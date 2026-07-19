@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Minimal WiX 3 installer: hookecho.exe into Program Files + Start Menu shortcut.
+     Version is passed by CI as -dAppVersion=X.Y.Z; UpgradeCode must never change. -->
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+  <Product Id="*"
+           Name="Hook Echo-WX"
+           Language="1033"
+           Version="$(var.AppVersion)"
+           Manufacturer="Hook Echo-WX project"
+           UpgradeCode="25ff064b-8dc5-4675-b924-414268ca1a45">
+    <Package InstallerVersion="500" Compressed="yes" InstallScope="perMachine" />
+    <MajorUpgrade DowngradeErrorMessage="A newer version of Hook Echo-WX is already installed." />
+    <MediaTemplate EmbedCab="yes" />
+
+    <Directory Id="TARGETDIR" Name="SourceDir">
+      <Directory Id="ProgramFiles64Folder">
+        <Directory Id="INSTALLFOLDER" Name="Hook Echo-WX">
+          <Component Id="MainExe" Guid="6f9ffb55-9e00-435b-a116-9f88413aa820" Win64="yes">
+            <File Id="HookechoExe" Source="$(var.ExePath)" KeyPath="yes" />
+          </Component>
+        </Directory>
+      </Directory>
+      <Directory Id="ProgramMenuFolder">
+        <Component Id="StartMenuShortcut" Guid="8f0f2f65-1f5e-4bfa-9c2b-51df6ad9f0be">
+          <Shortcut Id="AppShortcut" Name="Hook Echo-WX"
+                    Target="[INSTALLFOLDER]hookecho.exe"
+                    WorkingDirectory="INSTALLFOLDER" />
+          <RemoveFolder Id="CleanMenu" On="uninstall" />
+          <RegistryValue Root="HKCU" Key="Software\HookEchoWX" Name="installed"
+                         Type="integer" Value="1" KeyPath="yes" />
+        </Component>
+      </Directory>
+    </Directory>
+
+    <Feature Id="Main" Level="1">
+      <ComponentRef Id="MainExe" />
+      <ComponentRef Id="StartMenuShortcut" />
+    </Feature>
+  </Product>
+</Wix>

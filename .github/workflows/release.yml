@@ -79,14 +79,43 @@ jobs:
           cp target/release/hookecho.exe dist/
           cd dist && 7z a hookecho-windows-x86_64.zip hookecho.exe
 
+      - name: Read version
+        id: ver
+        shell: bash
+        run: echo "version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)" >> "$GITHUB_OUTPUT"
+
+      # WiX 3 (candle/light) is preinstalled on windows-latest.
+      - name: Build MSI
+        shell: bash
+        run: |
+          candle -nologo -arch x64 \
+            -dAppVersion=${{ steps.ver.outputs.version }} \
+            -dExePath=target/release/hookecho.exe \
+            -o dist/hookecho.wixobj packaging/windows/main.wxs
+          light -nologo -o dist/Hook_Echo-WX-x86_64.msi dist/hookecho.wixobj
+
+      # Inno Setup 6 is preinstalled on windows-latest (not on PATH).
+      - name: Build setup EXE
+        shell: bash
+        run: |
+          "/c/Program Files (x86)/Inno Setup 6/ISCC.exe" \
+            //DAppVersion=${{ steps.ver.outputs.version }} \
+            //DExeDir=target/release //Odist packaging/windows/hookecho.iss
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: hookecho-windows-x86_64
-          path: dist/hookecho-windows-x86_64.zip
+          path: |
+            dist/hookecho-windows-x86_64.zip
+            dist/Hook_Echo-WX-x86_64.msi
+            dist/Hook_Echo-WX-setup-x86_64.exe
 
       - name: Attach to release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/hookecho-windows-x86_64.zip
+          files: |
+            dist/hookecho-windows-x86_64.zip
+            dist/Hook_Echo-WX-x86_64.msi
+            dist/Hook_Echo-WX-setup-x86_64.exe
