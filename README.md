@@ -9,8 +9,10 @@ situational awareness (MRMS), on Windows and Linux.
 
 - **Linux**: download `Hook_Echo-WX-x86_64.AppImage` from
   [Releases](../../releases), `chmod +x`, run.
-- **Windows**: download `hookecho-windows-x86_64.zip` from
-  [Releases](../../releases), unzip, run `hookecho.exe`.
+- **Windows**: grab the installer from [Releases](../../releases) —
+  `Hook_Echo-WX-setup-x86_64.exe` (setup wizard) or `Hook_Echo-WX-x86_64.msi`
+  (MSI, for scripted/enterprise installs). A portable
+  `hookecho-windows-x86_64.zip` is there too: unzip, run `hookecho.exe`.
 - **From source**: `cargo run --release` (needs a Rust toolchain; on Linux also
   ALSA/Wayland/GTK dev headers — see `.github/workflows/ci.yml`).
 
