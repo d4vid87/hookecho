@@ -101,7 +101,8 @@ jobs:
         run: |
           & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" `
             /DAppVersion=${{ steps.ver.outputs.version }} `
-            /DExeDir=target\release /Odist packaging\windows\hookecho.iss
+            /DExeDir=${{ github.workspace }}\target\release `
+            /Odist packaging\windows\hookecho.iss
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
