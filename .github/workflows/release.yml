@@ -5,6 +5,10 @@ on:
     tags: ["v*"]
   workflow_dispatch:
 
+# softprops/action-gh-release needs write access; the default GITHUB_TOKEN is read-only.
+permissions:
+  contents: write
+
 jobs:
   appimage:
     name: Linux AppImage
