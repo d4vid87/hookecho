@@ -27,28 +27,28 @@ velocity, and GRLevelX `.pal` color tables (editable in-app):
 
 | Reflectivity | Velocity (dealiased) | Correlation coefficient |
 |---|---|---|
-| ![REF](docs/shots/reflectivity.png) | ![VEL](docs/shots/velocity.png) | ![CC](docs/shots/cc.png) |
+| ![REF](docs/shots/reflectivity.jpg) | ![VEL](docs/shots/velocity.jpg) | ![CC](docs/shots/cc.jpg) |
 
 **National view (MRMS)** — CONUS composite reflectivity, cloud-to-ground lightning
 density, rotation tracks / azimuthal shear, MESH hail size, and storm-total QPE
 flood layers:
 
-| Composite | Lightning | 24-h QPE |
+| Composite | Lightning | 1-h QPE |
 |---|---|---|
-| ![MRMS](docs/shots/mrms.png) | ![Lightning](docs/shots/lightning.png) | ![QPE](docs/shots/qpe.png) |
+| ![MRMS](docs/shots/mrms.jpg) | ![Lightning](docs/shots/lightning.jpg) | ![QPE](docs/shots/qpe.jpg) |
 
 **Forecast & analysis** — HRRR future radar with an observed→forecast timeline
 scrub, 3D volume raymarching, vertical cross-sections, VAD hodograph, soundings:
 
-| HRRR future radar | 3D volume | MESH hail |
+| HRRR future radar | 3D volume | Cross-section |
 |---|---|---|
-| ![HRRR](docs/shots/hrrr.png) | ![3D](docs/shots/storm3d.png) | ![MESH](docs/shots/mesh.png) |
+| ![HRRR](docs/shots/hrrr.jpg) | ![3D](docs/shots/storm3d.jpg) | ![Cross-section](docs/shots/xsection.jpg) |
 
 **Warnings & alerts** — clickable NWS bulletins with polygon overlays, an
 active-alerts panel, audible cues, and ntfy push the moment a warning covers one
 of your saved locations:
 
-![Alerts](docs/shots/alerts.png)
+![Alerts](docs/shots/alerts.jpg)
 
 ## Feature highlights
 
