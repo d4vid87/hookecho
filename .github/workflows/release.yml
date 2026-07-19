@@ -94,13 +94,14 @@ jobs:
             -o dist/hookecho.wixobj packaging/windows/main.wxs
           light -nologo -o dist/Hook_Echo-WX-x86_64.msi dist/hookecho.wixobj
 
-      # Inno Setup 6 is preinstalled on windows-latest (not on PATH).
+      # Inno Setup 6 is preinstalled on windows-latest (not on PATH). pwsh avoids
+      # Git-bash mangling of the /D switches.
       - name: Build setup EXE
-        shell: bash
+        shell: pwsh
         run: |
-          "/c/Program Files (x86)/Inno Setup 6/ISCC.exe" \
-            //DAppVersion=${{ steps.ver.outputs.version }} \
-            //DExeDir=target/release //Odist packaging/windows/hookecho.iss
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" `
+            /DAppVersion=${{ steps.ver.outputs.version }} `
+            /DExeDir=target\release /Odist packaging\windows\hookecho.iss
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
