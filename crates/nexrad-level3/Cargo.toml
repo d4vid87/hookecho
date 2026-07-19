@@ -1,0 +1,15 @@
+[package]
+name = "nexrad-level3"
+description = "Decoder for NEXRAD Level 3 (RPG) radar products"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+thiserror.workspace = true
+flate2.workspace = true
+
+[dev-dependencies]
+serde = { workspace = true }
+serde_json.workspace = true

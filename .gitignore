@@ -1,0 +1,6 @@
+/target
+Cargo.lock
+*.png
+!docs/shots/*.png
+/dist
+packaging/appimagetool-*.AppImage

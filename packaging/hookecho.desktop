@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Hook Echo-WX
+Comment=Advanced NEXRAD weather radar viewer
+Exec=hookecho
+Icon=hookecho
+Terminal=false
+Categories=Science;Geoscience;Education;
+Keywords=weather;radar;nexrad;storm;forecast;
+StartupWMClass=hookecho

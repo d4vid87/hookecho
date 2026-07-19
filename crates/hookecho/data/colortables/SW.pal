@@ -1,0 +1,11 @@
+; Hook Echo default spectrum width color table (GRLevelX .pal v2)
+Product: SW
+Units: m/s
+Step: 5
+RF: 128 128 128
+SolidColor: 0 40 40 60
+SolidColor: 4 0 120 200
+SolidColor: 8 0 200 120
+SolidColor: 14 230 230 0
+SolidColor: 20 230 120 0
+SolidColor: 30 230 0 0

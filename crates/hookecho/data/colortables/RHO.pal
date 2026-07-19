@@ -1,0 +1,27 @@
+; Hook Echo default correlation coefficient color table — NWS St. Louis (user-supplied .pal)
+Product: CC
+Units: %
+Scale: 100
+Step: 4
+
+Color: 100 25 25 25
+Color: 96 255 11 0
+Color: 92 255 187 0
+Color: 88 121 235 17 130 230 0
+Color: 84 93 229 119
+Color: 80 120 120 255
+Color: 76 30 30 255
+Color: 72 0 0 203
+Color: 68 0 0 163
+Color: 64 0 0 146
+Color: 60 0 0 130
+Color: 56 0 0 113
+Color: 52 9 0 101
+Color: 48 22 0 88
+Color: 44 30 0 79
+Color: 40 28 0 73
+Color: 36 20 0 69
+Color: 32 25 0 64
+Color: 28 23 0 59
+Color: 24 22 0 55
+Color: 20 20 0 50

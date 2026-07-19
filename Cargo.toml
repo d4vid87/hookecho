@@ -1,0 +1,35 @@
+[workspace]
+resolver = "2"
+members = ["crates/nexrad-level3", "crates/wxdata", "crates/hookecho"]
+
+# Vendored gribberish 1.5.0 with a one-line fix to its 8-bit PNG unpack (upstream always read a
+# u16, overrunning MRMS rotation-track / AzShear grids). See vendor/gribberish/src/templates/
+# data_representation/png_template.rs.
+[patch.crates-io]
+gribberish = { path = "vendor/gribberish" }
+
+# Release builds strip symbols and use thin LTO — wgpu+egui debug info dominates size, and the
+# AppImage ships the release binary. Dev builds are untouched.
+[profile.release]
+lto = "thin"
+strip = true
+
+[workspace.package]
+version = "0.0.0"
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/d4vid87/hookecho"
+
+[workspace.dependencies]
+anyhow = "1"
+thiserror = "2"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+flate2 = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+chrono = { version = "0.4", features = ["serde"] }
+lru = "0.12"
+directories = "5"
+bytemuck = { version = "1", features = ["derive"] }
+log = "0.4"
