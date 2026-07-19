@@ -22,14 +22,35 @@ fn cam_or_env(lon: f64, lat: f64, zoom: f64) -> Camera {
     Camera::at_lonlat(lon, lat, zoom)
 }
 
-/// Dark vector basemap for the national-layer renders (same fetch path as `run`), so field
-/// mosaics sit over a real map instead of the bare clear color.
-fn dark_basemap(
+/// Basemap for the national-layer renders, so field mosaics sit over a real map instead of
+/// the bare clear color. Default: dark vector tiles (same fetch path as `run`).
+/// `HOOKECHO_BASEMAP=<slug>` switches to any raster style, e.g. `mapbox-satellite-streets`
+/// (provider keys come from the saved Settings — never logged).
+fn national_basemap(
     rt: &tokio::runtime::Runtime,
     camera: &Camera,
-) -> (Vec<crate::render::PendingVectorTile>, Vec<crate::render::TileId>) {
+) -> (
+    Vec<crate::render::PendingTile>,
+    Vec<crate::render::VisibleTile>,
+    Vec<crate::render::PendingVectorTile>,
+    Vec<crate::render::TileId>,
+) {
     let vp = (SIZE as f32, SIZE as f32);
     let client = reqwest::Client::new();
+    if let Ok(slug) = std::env::var("HOOKECHO_BASEMAP") {
+        let style = crate::tiles::BasemapStyle::from_slug(&slug);
+        if style.is_raster() {
+            let settings = crate::settings::Settings::load();
+            let mut tm = TileManager::new(rt.handle().clone());
+            tm.set_style(style);
+            let vis = tm.visible(camera, vp);
+            let tiles = rt.block_on(crate::tiles::fetch_visible(
+                &client, style, &vis, &settings.mapbox_key, &settings.maptiler_key,
+            ));
+            println!("basemap {}: {} raster tiles", style.label(), tiles.len());
+            return (tiles, vis, Vec::new(), Vec::new());
+        }
+    }
     let vis = crate::tiles::tile_cover(camera, vp, 14);
     let tiles = rt.block_on(async {
         let template = crate::vector_tiles::fetch_tilejson(&client, None).await?;
@@ -38,9 +59,9 @@ fn dark_basemap(
     match tiles {
         Some(t) => {
             println!("basemap: {} vector tiles", t.len());
-            (t, vis.iter().map(|v| v.id).collect())
+            (Vec::new(), Vec::new(), t, vis.iter().map(|v| v.id).collect())
         }
-        None => (Vec::new(), Vec::new()),
+        None => (Vec::new(), Vec::new(), Vec::new(), Vec::new()),
     }
 }
 
@@ -532,7 +553,7 @@ pub fn run_overlay(out_path: &str) -> anyhow::Result<()> {
 
     let zoom = 4.0;
     let camera = cam_or_env(-97.0, 38.0, zoom); // CONUS center
-    let (new_vector_tiles, visible_vector) = dark_basemap(&rt, &camera);
+    let (new_tiles, visible, new_vector_tiles, visible_vector) = national_basemap(&rt, &camera);
     let geom = overlay_build::build(&features, zoom);
     println!("tessellated {} verts / {} indices", geom.vertices.len(), geom.indices.len());
 
@@ -541,8 +562,8 @@ pub fn run_overlay(out_path: &str) -> anyhow::Result<()> {
         pane: 0,
         camera_center: center,
         camera_scale: scale,
-        new_tiles: Vec::new(),
-        visible: Vec::new(),
+        new_tiles,
+        visible,
         radar_upload: None,
         draw_radar: false,
         overlay_upload: Some(OverlayUpload { vertices: geom.vertices, indices: geom.indices }),
@@ -604,14 +625,14 @@ pub fn run_mrms(out_path: &str) -> anyhow::Result<()> {
     };
 
     let camera = cam_or_env(-97.0, 38.0, 4.0);
-    let (new_vector_tiles, visible_vector) = dark_basemap(&rt, &camera);
+    let (new_tiles, visible, new_vector_tiles, visible_vector) = national_basemap(&rt, &camera);
     let (center, scale) = camera.world_to_clip_uniform((SIZE as f32, SIZE as f32));
     let cb = MapCallback {
         pane: 0,
         camera_center: center,
         camera_scale: scale,
-        new_tiles: Vec::new(),
-        visible: Vec::new(),
+        new_tiles,
+        visible,
         radar_upload: None,
         draw_radar: false,
         overlay_upload: None,
@@ -642,14 +663,14 @@ pub fn run_lightning(out_path: &str) -> anyhow::Result<()> {
 
     let upload = crate::app::lightning_upload(&field);
     let camera = cam_or_env(-97.0, 38.0, 4.0);
-    let (new_vector_tiles, visible_vector) = dark_basemap(&rt, &camera);
+    let (new_tiles, visible, new_vector_tiles, visible_vector) = national_basemap(&rt, &camera);
     let (center, scale) = camera.world_to_clip_uniform((SIZE as f32, SIZE as f32));
     let cb = MapCallback {
         pane: 0,
         camera_center: center,
         camera_scale: scale,
-        new_tiles: Vec::new(),
-        visible: Vec::new(),
+        new_tiles,
+        visible,
         radar_upload: None,
         draw_radar: false,
         overlay_upload: None,
@@ -690,14 +711,14 @@ pub fn run_field(slug: &str, out_path: &str) -> anyhow::Result<()> {
     let field = field.decimated(8192); // fit oversized (14000×7000) rotation/AzShear grids
     let upload = crate::app::field_upload_indexed(layer, &field);
     let camera = cam_or_env(-97.0, 38.0, 4.0);
-    let (new_vector_tiles, visible_vector) = dark_basemap(&rt, &camera);
+    let (new_tiles, visible, new_vector_tiles, visible_vector) = national_basemap(&rt, &camera);
     let (center, scale) = camera.world_to_clip_uniform((SIZE as f32, SIZE as f32));
     let cb = MapCallback {
         pane: 0,
         camera_center: center,
         camera_scale: scale,
-        new_tiles: Vec::new(),
-        visible: Vec::new(),
+        new_tiles,
+        visible,
         radar_upload: None,
         draw_radar: false,
         overlay_upload: None,
@@ -751,14 +772,14 @@ pub fn run_hrrr(fcst_hour: u8, out_path: &str) -> anyhow::Result<()> {
         lut: crate::colormap::bake_lut(&table, (vmin, vspan_max), None).to_vec(),
     };
     let camera = cam_or_env(-97.0, 38.0, 4.0);
-    let (new_vector_tiles, visible_vector) = dark_basemap(&rt, &camera);
+    let (new_tiles, visible, new_vector_tiles, visible_vector) = national_basemap(&rt, &camera);
     let (center, scale) = camera.world_to_clip_uniform((SIZE as f32, SIZE as f32));
     let cb = MapCallback {
         pane: 0,
         camera_center: center,
         camera_scale: scale,
-        new_tiles: Vec::new(),
-        visible: Vec::new(),
+        new_tiles,
+        visible,
         radar_upload: None,
         draw_radar: false,
         overlay_upload: None,
