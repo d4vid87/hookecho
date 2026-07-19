@@ -11,6 +11,39 @@ use wxdata::level2::{self, Moment};
 
 const SIZE: u32 = 1000;
 
+/// `HOOKECHO_CAM=lon,lat,zoom` overrides any headless camera — framing knob for screenshots.
+fn cam_or_env(lon: f64, lat: f64, zoom: f64) -> Camera {
+    if let Ok(v) = std::env::var("HOOKECHO_CAM") {
+        let p: Vec<f64> = v.split(',').filter_map(|s| s.trim().parse().ok()).collect();
+        if p.len() == 3 {
+            return Camera::at_lonlat(p[0], p[1], p[2]);
+        }
+    }
+    Camera::at_lonlat(lon, lat, zoom)
+}
+
+/// Dark vector basemap for the national-layer renders (same fetch path as `run`), so field
+/// mosaics sit over a real map instead of the bare clear color.
+fn dark_basemap(
+    rt: &tokio::runtime::Runtime,
+    camera: &Camera,
+) -> (Vec<crate::render::PendingVectorTile>, Vec<crate::render::TileId>) {
+    let vp = (SIZE as f32, SIZE as f32);
+    let client = reqwest::Client::new();
+    let vis = crate::tiles::tile_cover(camera, vp, 14);
+    let tiles = rt.block_on(async {
+        let template = crate::vector_tiles::fetch_tilejson(&client, None).await?;
+        Some(crate::vector_tiles::fetch_visible_vector(&client, &template, true, camera.zoom, &vis).await.0)
+    });
+    match tiles {
+        Some(t) => {
+            println!("basemap: {} vector tiles", t.len());
+            (t, vis.iter().map(|v| v.id).collect())
+        }
+        None => (Vec::new(), Vec::new()),
+    }
+}
+
 /// Render one real radar sweep for `site` to a PNG.
 ///
 /// `pal` optionally overrides the moment's colormap with a GRLevelX `.pal` file (verifies the
@@ -77,7 +110,7 @@ pub fn run(
         sweep.radar_lat, sweep.radar_lon
     );
 
-    let camera = Camera::at_lonlat(sweep.radar_lon as f64, sweep.radar_lat as f64, 7.0);
+    let camera = cam_or_env(sweep.radar_lon as f64, sweep.radar_lat as f64, 7.0);
     let (center, scale) = camera.world_to_clip_uniform((SIZE as f32, SIZE as f32));
 
     let vp = (SIZE as f32, SIZE as f32);
@@ -498,7 +531,8 @@ pub fn run_overlay(out_path: &str) -> anyhow::Result<()> {
     println!("overlay features: {}", features.len());
 
     let zoom = 4.0;
-    let camera = Camera::at_lonlat(-97.0, 38.0, zoom); // CONUS center
+    let camera = cam_or_env(-97.0, 38.0, zoom); // CONUS center
+    let (new_vector_tiles, visible_vector) = dark_basemap(&rt, &camera);
     let geom = overlay_build::build(&features, zoom);
     println!("tessellated {} verts / {} indices", geom.vertices.len(), geom.indices.len());
 
@@ -516,8 +550,8 @@ pub fn run_overlay(out_path: &str) -> anyhow::Result<()> {
         field_uploads: Vec::new(),
         field_draws: Vec::new(),
         clear_tiles: false,
-        new_vector_tiles: Vec::new(),
-        visible_vector: Vec::new(),
+        new_vector_tiles,
+        visible_vector,
         clear_vector: false,
     };
     render_to_png(&rt, cb, out_path)
@@ -569,7 +603,8 @@ pub fn run_mrms(out_path: &str) -> anyhow::Result<()> {
         lut: crate::colormap::bake_lut(&table, (vmin, vspan_max), None).to_vec(),
     };
 
-    let camera = Camera::at_lonlat(-97.0, 38.0, 4.0);
+    let camera = cam_or_env(-97.0, 38.0, 4.0);
+    let (new_vector_tiles, visible_vector) = dark_basemap(&rt, &camera);
     let (center, scale) = camera.world_to_clip_uniform((SIZE as f32, SIZE as f32));
     let cb = MapCallback {
         pane: 0,
@@ -584,8 +619,8 @@ pub fn run_mrms(out_path: &str) -> anyhow::Result<()> {
         field_uploads: vec![(crate::render::FieldLayer::Mrms, upload)],
         field_draws: vec![crate::render::FieldLayer::Mrms],
         clear_tiles: false,
-        new_vector_tiles: Vec::new(),
-        visible_vector: Vec::new(),
+        new_vector_tiles,
+        visible_vector,
         clear_vector: false,
     };
     render_to_png(&rt, cb, out_path)
@@ -606,7 +641,8 @@ pub fn run_lightning(out_path: &str) -> anyhow::Result<()> {
     );
 
     let upload = crate::app::lightning_upload(&field);
-    let camera = Camera::at_lonlat(-97.0, 38.0, 4.0);
+    let camera = cam_or_env(-97.0, 38.0, 4.0);
+    let (new_vector_tiles, visible_vector) = dark_basemap(&rt, &camera);
     let (center, scale) = camera.world_to_clip_uniform((SIZE as f32, SIZE as f32));
     let cb = MapCallback {
         pane: 0,
@@ -621,8 +657,8 @@ pub fn run_lightning(out_path: &str) -> anyhow::Result<()> {
         field_uploads: vec![(crate::render::FieldLayer::Lightning, upload)],
         field_draws: vec![crate::render::FieldLayer::Lightning],
         clear_tiles: false,
-        new_vector_tiles: Vec::new(),
-        visible_vector: Vec::new(),
+        new_vector_tiles,
+        visible_vector,
         clear_vector: false,
     };
     render_to_png(&rt, cb, out_path)
@@ -653,7 +689,8 @@ pub fn run_field(slug: &str, out_path: &str) -> anyhow::Result<()> {
 
     let field = field.decimated(8192); // fit oversized (14000×7000) rotation/AzShear grids
     let upload = crate::app::field_upload_indexed(layer, &field);
-    let camera = Camera::at_lonlat(-97.0, 38.0, 4.0);
+    let camera = cam_or_env(-97.0, 38.0, 4.0);
+    let (new_vector_tiles, visible_vector) = dark_basemap(&rt, &camera);
     let (center, scale) = camera.world_to_clip_uniform((SIZE as f32, SIZE as f32));
     let cb = MapCallback {
         pane: 0,
@@ -668,8 +705,8 @@ pub fn run_field(slug: &str, out_path: &str) -> anyhow::Result<()> {
         field_uploads: vec![(layer, upload)],
         field_draws: vec![layer],
         clear_tiles: false,
-        new_vector_tiles: Vec::new(),
-        visible_vector: Vec::new(),
+        new_vector_tiles,
+        visible_vector,
         clear_vector: false,
     };
     render_to_png(&rt, cb, out_path)
@@ -713,7 +750,8 @@ pub fn run_hrrr(fcst_hour: u8, out_path: &str) -> anyhow::Result<()> {
         ],
         lut: crate::colormap::bake_lut(&table, (vmin, vspan_max), None).to_vec(),
     };
-    let camera = Camera::at_lonlat(-97.0, 38.0, 4.0);
+    let camera = cam_or_env(-97.0, 38.0, 4.0);
+    let (new_vector_tiles, visible_vector) = dark_basemap(&rt, &camera);
     let (center, scale) = camera.world_to_clip_uniform((SIZE as f32, SIZE as f32));
     let cb = MapCallback {
         pane: 0,
@@ -728,8 +766,8 @@ pub fn run_hrrr(fcst_hour: u8, out_path: &str) -> anyhow::Result<()> {
         field_uploads: vec![(FieldLayer::Hrrr, upload)],
         field_draws: vec![FieldLayer::Hrrr],
         clear_tiles: false,
-        new_vector_tiles: Vec::new(),
-        visible_vector: Vec::new(),
+        new_vector_tiles,
+        visible_vector,
         clear_vector: false,
     };
     render_to_png(&rt, cb, out_path)
