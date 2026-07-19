@@ -56,9 +56,9 @@ fn main() -> eframe::Result<()> {
         return Ok(());
     }
 
-    // Audio cue check: `hookecho --chime` plays the warning chime once and exits.
+    // Audio cue check: `hookecho --chime` plays the default chime once and exits.
     if args.iter().any(|a| a == "--chime") {
-        audio::warning_chime();
+        audio::play(&settings::AlertSound::default(), 0.2);
         std::thread::sleep(std::time::Duration::from_millis(900));
         return Ok(());
     }

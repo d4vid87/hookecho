@@ -34,6 +34,7 @@ pub fn show(
     show_storm_reports: &mut bool,
     show_spotters: &mut bool,
     show_probsevere: &mut bool,
+    show_radar_sites: &mut bool,
 ) -> ToolboxActions {
     use crate::theme::section;
     let mut actions = ToolboxActions::default();
@@ -57,6 +58,8 @@ pub fn show(
                 .on_hover_text("Today's tornado (red) / wind (blue) / hail (green) reports; click a dot");
             ui.checkbox(show_spotters, "Spotter Network")
                 .on_hover_text("Live spotters within 230 km of the active site (spotternetwork.org, 1-min refresh)");
+            ui.checkbox(show_radar_sites, "Radar sites")
+                .on_hover_text("Show all NEXRAD sites; click one on the map to switch radars");
             if ui.checkbox(show_probsevere, "ProbSevere")
                 .on_hover_text("NOAA/CIMSS per-storm severe/tor/hail/wind probabilities; click a polygon")
                 .changed()
@@ -66,7 +69,7 @@ pub fn show(
             overlays_section(ui, filters, &mut actions);
         });
         section(ui, "Level 3", |ui| level3_section(ui));
-        section(ui, "Timeline", |ui| timeline_section(ui, view, &mut actions));
+        section(ui, "Timeline", |ui| timeline_section(ui, view, settings, &mut actions));
     });
     actions
 }
@@ -255,7 +258,9 @@ fn map_section(ui: &mut egui::Ui, view: &mut MapView, settings: &mut Settings) {
         .show_ui(ui, |ui| {
             // Only styles whose provider key is set are selectable.
             for s in BasemapStyle::ALL.into_iter().filter(|s| s.available(mb, mt)) {
-                ui.selectable_value(&mut view.basemap, s, s.label());
+                if ui.selectable_value(&mut view.basemap, s, s.label()).clicked() {
+                    settings.basemap = s.slug().to_string(); // persist across restarts
+                }
             }
         });
     if !mb || !mt {
@@ -364,7 +369,7 @@ fn level3_section(ui: &mut egui::Ui) {
     });
 }
 
-fn timeline_section(ui: &mut egui::Ui, view: &mut MapView, actions: &mut ToolboxActions) {
+fn timeline_section(ui: &mut egui::Ui, view: &mut MapView, settings: &mut Settings, actions: &mut ToolboxActions) {
     let t = &mut view.timeline;
 
     ui.horizontal(|ui| {
@@ -415,12 +420,8 @@ fn timeline_section(ui: &mut egui::Ui, view: &mut MapView, actions: &mut Toolbox
             t.step(-1);
         }
         let play_label = if t.playing { "⏸" } else { "▶" };
-        if ui.button(play_label).on_hover_text("Play/Pause").clicked() {
-            t.playing = !t.playing;
-            if t.playing && t.at_head() {
-                t.playhead = 0; // replay from the start when starting at the head
-                t.following = false;
-            }
+        if ui.button(play_label).on_hover_text("Play/Pause (live loops the newest frames)").clicked() {
+            t.toggle_play();
         }
         if ui.button("▶|").on_hover_text("Step forward").clicked() {
             t.step(1);
@@ -464,5 +465,10 @@ fn timeline_section(ui: &mut egui::Ui, view: &mut MapView, actions: &mut Toolbox
         ui.checkbox(&mut t.loop_enabled, "Loop");
         ui.label("Speed");
         ui.add(egui::Slider::new(&mut t.speed, 1.0..=15.0).suffix(" fps").show_value(true));
+    });
+    ui.horizontal(|ui| {
+        ui.label("Live loop window");
+        ui.add(egui::DragValue::new(&mut settings.live_loop_frames).range(2..=30).suffix(" frames"))
+            .on_hover_text("How many of the newest volumes ▶ cycles through when live");
     });
 }

@@ -219,10 +219,60 @@ fn general_tab(ui: &mut egui::Ui, settings: &mut Settings) {
     }
 }
 
+/// Alert-sound controls: master toggle, volume, and a per-event sound picker with previews.
+/// Shared by the Settings ▸ Audio tab and the first-run wizard.
+pub fn sound_picker(ui: &mut egui::Ui, settings: &mut Settings) {
+    use crate::settings::AlertSound;
+
+    ui.checkbox(&mut settings.alert_sound, "Play a sound on alerts")
+        .on_hover_text("Master switch for the warning / TDS / lightning alert sounds");
+    ui.horizontal(|ui| {
+        ui.label("Volume");
+        ui.add(egui::Slider::new(&mut settings.alert_volume, 0.0..=1.0).step_by(0.05));
+    });
+    ui.add_space(4.0);
+
+    // One row per alert kind: sound combo (+ Custom… file picker) and a ▶ preview.
+    let rows: [(&str, fn(&mut Settings) -> &mut AlertSound); 3] = [
+        ("Warning", |s| &mut s.warn_sound),
+        ("TDS", |s| &mut s.tds_sound),
+        ("Lightning", |s| &mut s.lightning_sound),
+    ];
+    let volume = settings.alert_volume;
+    egui::Grid::new("sound_grid").num_columns(3).spacing([10.0, 6.0]).show(ui, |ui| {
+        for (label, field) in rows {
+            ui.label(label);
+            let sound = field(settings);
+            egui::ComboBox::from_id_salt(label)
+                .selected_text(sound.label())
+                .show_ui(ui, |ui| {
+                    for b in AlertSound::BUILTINS {
+                        let sel = sound.label() == b.label();
+                        if ui.selectable_label(sel, b.label()).clicked() {
+                            *sound = b;
+                        }
+                    }
+                    let is_custom = matches!(sound, AlertSound::Custom(_));
+                    if ui.selectable_label(is_custom, "Custom…").clicked() {
+                        if let Some(path) = rfd::FileDialog::new()
+                            .add_filter("audio", &["wav", "mp3", "ogg", "flac"])
+                            .pick_file()
+                        {
+                            *sound = AlertSound::Custom(path.to_string_lossy().into_owned());
+                        }
+                    }
+                });
+            let preview = sound.clone();
+            if ui.button("▶").on_hover_text("Preview").clicked() {
+                crate::audio::play(&preview, volume);
+            }
+            ui.end_row();
+        }
+    });
+}
+
 fn audio_tab(ui: &mut egui::Ui, settings: &mut Settings) {
-    ui.checkbox(&mut settings.alert_sound, "Chime on new NWS warning")
-        .on_hover_text("Plays a short two-tone alert when a new warning appears (louder if it covers a saved marker)");
-    ui.weak("Run `hookecho --chime` to preview the sound.");
+    sound_picker(ui, settings);
 
     ui.add_space(8.0);
     ui.separator();

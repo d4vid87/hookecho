@@ -64,6 +64,44 @@ impl Theme {
     }
 }
 
+/// Alert sound choice. Built-ins are synthesized in `audio.rs` (no asset files); `Custom` plays a
+/// user file (wav/mp3/ogg/flac). Serializes as `"Chime"` or `{"Custom":"/path/f.wav"}`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub enum AlertSound {
+    #[default]
+    Chime,
+    Ding,
+    Siren,
+    Alarm,
+    Pulse,
+    Custom(String),
+}
+
+impl AlertSound {
+    /// The synthesized built-ins, for sound-picker combos.
+    pub const BUILTINS: [AlertSound; 5] =
+        [AlertSound::Chime, AlertSound::Ding, AlertSound::Siren, AlertSound::Alarm, AlertSound::Pulse];
+
+    pub fn label(&self) -> &'static str {
+        match self {
+            AlertSound::Chime => "Chime",
+            AlertSound::Ding => "Ding",
+            AlertSound::Siren => "Siren",
+            AlertSound::Alarm => "Alarm",
+            AlertSound::Pulse => "Pulse",
+            AlertSound::Custom(_) => "Custom…",
+        }
+    }
+}
+
+fn default_volume() -> f32 {
+    0.2
+}
+
+fn default_live_loop_frames() -> usize {
+    10
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
@@ -119,6 +157,24 @@ pub struct Settings {
     /// First-run setup wizard completed (or dismissed). `false` shows it at startup.
     #[serde(default)]
     pub setup_done: bool,
+    /// Sound played when a new NWS warning appears (gated by `alert_sound`).
+    #[serde(default)]
+    pub warn_sound: AlertSound,
+    /// Sound played on tornado-debris-signature detection.
+    #[serde(default)]
+    pub tds_sound: AlertSound,
+    /// Sound played on the lightning proximity alarm.
+    #[serde(default)]
+    pub lightning_sound: AlertSound,
+    /// Playback volume for all alert sounds (0.0..=1.0).
+    #[serde(default = "default_volume")]
+    pub alert_volume: f32,
+    /// Number of newest volumes the live loop cycles over when playing.
+    #[serde(default = "default_live_loop_frames")]
+    pub live_loop_frames: usize,
+    /// Persisted basemap style slug for startup (empty = pane default Dark).
+    #[serde(default)]
+    pub basemap: String,
 }
 
 /// A saved view: site + camera, and (for archive views) the UTC instant to seek to.
@@ -171,6 +227,10 @@ pub struct Marker {
     pub name: String,
     pub lat: f64,
     pub lon: f64,
+    /// Optional icon: a filename inside [`Settings::marker_icons_dir`] (not a full path, so the
+    /// settings stay portable). `None` draws the default accent dot.
+    #[serde(default)]
+    pub icon: Option<String>,
 }
 
 /// Display unit for velocity products. GRLevelX defaults to knots; internal math is m/s.
@@ -226,6 +286,12 @@ impl Default for Settings {
             anthropic_key: String::new(),
             lightning_alarm: false,
             setup_done: false,
+            warn_sound: AlertSound::default(),
+            tds_sound: AlertSound::default(),
+            lightning_sound: AlertSound::default(),
+            alert_volume: default_volume(),
+            live_loop_frames: default_live_loop_frames(),
+            basemap: String::new(),
         }
     }
 }
@@ -239,6 +305,13 @@ impl Settings {
     /// The auto-scanned color-tables folder (`<data_dir>/colortables`). Created on first use.
     pub fn colortables_dir() -> Option<PathBuf> {
         let dir = directories::ProjectDirs::from("", "", "hookecho")?.data_dir().join("colortables");
+        let _ = std::fs::create_dir_all(&dir);
+        Some(dir)
+    }
+
+    /// Folder holding uploaded marker icons (`<data_dir>/marker-icons`). Created on first use.
+    pub fn marker_icons_dir() -> Option<PathBuf> {
+        let dir = directories::ProjectDirs::from("", "", "hookecho")?.data_dir().join("marker-icons");
         let _ = std::fs::create_dir_all(&dir);
         Some(dir)
     }
@@ -334,7 +407,12 @@ mod tests {
             velocity_unit: VelocityUnit::Mph,
             ui_scale: 1.2,
             placefiles: vec![PlacefileConfig { url: "http://x/p.txt".to_string(), enabled: true }],
-            markers: vec![Marker { name: "Home".to_string(), lat: 35.3, lon: -97.5 }],
+            markers: vec![Marker {
+                name: "Home".to_string(),
+                lat: 35.3,
+                lon: -97.5,
+                icon: Some("home.png".to_string()),
+            }],
             dealias_velocity: true,
             mapbox_key: "pk.test".to_string(),
             maptiler_key: "mt.test".to_string(),
@@ -353,6 +431,12 @@ mod tests {
             anthropic_key: "sk-test".to_string(),
             lightning_alarm: true,
             setup_done: true,
+            warn_sound: AlertSound::Siren,
+            tds_sound: AlertSound::Custom("/tmp/tds.wav".to_string()),
+            lightning_sound: AlertSound::Alarm,
+            alert_volume: 0.7,
+            live_loop_frames: 12,
+            basemap: "carto-dark".to_string(),
         };
         let json = serde_json::to_string(&s).unwrap();
         let back: Settings = serde_json::from_str(&json).unwrap();

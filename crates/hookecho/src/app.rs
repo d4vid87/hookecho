@@ -384,6 +384,10 @@ pub struct HookEchoApp {
     show_storm_reports: bool,
     storm_reports: Vec<wxdata::spc::StormReport>,
     reports_last_fetch: Option<Instant>,
+    /// Draw all NEXRAD radar sites on the map; clicking one switches the pane to that radar.
+    show_radar_sites: bool,
+    /// Show the left toolbox panel. Collapse it (View ▸ Toolbox / F9) for a full-width radar.
+    show_toolbox: bool,
     /// Spotter Network positions + toggle + refresh clock (filtered to active site at draw).
     show_spotters: bool,
     spotters: Vec<wxdata::spotters::Spotter>,
@@ -420,6 +424,9 @@ pub struct HookEchoApp {
     xsection_pts: Vec<[f64; 2]>,
     xsection: Option<wxdata::xsection::CrossSection>,
     xsection_tex: Option<egui::TextureHandle>,
+    /// Lazily-loaded textures for uploaded marker icons, keyed by filename. `None` = load failed
+    /// (negative-cached so a missing/corrupt file isn't retried every frame).
+    marker_icon_tex: ui::marker_window::IconTextures,
     /// 3D raymarch view: open flag, orbit camera (az/el degrees + distance), and a pending
     /// volume upload (taken by the first paint after a rebuild).
     show_3d: bool,
@@ -497,7 +504,11 @@ impl HookEchoApp {
                 (s, cam)
             }
         };
-        let view = MapView::new(Some(start.clone()), camera);
+        let mut view = MapView::new(Some(start.clone()), camera);
+        // Restore the persisted basemap (empty slug = keep the default; from_slug("") = None).
+        if !settings.basemap.is_empty() {
+            view.basemap = crate::tiles::BasemapStyle::from_slug(&settings.basemap);
+        }
         let settings_setup_done = settings.setup_done;
 
         let mut app = Self {
@@ -598,6 +609,8 @@ impl HookEchoApp {
             show_storm_reports: false,
             storm_reports: Vec::new(),
             reports_last_fetch: None,
+            show_radar_sites: true,
+            show_toolbox: true,
             show_spotters: false,
             spotters: Vec::new(),
             spotters_last_fetch: None,
@@ -622,6 +635,7 @@ impl HookEchoApp {
             xsection_pts: Vec::new(),
             xsection: None,
             xsection_tex: None,
+            marker_icon_tex: Default::default(),
             show_3d: false,
             vol3d_az: 30.0,
             vol3d_el: 25.0,
@@ -818,7 +832,7 @@ impl HookEchoApp {
             use std::io::Write;
             let _ = std::io::stdout().flush();
             if self.settings.alert_sound {
-                crate::audio::warning_chime();
+                crate::audio::play(&self.settings.warn_sound, self.settings.alert_volume);
             }
         }
     }
@@ -858,7 +872,7 @@ impl HookEchoApp {
             fired = true;
         }
         if fired && self.settings.alert_sound {
-            crate::audio::warning_chime();
+            crate::audio::play(&self.settings.lightning_sound, self.settings.alert_volume);
         }
     }
 
@@ -913,6 +927,75 @@ impl HookEchoApp {
 
     /// Reconstruct a vertical reflectivity cross-section along the two clicked endpoints from
     /// pane `idx`'s volume, upload it as a texture, and open the cross-section window.
+    /// If the click landed on a radar-site ring (and not on a storm report/cell, which take
+    /// precedence), switch pane `idx` to that site and return true. `sync_pane` reacts to the
+    /// changed site — no extra plumbing here.
+    fn try_pick_site(
+        &mut self,
+        idx: usize,
+        pos: egui::Pos2,
+        cam: crate::render::mercator::Camera,
+        prect: egui::Rect,
+        vp: (f32, f32),
+    ) -> bool {
+        let to_screen_hit = |lon: f64, lat: f64| {
+            let w = crate::render::mercator::lonlat_to_world(lon, lat);
+            let (sx, sy) = cam.world_to_screen(w, vp);
+            let (dx, dy) = (prect.left() + sx - pos.x, prect.top() + sy - pos.y);
+            dx * dx + dy * dy
+        };
+        // Storm features win: bail if a report or cell dot sits under the cursor.
+        let near_storm = (self.show_storm_reports
+            && self.storm_reports.iter().any(|r| to_screen_hit(r.lon, r.lat) <= 12.0 * 12.0))
+            || (self.cells_site.as_deref() == self.views[idx].site.as_deref()
+                && self.storm_cells.iter().any(|c| to_screen_hit(c.lon, c.lat) <= 14.0 * 14.0));
+        if near_storm {
+            return false;
+        }
+        let hit = wxdata::sites::sites()
+            .iter()
+            .filter(|s| to_screen_hit(s.longitude as f64, s.latitude as f64) <= 12.0 * 12.0)
+            .min_by(|a, b| {
+                to_screen_hit(a.longitude as f64, a.latitude as f64)
+                    .partial_cmp(&to_screen_hit(b.longitude as f64, b.latitude as f64))
+                    .unwrap()
+            });
+        match hit {
+            Some(s) if self.views[idx].site.as_deref() != Some(s.id) => {
+                self.views[idx].site = Some(s.id.to_string());
+                self.cell_popup = None;
+                self.warning_popup = None;
+                self.detail = None;
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Load any marker icon files not yet in the texture cache (negative-cached on failure).
+    fn load_marker_icons(&mut self, ctx: &egui::Context) {
+        let Some(dir) = crate::settings::Settings::marker_icons_dir() else { return };
+        for m in &self.settings.markers {
+            let Some(name) = &m.icon else { continue };
+            if self.marker_icon_tex.contains_key(name) {
+                continue;
+            }
+            let tex = std::fs::read(dir.join(name))
+                .ok()
+                .and_then(|bytes| image::load_from_memory(&bytes).ok())
+                .map(|img| {
+                    let rgba = img.to_rgba8();
+                    let size = [rgba.width() as usize, rgba.height() as usize];
+                    let ci = egui::ColorImage::from_rgba_unmultiplied(size, rgba.as_raw());
+                    ctx.load_texture(format!("marker-{name}"), ci, egui::TextureOptions::LINEAR)
+                });
+            if tex.is_none() {
+                log::warn!("marker icon load failed: {name}");
+            }
+            self.marker_icon_tex.insert(name.clone(), tex);
+        }
+    }
+
     fn build_xsection(&mut self, idx: usize, ctx: &egui::Context) {
         let (a, b) = (self.xsection_pts[0], self.xsection_pts[1]);
         let Some(vol) = self.views[idx].volume.as_mut() else { return };
@@ -1096,7 +1179,7 @@ impl HookEchoApp {
             ));
             self.push_ntfy("⚠ Tornado Debris Signature", "Low CC + high reflectivity detected on radar");
             if self.settings.alert_sound {
-                crate::audio::warning_chime();
+                crate::audio::play(&self.settings.tds_sound, self.settings.alert_volume);
             }
         }
         self.tds_active = now_active;
@@ -1518,7 +1601,29 @@ impl HookEchoApp {
                 DataMsg::Volume { view, name, time, scan, .. } => {
                     self.scan_cache.put(name.clone(), scan.clone());
                     let v = &mut self.views[view];
-                    v.volume = Some(Volume::new(scan, name, time));
+                    let looping = v.timeline.live_looping();
+                    // A newly-arrived live head (following): roll the day at UTC midnight, or grow
+                    // the frame list so the loop window slides forward. A frame-fetch result for a
+                    // scrubbed/loop-display frame is older than the head and isn't a new head.
+                    let new_head = v.timeline.following && {
+                        let last_time = v.timeline.frames.last().and_then(|id| id.date_time());
+                        if time.date_naive() != v.timeline.date {
+                            v.timeline.date = time.date_naive(); // re-list fires via frames_key
+                            true
+                        } else if last_time.map_or(true, |t| time > t)
+                            && v.timeline.frames.last().map(|id| id.name()) != Some(name.as_str())
+                        {
+                            v.timeline.append_head(Identifier::new(name.clone()));
+                            true
+                        } else {
+                            false
+                        }
+                    };
+                    // While looping, the playhead frame owns the display; a genuinely new head is
+                    // only appended, not shown. Every other case updates the displayed volume.
+                    if !(looping && new_head) {
+                        v.volume = Some(Volume::new(scan, name, time));
+                    }
                     v.loading = false;
                     v.error = None;
                     v.clamp_tilt();
@@ -1563,8 +1668,13 @@ impl HookEchoApp {
         let idx = self.active;
         let (want, site, base) = {
             let v = &self.views[idx];
-            // Stream only while pinned to the live head; scrubbing pauses it.
-            let want = v.timeline.following && v.site.is_some() && v.volume.is_some();
+            // Stream only while pinned to the live head; scrubbing pauses it. A live loop is
+            // suppressed too — the loop shows past frames, so interval polling (not the sweep
+            // stream) carries new-volume arrival. ponytail: stream resumes on pause / go_head.
+            let want = v.timeline.following
+                && !v.timeline.live_looping()
+                && v.site.is_some()
+                && v.volume.is_some();
             (want, v.site.clone(), v.volume.as_ref().map(|vol| vol.scan.clone()))
         };
 
@@ -1656,6 +1766,7 @@ impl HookEchoApp {
                     self.obs_mode = true;
                 }
             }
+            Action::ToggleToolbox => self.show_toolbox = !self.show_toolbox,
             Action::InstantReplay => self.instant_replay(),
         }
     }
@@ -1741,6 +1852,7 @@ impl HookEchoApp {
         }
 
         // Advance playback (if playing) then reconcile the displayed volume with the timeline.
+        self.views[idx].timeline.live_window = self.settings.live_loop_frames.max(1);
         self.views[idx].timeline.tick();
         self.sync_timeline(idx, ctx, site_changed);
 
@@ -1767,14 +1879,22 @@ impl HookEchoApp {
             }
         }
 
+        let looping = self.views[idx].timeline.live_looping();
         if following {
-            // Live head: poll for the newest volume (unchanged behavior).
+            // Live head: poll for the newest volume. While looping, the displayed volume is a
+            // middle loop frame, so compare against the newest *frame* (not the shown volume) to
+            // decide whether the head advanced — otherwise every poll re-downloads the head.
             let (site, current_name, due) = {
                 let v = &self.views[idx];
                 let due = v
                     .last_poll
                     .map_or(true, |t| t.elapsed().as_secs() >= self.settings.poll_interval_secs);
-                (v.site.clone(), v.volume.as_ref().map(|vol| vol.name.clone()), due)
+                let current_name = if looping {
+                    v.timeline.frames.last().map(|id| id.name().to_string())
+                } else {
+                    v.volume.as_ref().map(|vol| vol.name.clone())
+                };
+                (v.site.clone(), current_name, due)
             };
             if site.is_some() && !self.views[idx].loading && (site_changed || due) {
                 if let Some(s) = site {
@@ -1783,8 +1903,9 @@ impl HookEchoApp {
                     self.spawn_fetch(idx, s, current_name, ctx.clone());
                 }
             }
-        } else {
-            // Archive: display the volume at the playhead (cache hit is synchronous).
+        }
+        if !following || looping {
+            // Archive / loop: display the volume at the playhead (cache hit is synchronous).
             let target = self.views[idx]
                 .timeline
                 .current()
@@ -1929,7 +2050,13 @@ impl HookEchoApp {
                 let px = (pos.x - prect.left(), pos.y - prect.top());
                 let w = cam.screen_to_world(px, vp);
                 let (lon, lat) = crate::render::mercator::world_to_lonlat(w.0, w.1);
+                // Interrogate + a click on a radar-site ring switches radars (storm features win,
+                // handled inside try_pick_site). Consumes the click so no popup opens underneath.
+                let picked_site = self.tool == MapTool::Interrogate
+                    && self.show_radar_sites
+                    && self.try_pick_site(idx, pos, cam, prect, vp);
                 match self.tool {
+                    _ if picked_site => {}
                     MapTool::Measure => {
                         if self.measure.len() >= 2 {
                             self.measure.clear();
@@ -1942,6 +2069,7 @@ impl HookEchoApp {
                             name: format!("Marker {n}"),
                             lat,
                             lon,
+                            icon: None,
                         });
                     }
                     MapTool::CrossSection => {
@@ -2456,6 +2584,31 @@ impl HookEchoApp {
             }
         }
 
+        // Radar sites: a ring per NEXRAD site; the active site in accent, others muted. IDs only
+        // when zoomed in so the CONUS view isn't cluttered. Click handled in the Interrogate tool.
+        if self.show_radar_sites {
+            let accent = crate::theme::accent(self.settings.theme);
+            let current = self.views[idx].site.as_deref();
+            let show_labels = cam.zoom >= 5.0;
+            for s in wxdata::sites::sites() {
+                let w = crate::render::mercator::lonlat_to_world(s.longitude as f64, s.latitude as f64);
+                let (sx, sy) = cam.world_to_screen(w, vp);
+                let p = egui::pos2(prect.left() + sx, prect.top() + sy);
+                if !prect.contains(p) {
+                    continue;
+                }
+                let is_current = current == Some(s.id);
+                let col = if is_current { accent } else { egui::Color32::from_rgb(120, 190, 255) };
+                let r = if is_current { 5.0 } else { 3.5 };
+                painter.circle_stroke(p, r, egui::Stroke::new(1.5, col));
+                painter.circle_filled(p, 1.5, col);
+                if show_labels {
+                    painter.text(p + egui::vec2(6.0, 0.0), egui::Align2::LEFT_CENTER, s.id,
+                        egui::FontId::monospace(10.0), col);
+                }
+            }
+        }
+
         // Location markers.
         for m in &self.settings.markers {
             let w = crate::render::mercator::lonlat_to_world(m.lon, m.lat);
@@ -2465,9 +2618,18 @@ impl HookEchoApp {
                 continue;
             }
             let col = crate::theme::accent(self.settings.theme);
-            painter.circle_filled(p, 4.0, col);
-            painter.circle_stroke(p, 4.0, egui::Stroke::new(1.5, egui::Color32::WHITE));
-            painter.text(p + egui::vec2(7.0, 0.0), egui::Align2::LEFT_CENTER, &m.name, egui::FontId::proportional(12.0), col);
+            // Uploaded icon if one is loaded; otherwise the default accent dot.
+            let tex = m.icon.as_ref().and_then(|n| self.marker_icon_tex.get(n)).and_then(|t| t.as_ref());
+            let label_dx = if let Some(tex) = tex {
+                let r = egui::Rect::from_center_size(p, egui::vec2(24.0, 24.0));
+                painter.image(tex.id(), r, egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), egui::Color32::WHITE);
+                14.0
+            } else {
+                painter.circle_filled(p, 4.0, col);
+                painter.circle_stroke(p, 4.0, egui::Stroke::new(1.5, egui::Color32::WHITE));
+                7.0
+            };
+            painter.text(p + egui::vec2(label_dx, 0.0), egui::Align2::LEFT_CENTER, &m.name, egui::FontId::proportional(12.0), col);
         }
 
         // Measure tool.
@@ -2597,6 +2759,8 @@ impl HookEchoApp {
                 }
                 ui.checkbox(&mut v.show_radar, "Radar");
                 ui.checkbox(&mut v.show_legend, "Legend");
+                ui.checkbox(&mut self.show_toolbox, "Toolbox (F7)")
+                    .on_hover_text("Collapse the left panel for a full-width radar view");
                 ui.separator();
                 if ui.checkbox(&mut self.obs_mode, "Streamer / OBS mode (F8)")
                     .on_hover_text("Hide all panels, leaving only the map — clean capture for streaming")
@@ -3340,6 +3504,7 @@ impl eframe::App for HookEchoApp {
         }
 
         self.save_pending_screenshot(ctx);
+        self.load_marker_icons(ctx);
         self.drive_loop_export(ctx);
         self.apply_chase();
         self.sync_forecast_scrub();
@@ -3456,7 +3621,7 @@ impl eframe::App for HookEchoApp {
         }
 
         let mut actions = ui::toolbox::ToolboxActions::default();
-        if !self.obs_mode {
+        if !self.obs_mode && self.show_toolbox {
         egui::Panel::left("toolbox")
             .resizable(true)
             .default_size(240.0)
@@ -3476,6 +3641,7 @@ impl eframe::App for HookEchoApp {
                     &mut self.show_storm_reports,
                     &mut self.show_spotters,
                     &mut self.show_probsevere,
+                    &mut self.show_radar_sites,
                 );
             });
         }
@@ -3506,7 +3672,14 @@ impl eframe::App for HookEchoApp {
         }
 
         // First-run setup wizard.
-        if let Some(site) = ui::wizard::show(ctx, &mut self.wizard, &mut self.settings) {
+        let active = self.active;
+        if let Some(site) = ui::wizard::show(
+            ctx,
+            &mut self.wizard,
+            &mut self.settings,
+            &mut self.views[active].basemap,
+            &self.marker_icon_tex,
+        ) {
             self.settings.setup_done = true;
             self.settings.save();
             let v = &mut self.views[self.active];
@@ -3538,7 +3711,7 @@ impl eframe::App for HookEchoApp {
             })
             .collect();
         self.placefile_window.show(ctx, &mut self.settings, &pf_status);
-        self.marker_window.show(ctx, &mut self.settings);
+        self.marker_window.show(ctx, &mut self.settings, &self.marker_icon_tex);
         self.palette_editor.show(ctx, &mut self.settings, &self.palettes);
         // Storm digest: poll a pending Claude result, then render + handle Generate.
         if let Some(rx) = &self.digest_rx {

@@ -36,7 +36,7 @@ rfd = "0.15"
 mvt-reader = "2.4"
 geo-types = "0.7"
 flate2.workspace = true
-rodio = { version = "0.19", default-features = false }
+rodio = { version = "0.19", default-features = false, features = ["wav", "mp3", "vorbis", "flac"] }
 glam = { version = "0.29", features = ["bytemuck"] }
 
 # Linux windowing backends (Wayland + X11). Feature-unioned onto the base eframe above, so only

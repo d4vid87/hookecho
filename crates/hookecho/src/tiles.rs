@@ -55,21 +55,48 @@ pub enum BasemapStyle {
     MapboxOutdoors,
     MapboxDark,
     MapboxLight,
+    MapboxNavDay,
+    MapboxNavNight,
     MapTilerStreets,
     MapTilerSatellite,
     MapTilerOutdoor,
     MapTilerTopo,
     MapTilerBasic,
     MapTilerDatavizDark,
+    // Keyless raster providers (no API key). Street/road emphasis noted where relevant.
+    OsmStandard,
+    OpenTopoMap,
+    CartoPositron,
+    CartoDarkMatter,
+    CartoVoyager,
+    EsriImagery,
+    EsriStreets,
+    EsriTopo,
+    UsgsTopo,
+    UsgsImageryTopo,
+    OsmHot,
+    CyclOsm,
 }
 
 impl BasemapStyle {
     /// Cycle order for the `z` hotkey; provider styles trail the built-ins.
-    pub const ALL: [BasemapStyle; 26] = [
+    pub const ALL: [BasemapStyle; 40] = [
         BasemapStyle::Dark,
         BasemapStyle::Light,
         BasemapStyle::Satellite,
         BasemapStyle::None,
+        BasemapStyle::OsmStandard,
+        BasemapStyle::OpenTopoMap,
+        BasemapStyle::CartoPositron,
+        BasemapStyle::CartoDarkMatter,
+        BasemapStyle::CartoVoyager,
+        BasemapStyle::EsriImagery,
+        BasemapStyle::EsriStreets,
+        BasemapStyle::EsriTopo,
+        BasemapStyle::UsgsTopo,
+        BasemapStyle::UsgsImageryTopo,
+        BasemapStyle::OsmHot,
+        BasemapStyle::CyclOsm,
         BasemapStyle::GoesEast,
         BasemapStyle::GoesWest,
         BasemapStyle::GoesEastIR,
@@ -86,6 +113,8 @@ impl BasemapStyle {
         BasemapStyle::MapboxOutdoors,
         BasemapStyle::MapboxDark,
         BasemapStyle::MapboxLight,
+        BasemapStyle::MapboxNavDay,
+        BasemapStyle::MapboxNavNight,
         BasemapStyle::MapTilerStreets,
         BasemapStyle::MapTilerSatellite,
         BasemapStyle::MapTilerOutdoor,
@@ -116,6 +145,20 @@ impl BasemapStyle {
             BasemapStyle::MapboxOutdoors => "Mapbox Outdoors",
             BasemapStyle::MapboxDark => "Mapbox Dark",
             BasemapStyle::MapboxLight => "Mapbox Light",
+            BasemapStyle::MapboxNavDay => "Mapbox Navigation (day)",
+            BasemapStyle::MapboxNavNight => "Mapbox Navigation (night)",
+            BasemapStyle::OsmStandard => "OpenStreetMap",
+            BasemapStyle::OpenTopoMap => "OpenTopoMap",
+            BasemapStyle::CartoPositron => "Carto Positron",
+            BasemapStyle::CartoDarkMatter => "Carto Dark Matter",
+            BasemapStyle::CartoVoyager => "Carto Voyager",
+            BasemapStyle::EsriImagery => "Esri World Imagery",
+            BasemapStyle::EsriStreets => "Esri Streets",
+            BasemapStyle::EsriTopo => "Esri Topographic",
+            BasemapStyle::UsgsTopo => "USGS Topo",
+            BasemapStyle::UsgsImageryTopo => "USGS Imagery Topo",
+            BasemapStyle::OsmHot => "OSM Humanitarian",
+            BasemapStyle::CyclOsm => "CyclOSM",
             BasemapStyle::MapTilerStreets => "MapTiler Streets",
             BasemapStyle::MapTilerSatellite => "MapTiler Satellite",
             BasemapStyle::MapTilerOutdoor => "MapTiler Outdoor",
@@ -148,6 +191,20 @@ impl BasemapStyle {
             BasemapStyle::MapboxOutdoors => "mapbox-outdoors",
             BasemapStyle::MapboxDark => "mapbox-dark",
             BasemapStyle::MapboxLight => "mapbox-light",
+            BasemapStyle::MapboxNavDay => "mapbox-nav-day",
+            BasemapStyle::MapboxNavNight => "mapbox-nav-night",
+            BasemapStyle::OsmStandard => "osm",
+            BasemapStyle::OpenTopoMap => "opentopo",
+            BasemapStyle::CartoPositron => "carto-positron",
+            BasemapStyle::CartoDarkMatter => "carto-dark",
+            BasemapStyle::CartoVoyager => "carto-voyager",
+            BasemapStyle::EsriImagery => "esri-imagery",
+            BasemapStyle::EsriStreets => "esri-streets",
+            BasemapStyle::EsriTopo => "esri-topo",
+            BasemapStyle::UsgsTopo => "usgs-topo",
+            BasemapStyle::UsgsImageryTopo => "usgs-imagery-topo",
+            BasemapStyle::OsmHot => "osm-hot",
+            BasemapStyle::CyclOsm => "cyclosm",
             BasemapStyle::MapTilerStreets => "maptiler-streets",
             BasemapStyle::MapTilerSatellite => "maptiler-satellite",
             BasemapStyle::MapTilerOutdoor => "maptiler-outdoor",
@@ -170,7 +227,9 @@ impl BasemapStyle {
             | BasemapStyle::MapboxSatelliteStreets
             | BasemapStyle::MapboxOutdoors
             | BasemapStyle::MapboxDark
-            | BasemapStyle::MapboxLight => Provider::Mapbox,
+            | BasemapStyle::MapboxLight
+            | BasemapStyle::MapboxNavDay
+            | BasemapStyle::MapboxNavNight => Provider::Mapbox,
             BasemapStyle::MapTilerStreets
             | BasemapStyle::MapTilerSatellite
             | BasemapStyle::MapTilerOutdoor
@@ -187,7 +246,18 @@ impl BasemapStyle {
             Provider::Mapbox => "© Mapbox © OpenStreetMap",
             Provider::MapTiler => "© MapTiler © OpenStreetMap",
             Provider::Builtin => match self {
-                BasemapStyle::Satellite => "USGS The National Map",
+                BasemapStyle::Satellite | BasemapStyle::UsgsTopo | BasemapStyle::UsgsImageryTopo => {
+                    "USGS The National Map"
+                }
+                BasemapStyle::OsmStandard | BasemapStyle::OsmHot | BasemapStyle::CyclOsm => {
+                    "© OpenStreetMap contributors"
+                }
+                BasemapStyle::OpenTopoMap => "© OpenTopoMap (CC-BY-SA) © OpenStreetMap",
+                BasemapStyle::CartoPositron
+                | BasemapStyle::CartoDarkMatter
+                | BasemapStyle::CartoVoyager => "© CARTO © OpenStreetMap",
+                BasemapStyle::EsriImagery => "© Esri, Maxar, Earthstar Geographics",
+                BasemapStyle::EsriStreets | BasemapStyle::EsriTopo => "© Esri © OpenStreetMap",
                 _ if self.goes_layer().is_some() => "NASA GIBS · NOAA GOES",
                 _ => "© OpenMapTiles © OpenStreetMap",
             },
@@ -213,16 +283,21 @@ impl BasemapStyle {
     }
 
     /// Is this style a raster-tile source (as opposed to the vector MVT basemap or None)?
+    /// Everything except the vector Dark/Light and None is a raster source.
     pub fn is_raster(self) -> bool {
-        matches!(self.provider_kind(), Provider::Mapbox | Provider::MapTiler)
-            || self == BasemapStyle::Satellite
-            || self.goes_layer().is_some()
+        !matches!(self, BasemapStyle::Dark | BasemapStyle::Light | BasemapStyle::None)
     }
 
     /// Max zoom the raster source serves; deeper views upscale rather than fetch 404s. GIBS
-    /// GOES layers top out at their matrix level; other rasters go to street level.
+    /// GOES layers top out at their matrix level; the USGS ArcGIS services cap at 16.
     fn max_raster_z(self) -> u8 {
-        self.goes_layer().map(|(_, level)| level).unwrap_or(18)
+        if let Some((_, level)) = self.goes_layer() {
+            return level;
+        }
+        match self {
+            BasemapStyle::UsgsTopo | BasemapStyle::UsgsImageryTopo => 16,
+            _ => 18,
+        }
     }
 
     /// Is this style selectable given which provider keys are set?
@@ -260,6 +335,8 @@ impl BasemapStyle {
             BasemapStyle::MapboxOutdoors => "outdoors-v12",
             BasemapStyle::MapboxDark => "dark-v11",
             BasemapStyle::MapboxLight => "light-v11",
+            BasemapStyle::MapboxNavDay => "navigation-day-v1",
+            BasemapStyle::MapboxNavNight => "navigation-night-v1",
             BasemapStyle::MapTilerStreets => "streets-v2",
             BasemapStyle::MapTilerSatellite => "satellite",
             BasemapStyle::MapTilerOutdoor => "outdoor-v2",
@@ -275,9 +352,47 @@ impl BasemapStyle {
     fn url(self, z: u8, x: u32, y: u32, mapbox_key: &str, maptiler_key: &str) -> Option<String> {
         match self.provider_kind() {
             Provider::Builtin => match self {
-                // USGS ImageryOnly (public-domain US aerial imagery). Note `{z}/{y}/{x}` order.
+                // ArcGIS MapServer tiles (public). All use `{z}/{y}/{x}` order and serve JPEG.
                 BasemapStyle::Satellite => Some(format!(
                     "https://basemap.nationalmap.gov/arcgis/rest/services/USGSImageryOnly/MapServer/tile/{z}/{y}/{x}"
+                )),
+                BasemapStyle::UsgsTopo => Some(format!(
+                    "https://basemap.nationalmap.gov/arcgis/rest/services/USGSTopo/MapServer/tile/{z}/{y}/{x}"
+                )),
+                BasemapStyle::UsgsImageryTopo => Some(format!(
+                    "https://basemap.nationalmap.gov/arcgis/rest/services/USGSImageryTopo/MapServer/tile/{z}/{y}/{x}"
+                )),
+                BasemapStyle::EsriImagery => Some(format!(
+                    "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
+                )),
+                BasemapStyle::EsriStreets => Some(format!(
+                    "https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}"
+                )),
+                BasemapStyle::EsriTopo => Some(format!(
+                    "https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}"
+                )),
+                // Standard XYZ `{z}/{x}/{y}.png` slippy tiles. Single subdomain shard where the
+                // provider uses them (ponytail: rotate a-c only if throttled).
+                BasemapStyle::OsmStandard => {
+                    Some(format!("https://tile.openstreetmap.org/{z}/{x}/{y}.png"))
+                }
+                BasemapStyle::OpenTopoMap => {
+                    Some(format!("https://a.tile.opentopomap.org/{z}/{x}/{y}.png"))
+                }
+                BasemapStyle::CartoPositron => {
+                    Some(format!("https://basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png"))
+                }
+                BasemapStyle::CartoDarkMatter => {
+                    Some(format!("https://basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png"))
+                }
+                BasemapStyle::CartoVoyager => {
+                    Some(format!("https://basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png"))
+                }
+                BasemapStyle::OsmHot => {
+                    Some(format!("https://a.tile.openstreetmap.fr/hot/{z}/{x}/{y}.png"))
+                }
+                BasemapStyle::CyclOsm => Some(format!(
+                    "https://a.tile-cyclosm.openstreetmap.fr/cyclosm/{z}/{x}/{y}.png"
                 )),
                 // NASA GIBS WMTS (web mercator), latest GOES imagery. GIBS uses `{z}/{y}/{x}`.
                 _ if self.goes_layer().is_some() => {
@@ -628,5 +743,44 @@ mod tests {
         let times = parse_goes_domain(xml, 3);
         assert_eq!(times.len(), 3);
         assert_eq!(times.last().unwrap().format("%H:%M").to_string(), "01:00");
+    }
+
+    #[test]
+    fn slug_roundtrips_for_all_styles() {
+        for s in BasemapStyle::ALL {
+            assert_eq!(BasemapStyle::from_slug(s.slug()), s, "slug roundtrip {s:?}");
+        }
+    }
+
+    #[test]
+    fn keyless_rasters_have_urls() {
+        // The new keyless providers must produce a URL with no API key set.
+        let keyless = [
+            BasemapStyle::OsmStandard,
+            BasemapStyle::OpenTopoMap,
+            BasemapStyle::CartoPositron,
+            BasemapStyle::CartoDarkMatter,
+            BasemapStyle::CartoVoyager,
+            BasemapStyle::EsriImagery,
+            BasemapStyle::EsriStreets,
+            BasemapStyle::EsriTopo,
+            BasemapStyle::UsgsTopo,
+            BasemapStyle::UsgsImageryTopo,
+            BasemapStyle::OsmHot,
+            BasemapStyle::CyclOsm,
+        ];
+        for s in keyless {
+            assert!(s.is_raster(), "{s:?} should be raster");
+            assert!(s.url(6, 15, 25, "", "").is_some(), "{s:?} should have a keyless URL");
+        }
+        // ArcGIS services use {z}/{y}/{x}: y before x in the path.
+        let esri = BasemapStyle::EsriImagery.url(6, 15, 25, "", "").unwrap();
+        assert!(esri.ends_with("/6/25/15"), "Esri y/x order: {esri}");
+        // Standard slippy tiles use {z}/{x}/{y}.
+        let osm = BasemapStyle::OsmStandard.url(6, 15, 25, "", "").unwrap();
+        assert!(osm.ends_with("/6/15/25.png"), "OSM x/y order: {osm}");
+        // Mapbox nav styles stay key-gated.
+        assert!(BasemapStyle::MapboxNavDay.url(6, 15, 25, "", "").is_none());
+        assert!(BasemapStyle::MapboxNavDay.url(6, 15, 25, "k", "").is_some());
     }
 }

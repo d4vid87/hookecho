@@ -22,6 +22,8 @@ pub struct Timeline {
     /// Playback rate in frames/second.
     pub speed: f32,
     pub loop_enabled: bool,
+    /// How many newest frames the live loop cycles over (synced from settings each frame).
+    pub live_window: usize,
     /// The (site, date) the current `frames` were listed for — detects a stale listing.
     pub frames_key: Option<(String, NaiveDate)>,
     /// A frame listing is in flight.
@@ -44,6 +46,7 @@ impl Default for Timeline {
             playing: false,
             speed: 4.0,
             loop_enabled: true,
+            live_window: 10,
             frames_key: None,
             listing: false,
             seek_target: None,
@@ -96,8 +99,39 @@ impl Timeline {
                 return;
             }
         }
-        if self.following || self.playhead >= self.frames.len() {
+        // While live-looping, a fresh listing must not yank the playhead to the head — the loop
+        // owns the playhead. Only clamp it back into range if it now points past the end.
+        if self.following && self.playing && !self.frames.is_empty() {
+            self.playhead = self.playhead.min(self.frames.len() - 1);
+        } else if self.following || self.playhead >= self.frames.len() {
             self.playhead = self.frames.len().saturating_sub(1);
+        }
+    }
+
+    /// Append a newly-arrived live head frame (keeps the loop window sliding forward). The
+    /// playhead is left where it is; the window is relative to `frames.len()`.
+    pub fn append_head(&mut self, id: Identifier) {
+        self.frames.push(id);
+    }
+
+    /// True when the play button is running a rolling live loop (pinned to head, playing, and the
+    /// playhead is somewhere behind the newest frame).
+    pub fn live_looping(&self) -> bool {
+        self.following && self.playing && !self.at_head()
+    }
+
+    /// Play/pause toggle. Starting at the live head begins a rolling loop over the newest
+    /// `live_window` frames while staying pinned to live; starting on an archive day replays from
+    /// the first frame.
+    pub fn toggle_play(&mut self) {
+        self.playing = !self.playing;
+        if self.playing && self.at_head() && !self.frames.is_empty() {
+            if self.following {
+                // Live: loop the tail window, stay pinned so new volumes keep arriving.
+                self.playhead = self.frames.len().saturating_sub(self.live_window.max(1));
+            } else {
+                self.playhead = 0; // archive: replay from the start
+            }
         }
     }
 
@@ -149,10 +183,18 @@ impl Timeline {
         self.last_advance = Some(Instant::now());
         if self.playhead + 1 < self.frames.len() {
             self.playhead += 1;
-            self.following = self.playhead + 1 >= self.frames.len();
+            // Archive play re-pins to live at the head; a live loop stays pinned throughout.
+            if !self.following {
+                self.following = self.playhead + 1 >= self.frames.len();
+            }
         } else if self.loop_enabled {
-            self.playhead = 0;
-            self.following = false;
+            // Wrap: a live loop jumps back to the window start and keeps following; an archive
+            // loop restarts from the beginning, un-pinned.
+            if self.following {
+                self.playhead = self.frames.len().saturating_sub(self.live_window.max(1));
+            } else {
+                self.playhead = 0;
+            }
         } else {
             self.playing = false;
         }
@@ -187,5 +229,63 @@ mod tests {
         let next = |p: usize| if p + 1 < n { p + 1 } else { 0 };
         assert_eq!(next(4), 0);
         assert_eq!(next(2), 3);
+    }
+
+    /// Build a timeline with `n` valid archive frames (names parse to real times).
+    fn with_frames(n: usize) -> Timeline {
+        let mut t = Timeline::default();
+        t.frames = (0..n)
+            .map(|i| Identifier::new(format!("KTLX20130520_{:02}{:02}00_V06", i / 60, i % 60)))
+            .collect();
+        t
+    }
+
+    #[test]
+    fn toggle_play_at_live_head_starts_rolling_loop() {
+        let mut t = with_frames(15);
+        t.live_window = 10;
+        t.following = true;
+        t.playhead = 14; // at head
+        t.toggle_play();
+        assert!(t.playing);
+        assert!(t.following, "live loop stays pinned to the head");
+        assert_eq!(t.playhead, 5, "loop starts at len - window");
+    }
+
+    #[test]
+    fn live_loop_wraps_to_window_start_and_keeps_following() {
+        let mut t = with_frames(15);
+        t.live_window = 10;
+        t.following = true;
+        t.playing = true;
+        t.playhead = 14; // last frame → tick wraps
+        assert!(t.tick(), "first tick fires immediately");
+        assert_eq!(t.playhead, 5, "wrap to len - window");
+        assert!(t.following, "still live");
+    }
+
+    #[test]
+    fn archive_loop_wraps_to_zero_unpinned() {
+        let mut t = with_frames(5);
+        t.following = false;
+        t.playing = true;
+        t.playhead = 4;
+        assert!(t.tick());
+        assert_eq!(t.playhead, 0, "archive loop restarts from the beginning");
+        assert!(!t.following);
+    }
+
+    #[test]
+    fn appended_head_slides_the_window() {
+        let mut t = with_frames(12);
+        t.live_window = 10;
+        t.following = true;
+        t.playing = true;
+        t.playhead = 2; // mid-window
+        let before = t.frames.len();
+        t.append_head(Identifier::new("KTLX20130520_0012_00_V06".to_string()));
+        assert_eq!(t.frames.len(), before + 1, "head appended");
+        assert_eq!(t.playhead, 2, "playhead unmoved; window slides on next wrap");
+        assert!(t.live_looping());
     }
 }
