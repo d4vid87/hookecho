@@ -34,7 +34,13 @@ pub fn show(
             }
             let aspect = rect.width() / rect.height().max(1.0);
             let uniform = orbit_uniform(*az, *el, *dist, aspect, n, nz, 256);
-            let cb = Volume3dCallback { upload: pending.take(), uniform };
+            // On the window's first frame egui may hand us a zero-area rect (auto-size pass);
+            // the paint callback would be culled and the one-shot upload lost, leaving the view
+            // black until reopened. Hold the upload until the rect is real.
+            let upload = (rect.height() >= 1.0 && rect.width() >= 1.0)
+                .then(|| pending.take())
+                .flatten();
+            let cb = Volume3dCallback { upload, uniform };
             ui.painter().add(egui_wgpu::Callback::new_paint_callback(rect, cb));
         });
     *open = keep;
