@@ -549,8 +549,7 @@ impl TileManager {
             .user_agent(USER_AGENT)
             .build()
             .expect("build reqwest client");
-        let cache_root = directories::ProjectDirs::from("", "", "hookecho")
-            .map(|d| d.cache_dir().join("tiles"));
+        let cache_root = crate::paths::cache_dir().map(|d| d.join("tiles"));
         Self {
             rt,
             client,

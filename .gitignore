@@ -2,5 +2,13 @@
 Cargo.lock
 *.png
 !docs/shots/*.png
+!android/app/src/main/res/**/*.png
 /dist
 packaging/appimagetool-*.AppImage
+
+# Android build artifacts (the .so is produced by cargo-ndk; Gradle output is transient).
+/android/app/src/main/jniLibs/
+/android/.gradle/
+/android/build/
+/android/app/build/
+/android/local.properties

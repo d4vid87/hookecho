@@ -22,7 +22,7 @@ pub struct ToolboxActions {
 }
 
 #[allow(clippy::too_many_arguments)] // one flat call per frame; a params struct adds churn for no reader gain
-pub fn show(
+pub(crate) fn show(
     ui: &mut egui::Ui,
     view: &mut MapView,
     settings: &mut Settings,

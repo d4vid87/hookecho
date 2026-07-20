@@ -1,32 +1,21 @@
 //! Hook Echo-WX — advanced NEXRAD weather radar viewer.
+//!
+//! The desktop binary: dispatches the `--headless-*` verifiers, then launches the windowed app.
+//! The shared app + render pipelines live in the `hookecho` library crate (see `lib.rs`), so the
+//! Android `cdylib` reuses all of it through its own `android_main` entry.
 
-mod app;
-mod audio;
-mod basemap_style;
-mod colormap;
-mod digest;
-mod events;
-mod geo;
-mod gps;
-mod headless;
-mod hotkeys;
-mod icon;
-mod loopexport;
-mod overlay_build;
-mod render;
-mod render3d;
-mod settings;
-mod theme;
-mod tiles;
-mod timeline;
-mod tray;
-mod ui;
-mod vector_tiles;
-mod view;
-
-use app::HookEchoApp;
+#[cfg(not(target_os = "android"))]
+use hookecho::{audio, headless, icon, settings, tiles, tray};
+#[cfg(not(target_os = "android"))]
 use wxdata::level2::Moment;
 
+/// The bin target is desktop-only (Android enters through `android_main` in the lib, and never
+/// runs this executable), but `cargo build` for the Android target still compiles it — so it
+/// needs to at least link there.
+#[cfg(target_os = "android")]
+fn main() {}
+
+#[cfg(not(target_os = "android"))]
 fn main() -> eframe::Result<()> {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
 
@@ -410,23 +399,11 @@ fn main() -> eframe::Result<()> {
         return Ok(());
     }
 
-    let native_options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default()
-            .with_inner_size([1280.0, 800.0])
-            .with_title("Hook Echo-WX")
-            .with_icon(icon::icon_data()),
-        renderer: eframe::Renderer::Wgpu,
-        ..Default::default()
-    };
-
-    eframe::run_native(
-        "Hook Echo-WX",
-        native_options,
-        Box::new(|cc| Ok(Box::new(HookEchoApp::new(cc)))),
-    )
+    hookecho::run_desktop()
 }
 
 /// The token following `flag` on the command line, if present.
+#[cfg(not(target_os = "android"))]
 fn flag_value<'a>(args: &'a [String], flag: &str) -> Option<&'a str> {
     args.iter()
         .position(|a| a == flag)

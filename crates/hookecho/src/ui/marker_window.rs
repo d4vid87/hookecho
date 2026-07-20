@@ -79,7 +79,7 @@ pub fn marker_grid(ui: &mut egui::Ui, markers: &mut Vec<Marker>, icon_tex: &Icon
 
 /// Prompt for a PNG, copy it into the marker-icons dir, and return the stored filename.
 fn pick_and_store_icon() -> Option<String> {
-    let src = rfd::FileDialog::new().add_filter("PNG", &["png"]).pick_file()?;
+    let src = crate::dialog::open_path("PNG", &["png"])?;
     let name = src.file_name()?.to_string_lossy().into_owned();
     let dir = Settings::marker_icons_dir()?;
     if let Err(e) = std::fs::copy(&src, dir.join(&name)) {

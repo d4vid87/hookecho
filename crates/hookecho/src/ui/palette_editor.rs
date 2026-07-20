@@ -161,7 +161,7 @@ fn save_and_apply(table: &ColorTable, moment: Moment, settings: &mut Settings) {
 }
 
 fn import_pal() -> Option<ColorTable> {
-    let path = rfd::FileDialog::new().add_filter("GRLevelX palette", &["pal"]).pick_file()?;
+    let path = crate::dialog::open_path("GRLevelX palette", &["pal"])?;
     match std::fs::read_to_string(&path).ok().and_then(|t| crate::colormap::parse_pal(&t).ok()) {
         Some(t) => Some(t),
         None => {
@@ -172,11 +172,7 @@ fn import_pal() -> Option<ColorTable> {
 }
 
 fn export_pal(table: &ColorTable) {
-    let Some(path) = rfd::FileDialog::new()
-        .set_file_name("palette.pal")
-        .add_filter("GRLevelX palette", &["pal"])
-        .save_file()
-    else {
+    let Some(path) = crate::dialog::save_path("palette.pal", "pal") else {
         return;
     };
     if let Err(e) = std::fs::write(&path, crate::colormap::to_pal_string(table)) {

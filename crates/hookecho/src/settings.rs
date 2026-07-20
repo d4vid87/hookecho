@@ -279,7 +279,9 @@ impl Default for Settings {
             presets: Vec::new(),
             palettes: BTreeMap::new(),
             velocity_unit: VelocityUnit::default(),
-            ui_scale: 1.0,
+            // Touch UI wants larger widgets out of the box; desktop stays at 1.0. (First-run only —
+            // once the user adjusts the slider, the saved value wins.)
+            ui_scale: if cfg!(target_os = "android") { 1.3 } else { 1.0 },
             placefiles: Vec::new(),
             markers: Vec::new(),
             dealias_velocity: false,
@@ -306,20 +308,19 @@ impl Default for Settings {
 
 impl Settings {
     fn path() -> Option<PathBuf> {
-        directories::ProjectDirs::from("", "", "hookecho")
-            .map(|d| d.config_dir().join("settings.json"))
+        crate::paths::config_dir().map(|d| d.join("settings.json"))
     }
 
     /// The auto-scanned color-tables folder (`<data_dir>/colortables`). Created on first use.
     pub fn colortables_dir() -> Option<PathBuf> {
-        let dir = directories::ProjectDirs::from("", "", "hookecho")?.data_dir().join("colortables");
+        let dir = crate::paths::data_dir()?.join("colortables");
         let _ = std::fs::create_dir_all(&dir);
         Some(dir)
     }
 
     /// Folder holding uploaded marker icons (`<data_dir>/marker-icons`). Created on first use.
     pub fn marker_icons_dir() -> Option<PathBuf> {
-        let dir = directories::ProjectDirs::from("", "", "hookecho")?.data_dir().join("marker-icons");
+        let dir = crate::paths::data_dir()?.join("marker-icons");
         let _ = std::fs::create_dir_all(&dir);
         Some(dir)
     }

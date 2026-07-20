@@ -6,6 +6,13 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 
+# The shared library (desktop bin + Android cdylib both build on it). `cdylib` is what Android's
+# NativeActivity loads as `libhookecho.so`; `lib` keeps it usable as a normal Rust dependency.
+[lib]
+name = "hookecho"
+path = "src/lib.rs"
+crate-type = ["lib", "cdylib"]
+
 [[bin]]
 name = "hookecho"
 path = "src/main.rs"
@@ -32,12 +39,16 @@ serde_json.workspace = true
 directories.workspace = true
 lru.workspace = true
 lyon = "1.0.19"
-rfd = "0.15"
 mvt-reader = "2.4"
 geo-types = "0.7"
 flate2.workspace = true
 rodio = { version = "0.19", default-features = false, features = ["wav", "mp3", "vorbis", "flac"] }
 glam = { version = "0.29", features = ["bytemuck"] }
+
+# Native file dialogs — desktop only. rfd has no Android backend, and Android replaces it with a
+# fixed exports dir + Storage-Access-Framework (deferred); see `dialog.rs`.
+[target.'cfg(not(target_os = "android"))'.dependencies]
+rfd = "0.15"
 
 # Linux windowing backends (Wayland + X11). Feature-unioned onto the base eframe above, so only
 # Linux builds pull them; Windows/macOS use their native winit backends.
@@ -45,3 +56,11 @@ glam = { version = "0.29", features = ["bytemuck"] }
 [target.'cfg(target_os = "linux")'.dependencies]
 eframe = { version = "0.35", default-features = false, features = ["wayland", "x11"] }
 ksni = { version = "0.3", features = ["blocking"] }
+
+# Android: eframe's NativeActivity backend + the winit android-activity glue (feature-unioned onto
+# the base eframe). `winit` is named directly so `android_main` can take the `AndroidApp` handle;
+# its version tracks the one eframe 0.35 pulls (winit 0.30), so the type matches eframe's field.
+[target.'cfg(target_os = "android")'.dependencies]
+eframe = { version = "0.35", default-features = false, features = ["android-native-activity"] }
+winit = { version = "0.30", features = ["android-native-activity"] }
+android_logger = "0.14"

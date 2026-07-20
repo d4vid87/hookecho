@@ -383,8 +383,7 @@ impl VectorTileManager {
             .user_agent(USER_AGENT)
             .build()
             .expect("build reqwest client");
-        let cache_root =
-            directories::ProjectDirs::from("", "", "hookecho").map(|d| d.cache_dir().join("vector"));
+        let cache_root = crate::paths::cache_dir().map(|d| d.join("vector"));
         Self {
             rt,
             client,

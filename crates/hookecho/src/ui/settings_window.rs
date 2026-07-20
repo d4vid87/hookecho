@@ -129,10 +129,7 @@ impl SettingsWindow {
                 });
 
                 if ui.button("Browse…").clicked() {
-                    if let Some(path) = rfd::FileDialog::new()
-                        .add_filter("GRLevelX palette", &["pal"])
-                        .pick_file()
-                    {
+                    if let Some(path) = crate::dialog::open_path("GRLevelX palette", &["pal"]) {
                         settings.palettes.insert(key.to_string(), path.to_string_lossy().into_owned());
                     }
                 }
@@ -256,10 +253,7 @@ pub fn sound_picker(ui: &mut egui::Ui, settings: &mut Settings) {
                     }
                     let is_custom = matches!(sound, AlertSound::Custom(_));
                     if ui.selectable_label(is_custom, "Custom…").clicked() {
-                        if let Some(path) = rfd::FileDialog::new()
-                            .add_filter("audio", &["wav", "mp3", "ogg", "flac"])
-                            .pick_file()
-                        {
+                        if let Some(path) = crate::dialog::open_path("audio", &["wav", "mp3", "ogg", "flac"]) {
                             *sound = AlertSound::Custom(path.to_string_lossy().into_owned());
                         }
                     }

@@ -27,6 +27,14 @@ use wxdata::overlay::{self, GeoFeature};
 /// Frames to let a stepped archive volume load before grabbing it for the loop GIF.
 const LOOP_SETTLE_FRAMES: u8 = 12;
 
+/// Squared screen-space hit radius (px²) for a tap/click target of nominal `px` radius. Android
+/// finger taps need a fatter target than a mouse cursor, so targets grow ~1.8× there; desktop is
+/// unchanged.
+fn tap_r2(px: f32) -> f32 {
+    let r = if cfg!(target_os = "android") { px * 1.8 } else { px };
+    r * r
+}
+
 /// Which severe-weather overlays are shown.
 pub struct OverlayFilters {
     pub show_alerts: bool,
@@ -572,6 +580,8 @@ pub struct HookEchoApp {
     vol3d_el: f32,
     vol3d_dist: f32,
     vol3d_pending: Option<crate::render3d::Volume3dUpload>,
+    /// GPU 2D texture-size cap (device limit), used to clamp field-grid decimation on mobile GPUs.
+    max_texture_dim: u32,
 }
 
 /// Split `r` into `n` pane rects: 1 full, 2 side-by-side, 3–4 in a 2×2 grid.
@@ -611,6 +621,9 @@ impl HookEchoApp {
             .expect("tokio runtime");
 
         let render_state = cc.wgpu_render_state.as_ref().expect("wgpu backend");
+        // The GPU's 2D texture-size cap: desktop/Adreno do 16384, but many mobile GPUs cap at
+        // 4096. Field grids (MRMS rotation/AzShear reach 14000 px) are decimated to fit this.
+        let max_texture_dim = render_state.device.limits().max_texture_dimension_2d;
         {
             let mut w = render_state.renderer.write();
             w.callback_resources
@@ -808,6 +821,7 @@ impl HookEchoApp {
             vol3d_el: 25.0,
             vol3d_dist: 3.0,
             vol3d_pending: None,
+            max_texture_dim,
         };
         app.palettes.reload(&app.settings.palette_paths());
         app.fetch_overlays(&cc.egui_ctx.clone());
@@ -1160,15 +1174,15 @@ impl HookEchoApp {
         };
         // Storm features win: bail if a report or cell dot sits under the cursor.
         let near_storm = (self.show_storm_reports
-            && self.active_storm_reports().iter().any(|r| to_screen_hit(r.lon, r.lat) <= 12.0 * 12.0))
+            && self.active_storm_reports().iter().any(|r| to_screen_hit(r.lon, r.lat) <= tap_r2(12.0)))
             || (self.cells_site.as_deref() == self.views[idx].site.as_deref()
-                && self.storm_cells.iter().any(|c| to_screen_hit(c.lon, c.lat) <= 14.0 * 14.0));
+                && self.storm_cells.iter().any(|c| to_screen_hit(c.lon, c.lat) <= tap_r2(14.0)));
         if near_storm {
             return false;
         }
         let hit = wxdata::sites::sites()
             .iter()
-            .filter(|s| to_screen_hit(s.longitude as f64, s.latitude as f64) <= 12.0 * 12.0)
+            .filter(|s| to_screen_hit(s.longitude as f64, s.latitude as f64) <= tap_r2(12.0))
             .min_by(|a, b| {
                 to_screen_hit(a.longitude as f64, a.latitude as f64)
                     .partial_cmp(&to_screen_hit(b.longitude as f64, b.latitude as f64))
@@ -1503,8 +1517,7 @@ impl HookEchoApp {
         let (tx, rx) = std::sync::mpsc::channel();
         self.climo_rx = Some(rx);
         let http = self.http.clone();
-        let cache = directories::ProjectDirs::from("", "", "hookecho")
-            .map(|d| d.cache_dir().join("torclimo_1950-2022.csv"));
+        let cache = crate::paths::cache_dir().map(|d| d.join("torclimo_1950-2022.csv"));
         self._rt.spawn(async move {
             let res = load_or_fetch_climo(&http, cache).await.map_err(|e| e.to_string());
             let _ = tx.send(res);
@@ -1635,9 +1648,11 @@ impl HookEchoApp {
                     if layer == crate::render::FieldLayer::Lightning {
                         self.check_lightning_proximity(&field);
                     }
-                    // Some MRMS products (rotation/AzShear) are 14000×7000 — over the 8192 GPU
-                    // texture cap; max-pool them to fit.
-                    let field = field.decimated(8192);
+                    // Some MRMS products (rotation/AzShear) are 14000×7000 — over the GPU texture
+                    // cap; max-pool to the smaller of an 8192 ceiling and the device's real limit
+                    // (mobile GPUs can be as low as 4096).
+                    let cap = (self.max_texture_dim as usize).min(8192);
+                    let field = field.decimated(cap);
                     let upload = self.field_upload(layer, &field);
                     if let Some(s) = self.fields.get_mut(&layer) {
                         s.pending = Some(upload);
@@ -2394,7 +2409,11 @@ impl HookEchoApp {
         let response = ui.interact(prect, egui::Id::new(("pane", idx)), egui::Sense::click_and_drag());
 
         // --- Input (mutates this pane's camera / selects it active) ---
-        if response.dragged() {
+        // During a multi-touch gesture the first finger still drives the egui pointer, so a pinch
+        // would ALSO register as a drag and fight the zoom — the gesture block below owns both
+        // pan and zoom while two fingers are down.
+        let gesture = ui.input(|i| i.multi_touch());
+        if response.dragged() && gesture.is_none() {
             self.active = idx;
             let d = response.drag_delta();
             self.views[idx].camera.pan_pixels(d.x, d.y);
@@ -2406,6 +2425,23 @@ impl HookEchoApp {
                     self.active = idx;
                     let cursor = (pos.x - prect.left(), pos.y - prect.top());
                     self.views[idx].camera.zoom_at(scroll as f64 * 0.005, cursor, vp);
+                }
+            }
+        }
+        // Two-finger gesture (touchscreens): pan by the gesture's translation, and zoom by the
+        // pinch. `zoom_delta` is a scale factor, so its log2 is the change in the camera's log2
+        // zoom level; anchor it at the gesture center so the pinched point stays put. Fires for
+        // the pane the gesture centers over. No-op with no touch.
+        if let Some(mt) = gesture {
+            if prect.contains(mt.center_pos) {
+                self.active = idx;
+                let t = mt.translation_delta;
+                if t != egui::Vec2::ZERO {
+                    self.views[idx].camera.pan_pixels(t.x, t.y);
+                }
+                if (mt.zoom_delta - 1.0).abs() > f32::EPSILON {
+                    let cursor = (mt.center_pos.x - prect.left(), mt.center_pos.y - prect.top());
+                    self.views[idx].camera.zoom_at((mt.zoom_delta as f64).log2(), cursor, vp);
                 }
             }
         }
@@ -2469,7 +2505,7 @@ impl HookEchoApp {
                                 let w = crate::render::mercator::lonlat_to_world(r.lon, r.lat);
                                 let (sx, sy) = cam.world_to_screen(w, vp);
                                 let (dx, dy) = (prect.left() + sx - pos.x, prect.top() + sy - pos.y);
-                                dx * dx + dy * dy <= 12.0 * 12.0
+                                dx * dx + dy * dy <= tap_r2(12.0)
                             })
                         }).flatten().cloned();
                         if let Some(r) = report {
@@ -2493,7 +2529,7 @@ impl HookEchoApp {
                                     let w = crate::render::mercator::lonlat_to_world(c.lon, c.lat);
                                     let (sx, sy) = cam.world_to_screen(w, vp);
                                     let (dx, dy) = (prect.left() + sx - pos.x, prect.top() + sy - pos.y);
-                                    dx * dx + dy * dy <= 14.0 * 14.0
+                                    dx * dx + dy * dy <= tap_r2(14.0)
                                 })
                             })
                             .flatten()
@@ -3433,7 +3469,9 @@ impl HookEchoApp {
                         }
                     }
                 });
-                if self.gps_rx.is_none() {
+                // gpsd is a desktop daemon; Android has no local gpsd (native location is a v2 JNI
+                // job), so this connect button only appears off-Android.
+                if !cfg!(target_os = "android") && self.gps_rx.is_none() {
                     if ui.button("Connect GPS (gpsd)")
                         .on_hover_text("Stream your live position from a local gpsd on :2947")
                         .clicked()
@@ -3509,11 +3547,7 @@ impl HookEchoApp {
                 ui.add_enabled(false, egui::Button::new("Layer Manager (U7)"));
                 ui.separator();
                 if ui.button("Save Screenshot…").clicked() {
-                    if let Some(path) = rfd::FileDialog::new()
-                        .set_file_name("hookecho.png")
-                        .add_filter("PNG", &["png"])
-                        .save_file()
-                    {
+                    if let Some(path) = crate::dialog::save_path("hookecho.png", "png") {
                         self.screenshot_pending = Some(ShotDest::File(path));
                         ui.ctx().send_viewport_cmd(egui::ViewportCommand::Screenshot(
                             egui::UserData::default(),
@@ -3535,9 +3569,12 @@ impl HookEchoApp {
                     self.start_loop_export(crate::loopexport::LoopFormat::Gif);
                     ui.close();
                 }
-                if ui.add_enabled(self.loop_export.is_none(), egui::Button::new("Export Loop (MP4)…"))
-                    .on_hover_text("Capture the archive timeline as an MP4 (requires ffmpeg)")
-                    .clicked()
+                // MP4 export shells out to the `ffmpeg` CLI, which isn't present on Android; GIF
+                // export (pure Rust) stays. Hide the MP4 item there rather than fail on click.
+                if !cfg!(target_os = "android")
+                    && ui.add_enabled(self.loop_export.is_none(), egui::Button::new("Export Loop (MP4)…"))
+                        .on_hover_text("Capture the archive timeline as an MP4 (requires ffmpeg)")
+                        .clicked()
                 {
                     self.start_loop_export(crate::loopexport::LoopFormat::Mp4);
                     ui.close();
@@ -3611,11 +3648,7 @@ impl HookEchoApp {
 
     /// Export settings + referenced color tables to a portable JSON bundle (rfd save dialog).
     fn export_settings_bundle(&mut self) {
-        let Some(path) = rfd::FileDialog::new()
-            .set_file_name("hookecho-settings.json")
-            .add_filter("JSON", &["json"])
-            .save_file()
-        else {
+        let Some(path) = crate::dialog::save_path("hookecho-settings.json", "json") else {
             return;
         };
         match self.settings.export_bundle() {
@@ -3631,7 +3664,7 @@ impl HookEchoApp {
     /// Import a settings bundle (rfd open dialog). The next-frame dirty-diff reloads palettes
     /// and persists, and the UI (theme, layers, markers…) updates live from the new settings.
     fn import_settings_bundle(&mut self) {
-        let Some(path) = rfd::FileDialog::new().add_filter("JSON", &["json"]).pick_file() else {
+        let Some(path) = crate::dialog::open_path("JSON", &["json"]) else {
             return;
         };
         match std::fs::read_to_string(&path).map_err(|e| e.to_string()).and_then(|s| crate::settings::Settings::import_bundle(&s)) {
@@ -3647,11 +3680,7 @@ impl HookEchoApp {
             LoopFormat::Gif => ("hookecho-loop.gif", "gif"),
             LoopFormat::Mp4 => ("hookecho-loop.mp4", "mp4"),
         };
-        let Some(path) = rfd::FileDialog::new()
-            .set_file_name(name)
-            .add_filter(ext.to_uppercase(), &[ext])
-            .save_file()
-        else {
+        let Some(path) = crate::dialog::save_path(name, ext) else {
             return;
         };
         let v = &mut self.views[self.active];
@@ -4801,7 +4830,11 @@ impl eframe::App for HookEchoApp {
             self.saved = self.settings.clone();
         }
 
-        ctx.request_repaint_after(std::time::Duration::from_millis(100));
+        // Idle heartbeat so clocks (volume age, countdowns) tick without input. Data arrivals and
+        // animations (pulse, banners) request faster repaints on their own. Slower on Android to
+        // spare the battery — nothing on screen changes faster than this between frames.
+        let idle = if cfg!(target_os = "android") { 250 } else { 100 };
+        ctx.request_repaint_after(std::time::Duration::from_millis(idle));
     }
 }
 

@@ -4,7 +4,7 @@ Advanced NEXRAD weather radar viewer — an open-source homage to
 [supercell-wx](https://github.com/dpaulat/supercell-wx), built from scratch in Rust
 with `wgpu` + `egui`. Deep per-site Level 2 / Level 3 analysis plus national
 situational awareness (MRMS), forecast environment overlays, and warning
-intelligence, on Windows and Linux.
+intelligence — on Windows, Linux, and Android.
 
 ## Install
 
@@ -14,8 +14,13 @@ intelligence, on Windows and Linux.
   `Hook_Echo-WX-setup-x86_64.exe` (setup wizard) or `Hook_Echo-WX-x86_64.msi`
   (MSI, for scripted/enterprise installs). A portable
   `hookecho-windows-x86_64.zip` is there too: unzip, run `hookecho.exe`.
+- **Android** (arm64, Android 10+): sideload `Hook_Echo-WX-arm64-v8a.apk` from
+  [Releases](../../releases) (`adb install -r …`, or open it on-device with
+  "install unknown apps" enabled). The same Rust app as desktop, as a
+  `NativeActivity` — see [`android/README.md`](android/README.md).
 - **From source**: `cargo run --release` (needs a Rust toolchain; on Linux also
-  ALSA/Wayland/GTK dev headers — see `.github/workflows/ci.yml`).
+  ALSA/Wayland/GTK dev headers — see `.github/workflows/ci.yml`). Android builds
+  via `android/build.sh` (NDK + `cargo-ndk`).
 
 First launch opens a three-step setup wizard: pick your home radar site, a theme
 (13 built in), and how warnings should reach you (chime and/or

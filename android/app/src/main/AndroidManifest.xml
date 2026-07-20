@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Pure NativeActivity app: no Java/Kotlin (`android:hasCode="false"`). The activity loads
+  libhookecho.so and calls its `android_main` (see the `android.app.lib_name` meta-data, which must
+  match the crate/.so name). `configChanges` keeps rotation/resize in-process so egui just gets a
+  resize event instead of an activity restart.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <uses-permission android:name="android.permission.INTERNET" />
+
+    <!-- The wgpu backend is Vulkan; require Vulkan 1.1 (0x00400003). -->
+    <uses-feature
+        android:name="android.hardware.vulkan.version"
+        android:version="0x00400003"
+        android:required="true" />
+
+    <application
+        android:allowBackup="true"
+        android:hasCode="false"
+        android:icon="@mipmap/ic_launcher"
+        android:label="Hook Echo-WX">
+        <activity
+            android:name="android.app.NativeActivity"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboard|keyboardHidden|navigation|uiMode|density"
+            android:exported="true"
+            android:label="Hook Echo-WX">
+            <meta-data
+                android:name="android.app.lib_name"
+                android:value="hookecho" />
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>
