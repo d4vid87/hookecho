@@ -79,3 +79,14 @@ jobs:
         env:
           ANDROID_NDK_HOME: ${{ steps.ndk.outputs.ndk-path }}
         run: cargo ndk -t arm64-v8a build --lib -p hookecho
+
+      # The Android linker defers unresolved symbols to dlopen — a missing C++ runtime links
+      # "successfully" here and then crashes instantly on-device (UnsatisfiedLinkError:
+      # __cxa_pure_virtual). Fail the build if any dlopen-time C++ runtime symbol is dangling.
+      - name: Verify no unresolved C++ runtime symbols
+        run: |
+          SO=target/aarch64-linux-android/debug/libhookecho.so
+          if nm -D --undefined-only "$SO" | grep -E '__cxa_(pure_virtual|throw|guard)|__gxx_personality|_ZNSt|_Znwm|_ZdlPv'; then
+            echo "::error::unresolved C++ runtime symbols in $SO — libc++ static link is broken"
+            exit 1
+          fi
