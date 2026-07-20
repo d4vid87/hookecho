@@ -3,7 +3,8 @@
 Advanced NEXRAD weather radar viewer — an open-source homage to
 [supercell-wx](https://github.com/dpaulat/supercell-wx), built from scratch in Rust
 with `wgpu` + `egui`. Deep per-site Level 2 / Level 3 analysis plus national
-situational awareness (MRMS), on Windows and Linux.
+situational awareness (MRMS), forecast environment overlays, and warning
+intelligence, on Windows and Linux.
 
 ## Install
 
@@ -32,21 +33,23 @@ velocity, and GRLevelX `.pal` color tables (editable in-app):
 | ![REF](docs/shots/reflectivity.jpg) | ![VEL](docs/shots/velocity.jpg) | ![CC](docs/shots/cc.jpg) |
 
 **National view (MRMS)** — CONUS composite reflectivity, cloud-to-ground lightning
-density, rotation tracks / azimuthal shear, MESH hail size, and storm-total QPE
-flood layers:
+density, rotation tracks / azimuthal shear, MESH hail size, storm-total QPE flood
+layers, surface precipitation type, and FLASH flash-flood recurrence intervals:
 
 | Composite | Lightning | 1-h QPE |
 |---|---|---|
 | ![MRMS](docs/shots/mrms.jpg) | ![Lightning](docs/shots/lightning.jpg) | ![QPE](docs/shots/qpe.jpg) |
 
 **Forecast & analysis** — HRRR future radar with an observed→forecast timeline
-scrub, 3D volume raymarching, vertical cross-sections, VAD hodograph, soundings:
+scrub, HRRR CAPE/SRH environment overlays, 3D volume raymarching, vertical
+cross-sections, CAPPI altitude slices, VAD hodograph, point soundings:
 
 | HRRR future radar | 3D volume | Cross-section |
 |---|---|---|
 | ![HRRR](docs/shots/hrrr.jpg) | ![3D](docs/shots/storm3d.jpg) | ![Cross-section](docs/shots/xsection.jpg) |
 
-**Warnings & alerts** — clickable NWS bulletins with polygon overlays, an
+**Warnings & alerts** — clickable NWS bulletins with polygon overlays, parsed
+storm-motion vectors with projected paths, escalation-aware alerting, an
 active-alerts panel, audible cues, and ntfy push the moment a warning covers one
 of your saved locations:
 
@@ -54,11 +57,36 @@ of your saved locations:
 
 ## Feature highlights
 
-- **Storm analysis**: SCIT cell tracks + forecast cones, hail/mesocyclone flags,
-  auto **tornado debris signature (TDS)** detection (low CC + high Z → chime/push),
-  NOAA **ProbSevere** per-storm severe/tor/hail/wind probabilities.
+- **Warning intelligence**: each warning's `eventMotionDescription` is parsed
+  into a storm-motion vector — warned-storm dot, projected 15/30/45/60-min path,
+  and ETA readouts to your saved locations. Escalation tiers (CONSIDERABLE →
+  DESTRUCTIVE/observed tornado → **Tornado Emergency / PDS**) drive a pulsing
+  polygon outline, priority sorting in the alerts panel with red threat chips,
+  a dedicated emergency siren, and `urgent`-priority phone push.
+- **Storm analysis**: SCIT cell tracks + past tracks + arrival-time cones,
+  hail/mesocyclone flags, auto **tornado debris signature (TDS)** detection
+  (low CC + high Z → chime/push), NOAA **ProbSevere** per-storm
+  severe/tor/hail/wind probabilities.
+- **Severe environment**: HRRR CAPE (surface-based or mixed-layer parcel) and
+  storm-relative helicity (0–1 or 0–3 km) as translucent map overlays, plus
+  point soundings (Skew-T/hodograph) and the VAD wind-profile hodograph.
+- **Gridded Level 3**: Digital VIL (DVL) and Enhanced Echo Tops (EET) for the
+  active site, decoded by the from-scratch packet-16 (Digital Radial Data Array)
+  decoder — BZIP2 symbology blocks, ICD float16 thresholds, MetPy-golden-tested.
+- **Surface obs**: METAR station plots — wind barbs (US convention),
+  temperature/dewpoint, flight-category-colored stations, greedy decluttering,
+  raw METAR on hover.
+- **Tropical**: active NHC storms with forecast cones, track lines, and
+  Saffir–Simpson category-colored forecast points; layer ids discovered at
+  runtime so NHC MapServer drift can't break it.
+- **Outlooks**: SPC Day 1–3 categorical convective outlooks, plus Day-1
+  probabilistic tornado/wind/hail grids with the significant-severe (SIG) hatch.
 - **Nowcast**: 0–45 min optical-flow radar extrapolation from storm motion,
-  alongside hourly HRRR model future radar.
+  alongside hourly HRRR model future radar (0–18 h) on the timeline's forecast
+  tail.
+- **Time machine**: archive playback of any date since 2008 — with the storm-based
+  warning polygons that were actually in effect at the scrubbed instant (IEM
+  archive), a curated historic events library, and bookmarks.
 - **Safety**: My-Locations warning monitoring, lightning proximity alarm
   (strike within ~15 km of a saved spot → chime/push), storm reports and
   Spotter Network overlay (contact info stripped at parse).
@@ -66,18 +94,21 @@ of your saved locations:
   (SPC 1950–2022 database) with EF-scale histogram.
 - **Radar DVR**: deep in-RAM decode buffer with one-touch instant replay (`R`).
 - **Streamer/OBS mode**: chrome-free UI (`F8`) + auto-tour of active warnings (`F9`).
-- **Time machine**: archive playback of any date since 2008, curated historic
-  events library, bookmarks.
-- Multi-pane layouts, placefiles, sensor dashboard, cross-sections/CAPPI,
-  13 themes, tray + background alerting, screenshot/loop export.
+- Multi-pane layouts, placefiles, sensor dashboard, CAPPI altitude slicer,
+  13 themes, tray + background alerting, screenshot/GIF/MP4 loop export.
 
 ## Workspace
 
-- `crates/nexrad-level3` — from-scratch NEXRAD Level 3 (RPG) product decoder.
-- `crates/wxdata` — data plumbing: Level 2 (AWS), MRMS, HRRR, NWS alerts, SPC,
-  ProbSevere, placefiles, spotters, climatology, TDS detection.
+- `crates/nexrad-level3` — from-scratch NEXRAD Level 3 (RPG) product decoder:
+  storm-cell packets (15/19/20/23) and digital radial arrays (packet 16,
+  DVL/EET), golden-tested against MetPy.
+- `crates/wxdata` — data plumbing: Level 2 (AWS), MRMS, HRRR (future radar +
+  environment fields), NWS alerts + storm motion/escalation, IEM archived
+  warnings, SPC outlooks/reports/climatology, METAR, NHC tropical, ProbSevere,
+  placefiles, spotters, TDS detection, CAPPI/cross-section/3D resampling.
 - `crates/hookecho` — the app: egui UI + wgpu render pipelines.
-- `vendor/gribberish` — vendored GRIB2 decoder (PNG-packing fix for MRMS).
+- `vendor/gribberish` — vendored GRIB2 decoder (PNG-packing + MRMS
+  local-parameter fixes; grep `hookecho patch:`).
 
 ## Verification
 
@@ -87,12 +118,18 @@ report without opening a window), e.g.:
 ```sh
 cargo run --release -- --headless out.png KTLX --moment VEL --dealias
 cargo run --release -- --headless-mrms mosaic.png
-cargo run --release -- --headless-tds KTLX
-cargo run --release -- --headless-climatology -97.5 35.3
+cargo run --release -- --headless-alerts                    # motion + escalation lines
+cargo run --release -- --headless-archwarn 2013-05-20T20:00:00Z
+cargo run --release -- --headless-env sbcape cape.png       # sbcape|mlcape|srh1|srh3
+cargo run --release -- --headless-field preciptype ptype.png
+cargo run --release -- --headless-l3grid dvl KTLX vil.png   # dvl|eet
+cargo run --release -- --headless-metar KTLX
+cargo run --release -- --headless-tropical
+cargo run --release -- --headless-cappi KTLX 3 cappi.png
 ```
 
 ```sh
-cargo test    # 82 offline unit tests
+cargo test    # 107 offline unit tests
 ```
 
 License: MIT.
