@@ -43,6 +43,8 @@ pub fn show(
     show_radar_sites: &mut bool,
     show_metar: &mut bool,
     show_tropical: &mut bool,
+    show_aviation: &mut bool,
+    show_range_rings: &mut bool,
 ) -> ToolboxActions {
     use crate::theme::section;
     let mut actions = ToolboxActions::default();
@@ -83,6 +85,14 @@ pub fn show(
             {
                 actions.overlays_changed = true;
             }
+            if ui.checkbox(show_aviation, "Aviation (SIGMET/AIRMET)")
+                .on_hover_text("Convective/turbulence/icing/IFR hazard areas; click a polygon for the raw bulletin")
+                .changed()
+            {
+                actions.overlays_changed = true;
+            }
+            ui.checkbox(show_range_rings, "Range rings")
+                .on_hover_text("50/100/150/200 km rings + azimuth spokes around the pane's radar");
             overlays_section(ui, filters, &mut actions);
         });
         section(ui, "Level 3", |ui| level3_section(ui, fields, l3grid_site));
@@ -135,6 +145,7 @@ fn national_section(
     toggle(ui, fields, FL::Qpe24h, "QPE 24-hour", "MRMS multi-sensor 24-hour precip accumulation (mm; storm total)");
     toggle(ui, fields, FL::PrecipType, "Precip type", "MRMS surface precipitation type (rain/snow/hail/convective)");
     toggle(ui, fields, FL::FlashFlood, "FLASH flood ARI", "MRMS FLASH flash-flood average recurrence interval (years)");
+    toggle(ui, fields, FL::HailSwath, "Hail swaths (24 h)", "24-hour running max of MESH — hail damage tracks (≥0.75 in shown)");
 }
 
 fn hrrr_section(
@@ -464,7 +475,11 @@ fn level3_section(
         ui.checkbox(&mut s.show, "Echo tops (EET)")
             .on_hover_text("Enhanced echo tops for the active site (kft)");
     }
-    if fields.get(&FL::Vil).is_some_and(|s| s.show) || fields.get(&FL::EchoTops).is_some_and(|s| s.show) {
+    if let Some(s) = fields.get_mut(&FL::Hca) {
+        ui.checkbox(&mut s.show, "Hydrometeor class (HHC)")
+            .on_hover_text("What the radar thinks it sees: rain / snow / hail / graupel / biological …");
+    }
+    if [FL::Vil, FL::EchoTops, FL::Hca].iter().any(|l| fields.get(l).is_some_and(|s| s.show)) {
         ui.weak(format!("Site: {}", l3grid_site.unwrap_or("—")));
     }
 }

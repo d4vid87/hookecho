@@ -187,10 +187,43 @@ fn main() -> eframe::Result<()> {
         return Ok(());
     }
 
-    // SPC storm-reports verify: `hookecho --headless-reports`.
-    if args.iter().any(|a| a == "--headless-reports") {
-        if let Err(e) = headless::run_reports() {
+    // Storm-reports verify: `hookecho --headless-reports [sts ets]` (RFC3339-ish UTC window).
+    if let Some(pos) = args.iter().position(|a| a == "--headless-reports") {
+        let sts = args.get(pos + 1).filter(|a| !a.starts_with("--")).map(String::as_str);
+        let ets = args.get(pos + 2).filter(|a| !a.starts_with("--")).map(String::as_str);
+        let window = sts.zip(ets);
+        if let Err(e) = headless::run_reports(window) {
             eprintln!("headless reports failed: {e}");
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
+
+    // AFD verify: `hookecho --headless-afd [SITE]`.
+    if let Some(pos) = args.iter().position(|a| a == "--headless-afd") {
+        let site = args.get(pos + 1).filter(|a| !a.starts_with("--")).map(String::as_str).unwrap_or("KTLX");
+        if let Err(e) = headless::run_afd(site) {
+            eprintln!("headless afd failed: {e}");
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
+
+    // Aviation verify: `hookecho --headless-aviation`.
+    if args.iter().any(|a| a == "--headless-aviation") {
+        if let Err(e) = headless::run_aviation() {
+            eprintln!("headless aviation failed: {e}");
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
+
+    // Sounding-indices verify: `hookecho --headless-indices [lon] [lat]`.
+    if let Some(pos) = args.iter().position(|a| a == "--headless-indices") {
+        let lon: f64 = args.get(pos + 1).and_then(|s| s.parse().ok()).unwrap_or(-97.5);
+        let lat: f64 = args.get(pos + 2).and_then(|s| s.parse().ok()).unwrap_or(35.3);
+        if let Err(e) = headless::run_indices(lon, lat) {
+            eprintln!("headless indices failed: {e}");
             std::process::exit(1);
         }
         return Ok(());

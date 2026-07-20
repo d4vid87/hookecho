@@ -725,7 +725,8 @@ pub fn run_field(slug: &str, out_path: &str) -> anyhow::Result<()> {
         "qpe24h" => (wxdata::mrms::QPE_24H.to_string(), FL::Qpe24h),
         "preciptype" => (wxdata::mrms::PRECIP_TYPE.to_string(), FL::PrecipType),
         "flashflood" => (wxdata::mrms::FLASH_ARI30.to_string(), FL::FlashFlood),
-        other => anyhow::bail!("unknown field slug '{other}' (rotation30|rotation60|rotation120|mesh|azshear|qpe1h|qpe24h|preciptype|flashflood)"),
+        "hailswath" => (wxdata::mrms::MESH_1440.to_string(), FL::HailSwath),
+        other => anyhow::bail!("unknown field slug '{other}' (rotation30|rotation60|rotation120|mesh|azshear|qpe1h|qpe24h|preciptype|flashflood|hailswath)"),
     };
     let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
     let field = rt.block_on(async {
@@ -813,13 +814,15 @@ pub fn run_l3grid(kind: &str, site: &str, out_path: &str) -> anyhow::Result<()> 
     let layer = match kind {
         "dvl" => FL::Vil,
         "eet" => FL::EchoTops,
-        other => anyhow::bail!("unknown l3grid kind '{other}' (dvl|eet)"),
+        "hhc" => FL::Hca,
+        other => anyhow::bail!("unknown l3grid kind '{other}' (dvl|eet|hhc)"),
     };
     let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
     let field = rt.block_on(async {
         let client = reqwest::Client::new();
         match layer {
             FL::Vil => wxdata::level3::fetch_dvl(&client, site).await,
+            FL::Hca => wxdata::level3::fetch_hhc(&client, site).await,
             _ => wxdata::level3::fetch_eet(&client, site).await,
         }
     });
@@ -1094,25 +1097,79 @@ pub fn run_3d(site: &str, out_path: &str) -> anyhow::Result<()> {
 }
 
 /// Fetch + print today's SPC storm reports (textual gate; markers are painter-drawn).
-pub fn run_reports() -> anyhow::Result<()> {
+pub fn run_reports(window: Option<(&str, &str)>) -> anyhow::Result<()> {
     let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
     let reports = rt.block_on(async {
         let client = reqwest::Client::new();
-        wxdata::spc::fetch_storm_reports(&client).await
+        wxdata::lsr::fetch(&client, window).await
     })?;
     use wxdata::spc::ReportKind;
-    let (mut t, mut w, mut h) = (0, 0, 0);
+    let (mut t, mut w, mut h, mut f, mut o) = (0, 0, 0, 0, 0);
     for r in &reports {
         match r.kind {
             ReportKind::Tornado => t += 1,
             ReportKind::Wind => w += 1,
             ReportKind::Hail => h += 1,
+            ReportKind::Flood => f += 1,
+            ReportKind::Other => o += 1,
         }
     }
-    println!("SPC storm reports today: {} total ({t} tornado, {w} wind, {h} hail)", reports.len());
+    let span = window.map(|(a, b)| format!("{a}..{b}")).unwrap_or_else(|| "last 6 h".into());
+    println!(
+        "LSRs ({span}): {} total ({t} tornado, {w} wind, {h} hail, {f} flood, {o} other)",
+        reports.len()
+    );
     for r in reports.iter().take(5) {
         println!("  {} {} @ {:.2},{:.2} — {} {}", r.kind.label(), r.magnitude, r.lat, r.lon, r.location, r.state);
     }
+    Ok(())
+}
+
+/// AFD verify: fetch + print the head of the active-site WFO discussion (feature DD).
+pub fn run_afd(site: &str) -> anyhow::Result<()> {
+    let s = wxdata::sites::site_by_id(site).ok_or_else(|| anyhow::anyhow!("unknown site {site}"))?;
+    let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
+    let afd = rt.block_on(async {
+        let client = reqwest::Client::new();
+        wxdata::afd::fetch(&client, s.latitude as f64, s.longitude as f64).await
+    })?;
+    println!("AFD {} issued {} — {} chars", afd.office, afd.issued, afd.text.len());
+    for line in afd.text.lines().take(12) {
+        println!("  {line}");
+    }
+    Ok(())
+}
+
+/// Aviation verify: fetch SIGMETs/AIRMETs, print per-hazard tallies (feature GG).
+pub fn run_aviation() -> anyhow::Result<()> {
+    let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
+    let feats = rt.block_on(async {
+        let client = reqwest::Client::new();
+        wxdata::aviation::fetch_airsigmet(&client).await
+    })?;
+    let mut tally: std::collections::BTreeMap<String, usize> = Default::default();
+    for f in &feats {
+        *tally.entry(f.title.clone()).or_default() += 1;
+    }
+    println!("Aviation hazards: {} polygons", feats.len());
+    for (k, n) in tally {
+        println!("  {n}× {k}");
+    }
+    Ok(())
+}
+
+/// Sounding-indices verify: fetch an HRRR profile and print the composites (feature FF).
+pub fn run_indices(lon: f64, lat: f64) -> anyhow::Result<()> {
+    let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
+    let s = rt.block_on(async {
+        let client = reqwest::Client::new();
+        wxdata::sounding::fetch(&client, lon, lat).await
+    })?;
+    let ix = s.indices().ok_or_else(|| anyhow::anyhow!("profile too short for indices"))?;
+    println!(
+        "indices @ {lat:.2},{lon:.2} (run {}): SBCAPE {:.0} J/kg  LCL {:.0} m  SRH1 {:.0}  SRH3 {:.0}  shear6 {:.0} kt  SCP {:.1}  STP {:.1}  EHI1 {:.1}",
+        s.run.format("%m/%d %H:%MZ"), ix.sbcape, ix.lcl_m, ix.srh1, ix.srh3, ix.shear6_kt, ix.scp, ix.stp, ix.ehi1
+    );
     Ok(())
 }
 

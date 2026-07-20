@@ -1,5 +1,6 @@
 //! egui UI: the radar toolbox, site picker, settings window, and color legend.
 
+pub mod afd_window;
 pub mod alert_panel;
 pub mod cappi_window;
 pub mod cell_window;

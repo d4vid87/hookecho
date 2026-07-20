@@ -18,6 +18,8 @@ pub enum FeatureKind {
     ProbSevere,
     /// NHC tropical-cyclone forecast cone (feature V).
     TropicalCone,
+    /// Aviation SIGMET/AIRMET hazard area (feature GG).
+    Sigmet,
 }
 
 impl FeatureKind {
@@ -33,6 +35,7 @@ impl FeatureKind {
             FeatureKind::ProbSevere => 5,
             FeatureKind::MesoDiscussion => 2,
             FeatureKind::TropicalCone => 2,
+            FeatureKind::Sigmet => 2,
             FeatureKind::Outlook => 1,
         }
     }

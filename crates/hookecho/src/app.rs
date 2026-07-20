@@ -80,8 +80,8 @@ enum OverlayMsg {
     Placefile(String, wxdata::placefile::Placefile),
     /// The latest grid for a national field layer (mosaic, rotation, MESH, AzShear, lightning).
     Field(crate::render::FieldLayer, wxdata::mrms::MrmsField),
-    /// Today's SPC local storm reports (tornado/wind/hail).
-    StormReports(Vec<wxdata::spc::StormReport>),
+    /// Local storm reports: live trailing window (`None`) or an archive bucket (feature CC).
+    StormReports(Option<i64>, Vec<wxdata::spc::StormReport>),
     /// Live Spotter Network positions (CONUS-wide; filtered to the active site at draw time).
     Spotters(Vec<wxdata::spotters::Spotter>),
     /// ProbSevere per-storm probability polygons.
@@ -98,6 +98,8 @@ enum OverlayMsg {
     Metar(Vec<wxdata::metar::SurfaceOb>),
     /// NHC tropical cyclones: cones + per-storm tracks (feature V).
     Tropical(wxdata::tropical::TropicalData),
+    /// Aviation SIGMET/AIRMET hazard polygons (feature GG).
+    Aviation(Vec<GeoFeature>),
 }
 
 /// One overlay data source to fetch.
@@ -110,7 +112,8 @@ enum OverlaySource {
     Placefile(String),
     /// A national field layer plus the MRMS S3 product path to fetch it from.
     Field(crate::render::FieldLayer, String),
-    StormReports,
+    /// Local storm reports: live (`None`) or a 30-min archive bucket (Unix secs / 1800).
+    StormReports(Option<i64>),
     Spotters,
     ProbSevere,
     /// HRRR composite-reflectivity forecast for a forecast hour (0..=18).
@@ -125,6 +128,8 @@ enum OverlaySource {
     Vwp(String),
     /// Archived storm-based warnings valid at a 5-min UTC bucket (Unix seconds, feature W).
     ArchiveWarnings(i64),
+    /// Aviation SIGMET/AIRMET polygons (feature GG).
+    Aviation,
     /// Surface observations within a lat/lon bbox `(lat0, lon0, lat1, lon1)` (feature U).
     Metar(f64, f64, f64, f64),
     /// NHC tropical cyclones (feature V).
@@ -150,8 +155,22 @@ impl OverlaySource {
             OverlaySource::Field(layer, product) => {
                 OverlayMsg::Field(layer, wxdata::mrms::fetch_latest(http, &product).await?)
             }
-            OverlaySource::StormReports => {
-                OverlayMsg::StormReports(wxdata::spc::fetch_storm_reports(http).await?)
+            OverlaySource::StormReports(bucket) => {
+                // Archive bucket: the 6 h of reports ending at the bucket's close; live: last 6 h.
+                let reports = match bucket {
+                    Some(b) => {
+                        let end = chrono::DateTime::from_timestamp((b + 1) * 1800, 0).unwrap_or_default();
+                        let start = end - chrono::Duration::hours(6);
+                        let fmt = "%Y-%m-%dT%H:%MZ";
+                        wxdata::lsr::fetch(
+                            http,
+                            Some((&start.format(fmt).to_string(), &end.format(fmt).to_string())),
+                        )
+                        .await?
+                    }
+                    None => wxdata::lsr::fetch(http, None).await?,
+                };
+                OverlayMsg::StormReports(bucket, reports)
             }
             OverlaySource::Spotters => {
                 OverlayMsg::Spotters(wxdata::spotters::fetch_spotters(http).await?)
@@ -176,6 +195,7 @@ impl OverlaySource {
                 let field = match layer {
                     FL::Vil => wxdata::level3::fetch_dvl(http, &site).await,
                     FL::EchoTops => wxdata::level3::fetch_eet(http, &site).await,
+                    FL::Hca => wxdata::level3::fetch_hhc(http, &site).await,
                     _ => None,
                 };
                 match field {
@@ -210,6 +230,9 @@ impl OverlaySource {
                 OverlayMsg::Metar(wxdata::metar::fetch_bbox(http, lat0, lon0, lat1, lon1).await?)
             }
             OverlaySource::Tropical => OverlayMsg::Tropical(wxdata::tropical::fetch_active(http).await?),
+            OverlaySource::Aviation => {
+                OverlayMsg::Aviation(wxdata::aviation::fetch_airsigmet(http).await?)
+            }
         })
     }
 }
@@ -243,7 +266,9 @@ fn field_refresh_secs(layer: crate::render::FieldLayer) -> u64 {
         // QPE accumulations update on a ~2-minute MRMS cadence.
         FL::Qpe1h | FL::Qpe24h => 120,
         // MRMS precip type / flash-flood ARI on the ~2-min cadence; L3 grids on the 120 s L3 cadence.
-        FL::PrecipType | FL::FlashFlood | FL::Vil | FL::EchoTops => 120,
+        FL::PrecipType | FL::FlashFlood | FL::Vil | FL::EchoTops | FL::Hca => 120,
+        // The 24-h hail-swath accumulation moves slowly.
+        FL::HailSwath => 300,
         // Environment (HRRR CAPE/SRH) refreshes slowly — 15 min.
         FL::Cape | FL::Srh => 900,
     }
@@ -366,6 +391,11 @@ pub struct HookEchoApp {
     arch_warn_inflight: Option<i64>,
     /// The bucket whose warnings are currently substituted into the overlay set (None = live).
     arch_warn_shown: Option<i64>,
+    /// Archived local storm reports (feature CC) keyed by 30-min UTC bucket (ts/1800); shown while
+    /// the active pane is scrubbed off-live (each bucket = the 6 h of reports ending there).
+    arch_lsr: LruCache<i64, Vec<wxdata::spc::StormReport>>,
+    arch_lsr_inflight: Option<i64>,
+    arch_lsr_shown: Option<i64>,
     outlook_features: [Vec<GeoFeature>; 3],
     md_features: Vec<GeoFeature>,
     /// ProbSevere storm-probability polygons + badges (toggle + refresh clock).
@@ -476,10 +506,22 @@ pub struct HookEchoApp {
     tray_rx: Option<std::sync::mpsc::Receiver<crate::tray::TrayCmd>>,
     /// Set by the tray "Quit" item so the close-to-tray handler lets the window actually close.
     really_quit: bool,
-    /// SPC storm-report markers (today's tornado/wind/hail log) + toggle + refresh clock.
+    /// Local storm-report markers (live IEM LSR feed, trailing 6 h) + toggle + refresh clock.
     show_storm_reports: bool,
     storm_reports: Vec<wxdata::spc::StormReport>,
     reports_last_fetch: Option<Instant>,
+    /// Aviation SIGMET/AIRMET overlay (feature GG): toggle, features, refresh clock.
+    show_aviation: bool,
+    aviation_features: Vec<GeoFeature>,
+    aviation_last_fetch: Option<Instant>,
+    /// Area Forecast Discussion window (feature DD): open flag, fetched text, in-flight receiver.
+    afd_open: bool,
+    afd: Option<wxdata::afd::Afd>,
+    afd_error: Option<String>,
+    afd_busy: bool,
+    afd_rx: Option<std::sync::mpsc::Receiver<Result<wxdata::afd::Afd, String>>>,
+    /// Range rings + azimuth spokes around the active site (feature HH).
+    show_range_rings: bool,
     /// Draw all NEXRAD radar sites on the map; clicking one switches the pane to that radar.
     show_radar_sites: bool,
     /// Show the left toolbox panel. Collapse it (View ▸ Toolbox / F9) for a full-width radar.
@@ -642,6 +684,9 @@ impl HookEchoApp {
             arch_warns: LruCache::new(NonZeroUsize::new(50).unwrap()),
             arch_warn_inflight: None,
             arch_warn_shown: None,
+            arch_lsr: LruCache::new(NonZeroUsize::new(50).unwrap()),
+            arch_lsr_inflight: None,
+            arch_lsr_shown: None,
             outlook_features: [Vec::new(), Vec::new(), Vec::new()],
             md_features: Vec::new(),
             show_probsevere: false,
@@ -722,6 +767,15 @@ impl HookEchoApp {
             show_storm_reports: false,
             storm_reports: Vec::new(),
             reports_last_fetch: None,
+            show_aviation: false,
+            aviation_features: Vec::new(),
+            aviation_last_fetch: None,
+            afd_open: false,
+            afd: None,
+            afd_error: None,
+            afd_busy: false,
+            afd_rx: None,
+            show_range_rings: false,
             show_radar_sites: true,
             show_toolbox: true,
             show_spotters: false,
@@ -1106,7 +1160,7 @@ impl HookEchoApp {
         };
         // Storm features win: bail if a report or cell dot sits under the cursor.
         let near_storm = (self.show_storm_reports
-            && self.storm_reports.iter().any(|r| to_screen_hit(r.lon, r.lat) <= 12.0 * 12.0))
+            && self.active_storm_reports().iter().any(|r| to_screen_hit(r.lon, r.lat) <= 12.0 * 12.0))
             || (self.cells_site.as_deref() == self.views[idx].site.as_deref()
                 && self.storm_cells.iter().any(|c| to_screen_hit(c.lon, c.lat) <= 14.0 * 14.0));
         if near_storm {
@@ -1473,12 +1527,13 @@ impl HookEchoApp {
             .map(|a| crate::digest::AlertLine { event: a.event.clone(), area: a.area.clone() })
             .collect();
         let mut reports = [0usize; 3]; // tornado, wind, hail
-        for r in &self.storm_reports {
+        for r in self.active_storm_reports() {
             use wxdata::spc::ReportKind::*;
             match r.kind {
                 Tornado => reports[0] += 1,
                 Wind => reports[1] += 1,
                 Hail => reports[2] += 1,
+                Flood | Other => {}
             }
         }
         let templated = crate::digest::templated(&alerts, reports);
@@ -1588,7 +1643,16 @@ impl HookEchoApp {
                         s.pending = Some(upload);
                     }
                 }
-                OverlayMsg::StormReports(reports) => self.storm_reports = reports,
+                OverlayMsg::StormReports(bucket, reports) => match bucket {
+                    None => self.storm_reports = reports,
+                    Some(b) => {
+                        self.arch_lsr.put(b, reports);
+                        if self.arch_lsr_inflight == Some(b) {
+                            self.arch_lsr_inflight = None;
+                        }
+                    }
+                },
+                OverlayMsg::Aviation(f) => self.aviation_features = f,
                 OverlayMsg::Spotters(spotters) => self.spotters = spotters,
                 OverlayMsg::ProbSevere(f) => self.probsevere = f,
                 OverlayMsg::Hrrr(fc) => {
@@ -1675,6 +1739,67 @@ impl HookEchoApp {
         }
     }
 
+    /// The storm reports to display right now: the live trailing window, or the archived set
+    /// while the active pane is scrubbed off-live (feature CC).
+    fn active_storm_reports(&self) -> &[wxdata::spc::StormReport] {
+        if let Some(b) = self.arch_lsr_shown {
+            if let Some(r) = self.arch_lsr.peek(&b) {
+                return r;
+            }
+        }
+        &self.storm_reports
+    }
+
+    /// Drive the archived-LSR set from the active pane's playhead (mirrors
+    /// [`Self::sync_archive_warnings`], on 30-min buckets).
+    fn sync_archive_lsr(&mut self, ctx: &egui::Context) {
+        if !self.show_storm_reports {
+            return;
+        }
+        let bucket = (|| {
+            let v = &self.views[self.active];
+            if v.timeline.following {
+                return None;
+            }
+            Some(v.volume.as_ref()?.time.timestamp() / 1800)
+        })();
+        match bucket {
+            None => self.arch_lsr_shown = None,
+            Some(b) => {
+                let cached = self.arch_lsr.contains(&b);
+                if !cached && self.arch_lsr_inflight != Some(b) {
+                    self.arch_lsr_inflight = Some(b);
+                    self.spawn_overlay(ctx, OverlaySource::StormReports(Some(b)));
+                }
+                if cached {
+                    self.arch_lsr_shown = Some(b);
+                }
+            }
+        }
+    }
+
+    /// Fetch the Area Forecast Discussion for the active site's WFO (feature DD).
+    fn fetch_afd(&mut self) {
+        let Some((lat, lon)) = self.views[self.active]
+            .site
+            .as_deref()
+            .and_then(wxdata::sites::site_by_id)
+            .map(|s| (s.latitude as f64, s.longitude as f64))
+        else {
+            self.afd_error = Some("no site selected".into());
+            return;
+        };
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.afd_rx = Some(rx);
+        self.afd_busy = true;
+        self.afd_error = None;
+        let http = self.http.clone();
+        self._rt.spawn(async move {
+            let res = wxdata::afd::fetch(&http, lat, lon).await.map_err(|e| e.to_string());
+            let _ = tx.send(res);
+        });
+    }
+
     /// Drive the METAR station-plot fetch (feature U): only when enabled and zoomed in enough,
     /// refetching every 75 s or when the view center drifts out of the fetched bbox's middle half.
     fn sync_metar(&mut self, ctx: &egui::Context) {
@@ -1728,6 +1853,9 @@ impl HookEchoApp {
             if let Some(t) = &self.tropical {
                 v.extend(t.cones.iter().cloned());
             }
+        }
+        if self.show_aviation {
+            v.extend(self.aviation_features.iter().cloned());
         }
         self.overlays = v;
         self.overlay_gen = self.overlay_gen.wrapping_add(1);
@@ -2335,9 +2463,9 @@ impl HookEchoApp {
                     }
                     MapTool::Climatology => self.query_climatology(lon, lat),
                     MapTool::Interrogate => {
-                        // SPC storm reports sit on top: a click near a report dot opens its detail.
+                        // Storm reports sit on top: a click near a report dot opens its detail.
                         let report = self.show_storm_reports.then(|| {
-                            self.storm_reports.iter().find(|r| {
+                            self.active_storm_reports().iter().find(|r| {
                                 let w = crate::render::mercator::lonlat_to_world(r.lon, r.lat);
                                 let (sx, sy) = cam.world_to_screen(w, vp);
                                 let (dx, dy) = (prect.left() + sx - pos.x, prect.top() + sy - pos.y);
@@ -2697,9 +2825,9 @@ impl HookEchoApp {
             }
         }
 
-        // SPC storm-report dots (today's tornado/wind/hail log).
+        // Storm-report dots (live LSRs, or the archived window while scrubbed).
         if self.show_storm_reports {
-            for r in &self.storm_reports {
+            for r in self.active_storm_reports() {
                 let w = crate::render::mercator::lonlat_to_world(r.lon, r.lat);
                 let (sx, sy) = cam.world_to_screen(w, vp);
                 let p = egui::pos2(prect.left() + sx, prect.top() + sy);
@@ -3027,6 +3155,40 @@ impl HookEchoApp {
             }
         }
 
+        // Range rings + azimuth spokes around this pane's site (feature HH).
+        if self.show_range_rings {
+            if let Some(site) = view.site.as_deref().and_then(wxdata::sites::site_by_id) {
+                let origin = [site.longitude as f64, site.latitude as f64];
+                let col = egui::Color32::from_gray(150).gamma_multiply(0.55);
+                let to_screen = |lon: f64, lat: f64| {
+                    let w = crate::render::mercator::lonlat_to_world(lon, lat);
+                    let (sx, sy) = cam.world_to_screen(w, vp);
+                    egui::pos2(prect.left() + sx, prect.top() + sy)
+                };
+                for km in [50.0, 100.0, 150.0, 200.0] {
+                    let pts: Vec<egui::Pos2> = (0..=72)
+                        .map(|i| {
+                            let p = crate::geo::destination_point(origin, i as f64 * 5.0, km);
+                            to_screen(p[0], p[1])
+                        })
+                        .collect();
+                    painter.add(egui::Shape::line(pts, egui::Stroke::new(1.0, col)));
+                    if cam.zoom >= 6.0 {
+                        let top = crate::geo::destination_point(origin, 0.0, km);
+                        painter.text(to_screen(top[0], top[1]), egui::Align2::CENTER_BOTTOM,
+                            format!("{km:.0} km"), egui::FontId::proportional(10.0), col);
+                    }
+                }
+                for az in (0..360).step_by(45) {
+                    let far = crate::geo::destination_point(origin, az as f64, 200.0);
+                    painter.line_segment(
+                        [to_screen(origin[0], origin[1]), to_screen(far[0], far[1])],
+                        egui::Stroke::new(0.6, col.gamma_multiply(0.7)),
+                    );
+                }
+            }
+        }
+
         // Radar sites: a ring per NEXRAD site; the active site in accent, others muted. IDs only
         // when zoomed in so the CONUS view isn't cluttered. Click handled in the Interrogate tool.
         if self.show_radar_sites {
@@ -3300,6 +3462,14 @@ impl HookEchoApp {
                 {
                     self.digest_window.open = true;
                     self.generate_digest();
+                    ui.close();
+                }
+                if ui.button("Forecast Discussion (AFD)…")
+                    .on_hover_text("The active site's WFO Area Forecast Discussion — the forecaster's reasoning")
+                    .clicked()
+                {
+                    self.afd_open = true;
+                    self.fetch_afd();
                     ui.close();
                 }
                 if ui.button("Placefile Manager…").clicked() {
@@ -3901,6 +4071,35 @@ pub(crate) fn field_upload_indexed(layer: crate::render::FieldLayer, f: &wxdata:
                 (0.0, [40, 90, 200]), (0.4, [40, 200, 90]), (0.75, [240, 230, 60]), (1.0, [240, 240, 240]),
             ]))
         }
+        // 24-h hail swaths: same MESH scale, but starting at severe-ish sizes so old small hail
+        // doesn't blanket the map (19 mm ≈ 0.75 in).
+        FL::HailSwath => {
+            let map = |v: f32| if v < 19.0 { 0 } else { (2.0 + ((v - 19.0) / 56.0).clamp(0.0, 1.0) * 253.0) as u8 };
+            field_index_upload(f, map, ramp_lut(&[
+                (0.0, [60, 200, 90]), (0.4, [240, 230, 60]), (0.7, [240, 150, 30]), (1.0, [230, 60, 200]),
+            ]))
+        }
+        // Hybrid Hydrometeor Classification: raw HCA class codes → categorical colors
+        // (per the product's class table; 140 = unknown, 150 = range-folded).
+        FL::Hca => {
+            let map = |v: f32| v as u8;
+            field_index_upload(f, map, categorical_lut(&[
+                (10, [140, 110, 90]),   // biological
+                (20, [95, 95, 95]),     // ground clutter / AP
+                (30, [185, 220, 255]),  // ice crystals
+                (40, [110, 160, 240]),  // dry snow
+                (50, [0, 200, 255]),    // wet snow
+                (60, [90, 200, 90]),    // light/moderate rain
+                (70, [25, 145, 50]),    // heavy rain
+                (80, [240, 200, 60]),   // big drops
+                (90, [200, 120, 220]),  // graupel
+                (100, [230, 50, 50]),   // hail (possibly with rain)
+                (110, [170, 0, 0]),     // large hail
+                (120, [120, 0, 60]),    // giant hail
+                (140, [160, 160, 160]), // unknown
+                (150, [240, 150, 200]), // range folded
+            ], 200))
+        }
         // The reflectivity-palette layers (mosaic, HRRR) route through the app method instead.
         FL::Mrms | FL::Hrrr => field_index_upload(f, |_| 0, vec![0u8; 256 * 4]),
     }
@@ -3940,6 +4139,8 @@ fn report_color(kind: wxdata::spc::ReportKind) -> [u8; 4] {
         R::Tornado => [230, 40, 40, 255],  // red
         R::Wind => [70, 130, 240, 255],    // blue
         R::Hail => [70, 210, 110, 255],    // green
+        R::Flood => [0, 150, 90, 255],     // dark green
+        R::Other => [180, 180, 180, 255],  // gray
     }
 }
 
@@ -4026,8 +4227,9 @@ impl eframe::App for HookEchoApp {
         self.sync_forecast_scrub();
         self.poll_messages();
         self.poll_overlays();
-        // Time-machine warnings: swap in archived polygons when the active pane is scrubbed.
+        // Time-machine warnings + storm reports: swap in archived sets while scrubbed.
         self.sync_archive_warnings(ctx);
+        self.sync_archive_lsr(ctx);
         // Surface obs (METAR station plots).
         self.sync_metar(ctx);
         // NHC tropical suite: refresh every 15 min while enabled.
@@ -4046,7 +4248,7 @@ impl eframe::App for HookEchoApp {
         use crate::render::FieldLayer as FL;
         for layer in FL::DRAW_ORDER {
             // HRRR forecast, HRRR environment, and per-site L3 grids each fetch in their own block.
-            if matches!(layer, FL::Hrrr | FL::Cape | FL::Srh | FL::Vil | FL::EchoTops) {
+            if matches!(layer, FL::Hrrr | FL::Cape | FL::Srh | FL::Vil | FL::EchoTops | FL::Hca) {
                 continue;
             }
             let stale = self
@@ -4067,7 +4269,8 @@ impl eframe::App for HookEchoApp {
                     FL::Qpe24h => wxdata::mrms::QPE_24H.to_string(),
                     FL::PrecipType => wxdata::mrms::PRECIP_TYPE.to_string(),
                     FL::FlashFlood => wxdata::mrms::FLASH_ARI30.to_string(),
-                    FL::Hrrr | FL::Cape | FL::Srh | FL::Vil | FL::EchoTops => unreachable!(),
+                    FL::HailSwath => wxdata::mrms::MESH_1440.to_string(),
+                    FL::Hrrr | FL::Cape | FL::Srh | FL::Vil | FL::EchoTops | FL::Hca => unreachable!(),
                 };
                 self.spawn_overlay(ctx, OverlaySource::Field(layer, product));
             }
@@ -4088,7 +4291,7 @@ impl eframe::App for HookEchoApp {
         // Gridded L3 products (DVL/EET): per-site, refetch on the L3 cadence or a site change.
         let l3_site = self.views[self.active].site.clone();
         let site_changed = self.l3grid_site != l3_site;
-        for layer in [FL::Vil, FL::EchoTops] {
+        for layer in [FL::Vil, FL::EchoTops, FL::Hca] {
             let on = self.fields.get(&layer).is_some_and(|s| s.show);
             if !on {
                 continue;
@@ -4106,7 +4309,11 @@ impl eframe::App for HookEchoApp {
                 }
             }
         }
-        if site_changed && (self.fields.get(&FL::Vil).is_some_and(|s| s.show) || self.fields.get(&FL::EchoTops).is_some_and(|s| s.show)) {
+        if site_changed
+            && [FL::Vil, FL::EchoTops, FL::Hca]
+                .iter()
+                .any(|l| self.fields.get(l).is_some_and(|s| s.show))
+        {
             self.l3grid_site = l3_site;
         }
         // HRRR future radar: fetch when enabled and the forecast hour changed or the run refreshed
@@ -4121,12 +4328,19 @@ impl eframe::App for HookEchoApp {
                 self.spawn_overlay(ctx, OverlaySource::Hrrr(self.hrrr_fcst_hour));
             }
         }
-        // SPC storm reports refresh (~5-min cadence; preliminary log updates slowly).
+        // Live LSR refresh (~2-min cadence; the IEM feed is minutes-fresh).
         if self.show_storm_reports
-            && self.reports_last_fetch.is_none_or(|t| t.elapsed().as_secs() >= 300)
+            && self.reports_last_fetch.is_none_or(|t| t.elapsed().as_secs() >= 120)
         {
             self.reports_last_fetch = Some(Instant::now());
-            self.spawn_overlay(ctx, OverlaySource::StormReports);
+            self.spawn_overlay(ctx, OverlaySource::StormReports(None));
+        }
+        // Aviation SIGMET/AIRMET refresh (10-min cadence).
+        if self.show_aviation
+            && self.aviation_last_fetch.is_none_or(|t| t.elapsed().as_secs() >= 600)
+        {
+            self.aviation_last_fetch = Some(Instant::now());
+            self.spawn_overlay(ctx, OverlaySource::Aviation);
         }
         // Spotter Network refresh (feed's own 1-min cadence).
         if self.show_spotters
@@ -4215,6 +4429,8 @@ impl eframe::App for HookEchoApp {
                     &mut self.show_radar_sites,
                     &mut self.show_metar,
                     &mut self.show_tropical,
+                    &mut self.show_aviation,
+                    &mut self.show_range_rings,
                 );
             });
         }
@@ -4306,6 +4522,29 @@ impl eframe::App for HookEchoApp {
         }
         if let Some(ui::digest_window::DigestAction::Generate) = self.digest_window.show(ctx) {
             self.generate_digest();
+        }
+        // Area Forecast Discussion: poll the async fetch, then render the text window.
+        if let Some(rx) = &self.afd_rx {
+            if let Ok(res) = rx.try_recv() {
+                self.afd_busy = false;
+                self.afd_rx = None;
+                match res {
+                    Ok(afd) => self.afd = Some(afd),
+                    Err(e) => self.afd_error = Some(e),
+                }
+            }
+        }
+        if self.afd_open {
+            let refresh = ui::afd_window::show(
+                ctx,
+                &mut self.afd_open,
+                self.afd.as_ref(),
+                self.afd_busy,
+                self.afd_error.as_deref(),
+            );
+            if refresh {
+                self.fetch_afd();
+            }
         }
         // Point sounding: poll the async fetch, then render the Skew-T / hodograph.
         if let Some(rx) = &self.sounding_rx {

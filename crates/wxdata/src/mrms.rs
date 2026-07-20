@@ -15,6 +15,8 @@ pub const REFLECTIVITY: &str = "CONUS/MergedReflectivityQCComposite_00.50";
 pub const LIGHTNING: &str = "CONUS/NLDN_CG_005min_AvgDensity_00.00";
 /// Max Estimated Size of Hail (mm).
 pub const MESH: &str = "CONUS/MESH_00.50";
+/// 24-hour running max of MESH (mm) — hail swaths / damage tracks.
+pub const MESH_1440: &str = "CONUS/MESH_Max_1440min_00.50";
 /// Instantaneous 0–2 km AGL azimuthal shear (s⁻¹).
 pub const AZSHEAR: &str = "CONUS/MergedAzShear_0-2kmAGL_00.50";
 /// Multi-sensor 1-hour QPE accumulation, Pass-2 gauge-corrected (mm).

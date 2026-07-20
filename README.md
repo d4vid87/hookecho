@@ -33,8 +33,9 @@ velocity, and GRLevelX `.pal` color tables (editable in-app):
 | ![REF](docs/shots/reflectivity.jpg) | ![VEL](docs/shots/velocity.jpg) | ![CC](docs/shots/cc.jpg) |
 
 **National view (MRMS)** — CONUS composite reflectivity, cloud-to-ground lightning
-density, rotation tracks / azimuthal shear, MESH hail size, storm-total QPE flood
-layers, surface precipitation type, and FLASH flash-flood recurrence intervals:
+density, rotation tracks / azimuthal shear, MESH hail size + 24-h hail swaths,
+storm-total QPE flood layers, surface precipitation type, and FLASH flash-flood
+recurrence intervals:
 
 | Composite | Lightning | 1-h QPE |
 |---|---|---|
@@ -68,11 +69,15 @@ of your saved locations:
   (low CC + high Z → chime/push), NOAA **ProbSevere** per-storm
   severe/tor/hail/wind probabilities.
 - **Severe environment**: HRRR CAPE (surface-based or mixed-layer parcel) and
-  storm-relative helicity (0–1 or 0–3 km) as translucent map overlays, plus
-  point soundings (Skew-T/hodograph) and the VAD wind-profile hodograph.
-- **Gridded Level 3**: Digital VIL (DVL) and Enhanced Echo Tops (EET) for the
-  active site, decoded by the from-scratch packet-16 (Digital Radial Data Array)
-  decoder — BZIP2 symbology blocks, ICD float16 thresholds, MetPy-golden-tested.
+  storm-relative helicity (0–1 or 0–3 km) as translucent map overlays; point
+  soundings (Skew-T/hodograph) with derived **SBCAPE / LCL / SRH / SCP / STP /
+  EHI** composite indices (real parcel ascent + Bunkers storm motion); the VAD
+  wind-profile hodograph; and the WFO's **Area Forecast Discussion** in-app.
+- **Gridded Level 3**: Digital VIL (DVL), Enhanced Echo Tops (EET), and
+  **Hydrometeor Classification (HHC)** — rain / snow / hail / graupel /
+  biological — for the active site, decoded by the from-scratch packet-16
+  (Digital Radial Data Array) decoder: BZIP2 symbology blocks, ICD float16
+  thresholds, 0.25-km and 1-km bin sizes, MetPy-golden-tested.
 - **Surface obs**: METAR station plots — wind barbs (US convention),
   temperature/dewpoint, flight-category-colored stations, greedy decluttering,
   raw METAR on hover.
@@ -85,27 +90,34 @@ of your saved locations:
   alongside hourly HRRR model future radar (0–18 h) on the timeline's forecast
   tail.
 - **Time machine**: archive playback of any date since 2008 — with the storm-based
-  warning polygons that were actually in effect at the scrubbed instant (IEM
-  archive), a curated historic events library, and bookmarks.
+  warning polygons **and the local storm reports** that were actually in effect
+  at the scrubbed instant (IEM archives), a curated historic events library, and
+  bookmarks.
 - **Safety**: My-Locations warning monitoring, lightning proximity alarm
-  (strike within ~15 km of a saved spot → chime/push), storm reports and
-  Spotter Network overlay (contact info stripped at parse).
+  (strike within ~15 km of a saved spot → chime/push), live NWS Local Storm
+  Reports (minutes-fresh, tornado/wind/hail/flood), and the Spotter Network
+  overlay (contact info stripped at parse).
+- **Aviation**: SIGMET/AIRMET hazard polygons (convective, turbulence, icing,
+  IFR) with the raw bulletin on click.
 - **Climatology**: click anywhere → historical tornado tracks near that point
   (SPC 1950–2022 database) with EF-scale histogram.
 - **Radar DVR**: deep in-RAM decode buffer with one-touch instant replay (`R`).
 - **Streamer/OBS mode**: chrome-free UI (`F8`) + auto-tour of active warnings (`F9`).
 - Multi-pane layouts, placefiles, sensor dashboard, CAPPI altitude slicer,
-  13 themes, tray + background alerting, screenshot/GIF/MP4 loop export.
+  range rings + azimuth spokes, 13 themes, tray + background alerting,
+  screenshot/GIF/MP4 loop export.
 
 ## Workspace
 
 - `crates/nexrad-level3` — from-scratch NEXRAD Level 3 (RPG) product decoder:
   storm-cell packets (15/19/20/23) and digital radial arrays (packet 16,
-  DVL/EET), golden-tested against MetPy.
+  DVL/EET/HHC), golden-tested against MetPy.
 - `crates/wxdata` — data plumbing: Level 2 (AWS), MRMS, HRRR (future radar +
   environment fields), NWS alerts + storm motion/escalation, IEM archived
-  warnings, SPC outlooks/reports/climatology, METAR, NHC tropical, ProbSevere,
-  placefiles, spotters, TDS detection, CAPPI/cross-section/3D resampling.
+  warnings + live/archived LSRs, SPC outlooks/climatology, METAR, NHC tropical,
+  aviation SIGMETs, Area Forecast Discussions, ProbSevere, placefiles, spotters,
+  TDS detection, sounding indices (parcel CAPE / Bunkers SRH / SCP / STP),
+  CAPPI/cross-section/3D resampling.
 - `crates/hookecho` — the app: egui UI + wgpu render pipelines.
 - `vendor/gribberish` — vendored GRIB2 decoder (PNG-packing + MRMS
   local-parameter fixes; grep `hookecho patch:`).
@@ -122,14 +134,18 @@ cargo run --release -- --headless-alerts                    # motion + escalatio
 cargo run --release -- --headless-archwarn 2013-05-20T20:00:00Z
 cargo run --release -- --headless-env sbcape cape.png       # sbcape|mlcape|srh1|srh3
 cargo run --release -- --headless-field preciptype ptype.png
-cargo run --release -- --headless-l3grid dvl KTLX vil.png   # dvl|eet
+cargo run --release -- --headless-l3grid hhc KTLX hca.png   # dvl|eet|hhc
 cargo run --release -- --headless-metar KTLX
 cargo run --release -- --headless-tropical
 cargo run --release -- --headless-cappi KTLX 3 cappi.png
+cargo run --release -- --headless-reports 2013-05-20T19:00Z 2013-05-20T21:00Z
+cargo run --release -- --headless-afd KTLX
+cargo run --release -- --headless-aviation
+cargo run --release -- --headless-indices -97.5 35.3
 ```
 
 ```sh
-cargo test    # 107 offline unit tests
+cargo test    # 114 offline unit tests
 ```
 
 License: MIT.

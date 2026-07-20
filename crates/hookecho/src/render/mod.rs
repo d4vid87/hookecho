@@ -67,6 +67,10 @@ pub enum FieldLayer {
     Vil,
     /// Enhanced Echo Tops (L3 EET packet-16 product).
     EchoTops,
+    /// 24-hour MESH max — hail swaths / damage tracks (MRMS).
+    HailSwath,
+    /// Hybrid Hydrometeor Classification (L3 HHC packet-16 product, categorical).
+    Hca,
 }
 
 impl FieldLayer {
@@ -79,7 +83,7 @@ impl FieldLayer {
     }
 
     /// Fixed bottom-to-top paint order within each band.
-    pub const DRAW_ORDER: [FieldLayer; 14] = [
+    pub const DRAW_ORDER: [FieldLayer; 16] = [
         // Below-radar context band (bottom to top).
         FieldLayer::Mrms,
         FieldLayer::Hrrr,
@@ -90,8 +94,10 @@ impl FieldLayer {
         FieldLayer::Qpe1h,
         FieldLayer::Qpe24h,
         FieldLayer::FlashFlood,
+        FieldLayer::HailSwath,
         FieldLayer::Vil,
         FieldLayer::EchoTops,
+        FieldLayer::Hca,
         FieldLayer::Rotation,
         FieldLayer::Mesh,
         FieldLayer::AzShear,

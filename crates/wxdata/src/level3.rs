@@ -593,21 +593,23 @@ async fn fetch_latest(http: &reqwest::Client, site: &str, product: &str) -> Opti
 }
 
 /// Project a Digital Radial Data Array (packet 16) product onto a regular lat/lon grid, decoding
-/// each level to a physical value via `decode`. Uses a flat-earth approximation on a 0.01° grid.
+/// each level to a physical value via `decode`. `bin_km` is the product's range-bin size (1.0 for
+/// DVL/EET, 0.25 for HHC). Uses a flat-earth approximation on a 0.01° grid.
 /// `// ponytail: flat-earth is fine at ≤460 km radar range; drop in a proper projection if a`
 /// `// site near the poles ever matters.`
 pub fn radial_to_field(
     p: &Level3Product,
+    bin_km: f64,
     decode_level: impl Fn(u8, &[i16; 16]) -> Option<f32>,
 ) -> Option<crate::mrms::MrmsField> {
     let ra = p.radial.as_ref()?;
     if ra.radials.is_empty() {
         return None;
     }
-    const BIN_KM: f64 = 1.0; // DVL/EET are 1-km range resolution
+    let bin_km = if bin_km > 0.0 { bin_km } else { 1.0 };
     const RES_DEG: f64 = 0.01;
     let (lat0, lon0) = (p.lat as f64, p.lon as f64);
-    let max_range_km = (ra.first_bin + ra.nbins) as f64 * BIN_KM;
+    let max_range_km = (ra.first_bin + ra.nbins) as f64 * bin_km;
     let coslat = lat0.to_radians().cos().max(0.05);
     let dlat = max_range_km / 111.0;
     let dlon = max_range_km / (111.0 * coslat);
@@ -638,7 +640,7 @@ pub fn radial_to_field(
             let lon = lon_west + (gx as f64 + 0.5) * RES_DEG;
             let dx_km = (lon - lon0) * 111.0 * coslat;
             let range_km = (dx_km * dx_km + dy_km * dy_km).sqrt();
-            let bin = (range_km / BIN_KM) as i64 - ra.first_bin as i64;
+            let bin = (range_km / bin_km) as i64 - ra.first_bin as i64;
             if bin < 0 {
                 continue;
             }
@@ -672,13 +674,21 @@ pub fn radial_to_field(
 /// Fetch the latest Digital VIL (DVL, product 134) grid for `site`.
 pub async fn fetch_dvl(http: &reqwest::Client, site: &str) -> Option<crate::mrms::MrmsField> {
     let p = fetch_tgftp(http, &l3_site(site).to_lowercase(), "134il").await?;
-    radial_to_field(&p, nexrad_level3::dvl_value)
+    radial_to_field(&p, 1.0, nexrad_level3::dvl_value)
 }
 
 /// Fetch the latest Enhanced Echo Tops (EET, product 135) grid for `site` (kft; topped flag dropped).
 pub async fn fetch_eet(http: &reqwest::Client, site: &str) -> Option<crate::mrms::MrmsField> {
     let p = fetch_tgftp(http, &l3_site(site).to_lowercase(), "135et").await?;
-    radial_to_field(&p, |lvl, thr| nexrad_level3::eet_value(lvl, thr).map(|(kft, _topped)| kft))
+    radial_to_field(&p, 1.0, |lvl, thr| nexrad_level3::eet_value(lvl, thr).map(|(kft, _topped)| kft))
+}
+
+/// Fetch the latest Hybrid Hydrometeor Classification (HHC, product 177) grid for `site`.
+/// Cell values are the raw HCA class codes (10 = biological … 150 = range-folded); the caller
+/// colors them with a categorical LUT. 0.25-km range bins per the ICD.
+pub async fn fetch_hhc(http: &reqwest::Client, site: &str) -> Option<crate::mrms::MrmsField> {
+    let p = fetch_tgftp(http, &l3_site(site).to_lowercase(), "177hh").await?;
+    radial_to_field(&p, 0.25, |lvl, _| (lvl >= 10).then_some(lvl as f32))
 }
 
 /// Fetch the latest `DS.{ds}` product for `site` from the tgftp `sn.last` feed and decode it.
@@ -749,7 +759,7 @@ mod tests {
             thresholds: [0; 16],
         };
         // Decode: nonzero level → its value, else None.
-        let f = radial_to_field(&p, |lvl, _| (lvl >= 2).then_some(lvl as f32)).unwrap();
+        let f = radial_to_field(&p, 1.0, |lvl, _| (lvl >= 2).then_some(lvl as f32)).unwrap();
         // A cell due east of the radar (~50 km) should be filled; due west should be empty.
         let east_lon = -97.0 + 0.4;
         let west_lon = -97.0 - 0.4;

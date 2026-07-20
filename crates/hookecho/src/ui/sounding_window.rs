@@ -45,6 +45,19 @@ impl SoundingWindow {
                         ui.label(format!("0–6 km shear ≈ {sh:.0} kt"));
                     }
                 });
+                // Fixed-layer composite indices (feature FF): the numbers a chaser scans first.
+                if let Some(ix) = s.indices() {
+                    ui.horizontal_wrapped(|ui| {
+                        crate::theme::stat_card(ui, "SBCAPE", &format!("{:.0} J/kg", ix.sbcape));
+                        crate::theme::stat_card(ui, "LCL", &format!("{:.0} m", ix.lcl_m));
+                        crate::theme::stat_card(ui, "SRH 0–1", &format!("{:.0}", ix.srh1));
+                        crate::theme::stat_card(ui, "SRH 0–3", &format!("{:.0}", ix.srh3));
+                        crate::theme::stat_card(ui, "SCP", &format!("{:.1}", ix.scp));
+                        crate::theme::stat_card(ui, "STP", &format!("{:.1}", ix.stp));
+                        crate::theme::stat_card(ui, "EHI 0–1", &format!("{:.1}", ix.ehi1));
+                    });
+                    ui.weak("Fixed-layer forms from 10 mandatory levels — coarser than SPC mesoanalysis.");
+                }
                 ui.separator();
                 ui.horizontal(|ui| {
                     skewt(ui, s);
