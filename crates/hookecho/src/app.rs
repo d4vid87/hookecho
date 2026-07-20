@@ -2621,6 +2621,29 @@ impl HookEchoApp {
         };
         ui.painter().add(egui_wgpu::Callback::new_paint_callback(prect, cb));
 
+        // Per-pane product picker (multi-pane only): set THIS pane's moment directly, without
+        // clicking to activate it first. Single-pane keeps using the toolbox Level 2 section.
+        if self.views.len() > 1 && !self.obs_mode {
+            let cur = self.views[idx].moment;
+            egui::Area::new(egui::Id::new(("pane_product", idx)))
+                .order(egui::Order::Foreground)
+                .fixed_pos(prect.left_top() + egui::vec2(6.0, 6.0))
+                .show(ctx, |ui| {
+                    egui::Frame::popup(ui.style())
+                        .inner_margin(egui::Margin::symmetric(4, 2))
+                        .show(ui, |ui| {
+                            ui.horizontal(|ui| {
+                                for m in Moment::ALL {
+                                    if ui.selectable_label(m == cur, m.short_name()).clicked() {
+                                        self.views[idx].moment = m;
+                                        self.active = idx;
+                                    }
+                                }
+                            });
+                        });
+                });
+        }
+
         // Optical-flow nowcast points (needs &mut self to bin the sweep; done before the &view borrow).
         let nowcast_pts = if self.filters.show_nowcast && idx == self.active {
             self.compute_nowcast(idx)
