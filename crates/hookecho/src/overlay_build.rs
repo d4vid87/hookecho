@@ -155,9 +155,9 @@ pub fn append_placefiles(geom: &mut OverlayGeom, items: &[&PlaceItem], zoom: f64
 fn feature_path(f: &GeoFeature) -> Path {
     let mut b = Path::builder();
     for ring in &f.rings {
-        let mut pts = ring.iter().filter_map(|&[lon, lat]| {
+        let mut pts = ring.iter().map(|&[lon, lat]| {
             let (wx, wy) = lonlat_to_world(lon, lat);
-            Some(lyon::math::point(wx as f32, wy as f32))
+            lyon::math::point(wx as f32, wy as f32)
         });
         if let Some(first) = pts.next() {
             b.begin(first);

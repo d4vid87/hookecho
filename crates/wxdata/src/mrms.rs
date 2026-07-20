@@ -21,9 +21,10 @@ pub const AZSHEAR: &str = "CONUS/MergedAzShear_0-2kmAGL_00.50";
 pub const QPE_01H: &str = "CONUS/MultiSensor_QPE_01H_Pass2_00.00";
 /// Multi-sensor 24-hour QPE accumulation, Pass-2 gauge-corrected (mm; storm-total scale).
 pub const QPE_24H: &str = "CONUS/MultiSensor_QPE_24H_Pass2_00.00";
-// FLASH flood products (ARI/FFG/streamflow) use a GRIB2 local parameter table the vendored
-// gribberish decoder rejects — omitted until that decode path is fixed. QPE accumulation covers
-// the flood-suite need for now.
+/// Surface precipitation type flag (categorical: rain/snow/hail/convective).
+pub const PRECIP_TYPE: &str = "CONUS/PrecipFlag_00.00";
+/// FLASH flash-flood average recurrence interval over the 30-min QPE window (years).
+pub const FLASH_ARI30: &str = "CONUS/FLASH_QPE_ARI30M_00.00";
 
 /// Low-level rotation-track (accumulated azimuthal-shear max) product path for `minutes`
 /// (30/60/120 supported; other values fall back to 30).
@@ -95,7 +96,7 @@ impl MrmsField {
     /// products (rotation tracks, AzShear) are 14000×7000 — larger than the 8192 texture cap.
     /// Max-pooling keeps the strongest signal in each block (right for shear/reflectivity).
     pub fn decimated(&self, max_dim: usize) -> MrmsField {
-        let factor = (self.nx.max(self.ny) + max_dim - 1) / max_dim;
+        let factor = self.nx.max(self.ny).div_ceil(max_dim);
         if factor <= 1 {
             return MrmsField {
                 values: self.values.clone(),

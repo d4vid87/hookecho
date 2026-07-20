@@ -77,6 +77,63 @@ pub fn build(sweeps: &[BinnedSweep], n: usize, nz: usize, half_km: f32, top_km: 
     Some(Volume3d { data, n, nz, half_km, top_km, value_min, value_max })
 }
 
+/// A constant-altitude PPI (CAPPI): an `n × n` horizontal slice of reflectivity (dBZ) at a fixed
+/// altitude, radar-centered. `dbz[x + n*y]` with row 0 = north (y inverted for image display).
+pub struct Cappi {
+    pub n: usize,
+    pub half_km: f32,
+    pub alt_km: f32,
+    /// dBZ per cell, `None` where no beam sampled that altitude.
+    pub dbz: Vec<Option<f32>>,
+}
+
+/// Re-slice the stacked tilts at a single altitude `alt_km` into an `n × n` CAPPI out to
+/// `half_km`. Mirrors [`build`]'s inner column loop but samples one height. `None` if no sweeps.
+pub fn cappi(sweeps: &[BinnedSweep], alt_km: f32, n: usize, half_km: f32) -> Option<Cappi> {
+    let s0 = sweeps.first()?;
+    let (value_min, value_max) = (s0.value_min, s0.value_max);
+    let span = (value_max - value_min).max(f32::EPSILON);
+    let n = n.max(2);
+    let mut dbz = vec![None; n * n];
+
+    for j in 0..n {
+        // Row 0 = north: invert y so the image displays north-up.
+        let y = half_km as f64 - 2.0 * half_km as f64 * j as f64 / (n - 1) as f64;
+        for i in 0..n {
+            let x = -half_km as f64 + 2.0 * half_km as f64 * i as f64 / (n - 1) as f64;
+            let ground = (x * x + y * y).sqrt();
+            if ground < 0.5 {
+                continue;
+            }
+            let az = x.atan2(y).to_degrees().rem_euclid(360.0);
+            let mut samples: Vec<(f64, f32)> = Vec::with_capacity(sweeps.len());
+            for s in sweeps {
+                let e = s.elevation_deg as f64;
+                let slant = ground / e.to_radians().cos();
+                let gate = ((slant - s.first_gate_km as f64) / s.gate_interval_km.max(f32::EPSILON) as f64).round();
+                if gate < 0.0 || gate as usize >= s.gate_count {
+                    continue;
+                }
+                let bin = ((az / 360.0 * s.az_bins as f64) as usize) % s.az_bins;
+                let idx = s.data[bin * s.gate_count + gate as usize];
+                if idx < 2 {
+                    continue;
+                }
+                let h = beam_height_km(slant, e);
+                let v = value_min + (idx as f32 - 2.0) / 253.0 * span;
+                samples.push((h, v));
+            }
+            if samples.is_empty() {
+                continue;
+            }
+            samples.sort_by(|p, q| p.0.partial_cmp(&q.0).unwrap_or(std::cmp::Ordering::Equal));
+            dbz[i + n * j] = sample_profile(&samples, alt_km as f64);
+        }
+    }
+
+    Some(Cappi { n, half_km, alt_km, dbz })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -115,5 +172,31 @@ mod tests {
         assert_eq!(v.data.len(), 64 * 64 * 24);
         let filled = v.data.iter().filter(|&&b| b >= 2).count();
         assert!(filled > 0, "east-side echo should populate some voxels");
+    }
+
+    #[test]
+    fn cappi_slices_east_echo_and_respects_row_order() {
+        // The synthetic echo sits east (az ~90°) at ~40..60 km, low altitude.
+        let sweeps = vec![sweep(0.5), sweep(1.5), sweep(2.4)];
+        let c = cappi(&sweeps, 2.0, 128, 120.0).unwrap();
+        assert_eq!(c.dbz.len(), 128 * 128);
+        let filled = c.dbz.iter().filter(|v| v.is_some()).count();
+        assert!(filled > 0, "2 km slice should catch the low echo");
+        // Filled cells cluster on the east half (x > 0); the west half stays empty.
+        let mid = 128 / 2;
+        let mut east_filled = 0;
+        let mut west_filled = 0;
+        for j in 0..128 {
+            for i in 0..128 {
+                if c.dbz[i + 128 * j].is_some() {
+                    if i > mid { east_filled += 1 } else { west_filled += 1 }
+                }
+            }
+        }
+        assert!(east_filled > 0, "east echo present");
+        assert_eq!(west_filled, 0, "west empty");
+        // Far above the echo there's nothing.
+        let high = cappi(&sweeps, 14.0, 128, 120.0).unwrap();
+        assert_eq!(high.dbz.iter().filter(|v| v.is_some()).count(), 0, "14 km empty");
     }
 }

@@ -103,7 +103,7 @@ pub fn detect(
             min_cc,
         })
         .collect();
-    hits.sort_by(|a, b| b.gates.cmp(&a.gates));
+    hits.sort_by_key(|h| std::cmp::Reverse(h.gates));
     hits
 }
 

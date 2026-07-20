@@ -55,20 +55,43 @@ pub enum FieldLayer {
     Lightning,
     Qpe1h,
     Qpe24h,
+    /// HRRR surface CAPE (environment suite).
+    Cape,
+    /// HRRR storm-relative helicity (environment suite).
+    Srh,
+    /// MRMS surface precipitation type (categorical context layer).
+    PrecipType,
+    /// MRMS FLASH flash-flood average recurrence interval.
+    FlashFlood,
+    /// Gridded Digital VIL (L3 DVL packet-16 product).
+    Vil,
+    /// Enhanced Echo Tops (L3 EET packet-16 product).
+    EchoTops,
 }
 
 impl FieldLayer {
     /// Painting under the single-site radar (national context) vs. over it (severe signals).
     pub fn below_radar(self) -> bool {
-        matches!(self, FieldLayer::Mrms | FieldLayer::Hrrr)
+        matches!(
+            self,
+            FieldLayer::Mrms | FieldLayer::Hrrr | FieldLayer::Cape | FieldLayer::Srh | FieldLayer::PrecipType
+        )
     }
 
     /// Fixed bottom-to-top paint order within each band.
-    pub const DRAW_ORDER: [FieldLayer; 8] = [
+    pub const DRAW_ORDER: [FieldLayer; 14] = [
+        // Below-radar context band (bottom to top).
         FieldLayer::Mrms,
         FieldLayer::Hrrr,
+        FieldLayer::Cape,
+        FieldLayer::Srh,
+        FieldLayer::PrecipType,
+        // Above-radar severe-signal band.
         FieldLayer::Qpe1h,
         FieldLayer::Qpe24h,
+        FieldLayer::FlashFlood,
+        FieldLayer::Vil,
+        FieldLayer::EchoTops,
         FieldLayer::Rotation,
         FieldLayer::Mesh,
         FieldLayer::AzShear,

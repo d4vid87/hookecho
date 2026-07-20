@@ -33,6 +33,8 @@ pub struct OverlayFilters {
     pub alert_cats: [bool; 6],
     /// SPC categorical outlook day (0 = off, else 1–3).
     pub outlook_day: u8,
+    /// Day-1 outlook hazard: categorical risk, or a tornado/wind/hail probability grid.
+    pub outlook_kind: wxdata::spc::OutlookKind,
     pub show_mds: bool,
     /// Level 3 storm cells (clickable dots: storm tracking, hail, mesocyclone).
     pub show_cells: bool,
@@ -54,6 +56,7 @@ impl Default for OverlayFilters {
             show_alerts: true,
             alert_cats: [true; 6],
             outlook_day: 0, // SPC outlook off by default; user opts in via the toolbox
+            outlook_kind: wxdata::spc::OutlookKind::Categorical,
 
             show_mds: true,
             show_cells: true,
@@ -89,6 +92,12 @@ enum OverlayMsg {
     Obs(String, Result<wxdata::obs::StationObs, String>),
     /// VAD wind profile for a site.
     Vwp(String, Vec<wxdata::level3::VwpLevel>),
+    /// Archived storm-based warnings for a 5-min UTC bucket (feature W).
+    ArchiveWarnings(i64, Vec<GeoFeature>),
+    /// Surface observations (METAR station plots) for the requested bbox (feature U).
+    Metar(Vec<wxdata::metar::SurfaceOb>),
+    /// NHC tropical cyclones: cones + per-storm tracks (feature V).
+    Tropical(wxdata::tropical::TropicalData),
 }
 
 /// One overlay data source to fetch.
@@ -96,7 +105,7 @@ enum OverlayMsg {
 enum OverlaySource {
     Alerts,
     Mds,
-    Outlook(u8),
+    Outlook(u8, wxdata::spc::OutlookKind),
     Cells(String),
     Placefile(String),
     /// A national field layer plus the MRMS S3 product path to fetch it from.
@@ -106,10 +115,20 @@ enum OverlaySource {
     ProbSevere,
     /// HRRR composite-reflectivity forecast for a forecast hour (0..=18).
     Hrrr(u8),
+    /// HRRR environment field (CAPE/SRH) at f00; `ml` = mixed-layer CAPE, `srh_km` = SRH depth.
+    Env(crate::render::FieldLayer, bool, u8),
+    /// Gridded L3 product (DVL/EET) for a site, projected to a lat/lon field (feature X).
+    L3Grid(crate::render::FieldLayer, String),
     /// Nearest-station observations for `site` at `(lat, lon)`.
     Obs { site: String, lat: f64, lon: f64 },
     /// VAD wind profile for `site`.
     Vwp(String),
+    /// Archived storm-based warnings valid at a 5-min UTC bucket (Unix seconds, feature W).
+    ArchiveWarnings(i64),
+    /// Surface observations within a lat/lon bbox `(lat0, lon0, lat1, lon1)` (feature U).
+    Metar(f64, f64, f64, f64),
+    /// NHC tropical cyclones (feature V).
+    Tropical,
 }
 
 impl OverlaySource {
@@ -117,8 +136,8 @@ impl OverlaySource {
         Ok(match self {
             OverlaySource::Alerts => OverlayMsg::Alerts(alerts::fetch_active(http).await?),
             OverlaySource::Mds => OverlayMsg::Mds(wxdata::spc::fetch_mesoscale_discussions(http).await?),
-            OverlaySource::Outlook(day) => {
-                OverlayMsg::Outlook(day, wxdata::spc::fetch_outlook(http, day).await?)
+            OverlaySource::Outlook(day, kind) => {
+                OverlayMsg::Outlook(day, wxdata::spc::fetch_outlook_kind(http, day, kind).await?)
             }
             OverlaySource::Cells(site) => {
                 let cells = level3::fetch_cells(http, &site).await;
@@ -141,6 +160,29 @@ impl OverlaySource {
                 OverlayMsg::ProbSevere(wxdata::probsevere::fetch_probsevere(http).await?)
             }
             OverlaySource::Hrrr(fh) => OverlayMsg::Hrrr(wxdata::hrrr::fetch_forecast(http, fh).await?),
+            OverlaySource::Env(layer, ml, srh_km) => {
+                use crate::render::FieldLayer as FL;
+                let (var, level, min_valid) = match layer {
+                    FL::Cape if ml => ("CAPE", "90-0 mb above ground".to_string(), 0.0),
+                    FL::Cape => ("CAPE", "surface".to_string(), 0.0),
+                    FL::Srh => ("HLCY", format!("{}000-0 m above ground", srh_km), f64::NEG_INFINITY),
+                    _ => ("REFC", "entire atmosphere".to_string(), -30.0),
+                };
+                let fc = wxdata::hrrr::fetch_field(http, var, &level, 0, min_valid).await?;
+                OverlayMsg::Field(layer, fc.field)
+            }
+            OverlaySource::L3Grid(layer, site) => {
+                use crate::render::FieldLayer as FL;
+                let field = match layer {
+                    FL::Vil => wxdata::level3::fetch_dvl(http, &site).await,
+                    FL::EchoTops => wxdata::level3::fetch_eet(http, &site).await,
+                    _ => None,
+                };
+                match field {
+                    Some(f) => OverlayMsg::Field(layer, f),
+                    None => anyhow::bail!("no L3 grid for {site}"),
+                }
+            }
             OverlaySource::Obs { site, lat, lon } => {
                 let r = wxdata::obs::fetch_nearest(http, lat, lon).await.map_err(|e| e.to_string());
                 OverlayMsg::Obs(site, r)
@@ -149,6 +191,25 @@ impl OverlaySource {
                 let levels = wxdata::level3::fetch_vwp(http, &site).await;
                 OverlayMsg::Vwp(site, levels)
             }
+            OverlaySource::ArchiveWarnings(bucket) => {
+                let ts = chrono::DateTime::from_timestamp(bucket * 300, 0)
+                    .unwrap_or_default()
+                    .to_rfc3339();
+                // An IEM outage caches the bucket empty (self-heals via LRU); log it so a
+                // silent "no warnings that day" isn't mistaken for truth.
+                let feats = match wxdata::archive_warnings::fetch(http, &ts).await {
+                    Ok(f) => f,
+                    Err(e) => {
+                        log::warn!("archive warnings fetch {ts}: {e} (bucket shown empty)");
+                        Vec::new()
+                    }
+                };
+                OverlayMsg::ArchiveWarnings(bucket, feats)
+            }
+            OverlaySource::Metar(lat0, lon0, lat1, lon1) => {
+                OverlayMsg::Metar(wxdata::metar::fetch_bbox(http, lat0, lon0, lat1, lon1).await?)
+            }
+            OverlaySource::Tropical => OverlayMsg::Tropical(wxdata::tropical::fetch_active(http).await?),
         })
     }
 }
@@ -181,6 +242,10 @@ fn field_refresh_secs(layer: crate::render::FieldLayer) -> u64 {
         FL::Mrms | FL::Mesh | FL::Rotation | FL::Hrrr => 120,
         // QPE accumulations update on a ~2-minute MRMS cadence.
         FL::Qpe1h | FL::Qpe24h => 120,
+        // MRMS precip type / flash-flood ARI on the ~2-min cadence; L3 grids on the 120 s L3 cadence.
+        FL::PrecipType | FL::FlashFlood | FL::Vil | FL::EchoTops => 120,
+        // Environment (HRRR CAPE/SRH) refreshes slowly — 15 min.
+        FL::Cape | FL::Srh => 900,
     }
 }
 
@@ -294,6 +359,13 @@ pub struct HookEchoApp {
     overlay_tx: Sender<OverlayMsg>,
     filters: OverlayFilters,
     alert_features: Vec<GeoFeature>,
+    /// Archived storm-based warnings (feature W) keyed by 5-min UTC bucket (ts/300); shown while
+    /// the active pane is scrubbed off-live.
+    arch_warns: LruCache<i64, Vec<GeoFeature>>,
+    /// The 5-min bucket currently being fetched (dedupes in-flight requests).
+    arch_warn_inflight: Option<i64>,
+    /// The bucket whose warnings are currently substituted into the overlay set (None = live).
+    arch_warn_shown: Option<i64>,
     outlook_features: [Vec<GeoFeature>; 3],
     md_features: Vec<GeoFeature>,
     /// ProbSevere storm-probability polygons + badges (toggle + refresh clock).
@@ -368,6 +440,30 @@ pub struct HookEchoApp {
     fields: std::collections::HashMap<crate::render::FieldLayer, FieldState>,
     /// Selected rotation-track accumulation window (minutes): 30, 60, or 120.
     rotation_minutes: u16,
+    /// Environment suite (HRRR CAPE/SRH): CAPE uses the mixed-layer (90-0 mb) parcel when true,
+    /// else surface-based; SRH depth in km (1 = 0-1 km, 3 = 0-3 km). Changing either clears the
+    /// layer's last_fetch so the next frame refetches.
+    env_cape_ml: bool,
+    env_srh_km: u8,
+    /// The site the L3 gridded products (DVL/EET) were last fetched for (feature X); refetch on
+    /// site change.
+    l3grid_site: Option<String>,
+    /// Surface obs (METAR station plots, feature U): toggle, current obs, fetch clock + bbox.
+    show_metar: bool,
+    metars: Vec<wxdata::metar::SurfaceOb>,
+    metar_last_fetch: Option<Instant>,
+    /// The `(lat0, lon0, lat1, lon1)` bbox the current `metars` were fetched for.
+    metar_bounds: Option<(f64, f64, f64, f64)>,
+    /// NHC tropical suite (feature V): toggle, fetched data, refresh clock.
+    show_tropical: bool,
+    tropical: Option<wxdata::tropical::TropicalData>,
+    tropical_last_fetch: Option<Instant>,
+    /// CAPPI slice window (feature AA): toggle, selected altitude (km), rendered texture, and the
+    /// key `(volume name, altitude bits)` the texture was built for (re-slice on change).
+    show_cappi: bool,
+    cappi_alt_km: f32,
+    cappi_tex: Option<egui::TextureHandle>,
+    cappi_key: Option<(String, u32)>,
     /// HRRR "future radar": selected forecast hour, last-fetched hour, run/valid times, clock.
     hrrr_fcst_hour: u8,
     hrrr_fetched_hour: Option<u8>,
@@ -459,7 +555,7 @@ fn pane_rects(r: egui::Rect, n: usize) -> Vec<egui::Rect> {
                     v.push(egui::Rect::from_min_size(egui::pos2(x, y), egui::vec2(w, h)));
                 }
             }
-            v.truncate(n.min(4).max(1));
+            v.truncate(n.clamp(1, 4));
             v
         }
     }
@@ -543,6 +639,9 @@ impl HookEchoApp {
             overlay_tx,
             filters: OverlayFilters::default(),
             alert_features: Vec::new(),
+            arch_warns: LruCache::new(NonZeroUsize::new(50).unwrap()),
+            arch_warn_inflight: None,
+            arch_warn_shown: None,
             outlook_features: [Vec::new(), Vec::new(), Vec::new()],
             md_features: Vec::new(),
             show_probsevere: false,
@@ -598,6 +697,20 @@ impl HookEchoApp {
                 .map(|&l| (l, FieldState::default()))
                 .collect(),
             rotation_minutes: 30,
+            env_cape_ml: false,
+            env_srh_km: 3,
+            l3grid_site: None,
+            show_metar: false,
+            metars: Vec::new(),
+            metar_last_fetch: None,
+            metar_bounds: None,
+            show_tropical: false,
+            tropical: None,
+            tropical_last_fetch: None,
+            show_cappi: false,
+            cappi_alt_km: 3.0,
+            cappi_tex: None,
+            cappi_key: None,
             hrrr_fcst_hour: 1,
             hrrr_fetched_hour: None,
             hrrr_run: None,
@@ -664,13 +777,23 @@ impl HookEchoApp {
         });
     }
 
+    /// Hazard kind for the current outlook day: probabilistic layers exist only for Day 1;
+    /// Days 2–3 always fetch the categorical risk.
+    fn outlook_kind_for_day(&self) -> wxdata::spc::OutlookKind {
+        if self.filters.outlook_day == 1 {
+            self.filters.outlook_kind
+        } else {
+            wxdata::spc::OutlookKind::Categorical
+        }
+    }
+
     fn fetch_overlays(&mut self, ctx: &egui::Context) {
         self.overlay_last_fetch = Some(Instant::now());
         self.spawn_overlay(ctx, OverlaySource::Alerts);
         self.spawn_overlay(ctx, OverlaySource::Mds);
         // Only fetch the SPC outlook the user has selected (off = day 0 fetches nothing).
         if (1..=3).contains(&self.filters.outlook_day) {
-            self.spawn_overlay(ctx, OverlaySource::Outlook(self.filters.outlook_day));
+            self.spawn_overlay(ctx, OverlaySource::Outlook(self.filters.outlook_day, self.outlook_kind_for_day()));
         }
         // Storm cells for the active view's site (Level 3 products are per-site).
         if let Some(site) = self.views[self.active].site.clone() {
@@ -799,12 +922,16 @@ impl HookEchoApp {
     /// each new one. The first fetch only seeds the known set (no alert on already-active warnings).
     fn detect_new_warnings(&mut self, feats: &[GeoFeature]) {
         let mut alerted = false;
+        let mut max_esc = 0u8; // highest escalation among newly-seen warnings this pass
         for f in feats {
             if f.kind != overlay::FeatureKind::Warning {
                 continue;
             }
             let Some(a) = &f.alert else { continue };
             if self.known_warning_ids.insert(a.id.clone()) && self.warnings_seeded {
+                let esc = wxdata::alerts::escalation(a);
+                max_esc = max_esc.max(esc);
+                let urgent = esc >= 2;
                 // A watched location (saved marker) inside the polygon escalates the banner.
                 let hit = self
                     .settings
@@ -817,6 +944,7 @@ impl HookEchoApp {
                         self.push_ntfy(
                             &format!("⚠ {} — {}", a.event, m.name),
                             if a.headline.is_empty() { &a.area } else { &a.headline },
+                            urgent,
                         );
                         (format!("⚠ {}", a.event), format!("covers {}", m.name))
                     }
@@ -832,7 +960,13 @@ impl HookEchoApp {
             use std::io::Write;
             let _ = std::io::stdout().flush();
             if self.settings.alert_sound {
-                crate::audio::play(&self.settings.warn_sound, self.settings.alert_volume);
+                // Escalated (Tornado Emergency / PDS / destructive) warnings use the emergency sound.
+                let sound = if max_esc >= 2 {
+                    &self.settings.emergency_sound
+                } else {
+                    &self.settings.warn_sound
+                };
+                crate::audio::play(sound, self.settings.alert_volume);
             }
         }
     }
@@ -863,6 +997,7 @@ impl HookEchoApp {
             self.push_ntfy(
                 &format!("⚡ Lightning near {}", m.name),
                 &format!("Cloud-to-ground strikes within {RADIUS_KM:.0} km of {}", m.name),
+                false,
             );
             self.warning_banners.push((
                 format!("⚡ Lightning near {}", m.name),
@@ -923,6 +1058,31 @@ impl HookEchoApp {
             lut,
         });
         self.show_3d = true;
+    }
+
+    /// Re-slice the active pane's cached volume into a CAPPI at `cappi_alt_km` when the key
+    /// (volume name + altitude) changed, and refresh the window texture (feature AA).
+    fn update_cappi(&mut self, ctx: &egui::Context) {
+        const HALF_KM: f32 = 150.0;
+        const N: usize = 256;
+        let Some(name) = self.views[self.active].volume.as_ref().map(|v| v.name.clone()) else {
+            self.cappi_tex = None;
+            self.cappi_key = None;
+            return;
+        };
+        let key = (name, self.cappi_alt_km.to_bits());
+        if self.cappi_key.as_ref() == Some(&key) {
+            return;
+        }
+        let Some(vol) = self.views[self.active].volume.as_mut() else { return };
+        let sweeps = vol.reflectivity_tilts();
+        if sweeps.is_empty() {
+            return;
+        }
+        let Some(c) = wxdata::volume3d::cappi(&sweeps, self.cappi_alt_km, N, HALF_KM) else { return };
+        let img = ui::cappi_window::to_image(&c, self.palettes.table(Moment::Reflectivity));
+        self.cappi_tex = Some(ctx.load_texture("cappi", img, egui::TextureOptions::NEAREST));
+        self.cappi_key = Some(key);
     }
 
     /// Reconstruct a vertical reflectivity cross-section along the two clicked endpoints from
@@ -1013,18 +1173,19 @@ impl HookEchoApp {
 
     /// POST a high-priority push notification to the user's ntfy.sh topic (no-op if unset).
     /// Best-effort on the shared tokio runtime; failures are logged, never fatal.
-    fn push_ntfy(&self, title: &str, body: &str) {
+    fn push_ntfy(&self, title: &str, body: &str, urgent: bool) {
         let topic = self.settings.ntfy_topic.trim().to_string();
         if topic.is_empty() {
             return;
         }
         let http = self.http.clone();
         let (title, body) = (title.to_string(), body.to_string());
+        let priority = if urgent { "urgent" } else { "high" };
         self._rt.spawn(async move {
             let res = http
                 .post(format!("https://ntfy.sh/{topic}"))
                 .header("Title", title)
-                .header("Priority", "high")
+                .header("Priority", priority)
                 .header("Tags", "warning,cloud_with_lightning")
                 .body(body)
                 .send()
@@ -1177,7 +1338,7 @@ impl HookEchoApp {
                 format!("{} debris signature(s) — possible tornado", hits.len()),
                 Instant::now(),
             ));
-            self.push_ntfy("⚠ Tornado Debris Signature", "Low CC + high reflectivity detected on radar");
+            self.push_ntfy("⚠ Tornado Debris Signature", "Low CC + high reflectivity detected on radar", true);
             if self.settings.alert_sound {
                 crate::audio::play(&self.settings.tds_sound, self.settings.alert_volume);
             }
@@ -1357,7 +1518,7 @@ impl HookEchoApp {
     fn open_alert_popup(&mut self, id: &str) {
         let mut seen = std::collections::HashSet::new();
         let cards: Vec<ui::warning_window::WarnCard> = self
-            .alert_features
+            .active_alert_features()
             .iter()
             .filter_map(|f| f.alert.as_ref().map(|a| (a, f.stroke)))
             .filter(|(a, _)| a.id == id && seen.insert(a.id.clone()))
@@ -1397,7 +1558,7 @@ impl HookEchoApp {
                             let hist = self.cell_trends.entry(c.id.clone()).or_default();
                             let sample = ui::cell_window::CellSample { vil: c.vil, top: c.top_kft, dbz: c.max_dbz };
                             // Skip a duplicate of the last sample (same volume re-fetched).
-                            if hist.last().map_or(true, |s| (s.vil, s.top, s.dbz) != (sample.vil, sample.top, sample.dbz)) {
+                            if hist.last().is_none_or(|s| (s.vil, s.top, s.dbz) != (sample.vil, sample.top, sample.dbz)) {
                                 hist.push(sample);
                                 if hist.len() > 40 {
                                     hist.remove(0);
@@ -1429,10 +1590,7 @@ impl HookEchoApp {
                 }
                 OverlayMsg::StormReports(reports) => self.storm_reports = reports,
                 OverlayMsg::Spotters(spotters) => self.spotters = spotters,
-                OverlayMsg::ProbSevere(f) => {
-                    self.probsevere = f;
-                    self.rebuild_overlays();
-                }
+                OverlayMsg::ProbSevere(f) => self.probsevere = f,
                 OverlayMsg::Hrrr(fc) => {
                     use crate::render::FieldLayer;
                     let upload = self.field_upload(FieldLayer::Hrrr, &fc.field);
@@ -1455,11 +1613,95 @@ impl HookEchoApp {
                         self.hodo_site = Some(site);
                     }
                 }
+                OverlayMsg::ArchiveWarnings(bucket, feats) => {
+                    self.arch_warns.put(bucket, feats);
+                    if self.arch_warn_inflight == Some(bucket) {
+                        self.arch_warn_inflight = None;
+                    }
+                }
+                OverlayMsg::Metar(obs) => self.metars = obs,
+                OverlayMsg::Tropical(data) => self.tropical = Some(data),
             }
             changed = true;
         }
         if changed {
+            // One rebuild covers every message kind (ProbSevere/Tropical included).
             self.rebuild_overlays();
+        }
+    }
+
+    /// The alert features to display right now: live alerts, or the archived set while the active
+    /// pane is scrubbed off-live to a bucket we've fetched (feature W).
+    fn active_alert_features(&self) -> &[GeoFeature] {
+        if let Some(b) = self.arch_warn_shown {
+            if let Some(f) = self.arch_warns.peek(&b) {
+                return f;
+            }
+        }
+        &self.alert_features
+    }
+
+    /// The 5-min UTC bucket (Unix secs / 300) of the active pane's displayed frame, or `None` when
+    /// following live (archive warnings only apply to scrubbed archive views).
+    fn archive_bucket(&self) -> Option<i64> {
+        let v = &self.views[self.active];
+        if v.timeline.following {
+            return None;
+        }
+        Some(v.volume.as_ref()?.time.timestamp() / 300)
+    }
+
+    /// Drive the archived-warning overlay from the active pane's playhead: fetch the bucket the
+    /// scrubbed frame falls in, and swap it in for the live alerts (or back to live at the head).
+    fn sync_archive_warnings(&mut self, ctx: &egui::Context) {
+        match self.archive_bucket() {
+            None => {
+                if self.arch_warn_shown.is_some() {
+                    self.arch_warn_shown = None;
+                    self.rebuild_overlays();
+                }
+            }
+            Some(b) => {
+                let cached = self.arch_warns.contains(&b);
+                if !cached && self.arch_warn_inflight != Some(b) {
+                    self.arch_warn_inflight = Some(b);
+                    self.spawn_overlay(ctx, OverlaySource::ArchiveWarnings(b));
+                }
+                if cached && self.arch_warn_shown != Some(b) {
+                    self.arch_warn_shown = Some(b);
+                    self.rebuild_overlays();
+                }
+            }
+        }
+    }
+
+    /// Drive the METAR station-plot fetch (feature U): only when enabled and zoomed in enough,
+    /// refetching every 75 s or when the view center drifts out of the fetched bbox's middle half.
+    fn sync_metar(&mut self, ctx: &egui::Context) {
+        if !self.show_metar {
+            return;
+        }
+        let (min_lon, min_lat, max_lon, max_lat) = self.view_bounds();
+        if (max_lon - min_lon) > 12.0 {
+            return; // too zoomed out — a nationwide plot would be unreadable and huge
+        }
+        let (clon, clat) = ((min_lon + max_lon) * 0.5, (min_lat + max_lat) * 0.5);
+        let stale = self.metar_last_fetch.is_none_or(|t| t.elapsed().as_secs() >= 75);
+        // Refetch when the center leaves the middle half of the last fetched bbox.
+        let drifted = self.metar_bounds.is_none_or(|(la0, lo0, la1, lo1)| {
+            let (mlon, mlat) = ((lo0 + lo1) * 0.5, (la0 + la1) * 0.5);
+            let (hw, hh) = ((lo1 - lo0) * 0.25, (la1 - la0) * 0.25);
+            (clon - mlon).abs() > hw || (clat - mlat).abs() > hh
+        });
+        if stale || drifted {
+            // Pad the fetch bbox 20% past the view, clamped to 15° per side.
+            let pad_lon = ((max_lon - min_lon) * 0.2).min(15.0);
+            let pad_lat = ((max_lat - min_lat) * 0.2).min(15.0);
+            let (lat0, lon0) = (min_lat - pad_lat, min_lon - pad_lon);
+            let (lat1, lon1) = (max_lat + pad_lat, max_lon + pad_lon);
+            self.metar_last_fetch = Some(Instant::now());
+            self.metar_bounds = Some((lat0, lon0, lat1, lon1));
+            self.spawn_overlay(ctx, OverlaySource::Metar(lat0, lon0, lat1, lon1));
         }
     }
 
@@ -1473,7 +1715,7 @@ impl HookEchoApp {
             v.extend(self.md_features.iter().cloned());
         }
         if self.filters.show_alerts {
-            for f in &self.alert_features {
+            for f in self.active_alert_features() {
                 if self.filters.alert_cats[alerts::category(&f.title).index()] {
                     v.push(f.clone());
                 }
@@ -1481,6 +1723,11 @@ impl HookEchoApp {
         }
         if self.show_probsevere {
             v.extend(self.probsevere.iter().cloned());
+        }
+        if self.show_tropical {
+            if let Some(t) = &self.tropical {
+                v.extend(t.cones.iter().cloned());
+            }
         }
         self.overlays = v;
         self.overlay_gen = self.overlay_gen.wrapping_add(1);
@@ -1610,7 +1857,7 @@ impl HookEchoApp {
                         if time.date_naive() != v.timeline.date {
                             v.timeline.date = time.date_naive(); // re-list fires via frames_key
                             true
-                        } else if last_time.map_or(true, |t| time > t)
+                        } else if last_time.is_none_or(|t| time > t)
                             && v.timeline.frames.last().map(|id| id.name()) != Some(name.as_str())
                         {
                             v.timeline.append_head(Identifier::new(name.clone()));
@@ -1687,7 +1934,7 @@ impl HookEchoApp {
         }
 
         if want && self.live_stream.is_none() {
-            let due = self.last_stream_attempt.map_or(true, |t| t.elapsed().as_secs() >= 60);
+            let due = self.last_stream_attempt.is_none_or(|t| t.elapsed().as_secs() >= 60);
             if due {
                 self.last_stream_attempt = Some(Instant::now());
                 let site = site.unwrap();
@@ -1888,7 +2135,7 @@ impl HookEchoApp {
                 let v = &self.views[idx];
                 let due = v
                     .last_poll
-                    .map_or(true, |t| t.elapsed().as_secs() >= self.settings.poll_interval_secs);
+                    .is_none_or(|t| t.elapsed().as_secs() >= self.settings.poll_interval_secs);
                 let current_name = if looping {
                     v.timeline.frames.last().map(|id| id.name().to_string())
                 } else {
@@ -2546,8 +2793,204 @@ impl HookEchoApp {
             }
         }
 
+        // Warning intelligence: warned-storm motion vector + projected path + ETA to markers, and
+        // a pulsing outline on escalated (Tornado Emergency / PDS / destructive) warnings.
+        if self.filters.show_alerts {
+            let to_screen = |lon: f64, lat: f64| {
+                let w = crate::render::mercator::lonlat_to_world(lon, lat);
+                let (sx, sy) = cam.world_to_screen(w, vp);
+                egui::pos2(prect.left() + sx, prect.top() + sy)
+            };
+            let mut any_escalated = false;
+            let mut etas: Vec<(f64, String)> = Vec::new();
+            let time = ctx.input(|i| i.time);
+            // Viewport-center lon/lat: a polygon with every vertex off-screen can still fill the
+            // whole pane (zoomed inside it) — the primary chase case for an escalated warning.
+            let (center_lon, center_lat) = {
+                let w = cam.screen_to_world((vp.0 * 0.5, vp.1 * 0.5), vp);
+                crate::render::mercator::world_to_lonlat(w.0, w.1)
+            };
+            for f in self.active_alert_features() {
+                let Some(a) = &f.alert else { continue };
+                // Pulsing outline for escalated warnings only — watches can carry PDS wording,
+                // but pulsing a state-sized watch polygon would drown the map (and `escalation`
+                // uppercases the whole bulletin, too heavy to run for every alert every frame).
+                if f.kind == overlay::FeatureKind::Warning && wxdata::alerts::escalation(a) >= 2 {
+                    let visible = f.rings.first().is_some_and(|r| {
+                        r.iter().any(|p| prect.contains(to_screen(p[0], p[1])))
+                    }) || f.contains(center_lon, center_lat);
+                    if visible {
+                        any_escalated = true;
+                        let w = 2.0 + 2.0 * (time * 4.0).sin().abs() as f32;
+                        let col = egui::Color32::from_rgb(255, 40, 40);
+                        for ring in &f.rings {
+                            let pts: Vec<egui::Pos2> = ring.iter().map(|p| to_screen(p[0], p[1])).collect();
+                            if pts.len() >= 2 {
+                                painter.add(egui::Shape::line(pts, egui::Stroke::new(w, col)));
+                            }
+                        }
+                    }
+                }
+                // Motion vector + projected path (heading = FROM + 180).
+                let Some(m) = &a.motion else { continue };
+                let Some(&origin) = m.points.first() else { continue };
+                if m.kt < 1.0 {
+                    continue;
+                }
+                let heading = ((m.deg + 180.0) % 360.0) as f64;
+                let apex = to_screen(origin[0], origin[1]);
+                let col = egui::Color32::from_rgb(255, 235, 90);
+                painter.circle_filled(apex, 4.0, col);
+                let mut prev = apex;
+                for min in [15.0_f64, 30.0, 45.0, 60.0] {
+                    let km = m.kt as f64 * 1.852 * (min / 60.0);
+                    let tp = crate::geo::destination_point(origin, heading, km);
+                    let p = to_screen(tp[0], tp[1]);
+                    painter.line_segment([prev, p], egui::Stroke::new(1.5, col));
+                    painter.circle_filled(p, 2.5, col);
+                    if cam.zoom >= 7.0 {
+                        painter.text(p + egui::vec2(5.0, -2.0), egui::Align2::LEFT_CENTER,
+                            format!("+{min:.0}m"), egui::FontId::proportional(10.0), col);
+                    }
+                    prev = p;
+                }
+                // ETA to any watched marker along the storm's heading.
+                for mk in &self.settings.markers {
+                    if let Some(t) = crate::geo::arrival_eta_min(origin, heading as f32, m.kt, [mk.lon, mk.lat], 22.5, 90.0) {
+                        etas.push((t, format!("⚠ {} — {} in {:.0} min", mk.name, a.event, t)));
+                    }
+                }
+            }
+            if idx == self.active && !etas.is_empty() {
+                etas.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+                let font = egui::FontId::proportional(12.0);
+                let mut y = prect.top() + 64.0;
+                for (_, line) in etas.iter().take(6) {
+                    let galley = painter.layout_no_wrap(line.clone(), font.clone(), egui::Color32::WHITE);
+                    let anchor = egui::pos2(prect.left() + 8.0, y);
+                    let bg = egui::Rect::from_min_size(anchor, galley.size() + egui::vec2(10.0, 4.0));
+                    painter.rect_filled(bg, 3.0, egui::Color32::from_rgba_unmultiplied(150, 30, 30, 210));
+                    painter.text(anchor + egui::vec2(5.0, 2.0), egui::Align2::LEFT_TOP, line, font.clone(), egui::Color32::WHITE);
+                    y += galley.size().y + 6.0;
+                }
+            }
+            if any_escalated {
+                ctx.request_repaint_after(std::time::Duration::from_millis(60));
+            }
+        }
+
+        // Surface obs (METAR station plots): fltCat-colored circle, wind barb, T/Td in °F.
+        if self.show_metar && cam.zoom >= 6.0 {
+            let show_labels = cam.zoom >= 7.0;
+            let flt_color = |c: &str| match c {
+                "VFR" => egui::Color32::from_rgb(60, 200, 90),
+                "MVFR" => egui::Color32::from_rgb(80, 150, 240),
+                "IFR" => egui::Color32::from_rgb(230, 60, 60),
+                "LIFR" => egui::Color32::from_rgb(220, 60, 200),
+                _ => egui::Color32::from_gray(180),
+            };
+            // Windiest-first so the strongest stations survive decluttering.
+            let mut obs: Vec<&wxdata::metar::SurfaceOb> = self.metars.iter().collect();
+            obs.sort_by(|a, b| b.wspd_kt.partial_cmp(&a.wspd_kt).unwrap_or(std::cmp::Ordering::Equal));
+            let mut placed: Vec<egui::Rect> = Vec::new();
+            for ob in obs {
+                let w = crate::render::mercator::lonlat_to_world(ob.lon, ob.lat);
+                let (sx, sy) = cam.world_to_screen(w, vp);
+                let p = egui::pos2(prect.left() + sx, prect.top() + sy);
+                if !prect.contains(p) {
+                    continue;
+                }
+                // Greedy declutter: skip stations whose plot cell overlaps one already drawn.
+                let cell = egui::Rect::from_center_size(p, egui::vec2(44.0, 34.0));
+                if placed.iter().any(|r| r.intersects(cell)) {
+                    continue;
+                }
+                placed.push(cell);
+                let col = flt_color(&ob.flt_cat);
+                painter.circle_stroke(p, 3.0, egui::Stroke::new(1.5, col));
+                // Wind barb, rotated so the shaft points toward the wind source (FROM bearing).
+                if let Some(dir) = ob.wdir_deg {
+                    let th = dir.to_radians();
+                    let (up, right) = ([th.sin(), -th.cos()], [th.cos(), th.sin()]);
+                    let map = |u: [f32; 2]| {
+                        p + egui::vec2(
+                            (u[0] * right[0] + u[1] * up[0]) * 22.0,
+                            (u[0] * right[1] + u[1] * up[1]) * 22.0,
+                        )
+                    };
+                    for (a, b) in wxdata::metar::barb_segments(ob.wspd_kt) {
+                        painter.line_segment([map(a), map(b)], egui::Stroke::new(1.3, col));
+                    }
+                }
+                // Temperature (red, upper-left) and dewpoint (green, lower-left) in °F.
+                if show_labels {
+                    let f = egui::FontId::proportional(11.0);
+                    if let Some(t) = ob.temp_c {
+                        painter.text(p + egui::vec2(-6.0, -6.0), egui::Align2::RIGHT_BOTTOM,
+                            format!("{:.0}", t * 9.0 / 5.0 + 32.0), f.clone(), egui::Color32::from_rgb(240, 90, 90));
+                    }
+                    if let Some(d) = ob.dewp_c {
+                        painter.text(p + egui::vec2(-6.0, 6.0), egui::Align2::RIGHT_TOP,
+                            format!("{:.0}", d * 9.0 / 5.0 + 32.0), f, egui::Color32::from_rgb(90, 220, 120));
+                    }
+                }
+                // Hover → the raw METAR text.
+                let hit = egui::Rect::from_center_size(p, egui::vec2(16.0, 16.0));
+                if response.hover_pos().is_some_and(|hp| hit.contains(hp)) && !ob.raw.is_empty() {
+                    response.clone().show_tooltip_text(&ob.raw);
+                }
+            }
+        }
+        // ponytail: °F hardcoded (US station-plot convention); wire to the Units setting if asked.
+
+        // NHC tropical suite: forecast track polyline + category-colored points + storm name.
+        if self.show_tropical {
+            if let Some(t) = &self.tropical {
+                let to_screen = |lon: f64, lat: f64| {
+                    let w = crate::render::mercator::lonlat_to_world(lon, lat);
+                    let (sx, sy) = cam.world_to_screen(w, vp);
+                    egui::pos2(prect.left() + sx, prect.top() + sy)
+                };
+                for storm in &t.storms {
+                    // Forecast track: white polyline through the points.
+                    if storm.points.len() >= 2 {
+                        let pts: Vec<egui::Pos2> = storm.points.iter().map(|p| to_screen(p.lon, p.lat)).collect();
+                        painter.add(egui::Shape::line(pts, egui::Stroke::new(1.5, egui::Color32::from_rgb(235, 235, 235))));
+                    }
+                    for p in &storm.points {
+                        let sp = to_screen(p.lon, p.lat);
+                        if !prect.contains(sp) {
+                            continue;
+                        }
+                        let (cat, rgb) = wxdata::tropical::saffir_simpson(p.kt);
+                        let col = egui::Color32::from_rgb(rgb[0], rgb[1], rgb[2]);
+                        painter.circle_filled(sp, 4.0, col);
+                        if cam.zoom >= 5.0 {
+                            painter.text(sp + egui::vec2(6.0, -2.0), egui::Align2::LEFT_CENTER,
+                                cat, egui::FontId::proportional(10.0), col);
+                        }
+                    }
+                    // Current position: bold storm name with a dark halo.
+                    let cp = to_screen(storm.lon, storm.lat);
+                    if prect.contains(cp) {
+                        let (_, rgb) = wxdata::tropical::saffir_simpson(storm.intensity_kt);
+                        let col = egui::Color32::from_rgb(rgb[0], rgb[1], rgb[2]);
+                        painter.circle_filled(cp, 5.0, col);
+                        painter.circle_stroke(cp, 5.0, egui::Stroke::new(1.5, egui::Color32::BLACK));
+                        let font = egui::FontId::proportional(13.0);
+                        for off in [egui::vec2(1.0, 1.0), egui::vec2(-1.0, -1.0), egui::vec2(1.0, -1.0), egui::vec2(-1.0, 1.0)] {
+                            painter.text(cp + egui::vec2(8.0, -8.0) + off, egui::Align2::LEFT_BOTTOM,
+                                &storm.name, font.clone(), egui::Color32::BLACK);
+                        }
+                        painter.text(cp + egui::vec2(8.0, -8.0), egui::Align2::LEFT_BOTTOM,
+                            &storm.name, font, egui::Color32::WHITE);
+                    }
+                }
+            }
+        }
+
         // HRRR "future radar" banner — unmistakable that this is model forecast, not observation.
-        if idx == self.active && self.fields.get(&crate::render::FieldLayer::Hrrr).map_or(false, |s| s.show) {
+        if idx == self.active && self.fields.get(&crate::render::FieldLayer::Hrrr).is_some_and(|s| s.show) {
             let valid = self
                 .hrrr_valid
                 .map(|v| v.format("%a %H:%MZ").to_string())
@@ -2829,6 +3272,11 @@ impl HookEchoApp {
                 ui.separator();
                 if ui.button("3D View").on_hover_text("Raymarch the volume in 3D (active pane)").clicked() {
                     self.build_volume3d();
+                    ui.close();
+                }
+                if ui.button("CAPPI slice…").on_hover_text("Constant-altitude reflectivity slice (active pane)").clicked() {
+                    self.show_cappi = true;
+                    self.cappi_key = None; // force a re-slice on open
                     ui.close();
                 }
                 if ui.button("Clear measurement").clicked() {
@@ -3280,6 +3728,12 @@ fn field_index_upload(
 
 /// Interpolate a 256-entry RGBA LUT from `(t, [r,g,b])` stops; index 0 is always transparent.
 fn ramp_lut(stops: &[(f32, [u8; 3])]) -> Vec<u8> {
+    ramp_lut_a(stops, 255)
+}
+
+/// Like [`ramp_lut`] but with a caller-chosen opacity for non-zero indices (index 0 stays clear).
+/// Environment overlays (CAPE/SRH) use a translucent alpha so the basemap reads through.
+fn ramp_lut_a(stops: &[(f32, [u8; 3])], alpha: u8) -> Vec<u8> {
     let mut lut = vec![0u8; 256 * 4];
     for i in 0..256 {
         let t = i as f32 / 255.0;
@@ -3297,8 +3751,19 @@ fn ramp_lut(stops: &[(f32, [u8; 3])]) -> Vec<u8> {
                 break;
             }
         }
-        let a = if i == 0 { 0 } else { 255 };
+        let a = if i == 0 { 0 } else { alpha };
         lut[i * 4..i * 4 + 4].copy_from_slice(&[rgb[0], rgb[1], rgb[2], a]);
+    }
+    lut
+}
+
+/// Build a 256-entry categorical LUT: every listed `(index, rgb)` gets `alpha`, all others clear.
+/// Used for the MRMS precipitation-type flag (discrete categories, not a continuous ramp).
+fn categorical_lut(slots: &[(u8, [u8; 3])], alpha: u8) -> Vec<u8> {
+    let mut lut = vec![0u8; 256 * 4];
+    for &(i, rgb) in slots {
+        let o = i as usize * 4;
+        lut[o..o + 4].copy_from_slice(&[rgb[0], rgb[1], rgb[2], alpha]);
     }
     lut
 }
@@ -3385,6 +3850,57 @@ pub(crate) fn field_upload_indexed(layer: crate::render::FieldLayer, f: &wxdata:
                 (0.8, [220, 40, 60]), (1.0, [230, 220, 240]),
             ]))
         }
+        // Surface CAPE (J/kg): 100..5000 → cyan→green→yellow→orange→magenta, translucent.
+        FL::Cape => {
+            let map = |v: f32| if v < 100.0 { 0 } else { (2.0 + ((v - 100.0) / 4900.0).clamp(0.0, 1.0) * 253.0) as u8 };
+            field_index_upload(f, map, ramp_lut_a(&[
+                (0.0, [0, 200, 200]), (0.25, [40, 200, 90]), (0.5, [240, 230, 60]),
+                (0.75, [240, 150, 30]), (1.0, [230, 60, 200]),
+            ], 150))
+        }
+        // Storm-relative helicity (m²/s²): 50..500 → blue→yellow→red, translucent.
+        FL::Srh => {
+            let map = |v: f32| if v < 50.0 { 0 } else { (2.0 + ((v - 50.0) / 450.0).clamp(0.0, 1.0) * 253.0) as u8 };
+            field_index_upload(f, map, ramp_lut_a(&[
+                (0.0, [40, 90, 200]), (0.5, [240, 230, 60]), (1.0, [230, 40, 40]),
+            ], 150))
+        }
+        // MRMS surface precip type flag: discrete categories via a categorical LUT.
+        FL::PrecipType => {
+            let map = |v: f32| v as u8; // categorical index, not a ramp
+            field_index_upload(f, map, categorical_lut(&[
+                (1, [60, 200, 90]),   // warm stratiform rain — green
+                (3, [90, 150, 240]),  // snow — blue
+                (6, [240, 230, 60]),  // convective — yellow
+                (7, [230, 40, 40]),   // hail — red
+                (10, [40, 200, 200]), // cold stratiform rain — teal
+                (91, [80, 220, 120]), // tropical/stratiform rain — green
+                (96, [80, 220, 120]), // tropical/convective rain — green
+            ], 200))
+        }
+        // MRMS FLASH flash-flood ARI (years): 1..100 log ramp yellow→orange→red→purple→white.
+        FL::FlashFlood => {
+            let map = |v: f32| if v < 1.0 { 0 } else { (2.0 + (v.log10() / 2.0).clamp(0.0, 1.0) * 253.0) as u8 };
+            field_index_upload(f, map, ramp_lut(&[
+                (0.0, [240, 230, 60]), (0.3, [240, 150, 30]), (0.6, [230, 40, 40]),
+                (0.85, [150, 40, 200]), (1.0, [240, 240, 240]),
+            ]))
+        }
+        // Digital VIL (kg/m²): 0.1..80 → green→yellow→orange→magenta→white.
+        FL::Vil => {
+            let map = |v: f32| if v < 0.1 { 0 } else { (2.0 + ((v - 0.1) / 79.9).clamp(0.0, 1.0) * 253.0) as u8 };
+            field_index_upload(f, map, ramp_lut(&[
+                (0.0, [60, 200, 90]), (0.35, [240, 230, 60]), (0.6, [240, 150, 30]),
+                (0.85, [230, 60, 200]), (1.0, [240, 240, 240]),
+            ]))
+        }
+        // Enhanced Echo Tops (kft): 5..70 → blue→green→yellow→white.
+        FL::EchoTops => {
+            let map = |v: f32| if v < 5.0 { 0 } else { (2.0 + ((v - 5.0) / 65.0).clamp(0.0, 1.0) * 253.0) as u8 };
+            field_index_upload(f, map, ramp_lut(&[
+                (0.0, [40, 90, 200]), (0.4, [40, 200, 90]), (0.75, [240, 230, 60]), (1.0, [240, 240, 240]),
+            ]))
+        }
         // The reflectivity-palette layers (mosaic, HRRR) route through the app method instead.
         FL::Mrms | FL::Hrrr => field_index_upload(f, |_| 0, vec![0u8; 256 * 4]),
     }
@@ -3432,7 +3948,7 @@ fn report_color(kind: wxdata::spc::ReportKind) -> [u8; 4] {
 pub(crate) fn display_units(moment: Moment, settings: &Settings) -> (f32, &'static str) {
     match moment {
         Moment::Velocity | Moment::SpectrumWidth => {
-            (settings.velocity_unit.from_ms(), settings.velocity_unit.label())
+            (settings.velocity_unit.factor_from_ms(), settings.velocity_unit.label())
         }
         _ => (1.0, moment.units()),
     }
@@ -3510,21 +4026,33 @@ impl eframe::App for HookEchoApp {
         self.sync_forecast_scrub();
         self.poll_messages();
         self.poll_overlays();
+        // Time-machine warnings: swap in archived polygons when the active pane is scrubbed.
+        self.sync_archive_warnings(ctx);
+        // Surface obs (METAR station plots).
+        self.sync_metar(ctx);
+        // NHC tropical suite: refresh every 15 min while enabled.
+        if self.show_tropical
+            && self.tropical_last_fetch.is_none_or(|t| t.elapsed().as_secs() >= 900)
+        {
+            self.tropical_last_fetch = Some(Instant::now());
+            self.spawn_overlay(ctx, OverlaySource::Tropical);
+        }
         // Periodic overlay refresh (~2 min), honoring live weather cadence.
-        if self.overlay_last_fetch.map_or(true, |t| t.elapsed().as_secs() >= 120) {
+        if self.overlay_last_fetch.is_none_or(|t| t.elapsed().as_secs() >= 120) {
             self.fetch_overlays(ctx);
         }
         // MRMS national mosaic: fetch when enabled, refresh at the ~2-min product cadence.
         // National field layers: fetch each enabled layer at its product cadence.
         use crate::render::FieldLayer as FL;
         for layer in FL::DRAW_ORDER {
-            if layer == FL::Hrrr {
-                continue; // HRRR is a forecast product, fetched below (its own hour + cadence).
+            // HRRR forecast, HRRR environment, and per-site L3 grids each fetch in their own block.
+            if matches!(layer, FL::Hrrr | FL::Cape | FL::Srh | FL::Vil | FL::EchoTops) {
+                continue;
             }
             let stale = self
                 .fields
                 .get(&layer)
-                .map_or(false, |s| s.show && s.last_fetch.map_or(true, |t| t.elapsed().as_secs() >= field_refresh_secs(layer)));
+                .is_some_and(|s| s.show && s.last_fetch.is_none_or(|t| t.elapsed().as_secs() >= field_refresh_secs(layer)));
             if stale {
                 if let Some(s) = self.fields.get_mut(&layer) {
                     s.last_fetch = Some(Instant::now());
@@ -3537,17 +4065,56 @@ impl eframe::App for HookEchoApp {
                     FL::Rotation => wxdata::mrms::rotation_track(self.rotation_minutes).to_string(),
                     FL::Qpe1h => wxdata::mrms::QPE_01H.to_string(),
                     FL::Qpe24h => wxdata::mrms::QPE_24H.to_string(),
-                    FL::Hrrr => unreachable!(),
+                    FL::PrecipType => wxdata::mrms::PRECIP_TYPE.to_string(),
+                    FL::FlashFlood => wxdata::mrms::FLASH_ARI30.to_string(),
+                    FL::Hrrr | FL::Cape | FL::Srh | FL::Vil | FL::EchoTops => unreachable!(),
                 };
                 self.spawn_overlay(ctx, OverlaySource::Field(layer, product));
             }
         }
+        // Environment suite (HRRR CAPE/SRH): fetch each enabled layer at f00, refresh ~15 min.
+        for layer in [FL::Cape, FL::Srh] {
+            let stale = self
+                .fields
+                .get(&layer)
+                .is_some_and(|s| s.show && s.last_fetch.is_none_or(|t| t.elapsed().as_secs() >= field_refresh_secs(layer)));
+            if stale {
+                if let Some(s) = self.fields.get_mut(&layer) {
+                    s.last_fetch = Some(Instant::now());
+                }
+                self.spawn_overlay(ctx, OverlaySource::Env(layer, self.env_cape_ml, self.env_srh_km));
+            }
+        }
+        // Gridded L3 products (DVL/EET): per-site, refetch on the L3 cadence or a site change.
+        let l3_site = self.views[self.active].site.clone();
+        let site_changed = self.l3grid_site != l3_site;
+        for layer in [FL::Vil, FL::EchoTops] {
+            let on = self.fields.get(&layer).is_some_and(|s| s.show);
+            if !on {
+                continue;
+            }
+            let stale = self
+                .fields
+                .get(&layer)
+                .is_some_and(|s| s.last_fetch.is_none_or(|t| t.elapsed().as_secs() >= field_refresh_secs(layer)));
+            if let Some(site) = &l3_site {
+                if stale || site_changed {
+                    if let Some(s) = self.fields.get_mut(&layer) {
+                        s.last_fetch = Some(Instant::now());
+                    }
+                    self.spawn_overlay(ctx, OverlaySource::L3Grid(layer, site.clone()));
+                }
+            }
+        }
+        if site_changed && (self.fields.get(&FL::Vil).is_some_and(|s| s.show) || self.fields.get(&FL::EchoTops).is_some_and(|s| s.show)) {
+            self.l3grid_site = l3_site;
+        }
         // HRRR future radar: fetch when enabled and the forecast hour changed or the run refreshed
         // (~10-min throttle; a new run posts hourly).
-        let hrrr_on = self.fields.get(&FL::Hrrr).map_or(false, |s| s.show);
+        let hrrr_on = self.fields.get(&FL::Hrrr).is_some_and(|s| s.show);
         if hrrr_on {
             let hour_changed = self.hrrr_fetched_hour != Some(self.hrrr_fcst_hour);
-            let stale = self.hrrr_last_fetch.map_or(true, |t| t.elapsed().as_secs() >= 600);
+            let stale = self.hrrr_last_fetch.is_none_or(|t| t.elapsed().as_secs() >= 600);
             if hour_changed || stale {
                 self.hrrr_fetched_hour = Some(self.hrrr_fcst_hour);
                 self.hrrr_last_fetch = Some(Instant::now());
@@ -3556,21 +4123,21 @@ impl eframe::App for HookEchoApp {
         }
         // SPC storm reports refresh (~5-min cadence; preliminary log updates slowly).
         if self.show_storm_reports
-            && self.reports_last_fetch.map_or(true, |t| t.elapsed().as_secs() >= 300)
+            && self.reports_last_fetch.is_none_or(|t| t.elapsed().as_secs() >= 300)
         {
             self.reports_last_fetch = Some(Instant::now());
             self.spawn_overlay(ctx, OverlaySource::StormReports);
         }
         // Spotter Network refresh (feed's own 1-min cadence).
         if self.show_spotters
-            && self.spotters_last_fetch.map_or(true, |t| t.elapsed().as_secs() >= 60)
+            && self.spotters_last_fetch.is_none_or(|t| t.elapsed().as_secs() >= 60)
         {
             self.spotters_last_fetch = Some(Instant::now());
             self.spawn_overlay(ctx, OverlaySource::Spotters);
         }
         // ProbSevere refresh (~2-min product cadence).
         if self.show_probsevere
-            && self.probsevere_last_fetch.map_or(true, |t| t.elapsed().as_secs() >= 120)
+            && self.probsevere_last_fetch.is_none_or(|t| t.elapsed().as_secs() >= 120)
         {
             self.probsevere_last_fetch = Some(Instant::now());
             self.spawn_overlay(ctx, OverlaySource::ProbSevere);
@@ -3578,7 +4145,7 @@ impl eframe::App for HookEchoApp {
         // Sensors: fetch when the window is open and the site changed or the 10-min clock elapsed.
         if self.show_sensors {
             if let Some(site) = self.views[self.active].site.clone() {
-                let stale = self.sensor_last_fetch.map_or(true, |t| t.elapsed().as_secs() >= 600);
+                let stale = self.sensor_last_fetch.is_none_or(|t| t.elapsed().as_secs() >= 600);
                 let site_changed = self.sensor_site.as_deref() != Some(site.as_str());
                 if stale || site_changed {
                     if let Some(s) = wxdata::sites::site_by_id(&site) {
@@ -3598,7 +4165,7 @@ impl eframe::App for HookEchoApp {
         // VAD hodograph: fetch when open and the site changed or the 5-min clock elapsed.
         if self.show_hodo {
             if let Some(site) = self.views[self.active].site.clone() {
-                let stale = self.hodo_last_fetch.map_or(true, |t| t.elapsed().as_secs() >= 300);
+                let stale = self.hodo_last_fetch.is_none_or(|t| t.elapsed().as_secs() >= 300);
                 let site_changed = self.hodo_site.as_deref() != Some(site.as_str());
                 if stale || site_changed {
                     if site_changed {
@@ -3626,6 +4193,7 @@ impl eframe::App for HookEchoApp {
             .resizable(true)
             .default_size(240.0)
             .show(root, |ui| {
+                let l3_site = self.l3grid_site.clone();
                 actions = ui::toolbox::show(
                     ui,
                     &mut self.views[self.active],
@@ -3635,6 +4203,9 @@ impl eframe::App for HookEchoApp {
                     &mut self.rotation_minutes,
                     &mut self.hrrr_fcst_hour,
                     self.hrrr_valid,
+                    &mut self.env_cape_ml,
+                    &mut self.env_srh_km,
+                    l3_site.as_deref(),
                     &mut self.show_sensors,
                     &mut self.show_hodo,
                     &mut self.show_alert_panel,
@@ -3642,6 +4213,8 @@ impl eframe::App for HookEchoApp {
                     &mut self.show_spotters,
                     &mut self.show_probsevere,
                     &mut self.show_radar_sites,
+                    &mut self.show_metar,
+                    &mut self.show_tropical,
                 );
             });
         }
@@ -3654,11 +4227,15 @@ impl eframe::App for HookEchoApp {
         if actions.instant_replay {
             self.instant_replay();
         }
+        if actions.outlook_kind_changed && self.filters.outlook_day == 1 {
+            // Hazard switched: drop the stale Day-1 features so the empty-check refetches it.
+            self.outlook_features[0].clear();
+        }
         if actions.overlays_changed {
-            // Selecting an outlook day that hasn't been fetched yet pulls it on demand.
+            // Selecting an outlook day/kind that hasn't been fetched yet pulls it on demand.
             let day = self.filters.outlook_day;
             if (1..=3).contains(&day) && self.outlook_features[(day - 1) as usize].is_empty() {
-                self.spawn_overlay(ctx, OverlaySource::Outlook(day));
+                self.spawn_overlay(ctx, OverlaySource::Outlook(day, self.outlook_kind_for_day()));
             }
             self.rebuild_overlays();
         }
@@ -3821,6 +4398,18 @@ impl eframe::App for HookEchoApp {
             );
             self.show_3d = open;
         }
+        if self.show_cappi {
+            self.update_cappi(ctx);
+            let mut open = true;
+            if let Some(tex) = self.cappi_tex.clone() {
+                open = ui::cappi_window::show(ctx, &tex, &mut self.cappi_alt_km, 300.0);
+            } else {
+                egui::Window::new("CAPPI slice").open(&mut open).show(ctx, |ui| {
+                    ui.weak("No volume loaded in the active pane.");
+                });
+            }
+            self.show_cappi = open;
+        }
         self.show_warning_banners(ctx);
 
         // Turn this frame's UI mutations into uploads/fetches before painting the map.
@@ -3836,7 +4425,7 @@ impl eframe::App for HookEchoApp {
         // Active-alerts side panel (right dock): lists alerts overlapping the active view.
         if self.show_alert_panel && !self.obs_mode {
             let bounds = self.view_bounds();
-            if let Some((id, lon, lat)) = ui::alert_panel::show(root, &self.alert_features, bounds) {
+            if let Some((id, lon, lat)) = ui::alert_panel::show(root, self.active_alert_features(), bounds) {
                 // Fly the active camera to the alert and open its bulletin.
                 let cam = &mut self.views[self.active].camera;
                 cam.center = crate::render::mercator::lonlat_to_world(lon, lat);
@@ -3951,5 +4540,33 @@ impl eframe::App for HookEchoApp {
         }
 
         ctx.request_repaint_after(std::time::Duration::from_millis(100));
+    }
+}
+
+#[cfg(test)]
+mod field_lut_tests {
+    use super::{categorical_lut, ramp_lut, ramp_lut_a};
+
+    #[test]
+    fn categorical_lut_sets_only_listed_slots() {
+        let lut = categorical_lut(&[(1, [10, 20, 30]), (7, [200, 40, 40])], 200);
+        assert_eq!(lut.len(), 256 * 4);
+        // Index 0 clear.
+        assert_eq!(&lut[0..4], &[0, 0, 0, 0]);
+        // Index 1 set with alpha 200.
+        assert_eq!(&lut[4..8], &[10, 20, 30, 200]);
+        // Index 7 set.
+        assert_eq!(&lut[28..32], &[200, 40, 40, 200]);
+        // An unlisted index stays clear.
+        assert_eq!(&lut[8..12], &[0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn ramp_lut_alpha_variants() {
+        let opaque = ramp_lut(&[(0.0, [0, 0, 0]), (1.0, [255, 255, 255])]);
+        assert_eq!(opaque[255 * 4 + 3], 255, "top index opaque");
+        assert_eq!(opaque[3], 0, "index 0 clear");
+        let translucent = ramp_lut_a(&[(0.0, [0, 0, 0]), (1.0, [255, 255, 255])], 150);
+        assert_eq!(translucent[255 * 4 + 3], 150, "top index uses given alpha");
     }
 }

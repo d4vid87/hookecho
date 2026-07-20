@@ -166,6 +166,9 @@ pub struct Settings {
     /// Sound played on the lightning proximity alarm.
     #[serde(default)]
     pub lightning_sound: AlertSound,
+    /// Sound played when an escalated (Tornado Emergency / PDS / destructive) warning appears.
+    #[serde(default = "default_emergency_sound")]
+    pub emergency_sound: AlertSound,
     /// Playback volume for all alert sounds (0.0..=1.0).
     #[serde(default = "default_volume")]
     pub alert_volume: f32,
@@ -193,6 +196,10 @@ pub struct Bookmark {
 
 fn default_true() -> bool {
     true
+}
+
+fn default_emergency_sound() -> AlertSound {
+    AlertSound::Siren
 }
 
 /// A portable settings export: the full settings plus inlined `.pal` contents (by moment short
@@ -254,7 +261,7 @@ impl VelocityUnit {
     }
 
     /// Factor to convert internal m/s into this unit.
-    pub fn from_ms(self) -> f32 {
+    pub fn factor_from_ms(self) -> f32 {
         match self {
             VelocityUnit::Knots => 1.943_844,
             VelocityUnit::MetersPerSecond => 1.0,
@@ -289,6 +296,7 @@ impl Default for Settings {
             warn_sound: AlertSound::default(),
             tds_sound: AlertSound::default(),
             lightning_sound: AlertSound::default(),
+            emergency_sound: default_emergency_sound(),
             alert_volume: default_volume(),
             live_loop_frames: default_live_loop_frames(),
             basemap: String::new(),
@@ -434,6 +442,7 @@ mod tests {
             warn_sound: AlertSound::Siren,
             tds_sound: AlertSound::Custom("/tmp/tds.wav".to_string()),
             lightning_sound: AlertSound::Alarm,
+            emergency_sound: AlertSound::Alarm,
             alert_volume: 0.7,
             live_loop_frames: 12,
             basemap: "carto-dark".to_string(),

@@ -51,6 +51,28 @@ pub struct Meso {
     pub kind: String,
 }
 
+/// One radial of a Digital Radial Data Array (packet 16): an angular wedge of range-bin levels.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Radial {
+    /// Start azimuth (degrees, meteorological — 0 = north, clockwise).
+    pub start_deg: f32,
+    /// Angular width of the wedge (degrees).
+    pub delta_deg: f32,
+    /// One `u8` data level per range bin (bin 0 = `first_bin` range index).
+    pub levels: Vec<u8>,
+}
+
+/// A Digital Radial Data Array (packet code 16): a polar grid of `u8` data levels, decoded to
+/// physical units through the product's threshold table (DVL, EET, etc.).
+#[derive(Debug, Clone, PartialEq)]
+pub struct RadialArray {
+    /// Range index of the first bin (bins before this are off the near edge).
+    pub first_bin: u16,
+    /// Number of range bins per radial.
+    pub nbins: u16,
+    pub radials: Vec<Radial>,
+}
+
 /// A decoded Level 3 product.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Level3Product {
@@ -74,6 +96,10 @@ pub struct Level3Product {
     /// Structure, Hail) don't always populate `tabular`/`graphic` at the declared offsets, so this
     /// full-message dump is the reliable source for the tolerant, line-based table parsers.
     pub raw_text: Option<String>,
+    /// Digital Radial Data Array (packet 16), for gridded products like DVL / Echo Tops.
+    pub radial: Option<RadialArray>,
+    /// The 16 product-dependent threshold halfwords (PDB HW31-46), decoded per product.
+    pub thresholds: [i16; 16],
 }
 
 /// Decode a Level 3 product from raw file bytes (WMO header + optional zlib body).
@@ -97,6 +123,12 @@ pub fn decode(raw: &[u8]) -> Result<Level3Product> {
     let lon = r.i32("lon")? as f32 / 1000.0;
     let height_ft = r.i16("height")?;
     let code = r.i16("prod_code")?;
+    // Product-dependent thresholds: PDB halfwords 31-46 (16 i16) at pdb_start+42.
+    let mut thresholds = [0i16; 16];
+    r.pos = pdb_start + 42;
+    for t in thresholds.iter_mut() {
+        *t = r.i16("threshold")?;
+    }
     // The three block offsets sit at the PDB tail (bytes 90..102 of the 102-byte PDB).
     r.pos = pdb_start + 90;
     let sym_off = r.u32("sym_off")? as usize;
@@ -107,10 +139,19 @@ pub fn decode(raw: &[u8]) -> Result<Level3Product> {
     let mut hail = Vec::new();
     let mut meso = Vec::new();
     let mut past_tracks = Vec::new();
+    let mut radial = None;
     if sym_off != 0 {
-        // A truncated/empty symbology block (e.g. tabular-only products like Storm Structure)
-        // must not abort decoding — keep whatever parsed and still return the tabular blocks.
-        let _ = parse_symbology(msg, sym_off * 2, &mut cells, &mut hail, &mut meso, &mut past_tracks);
+        // High-resolution digital products (DVL, EET, …) BZIP2-compress the symbology block in
+        // place; decompress it first, else parse it directly. A truncated/empty symbology block
+        // (e.g. tabular-only products like Storm Structure) must not abort decoding.
+        let sym_bytes = &msg[(sym_off * 2).min(msg.len())..];
+        if sym_bytes.starts_with(b"BZh") {
+            if let Some(dec) = bunzip(sym_bytes) {
+                let _ = parse_symbology(&dec, 0, &mut cells, &mut hail, &mut meso, &mut past_tracks, &mut radial);
+            }
+        } else {
+            let _ = parse_symbology(msg, sym_off * 2, &mut cells, &mut hail, &mut meso, &mut past_tracks, &mut radial);
+        }
     }
     let tabular = if tab_off != 0 { parse_text_block(msg, tab_off * 2, msg.len()) } else { None };
     // The graphic block precedes the tabular one; bound its extraction so runs don't bleed across.
@@ -123,7 +164,7 @@ pub fn decode(raw: &[u8]) -> Result<Level3Product> {
 
     let raw_text = parse_text_block(msg, 0, msg.len());
 
-    Ok(Level3Product { code, lat, lon, height_ft, cells, hail, meso, past_tracks, tabular, graphic, raw_text })
+    Ok(Level3Product { code, lat, lon, height_ft, cells, hail, meso, past_tracks, tabular, graphic, raw_text, radial, thresholds })
 }
 
 /// Walk the Product Symbology Block's layers, decoding storm-cell packets (15/19/20) and
@@ -135,6 +176,7 @@ fn parse_symbology(
     hail: &mut Vec<Hail>,
     meso: &mut Vec<Meso>,
     past_tracks: &mut Vec<Vec<(f32, f32)>>,
+    radial: &mut Option<RadialArray>,
 ) -> Result<()> {
     let mut r = Reader::at(msg, off);
     let _divider = r.i16("sym divider")?;
@@ -148,6 +190,13 @@ fn parse_symbology(
         let layer_end = (r.pos + layer_len).min(msg.len());
         while r.pos + 4 <= layer_end {
             let code = r.u16("packet code")?;
+            // Packet 16 (Digital Radial Data Array) has NO length halfword after the code — the
+            // next halfword is the index of the first range bin. Branch before reading a length.
+            if code == 16 {
+                *radial = parse_digital_radial(&mut r, layer_end).ok();
+                r.pos = layer_end; // one radial-array packet per layer
+                break;
+            }
             let num_bytes = r.u16("packet len")? as usize;
             let data_start = r.pos;
             let data_end = (data_start + num_bytes).min(layer_end);
@@ -216,6 +265,85 @@ fn parse_symbology(
         r.pos = layer_end;
     }
     Ok(())
+}
+
+/// Parse a Digital Radial Data Array (packet 16) body, cursor positioned just past the packet
+/// code. Header: first_bin, nbins, i/j center, scale, nradials; per radial: nbytes, start*10,
+/// delta*10, then `nbytes` level bytes.
+fn parse_digital_radial(r: &mut Reader, layer_end: usize) -> Result<RadialArray> {
+    let first_bin = r.u16("first_bin")?;
+    let nbins = r.u16("nbins")?;
+    let _i_center = r.i16("i_center")?;
+    let _j_center = r.i16("j_center")?;
+    let _scale = r.i16("scale")?;
+    let nradials = r.u16("nradials")?;
+    let mut radials = Vec::with_capacity(nradials as usize);
+    for _ in 0..nradials {
+        if r.pos + 6 > layer_end {
+            break;
+        }
+        let nbytes = r.u16("radial nbytes")? as usize;
+        let start_deg = r.i16("start angle")? as f32 * 0.1;
+        let delta_deg = r.i16("angle delta")? as f32 * 0.1;
+        let levels = r.take(nbytes.min(layer_end.saturating_sub(r.pos)), "radial data")?.to_vec();
+        radials.push(Radial { start_deg, delta_deg, levels });
+    }
+    Ok(RadialArray { first_bin, nbins, radials })
+}
+
+/// Decode a 16-bit NEXRAD-ICD floating-point value (sign / 5-bit exponent, bias 16 / 10-bit
+/// fraction), matching MetPy's `float16`. Used for DVL threshold scales/offsets.
+pub fn icd_float16(val: u16) -> f32 {
+    let frac = (val & 0x03ff) as f32;
+    let exp = (val >> 10) & 0x1f;
+    let sign = val >> 15;
+    let value = if exp != 0 {
+        2f32.powi(exp as i32 - 16) * (1.0 + frac / 1024.0)
+    } else {
+        frac / 512.0
+    };
+    if sign != 0 { -value } else { value }
+}
+
+/// Decode a Digital VIL (product 134) data level to kg/m², via the threshold table. Levels 0/1/255
+/// are below-threshold / flagged / reserved → `None`. Linear below `log_start`, exponential above.
+pub fn dvl_value(level: u8, thr: &[i16; 16]) -> Option<f32> {
+    if level < 2 || level == 255 {
+        return None;
+    }
+    let lin_scale = icd_float16(thr[0] as u16);
+    let lin_offset = icd_float16(thr[1] as u16);
+    let log_start = thr[2] as u16;
+    let log_scale = icd_float16(thr[3] as u16);
+    let log_offset = icd_float16(thr[4] as u16);
+    // Thresholds come off the wire; a zero scale (garbled product) must not produce ±inf.
+    if lin_scale == 0.0 || log_scale == 0.0 {
+        return None;
+    }
+    let i = level as f32;
+    if (level as u16) < log_start {
+        Some((i - lin_offset) / lin_scale)
+    } else {
+        Some(((i - log_offset) / log_scale).exp())
+    }
+}
+
+/// Decode an Enhanced Echo Tops (product 135) data level to (kft, topped-flag), via the threshold
+/// table. Levels 0/1 are below-threshold / flagged → `None`.
+pub fn eet_value(level: u8, thr: &[i16; 16]) -> Option<(f32, bool)> {
+    if level < 2 {
+        return None;
+    }
+    let data_mask = thr[0] as u16;
+    let scale = thr[1] as f32;
+    let offset = thr[2] as f32;
+    let topped_mask = thr[3] as u16;
+    if scale == 0.0 {
+        return None;
+    }
+    let kft = ((level as u16 & data_mask) as f32 - offset) / scale;
+    let topped = (level as u16 & topped_mask) != 0;
+    Some((kft, topped))
 }
 
 fn meso_kind(kind: u16) -> &'static str {
@@ -301,6 +429,16 @@ fn zlib_all(buf: &[u8]) -> Option<Vec<u8>> {
         cur = &cur[consumed..];
     }
     (!out.is_empty()).then_some(out)
+}
+
+/// BZIP2-decompress `buf` (the in-place compressed symbology block of high-res digital products).
+fn bunzip(buf: &[u8]) -> Option<Vec<u8>> {
+    let mut out = Vec::new();
+    let mut dec = bzip2::read::BzDecoder::new(buf);
+    match dec.read_to_end(&mut out) {
+        _ if !out.is_empty() => Some(out),
+        _ => None,
+    }
 }
 
 fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {

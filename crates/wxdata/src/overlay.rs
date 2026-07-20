@@ -16,6 +16,8 @@ pub enum FeatureKind {
     MesoDiscussion,
     Outlook,
     ProbSevere,
+    /// NHC tropical-cyclone forecast cone (feature V).
+    TropicalCone,
 }
 
 impl FeatureKind {
@@ -30,9 +32,23 @@ impl FeatureKind {
             FeatureKind::WatchBox => 3,
             FeatureKind::ProbSevere => 5,
             FeatureKind::MesoDiscussion => 2,
+            FeatureKind::TropicalCone => 2,
             FeatureKind::Outlook => 1,
         }
     }
+}
+
+/// Warned-storm motion parsed from the alert's `eventMotionDescription`.
+/// Direction is stored *as issued* — the FROM bearing; the heading a storm travels toward is
+/// `(deg + 180) % 360`, flipped at draw/ETA time.
+#[derive(Debug, Clone, PartialEq)]
+pub struct StormMotion {
+    /// FROM direction in degrees (meteorological, as issued).
+    pub deg: f32,
+    /// Speed in knots.
+    pub kt: f32,
+    /// Storm centroid track points as `[lon, lat]` (usually one).
+    pub points: Vec<[f64; 2]>,
 }
 
 /// Structured NWS alert metadata for the warning window (parsed from the alert `parameters`).
@@ -54,6 +70,8 @@ pub struct AlertInfo {
     pub damage_threat: Option<String>,
     /// The "SOURCE..." line, else "Radar indicated".
     pub source: Option<String>,
+    /// Parsed storm motion (direction/speed/track) from `eventMotionDescription`; not persisted.
+    pub motion: Option<StormMotion>,
 }
 
 /// One renderable, clickable overlay polygon.
@@ -99,14 +117,14 @@ impl GeoFeature {
 }
 
 /// The highest-priority feature containing `(lon, lat)`, if any.
-pub fn hit<'a>(features: &'a [GeoFeature], lon: f64, lat: f64) -> Option<&'a GeoFeature> {
+pub fn hit(features: &[GeoFeature], lon: f64, lat: f64) -> Option<&GeoFeature> {
     hit_all(features, lon, lat).into_iter().next()
 }
 
 /// All features containing `(lon, lat)`, highest click-priority first.
-pub fn hit_all<'a>(features: &'a [GeoFeature], lon: f64, lat: f64) -> Vec<&'a GeoFeature> {
+pub fn hit_all(features: &[GeoFeature], lon: f64, lat: f64) -> Vec<&GeoFeature> {
     let mut hits: Vec<&GeoFeature> = features.iter().filter(|f| f.contains(lon, lat)).collect();
-    hits.sort_by(|a, b| b.kind.z().cmp(&a.kind.z()));
+    hits.sort_by_key(|f| std::cmp::Reverse(f.kind.z()));
     hits
 }
 

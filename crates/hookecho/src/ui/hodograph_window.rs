@@ -29,7 +29,7 @@ pub fn show(ctx: &egui::Context, site: Option<&str>, levels: &[VwpLevel]) -> boo
 }
 
 fn plot(ui: &mut egui::Ui, levels: &[VwpLevel]) {
-    let side = ui.available_width().min(320.0).max(160.0);
+    let side = ui.available_width().clamp(160.0, 320.0);
     let (rect, _) = ui.allocate_exact_size(egui::vec2(side, side), egui::Sense::hover());
     let painter = ui.painter_at(rect);
     let center = rect.center();

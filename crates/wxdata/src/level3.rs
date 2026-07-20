@@ -592,11 +592,108 @@ async fn fetch_latest(http: &reqwest::Client, site: &str, product: &str) -> Opti
     None
 }
 
+/// Project a Digital Radial Data Array (packet 16) product onto a regular lat/lon grid, decoding
+/// each level to a physical value via `decode`. Uses a flat-earth approximation on a 0.01° grid.
+/// `// ponytail: flat-earth is fine at ≤460 km radar range; drop in a proper projection if a`
+/// `// site near the poles ever matters.`
+pub fn radial_to_field(
+    p: &Level3Product,
+    decode_level: impl Fn(u8, &[i16; 16]) -> Option<f32>,
+) -> Option<crate::mrms::MrmsField> {
+    let ra = p.radial.as_ref()?;
+    if ra.radials.is_empty() {
+        return None;
+    }
+    const BIN_KM: f64 = 1.0; // DVL/EET are 1-km range resolution
+    const RES_DEG: f64 = 0.01;
+    let (lat0, lon0) = (p.lat as f64, p.lon as f64);
+    let max_range_km = (ra.first_bin + ra.nbins) as f64 * BIN_KM;
+    let coslat = lat0.to_radians().cos().max(0.05);
+    let dlat = max_range_km / 111.0;
+    let dlon = max_range_km / (111.0 * coslat);
+    let (lat_north, lat_south) = (lat0 + dlat, lat0 - dlat);
+    let (lon_west, lon_east) = (lon0 - dlon, lon0 + dlon);
+    let nx = ((2.0 * dlon / RES_DEG).ceil() as usize).max(1);
+    let ny = ((2.0 * dlat / RES_DEG).ceil() as usize).max(1);
+
+    // 720-slot azimuth LUT (0.5° each): each slot → the radial covering it.
+    let mut az_lut = [usize::MAX; 720];
+    for (ri, rad) in ra.radials.iter().enumerate() {
+        let start = rad.start_deg.rem_euclid(360.0) as f64;
+        let steps = (rad.delta_deg as f64 / 0.5).ceil().max(1.0) as usize;
+        for s in 0..steps {
+            let slot = (((start / 0.5) as usize) + s) % 720;
+            if az_lut[slot] == usize::MAX {
+                az_lut[slot] = ri;
+            }
+        }
+    }
+
+    let mut values = vec![f32::NAN; nx * ny];
+    for gy in 0..ny {
+        // Row 0 = north (matches MrmsField convention).
+        let lat = lat_north - (gy as f64 + 0.5) * RES_DEG;
+        let dy_km = (lat - lat0) * 111.0;
+        for gx in 0..nx {
+            let lon = lon_west + (gx as f64 + 0.5) * RES_DEG;
+            let dx_km = (lon - lon0) * 111.0 * coslat;
+            let range_km = (dx_km * dx_km + dy_km * dy_km).sqrt();
+            let bin = (range_km / BIN_KM) as i64 - ra.first_bin as i64;
+            if bin < 0 {
+                continue;
+            }
+            // Azimuth measured clockwise from north.
+            let az = dx_km.atan2(dy_km).to_degrees().rem_euclid(360.0);
+            let ri = az_lut[((az / 0.5) as usize) % 720];
+            if ri == usize::MAX {
+                continue;
+            }
+            let levels = &ra.radials[ri].levels;
+            if let Some(&lvl) = levels.get(bin as usize) {
+                if let Some(v) = decode_level(lvl, &p.thresholds) {
+                    values[gy * nx + gx] = v;
+                }
+            }
+        }
+    }
+
+    Some(crate::mrms::MrmsField {
+        values,
+        nx,
+        ny,
+        lon_west,
+        lon_east,
+        lat_north,
+        lat_south,
+        time: chrono::Utc::now(),
+    })
+}
+
+/// Fetch the latest Digital VIL (DVL, product 134) grid for `site`.
+pub async fn fetch_dvl(http: &reqwest::Client, site: &str) -> Option<crate::mrms::MrmsField> {
+    let p = fetch_tgftp(http, &l3_site(site).to_lowercase(), "134il").await?;
+    radial_to_field(&p, nexrad_level3::dvl_value)
+}
+
+/// Fetch the latest Enhanced Echo Tops (EET, product 135) grid for `site` (kft; topped flag dropped).
+pub async fn fetch_eet(http: &reqwest::Client, site: &str) -> Option<crate::mrms::MrmsField> {
+    let p = fetch_tgftp(http, &l3_site(site).to_lowercase(), "135et").await?;
+    radial_to_field(&p, |lvl, thr| nexrad_level3::eet_value(lvl, thr).map(|(kft, _topped)| kft))
+}
+
 /// Fetch the latest `DS.{ds}` product for `site` from the tgftp `sn.last` feed and decode it.
 /// `ds` is the directory suffix (`p59hi`, `p62ss`); `site` is the 3-letter L3 id.
 async fn fetch_tgftp(http: &reqwest::Client, site: &str, ds: &str) -> Option<Level3Product> {
     let url = format!("{TGFTP}/DS.{ds}/SI.k{}/sn.last", site.to_lowercase());
-    let bytes = http.get(&url).send().await.ok()?.bytes().await.ok()?;
+    let bytes = http
+        .get(&url)
+        .header("User-Agent", crate::alerts::USER_AGENT)
+        .send()
+        .await
+        .ok()?
+        .bytes()
+        .await
+        .ok()?;
     match decode(&bytes) {
         Ok(p) => Some(p),
         Err(e) => {
@@ -624,6 +721,45 @@ mod tests {
         assert_eq!(l3_site("KTLX"), "TLX");
         assert_eq!(l3_site("PACG"), "PACG");
         assert_eq!(l3_site("TJUA"), "TJUA");
+    }
+
+    #[test]
+    fn radial_to_field_projects_wedge() {
+        use nexrad_level3::{Level3Product, Radial, RadialArray};
+        // A 90°-wide wedge centered on east (azimuth 90°) is hot; the rest is empty.
+        let mut radials = Vec::new();
+        for deg in (0..360).step_by(1) {
+            let hot = (45..135).contains(&deg);
+            let levels: Vec<u8> = (0..100).map(|_| if hot { 200 } else { 0 }).collect();
+            radials.push(Radial { start_deg: deg as f32, delta_deg: 1.0, levels });
+        }
+        let p = Level3Product {
+            code: 134,
+            lat: 35.0,
+            lon: -97.0,
+            height_ft: 0,
+            cells: vec![],
+            hail: vec![],
+            meso: vec![],
+            past_tracks: vec![],
+            tabular: None,
+            graphic: None,
+            raw_text: None,
+            radial: Some(RadialArray { first_bin: 0, nbins: 100, radials }),
+            thresholds: [0; 16],
+        };
+        // Decode: nonzero level → its value, else None.
+        let f = radial_to_field(&p, |lvl, _| (lvl >= 2).then_some(lvl as f32)).unwrap();
+        // A cell due east of the radar (~50 km) should be filled; due west should be empty.
+        let east_lon = -97.0 + 0.4;
+        let west_lon = -97.0 - 0.4;
+        let sample = |lon: f64, lat: f64| -> f32 {
+            let gx = (((lon - f.lon_west) / 0.01) as usize).min(f.nx - 1);
+            let gy = (((f.lat_north - lat) / 0.01) as usize).min(f.ny - 1);
+            f.values[gy * f.nx + gx]
+        };
+        assert!(sample(east_lon, 35.0) > 0.0, "east wedge filled");
+        assert!(sample(west_lon, 35.0).is_nan(), "west empty");
     }
 
     #[test]

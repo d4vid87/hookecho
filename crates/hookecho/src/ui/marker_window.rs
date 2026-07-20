@@ -54,10 +54,8 @@ pub fn marker_grid(ui: &mut egui::Ui, markers: &mut Vec<Marker>, icon_tex: &Icon
             ui.add(egui::DragValue::new(&mut m.lon).range(-180.0..=180.0).speed(0.01).max_decimals(4));
             ui.horizontal(|ui| {
                 // Thumbnail of the current icon, if its texture is loaded.
-                if let Some(Some(tex)) = m.icon.as_ref().map(|n| icon_tex.get(n)) {
-                    if let Some(tex) = tex {
-                        ui.add(egui::Image::new(tex).fit_to_exact_size(egui::vec2(20.0, 20.0)));
-                    }
+                if let Some(tex) = m.icon.as_ref().and_then(|n| icon_tex.get(n)).and_then(|t| t.as_ref()) {
+                    ui.add(egui::Image::new(tex).fit_to_exact_size(egui::vec2(20.0, 20.0)));
                 }
                 if ui.button("Browse…").clicked() {
                     if let Some(name) = pick_and_store_icon() {

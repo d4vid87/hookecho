@@ -177,7 +177,7 @@ impl Timeline {
             return false;
         }
         let interval = std::time::Duration::from_secs_f32((1.0 / self.speed).clamp(0.05, 10.0));
-        if !self.last_advance.map_or(true, |t| t.elapsed() >= interval) {
+        if self.last_advance.is_some_and(|t| t.elapsed() < interval) {
             return false;
         }
         self.last_advance = Some(Instant::now());
@@ -233,11 +233,12 @@ mod tests {
 
     /// Build a timeline with `n` valid archive frames (names parse to real times).
     fn with_frames(n: usize) -> Timeline {
-        let mut t = Timeline::default();
-        t.frames = (0..n)
-            .map(|i| Identifier::new(format!("KTLX20130520_{:02}{:02}00_V06", i / 60, i % 60)))
-            .collect();
-        t
+        Timeline {
+            frames: (0..n)
+                .map(|i| Identifier::new(format!("KTLX20130520_{:02}{:02}00_V06", i / 60, i % 60)))
+                .collect(),
+            ..Default::default()
+        }
     }
 
     #[test]

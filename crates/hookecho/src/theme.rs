@@ -268,8 +268,7 @@ fn tune(v: &mut Visuals, p: &Palette) {
     v.window_fill = p.bg;
     v.extreme_bg_color = p.extreme;
     v.faint_bg_color = p.faint;
-    // Window/menu edges glow faintly in the theme accent.
-    v.window_stroke = Stroke::new(1.0, if p.is_dark { p.stroke } else { p.stroke });
+    v.window_stroke = Stroke::new(1.0, p.stroke);
     v.window_shadow = egui::epaint::Shadow {
         offset: [0, 6],
         blur: 18,

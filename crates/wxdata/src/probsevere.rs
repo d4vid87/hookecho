@@ -38,7 +38,7 @@ pub async fn fetch_probsevere(client: &reqwest::Client) -> anyhow::Result<Vec<Ge
 /// since names are zero-padded `YYYYMMDD_HHMMSS`).
 fn latest_file(index: &str) -> Option<String> {
     index
-        .split(|c| c == '"' || c == '<' || c == '>')
+        .split(['"', '<', '>'])
         .filter(|s| s.starts_with("MRMS_PROBSEVERE_") && s.ends_with(".json"))
         .max()
         .map(str::to_string)

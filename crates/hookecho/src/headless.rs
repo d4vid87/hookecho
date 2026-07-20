@@ -410,6 +410,32 @@ pub fn run_alerts() -> anyhow::Result<()> {
             a.expires.map(|e| e.format("%H:%MZ").to_string()).unwrap_or_else(|| "—".into()),
         );
     }
+    // Storm motion + escalation (feature S).
+    for a in alerts.iter().filter(|a| a.motion.is_some() || wxdata::alerts::escalation(a) > 0) {
+        let esc = wxdata::alerts::escalation(a);
+        match &a.motion {
+            Some(m) => println!("  motion: {:>3.0}° {:>2.0}kt ({} pts) esc={esc}  [{}]", m.deg, m.kt, m.points.len(), a.event),
+            None => println!("  motion:    —          esc={esc}  [{}]", a.event),
+        }
+    }
+    Ok(())
+}
+
+/// Fetch + tally the storm-based warnings archived at an instant (feature W).
+pub fn run_archwarn(ts: &str) -> anyhow::Result<()> {
+    let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
+    let feats = rt.block_on(async {
+        let http = reqwest::Client::new();
+        wxdata::archive_warnings::fetch(&http, ts).await
+    })?;
+    let mut tally: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
+    for f in &feats {
+        *tally.entry(f.title.clone()).or_default() += 1;
+    }
+    println!("{}: {} archived warning polygons", ts, feats.len());
+    for (event, n) in &tally {
+        println!("  {event:<32} {n}");
+    }
     Ok(())
 }
 
@@ -621,7 +647,7 @@ pub fn run_mrms(out_path: &str) -> anyhow::Result<()> {
             field.lon_west as f32, field.lat_north as f32, field.lon_east as f32, field.lat_south as f32,
             field.nx as f32, field.ny as f32, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
         ],
-        lut: crate::colormap::bake_lut(&table, (vmin, vspan_max), None).to_vec(),
+        lut: crate::colormap::bake_lut(table, (vmin, vspan_max), None).to_vec(),
     };
 
     let camera = cam_or_env(-97.0, 38.0, 4.0);
@@ -697,7 +723,9 @@ pub fn run_field(slug: &str, out_path: &str) -> anyhow::Result<()> {
         "azshear" => (wxdata::mrms::AZSHEAR.to_string(), FL::AzShear),
         "qpe1h" => (wxdata::mrms::QPE_01H.to_string(), FL::Qpe1h),
         "qpe24h" => (wxdata::mrms::QPE_24H.to_string(), FL::Qpe24h),
-        other => anyhow::bail!("unknown field slug '{other}' (rotation30|rotation60|rotation120|mesh|azshear|qpe1h|qpe24h)"),
+        "preciptype" => (wxdata::mrms::PRECIP_TYPE.to_string(), FL::PrecipType),
+        "flashflood" => (wxdata::mrms::FLASH_ARI30.to_string(), FL::FlashFlood),
+        other => anyhow::bail!("unknown field slug '{other}' (rotation30|rotation60|rotation120|mesh|azshear|qpe1h|qpe24h|preciptype|flashflood)"),
     };
     let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
     let field = rt.block_on(async {
@@ -710,6 +738,148 @@ pub fn run_field(slug: &str, out_path: &str) -> anyhow::Result<()> {
 
     let field = field.decimated(8192); // fit oversized (14000×7000) rotation/AzShear grids
     let upload = crate::app::field_upload_indexed(layer, &field);
+    let camera = cam_or_env(-97.0, 38.0, 4.0);
+    let (new_tiles, visible, new_vector_tiles, visible_vector) = national_basemap(&rt, &camera);
+    let (center, scale) = camera.world_to_clip_uniform((SIZE as f32, SIZE as f32));
+    let cb = MapCallback {
+        pane: 0,
+        camera_center: center,
+        camera_scale: scale,
+        new_tiles,
+        visible,
+        radar_upload: None,
+        draw_radar: false,
+        overlay_upload: None,
+        draw_overlay: false,
+        field_uploads: vec![(layer, upload)],
+        field_draws: vec![layer],
+        clear_tiles: false,
+        new_vector_tiles,
+        visible_vector,
+        clear_vector: false,
+    };
+    render_to_png(&rt, cb, out_path)
+}
+
+/// Fetch + print the active NHC tropical cyclones (feature V). Exits 0 with a note when none.
+pub fn run_tropical() -> anyhow::Result<()> {
+    let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
+    let data = rt.block_on(async {
+        let client = reqwest::Client::new();
+        wxdata::tropical::fetch_active(&client).await
+    })?;
+    if data.storms.is_empty() {
+        println!("no active tropical storms");
+        return Ok(());
+    }
+    println!("{} active storm(s), {} cone polygon(s)", data.storms.len(), data.cones.len());
+    for s in &data.storms {
+        let (cat, _) = wxdata::tropical::saffir_simpson(s.intensity_kt);
+        let cone_verts: usize = data.cones.iter().flat_map(|c| c.rings.iter().map(|r| r.len())).sum();
+        println!(
+            "  {} ({}) {} — {:.0} kt {} at {:.1},{:.1}  {} track pts, {} cone verts",
+            s.name, s.id, s.classification, s.intensity_kt, cat, s.lat, s.lon, s.points.len(), cone_verts
+        );
+    }
+    Ok(())
+}
+
+/// Fetch + print surface obs (METAR) near a site (feature U).
+pub fn run_metar(site: &str) -> anyhow::Result<()> {
+    let s = wxdata::sites::site_by_id(site).ok_or_else(|| anyhow::anyhow!("unknown site {site}"))?;
+    let (lat, lon) = (s.latitude as f64, s.longitude as f64);
+    let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
+    let obs = rt.block_on(async {
+        let client = reqwest::Client::new();
+        wxdata::metar::fetch_bbox(&client, lat - 2.5, lon - 2.5, lat + 2.5, lon + 2.5).await
+    })?;
+    println!("{site}: {} surface obs within ±2.5°", obs.len());
+    for ob in obs.iter().take(3) {
+        println!(
+            "  {:<5} {:>6.2},{:>7.2}  {}kt @ {}  T {} Td {}  [{}]",
+            ob.icao, ob.lat, ob.lon, ob.wspd_kt,
+            ob.wdir_deg.map(|d| format!("{d:.0}")).unwrap_or_else(|| "VRB".into()),
+            ob.temp_c.map(|t| format!("{t:.0}C")).unwrap_or_else(|| "—".into()),
+            ob.dewp_c.map(|t| format!("{t:.0}C")).unwrap_or_else(|| "—".into()),
+            ob.flt_cat,
+        );
+    }
+    Ok(())
+}
+
+/// Fetch a gridded L3 product (DVL/EET), print stats, render centered on the site (feature X).
+pub fn run_l3grid(kind: &str, site: &str, out_path: &str) -> anyhow::Result<()> {
+    use crate::render::FieldLayer as FL;
+    let layer = match kind {
+        "dvl" => FL::Vil,
+        "eet" => FL::EchoTops,
+        other => anyhow::bail!("unknown l3grid kind '{other}' (dvl|eet)"),
+    };
+    let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
+    let field = rt.block_on(async {
+        let client = reqwest::Client::new();
+        match layer {
+            FL::Vil => wxdata::level3::fetch_dvl(&client, site).await,
+            _ => wxdata::level3::fetch_eet(&client, site).await,
+        }
+    });
+    let field = field.ok_or_else(|| anyhow::anyhow!("no {kind} grid for {site}"))?;
+    let filled = field.values.iter().filter(|v| !v.is_nan()).count();
+    let vmax = field.values.iter().cloned().filter(|v| !v.is_nan()).fold(f32::MIN, f32::max);
+    println!(
+        "{kind} {site} grid {}x{}  lon[{:.2},{:.2}] lat[{:.2},{:.2}]  filled {}  max {:.2}",
+        field.nx, field.ny, field.lon_west, field.lon_east, field.lat_south, field.lat_north, filled, vmax
+    );
+    let (clon, clat) = ((field.lon_west + field.lon_east) * 0.5, (field.lat_north + field.lat_south) * 0.5);
+    let upload = crate::app::field_upload_indexed(layer, &field);
+    let camera = cam_or_env(clon, clat, 7.0);
+    let (new_tiles, visible, new_vector_tiles, visible_vector) = national_basemap(&rt, &camera);
+    let (center, scale) = camera.world_to_clip_uniform((SIZE as f32, SIZE as f32));
+    let cb = MapCallback {
+        pane: 0,
+        camera_center: center,
+        camera_scale: scale,
+        new_tiles,
+        visible,
+        radar_upload: None,
+        draw_radar: false,
+        overlay_upload: None,
+        draw_overlay: false,
+        field_uploads: vec![(layer, upload)],
+        field_draws: vec![layer],
+        clear_tiles: false,
+        new_vector_tiles,
+        visible_vector,
+        clear_vector: false,
+    };
+    render_to_png(&rt, cb, out_path)
+}
+
+/// Fetch + regrid an HRRR environment field (CAPE/SRH), print stats, render over CONUS (feature T).
+pub fn run_env(slug: &str, out_path: &str) -> anyhow::Result<()> {
+    use crate::render::FieldLayer as FL;
+    let (var, level, min_valid, layer): (&str, &str, f64, FL) = match slug {
+        "sbcape" => ("CAPE", "surface", 0.0, FL::Cape),
+        "mlcape" => ("CAPE", "90-0 mb above ground", 0.0, FL::Cape),
+        "srh1" => ("HLCY", "1000-0 m above ground", f64::NEG_INFINITY, FL::Srh),
+        "srh3" => ("HLCY", "3000-0 m above ground", f64::NEG_INFINITY, FL::Srh),
+        other => anyhow::bail!("unknown env slug '{other}' (sbcape|mlcape|srh1|srh3)"),
+    };
+    let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
+    let fc = rt.block_on(async {
+        let client = reqwest::Client::new();
+        wxdata::hrrr::fetch_field(&client, var, level, 0, min_valid).await
+    })?;
+    let f = &fc.field;
+    let filled = f.values.iter().filter(|v| !v.is_nan()).count();
+    let vmax = f.values.iter().cloned().filter(|v| !v.is_nan()).fold(f32::MIN, f32::max);
+    let vmin = f.values.iter().cloned().filter(|v| !v.is_nan()).fold(f32::MAX, f32::min);
+    println!(
+        "{slug} ({var}:{level}) regrid {}x{}  filled {}  range [{:.1},{:.1}]  run {} valid {}",
+        f.nx, f.ny, filled, vmin, vmax, fc.run.format("%Y-%m-%d %HZ"), fc.valid().format("%Y-%m-%d %H:%MZ")
+    );
+
+    let upload = crate::app::field_upload_indexed(layer, f);
     let camera = cam_or_env(-97.0, 38.0, 4.0);
     let (new_tiles, visible, new_vector_tiles, visible_vector) = national_basemap(&rt, &camera);
     let (center, scale) = camera.world_to_clip_uniform((SIZE as f32, SIZE as f32));
@@ -769,7 +939,7 @@ pub fn run_hrrr(fcst_hour: u8, out_path: &str) -> anyhow::Result<()> {
             f.lon_west as f32, f.lat_north as f32, f.lon_east as f32, f.lat_south as f32,
             f.nx as f32, f.ny as f32, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
         ],
-        lut: crate::colormap::bake_lut(&table, (vmin, vspan_max), None).to_vec(),
+        lut: crate::colormap::bake_lut(table, (vmin, vspan_max), None).to_vec(),
     };
     let camera = cam_or_env(-97.0, 38.0, 4.0);
     let (new_tiles, visible, new_vector_tiles, visible_vector) = national_basemap(&rt, &camera);
@@ -824,7 +994,7 @@ pub fn run_xsection(site: &str, a: (f64, f64), b: (f64, f64), out_path: &str) ->
     );
 
     let table = crate::colormap::default_table(Moment::Reflectivity);
-    let img = crate::ui::xsection_window::to_image(&xs, &table);
+    let img = crate::ui::xsection_window::to_image(&xs, table);
     let buf: Vec<u8> = img.pixels.iter().flat_map(|p| [p.r(), p.g(), p.b(), p.a()]).collect();
     image::save_buffer(out_path, &buf, xs.cols as u32, xs.rows as u32, image::ColorType::Rgba8)?;
     println!("wrote {out_path}");
@@ -832,6 +1002,37 @@ pub fn run_xsection(site: &str, a: (f64, f64), b: (f64, f64), out_path: &str) ->
 }
 
 /// Build the 3D reflectivity volume for `site` and raymarch it from a fixed orbit camera to a PNG.
+/// Fetch a volume, slice a CAPPI at `alt_km`, print filled-cell count, and save the slice PNG.
+pub fn run_cappi(site: &str, alt_km: f32, out_path: &str) -> anyhow::Result<()> {
+    const N: usize = 256;
+    const HALF_KM: f32 = 150.0;
+    let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
+    let scan = rt.block_on(async {
+        let mut day = chrono::Utc::now().date_naive();
+        for _ in 0..3 {
+            match level2::download_latest_scan(site, day).await {
+                Ok(s) => return Ok(s),
+                Err(_) => day = day.pred_opt().unwrap(),
+            }
+        }
+        anyhow::bail!("no volume for {site}")
+    })?;
+    let elevs = level2::elevation_angles(&scan);
+    let sweeps: Vec<_> = (0..elevs.len())
+        .filter_map(|t| level2::bin_scan_opts(&scan, Moment::Reflectivity, t, false).ok())
+        .collect();
+    let c = wxdata::volume3d::cappi(&sweeps, alt_km, N, HALF_KM)
+        .ok_or_else(|| anyhow::anyhow!("no sweeps for CAPPI"))?;
+    let filled = c.dbz.iter().filter(|v| v.is_some()).count();
+    println!("CAPPI {site} @ {alt_km:.1} km  {N}x{N}  filled {}/{}", filled, c.dbz.len());
+    let table = crate::colormap::default_table(Moment::Reflectivity);
+    let img = crate::ui::cappi_window::to_image(&c, table);
+    let rgba: Vec<u8> = img.pixels.iter().flat_map(|p| [p.r(), p.g(), p.b(), p.a()]).collect();
+    image::save_buffer(out_path, &rgba, N as u32, N as u32, image::ColorType::Rgba8)?;
+    println!("wrote {out_path}");
+    Ok(())
+}
+
 pub fn run_3d(site: &str, out_path: &str) -> anyhow::Result<()> {
     const N: usize = 192;
     const NZ: usize = 48;
@@ -860,7 +1061,7 @@ pub fn run_3d(site: &str, out_path: &str) -> anyhow::Result<()> {
     );
 
     let table = crate::colormap::default_table(Moment::Reflectivity);
-    let lut = crate::colormap::bake_lut(&table, (v3.value_min, v3.value_max), None).to_vec();
+    let lut = crate::colormap::bake_lut(table, (v3.value_min, v3.value_max), None).to_vec();
     let upload = crate::render3d::Volume3dUpload { data: v3.data, n: v3.n as u32, nz: v3.nz as u32, lut };
     let uniform = crate::render3d::orbit_uniform(30.0, 25.0, 3.0, 1.0, N as u32, NZ as u32, 256);
 

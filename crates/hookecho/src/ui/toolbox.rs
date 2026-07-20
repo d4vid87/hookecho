@@ -17,8 +17,11 @@ pub struct ToolboxActions {
     pub srv_from_cells: bool,
     /// DVR: replay the buffered (in-RAM) frames from the earliest cached one.
     pub instant_replay: bool,
+    /// The Day-1 outlook hazard changed; the app must clear + refetch that day's outlook.
+    pub outlook_kind_changed: bool,
 }
 
+#[allow(clippy::too_many_arguments)] // one flat call per frame; a params struct adds churn for no reader gain
 pub fn show(
     ui: &mut egui::Ui,
     view: &mut MapView,
@@ -28,6 +31,9 @@ pub fn show(
     rotation_minutes: &mut u16,
     hrrr_fcst_hour: &mut u8,
     hrrr_valid: Option<chrono::DateTime<chrono::Utc>>,
+    env_cape_ml: &mut bool,
+    env_srh_km: &mut u8,
+    l3grid_site: Option<&str>,
     show_sensors: &mut bool,
     show_hodo: &mut bool,
     show_alert_panel: &mut bool,
@@ -35,6 +41,8 @@ pub fn show(
     show_spotters: &mut bool,
     show_probsevere: &mut bool,
     show_radar_sites: &mut bool,
+    show_metar: &mut bool,
+    show_tropical: &mut bool,
 ) -> ToolboxActions {
     use crate::theme::section;
     let mut actions = ToolboxActions::default();
@@ -45,6 +53,7 @@ pub fn show(
         section(ui, "Level 2", |ui| level2_section(ui, view, settings, &mut actions));
         section(ui, "National", |ui| national_section(ui, fields, rotation_minutes));
         section(ui, "Future Radar", |ui| hrrr_section(ui, fields, hrrr_fcst_hour, hrrr_valid));
+        section(ui, "Environment", |ui| env_section(ui, fields, env_cape_ml, env_srh_km));
         section(ui, "Sensors", |ui| {
             ui.checkbox(show_sensors, "Sensor dashboard")
                 .on_hover_text("Nearest NWS/METAR station: current conditions + 24h trends");
@@ -60,6 +69,14 @@ pub fn show(
                 .on_hover_text("Live spotters within 230 km of the active site (spotternetwork.org, 1-min refresh)");
             ui.checkbox(show_radar_sites, "Radar sites")
                 .on_hover_text("Show all NEXRAD sites; click one on the map to switch radars");
+            ui.checkbox(show_metar, "Surface obs (METAR)")
+                .on_hover_text("Station plots: wind barbs + T/Td, flight-category colored (zoom in)");
+            if ui.checkbox(show_tropical, "Tropical (NHC)")
+                .on_hover_text("Active tropical cyclones: forecast cones, tracks, category-colored points")
+                .changed()
+            {
+                actions.overlays_changed = true;
+            }
             if ui.checkbox(show_probsevere, "ProbSevere")
                 .on_hover_text("NOAA/CIMSS per-storm severe/tor/hail/wind probabilities; click a polygon")
                 .changed()
@@ -68,7 +85,7 @@ pub fn show(
             }
             overlays_section(ui, filters, &mut actions);
         });
-        section(ui, "Level 3", |ui| level3_section(ui));
+        section(ui, "Level 3", |ui| level3_section(ui, fields, l3grid_site));
         section(ui, "Timeline", |ui| timeline_section(ui, view, settings, &mut actions));
     });
     actions
@@ -93,7 +110,7 @@ fn national_section(
     }
     toggle(ui, fields, FL::Mrms, "MRMS Mosaic", "MRMS national composite reflectivity (~2-min cadence)");
     toggle(ui, fields, FL::Rotation, "Rotation tracks", "Accumulated low-level azimuthal-shear max — tornado-track map");
-    if fields.get(&FL::Rotation).map_or(false, |s| s.show) {
+    if fields.get(&FL::Rotation).is_some_and(|s| s.show) {
         ui.indent("rot_dur", |ui| {
             ui.horizontal(|ui| {
                 ui.label("Window:");
@@ -116,6 +133,8 @@ fn national_section(
     ui.separator();
     toggle(ui, fields, FL::Qpe1h, "QPE 1-hour", "MRMS multi-sensor 1-hour precip accumulation (mm)");
     toggle(ui, fields, FL::Qpe24h, "QPE 24-hour", "MRMS multi-sensor 24-hour precip accumulation (mm; storm total)");
+    toggle(ui, fields, FL::PrecipType, "Precip type", "MRMS surface precipitation type (rain/snow/hail/convective)");
+    toggle(ui, fields, FL::FlashFlood, "FLASH flood ARI", "MRMS FLASH flash-flood average recurrence interval (years)");
 }
 
 fn hrrr_section(
@@ -148,6 +167,59 @@ fn hrrr_section(
     }
 }
 
+fn env_section(
+    ui: &mut egui::Ui,
+    fields: &mut std::collections::HashMap<crate::render::FieldLayer, crate::app::FieldState>,
+    env_cape_ml: &mut bool,
+    env_srh_km: &mut u8,
+) {
+    use crate::render::FieldLayer as FL;
+    // CAPE toggle + surface/mixed-layer parcel select.
+    let cape_on = if let Some(s) = fields.get_mut(&FL::Cape) {
+        ui.checkbox(&mut s.show, "CAPE")
+            .on_hover_text("HRRR convective available potential energy (analysis f00)");
+        s.show
+    } else {
+        false
+    };
+    if cape_on {
+        ui.indent("cape_parcel", |ui| {
+            ui.horizontal(|ui| {
+                ui.label("Parcel:");
+                let mut changed = ui.selectable_value(env_cape_ml, false, "SB").changed();
+                changed |= ui.selectable_value(env_cape_ml, true, "ML").changed();
+                if changed {
+                    if let Some(s) = fields.get_mut(&FL::Cape) {
+                        s.last_fetch = None;
+                    }
+                }
+            });
+        });
+    }
+    // SRH toggle + 0-1/0-3 km depth select.
+    let srh_on = if let Some(s) = fields.get_mut(&FL::Srh) {
+        ui.checkbox(&mut s.show, "Storm-relative helicity")
+            .on_hover_text("HRRR SRH (analysis f00)");
+        s.show
+    } else {
+        false
+    };
+    if srh_on {
+        ui.indent("srh_depth", |ui| {
+            ui.horizontal(|ui| {
+                ui.label("Depth:");
+                let mut changed = ui.selectable_value(env_srh_km, 1u8, "0–1 km").changed();
+                changed |= ui.selectable_value(env_srh_km, 3u8, "0–3 km").changed();
+                if changed {
+                    if let Some(s) = fields.get_mut(&FL::Srh) {
+                        s.last_fetch = None;
+                    }
+                }
+            });
+        });
+    }
+}
+
 fn overlays_section(ui: &mut egui::Ui, filters: &mut OverlayFilters, actions: &mut ToolboxActions) {
     let mut changed = false;
 
@@ -158,6 +230,20 @@ fn overlays_section(ui: &mut egui::Ui, filters: &mut OverlayFilters, actions: &m
             changed |= ui.selectable_value(&mut filters.outlook_day, day, label).changed();
         }
     });
+    // Day-1 hazard sub-select (probabilistic tornado/wind/hail); Days 2–3 are categorical only.
+    if filters.outlook_day == 1 {
+        ui.indent("outlook_kind", |ui| {
+            ui.horizontal(|ui| {
+                ui.label("Hazard:");
+                for kind in wxdata::spc::OutlookKind::ALL {
+                    if ui.selectable_value(&mut filters.outlook_kind, kind, kind.label()).changed() {
+                        actions.outlook_kind_changed = true;
+                        changed = true;
+                    }
+                }
+            });
+        });
+    }
     changed |= ui.checkbox(&mut filters.show_mds, "Mesoscale Discussions").changed();
     ui.checkbox(&mut filters.show_cells, "Storm cells (L3)")
         .on_hover_text("Clickable storm tracking / hail / mesocyclone markers");
@@ -193,7 +279,8 @@ fn overlays_section(ui: &mut egui::Ui, filters: &mut OverlayFilters, actions: &m
             }
         });
     }
-    actions.overlays_changed = changed;
+    // |= — the Tropical/ProbSevere checkboxes above this call already set the flag.
+    actions.overlays_changed |= changed;
 }
 
 fn site_section(ui: &mut egui::Ui, view: &mut MapView, settings: &mut Settings, actions: &mut ToolboxActions) {
@@ -359,14 +446,27 @@ fn level2_section(ui: &mut egui::Ui, view: &mut MapView, settings: &mut Settings
     });
 }
 
-fn level3_section(ui: &mut egui::Ui) {
+fn level3_section(
+    ui: &mut egui::Ui,
+    fields: &mut std::collections::HashMap<crate::render::FieldLayer, crate::app::FieldState>,
+    l3grid_site: Option<&str>,
+) {
+    use crate::render::FieldLayer as FL;
     ui.label("Storm cells: Storm Tracking, Hail (HDA), Mesocyclone");
     ui.weak("Toggle in Overlays ▸ Storm cells; click a marker to interrogate.");
-    ui.add_enabled_ui(false, |ui| {
-        for cat in ["TVS", "Digital moments (94/99/…)"] {
-            ui.label(cat);
-        }
-    });
+    ui.separator();
+    // Gridded L3 products for the active site (packet 16 digital radial arrays).
+    if let Some(s) = fields.get_mut(&FL::Vil) {
+        ui.checkbox(&mut s.show, "Digital VIL (DVL)")
+            .on_hover_text("Gridded vertically-integrated liquid for the active site (kg/m²)");
+    }
+    if let Some(s) = fields.get_mut(&FL::EchoTops) {
+        ui.checkbox(&mut s.show, "Echo tops (EET)")
+            .on_hover_text("Enhanced echo tops for the active site (kft)");
+    }
+    if fields.get(&FL::Vil).is_some_and(|s| s.show) || fields.get(&FL::EchoTops).is_some_and(|s| s.show) {
+        ui.weak(format!("Site: {}", l3grid_site.unwrap_or("—")));
+    }
 }
 
 fn timeline_section(ui: &mut egui::Ui, view: &mut MapView, settings: &mut Settings, actions: &mut ToolboxActions) {

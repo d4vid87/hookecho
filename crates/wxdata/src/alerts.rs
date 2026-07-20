@@ -3,7 +3,7 @@
 //! Each alert with a polygon becomes a [`GeoFeature`] colored by event. Zone-only alerts
 //! (no polygon, just UGC zones) are skipped for now — resolving zone geometry is a follow-up.
 
-use crate::overlay::{for_each_feature, polygons_of, AlertInfo, FeatureKind, GeoFeature};
+use crate::overlay::{for_each_feature, polygons_of, AlertInfo, FeatureKind, GeoFeature, StormMotion};
 
 const ALERTS_URL: &str = "https://api.weather.gov/alerts/active";
 /// weather.gov requires a User-Agent identifying the app + a contact.
@@ -62,8 +62,64 @@ pub fn category(event: &str) -> Category {
     }
 }
 
+/// Parse an NWS `eventMotionDescription` into a [`StormMotion`].
+///
+/// Format is `...`-delimited, e.g. `2023-03-31T20:30:00-00:00...storm...234DEG...52KT...3540,9012`.
+/// Direction/speed are the tokens ending in `DEG`/`KT`; trailing `lat,lon` pairs are hundredths of
+/// a degree with lon stored west-positive (so negated). Direction is kept *as issued* (FROM). Any
+/// missing piece (no DEG, no KT, no points) makes this `None` so the caller simply doesn't draw.
+pub fn parse_motion(desc: &str) -> Option<StormMotion> {
+    let mut deg = None;
+    let mut kt = None;
+    let mut points = Vec::new();
+    for tok in desc.split("...").map(str::trim).filter(|t| !t.is_empty()) {
+        let up = tok.to_ascii_uppercase();
+        if let Some(n) = up.strip_suffix("DEG") {
+            deg = n.trim().parse::<f32>().ok().or(deg);
+        } else if let Some(n) = up.strip_suffix("KT") {
+            kt = n.trim().parse::<f32>().ok().or(kt);
+        } else if tok.contains(',') {
+            // One or more space-separated `lat,lon` centroid pairs (hundredths of a degree).
+            for pair in tok.split_whitespace() {
+                if let Some((a, b)) = pair.split_once(',') {
+                    if let (Ok(lat), Ok(lon)) = (a.trim().parse::<f64>(), b.trim().parse::<f64>()) {
+                        points.push([-(lon / 100.0), lat / 100.0]);
+                    }
+                }
+            }
+        }
+    }
+    let (deg, kt) = (deg?, kt?);
+    if points.is_empty() {
+        return None;
+    }
+    Some(StormMotion { deg, kt, points })
+}
+
+/// Escalation tier for a warning: 0 plain, 1 CONSIDERABLE, 2 DESTRUCTIVE/observed-tornado,
+/// 3 Tornado Emergency / PDS. Higher tiers sort to the top and trigger the emergency sound.
+pub fn escalation(a: &AlertInfo) -> u8 {
+    let head = format!("{} {}", a.headline, a.description).to_ascii_uppercase();
+    if head.contains("TORNADO EMERGENCY") || head.contains("PARTICULARLY DANGEROUS SITUATION") {
+        return 3;
+    }
+    let threat = a.damage_threat.as_deref().unwrap_or("").to_ascii_uppercase();
+    let observed = a
+        .tornado_detection
+        .as_deref()
+        .map(|d| d.to_ascii_uppercase().contains("OBSERVED"))
+        .unwrap_or(false);
+    if threat.contains("DESTRUCTIVE") || threat.contains("CATASTROPHIC") || observed {
+        return 2;
+    }
+    if threat.contains("CONSIDERABLE") {
+        return 1;
+    }
+    0
+}
+
 /// (FeatureKind, base RGB) for an event; fill is this at low alpha, stroke at full.
-fn event_style(event: &str) -> (FeatureKind, [u8; 3]) {
+pub(crate) fn event_style(event: &str) -> (FeatureKind, [u8; 3]) {
     let e = event.to_ascii_lowercase();
     let kind = if e.contains("warning") {
         FeatureKind::Warning
@@ -140,6 +196,7 @@ fn build_alert(props: &serde_json::Map<String, serde_json::Value>) -> Option<(Fe
         damage_threat: param(props, "thunderstormDamageThreat")
             .or_else(|| param(props, "tornadoDamageThreat")),
         source: param(props, "eventMotionDescription").or_else(|| Some("Radar indicated".into())),
+        motion: param(props, "eventMotionDescription").as_deref().and_then(parse_motion),
     };
     Some((kind, rgb, detail, alert))
 }
@@ -165,10 +222,13 @@ pub fn parse_alerts(json: &str) -> anyhow::Result<Vec<GeoFeature>> {
     Ok(out)
 }
 
+/// One zone's polygon groups (rings per polygon part), as returned by [`polygons_of`].
+type ZonePolys = Vec<Vec<Vec<[f64; 2]>>>;
+
 /// Process-lifetime cache of resolved zone geometries (rings), keyed by zone URL. Zone polygons
 /// are effectively static, so one fetch per zone per run is plenty.
 /// `// ponytail: in-memory only; a disk cache would survive restarts if it ever matters.`
-static ZONE_CACHE: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, Vec<Vec<Vec<[f64; 2]>>>>>> =
+static ZONE_CACHE: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, ZonePolys>>> =
     std::sync::OnceLock::new();
 
 /// Cap on zone geometries fetched per refresh, so a nationwide burst of zone-only advisories
@@ -304,6 +364,52 @@ mod tests {
         let ids: std::collections::HashSet<_> =
             hits.iter().filter_map(|f| f.alert.as_ref().map(|a| a.id.as_str())).collect();
         assert_eq!(ids.len(), 1);
+    }
+
+    #[test]
+    fn parse_motion_single_point() {
+        let m = parse_motion("2023-03-31T20:30:00-00:00...storm...234DEG...52KT...3540,9012").unwrap();
+        assert_eq!(m.deg, 234.0);
+        assert_eq!(m.kt, 52.0);
+        assert_eq!(m.points.len(), 1);
+        assert!((m.points[0][1] - 35.40).abs() < 1e-6, "lat");
+        assert!((m.points[0][0] - -90.12).abs() < 1e-6, "lon west-positive negated");
+    }
+
+    #[test]
+    fn parse_motion_multi_point() {
+        let m = parse_motion("...storm...100DEG...20KT...3540,9012 3548,9020").unwrap();
+        assert_eq!(m.points.len(), 2);
+    }
+
+    #[test]
+    fn parse_motion_garbage_is_none() {
+        assert!(parse_motion("no motion here").is_none());
+        assert!(parse_motion("...234DEG...52KT...").is_none(), "no points");
+    }
+
+    #[test]
+    fn escalation_tiers() {
+        let mk = |head: &str, threat: Option<&str>, det: Option<&str>| AlertInfo {
+            id: String::new(),
+            event: "Severe Thunderstorm Warning".into(),
+            headline: head.into(),
+            area: String::new(),
+            description: String::new(),
+            instruction: String::new(),
+            expires: None,
+            max_hail_in: None,
+            max_wind: None,
+            tornado_detection: det.map(str::to_string),
+            damage_threat: threat.map(str::to_string),
+            source: None,
+            motion: None,
+        };
+        assert_eq!(escalation(&mk("plain warning", None, None)), 0);
+        assert_eq!(escalation(&mk("", Some("CONSIDERABLE"), None)), 1);
+        assert_eq!(escalation(&mk("", Some("DESTRUCTIVE"), None)), 2);
+        assert_eq!(escalation(&mk("", None, Some("OBSERVED"))), 2);
+        assert_eq!(escalation(&mk("THIS IS A TORNADO EMERGENCY", None, None)), 3);
     }
 
     // Live network check (nation-wide there are essentially always active alerts).

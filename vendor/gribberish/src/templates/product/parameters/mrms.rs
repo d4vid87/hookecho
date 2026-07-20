@@ -270,7 +270,16 @@ pub fn multiradar_parameter(category: u8, parameter: u8) -> Option<Parameter> {
         11 => Some(Parameter::from(MRMSMergedReflectivityProduct::from(
             parameter,
         ))),
-        _ => None,
+        // hookecho patch: MRMS discipline-209 products in categories outside the enumerated set
+        // (e.g. PrecipFlag surface precip type, FLASH flash-flood ARI) carry a valid grid whose
+        // only obstacle to decoding is this None → parameter() Err. Return a generic placeholder so
+        // the data message decodes; the app supplies its own units/coloring. Scoped to MRMS
+        // (discipline 209) — HRRR and other disciplines are untouched.
+        _ => Some(Parameter {
+            name: format!("MRMS {}/{}", category, parameter),
+            unit: "unknown".to_string(),
+            abbrev: format!("MRMS_{}_{}", category, parameter),
+        }),
     }
 }
 

@@ -26,6 +26,9 @@ pub struct Row<'a> {
     pub info: &'a AlertInfo,
     pub color: [u8; 4],
     pub center: (f64, f64),
+    /// Escalation tier, computed once per row — `escalation()` uppercases the (multi-KB)
+    /// bulletin text, too heavy to re-run inside a per-frame sort comparator.
+    pub esc: u8,
 }
 
 /// Collect alert features whose bbox overlaps the view bounds `(min_lon, min_lat, max_lon, max_lat)`,
@@ -43,11 +46,18 @@ pub fn rows_in_view(feats: &[GeoFeature], bounds: (f64, f64, f64, f64)) -> Vec<R
         if !seen.insert(a.id.clone()) {
             continue;
         }
-        rows.push(Row { info: a, color: f.stroke, center: ((x0 + x1) * 0.5, (y0 + y1) * 0.5) });
+        rows.push(Row {
+            info: a,
+            color: f.stroke,
+            center: ((x0 + x1) * 0.5, (y0 + y1) * 0.5),
+            esc: wxdata::alerts::escalation(a),
+        });
     }
     rows.sort_by(|a, b| {
-        severity_rank(&b.info.event)
-            .cmp(&severity_rank(&a.info.event))
+        // Escalation leads: a PDS/destructive SVR outranks a plain TOR (matches broadcast practice).
+        b.esc
+            .cmp(&a.esc)
+            .then_with(|| severity_rank(&b.info.event).cmp(&severity_rank(&a.info.event)))
             .then_with(|| expiry_key(a.info).cmp(&expiry_key(b.info)))
     });
     rows
@@ -88,6 +98,18 @@ pub fn show(root: &mut egui::Ui, feats: &[GeoFeature], bounds: (f64, f64, f64, f
                                 let (rect, _) = ui.allocate_exact_size(egui::vec2(5.0, 15.0), egui::Sense::hover());
                                 ui.painter().rect_filled(rect, 1.0, color32(row.color));
                                 ui.strong(&a.event);
+                                // Emergency/PDS/destructive chip on escalated rows.
+                                if row.esc >= 2 {
+                                    let label = a.headline.to_ascii_uppercase();
+                                    let chip = if label.contains("TORNADO EMERGENCY") {
+                                        "TOR EMERGENCY"
+                                    } else if a.damage_threat.as_deref().is_some_and(|d| d.to_ascii_uppercase().contains("CATASTROPHIC")) {
+                                        "CATASTROPHIC"
+                                    } else {
+                                        "DESTRUCTIVE"
+                                    };
+                                    ui.label(egui::RichText::new(chip).small().strong().color(egui::Color32::WHITE).background_color(egui::Color32::from_rgb(200, 20, 20)));
+                                }
                             });
                             ui.add(egui::Label::new(egui::RichText::new(&a.area).weak().small()).truncate());
                             ui.label(egui::RichText::new(crate::ui::warning_window::countdown(a)).small());

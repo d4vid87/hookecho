@@ -190,9 +190,7 @@ pub fn parse(text: &str) -> Placefile {
                 // `Text: lat, lon, fontNumber, "string" [, "hover"]`.
                 if let Some(pos) = parse_coord(rest) {
                     let text = quoted(rest).unwrap_or_default();
-                    let hover = rest.matches('"').count().ge(&4)
-                        .then(|| rest.rsplit('"').nth(1).unwrap_or("").to_string())
-                        .unwrap_or_default();
+                    let hover = if rest.matches('"').count().ge(&4) { rest.rsplit('"').nth(1).unwrap_or("").to_string() } else { Default::default() };
                     if !text.is_empty() {
                         pf.items.push(PlaceItem {
                             threshold_nmi: threshold,

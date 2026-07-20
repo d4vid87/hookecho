@@ -9,10 +9,7 @@ pub fn to_image(xs: &CrossSection, table: &ColorTable) -> egui::ColorImage {
     let mut buf = vec![0u8; xs.cols * xs.rows * 4];
     for r in 0..xs.rows {
         for c in 0..xs.cols {
-            let rgba = match xs.at(c, r).and_then(|v| table.sample(v)) {
-                Some(rgba) => rgba,
-                None => [18, 18, 18, 255], // panel background where there's no coverage
-            };
+            let rgba = xs.at(c, r).and_then(|v| table.sample(v)).unwrap_or([18, 18, 18, 255]);
             buf[(r * xs.cols + c) * 4..(r * xs.cols + c) * 4 + 4].copy_from_slice(&rgba);
         }
     }

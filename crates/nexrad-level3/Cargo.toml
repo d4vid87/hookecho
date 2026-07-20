@@ -9,6 +9,7 @@ repository.workspace = true
 [dependencies]
 thiserror.workspace = true
 flate2.workspace = true
+bzip2 = "0.6"
 
 [dev-dependencies]
 serde = { workspace = true }

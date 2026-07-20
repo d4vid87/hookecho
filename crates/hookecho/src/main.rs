@@ -94,12 +94,66 @@ fn main() -> eframe::Result<()> {
         return Ok(());
     }
 
+    // Tropical verify: `hookecho --headless-tropical`.
+    if args.iter().any(|a| a == "--headless-tropical") {
+        if let Err(e) = headless::run_tropical() {
+            eprintln!("headless tropical failed: {e}");
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
+
+    // Surface-obs verify: `hookecho --headless-metar [SITE]`.
+    if let Some(pos) = args.iter().position(|a| a == "--headless-metar") {
+        let site = args.get(pos + 1).filter(|a| !a.starts_with("--")).map(String::as_str).unwrap_or("KTLX");
+        if let Err(e) = headless::run_metar(site) {
+            eprintln!("headless metar failed: {e}");
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
+
+    // Gridded L3 verify: `hookecho --headless-l3grid <dvl|eet> [SITE] <out.png>`.
+    if let Some(pos) = args.iter().position(|a| a == "--headless-l3grid") {
+        let kind = args.get(pos + 1).map(String::as_str).unwrap_or("dvl");
+        let site = args.get(pos + 2).filter(|a| !a.starts_with("--")).map(String::as_str).unwrap_or("KTLX");
+        let out = args.get(pos + 3).filter(|a| !a.starts_with("--")).map(String::as_str).unwrap_or("l3grid.png");
+        if let Err(e) = headless::run_l3grid(kind, site, out) {
+            eprintln!("headless l3grid render failed: {e}");
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
+
+    // Environment-suite verify: `hookecho --headless-env <sbcape|mlcape|srh1|srh3> <out.png>`.
+    if let Some(pos) = args.iter().position(|a| a == "--headless-env") {
+        let slug = args.get(pos + 1).map(String::as_str).unwrap_or("sbcape");
+        let out = args.get(pos + 2).filter(|a| !a.starts_with("--")).map(String::as_str).unwrap_or("env.png");
+        if let Err(e) = headless::run_env(slug, out) {
+            eprintln!("headless env render failed: {e}");
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
+
     // HRRR future-radar verify: `hookecho --headless-hrrr [fcsthour] <out.png>`.
     if let Some(pos) = args.iter().position(|a| a == "--headless-hrrr") {
         let fh: u8 = args.get(pos + 1).and_then(|s| s.parse().ok()).unwrap_or(1);
         let out = args.get(pos + 2).filter(|a| !a.starts_with("--")).map(String::as_str).unwrap_or("hrrr.png");
         if let Err(e) = headless::run_hrrr(fh, out) {
             eprintln!("headless hrrr render failed: {e}");
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
+
+    // CAPPI verify: `hookecho --headless-cappi [SITE] [alt_km] <out.png>`.
+    if let Some(pos) = args.iter().position(|a| a == "--headless-cappi") {
+        let site = args.get(pos + 1).filter(|a| !a.starts_with("--")).map(String::as_str).unwrap_or("KTLX");
+        let alt: f32 = args.get(pos + 2).and_then(|s| s.parse().ok()).unwrap_or(3.0);
+        let out = args.get(pos + 3).filter(|a| !a.starts_with("--")).map(String::as_str).unwrap_or("cappi.png");
+        if let Err(e) = headless::run_cappi(site, alt, out) {
+            eprintln!("headless cappi failed: {e}");
             std::process::exit(1);
         }
         return Ok(());
@@ -247,6 +301,16 @@ fn main() -> eframe::Result<()> {
     if args.iter().any(|a| a == "--headless-alerts") {
         if let Err(e) = headless::run_alerts() {
             eprintln!("headless alerts failed: {e}");
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
+
+    // Archived-warning verify: `hookecho --headless-archwarn <RFC3339>`.
+    if let Some(pos) = args.iter().position(|a| a == "--headless-archwarn") {
+        let ts = args.get(pos + 1).map(String::as_str).unwrap_or("2013-05-20T20:00:00Z");
+        if let Err(e) = headless::run_archwarn(ts) {
+            eprintln!("headless archwarn failed: {e}");
             std::process::exit(1);
         }
         return Ok(());

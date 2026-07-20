@@ -1,10 +1,12 @@
 //! Weather radar data acquisition and domain model for Hook Echo-WX.
 
 pub mod alerts;
+pub mod archive_warnings;
 pub mod dealias;
 pub mod hrrr;
 pub mod level2;
 pub mod level3;
+pub mod metar;
 pub mod live;
 pub mod mrms;
 pub mod obs;
@@ -16,6 +18,7 @@ pub mod spc;
 pub mod spotters;
 pub mod tds;
 pub mod torclimo;
+pub mod tropical;
 pub mod volume3d;
 pub mod xsection;
 
