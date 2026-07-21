@@ -17,7 +17,7 @@ impl SoundingWindow {
             return;
         }
         let mut open = self.open;
-        egui::Window::new("Point Sounding (HRRR)")
+        crate::ui::fit_phone(ctx, egui::Window::new("Point Sounding (HRRR)"))
             .open(&mut open)
             .default_size([560.0, 460.0])
             .show(ctx, |ui| {

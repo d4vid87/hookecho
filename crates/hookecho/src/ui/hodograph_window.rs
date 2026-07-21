@@ -8,7 +8,7 @@ const MS_TO_KT: f32 = 1.943_844;
 /// Show the hodograph window. Returns `false` when it should close.
 pub fn show(ctx: &egui::Context, site: Option<&str>, levels: &[VwpLevel]) -> bool {
     let mut open = true;
-    egui::Window::new("VAD Hodograph")
+    crate::ui::fit_phone(ctx, egui::Window::new("VAD Hodograph"))
         .open(&mut open)
         .default_size([360.0, 420.0])
         .show(ctx, |ui| {

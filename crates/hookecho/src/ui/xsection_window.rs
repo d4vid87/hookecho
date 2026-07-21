@@ -19,7 +19,7 @@ pub fn to_image(xs: &CrossSection, table: &ColorTable) -> egui::ColorImage {
 /// Show the cross-section window. Returns `false` when it should close.
 pub fn show(ctx: &egui::Context, xs: &CrossSection, tex: &egui::TextureHandle) -> bool {
     let mut open = true;
-    egui::Window::new("Cross-section")
+    crate::ui::fit_phone(ctx, egui::Window::new("Cross-section"))
         .open(&mut open)
         .default_size([560.0, 300.0])
         .show(ctx, |ui| {

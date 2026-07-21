@@ -18,7 +18,7 @@ pub struct CellSample {
 /// Returns `false` when it should close.
 pub fn show(ctx: &egui::Context, cell: &Cell, trend: &[CellSample]) -> bool {
     let mut open = true;
-    egui::Window::new(format!("Storm {} Attributes", cell.id))
+    crate::ui::fit_phone(ctx, egui::Window::new(format!("Storm {} Attributes", cell.id)))
         .open(&mut open)
         .default_size([380.0, 460.0])
         .show(ctx, |ui| {

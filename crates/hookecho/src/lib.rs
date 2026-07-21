@@ -20,6 +20,7 @@ pub mod icon;
 pub mod loopexport;
 pub mod overlay_build;
 pub mod paths;
+pub mod platform;
 pub mod render;
 pub mod render3d;
 pub mod settings;
@@ -68,6 +69,8 @@ fn android_main(app: winit::platform::android::activity::AndroidApp) {
     if let Some(path) = app.internal_data_path() {
         paths::set_base(path);
     }
+    // The UI queries this handle for system-bar insets each frame.
+    platform::set_app(app.clone());
 
     let native_options = eframe::NativeOptions {
         android_app: Some(app),

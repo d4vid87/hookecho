@@ -11,7 +11,7 @@ pub fn show(
     error: Option<&str>,
 ) -> bool {
     let mut refresh = false;
-    egui::Window::new("Forecast Discussion")
+    crate::ui::fit_phone(ctx, egui::Window::new("Forecast Discussion"))
         .open(open)
         .default_size([560.0, 520.0])
         .show(ctx, |ui| {

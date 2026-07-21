@@ -279,9 +279,10 @@ impl Default for Settings {
             presets: Vec::new(),
             palettes: BTreeMap::new(),
             velocity_unit: VelocityUnit::default(),
-            // Touch UI wants larger widgets out of the box; desktop stays at 1.0. (First-run only —
-            // once the user adjusts the slider, the saved value wins.)
-            ui_scale: if cfg!(target_os = "android") { 1.3 } else { 1.0 },
+            // 1.0 everywhere: this multiplies the native scale factor, and Android's display
+            // density already sizes widgets for touch — an extra 1.3 shrank the S24's logical
+            // canvas to ~277 pt wide (nothing fit).
+            ui_scale: 1.0,
             placefiles: Vec::new(),
             markers: Vec::new(),
             dealias_velocity: false,
@@ -341,13 +342,20 @@ impl Settings {
     /// Load from disk, falling back to defaults on any error (missing file, parse failure).
     pub fn load() -> Self {
         let Some(path) = Self::path() else { return Self::default() };
-        match std::fs::read_to_string(&path) {
+        let mut loaded = match std::fs::read_to_string(&path) {
             Ok(s) => serde_json::from_str(&s).unwrap_or_else(|e| {
                 log::warn!("settings parse failed ({e}); using defaults");
                 Self::default()
             }),
             Err(_) => Self::default(),
+        };
+        // One-shot repair: early Android builds persisted ui_scale 1.3 as the default, which
+        // multiplied on top of display density and left a ~277-pt-wide canvas. A saved exact 1.3
+        // on Android is that bug, not a choice — the slider steps land there for almost no one.
+        if cfg!(target_os = "android") && (loaded.ui_scale - 1.3).abs() < 0.001 {
+            loaded.ui_scale = 1.0;
         }
+        loaded
     }
 
     /// Export a portable bundle: this Settings plus the *contents* of every referenced `.pal`

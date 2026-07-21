@@ -18,7 +18,7 @@ pub fn to_image(c: &Cappi, table: &ColorTable) -> egui::ColorImage {
 /// Returns `false` when the window should close.
 pub fn show(ctx: &egui::Context, tex: &egui::TextureHandle, alt_km: &mut f32, length: f32) -> bool {
     let mut open = true;
-    egui::Window::new("CAPPI slice")
+    crate::ui::fit_phone(ctx, egui::Window::new("CAPPI slice"))
         .open(&mut open)
         .default_size([420.0, 480.0])
         .show(ctx, |ui| {

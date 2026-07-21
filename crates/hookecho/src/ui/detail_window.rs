@@ -10,7 +10,7 @@ pub struct Detail {
 /// Show the detail window. Returns `false` when it should close.
 pub fn show(ctx: &egui::Context, detail: &Detail) -> bool {
     let mut open = true;
-    egui::Window::new("Feature Details")
+    crate::ui::fit_phone(ctx, egui::Window::new("Feature Details"))
         .open(&mut open)
         .default_size([380.0, 320.0])
         .show(ctx, |ui| {

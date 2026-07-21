@@ -85,7 +85,7 @@ pub fn show(
     let mut go_home = false;
     let mut toggle_star: Option<String> = None;
 
-    egui::Window::new("Select Radar Site")
+    crate::ui::fit_phone(ctx, egui::Window::new("Select Radar Site"))
         .open(&mut open)
         .default_size([460.0, 520.0])
         .show(ctx, |ui| {

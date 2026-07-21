@@ -36,7 +36,7 @@ impl SettingsWindow {
         self.prev_open = self.open;
 
         let mut open = self.open;
-        egui::Window::new("Settings")
+        crate::ui::fit_phone(ctx, egui::Window::new("Settings"))
             .open(&mut open)
             .default_size([460.0, 340.0])
             .show(ctx, |ui| {
@@ -205,7 +205,9 @@ fn general_tab(ui: &mut egui::Ui, settings: &mut Settings) {
         ui.end_row();
 
         ui.label("UI scale");
-        ui.add(egui::Slider::new(&mut settings.ui_scale, 0.7..=1.6).step_by(0.05));
+        // Phones start denser: 0.5 × a 4.0 density factor ≈ a desktop-density canvas.
+let lo = if cfg!(target_os = "android") { 0.5 } else { 0.7 };
+ui.add(egui::Slider::new(&mut settings.ui_scale, lo..=1.6).step_by(0.05));
         ui.end_row();
     });
     ui.weak("UI scale also responds to Ctrl+= / Ctrl+- / Ctrl+0.");

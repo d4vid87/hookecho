@@ -19,7 +19,7 @@ pub struct PlacefileWindow {
 impl PlacefileWindow {
     pub fn show(&mut self, ctx: &egui::Context, settings: &mut Settings, status: &[PlacefileStatus]) {
         let mut open = self.open;
-        egui::Window::new("Placefile Manager")
+        crate::ui::fit_phone(ctx, egui::Window::new("Placefile Manager"))
             .open(&mut open)
             .default_size([520.0, 320.0])
             .show(ctx, |ui| {

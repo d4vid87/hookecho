@@ -17,7 +17,7 @@ pub struct MarkerWindow {
 impl MarkerWindow {
     pub fn show(&mut self, ctx: &egui::Context, settings: &mut Settings, icon_tex: &IconTextures) {
         let mut open = self.open;
-        egui::Window::new("Location Markers")
+        crate::ui::fit_phone(ctx, egui::Window::new("Location Markers"))
             .open(&mut open)
             .default_size([520.0, 320.0])
             .show(ctx, |ui| {

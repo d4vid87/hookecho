@@ -19,7 +19,7 @@ pub struct WarningPopup {
 /// Show the warning window. Returns `false` when it should close.
 pub fn show(ctx: &egui::Context, popup: &mut WarningPopup) -> bool {
     let mut open = true;
-    egui::Window::new("Active Warnings")
+    crate::ui::fit_phone(ctx, egui::Window::new("Active Warnings"))
         .open(&mut open)
         .default_size([460.0, 560.0])
         .show(ctx, |ui| match popup.selected {

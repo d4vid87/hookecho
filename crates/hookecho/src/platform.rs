@@ -1,0 +1,44 @@
+//! Platform glue that varies at runtime. Desktop: no-ops. Android: `android_main` stashes the
+//! `AndroidApp` handle here so every frame can feed the system-bar insets into egui's safe-area
+//! input — egui-winit 0.35 only wires that up for iOS, and the NativeActivity surface extends
+//! under the status bar and gesture bar. With the insets fed, egui's root Ui, panels, and
+//! windows avoid the system chrome natively.
+
+/// Feed system-bar insets into egui's safe-area input (no-op off-Android).
+#[cfg(not(target_os = "android"))]
+pub fn apply_safe_area(_ctx: &egui::Context, _raw_input: &mut egui::RawInput) {}
+
+#[cfg(target_os = "android")]
+mod android {
+    use std::sync::OnceLock;
+    use winit::platform::android::activity::AndroidApp;
+
+    static APP: OnceLock<AndroidApp> = OnceLock::new();
+
+    /// Stash the activity handle (called once from `android_main` before the event loop).
+    pub fn set_app(app: AndroidApp) {
+        let _ = APP.set(app);
+    }
+
+    /// Convert the activity's content rect (pixels, relative to the full window) into egui
+    /// safe-area insets (points). No-op until the first layout callback delivers a real rect.
+    pub fn apply_safe_area(ctx: &egui::Context, raw_input: &mut egui::RawInput) {
+        let Some(app) = APP.get() else { return };
+        let rect = app.content_rect();
+        if rect.bottom <= rect.top {
+            return; // content rect not delivered yet
+        }
+        let Some(win) = app.native_window() else { return };
+        let (w, h) = (win.width() as f32, win.height() as f32);
+        let ppp = ctx.pixels_per_point();
+        raw_input.safe_area_insets = Some(egui::SafeAreaInsets(egui::epaint::MarginF32 {
+            left: (rect.left as f32 / ppp).max(0.0),
+            right: ((w - rect.right as f32) / ppp).max(0.0),
+            top: (rect.top as f32 / ppp).max(0.0),
+            bottom: ((h - rect.bottom as f32) / ppp).max(0.0),
+        }));
+    }
+}
+
+#[cfg(target_os = "android")]
+pub use android::{apply_safe_area, set_app};

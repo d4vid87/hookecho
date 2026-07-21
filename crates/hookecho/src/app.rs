@@ -790,7 +790,8 @@ impl HookEchoApp {
             afd_rx: None,
             show_range_rings: false,
             show_radar_sites: true,
-            show_toolbox: true,
+            // Phone screens are ~360 pt wide — the toolbox starts as a hidden drawer there (☰ toggles).
+show_toolbox: !cfg!(target_os = "android"),
             show_spotters: false,
             spotters: Vec::new(),
             spotters_last_fetch: None,
@@ -1452,7 +1453,7 @@ impl HookEchoApp {
             return;
         }
         let mut open = self.climo_open;
-        egui::Window::new("Tornado climatology")
+        crate::ui::fit_phone(ctx, egui::Window::new("Tornado climatology"))
             .open(&mut open)
             .default_width(360.0)
             .show(ctx, |ui| {
@@ -3390,6 +3391,10 @@ impl HookEchoApp {
 
     fn menu_bar(&mut self, ui: &mut egui::Ui) {
         egui::MenuBar::new().ui(ui, |ui| {
+            // Touch affordance for the toolbox drawer (F7 has no key on a phone).
+            if cfg!(target_os = "android") && ui.button("☰").clicked() {
+                self.show_toolbox = !self.show_toolbox;
+            }
             ui.menu_button("File", |ui| {
                 if ui.button("Settings…").clicked() {
                     self.settings_window.open = true;
@@ -4219,6 +4224,11 @@ fn humanize(secs: i64) -> String {
 }
 
 impl eframe::App for HookEchoApp {
+    fn raw_input_hook(&mut self, ctx: &egui::Context, raw_input: &mut egui::RawInput) {
+        // Android: feed the status-bar / gesture-bar insets so no UI draws under system chrome.
+        crate::platform::apply_safe_area(ctx, raw_input);
+    }
+
     fn ui(&mut self, root: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = root.ctx().clone();
         let ctx = &ctx;
@@ -4695,7 +4705,7 @@ impl eframe::App for HookEchoApp {
             if let Some(tex) = self.cappi_tex.clone() {
                 open = ui::cappi_window::show(ctx, &tex, &mut self.cappi_alt_km, 300.0);
             } else {
-                egui::Window::new("CAPPI slice").open(&mut open).show(ctx, |ui| {
+                crate::ui::fit_phone(ctx, egui::Window::new("CAPPI slice")).open(&mut open).show(ctx, |ui| {
                     ui.weak("No volume loaded in the active pane.");
                 });
             }

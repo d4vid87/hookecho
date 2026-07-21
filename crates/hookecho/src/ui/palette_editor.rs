@@ -34,7 +34,7 @@ impl PaletteEditor {
         }
 
         let mut open = self.open;
-        egui::Window::new("Color-Table Editor")
+        crate::ui::fit_phone(ctx, egui::Window::new("Color-Table Editor"))
             .open(&mut open)
             .default_size([460.0, 520.0])
             .show(ctx, |ui| {

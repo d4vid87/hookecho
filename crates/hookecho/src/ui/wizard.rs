@@ -37,13 +37,14 @@ pub fn show(
     }
     let mut finished = None;
     let mut open = true;
-    egui::Window::new("Welcome to Hook Echo-WX")
+    crate::ui::fit_phone(ctx, egui::Window::new("Welcome to Hook Echo-WX"))
         .open(&mut open)
         .collapsible(false)
         .resizable(false)
         .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
         .show(ctx, |ui| {
-            ui.set_width(420.0);
+            // Full width on desktop; on a phone, whatever fits (fit_phone caps the window).
+            ui.set_width(420.0_f32.min(ctx.content_rect().width() - 40.0));
             match wiz.step {
                 0 => page_welcome(ui),
                 1 => page_site(ui, wiz, settings),

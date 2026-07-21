@@ -17,7 +17,7 @@ pub fn show(
     nz: u32,
 ) {
     let mut keep = *open;
-    egui::Window::new("3D Reflectivity")
+    crate::ui::fit_phone(ctx, egui::Window::new("3D Reflectivity"))
         .open(&mut keep)
         .default_size([480.0, 420.0])
         .show(ctx, |ui| {

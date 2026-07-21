@@ -10,7 +10,7 @@ const KMH_TO_MPH: f32 = 0.621_371;
 /// Returns `false` when it should close.
 pub fn show(ctx: &egui::Context, data: Option<&Result<StationObs, String>>) -> bool {
     let mut open = true;
-    egui::Window::new("Sensors")
+    crate::ui::fit_phone(ctx, egui::Window::new("Sensors"))
         .open(&mut open)
         .default_size([340.0, 520.0])
         .show(ctx, |ui| match data {
