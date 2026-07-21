@@ -4470,6 +4470,36 @@ impl eframe::App for HookEchoApp {
 
         self.drive_obs_tour();
 
+        // eframe's root Ui spans the full viewport (deliberately edge-to-edge), so panels ignore
+        // egui's safe area; reserve the system-bar strips ourselves. Floating windows/areas
+        // constrain to content_rect natively. Zero-size off-Android (insets only fed there).
+        let vr = ctx.viewport_rect();
+        let cr = ctx.content_rect();
+        if cr.top() > vr.top() {
+            egui::Panel::top("safe_top")
+                .exact_size(cr.top() - vr.top())
+                .frame(egui::Frame::NONE)
+                .show(root, |_| {});
+        }
+        if vr.bottom() > cr.bottom() {
+            egui::Panel::bottom("safe_bottom")
+                .exact_size(vr.bottom() - cr.bottom())
+                .frame(egui::Frame::NONE)
+                .show(root, |_| {});
+        }
+        if cr.left() > vr.left() {
+            egui::Panel::left("safe_left")
+                .exact_size(cr.left() - vr.left())
+                .frame(egui::Frame::NONE)
+                .show(root, |_| {});
+        }
+        if vr.right() > cr.right() {
+            egui::Panel::right("safe_right")
+                .exact_size(vr.right() - cr.right())
+                .frame(egui::Frame::NONE)
+                .show(root, |_| {});
+        }
+
         if !self.obs_mode {
             egui::Panel::top("menu_bar").show(root, |ui| self.menu_bar(ui));
         }
