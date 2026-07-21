@@ -5,8 +5,15 @@ members = ["crates/nexrad-level3", "crates/wxdata", "crates/hookecho"]
 # Vendored gribberish 1.5.0 with a one-line fix to its 8-bit PNG unpack (upstream always read a
 # u16, overrunning MRMS rotation-track / AzShear grids). See vendor/gribberish/src/templates/
 # data_representation/png_template.rs.
+# Vendored nexrad-data 1.0.0-rc.7: its reqwest 0.13 forces the `rustls` feature, which on Android
+# selects rustls-platform-verifier — that needs a bundled Kotlin CertificateVerifier class our
+# hasCode=false NativeActivity APK can't ship (and panics uninitialized). The vendored copy hands
+# reqwest a preconfigured webpki-roots TLS config instead (grep `hookecho patch:` in
+# vendor/nexrad-data/src/aws/client.rs), matching our main reqwest 0.12. Desktop is unaffected.
+# Patched (not a workspace member) so its own tests/benches stay out of --workspace/--all-targets.
 [patch.crates-io]
 gribberish = { path = "vendor/gribberish" }
+nexrad-data = { path = "vendor/nexrad-data" }
 
 # Release builds strip symbols and use thin LTO — wgpu+egui debug info dominates size, and the
 # AppImage ships the release binary. Dev builds are untouched.

@@ -8,6 +8,8 @@ repository.workspace = true
 
 [dependencies]
 nexrad-level3 = { path = "../nexrad-level3" }
+# Vendored via [patch.crates-io] in the workspace Cargo.toml — see the note there. Its HTTP
+# client is patched to use webpki-roots TLS so AWS S3 fetches work on Android.
 nexrad-data = "1.0.0-rc.7"
 nexrad-model = "1.0.0-rc.2"
 anyhow.workspace = true

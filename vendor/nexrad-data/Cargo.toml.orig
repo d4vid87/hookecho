@@ -1,0 +1,62 @@
+[package]
+name = "nexrad-data"
+version = "1.0.0-rc.7"
+description = "Data access for NEXRAD weather radar files and AWS integration."
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[features]
+default = ["aws", "nexrad-model"]
+# Basic AWS S3 access (WASM-compatible)
+aws = ["reqwest", "xml", "once_cell"]
+# Real-time polling functionality (requires tokio, not WASM-compatible)
+aws-polling = ["aws", "tokio", "futures"]
+# Parallel decompression and decoding using rayon
+parallel = ["rayon"]
+
+[dependencies]
+log = { workspace = true }
+thiserror = { workspace = true }
+chrono = { workspace = true }
+zerocopy = { workspace = true }
+bzip2 = { workspace = true }
+flate2 = { workspace = true }
+nexrad-decode = { version = "1.0.0-rc.3", path = "../nexrad-decode" }
+reqwest = { workspace = true, optional = true }
+xml = { workspace = true, optional = true }
+nexrad-model = { version = "1.0.0-rc.2", path = "../nexrad-model", optional = true }
+rayon = { workspace = true, optional = true }
+once_cell = { workspace = true, optional = true }
+futures = { workspace = true, optional = true }
+
+# tokio is only available on non-WASM targets
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+tokio = { workspace = true, optional = true }
+
+[dev-dependencies]
+clap = { workspace = true }
+env_logger = { workspace = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+tokio = { workspace = true }
+criterion = { workspace = true }
+
+[[example]]
+name = "realtime"
+path = "examples/realtime.rs"
+required-features = ["aws-polling"]
+
+[[example]]
+name = "chunk_iterator"
+path = "examples/chunk_iterator.rs"
+required-features = ["aws"]
+
+[[bench]]
+name = "scan"
+harness = false
+required-features = ["nexrad-model"]
