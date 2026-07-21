@@ -3,6 +3,11 @@
 //! UI code only mutates the active [`MapView`]; a single per-frame sync step turns those
 //! mutations into GPU uploads and background fetches, so buttons and hotkeys share one path.
 
+/// Touch-first Android chrome (top bar, bottom dock, slide-up sheets), replacing the desktop
+/// menu bar / left toolbox / status bar / right alert dock. Only the chrome differs; the map,
+/// windows, and every data path are shared.
+mod mobile;
+
 use crate::colormap::{ColorTable, Palettes};
 use crate::hotkeys::{self, Action};
 use crate::overlay_build;
@@ -538,6 +543,8 @@ pub struct HookEchoApp {
     show_radar_sites: bool,
     /// Show the left toolbox panel. Collapse it (View ▸ Toolbox / F9) for a full-width radar.
     show_toolbox: bool,
+    /// Android only: which slide-up sheet the mobile chrome is showing (see `app::mobile`).
+    mobile_sheet: mobile::MobileSheet,
     /// Spotter Network positions + toggle + refresh clock (filtered to active site at draw).
     show_spotters: bool,
     spotters: Vec<wxdata::spotters::Spotter>,
@@ -798,6 +805,7 @@ pending_paste: None,
             show_radar_sites: true,
             // Phone screens are ~360 pt wide — the toolbox starts as a hidden drawer there (☰ toggles).
 show_toolbox: !cfg!(target_os = "android"),
+mobile_sheet: mobile::MobileSheet::None,
             show_spotters: false,
             spotters: Vec::new(),
             spotters_last_fetch: None,
@@ -4500,42 +4508,49 @@ impl eframe::App for HookEchoApp {
                 .show(root, |_| {});
         }
 
-        if !self.obs_mode {
-            egui::Panel::top("menu_bar").show(root, |ui| self.menu_bar(ui));
-        }
-
+        // Chrome: touch-first on Android (top bar + dock + slide-up sheets), desktop otherwise
+        // (menu bar + left toolbox). Both funnel into the same `ToolboxActions` handling below.
         let mut actions = ui::toolbox::ToolboxActions::default();
-        if !self.obs_mode && self.show_toolbox {
-        egui::Panel::left("toolbox")
-            .resizable(true)
-            .default_size(240.0)
-            .show(root, |ui| {
-                let l3_site = self.l3grid_site.clone();
-                actions = ui::toolbox::show(
-                    ui,
-                    &mut self.views[self.active],
-                    &mut self.settings,
-                    &mut self.filters,
-                    &mut self.fields,
-                    &mut self.rotation_minutes,
-                    &mut self.hrrr_fcst_hour,
-                    self.hrrr_valid,
-                    &mut self.env_cape_ml,
-                    &mut self.env_srh_km,
-                    l3_site.as_deref(),
-                    &mut self.show_sensors,
-                    &mut self.show_hodo,
-                    &mut self.show_alert_panel,
-                    &mut self.show_storm_reports,
-                    &mut self.show_spotters,
-                    &mut self.show_probsevere,
-                    &mut self.show_radar_sites,
-                    &mut self.show_metar,
-                    &mut self.show_tropical,
-                    &mut self.show_aviation,
-                    &mut self.show_range_rings,
-                );
-            });
+        if cfg!(target_os = "android") {
+            if !self.obs_mode {
+                actions = self.mobile_chrome(root, ctx);
+            }
+        } else {
+            if !self.obs_mode {
+                egui::Panel::top("menu_bar").show(root, |ui| self.menu_bar(ui));
+            }
+            if !self.obs_mode && self.show_toolbox {
+                egui::Panel::left("toolbox")
+                    .resizable(true)
+                    .default_size(240.0)
+                    .show(root, |ui| {
+                        let l3_site = self.l3grid_site.clone();
+                        actions = ui::toolbox::show(
+                            ui,
+                            &mut self.views[self.active],
+                            &mut self.settings,
+                            &mut self.filters,
+                            &mut self.fields,
+                            &mut self.rotation_minutes,
+                            &mut self.hrrr_fcst_hour,
+                            self.hrrr_valid,
+                            &mut self.env_cape_ml,
+                            &mut self.env_srh_km,
+                            l3_site.as_deref(),
+                            &mut self.show_sensors,
+                            &mut self.show_hodo,
+                            &mut self.show_alert_panel,
+                            &mut self.show_storm_reports,
+                            &mut self.show_spotters,
+                            &mut self.show_probsevere,
+                            &mut self.show_radar_sites,
+                            &mut self.show_metar,
+                            &mut self.show_tropical,
+                            &mut self.show_aviation,
+                            &mut self.show_range_rings,
+                        );
+                    });
+            }
         }
         if actions.open_site_dialog && self.site_dialog.is_none() {
             self.site_dialog = Some(Default::default());
@@ -4760,19 +4775,21 @@ impl eframe::App for HookEchoApp {
         }
         self.sync_overlay();
 
-        if !self.obs_mode {
-            egui::Panel::bottom("status_bar").show(root, |ui| self.status_bar(ui));
-        }
-
-        // Active-alerts side panel (right dock): lists alerts overlapping the active view.
-        if self.show_alert_panel && !self.obs_mode {
-            let bounds = self.view_bounds();
-            if let Some((id, lon, lat)) = ui::alert_panel::show(root, self.active_alert_features(), bounds) {
-                // Fly the active camera to the alert and open its bulletin.
-                let cam = &mut self.views[self.active].camera;
-                cam.center = crate::render::mercator::lonlat_to_world(lon, lat);
-                cam.zoom = cam.zoom.max(8.0);
-                self.open_alert_popup(&id);
+        // Desktop status bar + right-dock alert panel. On Android the top bar shows the volume
+        // age and the alerts live in the bell's slide-up sheet (see `app::mobile`).
+        if !cfg!(target_os = "android") {
+            if !self.obs_mode {
+                egui::Panel::bottom("status_bar").show(root, |ui| self.status_bar(ui));
+            }
+            if self.show_alert_panel && !self.obs_mode {
+                let bounds = self.view_bounds();
+                if let Some((id, lon, lat)) = ui::alert_panel::show(root, self.active_alert_features(), bounds) {
+                    // Fly the active camera to the alert and open its bulletin.
+                    let cam = &mut self.views[self.active].camera;
+                    cam.center = crate::render::mercator::lonlat_to_world(lon, lat);
+                    cam.zoom = cam.zoom.max(8.0);
+                    self.open_alert_popup(&id);
+                }
             }
         }
 
