@@ -430,6 +430,10 @@ pub struct HookEchoApp {
     cell_trends: std::collections::HashMap<String, Vec<ui::cell_window::CellSample>>,
     /// Last `ui_scale` pushed to egui, to tell slider changes apart from keyboard zoom.
     ui_scale_applied: f32,
+    /// Android: whether we've asked for the soft keyboard (tracks egui's wants_keyboard_input).
+    ime_shown: bool,
+    /// Android: clipboard text read via JNI, queued for injection as an egui Paste event.
+    pending_paste: Option<String>,
     /// Loaded placefile overlays (reconciled from `settings.placefiles` by URL).
     placefiles: Vec<LoadedPlacefile>,
     placefile_window: ui::placefile_window::PlacefileWindow,
@@ -717,6 +721,8 @@ impl HookEchoApp {
             warning_popup: None,
             storm_cells: Vec::new(),
             ui_scale_applied: -1.0,
+ime_shown: false,
+pending_paste: None,
             placefiles: Vec::new(),
             placefile_window: Default::default(),
             last_viewport: (1000.0, 800.0),
@@ -4227,6 +4233,11 @@ impl eframe::App for HookEchoApp {
     fn raw_input_hook(&mut self, ctx: &egui::Context, raw_input: &mut egui::RawInput) {
         // Android: feed the status-bar / gesture-bar insets so no UI draws under system chrome.
         crate::platform::apply_safe_area(ctx, raw_input);
+        // Android: clipboard text fetched by the paste bar lands as a real egui Paste event, so
+        // the focused text field inserts it exactly like Ctrl+V would.
+        if let Some(text) = self.pending_paste.take() {
+            raw_input.events.push(egui::Event::Paste(text));
+        }
     }
 
     fn ui(&mut self, root: &mut egui::Ui, _frame: &mut eframe::Frame) {
@@ -4838,6 +4849,28 @@ impl eframe::App for HookEchoApp {
             }
             self.settings.save();
             self.saved = self.settings.clone();
+        }
+
+        // Android text input: summon/dismiss the soft keyboard as egui focus moves in/out of
+        // text fields, and float a Paste button (the system clipboard is unreachable from a
+        // NativeActivity keyboard otherwise — egui gets the text as a Paste event next frame).
+        if cfg!(target_os = "android") {
+            let wants = ctx.egui_wants_keyboard_input();
+            if wants != self.ime_shown {
+                crate::platform::show_soft_input(wants);
+                self.ime_shown = wants;
+            }
+            if wants {
+                egui::Area::new(egui::Id::new("android_paste_bar"))
+                    .anchor(egui::Align2::RIGHT_TOP, [-8.0, 64.0])
+                    .show(ctx, |ui| {
+                        egui::Frame::popup(ui.style()).show(ui, |ui| {
+                            if ui.button("Paste").clicked() {
+                                self.pending_paste = crate::platform::clipboard_text();
+                            }
+                        });
+                    });
+            }
         }
 
         // Idle heartbeat so clocks (volume age, countdowns) tick without input. Data arrivals and

@@ -64,3 +64,6 @@ ksni = { version = "0.3", features = ["blocking"] }
 eframe = { version = "0.35", default-features = false, features = ["android-native-activity"] }
 winit = { version = "0.30", features = ["android-native-activity"] }
 android_logger = "0.14"
+# System clipboard bridge (paste into egui text fields); the soft-keyboard calls go through
+# android-activity's built-in helpers instead.
+jni = "0.21"
