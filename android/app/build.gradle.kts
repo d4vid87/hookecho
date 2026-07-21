@@ -30,4 +30,24 @@ android {
             isMinifyEnabled = false
         }
     }
+
+    // Stable APK signature across CI runs: without this, every workflow run generates a fresh
+    // debug keystore and phones refuse the update (INSTALL_FAILED_UPDATE_INCOMPATIBLE). CI
+    // materializes the keystore from repo secrets and points these env vars at it; local builds
+    // without the vars keep the default debug signing.
+    val ksFile = System.getenv("HOOKECHO_KEYSTORE").takeUnless { it.isNullOrEmpty() }
+    val ksPass = System.getenv("HOOKECHO_KEYSTORE_PASS").takeUnless { it.isNullOrEmpty() }
+    if (ksFile != null && ksPass != null) {
+        signingConfigs {
+            create("stable") {
+                storeFile = file(ksFile)
+                storePassword = ksPass
+                keyAlias = "hookecho"
+                keyPassword = ksPass
+                storeType = "PKCS12"
+            }
+        }
+        buildTypes.getByName("debug").signingConfig = signingConfigs.getByName("stable")
+        buildTypes.getByName("release").signingConfig = signingConfigs.getByName("stable")
+    }
 }
