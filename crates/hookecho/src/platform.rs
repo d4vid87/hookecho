@@ -21,21 +21,29 @@ mod android {
     }
 
     /// Convert the activity's content rect (pixels, relative to the full window) into egui
-    /// safe-area insets (points). No-op until the first layout callback delivers a real rect.
+    /// safe-area insets (points). On gesture-nav phones the system bars are transparent
+    /// overlays, so the content rect legitimately reports full-screen — floor the top/bottom at
+    /// the standard status-bar / gesture-bar heights so the UI clears them anyway.
+    /// `// ponytail: real per-device insets need a JNI WindowInsets query — floors cover v1.`
     pub fn apply_safe_area(ctx: &egui::Context, raw_input: &mut egui::RawInput) {
         let Some(app) = APP.get() else { return };
         let rect = app.content_rect();
-        if rect.bottom <= rect.top {
-            return; // content rect not delivered yet
-        }
-        let Some(win) = app.native_window() else { return };
-        let (w, h) = (win.width() as f32, win.height() as f32);
         let ppp = ctx.pixels_per_point();
+        let (mut left, mut right, mut top, mut bottom) = (0.0f32, 0.0f32, 0.0f32, 0.0f32);
+        if rect.bottom > rect.top {
+            if let Some(win) = app.native_window() {
+                let (w, h) = (win.width() as f32, win.height() as f32);
+                left = (rect.left as f32 / ppp).max(0.0);
+                right = ((w - rect.right as f32) / ppp).max(0.0);
+                top = (rect.top as f32 / ppp).max(0.0);
+                bottom = ((h - rect.bottom as f32) / ppp).max(0.0);
+            }
+        }
         raw_input.safe_area_insets = Some(egui::SafeAreaInsets(egui::epaint::MarginF32 {
-            left: (rect.left as f32 / ppp).max(0.0),
-            right: ((w - rect.right as f32) / ppp).max(0.0),
-            top: (rect.top as f32 / ppp).max(0.0),
-            bottom: ((h - rect.bottom as f32) / ppp).max(0.0),
+            left,
+            right,
+            top: top.max(28.0),
+            bottom: bottom.max(20.0),
         }));
     }
 }
