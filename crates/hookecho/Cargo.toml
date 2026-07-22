@@ -44,6 +44,7 @@ geo-types = "0.7"
 flate2.workspace = true
 rodio = { version = "0.19", default-features = false, features = ["wav", "mp3", "vorbis", "flac"] }
 glam = { version = "0.29", features = ["bytemuck"] }
+egui-phosphor = "0.13.0"
 
 # Native file dialogs — desktop only. rfd has no Android backend, and Android replaces it with a
 # fixed exports dir + Storage-Access-Framework (deferred); see `dialog.rs`.

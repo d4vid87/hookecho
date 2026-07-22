@@ -630,6 +630,13 @@ fn pane_rects(r: egui::Rect, n: usize) -> Vec<egui::Rect> {
 
 impl HookEchoApp {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
+        // Bundle Phosphor icon glyphs into the proportional font family so the mobile
+        // RadarOmega-style chrome (tool dock, menu rows) can draw line icons — egui's default
+        // face has none. Cheap; desktop uses them too (no-op if unreferenced).
+        let mut fonts = egui::FontDefinitions::default();
+        egui_phosphor::add_to_fonts(&mut fonts, egui_phosphor::Variant::Regular);
+        cc.egui_ctx.set_fonts(fonts);
+
         let rt = tokio::runtime::Builder::new_multi_thread()
             .enable_all()
             .build()
@@ -3412,20 +3419,12 @@ mobile_sheet: mobile::MobileSheet::None,
             }
         }
 
-        if view.show_legend && view.volume.is_some() {
+        // The boxed legend is desktop-only; Android draws a full-width color scale in the mobile
+        // chrome (see `app::mobile`), so drawing both would be redundant.
+        if view.show_legend && view.volume.is_some() && !cfg!(target_os = "android") {
             let table = self.palettes.table(view.moment);
             let (df, dl) = display_units(view.moment, &self.settings);
-            // On Android the floating top bar sits over the map's top edge; drop the legend clear
-            // of it (safe-area inset + bar height) so the two don't overlap.
-            let lrect = if cfg!(target_os = "android") {
-                let inset_top = (ctx.content_rect().top() - ctx.viewport_rect().top()).max(0.0);
-                let mut r = prect;
-                r.min.y += inset_top + 66.0;
-                r
-            } else {
-                prect
-            };
-            ui::legend::draw(&painter, lrect, view.moment, table, view.active_threshold(), df, dl);
+            ui::legend::draw(&painter, prect, view.moment, table, view.active_threshold(), df, dl);
         }
     }
 
