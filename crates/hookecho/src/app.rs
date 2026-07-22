@@ -549,6 +549,8 @@ pub struct HookEchoApp {
     show_toolbox: bool,
     /// Android only: which slide-up sheet the mobile chrome is showing (see `app::mobile`).
     mobile_sheet: mobile::MobileSheet,
+    /// Android: hide all floating chrome to view the whole radar (toggled by the eye button).
+    mobile_chrome_hidden: bool,
     /// Spotter Network positions + toggle + refresh clock (filtered to active site at draw).
     show_spotters: bool,
     spotters: Vec<wxdata::spotters::Spotter>,
@@ -605,11 +607,21 @@ fn pane_rects(r: egui::Rect, n: usize) -> Vec<egui::Rect> {
     match n {
         0 | 1 => vec![r],
         2 => {
-            let w = (r.width() - gap) / 2.0;
-            vec![
-                egui::Rect::from_min_size(r.min, egui::vec2(w, r.height())),
-                egui::Rect::from_min_size(egui::pos2(r.min.x + w + gap, r.min.y), egui::vec2(w, r.height())),
-            ]
+            // Stack top/bottom when the viewport is taller than wide (portrait phone), else split
+            // left/right (wide desktop). Gives the horizontal split the user wants on mobile.
+            if r.height() >= r.width() {
+                let h = (r.height() - gap) / 2.0;
+                vec![
+                    egui::Rect::from_min_size(r.min, egui::vec2(r.width(), h)),
+                    egui::Rect::from_min_size(egui::pos2(r.min.x, r.min.y + h + gap), egui::vec2(r.width(), h)),
+                ]
+            } else {
+                let w = (r.width() - gap) / 2.0;
+                vec![
+                    egui::Rect::from_min_size(r.min, egui::vec2(w, r.height())),
+                    egui::Rect::from_min_size(egui::pos2(r.min.x + w + gap, r.min.y), egui::vec2(w, r.height())),
+                ]
+            }
         }
         _ => {
             let w = (r.width() - gap) / 2.0;
@@ -818,6 +830,7 @@ paste_target: None,
             // Phone screens are ~360 pt wide — the toolbox starts as a hidden drawer there (☰ toggles).
 show_toolbox: !cfg!(target_os = "android"),
 mobile_sheet: mobile::MobileSheet::None,
+            mobile_chrome_hidden: false,
             show_spotters: false,
             spotters: Vec::new(),
             spotters_last_fetch: None,

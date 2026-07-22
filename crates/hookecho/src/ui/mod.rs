@@ -9,8 +9,12 @@
 pub(crate) fn fit_phone<'a>(ctx: &egui::Context, w: egui::Window<'a>) -> egui::Window<'a> {
     if cfg!(target_os = "android") {
         let r = ctx.content_rect();
-        w.max_width(r.width() - 12.0)
-            .max_height(r.height() * 0.82)
+        // `resizable(false)` is load-bearing: a resizable window keeps a stored width from a wider
+        // session (or grows to its content) and spills off both screen edges — the reported cell
+        // popup clipping. Pinning width + disabling resize keeps every popup inside the screen.
+        w.resizable(false)
+            .max_width(r.width() - 16.0)
+            .max_height(r.height() * 0.80)
             .vscroll(true)
             .anchor(egui::Align2::CENTER_TOP, [0.0, r.top() + 6.0])
     } else {

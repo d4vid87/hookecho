@@ -136,6 +136,21 @@ impl super::HookEchoApp {
         let inset_top = (content.top() - vr.top()).max(0.0);
         let inset_bottom = (vr.bottom() - content.bottom()).max(0.0);
 
+        // Hide/show all chrome (view the whole radar). This button is always drawn; when hidden it
+        // is the only floating control, so the map is fully visible.
+        egui::Area::new(Id::new("m_chrome_toggle"))
+            .anchor(Align2::RIGHT_TOP, vec2(-10.0, inset_top + 66.0))
+            .show(ctx, |ui| {
+                let g = if self.mobile_chrome_hidden { ph::EYE } else { ph::EYE_SLASH };
+                if square_btn(ui, g, self.mobile_chrome_hidden, OMEGA_ORANGE).clicked() {
+                    self.mobile_chrome_hidden = !self.mobile_chrome_hidden;
+                    self.mobile_sheet = MobileSheet::None;
+                }
+            });
+        if self.mobile_chrome_hidden {
+            return actions;
+        }
+
         // Owned alert rows (decoupled from `&self`) so the Alerts drawer can list + fly to them.
         let bounds = self.view_bounds();
         let malerts: Vec<MAlert> = {
