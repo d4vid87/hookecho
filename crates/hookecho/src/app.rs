@@ -118,7 +118,8 @@ enum OverlayMsg {
 /// One overlay data source to fetch.
 #[derive(Clone)]
 enum OverlaySource {
-    Alerts,
+    /// NWS alerts; the `Option<(lat, lon)>` scopes zone-only alert resolution to the active radar.
+    Alerts(Option<(f64, f64)>),
     Mds,
     Outlook(u8, wxdata::spc::OutlookKind),
     Cells(String),
@@ -152,7 +153,7 @@ enum OverlaySource {
 impl OverlaySource {
     async fn fetch(self, http: &reqwest::Client) -> anyhow::Result<OverlayMsg> {
         Ok(match self {
-            OverlaySource::Alerts => OverlayMsg::Alerts(alerts::fetch_active(http).await?),
+            OverlaySource::Alerts(near) => OverlayMsg::Alerts(alerts::fetch_active(http, near).await?),
             OverlaySource::Mds => OverlayMsg::Mds(wxdata::spc::fetch_mesoscale_discussions(http).await?),
             OverlaySource::Outlook(day, kind) => {
                 OverlayMsg::Outlook(day, wxdata::spc::fetch_outlook_kind(http, day, kind).await?)
@@ -876,7 +877,14 @@ mobile_sheet: mobile::MobileSheet::None,
 
     fn fetch_overlays(&mut self, ctx: &egui::Context) {
         self.overlay_last_fetch = Some(Instant::now());
-        self.spawn_overlay(ctx, OverlaySource::Alerts);
+        // Scope zone-only alert resolution (heat, advisories) to the active radar so the site's own
+        // alerts always resolve — see `alerts::fetch_active`.
+        let near = self.views[self.active]
+            .site
+            .as_deref()
+            .and_then(wxdata::sites::site_by_id)
+            .map(|s| (s.latitude as f64, s.longitude as f64));
+        self.spawn_overlay(ctx, OverlaySource::Alerts(near));
         self.spawn_overlay(ctx, OverlaySource::Mds);
         // Only fetch the SPC outlook the user has selected (off = day 0 fetches nothing).
         if (1..=3).contains(&self.filters.outlook_day) {
@@ -2628,8 +2636,12 @@ mobile_sheet: mobile::MobileSheet::None,
 
         // --- Tiles (shared caches, per-pane visible list) ---
         let cam = self.views[idx].camera;
+        // High-DPI screens render a 256-px raster tile across `ppp`× more physical pixels, which
+        // looks blurry (bad on the S24's ~3.75× density). Fetch `round(log2(ppp))` levels deeper so
+        // tiles land near 1:1. Capped at +2 to bound the tile count. Desktop (ppp 1) → +0.
+        let raster_bias = ctx.pixels_per_point().max(1.0).log2().round().clamp(0.0, 2.0) as f64;
         let visible = if is_raster {
-            let vis = self.tiles.visible(&cam, vp);
+            let vis = self.tiles.visible(&cam, vp, raster_bias);
             self.tiles.request_missing(&vis);
             vis
         } else {
@@ -3403,11 +3415,12 @@ mobile_sheet: mobile::MobileSheet::None,
         if view.show_legend && view.volume.is_some() {
             let table = self.palettes.table(view.moment);
             let (df, dl) = display_units(view.moment, &self.settings);
-            // On Android the floating top bar sits over the map's top edge; drop the legend below
-            // it so the two don't overlap.
+            // On Android the floating top bar sits over the map's top edge; drop the legend clear
+            // of it (safe-area inset + bar height) so the two don't overlap.
             let lrect = if cfg!(target_os = "android") {
+                let inset_top = (ctx.content_rect().top() - ctx.viewport_rect().top()).max(0.0);
                 let mut r = prect;
-                r.min.y += 70.0;
+                r.min.y += inset_top + 66.0;
                 r
             } else {
                 prect

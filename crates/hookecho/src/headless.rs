@@ -43,7 +43,7 @@ fn national_basemap(
             let settings = crate::settings::Settings::load();
             let mut tm = TileManager::new(rt.handle().clone());
             tm.set_style(style);
-            let vis = tm.visible(camera, vp);
+            let vis = tm.visible(camera, vp, 0.0);
             let tiles = rt.block_on(crate::tiles::fetch_visible(
                 &client, style, &vis, &settings.mapbox_key, &settings.maptiler_key,
             ));
@@ -51,7 +51,7 @@ fn national_basemap(
             return (tiles, vis, Vec::new(), Vec::new());
         }
     }
-    let vis = crate::tiles::tile_cover(camera, vp, 14);
+    let vis = crate::tiles::tile_cover(camera, vp, 14, 0.0);
     let tiles = rt.block_on(async {
         let template = crate::vector_tiles::fetch_tilejson(&client, None).await?;
         Some(crate::vector_tiles::fetch_visible_vector(&client, &template, true, camera.zoom, &vis).await.0)
@@ -146,7 +146,7 @@ pub fn run(
     let (new_tiles, visible) = if basemap.is_raster() {
         let mut tm = TileManager::new(rt.handle().clone());
         tm.set_style(basemap); // so the zoom cap matches this source (GOES layers top out early)
-        let vis = tm.visible(&camera, vp);
+        let vis = tm.visible(&camera, vp, 0.0);
         let tiles = rt.block_on(crate::tiles::fetch_visible(
             &client, basemap, &vis, &settings.mapbox_key, &settings.maptiler_key,
         ));
@@ -158,7 +158,7 @@ pub fn run(
     let (new_vector_tiles, visible_vector) = if is_vector {
         let dark = basemap == BasemapStyle::Dark;
         let tess_zoom = camera.zoom;
-        let vis = crate::tiles::tile_cover(&camera, vp, 14);
+        let vis = crate::tiles::tile_cover(&camera, vp, 14, 0.0);
         let (tiles, labels) = rt.block_on(async {
             let template = crate::vector_tiles::fetch_tilejson(&client, None)
                 .await
@@ -388,7 +388,7 @@ pub fn run_alerts() -> anyhow::Result<()> {
     let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
     let feats = rt.block_on(async {
         let http = reqwest::Client::new();
-        wxdata::alerts::fetch_active(&http).await
+        wxdata::alerts::fetch_active(&http, None).await
     })?;
     // Dedupe by alert id (MultiPolygon alerts emit one feature per part).
     let mut seen = std::collections::HashSet::new();
@@ -569,7 +569,7 @@ pub fn run_overlay(out_path: &str) -> anyhow::Result<()> {
 
     let (alerts, outlook) = rt.block_on(async {
         let client = reqwest::Client::new();
-        let alerts = wxdata::alerts::fetch_active(&client).await.unwrap_or_default();
+        let alerts = wxdata::alerts::fetch_active(&client, None).await.unwrap_or_default();
         let outlook = wxdata::spc::fetch_outlook(&client, 1).await.unwrap_or_default();
         (alerts, outlook)
     });

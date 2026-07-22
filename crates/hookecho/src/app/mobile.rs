@@ -33,9 +33,9 @@ struct MAlert {
 fn glass(alpha: u8) -> Frame {
     Frame::new()
         .fill(Color32::from_rgba_unmultiplied(16, 18, 24, alpha))
-        .corner_radius(16.0)
-        .inner_margin(Margin::symmetric(10, 8))
-        .stroke(Stroke::new(1.0, Color32::from_rgba_unmultiplied(255, 255, 255, 20)))
+        .corner_radius(18.0)
+        .inner_margin(Margin::symmetric(12, 8))
+        .stroke(Stroke::new(1.0, Color32::from_rgba_unmultiplied(255, 255, 255, 24)))
 }
 
 /// A round-ish 42px control button (hamburger, gear, playback…).
@@ -49,7 +49,7 @@ fn round_btn(ui: &mut egui::Ui, glyph: &str, active: bool, accent: Color32) -> e
         egui::Button::new(RichText::new(glyph).size(18.0).color(fg))
             .min_size(vec2(42.0, 42.0))
             .fill(bg)
-            .corner_radius(11.0),
+            .corner_radius(13.0),
     )
 }
 
@@ -61,8 +61,8 @@ fn chip(ui: &mut egui::Ui, label: &str, w: f32, active: bool, accent: Color32) -
         (Color32::from_gray(225), Color32::from_rgba_unmultiplied(255, 255, 255, 20))
     };
     ui.add_sized(
-        [w, 40.0],
-        egui::Button::new(RichText::new(label).size(14.0).color(fg)).fill(bg).corner_radius(10.0),
+        [w, 38.0],
+        egui::Button::new(RichText::new(label).size(14.0).color(fg)).fill(bg).corner_radius(12.0),
     )
 }
 

@@ -434,7 +434,9 @@ impl VectorTileManager {
     }
 
     pub fn visible(&self, cam: &Camera, viewport_px: (f32, f32)) -> Vec<VisibleTile> {
-        tile_cover(cam, viewport_px, MAX_VECTOR_Z)
+        // Vector tiles tessellate to resolution-independent triangles, so they stay crisp at any
+        // DPI — no zoom bias needed (unlike raster, which upsamples a fixed-px image).
+        tile_cover(cam, viewport_px, MAX_VECTOR_Z, 0.0)
     }
 
     /// Kick off tilejson + tile fetches for anything visible and not yet requested.

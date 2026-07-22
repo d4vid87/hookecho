@@ -1,7 +1,8 @@
 //! NWS active alerts from api.weather.gov: warnings, watches, statements, advisories.
 //!
-//! Each alert with a polygon becomes a [`GeoFeature`] colored by event. Zone-only alerts
-//! (no polygon, just UGC zones) are skipped for now — resolving zone geometry is a follow-up.
+//! Each alert with a polygon becomes a [`GeoFeature`] colored by event. Zone-only alerts (no inline
+//! polygon, just UGC zones — heat warnings, advisories, marine) are resolved to their zone geometry;
+//! see [`fetch_active`], which scopes that resolution to the active radar so local ones always land.
 
 use crate::overlay::{for_each_feature, polygons_of, AlertInfo, FeatureKind, GeoFeature, StormMotion};
 
@@ -264,13 +265,19 @@ async fn fetch_zone_geometry(client: &reqwest::Client, url: &str) -> Vec<Vec<Vec
     polys
 }
 
-/// Resolve zone-only alerts (no inline polygon) into features via their `affectedZones` URLs.
-async fn fetch_zone_alerts(client: &reqwest::Client, body: &str) -> Vec<GeoFeature> {
+/// Resolve zone-only alerts (no inline polygon) in `body` into features via their `affectedZones`
+/// URLs. Alerts whose id is already in `seen` are skipped (dedup across the nationwide + scoped
+/// passes); every resolved id is added to `seen`. `budget` caps zone fetches so a burst can't fan
+/// out into thousands of requests.
+async fn resolve_zone_alerts(
+    client: &reqwest::Client,
+    body: &str,
+    mut budget: usize,
+    seen: &mut std::collections::HashSet<String>,
+) -> Vec<GeoFeature> {
     let Ok(v) = serde_json::from_str::<serde_json::Value>(body) else { return Vec::new() };
     let Some(feats) = v.get("features").and_then(|f| f.as_array()) else { return Vec::new() };
     let mut out = Vec::new();
-    let mut budget = MAX_ZONE_FETCHES;
-    let mut truncated = false;
     for feat in feats {
         // Only alerts lacking an inline geometry need zone resolution.
         if !feat.get("geometry").map(|g| g.is_null()).unwrap_or(true) {
@@ -278,10 +285,12 @@ async fn fetch_zone_alerts(client: &reqwest::Client, body: &str) -> Vec<GeoFeatu
         }
         let Some(props) = feat.get("properties").and_then(|p| p.as_object()) else { continue };
         let Some((kind, rgb, detail, alert)) = build_alert(props) else { continue };
+        if !seen.insert(alert.id.clone()) {
+            continue; // already resolved in an earlier pass
+        }
         let zones = props.get("affectedZones").and_then(|z| z.as_array()).cloned().unwrap_or_default();
         for zurl in zones.iter().filter_map(|z| z.as_str()) {
             if budget == 0 {
-                truncated = true;
                 break;
             }
             budget -= 1;
@@ -297,29 +306,61 @@ async fn fetch_zone_alerts(client: &reqwest::Client, body: &str) -> Vec<GeoFeatu
                 });
             }
         }
-        if truncated {
-            break;
-        }
-    }
-    if truncated {
-        log::warn!("zone-only alert resolution capped at {MAX_ZONE_FETCHES} zones");
     }
     out
 }
 
-/// Fetch all active NWS alerts as overlay features: inline-polygon alerts plus zone-only alerts
-/// resolved to their UGC zone geometry.
-pub async fn fetch_active(client: &reqwest::Client) -> anyhow::Result<Vec<GeoFeature>> {
-    let resp = client
-        .get(ALERTS_URL)
+/// GET an api.weather.gov alerts endpoint as a GeoJSON body.
+async fn get_alerts(client: &reqwest::Client, url: &str) -> anyhow::Result<String> {
+    Ok(client
+        .get(url)
         .header("User-Agent", USER_AGENT)
         .header("Accept", "application/geo+json")
         .send()
         .await?
-        .error_for_status()?;
-    let body = resp.text().await?;
+        .error_for_status()?
+        .text()
+        .await?)
+}
+
+/// Fetch active NWS alerts as overlay features. Inline-polygon alerts (tornado, severe, flash
+/// flood) come from the nationwide feed so they render anywhere the map is panned. Zone-only alerts
+/// (heat, advisories, marine — no inline polygon, just UGC zones) are resolved to their zone
+/// geometry; with `near = Some((lat, lon))` (the active radar) they're scoped to `?point=` so the
+/// site's own heat warning / advisory always resolves — the nationwide feed carries ~1800 zone URLs
+/// and the local one sits far past any sane per-refresh cap. Without a site (headless) it falls back
+/// to a capped nationwide zone pass.
+///
+/// `// ponytail: point-scoped zone alerts cover the radar location, not every in-view county —
+/// matches the app's site-centric alert scoping; widen to a state/bbox query if edge-of-range
+/// advisories ever matter.`
+pub async fn fetch_active(
+    client: &reqwest::Client,
+    near: Option<(f64, f64)>,
+) -> anyhow::Result<Vec<GeoFeature>> {
+    let body = get_alerts(client, ALERTS_URL).await?;
     let mut feats = parse_alerts(&body)?;
-    feats.extend(fetch_zone_alerts(client, &body).await);
+    let mut seen: std::collections::HashSet<String> =
+        feats.iter().filter_map(|f| f.alert.as_ref().map(|a| a.id.clone())).collect();
+    match near {
+        Some((lat, lon)) => {
+            let url = format!("{ALERTS_URL}?point={lat:.4},{lon:.4}");
+            match get_alerts(client, &url).await {
+                Ok(point_body) => {
+                    feats.extend(resolve_zone_alerts(client, &point_body, 400, &mut seen).await);
+                }
+                // A point query can 400 (e.g. a marine site just off the coast) — fall back so the
+                // user still gets the feed-top zone alerts rather than none.
+                Err(e) => {
+                    log::warn!("scoped alert fetch failed ({e}); using nationwide zone pass");
+                    feats.extend(resolve_zone_alerts(client, &body, MAX_ZONE_FETCHES, &mut seen).await);
+                }
+            }
+        }
+        None => {
+            feats.extend(resolve_zone_alerts(client, &body, MAX_ZONE_FETCHES, &mut seen).await);
+        }
+    }
     Ok(feats)
 }
 
@@ -417,7 +458,7 @@ mod tests {
     #[ignore = "network"]
     async fn fetches_live_alerts() {
         let client = reqwest::Client::new();
-        let feats = fetch_active(&client).await.unwrap();
+        let feats = fetch_active(&client, Some((32.57, -97.30))).await.unwrap();
         eprintln!("fetched {} alert polygons", feats.len());
     }
 }

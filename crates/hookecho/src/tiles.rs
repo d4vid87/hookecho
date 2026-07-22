@@ -422,8 +422,13 @@ impl BasemapStyle {
 
 /// Integer tile ids covering `cam`'s view (zoom clamped to `max_z`) with their world rects.
 /// Shared by raster (`max_z` 18) and vector (`max_z` 14) layers.
-pub fn tile_cover(cam: &Camera, viewport_px: (f32, f32), max_z: u8) -> Vec<VisibleTile> {
-    let z = cam.zoom.round().clamp(2.0, max_z as f64) as u8;
+///
+/// `zoom_bias` bumps the fetched tile detail level without changing the covered extent — used to
+/// pull sharper raster tiles on high-DPI screens (a 256-px tile stretched over 4× physical pixels
+/// looks blurry). The view geometry (`world_per_pixel`) still keys off the camera zoom, so only the
+/// tile grid gets finer.
+pub fn tile_cover(cam: &Camera, viewport_px: (f32, f32), max_z: u8, zoom_bias: f64) -> Vec<VisibleTile> {
+    let z = (cam.zoom + zoom_bias).round().clamp(2.0, max_z as f64) as u8;
     let n = 1u32 << z;
     let nf = n as f64;
     let wpp = cam.world_per_pixel();
@@ -600,9 +605,10 @@ impl TileManager {
         true
     }
 
-    /// Integer tile ids covering the current view, and their world-space rects.
-    pub fn visible(&self, cam: &Camera, viewport_px: (f32, f32)) -> Vec<VisibleTile> {
-        tile_cover(cam, viewport_px, self.style.max_raster_z())
+    /// Integer tile ids covering the current view, and their world-space rects. `zoom_bias`
+    /// pulls sharper tiles on high-DPI displays (see [`tile_cover`]).
+    pub fn visible(&self, cam: &Camera, viewport_px: (f32, f32), zoom_bias: f64) -> Vec<VisibleTile> {
+        tile_cover(cam, viewport_px, self.style.max_raster_z(), zoom_bias)
     }
 
     /// Kick off fetches for any visible tiles not yet requested.

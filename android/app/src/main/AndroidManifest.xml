@@ -3,7 +3,9 @@
   Pure NativeActivity app: no Java/Kotlin (`android:hasCode="false"`). The activity loads
   libhookecho.so and calls its `android_main` (see the `android.app.lib_name` meta-data, which must
   match the crate/.so name). `configChanges` keeps rotation/resize in-process so egui just gets a
-  resize event instead of an activity restart.
+  resize event instead of an activity restart. `screenOrientation="sensor"` makes the app follow the
+  physical device orientation (portrait + both landscapes) — a fullscreen NativeActivity left
+  UNSPECIFIED gets pinned to portrait by Samsung's launcher heuristics and never rotates.
 -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
@@ -23,6 +25,7 @@
         <activity
             android:name="android.app.NativeActivity"
             android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboard|keyboardHidden|navigation|uiMode|density"
+            android:screenOrientation="sensor"
             android:windowSoftInputMode="adjustResize"
             android:exported="true"
             android:label="Hook Echo-WX">

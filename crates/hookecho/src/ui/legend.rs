@@ -89,23 +89,32 @@ pub fn draw(
     };
     match table.step.filter(|s| *s > 0.0) {
         Some(step) => {
+            // Tick every `step`, but only *label* every Nth so numbers never collide: at ~24 px per
+            // label, skip enough ticks to clear that gap (a 5-dBZ step over a 220-px bar packs 25
+            // ticks — labelling all of them smears "-30-25-20" into an unreadable blur).
+            let tick_px = (step / span) * bar.width();
+            let label_stride = (24.0 / tick_px.max(0.1)).ceil().max(1.0) as i32;
             let first = (vmin / step).ceil() * step;
             let mut v = first;
             let mut n = 0;
-            while v <= vmax && n < 64 {
+            while v <= vmax && n < 128 {
                 let x = x_of(v);
-                let align = if v <= vmin + 0.01 {
-                    Align2::LEFT_TOP
-                } else if v >= vmax - 0.01 {
-                    Align2::RIGHT_TOP
-                } else {
-                    Align2::CENTER_TOP
-                };
                 painter.line_segment(
                     [egui::pos2(x, bar.bottom()), egui::pos2(x, bar.bottom() + 3.0)],
                     Stroke::new(1.0, Color32::from_gray(160)),
                 );
-                label(v, align, x);
+                // Always label the ends; thin the interior to the stride.
+                let is_end = v <= vmin + 0.01 || v >= vmax - 0.01;
+                if is_end || n % label_stride == 0 {
+                    let align = if v <= vmin + 0.01 {
+                        Align2::LEFT_TOP
+                    } else if v >= vmax - 0.01 {
+                        Align2::RIGHT_TOP
+                    } else {
+                        Align2::CENTER_TOP
+                    };
+                    label(v, align, x);
+                }
                 v += step;
                 n += 1;
             }
