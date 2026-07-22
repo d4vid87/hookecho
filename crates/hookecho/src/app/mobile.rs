@@ -343,8 +343,14 @@ impl super::HookEchoApp {
                         if slot(ui, ph::CROSSHAIR, tool == MapTool::Interrogate) {
                             self.tool = MapTool::Interrogate;
                         }
-                        if slot(ui, ph::ROWS, tool == MapTool::CrossSection) {
-                            self.tool = if tool == MapTool::CrossSection { MapTool::Interrogate } else { MapTool::CrossSection };
+                        // Panes: cycle single -> dual -> quad -> single (RadarOmega's "=" layout).
+                        if slot(ui, ph::ROWS, self.views.len() > 1) {
+                            let next = match self.views.len() {
+                                1 => 2,
+                                2 => 4,
+                                _ => 1,
+                            };
+                            self.set_pane_count(next);
                         }
                         if slot(ui, ph::POLYGON, tool == MapTool::Sounding) {
                             self.tool = if tool == MapTool::Sounding { MapTool::Interrogate } else { MapTool::Sounding };
@@ -365,6 +371,31 @@ impl super::HookEchoApp {
                     });
                 });
             });
+
+        // ---------- ARMED TOOL HINT ----------
+        // The desktop status bar (which tells you a tap-tool is armed and needs 2 points) is hidden
+        // on mobile, so measure/cross-section read as "broken". Float the guidance above the card.
+        let hint = match self.tool {
+            super::MapTool::Measure => Some("Tap two points to measure"),
+            super::MapTool::Marker => Some("Tap the map to drop a marker"),
+            super::MapTool::CrossSection => Some("Tap two points for a cross-section"),
+            super::MapTool::Sounding => Some("Tap a point for a sounding"),
+            super::MapTool::Climatology => Some("Tap a point for tornado climatology"),
+            _ => None,
+        };
+        if let Some(text) = hint {
+            egui::Area::new(Id::new("m_toolhint"))
+                .anchor(Align2::CENTER_BOTTOM, vec2(0.0, -(inset_bottom + 172.0)))
+                .show(ctx, |ui| {
+                    Frame::new()
+                        .fill(Color32::from_rgba_unmultiplied(242, 160, 51, 236))
+                        .corner_radius(14.0)
+                        .inner_margin(Margin::symmetric(14, 8))
+                        .show(ui, |ui| {
+                            ui.label(RichText::new(text).size(14.0).strong().color(Color32::BLACK));
+                        });
+                });
+        }
 
         // ---------- POPUPS / DRAWERS ----------
         match self.mobile_sheet {
