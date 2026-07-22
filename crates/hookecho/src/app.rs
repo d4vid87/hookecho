@@ -439,6 +439,9 @@ pub struct HookEchoApp {
     ime_shown: bool,
     /// Android: clipboard text read via JNI, queued for injection as an egui Paste event.
     pending_paste: Option<String>,
+    /// Android: the text field that was focused when Paste was tapped. Tapping the button steals
+    /// focus, so we re-focus this the frame the Paste event is delivered (else it lands nowhere).
+    paste_target: Option<egui::Id>,
     /// Loaded placefile overlays (reconciled from `settings.placefiles` by URL).
     placefiles: Vec<LoadedPlacefile>,
     placefile_window: ui::placefile_window::PlacefileWindow,
@@ -730,6 +733,7 @@ impl HookEchoApp {
             ui_scale_applied: -1.0,
 ime_shown: false,
 pending_paste: None,
+paste_target: None,
             placefiles: Vec::new(),
             placefile_window: Default::default(),
             last_viewport: (1000.0, 800.0),
@@ -4261,6 +4265,12 @@ impl eframe::App for HookEchoApp {
         let ctx = root.ctx().clone();
         let ctx = &ctx;
 
+        // Android paste: re-focus the text field that lost focus to the Paste-button tap, before
+        // any window draws, so the queued Paste event (see `raw_input_hook`) lands in it.
+        if let Some(id) = self.paste_target.take() {
+            ctx.memory_mut(|m| m.request_focus(id));
+        }
+
         // Tray menu commands (Linux StatusNotifier): restore the window or quit for real.
         if let Some(rx) = &self.tray_rx {
             while let Ok(cmd) = rx.try_recv() {
@@ -4923,6 +4933,9 @@ impl eframe::App for HookEchoApp {
                         egui::Frame::popup(ui.style()).show(ui, |ui| {
                             if ui.button("Paste").clicked() {
                                 self.pending_paste = crate::platform::clipboard_text();
+                                // Remember the field losing focus to this tap, to restore it next
+                                // frame so the Paste event has somewhere to land.
+                                self.paste_target = ui.ctx().memory(|m| m.focused());
                             }
                         });
                     });

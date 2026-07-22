@@ -23,6 +23,7 @@
         <activity
             android:name="android.app.NativeActivity"
             android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboard|keyboardHidden|navigation|uiMode|density"
+            android:windowSoftInputMode="adjustResize"
             android:exported="true"
             android:label="Hook Echo-WX">
             <meta-data
