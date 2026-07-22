@@ -2287,6 +2287,10 @@ mobile_sheet: mobile::MobileSheet::None,
             v.loaded_site = v.site.clone();
             v.volume = None;
             v.error = None;
+            // Clear a stuck in-flight flag: if the previous site's fetch is still running when the
+            // site changes, its result is dropped on arrival (site mismatch) without clearing
+            // `loading`, which would then block the new site's fetch forever ("no volume").
+            v.loading = false;
             match &v.site {
                 Some(s) => ui::site_dialog::center_on_site(&mut v.camera, s),
                 None => {
@@ -3384,7 +3388,8 @@ mobile_sheet: mobile::MobileSheet::None,
                 let (a, b) = (screen(self.measure[0]), screen(self.measure[1]));
                 painter.line_segment([a, b], egui::Stroke::new(2.0, col));
                 let (km, brg) = crate::geo::great_circle(self.measure[0], self.measure[1]);
-                let txt = format!("{:.1} nmi / {:.1} km  @ {:.0}°", crate::geo::km_to_nmi(km), km, brg);
+                let mi = km * 0.621_371; // statute miles
+                let txt = format!("{mi:.1} mi  @ {brg:.0}°");
                 let mid = a + (b - a) * 0.5;
                 painter.text(mid + egui::vec2(0.0, -10.0), egui::Align2::CENTER_BOTTOM, txt, egui::FontId::proportional(12.0), col);
             }

@@ -333,8 +333,11 @@ impl super::HookEchoApp {
                     ui.horizontal(|ui| {
                         use super::MapTool;
                         ui.set_width(cwi);
+                        // Zero the inter-slot spacing: with 9 slots the accumulated item_spacing
+                        // overflowed the row and bunched the last two icons. Even slots, no gaps.
+                        ui.spacing_mut().item_spacing.x = 0.0;
                         let n = 9.0;
-                        let iw = (cwi - 2.0) / n;
+                        let iw = cwi / n;
                         let tool = self.tool;
                         let slot = |ui: &mut egui::Ui, glyph: &str, on: bool| -> bool {
                             ui.allocate_ui_with_layout(vec2(iw, 40.0), Layout::centered_and_justified(egui::Direction::TopDown), |ui| {
