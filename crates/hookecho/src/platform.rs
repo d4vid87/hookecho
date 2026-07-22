@@ -89,8 +89,12 @@ mod android_ime {
         let activity =
             unsafe { JObject::from_raw(app.activity_as_ptr() as jni::sys::jobject) };
         match read_clip(&mut env, &activity) {
-            Ok(text) => text,
-            Err(_) => {
+            Ok(text) => {
+                log::info!("clipboard_text: read {} chars", text.as_deref().map_or(0, str::len));
+                text
+            }
+            Err(e) => {
+                log::warn!("clipboard_text: JNI error: {e:?}");
                 let _ = env.exception_clear();
                 None
             }
