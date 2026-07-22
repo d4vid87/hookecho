@@ -142,20 +142,26 @@ impl super::HookEchoApp {
         egui::Area::new(Id::new("m_topbar"))
             .anchor(Align2::CENTER_TOP, vec2(0.0, inset_top + 8.0))
             .show(ctx, |ui| {
+                // Fixed inner width computed from the safe content width, minus the frame margins,
+                // so the row (hamburger · pill · gear · badge) never overflows the screen edges.
+                let inner_w = content.width() - 36.0;
                 glass(210).show(ui, |ui| {
-                    ui.set_width(content.width() - 36.0);
+                    ui.set_width(inner_w);
                     ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 6.0;
                         let menu_on = self.mobile_sheet == MobileSheet::Menu;
                         if round_btn(ui, "≡", menu_on, accent).clicked() {
                             self.mobile_sheet = if menu_on { MobileSheet::None } else { MobileSheet::Menu };
                         }
-                        // Reserve room for the gear + alert badge on the right; the site/VCP pill
-                        // fills the rest.
-                        let reserved = 42.0 + 8.0 + 52.0 + 12.0;
-                        let pill_w = (ui.available_width() - reserved).max(90.0);
-                        let mode = vcp.clone().unwrap_or_else(|| "no volume".into());
+                        // Pill width = inner width minus the three fixed buttons and the gaps.
+                        let pill_w = (inner_w - 42.0 - 42.0 - 52.0 - 4.0 * 6.0).max(80.0);
+                        // Short VCP ("VCP 35 (Clear air, SZ-2)" -> "VCP 35") so the pill fits.
+                        let mode = vcp
+                            .as_deref()
+                            .map(|s| s.split(" (").next().unwrap_or(s).to_string())
+                            .unwrap_or_else(|| "no volume".into());
                         let pill = egui::Button::new(
-                            RichText::new(format!("◎  {site}   ·   {mode}")).size(15.0).strong().color(Color32::from_gray(235)),
+                            RichText::new(format!("◎  {site}  ·  {mode}")).size(15.0).strong().color(Color32::from_gray(235)),
                         )
                         .fill(Color32::from_rgba_unmultiplied(255, 255, 255, 16))
                         .corner_radius(11.0);

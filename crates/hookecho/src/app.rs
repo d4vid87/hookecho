@@ -3377,7 +3377,16 @@ mobile_sheet: mobile::MobileSheet::None,
         if view.show_legend && view.volume.is_some() {
             let table = self.palettes.table(view.moment);
             let (df, dl) = display_units(view.moment, &self.settings);
-            ui::legend::draw(&painter, prect, view.moment, table, view.active_threshold(), df, dl);
+            // On Android the floating top bar sits over the map's top edge; drop the legend below
+            // it so the two don't overlap.
+            let lrect = if cfg!(target_os = "android") {
+                let mut r = prect;
+                r.min.y += 70.0;
+                r
+            } else {
+                prect
+            };
+            ui::legend::draw(&painter, lrect, view.moment, table, view.active_threshold(), df, dl);
         }
     }
 
