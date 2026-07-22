@@ -1010,16 +1010,20 @@ mobile_sheet: mobile::MobileSheet::None,
     fn detect_new_warnings(&mut self, feats: &[GeoFeature]) {
         let mut alerted = false;
         let mut max_esc = 0u8; // highest escalation among newly-seen warnings this pass
+        // Only banner warnings within the selected radar's coverage — a warning covering a saved
+        // location still banners + pushes regardless (that's a watched place, not the viewed site).
+        let site_box = self.active_site_bounds(250.0);
         for f in feats {
             if f.kind != overlay::FeatureKind::Warning {
                 continue;
             }
             let Some(a) = &f.alert else { continue };
+            // Mark every warning seen so it can't re-banner later, but only alert on genuinely new
+            // ones after the first (seeding) pass.
             if self.known_warning_ids.insert(a.id.clone()) && self.warnings_seeded {
                 let esc = wxdata::alerts::escalation(a);
-                max_esc = max_esc.max(esc);
                 let urgent = esc >= 2;
-                // A watched location (saved marker) inside the polygon escalates the banner.
+                // A watched location (saved marker) inside the polygon always alerts + pushes.
                 let hit = self
                     .settings
                     .markers
@@ -1035,8 +1039,15 @@ mobile_sheet: mobile::MobileSheet::None,
                         );
                         (format!("⚠ {}", a.event), format!("covers {}", m.name))
                     }
-                    None => (a.event.clone(), a.area.clone()),
+                    None => {
+                        // No watched location: banner only if it's near the selected radar.
+                        if site_box.is_none_or(|bx| !feature_in_box(f, bx)) {
+                            continue;
+                        }
+                        (a.event.clone(), a.area.clone())
+                    }
                 };
+                max_esc = max_esc.max(esc);
                 self.warning_banners.push((label, area, Instant::now()));
                 alerted = true;
             }
@@ -1599,6 +1610,17 @@ mobile_sheet: mobile::MobileSheet::None,
         let (lon0, lat0) = world_to_lonlat(wx0, wy0);
         let (lon1, lat1) = world_to_lonlat(wx1, wy1);
         (lon0.min(lon1), lat0.min(lat1), lon0.max(lon1), lat0.max(lat1))
+    }
+
+    /// Lon/lat box `±radius_km` around the active pane's radar site (its coverage area), or `None`
+    /// when no site is selected. Used to scope new-warning banners to the viewed radar.
+    fn active_site_bounds(&self, radius_km: f64) -> Option<(f64, f64, f64, f64)> {
+        let site = self.views[self.active].site.as_deref()?;
+        let s = wxdata::sites::site_by_id(site)?;
+        let (lat, lon) = (s.latitude as f64, s.longitude as f64);
+        let dlat = radius_km / 111.0;
+        let dlon = radius_km / (111.0 * lat.to_radians().cos().abs().max(0.01));
+        Some((lon - dlon, lat - dlat, lon + dlon, lat + dlat))
     }
 
     /// Open the warning popup on the alert with `id` (from the alerts panel), showing its bulletin.
@@ -4250,6 +4272,14 @@ fn humanize(secs: i64) -> String {
     }
 }
 
+/// True if the feature's bounding box overlaps `box = (min_lon, min_lat, max_lon, max_lat)`.
+/// Features with no geometry (no bbox) are treated as not overlapping.
+fn feature_in_box(f: &GeoFeature, bx: (f64, f64, f64, f64)) -> bool {
+    let Some((x0, y0, x1, y1)) = f.bbox() else { return false };
+    let (bx0, by0, bx1, by1) = bx;
+    x1 >= bx0 && x0 <= bx1 && y1 >= by0 && y0 <= by1
+}
+
 impl eframe::App for HookEchoApp {
     fn raw_input_hook(&mut self, ctx: &egui::Context, raw_input: &mut egui::RawInput) {
         // Android: feed the status-bar / gesture-bar insets so no UI draws under system chrome.
@@ -4947,6 +4977,40 @@ impl eframe::App for HookEchoApp {
         // spare the battery — nothing on screen changes faster than this between frames.
         let idle = if cfg!(target_os = "android") { 250 } else { 100 };
         ctx.request_repaint_after(std::time::Duration::from_millis(idle));
+    }
+}
+
+#[cfg(test)]
+mod warning_scope_tests {
+    use super::{feature_in_box, GeoFeature};
+    use wxdata::overlay::FeatureKind;
+
+    fn poly(x0: f64, y0: f64, x1: f64, y1: f64) -> GeoFeature {
+        GeoFeature {
+            rings: vec![vec![[x0, y0], [x1, y0], [x1, y1], [x0, y1], [x0, y0]]],
+            fill: [0; 4],
+            stroke: [0; 4],
+            kind: FeatureKind::Warning,
+            title: String::new(),
+            detail: String::new(),
+            alert: None,
+        }
+    }
+
+    #[test]
+    fn feature_in_box_overlap() {
+        // Box roughly around KFWS (Dallas): lon -97.3, lat 32.6, ±2.25°.
+        let bx = (-99.55, 30.35, -95.05, 34.85);
+        // A warning polygon overlapping the box.
+        assert!(feature_in_box(&poly(-98.0, 32.0, -97.0, 33.0), bx));
+        // A warning far away (Mississippi) — no overlap.
+        assert!(!feature_in_box(&poly(-90.0, 32.0, -89.0, 33.0), bx));
+        // Touching the edge counts as overlap.
+        assert!(feature_in_box(&poly(-95.05, 32.0, -94.0, 33.0), bx));
+        // Empty geometry never overlaps.
+        let mut empty = poly(0.0, 0.0, 0.0, 0.0);
+        empty.rings.clear();
+        assert!(!feature_in_box(&empty, bx));
     }
 }
 

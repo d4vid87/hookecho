@@ -40,7 +40,11 @@ impl SettingsWindow {
             .open(&mut open)
             .default_size([460.0, 340.0])
             .show(ctx, |ui| {
-                ui.horizontal(|ui| {
+                // Keep the whole window inside a phone screen; tabs wrap instead of clipping.
+                if cfg!(target_os = "android") {
+                    ui.set_max_width(ui.ctx().content_rect().width() - 28.0);
+                }
+                ui.horizontal_wrapped(|ui| {
                     for (tab, label) in [
                         (Tab::General, "General"),
                         (Tab::Palettes, "Palettes"),
@@ -161,26 +165,25 @@ fn units_tab(ui: &mut egui::Ui, settings: &mut Settings) {
 
 fn basemaps_tab(ui: &mut egui::Ui, settings: &mut Settings) {
     ui.label("Provider API keys unlock additional raster basemap styles.");
-    ui.add_space(4.0);
-    egui::Grid::new("basemap_keys").num_columns(2).spacing([12.0, 8.0]).show(ui, |ui| {
-        ui.label("Mapbox access token");
-        key_field(ui, &mut settings.mapbox_key);
-        ui.end_row();
-        ui.label("MapTiler API key");
-        key_field(ui, &mut settings.maptiler_key);
-        ui.end_row();
-    });
-    ui.add_space(4.0);
+    ui.add_space(6.0);
+    key_field(ui, "Mapbox access token", &mut settings.mapbox_key);
+    ui.add_space(8.0);
+    key_field(ui, "MapTiler API key", &mut settings.maptiler_key);
+    ui.add_space(6.0);
     ui.weak("Keys are stored locally in settings.json and sent only to the provider's tile API.");
 }
 
-/// A masked API-key entry. On Android it grows a Paste button that fills the field straight from
-/// the system clipboard (the on-screen keyboard makes long keys impractical to type, and reading
-/// the clipboard directly sidesteps focus/IME quirks).
-fn key_field(ui: &mut egui::Ui, value: &mut String) {
+/// A masked API-key entry: a label above a field that fills the row, then a Clear (✕) button, and
+/// on Android a Paste button that fills the field straight from the system clipboard (typing long
+/// keys on a soft keyboard is impractical, and reading the clipboard directly sidesteps IME
+/// quirks). Laid out responsively so it fits any width, phone included.
+fn key_field(ui: &mut egui::Ui, label: &str, value: &mut String) {
+    ui.label(label);
     ui.horizontal(|ui| {
-        let width = if cfg!(target_os = "android") { 190.0 } else { 240.0 };
-        ui.add(egui::TextEdit::singleline(value).password(true).desired_width(width));
+        // Reserve space for the trailing buttons; the field takes the rest.
+        let paste_w = if cfg!(target_os = "android") { 62.0 } else { 0.0 };
+        let field_w = (ui.available_width() - paste_w - 34.0).max(80.0);
+        ui.add(egui::TextEdit::singleline(value).password(true).desired_width(field_w));
         #[cfg(target_os = "android")]
         if ui.button("Paste").on_hover_text("Paste from clipboard").clicked() {
             if let Some(t) = crate::platform::clipboard_text() {
