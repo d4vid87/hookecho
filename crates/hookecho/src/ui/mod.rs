@@ -2,13 +2,17 @@
 
 /// Clamp a floating window to the screen on Android (no-op elsewhere): egui windows size to
 /// their content, and desktop-sized content overflows a ~360-pt-wide portrait phone display.
-/// Height overflow gets a scrollbar instead of a clip.
+/// Height overflow gets a scrollbar instead of a clip. The window is pinned near the top so its
+/// first fields stay visible when the soft keyboard covers the lower ~40% of the screen (the
+/// NativeActivity draws edge-to-edge, so the IME doesn't resize the content rect). Callers that
+/// set their own `.anchor` after this override the pin.
 pub(crate) fn fit_phone<'a>(ctx: &egui::Context, w: egui::Window<'a>) -> egui::Window<'a> {
     if cfg!(target_os = "android") {
         let r = ctx.content_rect();
         w.max_width(r.width() - 12.0)
             .max_height(r.height() * 0.82)
             .vscroll(true)
+            .anchor(egui::Align2::CENTER_TOP, [0.0, r.top() + 6.0])
     } else {
         w
     }

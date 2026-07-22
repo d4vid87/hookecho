@@ -4257,7 +4257,6 @@ impl eframe::App for HookEchoApp {
         // Android: clipboard text fetched by the paste bar lands as a real egui Paste event, so
         // the focused text field inserts it exactly like Ctrl+V would.
         if let Some(text) = self.pending_paste.take() {
-            log::info!("injecting Paste event ({} chars)", text.len());
             raw_input.events.push(egui::Event::Paste(text));
         }
     }
@@ -4269,7 +4268,6 @@ impl eframe::App for HookEchoApp {
         // Android paste: re-focus the text field that lost focus to the Paste-button tap, before
         // any window draws, so the queued Paste event (see `raw_input_hook`) lands in it.
         if let Some(id) = self.paste_target.take() {
-            log::info!("restoring focus to {id:?} (was {:?})", ctx.memory(|m| m.focused()));
             ctx.memory_mut(|m| m.request_focus(id));
         }
 
@@ -4938,11 +4936,6 @@ impl eframe::App for HookEchoApp {
                                 // Remember the field losing focus to this tap, to restore it next
                                 // frame so the Paste event has somewhere to land.
                                 self.paste_target = ui.ctx().memory(|m| m.focused());
-                                log::info!(
-                                    "paste tapped: clip={} target={:?}",
-                                    self.pending_paste.is_some(),
-                                    self.paste_target
-                                );
                             }
                         });
                     });

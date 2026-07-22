@@ -164,14 +164,33 @@ fn basemaps_tab(ui: &mut egui::Ui, settings: &mut Settings) {
     ui.add_space(4.0);
     egui::Grid::new("basemap_keys").num_columns(2).spacing([12.0, 8.0]).show(ui, |ui| {
         ui.label("Mapbox access token");
-        ui.add(egui::TextEdit::singleline(&mut settings.mapbox_key).password(true).desired_width(240.0));
+        key_field(ui, &mut settings.mapbox_key);
         ui.end_row();
         ui.label("MapTiler API key");
-        ui.add(egui::TextEdit::singleline(&mut settings.maptiler_key).password(true).desired_width(240.0));
+        key_field(ui, &mut settings.maptiler_key);
         ui.end_row();
     });
     ui.add_space(4.0);
     ui.weak("Keys are stored locally in settings.json and sent only to the provider's tile API.");
+}
+
+/// A masked API-key entry. On Android it grows a Paste button that fills the field straight from
+/// the system clipboard (the on-screen keyboard makes long keys impractical to type, and reading
+/// the clipboard directly sidesteps focus/IME quirks).
+fn key_field(ui: &mut egui::Ui, value: &mut String) {
+    ui.horizontal(|ui| {
+        let width = if cfg!(target_os = "android") { 190.0 } else { 240.0 };
+        ui.add(egui::TextEdit::singleline(value).password(true).desired_width(width));
+        #[cfg(target_os = "android")]
+        if ui.button("Paste").on_hover_text("Paste from clipboard").clicked() {
+            if let Some(t) = crate::platform::clipboard_text() {
+                *value = t.trim().to_string();
+            }
+        }
+        if !value.is_empty() && ui.small_button("✕").on_hover_text("Clear").clicked() {
+            value.clear();
+        }
+    });
 }
 
 fn general_tab(ui: &mut egui::Ui, settings: &mut Settings) {
