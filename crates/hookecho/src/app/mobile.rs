@@ -150,7 +150,7 @@ impl super::HookEchoApp {
                     ui.horizontal(|ui| {
                         ui.spacing_mut().item_spacing.x = 6.0;
                         let menu_on = self.mobile_sheet == MobileSheet::Menu;
-                        if round_btn(ui, "≡", menu_on, accent).clicked() {
+                        if round_btn(ui, "☰", menu_on, accent).clicked() {
                             self.mobile_sheet = if menu_on { MobileSheet::None } else { MobileSheet::Menu };
                         }
                         // Pill width = inner width minus the three fixed buttons and the gaps.
@@ -188,8 +188,6 @@ impl super::HookEchoApp {
                             self.mobile_sheet = if on { MobileSheet::None } else { MobileSheet::Alerts };
                         }
                     });
-                    // Block map pan/zoom under the bar.
-                    ui.interact(ui.min_rect(), Id::new("m_top_blk"), Sense::click_and_drag());
                 });
             });
 
@@ -213,10 +211,10 @@ impl super::HookEchoApp {
                         let live_col = if following { Color32::from_rgb(90, 220, 120) } else { Color32::from_gray(150) };
                         if ui
                             .add(
-                                egui::Button::new(RichText::new("● LIVE").size(13.0).strong().color(if following { Color32::BLACK } else { live_col }))
+                                egui::Button::new(RichText::new("LIVE").size(13.0).strong().color(if following { Color32::BLACK } else { live_col }))
                                     .fill(if following { Color32::from_rgb(90, 220, 120) } else { Color32::from_rgba_unmultiplied(255, 255, 255, 18) })
                                     .corner_radius(10.0)
-                                    .min_size(vec2(0.0, 40.0)),
+                                    .min_size(vec2(56.0, 40.0)),
                             )
                             .clicked()
                         {
@@ -253,27 +251,33 @@ impl super::HookEchoApp {
                                     self.views[active].moment = m;
                                 }
                             }
-                            if n_tilt > 0 && chip(ui, &format!("⤒ {cur_angle:.1}°"), 74.0, false, accent).clicked() {
+                            if n_tilt > 0 && chip(ui, &format!("Tilt {cur_angle:.1}°"), 92.0, false, accent).clicked() {
                                 self.views[active].tilt = (cur_tilt + 1) % n_tilt.max(1);
                             }
                         });
                     });
-                    ui.interact(ui.min_rect(), Id::new("m_bot_blk"), Sense::click_and_drag());
                 });
             });
 
         // ---------- DRAWERS ----------
         if self.mobile_sheet != MobileSheet::None {
-            // Scrim: dims the map + bars, tap outside to close.
+            let dw = (content.width() * 0.86).min(430.0);
+            // The opaque drawer rect (left for Menu, right for Alerts) — taps inside it must not
+            // close the drawer via the scrim.
+            let drawer_rect = if self.mobile_sheet == MobileSheet::Alerts {
+                egui::Rect::from_min_size(pos2(content.right() - dw, content.top()), vec2(dw, content.height()))
+            } else {
+                egui::Rect::from_min_size(pos2(content.left(), content.top()), vec2(dw, content.height()))
+            };
+            // Scrim: dims the map + bars; a tap *outside* the drawer closes it.
             egui::Area::new(Id::new("m_scrim")).fixed_pos(vr.min).show(ctx, |ui| {
                 let r = ui.allocate_response(vr.size(), Sense::click());
                 ui.painter().rect_filled(r.rect, egui::CornerRadius::ZERO, Color32::from_black_alpha(130));
-                if r.clicked() {
+                if r.clicked() && !r.interact_pointer_pos().is_some_and(|p| drawer_rect.contains(p)) {
                     self.mobile_sheet = MobileSheet::None;
                 }
             });
 
-            let dw = (content.width() * 0.86).min(430.0);
             let drawer = Frame::new()
                 .fill(Color32::from_rgba_unmultiplied(14, 16, 22, 246))
                 .inner_margin(Margin::symmetric(12, 10))
@@ -326,7 +330,6 @@ impl super::HookEchoApp {
                                     ui.separator();
                                     self.mobile_tools(ui);
                                 });
-                                ui.interact(ui.min_rect(), Id::new("m_drawer_blk"), Sense::click_and_drag());
                             });
                         });
                 }
@@ -370,7 +373,6 @@ impl super::HookEchoApp {
                                         }
                                     }
                                 });
-                                ui.interact(ui.min_rect(), Id::new("m_alerts_blk"), Sense::click_and_drag());
                             });
                         });
                 }
