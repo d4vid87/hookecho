@@ -2671,24 +2671,27 @@ mobile_sheet: mobile::MobileSheet::None,
         } else {
             Vec::new()
         };
-        let (visible_vector, vlabels) = if is_vector {
+        // Always run the vector-tile pipeline for its city/town labels — raster basemaps (satellite)
+        // bake in faint labels that are hard to read, so we overlay crisp haloed ones. Only the
+        // *geometry* is basemap-specific: vector basemaps draw it, raster keeps its own imagery.
+        let (visible_vector, vlabels) = {
             let vis = self.vtiles.visible(&cam, vp);
             self.vtiles.request_missing(&vis);
             let ids: Vec<crate::render::TileId> = vis.iter().map(|v| v.id).collect();
             let labels: Vec<crate::vector_tiles::PlaceLabel> =
                 self.vtiles.labels_for(ids.iter()).into_iter().cloned().collect();
-            (ids, labels)
-        } else {
-            (Vec::new(), Vec::new())
+            (if is_vector { ids } else { Vec::new() }, labels)
         };
         // Drain finished fetches once (on the first pane) — they upload into the shared cache.
         let (new_tiles, new_vector_tiles) = if first {
             let nt = self.tiles.drain_ready();
+            // Drain vtiles regardless of basemap (it populates the label cache); only upload the
+            // geometry to the GPU when a vector basemap will actually draw it.
             let nv = self.vtiles.drain_ready();
             if !nt.is_empty() || !nv.is_empty() {
                 ctx.request_repaint();
             }
-            (nt, nv)
+            (nt, if is_vector { nv } else { Vec::new() })
         } else {
             (Vec::new(), Vec::new())
         };
@@ -2774,17 +2777,31 @@ mobile_sheet: mobile::MobileSheet::None,
         let view = &self.views[idx];
         let basemap = view.basemap;
 
-        // Vector city/town labels.
-        if is_vector && !vlabels.is_empty() {
-            let st = crate::basemap_style::style(basemap == BasemapStyle::Dark);
-            let text_col = egui::Color32::from_rgb(st.label[0], st.label[1], st.label[2]);
-            let halo_col = egui::Color32::from_rgb(st.label_halo[0], st.label_halo[1], st.label_halo[2]);
+        // City/town labels, overlaid on every basemap. On raster (satellite) the baked-in labels
+        // are faint over imagery + echoes, so we draw crisp white text with a solid black halo;
+        // vector basemaps use their palette's label colors. Bigger fonts + an 8-way halo read well.
+        if !vlabels.is_empty() {
+            let (text_col, halo_col, big) = if is_vector {
+                let st = crate::basemap_style::style(basemap == BasemapStyle::Dark);
+                (
+                    egui::Color32::from_rgb(st.label[0], st.label[1], st.label[2]),
+                    egui::Color32::from_rgb(st.label_halo[0], st.label_halo[1], st.label_halo[2]),
+                    13.0,
+                )
+            } else {
+                (egui::Color32::WHITE, egui::Color32::from_black_alpha(235), 14.5)
+            };
             let z = cam.zoom;
             let mut labels: Vec<&crate::vector_tiles::PlaceLabel> =
                 vlabels.iter().filter(|l| l.city || z >= 9.0).collect();
             labels.sort_by_key(|l| (!l.city, l.rank));
             let mut placed: Vec<egui::Rect> = Vec::new();
             let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
+            // 8-way halo (cardinals + diagonals) for a solid, readable outline.
+            const HALO: [egui::Vec2; 8] = [
+                egui::vec2(1.2, 0.0), egui::vec2(-1.2, 0.0), egui::vec2(0.0, 1.2), egui::vec2(0.0, -1.2),
+                egui::vec2(1.0, 1.0), egui::vec2(1.0, -1.0), egui::vec2(-1.0, 1.0), egui::vec2(-1.0, -1.0),
+            ];
             for l in labels {
                 if !seen.insert(l.name.as_str()) {
                     continue;
@@ -2794,24 +2811,25 @@ mobile_sheet: mobile::MobileSheet::None,
                 if !prect.contains(p) {
                     continue;
                 }
-                let font = egui::FontId::proportional(if l.city { 13.0 } else { 11.0 });
+                let font = egui::FontId::proportional(if l.city { big } else { big - 2.5 });
                 let galley = painter.layout_no_wrap(l.name.clone(), font.clone(), text_col);
                 let r = egui::Rect::from_min_size(p, galley.size()).expand(4.0);
                 if placed.iter().any(|q| q.intersects(r)) {
                     continue;
                 }
                 placed.push(r);
-                for off in [egui::vec2(1.0, 0.0), egui::vec2(-1.0, 0.0), egui::vec2(0.0, 1.0), egui::vec2(0.0, -1.0)] {
+                for off in HALO {
                     painter.text(p + off, egui::Align2::LEFT_TOP, &l.name, font.clone(), halo_col);
                 }
                 painter.text(p, egui::Align2::LEFT_TOP, &l.name, font.clone(), text_col);
             }
+            // OpenMapTiles/OpenStreetMap credit for the label data (raster imagery is credited below).
             painter.text(
-                egui::pos2(prect.left() + 6.0, prect.bottom() - 4.0),
+                egui::pos2(prect.left() + 6.0, prect.bottom() - 18.0),
                 egui::Align2::LEFT_BOTTOM,
                 "© OpenMapTiles © OpenStreetMap",
                 egui::FontId::proportional(10.0),
-                text_col.gamma_multiply(0.7),
+                egui::Color32::from_gray(200).gamma_multiply(0.55),
             );
         }
 

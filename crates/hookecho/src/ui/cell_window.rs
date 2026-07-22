@@ -93,11 +93,22 @@ fn opt(v: Option<f32>, unit: &str, decimals: usize) -> String {
     v.map(|x| format!("{x:.*}{unit}", decimals)).unwrap_or_else(|| "—".into())
 }
 
-/// Lay out label/value pairs as wrapped stat cards.
+/// Lay out label/value pairs. Desktop: wrapped stat cards. Android: a compact vertical
+/// `LABEL: value` list — the fixed-width cards force the window wider than the phone screen and
+/// clip both edges, so a shrinkable list is the only reliable fit.
 fn grid(ui: &mut egui::Ui, cards: &[(&str, String)]) {
-    ui.horizontal_wrapped(|ui| {
+    if cfg!(target_os = "android") {
         for (label, value) in cards {
-            stat_card(ui, label, value);
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new(format!("{}:", label.to_uppercase())).size(11.0).weak());
+                ui.label(egui::RichText::new(value).size(14.5).strong());
+            });
         }
-    });
+    } else {
+        ui.horizontal_wrapped(|ui| {
+            for (label, value) in cards {
+                stat_card(ui, label, value);
+            }
+        });
+    }
 }
