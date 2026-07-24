@@ -437,6 +437,11 @@ pub struct HookEchoApp {
     detail: Option<Detail>,
     /// Open "Storm {id} Attributes" window (a clicked storm cell).
     cell_popup: Option<Cell>,
+    /// Storm-follow camera: the `(site, last-snapshot cell, since)` the active pane is tracking.
+    /// Each new volume recenters on this cell; a manual pan or site change cancels it.
+    follow_cell: Option<(String, Cell, Instant)>,
+    /// Transient "follow ended" note `(text, shown-at)`; renders in the follow badge slot ~5 s.
+    follow_notice: Option<(String, Instant)>,
     /// Open "Active Warnings" window (clicked warning/watch polygons).
     warning_popup: Option<ui::warning_window::WarningPopup>,
     /// Level 3 clickable storm cells for `cells_site` (the active site when last fetched).
@@ -766,6 +771,8 @@ impl HookEchoApp {
             overlay_last_fetch: None,
             detail: None,
             cell_popup: None,
+            follow_cell: None,
+            follow_notice: None,
             warning_popup: None,
             storm_cells: Vec::new(),
             ui_scale_applied: -1.0,
@@ -1726,6 +1733,7 @@ mobile_sheet: mobile::MobileSheet::None,
                         }
                         self.storm_cells = cells;
                         self.cells_site = Some(site);
+                        self.update_follow();
                     }
                 }
                 OverlayMsg::Placefile(url, pf) => {
@@ -1962,6 +1970,87 @@ mobile_sheet: mobile::MobileSheet::None,
             self.gauge_last_fetch = Some(Instant::now());
             self.gauge_bounds = Some((lat0, lon0, lat1, lon1));
             self.spawn_overlay(ctx, OverlaySource::Gauges(lat0, lon0, lat1, lon1));
+        }
+    }
+
+    /// Storm-follow camera: re-lock onto the tracked cell in the freshly-applied volume and recenter
+    /// the active pane on it. Called from the `Cells` apply arm. Reacquires across SCIT renumbering
+    /// by predicting the cell's position from its last motion and adopting the nearest new cell.
+    fn update_follow(&mut self) {
+        let Some((fsite, last, since)) = self.follow_cell.take() else { return };
+        // Active site changed out from under the follow (site switch) → stop silently.
+        if self.cells_site.as_deref() != Some(fsite.as_str()) {
+            return;
+        }
+        // Same SCIT id in the new volume → the easy case.
+        if let Some(c) = self.storm_cells.iter().find(|c| !c.id.is_empty() && c.id == last.id).cloned() {
+            self.recenter_follow(&c);
+            self.follow_cell = Some((fsite, c, Instant::now()));
+            return;
+        }
+        // Renumber/miss: predict where the cell drifted and adopt the nearest new cell within 15 km.
+        let elapsed_h = since.elapsed().as_secs_f64() / 3600.0;
+        let pred = match (last.mvt_deg, last.mvt_kt) {
+            (Some(dir), Some(kt)) if kt > 0.0 => {
+                crate::geo::destination_point([last.lon, last.lat], dir as f64, kt as f64 * 1.852 * elapsed_h)
+            }
+            _ => [last.lon, last.lat],
+        };
+        if let Some(c) = nearest_cell(&self.storm_cells, pred[0], pred[1], 15.0).cloned() {
+            self.recenter_follow(&c);
+            self.follow_cell = Some((fsite, c, Instant::now()));
+        } else {
+            self.follow_notice = Some((format!("Lost {} — follow ended", last.id), Instant::now()));
+            // follow_cell already taken → stays None.
+        }
+    }
+
+    /// Snap the active pane's camera onto a followed cell, keeping the current zoom.
+    fn recenter_follow(&mut self, c: &Cell) {
+        self.views[self.active].camera.center = crate::render::mercator::lonlat_to_world(c.lon, c.lat);
+    }
+
+    /// Top-right badge for the storm-follow camera: a tap-to-stop pill while following, or a
+    /// transient "follow ended" note for ~5 s after the tracked cell is lost. Same slot on
+    /// desktop + Android (just below the top bar).
+    fn follow_badge(&mut self, ctx: &egui::Context) {
+        if self.follow_notice.as_ref().is_some_and(|(_, t)| t.elapsed().as_secs() >= 5) {
+            self.follow_notice = None;
+        }
+        let following = self.follow_cell.is_some();
+        let text = if let Some((_, c, _)) = &self.follow_cell {
+            format!("⌖ Following {}  ✕", c.id)
+        } else if let Some((msg, _)) = &self.follow_notice {
+            msg.clone()
+        } else {
+            return;
+        };
+        egui::Area::new("follow_badge".into())
+            .anchor(egui::Align2::RIGHT_TOP, egui::vec2(-10.0, 48.0))
+            .show(ctx, |ui| {
+                let fill = if following {
+                    egui::Color32::from_rgba_unmultiplied(40, 90, 150, 220)
+                } else {
+                    egui::Color32::from_black_alpha(160)
+                };
+                egui::Frame::new()
+                    .fill(fill)
+                    .corner_radius(4.0)
+                    .inner_margin(egui::Margin::symmetric(8, 4))
+                    .show(ui, |ui| {
+                        if following {
+                            let btn = egui::Button::new(egui::RichText::new(&text).color(egui::Color32::WHITE)).frame(false);
+                            if ui.add(btn).on_hover_text("Stop following this storm").clicked() {
+                                self.follow_cell = None;
+                            }
+                        } else {
+                            ui.colored_label(egui::Color32::from_white_alpha(210), &text);
+                        }
+                    });
+            });
+        // Keep the notice's expiry ticking without input.
+        if self.follow_notice.is_some() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(500));
         }
     }
 
@@ -2541,6 +2630,7 @@ mobile_sheet: mobile::MobileSheet::None,
             self.active = idx;
             let d = response.drag_delta();
             self.views[idx].camera.pan_pixels(d.x, d.y);
+            self.follow_cell = None; // a manual pan takes over the camera
         }
         let scroll = ui.input(|i| i.smooth_scroll_delta.y);
         if scroll.abs() > 0.0 {
@@ -2562,6 +2652,7 @@ mobile_sheet: mobile::MobileSheet::None,
                 let t = mt.translation_delta;
                 if t != egui::Vec2::ZERO {
                     self.views[idx].camera.pan_pixels(t.x, t.y);
+                    self.follow_cell = None; // a manual pan takes over the camera (pinch-zoom does not)
                 }
                 if (mt.zoom_delta - 1.0).abs() > f32::EPSILON {
                     let cursor = (mt.center_pos.x - prect.left(), mt.center_pos.y - prect.top());
@@ -4390,6 +4481,18 @@ fn cell_color(kind: CellKind) -> [u8; 4] {
     }
 }
 
+/// The storm cell (with a non-empty SCIT id) nearest to `(lon, lat)` within `max_km`, if any.
+/// Used by the storm-follow camera to reacquire a tracked cell after SCIT renumbers it.
+fn nearest_cell(cells: &[Cell], lon: f64, lat: f64, max_km: f64) -> Option<&Cell> {
+    cells
+        .iter()
+        .filter(|c| !c.id.is_empty())
+        .map(|c| (c, crate::geo::great_circle([lon, lat], [c.lon, c.lat]).0))
+        .filter(|(_, km)| *km <= max_km)
+        .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
+        .map(|(c, _)| c)
+}
+
 /// Marker color for an SPC storm-report kind.
 fn report_color(kind: wxdata::spc::ReportKind) -> [u8; 4] {
     use wxdata::spc::ReportKind as R;
@@ -4956,10 +5059,21 @@ impl eframe::App for HookEchoApp {
         }
         if let Some(cell) = &self.cell_popup {
             let trend = self.cell_trends.get(&cell.id).map(Vec::as_slice).unwrap_or(&[]);
-            if !ui::cell_window::show(ctx, cell, trend) {
+            let following = self.follow_cell.as_ref().is_some_and(|(_, c, _)| c.id == cell.id);
+            let (open, toggled) = ui::cell_window::show(ctx, cell, trend, following);
+            if toggled {
+                if following {
+                    self.follow_cell = None;
+                } else if let Some(site) = self.cells_site.clone() {
+                    self.follow_cell = Some((site, cell.clone(), Instant::now()));
+                    self.follow_notice = None;
+                }
+            }
+            if !open {
                 self.cell_popup = None;
             }
         }
+        self.follow_badge(ctx);
         if let Some(popup) = &mut self.warning_popup {
             if !ui::warning_window::show(ctx, popup) {
                 self.warning_popup = None;
@@ -5159,6 +5273,30 @@ impl eframe::App for HookEchoApp {
         // spare the battery — nothing on screen changes faster than this between frames.
         let idle = if cfg!(target_os = "android") { 250 } else { 100 };
         ctx.request_repaint_after(std::time::Duration::from_millis(idle));
+    }
+}
+
+#[cfg(test)]
+mod follow_tests {
+    use super::nearest_cell;
+    use wxdata::level3::Cell;
+
+    fn cell(id: &str, lon: f64, lat: f64) -> Cell {
+        Cell { id: id.into(), lon, lat, ..Default::default() }
+    }
+
+    #[test]
+    fn nearest_cell_within_radius_and_none_outside() {
+        // Three cells around a predicted point near (−97.5, 35.3).
+        let cells = vec![
+            cell("A7", -97.60, 35.30), // ~9 km west
+            cell("B3", -97.51, 35.31), // ~1.5 km — the nearest
+            cell("", -97.505, 35.305), // closest of all but no SCIT id → ineligible
+        ];
+        let got = nearest_cell(&cells, -97.5, 35.3, 15.0).unwrap();
+        assert_eq!(got.id, "B3");
+        // A prediction far from every cell (radius exceeded) → nothing to adopt.
+        assert!(nearest_cell(&cells, -90.0, 30.0, 15.0).is_none());
     }
 }
 

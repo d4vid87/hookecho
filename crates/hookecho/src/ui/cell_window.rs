@@ -14,15 +14,24 @@ pub struct CellSample {
     pub dbz: Option<f32>,
 }
 
-/// Show the storm-attributes window. `trend` is the cell's per-volume history (oldest→newest).
-/// Returns `false` when it should close.
-pub fn show(ctx: &egui::Context, cell: &Cell, trend: &[CellSample]) -> bool {
+/// Show the storm-attributes window. `trend` is the cell's per-volume history (oldest→newest);
+/// `following` reflects whether the camera is currently tracking this cell. Returns
+/// `(still_open, follow_toggled)` — `follow_toggled` is `true` the frame the Follow button is hit.
+pub fn show(ctx: &egui::Context, cell: &Cell, trend: &[CellSample], following: bool) -> (bool, bool) {
     let mut open = true;
+    let mut follow_toggled = false;
     crate::ui::fit_phone(ctx, egui::Window::new(format!("Storm {} Attributes", cell.id)))
         .open(&mut open)
         .default_size([380.0, 460.0])
         .show(ctx, |ui| {
             egui::ScrollArea::vertical().show(ui, |ui| {
+                let label = if following { "Following ✓ (tap to stop)" } else { "⌖ Follow" };
+                if ui.add(egui::Button::new(label).min_size(egui::vec2(ui.available_width(), 0.0)))
+                    .on_hover_text("Keep the camera centered on this cell as it moves through each new volume")
+                    .clicked()
+                {
+                    follow_toggled = true;
+                }
                 theme::section(ui, "Current Position", |ui| {
                     grid(ui, &[
                         ("Latitude", format!("{:.3}°", cell.lat)),
@@ -78,7 +87,7 @@ pub fn show(ctx: &egui::Context, cell: &Cell, trend: &[CellSample]) -> bool {
                 }
             });
         });
-    open
+    (open, follow_toggled)
 }
 
 /// A labelled trend sparkline over the samples that carry the selected field.

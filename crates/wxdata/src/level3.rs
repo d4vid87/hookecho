@@ -20,8 +20,9 @@ const BUCKET: &str = "https://unidata-nexrad-level3.s3.amazonaws.com";
 const TGFTP: &str = "https://tgftp.nws.noaa.gov/SL.us008001/DF.of/DC.radar";
 
 /// What a clickable storm marker represents.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum CellKind {
+    #[default]
     Storm,
     Hail,
     Meso,
@@ -37,7 +38,7 @@ pub struct TrackPoint {
 
 /// A clickable storm-cell marker with typed SCIT attributes. All attribute fields are optional
 /// (a product may be missing, or a row unparsable) and render as `—`.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct Cell {
     pub kind: CellKind,
     pub lon: f64,
