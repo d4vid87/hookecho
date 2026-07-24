@@ -486,6 +486,7 @@ impl super::HookEchoApp {
                         ui.separator();
                         egui::ScrollArea::vertical().show(ui, |ui| {
                             let l3_site = self.l3grid_site.clone();
+                            let cp_ui = self.chasepack_ui();
                             *actions = crate::ui::toolbox::show(
                                 ui,
                                 &mut self.views[self.active],
@@ -510,6 +511,7 @@ impl super::HookEchoApp {
                                 &mut self.show_tropical,
                                 &mut self.show_aviation,
                                 &mut self.show_range_rings,
+                                &cp_ui,
                             );
                             ui.add_space(8.0);
                             ui.separator();

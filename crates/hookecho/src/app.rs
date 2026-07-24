@@ -375,6 +375,17 @@ impl DataMsg {
 /// option is the storm-motion (east, north) m/s for storm-relative velocity.
 type ShownKey = (String, Moment, usize, Option<f32>, bool, u64, Option<(u32, u32)>, bool);
 
+/// An in-progress offline chase-pack download: the worker outcome channel, a cancel flag the
+/// workers poll, and running tallies for the toolbox progress bar.
+struct ChasePack {
+    rx: Receiver<(bool, u64)>,
+    cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    total: u64,
+    done: u64,
+    errors: u64,
+    bytes: u64,
+}
+
 pub struct HookEchoApp {
     _rt: Runtime,
     tiles: TileManager,
@@ -388,6 +399,8 @@ pub struct HookEchoApp {
     /// Geocode results for the marker window's address search: `(label, lat, lon)` or an error.
     geocode_tx: Sender<Result<(String, f64, f64), String>>,
     geocode_rx: Receiver<Result<(String, f64, f64), String>>,
+    /// In-progress offline chase-pack tile download (basemap pre-cache for the current view).
+    chasepack: Option<ChasePack>,
     /// Per-pane "what's uploaded" key, so each pane re-bins/re-uploads only on a real change.
     pane_shown: std::collections::HashMap<usize, ShownKey>,
     site_dialog: Option<ui::site_dialog::SiteDialog>,
@@ -729,6 +742,7 @@ impl HookEchoApp {
             msg_tx,
             geocode_tx,
             geocode_rx,
+            chasepack: None,
             pane_shown: std::collections::HashMap::new(),
             site_dialog: None,
             wizard: {
@@ -1667,6 +1681,72 @@ mobile_sheet: mobile::MobileSheet::None,
         let (lon0, lat0) = world_to_lonlat(wx0, wy0);
         let (lon1, lat1) = world_to_lonlat(wx1, wy1);
         (lon0.min(lon1), lat0.min(lat1), lon0.max(lon1), lat0.max(lat1))
+    }
+
+    /// Fixed chase-pack zoom span for the current view: `z_lo = floor(zoom)`, four levels deeper,
+    /// capped to the active basemap's max. Returns `(z_lo, z_hi, packable, max_z)`.
+    fn chasepack_zoom(&self) -> (u8, u8) {
+        use crate::tiles::BasemapStyle;
+        let style = self.views[self.active].basemap;
+        let z_lo = (self.views[self.active].camera.zoom.floor() as i64).clamp(2, 18) as u8;
+        let max_z = if style.is_raster() {
+            self.tiles.max_pack_z(style)
+        } else if matches!(style, BasemapStyle::Dark | BasemapStyle::Light) {
+            self.vtiles.max_pack_z()
+        } else {
+            z_lo
+        };
+        (z_lo, (z_lo + 4).min(max_z))
+    }
+
+    /// Per-frame chase-pack estimate + progress the toolbox renders (see [`ui::toolbox::ChasePackUi`]).
+    fn chasepack_ui(&self) -> ui::toolbox::ChasePackUi {
+        use crate::tiles::BasemapStyle;
+        let style = self.views[self.active].basemap;
+        let packable = if style.is_raster() {
+            self.tiles.packable(style)
+        } else if matches!(style, BasemapStyle::Dark | BasemapStyle::Light) {
+            self.vtiles.packable()
+        } else {
+            false
+        };
+        let (z_lo, z_hi) = self.chasepack_zoom();
+        let tiles = if packable {
+            let (min_lon, min_lat, max_lon, max_lat) = self.view_bounds();
+            crate::tiles::pack_tile_count(min_lon, min_lat, max_lon, max_lat, z_lo, z_hi)
+        } else {
+            0
+        };
+        // ponytail: 25 KB/tile average across raster + vector; only used for the "≈ MB" hint.
+        let mb = tiles as f64 * 25_000.0 / 1e6;
+        let progress = self.chasepack.as_ref().map(|p| (p.done, p.total, p.errors, p.bytes as f64 / 1e6));
+        ui::toolbox::ChasePackUi { tiles, mb, packable, z_lo, z_hi, progress }
+    }
+
+    /// Kick off an offline chase-pack download of the current view's basemap tiles (4 workers).
+    fn start_chasepack(&mut self) {
+        use crate::tiles::BasemapStyle;
+        if self.chasepack.is_some() {
+            return;
+        }
+        let style = self.views[self.active].basemap;
+        let (z_lo, z_hi) = self.chasepack_zoom();
+        let (min_lon, min_lat, max_lon, max_lat) = self.view_bounds();
+        let jobs = if style.is_raster() {
+            self.tiles.pack_jobs(style, min_lon, min_lat, max_lon, max_lat, z_lo, z_hi)
+        } else if matches!(style, BasemapStyle::Dark | BasemapStyle::Light) {
+            self.vtiles.pack_jobs(min_lon, min_lat, max_lon, max_lat, z_lo, z_hi)
+        } else {
+            Vec::new()
+        };
+        if jobs.is_empty() {
+            return;
+        }
+        let total = jobs.len() as u64;
+        let (tx, rx) = std::sync::mpsc::channel();
+        let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        crate::tiles::start_pack_download(self._rt.handle(), jobs, cancel.clone(), tx);
+        self.chasepack = Some(ChasePack { rx, cancel, total, done: 0, errors: 0, bytes: 0 });
     }
 
     /// Lon/lat box `±radius_km` around the active pane's radar site (its coverage area), or `None`
@@ -4831,6 +4911,7 @@ impl eframe::App for HookEchoApp {
                     .default_size(240.0)
                     .show(root, |ui| {
                         let l3_site = self.l3grid_site.clone();
+                        let cp_ui = self.chasepack_ui();
                         actions = ui::toolbox::show(
                             ui,
                             &mut self.views[self.active],
@@ -4855,6 +4936,7 @@ impl eframe::App for HookEchoApp {
                             &mut self.show_tropical,
                             &mut self.show_aviation,
                             &mut self.show_range_rings,
+                            &cp_ui,
                         );
                     });
             }
@@ -4867,6 +4949,15 @@ impl eframe::App for HookEchoApp {
         }
         if actions.instant_replay {
             self.instant_replay();
+        }
+        if actions.download_chasepack {
+            self.start_chasepack();
+        }
+        if actions.cancel_chasepack {
+            if let Some(p) = &self.chasepack {
+                p.cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+            }
+            self.chasepack = None;
         }
         if actions.outlook_kind_changed && self.filters.outlook_day == 1 {
             // Hazard switched: drop the stale Day-1 features so the empty-check refetches it.
@@ -4956,6 +5047,21 @@ impl eframe::App for HookEchoApp {
                 let _ = tx.send(wxdata::geocode::search(&http, &query).await);
                 ctx2.request_repaint();
             });
+        }
+        // Drain chase-pack worker outcomes; drop the download state once every tile is accounted for.
+        if let Some(pack) = &mut self.chasepack {
+            while let Ok((ok, n)) = pack.rx.try_recv() {
+                pack.done += 1;
+                pack.bytes += n;
+                if !ok {
+                    pack.errors += 1;
+                }
+            }
+            if pack.done >= pack.total {
+                self.chasepack = None;
+            } else {
+                ctx.request_repaint_after(std::time::Duration::from_millis(250));
+            }
         }
         self.palette_editor.show(ctx, &mut self.settings, &self.palettes);
         // Storm digest: poll a pending Claude result, then render + handle Generate.

@@ -829,6 +829,43 @@ pub fn run_gauges(site: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Offline chase-pack verifier: pre-download the raster basemap around `(lat, lon)` within
+/// `radius_km` over a 4-level zoom span ending at `zmax`, then print how many tiles were cached vs
+/// fetched. Re-running should report everything cached (the read-through disk cache is transparent).
+pub fn run_chasepack(lat: f64, lon: f64, radius_km: f64, zmax: u8, style_slug: &str) -> anyhow::Result<()> {
+    use crate::tiles::{start_pack_download, BasemapStyle, TileManager};
+    let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
+    let style = BasemapStyle::from_slug(style_slug);
+    let dlat = radius_km / 111.0;
+    let dlon = radius_km / (111.0 * lat.to_radians().cos().abs().max(0.01));
+    let (min_lon, min_lat, max_lon, max_lat) = (lon - dlon, lat - dlat, lon + dlon, lat + dlat);
+    let z_lo = zmax.saturating_sub(4).max(2);
+    let mgr = TileManager::new(rt.handle().clone());
+    let jobs = mgr.pack_jobs(style, min_lon, min_lat, max_lon, max_lat, z_lo, zmax);
+    let total = jobs.len();
+    if total == 0 {
+        anyhow::bail!("no jobs for style '{style_slug}' (pick a raster basemap slug, e.g. carto-dark)");
+    }
+    let (tx, rx) = std::sync::mpsc::channel();
+    let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    start_pack_download(rt.handle(), jobs, cancel, tx);
+    let (mut cached, mut fetched, mut errors, mut bytes) = (0u64, 0u64, 0u64, 0u64);
+    for _ in 0..total {
+        match rx.recv() {
+            Ok((true, 0)) => cached += 1,
+            Ok((true, n)) => {
+                fetched += 1;
+                bytes += n;
+            }
+            Ok((false, _)) => errors += 1,
+            Err(_) => break,
+        }
+    }
+    let mb = bytes as f64 / 1e6;
+    println!("{total} tiles (z{z_lo}-{zmax}, {style_slug}): {cached} cached, {fetched} fetched, {errors} errors, {mb:.1} MB");
+    Ok(())
+}
+
 /// Fetch a gridded L3 product (DVL/EET), print stats, render centered on the site (feature X).
 pub fn run_l3grid(kind: &str, site: &str, out_path: &str) -> anyhow::Result<()> {
     use crate::render::FieldLayer as FL;

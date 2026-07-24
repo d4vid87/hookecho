@@ -6,7 +6,9 @@
 
 use crate::render::{mercator::Camera, PendingTile, TileId, VisibleTile};
 use std::collections::HashSet;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, Sender};
+use std::sync::{Arc, Mutex};
 use tokio::runtime::Handle;
 
 // Browser-prefixed so imagery hosts (e.g. Esri) that 403 bare library UAs still serve tiles,
@@ -653,6 +655,38 @@ impl TileManager {
         }
     }
 
+    /// Max zoom `style` serves (for the chase-pack depth cap).
+    pub fn max_pack_z(&self, style: BasemapStyle) -> u8 {
+        style.max_raster_z()
+    }
+
+    /// Whether `style` produces raster tiles a chase pack can pre-download (has a URL, isn't a
+    /// time-tagged GOES layer). Takes the style explicitly so it doesn't depend on which pane the
+    /// tile manager last rendered.
+    pub fn packable(&self, style: BasemapStyle) -> bool {
+        style.goes_layer().is_none() && style.url(0, 0, 0, &self.mapbox_key, &self.maptiler_key).is_some()
+    }
+
+    /// Build the `(url, cache_path)` jobs for an offline chase pack of the lon/lat bbox over
+    /// `z_lo..=z_hi` in `style`. Empty for URL-less (Dark/Light/None) and GOES styles. Cache paths
+    /// match the live read-through cache so pre-downloads are transparent.
+    #[allow(clippy::too_many_arguments)] // scalar bbox mirrors pack_tile_count's tested signature
+    pub fn pack_jobs(&self, style: BasemapStyle, min_lon: f64, min_lat: f64, max_lon: f64, max_lat: f64, z_lo: u8, z_hi: u8) -> Vec<PackJob> {
+        let Some(root) = self.cache_root.as_ref() else { return Vec::new() };
+        if style.goes_layer().is_some() {
+            return Vec::new();
+        }
+        let z_hi = z_hi.min(style.max_raster_z());
+        let dir = root.join(style.provider()).join("default");
+        pack_tile_ids(min_lon, min_lat, max_lon, max_lat, z_lo, z_hi)
+            .into_iter()
+            .filter_map(|(z, x, y)| {
+                let url = style.url(z, x, y, &self.mapbox_key, &self.maptiler_key)?;
+                Some((url, dir.join(format!("{z}/{x}/{y}"))))
+            })
+            .collect()
+    }
+
     /// Drain finished fetches into upload-ready tiles (each returned exactly once).
     pub fn drain_ready(&mut self) -> Vec<PendingTile> {
         let mut ready = Vec::new();
@@ -726,9 +760,111 @@ pub(crate) async fn load_tile_bytes(
     Ok(bytes)
 }
 
+/// A chase-pack download job: the tile URL and the disk path to cache it at.
+pub type PackJob = (String, std::path::PathBuf);
+
+/// Number of tiles a chase-pack download covers over zoom `z_lo..=z_hi` for the lon/lat bbox.
+/// Pure — the toolbox calls it each frame to show a live size estimate. `≈ tiles × 25 KB`.
+pub fn pack_tile_count(min_lon: f64, min_lat: f64, max_lon: f64, max_lat: f64, z_lo: u8, z_hi: u8) -> u64 {
+    let a = crate::render::mercator::lonlat_to_world(min_lon, min_lat);
+    let b = crate::render::mercator::lonlat_to_world(max_lon, max_lat);
+    let (wxmin, wxmax) = (a.0.min(b.0), a.0.max(b.0));
+    let (wymin, wymax) = (a.1.min(b.1), a.1.max(b.1));
+    let mut count = 0u64;
+    for z in z_lo..=z_hi {
+        let n = 1u64 << z;
+        let nf = n as f64;
+        let tx0 = (wxmin * nf).floor() as i64;
+        let tx1 = (wxmax * nf).ceil() as i64;
+        let ty0 = ((wymin * nf).floor() as i64).max(0);
+        let ty1 = ((wymax * nf).ceil() as i64).min(n as i64);
+        count += (tx1 - tx0).max(0) as u64 * (ty1 - ty0).max(0) as u64;
+    }
+    count
+}
+
+/// The `(z, x, y)` tile ids covering the lon/lat bbox over `z_lo..=z_hi` (x wrapped into range).
+/// Shared by the raster and vector chase-pack job builders.
+pub(crate) fn pack_tile_ids(min_lon: f64, min_lat: f64, max_lon: f64, max_lat: f64, z_lo: u8, z_hi: u8) -> Vec<TileId> {
+    let a = crate::render::mercator::lonlat_to_world(min_lon, min_lat);
+    let b = crate::render::mercator::lonlat_to_world(max_lon, max_lat);
+    let (wxmin, wxmax) = (a.0.min(b.0), a.0.max(b.0));
+    let (wymin, wymax) = (a.1.min(b.1), a.1.max(b.1));
+    let mut ids = Vec::new();
+    for z in z_lo..=z_hi {
+        let n = 1u32 << z;
+        let nf = n as f64;
+        let tx0 = (wxmin * nf).floor() as i64;
+        let tx1 = (wxmax * nf).ceil() as i64;
+        let ty0 = ((wymin * nf).floor() as i64).max(0);
+        let ty1 = ((wymax * nf).ceil() as i64).min(n as i64);
+        for ty in ty0..ty1 {
+            for tx in tx0..tx1 {
+                ids.push((z, tx.rem_euclid(n as i64) as u32, ty as u32));
+            }
+        }
+    }
+    ids
+}
+
+/// Download `jobs` into the disk tile cache with 4 fixed workers, reporting each tile's outcome
+/// on `tx` as `(ok, downloaded_bytes)` — `bytes == 0` means it was already cached (skipped). Stops
+/// early when `cancel` is set. // ponytail: 4 fixed workers pulling a shared queue, no semaphore crate.
+pub fn start_pack_download(rt: &Handle, jobs: Vec<PackJob>, cancel: Arc<AtomicBool>, tx: Sender<(bool, u64)>) {
+    let queue = Arc::new(Mutex::new(jobs.into_iter()));
+    let client = reqwest::Client::builder()
+        .user_agent(USER_AGENT) // browser-ish UA: imagery hosts 403 bare UAs (matches live tile traffic)
+        .build()
+        .expect("build reqwest client");
+    for _ in 0..4 {
+        let queue = queue.clone();
+        let cancel = cancel.clone();
+        let tx = tx.clone();
+        let client = client.clone();
+        rt.spawn(async move {
+            loop {
+                if cancel.load(Ordering::Relaxed) {
+                    break;
+                }
+                let job = queue.lock().unwrap().next();
+                let Some((url, path)) = job else { break };
+                if path.exists() {
+                    let _ = tx.send((true, 0));
+                    continue;
+                }
+                match load_tile_bytes(&client, &url, Some(&path)).await {
+                    Ok(bytes) => {
+                        let _ = tx.send((true, bytes.len() as u64));
+                    }
+                    Err(_) => {
+                        let _ = tx.send((false, 0));
+                    }
+                }
+            }
+        });
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pack_tile_count_covers_expected() {
+        // The whole world at z0 is a single tile.
+        assert_eq!(pack_tile_count(-179.9, -85.0, 179.9, 85.0, 0, 0), 1);
+        // A sub-tile-sized box still needs at least one tile at each level.
+        assert_eq!(pack_tile_count(-97.52, 35.30, -97.50, 35.32, 6, 6), 1);
+        // Summing a range equals summing its levels.
+        let a = pack_tile_count(-97.52, 35.30, -97.50, 35.32, 5, 5);
+        let b = pack_tile_count(-97.52, 35.30, -97.50, 35.32, 6, 6);
+        assert_eq!(pack_tile_count(-97.52, 35.30, -97.50, 35.32, 5, 6), a + b);
+        // id list length matches the count.
+        assert_eq!(
+            pack_tile_ids(-99.0, 34.0, -96.0, 36.0, 7, 9).len() as u64,
+            pack_tile_count(-99.0, 34.0, -96.0, 36.0, 7, 9)
+        );
+    }
 
     #[test]
     fn parses_goes_domain_ranges() {

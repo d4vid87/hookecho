@@ -112,6 +112,23 @@ fn main() -> eframe::Result<()> {
         return Ok(());
     }
 
+    // Chase-pack verify: `hookecho --headless-chasepack [lat lon radius_km zmax] [--basemap slug]`.
+    if let Some(pos) = args.iter().position(|a| a == "--headless-chasepack") {
+        let num = |i: usize, d: f64| args.get(pos + i).and_then(|a| a.parse().ok()).unwrap_or(d);
+        let (lat, lon, radius, zmax) = (num(1, 35.3), num(2, -97.5), num(3, 100.0), num(4, 12.0) as u8);
+        let slug = args
+            .iter()
+            .position(|a| a == "--basemap")
+            .and_then(|i| args.get(i + 1))
+            .map(String::as_str)
+            .unwrap_or("carto-dark");
+        if let Err(e) = headless::run_chasepack(lat, lon, radius, zmax, slug) {
+            eprintln!("headless chasepack failed: {e}");
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
+
     // Gridded L3 verify: `hookecho --headless-l3grid <dvl|eet> [SITE] <out.png>`.
     if let Some(pos) = args.iter().position(|a| a == "--headless-l3grid") {
         let kind = args.get(pos + 1).map(String::as_str).unwrap_or("dvl");

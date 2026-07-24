@@ -19,6 +19,22 @@ pub struct ToolboxActions {
     pub instant_replay: bool,
     /// The Day-1 outlook hazard changed; the app must clear + refetch that day's outlook.
     pub outlook_kind_changed: bool,
+    /// Start an offline chase-pack download of the current view's basemap.
+    pub download_chasepack: bool,
+    /// Cancel the in-progress chase-pack download.
+    pub cancel_chasepack: bool,
+}
+
+/// Read-only chase-pack state the app feeds the toolbox each frame: the current-view estimate and,
+/// while a download runs, its progress `(done, total, errors, mb)`.
+pub struct ChasePackUi {
+    pub tiles: u64,
+    pub mb: f64,
+    /// The active basemap can be pre-downloaded (raster with a URL, or vector once its template loads).
+    pub packable: bool,
+    pub z_lo: u8,
+    pub z_hi: u8,
+    pub progress: Option<(u64, u64, u64, f64)>,
 }
 
 #[allow(clippy::too_many_arguments)] // one flat call per frame; a params struct adds churn for no reader gain
@@ -46,13 +62,14 @@ pub(crate) fn show(
     show_tropical: &mut bool,
     show_aviation: &mut bool,
     show_range_rings: &mut bool,
+    chasepack: &ChasePackUi,
 ) -> ToolboxActions {
     use crate::theme::section;
     let mut actions = ToolboxActions::default();
     egui::ScrollArea::vertical().show(ui, |ui| {
         section(ui, "Radar Site", |ui| site_section(ui, view, settings, &mut actions));
         section(ui, "Volume", |ui| vcp_section(ui, view));
-        section(ui, "Map", |ui| map_section(ui, view, settings));
+        section(ui, "Map", |ui| map_section(ui, view, settings, chasepack, &mut actions));
         section(ui, "Level 2", |ui| level2_section(ui, view, settings, &mut actions));
         section(ui, "National", |ui| national_section(ui, fields, rotation_minutes));
         section(ui, "Future Radar", |ui| hrrr_section(ui, fields, hrrr_fcst_hour, hrrr_valid));
@@ -350,7 +367,7 @@ fn vcp_section(ui: &mut egui::Ui, view: &MapView) {
     });
 }
 
-fn map_section(ui: &mut egui::Ui, view: &mut MapView, settings: &mut Settings) {
+fn map_section(ui: &mut egui::Ui, view: &mut MapView, settings: &mut Settings, chasepack: &ChasePackUi, actions: &mut ToolboxActions) {
     use crate::settings::StartView;
     use crate::tiles::BasemapStyle;
     let (mb, mt) = (!settings.mapbox_key.is_empty(), !settings.maptiler_key.is_empty());
@@ -394,6 +411,37 @@ fn map_section(ui: &mut egui::Ui, view: &mut MapView, settings: &mut Settings) {
         });
         if clear {
             settings.start_view = None;
+        }
+    }
+
+    // Offline chase pack: pre-cache this view's basemap tiles to disk so it renders with no signal.
+    ui.separator();
+    if let Some((done, total, errors, mb)) = chasepack.progress {
+        let frac = if total > 0 { done as f32 / total as f32 } else { 1.0 };
+        ui.add(egui::ProgressBar::new(frac).text(format!("{done}/{total} tiles · {mb:.0} MB")));
+        if errors > 0 {
+            ui.colored_label(egui::Color32::from_rgb(230, 120, 60), format!("{errors} failed"));
+        }
+        if ui.button("Cancel download").clicked() {
+            actions.cancel_chasepack = true;
+        }
+    } else if !chasepack.packable {
+        ui.weak("Offline pack: pick a raster or vector basemap");
+    } else {
+        ui.weak(format!(
+            "Offline pack: {} tiles ≈ {:.0} MB (z{}–{}, current view)",
+            chasepack.tiles, chasepack.mb, chasepack.z_lo, chasepack.z_hi
+        ));
+        let too_big = chasepack.mb > 2000.0;
+        if ui
+            .add_enabled(!too_big, egui::Button::new("⬇ Download offline pack"))
+            .on_hover_text("Cache this view's basemap tiles to disk for offline use in the field")
+            .clicked()
+        {
+            actions.download_chasepack = true;
+        }
+        if too_big {
+            ui.colored_label(egui::Color32::from_rgb(230, 90, 90), "Too large (>2 GB) — zoom in or narrow the view");
         }
     }
 }

@@ -478,6 +478,31 @@ impl VectorTileManager {
         }
     }
 
+    /// Whether the vector basemap can be pre-downloaded yet (its tile-URL template has been
+    /// fetched from TileJSON — happens shortly after the first vector view).
+    pub fn packable(&self) -> bool {
+        self.template.is_some()
+    }
+
+    /// Max zoom the vector source serves (for the chase-pack depth cap).
+    pub fn max_pack_z(&self) -> u8 {
+        MAX_VECTOR_Z
+    }
+
+    /// Build the `(url, cache_path)` jobs for an offline chase pack of the lon/lat bbox over
+    /// `z_lo..=z_hi` (capped at the vector max zoom). Empty until the URL template is known. The
+    /// `.pbf` cache path is snapshot-agnostic so a dark/light switch keeps the pre-downloads.
+    pub fn pack_jobs(&self, min_lon: f64, min_lat: f64, max_lon: f64, max_lat: f64, z_lo: u8, z_hi: u8) -> Vec<crate::tiles::PackJob> {
+        let (Some(template), Some(root)) = (self.template.as_ref(), self.cache_root.as_ref()) else {
+            return Vec::new();
+        };
+        let z_hi = z_hi.min(MAX_VECTOR_Z);
+        crate::tiles::pack_tile_ids(min_lon, min_lat, max_lon, max_lat, z_lo, z_hi)
+            .into_iter()
+            .map(|(z, x, y)| (fill_template(template, z, x, y), root.join(format!("{z}/{x}/{y}.pbf"))))
+            .collect()
+    }
+
     /// Drain finished tessellations into upload-ready tiles (each returned once).
     pub fn drain_ready(&mut self) -> Vec<PendingVectorTile> {
         let mut ready = Vec::new();
