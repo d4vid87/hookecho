@@ -506,6 +506,7 @@ impl super::HookEchoApp {
                                 &mut self.show_probsevere,
                                 &mut self.show_radar_sites,
                                 &mut self.show_metar,
+                                &mut self.show_gauges,
                                 &mut self.show_tropical,
                                 &mut self.show_aviation,
                                 &mut self.show_range_rings,

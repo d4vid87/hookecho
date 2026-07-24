@@ -808,6 +808,27 @@ pub fn run_metar(site: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Fetch NWPS river gauges within ±2.5° of a site, print the count + a few samples (worst-first).
+pub fn run_gauges(site: &str) -> anyhow::Result<()> {
+    let s = wxdata::sites::site_by_id(site).ok_or_else(|| anyhow::anyhow!("unknown site {site}"))?;
+    let (lat, lon) = (s.latitude as f64, s.longitude as f64);
+    let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
+    let gauges = rt.block_on(async {
+        let client = reqwest::Client::new();
+        wxdata::river::fetch_bbox(&client, lat - 2.5, lon - 2.5, lat + 2.5, lon + 2.5).await
+    })?;
+    println!("{site}: {} river gauges within ±2.5°", gauges.len());
+    for g in gauges.iter().take(3) {
+        println!(
+            "  {:<6} {:>6.2},{:>7.2}  {:>7}  {:?}  {}",
+            g.lid, g.lat, g.lon,
+            g.stage_ft.map(|v| format!("{v:.1}ft")).unwrap_or_else(|| "—".into()),
+            g.cat, g.name,
+        );
+    }
+    Ok(())
+}
+
 /// Fetch a gridded L3 product (DVL/EET), print stats, render centered on the site (feature X).
 pub fn run_l3grid(kind: &str, site: &str, out_path: &str) -> anyhow::Result<()> {
     use crate::render::FieldLayer as FL;

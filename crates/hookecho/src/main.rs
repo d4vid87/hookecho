@@ -102,6 +102,16 @@ fn main() -> eframe::Result<()> {
         return Ok(());
     }
 
+    // River-gauge verify: `hookecho --headless-gauges [SITE]`.
+    if let Some(pos) = args.iter().position(|a| a == "--headless-gauges") {
+        let site = args.get(pos + 1).filter(|a| !a.starts_with("--")).map(String::as_str).unwrap_or("KTLX");
+        if let Err(e) = headless::run_gauges(site) {
+            eprintln!("headless gauges failed: {e}");
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
+
     // Gridded L3 verify: `hookecho --headless-l3grid <dvl|eet> [SITE] <out.png>`.
     if let Some(pos) = args.iter().position(|a| a == "--headless-l3grid") {
         let kind = args.get(pos + 1).map(String::as_str).unwrap_or("dvl");

@@ -109,6 +109,8 @@ enum OverlayMsg {
     ArchiveWarnings(i64, Vec<GeoFeature>),
     /// Surface observations (METAR station plots) for the requested bbox (feature U).
     Metar(Vec<wxdata::metar::SurfaceOb>),
+    /// River flood gauges (NWPS) for the requested bbox.
+    Gauges(Vec<wxdata::river::Gauge>),
     /// NHC tropical cyclones: cones + per-storm tracks (feature V).
     Tropical(wxdata::tropical::TropicalData),
     /// Aviation SIGMET/AIRMET hazard polygons (feature GG).
@@ -146,6 +148,8 @@ enum OverlaySource {
     Aviation,
     /// Surface observations within a lat/lon bbox `(lat0, lon0, lat1, lon1)` (feature U).
     Metar(f64, f64, f64, f64),
+    /// River flood gauges within a lat/lon bbox `(lat0, lon0, lat1, lon1)`.
+    Gauges(f64, f64, f64, f64),
     /// NHC tropical cyclones (feature V).
     Tropical,
 }
@@ -242,6 +246,9 @@ impl OverlaySource {
             }
             OverlaySource::Metar(lat0, lon0, lat1, lon1) => {
                 OverlayMsg::Metar(wxdata::metar::fetch_bbox(http, lat0, lon0, lat1, lon1).await?)
+            }
+            OverlaySource::Gauges(lat0, lon0, lat1, lon1) => {
+                OverlayMsg::Gauges(wxdata::river::fetch_bbox(http, lat0, lon0, lat1, lon1).await?)
             }
             OverlaySource::Tropical => OverlayMsg::Tropical(wxdata::tropical::fetch_active(http).await?),
             OverlaySource::Aviation => {
@@ -508,6 +515,11 @@ pub struct HookEchoApp {
     metar_last_fetch: Option<Instant>,
     /// The `(lat0, lon0, lat1, lon1)` bbox the current `metars` were fetched for.
     metar_bounds: Option<(f64, f64, f64, f64)>,
+    /// River flood gauges (NWPS): toggle, current gauges, fetch clock + bbox (mirrors METAR).
+    show_gauges: bool,
+    gauges: Vec<wxdata::river::Gauge>,
+    gauge_last_fetch: Option<Instant>,
+    gauge_bounds: Option<(f64, f64, f64, f64)>,
     /// NHC tropical suite (feature V): toggle, fetched data, refresh clock.
     show_tropical: bool,
     tropical: Option<wxdata::tropical::TropicalData>,
@@ -805,6 +817,10 @@ paste_target: None,
             metars: Vec::new(),
             metar_last_fetch: None,
             metar_bounds: None,
+            show_gauges: false,
+            gauges: Vec::new(),
+            gauge_last_fetch: None,
+            gauge_bounds: None,
             show_tropical: false,
             tropical: None,
             tropical_last_fetch: None,
@@ -1774,6 +1790,7 @@ mobile_sheet: mobile::MobileSheet::None,
                     }
                 }
                 OverlayMsg::Metar(obs) => self.metars = obs,
+                OverlayMsg::Gauges(g) => self.gauges = g,
                 OverlayMsg::Tropical(data) => self.tropical = Some(data),
             }
             changed = true;
@@ -1917,6 +1934,34 @@ mobile_sheet: mobile::MobileSheet::None,
             self.metar_last_fetch = Some(Instant::now());
             self.metar_bounds = Some((lat0, lon0, lat1, lon1));
             self.spawn_overlay(ctx, OverlaySource::Metar(lat0, lon0, lat1, lon1));
+        }
+    }
+
+    /// Drive the river-gauge fetch (NWPS), mirroring [`Self::sync_metar`] but with a slower cadence
+    /// (gauge stages update every ~15 min upstream, so 300 s is plenty).
+    fn sync_gauges(&mut self, ctx: &egui::Context) {
+        if !self.show_gauges {
+            return;
+        }
+        let (min_lon, min_lat, max_lon, max_lat) = self.view_bounds();
+        if (max_lon - min_lon) > 12.0 {
+            return; // too zoomed out — too many gauges to be readable
+        }
+        let (clon, clat) = ((min_lon + max_lon) * 0.5, (min_lat + max_lat) * 0.5);
+        let stale = self.gauge_last_fetch.is_none_or(|t| t.elapsed().as_secs() >= 300);
+        let drifted = self.gauge_bounds.is_none_or(|(la0, lo0, la1, lo1)| {
+            let (mlon, mlat) = ((lo0 + lo1) * 0.5, (la0 + la1) * 0.5);
+            let (hw, hh) = ((lo1 - lo0) * 0.25, (la1 - la0) * 0.25);
+            (clon - mlon).abs() > hw || (clat - mlat).abs() > hh
+        });
+        if stale || drifted {
+            let pad_lon = ((max_lon - min_lon) * 0.2).min(15.0);
+            let pad_lat = ((max_lat - min_lat) * 0.2).min(15.0);
+            let (lat0, lon0) = (min_lat - pad_lat, min_lon - pad_lon);
+            let (lat1, lon1) = (max_lat + pad_lat, max_lon + pad_lon);
+            self.gauge_last_fetch = Some(Instant::now());
+            self.gauge_bounds = Some((lat0, lon0, lat1, lon1));
+            self.spawn_overlay(ctx, OverlaySource::Gauges(lat0, lon0, lat1, lon1));
         }
     }
 
@@ -3231,6 +3276,59 @@ mobile_sheet: mobile::MobileSheet::None,
         }
         // ponytail: °F hardcoded (US station-plot convention); wire to the Units setting if asked.
 
+        // River flood gauges (NWPS): category-colored inverted-triangle droplet + stage tooltip.
+        // ponytail: hover tooltip carries name/stage/forecast; skipped a click→Detail popup — the
+        // hover already answers "how high is this river", add the popup if users want to pin it.
+        if self.show_gauges && cam.zoom >= 6.0 {
+            use wxdata::river::FloodCat;
+            let gcolor = |c: FloodCat| match c {
+                FloodCat::Major => egui::Color32::from_rgb(170, 60, 220),
+                FloodCat::Moderate => egui::Color32::from_rgb(230, 40, 40),
+                FloodCat::Minor => egui::Color32::from_rgb(255, 140, 0),
+                FloodCat::Action => egui::Color32::from_rgb(240, 200, 40),
+                FloodCat::NoFlooding => egui::Color32::from_rgb(80, 200, 220),
+                FloodCat::Unknown => egui::Color32::from_gray(150),
+            };
+            let glabel = |c: FloodCat| match c {
+                FloodCat::Major => "major flooding",
+                FloodCat::Moderate => "moderate flooding",
+                FloodCat::Minor => "minor flooding",
+                FloodCat::Action => "action stage",
+                FloodCat::NoFlooding => "no flooding",
+                FloodCat::Unknown => "no current reading",
+            };
+            let mut placed: Vec<egui::Rect> = Vec::new();
+            for g in &self.gauges {
+                let w = crate::render::mercator::lonlat_to_world(g.lon, g.lat);
+                let (sx, sy) = cam.world_to_screen(w, vp);
+                let p = egui::pos2(prect.left() + sx, prect.top() + sy);
+                if !prect.contains(p) {
+                    continue;
+                }
+                // Greedy declutter: skip droplets that would overlap one already placed.
+                let cell = egui::Rect::from_center_size(p, egui::vec2(15.0, 15.0));
+                if placed.iter().any(|r| r.intersects(cell)) {
+                    continue;
+                }
+                placed.push(cell);
+                let s = 6.0;
+                painter.add(egui::Shape::convex_polygon(
+                    vec![p + egui::vec2(-s * 0.85, -s * 0.6), p + egui::vec2(s * 0.85, -s * 0.6), p + egui::vec2(0.0, s)],
+                    gcolor(g.cat).gamma_multiply(0.85),
+                    egui::Stroke::new(1.2, egui::Color32::from_gray(20)),
+                ));
+                let hit = egui::Rect::from_center_size(p, egui::vec2(16.0, 16.0));
+                if response.hover_pos().is_some_and(|hp| hit.contains(hp)) {
+                    let stage = g.stage_ft.map_or_else(|| "n/a".to_string(), |v| format!("{v:.1} ft"));
+                    let mut tip = format!("{} ({})\n{stage} — {}", g.name, g.lid, glabel(g.cat));
+                    if let Some(f) = g.forecast_ft {
+                        tip.push_str(&format!("\nFcst: {f:.1} ft ({})", glabel(g.forecast_cat)));
+                    }
+                    response.clone().show_tooltip_text(tip);
+                }
+            }
+        }
+
         // NHC tropical suite: forecast track polyline + category-colored points + storm name.
         if self.show_tropical {
             if let Some(t) = &self.tropical {
@@ -4416,6 +4514,8 @@ impl eframe::App for HookEchoApp {
         self.sync_archive_lsr(ctx);
         // Surface obs (METAR station plots).
         self.sync_metar(ctx);
+        // River flood gauges (NWPS).
+        self.sync_gauges(ctx);
         // NHC tropical suite: refresh every 15 min while enabled.
         if self.show_tropical
             && self.tropical_last_fetch.is_none_or(|t| t.elapsed().as_secs() >= 900)
@@ -4648,6 +4748,7 @@ impl eframe::App for HookEchoApp {
                             &mut self.show_probsevere,
                             &mut self.show_radar_sites,
                             &mut self.show_metar,
+                            &mut self.show_gauges,
                             &mut self.show_tropical,
                             &mut self.show_aviation,
                             &mut self.show_range_rings,

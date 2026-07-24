@@ -42,6 +42,7 @@ pub(crate) fn show(
     show_probsevere: &mut bool,
     show_radar_sites: &mut bool,
     show_metar: &mut bool,
+    show_gauges: &mut bool,
     show_tropical: &mut bool,
     show_aviation: &mut bool,
     show_range_rings: &mut bool,
@@ -73,6 +74,8 @@ pub(crate) fn show(
                 .on_hover_text("Show all NEXRAD sites; click one on the map to switch radars");
             ui.checkbox(show_metar, "Surface obs (METAR)")
                 .on_hover_text("Station plots: wind barbs + T/Td, flight-category colored (zoom in)");
+            ui.checkbox(show_gauges, "River gauges (NWPS)")
+                .on_hover_text("River flood gauges: colored droplets by flood category, hover for stage/forecast (zoom in)");
             if ui.checkbox(show_tropical, "Tropical (NHC)")
                 .on_hover_text("Active tropical cyclones: forecast cones, tracks, category-colored points")
                 .changed()

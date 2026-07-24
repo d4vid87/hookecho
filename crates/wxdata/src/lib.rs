@@ -17,6 +17,7 @@ pub mod obs;
 pub mod overlay;
 pub mod placefile;
 pub mod probsevere;
+pub mod river;
 pub mod sounding;
 pub mod spc;
 pub mod spotters;
