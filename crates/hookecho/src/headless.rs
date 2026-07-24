@@ -866,6 +866,37 @@ pub fn run_chasepack(lat: f64, lon: f64, radius_km: f64, zmax: u8, style_slug: &
     Ok(())
 }
 
+/// HRRR contour verifier: fetch a surface field, contour it, and print the line count / level
+/// range / longest polyline / valid time. No PNG — the overlay is painter-based, so line counts
+/// exercise the whole fetch→regrid→marching-squares pipeline without a GPU.
+pub fn run_contours(kind_token: &str) -> anyhow::Result<()> {
+    let kind = crate::app::ContourKind::from_token(kind_token)
+        .ok_or_else(|| anyhow::anyhow!("unknown contour kind '{kind_token}' (mslp|t2m|td2m|cape|srh)"))?;
+    let (var, level, interval) = kind.params().expect("non-Off kind has params");
+    let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
+    let (lines, valid) = rt.block_on(async {
+        let client = reqwest::Client::new();
+        let mut fc = wxdata::hrrr::fetch_field(&client, var, level, 0, f64::NEG_INFINITY).await?;
+        for v in &mut fc.field.values {
+            if v.is_finite() {
+                *v = kind.to_display(*v);
+            }
+        }
+        let valid = fc.valid();
+        anyhow::Ok((wxdata::contour::contour_lines(&fc.field, interval), valid))
+    })?;
+    let n = lines.len();
+    let longest = lines.iter().map(|l| l.pts.len()).max().unwrap_or(0);
+    let (lo, hi) = lines
+        .iter()
+        .fold((f32::INFINITY, f32::NEG_INFINITY), |(a, b), l| (a.min(l.level), b.max(l.level)));
+    println!(
+        "{kind_token}: {n} lines, levels {lo}-{hi} step {interval}, longest {longest} pts, valid {}",
+        valid.format("%H:%MZ")
+    );
+    Ok(())
+}
+
 /// Fetch a gridded L3 product (DVL/EET), print stats, render centered on the site (feature X).
 pub fn run_l3grid(kind: &str, site: &str, out_path: &str) -> anyhow::Result<()> {
     use crate::render::FieldLayer as FL;

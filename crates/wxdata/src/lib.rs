@@ -4,6 +4,7 @@ pub mod afd;
 pub mod alerts;
 pub mod archive_warnings;
 pub mod aviation;
+pub mod contour;
 pub mod dealias;
 pub mod geocode;
 pub mod hrrr;

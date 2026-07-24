@@ -49,6 +49,7 @@ pub(crate) fn show(
     hrrr_valid: Option<chrono::DateTime<chrono::Utc>>,
     env_cape_ml: &mut bool,
     env_srh_km: &mut u8,
+    contour_kind: &mut crate::app::ContourKind,
     l3grid_site: Option<&str>,
     show_sensors: &mut bool,
     show_hodo: &mut bool,
@@ -73,7 +74,7 @@ pub(crate) fn show(
         section(ui, "Level 2", |ui| level2_section(ui, view, settings, &mut actions));
         section(ui, "National", |ui| national_section(ui, fields, rotation_minutes));
         section(ui, "Future Radar", |ui| hrrr_section(ui, fields, hrrr_fcst_hour, hrrr_valid));
-        section(ui, "Environment", |ui| env_section(ui, fields, env_cape_ml, env_srh_km));
+        section(ui, "Environment", |ui| env_section(ui, fields, env_cape_ml, env_srh_km, contour_kind));
         section(ui, "Sensors", |ui| {
             ui.checkbox(show_sensors, "Sensor dashboard")
                 .on_hover_text("Nearest NWS/METAR station: current conditions + 24h trends");
@@ -203,6 +204,7 @@ fn env_section(
     fields: &mut std::collections::HashMap<crate::render::FieldLayer, crate::app::FieldState>,
     env_cape_ml: &mut bool,
     env_srh_km: &mut u8,
+    contour_kind: &mut crate::app::ContourKind,
 ) {
     use crate::render::FieldLayer as FL;
     // CAPE toggle + surface/mixed-layer parcel select.
@@ -249,6 +251,16 @@ fn env_section(
             });
         });
     }
+    // HRRR model contours (isolines) — MSLP / 2 m temp / dewpoint / SB-CAPE / 0-3 km SRH.
+    egui::ComboBox::from_label("Contours")
+        .selected_text(contour_kind.label())
+        .show_ui(ui, |ui| {
+            for k in crate::app::ContourKind::ALL {
+                ui.selectable_value(contour_kind, k, k.label());
+            }
+        })
+        .response
+        .on_hover_text("Draw an HRRR surface field as labeled contour lines (analysis f00)");
 }
 
 fn overlays_section(ui: &mut egui::Ui, filters: &mut OverlayFilters, actions: &mut ToolboxActions) {

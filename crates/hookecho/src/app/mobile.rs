@@ -498,6 +498,7 @@ impl super::HookEchoApp {
                                 self.hrrr_valid,
                                 &mut self.env_cape_ml,
                                 &mut self.env_srh_km,
+                                &mut self.contour_kind,
                                 l3_site.as_deref(),
                                 &mut self.show_sensors,
                                 &mut self.show_hodo,

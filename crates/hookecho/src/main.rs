@@ -129,6 +129,16 @@ fn main() -> eframe::Result<()> {
         return Ok(());
     }
 
+    // HRRR contour verify: `hookecho --headless-contours <mslp|t2m|td2m|cape|srh>`.
+    if let Some(pos) = args.iter().position(|a| a == "--headless-contours") {
+        let kind = args.get(pos + 1).map(String::as_str).unwrap_or("mslp");
+        if let Err(e) = headless::run_contours(kind) {
+            eprintln!("headless contours failed: {e}");
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
+
     // Gridded L3 verify: `hookecho --headless-l3grid <dvl|eet> [SITE] <out.png>`.
     if let Some(pos) = args.iter().position(|a| a == "--headless-l3grid") {
         let kind = args.get(pos + 1).map(String::as_str).unwrap_or("dvl");

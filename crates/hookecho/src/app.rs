@@ -111,6 +111,8 @@ enum OverlayMsg {
     Metar(Vec<wxdata::metar::SurfaceOb>),
     /// River flood gauges (NWPS) for the requested bbox.
     Gauges(Vec<wxdata::river::Gauge>),
+    /// HRRR model contour polylines for a kind, plus the forecast valid time.
+    Contours(ContourKind, Vec<wxdata::contour::ContourLine>, DateTime<Utc>),
     /// NHC tropical cyclones: cones + per-storm tracks (feature V).
     Tropical(wxdata::tropical::TropicalData),
     /// Aviation SIGMET/AIRMET hazard polygons (feature GG).
@@ -150,6 +152,8 @@ enum OverlaySource {
     Metar(f64, f64, f64, f64),
     /// River flood gauges within a lat/lon bbox `(lat0, lon0, lat1, lon1)`.
     Gauges(f64, f64, f64, f64),
+    /// HRRR model contours for a field kind (fetched at surface f00, contoured off-thread).
+    Contours(ContourKind),
     /// NHC tropical cyclones (feature V).
     Tropical,
 }
@@ -250,6 +254,18 @@ impl OverlaySource {
             OverlaySource::Gauges(lat0, lon0, lat1, lon1) => {
                 OverlayMsg::Gauges(wxdata::river::fetch_bbox(http, lat0, lon0, lat1, lon1).await?)
             }
+            OverlaySource::Contours(kind) => {
+                let (var, level, interval) = kind.params().ok_or_else(|| anyhow::anyhow!("contour Off"))?;
+                let mut fc = wxdata::hrrr::fetch_field(http, var, level, 0, f64::NEG_INFINITY).await?;
+                // Convert to display units so the interval is in hPa / °F / etc, then contour off-thread.
+                for v in &mut fc.field.values {
+                    if v.is_finite() {
+                        *v = kind.to_display(*v);
+                    }
+                }
+                let valid = fc.valid();
+                OverlayMsg::Contours(kind, wxdata::contour::contour_lines(&fc.field, interval), valid)
+            }
             OverlaySource::Tropical => OverlayMsg::Tropical(wxdata::tropical::fetch_active(http).await?),
             OverlaySource::Aviation => {
                 OverlayMsg::Aviation(wxdata::aviation::fetch_airsigmet(http).await?)
@@ -276,6 +292,79 @@ enum MapTool {
     Chase,
     /// Click a point to list historical tornado tracks near it (SPC climatology).
     Climatology,
+}
+
+/// HRRR model field drawn as contour lines over the radar (surface `f00`). SB-CAPE / 0-3 km SRH
+/// are fixed here — `// ponytail: not wired to the env suite's env_cape_ml / env_srh_km toggles.`
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) enum ContourKind {
+    #[default]
+    Off,
+    Mslp,
+    T2m,
+    Td2m,
+    Cape,
+    Srh,
+}
+
+impl ContourKind {
+    pub(crate) const ALL: [ContourKind; 6] =
+        [ContourKind::Off, ContourKind::Mslp, ContourKind::T2m, ContourKind::Td2m, ContourKind::Cape, ContourKind::Srh];
+
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            ContourKind::Off => "Off",
+            ContourKind::Mslp => "MSLP",
+            ContourKind::T2m => "2 m temp",
+            ContourKind::Td2m => "2 m dewpoint",
+            ContourKind::Cape => "SB-CAPE",
+            ContourKind::Srh => "0-3 km SRH",
+        }
+    }
+
+    /// Parse a headless CLI token (`mslp|t2m|td2m|cape|srh`) into a kind.
+    pub(crate) fn from_token(s: &str) -> Option<ContourKind> {
+        Some(match s {
+            "mslp" => ContourKind::Mslp,
+            "t2m" => ContourKind::T2m,
+            "td2m" => ContourKind::Td2m,
+            "cape" => ContourKind::Cape,
+            "srh" => ContourKind::Srh,
+            _ => return None,
+        })
+    }
+
+    /// GRIB `(var, level, contour interval)` in display units, or `None` for `Off`.
+    pub(crate) fn params(self) -> Option<(&'static str, &'static str, f32)> {
+        match self {
+            ContourKind::Off => None,
+            ContourKind::Mslp => Some(("MSLMA", "mean sea level", 2.0)), // hPa
+            ContourKind::T2m => Some(("TMP", "2 m above ground", 5.0)),  // °F
+            ContourKind::Td2m => Some(("DPT", "2 m above ground", 5.0)), // °F
+            ContourKind::Cape => Some(("CAPE", "surface", 500.0)),       // J/kg
+            ContourKind::Srh => Some(("HLCY", "3000-0 m above ground", 100.0)), // m²/s²
+        }
+    }
+
+    /// Convert a raw GRIB value to the display unit the interval is expressed in.
+    pub(crate) fn to_display(self, raw: f32) -> f32 {
+        match self {
+            ContourKind::Mslp => raw / 100.0,               // Pa → hPa
+            ContourKind::T2m | ContourKind::Td2m => raw * 9.0 / 5.0 - 459.67, // K → °F
+            _ => raw,                                        // CAPE / SRH as-is
+        }
+    }
+
+    fn color(self) -> egui::Color32 {
+        match self {
+            ContourKind::Mslp => egui::Color32::from_rgb(235, 235, 235),
+            ContourKind::T2m => egui::Color32::from_rgb(240, 120, 60),
+            ContourKind::Td2m => egui::Color32::from_rgb(90, 200, 120),
+            ContourKind::Cape => egui::Color32::from_rgb(240, 160, 40),
+            ContourKind::Srh => egui::Color32::from_rgb(190, 110, 230),
+            ContourKind::Off => egui::Color32::WHITE,
+        }
+    }
 }
 
 /// Refresh cadence (seconds) for a national field layer's product.
@@ -538,6 +627,13 @@ pub struct HookEchoApp {
     gauges: Vec<wxdata::river::Gauge>,
     gauge_last_fetch: Option<Instant>,
     gauge_bounds: Option<(f64, f64, f64, f64)>,
+    /// HRRR model contours: selected field, current polylines, valid time, fetch clock, and the
+    /// kind the current lines were fetched for (drives refetch-on-change).
+    contour_kind: ContourKind,
+    contours: Vec<wxdata::contour::ContourLine>,
+    contour_valid: Option<DateTime<Utc>>,
+    contour_last_fetch: Option<Instant>,
+    contour_fetched_kind: Option<ContourKind>,
     /// NHC tropical suite (feature V): toggle, fetched data, refresh clock.
     show_tropical: bool,
     tropical: Option<wxdata::tropical::TropicalData>,
@@ -842,6 +938,11 @@ paste_target: None,
             gauges: Vec::new(),
             gauge_last_fetch: None,
             gauge_bounds: None,
+            contour_kind: ContourKind::Off,
+            contours: Vec::new(),
+            contour_valid: None,
+            contour_last_fetch: None,
+            contour_fetched_kind: None,
             show_tropical: false,
             tropical: None,
             tropical_last_fetch: None,
@@ -1879,6 +1980,13 @@ mobile_sheet: mobile::MobileSheet::None,
                 }
                 OverlayMsg::Metar(obs) => self.metars = obs,
                 OverlayMsg::Gauges(g) => self.gauges = g,
+                OverlayMsg::Contours(kind, lines, valid) => {
+                    // Keep only if the selection didn't change while the fetch was in flight.
+                    if kind == self.contour_kind {
+                        self.contours = lines;
+                        self.contour_valid = Some(valid);
+                    }
+                }
                 OverlayMsg::Tropical(data) => self.tropical = Some(data),
             }
             changed = true;
@@ -2050,6 +2158,30 @@ mobile_sheet: mobile::MobileSheet::None,
             self.gauge_last_fetch = Some(Instant::now());
             self.gauge_bounds = Some((lat0, lon0, lat1, lon1));
             self.spawn_overlay(ctx, OverlaySource::Gauges(lat0, lon0, lat1, lon1));
+        }
+    }
+
+    /// Drive the HRRR contour fetch: refetch on a kind change or every 15 min. The HRRR surface
+    /// run updates hourly and contouring is cheap enough to redo on the model cadence.
+    fn sync_contours(&mut self, ctx: &egui::Context) {
+        if self.contour_kind == ContourKind::Off {
+            if !self.contours.is_empty() {
+                self.contours.clear();
+                self.contour_valid = None;
+            }
+            self.contour_fetched_kind = None;
+            return;
+        }
+        let changed = self.contour_fetched_kind != Some(self.contour_kind);
+        let stale = self.contour_last_fetch.is_none_or(|t| t.elapsed().as_secs() >= 900);
+        if changed {
+            self.contours.clear();
+            self.contour_valid = None;
+        }
+        if changed || stale {
+            self.contour_last_fetch = Some(Instant::now());
+            self.contour_fetched_kind = Some(self.contour_kind);
+            self.spawn_overlay(ctx, OverlaySource::Contours(self.contour_kind));
         }
     }
 
@@ -3065,6 +3197,49 @@ mobile_sheet: mobile::MobileSheet::None,
                 egui::FontId::proportional(10.0),
                 col,
             );
+        }
+
+        // HRRR model contours (MSLP / 2 m temp / dewpoint / CAPE / SRH): labeled isolines + banner.
+        if self.contour_kind != ContourKind::Off && !self.contours.is_empty() {
+            let to_screen = |lon: f64, lat: f64| {
+                let w = crate::render::mercator::lonlat_to_world(lon, lat);
+                let (sx, sy) = cam.world_to_screen(w, vp);
+                egui::pos2(prect.left() + sx, prect.top() + sy)
+            };
+            let col = self.contour_kind.color();
+            let clip = prect.expand(20.0);
+            for line in &self.contours {
+                let pts: Vec<egui::Pos2> = line.pts.iter().map(|&(lon, lat)| to_screen(lon, lat)).collect();
+                if pts.iter().all(|p| !clip.contains(*p)) {
+                    continue; // fully off-screen
+                }
+                painter.add(egui::Shape::line(pts.clone(), egui::Stroke::new(1.2, col)));
+                // Label the longest on-screen segment's midpoint when the line spans enough pixels.
+                if let Some((a, b)) = longest_segment(&pts) {
+                    if a.distance(b) > 60.0 {
+                        let mid = a + (b - a) * 0.5;
+                        let txt = format!("{:.0}", line.level);
+                        let font = egui::FontId::proportional(11.0);
+                        for dx in [-1.0, 1.0] {
+                            for dy in [-1.0, 1.0] {
+                                painter.text(mid + egui::vec2(dx, dy), egui::Align2::CENTER_CENTER,
+                                    &txt, font.clone(), egui::Color32::from_black_alpha(200));
+                            }
+                        }
+                        painter.text(mid, egui::Align2::CENTER_CENTER, &txt, font, col);
+                    }
+                }
+            }
+            if idx == self.active {
+                let vt = self.contour_valid.map(|t| t.format("%H:%MZ").to_string()).unwrap_or_default();
+                let text = format!("HRRR {} contours — valid {vt}", self.contour_kind.label());
+                let font = egui::FontId::proportional(12.0);
+                let anchor = egui::pos2(prect.left() + 8.0, prect.top() + 40.0);
+                let galley = painter.layout_no_wrap(text.clone(), font.clone(), egui::Color32::WHITE);
+                let bg = egui::Rect::from_min_size(anchor, galley.size() + egui::vec2(10.0, 4.0));
+                painter.rect_filled(bg, 3.0, egui::Color32::from_rgba_unmultiplied(60, 90, 60, 200));
+                painter.text(anchor + egui::vec2(5.0, 2.0), egui::Align2::LEFT_TOP, &text, font, egui::Color32::WHITE);
+            }
         }
 
         // Storm-cell dots + SCIT forecast tracks.
@@ -4573,6 +4748,13 @@ fn nearest_cell(cells: &[Cell], lon: f64, lat: f64, max_km: f64) -> Option<&Cell
         .map(|(c, _)| c)
 }
 
+/// The longest consecutive segment of a screen-space polyline (for placing a contour label).
+fn longest_segment(pts: &[egui::Pos2]) -> Option<(egui::Pos2, egui::Pos2)> {
+    pts.windows(2)
+        .map(|w| (w[0], w[1]))
+        .max_by(|a, b| a.0.distance(a.1).partial_cmp(&b.0.distance(b.1)).unwrap_or(std::cmp::Ordering::Equal))
+}
+
 /// Marker color for an SPC storm-report kind.
 fn report_color(kind: wxdata::spc::ReportKind) -> [u8; 4] {
     use wxdata::spc::ReportKind as R;
@@ -4699,6 +4881,8 @@ impl eframe::App for HookEchoApp {
         self.sync_metar(ctx);
         // River flood gauges (NWPS).
         self.sync_gauges(ctx);
+        // HRRR model contours.
+        self.sync_contours(ctx);
         // NHC tropical suite: refresh every 15 min while enabled.
         if self.show_tropical
             && self.tropical_last_fetch.is_none_or(|t| t.elapsed().as_secs() >= 900)
@@ -4923,6 +5107,7 @@ impl eframe::App for HookEchoApp {
                             self.hrrr_valid,
                             &mut self.env_cape_ml,
                             &mut self.env_srh_km,
+                            &mut self.contour_kind,
                             l3_site.as_deref(),
                             &mut self.show_sensors,
                             &mut self.show_hodo,
