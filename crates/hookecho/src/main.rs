@@ -115,7 +115,7 @@ fn main() -> eframe::Result<()> {
     // Chase-pack verify: `hookecho --headless-chasepack [lat lon radius_km zmax] [--basemap slug]`.
     if let Some(pos) = args.iter().position(|a| a == "--headless-chasepack") {
         let num = |i: usize, d: f64| args.get(pos + i).and_then(|a| a.parse().ok()).unwrap_or(d);
-        let (lat, lon, radius, zmax) = (num(1, 35.3), num(2, -97.5), num(3, 100.0), num(4, 12.0) as u8);
+        let (lat, lon, radius, zmax) = (num(1, 35.3), num(2, -97.5), num(3, 100.0), (num(4, 12.0) as u8).min(18));
         let slug = args
             .iter()
             .position(|a| a == "--basemap")

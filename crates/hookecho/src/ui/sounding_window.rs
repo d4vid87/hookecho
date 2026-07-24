@@ -59,10 +59,21 @@ impl SoundingWindow {
                     ui.weak("Fixed-layer forms from 10 mandatory levels — coarser than SPC mesoanalysis.");
                 }
                 ui.separator();
-                ui.horizontal(|ui| {
-                    skewt(ui, s);
-                    hodograph(ui, s);
-                });
+                // Phone: the fixed-width plots (300 + 240 px) side by side overflow the screen —
+                // stack them vertically inside a scroll instead (fixed-width content overrides
+                // fit_phone's max_width; same pattern as cell_window's grid).
+                if cfg!(target_os = "android") {
+                    egui::ScrollArea::vertical().show(ui, |ui| {
+                        skewt(ui, s);
+                        ui.add_space(6.0);
+                        hodograph(ui, s);
+                    });
+                } else {
+                    ui.horizontal(|ui| {
+                        skewt(ui, s);
+                        hodograph(ui, s);
+                    });
+                }
             });
         self.open = open;
     }

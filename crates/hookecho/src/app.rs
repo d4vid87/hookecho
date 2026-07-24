@@ -1785,7 +1785,8 @@ mobile_sheet: mobile::MobileSheet::None,
     }
 
     /// Fixed chase-pack zoom span for the current view: `z_lo = floor(zoom)`, four levels deeper,
-    /// capped to the active basemap's max. Returns `(z_lo, z_hi, packable, max_z)`.
+    /// both capped to the active basemap's max (zooming past the style's deepest level packs that
+    /// deepest level instead of an empty range).
     fn chasepack_zoom(&self) -> (u8, u8) {
         use crate::tiles::BasemapStyle;
         let style = self.views[self.active].basemap;
@@ -1797,6 +1798,7 @@ mobile_sheet: mobile::MobileSheet::None,
         } else {
             z_lo
         };
+        let z_lo = z_lo.min(max_z);
         (z_lo, (z_lo + 4).min(max_z))
     }
 
@@ -2237,8 +2239,16 @@ mobile_sheet: mobile::MobileSheet::None,
         } else {
             return;
         };
+        // Desktop: just under the menu bar. Android: below the top glass bar + chrome-hide EYE
+        // button (which sits at inset_top + 66; see app/mobile.rs), so nothing stacks.
+        let y = if cfg!(target_os = "android") {
+            let inset_top = (ctx.content_rect().top() - ctx.viewport_rect().top()).max(0.0);
+            inset_top + 116.0
+        } else {
+            48.0
+        };
         egui::Area::new("follow_badge".into())
-            .anchor(egui::Align2::RIGHT_TOP, egui::vec2(-10.0, 48.0))
+            .anchor(egui::Align2::RIGHT_TOP, egui::vec2(-10.0, y))
             .show(ctx, |ui| {
                 let fill = if following {
                     egui::Color32::from_rgba_unmultiplied(40, 90, 150, 220)
@@ -2649,10 +2659,14 @@ mobile_sheet: mobile::MobileSheet::None,
                     self.pane_shown.remove(&idx);
                 }
             }
-            // Storm cells follow the active pane's site: drop the old ones and refetch.
+            // Storm cells follow the active pane's site: drop the old ones (and any open old-site
+            // storm popup / trend history — the ring-click path in try_pick_site does the same) and
+            // refetch.
             if idx == self.active {
                 self.storm_cells.clear();
                 self.cells_site = None;
+                self.cell_trends.clear();
+                self.cell_popup = None;
                 if let Some(site) = self.views[idx].site.clone() {
                     let http = self.http.clone();
                     let tx = self.overlay_tx.clone();
@@ -3207,15 +3221,26 @@ mobile_sheet: mobile::MobileSheet::None,
                 egui::pos2(prect.left() + sx, prect.top() + sy)
             };
             let col = self.contour_kind.color();
-            let clip = prect.expand(20.0);
+            // This pane's lon/lat bounds, for culling lines by their precomputed bbox BEFORE
+            // projecting any points — CAPE/SRH carry thousands of small rings.
+            let (vmin_lon, vmin_lat, vmax_lon, vmax_lat) = {
+                use crate::render::mercator::world_to_lonlat;
+                let (wx0, wy0) = cam.screen_to_world((0.0, 0.0), vp);
+                let (wx1, wy1) = cam.screen_to_world((vp.0, vp.1), vp);
+                let (lon0, lat0) = world_to_lonlat(wx0, wy0);
+                let (lon1, lat1) = world_to_lonlat(wx1, wy1);
+                (lon0.min(lon1), lat0.min(lat1), lon0.max(lon1), lat0.max(lat1))
+            };
             for line in &self.contours {
-                let pts: Vec<egui::Pos2> = line.pts.iter().map(|&(lon, lat)| to_screen(lon, lat)).collect();
-                if pts.iter().all(|p| !clip.contains(*p)) {
-                    continue; // fully off-screen
+                let (bx0, by0, bx1, by1) = line.bbox;
+                if bx1 < vmin_lon || bx0 > vmax_lon || by1 < vmin_lat || by0 > vmax_lat {
+                    continue; // fully off-view
                 }
-                painter.add(egui::Shape::line(pts.clone(), egui::Stroke::new(1.2, col)));
-                // Label the longest on-screen segment's midpoint when the line spans enough pixels.
-                if let Some((a, b)) = longest_segment(&pts) {
+                let pts: Vec<egui::Pos2> = line.pts.iter().map(|&(lon, lat)| to_screen(lon, lat)).collect();
+                // Label the longest segment's midpoint when the line spans enough pixels.
+                let seg = longest_segment(&pts);
+                painter.add(egui::Shape::line(pts, egui::Stroke::new(1.2, col)));
+                if let Some((a, b)) = seg {
                     if a.distance(b) > 60.0 {
                         let mid = a + (b - a) * 0.5;
                         let txt = format!("{:.0}", line.level);

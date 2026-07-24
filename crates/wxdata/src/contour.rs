@@ -9,10 +9,13 @@
 use crate::mrms::MrmsField;
 use std::collections::HashMap;
 
-/// A single contour polyline at one level, in `(lon, lat)` degrees.
+/// A single contour polyline at one level, in `(lon, lat)` degrees. `bbox` is the polyline's
+/// `(min_lon, min_lat, max_lon, max_lat)` so the painter can cull off-view lines without
+/// projecting every point (CAPE/SRH produce thousands of small rings).
 pub struct ContourLine {
     pub level: f32,
     pub pts: Vec<(f64, f64)>,
+    pub bbox: (f64, f64, f64, f64),
 }
 
 /// Extract contour polylines from `f` at every multiple of `interval` inside the data's value
@@ -41,7 +44,11 @@ pub fn contour_lines(f: &MrmsField, interval: f32) -> Vec<ContourLine> {
         let level = k as f32 * interval;
         for line in stitch(level_segments(f, level)) {
             if line.len() >= 3 {
-                out.push(ContourLine { level, pts: line });
+                let bbox = line.iter().fold(
+                    (f64::MAX, f64::MAX, f64::MIN, f64::MIN),
+                    |(x0, y0, x1, y1), p| (x0.min(p.0), y0.min(p.1), x1.max(p.0), y1.max(p.1)),
+                );
+                out.push(ContourLine { level, pts: line, bbox });
             }
         }
         levels += 1;

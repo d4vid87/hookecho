@@ -140,6 +140,7 @@ impl super::HookEchoApp {
         // is the only floating control, so the map is fully visible.
         egui::Area::new(Id::new("m_chrome_toggle"))
             .anchor(Align2::RIGHT_TOP, vec2(-10.0, inset_top + 66.0))
+            .order(egui::Order::Foreground) // above the drawer scrim, so it stays tappable + undimmed
             .show(ctx, |ui| {
                 let g = if self.mobile_chrome_hidden { ph::EYE } else { ph::EYE_SLASH };
                 if square_btn(ui, g, self.mobile_chrome_hidden, OMEGA_ORANGE).clicked() {

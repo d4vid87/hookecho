@@ -766,6 +766,7 @@ pub type PackJob = (String, std::path::PathBuf);
 /// Number of tiles a chase-pack download covers over zoom `z_lo..=z_hi` for the lon/lat bbox.
 /// Pure — the toolbox calls it each frame to show a live size estimate. `≈ tiles × 25 KB`.
 pub fn pack_tile_count(min_lon: f64, min_lat: f64, max_lon: f64, max_lat: f64, z_lo: u8, z_hi: u8) -> u64 {
+    let z_hi = z_hi.min(22); // guard the shifts below — a junk CLI zmax must not overflow 1<<z
     let a = crate::render::mercator::lonlat_to_world(min_lon, min_lat);
     let b = crate::render::mercator::lonlat_to_world(max_lon, max_lat);
     let (wxmin, wxmax) = (a.0.min(b.0), a.0.max(b.0));
@@ -786,6 +787,7 @@ pub fn pack_tile_count(min_lon: f64, min_lat: f64, max_lon: f64, max_lat: f64, z
 /// The `(z, x, y)` tile ids covering the lon/lat bbox over `z_lo..=z_hi` (x wrapped into range).
 /// Shared by the raster and vector chase-pack job builders.
 pub(crate) fn pack_tile_ids(min_lon: f64, min_lat: f64, max_lon: f64, max_lat: f64, z_lo: u8, z_hi: u8) -> Vec<TileId> {
+    let z_hi = z_hi.min(22); // guard 1u32 << z (see pack_tile_count)
     let a = crate::render::mercator::lonlat_to_world(min_lon, min_lat);
     let b = crate::render::mercator::lonlat_to_world(max_lon, max_lat);
     let (wxmin, wxmax) = (a.0.min(b.0), a.0.max(b.0));
