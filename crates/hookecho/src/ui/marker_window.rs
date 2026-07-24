@@ -12,20 +12,53 @@ pub type IconTextures = HashMap<String, Option<TextureHandle>>;
 #[derive(Default)]
 pub struct MarkerWindow {
     pub open: bool,
+    /// Address/place search box contents.
+    pub query: String,
+    /// A geocode request is in flight (the app clears this when the result arrives).
+    pub searching: bool,
+    /// Last search outcome, shown under the box ("Added …" or an error).
+    pub status: Option<String>,
 }
 
 impl MarkerWindow {
-    pub fn show(&mut self, ctx: &egui::Context, settings: &mut Settings, icon_tex: &IconTextures) {
+    /// Returns the address/place to geocode when the user submits the search box; the app resolves
+    /// it (see `wxdata::geocode`) and adds a marker at the result.
+    #[must_use]
+    pub fn show(
+        &mut self,
+        ctx: &egui::Context,
+        settings: &mut Settings,
+        icon_tex: &IconTextures,
+    ) -> Option<String> {
         let mut open = self.open;
+        let mut go: Option<String> = None;
         crate::ui::fit_phone(ctx, egui::Window::new("Location Markers"))
             .open(&mut open)
-            .default_size([520.0, 320.0])
+            .default_size([520.0, 360.0])
             .show(ctx, |ui| {
+                ui.strong("Add by address");
+                ui.horizontal(|ui| {
+                    let field = ui.add(
+                        egui::TextEdit::singleline(&mut self.query)
+                            .hint_text("City, address, or place")
+                            .desired_width(ui.available_width() - 96.0),
+                    );
+                    let entered = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                    let label = if self.searching { "Searching…" } else { "🔍 Search" };
+                    let clicked = ui.add_enabled(!self.searching, egui::Button::new(label)).clicked();
+                    if (clicked || entered) && !self.searching && !self.query.trim().is_empty() {
+                        go = Some(self.query.trim().to_string());
+                    }
+                });
+                if let Some(s) = &self.status {
+                    ui.weak(s);
+                }
+                ui.separator();
                 ui.weak("Tip: Tools ▸ Drop marker adds one by clicking the map.");
                 ui.add_space(4.0);
                 marker_grid(ui, &mut settings.markers, icon_tex);
                 ui.add_space(6.0);
-                if ui.button("➕ Add marker").clicked() {
+                if ui.button("➕ Add blank marker").clicked() {
                     let n = settings.markers.len() + 1;
                     settings.markers.push(Marker {
                         name: format!("Marker {n}"),
@@ -36,6 +69,7 @@ impl MarkerWindow {
                 }
             });
         self.open = open;
+        go
     }
 }
 

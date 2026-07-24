@@ -378,6 +378,9 @@ pub struct HookEchoApp {
     active: usize,
     msg_rx: Receiver<DataMsg>,
     msg_tx: Sender<DataMsg>,
+    /// Geocode results for the marker window's address search: `(label, lat, lon)` or an error.
+    geocode_tx: Sender<Result<(String, f64, f64), String>>,
+    geocode_rx: Receiver<Result<(String, f64, f64), String>>,
     /// Per-pane "what's uploaded" key, so each pane re-bins/re-uploads only on a real change.
     pane_shown: std::collections::HashMap<usize, ShownKey>,
     site_dialog: Option<ui::site_dialog::SiteDialog>,
@@ -673,6 +676,7 @@ impl HookEchoApp {
         let vtiles = crate::vector_tiles::VectorTileManager::new(rt.handle().clone());
         let (msg_tx, msg_rx) = std::sync::mpsc::channel();
         let (overlay_tx, overlay_rx) = std::sync::mpsc::channel();
+        let (geocode_tx, geocode_rx) = std::sync::mpsc::channel();
         let http = reqwest::Client::new();
 
         // Open on the saved startup view if set (and its site still resolves), else the default site.
@@ -706,6 +710,8 @@ impl HookEchoApp {
             active: 0,
             msg_rx,
             msg_tx,
+            geocode_tx,
+            geocode_rx,
             pane_shown: std::collections::HashMap::new(),
             site_dialog: None,
             wizard: {
@@ -4719,7 +4725,34 @@ impl eframe::App for HookEchoApp {
             })
             .collect();
         self.placefile_window.show(ctx, &mut self.settings, &pf_status);
-        self.marker_window.show(ctx, &mut self.settings, &self.marker_icon_tex);
+        // Drain any geocode results into a new marker (address search in the marker window).
+        while let Ok(res) = self.geocode_rx.try_recv() {
+            self.marker_window.searching = false;
+            match res {
+                Ok((name, lat, lon)) => {
+                    self.settings.markers.push(crate::settings::Marker { name: name.clone(), lat, lon, icon: None });
+                    self.settings.save();
+                    // Fly the active pane to the new marker (same idiom as the alert panel).
+                    let cam = &mut self.views[self.active].camera;
+                    cam.center = crate::render::mercator::lonlat_to_world(lon, lat);
+                    cam.zoom = cam.zoom.max(9.0);
+                    self.marker_window.status = Some(format!("Added \"{name}\""));
+                    self.marker_window.query.clear();
+                }
+                Err(e) => self.marker_window.status = Some(e),
+            }
+        }
+        if let Some(query) = self.marker_window.show(ctx, &mut self.settings, &self.marker_icon_tex) {
+            self.marker_window.searching = true;
+            self.marker_window.status = Some("Searching…".into());
+            let http = self.http.clone();
+            let tx = self.geocode_tx.clone();
+            let ctx2 = ctx.clone();
+            self._rt.spawn(async move {
+                let _ = tx.send(wxdata::geocode::search(&http, &query).await);
+                ctx2.request_repaint();
+            });
+        }
         self.palette_editor.show(ctx, &mut self.settings, &self.palettes);
         // Storm digest: poll a pending Claude result, then render + handle Generate.
         if let Some(rx) = &self.digest_rx {

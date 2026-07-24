@@ -5,6 +5,7 @@ pub mod alerts;
 pub mod archive_warnings;
 pub mod aviation;
 pub mod dealias;
+pub mod geocode;
 pub mod hrrr;
 pub mod level2;
 pub mod level3;
