@@ -1,6 +1,6 @@
 //! Location Markers manager: name/edit/remove/icon user-placed markers.
 //!
-//! Markers can also be dropped directly on the map via Tools ▸ Drop marker.
+//! Markers can also be dropped directly on the map with the "Drop marker" tool.
 
 use crate::settings::{Marker, Settings};
 use egui::TextureHandle;
@@ -61,7 +61,7 @@ impl MarkerWindow {
                     ui.weak(s);
                 }
                 ui.separator();
-                ui.weak("Tip: Tools ▸ Drop marker adds one by clicking the map.");
+                ui.weak("Tip: press Ctrl+K, pick \"Tool: Drop marker\", then click the map.");
                 ui.add_space(4.0);
                 marker_grid(ui, &mut settings.markers, icon_tex);
                 ui.add_space(6.0);

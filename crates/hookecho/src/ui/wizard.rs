@@ -103,6 +103,13 @@ fn page_welcome(ui: &mut egui::Ui) {
     ui.strong("Welcome (1/8)");
     ui.add_space(6.0);
     ui.label("This quick setup configures your radar, map, theme, sounds, and saved locations. It takes under a minute — everything here can be changed later in Settings.");
+    ui.add_space(6.0);
+    ui.label("Afterwards the whole app is one map with a few floating controls:");
+    ui.add_space(2.0);
+    ui.small("• The bar along the bottom is the timeline — play, scrub, and jump back to live.");
+    ui.small("• Bottom-left names the product you're looking at; tap it to switch.");
+    ui.small("• The buttons down the right edge open Layers, radar Site, Alerts and Settings.");
+    ui.small("• Search the top pill for a place, or press Ctrl+K to search every action.");
     ui.add_space(4.0);
     ui.small("Press Next to begin.");
 }
@@ -228,6 +235,6 @@ fn page_done(ui: &mut egui::Ui, settings: &Settings, basemap: BasemapStyle) {
     ));
     ui.add_space(4.0);
     ui.small(
-        "Press Finish to jump to your home radar. Re-run this anytime from Help ▸ Setup wizard.",
+        "Press Finish to jump to your home radar. Re-run this anytime from ⋯ More ▸ Setup wizard.",
     );
 }

@@ -33,7 +33,7 @@ impl SoundingWindow {
                     return;
                 }
                 let Some(s) = &self.sounding else {
-                    ui.weak("Tools ▸ Sounding, then click a point on the map.");
+                    ui.weak("Press Ctrl+K, pick \"Tool: Sounding\", then click a point on the map.");
                     return;
                 };
                 ui.horizontal(|ui| {

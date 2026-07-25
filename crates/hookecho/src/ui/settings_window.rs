@@ -298,7 +298,7 @@ fn general_tab(ui: &mut egui::Ui, settings: &mut Settings) {
                 .desired_width(240.0),
         );
     });
-    ui.weak("Optional. Tools ▸ Storm Digest works offline; a key lets Claude write friendlier prose. Held locally only.");
+    ui.weak("Optional. Storm Digest (Ctrl+K) works offline; a key lets Claude write friendlier prose. Held locally only.");
 }
 
 /// Alert-sound controls: master toggle, volume, and a per-event sound picker with previews.

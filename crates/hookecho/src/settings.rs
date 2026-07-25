@@ -165,6 +165,9 @@ pub struct Settings {
     /// First-run setup wizard completed (or dismissed). `false` shows it at startup.
     #[serde(default)]
     pub setup_done: bool,
+    /// The one-time callouts pointing at the floating chrome have been dismissed.
+    #[serde(default)]
+    pub coach_done: bool,
     /// Sound played when a new NWS warning appears (gated by `alert_sound`).
     #[serde(default)]
     pub warn_sound: AlertSound,
@@ -355,6 +358,7 @@ impl Default for Settings {
             anthropic_key: String::new(),
             lightning_alarm: false,
             setup_done: false,
+            coach_done: false,
             warn_sound: AlertSound::default(),
             tds_sound: AlertSound::default(),
             rotation_sound: default_rotation_sound(),
@@ -525,6 +529,7 @@ mod tests {
             anthropic_key: "sk-test".to_string(),
             lightning_alarm: true,
             setup_done: true,
+            coach_done: true,
             warn_sound: AlertSound::Siren,
             tds_sound: AlertSound::Custom("/tmp/tds.wav".to_string()),
             rotation_sound: AlertSound::Siren,

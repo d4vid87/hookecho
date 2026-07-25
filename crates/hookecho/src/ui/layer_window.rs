@@ -19,7 +19,7 @@ pub(crate) fn show(ctx: &egui::Context, open: &mut bool, settings: &mut Settings
         .default_width(420.0)
         .show(ctx, |ui| {
             if settings.placefiles.is_empty() {
-                ui.weak("No placefiles configured — add one in Tools ▸ Placefile Manager.");
+                ui.weak("No placefiles configured — add one from Layers ▸ Placefile manager.");
                 return;
             }
             ui.weak("Top of the list paints first (underneath).");

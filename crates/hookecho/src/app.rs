@@ -6796,6 +6796,62 @@ impl HookEchoApp {
         }
     }
 
+    /// One-time callouts pointing at the three floating surfaces a newcomer has to find: the
+    /// search pill, the Layers button, and the timeline.
+    ///
+    /// Existing users see these once too — the chrome is new to them as well, which is the point.
+    /// ponytail: three hardcoded callouts, no tour framework; a real tour can come if the set grows.
+    fn coach_marks(&mut self, ctx: &egui::Context) {
+        use crate::ui::style;
+        if !self.settings.setup_done || self.settings.coach_done || self.wizard.open {
+            return;
+        }
+        let accent = crate::theme::accent(self.settings.theme);
+        let mut done = false;
+        for (id, align, offset, text) in [
+            (
+                "coach_search",
+                egui::Align2::CENTER_TOP,
+                egui::vec2(0.0, style::LANE_TOP_SEARCH + 52.0),
+                "Search for a place up here — or press Ctrl+K to search every product, layer and tool.",
+            ),
+            (
+                "coach_layers",
+                egui::Align2::RIGHT_TOP,
+                egui::vec2(-78.0, style::LANE_TOP_SEARCH + 4.0),
+                "Layers: every product and overlay, with a plain-English description of each.",
+            ),
+            (
+                "coach_timeline",
+                egui::Align2::CENTER_BOTTOM,
+                egui::vec2(0.0, style::LANE_BOTTOM_TIMELINE - 64.0),
+                "This is the timeline — play the loop, scrub back through the storm, jump to live.",
+            ),
+        ] {
+            egui::Area::new(egui::Id::new(id))
+                .anchor(align, offset)
+                .order(egui::Order::Foreground)
+                .show(ctx, |ui| {
+                    style::glass(240)
+                        .stroke(egui::Stroke::new(1.5, accent))
+                        .show(ui, |ui| {
+                            ui.set_max_width(300.0);
+                            ui.label(
+                                egui::RichText::new(text)
+                                    .size(style::FONT_BASE)
+                                    .color(egui::Color32::from_gray(238)),
+                            );
+                            if ui.small_button("Got it").clicked() {
+                                done = true;
+                            }
+                        });
+                });
+        }
+        if done {
+            self.settings.coach_done = true;
+        }
+    }
+
     /// Bottom-right info chip: zoom, cursor position, DVR depth, and the active tool's hint.
     ///
     /// This is what the docked status bar used to hold. A full-width bar for four short readouts
@@ -6869,13 +6925,10 @@ impl HookEchoApp {
     fn error_chip(&mut self, ctx: &egui::Context) {
         const HOLD_SECS: f64 = 6.0;
         let now = ctx.input(|i| i.time);
-        match self.views[self.active].error.clone() {
-            Some(e) => {
-                if self.error_chip.as_ref().is_none_or(|(prev, _)| *prev != e) {
-                    self.error_chip = Some((e, now));
-                }
+        if let Some(e) = self.views[self.active].error.clone() {
+            if self.error_chip.as_ref().is_none_or(|(prev, _)| *prev != e) {
+                self.error_chip = Some((e, now));
             }
-            None => {}
         }
         let Some((msg, since)) = self.error_chip.clone() else {
             return;
@@ -7986,6 +8039,7 @@ impl eframe::App for HookEchoApp {
             self.timeline_pill(ctx);
             self.info_chip(ctx);
             self.error_chip(ctx);
+            self.coach_marks(ctx);
             self.layers_panel(ctx);
             self.command_palette(ctx);
         }
@@ -8296,10 +8350,10 @@ impl eframe::App for HookEchoApp {
         }
         self.sync_overlay();
 
-        // Desktop status bar + right-dock alert panel. On Android the top bar shows the volume
-        // age and the alerts live in the bell's slide-up sheet (see `app::mobile`).
-        if !cfg!(target_os = "android") {
-            if self.show_alert_panel && !self.obs_mode {
+        // Desktop right-dock alert panel. On Android the alerts live in the bell's slide-up sheet
+        // (see `app::mobile`).
+        if !cfg!(target_os = "android") && self.show_alert_panel && !self.obs_mode {
+            {
                 let bounds = self.view_bounds();
                 if let Some((id, lon, lat)) =
                     ui::alert_panel::show(root, self.active_alert_features(), bounds)
