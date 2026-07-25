@@ -152,3 +152,128 @@ pub fn draw(
         Color32::WHITE,
     );
 }
+
+/// Paint a gridded field layer's scale under the moment legend (or at the top-left when the radar
+/// legend is hidden). Reads [`crate::render::field_ramps`] — the same table that bakes the layer's
+/// GPU LUT — so the key can't drift from the pixels.
+///
+/// `y_offset` is where to start vertically inside `map_rect`; returns the height consumed.
+pub fn draw_field(
+    painter: &egui::Painter,
+    map_rect: Rect,
+    layer: crate::render::FieldLayer,
+    y_offset: f32,
+) -> f32 {
+    use crate::render::field_ramps::{ramp_for, FieldScale};
+    let Some(r) = ramp_for(layer) else {
+        return 0.0;
+    };
+    let font = FontId::proportional(10.0);
+    let origin = map_rect.left_top() + Vec2::new(MARGIN, MARGIN + y_offset);
+
+    match r.scale {
+        FieldScale::Ramp { lo, hi, stops, .. } => {
+            let bar = Rect::from_min_size(origin + Vec2::new(0.0, 14.0), Vec2::new(BAR_W, BAR_H));
+            let panel = Rect::from_min_max(
+                bar.left_top() - Vec2::new(6.0, 16.0),
+                bar.right_bottom() + Vec2::new(6.0, 14.0),
+            );
+            painter.rect_filled(panel, 4.0, Color32::from_black_alpha(160));
+
+            // One quad per stop segment, per-vertex colors — same idiom as the moment legend.
+            let mut mesh = Mesh::default();
+            let col = |c: [u8; 3]| Color32::from_rgb(c[0], c[1], c[2]);
+            for w in stops.windows(2) {
+                let (t0, c0) = w[0];
+                let (t1, c1) = w[1];
+                let x0 = bar.left() + t0 * bar.width();
+                let x1 = bar.left() + t1 * bar.width();
+                let q = Rect::from_min_max(egui::pos2(x0, bar.top()), egui::pos2(x1, bar.bottom()));
+                let i = mesh.vertices.len() as u32;
+                for (p, c) in [
+                    (q.left_top(), col(c0)),
+                    (q.right_top(), col(c1)),
+                    (q.right_bottom(), col(c1)),
+                    (q.left_bottom(), col(c0)),
+                ] {
+                    mesh.colored_vertex(p, c);
+                }
+                mesh.add_triangle(i, i + 1, i + 2);
+                mesh.add_triangle(i, i + 2, i + 3);
+            }
+            painter.add(Shape::mesh(mesh));
+            painter.rect_stroke(
+                bar,
+                0.0,
+                Stroke::new(1.0, Color32::from_gray(90)),
+                egui::StrokeKind::Inside,
+            );
+
+            // Sub-unit thresholds (VIL 0.1, QPE 0.25) need decimals; everything else reads
+            // better whole.
+            let num = |v: f32| {
+                if v >= 10.0 {
+                    format!("{v:.0}")
+                } else {
+                    format!("{v:.2}")
+                }
+            };
+            for (v, align, x) in [
+                (lo, Align2::LEFT_TOP, bar.left()),
+                (hi, Align2::RIGHT_TOP, bar.right()),
+            ] {
+                painter.text(
+                    egui::pos2(x, bar.bottom() + 2.0),
+                    align,
+                    num(v),
+                    font.clone(),
+                    Color32::from_gray(225),
+                );
+            }
+            let head = if r.units.is_empty() {
+                r.label.to_string()
+            } else {
+                format!("{} ({})", r.label, r.units)
+            };
+            painter.text(
+                bar.left_top() - Vec2::new(0.0, 3.0),
+                Align2::LEFT_BOTTOM,
+                head,
+                font,
+                Color32::WHITE,
+            );
+            panel.height() + 6.0
+        }
+        FieldScale::Categorical(cats) => {
+            // Swatch column: these codes ("HHC class 110") mean nothing without their names.
+            let row_h = 13.0;
+            let w = 132.0;
+            let h = 16.0 + cats.len() as f32 * row_h;
+            let panel = Rect::from_min_size(origin, Vec2::new(w, h));
+            painter.rect_filled(panel, 4.0, Color32::from_black_alpha(160));
+            painter.text(
+                panel.left_top() + Vec2::new(6.0, 2.0),
+                Align2::LEFT_TOP,
+                r.label,
+                font.clone(),
+                Color32::WHITE,
+            );
+            for (i, (_, rgb, name)) in cats.iter().enumerate() {
+                let y = panel.top() + 16.0 + i as f32 * row_h;
+                let sw = Rect::from_min_size(
+                    egui::pos2(panel.left() + 6.0, y + 2.0),
+                    Vec2::new(12.0, 8.0),
+                );
+                painter.rect_filled(sw, 2.0, Color32::from_rgb(rgb[0], rgb[1], rgb[2]));
+                painter.text(
+                    egui::pos2(sw.right() + 5.0, y),
+                    Align2::LEFT_TOP,
+                    *name,
+                    font.clone(),
+                    Color32::from_gray(225),
+                );
+            }
+            h + 6.0
+        }
+    }
+}

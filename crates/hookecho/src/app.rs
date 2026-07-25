@@ -6379,18 +6379,32 @@ impl HookEchoApp {
 
         // The boxed legend is desktop-only; Android draws a full-width color scale in the mobile
         // chrome (see `app::mobile`), so drawing both would be redundant.
-        if view.show_legend && view.volume.is_some() && !cfg!(target_os = "android") {
-            let table = self.palettes.table(view.moment);
-            let (df, dl) = display_units(view.moment, &self.settings);
-            ui::legend::draw(
-                &painter,
-                prect,
-                view.moment,
-                table,
-                view.active_threshold(),
-                df,
-                dl,
-            );
+        if view.show_legend && !cfg!(target_os = "android") {
+            let mut y = 0.0;
+            if view.volume.is_some() {
+                let table = self.palettes.table(view.moment);
+                let (df, dl) = display_units(view.moment, &self.settings);
+                ui::legend::draw(
+                    &painter,
+                    prect,
+                    view.moment,
+                    table,
+                    view.active_threshold(),
+                    df,
+                    dl,
+                );
+                y += 56.0; // the moment legend's panel height
+            }
+            // Whichever gridded layer the user actually sees on top — the last enabled one in
+            // paint order — gets its scale keyed underneath. Without this, MESH/QPE/VIL and the
+            // categorical classifications were unlabeled color.
+            if let Some(top) = crate::render::FieldLayer::DRAW_ORDER
+                .iter()
+                .rev()
+                .find(|l| self.fields.get(l).is_some_and(|s| s.show))
+            {
+                ui::legend::draw_field(&painter, prect, *top, y);
+            }
         }
     }
 
@@ -7214,255 +7228,24 @@ pub(crate) fn field_upload_indexed(
     layer: crate::render::FieldLayer,
     f: &wxdata::mrms::MrmsField,
 ) -> crate::render::MrmsUpload {
+    use crate::render::field_ramps::{ramp_for, FieldScale};
     use crate::render::FieldLayer as FL;
-    match layer {
-        FL::Lightning => lightning_upload(f),
-        // Azimuthal shear (MRMS units ~0..45, ×10⁻³ s⁻¹), accumulated (rotation track) or
-        // instantaneous: threshold ~4, saturate ~40 → blue→cyan→yellow→red.
-        FL::Rotation | FL::AzShear => {
-            let map = |v: f32| {
-                let a = v.abs();
-                if a < 4.0 {
-                    0
-                } else {
-                    (2.0 + ((a - 4.0) / 36.0).clamp(0.0, 1.0) * 253.0) as u8
-                }
-            };
-            field_index_upload(
-                f,
-                map,
-                ramp_lut(&[
-                    (0.0, [40, 90, 200]),
-                    (0.4, [40, 200, 200]),
-                    (0.7, [240, 230, 60]),
-                    (1.0, [230, 40, 40]),
-                ]),
-            )
-        }
-        // MESH max hail size (mm): 10..75 mm → green→yellow→orange→magenta.
-        FL::Mesh => {
-            let map = |v: f32| {
-                if v < 10.0 {
-                    0
-                } else {
-                    (2.0 + ((v - 10.0) / 65.0).clamp(0.0, 1.0) * 253.0) as u8
-                }
-            };
-            field_index_upload(
-                f,
-                map,
-                ramp_lut(&[
-                    (0.0, [60, 200, 90]),
-                    (0.4, [240, 230, 60]),
-                    (0.7, [240, 150, 30]),
-                    (1.0, [230, 60, 200]),
-                ]),
-            )
-        }
-        // QPE accumulation (mm): 0.25..100 mm on a log ramp, green→yellow→red→magenta→white.
-        FL::Qpe1h | FL::Qpe24h => {
-            let full: f32 = if layer == FL::Qpe24h { 250.0 } else { 100.0 };
-            let map = move |v: f32| {
-                if v < 0.25 {
-                    0
-                } else {
-                    let t = ((v.log10() - (0.25f32).log10()) / (full.log10() - (0.25f32).log10()))
-                        .clamp(0.0, 1.0);
-                    (2.0 + t * 253.0) as u8
-                }
-            };
-            field_index_upload(
-                f,
-                map,
-                ramp_lut(&[
-                    (0.0, [40, 180, 90]),
-                    (0.3, [230, 220, 60]),
-                    (0.55, [230, 110, 40]),
-                    (0.8, [220, 40, 60]),
-                    (1.0, [230, 220, 240]),
-                ]),
-            )
-        }
-        // Surface CAPE (J/kg): 100..5000 → cyan→green→yellow→orange→magenta, translucent.
-        FL::Cape => {
-            let map = |v: f32| {
-                if v < 100.0 {
-                    0
-                } else {
-                    (2.0 + ((v - 100.0) / 4900.0).clamp(0.0, 1.0) * 253.0) as u8
-                }
-            };
-            field_index_upload(
-                f,
-                map,
-                ramp_lut_a(
-                    &[
-                        (0.0, [0, 200, 200]),
-                        (0.25, [40, 200, 90]),
-                        (0.5, [240, 230, 60]),
-                        (0.75, [240, 150, 30]),
-                        (1.0, [230, 60, 200]),
-                    ],
-                    150,
-                ),
-            )
-        }
-        // Storm-relative helicity (m²/s²): 50..500 → blue→yellow→red, translucent.
-        FL::Srh => {
-            let map = |v: f32| {
-                if v < 50.0 {
-                    0
-                } else {
-                    (2.0 + ((v - 50.0) / 450.0).clamp(0.0, 1.0) * 253.0) as u8
-                }
-            };
-            field_index_upload(
-                f,
-                map,
-                ramp_lut_a(
-                    &[
-                        (0.0, [40, 90, 200]),
-                        (0.5, [240, 230, 60]),
-                        (1.0, [230, 40, 40]),
-                    ],
-                    150,
-                ),
-            )
-        }
-        // MRMS surface precip type flag: discrete categories via a categorical LUT.
-        FL::PrecipType => {
-            let map = |v: f32| v as u8; // categorical index, not a ramp
-            field_index_upload(
-                f,
-                map,
-                categorical_lut(
-                    &[
-                        (1, [60, 200, 90]),   // warm stratiform rain — green
-                        (3, [90, 150, 240]),  // snow — blue
-                        (6, [240, 230, 60]),  // convective — yellow
-                        (7, [230, 40, 40]),   // hail — red
-                        (10, [40, 200, 200]), // cold stratiform rain — teal
-                        (91, [80, 220, 120]), // tropical/stratiform rain — green
-                        (96, [80, 220, 120]), // tropical/convective rain — green
-                    ],
-                    200,
-                ),
-            )
-        }
-        // MRMS FLASH flash-flood ARI (years): 1..100 log ramp yellow→orange→red→purple→white.
-        FL::FlashFlood => {
-            let map = |v: f32| {
-                if v < 1.0 {
-                    0
-                } else {
-                    (2.0 + (v.log10() / 2.0).clamp(0.0, 1.0) * 253.0) as u8
-                }
-            };
-            field_index_upload(
-                f,
-                map,
-                ramp_lut(&[
-                    (0.0, [240, 230, 60]),
-                    (0.3, [240, 150, 30]),
-                    (0.6, [230, 40, 40]),
-                    (0.85, [150, 40, 200]),
-                    (1.0, [240, 240, 240]),
-                ]),
-            )
-        }
-        // Digital VIL (kg/m²): 0.1..80 → green→yellow→orange→magenta→white.
-        FL::Vil => {
-            let map = |v: f32| {
-                if v < 0.1 {
-                    0
-                } else {
-                    (2.0 + ((v - 0.1) / 79.9).clamp(0.0, 1.0) * 253.0) as u8
-                }
-            };
-            field_index_upload(
-                f,
-                map,
-                ramp_lut(&[
-                    (0.0, [60, 200, 90]),
-                    (0.35, [240, 230, 60]),
-                    (0.6, [240, 150, 30]),
-                    (0.85, [230, 60, 200]),
-                    (1.0, [240, 240, 240]),
-                ]),
-            )
-        }
-        // Enhanced Echo Tops (kft): 5..70 → blue→green→yellow→white.
-        FL::EchoTops => {
-            let map = |v: f32| {
-                if v < 5.0 {
-                    0
-                } else {
-                    (2.0 + ((v - 5.0) / 65.0).clamp(0.0, 1.0) * 253.0) as u8
-                }
-            };
-            field_index_upload(
-                f,
-                map,
-                ramp_lut(&[
-                    (0.0, [40, 90, 200]),
-                    (0.4, [40, 200, 90]),
-                    (0.75, [240, 230, 60]),
-                    (1.0, [240, 240, 240]),
-                ]),
-            )
-        }
-        // 24-h hail swaths: same MESH scale, but starting at severe-ish sizes so old small hail
-        // doesn't blanket the map (19 mm ≈ 0.75 in).
-        FL::HailSwath => {
-            let map = |v: f32| {
-                if v < 19.0 {
-                    0
-                } else {
-                    (2.0 + ((v - 19.0) / 56.0).clamp(0.0, 1.0) * 253.0) as u8
-                }
-            };
-            field_index_upload(
-                f,
-                map,
-                ramp_lut(&[
-                    (0.0, [60, 200, 90]),
-                    (0.4, [240, 230, 60]),
-                    (0.7, [240, 150, 30]),
-                    (1.0, [230, 60, 200]),
-                ]),
-            )
-        }
-        // Hybrid Hydrometeor Classification: raw HCA class codes → categorical colors
-        // (per the product's class table; 140 = unknown, 150 = range-folded).
-        FL::Hca => {
-            let map = |v: f32| v as u8;
-            field_index_upload(
-                f,
-                map,
-                categorical_lut(
-                    &[
-                        (10, [140, 110, 90]),   // biological
-                        (20, [95, 95, 95]),     // ground clutter / AP
-                        (30, [185, 220, 255]),  // ice crystals
-                        (40, [110, 160, 240]),  // dry snow
-                        (50, [0, 200, 255]),    // wet snow
-                        (60, [90, 200, 90]),    // light/moderate rain
-                        (70, [25, 145, 50]),    // heavy rain
-                        (80, [240, 200, 60]),   // big drops
-                        (90, [200, 120, 220]),  // graupel
-                        (100, [230, 50, 50]),   // hail (possibly with rain)
-                        (110, [170, 0, 0]),     // large hail
-                        (120, [120, 0, 60]),    // giant hail
-                        (140, [160, 160, 160]), // unknown
-                        (150, [240, 150, 200]), // range folded
-                    ],
-                    200,
-                ),
-            )
-        }
-        // The reflectivity-palette layers (mosaic, HRRR) route through the app method instead.
-        FL::Mrms | FL::Hrrr => field_index_upload(f, |_| 0, vec![0u8; 256 * 4]),
+    // Lightning keeps its own mapping (density counts, not a physical scale).
+    if layer == FL::Lightning {
+        return lightning_upload(f);
     }
+    let Some(r) = ramp_for(layer) else {
+        // The reflectivity-palette layers (mosaic, HRRR) route through the app method instead.
+        return field_index_upload(f, |_| 0, vec![0u8; 256 * 4]);
+    };
+    let lut = match r.scale {
+        FieldScale::Ramp { stops, .. } => ramp_lut_a(stops, r.alpha),
+        FieldScale::Categorical(cats) => {
+            let slots: Vec<(u8, [u8; 3])> = cats.iter().map(|&(i, rgb, _)| (i, rgb)).collect();
+            categorical_lut(&slots, r.alpha)
+        }
+    };
+    field_index_upload(f, |v| r.index(v), lut)
 }
 
 impl HookEchoApp {

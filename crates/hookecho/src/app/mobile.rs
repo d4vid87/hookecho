@@ -81,6 +81,69 @@ fn dock_icon(ui: &mut egui::Ui, glyph: &str, active: bool) -> egui::Response {
     )
 }
 
+/// A slim full-width strip for a gridded field layer, with its name and range inline.
+fn paint_field_strip(painter: &egui::Painter, rect: Rect, layer: crate::render::FieldLayer) {
+    use crate::render::field_ramps::{ramp_for, FieldScale};
+    let Some(r) = ramp_for(layer) else { return };
+    let col = |c: [u8; 3]| Color32::from_rgb(c[0], c[1], c[2]);
+    match r.scale {
+        FieldScale::Ramp { lo, hi, stops, .. } => {
+            let mut mesh = Mesh::default();
+            for w in stops.windows(2) {
+                let (t0, c0) = w[0];
+                let (t1, c1) = w[1];
+                let q = Rect::from_min_max(
+                    pos2(rect.left() + t0 * rect.width(), rect.top()),
+                    pos2(rect.left() + t1 * rect.width(), rect.bottom()),
+                );
+                let i = mesh.vertices.len() as u32;
+                for (p, c) in [
+                    (q.left_top(), col(c0)),
+                    (q.right_top(), col(c1)),
+                    (q.right_bottom(), col(c1)),
+                    (q.left_bottom(), col(c0)),
+                ] {
+                    mesh.colored_vertex(p, c);
+                }
+                mesh.add_triangle(i, i + 1, i + 2);
+                mesh.add_triangle(i, i + 2, i + 3);
+            }
+            painter.add(Shape::mesh(mesh));
+            let label = if r.units.is_empty() {
+                format!("{}  {lo:.0}\u{2013}{hi:.0}", r.label)
+            } else {
+                format!("{}  {lo:.0}\u{2013}{hi:.0} {}", r.label, r.units)
+            };
+            painter.text(
+                pos2(rect.left() + 4.0, rect.bottom() + 1.0),
+                Align2::LEFT_TOP,
+                label,
+                egui::FontId::proportional(9.0),
+                Color32::from_gray(215),
+            );
+        }
+        FieldScale::Categorical(cats) => {
+            // Equal slices, one per class, with the layer name beneath.
+            let w = rect.width() / cats.len() as f32;
+            for (i, (_, rgb, _)) in cats.iter().enumerate() {
+                let x = rect.left() + i as f32 * w;
+                painter.rect_filled(
+                    Rect::from_min_size(pos2(x, rect.top()), vec2(w, rect.height())),
+                    0.0,
+                    col(*rgb),
+                );
+            }
+            painter.text(
+                pos2(rect.left() + 4.0, rect.bottom() + 1.0),
+                Align2::LEFT_TOP,
+                r.label,
+                egui::FontId::proportional(9.0),
+                Color32::from_gray(215),
+            );
+        }
+    }
+}
+
 /// Paint the active product's color table as a full-width gradient strip (the top scale bar).
 fn paint_colorbar(
     painter: &egui::Painter,
@@ -253,6 +316,16 @@ impl super::HookEchoApp {
                 Id::new("m_colorbar"),
             ));
             paint_colorbar(&painter, strip, cur_moment, table);
+
+            // Second strip for the topmost gridded layer — the phone has no room for the desktop
+            // legend box, but an unlabeled MESH/QPE wash is just as cryptic here.
+            if let Some(top) = crate::render::FieldLayer::DRAW_ORDER
+                .iter()
+                .rev()
+                .find(|l| self.fields.get(l).is_some_and(|s| s.show))
+            {
+                paint_field_strip(&painter, strip.translate(vec2(0.0, 11.0)), *top);
+            }
         }
 
         // ---------- TOP BAR ----------
@@ -1034,7 +1107,13 @@ impl super::HookEchoApp {
 
     /// Quick-layers sheet: the searchable layer registry in a bottom sheet (the phone's
     /// equivalent of the desktop Layers panel).
-    fn mobile_layers_sheet(&mut self, ctx: &egui::Context, content: Rect, vr: Rect, inset_bottom: f32) {
+    fn mobile_layers_sheet(
+        &mut self,
+        ctx: &egui::Context,
+        content: Rect,
+        vr: Rect,
+        inset_bottom: f32,
+    ) {
         let sheet = Rect::from_min_size(
             pos2(content.left(), content.center().y - 40.0),
             vec2(content.width(), content.height() * 0.6),
@@ -1085,7 +1164,13 @@ impl super::HookEchoApp {
     }
 
     /// Bottom "more tools" sheet (analysis + capture grid) driven by the pencil dock icon.
-    fn mobile_tools_sheet(&mut self, ctx: &egui::Context, content: Rect, vr: Rect, inset_bottom: f32) {
+    fn mobile_tools_sheet(
+        &mut self,
+        ctx: &egui::Context,
+        content: Rect,
+        vr: Rect,
+        inset_bottom: f32,
+    ) {
         let sheet = Rect::from_min_size(
             pos2(content.left(), content.center().y),
             vec2(content.width(), content.height() * 0.5),

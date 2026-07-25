@@ -1,6 +1,7 @@
 //! wgpu rendering: a slippy-map tile layer plus a polar radar layer, both drawn
 //! inside egui's render pass via [`egui_wgpu::CallbackTrait`].
 
+pub mod field_ramps;
 pub mod mercator;
 
 use std::collections::HashMap;
