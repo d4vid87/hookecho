@@ -22,10 +22,37 @@ intelligence — on Windows, Linux, and Android.
   ALSA/Wayland/GTK dev headers — see `.github/workflows/ci.yml`). Android builds
   via `android/build.sh` (NDK + `cargo-ndk`).
 
-First launch opens a three-step setup wizard: pick your home radar site, a theme
-(13 built in), and how warnings should reach you (chime and/or
-[ntfy.sh](https://ntfy.sh) push to your phone). Re-run it anytime from
-**Help → Setup wizard**.
+First launch opens a setup wizard: pick your home radar site, a theme (13 built
+in), and how warnings should reach you (chime and/or [ntfy.sh](https://ntfy.sh)
+push to your phone). After that, three one-time callouts point at the controls
+you'll actually use. Re-run the wizard anytime from **⋯ More → Setup wizard**.
+
+## The interface
+
+Hook Echo-WX is a map with a few floating controls over it — there is no menu
+bar, no docked toolbar, and nothing between you and the radar:
+
+- **Bottom-left** names the product you're looking at. Click it to switch
+  products or tilts; every product carries a plain-English description of what
+  it shows and why you'd look at it.
+- **Bottom-center** is the timeline: site, clock, play, scrub, and a LIVE badge
+  that snaps back to the newest scan.
+- **Right edge**: Layers, radar Site, Alerts, Advanced toolbox, Settings, and
+  **⋯ More**.
+- **Top-center** searches for a place. `Ctrl+K` searches every product, layer,
+  window and tool in the app — one list, described in plain English.
+
+| The product picker | The Layers panel |
+|---|---|
+| ![Products](docs/shots/products.jpg) | ![Layers](docs/shots/layers.jpg) |
+
+Radar times read in **the selected radar's local time**, not Zulu — a KEPZ pane
+shows MDT while a KTLX pane shows CDT, side by side. Settings → Units puts it
+back to UTC if you'd rather work in Zulu.
+
+Every expert control is still there. The Advanced toolbox (`F7`) holds the full
+docked panel: thresholds, dealiasing, storm motion, VCP, basemaps, forecast-hour
+sliders, chase packs, and the rest.
 
 ## Walkthrough
 
@@ -42,24 +69,19 @@ density, rotation tracks / azimuthal shear, MESH hail size + 24-h hail swaths,
 storm-total QPE flood layers, surface precipitation type, and FLASH flash-flood
 recurrence intervals:
 
-| Composite | Lightning | 1-h QPE |
+| CONUS composite | 1-h QPE | HRRR future radar |
 |---|---|---|
-| ![MRMS](docs/shots/mrms.jpg) | ![Lightning](docs/shots/lightning.jpg) | ![QPE](docs/shots/qpe.jpg) |
+| ![MRMS](docs/shots/mrms.jpg) | ![QPE](docs/shots/qpe.jpg) | ![HRRR](docs/shots/hrrr.jpg) |
 
-**Forecast & analysis** — HRRR future radar with an observed→forecast timeline
-scrub, HRRR CAPE/SRH environment overlays, 3D volume raymarching, vertical
-cross-sections, CAPPI altitude slices, VAD hodograph, point soundings:
-
-| HRRR future radar | 3D volume | Cross-section |
-|---|---|---|
-| ![HRRR](docs/shots/hrrr.jpg) | ![3D](docs/shots/storm3d.jpg) | ![Cross-section](docs/shots/xsection.jpg) |
-
-**Warnings & alerts** — clickable NWS bulletins with polygon overlays, parsed
-storm-motion vectors with projected paths, escalation-aware alerting, an
+**Warnings, alerts & analysis** — clickable NWS bulletins with polygon overlays,
+parsed storm-motion vectors with projected paths, escalation-aware alerting, an
 active-alerts panel, audible cues, and ntfy push the moment a warning covers one
-of your saved locations:
+of your saved locations; plus vertical cross-sections, CAPPI altitude slices, 3D
+volume raymarching, VAD hodographs and point soundings:
 
-![Alerts](docs/shots/alerts.jpg)
+| Active alerts | Cross-section |
+|---|---|
+| ![Alerts](docs/shots/alerts.jpg) | ![Cross-section](docs/shots/xsection.jpg) |
 
 ## Feature highlights
 
@@ -106,11 +128,22 @@ of your saved locations:
   IFR) with the raw bulletin on click.
 - **Climatology**: click anywhere → historical tornado tracks near that point
   (SPC 1950–2022 database) with EF-scale histogram.
+- **Rotation couplets**: client-side azimuthal-shear couplet detection on the
+  live volume, with its own alarm sound — a mesocyclone flag that doesn't wait
+  for a Level 3 product.
 - **Radar DVR**: deep in-RAM decode buffer with one-touch instant replay (`R`).
 - **Streamer/OBS mode**: chrome-free UI (`F8`) + auto-tour of active warnings (`F9`).
-- Multi-pane layouts, placefiles, sensor dashboard, CAPPI altitude slicer,
-  range rings + azimuth spokes, 13 themes, tray + background alerting,
-  screenshot/GIF/MP4 loop export.
+- **Chase mode**: live GPS (gpsd on desktop, the system location service on
+  Android), a storm-relative chase HUD with closest-approach and escape bearing,
+  and offline "chase packs" of pre-downloaded basemap tiles.
+- Multi-pane layouts, placefiles with icon sheets + a layer manager, sensor
+  dashboard, CAPPI altitude slicer, range rings + azimuth spokes, 13 themes,
+  tray + background alerting, screenshot/GIF/MP4 loop export.
+
+On Android the same app wears a touch-first skin: a five-slot labeled dock
+(Play · Layers · Products · Site · More), slide-up sheets, a navigation drawer
+built from the same described action list as the desktop Layers panel, and
+native GPS for chase mode.
 
 ## Workspace
 
@@ -150,7 +183,7 @@ cargo run --release -- --headless-indices -97.5 35.3
 ```
 
 ```sh
-cargo test    # 114 offline unit tests
+cargo test    # 142 offline unit tests
 ```
 
 License: MIT.
