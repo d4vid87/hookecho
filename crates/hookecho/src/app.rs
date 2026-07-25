@@ -697,6 +697,9 @@ struct ChasePack {
     bytes: u64,
 }
 
+/// How many buttons the right-edge control column shows — the badge lane stacks below them.
+const CONTROL_BUTTONS: usize = 6;
+
 pub struct HookEchoApp {
     _rt: Runtime,
     tiles: TileManager,
@@ -1424,7 +1427,10 @@ impl HookEchoApp {
             return;
         }
         egui::Area::new(egui::Id::new("warning_banners"))
-            .anchor(egui::Align2::CENTER_TOP, egui::vec2(0.0, 8.0))
+            .anchor(
+                egui::Align2::CENTER_TOP,
+                egui::vec2(0.0, crate::ui::style::LANE_TOP_BANNER),
+            )
             .show(ctx, |ui| {
                 let mut dismiss = false;
                 for (event, area, _) in &self.warning_banners {
@@ -2325,7 +2331,7 @@ impl HookEchoApp {
         let mut query = std::mem::take(&mut self.layers_query);
         let (mut chosen, mut close) = (None, false);
         egui::Area::new(egui::Id::new("layers_panel"))
-            .anchor(egui::Align2::RIGHT_TOP, egui::vec2(-74.0, 44.0))
+            .anchor(egui::Align2::RIGHT_TOP, crate::ui::style::LANE_RIGHT_PANEL)
             .order(egui::Order::Foreground)
             .show(ctx, |ui| {
                 mobile::glass(232).show(ui, |ui| {
@@ -2387,7 +2393,10 @@ impl HookEchoApp {
             .is_some_and(|v| (chrono::Utc::now() - v.time).num_seconds() < 900);
         let mut go_head = false;
         egui::Area::new(egui::Id::new("timeline_pill"))
-            .anchor(egui::Align2::CENTER_BOTTOM, egui::vec2(0.0, -34.0))
+            .anchor(
+                egui::Align2::CENTER_BOTTOM,
+                egui::vec2(0.0, crate::ui::style::LANE_BOTTOM_TIMELINE),
+            )
             .show(ctx, |ui| {
                 mobile::glass(228).show(ui, |ui| {
                     ui.set_width(pill_w);
@@ -2495,7 +2504,10 @@ impl HookEchoApp {
         let accent = crate::theme::accent(self.settings.theme);
         let mut clicked: Option<&'static str> = None;
         egui::Area::new(egui::Id::new("control_column"))
-            .anchor(egui::Align2::RIGHT_TOP, egui::vec2(-14.0, 44.0))
+            .anchor(
+                egui::Align2::RIGHT_TOP,
+                crate::ui::style::LANE_RIGHT_CONTROLS,
+            )
             .show(ctx, |ui| {
                 ui.vertical(|ui| {
                     ui.spacing_mut().item_spacing.y = 8.0;
@@ -2558,7 +2570,10 @@ impl HookEchoApp {
         let cr = ctx.content_rect();
         let mut submit = None;
         egui::Area::new(egui::Id::new("search_pill"))
-            .anchor(egui::Align2::CENTER_TOP, egui::vec2(0.0, 44.0))
+            .anchor(
+                egui::Align2::CENTER_TOP,
+                egui::vec2(0.0, crate::ui::style::LANE_TOP_SEARCH),
+            )
             .show(ctx, |ui| {
                 mobile::glass(226).show(ui, |ui| {
                     ui.set_width((cr.width() * 0.3).clamp(220.0, 420.0));
@@ -2639,7 +2654,7 @@ impl HookEchoApp {
         let mut close = esc || chosen.is_some();
         let mut query = std::mem::take(&mut self.palette_query);
         let sel = self.palette_sel;
-        egui::Window::new("Search actions")
+        crate::ui::fit_phone(ctx, egui::Window::new("Search actions"))
             .title_bar(false)
             .collapsible(false)
             .resizable(false)
@@ -3517,10 +3532,14 @@ impl HookEchoApp {
             let inset_top = (ctx.content_rect().top() - ctx.viewport_rect().top()).max(0.0);
             inset_top + 116.0
         } else {
-            48.0
+            // Below the whole control column, in the badge lane.
+            crate::ui::style::lane_right_badge_y(CONTROL_BUTTONS)
         };
         egui::Area::new("follow_badge".into())
-            .anchor(egui::Align2::RIGHT_TOP, egui::vec2(-10.0, y))
+            .anchor(
+                egui::Align2::RIGHT_TOP,
+                egui::vec2(crate::ui::style::LANE_RIGHT_BADGE_X, y),
+            )
             .show(ctx, |ui| {
                 let fill = if following {
                     egui::Color32::from_rgba_unmultiplied(40, 90, 150, 220)

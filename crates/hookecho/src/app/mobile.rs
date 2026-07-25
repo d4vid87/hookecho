@@ -12,10 +12,8 @@ use wxdata::level2::Moment;
 
 use crate::ui::toolbox::ToolboxActions;
 
-/// RadarOmega's signature accents: orange for the active/live radar chrome, blue for actions.
-pub(crate) const OMEGA_ORANGE: Color32 = Color32::from_rgb(0xF2, 0xA0, 0x33);
-pub(crate) const OMEGA_BLUE: Color32 = Color32::from_rgb(0x2D, 0x9C, 0xDB);
-pub(crate) const OMEGA_GREEN: Color32 = Color32::from_rgb(0x3D, 0xD5, 0x6B);
+pub(crate) use crate::ui::style::{glass, square_btn, OMEGA_BLUE, OMEGA_GREEN, OMEGA_ORANGE};
+
 /// Drawer navy (RadarOmega's menu background).
 const DRAWER_BG: Color32 = Color32::from_rgb(0x0E, 0x18, 0x28);
 /// RadarOmega's blue brand title color.
@@ -44,41 +42,6 @@ struct MAlert {
     lon: f64,
     lat: f64,
     esc: u8,
-}
-
-/// Translucent near-black card used by the floating bars.
-pub(crate) fn glass(alpha: u8) -> Frame {
-    Frame::new()
-        .fill(Color32::from_rgba_unmultiplied(12, 14, 18, alpha))
-        .corner_radius(18.0)
-        .inner_margin(Margin::symmetric(12, 9))
-        .stroke(Stroke::new(
-            1.0,
-            Color32::from_rgba_unmultiplied(255, 255, 255, 22),
-        ))
-}
-
-/// A ~44px rounded-square chrome button holding one Phosphor glyph.
-pub(crate) fn square_btn(
-    ui: &mut egui::Ui,
-    glyph: &str,
-    active: bool,
-    accent: Color32,
-) -> egui::Response {
-    let (fg, bg) = if active {
-        (Color32::BLACK, accent)
-    } else {
-        (
-            Color32::from_gray(232),
-            Color32::from_rgba_unmultiplied(255, 255, 255, 20),
-        )
-    };
-    ui.add(
-        egui::Button::new(RichText::new(glyph).size(20.0).color(fg))
-            .min_size(vec2(44.0, 44.0))
-            .fill(bg)
-            .corner_radius(13.0),
-    )
 }
 
 /// A flat tool-dock icon (transparent, tinted when active) — RadarOmega's bottom toolbar.

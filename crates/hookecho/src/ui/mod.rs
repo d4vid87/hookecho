@@ -40,6 +40,7 @@ pub mod sensor_window;
 pub mod settings_window;
 pub mod site_dialog;
 pub mod sounding_window;
+pub mod style;
 pub mod toolbox;
 pub mod volume3d_window;
 pub mod warning_window;
