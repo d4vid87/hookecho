@@ -738,7 +738,7 @@ fn product_row(
 }
 
 /// How many buttons the right-edge control column shows — the badge lane stacks below them.
-const CONTROL_BUTTONS: usize = 5;
+const CONTROL_BUTTONS: usize = 6;
 
 pub struct HookEchoApp {
     _rt: Runtime,
@@ -811,6 +811,8 @@ pub struct HookEchoApp {
     follow_notice: Option<(String, Instant)>,
     /// Open "Active Warnings" window (clicked warning/watch polygons).
     warning_popup: Option<ui::warning_window::WarningPopup>,
+    /// Newest pane error and the time it appeared, for the auto-hiding bottom-center chip.
+    error_chip: Option<(String, f64)>,
     /// Level 3 clickable storm cells for `cells_site` (the active site when last fetched).
     storm_cells: Vec<Cell>,
     cells_site: Option<String>,
@@ -1189,6 +1191,7 @@ impl HookEchoApp {
             follow_cell: None,
             follow_notice: None,
             warning_popup: None,
+            error_chip: None,
             storm_cells: Vec::new(),
             ui_scale_applied: -1.0,
             ime_shown: false,
@@ -2431,6 +2434,16 @@ impl HookEchoApp {
             .volume
             .as_ref()
             .is_some_and(|v| (chrono::Utc::now() - v.time).num_seconds() < 900);
+        // Site and data age used to live in the docked status bar; the clock belongs with the clock.
+        let site = self.views[self.active]
+            .site
+            .clone()
+            .unwrap_or_else(|| "no site".to_string());
+        let age = self.views[self.active].volume.as_ref().map(|v| {
+            let secs = (Utc::now() - v.time).num_seconds().max(0);
+            format!("({} ago)", humanize(secs))
+        });
+        let loading = self.views[self.active].loading;
         let mut go_head = false;
         egui::Area::new(egui::Id::new("timeline_pill"))
             .anchor(
@@ -2442,6 +2455,12 @@ impl HookEchoApp {
                     ui.set_width(pill_w);
                     let t = &mut self.views[self.active].timeline;
                     ui.horizontal(|ui| {
+                        ui.label(
+                            egui::RichText::new(&site)
+                                .size(crate::ui::style::FONT_BASE)
+                                .strong()
+                                .color(egui::Color32::from_gray(238)),
+                        );
                         let btn = |ui: &mut egui::Ui, glyph: &str, on: bool| {
                             let fg = if on {
                                 accent
@@ -2529,6 +2548,19 @@ impl HookEchoApp {
                                 .monospace()
                                 .color(egui::Color32::from_gray(215)),
                         );
+                        if let Some(age) = &age {
+                            ui.label(
+                                egui::RichText::new(age)
+                                    .size(crate::ui::style::FONT_SM)
+                                    .color(egui::Color32::from_gray(150)),
+                            );
+                        } else if loading {
+                            ui.label(
+                                egui::RichText::new("loading…")
+                                    .size(crate::ui::style::FONT_SM)
+                                    .color(egui::Color32::from_gray(150)),
+                            );
+                        }
                     });
                 });
             });
@@ -2580,6 +2612,13 @@ impl HookEchoApp {
                             clicked = Some(id);
                         }
                     }
+                    // Everything the retired menu bar held that isn't in the action registry.
+                    let more =
+                        mobile::square_btn(ui, ph::DOTS_THREE, false, accent).on_hover_text("More");
+                    if more.clicked() {
+                        egui::Popup::toggle_id(ui.ctx(), more.id);
+                    }
+                    self.more_menu(&more);
                 });
             });
         match clicked {
@@ -6379,57 +6418,45 @@ impl HookEchoApp {
         self.pane_shown.clear();
     }
 
-    fn menu_bar(&mut self, ui: &mut egui::Ui) {
-        egui::MenuBar::new().ui(ui, |ui| {
-            // Touch affordance for the toolbox drawer (F7 has no key on a phone).
-            if cfg!(target_os = "android") && ui.button("☰").clicked() {
-                self.show_toolbox = !self.show_toolbox;
-            }
-            ui.menu_button("File", |ui| {
-                if ui.button("Settings…").clicked() {
-                    self.settings_window.open = true;
-                    ui.close();
-                }
-                ui.separator();
-                if ui.button("Export Settings…")
-                    .on_hover_text("Save settings + color tables to a portable bundle")
-                    .clicked()
+    /// The "⋯ More" popup: everything the old menu bar held that the action registry, the control
+    /// column and Settings don't already cover.
+    ///
+    /// The menu bar was a third parallel navigation system on top of the floating chrome and the
+    /// Advanced toolbox — three doors to overlapping sets of the same commands. It's gone; every
+    /// item it held either lives in the registry (Ctrl+K / the Layers panel) or lives here.
+    fn more_menu(&mut self, btn: &egui::Response) {
+        egui::Popup::menu(btn)
+            .align(egui::RectAlign::LEFT_START)
+            .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+            .show(|ui| {
+                ui.set_min_width(250.0);
+
+                ui.label(egui::RichText::new("View").strong());
                 {
-                    self.export_settings_bundle();
-                    ui.close();
+                    let v = &mut self.views[self.active];
+                    let mut on = v.basemap != crate::tiles::BasemapStyle::None;
+                    if ui.checkbox(&mut on, "Basemap").changed() {
+                        v.basemap = if on {
+                            crate::tiles::BasemapStyle::Dark
+                        } else {
+                            crate::tiles::BasemapStyle::None
+                        };
+                    }
+                    ui.checkbox(&mut v.show_radar, "Radar");
+                    ui.checkbox(&mut v.show_legend, "Legend");
                 }
-                if ui.button("Import Settings…")
-                    .on_hover_text("Load a settings bundle from another machine")
-                    .clicked()
-                {
-                    self.import_settings_bundle();
-                    ui.close();
-                }
-                ui.separator();
-                if ui.button("Exit").clicked() {
-                    ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
-                }
-            });
-            ui.menu_button("View", |ui| {
-                let v = &mut self.views[self.active];
-                let mut on = v.basemap != crate::tiles::BasemapStyle::None;
-                if ui.checkbox(&mut on, "Basemap").changed() {
-                    v.basemap = if on { crate::tiles::BasemapStyle::Dark } else { crate::tiles::BasemapStyle::None };
-                }
-                ui.checkbox(&mut v.show_radar, "Radar");
-                ui.checkbox(&mut v.show_legend, "Legend");
-                ui.checkbox(&mut self.layers_open, "Layers panel (L)")
-                    .on_hover_text("Searchable list of every product, layer, and tool");
-                ui.checkbox(&mut self.show_toolbox, "Advanced toolbox (F7)")
-                    .on_hover_text("The full docked panel: every setting, expanded");
-                ui.separator();
-                if ui.checkbox(&mut self.obs_mode, "Streamer / OBS mode (F8)")
-                    .on_hover_text("Hide all panels, leaving only the map — clean capture for streaming")
-                    .changed() && !self.obs_mode
+                if ui
+                    .checkbox(&mut self.obs_mode, "Streamer / OBS mode (F8)")
+                    .on_hover_text(
+                        "Hide all panels, leaving only the map — clean capture for streaming",
+                    )
+                    .changed()
+                    && !self.obs_mode
                 {
                     self.obs_tour = false;
                 }
-                if ui.checkbox(&mut self.obs_tour, "Auto-tour active warnings (F9)")
+                if ui
+                    .checkbox(&mut self.obs_tour, "Auto-tour active warnings (F9)")
                     .on_hover_text("Cycle the camera through active warning polygons every ~12 s")
                     .changed()
                 {
@@ -6438,41 +6465,38 @@ impl HookEchoApp {
                         self.obs_mode = true;
                     }
                 }
-            });
-            ui.menu_button("Tools", |ui| {
-                ui.label("Map tool");
-                ui.selectable_value(&mut self.tool, MapTool::Interrogate, "Interrogate");
-                ui.selectable_value(&mut self.tool, MapTool::Measure, "Measure");
-                ui.selectable_value(&mut self.tool, MapTool::Marker, "Drop marker");
-                ui.selectable_value(&mut self.tool, MapTool::CrossSection, "Cross-section")
-                    .on_hover_text("Click two points to slice a vertical reflectivity panel");
-                ui.selectable_value(&mut self.tool, MapTool::Sounding, "Sounding")
-                    .on_hover_text("Click a point for an HRRR Skew-T / hodograph");
-                ui.selectable_value(&mut self.tool, MapTool::Chase, "Set chase location")
-                    .on_hover_text("Click your position; chase mode follows it to the nearest radar");
-                ui.selectable_value(&mut self.tool, MapTool::Climatology, "Tornado climatology")
-                    .on_hover_text("Click a point to list historical tornadoes within 25 mi (SPC 1950–2022)");
-                ui.horizontal(|ui| {
-                    if ui.checkbox(&mut self.chase_mode, "Chase mode (follow me)").changed() && !self.chase_mode {
-                        self.chase_applied = None;
-                    }
-                    if self.chase_mode {
-                        if let Some((lon, lat)) = self.chase_pos {
-                            if let Some(s) = crate::geo::nearest_site_id(lon, lat) {
-                                ui.weak(format!("→ {s}"));
-                            }
-                        } else {
-                            ui.weak("pick a location");
-                        }
-                    }
-                });
+
+                ui.separator();
+                ui.label(egui::RichText::new("Chase").strong());
+                if ui
+                    .checkbox(&mut self.chase_mode, "Chase mode (follow me)")
+                    .changed()
+                    && !self.chase_mode
+                {
+                    self.chase_applied = None;
+                }
+                if self.chase_mode {
+                    match self
+                        .chase_pos
+                        .and_then(|(lon, lat)| crate::geo::nearest_site_id(lon, lat))
+                    {
+                        Some(s) => ui.weak(format!("nearest radar: {s}")),
+                        None => ui.weak("pick a location with Tool: Set chase location"),
+                    };
+                }
                 // Desktop streams from a local gpsd; Android polls the system LocationManager
                 // over JNI (see platform.rs). Both feed the same `gps_rx` channel.
                 if self.gps_rx.is_none() {
                     let (label, tip) = if cfg!(target_os = "android") {
-                        ("Enable GPS (chase)", "Follow your device's position (asks for the location permission)")
+                        (
+                            "Enable GPS (chase)",
+                            "Follow your device's position (asks for the location permission)",
+                        )
                     } else {
-                        ("Connect GPS (gpsd)", "Stream your live position from a local gpsd on :2947")
+                        (
+                            "Connect GPS (gpsd)",
+                            "Stream your live position from a local gpsd on :2947",
+                        )
                     };
                     if ui.button(label).on_hover_text(tip).clicked() {
                         let rx = if cfg!(target_os = "android") {
@@ -6489,134 +6513,90 @@ impl HookEchoApp {
                         }
                     }
                 } else {
-                    ui.horizontal(|ui| {
-                        // getLastKnownLocation is null until the first fix lands (cold start,
-                        // indoors, or permission still pending) — say so rather than look dead.
-                        if self.chase_pos.is_some() {
-                            ui.weak("📡 GPS connected");
-                        } else {
-                            ui.weak("📡 waiting for GPS fix…");
-                        }
-                        if ui.button("Disconnect").clicked() {
-                            self.gps_rx = None;
-                        }
-                    });
+                    // getLastKnownLocation is null until the first fix lands (cold start,
+                    // indoors, or permission still pending) — say so rather than look dead.
+                    if self.chase_pos.is_some() {
+                        ui.weak("📡 GPS connected");
+                    } else {
+                        ui.weak("📡 waiting for GPS fix…");
+                    }
+                    if ui.button("Disconnect GPS").clicked() {
+                        self.gps_rx = None;
+                    }
                 }
+
                 ui.separator();
-                if ui.button("3D View").on_hover_text("Raymarch the volume in 3D (active pane)").clicked() {
-                    self.build_volume3d();
-                    ui.close();
-                }
-                if ui.button("CAPPI slice…").on_hover_text("Constant-altitude reflectivity slice (active pane)").clicked() {
-                    self.show_cappi = true;
-                    self.cappi_key = None; // force a re-slice on open
-                    ui.close();
-                }
-                if ui.button("Clear measurement").clicked() {
-                    self.measure.clear();
-                }
-                ui.separator();
-                if ui.button("Location Markers…").clicked() {
-                    self.marker_window.open = true;
-                    ui.close();
-                }
-                if ui.button("Event Library…")
-                    .on_hover_text("Jump to famous storms or your saved bookmarks")
-                    .clicked()
-                {
-                    self.event_window.open = true;
-                    ui.close();
-                }
-                if ui.button("Storm Digest…")
-                    .on_hover_text("Plain-language briefing of the in-view weather")
-                    .clicked()
-                {
-                    self.digest_window.open = true;
-                    self.generate_digest();
-                    ui.close();
-                }
-                if ui.button("Forecast Discussion (AFD)…")
-                    .on_hover_text("The active site's WFO Area Forecast Discussion — the forecaster's reasoning")
-                    .clicked()
-                {
-                    self.afd_open = true;
-                    self.fetch_afd();
-                    ui.close();
-                }
-                if ui.button("Placefile Manager…").clicked() {
-                    self.placefile_window.open = true;
-                    ui.close();
-                }
-                if ui.button("Color-Table Editor…")
-                    .on_hover_text("Edit radar palettes with live preview; import/export .pal")
-                    .clicked()
-                {
-                    self.palette_editor.open = true;
-                    ui.close();
-                }
-                if ui.button("Layer Manager…")
-                    .on_hover_text("Placefile draw order, opacity, and on/off")
-                    .clicked()
-                {
-                    self.layer_window_open = true;
-                    ui.close();
-                }
-                ui.separator();
-                if ui.button("Save Screenshot…").clicked() {
+                ui.label(egui::RichText::new("Capture").strong());
+                if ui.button("Save screenshot…").clicked() {
                     if let Some(path) = crate::dialog::save_path("hookecho.png", "png") {
                         self.screenshot_pending = Some(ShotDest::File(path));
-                        ui.ctx().send_viewport_cmd(egui::ViewportCommand::Screenshot(
+                        ui.ctx()
+                            .send_viewport_cmd(egui::ViewportCommand::Screenshot(
+                                egui::UserData::default(),
+                            ));
+                    }
+                }
+                if ui.button("Copy view to clipboard").clicked() {
+                    self.screenshot_pending = Some(ShotDest::Clipboard);
+                    ui.ctx()
+                        .send_viewport_cmd(egui::ViewportCommand::Screenshot(
                             egui::UserData::default(),
                         ));
-                    }
-                    ui.close();
                 }
-                if ui.button("Copy View").clicked() {
-                    self.screenshot_pending = Some(ShotDest::Clipboard);
-                    ui.ctx().send_viewport_cmd(egui::ViewportCommand::Screenshot(
-                        egui::UserData::default(),
-                    ));
-                    ui.close();
-                }
-                if ui.add_enabled(self.loop_export.is_none(), egui::Button::new("Export Loop (GIF)…"))
+                if ui
+                    .add_enabled(
+                        self.loop_export.is_none(),
+                        egui::Button::new("Export loop (GIF)…"),
+                    )
                     .on_hover_text("Capture the archive timeline as a looping animation")
                     .clicked()
                 {
                     self.start_loop_export(crate::loopexport::LoopFormat::Gif);
-                    ui.close();
                 }
                 // MP4 export shells out to the `ffmpeg` CLI, which isn't present on Android; GIF
                 // export (pure Rust) stays. Hide the MP4 item there rather than fail on click.
                 if !cfg!(target_os = "android")
-                    && ui.add_enabled(self.loop_export.is_none(), egui::Button::new("Export Loop (MP4)…"))
+                    && ui
+                        .add_enabled(
+                            self.loop_export.is_none(),
+                            egui::Button::new("Export loop (MP4)…"),
+                        )
                         .on_hover_text("Capture the archive timeline as an MP4 (requires ffmpeg)")
                         .clicked()
                 {
                     self.start_loop_export(crate::loopexport::LoopFormat::Mp4);
-                    ui.close();
                 }
-            });
-            ui.menu_button("Panes", |ui| {
-                for count in [1usize, 2, 4] {
-                    let label = if count == 1 { "1 pane".to_string() } else { format!("{count} panes") };
-                    if ui.selectable_label(self.views.len() == count, label).clicked() {
-                        self.set_pane_count(count);
-                        ui.close();
-                    }
+                if ui.button("Clear measurement").clicked() {
+                    self.measure.clear();
                 }
+
                 ui.separator();
-                ui.checkbox(&mut self.link_cameras, "Link cameras");
-            });
-            ui.menu_button("Help", |ui| {
-                ui.label("Hook Echo-WX — NEXRAD radar viewer");
-                ui.label("github.com/d4vid87/hookecho");
+                ui.label(egui::RichText::new("Settings").strong());
+                if ui
+                    .button("Export settings…")
+                    .on_hover_text("Save settings + color tables to a portable bundle")
+                    .clicked()
+                {
+                    self.export_settings_bundle();
+                }
+                if ui
+                    .button("Import settings…")
+                    .on_hover_text("Load a settings bundle from another machine")
+                    .clicked()
+                {
+                    self.import_settings_bundle();
+                }
+
                 ui.separator();
+                ui.weak("Hook Echo-WX — NEXRAD radar viewer");
+                ui.weak("github.com/d4vid87/hookecho");
                 if ui.button("Setup wizard…").clicked() {
                     self.wizard.start();
-                    ui.close();
+                }
+                if ui.button("Exit").clicked() {
+                    ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
                 }
             });
-        });
     }
 
     /// Deep-link the active pane to a site + camera, and (for archive) seek the timeline to
@@ -6813,56 +6793,120 @@ impl HookEchoApp {
         }
     }
 
-    fn status_bar(&self, ui: &mut egui::Ui) {
+    /// Bottom-right info chip: zoom, cursor position, DVR depth, and the active tool's hint.
+    ///
+    /// This is what the docked status bar used to hold. A full-width bar for four short readouts
+    /// cost a strip of map on every frame; the chip floats over the map instead, and the site and
+    /// volume time it also carried now live in the timeline pill where the clock belongs.
+    fn info_chip(&mut self, ctx: &egui::Context) {
+        use crate::ui::style;
         let v = &self.views[self.active];
-        ui.horizontal(|ui| {
-            ui.strong(v.site.as_deref().unwrap_or("no site"));
-            ui.separator();
-            if let Some(vol) = &v.volume {
-                let age = (Utc::now() - vol.time).num_seconds().max(0);
-                ui.label(format!(
-                    "{} ({} ago)",
-                    crate::timefmt::fmt_clock(
-                        vol.time,
-                        self.settings.tz_for(v.site.as_deref()),
-                        true
-                    ),
-                    humanize(age)
-                ));
-            } else if v.loading {
-                ui.label("loading…");
-            }
-            if let Some(e) = &v.error {
-                ui.colored_label(egui::Color32::from_rgb(230, 100, 100), e);
-            }
-            if self.tool != MapTool::Interrogate {
-                ui.separator();
-                let name = match self.tool {
-                    MapTool::Measure => "Measure: click 2 points",
-                    MapTool::Marker => "Drop marker: click map",
-                    MapTool::CrossSection => "Cross-section: click 2 points",
-                    MapTool::Sounding => "Sounding: click a point",
-                    MapTool::Chase => "Chase: click your location",
-                    MapTool::Climatology => "Climatology: click a point",
-                    MapTool::Interrogate => "",
-                };
-                ui.colored_label(crate::theme::accent(self.settings.theme), name);
-            }
-            // Right-aligned segment: zoom, then cursor lat/lon, then DVR buffer depth.
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                ui.weak(format!("z{:.1}", v.camera.zoom));
-                if let Some((lon, lat)) = self.cursor_ll {
-                    ui.separator();
-                    ui.monospace(format!("{lat:.3}, {lon:.3}"));
-                }
-                let depth = self.dvr_depth();
-                if depth > 1 {
-                    ui.separator();
-                    ui.weak(format!("⟲ DVR {depth}"))
-                        .on_hover_text("Frames buffered in memory for instant replay (press R)");
-                }
+        let hint = match self.tool {
+            MapTool::Measure => "Measure: click 2 points",
+            MapTool::Marker => "Drop marker: click map",
+            MapTool::CrossSection => "Cross-section: click 2 points",
+            MapTool::Sounding => "Sounding: click a point",
+            MapTool::Chase => "Chase: click your location",
+            MapTool::Climatology => "Climatology: click a point",
+            MapTool::Interrogate => "",
+        };
+        let zoom = format!("z{:.1}", v.camera.zoom);
+        let coords = self
+            .cursor_ll
+            .map(|(lon, lat)| format!("{lat:.3}, {lon:.3}"));
+        let depth = self.dvr_depth();
+        let accent = crate::theme::accent(self.settings.theme);
+        egui::Area::new(egui::Id::new("info_chip"))
+            .anchor(
+                egui::Align2::RIGHT_BOTTOM,
+                egui::vec2(-14.0, style::LANE_BOTTOM_CHIP),
+            )
+            .interactable(depth > 1)
+            .show(ctx, |ui| {
+                style::glass(200).show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        if !hint.is_empty() {
+                            ui.label(egui::RichText::new(hint).size(style::FONT_SM).color(accent));
+                            ui.separator();
+                        }
+                        if depth > 1 {
+                            ui.label(
+                                egui::RichText::new(format!("⟲ DVR {depth}"))
+                                    .size(style::FONT_SM)
+                                    .color(egui::Color32::from_gray(170)),
+                            )
+                            .on_hover_text(
+                                "Frames buffered in memory for instant replay (press R)",
+                            );
+                            ui.separator();
+                        }
+                        if let Some(c) = coords {
+                            ui.label(
+                                egui::RichText::new(c)
+                                    .size(style::FONT_SM)
+                                    .monospace()
+                                    .color(egui::Color32::from_gray(170)),
+                            );
+                            ui.separator();
+                        }
+                        ui.label(
+                            egui::RichText::new(zoom)
+                                .size(style::FONT_SM)
+                                .color(egui::Color32::from_gray(170)),
+                        );
+                    });
+                });
             });
-        });
+    }
+
+    /// Bottom-center error chip: the active pane's fetch error, auto-hiding after ~6 seconds.
+    ///
+    /// ponytail: one chip, newest error wins, no toast queue — add a queue if overlapping errors
+    /// from different panes turn out to matter.
+    fn error_chip(&mut self, ctx: &egui::Context) {
+        const HOLD_SECS: f64 = 6.0;
+        let now = ctx.input(|i| i.time);
+        match self.views[self.active].error.clone() {
+            Some(e) => {
+                if self.error_chip.as_ref().is_none_or(|(prev, _)| *prev != e) {
+                    self.error_chip = Some((e, now));
+                }
+            }
+            None => {}
+        }
+        let Some((msg, since)) = self.error_chip.clone() else {
+            return;
+        };
+        if now - since > HOLD_SECS {
+            self.error_chip = None;
+            return;
+        }
+        ctx.request_repaint_after(std::time::Duration::from_millis(500));
+        egui::Area::new(egui::Id::new("error_chip"))
+            .anchor(
+                egui::Align2::CENTER_BOTTOM,
+                egui::vec2(0.0, crate::ui::style::LANE_BOTTOM_CHASE),
+            )
+            .show(ctx, |ui| {
+                crate::ui::style::glass(232)
+                    .stroke(egui::Stroke::new(
+                        1.0,
+                        egui::Color32::from_rgb(230, 100, 100).gamma_multiply(0.8),
+                    ))
+                    .show(ui, |ui| {
+                        if ui
+                            .label(
+                                egui::RichText::new(&msg)
+                                    .size(crate::ui::style::FONT_BASE)
+                                    .color(egui::Color32::from_rgb(240, 150, 150)),
+                            )
+                            .on_hover_text("Click to dismiss")
+                            .clicked()
+                        {
+                            self.error_chip = None;
+                        }
+                    });
+            });
     }
 }
 
@@ -7846,9 +7890,6 @@ impl eframe::App for HookEchoApp {
                 actions = self.mobile_chrome(root, ctx);
             }
         } else {
-            if !self.obs_mode {
-                egui::Panel::top("menu_bar").show(root, |ui| self.menu_bar(ui));
-            }
             if !self.obs_mode && self.show_toolbox {
                 egui::Panel::left("toolbox")
                     .resizable(true)
@@ -7940,6 +7981,8 @@ impl eframe::App for HookEchoApp {
             self.control_column(ctx);
             self.product_pill(ctx);
             self.timeline_pill(ctx);
+            self.info_chip(ctx);
+            self.error_chip(ctx);
             self.layers_panel(ctx);
             self.command_palette(ctx);
         }
@@ -8253,9 +8296,6 @@ impl eframe::App for HookEchoApp {
         // Desktop status bar + right-dock alert panel. On Android the top bar shows the volume
         // age and the alerts live in the bell's slide-up sheet (see `app::mobile`).
         if !cfg!(target_os = "android") {
-            if !self.obs_mode {
-                egui::Panel::bottom("status_bar").show(root, |ui| self.status_bar(ui));
-            }
             if self.show_alert_panel && !self.obs_mode {
                 let bounds = self.view_bounds();
                 if let Some((id, lon, lat)) =
