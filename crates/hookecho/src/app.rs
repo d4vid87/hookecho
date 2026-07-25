@@ -2377,6 +2377,69 @@ paste_target: None,
         }
     }
 
+    /// Chase HUD: the storm-relative numbers a chaser in motion actually needs — where the storm
+    /// is, how close it will come and when, and which way to drive to get off its path. Display
+    /// only; the arrival cones and NWS warnings already own the alarms.
+    fn chase_hud(&mut self, ctx: &egui::Context) {
+        if !self.chase_mode {
+            return;
+        }
+        let Some((lon, lat)) = self.chase_pos else { return };
+        let me = [lon, lat];
+        // Prefer the cell the camera is following, else the nearest tracked cell within 300 km.
+        let cell = match &self.follow_cell {
+            Some((_, c, _)) => Some(c.clone()),
+            None => nearest_cell(&self.storm_cells, lon, lat, 300.0).cloned(),
+        };
+        let Some(c) = cell else { return };
+        let (km, bearing) = crate::geo::great_circle(me, [c.lon, c.lat]);
+        let dir = c.mvt_deg.unwrap_or(0.0) as f64;
+        let kt = c.mvt_kt.unwrap_or(0.0) as f64;
+        let (close_km, close_min) = crate::geo::closest_approach([c.lon, c.lat], dir, kt, me, 120.0);
+        let escape = crate::geo::escape_bearing([c.lon, c.lat], dir, me);
+        let mi = |km: f64| km * 0.621_371;
+        // Urgent when the storm will be on top of you soon.
+        let urgent = mi(close_km) < 5.0 && close_min < 20.0;
+        let accent = crate::theme::accent(self.settings.theme);
+        let red = egui::Color32::from_rgb(230, 70, 70);
+        let inset_bottom = (ctx.viewport_rect().bottom() - ctx.content_rect().bottom()).max(0.0);
+        // Android floats the bottom card at the same edge; sit above it.
+        let dy = if cfg!(target_os = "android") { -(inset_bottom + 190.0) } else { -34.0 };
+        egui::Area::new(egui::Id::new("chase_hud"))
+            .anchor(egui::Align2::LEFT_BOTTOM, egui::vec2(14.0, dy))
+            .show(ctx, |ui| {
+                let frame = mobile::glass(228)
+                    .stroke(egui::Stroke::new(if urgent { 2.0 } else { 1.0 }, if urgent { red } else { egui::Color32::from_rgba_unmultiplied(255, 255, 255, 22) }));
+                frame.show(ui, |ui| {
+                    ui.set_width(226.0);
+                    let head = if c.id.is_empty() { "Storm".to_string() } else { format!("Storm {}", c.id) };
+                    ui.label(egui::RichText::new(head).size(14.0).strong().color(if urgent { red } else { accent }));
+                    let row = |ui: &mut egui::Ui, k: &str, v: String| {
+                        ui.horizontal(|ui| {
+                            ui.label(egui::RichText::new(k).size(12.0).color(egui::Color32::from_gray(160)));
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                ui.label(egui::RichText::new(v).size(13.0).strong().color(egui::Color32::from_gray(235)));
+                            });
+                        });
+                    };
+                    row(ui, "Now", format!("{:.1} mi {} ({:.0}°)", mi(km), cardinal(bearing), bearing));
+                    if kt > 1.0 {
+                        row(ui, "Closest", format!("{:.1} mi in {close_min:.0} min", mi(close_km)));
+                        row(ui, "Escape", format!("{} ({:.0}°)", cardinal(escape), escape));
+                        row(ui, "Motion", format!("{} at {kt:.0} kt", cardinal(dir)));
+                    } else {
+                        row(ui, "Motion", "stationary".into());
+                    }
+                    if let Some(site) = crate::geo::nearest_site_id(lon, lat) {
+                        row(ui, "Radar", site);
+                    }
+                });
+            });
+        if urgent {
+            ctx.request_repaint_after(std::time::Duration::from_millis(500));
+        }
+    }
+
     /// The boolean behind an [`OverlayToggle`]. One place to resolve a named toggle so the
     /// layers panel, command palette, and mobile sheet never drift apart.
     fn overlay_flag(&mut self, t: OverlayToggle) -> &mut bool {
@@ -6230,6 +6293,9 @@ impl eframe::App for HookEchoApp {
             }
         }
         self.follow_badge(ctx);
+        if !self.obs_mode {
+            self.chase_hud(ctx);
+        }
         if let Some(popup) = &mut self.warning_popup {
             if !ui::warning_window::show(ctx, popup) {
                 self.warning_popup = None;

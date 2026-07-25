@@ -63,6 +63,53 @@ pub fn arrival_eta_min(
     (minutes >= 0.0 && minutes <= max_min).then_some(minutes)
 }
 
+/// How close a storm at `cell` moving toward `dir_deg` at `kt` knots will come to `target`, and
+/// when: returns `(km, minutes)` for the minimum distance over the next `max_min` minutes.
+///
+/// Sampled once a minute along the projected track rather than solved analytically — the great
+/// circle makes the closed form fussy, and a chaser cares about the minute, not the second. A
+/// receding storm returns `t = 0` (now is as close as it gets).
+pub fn closest_approach(
+    cell: [f64; 2],
+    dir_deg: f64,
+    kt: f64,
+    target: [f64; 2],
+    max_min: f64,
+) -> (f64, f64) {
+    let mut best = (great_circle(cell, target).0, 0.0);
+    if kt <= 1.0 {
+        return best; // effectively stationary: it never gets closer than it is now
+    }
+    let km_per_min = kt * 1.852 / 60.0;
+    let mut t = 1.0;
+    while t <= max_min {
+        let at = destination_point(cell, dir_deg, km_per_min * t);
+        let km = great_circle(at, target).0;
+        if km < best.0 {
+            best = (km, t);
+        }
+        t += 1.0;
+    }
+    best
+}
+
+/// The bearing to drive to get off a storm's path fastest: perpendicular to the storm motion, on
+/// whichever side `target` already sits (crossing in front of the storm is how chasers die).
+pub fn escape_bearing(cell: [f64; 2], dir_deg: f64, target: [f64; 2]) -> f64 {
+    let (_, to_target) = great_circle(cell, target);
+    // Signed angle from the motion vector to the target direction, in (-180, 180].
+    let mut off = (to_target - dir_deg) % 360.0;
+    if off > 180.0 {
+        off -= 360.0;
+    }
+    if off < -180.0 {
+        off += 360.0;
+    }
+    // Target on the right of the track → flee right (+90°), else left.
+    let turn = if off >= 0.0 { 90.0 } else { -90.0 };
+    (dir_deg + turn + 360.0) % 360.0
+}
+
 /// The NEXRAD site id nearest to `[lon, lat]` (chase-mode auto-handoff), or `None` if the
 /// registry is somehow empty. Delegates to the registry's own nearest-site lookup.
 pub fn nearest_site_id(lon: f64, lat: f64) -> Option<String> {
@@ -99,6 +146,33 @@ mod tests {
             .expect("target is on the path");
         // ~48 nmi / 30 kt = ~1.6 h ≈ 96 min.
         assert!((eta - 96.0).abs() < 8.0, "ETA ~96 min, got {eta}");
+    }
+
+    #[test]
+    fn closest_approach_runs_the_storm_over_you() {
+        // Storm 1° west of the chaser moving due east at 30 kt: it passes right over them.
+        let (km, min) = closest_approach([-98.0, 35.0], 90.0, 30.0, [-97.0, 35.0], 240.0);
+        assert!(km < 3.0, "should nearly hit, got {km} km");
+        // ~91 km at 55.6 km/h ≈ 98 min.
+        assert!((min - 98.0).abs() < 10.0, "ETA ~98 min, got {min}");
+    }
+
+    #[test]
+    fn closest_approach_receding_storm_is_closest_now() {
+        // Storm already east of the chaser, still moving east — it only gets farther.
+        let (km, min) = closest_approach([-96.0, 35.0], 90.0, 40.0, [-97.0, 35.0], 240.0);
+        assert_eq!(min, 0.0, "closest approach is now");
+        assert!(km > 80.0, "still ~91 km away, got {km}");
+    }
+
+    #[test]
+    fn escape_bearing_points_away_from_the_track() {
+        // Eastbound storm, chaser to the north → flee north.
+        let b = escape_bearing([-97.0, 35.0], 90.0, [-97.0, 36.0]);
+        assert!(b.min(360.0 - b) < 1.0, "expected ~0° (north), got {b}");
+        // Same storm, chaser to the south → flee south.
+        let b = escape_bearing([-97.0, 35.0], 90.0, [-97.0, 34.0]);
+        assert!((b - 180.0).abs() < 1.0, "expected ~180° (south), got {b}");
     }
 
     #[test]
