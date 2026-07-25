@@ -32,12 +32,21 @@ pub(crate) fn show(ctx: &egui::Context, open: &mut bool, settings: &mut Settings
                     changed |= ui.checkbox(&mut cfg.enabled, "").changed();
                     // The URL's file name is the readable part; the full URL is the tooltip.
                     let name = cfg.url.rsplit('/').next().unwrap_or(&cfg.url).to_string();
-                    ui.label(egui::RichText::new(name).strong()).on_hover_text(&cfg.url);
+                    ui.label(egui::RichText::new(name).strong())
+                        .on_hover_text(&cfg.url);
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.add_enabled(i + 1 < n, egui::Button::new("▼")).on_hover_text("Paint later (on top)").clicked() {
+                        if ui
+                            .add_enabled(i + 1 < n, egui::Button::new("▼"))
+                            .on_hover_text("Paint later (on top)")
+                            .clicked()
+                        {
                             swap = Some((i, i + 1));
                         }
-                        if ui.add_enabled(i > 0, egui::Button::new("▲")).on_hover_text("Paint earlier (underneath)").clicked() {
+                        if ui
+                            .add_enabled(i > 0, egui::Button::new("▲"))
+                            .on_hover_text("Paint earlier (underneath)")
+                            .clicked()
+                        {
                             swap = Some((i, i - 1));
                         }
                         changed |= ui

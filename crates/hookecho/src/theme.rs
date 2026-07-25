@@ -209,7 +209,11 @@ pub fn preview_bg(theme: Theme) -> Color32 {
 
 pub fn apply(ctx: &egui::Context, theme: Theme, system_dark: bool) {
     let pal = palette(theme, system_dark);
-    let mut visuals = if pal.is_dark { Visuals::dark() } else { Visuals::light() };
+    let mut visuals = if pal.is_dark {
+        Visuals::dark()
+    } else {
+        Visuals::light()
+    };
     tune(&mut visuals, &pal);
 
     let mut style = Style {
@@ -245,11 +249,18 @@ pub fn apply(ctx: &egui::Context, theme: Theme, system_dark: bool) {
         (TextStyle::Body, FontId::new(13.5, Proportional)),
         (TextStyle::Button, FontId::new(13.5, Proportional)),
         (TextStyle::Small, FontId::new(11.0, Proportional)),
-        (TextStyle::Monospace, FontId::new(12.5, egui::FontFamily::Monospace)),
+        (
+            TextStyle::Monospace,
+            FontId::new(12.5, egui::FontFamily::Monospace),
+        ),
     ]
     .into();
 
-    let egui_theme = if pal.is_dark { egui::Theme::Dark } else { egui::Theme::Light };
+    let egui_theme = if pal.is_dark {
+        egui::Theme::Dark
+    } else {
+        egui::Theme::Light
+    };
     ctx.set_style_of(egui_theme, style);
     ctx.options_mut(|o| {
         o.theme_preference = if pal.is_dark {
@@ -314,9 +325,10 @@ pub fn stat_card(ui: &mut egui::Ui, label: &str, value: &str) {
         .show(ui, |ui| {
             ui.set_width(108.0);
             ui.vertical(|ui| {
-                ui.add(egui::Label::new(
-                    egui::RichText::new(label.to_uppercase()).size(9.5).weak(),
-                ).truncate());
+                ui.add(
+                    egui::Label::new(egui::RichText::new(label.to_uppercase()).size(9.5).weak())
+                        .truncate(),
+                );
                 ui.label(egui::RichText::new(value).size(15.0).strong());
             });
         });
@@ -324,13 +336,20 @@ pub fn stat_card(ui: &mut egui::Ui, label: &str, value: &str) {
 
 /// A min-max normalized sparkline of `vals` (oldest→newest) in a fixed-height row.
 pub fn sparkline(ui: &mut egui::Ui, vals: &[f32], color: Color32) {
-    let (rect, _) =
-        ui.allocate_exact_size(egui::vec2(ui.available_width().min(300.0), 34.0), egui::Sense::hover());
+    let (rect, _) = ui.allocate_exact_size(
+        egui::vec2(ui.available_width().min(300.0), 34.0),
+        egui::Sense::hover(),
+    );
     let painter = ui.painter_at(rect);
     painter.rect_filled(rect, 3.0, ui.visuals().extreme_bg_color);
     if vals.len() < 2 {
-        painter.text(rect.center(), egui::Align2::CENTER_CENTER, "no data",
-            egui::FontId::proportional(10.0), ui.visuals().weak_text_color());
+        painter.text(
+            rect.center(),
+            egui::Align2::CENTER_CENTER,
+            "no data",
+            egui::FontId::proportional(10.0),
+            ui.visuals().weak_text_color(),
+        );
         return;
     }
     let (mut lo, mut hi) = (f32::INFINITY, f32::NEG_INFINITY);
@@ -344,17 +363,28 @@ pub fn sparkline(ui: &mut egui::Ui, vals: &[f32], color: Color32) {
         .iter()
         .enumerate()
         .map(|(i, &v)| {
-            let x = rect.left() + pad + (rect.width() - 2.0 * pad) * i as f32 / (vals.len() - 1) as f32;
+            let x =
+                rect.left() + pad + (rect.width() - 2.0 * pad) * i as f32 / (vals.len() - 1) as f32;
             let y = rect.bottom() - pad - (rect.height() - 2.0 * pad) * (v - lo) / span;
             egui::pos2(x, y)
         })
         .collect();
     painter.add(egui::Shape::line(pts, Stroke::new(1.5, color)));
     let weak = ui.visuals().weak_text_color();
-    painter.text(rect.right_top() + egui::vec2(-3.0, 1.0), egui::Align2::RIGHT_TOP,
-        format!("{hi:.0}"), egui::FontId::proportional(9.0), weak);
-    painter.text(rect.right_bottom() + egui::vec2(-3.0, -1.0), egui::Align2::RIGHT_BOTTOM,
-        format!("{lo:.0}"), egui::FontId::proportional(9.0), weak);
+    painter.text(
+        rect.right_top() + egui::vec2(-3.0, 1.0),
+        egui::Align2::RIGHT_TOP,
+        format!("{hi:.0}"),
+        egui::FontId::proportional(9.0),
+        weak,
+    );
+    painter.text(
+        rect.right_bottom() + egui::vec2(-3.0, -1.0),
+        egui::Align2::RIGHT_BOTTOM,
+        format!("{lo:.0}"),
+        egui::FontId::proportional(9.0),
+        weak,
+    );
 }
 
 /// A collapsible, accent-labelled toolbox section with consistent inner spacing.

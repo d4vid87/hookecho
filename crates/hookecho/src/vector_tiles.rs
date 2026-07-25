@@ -27,11 +27,18 @@ const MAX_VECTOR_Z: u8 = 14;
 const USER_AGENT: &str = "Mozilla/5.0 (compatible; hookecho/0.0; +github.com/d4vid87/hookecho)";
 
 // Fill layers in painter's-algorithm order (drawn after the background quad, before strokes).
-const FILL_LAYERS: &[(&str, &str)] =
-    &[("landcover", "class"), ("landuse", "class"), ("park", "class"), ("water", "class")];
+const FILL_LAYERS: &[(&str, &str)] = &[
+    ("landcover", "class"),
+    ("landuse", "class"),
+    ("park", "class"),
+    ("water", "class"),
+];
 // Stroke layers, drawn last (over the fills).
-const STROKE_LAYERS: &[(&str, &str)] =
-    &[("waterway", ""), ("transportation", "class"), ("boundary", "admin_level")];
+const STROKE_LAYERS: &[(&str, &str)] = &[
+    ("waterway", ""),
+    ("transportation", "class"),
+    ("boundary", "admin_level"),
+];
 
 /// A city/town label to draw with the egui painter (never appears in GPU/headless PNGs).
 #[derive(Clone, Debug)]
@@ -54,7 +61,12 @@ fn srgb_to_linear(c: u8) -> f32 {
 }
 
 fn color(rgba: [u8; 4]) -> [f32; 4] {
-    [srgb_to_linear(rgba[0]), srgb_to_linear(rgba[1]), srgb_to_linear(rgba[2]), rgba[3] as f32 / 255.0]
+    [
+        srgb_to_linear(rgba[0]),
+        srgb_to_linear(rgba[1]),
+        srgb_to_linear(rgba[2]),
+        rgba[3] as f32 / 255.0,
+    ]
 }
 
 /// Stringify a feature property (Strings pass through, numbers stringify) for style matching.
@@ -95,7 +107,11 @@ fn add_ring(
     }
 }
 
-fn append(verts: &mut Vec<OverlayVertex>, indices: &mut Vec<u32>, buf: VertexBuffers<OverlayVertex, u32>) {
+fn append(
+    verts: &mut Vec<OverlayVertex>,
+    indices: &mut Vec<u32>,
+    buf: VertexBuffers<OverlayVertex, u32>,
+) {
     let base = verts.len() as u32;
     verts.extend(buf.vertices);
     indices.extend(buf.indices.into_iter().map(|i| i + base));
@@ -106,7 +122,10 @@ fn maybe_gunzip(bytes: &[u8]) -> Vec<u8> {
     if bytes.len() >= 2 && bytes[0] == 0x1f && bytes[1] == 0x8b {
         use std::io::Read;
         let mut out = Vec::new();
-        if flate2::read::GzDecoder::new(bytes).read_to_end(&mut out).is_ok() {
+        if flate2::read::GzDecoder::new(bytes)
+            .read_to_end(&mut out)
+            .is_ok()
+        {
             return out;
         }
     }
@@ -134,10 +153,22 @@ pub fn build_tile(
     let (x1, y1) = ((txf + 1.0) / n, (tyf + 1.0) / n);
     let base = verts.len() as u32;
     verts.extend_from_slice(&[
-        OverlayVertex { world: [x0 as f32, y0 as f32], color: bg },
-        OverlayVertex { world: [x1 as f32, y0 as f32], color: bg },
-        OverlayVertex { world: [x1 as f32, y1 as f32], color: bg },
-        OverlayVertex { world: [x0 as f32, y1 as f32], color: bg },
+        OverlayVertex {
+            world: [x0 as f32, y0 as f32],
+            color: bg,
+        },
+        OverlayVertex {
+            world: [x1 as f32, y0 as f32],
+            color: bg,
+        },
+        OverlayVertex {
+            world: [x1 as f32, y1 as f32],
+            color: bg,
+        },
+        OverlayVertex {
+            world: [x0 as f32, y1 as f32],
+            color: bg,
+        },
     ]);
     indices.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
 
@@ -155,12 +186,16 @@ pub fn build_tile(
 
     // Fills.
     for (layer, key) in FILL_LAYERS {
-        let Some(i) = names.iter().position(|nm| nm == layer) else { continue };
+        let Some(i) = names.iter().position(|nm| nm == layer) else {
+            continue;
+        };
         let extent = extent_of(i);
         let feats = reader.get_features(i).unwrap_or_default();
         for f in &feats {
             let cls = prop(&f.properties, key);
-            let Some(c) = basemap_style::fill(dark, layer, &cls) else { continue };
+            let Some(c) = basemap_style::fill(dark, layer, &cls) else {
+                continue;
+            };
             let mut b = Path::builder();
             let mut any = false;
             match &f.geometry {
@@ -203,7 +238,9 @@ pub fn build_tile(
 
     // Strokes.
     for (layer, key) in STROKE_LAYERS {
-        let Some(i) = names.iter().position(|nm| nm == layer) else { continue };
+        let Some(i) = names.iter().position(|nm| nm == layer) else {
+            continue;
+        };
         let extent = extent_of(i);
         let feats = reader.get_features(i).unwrap_or_default();
         for f in &feats {
@@ -211,7 +248,9 @@ pub fn build_tile(
                 continue;
             }
             let cls = prop(&f.properties, key);
-            let Some((c, wpx)) = basemap_style::stroke(dark, layer, &cls) else { continue };
+            let Some((c, wpx)) = basemap_style::stroke(dark, layer, &cls) else {
+                continue;
+            };
             let w = (wpx as f64 * px_to_world) as f32;
             let mut b = Path::builder();
             let mut any = false;
@@ -255,9 +294,21 @@ pub fn build_tile(
 }
 
 /// Pull city/town point labels from the `place` layer.
-fn extract_labels(reader: &Reader, names: &[String], n: f64, txf: f64, tyf: f64) -> Vec<PlaceLabel> {
-    let Some(i) = names.iter().position(|nm| nm == "place") else { return Vec::new() };
-    let extent = reader.get_layer_metadata().ok().and_then(|m| m.get(i).map(|l| l.extent as f64)).unwrap_or(4096.0);
+fn extract_labels(
+    reader: &Reader,
+    names: &[String],
+    n: f64,
+    txf: f64,
+    tyf: f64,
+) -> Vec<PlaceLabel> {
+    let Some(i) = names.iter().position(|nm| nm == "place") else {
+        return Vec::new();
+    };
+    let extent = reader
+        .get_layer_metadata()
+        .ok()
+        .and_then(|m| m.get(i).map(|l| l.extent as f64))
+        .unwrap_or(4096.0);
     let mut out = Vec::new();
     for f in reader.get_features(i).unwrap_or_default() {
         let cls = prop(&f.properties, "class");
@@ -267,7 +318,11 @@ fn extract_labels(reader: &Reader, names: &[String], n: f64, txf: f64, tyf: f64)
         }
         let name = {
             let en = prop(&f.properties, "name:en");
-            if en.is_empty() { prop(&f.properties, "name") } else { en }
+            if en.is_empty() {
+                prop(&f.properties, "name")
+            } else {
+                en
+            }
         };
         if name.is_empty() {
             continue;
@@ -285,7 +340,12 @@ fn extract_labels(reader: &Reader, names: &[String], n: f64, txf: f64, tyf: f64)
                 Some(Value::UInt(r)) => *r as i64,
                 _ => 100,
             };
-            out.push(PlaceLabel { world: [p.x, p.y], name, rank, city });
+            out.push(PlaceLabel {
+                world: [p.x, p.y],
+                name,
+                rank,
+                city,
+            });
         }
     }
     out
@@ -301,12 +361,19 @@ fn fill_template(template: &str, z: u8, x: u32, y: u32) -> String {
 /// Fetch the OpenFreeMap tile URL template from TileJSON, disk-cached with a TTL.
 /// `// ponytail: 12h TTL over the rotating snapshot; add 404-driven refetch if a snapshot is
 /// pulled mid-session before the TTL expires.`
-pub async fn fetch_tilejson(client: &reqwest::Client, cache_dir: Option<&std::path::Path>) -> Option<String> {
+pub async fn fetch_tilejson(
+    client: &reqwest::Client,
+    cache_dir: Option<&std::path::Path>,
+) -> Option<String> {
     if let Some(dir) = cache_dir {
         let p = dir.join("tilejson.txt");
         if let Ok(meta) = std::fs::metadata(&p) {
             if let Ok(modt) = meta.modified() {
-                if modt.elapsed().map(|e| e.as_secs() < 12 * 3600).unwrap_or(false) {
+                if modt
+                    .elapsed()
+                    .map(|e| e.as_secs() < 12 * 3600)
+                    .unwrap_or(false)
+                {
                     if let Ok(s) = std::fs::read_to_string(&p) {
                         return Some(s.trim().to_string());
                     }
@@ -314,7 +381,16 @@ pub async fn fetch_tilejson(client: &reqwest::Client, cache_dir: Option<&std::pa
             }
         }
     }
-    let body = client.get(TILEJSON_URL).send().await.ok()?.error_for_status().ok()?.text().await.ok()?;
+    let body = client
+        .get(TILEJSON_URL)
+        .send()
+        .await
+        .ok()?
+        .error_for_status()
+        .ok()?
+        .text()
+        .await
+        .ok()?;
     let v: serde_json::Value = serde_json::from_str(&body).ok()?;
     let t = v["tiles"].get(0)?.as_str()?.to_string();
     if let Some(dir) = cache_dir {
@@ -342,7 +418,11 @@ pub async fn fetch_visible_vector(
             Ok(bytes) => {
                 let (verts, indices, lbls) = build_tile(&bytes, v.id, dark, tess_zoom);
                 labels.extend(lbls);
-                out.push(PendingVectorTile { id: v.id, vertices: verts, indices });
+                out.push(PendingVectorTile {
+                    id: v.id,
+                    vertices: verts,
+                    indices,
+                });
             }
             Err(e) => log::warn!("vector tile {url}: {e}"),
         }
@@ -465,14 +545,22 @@ impl VectorTileManager {
             }
             let (z, x, y) = v.id;
             let url = fill_template(&template, z, x, y);
-            let path = self.cache_root.as_ref().map(|d| d.join(format!("{z}/{x}/{y}.pbf")));
+            let path = self
+                .cache_root
+                .as_ref()
+                .map(|d| d.join(format!("{z}/{x}/{y}.pbf")));
             let client = self.client.clone();
             let tx = self.tx.clone();
             let id = v.id;
             self.rt.spawn(async move {
                 if let Ok(bytes) = load_tile_bytes(&client, &url, path.as_deref()).await {
                     let (vertices, indices, labels) = build_tile(&bytes, id, dark, tess_zoom);
-                    let _ = tx.send(FetchedVector { id, vertices, indices, labels });
+                    let _ = tx.send(FetchedVector {
+                        id,
+                        vertices,
+                        indices,
+                        labels,
+                    });
                 }
             });
         }
@@ -492,14 +580,28 @@ impl VectorTileManager {
     /// Build the `(url, cache_path)` jobs for an offline chase pack of the lon/lat bbox over
     /// `z_lo..=z_hi` (capped at the vector max zoom). Empty until the URL template is known. The
     /// `.pbf` cache path is snapshot-agnostic so a dark/light switch keeps the pre-downloads.
-    pub fn pack_jobs(&self, min_lon: f64, min_lat: f64, max_lon: f64, max_lat: f64, z_lo: u8, z_hi: u8) -> Vec<crate::tiles::PackJob> {
-        let (Some(template), Some(root)) = (self.template.as_ref(), self.cache_root.as_ref()) else {
+    pub fn pack_jobs(
+        &self,
+        min_lon: f64,
+        min_lat: f64,
+        max_lon: f64,
+        max_lat: f64,
+        z_lo: u8,
+        z_hi: u8,
+    ) -> Vec<crate::tiles::PackJob> {
+        let (Some(template), Some(root)) = (self.template.as_ref(), self.cache_root.as_ref())
+        else {
             return Vec::new();
         };
         let z_hi = z_hi.min(MAX_VECTOR_Z);
         crate::tiles::pack_tile_ids(min_lon, min_lat, max_lon, max_lat, z_lo, z_hi)
             .into_iter()
-            .map(|(z, x, y)| (fill_template(template, z, x, y), root.join(format!("{z}/{x}/{y}.pbf"))))
+            .map(|(z, x, y)| {
+                (
+                    fill_template(template, z, x, y),
+                    root.join(format!("{z}/{x}/{y}.pbf")),
+                )
+            })
             .collect()
     }
 
@@ -509,7 +611,11 @@ impl VectorTileManager {
         while let Ok(f) = self.rx.try_recv() {
             if self.uploaded.insert(f.id) {
                 self.labels.insert(f.id, f.labels);
-                ready.push(PendingVectorTile { id: f.id, vertices: f.vertices, indices: f.indices });
+                ready.push(PendingVectorTile {
+                    id: f.id,
+                    vertices: f.vertices,
+                    indices: f.indices,
+                });
             }
         }
         ready

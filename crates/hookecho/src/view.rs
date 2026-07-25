@@ -28,7 +28,14 @@ impl Volume {
     pub fn new(scan: Scan, name: String, time: DateTime<Utc>) -> Self {
         let vcp = scan.coverage_pattern_number().to_string();
         let elevations = level2::elevation_angles(&scan);
-        Self { scan, name, time, vcp, elevations, binned: HashMap::new() }
+        Self {
+            scan,
+            name,
+            time,
+            vcp,
+            elevations,
+            binned: HashMap::new(),
+        }
     }
 
     /// Apply a live merged volume: swap in the new scan, recompute tilts, and evict only the
@@ -52,7 +59,12 @@ impl Volume {
     }
 
     /// Bin (and cache) the sweep for `moment` at tilt index `tilt`.
-    pub fn binned(&mut self, moment: Moment, tilt: usize, dealias: bool) -> anyhow::Result<&BinnedSweep> {
+    pub fn binned(
+        &mut self,
+        moment: Moment,
+        tilt: usize,
+        dealias: bool,
+    ) -> anyhow::Result<&BinnedSweep> {
         use std::collections::hash_map::Entry;
         match self.binned.entry((moment, tilt, dealias)) {
             Entry::Occupied(e) => Ok(e.into_mut()),

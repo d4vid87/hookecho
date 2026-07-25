@@ -63,7 +63,11 @@ pub fn show(
             id: s.id.to_string(),
             city: s.city.to_string(),
             state: s.state.to_string(),
-            kind: if s.id.starts_with('T') { "TDWR" } else { "WSR-88D" },
+            kind: if s.id.starts_with('T') {
+                "TDWR"
+            } else {
+                "WSR-88D"
+            },
             dist_km: haversine_km(center, (s.longitude as f64, s.latitude as f64)),
             starred: settings.presets.iter().any(|p| p == s.id),
         })
@@ -112,7 +116,10 @@ pub fn show(
                             if ui.button(star).clicked() {
                                 toggle_star = Some(r.id.clone());
                             }
-                            let text = format!("{}   {}, {}   ·   {:.0} km", r.id, r.city, r.state, r.dist_km);
+                            let text = format!(
+                                "{}   {}, {}   ·   {:.0} km",
+                                r.id, r.city, r.state, r.dist_km
+                            );
                             let btn = egui::Button::new(egui::RichText::new(text).size(15.0))
                                 .fill(egui::Color32::from_rgba_unmultiplied(255, 255, 255, 12))
                                 .corner_radius(8.0)
@@ -153,11 +160,15 @@ pub fn show(
                     .column(Column::exact(80.0)) // distance
                     .min_scrolled_height(0.0)
                     .header(22.0, |mut h| {
-                        h.col(|ui| { ui.label("★"); });
+                        h.col(|ui| {
+                            ui.label("★");
+                        });
                         h.col(|ui| header_button(ui, "ID", SortCol::Id));
                         h.col(|ui| header_button(ui, "City", SortCol::City));
                         h.col(|ui| header_button(ui, "St", SortCol::State));
-                        h.col(|ui| { ui.label("Type"); });
+                        h.col(|ui| {
+                            ui.label("Type");
+                        });
                         h.col(|ui| header_button(ui, "Dist", SortCol::Distance));
                     })
                     .body(|mut body| {
@@ -171,11 +182,21 @@ pub fn show(
                                         star_hit = true;
                                     }
                                 });
-                                row.col(|ui| { ui.strong(&r.id); });
-                                row.col(|ui| { ui.label(&r.city); });
-                                row.col(|ui| { ui.label(&r.state); });
-                                row.col(|ui| { ui.label(r.kind); });
-                                row.col(|ui| { ui.label(format!("{:.0} km", r.dist_km)); });
+                                row.col(|ui| {
+                                    ui.strong(&r.id);
+                                });
+                                row.col(|ui| {
+                                    ui.label(&r.city);
+                                });
+                                row.col(|ui| {
+                                    ui.label(&r.state);
+                                });
+                                row.col(|ui| {
+                                    ui.label(r.kind);
+                                });
+                                row.col(|ui| {
+                                    ui.label(format!("{:.0} km", r.dist_km));
+                                });
                                 if row.response().clicked() && !star_hit {
                                     apply = Some(r.id.clone());
                                 }

@@ -27,8 +27,7 @@ pub fn destination_point(start: [f64; 2], bearing_deg: f64, km: f64) -> [f64; 2]
     let brg = bearing_deg.to_radians();
     let (lon1, lat1) = (start[0].to_radians(), start[1].to_radians());
     let lat2 = (lat1.sin() * d.cos() + lat1.cos() * d.sin() * brg.cos()).asin();
-    let lon2 = lon1
-        + (brg.sin() * d.sin() * lat1.cos()).atan2(d.cos() - lat1.sin() * lat2.sin());
+    let lon2 = lon1 + (brg.sin() * d.sin() * lat1.cos()).atan2(d.cos() - lat1.sin() * lat2.sin());
     [lon2.to_degrees(), lat2.to_degrees()]
 }
 
@@ -129,8 +128,15 @@ mod tests {
     #[test]
     fn one_degree_north_is_60nmi() {
         let (km, brg) = great_circle([-97.0, 35.0], [-97.0, 36.0]);
-        assert!((km_to_nmi(km) - 60.0).abs() < 0.5, "≈60 nmi/deg lat, got {}", km_to_nmi(km));
-        assert!(brg.abs() < 0.5 || (brg - 360.0).abs() < 0.5, "due north, got {brg}");
+        assert!(
+            (km_to_nmi(km) - 60.0).abs() < 0.5,
+            "≈60 nmi/deg lat, got {}",
+            km_to_nmi(km)
+        );
+        assert!(
+            brg.abs() < 0.5 || (brg - 360.0).abs() < 0.5,
+            "due north, got {brg}"
+        );
     }
 
     #[test]

@@ -30,8 +30,14 @@ pub fn encode_mp4(frames: &[RgbaImage], fps: u32, path: &Path) -> anyhow::Result
         .args(["-y", "-framerate", &fps.to_string(), "-i"])
         .arg(dir.join("f%04d.png"))
         .args([
-            "-vf", "pad=ceil(iw/2)*2:ceil(ih/2)*2",
-            "-c:v", "libx264", "-pix_fmt", "yuv420p", "-movflags", "+faststart",
+            "-vf",
+            "pad=ceil(iw/2)*2:ceil(ih/2)*2",
+            "-c:v",
+            "libx264",
+            "-pix_fmt",
+            "yuv420p",
+            "-movflags",
+            "+faststart",
         ])
         .arg(path)
         .stdin(std::process::Stdio::null())
@@ -96,8 +102,13 @@ mod tests {
     #[test]
     fn encodes_mp4_when_ffmpeg_present() {
         // Skip cleanly if ffmpeg isn't installed (CI without it still passes).
-        if std::process::Command::new("ffmpeg").arg("-version").stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null()).status().map(|s| s.success()).unwrap_or(false)
+        if std::process::Command::new("ffmpeg")
+            .arg("-version")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
         {
             let mut a = RgbaImage::new(16, 16);
             for p in a.pixels_mut() {
@@ -107,7 +118,10 @@ mod tests {
             encode_mp4(&[a.clone(), a], 5, &path).expect("mp4 encode");
             let bytes = std::fs::read(&path).expect("mp4 written");
             // MP4 files carry an 'ftyp' box near the start.
-            assert!(bytes.windows(4).take(64).any(|w| w == b"ftyp"), "looks like an MP4");
+            assert!(
+                bytes.windows(4).take(64).any(|w| w == b"ftyp"),
+                "looks like an MP4"
+            );
         }
     }
 }

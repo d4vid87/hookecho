@@ -23,7 +23,9 @@ pub fn show(ctx: &egui::Context, popup: &mut WarningPopup) -> bool {
         .open(&mut open)
         .default_size([460.0, 560.0])
         .show(ctx, |ui| match popup.selected {
-            Some(i) if i < popup.cards.len() => detail_view(ui, &popup.cards[i], &mut popup.selected),
+            Some(i) if i < popup.cards.len() => {
+                detail_view(ui, &popup.cards[i], &mut popup.selected)
+            }
             _ => stack_view(ui, &popup.cards, &mut popup.selected),
         });
     open
@@ -41,7 +43,8 @@ fn stack_view(ui: &mut egui::Ui, cards: &[WarnCard], selected: &mut Option<usize
                 .show(ui, |ui| {
                     // Colored header strip + event name.
                     ui.horizontal(|ui| {
-                        let (rect, _) = ui.allocate_exact_size(egui::vec2(6.0, 16.0), egui::Sense::hover());
+                        let (rect, _) =
+                            ui.allocate_exact_size(egui::vec2(6.0, 16.0), egui::Sense::hover());
                         ui.painter().rect_filled(rect, 1.0, color32(card.color));
                         ui.strong(&a.event);
                     });
@@ -56,7 +59,10 @@ fn stack_view(ui: &mut egui::Ui, cards: &[WarnCard], selected: &mut Option<usize
                     bits.push(countdown(a));
                     ui.label(bits.join("  ·  "));
                     if !a.area.is_empty() {
-                        ui.add(egui::Label::new(egui::RichText::new(&a.area).weak().small()).truncate());
+                        ui.add(
+                            egui::Label::new(egui::RichText::new(&a.area).weak().small())
+                                .truncate(),
+                        );
                     }
                 })
                 .response;
@@ -120,7 +126,9 @@ fn detail_view(ui: &mut egui::Ui, card: &WarnCard, selected: &mut Option<usize>)
 
 /// "Expires in N min" / "Expires in H h M min" / "EXPIRED" from the alert expiry.
 pub(crate) fn countdown(a: &AlertInfo) -> String {
-    let Some(exp) = a.expires else { return "No expiry".into() };
+    let Some(exp) = a.expires else {
+        return "No expiry".into();
+    };
     let secs = (exp - chrono::Utc::now()).num_seconds();
     if secs <= 0 {
         return "EXPIRED".into();

@@ -8,7 +8,9 @@ use wxdata::volume3d::Cappi;
 pub fn to_image(c: &Cappi, table: &ColorTable) -> egui::ColorImage {
     let mut buf = vec![0u8; c.n * c.n * 4];
     for i in 0..c.n * c.n {
-        let rgba = c.dbz[i].and_then(|v| table.sample(v)).unwrap_or([18, 18, 18, 255]);
+        let rgba = c.dbz[i]
+            .and_then(|v| table.sample(v))
+            .unwrap_or([18, 18, 18, 255]);
         buf[i * 4..i * 4 + 4].copy_from_slice(&rgba);
     }
     egui::ColorImage::from_rgba_unmultiplied([c.n, c.n], &buf)

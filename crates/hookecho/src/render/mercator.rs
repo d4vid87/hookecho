@@ -39,7 +39,10 @@ pub struct Camera {
 
 impl Camera {
     pub fn at_lonlat(lon: f64, lat: f64, zoom: f64) -> Self {
-        Self { center: lonlat_to_world(lon, lat), zoom }
+        Self {
+            center: lonlat_to_world(lon, lat),
+            zoom,
+        }
     }
 
     /// World units covered by one screen pixel.
@@ -112,9 +115,15 @@ mod tests {
     #[test]
     fn world_origin_and_center() {
         let (x, y) = lonlat_to_world(-180.0, MAX_LAT);
-        assert!(x.abs() < 1e-9 && y.abs() < 1e-6, "top-left is (0,0), got ({x},{y})");
+        assert!(
+            x.abs() < 1e-9 && y.abs() < 1e-6,
+            "top-left is (0,0), got ({x},{y})"
+        );
         let (x, y) = lonlat_to_world(0.0, 0.0);
-        assert!((x - 0.5).abs() < 1e-9 && (y - 0.5).abs() < 1e-9, "equator/prime meridian is center");
+        assert!(
+            (x - 0.5).abs() < 1e-9 && (y - 0.5).abs() < 1e-9,
+            "equator/prime meridian is center"
+        );
     }
 
     #[test]

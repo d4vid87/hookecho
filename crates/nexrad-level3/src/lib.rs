@@ -14,7 +14,11 @@ use std::io::Read;
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error("message too short: need {need} bytes at {what}, have {have}")]
-    Short { what: &'static str, need: usize, have: usize },
+    Short {
+        what: &'static str,
+        need: usize,
+        have: usize,
+    },
     #[error("bad product description block (divider {0}, expected -1)")]
     BadPdb(i16),
 }
@@ -147,16 +151,40 @@ pub fn decode(raw: &[u8]) -> Result<Level3Product> {
         let sym_bytes = &msg[(sym_off * 2).min(msg.len())..];
         if sym_bytes.starts_with(b"BZh") {
             if let Some(dec) = bunzip(sym_bytes) {
-                let _ = parse_symbology(&dec, 0, &mut cells, &mut hail, &mut meso, &mut past_tracks, &mut radial);
+                let _ = parse_symbology(
+                    &dec,
+                    0,
+                    &mut cells,
+                    &mut hail,
+                    &mut meso,
+                    &mut past_tracks,
+                    &mut radial,
+                );
             }
         } else {
-            let _ = parse_symbology(msg, sym_off * 2, &mut cells, &mut hail, &mut meso, &mut past_tracks, &mut radial);
+            let _ = parse_symbology(
+                msg,
+                sym_off * 2,
+                &mut cells,
+                &mut hail,
+                &mut meso,
+                &mut past_tracks,
+                &mut radial,
+            );
         }
     }
-    let tabular = if tab_off != 0 { parse_text_block(msg, tab_off * 2, msg.len()) } else { None };
+    let tabular = if tab_off != 0 {
+        parse_text_block(msg, tab_off * 2, msg.len())
+    } else {
+        None
+    };
     // The graphic block precedes the tabular one; bound its extraction so runs don't bleed across.
     let graphic = if graph_off != 0 {
-        let end = if tab_off > graph_off { tab_off * 2 } else { msg.len() };
+        let end = if tab_off > graph_off {
+            tab_off * 2
+        } else {
+            msg.len()
+        };
         parse_text_block(msg, graph_off * 2, end.min(msg.len()))
     } else {
         None
@@ -164,7 +192,21 @@ pub fn decode(raw: &[u8]) -> Result<Level3Product> {
 
     let raw_text = parse_text_block(msg, 0, msg.len());
 
-    Ok(Level3Product { code, lat, lon, height_ft, cells, hail, meso, past_tracks, tabular, graphic, raw_text, radial, thresholds })
+    Ok(Level3Product {
+        code,
+        lat,
+        lon,
+        height_ft,
+        cells,
+        hail,
+        meso,
+        past_tracks,
+        tabular,
+        graphic,
+        raw_text,
+        radial,
+        thresholds,
+    })
 }
 
 /// Walk the Product Symbology Block's layers, decoding storm-cell packets (15/19/20) and
@@ -207,7 +249,11 @@ fn parse_symbology(
                         let x = r.i16("stormid x")? as f32 * 0.25;
                         let y = r.i16("stormid y")? as f32 * 0.25;
                         let id = r.ascii(2);
-                        cells.push(StormCell { id, x_km: x, y_km: y });
+                        cells.push(StormCell {
+                            id,
+                            x_km: x,
+                            y_km: y,
+                        });
                     }
                 }
                 19 => {
@@ -218,7 +264,13 @@ fn parse_symbology(
                         let poh = r.i16("poh")?;
                         let posh = r.i16("posh")?;
                         let max_size = r.u16("hail size")?;
-                        hail.push(Hail { x_km: x, y_km: y, poh, posh, max_size });
+                        hail.push(Hail {
+                            x_km: x,
+                            y_km: y,
+                            poh,
+                            posh,
+                            max_size,
+                        });
                     }
                 }
                 20 => {
@@ -228,7 +280,11 @@ fn parse_symbology(
                         let y = r.i16("meso y")? as f32 * 0.25;
                         let kind = r.u16("meso kind")?;
                         let _attr = r.u16("meso attr")?;
-                        meso.push(Meso { x_km: x, y_km: y, kind: meso_kind(kind).to_string() });
+                        meso.push(Meso {
+                            x_km: x,
+                            y_km: y,
+                            kind: meso_kind(kind).to_string(),
+                        });
                     }
                 }
                 23 => {
@@ -285,10 +341,20 @@ fn parse_digital_radial(r: &mut Reader, layer_end: usize) -> Result<RadialArray>
         let nbytes = r.u16("radial nbytes")? as usize;
         let start_deg = r.i16("start angle")? as f32 * 0.1;
         let delta_deg = r.i16("angle delta")? as f32 * 0.1;
-        let levels = r.take(nbytes.min(layer_end.saturating_sub(r.pos)), "radial data")?.to_vec();
-        radials.push(Radial { start_deg, delta_deg, levels });
+        let levels = r
+            .take(nbytes.min(layer_end.saturating_sub(r.pos)), "radial data")?
+            .to_vec();
+        radials.push(Radial {
+            start_deg,
+            delta_deg,
+            levels,
+        });
     }
-    Ok(RadialArray { first_bin, nbins, radials })
+    Ok(RadialArray {
+        first_bin,
+        nbins,
+        radials,
+    })
 }
 
 /// Decode a 16-bit NEXRAD-ICD floating-point value (sign / 5-bit exponent, bias 16 / 10-bit
@@ -302,7 +368,11 @@ pub fn icd_float16(val: u16) -> f32 {
     } else {
         frac / 512.0
     };
-    if sign != 0 { -value } else { value }
+    if sign != 0 {
+        -value
+    } else {
+        value
+    }
 }
 
 /// Decode a Digital VIL (product 134) data level to kg/m², via the threshold table. Levels 0/1/255
@@ -380,8 +450,12 @@ fn parse_text_block(msg: &[u8], off: usize, end: usize) -> Option<String> {
             run = 0;
         }
     }
-    let text: String =
-        out.lines().map(str::trim_end).filter(|l| !l.trim().is_empty()).collect::<Vec<_>>().join("\n");
+    let text: String = out
+        .lines()
+        .map(str::trim_end)
+        .filter(|l| !l.trim().is_empty())
+        .collect::<Vec<_>>()
+        .join("\n");
     (!text.trim().is_empty()).then_some(text)
 }
 
@@ -461,7 +535,11 @@ impl<'a> Reader<'a> {
     fn take(&mut self, n: usize, what: &'static str) -> Result<&'a [u8]> {
         let end = self.pos + n;
         if end > self.buf.len() {
-            return Err(Error::Short { what, need: n, have: self.buf.len().saturating_sub(self.pos) });
+            return Err(Error::Short {
+                what,
+                need: n,
+                have: self.buf.len().saturating_sub(self.pos),
+            });
         }
         let s = &self.buf[self.pos..end];
         self.pos = end;

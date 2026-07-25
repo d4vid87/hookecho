@@ -77,7 +77,9 @@ mod android_ime {
 
     /// Ask Android for the soft keyboard. `android-activity` does the JNI for this one.
     pub fn show_soft_input(show: bool) {
-        let Some(app) = super::android::app() else { return };
+        let Some(app) = super::android::app() else {
+            return;
+        };
         if show {
             app.show_soft_input(true);
         } else {
@@ -90,11 +92,9 @@ mod android_ime {
     /// clears the exception and returns `None`.
     pub fn clipboard_text() -> Option<String> {
         let app = super::android::app()?;
-        let vm =
-            unsafe { jni::JavaVM::from_raw(app.vm_as_ptr() as *mut jni::sys::JavaVM) }.ok()?;
+        let vm = unsafe { jni::JavaVM::from_raw(app.vm_as_ptr() as *mut jni::sys::JavaVM) }.ok()?;
         let mut env = vm.attach_current_thread().ok()?;
-        let activity =
-            unsafe { JObject::from_raw(app.activity_as_ptr() as jni::sys::jobject) };
+        let activity = unsafe { JObject::from_raw(app.activity_as_ptr() as jni::sys::jobject) };
         match read_clip(&mut env, &activity) {
             Ok(text) => text,
             Err(e) => {
@@ -105,10 +105,7 @@ mod android_ime {
         }
     }
 
-    fn read_clip(
-        env: &mut JNIEnv,
-        activity: &JObject,
-    ) -> jni::errors::Result<Option<String>> {
+    fn read_clip(env: &mut JNIEnv, activity: &JObject) -> jni::errors::Result<Option<String>> {
         let service = env.new_string("clipboard")?;
         let cm = env
             .call_method(
@@ -208,14 +205,21 @@ mod android_location {
 
     /// One permission check + `getLastKnownLocation("gps")` round trip.
     fn read_fix(asked: &mut bool) -> jni::errors::Result<Option<(f64, f64)>> {
-        let Some(app) = super::android::app() else { return Ok(None) };
+        let Some(app) = super::android::app() else {
+            return Ok(None);
+        };
         let vm = unsafe { jni::JavaVM::from_raw(app.vm_as_ptr() as *mut jni::sys::JavaVM) }?;
         let mut env = vm.attach_current_thread()?;
         let activity = unsafe { JObject::from_raw(app.activity_as_ptr() as jni::sys::jobject) };
 
         let perm = env.new_string("android.permission.ACCESS_FINE_LOCATION")?;
         let granted = env
-            .call_method(&activity, "checkSelfPermission", "(Ljava/lang/String;)I", &[(&perm).into()])?
+            .call_method(
+                &activity,
+                "checkSelfPermission",
+                "(Ljava/lang/String;)I",
+                &[(&perm).into()],
+            )?
             .i()?;
         if granted != 0 {
             // PackageManager.PERMISSION_GRANTED == 0; anything else means we must ask (once).
@@ -235,7 +239,12 @@ mod android_location {
 
         let service = env.new_string("location")?;
         let lm = env
-            .call_method(&activity, "getSystemService", "(Ljava/lang/String;)Ljava/lang/Object;", &[(&service).into()])?
+            .call_method(
+                &activity,
+                "getSystemService",
+                "(Ljava/lang/String;)Ljava/lang/Object;",
+                &[(&service).into()],
+            )?
             .l()?;
         if lm.is_null() {
             return Ok(None);
@@ -261,6 +270,6 @@ mod android_location {
 #[cfg(target_os = "android")]
 pub use android::{apply_safe_area, set_app};
 #[cfg(target_os = "android")]
-pub use android_location::start_location;
-#[cfg(target_os = "android")]
 pub use android_ime::{clipboard_text, show_soft_input};
+#[cfg(target_os = "android")]
+pub use android_location::start_location;

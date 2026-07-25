@@ -26,6 +26,7 @@ pub mod render3d;
 pub mod settings;
 pub mod theme;
 pub mod tiles;
+pub mod timefmt;
 pub mod timeline;
 pub mod tray;
 pub mod ui;

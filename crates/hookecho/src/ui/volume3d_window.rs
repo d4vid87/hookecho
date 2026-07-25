@@ -41,7 +41,8 @@ pub fn show(
                 .then(|| pending.take())
                 .flatten();
             let cb = Volume3dCallback { upload, uniform };
-            ui.painter().add(egui_wgpu::Callback::new_paint_callback(rect, cb));
+            ui.painter()
+                .add(egui_wgpu::Callback::new_paint_callback(rect, cb));
         });
     *open = keep;
 }

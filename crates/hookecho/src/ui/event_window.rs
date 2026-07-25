@@ -8,7 +8,13 @@ use chrono::{DateTime, Utc};
 /// What the app should do after the window is shown.
 pub enum EventAction {
     /// Jump the active pane to a site + camera, seeking the timeline to `time` (None = live).
-    Goto { site: String, lon: f64, lat: f64, zoom: f64, time: Option<DateTime<Utc>> },
+    Goto {
+        site: String,
+        lon: f64,
+        lat: f64,
+        zoom: f64,
+        time: Option<DateTime<Utc>>,
+    },
     /// Save the active pane's current view as a bookmark.
     AddBookmark,
 }
@@ -30,7 +36,11 @@ impl EventWindow {
                 crate::theme::section(ui, "Famous events", |ui| {
                     for e in crate::events::EVENTS {
                         ui.horizontal(|ui| {
-                            if ui.button("▶").on_hover_text("Jump the active pane here").clicked() {
+                            if ui
+                                .button("▶")
+                                .on_hover_text("Jump the active pane here")
+                                .clicked()
+                            {
                                 action = Some(EventAction::Goto {
                                     site: e.site.to_string(),
                                     lon: e.lon,

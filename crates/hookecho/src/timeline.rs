@@ -140,7 +140,10 @@ impl Timeline {
         self.frames
             .iter()
             .enumerate()
-            .filter_map(|(i, id)| id.date_time().map(|t| (i, (t - target).num_seconds().abs())))
+            .filter_map(|(i, id)| {
+                id.date_time()
+                    .map(|t| (i, (t - target).num_seconds().abs()))
+            })
             .min_by_key(|(_, d)| *d)
             .map(|(i, _)| i)
     }
@@ -286,7 +289,10 @@ mod tests {
         let before = t.frames.len();
         t.append_head(Identifier::new("KTLX20130520_0012_00_V06".to_string()));
         assert_eq!(t.frames.len(), before + 1, "head appended");
-        assert_eq!(t.playhead, 2, "playhead unmoved; window slides on next wrap");
+        assert_eq!(
+            t.playhead, 2,
+            "playhead unmoved; window slides on next wrap"
+        );
         assert!(t.live_looping());
     }
 }

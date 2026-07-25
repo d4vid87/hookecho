@@ -54,7 +54,10 @@ fn main() -> eframe::Result<()> {
 
     // Overlay verify: `hookecho --headless-overlay <out.png>`.
     if let Some(pos) = args.iter().position(|a| a == "--headless-overlay") {
-        let out = args.get(pos + 1).map(String::as_str).unwrap_or("overlay.png");
+        let out = args
+            .get(pos + 1)
+            .map(String::as_str)
+            .unwrap_or("overlay.png");
         if let Err(e) = headless::run_overlay(out) {
             eprintln!("headless overlay render failed: {e}");
             std::process::exit(1);
@@ -74,8 +77,15 @@ fn main() -> eframe::Result<()> {
 
     // National field-layer verify: `hookecho --headless-field <slug> <out.png>`.
     if let Some(pos) = args.iter().position(|a| a == "--headless-field") {
-        let slug = args.get(pos + 1).map(String::as_str).unwrap_or("rotation30");
-        let out = args.get(pos + 2).filter(|a| !a.starts_with("--")).map(String::as_str).unwrap_or("field.png");
+        let slug = args
+            .get(pos + 1)
+            .map(String::as_str)
+            .unwrap_or("rotation30");
+        let out = args
+            .get(pos + 2)
+            .filter(|a| !a.starts_with("--"))
+            .map(String::as_str)
+            .unwrap_or("field.png");
         if let Err(e) = headless::run_field(slug, out) {
             eprintln!("headless field render failed: {e}");
             std::process::exit(1);
@@ -94,7 +104,11 @@ fn main() -> eframe::Result<()> {
 
     // Surface-obs verify: `hookecho --headless-metar [SITE]`.
     if let Some(pos) = args.iter().position(|a| a == "--headless-metar") {
-        let site = args.get(pos + 1).filter(|a| !a.starts_with("--")).map(String::as_str).unwrap_or("KTLX");
+        let site = args
+            .get(pos + 1)
+            .filter(|a| !a.starts_with("--"))
+            .map(String::as_str)
+            .unwrap_or("KTLX");
         if let Err(e) = headless::run_metar(site) {
             eprintln!("headless metar failed: {e}");
             std::process::exit(1);
@@ -104,7 +118,11 @@ fn main() -> eframe::Result<()> {
 
     // River-gauge verify: `hookecho --headless-gauges [SITE]`.
     if let Some(pos) = args.iter().position(|a| a == "--headless-gauges") {
-        let site = args.get(pos + 1).filter(|a| !a.starts_with("--")).map(String::as_str).unwrap_or("KTLX");
+        let site = args
+            .get(pos + 1)
+            .filter(|a| !a.starts_with("--"))
+            .map(String::as_str)
+            .unwrap_or("KTLX");
         if let Err(e) = headless::run_gauges(site) {
             eprintln!("headless gauges failed: {e}");
             std::process::exit(1);
@@ -115,7 +133,12 @@ fn main() -> eframe::Result<()> {
     // Chase-pack verify: `hookecho --headless-chasepack [lat lon radius_km zmax] [--basemap slug]`.
     if let Some(pos) = args.iter().position(|a| a == "--headless-chasepack") {
         let num = |i: usize, d: f64| args.get(pos + i).and_then(|a| a.parse().ok()).unwrap_or(d);
-        let (lat, lon, radius, zmax) = (num(1, 35.3), num(2, -97.5), num(3, 100.0), (num(4, 12.0) as u8).min(18));
+        let (lat, lon, radius, zmax) = (
+            num(1, 35.3),
+            num(2, -97.5),
+            num(3, 100.0),
+            (num(4, 12.0) as u8).min(18),
+        );
         let slug = args
             .iter()
             .position(|a| a == "--basemap")
@@ -142,8 +165,16 @@ fn main() -> eframe::Result<()> {
     // Gridded L3 verify: `hookecho --headless-l3grid <dvl|eet> [SITE] <out.png>`.
     if let Some(pos) = args.iter().position(|a| a == "--headless-l3grid") {
         let kind = args.get(pos + 1).map(String::as_str).unwrap_or("dvl");
-        let site = args.get(pos + 2).filter(|a| !a.starts_with("--")).map(String::as_str).unwrap_or("KTLX");
-        let out = args.get(pos + 3).filter(|a| !a.starts_with("--")).map(String::as_str).unwrap_or("l3grid.png");
+        let site = args
+            .get(pos + 2)
+            .filter(|a| !a.starts_with("--"))
+            .map(String::as_str)
+            .unwrap_or("KTLX");
+        let out = args
+            .get(pos + 3)
+            .filter(|a| !a.starts_with("--"))
+            .map(String::as_str)
+            .unwrap_or("l3grid.png");
         if let Err(e) = headless::run_l3grid(kind, site, out) {
             eprintln!("headless l3grid render failed: {e}");
             std::process::exit(1);
@@ -154,7 +185,11 @@ fn main() -> eframe::Result<()> {
     // Environment-suite verify: `hookecho --headless-env <sbcape|mlcape|srh1|srh3> <out.png>`.
     if let Some(pos) = args.iter().position(|a| a == "--headless-env") {
         let slug = args.get(pos + 1).map(String::as_str).unwrap_or("sbcape");
-        let out = args.get(pos + 2).filter(|a| !a.starts_with("--")).map(String::as_str).unwrap_or("env.png");
+        let out = args
+            .get(pos + 2)
+            .filter(|a| !a.starts_with("--"))
+            .map(String::as_str)
+            .unwrap_or("env.png");
         if let Err(e) = headless::run_env(slug, out) {
             eprintln!("headless env render failed: {e}");
             std::process::exit(1);
@@ -165,7 +200,11 @@ fn main() -> eframe::Result<()> {
     // HRRR future-radar verify: `hookecho --headless-hrrr [fcsthour] <out.png>`.
     if let Some(pos) = args.iter().position(|a| a == "--headless-hrrr") {
         let fh: u8 = args.get(pos + 1).and_then(|s| s.parse().ok()).unwrap_or(1);
-        let out = args.get(pos + 2).filter(|a| !a.starts_with("--")).map(String::as_str).unwrap_or("hrrr.png");
+        let out = args
+            .get(pos + 2)
+            .filter(|a| !a.starts_with("--"))
+            .map(String::as_str)
+            .unwrap_or("hrrr.png");
         if let Err(e) = headless::run_hrrr(fh, out) {
             eprintln!("headless hrrr render failed: {e}");
             std::process::exit(1);
@@ -175,9 +214,20 @@ fn main() -> eframe::Result<()> {
 
     // CAPPI verify: `hookecho --headless-cappi [SITE] [alt_km] <out.png>`.
     if let Some(pos) = args.iter().position(|a| a == "--headless-cappi") {
-        let site = args.get(pos + 1).filter(|a| !a.starts_with("--")).map(String::as_str).unwrap_or("KTLX");
-        let alt: f32 = args.get(pos + 2).and_then(|s| s.parse().ok()).unwrap_or(3.0);
-        let out = args.get(pos + 3).filter(|a| !a.starts_with("--")).map(String::as_str).unwrap_or("cappi.png");
+        let site = args
+            .get(pos + 1)
+            .filter(|a| !a.starts_with("--"))
+            .map(String::as_str)
+            .unwrap_or("KTLX");
+        let alt: f32 = args
+            .get(pos + 2)
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(3.0);
+        let out = args
+            .get(pos + 3)
+            .filter(|a| !a.starts_with("--"))
+            .map(String::as_str)
+            .unwrap_or("cappi.png");
         if let Err(e) = headless::run_cappi(site, alt, out) {
             eprintln!("headless cappi failed: {e}");
             std::process::exit(1);
@@ -187,8 +237,16 @@ fn main() -> eframe::Result<()> {
 
     // 3D raymarch verify: `hookecho --headless-3d [SITE] <out.png>`.
     if let Some(pos) = args.iter().position(|a| a == "--headless-3d") {
-        let site = args.get(pos + 1).filter(|a| !a.starts_with("--")).map(String::as_str).unwrap_or("KTLX");
-        let out = args.get(pos + 2).filter(|a| !a.starts_with("--")).map(String::as_str).unwrap_or("volume3d.png");
+        let site = args
+            .get(pos + 1)
+            .filter(|a| !a.starts_with("--"))
+            .map(String::as_str)
+            .unwrap_or("KTLX");
+        let out = args
+            .get(pos + 2)
+            .filter(|a| !a.starts_with("--"))
+            .map(String::as_str)
+            .unwrap_or("volume3d.png");
         if let Err(e) = headless::run_3d(site, out) {
             eprintln!("headless 3d render failed: {e}");
             std::process::exit(1);
@@ -203,9 +261,19 @@ fn main() -> eframe::Result<()> {
             let (a, b) = s.split_once(',')?;
             Some((a.parse().ok()?, b.parse().ok()?))
         };
-        let a = args.get(pos + 2).and_then(|s| parse(s)).unwrap_or((-98.5, 35.3));
-        let b = args.get(pos + 3).and_then(|s| parse(s)).unwrap_or((-96.0, 35.3));
-        let out = args.get(pos + 4).filter(|a| !a.starts_with("--")).map(String::as_str).unwrap_or("xsection.png");
+        let a = args
+            .get(pos + 2)
+            .and_then(|s| parse(s))
+            .unwrap_or((-98.5, 35.3));
+        let b = args
+            .get(pos + 3)
+            .and_then(|s| parse(s))
+            .unwrap_or((-96.0, 35.3));
+        let out = args
+            .get(pos + 4)
+            .filter(|a| !a.starts_with("--"))
+            .map(String::as_str)
+            .unwrap_or("xsection.png");
         if let Err(e) = headless::run_xsection(site, a, b, out) {
             eprintln!("headless xsection failed: {e}");
             std::process::exit(1);
@@ -215,8 +283,14 @@ fn main() -> eframe::Result<()> {
 
     // Storm-reports verify: `hookecho --headless-reports [sts ets]` (RFC3339-ish UTC window).
     if let Some(pos) = args.iter().position(|a| a == "--headless-reports") {
-        let sts = args.get(pos + 1).filter(|a| !a.starts_with("--")).map(String::as_str);
-        let ets = args.get(pos + 2).filter(|a| !a.starts_with("--")).map(String::as_str);
+        let sts = args
+            .get(pos + 1)
+            .filter(|a| !a.starts_with("--"))
+            .map(String::as_str);
+        let ets = args
+            .get(pos + 2)
+            .filter(|a| !a.starts_with("--"))
+            .map(String::as_str);
         let window = sts.zip(ets);
         if let Err(e) = headless::run_reports(window) {
             eprintln!("headless reports failed: {e}");
@@ -227,7 +301,11 @@ fn main() -> eframe::Result<()> {
 
     // AFD verify: `hookecho --headless-afd [SITE]`.
     if let Some(pos) = args.iter().position(|a| a == "--headless-afd") {
-        let site = args.get(pos + 1).filter(|a| !a.starts_with("--")).map(String::as_str).unwrap_or("KTLX");
+        let site = args
+            .get(pos + 1)
+            .filter(|a| !a.starts_with("--"))
+            .map(String::as_str)
+            .unwrap_or("KTLX");
         if let Err(e) = headless::run_afd(site) {
             eprintln!("headless afd failed: {e}");
             std::process::exit(1);
@@ -246,8 +324,14 @@ fn main() -> eframe::Result<()> {
 
     // Sounding-indices verify: `hookecho --headless-indices [lon] [lat]`.
     if let Some(pos) = args.iter().position(|a| a == "--headless-indices") {
-        let lon: f64 = args.get(pos + 1).and_then(|s| s.parse().ok()).unwrap_or(-97.5);
-        let lat: f64 = args.get(pos + 2).and_then(|s| s.parse().ok()).unwrap_or(35.3);
+        let lon: f64 = args
+            .get(pos + 1)
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(-97.5);
+        let lat: f64 = args
+            .get(pos + 2)
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(35.3);
         if let Err(e) = headless::run_indices(lon, lat) {
             eprintln!("headless indices failed: {e}");
             std::process::exit(1);
@@ -277,8 +361,14 @@ fn main() -> eframe::Result<()> {
 
     // Tornado climatology verify: `hookecho --headless-climatology [lon lat]` (default Moore, OK).
     if let Some(pos) = args.iter().position(|a| a == "--headless-climatology") {
-        let lon = args.get(pos + 1).and_then(|s| s.parse().ok()).unwrap_or(-97.49);
-        let lat = args.get(pos + 2).and_then(|s| s.parse().ok()).unwrap_or(35.34);
+        let lon = args
+            .get(pos + 1)
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(-97.49);
+        let lat = args
+            .get(pos + 2)
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(35.34);
         if let Err(e) = headless::run_climatology(lon, lat) {
             eprintln!("headless climatology failed: {e}");
             std::process::exit(1);
@@ -307,7 +397,10 @@ fn main() -> eframe::Result<()> {
 
     // MRMS lightning verify: `hookecho --headless-lightning <out.png>`.
     if let Some(pos) = args.iter().position(|a| a == "--headless-lightning") {
-        let out = args.get(pos + 1).map(String::as_str).unwrap_or("lightning.png");
+        let out = args
+            .get(pos + 1)
+            .map(String::as_str)
+            .unwrap_or("lightning.png");
         if let Err(e) = headless::run_lightning(out) {
             eprintln!("headless lightning render failed: {e}");
             std::process::exit(1);
@@ -317,7 +410,11 @@ fn main() -> eframe::Result<()> {
 
     // Multi-pane render verify: `hookecho --headless-multipane [SITE]`.
     if let Some(pos) = args.iter().position(|a| a == "--headless-multipane") {
-        let site = args.get(pos + 1).filter(|a| !a.starts_with("--")).map(String::as_str).unwrap_or("KTLX");
+        let site = args
+            .get(pos + 1)
+            .filter(|a| !a.starts_with("--"))
+            .map(String::as_str)
+            .unwrap_or("KTLX");
         if let Err(e) = headless::run_multipane(site, "pane0.png", "pane1.png") {
             eprintln!("headless multipane failed: {e}");
             std::process::exit(1);
@@ -327,8 +424,15 @@ fn main() -> eframe::Result<()> {
 
     // Placefile verify: `hookecho --headless-placefile <file.txt> [out.png]`.
     if let Some(pos) = args.iter().position(|a| a == "--headless-placefile") {
-        let path = args.get(pos + 1).map(String::as_str).unwrap_or("placefile.txt");
-        let out = args.get(pos + 2).filter(|a| !a.starts_with("--")).map(String::as_str).unwrap_or("placefile.png");
+        let path = args
+            .get(pos + 1)
+            .map(String::as_str)
+            .unwrap_or("placefile.txt");
+        let out = args
+            .get(pos + 2)
+            .filter(|a| !a.starts_with("--"))
+            .map(String::as_str)
+            .unwrap_or("placefile.png");
         if let Err(e) = headless::run_placefile(path, out) {
             eprintln!("headless placefile failed: {e}");
             std::process::exit(1);
@@ -348,7 +452,11 @@ fn main() -> eframe::Result<()> {
 
     // Sensor/obs verify: `hookecho --headless-obs [SITE]`.
     if let Some(pos) = args.iter().position(|a| a == "--headless-obs") {
-        let site = args.get(pos + 1).filter(|a| !a.starts_with("--")).map(String::as_str).unwrap_or("KTLX");
+        let site = args
+            .get(pos + 1)
+            .filter(|a| !a.starts_with("--"))
+            .map(String::as_str)
+            .unwrap_or("KTLX");
         if let Err(e) = headless::run_obs(site) {
             eprintln!("headless obs failed: {e}");
             std::process::exit(1);
@@ -358,7 +466,11 @@ fn main() -> eframe::Result<()> {
 
     // VAD wind-profile verify: `hookecho --headless-vwp [SITE]`.
     if let Some(pos) = args.iter().position(|a| a == "--headless-vwp") {
-        let site = args.get(pos + 1).filter(|a| !a.starts_with("--")).map(String::as_str).unwrap_or("KTLX");
+        let site = args
+            .get(pos + 1)
+            .filter(|a| !a.starts_with("--"))
+            .map(String::as_str)
+            .unwrap_or("KTLX");
         if let Err(e) = headless::run_vwp(site) {
             eprintln!("headless vwp failed: {e}");
             std::process::exit(1);
@@ -377,7 +489,10 @@ fn main() -> eframe::Result<()> {
 
     // Archived-warning verify: `hookecho --headless-archwarn <RFC3339>`.
     if let Some(pos) = args.iter().position(|a| a == "--headless-archwarn") {
-        let ts = args.get(pos + 1).map(String::as_str).unwrap_or("2013-05-20T20:00:00Z");
+        let ts = args
+            .get(pos + 1)
+            .map(String::as_str)
+            .unwrap_or("2013-05-20T20:00:00Z");
         if let Err(e) = headless::run_archwarn(ts) {
             eprintln!("headless archwarn failed: {e}");
             std::process::exit(1);
@@ -405,7 +520,10 @@ fn main() -> eframe::Result<()> {
 
     // Headless verify mode: `hookecho --headless <out.png> [SITE] [--moment REF] [--tilt N]`.
     if let Some(pos) = args.iter().position(|a| a == "--headless") {
-        let out = args.get(pos + 1).map(String::as_str).unwrap_or("hookecho.png");
+        let out = args
+            .get(pos + 1)
+            .map(String::as_str)
+            .unwrap_or("hookecho.png");
         // First positional after out that isn't a flag is the site.
         let site = args
             .get(pos + 2)
@@ -439,7 +557,9 @@ fn main() -> eframe::Result<()> {
             let r = dir.to_radians();
             Some((spd * r.sin(), spd * r.cos()))
         });
-        if let Err(e) = headless::run(out, site, moment, tilt, smooth, pal, storm_uv, date, time, basemap, dealias) {
+        if let Err(e) = headless::run(
+            out, site, moment, tilt, smooth, pal, storm_uv, date, time, basemap, dealias,
+        ) {
             eprintln!("headless render failed: {e}");
             std::process::exit(1);
         }

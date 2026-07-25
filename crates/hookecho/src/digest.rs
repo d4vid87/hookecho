@@ -49,11 +49,7 @@ pub fn templated(alerts: &[AlertLine], reports: [usize; 3]) -> String {
 
 /// Rewrite the templated facts into friendly prose with Claude. `context` is the templated
 /// summary (the ground truth). Returns the model's text, or an error the caller can log.
-pub async fn claude(
-    http: &reqwest::Client,
-    key: &str,
-    context: &str,
-) -> anyhow::Result<String> {
+pub async fn claude(http: &reqwest::Client, key: &str, context: &str) -> anyhow::Result<String> {
     let prompt = format!(
         "You are a calm, plain-language weather briefer for the general public. In 2-4 short \
          sentences, explain what these active weather conditions mean and what people in the \
@@ -90,14 +86,26 @@ mod tests {
     #[test]
     fn templated_summarizes_and_counts() {
         let alerts = vec![
-            AlertLine { event: "Tornado Warning".into(), area: "Cleveland Co.".into() },
-            AlertLine { event: "Tornado Warning".into(), area: "McClain Co.".into() },
-            AlertLine { event: "Severe Thunderstorm Warning".into(), area: "Grady Co.".into() },
+            AlertLine {
+                event: "Tornado Warning".into(),
+                area: "Cleveland Co.".into(),
+            },
+            AlertLine {
+                event: "Tornado Warning".into(),
+                area: "McClain Co.".into(),
+            },
+            AlertLine {
+                event: "Severe Thunderstorm Warning".into(),
+                area: "Grady Co.".into(),
+            },
         ];
         let s = templated(&alerts, [1, 3, 2]);
         assert!(s.contains("2 Tornado Warning"), "counts events: {s}");
         assert!(s.contains("Cleveland Co."), "names affected areas: {s}");
-        assert!(s.contains("1 tornado, 3 wind, 2 hail"), "storm report tally: {s}");
+        assert!(
+            s.contains("1 tornado, 3 wind, 2 hail"),
+            "storm report tally: {s}"
+        );
     }
 
     #[test]

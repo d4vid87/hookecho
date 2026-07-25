@@ -1,7 +1,7 @@
 //! Settings window. General/Palettes/Units are live (U1/U3); the rest are later milestones.
 
 use crate::colormap::Palettes;
-use crate::settings::{Settings, Theme, VelocityUnit};
+use crate::settings::{Settings, Theme, TimeDisplay, VelocityUnit};
 use wxdata::level2::Moment;
 
 #[derive(Default, PartialEq, Clone, Copy)]
@@ -105,48 +105,60 @@ impl SettingsWindow {
         }
         ui.add_space(4.0);
 
-        egui::Grid::new("palette_grid").num_columns(3).spacing([10.0, 8.0]).show(ui, |ui| {
-            for moment in Moment::ALL {
-                let key = moment.short_name();
-                ui.label(key);
+        egui::Grid::new("palette_grid")
+            .num_columns(3)
+            .spacing([10.0, 8.0])
+            .show(ui, |ui| {
+                for moment in Moment::ALL {
+                    let key = moment.short_name();
+                    ui.label(key);
 
-                let current = settings.palettes.get(key).cloned();
-                let current_stem = current
-                    .as_deref()
-                    .and_then(|p| std::path::Path::new(p).file_stem().and_then(|s| s.to_str()))
-                    .map(str::to_string);
-                let selected_text = current_stem.clone().unwrap_or_else(|| "Default".to_string());
+                    let current = settings.palettes.get(key).cloned();
+                    let current_stem = current
+                        .as_deref()
+                        .and_then(|p| std::path::Path::new(p).file_stem().and_then(|s| s.to_str()))
+                        .map(str::to_string);
+                    let selected_text = current_stem
+                        .clone()
+                        .unwrap_or_else(|| "Default".to_string());
 
-                egui::ComboBox::from_id_salt(("pal_combo", key)).selected_text(selected_text).show_ui(ui, |ui| {
-                    if ui.selectable_label(current.is_none(), "Default").clicked() {
-                        settings.palettes.remove(key);
-                    }
-                    for stem in &self.pal_stems {
-                        let is_sel = current_stem.as_deref() == Some(stem.as_str());
-                        if ui.selectable_label(is_sel, stem).clicked() {
-                            if let Some(d) = &dir {
-                                let path = d.join(format!("{stem}.pal"));
-                                settings.palettes.insert(key.to_string(), path.to_string_lossy().into_owned());
+                    egui::ComboBox::from_id_salt(("pal_combo", key))
+                        .selected_text(selected_text)
+                        .show_ui(ui, |ui| {
+                            if ui.selectable_label(current.is_none(), "Default").clicked() {
+                                settings.palettes.remove(key);
                             }
+                            for stem in &self.pal_stems {
+                                let is_sel = current_stem.as_deref() == Some(stem.as_str());
+                                if ui.selectable_label(is_sel, stem).clicked() {
+                                    if let Some(d) = &dir {
+                                        let path = d.join(format!("{stem}.pal"));
+                                        settings.palettes.insert(
+                                            key.to_string(),
+                                            path.to_string_lossy().into_owned(),
+                                        );
+                                    }
+                                }
+                            }
+                        });
+
+                    if ui.button("Browse…").clicked() {
+                        if let Some(path) = crate::dialog::open_path("GRLevelX palette", &["pal"]) {
+                            settings
+                                .palettes
+                                .insert(key.to_string(), path.to_string_lossy().into_owned());
                         }
                     }
-                });
+                    ui.end_row();
 
-                if ui.button("Browse…").clicked() {
-                    if let Some(path) = crate::dialog::open_path("GRLevelX palette", &["pal"]) {
-                        settings.palettes.insert(key.to_string(), path.to_string_lossy().into_owned());
+                    if let Some(err) = &palettes.errors[moment.index()] {
+                        ui.label("");
+                        ui.colored_label(egui::Color32::from_rgb(230, 170, 80), format!("⚠ {err}"));
+                        ui.label("");
+                        ui.end_row();
                     }
                 }
-                ui.end_row();
-
-                if let Some(err) = &palettes.errors[moment.index()] {
-                    ui.label("");
-                    ui.colored_label(egui::Color32::from_rgb(230, 170, 80), format!("⚠ {err}"));
-                    ui.label("");
-                    ui.end_row();
-                }
-            }
-        });
+            });
     }
 }
 
@@ -158,6 +170,16 @@ fn units_tab(ui: &mut egui::Ui, settings: &mut Settings) {
                 ui.selectable_value(&mut settings.velocity_unit, u, u.label());
             }
         });
+        ui.end_row();
+
+        ui.label("Time display");
+        ui.horizontal(|ui| {
+            for d in TimeDisplay::ALL {
+                ui.selectable_value(&mut settings.time_display, d, d.label());
+            }
+        })
+        .response
+        .on_hover_text("Site local reads the clock the radar is standing in; UTC is the Zulu time on the wire");
         ui.end_row();
     });
     ui.weak("Reflectivity stays dBZ; internal data is unchanged (display-only).");
@@ -181,11 +203,23 @@ fn key_field(ui: &mut egui::Ui, label: &str, value: &mut String) {
     ui.label(label);
     ui.horizontal(|ui| {
         // Reserve space for the trailing buttons; the field takes the rest.
-        let paste_w = if cfg!(target_os = "android") { 62.0 } else { 0.0 };
+        let paste_w = if cfg!(target_os = "android") {
+            62.0
+        } else {
+            0.0
+        };
         let field_w = (ui.available_width() - paste_w - 34.0).max(80.0);
-        ui.add(egui::TextEdit::singleline(value).password(true).desired_width(field_w));
+        ui.add(
+            egui::TextEdit::singleline(value)
+                .password(true)
+                .desired_width(field_w),
+        );
         #[cfg(target_os = "android")]
-        if ui.button("Paste").on_hover_text("Paste from clipboard").clicked() {
+        if ui
+            .button("Paste")
+            .on_hover_text("Paste from clipboard")
+            .clicked()
+        {
             if let Some(t) = crate::platform::clipboard_text() {
                 *value = t.trim().to_string();
             }
@@ -197,41 +231,49 @@ fn key_field(ui: &mut egui::Ui, label: &str, value: &mut String) {
 }
 
 fn general_tab(ui: &mut egui::Ui, settings: &mut Settings) {
-    egui::Grid::new("general_grid").num_columns(2).spacing([12.0, 8.0]).show(ui, |ui| {
-        ui.label("Default site");
-        let mut site = settings.default_site.clone();
-        if ui.text_edit_singleline(&mut site).changed() {
-            settings.default_site = site.to_ascii_uppercase();
-        }
-        ui.end_row();
+    egui::Grid::new("general_grid")
+        .num_columns(2)
+        .spacing([12.0, 8.0])
+        .show(ui, |ui| {
+            ui.label("Default site");
+            let mut site = settings.default_site.clone();
+            if ui.text_edit_singleline(&mut site).changed() {
+                settings.default_site = site.to_ascii_uppercase();
+            }
+            ui.end_row();
 
-        ui.label("Poll interval (s)");
-        ui.add(egui::DragValue::new(&mut settings.poll_interval_secs).range(10..=600));
-        ui.end_row();
+            ui.label("Poll interval (s)");
+            ui.add(egui::DragValue::new(&mut settings.poll_interval_secs).range(10..=600));
+            ui.end_row();
 
-        ui.label("Theme");
-        ui.horizontal(|ui| {
-            egui::ComboBox::from_id_salt("theme")
-                .selected_text(settings.theme.label())
-                .show_ui(ui, |ui| {
-                    for t in Theme::ALL {
-                        ui.selectable_value(&mut settings.theme, t, t.label());
-                    }
-                });
-            // Live swatch: accent over the theme background, so the choice previews at a glance.
-            let (rect, _) = ui.allocate_exact_size(egui::vec2(46.0, 18.0), egui::Sense::hover());
-            let p = ui.painter_at(rect);
-            p.rect_filled(rect, 3.0, crate::theme::preview_bg(settings.theme));
-            p.circle_filled(rect.center(), 6.0, crate::theme::accent(settings.theme));
+            ui.label("Theme");
+            ui.horizontal(|ui| {
+                egui::ComboBox::from_id_salt("theme")
+                    .selected_text(settings.theme.label())
+                    .show_ui(ui, |ui| {
+                        for t in Theme::ALL {
+                            ui.selectable_value(&mut settings.theme, t, t.label());
+                        }
+                    });
+                // Live swatch: accent over the theme background, so the choice previews at a glance.
+                let (rect, _) =
+                    ui.allocate_exact_size(egui::vec2(46.0, 18.0), egui::Sense::hover());
+                let p = ui.painter_at(rect);
+                p.rect_filled(rect, 3.0, crate::theme::preview_bg(settings.theme));
+                p.circle_filled(rect.center(), 6.0, crate::theme::accent(settings.theme));
+            });
+            ui.end_row();
+
+            ui.label("UI scale");
+            // Phones start denser: 0.5 × a 4.0 density factor ≈ a desktop-density canvas.
+            let lo = if cfg!(target_os = "android") {
+                0.5
+            } else {
+                0.7
+            };
+            ui.add(egui::Slider::new(&mut settings.ui_scale, lo..=1.6).step_by(0.05));
+            ui.end_row();
         });
-        ui.end_row();
-
-        ui.label("UI scale");
-        // Phones start denser: 0.5 × a 4.0 density factor ≈ a desktop-density canvas.
-let lo = if cfg!(target_os = "android") { 0.5 } else { 0.7 };
-ui.add(egui::Slider::new(&mut settings.ui_scale, lo..=1.6).step_by(0.05));
-        ui.end_row();
-    });
     ui.weak("UI scale also responds to Ctrl+= / Ctrl+- / Ctrl+0.");
 
     let valid = wxdata::sites::site_by_id(&settings.default_site).is_some();
@@ -263,33 +305,38 @@ pub fn sound_picker(ui: &mut egui::Ui, settings: &mut Settings) {
         ("Lightning", |s| &mut s.lightning_sound),
     ];
     let volume = settings.alert_volume;
-    egui::Grid::new("sound_grid").num_columns(3).spacing([10.0, 6.0]).show(ui, |ui| {
-        for (label, field) in rows {
-            ui.label(label);
-            let sound = field(settings);
-            egui::ComboBox::from_id_salt(label)
-                .selected_text(sound.label())
-                .show_ui(ui, |ui| {
-                    for b in AlertSound::BUILTINS {
-                        let sel = sound.label() == b.label();
-                        if ui.selectable_label(sel, b.label()).clicked() {
-                            *sound = b;
+    egui::Grid::new("sound_grid")
+        .num_columns(3)
+        .spacing([10.0, 6.0])
+        .show(ui, |ui| {
+            for (label, field) in rows {
+                ui.label(label);
+                let sound = field(settings);
+                egui::ComboBox::from_id_salt(label)
+                    .selected_text(sound.label())
+                    .show_ui(ui, |ui| {
+                        for b in AlertSound::BUILTINS {
+                            let sel = sound.label() == b.label();
+                            if ui.selectable_label(sel, b.label()).clicked() {
+                                *sound = b;
+                            }
                         }
-                    }
-                    let is_custom = matches!(sound, AlertSound::Custom(_));
-                    if ui.selectable_label(is_custom, "Custom…").clicked() {
-                        if let Some(path) = crate::dialog::open_path("audio", &["wav", "mp3", "ogg", "flac"]) {
-                            *sound = AlertSound::Custom(path.to_string_lossy().into_owned());
+                        let is_custom = matches!(sound, AlertSound::Custom(_));
+                        if ui.selectable_label(is_custom, "Custom…").clicked() {
+                            if let Some(path) =
+                                crate::dialog::open_path("audio", &["wav", "mp3", "ogg", "flac"])
+                            {
+                                *sound = AlertSound::Custom(path.to_string_lossy().into_owned());
+                            }
                         }
-                    }
-                });
-            let preview = sound.clone();
-            if ui.button("▶").on_hover_text("Preview").clicked() {
-                crate::audio::play(&preview, volume);
+                    });
+                let preview = sound.clone();
+                if ui.button("▶").on_hover_text("Preview").clicked() {
+                    crate::audio::play(&preview, volume);
+                }
+                ui.end_row();
             }
-            ui.end_row();
-        }
-    });
+        });
 }
 
 fn audio_tab(ui: &mut egui::Ui, settings: &mut Settings) {
@@ -313,15 +360,25 @@ fn audio_tab(ui: &mut egui::Ui, settings: &mut Settings) {
 
     ui.add_space(8.0);
     ui.separator();
-    ui.checkbox(&mut settings.close_to_tray, "Keep running in background when window closes")
-        .on_hover_text("Closing the window minimizes instead of quitting, so alert polling + push keep going");
+    ui.checkbox(
+        &mut settings.close_to_tray,
+        "Keep running in background when window closes",
+    )
+    .on_hover_text(
+        "Closing the window minimizes instead of quitting, so alert polling + push keep going",
+    );
 
     ui.add_space(8.0);
     ui.separator();
     ui.strong("Storm digest (Claude)");
     ui.horizontal(|ui| {
         ui.label("Anthropic key:");
-        ui.add(egui::TextEdit::singleline(&mut settings.anthropic_key).password(true).hint_text("sk-ant-…").desired_width(240.0));
+        ui.add(
+            egui::TextEdit::singleline(&mut settings.anthropic_key)
+                .password(true)
+                .hint_text("sk-ant-…")
+                .desired_width(240.0),
+        );
     });
     ui.weak("Optional. Tools ▸ Storm Digest works offline; a key lets Claude write friendlier prose. Held locally only.");
 }

@@ -93,7 +93,11 @@ pub fn append_placefiles(geom: &mut OverlayGeom, items: &[(&PlaceItem, f32)], zo
             c
         };
         match &item.kind {
-            PlaceKind::Line { color: col, width, pts } => {
+            PlaceKind::Line {
+                color: col,
+                width,
+                pts,
+            } => {
                 let stroke = color(*col);
                 let mut b = Path::builder();
                 let mut it = pts.iter().map(|&[lon, lat]| {
@@ -179,5 +183,6 @@ fn feature_path(f: &GeoFeature) -> Path {
 fn append(geom: &mut OverlayGeom, buf: VertexBuffers<OverlayVertex, u32>) {
     let base = geom.vertices.len() as u32;
     geom.vertices.extend(buf.vertices);
-    geom.indices.extend(buf.indices.into_iter().map(|i| i + base));
+    geom.indices
+        .extend(buf.indices.into_iter().map(|i| i + base));
 }

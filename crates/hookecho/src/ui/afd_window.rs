@@ -36,8 +36,9 @@ pub fn show(
                 ui.colored_label(egui::Color32::from_rgb(230, 90, 90), e);
             }
             ui.separator();
-            egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-                match afd {
+            egui::ScrollArea::vertical()
+                .auto_shrink([false, false])
+                .show(ui, |ui| match afd {
                     Some(a) => {
                         ui.add(
                             egui::Label::new(egui::RichText::new(&a.text).monospace().size(12.0))
@@ -50,8 +51,7 @@ pub fn show(
                     None => {
                         ui.weak("No discussion loaded.");
                     }
-                }
-            });
+                });
         });
     refresh
 }

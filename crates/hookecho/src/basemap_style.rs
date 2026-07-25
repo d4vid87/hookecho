@@ -20,10 +20,16 @@ pub struct VecStyle {
     pub label_halo: [u8; 4],
 }
 
-const DARK: VecStyle =
-    VecStyle { background: rgb(0x111318), label: rgb(0xc8d0da), label_halo: rgb(0x0b0d11) };
-const LIGHT: VecStyle =
-    VecStyle { background: rgb(0xf2efe9), label: rgb(0x3a3a3a), label_halo: rgb(0xf7f5f0) };
+const DARK: VecStyle = VecStyle {
+    background: rgb(0x111318),
+    label: rgb(0xc8d0da),
+    label_halo: rgb(0x0b0d11),
+};
+const LIGHT: VecStyle = VecStyle {
+    background: rgb(0xf2efe9),
+    label: rgb(0x3a3a3a),
+    label_halo: rgb(0xf7f5f0),
+};
 
 pub fn style(dark: bool) -> &'static VecStyle {
     if dark {
@@ -63,9 +69,13 @@ pub fn fill(dark: bool, layer: &str, class: &str) -> Option<[u8; 4]> {
 /// Stroke color + pixel width for a line feature, or `None` to skip it.
 pub fn stroke(dark: bool, layer: &str, class: &str) -> Option<([u8; 4], f32)> {
     let (motorway, primary, secondary, minor, rail, water, admin2, admin4) = if dark {
-        (0x3d4450, 0x353c47, 0x2c323b, 0x23282f, 0x2a2f36, 0x24333f, 0x5a6470, 0x3a424c)
+        (
+            0x3d4450, 0x353c47, 0x2c323b, 0x23282f, 0x2a2f36, 0x24333f, 0x5a6470, 0x3a424c,
+        )
     } else {
-        (0xf6d3a0, 0xf9dfb0, 0xe9e3d5, 0xdedacf, 0xcdc9c0, 0xa9c4d6, 0x9aa0a8, 0xc4c0b8)
+        (
+            0xf6d3a0, 0xf9dfb0, 0xe9e3d5, 0xdedacf, 0xcdc9c0, 0xa9c4d6, 0x9aa0a8, 0xc4c0b8,
+        )
     };
     let (c, w) = match layer {
         "transportation" => match class {

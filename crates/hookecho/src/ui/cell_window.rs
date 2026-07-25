@@ -17,81 +17,151 @@ pub struct CellSample {
 /// Show the storm-attributes window. `trend` is the cell's per-volume history (oldest→newest);
 /// `following` reflects whether the camera is currently tracking this cell. Returns
 /// `(still_open, follow_toggled)` — `follow_toggled` is `true` the frame the Follow button is hit.
-pub fn show(ctx: &egui::Context, cell: &Cell, trend: &[CellSample], following: bool) -> (bool, bool) {
+pub fn show(
+    ctx: &egui::Context,
+    cell: &Cell,
+    trend: &[CellSample],
+    following: bool,
+) -> (bool, bool) {
     let mut open = true;
     let mut follow_toggled = false;
-    crate::ui::fit_phone(ctx, egui::Window::new(format!("Storm {} Attributes", cell.id)))
-        .open(&mut open)
-        .default_size([380.0, 460.0])
-        .show(ctx, |ui| {
-            egui::ScrollArea::vertical().show(ui, |ui| {
-                let label = if following { "Following ✓ (tap to stop)" } else { "⌖ Follow" };
-                if ui.add(egui::Button::new(label).min_size(egui::vec2(ui.available_width(), 0.0)))
-                    .on_hover_text("Keep the camera centered on this cell as it moves through each new volume")
-                    .clicked()
-                {
-                    follow_toggled = true;
-                }
-                theme::section(ui, "Current Position", |ui| {
-                    grid(ui, &[
+    crate::ui::fit_phone(
+        ctx,
+        egui::Window::new(format!("Storm {} Attributes", cell.id)),
+    )
+    .open(&mut open)
+    .default_size([380.0, 460.0])
+    .show(ctx, |ui| {
+        egui::ScrollArea::vertical().show(ui, |ui| {
+            let label = if following {
+                "Following ✓ (tap to stop)"
+            } else {
+                "⌖ Follow"
+            };
+            if ui
+                .add(egui::Button::new(label).min_size(egui::vec2(ui.available_width(), 0.0)))
+                .on_hover_text(
+                    "Keep the camera centered on this cell as it moves through each new volume",
+                )
+                .clicked()
+            {
+                follow_toggled = true;
+            }
+            theme::section(ui, "Current Position", |ui| {
+                grid(
+                    ui,
+                    &[
                         ("Latitude", format!("{:.3}°", cell.lat)),
                         ("Longitude", format!("{:.3}°", cell.lon)),
                         ("Range", opt(cell.range_nm, " NM", 0)),
                         ("Bearing", opt(cell.az_deg, "°", 0)),
-                    ]);
-                });
-                theme::section(ui, "Movement", |ui| {
-                    let mph = cell.mvt_kt.map(|k| k * KT_TO_MPH);
-                    grid(ui, &[
+                    ],
+                );
+            });
+            theme::section(ui, "Movement", |ui| {
+                let mph = cell.mvt_kt.map(|k| k * KT_TO_MPH);
+                grid(
+                    ui,
+                    &[
                         ("Speed", opt(mph, " mph", 0)),
                         ("Direction", opt(cell.mvt_deg, "°", 0)),
-                    ]);
-                });
-                theme::section(ui, "Intensity & Structure", |ui| {
-                    let base = cell.base_kft.map(|b| {
-                        format!("{}{:.1} kft", if cell.base_below { "<" } else { "" }, b)
-                    });
-                    grid(ui, &[
+                    ],
+                );
+            });
+            theme::section(ui, "Intensity & Structure", |ui| {
+                let base = cell
+                    .base_kft
+                    .map(|b| format!("{}{:.1} kft", if cell.base_below { "<" } else { "" }, b));
+                grid(
+                    ui,
+                    &[
                         ("Max dBZ", opt(cell.max_dbz, " dBZ", 0)),
                         ("Max ref hgt", opt(cell.max_dbz_hgt_kft, " kft", 1)),
                         ("Cell top", opt(cell.top_kft, " kft", 1)),
                         ("Cell base", base.unwrap_or_else(|| "—".into())),
                         ("Cell-based VIL", opt(cell.vil, "", 0)),
-                    ]);
-                });
-                theme::section(ui, "Hail Potential", |ui| {
-                    grid(ui, &[
-                        ("POH", cell.poh.map(|v| format!("{v}%")).unwrap_or_else(|| "—".into())),
-                        ("POSH", cell.posh.map(|v| format!("{v}%")).unwrap_or_else(|| "—".into())),
+                    ],
+                );
+            });
+            theme::section(ui, "Hail Potential", |ui| {
+                grid(
+                    ui,
+                    &[
+                        (
+                            "POH",
+                            cell.poh
+                                .map(|v| format!("{v}%"))
+                                .unwrap_or_else(|| "—".into()),
+                        ),
+                        (
+                            "POSH",
+                            cell.posh
+                                .map(|v| format!("{v}%"))
+                                .unwrap_or_else(|| "—".into()),
+                        ),
                         ("Max size", opt(cell.hail_in, " in", 2)),
-                    ]);
-                });
-                theme::section(ui, "Features", |ui| {
-                    grid(ui, &[
+                    ],
+                );
+            });
+            theme::section(ui, "Features", |ui| {
+                grid(
+                    ui,
+                    &[
                         ("TVS", cell.tvs.clone().unwrap_or_else(|| "None".into())),
-                        ("Mesocyclone", cell.meso.clone().unwrap_or_else(|| "None".into())),
-                    ]);
-                });
-                theme::section(ui, "Error Metrics", |ui| {
-                    grid(ui, &[
+                        (
+                            "Mesocyclone",
+                            cell.meso.clone().unwrap_or_else(|| "None".into()),
+                        ),
+                    ],
+                );
+            });
+            theme::section(ui, "Error Metrics", |ui| {
+                grid(
+                    ui,
+                    &[
                         ("Forecast error", opt(cell.fcst_err_nm, " NM", 1)),
                         ("Mean error", opt(cell.mean_err_nm, " NM", 1)),
-                    ]);
-                });
-                if trend.len() >= 2 {
-                    theme::section(ui, "Trends (per volume)", |ui| {
-                        trend_row(ui, "Max dBZ", trend, |s| s.dbz, egui::Color32::from_rgb(255, 140, 90));
-                        trend_row(ui, "Cell top kft", trend, |s| s.top, egui::Color32::from_rgb(120, 200, 140));
-                        trend_row(ui, "Cell-based VIL", trend, |s| s.vil, egui::Color32::from_rgb(90, 170, 255));
-                    });
-                }
+                    ],
+                );
             });
+            if trend.len() >= 2 {
+                theme::section(ui, "Trends (per volume)", |ui| {
+                    trend_row(
+                        ui,
+                        "Max dBZ",
+                        trend,
+                        |s| s.dbz,
+                        egui::Color32::from_rgb(255, 140, 90),
+                    );
+                    trend_row(
+                        ui,
+                        "Cell top kft",
+                        trend,
+                        |s| s.top,
+                        egui::Color32::from_rgb(120, 200, 140),
+                    );
+                    trend_row(
+                        ui,
+                        "Cell-based VIL",
+                        trend,
+                        |s| s.vil,
+                        egui::Color32::from_rgb(90, 170, 255),
+                    );
+                });
+            }
         });
+    });
     (open, follow_toggled)
 }
 
 /// A labelled trend sparkline over the samples that carry the selected field.
-fn trend_row(ui: &mut egui::Ui, label: &str, trend: &[CellSample], f: fn(&CellSample) -> Option<f32>, color: egui::Color32) {
+fn trend_row(
+    ui: &mut egui::Ui,
+    label: &str,
+    trend: &[CellSample],
+    f: fn(&CellSample) -> Option<f32>,
+    color: egui::Color32,
+) {
     let vals: Vec<f32> = trend.iter().filter_map(f).collect();
     ui.label(egui::RichText::new(label).small().weak());
     theme::sparkline(ui, &vals, color);
@@ -99,7 +169,8 @@ fn trend_row(ui: &mut egui::Ui, label: &str, trend: &[CellSample], f: fn(&CellSa
 
 /// Format an optional value with a unit suffix and `decimals` precision (`—` when absent).
 fn opt(v: Option<f32>, unit: &str, decimals: usize) -> String {
-    v.map(|x| format!("{x:.*}{unit}", decimals)).unwrap_or_else(|| "—".into())
+    v.map(|x| format!("{x:.*}{unit}", decimals))
+        .unwrap_or_else(|| "—".into())
 }
 
 /// Lay out label/value pairs. Desktop: wrapped stat cards. Android: a compact vertical
@@ -109,7 +180,11 @@ fn grid(ui: &mut egui::Ui, cards: &[(&str, String)]) {
     if cfg!(target_os = "android") {
         for (label, value) in cards {
             ui.horizontal(|ui| {
-                ui.label(egui::RichText::new(format!("{}:", label.to_uppercase())).size(11.0).weak());
+                ui.label(
+                    egui::RichText::new(format!("{}:", label.to_uppercase()))
+                        .size(11.0)
+                        .weak(),
+                );
                 ui.label(egui::RichText::new(value).size(14.5).strong());
             });
         }

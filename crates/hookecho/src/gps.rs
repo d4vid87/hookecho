@@ -29,7 +29,10 @@ pub fn spawn() -> Option<Receiver<(f64, f64)>> {
     std::thread::spawn(move || {
         let mut stream = stream;
         // Enable JSON streaming.
-        if stream.write_all(b"?WATCH={\"enable\":true,\"json\":true}\n").is_err() {
+        if stream
+            .write_all(b"?WATCH={\"enable\":true,\"json\":true}\n")
+            .is_err()
+        {
             return;
         }
         let reader = BufReader::new(stream.try_clone().expect("clone gpsd stream"));

@@ -43,9 +43,16 @@ impl MarkerWindow {
                             .hint_text("City, address, or place")
                             .desired_width(ui.available_width() - 96.0),
                     );
-                    let entered = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-                    let label = if self.searching { "Searching…" } else { "🔍 Search" };
-                    let clicked = ui.add_enabled(!self.searching, egui::Button::new(label)).clicked();
+                    let entered =
+                        field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                    let label = if self.searching {
+                        "Searching…"
+                    } else {
+                        "🔍 Search"
+                    };
+                    let clicked = ui
+                        .add_enabled(!self.searching, egui::Button::new(label))
+                        .clicked();
                     if (clicked || entered) && !self.searching && !self.query.trim().is_empty() {
                         go = Some(self.query.trim().to_string());
                     }
@@ -76,36 +83,55 @@ impl MarkerWindow {
 /// Editable marker table (name/lat/lon/icon). Shared by the manager window and the wizard.
 pub fn marker_grid(ui: &mut egui::Ui, markers: &mut Vec<Marker>, icon_tex: &IconTextures) {
     let mut remove: Option<usize> = None;
-    egui::Grid::new("markers_grid").num_columns(5).spacing([8.0, 6.0]).show(ui, |ui| {
-        ui.strong("Name");
-        ui.strong("Lat");
-        ui.strong("Lon");
-        ui.strong("Icon");
-        ui.end_row();
-        for (i, m) in markers.iter_mut().enumerate() {
-            ui.add(egui::TextEdit::singleline(&mut m.name).desired_width(140.0));
-            ui.add(egui::DragValue::new(&mut m.lat).range(-90.0..=90.0).speed(0.01).max_decimals(4));
-            ui.add(egui::DragValue::new(&mut m.lon).range(-180.0..=180.0).speed(0.01).max_decimals(4));
-            ui.horizontal(|ui| {
-                // Thumbnail of the current icon, if its texture is loaded.
-                if let Some(tex) = m.icon.as_ref().and_then(|n| icon_tex.get(n)).and_then(|t| t.as_ref()) {
-                    ui.add(egui::Image::new(tex).fit_to_exact_size(egui::vec2(20.0, 20.0)));
-                }
-                if ui.button("Browse…").clicked() {
-                    if let Some(name) = pick_and_store_icon() {
-                        m.icon = Some(name);
-                    }
-                }
-                if m.icon.is_some() && ui.button("✖icon").on_hover_text("Clear icon").clicked() {
-                    m.icon = None;
-                }
-            });
-            if ui.button("✖").on_hover_text("Remove marker").clicked() {
-                remove = Some(i);
-            }
+    egui::Grid::new("markers_grid")
+        .num_columns(5)
+        .spacing([8.0, 6.0])
+        .show(ui, |ui| {
+            ui.strong("Name");
+            ui.strong("Lat");
+            ui.strong("Lon");
+            ui.strong("Icon");
             ui.end_row();
-        }
-    });
+            for (i, m) in markers.iter_mut().enumerate() {
+                ui.add(egui::TextEdit::singleline(&mut m.name).desired_width(140.0));
+                ui.add(
+                    egui::DragValue::new(&mut m.lat)
+                        .range(-90.0..=90.0)
+                        .speed(0.01)
+                        .max_decimals(4),
+                );
+                ui.add(
+                    egui::DragValue::new(&mut m.lon)
+                        .range(-180.0..=180.0)
+                        .speed(0.01)
+                        .max_decimals(4),
+                );
+                ui.horizontal(|ui| {
+                    // Thumbnail of the current icon, if its texture is loaded.
+                    if let Some(tex) = m
+                        .icon
+                        .as_ref()
+                        .and_then(|n| icon_tex.get(n))
+                        .and_then(|t| t.as_ref())
+                    {
+                        ui.add(egui::Image::new(tex).fit_to_exact_size(egui::vec2(20.0, 20.0)));
+                    }
+                    if ui.button("Browse…").clicked() {
+                        if let Some(name) = pick_and_store_icon() {
+                            m.icon = Some(name);
+                        }
+                    }
+                    if m.icon.is_some() && ui.button("✖icon").on_hover_text("Clear icon").clicked()
+                    {
+                        m.icon = None;
+                    }
+                });
+                if ui.button("✖").on_hover_text("Remove marker").clicked() {
+                    remove = Some(i);
+                }
+                ui.end_row();
+            }
+        });
     if let Some(i) = remove {
         markers.remove(i);
     }

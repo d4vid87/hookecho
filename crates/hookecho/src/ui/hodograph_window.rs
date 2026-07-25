@@ -48,16 +48,43 @@ fn plot(ui: &mut egui::Ui, levels: &[VwpLevel]) {
     while r <= max_kt {
         let rr = radius * r / max_kt;
         painter.circle_stroke(center, rr, egui::Stroke::new(1.0, grid));
-        painter.text(center + egui::vec2(2.0, -rr), egui::Align2::LEFT_BOTTOM,
-            format!("{r:.0}"), egui::FontId::proportional(9.0), grid);
+        painter.text(
+            center + egui::vec2(2.0, -rr),
+            egui::Align2::LEFT_BOTTOM,
+            format!("{r:.0}"),
+            egui::FontId::proportional(9.0),
+            grid,
+        );
         r += 10.0;
     }
     // N/S/E/W spokes.
-    painter.line_segment([center - egui::vec2(radius, 0.0), center + egui::vec2(radius, 0.0)], egui::Stroke::new(1.0, grid));
-    painter.line_segment([center - egui::vec2(0.0, radius), center + egui::vec2(0.0, radius)], egui::Stroke::new(1.0, grid));
-    for (label, off) in [("N", egui::vec2(0.0, -radius)), ("S", egui::vec2(0.0, radius)),
-                         ("E", egui::vec2(radius, 0.0)), ("W", egui::vec2(-radius, 0.0))] {
-        painter.text(center + off, egui::Align2::CENTER_CENTER, label, egui::FontId::proportional(10.0), grid);
+    painter.line_segment(
+        [
+            center - egui::vec2(radius, 0.0),
+            center + egui::vec2(radius, 0.0),
+        ],
+        egui::Stroke::new(1.0, grid),
+    );
+    painter.line_segment(
+        [
+            center - egui::vec2(0.0, radius),
+            center + egui::vec2(0.0, radius),
+        ],
+        egui::Stroke::new(1.0, grid),
+    );
+    for (label, off) in [
+        ("N", egui::vec2(0.0, -radius)),
+        ("S", egui::vec2(0.0, radius)),
+        ("E", egui::vec2(radius, 0.0)),
+        ("W", egui::vec2(-radius, 0.0)),
+    ] {
+        painter.text(
+            center + off,
+            egui::Align2::CENTER_CENTER,
+            label,
+            egui::FontId::proportional(10.0),
+            grid,
+        );
     }
 
     // Wind curve: (u, v) kt -> screen (east right, north up). Color low->high by altitude.

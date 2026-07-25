@@ -13,7 +13,8 @@ use tokio::runtime::Handle;
 
 // Browser-prefixed so imagery hosts (e.g. Esri) that 403 bare library UAs still serve tiles,
 // while still identifying the app.
-pub(crate) const USER_AGENT: &str = "Mozilla/5.0 (compatible; hookecho/0.0; +github.com/d4vid87/hookecho)";
+pub(crate) const USER_AGENT: &str =
+    "Mozilla/5.0 (compatible; hookecho/0.0; +github.com/d4vid87/hookecho)";
 
 /// Which provider (if any) a style needs an API key for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -218,7 +219,10 @@ impl BasemapStyle {
 
     /// Resolve a `--basemap` slug (unknown -> None).
     pub fn from_slug(s: &str) -> BasemapStyle {
-        Self::ALL.into_iter().find(|st| st.slug() == s).unwrap_or(BasemapStyle::None)
+        Self::ALL
+            .into_iter()
+            .find(|st| st.slug() == s)
+            .unwrap_or(BasemapStyle::None)
     }
 
     /// Which provider key this style requires.
@@ -248,9 +252,9 @@ impl BasemapStyle {
             Provider::Mapbox => "© Mapbox © OpenStreetMap",
             Provider::MapTiler => "© MapTiler © OpenStreetMap",
             Provider::Builtin => match self {
-                BasemapStyle::Satellite | BasemapStyle::UsgsTopo | BasemapStyle::UsgsImageryTopo => {
-                    "USGS The National Map"
-                }
+                BasemapStyle::Satellite
+                | BasemapStyle::UsgsTopo
+                | BasemapStyle::UsgsImageryTopo => "USGS The National Map",
                 BasemapStyle::OsmStandard | BasemapStyle::OsmHot | BasemapStyle::CyclOsm => {
                     "© OpenStreetMap contributors"
                 }
@@ -287,7 +291,10 @@ impl BasemapStyle {
     /// Is this style a raster-tile source (as opposed to the vector MVT basemap or None)?
     /// Everything except the vector Dark/Light and None is a raster source.
     pub fn is_raster(self) -> bool {
-        !matches!(self, BasemapStyle::Dark | BasemapStyle::Light | BasemapStyle::None)
+        !matches!(
+            self,
+            BasemapStyle::Dark | BasemapStyle::Light | BasemapStyle::None
+        )
     }
 
     /// Max zoom the raster source serves; deeper views upscale rather than fetch 404s. GIBS
@@ -429,7 +436,12 @@ impl BasemapStyle {
 /// pull sharper raster tiles on high-DPI screens (a 256-px tile stretched over 4× physical pixels
 /// looks blurry). The view geometry (`world_per_pixel`) still keys off the camera zoom, so only the
 /// tile grid gets finer.
-pub fn tile_cover(cam: &Camera, viewport_px: (f32, f32), max_z: u8, zoom_bias: f64) -> Vec<VisibleTile> {
+pub fn tile_cover(
+    cam: &Camera,
+    viewport_px: (f32, f32),
+    max_z: u8,
+    zoom_bias: f64,
+) -> Vec<VisibleTile> {
     let z = (cam.zoom + zoom_bias).round().clamp(2.0, max_z as f64) as u8;
     let n = 1u32 << z;
     let nf = n as f64;
@@ -453,7 +465,11 @@ pub fn tile_cover(cam: &Camera, viewport_px: (f32, f32), max_z: u8, zoom_bias: f
             let wy0 = ty as f32 / nf as f32;
             let wx1 = (tx + 1) as f32 / nf as f32;
             let wy1 = (ty + 1) as f32 / nf as f32;
-            out.push(VisibleTile { id, world_min: [wx0, wy0], world_max: [wx1, wy1] });
+            out.push(VisibleTile {
+                id,
+                world_min: [wx0, wy0],
+                world_max: [wx1, wy1],
+            });
         }
     }
     out
@@ -464,8 +480,12 @@ pub fn tile_cover(cam: &Camera, viewport_px: (f32, f32), max_z: u8, zoom_bias: f
 /// discrete steps. Returns at most `limit` most-recent instants.
 pub fn parse_goes_domain(xml: &str, limit: usize) -> Vec<chrono::DateTime<chrono::Utc>> {
     use chrono::{DateTime, Utc};
-    let Some(start) = xml.find("<Domain>") else { return Vec::new() };
-    let Some(end) = xml[start..].find("</Domain>") else { return Vec::new() };
+    let Some(start) = xml.find("<Domain>") else {
+        return Vec::new();
+    };
+    let Some(end) = xml[start..].find("</Domain>") else {
+        return Vec::new();
+    };
     let body = &xml[start + "<Domain>".len()..start + end];
     let mut out: Vec<DateTime<Utc>> = Vec::new();
     for range in body.split(',') {
@@ -475,7 +495,9 @@ pub fn parse_goes_domain(xml: &str, limit: usize) -> Vec<chrono::DateTime<chrono
             [s] => (*s, *s, "PT10M"), // a lone instant
             _ => continue,
         };
-        let (Ok(s), Ok(e)) = (s.parse::<DateTime<Utc>>(), e.parse::<DateTime<Utc>>()) else { continue };
+        let (Ok(s), Ok(e)) = (s.parse::<DateTime<Utc>>(), e.parse::<DateTime<Utc>>()) else {
+            continue;
+        };
         let step_min = parse_iso_minutes(period).unwrap_or(10).max(1);
         let mut t = s;
         while t <= e {
@@ -511,14 +533,21 @@ pub async fn fetch_goes_times(
     hours: i64,
     limit: usize,
 ) -> Vec<chrono::DateTime<chrono::Utc>> {
-    let Some((layer, level)) = style.goes_layer() else { return Vec::new() };
+    let Some((layer, level)) = style.goes_layer() else {
+        return Vec::new();
+    };
     let now = chrono::Utc::now();
     let from = (now - chrono::Duration::hours(hours)).format("%Y-%m-%dT%H:%M:%SZ");
     let to = now.format("%Y-%m-%dT%H:%M:%SZ");
     let url = format!(
         "https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/1.0.0/{layer}/default/GoogleMapsCompatible_Level{level}/-180,-90,180,90/{from}--{to}.xml"
     );
-    match client.get(&url).header("User-Agent", USER_AGENT).send().await {
+    match client
+        .get(&url)
+        .header("User-Agent", USER_AGENT)
+        .send()
+        .await
+    {
         Ok(resp) => match resp.text().await {
             Ok(xml) => parse_goes_domain(&xml, limit),
             Err(_) => Vec::new(),
@@ -609,7 +638,12 @@ impl TileManager {
 
     /// Integer tile ids covering the current view, and their world-space rects. `zoom_bias`
     /// pulls sharper tiles on high-DPI displays (see [`tile_cover`]).
-    pub fn visible(&self, cam: &Camera, viewport_px: (f32, f32), zoom_bias: f64) -> Vec<VisibleTile> {
+    pub fn visible(
+        &self,
+        cam: &Camera,
+        viewport_px: (f32, f32),
+        zoom_bias: f64,
+    ) -> Vec<VisibleTile> {
         tile_cover(cam, viewport_px, self.style.max_raster_z(), zoom_bias)
     }
 
@@ -620,22 +654,31 @@ impl TileManager {
                 continue;
             }
             let (z, x, y) = v.id;
-            let Some(mut url) = self.style.url(z, x, y, &self.mapbox_key, &self.maptiler_key) else { continue };
+            let Some(mut url) = self
+                .style
+                .url(z, x, y, &self.mapbox_key, &self.maptiler_key)
+            else {
+                continue;
+            };
             // GOES frame time: rewrite the `default` time slot in the GIBS URL and tag the cache
             // dir so different frames don't collide. Latest (`None`) keeps `default`.
             let time_tag = match (self.style.goes_layer(), self.goes_time) {
                 (Some(_), Some(t)) => {
                     let iso = t.format("%Y-%m-%dT%H:%M:%SZ").to_string();
-                    url = url.replace("/default/GoogleMapsCompatible", &format!("/{iso}/GoogleMapsCompatible"));
+                    url = url.replace(
+                        "/default/GoogleMapsCompatible",
+                        &format!("/{iso}/GoogleMapsCompatible"),
+                    );
                     t.format("%Y%m%dT%H%M").to_string()
                 }
                 _ => "default".to_string(),
             };
             self.requested.insert(v.id);
-            let path = self
-                .cache_root
-                .as_ref()
-                .map(|d| d.join(self.style.provider()).join(&time_tag).join(format!("{z}/{x}/{y}")));
+            let path = self.cache_root.as_ref().map(|d| {
+                d.join(self.style.provider())
+                    .join(&time_tag)
+                    .join(format!("{z}/{x}/{y}"))
+            });
             let client = self.client.clone();
             let tx = self.tx.clone();
             self.rt.spawn(async move {
@@ -664,15 +707,29 @@ impl TileManager {
     /// time-tagged GOES layer). Takes the style explicitly so it doesn't depend on which pane the
     /// tile manager last rendered.
     pub fn packable(&self, style: BasemapStyle) -> bool {
-        style.goes_layer().is_none() && style.url(0, 0, 0, &self.mapbox_key, &self.maptiler_key).is_some()
+        style.goes_layer().is_none()
+            && style
+                .url(0, 0, 0, &self.mapbox_key, &self.maptiler_key)
+                .is_some()
     }
 
     /// Build the `(url, cache_path)` jobs for an offline chase pack of the lon/lat bbox over
     /// `z_lo..=z_hi` in `style`. Empty for URL-less (Dark/Light/None) and GOES styles. Cache paths
     /// match the live read-through cache so pre-downloads are transparent.
     #[allow(clippy::too_many_arguments)] // scalar bbox mirrors pack_tile_count's tested signature
-    pub fn pack_jobs(&self, style: BasemapStyle, min_lon: f64, min_lat: f64, max_lon: f64, max_lat: f64, z_lo: u8, z_hi: u8) -> Vec<PackJob> {
-        let Some(root) = self.cache_root.as_ref() else { return Vec::new() };
+    pub fn pack_jobs(
+        &self,
+        style: BasemapStyle,
+        min_lon: f64,
+        min_lat: f64,
+        max_lon: f64,
+        max_lat: f64,
+        z_lo: u8,
+        z_hi: u8,
+    ) -> Vec<PackJob> {
+        let Some(root) = self.cache_root.as_ref() else {
+            return Vec::new();
+        };
         if style.goes_layer().is_some() {
             return Vec::new();
         }
@@ -716,13 +773,20 @@ pub async fn fetch_visible(
     let mut out = Vec::new();
     for v in visible {
         let (z, x, y) = v.id;
-        let Some(url) = style.url(z, x, y, mapbox_key, maptiler_key) else { continue };
+        let Some(url) = style.url(z, x, y, mapbox_key, maptiler_key) else {
+            continue;
+        };
         match load_tile_bytes(client, &url, None).await {
             Ok(bytes) => match image::load_from_memory(&bytes) {
                 Ok(img) => {
                     let rgba = img.to_rgba8();
                     let (w, h) = rgba.dimensions();
-                    out.push(PendingTile { id: v.id, rgba: rgba.into_raw(), width: w, height: h });
+                    out.push(PendingTile {
+                        id: v.id,
+                        rgba: rgba.into_raw(),
+                        width: w,
+                        height: h,
+                    });
                 }
                 Err(e) => log::warn!("tile decode {url}: {e}"),
             },
@@ -765,7 +829,14 @@ pub type PackJob = (String, std::path::PathBuf);
 
 /// Number of tiles a chase-pack download covers over zoom `z_lo..=z_hi` for the lon/lat bbox.
 /// Pure — the toolbox calls it each frame to show a live size estimate. `≈ tiles × 25 KB`.
-pub fn pack_tile_count(min_lon: f64, min_lat: f64, max_lon: f64, max_lat: f64, z_lo: u8, z_hi: u8) -> u64 {
+pub fn pack_tile_count(
+    min_lon: f64,
+    min_lat: f64,
+    max_lon: f64,
+    max_lat: f64,
+    z_lo: u8,
+    z_hi: u8,
+) -> u64 {
     let z_hi = z_hi.min(22); // guard the shifts below — a junk CLI zmax must not overflow 1<<z
     let a = crate::render::mercator::lonlat_to_world(min_lon, min_lat);
     let b = crate::render::mercator::lonlat_to_world(max_lon, max_lat);
@@ -786,7 +857,14 @@ pub fn pack_tile_count(min_lon: f64, min_lat: f64, max_lon: f64, max_lat: f64, z
 
 /// The `(z, x, y)` tile ids covering the lon/lat bbox over `z_lo..=z_hi` (x wrapped into range).
 /// Shared by the raster and vector chase-pack job builders.
-pub(crate) fn pack_tile_ids(min_lon: f64, min_lat: f64, max_lon: f64, max_lat: f64, z_lo: u8, z_hi: u8) -> Vec<TileId> {
+pub(crate) fn pack_tile_ids(
+    min_lon: f64,
+    min_lat: f64,
+    max_lon: f64,
+    max_lat: f64,
+    z_lo: u8,
+    z_hi: u8,
+) -> Vec<TileId> {
     let z_hi = z_hi.min(22); // guard 1u32 << z (see pack_tile_count)
     let a = crate::render::mercator::lonlat_to_world(min_lon, min_lat);
     let b = crate::render::mercator::lonlat_to_world(max_lon, max_lat);
@@ -812,7 +890,12 @@ pub(crate) fn pack_tile_ids(min_lon: f64, min_lat: f64, max_lon: f64, max_lat: f
 /// Download `jobs` into the disk tile cache with 4 fixed workers, reporting each tile's outcome
 /// on `tx` as `(ok, downloaded_bytes)` — `bytes == 0` means it was already cached (skipped). Stops
 /// early when `cancel` is set. // ponytail: 4 fixed workers pulling a shared queue, no semaphore crate.
-pub fn start_pack_download(rt: &Handle, jobs: Vec<PackJob>, cancel: Arc<AtomicBool>, tx: Sender<(bool, u64)>) {
+pub fn start_pack_download(
+    rt: &Handle,
+    jobs: Vec<PackJob>,
+    cancel: Arc<AtomicBool>,
+    tx: Sender<(bool, u64)>,
+) {
     let queue = Arc::new(Mutex::new(jobs.into_iter()));
     let client = reqwest::Client::builder()
         .user_agent(USER_AGENT) // browser-ish UA: imagery hosts 403 bare UAs (matches live tile traffic)
@@ -914,7 +997,10 @@ mod tests {
         ];
         for s in keyless {
             assert!(s.is_raster(), "{s:?} should be raster");
-            assert!(s.url(6, 15, 25, "", "").is_some(), "{s:?} should have a keyless URL");
+            assert!(
+                s.url(6, 15, 25, "", "").is_some(),
+                "{s:?} should have a keyless URL"
+            );
         }
         // ArcGIS services use {z}/{y}/{x}: y before x in the path.
         let esri = BasemapStyle::EsriImagery.url(6, 15, 25, "", "").unwrap();

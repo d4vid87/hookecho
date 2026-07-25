@@ -64,7 +64,11 @@ mod imp {
         for px in data.chunks_exact_mut(4) {
             px.rotate_right(1); // RGBA -> ARGB
         }
-        ksni::Icon { width: size as i32, height: size as i32, data }
+        ksni::Icon {
+            width: size as i32,
+            height: size as i32,
+            data,
+        }
     }
 
     /// Spawn the tray service. Returns the command receiver, or `None` if no StatusNotifier host
@@ -73,7 +77,10 @@ mod imp {
     pub fn spawn() -> Option<Receiver<TrayCmd>> {
         use ksni::blocking::TrayMethods;
         let (tx, rx) = std::sync::mpsc::channel();
-        let tray = HookEchoTray { tx, icon: logo_icon() };
+        let tray = HookEchoTray {
+            tx,
+            icon: logo_icon(),
+        };
         match tray.spawn() {
             Ok(handle) => {
                 std::mem::forget(handle);

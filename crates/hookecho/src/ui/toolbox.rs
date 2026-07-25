@@ -67,13 +67,14 @@ pub(crate) fn show(
 ) -> ToolboxActions {
     use crate::theme::section;
     let mut actions = ToolboxActions::default();
+    let tz = settings.tz_for(view.site.as_deref());
     egui::ScrollArea::vertical().show(ui, |ui| {
         section(ui, "Radar Site", |ui| site_section(ui, view, settings, &mut actions));
         section(ui, "Volume", |ui| vcp_section(ui, view));
         section(ui, "Map", |ui| map_section(ui, view, settings, chasepack, &mut actions));
         section(ui, "Level 2", |ui| level2_section(ui, view, settings, &mut actions));
         section(ui, "National", |ui| national_section(ui, fields, rotation_minutes));
-        section(ui, "Future Radar", |ui| hrrr_section(ui, fields, hrrr_fcst_hour, hrrr_valid));
+        section(ui, "Future Radar", |ui| hrrr_section(ui, fields, hrrr_fcst_hour, hrrr_valid, tz));
         section(ui, "Environment", |ui| env_section(ui, fields, env_cape_ml, env_srh_km, contour_kind));
         section(ui, "Sensors", |ui| {
             ui.checkbox(show_sensors, "Sensor dashboard")
@@ -139,15 +140,29 @@ fn national_section(
             ui.checkbox(&mut s.show, label).on_hover_text(hover);
         }
     }
-    toggle(ui, fields, FL::Mrms, "MRMS Mosaic", "MRMS national composite reflectivity (~2-min cadence)");
-    toggle(ui, fields, FL::Rotation, "Rotation tracks", "Accumulated low-level azimuthal-shear max — tornado-track map");
+    toggle(
+        ui,
+        fields,
+        FL::Mrms,
+        "MRMS Mosaic",
+        "MRMS national composite reflectivity (~2-min cadence)",
+    );
+    toggle(
+        ui,
+        fields,
+        FL::Rotation,
+        "Rotation tracks",
+        "Accumulated low-level azimuthal-shear max — tornado-track map",
+    );
     if fields.get(&FL::Rotation).is_some_and(|s| s.show) {
         ui.indent("rot_dur", |ui| {
             ui.horizontal(|ui| {
                 ui.label("Window:");
                 let mut changed = false;
                 for m in [30u16, 60, 120] {
-                    changed |= ui.selectable_value(rotation_minutes, m, format!("{m}m")).changed();
+                    changed |= ui
+                        .selectable_value(rotation_minutes, m, format!("{m}m"))
+                        .changed();
                 }
                 // Duration change → force an immediate refetch of the rotation grid.
                 if changed {
@@ -158,15 +173,63 @@ fn national_section(
             });
         });
     }
-    toggle(ui, fields, FL::Mesh, "MESH hail", "Max Estimated Size of Hail (MRMS)");
-    toggle(ui, fields, FL::AzShear, "AzShear (0–2km)", "Instantaneous low-level azimuthal shear");
-    toggle(ui, fields, FL::Lightning, "Lightning", "MRMS cloud-to-ground strike density, 5-min average (CONUS)");
+    toggle(
+        ui,
+        fields,
+        FL::Mesh,
+        "MESH hail",
+        "Max Estimated Size of Hail (MRMS)",
+    );
+    toggle(
+        ui,
+        fields,
+        FL::AzShear,
+        "AzShear (0–2km)",
+        "Instantaneous low-level azimuthal shear",
+    );
+    toggle(
+        ui,
+        fields,
+        FL::Lightning,
+        "Lightning",
+        "MRMS cloud-to-ground strike density, 5-min average (CONUS)",
+    );
     ui.separator();
-    toggle(ui, fields, FL::Qpe1h, "QPE 1-hour", "MRMS multi-sensor 1-hour precip accumulation (mm)");
-    toggle(ui, fields, FL::Qpe24h, "QPE 24-hour", "MRMS multi-sensor 24-hour precip accumulation (mm; storm total)");
-    toggle(ui, fields, FL::PrecipType, "Precip type", "MRMS surface precipitation type (rain/snow/hail/convective)");
-    toggle(ui, fields, FL::FlashFlood, "FLASH flood ARI", "MRMS FLASH flash-flood average recurrence interval (years)");
-    toggle(ui, fields, FL::HailSwath, "Hail swaths (24 h)", "24-hour running max of MESH — hail damage tracks (≥0.75 in shown)");
+    toggle(
+        ui,
+        fields,
+        FL::Qpe1h,
+        "QPE 1-hour",
+        "MRMS multi-sensor 1-hour precip accumulation (mm)",
+    );
+    toggle(
+        ui,
+        fields,
+        FL::Qpe24h,
+        "QPE 24-hour",
+        "MRMS multi-sensor 24-hour precip accumulation (mm; storm total)",
+    );
+    toggle(
+        ui,
+        fields,
+        FL::PrecipType,
+        "Precip type",
+        "MRMS surface precipitation type (rain/snow/hail/convective)",
+    );
+    toggle(
+        ui,
+        fields,
+        FL::FlashFlood,
+        "FLASH flood ARI",
+        "MRMS FLASH flash-flood average recurrence interval (years)",
+    );
+    toggle(
+        ui,
+        fields,
+        FL::HailSwath,
+        "Hail swaths (24 h)",
+        "24-hour running max of MESH — hail damage tracks (≥0.75 in shown)",
+    );
 }
 
 fn hrrr_section(
@@ -174,11 +237,14 @@ fn hrrr_section(
     fields: &mut std::collections::HashMap<crate::render::FieldLayer, crate::app::FieldState>,
     hrrr_fcst_hour: &mut u8,
     hrrr_valid: Option<chrono::DateTime<chrono::Utc>>,
+    tz: Option<wxdata::tz::Tz>,
 ) {
     use crate::render::FieldLayer as FL;
     let on = if let Some(s) = fields.get_mut(&FL::Hrrr) {
         ui.checkbox(&mut s.show, "HRRR forecast reflectivity")
-            .on_hover_text("Model composite reflectivity forecast (not observed) — scrub the forecast hour");
+            .on_hover_text(
+                "Model composite reflectivity forecast (not observed) — scrub the forecast hour",
+            );
         s.show
     } else {
         false
@@ -189,7 +255,11 @@ fn hrrr_section(
             Some(v) => {
                 ui.colored_label(
                     egui::Color32::from_rgb(255, 170, 60),
-                    format!("FORECAST +{}h — valid {}", hrrr_fcst_hour, v.format("%a %H:%MZ")),
+                    format!(
+                        "FORECAST +{}h — valid {}",
+                        hrrr_fcst_hour,
+                        crate::timefmt::fmt_date_clock(v, tz)
+                    ),
                 );
             }
             None => {
@@ -269,8 +339,14 @@ fn overlays_section(ui: &mut egui::Ui, filters: &mut OverlayFilters, actions: &m
     ui.horizontal(|ui| {
         ui.label("SPC Outlook:");
         for day in 0u8..=3 {
-            let label = if day == 0 { "Off".to_string() } else { format!("D{day}") };
-            changed |= ui.selectable_value(&mut filters.outlook_day, day, label).changed();
+            let label = if day == 0 {
+                "Off".to_string()
+            } else {
+                format!("D{day}")
+            };
+            changed |= ui
+                .selectable_value(&mut filters.outlook_day, day, label)
+                .changed();
         }
     });
     // Day-1 hazard sub-select (probabilistic tornado/wind/hail); Days 2–3 are categorical only.
@@ -279,7 +355,10 @@ fn overlays_section(ui: &mut egui::Ui, filters: &mut OverlayFilters, actions: &m
             ui.horizontal(|ui| {
                 ui.label("Hazard:");
                 for kind in wxdata::spc::OutlookKind::ALL {
-                    if ui.selectable_value(&mut filters.outlook_kind, kind, kind.label()).changed() {
+                    if ui
+                        .selectable_value(&mut filters.outlook_kind, kind, kind.label())
+                        .changed()
+                    {
                         actions.outlook_kind_changed = true;
                         changed = true;
                     }
@@ -287,7 +366,9 @@ fn overlays_section(ui: &mut egui::Ui, filters: &mut OverlayFilters, actions: &m
             });
         });
     }
-    changed |= ui.checkbox(&mut filters.show_mds, "Mesoscale Discussions").changed();
+    changed |= ui
+        .checkbox(&mut filters.show_mds, "Mesoscale Discussions")
+        .changed();
     ui.checkbox(&mut filters.show_cells, "Storm cells (L3)")
         .on_hover_text("Clickable storm tracking / hail / mesocyclone markers");
     if filters.show_cells {
@@ -314,7 +395,9 @@ fn overlays_section(ui: &mut egui::Ui, filters: &mut OverlayFilters, actions: &m
         .on_hover_text("Auto-flag tornado debris signatures: low CC (ρhv) collocated with high reflectivity. Needs a dual-pol volume.");
     ui.checkbox(&mut filters.show_couplets, "Rotation couplets")
         .on_hover_text("Flag gate-to-gate velocity couplets (mesocyclone/TVS) from the dealiased velocity sweep; alarms on new detections.");
-    changed |= ui.checkbox(&mut filters.show_alerts, "NWS Alerts").changed();
+    changed |= ui
+        .checkbox(&mut filters.show_alerts, "NWS Alerts")
+        .changed();
     if filters.show_alerts {
         ui.indent("alert_cats", |ui| {
             for cat in Category::ALL {
@@ -328,7 +411,12 @@ fn overlays_section(ui: &mut egui::Ui, filters: &mut OverlayFilters, actions: &m
     actions.overlays_changed |= changed;
 }
 
-fn site_section(ui: &mut egui::Ui, view: &mut MapView, settings: &mut Settings, actions: &mut ToolboxActions) {
+fn site_section(
+    ui: &mut egui::Ui,
+    view: &mut MapView,
+    settings: &mut Settings,
+    actions: &mut ToolboxActions,
+) {
     match &view.site {
         Some(id) => {
             let loc = wxdata::sites::site_by_id(id)
@@ -381,16 +469,31 @@ fn vcp_section(ui: &mut egui::Ui, view: &MapView) {
     });
 }
 
-fn map_section(ui: &mut egui::Ui, view: &mut MapView, settings: &mut Settings, chasepack: &ChasePackUi, actions: &mut ToolboxActions) {
+fn map_section(
+    ui: &mut egui::Ui,
+    view: &mut MapView,
+    settings: &mut Settings,
+    chasepack: &ChasePackUi,
+    actions: &mut ToolboxActions,
+) {
     use crate::settings::StartView;
     use crate::tiles::BasemapStyle;
-    let (mb, mt) = (!settings.mapbox_key.is_empty(), !settings.maptiler_key.is_empty());
+    let (mb, mt) = (
+        !settings.mapbox_key.is_empty(),
+        !settings.maptiler_key.is_empty(),
+    );
     egui::ComboBox::from_label("Background")
         .selected_text(view.basemap.label())
         .show_ui(ui, |ui| {
             // Only styles whose provider key is set are selectable.
-            for s in BasemapStyle::ALL.into_iter().filter(|s| s.available(mb, mt)) {
-                if ui.selectable_value(&mut view.basemap, s, s.label()).clicked() {
+            for s in BasemapStyle::ALL
+                .into_iter()
+                .filter(|s| s.available(mb, mt))
+            {
+                if ui
+                    .selectable_value(&mut view.basemap, s, s.label())
+                    .clicked()
+                {
                     settings.basemap = s.slug().to_string(); // persist across restarts
                 }
             }
@@ -404,7 +507,8 @@ fn map_section(ui: &mut egui::Ui, view: &mut MapView, settings: &mut Settings, c
 
     // Startup view: remember this site + camera as the launch position.
     ui.separator();
-    if ui.button("Save as startup view")
+    if ui
+        .button("Save as startup view")
         .on_hover_text("Open here (site + map position) on next launch")
         .clicked()
     {
@@ -431,10 +535,17 @@ fn map_section(ui: &mut egui::Ui, view: &mut MapView, settings: &mut Settings, c
     // Offline chase pack: pre-cache this view's basemap tiles to disk so it renders with no signal.
     ui.separator();
     if let Some((done, total, errors, mb)) = chasepack.progress {
-        let frac = if total > 0 { done as f32 / total as f32 } else { 1.0 };
+        let frac = if total > 0 {
+            done as f32 / total as f32
+        } else {
+            1.0
+        };
         ui.add(egui::ProgressBar::new(frac).text(format!("{done}/{total} tiles · {mb:.0} MB")));
         if errors > 0 {
-            ui.colored_label(egui::Color32::from_rgb(230, 120, 60), format!("{errors} failed"));
+            ui.colored_label(
+                egui::Color32::from_rgb(230, 120, 60),
+                format!("{errors} failed"),
+            );
         }
         if ui.button("Cancel download").clicked() {
             actions.cancel_chasepack = true;
@@ -455,12 +566,20 @@ fn map_section(ui: &mut egui::Ui, view: &mut MapView, settings: &mut Settings, c
             actions.download_chasepack = true;
         }
         if too_big {
-            ui.colored_label(egui::Color32::from_rgb(230, 90, 90), "Too large (>2 GB) — zoom in or narrow the view");
+            ui.colored_label(
+                egui::Color32::from_rgb(230, 90, 90),
+                "Too large (>2 GB) — zoom in or narrow the view",
+            );
         }
     }
 }
 
-fn level2_section(ui: &mut egui::Ui, view: &mut MapView, settings: &mut Settings, actions: &mut ToolboxActions) {
+fn level2_section(
+    ui: &mut egui::Ui,
+    view: &mut MapView,
+    settings: &mut Settings,
+    actions: &mut ToolboxActions,
+) {
     ui.horizontal_wrapped(|ui| {
         for m in Moment::ALL {
             ui.selectable_value(&mut view.moment, m, m.short_name());
@@ -490,10 +609,19 @@ fn level2_section(ui: &mut egui::Ui, view: &mut MapView, settings: &mut Settings
         if view.srv {
             ui.horizontal(|ui| {
                 ui.label("Motion:");
-                ui.add(egui::DragValue::new(&mut view.storm_dir_deg).range(0.0..=359.0).suffix("°"));
-                ui.add(egui::DragValue::new(&mut view.storm_speed_kt).range(0.0..=150.0).suffix(" kt"));
+                ui.add(
+                    egui::DragValue::new(&mut view.storm_dir_deg)
+                        .range(0.0..=359.0)
+                        .suffix("°"),
+                );
+                ui.add(
+                    egui::DragValue::new(&mut view.storm_speed_kt)
+                        .range(0.0..=150.0)
+                        .suffix(" kt"),
+                );
             });
-            if ui.button("From storm cells")
+            if ui
+                .button("From storm cells")
                 .on_hover_text("Set motion to the SCIT storm-cell mean (needs L3 storm cells)")
                 .clicked()
             {
@@ -542,14 +670,25 @@ fn level3_section(
     }
     if let Some(s) = fields.get_mut(&FL::Hca) {
         ui.checkbox(&mut s.show, "Hydrometeor class (HHC)")
-            .on_hover_text("What the radar thinks it sees: rain / snow / hail / graupel / biological …");
+            .on_hover_text(
+                "What the radar thinks it sees: rain / snow / hail / graupel / biological …",
+            );
     }
-    if [FL::Vil, FL::EchoTops, FL::Hca].iter().any(|l| fields.get(l).is_some_and(|s| s.show)) {
+    if [FL::Vil, FL::EchoTops, FL::Hca]
+        .iter()
+        .any(|l| fields.get(l).is_some_and(|s| s.show))
+    {
         ui.weak(format!("Site: {}", l3grid_site.unwrap_or("—")));
     }
 }
 
-fn timeline_section(ui: &mut egui::Ui, view: &mut MapView, settings: &mut Settings, actions: &mut ToolboxActions) {
+fn timeline_section(
+    ui: &mut egui::Ui,
+    view: &mut MapView,
+    settings: &mut Settings,
+    actions: &mut ToolboxActions,
+) {
+    let tz = settings.tz_for(view.site.as_deref());
     let t = &mut view.timeline;
 
     ui.horizontal(|ui| {
@@ -582,7 +721,8 @@ fn timeline_section(ui: &mut egui::Ui, view: &mut MapView, settings: &mut Settin
                 t.following = false;
             }
         }
-        ui.monospace(t.date.format("%Y-%m-%d").to_string());
+        ui.monospace(t.date.format("%Y-%m-%d").to_string())
+            .on_hover_text("Archive days are UTC days — the S3 buckets are bucketed that way");
         let is_today = t.date >= chrono::Utc::now().date_naive();
         if ui.add_enabled(!is_today, egui::Button::new("▶")).clicked() {
             if let Some(d) = t.date.succ_opt() {
@@ -600,7 +740,11 @@ fn timeline_section(ui: &mut egui::Ui, view: &mut MapView, settings: &mut Settin
             t.step(-1);
         }
         let play_label = if t.playing { "⏸" } else { "▶" };
-        if ui.button(play_label).on_hover_text("Play/Pause (live loops the newest frames)").clicked() {
+        if ui
+            .button(play_label)
+            .on_hover_text("Play/Pause (live loops the newest frames)")
+            .clicked()
+        {
             t.toggle_play();
         }
         if ui.button("▶|").on_hover_text("Step forward").clicked() {
@@ -609,7 +753,11 @@ fn timeline_section(ui: &mut egui::Ui, view: &mut MapView, settings: &mut Settin
         if ui.button("⏭").on_hover_text("Live head").clicked() {
             t.go_head();
         }
-        if ui.button("⟲ DVR").on_hover_text("Instant replay: loop the frames buffered in memory (R)").clicked() {
+        if ui
+            .button("⟲ DVR")
+            .on_hover_text("Instant replay: loop the frames buffered in memory (R)")
+            .clicked()
+        {
             actions.instant_replay = true;
         }
     });
@@ -628,11 +776,22 @@ fn timeline_section(ui: &mut egui::Ui, view: &mut MapView, settings: &mut Settin
         // Readout: observed frame time, or the forecast hour in the tail.
         match t.forecast_hour() {
             Some(h) => {
-                ui.colored_label(egui::Color32::from_rgb(255, 170, 60), format!("▶ FORECAST  F+{h}h  (HRRR)"));
+                ui.colored_label(
+                    egui::Color32::from_rgb(255, 170, 60),
+                    format!("▶ FORECAST  F+{h}h  (HRRR)"),
+                );
             }
             None => {
-                let when = t.current().and_then(|id| id.date_time()).map(|d| d.format("%H:%M:%SZ").to_string());
-                ui.label(format!("{} / {} observed  {}", t.playhead + 1, observed, when.unwrap_or_default()));
+                let when = t
+                    .current()
+                    .and_then(|id| id.date_time())
+                    .map(|d| crate::timefmt::fmt_clock(d, tz, true));
+                ui.label(format!(
+                    "{} / {} observed  {}",
+                    t.playhead + 1,
+                    observed,
+                    when.unwrap_or_default()
+                ));
             }
         }
     } else if t.listing {
@@ -644,11 +803,19 @@ fn timeline_section(ui: &mut egui::Ui, view: &mut MapView, settings: &mut Settin
     ui.horizontal(|ui| {
         ui.checkbox(&mut t.loop_enabled, "Loop");
         ui.label("Speed");
-        ui.add(egui::Slider::new(&mut t.speed, 1.0..=15.0).suffix(" fps").show_value(true));
+        ui.add(
+            egui::Slider::new(&mut t.speed, 1.0..=15.0)
+                .suffix(" fps")
+                .show_value(true),
+        );
     });
     ui.horizontal(|ui| {
         ui.label("Live loop window");
-        ui.add(egui::DragValue::new(&mut settings.live_loop_frames).range(2..=30).suffix(" frames"))
-            .on_hover_text("How many of the newest volumes ▶ cycles through when live");
+        ui.add(
+            egui::DragValue::new(&mut settings.live_loop_frames)
+                .range(2..=30)
+                .suffix(" frames"),
+        )
+        .on_hover_text("How many of the newest volumes ▶ cycles through when live");
     });
 }

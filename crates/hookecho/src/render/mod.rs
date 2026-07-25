@@ -78,7 +78,11 @@ impl FieldLayer {
     pub fn below_radar(self) -> bool {
         matches!(
             self,
-            FieldLayer::Mrms | FieldLayer::Hrrr | FieldLayer::Cape | FieldLayer::Srh | FieldLayer::PrecipType
+            FieldLayer::Mrms
+                | FieldLayer::Hrrr
+                | FieldLayer::Cape
+                | FieldLayer::Srh
+                | FieldLayer::PrecipType
         )
     }
 
@@ -250,14 +254,12 @@ pub struct RenderResources {
 
 impl RenderResources {
     pub fn new(device: &wgpu::Device, target_format: wgpu::TextureFormat) -> Self {
-        let tile_shader =
-            device.create_shader_module(wgpu::include_wgsl!("../shaders/tiles.wgsl"));
+        let tile_shader = device.create_shader_module(wgpu::include_wgsl!("../shaders/tiles.wgsl"));
         let radar_shader =
             device.create_shader_module(wgpu::include_wgsl!("../shaders/radar.wgsl"));
         let overlay_shader =
             device.create_shader_module(wgpu::include_wgsl!("../shaders/overlay.wgsl"));
-        let mrms_shader =
-            device.create_shader_module(wgpu::include_wgsl!("../shaders/mrms.wgsl"));
+        let mrms_shader = device.create_shader_module(wgpu::include_wgsl!("../shaders/mrms.wgsl"));
 
         // group 0: camera uniform (shared).
         let camera_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -506,7 +508,10 @@ impl RenderResources {
             let camera_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("camera_bg"),
                 layout: camera_bgl,
-                entries: &[wgpu::BindGroupEntry { binding: 0, resource: camera_buf.as_entire_binding() }],
+                entries: &[wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: camera_buf.as_entire_binding(),
+                }],
             });
             let tile_vbuf = device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("tile_vbuf"),
@@ -533,7 +538,6 @@ impl RenderResources {
             }
         })
     }
-
 
     fn upload_tile(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, t: &PendingTile) {
         let size = wgpu::Extent3d {
@@ -571,11 +575,23 @@ impl RenderResources {
             label: Some("tile_bg"),
             layout: &self.tile_bgl,
             entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&view) },
-                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&self.sampler) },
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&self.sampler),
+                },
             ],
         });
-        self.tiles.insert(t.id, TileGpu { _tex: tex, bind_group });
+        self.tiles.insert(
+            t.id,
+            TileGpu {
+                _tex: tex,
+                bind_group,
+            },
+        );
     }
 
     fn build_radar(&self, device: &wgpu::Device, queue: &wgpu::Queue, r: &RadarUpload) -> RadarGpu {
@@ -616,7 +632,11 @@ impl RenderResources {
         });
 
         // 256×1 color LUT, indexed by the sweep u8 in the fragment shader.
-        let lut_size = wgpu::Extent3d { width: 256, height: 1, depth_or_array_layers: 1 };
+        let lut_size = wgpu::Extent3d {
+            width: 256,
+            height: 1,
+            depth_or_array_layers: 1,
+        };
         let lut_tex = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("radar_lut"),
             size: lut_size,
@@ -649,12 +669,26 @@ impl RenderResources {
             label: Some("radar_bg"),
             layout: &self.radar_bgl,
             entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: uni.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&view) },
-                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(&lut_view) },
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: uni.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(&view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::TextureView(&lut_view),
+                },
             ],
         });
-        RadarGpu { _tex: tex, _lut: lut_tex, _uni: uni, bind_group }
+        RadarGpu {
+            _tex: tex,
+            _lut: lut_tex,
+            _uni: uni,
+            bind_group,
+        }
     }
 
     /// Upload camera/tiles/radar for `cb` and stage its pane's draw list. Shared caches (tiles,
@@ -682,10 +716,18 @@ impl RenderResources {
             self.fields.insert(*layer, gpu);
         }
         // Draw only the requested layers that actually have GPU data.
-        self.field_draws = cb.field_draws.iter().copied().filter(|l| self.fields.contains_key(l)).collect();
+        self.field_draws = cb
+            .field_draws
+            .iter()
+            .copied()
+            .filter(|l| self.fields.contains_key(l))
+            .collect();
 
         // --- Per-pane state ---
-        let new_radar = cb.radar_upload.as_ref().map(|r| self.build_radar(device, queue, r));
+        let new_radar = cb
+            .radar_upload
+            .as_ref()
+            .map(|r| self.build_radar(device, queue, r));
         // Build the tile quad list against the shared tile cache before mutably borrowing the pane.
         let mut tverts: Vec<TileVertex> = Vec::new();
         let mut visible: Vec<VisibleTile> = Vec::new();
@@ -699,12 +741,30 @@ impl RenderResources {
             let [x0, y0] = v.world_min;
             let [x1, y1] = v.world_max;
             tverts.extend_from_slice(&[
-                TileVertex { world: [x0, y0], uv: [0.0, 0.0] },
-                TileVertex { world: [x1, y0], uv: [1.0, 0.0] },
-                TileVertex { world: [x1, y1], uv: [1.0, 1.0] },
-                TileVertex { world: [x0, y0], uv: [0.0, 0.0] },
-                TileVertex { world: [x1, y1], uv: [1.0, 1.0] },
-                TileVertex { world: [x0, y1], uv: [0.0, 1.0] },
+                TileVertex {
+                    world: [x0, y0],
+                    uv: [0.0, 0.0],
+                },
+                TileVertex {
+                    world: [x1, y0],
+                    uv: [1.0, 0.0],
+                },
+                TileVertex {
+                    world: [x1, y1],
+                    uv: [1.0, 1.0],
+                },
+                TileVertex {
+                    world: [x0, y0],
+                    uv: [0.0, 0.0],
+                },
+                TileVertex {
+                    world: [x1, y1],
+                    uv: [1.0, 1.0],
+                },
+                TileVertex {
+                    world: [x0, y1],
+                    uv: [0.0, 1.0],
+                },
             ]);
             visible.push(*v);
         }
@@ -714,7 +774,10 @@ impl RenderResources {
         queue.write_buffer(
             &pane.camera_buf,
             0,
-            bytemuck::bytes_of(&CameraUniform { center: cb.camera_center, scale: cb.camera_scale }),
+            bytemuck::bytes_of(&CameraUniform {
+                center: cb.camera_center,
+                scale: cb.camera_scale,
+            }),
         );
         if let Some(r) = &cb.radar_upload {
             let [x0, y0] = r.world_min;
@@ -756,13 +819,26 @@ impl RenderResources {
             contents: bytemuck::cast_slice(&o.indices),
             usage: wgpu::BufferUsages::INDEX,
         });
-        self.overlay = Some(OverlayGpu { vbuf, ibuf, index_count: o.indices.len() as u32 });
+        self.overlay = Some(OverlayGpu {
+            vbuf,
+            ibuf,
+            index_count: o.indices.len() as u32,
+        });
     }
 
     /// Build a national field-layer (MRMS mosaic or lightning): R8 index texture + LUT texture +
     /// grid uniform + full-grid quad. Shared by both layers; they differ only in data + LUT.
-    fn build_field_layer(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, m: &MrmsUpload) -> MrmsGpu {
-        let size = wgpu::Extent3d { width: m.nx, height: m.ny, depth_or_array_layers: 1 };
+    fn build_field_layer(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        m: &MrmsUpload,
+    ) -> MrmsGpu {
+        let size = wgpu::Extent3d {
+            width: m.nx,
+            height: m.ny,
+            depth_or_array_layers: 1,
+        };
         let tex = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("mrms_tex"),
             size,
@@ -774,9 +850,18 @@ impl RenderResources {
             view_formats: &[],
         });
         queue.write_texture(
-            wgpu::TexelCopyTextureInfo { texture: &tex, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
+            wgpu::TexelCopyTextureInfo {
+                texture: &tex,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
             &m.data,
-            wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(m.nx), rows_per_image: Some(m.ny) },
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(m.nx),
+                rows_per_image: Some(m.ny),
+            },
             size,
         );
         let uni = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -784,7 +869,11 @@ impl RenderResources {
             contents: bytemuck::cast_slice(&m.uniform),
             usage: wgpu::BufferUsages::UNIFORM,
         });
-        let lut_size = wgpu::Extent3d { width: 256, height: 1, depth_or_array_layers: 1 };
+        let lut_size = wgpu::Extent3d {
+            width: 256,
+            height: 1,
+            depth_or_array_layers: 1,
+        };
         let lut_tex = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("mrms_lut"),
             size: lut_size,
@@ -796,9 +885,18 @@ impl RenderResources {
             view_formats: &[],
         });
         queue.write_texture(
-            wgpu::TexelCopyTextureInfo { texture: &lut_tex, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
+            wgpu::TexelCopyTextureInfo {
+                texture: &lut_tex,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
             &m.lut,
-            wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(256 * 4), rows_per_image: Some(1) },
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(256 * 4),
+                rows_per_image: Some(1),
+            },
             lut_size,
         );
         let view = tex.create_view(&wgpu::TextureViewDescriptor::default());
@@ -807,9 +905,18 @@ impl RenderResources {
             label: Some("mrms_bg"),
             layout: &self.radar_bgl,
             entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: uni.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&view) },
-                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(&lut_view) },
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: uni.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(&view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::TextureView(&lut_view),
+                },
             ],
         });
         let [x0, y0] = m.world_min;
@@ -827,7 +934,13 @@ impl RenderResources {
             contents: bytemuck::cast_slice(&verts),
             usage: wgpu::BufferUsages::VERTEX,
         });
-        MrmsGpu { _tex: tex, _lut: lut_tex, _uni: uni, bind_group, vbuf }
+        MrmsGpu {
+            _tex: tex,
+            _lut: lut_tex,
+            _uni: uni,
+            bind_group,
+            vbuf,
+        }
     }
 
     fn upload_vector_tile(&mut self, device: &wgpu::Device, t: &PendingVectorTile) {
@@ -845,8 +958,14 @@ impl RenderResources {
             contents: bytemuck::cast_slice(&t.indices),
             usage: wgpu::BufferUsages::INDEX,
         });
-        self.vector_tiles
-            .insert(t.id, OverlayGpu { vbuf, ibuf, index_count: t.indices.len() as u32 });
+        self.vector_tiles.insert(
+            t.id,
+            OverlayGpu {
+                vbuf,
+                ibuf,
+                index_count: t.indices.len() as u32,
+            },
+        );
     }
 
     /// Paint the active field layers in the requested band (below/above the radar), in the fixed
@@ -869,7 +988,9 @@ impl RenderResources {
     /// Record one pane's draws (vector basemap → raster tiles → radar → overlay), all using
     /// that pane's camera bind group.
     fn record_pane(&self, id: u32, pass: &mut wgpu::RenderPass<'_>) {
-        let Some(pane) = self.panes.get(&id) else { return };
+        let Some(pane) = self.panes.get(&id) else {
+            return;
+        };
         let cam = &pane.camera_bg;
         // Vector basemap first (opaque, under everything).
         if !pane.frame_visible_vector.is_empty() {
@@ -931,8 +1052,9 @@ impl RenderResources {
         pane: u32,
         clear: wgpu::Color,
     ) {
-        let mut encoder =
-            device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("headless") });
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("headless"),
+        });
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("headless_pass"),
@@ -940,7 +1062,10 @@ impl RenderResources {
                     view,
                     resolve_target: None,
                     depth_slice: None,
-                    ops: wgpu::Operations { load: wgpu::LoadOp::Clear(clear), store: wgpu::StoreOp::Store },
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(clear),
+                        store: wgpu::StoreOp::Store,
+                    },
                 })],
                 depth_stencil_attachment: None,
                 timestamp_writes: None,

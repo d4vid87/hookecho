@@ -39,7 +39,9 @@ pub fn rows_in_view(feats: &[GeoFeature], bounds: (f64, f64, f64, f64)) -> Vec<R
     let mut rows: Vec<Row> = Vec::new();
     for f in feats {
         let Some(a) = &f.alert else { continue };
-        let Some((x0, y0, x1, y1)) = f.bbox() else { continue };
+        let Some((x0, y0, x1, y1)) = f.bbox() else {
+            continue;
+        };
         if x1 < vx0 || x0 > vx1 || y1 < vy0 || y0 > vy1 {
             continue; // bbox disjoint from the view
         }
@@ -69,7 +71,11 @@ fn expiry_key(a: &AlertInfo) -> i64 {
 }
 
 /// Render the panel. Returns the clicked alert's `(id, center_lon, center_lat)` when a row is picked.
-pub fn show(root: &mut egui::Ui, feats: &[GeoFeature], bounds: (f64, f64, f64, f64)) -> Option<(String, f64, f64)> {
+pub fn show(
+    root: &mut egui::Ui,
+    feats: &[GeoFeature],
+    bounds: (f64, f64, f64, f64),
+) -> Option<(String, f64, f64)> {
     let rows = rows_in_view(feats, bounds);
     let mut clicked = None;
     egui::Panel::right("alerts_panel")
@@ -95,7 +101,10 @@ pub fn show(root: &mut egui::Ui, feats: &[GeoFeature], bounds: (f64, f64, f64, f
                         .inner_margin(egui::Margin::same(6))
                         .show(ui, |ui| {
                             ui.horizontal(|ui| {
-                                let (rect, _) = ui.allocate_exact_size(egui::vec2(5.0, 15.0), egui::Sense::hover());
+                                let (rect, _) = ui.allocate_exact_size(
+                                    egui::vec2(5.0, 15.0),
+                                    egui::Sense::hover(),
+                                );
                                 ui.painter().rect_filled(rect, 1.0, color32(row.color));
                                 ui.strong(&a.event);
                                 // Emergency/PDS/destructive chip on escalated rows.
@@ -103,16 +112,30 @@ pub fn show(root: &mut egui::Ui, feats: &[GeoFeature], bounds: (f64, f64, f64, f
                                     let label = a.headline.to_ascii_uppercase();
                                     let chip = if label.contains("TORNADO EMERGENCY") {
                                         "TOR EMERGENCY"
-                                    } else if a.damage_threat.as_deref().is_some_and(|d| d.to_ascii_uppercase().contains("CATASTROPHIC")) {
+                                    } else if a.damage_threat.as_deref().is_some_and(|d| {
+                                        d.to_ascii_uppercase().contains("CATASTROPHIC")
+                                    }) {
                                         "CATASTROPHIC"
                                     } else {
                                         "DESTRUCTIVE"
                                     };
-                                    ui.label(egui::RichText::new(chip).small().strong().color(egui::Color32::WHITE).background_color(egui::Color32::from_rgb(200, 20, 20)));
+                                    ui.label(
+                                        egui::RichText::new(chip)
+                                            .small()
+                                            .strong()
+                                            .color(egui::Color32::WHITE)
+                                            .background_color(egui::Color32::from_rgb(200, 20, 20)),
+                                    );
                                 }
                             });
-                            ui.add(egui::Label::new(egui::RichText::new(&a.area).weak().small()).truncate());
-                            ui.label(egui::RichText::new(crate::ui::warning_window::countdown(a)).small());
+                            ui.add(
+                                egui::Label::new(egui::RichText::new(&a.area).weak().small())
+                                    .truncate(),
+                            );
+                            ui.label(
+                                egui::RichText::new(crate::ui::warning_window::countdown(a))
+                                    .small(),
+                            );
                         })
                         .response;
                     if resp.interact(egui::Sense::click()).clicked() {

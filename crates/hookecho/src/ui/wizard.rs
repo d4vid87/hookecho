@@ -112,35 +112,51 @@ fn page_site(ui: &mut egui::Ui, wiz: &mut Wizard, settings: &mut Settings) {
     ui.add_space(6.0);
     ui.add(egui::TextEdit::singleline(&mut wiz.filter).hint_text("Search by ID, city, or state…"));
     let needle = wiz.filter.to_ascii_uppercase();
-    egui::ScrollArea::vertical().max_height(200.0).show(ui, |ui| {
-        for s in wxdata::sites::sites() {
-            if !needle.is_empty()
-                && !s.id.to_ascii_uppercase().contains(&needle)
-                && !s.city.to_ascii_uppercase().contains(&needle)
-                && !s.state.to_ascii_uppercase().contains(&needle)
-            {
-                continue;
+    egui::ScrollArea::vertical()
+        .max_height(200.0)
+        .show(ui, |ui| {
+            for s in wxdata::sites::sites() {
+                if !needle.is_empty()
+                    && !s.id.to_ascii_uppercase().contains(&needle)
+                    && !s.city.to_ascii_uppercase().contains(&needle)
+                    && !s.state.to_ascii_uppercase().contains(&needle)
+                {
+                    continue;
+                }
+                let label = format!("{}  —  {}, {}", s.id, s.city, s.state);
+                if ui
+                    .selectable_label(settings.default_site == s.id, label)
+                    .clicked()
+                {
+                    settings.default_site = s.id.to_string();
+                }
             }
-            let label = format!("{}  —  {}, {}", s.id, s.city, s.state);
-            if ui.selectable_label(settings.default_site == s.id, label).clicked() {
-                settings.default_site = s.id.to_string();
-            }
-        }
-    });
+        });
 }
 
 fn page_map(ui: &mut egui::Ui, settings: &mut Settings, basemap: &mut BasemapStyle) {
     ui.strong("Map & API keys (3/8)");
     ui.small("Optional keys unlock premium basemaps. Free keys: mapbox.com and maptiler.com. Plenty of basemaps work with no key at all.");
     ui.add_space(6.0);
-    egui::Grid::new("wiz_keys").num_columns(2).spacing([10.0, 6.0]).show(ui, |ui| {
-        ui.label("Mapbox token");
-        ui.add(egui::TextEdit::singleline(&mut settings.mapbox_key).password(true).desired_width(240.0));
-        ui.end_row();
-        ui.label("MapTiler key");
-        ui.add(egui::TextEdit::singleline(&mut settings.maptiler_key).password(true).desired_width(240.0));
-        ui.end_row();
-    });
+    egui::Grid::new("wiz_keys")
+        .num_columns(2)
+        .spacing([10.0, 6.0])
+        .show(ui, |ui| {
+            ui.label("Mapbox token");
+            ui.add(
+                egui::TextEdit::singleline(&mut settings.mapbox_key)
+                    .password(true)
+                    .desired_width(240.0),
+            );
+            ui.end_row();
+            ui.label("MapTiler key");
+            ui.add(
+                egui::TextEdit::singleline(&mut settings.maptiler_key)
+                    .password(true)
+                    .desired_width(240.0),
+            );
+            ui.end_row();
+        });
     ui.add_space(6.0);
     // Basemap picker, filtered by whichever keys are set this frame (typing a key unlocks styles).
     let mb = !settings.mapbox_key.is_empty();
@@ -151,7 +167,9 @@ fn page_map(ui: &mut egui::Ui, settings: &mut Settings, basemap: &mut BasemapSty
             .selected_text(basemap.label())
             .show_ui(ui, |ui| {
                 for s in BasemapStyle::ALL {
-                    if s.available(mb, mt) && ui.selectable_label(*basemap == s, s.label()).clicked() {
+                    if s.available(mb, mt)
+                        && ui.selectable_label(*basemap == s, s.label()).clicked()
+                    {
                         *basemap = s;
                         settings.basemap = s.slug().to_string();
                     }
@@ -163,24 +181,33 @@ fn page_map(ui: &mut egui::Ui, settings: &mut Settings, basemap: &mut BasemapSty
 fn page_theme(ui: &mut egui::Ui, settings: &mut Settings) {
     ui.strong("Look and feel (4/8)");
     ui.add_space(6.0);
-    egui::ScrollArea::vertical().max_height(220.0).show(ui, |ui| {
-        for t in Theme::ALL {
-            ui.horizontal(|ui| {
-                let (rect, _) = ui.allocate_exact_size(egui::vec2(28.0, 14.0), egui::Sense::hover());
-                let p = ui.painter();
-                p.rect_filled(rect, 3.0, crate::theme::preview_bg(t));
-                p.circle_filled(rect.center(), 5.0, crate::theme::accent(t));
-                ui.selectable_value(&mut settings.theme, t, t.label());
-            });
-        }
-    });
+    egui::ScrollArea::vertical()
+        .max_height(220.0)
+        .show(ui, |ui| {
+            for t in Theme::ALL {
+                ui.horizontal(|ui| {
+                    let (rect, _) =
+                        ui.allocate_exact_size(egui::vec2(28.0, 14.0), egui::Sense::hover());
+                    let p = ui.painter();
+                    p.rect_filled(rect, 3.0, crate::theme::preview_bg(t));
+                    p.circle_filled(rect.center(), 5.0, crate::theme::accent(t));
+                    ui.selectable_value(&mut settings.theme, t, t.label());
+                });
+            }
+        });
 }
 
 fn page_alerts(ui: &mut egui::Ui, settings: &mut Settings) {
     ui.strong("Alerts (7/8)");
     ui.add_space(6.0);
-    ui.checkbox(&mut settings.alert_sound, "Play a sound when a new warning appears");
-    ui.checkbox(&mut settings.lightning_alarm, "Alarm on nearby lightning (within ~15 km of a saved location)");
+    ui.checkbox(
+        &mut settings.alert_sound,
+        "Play a sound when a new warning appears",
+    );
+    ui.checkbox(
+        &mut settings.lightning_alarm,
+        "Alarm on nearby lightning (within ~15 km of a saved location)",
+    );
     ui.horizontal(|ui| {
         ui.label("ntfy.sh topic:");
         ui.text_edit_singleline(&mut settings.ntfy_topic);
@@ -195,7 +222,12 @@ fn page_done(ui: &mut egui::Ui, settings: &Settings, basemap: BasemapStyle) {
     ui.label(format!("Theme: {}", settings.theme.label()));
     ui.label(format!("Basemap: {}", basemap.label()));
     ui.label(format!("Saved locations: {}", settings.markers.len()));
-    ui.label(format!("Alert sound: {}", if settings.alert_sound { "on" } else { "off" }));
+    ui.label(format!(
+        "Alert sound: {}",
+        if settings.alert_sound { "on" } else { "off" }
+    ));
     ui.add_space(4.0);
-    ui.small("Press Finish to jump to your home radar. Re-run this anytime from Help ▸ Setup wizard.");
+    ui.small(
+        "Press Finish to jump to your home radar. Re-run this anytime from Help ▸ Setup wizard.",
+    );
 }

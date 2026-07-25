@@ -88,7 +88,11 @@ fn dbz_color(t: f32) -> [u8; 4] {
 /// The 64px window icon.
 pub fn icon_data() -> egui::IconData {
     let size = 64;
-    egui::IconData { rgba: rgba(size), width: size as u32, height: size as u32 }
+    egui::IconData {
+        rgba: rgba(size),
+        width: size as u32,
+        height: size as u32,
+    }
 }
 
 #[cfg(test)]

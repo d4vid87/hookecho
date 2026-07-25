@@ -36,7 +36,11 @@ const LOOP_SETTLE_FRAMES: u8 = 12;
 /// finger taps need a fatter target than a mouse cursor, so targets grow ~1.8× there; desktop is
 /// unchanged.
 fn tap_r2(px: f32) -> f32 {
-    let r = if cfg!(target_os = "android") { px * 1.8 } else { px };
+    let r = if cfg!(target_os = "android") {
+        px * 1.8
+    } else {
+        px
+    };
     r * r
 }
 
@@ -115,7 +119,11 @@ enum OverlayMsg {
     /// River flood gauges (NWPS) for the requested bbox.
     Gauges(Vec<wxdata::river::Gauge>),
     /// HRRR model contour polylines for a kind, plus the forecast valid time.
-    Contours(ContourKind, Vec<wxdata::contour::ContourLine>, DateTime<Utc>),
+    Contours(
+        ContourKind,
+        Vec<wxdata::contour::ContourLine>,
+        DateTime<Utc>,
+    ),
     /// NHC tropical cyclones: cones + per-storm tracks (feature V).
     Tropical(wxdata::tropical::TropicalData),
     /// Aviation SIGMET/AIRMET hazard polygons (feature GG).
@@ -144,7 +152,11 @@ enum OverlaySource {
     /// Gridded L3 product (DVL/EET) for a site, projected to a lat/lon field (feature X).
     L3Grid(crate::render::FieldLayer, String),
     /// Nearest-station observations for `site` at `(lat, lon)`.
-    Obs { site: String, lat: f64, lon: f64 },
+    Obs {
+        site: String,
+        lat: f64,
+        lon: f64,
+    },
     /// VAD wind profile for `site`.
     Vwp(String),
     /// Archived storm-based warnings valid at a 5-min UTC bucket (Unix seconds, feature W).
@@ -164,8 +176,12 @@ enum OverlaySource {
 impl OverlaySource {
     async fn fetch(self, http: &reqwest::Client) -> anyhow::Result<OverlayMsg> {
         Ok(match self {
-            OverlaySource::Alerts(near) => OverlayMsg::Alerts(alerts::fetch_active(http, near).await?),
-            OverlaySource::Mds => OverlayMsg::Mds(wxdata::spc::fetch_mesoscale_discussions(http).await?),
+            OverlaySource::Alerts(near) => {
+                OverlayMsg::Alerts(alerts::fetch_active(http, near).await?)
+            }
+            OverlaySource::Mds => {
+                OverlayMsg::Mds(wxdata::spc::fetch_mesoscale_discussions(http).await?)
+            }
             OverlaySource::Outlook(day, kind) => {
                 OverlayMsg::Outlook(day, wxdata::spc::fetch_outlook_kind(http, day, kind).await?)
             }
@@ -184,7 +200,8 @@ impl OverlaySource {
                 // Archive bucket: the 6 h of reports ending at the bucket's close; live: last 6 h.
                 let reports = match bucket {
                     Some(b) => {
-                        let end = chrono::DateTime::from_timestamp((b + 1) * 1800, 0).unwrap_or_default();
+                        let end =
+                            chrono::DateTime::from_timestamp((b + 1) * 1800, 0).unwrap_or_default();
                         let start = end - chrono::Duration::hours(6);
                         let fmt = "%Y-%m-%dT%H:%MZ";
                         wxdata::lsr::fetch(
@@ -203,13 +220,19 @@ impl OverlaySource {
             OverlaySource::ProbSevere => {
                 OverlayMsg::ProbSevere(wxdata::probsevere::fetch_probsevere(http).await?)
             }
-            OverlaySource::Hrrr(fh) => OverlayMsg::Hrrr(wxdata::hrrr::fetch_forecast(http, fh).await?),
+            OverlaySource::Hrrr(fh) => {
+                OverlayMsg::Hrrr(wxdata::hrrr::fetch_forecast(http, fh).await?)
+            }
             OverlaySource::Env(layer, ml, srh_km) => {
                 use crate::render::FieldLayer as FL;
                 let (var, level, min_valid) = match layer {
                     FL::Cape if ml => ("CAPE", "90-0 mb above ground".to_string(), 0.0),
                     FL::Cape => ("CAPE", "surface".to_string(), 0.0),
-                    FL::Srh => ("HLCY", format!("{}000-0 m above ground", srh_km), f64::NEG_INFINITY),
+                    FL::Srh => (
+                        "HLCY",
+                        format!("{}000-0 m above ground", srh_km),
+                        f64::NEG_INFINITY,
+                    ),
                     _ => ("REFC", "entire atmosphere".to_string(), -30.0),
                 };
                 let fc = wxdata::hrrr::fetch_field(http, var, &level, 0, min_valid).await?;
@@ -229,7 +252,9 @@ impl OverlaySource {
                 }
             }
             OverlaySource::Obs { site, lat, lon } => {
-                let r = wxdata::obs::fetch_nearest(http, lat, lon).await.map_err(|e| e.to_string());
+                let r = wxdata::obs::fetch_nearest(http, lat, lon)
+                    .await
+                    .map_err(|e| e.to_string());
                 OverlayMsg::Obs(site, r)
             }
             OverlaySource::Vwp(site) => {
@@ -265,8 +290,11 @@ impl OverlaySource {
                     let lines = wxdata::contour::contour_lines(&fc.field, kind.severe_interval());
                     return Ok(OverlayMsg::Contours(kind, lines, valid));
                 }
-                let (var, level, interval) = kind.params().ok_or_else(|| anyhow::anyhow!("contour Off"))?;
-                let mut fc = wxdata::hrrr::fetch_field(http, var, level, 0, f64::NEG_INFINITY).await?;
+                let (var, level, interval) = kind
+                    .params()
+                    .ok_or_else(|| anyhow::anyhow!("contour Off"))?;
+                let mut fc =
+                    wxdata::hrrr::fetch_field(http, var, level, 0, f64::NEG_INFINITY).await?;
                 // Convert to display units so the interval is in hPa / °F / etc, then contour off-thread.
                 for v in &mut fc.field.values {
                     if v.is_finite() {
@@ -274,9 +302,15 @@ impl OverlaySource {
                     }
                 }
                 let valid = fc.valid();
-                OverlayMsg::Contours(kind, wxdata::contour::contour_lines(&fc.field, interval), valid)
+                OverlayMsg::Contours(
+                    kind,
+                    wxdata::contour::contour_lines(&fc.field, interval),
+                    valid,
+                )
             }
-            OverlaySource::Tropical => OverlayMsg::Tropical(wxdata::tropical::fetch_active(http).await?),
+            OverlaySource::Tropical => {
+                OverlayMsg::Tropical(wxdata::tropical::fetch_active(http).await?)
+            }
             OverlaySource::Aviation => {
                 OverlayMsg::Aviation(wxdata::aviation::fetch_airsigmet(http).await?)
             }
@@ -402,9 +436,9 @@ impl ContourKind {
     /// Convert a raw GRIB value to the display unit the interval is expressed in.
     pub(crate) fn to_display(self, raw: f32) -> f32 {
         match self {
-            ContourKind::Mslp => raw / 100.0,               // Pa → hPa
+            ContourKind::Mslp => raw / 100.0, // Pa → hPa
             ContourKind::T2m | ContourKind::Td2m => raw * 9.0 / 5.0 - 459.67, // K → °F
-            _ => raw,                                        // CAPE / SRH as-is
+            _ => raw,                         // CAPE / SRH as-is
         }
     }
 
@@ -501,7 +535,13 @@ pub(crate) enum PlaceLabelKind {
     /// An icon with no usable sheet (none declared, or the image hasn't loaded): ring + dot.
     Marker,
     /// One cell of a loaded icon sheet, rotated `angle` degrees clockwise.
-    Sprite { tex: egui::TextureId, uv: egui::Rect, size: egui::Vec2, hot: egui::Vec2, angle: f32 },
+    Sprite {
+        tex: egui::TextureId,
+        uv: egui::Rect,
+        size: egui::Vec2,
+        hot: egui::Vec2,
+        angle: f32,
+    },
 }
 
 /// A registry row: what it's called, where it lives, what it does, and (for toggles) its state.
@@ -570,15 +610,43 @@ struct LoadedPlacefile {
 
 /// A background fetch result routed back to a specific view.
 enum DataMsg {
-    Volume { view: usize, site: String, name: String, time: DateTime<Utc>, scan: Scan },
+    Volume {
+        view: usize,
+        site: String,
+        name: String,
+        time: DateTime<Utc>,
+        scan: Scan,
+    },
     /// A live sweep-boundary update (merged full volume) from the chunk streamer.
-    Live { view: usize, site: String, name: String, time: DateTime<Utc>, scan: Scan, changed: Vec<f32> },
+    Live {
+        view: usize,
+        site: String,
+        name: String,
+        time: DateTime<Utc>,
+        scan: Scan,
+        changed: Vec<f32>,
+    },
     /// The live stream for `view` ended (error or clean exit); polling resumes.
-    LiveEnded { view: usize, site: String },
+    LiveEnded {
+        view: usize,
+        site: String,
+    },
     /// The archive volume listing for a site+date (timeline frames).
-    Frames { view: usize, site: String, date: NaiveDate, frames: Vec<Identifier> },
-    UpToDate { view: usize, site: String },
-    Error { view: usize, site: String, err: String },
+    Frames {
+        view: usize,
+        site: String,
+        date: NaiveDate,
+        frames: Vec<Identifier>,
+    },
+    UpToDate {
+        view: usize,
+        site: String,
+    },
+    Error {
+        view: usize,
+        site: String,
+        err: String,
+    },
 }
 
 impl DataMsg {
@@ -607,7 +675,16 @@ impl DataMsg {
 /// What is currently uploaded to the GPU, so we only re-bin/re-upload on a real change.
 /// The `u64` is the palette generation (a color-table reload forces a re-bake); the trailing
 /// option is the storm-motion (east, north) m/s for storm-relative velocity.
-type ShownKey = (String, Moment, usize, Option<f32>, bool, u64, Option<(u32, u32)>, bool);
+type ShownKey = (
+    String,
+    Moment,
+    usize,
+    Option<f32>,
+    bool,
+    u64,
+    Option<(u32, u32)>,
+    bool,
+);
 
 /// An in-progress offline chase-pack download: the worker outcome channel, a cancel flag the
 /// workers poll, and running tallies for the toolbox progress bar.
@@ -727,7 +804,8 @@ pub struct HookEchoApp {
     /// Tornado climatology: the loaded SPC track database (lazy), a pending async load, the last
     /// query result + its center, a window-open flag, and a query queued while the CSV loads.
     climo_tracks: Option<std::sync::Arc<Vec<wxdata::torclimo::TornadoTrack>>>,
-    climo_rx: Option<std::sync::mpsc::Receiver<Result<Vec<wxdata::torclimo::TornadoTrack>, String>>>,
+    climo_rx:
+        Option<std::sync::mpsc::Receiver<Result<Vec<wxdata::torclimo::TornadoTrack>, String>>>,
     climo_hits: Vec<wxdata::torclimo::TornadoTrack>,
     climo_center: Option<(f64, f64)>,
     climo_open: bool,
@@ -910,13 +988,19 @@ fn pane_rects(r: egui::Rect, n: usize) -> Vec<egui::Rect> {
                 let h = (r.height() - gap) / 2.0;
                 vec![
                     egui::Rect::from_min_size(r.min, egui::vec2(r.width(), h)),
-                    egui::Rect::from_min_size(egui::pos2(r.min.x, r.min.y + h + gap), egui::vec2(r.width(), h)),
+                    egui::Rect::from_min_size(
+                        egui::pos2(r.min.x, r.min.y + h + gap),
+                        egui::vec2(r.width(), h),
+                    ),
                 ]
             } else {
                 let w = (r.width() - gap) / 2.0;
                 vec![
                     egui::Rect::from_min_size(r.min, egui::vec2(w, r.height())),
-                    egui::Rect::from_min_size(egui::pos2(r.min.x + w + gap, r.min.y), egui::vec2(w, r.height())),
+                    egui::Rect::from_min_size(
+                        egui::pos2(r.min.x + w + gap, r.min.y),
+                        egui::vec2(w, r.height()),
+                    ),
                 ]
             }
         }
@@ -928,7 +1012,10 @@ fn pane_rects(r: egui::Rect, n: usize) -> Vec<egui::Rect> {
                 for col in 0..2 {
                     let x = r.min.x + (w + gap) * col as f32;
                     let y = r.min.y + (h + gap) * row as f32;
-                    v.push(egui::Rect::from_min_size(egui::pos2(x, y), egui::vec2(w, h)));
+                    v.push(egui::Rect::from_min_size(
+                        egui::pos2(x, y),
+                        egui::vec2(w, h),
+                    ));
                 }
             }
             v.truncate(n.clamp(1, 4));
@@ -957,12 +1044,15 @@ impl HookEchoApp {
         let max_texture_dim = render_state.device.limits().max_texture_dimension_2d;
         {
             let mut w = render_state.renderer.write();
-            w.callback_resources
-                .insert(RenderResources::new(&render_state.device, render_state.target_format));
-            w.callback_resources.insert(crate::render3d::Volume3dResources::new(
+            w.callback_resources.insert(RenderResources::new(
                 &render_state.device,
                 render_state.target_format,
             ));
+            w.callback_resources
+                .insert(crate::render3d::Volume3dResources::new(
+                    &render_state.device,
+                    render_state.target_format,
+                ));
         }
 
         let settings = Settings::load();
@@ -978,7 +1068,10 @@ impl HookEchoApp {
         let (start, camera) = match &settings.start_view {
             Some(sv) if wxdata::sites::site_by_id(&sv.site).is_some() => (
                 sv.site.clone(),
-                Camera { center: (sv.x, sv.y), zoom: sv.zoom },
+                Camera {
+                    center: (sv.x, sv.y),
+                    zoom: sv.zoom,
+                },
             ),
             _ => {
                 let s = settings.default_site.clone();
@@ -1055,9 +1148,9 @@ impl HookEchoApp {
             warning_popup: None,
             storm_cells: Vec::new(),
             ui_scale_applied: -1.0,
-ime_shown: false,
-pending_paste: None,
-paste_target: None,
+            ime_shown: false,
+            pending_paste: None,
+            paste_target: None,
             placefiles: Vec::new(),
             placefile_window: Default::default(),
             last_viewport: (1000.0, 800.0),
@@ -1235,7 +1328,10 @@ paste_target: None,
         self.spawn_overlay(ctx, OverlaySource::Mds);
         // Only fetch the SPC outlook the user has selected (off = day 0 fetches nothing).
         if (1..=3).contains(&self.filters.outlook_day) {
-            self.spawn_overlay(ctx, OverlaySource::Outlook(self.filters.outlook_day, self.outlook_kind_for_day()));
+            self.spawn_overlay(
+                ctx,
+                OverlaySource::Outlook(self.filters.outlook_day, self.outlook_kind_for_day()),
+            );
         }
         // Storm cells for the active view's site (Level 3 products are per-site).
         if let Some(site) = self.views[self.active].site.clone() {
@@ -1322,7 +1418,8 @@ paste_target: None,
 
     /// Draw new-warning banners at top-center (auto-expire ~45s; click to dismiss all).
     fn show_warning_banners(&mut self, ctx: &egui::Context) {
-        self.warning_banners.retain(|(_, _, at)| at.elapsed().as_secs() < 45);
+        self.warning_banners
+            .retain(|(_, _, at)| at.elapsed().as_secs() < 45);
         if self.warning_banners.is_empty() {
             return;
         }
@@ -1333,16 +1430,31 @@ paste_target: None,
                 for (event, area, _) in &self.warning_banners {
                     let resp = egui::Frame::new()
                         .fill(egui::Color32::from_rgb(150, 20, 20))
-                        .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(255, 120, 120)))
+                        .stroke(egui::Stroke::new(
+                            1.0,
+                            egui::Color32::from_rgb(255, 120, 120),
+                        ))
                         .corner_radius(egui::CornerRadius::same(6))
                         .inner_margin(egui::Margin::symmetric(12, 6))
                         .show(ui, |ui| {
                             ui.horizontal(|ui| {
-                                ui.label(egui::RichText::new("⚠").size(16.0).color(egui::Color32::WHITE));
+                                ui.label(
+                                    egui::RichText::new("⚠")
+                                        .size(16.0)
+                                        .color(egui::Color32::WHITE),
+                                );
                                 ui.vertical(|ui| {
-                                    ui.label(egui::RichText::new(format!("New {event}")).strong().color(egui::Color32::WHITE));
+                                    ui.label(
+                                        egui::RichText::new(format!("New {event}"))
+                                            .strong()
+                                            .color(egui::Color32::WHITE),
+                                    );
                                     if !area.is_empty() {
-                                        ui.label(egui::RichText::new(area).small().color(egui::Color32::from_gray(230)));
+                                        ui.label(
+                                            egui::RichText::new(area)
+                                                .small()
+                                                .color(egui::Color32::from_gray(230)),
+                                        );
                                     }
                                 });
                             });
@@ -1365,8 +1477,8 @@ paste_target: None,
     fn detect_new_warnings(&mut self, feats: &[GeoFeature]) {
         let mut alerted = false;
         let mut max_esc = 0u8; // highest escalation among newly-seen warnings this pass
-        // Only banner warnings within the selected radar's coverage — a warning covering a saved
-        // location still banners + pushes regardless (that's a watched place, not the viewed site).
+                               // Only banner warnings within the selected radar's coverage — a warning covering a saved
+                               // location still banners + pushes regardless (that's a watched place, not the viewed site).
         let site_box = self.active_site_bounds(250.0);
         for f in feats {
             if f.kind != overlay::FeatureKind::Warning {
@@ -1389,7 +1501,11 @@ paste_target: None,
                         // Watched location covered → push to the phone (opt-in ntfy topic).
                         self.push_ntfy(
                             &format!("⚠ {} — {}", a.event, m.name),
-                            if a.headline.is_empty() { &a.area } else { &a.headline },
+                            if a.headline.is_empty() {
+                                &a.area
+                            } else {
+                                &a.headline
+                            },
                             urgent,
                         );
                         (format!("⚠ {}", a.event), format!("covers {}", m.name))
@@ -1446,10 +1562,14 @@ paste_target: None,
             if recent {
                 continue;
             }
-            self.lightning_alerted.insert(m.name.clone(), Instant::now());
+            self.lightning_alerted
+                .insert(m.name.clone(), Instant::now());
             self.push_ntfy(
                 &format!("⚡ Lightning near {}", m.name),
-                &format!("Cloud-to-ground strikes within {RADIUS_KM:.0} km of {}", m.name),
+                &format!(
+                    "Cloud-to-ground strikes within {RADIUS_KM:.0} km of {}",
+                    m.name
+                ),
                 false,
             );
             self.warning_banners.push((
@@ -1492,12 +1612,16 @@ paste_target: None,
     fn build_volume3d(&mut self) {
         const N: usize = 192;
         const NZ: usize = 48;
-        let Some(vol) = self.views[self.active].volume.as_mut() else { return };
+        let Some(vol) = self.views[self.active].volume.as_mut() else {
+            return;
+        };
         let sweeps = vol.reflectivity_tilts();
         if sweeps.is_empty() {
             return;
         }
-        let Some(v3) = wxdata::volume3d::build(&sweeps, N, NZ, 150.0, 18.0) else { return };
+        let Some(v3) = wxdata::volume3d::build(&sweeps, N, NZ, 150.0, 18.0) else {
+            return;
+        };
         let lut = crate::colormap::bake_lut(
             self.palettes.table(Moment::Reflectivity),
             (v3.value_min, v3.value_max),
@@ -1518,7 +1642,11 @@ paste_target: None,
     fn update_cappi(&mut self, ctx: &egui::Context) {
         const HALF_KM: f32 = 150.0;
         const N: usize = 256;
-        let Some(name) = self.views[self.active].volume.as_ref().map(|v| v.name.clone()) else {
+        let Some(name) = self.views[self.active]
+            .volume
+            .as_ref()
+            .map(|v| v.name.clone())
+        else {
             self.cappi_tex = None;
             self.cappi_key = None;
             return;
@@ -1527,12 +1655,16 @@ paste_target: None,
         if self.cappi_key.as_ref() == Some(&key) {
             return;
         }
-        let Some(vol) = self.views[self.active].volume.as_mut() else { return };
+        let Some(vol) = self.views[self.active].volume.as_mut() else {
+            return;
+        };
         let sweeps = vol.reflectivity_tilts();
         if sweeps.is_empty() {
             return;
         }
-        let Some(c) = wxdata::volume3d::cappi(&sweeps, self.cappi_alt_km, N, HALF_KM) else { return };
+        let Some(c) = wxdata::volume3d::cappi(&sweeps, self.cappi_alt_km, N, HALF_KM) else {
+            return;
+        };
         let img = ui::cappi_window::to_image(&c, self.palettes.table(Moment::Reflectivity));
         self.cappi_tex = Some(ctx.load_texture("cappi", img, egui::TextureOptions::NEAREST));
         self.cappi_key = Some(key);
@@ -1559,9 +1691,15 @@ paste_target: None,
         };
         // Storm features win: bail if a report or cell dot sits under the cursor.
         let near_storm = (self.show_storm_reports
-            && self.active_storm_reports().iter().any(|r| to_screen_hit(r.lon, r.lat) <= tap_r2(12.0)))
+            && self
+                .active_storm_reports()
+                .iter()
+                .any(|r| to_screen_hit(r.lon, r.lat) <= tap_r2(12.0)))
             || (self.cells_site.as_deref() == self.views[idx].site.as_deref()
-                && self.storm_cells.iter().any(|c| to_screen_hit(c.lon, c.lat) <= tap_r2(14.0)));
+                && self
+                    .storm_cells
+                    .iter()
+                    .any(|c| to_screen_hit(c.lon, c.lat) <= tap_r2(14.0)));
         if near_storm {
             return false;
         }
@@ -1587,7 +1725,9 @@ paste_target: None,
 
     /// Load any marker icon files not yet in the texture cache (negative-cached on failure).
     fn load_marker_icons(&mut self, ctx: &egui::Context) {
-        let Some(dir) = crate::settings::Settings::marker_icons_dir() else { return };
+        let Some(dir) = crate::settings::Settings::marker_icons_dir() else {
+            return;
+        };
         for m in &self.settings.markers {
             let Some(name) = &m.icon else { continue };
             if self.marker_icon_tex.contains_key(name) {
@@ -1611,12 +1751,15 @@ paste_target: None,
 
     fn build_xsection(&mut self, idx: usize, ctx: &egui::Context) {
         let (a, b) = (self.xsection_pts[0], self.xsection_pts[1]);
-        let Some(vol) = self.views[idx].volume.as_mut() else { return };
+        let Some(vol) = self.views[idx].volume.as_mut() else {
+            return;
+        };
         let sweeps = vol.reflectivity_tilts(); // owned → the &mut vol borrow ends here
         if sweeps.is_empty() {
             return;
         }
-        let Some(xs) = wxdata::xsection::build(&sweeps, (a[0], a[1]), (b[0], b[1]), 300, 120, 18.0) else {
+        let Some(xs) = wxdata::xsection::build(&sweeps, (a[0], a[1]), (b[0], b[1]), 300, 120, 18.0)
+        else {
             return;
         };
         let img = ui::xsection_window::to_image(&xs, self.palettes.table(Moment::Reflectivity));
@@ -1668,13 +1811,23 @@ paste_target: None,
                         if ui.add_enabled(cur > 0, egui::Button::new("◀")).clicked() {
                             self.goes_time_idx = Some(cur.saturating_sub(1));
                         }
-                        let label = self.goes_times[cur].format("%H:%MZ").to_string();
+                        let label = crate::timefmt::fmt_clock(
+                            self.goes_times[cur],
+                            self.active_tz(),
+                            false,
+                        );
                         ui.monospace(label);
-                        if ui.add_enabled(cur + 1 < n, egui::Button::new("▶")).clicked() {
+                        if ui
+                            .add_enabled(cur + 1 < n, egui::Button::new("▶"))
+                            .clicked()
+                        {
                             let ni = cur + 1;
                             self.goes_time_idx = if ni >= n - 1 { None } else { Some(ni) };
                         }
-                        if ui.add_enabled(self.goes_time_idx.is_some(), egui::Button::new("Latest")).clicked() {
+                        if ui
+                            .add_enabled(self.goes_time_idx.is_some(), egui::Button::new("Latest"))
+                            .clicked()
+                        {
                             self.goes_time_idx = None;
                         }
                     });
@@ -1699,7 +1852,9 @@ paste_target: None,
             self.chase_applied = None;
             return;
         }
-        let Some((lon, lat)) = self.chase_pos else { return };
+        let Some((lon, lat)) = self.chase_pos else {
+            return;
+        };
         if self.chase_applied == Some((lon, lat)) {
             return;
         }
@@ -1719,7 +1874,9 @@ paste_target: None,
         self.sounding_window.sounding = None;
         let http = self.http.clone();
         self._rt.spawn(async move {
-            let res = wxdata::sounding::fetch(&http, lon, lat).await.map_err(|e| e.to_string());
+            let res = wxdata::sounding::fetch(&http, lon, lat)
+                .await
+                .map_err(|e| e.to_string());
             let _ = tx.send(res);
         });
     }
@@ -1728,13 +1885,19 @@ paste_target: None,
     /// the mean SCIT storm motion to the configured lead time. Returns advected `(lon, lat, color)`
     /// points for the painter. Coarse (subsampled gates) — a first-order extrapolation, not a model.
     fn compute_nowcast(&mut self, idx: usize) -> Vec<(f64, f64, egui::Color32)> {
-        let Some((dir, kt)) = self.scit_mean_motion() else { return Vec::new() };
+        let Some((dir, kt)) = self.scit_mean_motion() else {
+            return Vec::new();
+        };
         if kt <= 1.0 {
             return Vec::new();
         }
         let lead_km = kt as f64 * 1.852 * (self.filters.nowcast_lead_min as f64 / 60.0);
         let tilt = self.views[idx].tilt;
-        let sweep = match self.views[idx].volume.as_mut().and_then(|v| v.binned(Moment::Reflectivity, tilt, false).ok()) {
+        let sweep = match self.views[idx]
+            .volume
+            .as_mut()
+            .and_then(|v| v.binned(Moment::Reflectivity, tilt, false).ok())
+        {
             Some(s) => s.clone(),
             None => return Vec::new(),
         };
@@ -1757,7 +1920,11 @@ paste_target: None,
                 let gate_ll = crate::geo::destination_point(radar, az_deg, range_km);
                 let adv = crate::geo::destination_point(gate_ll, dir as f64, lead_km);
                 let c = table.sample(dbz).unwrap_or([120, 120, 120, 255]);
-                out.push((adv[0], adv[1], egui::Color32::from_rgba_unmultiplied(c[0], c[1], c[2], 150)));
+                out.push((
+                    adv[0],
+                    adv[1],
+                    egui::Color32::from_rgba_unmultiplied(c[0], c[1], c[2], 150),
+                ));
             }
         }
         out
@@ -1767,7 +1934,11 @@ paste_target: None,
     /// signatures (low CC in high Z). Fires a chime + banner on the rising edge of a new detection.
     fn compute_tds(&mut self, idx: usize) -> Vec<wxdata::tds::TdsHit> {
         // Lowest tilt carries the near-ground debris; dual-pol CC must be present.
-        let z = match self.views[idx].volume.as_mut().and_then(|v| v.binned(Moment::Reflectivity, 0, false).ok()) {
+        let z = match self.views[idx]
+            .volume
+            .as_mut()
+            .and_then(|v| v.binned(Moment::Reflectivity, 0, false).ok())
+        {
             Some(s) => s.clone(),
             None => return Vec::new(),
         };
@@ -1791,7 +1962,11 @@ paste_target: None,
                 format!("{} debris signature(s) — possible tornado", hits.len()),
                 Instant::now(),
             ));
-            self.push_ntfy("⚠ Tornado Debris Signature", "Low CC + high reflectivity detected on radar", true);
+            self.push_ntfy(
+                "⚠ Tornado Debris Signature",
+                "Low CC + high reflectivity detected on radar",
+                true,
+            );
             if self.settings.alert_sound {
                 crate::audio::play(&self.settings.tds_sound, self.settings.alert_volume);
             }
@@ -1831,7 +2006,11 @@ paste_target: None,
                 format!("{kt:.0} kt couplet — {where_}"),
                 Instant::now(),
             ));
-            self.push_ntfy("⟳ Rotation couplet", &format!("{kt:.0} kt rotational velocity — {where_}"), true);
+            self.push_ntfy(
+                "⟳ Rotation couplet",
+                &format!("{kt:.0} kt rotational velocity — {where_}"),
+                true,
+            );
             if self.settings.alert_sound {
                 crate::audio::play(&self.settings.rotation_sound, self.settings.alert_volume);
             }
@@ -1892,26 +2071,41 @@ paste_target: None,
                     return;
                 }
                 if let Some(e) = &self.climo_error {
-                    ui.colored_label(egui::Color32::from_rgb(230, 90, 90), format!("Load failed: {e}"));
+                    ui.colored_label(
+                        egui::Color32::from_rgb(230, 90, 90),
+                        format!("Load failed: {e}"),
+                    );
                     return;
                 }
                 ui.strong(format!("{} tornadoes on record", self.climo_hits.len()));
                 let hist = wxdata::torclimo::mag_histogram(&self.climo_hits);
                 ui.horizontal_wrapped(|ui| {
-                    for (i, label) in ["EF0", "EF1", "EF2", "EF3", "EF4", "EF5", "Unk"].iter().enumerate() {
+                    for (i, label) in ["EF0", "EF1", "EF2", "EF3", "EF4", "EF5", "Unk"]
+                        .iter()
+                        .enumerate()
+                    {
                         crate::theme::stat_card(ui, label, &hist[i].to_string());
                     }
                 });
                 ui.separator();
-                egui::ScrollArea::vertical().max_height(240.0).show(ui, |ui| {
-                    for t in self.climo_hits.iter().take(50) {
-                        let mag = if t.mag < 0 { "EF?".to_string() } else { format!("EF{}", t.mag) };
-                        ui.label(format!("{}  {}  start {:.2},{:.2}", t.year, mag, t.slat, t.slon));
-                    }
-                    if self.climo_hits.len() > 50 {
-                        ui.weak(format!("… and {} more", self.climo_hits.len() - 50));
-                    }
-                });
+                egui::ScrollArea::vertical()
+                    .max_height(240.0)
+                    .show(ui, |ui| {
+                        for t in self.climo_hits.iter().take(50) {
+                            let mag = if t.mag < 0 {
+                                "EF?".to_string()
+                            } else {
+                                format!("EF{}", t.mag)
+                            };
+                            ui.label(format!(
+                                "{}  {}  start {:.2},{:.2}",
+                                t.year, mag, t.slat, t.slon
+                            ));
+                        }
+                        if self.climo_hits.len() > 50 {
+                            ui.weak(format!("… and {} more", self.climo_hits.len() - 50));
+                        }
+                    });
             });
         self.climo_open = open;
     }
@@ -1944,7 +2138,9 @@ paste_target: None,
         let http = self.http.clone();
         let cache = crate::paths::cache_dir().map(|d| d.join("torclimo_1950-2022.csv"));
         self._rt.spawn(async move {
-            let res = load_or_fetch_climo(&http, cache).await.map_err(|e| e.to_string());
+            let res = load_or_fetch_climo(&http, cache)
+                .await
+                .map_err(|e| e.to_string());
             let _ = tx.send(res);
         });
     }
@@ -1954,7 +2150,9 @@ paste_target: None,
     fn generate_digest(&mut self) {
         let bounds = self.view_bounds();
         let overlaps = |f: &GeoFeature| {
-            let Some((w, s, e, n)) = f.bbox() else { return false };
+            let Some((w, s, e, n)) = f.bbox() else {
+                return false;
+            };
             !(e < bounds.0 || w > bounds.2 || n < bounds.1 || s > bounds.3)
         };
         let alerts: Vec<crate::digest::AlertLine> = self
@@ -1962,7 +2160,10 @@ paste_target: None,
             .iter()
             .filter(|f| overlaps(f))
             .filter_map(|f| f.alert.as_ref())
-            .map(|a| crate::digest::AlertLine { event: a.event.clone(), area: a.area.clone() })
+            .map(|a| crate::digest::AlertLine {
+                event: a.event.clone(),
+                area: a.area.clone(),
+            })
             .collect();
         let mut reports = [0usize; 3]; // tornado, wind, hail
         for r in self.active_storm_reports() {
@@ -2004,7 +2205,12 @@ paste_target: None,
         let (wx1, wy1) = cam.screen_to_world((vp.0, vp.1), vp);
         let (lon0, lat0) = world_to_lonlat(wx0, wy0);
         let (lon1, lat1) = world_to_lonlat(wx1, wy1);
-        (lon0.min(lon1), lat0.min(lat1), lon0.max(lon1), lat0.max(lat1))
+        (
+            lon0.min(lon1),
+            lat0.min(lat1),
+            lon0.max(lon1),
+            lat0.max(lat1),
+        )
     }
 
     /// Fixed chase-pack zoom span for the current view: `z_lo = floor(zoom)`, four levels deeper,
@@ -2045,8 +2251,18 @@ paste_target: None,
         };
         // ponytail: 25 KB/tile average across raster + vector; only used for the "≈ MB" hint.
         let mb = tiles as f64 * 25_000.0 / 1e6;
-        let progress = self.chasepack.as_ref().map(|p| (p.done, p.total, p.errors, p.bytes as f64 / 1e6));
-        ui::toolbox::ChasePackUi { tiles, mb, packable, z_lo, z_hi, progress }
+        let progress = self
+            .chasepack
+            .as_ref()
+            .map(|p| (p.done, p.total, p.errors, p.bytes as f64 / 1e6));
+        ui::toolbox::ChasePackUi {
+            tiles,
+            mb,
+            packable,
+            z_lo,
+            z_hi,
+            progress,
+        }
     }
 
     /// Kick off an offline chase-pack download of the current view's basemap tiles (4 workers).
@@ -2059,9 +2275,11 @@ paste_target: None,
         let (z_lo, z_hi) = self.chasepack_zoom();
         let (min_lon, min_lat, max_lon, max_lat) = self.view_bounds();
         let jobs = if style.is_raster() {
-            self.tiles.pack_jobs(style, min_lon, min_lat, max_lon, max_lat, z_lo, z_hi)
+            self.tiles
+                .pack_jobs(style, min_lon, min_lat, max_lon, max_lat, z_lo, z_hi)
         } else if matches!(style, BasemapStyle::Dark | BasemapStyle::Light) {
-            self.vtiles.pack_jobs(min_lon, min_lat, max_lon, max_lat, z_lo, z_hi)
+            self.vtiles
+                .pack_jobs(min_lon, min_lat, max_lon, max_lat, z_lo, z_hi)
         } else {
             Vec::new()
         };
@@ -2072,7 +2290,14 @@ paste_target: None,
         let (tx, rx) = std::sync::mpsc::channel();
         let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         crate::tiles::start_pack_download(self._rt.handle(), jobs, cancel.clone(), tx);
-        self.chasepack = Some(ChasePack { rx, cancel, total, done: 0, errors: 0, bytes: 0 });
+        self.chasepack = Some(ChasePack {
+            rx,
+            cancel,
+            total,
+            done: 0,
+            errors: 0,
+            bytes: 0,
+        });
     }
 
     /// Lon/lat box `±radius_km` around the active pane's radar site (its coverage area), or `None`
@@ -2106,7 +2331,12 @@ paste_target: None,
                 mobile::glass(232).show(ui, |ui| {
                     ui.set_width(330.0);
                     ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("Layers").size(16.0).strong().color(accent));
+                        ui.label(
+                            egui::RichText::new("Layers")
+                                .size(16.0)
+                                .strong()
+                                .color(accent),
+                        );
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             close = ui
                                 .add(
@@ -2118,7 +2348,13 @@ paste_target: None,
                         });
                     });
                     ui.separator();
-                    chosen = ui::layers_panel::body(ui, &entries, &mut query, accent, cr.height() - 170.0);
+                    chosen = ui::layers_panel::body(
+                        ui,
+                        &entries,
+                        &mut query,
+                        accent,
+                        cr.height() - 170.0,
+                    );
                 });
             });
         self.layers_query = query;
@@ -2133,9 +2369,16 @@ paste_target: None,
     /// Floating timeline scrubber (desktop): transport + scrub + live badge in a glass pill over
     /// the map's bottom edge. The date picker, loop, and speed stay in the Advanced toolbox —
     /// this is the 95% case. Drives the same `timeline` calls as `toolbox::timeline_section`.
+    /// [`Settings::tz_for`] for the active pane — the zone for chrome that isn't per-pane.
+    pub(crate) fn active_tz(&self) -> Option<wxdata::tz::Tz> {
+        self.settings
+            .tz_for(self.views[self.active].site.as_deref())
+    }
+
     fn timeline_pill(&mut self, ctx: &egui::Context) {
         use egui_phosphor::regular as ph;
         let accent = crate::theme::accent(self.settings.theme);
+        let tz = self.active_tz();
         let cr = ctx.content_rect();
         let pill_w = (cr.width() * 0.6).clamp(360.0, 720.0);
         let fresh = self.views[self.active]
@@ -2151,7 +2394,11 @@ paste_target: None,
                     let t = &mut self.views[self.active].timeline;
                     ui.horizontal(|ui| {
                         let btn = |ui: &mut egui::Ui, glyph: &str, on: bool| {
-                            let fg = if on { accent } else { egui::Color32::from_gray(225) };
+                            let fg = if on {
+                                accent
+                            } else {
+                                egui::Color32::from_gray(225)
+                            };
                             ui.add(
                                 egui::Button::new(egui::RichText::new(glyph).size(18.0).color(fg))
                                     .min_size(egui::vec2(30.0, 30.0))
@@ -2176,13 +2423,21 @@ paste_target: None,
                         } else if t.following {
                             (egui::Color32::from_rgb(220, 180, 0), "LIVE".to_string())
                         } else {
-                            (egui::Color32::from_gray(150), format!("ARCHIVE {}", t.date.format("%m/%d")))
+                            (
+                                egui::Color32::from_gray(150),
+                                format!("ARCHIVE {}", t.date.format("%m/%d")),
+                            )
                         };
                         if ui
                             .add(
-                                egui::Button::new(egui::RichText::new(text).size(12.0).strong().color(egui::Color32::BLACK))
-                                    .fill(col)
-                                    .corner_radius(9.0),
+                                egui::Button::new(
+                                    egui::RichText::new(text)
+                                        .size(12.0)
+                                        .strong()
+                                        .color(egui::Color32::BLACK),
+                                )
+                                .fill(col)
+                                .corner_radius(9.0),
                             )
                             .on_hover_text("Jump to the newest volume")
                             .clicked()
@@ -2192,7 +2447,11 @@ paste_target: None,
                         // Scrub bar + readout fill the rest of the pill.
                         let observed = t.frames.len();
                         if observed == 0 {
-                            ui.weak(if t.listing { "listing volumes…" } else { "(no volumes)" });
+                            ui.weak(if t.listing {
+                                "listing volumes…"
+                            } else {
+                                "(no volumes)"
+                            });
                             return;
                         }
                         let readout = match t.forecast_hour() {
@@ -2200,7 +2459,7 @@ paste_target: None,
                             None => t
                                 .current()
                                 .and_then(|id| id.date_time())
-                                .map(|d| d.format("%H:%M:%SZ").to_string())
+                                .map(|d| crate::timefmt::fmt_clock(d, tz, true))
                                 .unwrap_or_default(),
                         };
                         let last = t.slot_count().saturating_sub(1);
@@ -2215,7 +2474,12 @@ paste_target: None,
                             t.playing = false;
                             t.following = ph_idx + 1 == observed;
                         }
-                        ui.label(egui::RichText::new(readout).size(12.0).monospace().color(egui::Color32::from_gray(215)));
+                        ui.label(
+                            egui::RichText::new(readout)
+                                .size(12.0)
+                                .monospace()
+                                .color(egui::Color32::from_gray(215)),
+                        );
                     });
                 });
             });
@@ -2237,13 +2501,36 @@ paste_target: None,
                     ui.spacing_mut().item_spacing.y = 8.0;
                     for (glyph, id, on, tip) in [
                         (ph::STACK, "layers", self.layers_open, "Layers (L)"),
-                        (ph::RADIO_BUTTON, "site", self.site_dialog.is_some(), "Radar site (F3)"),
-                        (ph::WARNING, "alerts", self.show_alert_panel, "Active alerts (A)"),
-                        (ph::WRENCH, "tools", self.palette_open, "Search actions (Ctrl+K)"),
-                        (ph::SLIDERS, "advanced", self.show_toolbox, "Advanced toolbox (F7)"),
+                        (
+                            ph::RADIO_BUTTON,
+                            "site",
+                            self.site_dialog.is_some(),
+                            "Radar site (F3)",
+                        ),
+                        (
+                            ph::WARNING,
+                            "alerts",
+                            self.show_alert_panel,
+                            "Active alerts (A)",
+                        ),
+                        (
+                            ph::WRENCH,
+                            "tools",
+                            self.palette_open,
+                            "Search actions (Ctrl+K)",
+                        ),
+                        (
+                            ph::SLIDERS,
+                            "advanced",
+                            self.show_toolbox,
+                            "Advanced toolbox (F7)",
+                        ),
                         (ph::GEAR, "settings", self.settings_window.open, "Settings"),
                     ] {
-                        if mobile::square_btn(ui, glyph, on, accent).on_hover_text(tip).clicked() {
+                        if mobile::square_btn(ui, glyph, on, accent)
+                            .on_hover_text(tip)
+                            .clicked()
+                        {
                             clicked = Some(id);
                         }
                     }
@@ -2296,7 +2583,11 @@ paste_target: None,
                     // Transient result note (fades after ~4 s).
                     if let Some((text, at)) = &self.place_status {
                         if at.elapsed().as_secs() < 4 {
-                            ui.label(egui::RichText::new(text).size(11.0).color(egui::Color32::from_gray(180)));
+                            ui.label(
+                                egui::RichText::new(text)
+                                    .size(11.0)
+                                    .color(egui::Color32::from_gray(180)),
+                            );
                         } else {
                             self.place_status = None;
                         }
@@ -2342,7 +2633,9 @@ paste_target: None,
             self.palette_sel = self.palette_sel.saturating_sub(1);
         }
         self.palette_sel = self.palette_sel.min(hits.len().saturating_sub(1));
-        let mut chosen = enter.then(|| hits.get(self.palette_sel).map(|i| entries[*i].action)).flatten();
+        let mut chosen = enter
+            .then(|| hits.get(self.palette_sel).map(|i| entries[*i].action))
+            .flatten();
         let mut close = esc || chosen.is_some();
         let mut query = std::mem::take(&mut self.palette_query);
         let sel = self.palette_sel;
@@ -2360,19 +2653,27 @@ paste_target: None,
                 );
                 resp.request_focus();
                 ui.separator();
-                egui::ScrollArea::vertical().max_height(320.0).show(ui, |ui| {
-                    for (n, i) in hits.iter().enumerate() {
-                        let e = &entries[*i];
-                        let mark = match e.on {
-                            Some(true) => "● ",
-                            Some(false) => "○ ",
-                            None => "  ",
-                        };
-                        let text = format!("{mark}{}  ·  {}", e.label, e.category);
-                        let col = if n == sel { accent } else { egui::Color32::from_gray(215) };
-                        if ui
-                            .add(
-                                egui::Button::new(egui::RichText::new(text).size(14.0).color(col))
+                egui::ScrollArea::vertical()
+                    .max_height(320.0)
+                    .show(ui, |ui| {
+                        for (n, i) in hits.iter().enumerate() {
+                            let e = &entries[*i];
+                            let mark = match e.on {
+                                Some(true) => "● ",
+                                Some(false) => "○ ",
+                                None => "  ",
+                            };
+                            let text = format!("{mark}{}  ·  {}", e.label, e.category);
+                            let col = if n == sel {
+                                accent
+                            } else {
+                                egui::Color32::from_gray(215)
+                            };
+                            if ui
+                                .add(
+                                    egui::Button::new(
+                                        egui::RichText::new(text).size(14.0).color(col),
+                                    )
                                     .min_size(egui::vec2(ui.available_width(), 26.0))
                                     .fill(if n == sel {
                                         egui::Color32::from_rgba_unmultiplied(255, 255, 255, 22)
@@ -2380,17 +2681,17 @@ paste_target: None,
                                         egui::Color32::TRANSPARENT
                                     })
                                     .stroke(egui::Stroke::NONE),
-                            )
-                            .clicked()
-                        {
-                            chosen = Some(e.action);
-                            close = true;
+                                )
+                                .clicked()
+                            {
+                                chosen = Some(e.action);
+                                close = true;
+                            }
                         }
-                    }
-                    if hits.is_empty() {
-                        ui.weak("No matches.");
-                    }
-                });
+                        if hits.is_empty() {
+                            ui.weak("No matches.");
+                        }
+                    });
             });
         self.palette_query = query;
         if let Some(a) = chosen {
@@ -2410,7 +2711,9 @@ paste_target: None,
         if !self.chase_mode {
             return;
         }
-        let Some((lon, lat)) = self.chase_pos else { return };
+        let Some((lon, lat)) = self.chase_pos else {
+            return;
+        };
         let me = [lon, lat];
         // Prefer the cell the camera is following, else the nearest tracked cell within 300 km.
         let cell = match &self.follow_cell {
@@ -2421,7 +2724,8 @@ paste_target: None,
         let (km, bearing) = crate::geo::great_circle(me, [c.lon, c.lat]);
         let dir = c.mvt_deg.unwrap_or(0.0) as f64;
         let kt = c.mvt_kt.unwrap_or(0.0) as f64;
-        let (close_km, close_min) = crate::geo::closest_approach([c.lon, c.lat], dir, kt, me, 120.0);
+        let (close_km, close_min) =
+            crate::geo::closest_approach([c.lon, c.lat], dir, kt, me, 120.0);
         let escape = crate::geo::escape_bearing([c.lon, c.lat], dir, me);
         let mi = |km: f64| km * 0.621_371;
         // Urgent when the storm will be on top of you soon.
@@ -2430,28 +2734,71 @@ paste_target: None,
         let red = egui::Color32::from_rgb(230, 70, 70);
         let inset_bottom = (ctx.viewport_rect().bottom() - ctx.content_rect().bottom()).max(0.0);
         // Android floats the bottom card at the same edge; sit above it.
-        let dy = if cfg!(target_os = "android") { -(inset_bottom + 190.0) } else { -34.0 };
+        let dy = if cfg!(target_os = "android") {
+            -(inset_bottom + 190.0)
+        } else {
+            -34.0
+        };
         egui::Area::new(egui::Id::new("chase_hud"))
             .anchor(egui::Align2::LEFT_BOTTOM, egui::vec2(14.0, dy))
             .show(ctx, |ui| {
-                let frame = mobile::glass(228)
-                    .stroke(egui::Stroke::new(if urgent { 2.0 } else { 1.0 }, if urgent { red } else { egui::Color32::from_rgba_unmultiplied(255, 255, 255, 22) }));
+                let frame = mobile::glass(228).stroke(egui::Stroke::new(
+                    if urgent { 2.0 } else { 1.0 },
+                    if urgent {
+                        red
+                    } else {
+                        egui::Color32::from_rgba_unmultiplied(255, 255, 255, 22)
+                    },
+                ));
                 frame.show(ui, |ui| {
                     ui.set_width(226.0);
-                    let head = if c.id.is_empty() { "Storm".to_string() } else { format!("Storm {}", c.id) };
-                    ui.label(egui::RichText::new(head).size(14.0).strong().color(if urgent { red } else { accent }));
+                    let head = if c.id.is_empty() {
+                        "Storm".to_string()
+                    } else {
+                        format!("Storm {}", c.id)
+                    };
+                    ui.label(
+                        egui::RichText::new(head)
+                            .size(14.0)
+                            .strong()
+                            .color(if urgent { red } else { accent }),
+                    );
                     let row = |ui: &mut egui::Ui, k: &str, v: String| {
                         ui.horizontal(|ui| {
-                            ui.label(egui::RichText::new(k).size(12.0).color(egui::Color32::from_gray(160)));
-                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                ui.label(egui::RichText::new(v).size(13.0).strong().color(egui::Color32::from_gray(235)));
-                            });
+                            ui.label(
+                                egui::RichText::new(k)
+                                    .size(12.0)
+                                    .color(egui::Color32::from_gray(160)),
+                            );
+                            ui.with_layout(
+                                egui::Layout::right_to_left(egui::Align::Center),
+                                |ui| {
+                                    ui.label(
+                                        egui::RichText::new(v)
+                                            .size(13.0)
+                                            .strong()
+                                            .color(egui::Color32::from_gray(235)),
+                                    );
+                                },
+                            );
                         });
                     };
-                    row(ui, "Now", format!("{:.1} mi {} ({:.0}°)", mi(km), cardinal(bearing), bearing));
+                    row(
+                        ui,
+                        "Now",
+                        format!("{:.1} mi {} ({:.0}°)", mi(km), cardinal(bearing), bearing),
+                    );
                     if kt > 1.0 {
-                        row(ui, "Closest", format!("{:.1} mi in {close_min:.0} min", mi(close_km)));
-                        row(ui, "Escape", format!("{} ({:.0}°)", cardinal(escape), escape));
+                        row(
+                            ui,
+                            "Closest",
+                            format!("{:.1} mi in {close_min:.0} min", mi(close_km)),
+                        );
+                        row(
+                            ui,
+                            "Escape",
+                            format!("{} ({:.0}°)", cardinal(escape), escape),
+                        );
                         row(ui, "Motion", format!("{} at {kt:.0} kt", cardinal(dir)));
                     } else {
                         row(ui, "Motion", "stationary".into());
@@ -2503,7 +2850,12 @@ paste_target: None,
         use OverlayToggle as T;
         let mut out = Vec::new();
         let mut push = |label: &str, category, action, on| {
-            out.push(PaletteEntry { label: label.to_string(), category, action, on })
+            out.push(PaletteEntry {
+                label: label.to_string(),
+                category,
+                action,
+                on,
+            })
         };
 
         // --- Radar products (the active pane's moment). ---
@@ -2516,9 +2868,21 @@ paste_target: None,
             (Moment::Velocity, false, "Velocity"),
             (Moment::Velocity, true, "Storm-Relative Velocity"),
             (Moment::SpectrumWidth, false, "Spectrum Width"),
-            (Moment::CorrelationCoefficient, false, "Correlation Coefficient (CC)"),
-            (Moment::DifferentialReflectivity, false, "Differential Reflectivity (ZDR)"),
-            (Moment::DifferentialPhase, false, "Specific Differential Phase (KDP)"),
+            (
+                Moment::CorrelationCoefficient,
+                false,
+                "Correlation Coefficient (CC)",
+            ),
+            (
+                Moment::DifferentialReflectivity,
+                false,
+                "Differential Reflectivity (ZDR)",
+            ),
+            (
+                Moment::DifferentialPhase,
+                false,
+                "Specific Differential Phase (KDP)",
+            ),
         ] {
             let on = cur_moment == m && (m != Moment::Velocity || cur_srv == srv);
             push(label, "Radar", PaletteAction::SetMoment(m, srv), Some(on));
@@ -2647,7 +3011,12 @@ paste_target: None,
                 on: Some(panes == n),
             });
         }
-        out.push(PaletteEntry { label: "Reload".into(), category: "Tools", action: PaletteAction::Reload, on: None });
+        out.push(PaletteEntry {
+            label: "Reload".into(),
+            category: "Tools",
+            action: PaletteAction::Reload,
+            on: None,
+        });
         out.push(PaletteEntry {
             label: "Instant replay (DVR)".into(),
             category: "Tools",
@@ -2684,7 +3053,10 @@ paste_target: None,
                 *f = !*f;
                 // These feed the assembled feature set rather than a painter flag.
                 use OverlayToggle as T;
-                if matches!(t, T::Tropical | T::ProbSevere | T::Aviation | T::Alerts | T::Mds) {
+                if matches!(
+                    t,
+                    T::Tropical | T::ProbSevere | T::Aviation | T::Alerts | T::Mds
+                ) {
                     self.rebuild_overlays();
                 }
             }
@@ -2737,11 +3109,17 @@ paste_target: None,
             .iter()
             .filter_map(|f| f.alert.as_ref().map(|a| (a, f.stroke)))
             .filter(|(a, _)| a.id == id && seen.insert(a.id.clone()))
-            .map(|(a, color)| ui::warning_window::WarnCard { info: a.clone(), color })
+            .map(|(a, color)| ui::warning_window::WarnCard {
+                info: a.clone(),
+                color,
+            })
             .collect();
         if !cards.is_empty() {
             self.detail = None;
-            self.warning_popup = Some(ui::warning_window::WarningPopup { cards, selected: Some(0) });
+            self.warning_popup = Some(ui::warning_window::WarningPopup {
+                cards,
+                selected: Some(0),
+            });
         }
     }
 
@@ -2771,9 +3149,15 @@ paste_target: None,
                                 continue;
                             }
                             let hist = self.cell_trends.entry(c.id.clone()).or_default();
-                            let sample = ui::cell_window::CellSample { vil: c.vil, top: c.top_kft, dbz: c.max_dbz };
+                            let sample = ui::cell_window::CellSample {
+                                vil: c.vil,
+                                top: c.top_kft,
+                                dbz: c.max_dbz,
+                            };
                             // Skip a duplicate of the last sample (same volume re-fetched).
-                            if hist.last().is_none_or(|s| (s.vil, s.top, s.dbz) != (sample.vil, sample.top, sample.dbz)) {
+                            if hist.last().is_none_or(|s| {
+                                (s.vil, s.top, s.dbz) != (sample.vil, sample.top, sample.dbz)
+                            }) {
                                 hist.push(sample);
                                 if hist.len() > 40 {
                                     hist.remove(0);
@@ -2966,7 +3350,9 @@ paste_target: None,
         self.afd_error = None;
         let http = self.http.clone();
         self._rt.spawn(async move {
-            let res = wxdata::afd::fetch(&http, lat, lon).await.map_err(|e| e.to_string());
+            let res = wxdata::afd::fetch(&http, lat, lon)
+                .await
+                .map_err(|e| e.to_string());
             let _ = tx.send(res);
         });
     }
@@ -2982,7 +3368,9 @@ paste_target: None,
             return; // too zoomed out — a nationwide plot would be unreadable and huge
         }
         let (clon, clat) = ((min_lon + max_lon) * 0.5, (min_lat + max_lat) * 0.5);
-        let stale = self.metar_last_fetch.is_none_or(|t| t.elapsed().as_secs() >= 75);
+        let stale = self
+            .metar_last_fetch
+            .is_none_or(|t| t.elapsed().as_secs() >= 75);
         // Refetch when the center leaves the middle half of the last fetched bbox.
         let drifted = self.metar_bounds.is_none_or(|(la0, lo0, la1, lo1)| {
             let (mlon, mlat) = ((lo0 + lo1) * 0.5, (la0 + la1) * 0.5);
@@ -3012,7 +3400,9 @@ paste_target: None,
             return; // too zoomed out — too many gauges to be readable
         }
         let (clon, clat) = ((min_lon + max_lon) * 0.5, (min_lat + max_lat) * 0.5);
-        let stale = self.gauge_last_fetch.is_none_or(|t| t.elapsed().as_secs() >= 300);
+        let stale = self
+            .gauge_last_fetch
+            .is_none_or(|t| t.elapsed().as_secs() >= 300);
         let drifted = self.gauge_bounds.is_none_or(|(la0, lo0, la1, lo1)| {
             let (mlon, mlat) = ((lo0 + lo1) * 0.5, (la0 + la1) * 0.5);
             let (hw, hh) = ((lo1 - lo0) * 0.25, (la1 - la0) * 0.25);
@@ -3041,7 +3431,9 @@ paste_target: None,
             return;
         }
         let changed = self.contour_fetched_kind != Some(self.contour_kind);
-        let stale = self.contour_last_fetch.is_none_or(|t| t.elapsed().as_secs() >= 900);
+        let stale = self
+            .contour_last_fetch
+            .is_none_or(|t| t.elapsed().as_secs() >= 900);
         if changed {
             self.contours.clear();
             self.contour_valid = None;
@@ -3057,13 +3449,20 @@ paste_target: None,
     /// the active pane on it. Called from the `Cells` apply arm. Reacquires across SCIT renumbering
     /// by predicting the cell's position from its last motion and adopting the nearest new cell.
     fn update_follow(&mut self) {
-        let Some((fsite, last, since)) = self.follow_cell.take() else { return };
+        let Some((fsite, last, since)) = self.follow_cell.take() else {
+            return;
+        };
         // Active site changed out from under the follow (site switch) → stop silently.
         if self.cells_site.as_deref() != Some(fsite.as_str()) {
             return;
         }
         // Same SCIT id in the new volume → the easy case.
-        if let Some(c) = self.storm_cells.iter().find(|c| !c.id.is_empty() && c.id == last.id).cloned() {
+        if let Some(c) = self
+            .storm_cells
+            .iter()
+            .find(|c| !c.id.is_empty() && c.id == last.id)
+            .cloned()
+        {
             self.recenter_follow(&c);
             self.follow_cell = Some((fsite, c, Instant::now()));
             return;
@@ -3071,9 +3470,11 @@ paste_target: None,
         // Renumber/miss: predict where the cell drifted and adopt the nearest new cell within 15 km.
         let elapsed_h = since.elapsed().as_secs_f64() / 3600.0;
         let pred = match (last.mvt_deg, last.mvt_kt) {
-            (Some(dir), Some(kt)) if kt > 0.0 => {
-                crate::geo::destination_point([last.lon, last.lat], dir as f64, kt as f64 * 1.852 * elapsed_h)
-            }
+            (Some(dir), Some(kt)) if kt > 0.0 => crate::geo::destination_point(
+                [last.lon, last.lat],
+                dir as f64,
+                kt as f64 * 1.852 * elapsed_h,
+            ),
             _ => [last.lon, last.lat],
         };
         if let Some(c) = nearest_cell(&self.storm_cells, pred[0], pred[1], 15.0).cloned() {
@@ -3087,14 +3488,19 @@ paste_target: None,
 
     /// Snap the active pane's camera onto a followed cell, keeping the current zoom.
     fn recenter_follow(&mut self, c: &Cell) {
-        self.views[self.active].camera.center = crate::render::mercator::lonlat_to_world(c.lon, c.lat);
+        self.views[self.active].camera.center =
+            crate::render::mercator::lonlat_to_world(c.lon, c.lat);
     }
 
     /// Top-right badge for the storm-follow camera: a tap-to-stop pill while following, or a
     /// transient "follow ended" note for ~5 s after the tracked cell is lost. Same slot on
     /// desktop + Android (just below the top bar).
     fn follow_badge(&mut self, ctx: &egui::Context) {
-        if self.follow_notice.as_ref().is_some_and(|(_, t)| t.elapsed().as_secs() >= 5) {
+        if self
+            .follow_notice
+            .as_ref()
+            .is_some_and(|(_, t)| t.elapsed().as_secs() >= 5)
+        {
             self.follow_notice = None;
         }
         let following = self.follow_cell.is_some();
@@ -3127,8 +3533,15 @@ paste_target: None,
                     .inner_margin(egui::Margin::symmetric(8, 4))
                     .show(ui, |ui| {
                         if following {
-                            let btn = egui::Button::new(egui::RichText::new(&text).color(egui::Color32::WHITE)).frame(false);
-                            if ui.add(btn).on_hover_text("Stop following this storm").clicked() {
+                            let btn = egui::Button::new(
+                                egui::RichText::new(&text).color(egui::Color32::WHITE),
+                            )
+                            .frame(false);
+                            if ui
+                                .add(btn)
+                                .on_hover_text("Stop following this storm")
+                                .clicked()
+                            {
                                 self.follow_cell = None;
                             }
                         } else {
@@ -3146,7 +3559,11 @@ paste_target: None,
     fn rebuild_overlays(&mut self) {
         let mut v = Vec::new();
         if (1..=3).contains(&self.filters.outlook_day) {
-            v.extend(self.outlook_features[(self.filters.outlook_day - 1) as usize].iter().cloned());
+            v.extend(
+                self.outlook_features[(self.filters.outlook_day - 1) as usize]
+                    .iter()
+                    .cloned(),
+            );
         }
         if self.filters.show_mds {
             v.extend(self.md_features.iter().cloned());
@@ -3191,7 +3608,12 @@ paste_target: None,
         let now = Utc::now();
         let mut out = Vec::new();
         for cfg in &self.settings.placefiles {
-            let Some((li, lp)) = self.placefiles.iter().enumerate().find(|(_, lp)| lp.url == cfg.url) else {
+            let Some((li, lp)) = self
+                .placefiles
+                .iter()
+                .enumerate()
+                .find(|(_, lp)| lp.url == cfg.url)
+            else {
                 continue;
             };
             if !lp.enabled {
@@ -3221,17 +3643,30 @@ paste_target: None,
             .filter_map(|(it, opacity, li)| {
                 let fade = |c: [u8; 4]| rgba32(c).gamma_multiply(*opacity);
                 Some(match &it.kind {
-                    PlaceKind::Text { color, pos, text, hover } => PlaceLabel {
+                    PlaceKind::Text {
+                        color,
+                        pos,
+                        text,
+                        hover,
+                    } => PlaceLabel {
                         color: fade(*color),
                         pos: *pos,
                         hover: hover.clone(),
                         kind: PlaceLabelKind::Text(text.clone()),
                     },
-                    PlaceKind::Icon { color, pos, angle, sheet, hover } => PlaceLabel {
+                    PlaceKind::Icon {
+                        color,
+                        pos,
+                        angle,
+                        sheet,
+                        hover,
+                    } => PlaceLabel {
                         color: fade(*color),
                         pos: *pos,
                         hover: hover.clone(),
-                        kind: self.sprite_for(*li, *sheet, *angle).unwrap_or(PlaceLabelKind::Marker),
+                        kind: self
+                            .sprite_for(*li, *sheet, *angle)
+                            .unwrap_or(PlaceLabelKind::Marker),
                     },
                     _ => return None,
                 })
@@ -3241,12 +3676,20 @@ paste_target: None,
 
     /// Resolve an icon's `(file, index)` against the placefile's sheets and the loaded textures.
     /// `None` whenever anything is missing — the caller falls back to a plain marker.
-    fn sprite_for(&self, li: usize, sheet: Option<(u32, u32)>, angle: f32) -> Option<PlaceLabelKind> {
+    fn sprite_for(
+        &self,
+        li: usize,
+        sheet: Option<(u32, u32)>,
+        angle: f32,
+    ) -> Option<PlaceLabelKind> {
         let (file, index) = sheet?;
         let sh = self.placefiles.get(li)?.pf.icon_files.get(&file)?;
         let tex = self.pf_icon_tex.get(&sh.url)?.as_ref()?;
         let [tw, th] = tex.size();
-        let (cols, rows) = ((tw as u32 / sh.icon_w).max(1), (th as u32 / sh.icon_h).max(1));
+        let (cols, rows) = (
+            (tw as u32 / sh.icon_w).max(1),
+            (th as u32 / sh.icon_h).max(1),
+        );
         // Icon numbering is 1-based, left to right then top to bottom.
         let i = index.saturating_sub(1);
         if i >= cols * rows {
@@ -3256,7 +3699,10 @@ paste_target: None,
         let (u0, v0) = (cx * sh.icon_w, cy * sh.icon_h);
         let uv = egui::Rect::from_min_max(
             egui::pos2(u0 as f32 / tw as f32, v0 as f32 / th as f32),
-            egui::pos2((u0 + sh.icon_w) as f32 / tw as f32, (v0 + sh.icon_h) as f32 / th as f32),
+            egui::pos2(
+                (u0 + sh.icon_w) as f32 / tw as f32,
+                (v0 + sh.icon_h) as f32 / th as f32,
+            ),
         );
         Some(PlaceLabelKind::Sprite {
             tex: tex.id(),
@@ -3271,7 +3717,8 @@ paste_target: None,
     /// upload arrivals. `// ponytail: no disk cache — sheets are a few KB and refetch on launch.`
     fn sync_pf_icons(&mut self, ctx: &egui::Context) {
         while let Ok((url, image)) = self.pf_icon_rx.try_recv() {
-            let tex = ctx.load_texture(format!("pficon:{url}"), image, egui::TextureOptions::LINEAR);
+            let tex =
+                ctx.load_texture(format!("pficon:{url}"), image, egui::TextureOptions::LINEAR);
             self.pf_icon_tex.insert(url, Some(tex));
         }
         let wanted: Vec<String> = self
@@ -3314,7 +3761,10 @@ paste_target: None,
                 items.iter().map(|(it, op, _)| (*it, *op)).collect();
             overlay_build::append_placefiles(&mut geom, &pf, zoom);
             self.overlay_ready = !geom.indices.is_empty();
-            self.pending_overlay = Some(OverlayUpload { vertices: geom.vertices, indices: geom.indices });
+            self.pending_overlay = Some(OverlayUpload {
+                vertices: geom.vertices,
+                indices: geom.indices,
+            });
             self.built_gen = self.overlay_gen;
             self.built_zoom_bucket = bucket;
         }
@@ -3322,23 +3772,46 @@ paste_target: None,
 
     /// Spawn a background fetch of the latest volume for `site`, routed back to `view_idx`.
     /// `current_name = None` forces a re-download even if the newest volume is unchanged.
-    fn spawn_fetch(&self, view_idx: usize, site: String, current_name: Option<String>, ctx: egui::Context) {
+    fn spawn_fetch(
+        &self,
+        view_idx: usize,
+        site: String,
+        current_name: Option<String>,
+        ctx: egui::Context,
+    ) {
         let tx = self.msg_tx.clone();
         self._rt.spawn(async move {
             let msg = match level2::latest_identifier(&site).await {
                 Ok(id) => {
                     let name = id.name().to_string();
                     if current_name.as_deref() == Some(name.as_str()) {
-                        DataMsg::UpToDate { view: view_idx, site }
+                        DataMsg::UpToDate {
+                            view: view_idx,
+                            site,
+                        }
                     } else {
                         let time = id.date_time().unwrap_or_else(Utc::now);
                         match level2::download_scan(id).await {
-                            Ok(scan) => DataMsg::Volume { view: view_idx, site, name, time, scan },
-                            Err(e) => DataMsg::Error { view: view_idx, site, err: e.to_string() },
+                            Ok(scan) => DataMsg::Volume {
+                                view: view_idx,
+                                site,
+                                name,
+                                time,
+                                scan,
+                            },
+                            Err(e) => DataMsg::Error {
+                                view: view_idx,
+                                site,
+                                err: e.to_string(),
+                            },
                         }
                     }
                 }
-                Err(e) => DataMsg::Error { view: view_idx, site, err: e.to_string() },
+                Err(e) => DataMsg::Error {
+                    view: view_idx,
+                    site,
+                    err: e.to_string(),
+                },
             };
             let _ = tx.send(msg);
             ctx.request_repaint();
@@ -3351,7 +3824,11 @@ paste_target: None,
             // LiveEnded must be handled even after a site change (to drop the stream handle).
             if matches!(msg, DataMsg::LiveEnded { .. }) {
                 if let DataMsg::LiveEnded { view, .. } = msg {
-                    if self.live_stream.as_ref().is_some_and(|(v, _, _)| *v == view) {
+                    if self
+                        .live_stream
+                        .as_ref()
+                        .is_some_and(|(v, _, _)| *v == view)
+                    {
                         self.live_stream = None; // interval polling resumes automatically
                     }
                 }
@@ -3361,7 +3838,13 @@ paste_target: None,
                 continue; // view gone or its site changed since the fetch spawned
             }
             match msg {
-                DataMsg::Volume { view, name, time, scan, .. } => {
+                DataMsg::Volume {
+                    view,
+                    name,
+                    time,
+                    scan,
+                    ..
+                } => {
                     self.scan_cache.put(name.clone(), scan.clone());
                     let v = &mut self.views[view];
                     let looping = v.timeline.live_looping();
@@ -3392,7 +3875,12 @@ paste_target: None,
                     v.clamp_tilt();
                     self.pane_shown.remove(&view);
                 }
-                DataMsg::Frames { view, site, date, frames } => {
+                DataMsg::Frames {
+                    view,
+                    site,
+                    date,
+                    frames,
+                } => {
                     let v = &mut self.views[view];
                     v.timeline.listing = false;
                     if v.timeline.date == date && v.site.as_deref() == Some(site.as_str()) {
@@ -3400,7 +3888,14 @@ paste_target: None,
                         self.pane_shown.remove(&view);
                     }
                 }
-                DataMsg::Live { view, name, time, scan, changed, .. } => {
+                DataMsg::Live {
+                    view,
+                    name,
+                    time,
+                    scan,
+                    changed,
+                    ..
+                } => {
                     let v = &mut self.views[view];
                     match &mut v.volume {
                         Some(vol) => vol.apply_live(scan, name, time, &changed),
@@ -3438,7 +3933,11 @@ paste_target: None,
                 && !v.timeline.live_looping()
                 && v.site.is_some()
                 && v.volume.is_some();
-            (want, v.site.clone(), v.volume.as_ref().map(|vol| vol.scan.clone()))
+            (
+                want,
+                v.site.clone(),
+                v.volume.as_ref().map(|vol| vol.scan.clone()),
+            )
         };
 
         // Abort an existing stream if it no longer matches the active view/site or isn't wanted.
@@ -3450,7 +3949,9 @@ paste_target: None,
         }
 
         if want && self.live_stream.is_none() {
-            let due = self.last_stream_attempt.is_none_or(|t| t.elapsed().as_secs() >= 60);
+            let due = self
+                .last_stream_attempt
+                .is_none_or(|t| t.elapsed().as_secs() >= 60);
             if due {
                 self.last_stream_attempt = Some(Instant::now());
                 let site = site.unwrap();
@@ -3462,7 +3963,13 @@ paste_target: None,
     }
 
     /// Spawn the live chunk streamer for `site`, routing merged volumes back to `view_idx`.
-    fn spawn_stream(&self, view_idx: usize, site: String, base: Scan, ctx: egui::Context) -> tokio::task::JoinHandle<()> {
+    fn spawn_stream(
+        &self,
+        view_idx: usize,
+        site: String,
+        base: Scan,
+        ctx: egui::Context,
+    ) -> tokio::task::JoinHandle<()> {
         let tx = self.msg_tx.clone();
         self._rt.spawn(async move {
             let end_site = site.clone();
@@ -3484,7 +3991,10 @@ paste_target: None,
             if let Err(e) = &res {
                 log::warn!("live stream for {end_site} ended: {e}");
             }
-            let _ = tx.send(DataMsg::LiveEnded { view: view_idx, site: end_site });
+            let _ = tx.send(DataMsg::LiveEnded {
+                view: view_idx,
+                site: end_site,
+            });
             ctx.request_repaint();
         })
     }
@@ -3511,7 +4021,10 @@ paste_target: None,
             }
             Action::Reload => self.trigger_reload(ctx),
             Action::CycleBasemap => {
-                let (mb, mt) = (!self.settings.mapbox_key.is_empty(), !self.settings.maptiler_key.is_empty());
+                let (mb, mt) = (
+                    !self.settings.mapbox_key.is_empty(),
+                    !self.settings.maptiler_key.is_empty(),
+                );
                 let v = &mut self.views[self.active];
                 v.basemap = v.basemap.next(mb, mt);
             }
@@ -3541,7 +4054,10 @@ paste_target: None,
         if !self.obs_tour {
             return;
         }
-        if self.obs_tour_last.is_some_and(|t| t.elapsed().as_secs() < 12) {
+        if self
+            .obs_tour_last
+            .is_some_and(|t| t.elapsed().as_secs() < 12)
+        {
             return;
         }
         // Centroids of active warning polygons, tornado/severe first.
@@ -3551,7 +4067,11 @@ paste_target: None,
             .filter(|f| f.kind == overlay::FeatureKind::Warning)
             .filter_map(|f| {
                 let (w, s, e, n) = f.bbox()?;
-                let sev = if f.title.to_lowercase().contains("tornado") { 0 } else { 1 };
+                let sev = if f.title.to_lowercase().contains("tornado") {
+                    0
+                } else {
+                    1
+                };
                 Some((sev, (w + e) / 2.0, (s + n) / 2.0))
             })
             .collect();
@@ -3642,7 +4162,13 @@ paste_target: None,
             let v = &self.views[idx];
             let key = v.site.clone().map(|s| (s, v.timeline.date));
             let need = v.site.is_some() && v.timeline.frames_key != key;
-            (v.site.clone(), v.timeline.date, v.timeline.following, need, v.timeline.listing)
+            (
+                v.site.clone(),
+                v.timeline.date,
+                v.timeline.following,
+                need,
+                v.timeline.listing,
+            )
         };
         if let Some(s) = &site {
             if need_list && !listing {
@@ -3678,10 +4204,13 @@ paste_target: None,
         }
         if !following || looping {
             // Archive / loop: display the volume at the playhead (cache hit is synchronous).
-            let target = self.views[idx]
-                .timeline
-                .current()
-                .map(|id| (id.name().to_string(), id.date_time().unwrap_or_else(Utc::now), id.clone()));
+            let target = self.views[idx].timeline.current().map(|id| {
+                (
+                    id.name().to_string(),
+                    id.date_time().unwrap_or_else(Utc::now),
+                    id.clone(),
+                )
+            });
             if let Some((name, time, id)) = target {
                 let shown = self.views[idx].volume.as_ref().map(|v| v.name.clone());
                 if shown.as_deref() != Some(name.as_str()) {
@@ -3709,8 +4238,18 @@ paste_target: None,
             let name = id.name().to_string();
             let time = id.date_time().unwrap_or_else(Utc::now);
             let msg = match level2::download_scan(id).await {
-                Ok(scan) => DataMsg::Volume { view: view_idx, site, name, time, scan },
-                Err(e) => DataMsg::Error { view: view_idx, site, err: e.to_string() },
+                Ok(scan) => DataMsg::Volume {
+                    view: view_idx,
+                    site,
+                    name,
+                    time,
+                    scan,
+                },
+                Err(e) => DataMsg::Error {
+                    view: view_idx,
+                    site,
+                    err: e.to_string(),
+                },
             };
             let _ = tx.send(msg);
             ctx.request_repaint();
@@ -3718,12 +4257,23 @@ paste_target: None,
     }
 
     /// List the archive volumes for `site` on `date` (timeline frames).
-    fn spawn_list_frames(&self, view_idx: usize, site: String, date: NaiveDate, ctx: egui::Context) {
+    fn spawn_list_frames(
+        &self,
+        view_idx: usize,
+        site: String,
+        date: NaiveDate,
+        ctx: egui::Context,
+    ) {
         let tx = self.msg_tx.clone();
         self._rt.spawn(async move {
             match level2::list_volumes(&site, date).await {
                 Ok(frames) => {
-                    let _ = tx.send(DataMsg::Frames { view: view_idx, site, date, frames });
+                    let _ = tx.send(DataMsg::Frames {
+                        view: view_idx,
+                        site,
+                        date,
+                        frames,
+                    });
                     ctx.request_repaint();
                 }
                 Err(e) => log::warn!("list frames {site} {date}: {e}"),
@@ -3744,20 +4294,36 @@ paste_target: None,
         self.views[idx].clamp_tilt_to(&count);
         let (moment, tilt, threshold, smooth, storm_uv) = {
             let v = &self.views[idx];
-            (v.moment, v.tilt, v.active_threshold(), v.smooth, v.storm_motion_uv())
+            (
+                v.moment,
+                v.tilt,
+                v.active_threshold(),
+                v.smooth,
+                v.storm_motion_uv(),
+            )
         };
         let name = self.views[data].volume.as_ref().unwrap().name.clone();
         let uv_key = storm_uv.map(|(e, n)| (e.to_bits(), n.to_bits()));
         // Dealiasing only applies to Doppler velocity.
         let dealias = self.settings.dealias_velocity && moment == Moment::Velocity;
-        let key: ShownKey = (name, moment, tilt, threshold, smooth, self.palettes.gen, uv_key, dealias);
+        let key: ShownKey = (
+            name,
+            moment,
+            tilt,
+            threshold,
+            smooth,
+            self.palettes.gen,
+            uv_key,
+            dealias,
+        );
         if self.pane_shown.get(&idx) == Some(&key) {
             return (None, true);
         }
         let table = self.palettes.table(moment);
         let upload = {
             let vol = self.views[data].volume.as_mut().unwrap();
-            vol.binned(moment, tilt, dealias).map(|s| to_upload(s, table, threshold, smooth, storm_uv))
+            vol.binned(moment, tilt, dealias)
+                .map(|s| to_upload(s, table, threshold, smooth, storm_uv))
         };
         match upload {
             Ok(up) => {
@@ -3788,7 +4354,11 @@ paste_target: None,
     ) {
         use crate::tiles::BasemapStyle;
         let vp = (prect.width(), prect.height());
-        let response = ui.interact(prect, egui::Id::new(("pane", idx)), egui::Sense::click_and_drag());
+        let response = ui.interact(
+            prect,
+            egui::Id::new(("pane", idx)),
+            egui::Sense::click_and_drag(),
+        );
 
         // --- Input (mutates this pane's camera / selects it active) ---
         // During a multi-touch gesture the first finger still drives the egui pointer, so a pinch
@@ -3807,7 +4377,9 @@ paste_target: None,
                 if prect.contains(pos) {
                     self.active = idx;
                     let cursor = (pos.x - prect.left(), pos.y - prect.top());
-                    self.views[idx].camera.zoom_at(scroll as f64 * 0.005, cursor, vp);
+                    self.views[idx]
+                        .camera
+                        .zoom_at(scroll as f64 * 0.005, cursor, vp);
                 }
             }
         }
@@ -3824,8 +4396,13 @@ paste_target: None,
                     self.follow_cell = None; // a manual pan takes over the camera (pinch-zoom does not)
                 }
                 if (mt.zoom_delta - 1.0).abs() > f32::EPSILON {
-                    let cursor = (mt.center_pos.x - prect.left(), mt.center_pos.y - prect.top());
-                    self.views[idx].camera.zoom_at((mt.zoom_delta as f64).log2(), cursor, vp);
+                    let cursor = (
+                        mt.center_pos.x - prect.left(),
+                        mt.center_pos.y - prect.top(),
+                    );
+                    self.views[idx]
+                        .camera
+                        .zoom_at((mt.zoom_delta as f64).log2(), cursor, vp);
                 }
             }
         }
@@ -3884,14 +4461,19 @@ paste_target: None,
                     MapTool::Climatology => self.query_climatology(lon, lat),
                     MapTool::Interrogate => {
                         // Storm reports sit on top: a click near a report dot opens its detail.
-                        let report = self.show_storm_reports.then(|| {
-                            self.active_storm_reports().iter().find(|r| {
-                                let w = crate::render::mercator::lonlat_to_world(r.lon, r.lat);
-                                let (sx, sy) = cam.world_to_screen(w, vp);
-                                let (dx, dy) = (prect.left() + sx - pos.x, prect.top() + sy - pos.y);
-                                dx * dx + dy * dy <= tap_r2(12.0)
+                        let report = self
+                            .show_storm_reports
+                            .then(|| {
+                                self.active_storm_reports().iter().find(|r| {
+                                    let w = crate::render::mercator::lonlat_to_world(r.lon, r.lat);
+                                    let (sx, sy) = cam.world_to_screen(w, vp);
+                                    let (dx, dy) =
+                                        (prect.left() + sx - pos.x, prect.top() + sy - pos.y);
+                                    dx * dx + dy * dy <= tap_r2(12.0)
+                                })
                             })
-                        }).flatten().cloned();
+                            .flatten()
+                            .cloned();
                         if let Some(r) = report {
                             self.cell_popup = None;
                             self.warning_popup = None;
@@ -3904,65 +4486,70 @@ paste_target: None,
                                 color: report_color(r.kind),
                             });
                         } else {
-                        let cell_hit = self.filters.show_cells
-                            && self.cells_site.as_deref() == self.views[idx].site.as_deref()
-                            && !self.storm_cells.is_empty();
-                        let picked = cell_hit
-                            .then(|| {
-                                self.storm_cells.iter().find(|c| {
-                                    let w = crate::render::mercator::lonlat_to_world(c.lon, c.lat);
-                                    let (sx, sy) = cam.world_to_screen(w, vp);
-                                    let (dx, dy) = (prect.left() + sx - pos.x, prect.top() + sy - pos.y);
-                                    dx * dx + dy * dy <= tap_r2(14.0)
-                                })
-                            })
-                            .flatten()
-                            .cloned();
-                        match picked {
-                            // A storm cell with an id opens the attributes window; a standalone
-                            // detection (empty id) falls back to a generic detail popup.
-                            Some(c) if !c.id.is_empty() => {
-                                self.detail = None;
-                                self.cell_popup = Some(c);
-                            }
-                            Some(c) => {
-                                self.cell_popup = None;
-                                self.detail = Some(Detail {
-                                    title: c.title.clone(),
-                                    body: c.summary(),
-                                    color: cell_color(c.kind),
-                                });
-                            }
-                            None => {
-                                // Warnings/watches open the warning window (deduped by alert id
-                                // across MultiPolygon parts); other features use the generic popup.
-                                let hits = overlay::hit_all(&self.overlays, lon, lat);
-                                let mut seen = std::collections::HashSet::new();
-                                let cards: Vec<ui::warning_window::WarnCard> = hits
-                                    .iter()
-                                    .filter_map(|f| f.alert.as_ref().map(|a| (a, f.stroke)))
-                                    .filter(|(a, _)| seen.insert(a.id.clone()))
-                                    .map(|(a, color)| ui::warning_window::WarnCard {
-                                        info: a.clone(),
-                                        color,
+                            let cell_hit = self.filters.show_cells
+                                && self.cells_site.as_deref() == self.views[idx].site.as_deref()
+                                && !self.storm_cells.is_empty();
+                            let picked = cell_hit
+                                .then(|| {
+                                    self.storm_cells.iter().find(|c| {
+                                        let w =
+                                            crate::render::mercator::lonlat_to_world(c.lon, c.lat);
+                                        let (sx, sy) = cam.world_to_screen(w, vp);
+                                        let (dx, dy) =
+                                            (prect.left() + sx - pos.x, prect.top() + sy - pos.y);
+                                        dx * dx + dy * dy <= tap_r2(14.0)
                                     })
-                                    .collect();
-                                if !cards.is_empty() {
+                                })
+                                .flatten()
+                                .cloned();
+                            match picked {
+                                // A storm cell with an id opens the attributes window; a standalone
+                                // detection (empty id) falls back to a generic detail popup.
+                                Some(c) if !c.id.is_empty() => {
                                     self.detail = None;
-                                    // Open straight to the full bulletin of the top alert; the
-                                    // Back button reveals the stack when polygons overlap.
-                                    self.warning_popup =
-                                        Some(ui::warning_window::WarningPopup { cards, selected: Some(0) });
-                                } else {
-                                    self.warning_popup = None;
-                                    self.detail = hits.first().map(|f| Detail {
-                                        title: f.title.clone(),
-                                        body: f.detail.clone(),
-                                        color: f.stroke,
+                                    self.cell_popup = Some(c);
+                                }
+                                Some(c) => {
+                                    self.cell_popup = None;
+                                    self.detail = Some(Detail {
+                                        title: c.title.clone(),
+                                        body: c.summary(),
+                                        color: cell_color(c.kind),
                                     });
                                 }
+                                None => {
+                                    // Warnings/watches open the warning window (deduped by alert id
+                                    // across MultiPolygon parts); other features use the generic popup.
+                                    let hits = overlay::hit_all(&self.overlays, lon, lat);
+                                    let mut seen = std::collections::HashSet::new();
+                                    let cards: Vec<ui::warning_window::WarnCard> = hits
+                                        .iter()
+                                        .filter_map(|f| f.alert.as_ref().map(|a| (a, f.stroke)))
+                                        .filter(|(a, _)| seen.insert(a.id.clone()))
+                                        .map(|(a, color)| ui::warning_window::WarnCard {
+                                            info: a.clone(),
+                                            color,
+                                        })
+                                        .collect();
+                                    if !cards.is_empty() {
+                                        self.detail = None;
+                                        // Open straight to the full bulletin of the top alert; the
+                                        // Back button reveals the stack when polygons overlap.
+                                        self.warning_popup =
+                                            Some(ui::warning_window::WarningPopup {
+                                                cards,
+                                                selected: Some(0),
+                                            });
+                                    } else {
+                                        self.warning_popup = None;
+                                        self.detail = hits.first().map(|f| Detail {
+                                            title: f.title.clone(),
+                                            body: f.detail.clone(),
+                                            color: f.stroke,
+                                        });
+                                    }
+                                }
                             }
-                        }
                         }
                     }
                 }
@@ -3974,7 +4561,12 @@ paste_target: None,
         // High-DPI screens render a 256-px raster tile across `ppp`× more physical pixels, which
         // looks blurry (bad on the S24's ~3.75× density). Fetch `round(log2(ppp))` levels deeper so
         // tiles land near 1:1. Capped at +2 to bound the tile count. Desktop (ppp 1) → +0.
-        let raster_bias = ctx.pixels_per_point().max(1.0).log2().round().clamp(0.0, 2.0) as f64;
+        let raster_bias = ctx
+            .pixels_per_point()
+            .max(1.0)
+            .log2()
+            .round()
+            .clamp(0.0, 2.0) as f64;
         let visible = if is_raster {
             let vis = self.tiles.visible(&cam, vp, raster_bias);
             self.tiles.request_missing(&vis);
@@ -3989,8 +4581,12 @@ paste_target: None,
             let vis = self.vtiles.visible(&cam, vp);
             self.vtiles.request_missing(&vis);
             let ids: Vec<crate::render::TileId> = vis.iter().map(|v| v.id).collect();
-            let labels: Vec<crate::vector_tiles::PlaceLabel> =
-                self.vtiles.labels_for(ids.iter()).into_iter().cloned().collect();
+            let labels: Vec<crate::vector_tiles::PlaceLabel> = self
+                .vtiles
+                .labels_for(ids.iter())
+                .into_iter()
+                .cloned()
+                .collect();
             (if is_vector { ids } else { Vec::new() }, labels)
         };
         // Drain finished fetches once (on the first pane) — they upload into the shared cache.
@@ -4024,8 +4620,12 @@ paste_target: None,
         } else {
             Vec::new()
         };
-        let field_draws: Vec<crate::render::FieldLayer> =
-            self.fields.iter().filter(|(_, s)| s.show).map(|(k, _)| *k).collect();
+        let field_draws: Vec<crate::render::FieldLayer> = self
+            .fields
+            .iter()
+            .filter(|(_, s)| s.show)
+            .map(|(k, _)| *k)
+            .collect();
 
         let cam = self.views[idx].camera;
         let (center, scale) = cam.world_to_clip_uniform(vp);
@@ -4037,7 +4637,11 @@ paste_target: None,
             visible,
             radar_upload,
             draw_radar,
-            overlay_upload: if first { self.pending_overlay.take() } else { None },
+            overlay_upload: if first {
+                self.pending_overlay.take()
+            } else {
+                None
+            },
             draw_overlay: self.overlay_ready,
             field_uploads,
             field_draws,
@@ -4046,7 +4650,8 @@ paste_target: None,
             visible_vector,
             clear_vector,
         };
-        ui.painter().add(egui_wgpu::Callback::new_paint_callback(prect, cb));
+        ui.painter()
+            .add(egui_wgpu::Callback::new_paint_callback(prect, cb));
 
         // Per-pane product picker (multi-pane only): set THIS pane's moment directly, without
         // clicking to activate it first. Single-pane keeps using the toolbox Level 2 section.
@@ -4105,7 +4710,11 @@ paste_target: None,
                     13.0,
                 )
             } else {
-                (egui::Color32::WHITE, egui::Color32::from_black_alpha(235), 14.5)
+                (
+                    egui::Color32::WHITE,
+                    egui::Color32::from_black_alpha(235),
+                    14.5,
+                )
             };
             let z = cam.zoom;
             let mut labels: Vec<&crate::vector_tiles::PlaceLabel> =
@@ -4115,8 +4724,14 @@ paste_target: None,
             let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
             // 8-way halo (cardinals + diagonals) for a solid, readable outline.
             const HALO: [egui::Vec2; 8] = [
-                egui::vec2(1.2, 0.0), egui::vec2(-1.2, 0.0), egui::vec2(0.0, 1.2), egui::vec2(0.0, -1.2),
-                egui::vec2(1.0, 1.0), egui::vec2(1.0, -1.0), egui::vec2(-1.0, 1.0), egui::vec2(-1.0, -1.0),
+                egui::vec2(1.2, 0.0),
+                egui::vec2(-1.2, 0.0),
+                egui::vec2(0.0, 1.2),
+                egui::vec2(0.0, -1.2),
+                egui::vec2(1.0, 1.0),
+                egui::vec2(1.0, -1.0),
+                egui::vec2(-1.0, 1.0),
+                egui::vec2(-1.0, -1.0),
             ];
             for l in labels {
                 if !seen.insert(l.name.as_str()) {
@@ -4135,7 +4750,13 @@ paste_target: None,
                 }
                 placed.push(r);
                 for off in HALO {
-                    painter.text(p + off, egui::Align2::LEFT_TOP, &l.name, font.clone(), halo_col);
+                    painter.text(
+                        p + off,
+                        egui::Align2::LEFT_TOP,
+                        &l.name,
+                        font.clone(),
+                        halo_col,
+                    );
                 }
                 painter.text(p, egui::Align2::LEFT_TOP, &l.name, font.clone(), text_col);
             }
@@ -4177,14 +4798,23 @@ paste_target: None,
                 let (wx1, wy1) = cam.screen_to_world((vp.0, vp.1), vp);
                 let (lon0, lat0) = world_to_lonlat(wx0, wy0);
                 let (lon1, lat1) = world_to_lonlat(wx1, wy1);
-                (lon0.min(lon1), lat0.min(lat1), lon0.max(lon1), lat0.max(lat1))
+                (
+                    lon0.min(lon1),
+                    lat0.min(lat1),
+                    lon0.max(lon1),
+                    lat0.max(lat1),
+                )
             };
             for line in &self.contours {
                 let (bx0, by0, bx1, by1) = line.bbox;
                 if bx1 < vmin_lon || bx0 > vmax_lon || by1 < vmin_lat || by0 > vmax_lat {
                     continue; // fully off-view
                 }
-                let pts: Vec<egui::Pos2> = line.pts.iter().map(|&(lon, lat)| to_screen(lon, lat)).collect();
+                let pts: Vec<egui::Pos2> = line
+                    .pts
+                    .iter()
+                    .map(|&(lon, lat)| to_screen(lon, lat))
+                    .collect();
                 // Label the longest segment's midpoint when the line spans enough pixels.
                 let seg = longest_segment(&pts);
                 painter.add(egui::Shape::line(pts, egui::Stroke::new(1.2, col)));
@@ -4195,8 +4825,13 @@ paste_target: None,
                         let font = egui::FontId::proportional(11.0);
                         for dx in [-1.0, 1.0] {
                             for dy in [-1.0, 1.0] {
-                                painter.text(mid + egui::vec2(dx, dy), egui::Align2::CENTER_CENTER,
-                                    &txt, font.clone(), egui::Color32::from_black_alpha(200));
+                                painter.text(
+                                    mid + egui::vec2(dx, dy),
+                                    egui::Align2::CENTER_CENTER,
+                                    &txt,
+                                    font.clone(),
+                                    egui::Color32::from_black_alpha(200),
+                                );
                             }
                         }
                         painter.text(mid, egui::Align2::CENTER_CENTER, &txt, font, col);
@@ -4204,14 +4839,28 @@ paste_target: None,
                 }
             }
             if idx == self.active {
-                let vt = self.contour_valid.map(|t| t.format("%H:%MZ").to_string()).unwrap_or_default();
+                let vt = self
+                    .contour_valid
+                    .map(|t| crate::timefmt::fmt_clock(t, self.active_tz(), false))
+                    .unwrap_or_default();
                 let text = format!("HRRR {} contours — valid {vt}", self.contour_kind.label());
                 let font = egui::FontId::proportional(12.0);
                 let anchor = egui::pos2(prect.left() + 8.0, prect.top() + 40.0);
-                let galley = painter.layout_no_wrap(text.clone(), font.clone(), egui::Color32::WHITE);
+                let galley =
+                    painter.layout_no_wrap(text.clone(), font.clone(), egui::Color32::WHITE);
                 let bg = egui::Rect::from_min_size(anchor, galley.size() + egui::vec2(10.0, 4.0));
-                painter.rect_filled(bg, 3.0, egui::Color32::from_rgba_unmultiplied(60, 90, 60, 200));
-                painter.text(anchor + egui::vec2(5.0, 2.0), egui::Align2::LEFT_TOP, &text, font, egui::Color32::WHITE);
+                painter.rect_filled(
+                    bg,
+                    3.0,
+                    egui::Color32::from_rgba_unmultiplied(60, 90, 60, 200),
+                );
+                painter.text(
+                    anchor + egui::vec2(5.0, 2.0),
+                    egui::Align2::LEFT_TOP,
+                    &text,
+                    font,
+                    egui::Color32::WHITE,
+                );
             }
         }
 
@@ -4229,26 +4878,52 @@ paste_target: None,
                 const HALF_ANGLE: f64 = 18.0;
                 let mut etas: Vec<(f64, String)> = Vec::new();
                 for c in &self.storm_cells {
-                    let (Some(dir), Some(kt)) = (c.mvt_deg, c.mvt_kt) else { continue };
+                    let (Some(dir), Some(kt)) = (c.mvt_deg, c.mvt_kt) else {
+                        continue;
+                    };
                     if kt <= 1.0 {
                         continue;
                     }
                     let lead_km = kt as f64 * 1.852 * (LEAD_MIN / 60.0);
-                    let left = crate::geo::destination_point([c.lon, c.lat], dir as f64 - HALF_ANGLE, lead_km);
-                    let right = crate::geo::destination_point([c.lon, c.lat], dir as f64 + HALF_ANGLE, lead_km);
+                    let left = crate::geo::destination_point(
+                        [c.lon, c.lat],
+                        dir as f64 - HALF_ANGLE,
+                        lead_km,
+                    );
+                    let right = crate::geo::destination_point(
+                        [c.lon, c.lat],
+                        dir as f64 + HALF_ANGLE,
+                        lead_km,
+                    );
                     let apex = to_screen(c.lon, c.lat);
                     let lp = to_screen(left[0], left[1]);
                     let rp = to_screen(right[0], right[1]);
                     let col = cell_color(c.kind);
                     let fill = egui::Color32::from_rgba_unmultiplied(col[0], col[1], col[2], 40);
-                    painter.add(egui::Shape::convex_polygon(vec![apex, lp, rp], fill, egui::Stroke::NONE));
+                    painter.add(egui::Shape::convex_polygon(
+                        vec![apex, lp, rp],
+                        fill,
+                        egui::Stroke::NONE,
+                    ));
                     // Center line toward the projected 60-min position.
                     let tip = crate::geo::destination_point([c.lon, c.lat], dir as f64, lead_km);
-                    painter.line_segment([apex, to_screen(tip[0], tip[1])],
-                        egui::Stroke::new(1.0, egui::Color32::from_rgba_unmultiplied(col[0], col[1], col[2], 160)));
+                    painter.line_segment(
+                        [apex, to_screen(tip[0], tip[1])],
+                        egui::Stroke::new(
+                            1.0,
+                            egui::Color32::from_rgba_unmultiplied(col[0], col[1], col[2], 160),
+                        ),
+                    );
                     // ETA to each watched marker inside this cone.
                     for m in &self.settings.markers {
-                        if let Some(min) = crate::geo::arrival_eta_min([c.lon, c.lat], dir, kt, [m.lon, m.lat], HALF_ANGLE, LEAD_MIN) {
+                        if let Some(min) = crate::geo::arrival_eta_min(
+                            [c.lon, c.lat],
+                            dir,
+                            kt,
+                            [m.lon, m.lat],
+                            HALF_ANGLE,
+                            LEAD_MIN,
+                        ) {
                             etas.push((min, format!("{} — {} in {:.0} min", m.name, c.id, min)));
                         }
                     }
@@ -4259,11 +4934,28 @@ paste_target: None,
                     let mut y = prect.top() + 40.0;
                     for (_, line) in etas.iter().take(6) {
                         let text = format!("⏱ {line}");
-                        let galley = painter.layout_no_wrap(text.clone(), font.clone(), egui::Color32::WHITE);
+                        let galley = painter.layout_no_wrap(
+                            text.clone(),
+                            font.clone(),
+                            egui::Color32::WHITE,
+                        );
                         let anchor = egui::pos2(prect.left() + 8.0, y);
-                        let bg = egui::Rect::from_min_size(anchor, galley.size() + egui::vec2(10.0, 4.0));
-                        painter.rect_filled(bg, 3.0, egui::Color32::from_rgba_unmultiplied(150, 30, 30, 210));
-                        painter.text(anchor + egui::vec2(5.0, 2.0), egui::Align2::LEFT_TOP, &text, font.clone(), egui::Color32::WHITE);
+                        let bg = egui::Rect::from_min_size(
+                            anchor,
+                            galley.size() + egui::vec2(10.0, 4.0),
+                        );
+                        painter.rect_filled(
+                            bg,
+                            3.0,
+                            egui::Color32::from_rgba_unmultiplied(150, 30, 30, 210),
+                        );
+                        painter.text(
+                            anchor + egui::vec2(5.0, 2.0),
+                            egui::Align2::LEFT_TOP,
+                            &text,
+                            font.clone(),
+                            egui::Color32::WHITE,
+                        );
                         y += galley.size().y + 6.0;
                     }
                 }
@@ -4278,13 +4970,28 @@ paste_target: None,
                     }
                 }
                 if idx == self.active {
-                    let text = format!("◈ NOWCAST +{} min — echo extrapolated from storm motion", self.filters.nowcast_lead_min);
+                    let text = format!(
+                        "◈ NOWCAST +{} min — echo extrapolated from storm motion",
+                        self.filters.nowcast_lead_min
+                    );
                     let font = egui::FontId::proportional(12.0);
                     let anchor = egui::pos2(prect.left() + 8.0, prect.top() + 20.0);
-                    let galley = painter.layout_no_wrap(text.clone(), font.clone(), egui::Color32::WHITE);
-                    let bg = egui::Rect::from_min_size(anchor, galley.size() + egui::vec2(10.0, 4.0));
-                    painter.rect_filled(bg, 3.0, egui::Color32::from_rgba_unmultiplied(60, 60, 150, 200));
-                    painter.text(anchor + egui::vec2(5.0, 2.0), egui::Align2::LEFT_TOP, &text, font, egui::Color32::WHITE);
+                    let galley =
+                        painter.layout_no_wrap(text.clone(), font.clone(), egui::Color32::WHITE);
+                    let bg =
+                        egui::Rect::from_min_size(anchor, galley.size() + egui::vec2(10.0, 4.0));
+                    painter.rect_filled(
+                        bg,
+                        3.0,
+                        egui::Color32::from_rgba_unmultiplied(60, 60, 150, 200),
+                    );
+                    painter.text(
+                        anchor + egui::vec2(5.0, 2.0),
+                        egui::Align2::LEFT_TOP,
+                        &text,
+                        font,
+                        egui::Color32::WHITE,
+                    );
                 }
             }
 
@@ -4297,12 +5004,21 @@ paste_target: None,
                 let m = egui::Color32::from_rgb(240, 40, 210);
                 let s = 8.0;
                 painter.add(egui::Shape::convex_polygon(
-                    vec![p + egui::vec2(-s, -s), p + egui::vec2(s, -s), p + egui::vec2(0.0, s)],
+                    vec![
+                        p + egui::vec2(-s, -s),
+                        p + egui::vec2(s, -s),
+                        p + egui::vec2(0.0, s),
+                    ],
                     egui::Color32::from_rgba_unmultiplied(240, 40, 210, 60),
                     egui::Stroke::new(2.0, m),
                 ));
-                painter.text(p + egui::vec2(0.0, -s - 2.0), egui::Align2::CENTER_BOTTOM,
-                    format!("TDS ρ{:.2}", h.min_cc), egui::FontId::proportional(11.0), m);
+                painter.text(
+                    p + egui::vec2(0.0, -s - 2.0),
+                    egui::Align2::CENTER_BOTTOM,
+                    format!("TDS ρ{:.2}", h.min_cc),
+                    egui::FontId::proportional(11.0),
+                    m,
+                );
             }
 
             // Rotation couplets: a ring at each cluster — solid red at strong-TVS strength
@@ -4322,8 +5038,13 @@ paste_target: None,
                 if strong {
                     painter.circle_filled(p, 3.5, col);
                 }
-                painter.text(p + egui::vec2(0.0, 13.0), egui::Align2::CENTER_TOP,
-                    format!("ROT {:.0} kt", h.vrot_ms * 1.943_844), egui::FontId::proportional(11.0), col);
+                painter.text(
+                    p + egui::vec2(0.0, 13.0),
+                    egui::Align2::CENTER_TOP,
+                    format!("ROT {:.0} kt", h.vrot_ms * 1.943_844),
+                    egui::FontId::proportional(11.0),
+                    col,
+                );
             }
 
             let label_tracks = self.filters.show_tracks && cam.zoom >= 7.0;
@@ -4332,7 +5053,11 @@ paste_target: None,
                 // Past track (packet 23): faint gray polyline leading up to the current position.
                 if self.filters.show_tracks && c.past_track.len() >= 2 {
                     let gray = egui::Color32::from_gray(150).gamma_multiply(0.7);
-                    let pts: Vec<egui::Pos2> = c.past_track.iter().map(|&(lon, lat)| to_screen(lon, lat)).collect();
+                    let pts: Vec<egui::Pos2> = c
+                        .past_track
+                        .iter()
+                        .map(|&(lon, lat)| to_screen(lon, lat))
+                        .collect();
                     painter.add(egui::Shape::line(pts, egui::Stroke::new(1.5, gray)));
                 }
                 // Forecast track: cell -> future positions, ticks + T+NNm labels.
@@ -4347,11 +5072,21 @@ paste_target: None,
                             let txt = format!("T+{}m", tp.minutes);
                             let lp = tpp + egui::vec2(5.0, -2.0);
                             for off in [egui::vec2(1.0, 1.0), egui::vec2(-1.0, -1.0)] {
-                                painter.text(lp + off, egui::Align2::LEFT_CENTER, &txt,
-                                    egui::FontId::proportional(10.0), egui::Color32::from_black_alpha(180));
+                                painter.text(
+                                    lp + off,
+                                    egui::Align2::LEFT_CENTER,
+                                    &txt,
+                                    egui::FontId::proportional(10.0),
+                                    egui::Color32::from_black_alpha(180),
+                                );
                             }
-                            painter.text(lp, egui::Align2::LEFT_CENTER, &txt,
-                                egui::FontId::proportional(10.0), egui::Color32::from_rgb(255, 90, 90));
+                            painter.text(
+                                lp,
+                                egui::Align2::LEFT_CENTER,
+                                &txt,
+                                egui::FontId::proportional(10.0),
+                                egui::Color32::from_rgb(255, 90, 90),
+                            );
                         }
                         prev = tpp;
                     }
@@ -4364,8 +5099,13 @@ paste_target: None,
                 painter.circle_stroke(p, 6.0, egui::Stroke::new(2.0, color));
                 painter.circle_filled(p, 2.0, color);
                 if c.kind == CellKind::Storm && !c.id.is_empty() {
-                    painter.text(p + egui::vec2(8.0, -8.0), egui::Align2::LEFT_BOTTOM,
-                        &c.id, egui::FontId::proportional(11.0), color);
+                    painter.text(
+                        p + egui::vec2(8.0, -8.0),
+                        egui::Align2::LEFT_BOTTOM,
+                        &c.id,
+                        egui::FontId::proportional(11.0),
+                        color,
+                    );
                 }
             }
         }
@@ -4384,7 +5124,12 @@ paste_target: None,
                 // Small filled diamond so reports read distinctly from round storm-cell dots.
                 let d = 4.0;
                 painter.add(egui::Shape::convex_polygon(
-                    vec![p + egui::vec2(0.0, -d), p + egui::vec2(d, 0.0), p + egui::vec2(0.0, d), p + egui::vec2(-d, 0.0)],
+                    vec![
+                        p + egui::vec2(0.0, -d),
+                        p + egui::vec2(d, 0.0),
+                        p + egui::vec2(0.0, d),
+                        p + egui::vec2(-d, 0.0),
+                    ],
                     color,
                     egui::Stroke::new(1.0, egui::Color32::from_black_alpha(160)),
                 ));
@@ -4416,10 +5161,18 @@ paste_target: None,
                     let stale = (now - sp.time).num_minutes() > 30;
                     let color = {
                         let g = egui::Color32::from_rgb(0, 200, 80);
-                        if stale { g.gamma_multiply(0.35) } else { g }
+                        if stale {
+                            g.gamma_multiply(0.35)
+                        } else {
+                            g
+                        }
                     };
                     painter.circle_filled(p, 3.0, color);
-                    painter.circle_stroke(p, 3.0, egui::Stroke::new(1.0, egui::Color32::from_black_alpha(160)));
+                    painter.circle_stroke(
+                        p,
+                        3.0,
+                        egui::Stroke::new(1.0, egui::Color32::from_black_alpha(160)),
+                    );
                     // Movement arrow tick, heading clockwise from north.
                     if let Some(h) = sp.heading {
                         let r = h.to_radians();
@@ -4427,12 +5180,22 @@ paste_target: None,
                         painter.line_segment([p, p + dir * 8.0], egui::Stroke::new(1.5, color));
                     }
                     if show_labels {
-                        painter.text(p + egui::vec2(5.0, -5.0), egui::Align2::LEFT_BOTTOM,
-                            &sp.name, egui::FontId::proportional(10.0), color);
+                        painter.text(
+                            p + egui::vec2(5.0, -5.0),
+                            egui::Align2::LEFT_BOTTOM,
+                            &sp.name,
+                            egui::FontId::proportional(10.0),
+                            color,
+                        );
                     }
                     let hit = egui::Rect::from_center_size(p, egui::vec2(14.0, 14.0));
                     if response.hover_pos().is_some_and(|hp| hit.contains(hp)) {
-                        let hover = format!("{}\n{}\n{}", sp.name, sp.time.format("%Y-%m-%d %H:%M UTC"), sp.status);
+                        let hover = format!(
+                            "{}\n{}\n{}",
+                            sp.name,
+                            crate::timefmt::fmt_date_clock(sp.time, self.active_tz()),
+                            sp.status
+                        );
                         response.clone().show_tooltip_text(hover);
                     }
                 }
@@ -4442,7 +5205,9 @@ paste_target: None,
         // ProbSevere per-storm probability badges (polygons draw via the overlay pipeline).
         if self.show_probsevere {
             for f in &self.probsevere {
-                let Some(ring) = f.rings.first() else { continue };
+                let Some(ring) = f.rings.first() else {
+                    continue;
+                };
                 if ring.is_empty() {
                     continue;
                 }
@@ -4451,7 +5216,10 @@ paste_target: None,
                     clon += p[0];
                     clat += p[1];
                 }
-                let cw = crate::render::mercator::lonlat_to_world(clon / ring.len() as f64, clat / ring.len() as f64);
+                let cw = crate::render::mercator::lonlat_to_world(
+                    clon / ring.len() as f64,
+                    clat / ring.len() as f64,
+                );
                 let (sx, sy) = cam.world_to_screen(cw, vp);
                 let c = egui::pos2(prect.left() + sx, prect.top() + sy);
                 if !prect.contains(c) {
@@ -4459,10 +5227,17 @@ paste_target: None,
                 }
                 let color = egui::Color32::from_rgb(f.stroke[0], f.stroke[1], f.stroke[2]);
                 let font = egui::FontId::proportional(11.0);
-                let galley = painter.layout_no_wrap(f.title.clone(), font.clone(), egui::Color32::BLACK);
+                let galley =
+                    painter.layout_no_wrap(f.title.clone(), font.clone(), egui::Color32::BLACK);
                 let rect = egui::Rect::from_center_size(c, galley.size() + egui::vec2(8.0, 4.0));
                 painter.rect_filled(rect, 3.0, color);
-                painter.text(c, egui::Align2::CENTER_CENTER, &f.title, font, egui::Color32::BLACK);
+                painter.text(
+                    c,
+                    egui::Align2::CENTER_CENTER,
+                    &f.title,
+                    font,
+                    egui::Color32::BLACK,
+                );
             }
         }
 
@@ -4489,15 +5264,17 @@ paste_target: None,
                 // but pulsing a state-sized watch polygon would drown the map (and `escalation`
                 // uppercases the whole bulletin, too heavy to run for every alert every frame).
                 if f.kind == overlay::FeatureKind::Warning && wxdata::alerts::escalation(a) >= 2 {
-                    let visible = f.rings.first().is_some_and(|r| {
-                        r.iter().any(|p| prect.contains(to_screen(p[0], p[1])))
-                    }) || f.contains(center_lon, center_lat);
+                    let visible =
+                        f.rings.first().is_some_and(|r| {
+                            r.iter().any(|p| prect.contains(to_screen(p[0], p[1])))
+                        }) || f.contains(center_lon, center_lat);
                     if visible {
                         any_escalated = true;
                         let w = 2.0 + 2.0 * (time * 4.0).sin().abs() as f32;
                         let col = egui::Color32::from_rgb(255, 40, 40);
                         for ring in &f.rings {
-                            let pts: Vec<egui::Pos2> = ring.iter().map(|p| to_screen(p[0], p[1])).collect();
+                            let pts: Vec<egui::Pos2> =
+                                ring.iter().map(|p| to_screen(p[0], p[1])).collect();
                             if pts.len() >= 2 {
                                 painter.add(egui::Shape::line(pts, egui::Stroke::new(w, col)));
                             }
@@ -4506,7 +5283,9 @@ paste_target: None,
                 }
                 // Motion vector + projected path (heading = FROM + 180).
                 let Some(m) = &a.motion else { continue };
-                let Some(&origin) = m.points.first() else { continue };
+                let Some(&origin) = m.points.first() else {
+                    continue;
+                };
                 if m.kt < 1.0 {
                     continue;
                 }
@@ -4522,14 +5301,26 @@ paste_target: None,
                     painter.line_segment([prev, p], egui::Stroke::new(1.5, col));
                     painter.circle_filled(p, 2.5, col);
                     if cam.zoom >= 7.0 {
-                        painter.text(p + egui::vec2(5.0, -2.0), egui::Align2::LEFT_CENTER,
-                            format!("+{min:.0}m"), egui::FontId::proportional(10.0), col);
+                        painter.text(
+                            p + egui::vec2(5.0, -2.0),
+                            egui::Align2::LEFT_CENTER,
+                            format!("+{min:.0}m"),
+                            egui::FontId::proportional(10.0),
+                            col,
+                        );
                     }
                     prev = p;
                 }
                 // ETA to any watched marker along the storm's heading.
                 for mk in &self.settings.markers {
-                    if let Some(t) = crate::geo::arrival_eta_min(origin, heading as f32, m.kt, [mk.lon, mk.lat], 22.5, 90.0) {
+                    if let Some(t) = crate::geo::arrival_eta_min(
+                        origin,
+                        heading as f32,
+                        m.kt,
+                        [mk.lon, mk.lat],
+                        22.5,
+                        90.0,
+                    ) {
                         etas.push((t, format!("⚠ {} — {} in {:.0} min", mk.name, a.event, t)));
                     }
                 }
@@ -4539,11 +5330,23 @@ paste_target: None,
                 let font = egui::FontId::proportional(12.0);
                 let mut y = prect.top() + 64.0;
                 for (_, line) in etas.iter().take(6) {
-                    let galley = painter.layout_no_wrap(line.clone(), font.clone(), egui::Color32::WHITE);
+                    let galley =
+                        painter.layout_no_wrap(line.clone(), font.clone(), egui::Color32::WHITE);
                     let anchor = egui::pos2(prect.left() + 8.0, y);
-                    let bg = egui::Rect::from_min_size(anchor, galley.size() + egui::vec2(10.0, 4.0));
-                    painter.rect_filled(bg, 3.0, egui::Color32::from_rgba_unmultiplied(150, 30, 30, 210));
-                    painter.text(anchor + egui::vec2(5.0, 2.0), egui::Align2::LEFT_TOP, line, font.clone(), egui::Color32::WHITE);
+                    let bg =
+                        egui::Rect::from_min_size(anchor, galley.size() + egui::vec2(10.0, 4.0));
+                    painter.rect_filled(
+                        bg,
+                        3.0,
+                        egui::Color32::from_rgba_unmultiplied(150, 30, 30, 210),
+                    );
+                    painter.text(
+                        anchor + egui::vec2(5.0, 2.0),
+                        egui::Align2::LEFT_TOP,
+                        line,
+                        font.clone(),
+                        egui::Color32::WHITE,
+                    );
                     y += galley.size().y + 6.0;
                 }
             }
@@ -4564,7 +5367,11 @@ paste_target: None,
             };
             // Windiest-first so the strongest stations survive decluttering.
             let mut obs: Vec<&wxdata::metar::SurfaceOb> = self.metars.iter().collect();
-            obs.sort_by(|a, b| b.wspd_kt.partial_cmp(&a.wspd_kt).unwrap_or(std::cmp::Ordering::Equal));
+            obs.sort_by(|a, b| {
+                b.wspd_kt
+                    .partial_cmp(&a.wspd_kt)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
             let mut placed: Vec<egui::Rect> = Vec::new();
             for ob in obs {
                 let w = crate::render::mercator::lonlat_to_world(ob.lon, ob.lat);
@@ -4599,12 +5406,22 @@ paste_target: None,
                 if show_labels {
                     let f = egui::FontId::proportional(11.0);
                     if let Some(t) = ob.temp_c {
-                        painter.text(p + egui::vec2(-6.0, -6.0), egui::Align2::RIGHT_BOTTOM,
-                            format!("{:.0}", t * 9.0 / 5.0 + 32.0), f.clone(), egui::Color32::from_rgb(240, 90, 90));
+                        painter.text(
+                            p + egui::vec2(-6.0, -6.0),
+                            egui::Align2::RIGHT_BOTTOM,
+                            format!("{:.0}", t * 9.0 / 5.0 + 32.0),
+                            f.clone(),
+                            egui::Color32::from_rgb(240, 90, 90),
+                        );
                     }
                     if let Some(d) = ob.dewp_c {
-                        painter.text(p + egui::vec2(-6.0, 6.0), egui::Align2::RIGHT_TOP,
-                            format!("{:.0}", d * 9.0 / 5.0 + 32.0), f, egui::Color32::from_rgb(90, 220, 120));
+                        painter.text(
+                            p + egui::vec2(-6.0, 6.0),
+                            egui::Align2::RIGHT_TOP,
+                            format!("{:.0}", d * 9.0 / 5.0 + 32.0),
+                            f,
+                            egui::Color32::from_rgb(90, 220, 120),
+                        );
                     }
                 }
                 // Hover → the raw METAR text.
@@ -4653,13 +5470,19 @@ paste_target: None,
                 placed.push(cell);
                 let s = 6.0;
                 painter.add(egui::Shape::convex_polygon(
-                    vec![p + egui::vec2(-s * 0.85, -s * 0.6), p + egui::vec2(s * 0.85, -s * 0.6), p + egui::vec2(0.0, s)],
+                    vec![
+                        p + egui::vec2(-s * 0.85, -s * 0.6),
+                        p + egui::vec2(s * 0.85, -s * 0.6),
+                        p + egui::vec2(0.0, s),
+                    ],
                     gcolor(g.cat).gamma_multiply(0.85),
                     egui::Stroke::new(1.2, egui::Color32::from_gray(20)),
                 ));
                 let hit = egui::Rect::from_center_size(p, egui::vec2(16.0, 16.0));
                 if response.hover_pos().is_some_and(|hp| hit.contains(hp)) {
-                    let stage = g.stage_ft.map_or_else(|| "n/a".to_string(), |v| format!("{v:.1} ft"));
+                    let stage = g
+                        .stage_ft
+                        .map_or_else(|| "n/a".to_string(), |v| format!("{v:.1} ft"));
                     let mut tip = format!("{} ({})\n{stage} — {}", g.name, g.lid, glabel(g.cat));
                     if let Some(f) = g.forecast_ft {
                         tip.push_str(&format!("\nFcst: {f:.1} ft ({})", glabel(g.forecast_cat)));
@@ -4680,8 +5503,15 @@ paste_target: None,
                 for storm in &t.storms {
                     // Forecast track: white polyline through the points.
                     if storm.points.len() >= 2 {
-                        let pts: Vec<egui::Pos2> = storm.points.iter().map(|p| to_screen(p.lon, p.lat)).collect();
-                        painter.add(egui::Shape::line(pts, egui::Stroke::new(1.5, egui::Color32::from_rgb(235, 235, 235))));
+                        let pts: Vec<egui::Pos2> = storm
+                            .points
+                            .iter()
+                            .map(|p| to_screen(p.lon, p.lat))
+                            .collect();
+                        painter.add(egui::Shape::line(
+                            pts,
+                            egui::Stroke::new(1.5, egui::Color32::from_rgb(235, 235, 235)),
+                        ));
                     }
                     for p in &storm.points {
                         let sp = to_screen(p.lon, p.lat);
@@ -4692,8 +5522,13 @@ paste_target: None,
                         let col = egui::Color32::from_rgb(rgb[0], rgb[1], rgb[2]);
                         painter.circle_filled(sp, 4.0, col);
                         if cam.zoom >= 5.0 {
-                            painter.text(sp + egui::vec2(6.0, -2.0), egui::Align2::LEFT_CENTER,
-                                cat, egui::FontId::proportional(10.0), col);
+                            painter.text(
+                                sp + egui::vec2(6.0, -2.0),
+                                egui::Align2::LEFT_CENTER,
+                                cat,
+                                egui::FontId::proportional(10.0),
+                                col,
+                            );
                         }
                     }
                     // Current position: bold storm name with a dark halo.
@@ -4702,33 +5537,66 @@ paste_target: None,
                         let (_, rgb) = wxdata::tropical::saffir_simpson(storm.intensity_kt);
                         let col = egui::Color32::from_rgb(rgb[0], rgb[1], rgb[2]);
                         painter.circle_filled(cp, 5.0, col);
-                        painter.circle_stroke(cp, 5.0, egui::Stroke::new(1.5, egui::Color32::BLACK));
+                        painter.circle_stroke(
+                            cp,
+                            5.0,
+                            egui::Stroke::new(1.5, egui::Color32::BLACK),
+                        );
                         let font = egui::FontId::proportional(13.0);
-                        for off in [egui::vec2(1.0, 1.0), egui::vec2(-1.0, -1.0), egui::vec2(1.0, -1.0), egui::vec2(-1.0, 1.0)] {
-                            painter.text(cp + egui::vec2(8.0, -8.0) + off, egui::Align2::LEFT_BOTTOM,
-                                &storm.name, font.clone(), egui::Color32::BLACK);
+                        for off in [
+                            egui::vec2(1.0, 1.0),
+                            egui::vec2(-1.0, -1.0),
+                            egui::vec2(1.0, -1.0),
+                            egui::vec2(-1.0, 1.0),
+                        ] {
+                            painter.text(
+                                cp + egui::vec2(8.0, -8.0) + off,
+                                egui::Align2::LEFT_BOTTOM,
+                                &storm.name,
+                                font.clone(),
+                                egui::Color32::BLACK,
+                            );
                         }
-                        painter.text(cp + egui::vec2(8.0, -8.0), egui::Align2::LEFT_BOTTOM,
-                            &storm.name, font, egui::Color32::WHITE);
+                        painter.text(
+                            cp + egui::vec2(8.0, -8.0),
+                            egui::Align2::LEFT_BOTTOM,
+                            &storm.name,
+                            font,
+                            egui::Color32::WHITE,
+                        );
                     }
                 }
             }
         }
 
         // HRRR "future radar" banner — unmistakable that this is model forecast, not observation.
-        if idx == self.active && self.fields.get(&crate::render::FieldLayer::Hrrr).is_some_and(|s| s.show) {
+        if idx == self.active
+            && self
+                .fields
+                .get(&crate::render::FieldLayer::Hrrr)
+                .is_some_and(|s| s.show)
+        {
             let valid = self
                 .hrrr_valid
-                .map(|v| v.format("%a %H:%MZ").to_string())
+                .map(|v| crate::timefmt::fmt_date_clock(v, self.active_tz()))
                 .unwrap_or_else(|| "loading…".to_string());
-            let text = format!("⚠ FORECAST +{}h — HRRR MODEL, NOT OBSERVED — valid {}", self.hrrr_fcst_hour, valid);
+            let text = format!(
+                "⚠ FORECAST +{}h — HRRR MODEL, NOT OBSERVED — valid {}",
+                self.hrrr_fcst_hour, valid
+            );
             let font = egui::FontId::proportional(13.0);
             let galley = painter.layout_no_wrap(text.clone(), font.clone(), egui::Color32::BLACK);
             let pad = egui::vec2(10.0, 4.0);
             let center = egui::pos2(prect.center().x, prect.top() + 16.0);
             let rect = egui::Rect::from_center_size(center, galley.size() + pad * 2.0);
             painter.rect_filled(rect, 4.0, egui::Color32::from_rgb(255, 170, 60));
-            painter.text(center, egui::Align2::CENTER_CENTER, &text, font, egui::Color32::BLACK);
+            painter.text(
+                center,
+                egui::Align2::CENTER_CENTER,
+                &text,
+                font,
+                egui::Color32::BLACK,
+            );
         }
 
         // Placefile labels/icons.
@@ -4743,13 +5611,25 @@ paste_target: None,
             let mut hit_size = egui::vec2(16.0, 16.0);
             match &label.kind {
                 PlaceLabelKind::Text(text) => {
-                    painter.text(p, egui::Align2::CENTER_CENTER, text, egui::FontId::proportional(12.0), label.color);
+                    painter.text(
+                        p,
+                        egui::Align2::CENTER_CENTER,
+                        text,
+                        egui::FontId::proportional(12.0),
+                        label.color,
+                    );
                 }
                 PlaceLabelKind::Marker => {
                     painter.circle_stroke(p, 5.0, egui::Stroke::new(1.5, label.color));
                     painter.circle_filled(p, 1.5, label.color);
                 }
-                PlaceLabelKind::Sprite { tex, uv, size, hot, angle } => {
+                PlaceLabelKind::Sprite {
+                    tex,
+                    uv,
+                    size,
+                    hot,
+                    angle,
+                } => {
                     draw_sprite(&painter, *tex, *uv, p, *size, *hot, *angle, label.color);
                     hit_size = *size;
                 }
@@ -4782,8 +5662,13 @@ paste_target: None,
                     painter.add(egui::Shape::line(pts, egui::Stroke::new(1.0, col)));
                     if cam.zoom >= 6.0 {
                         let top = crate::geo::destination_point(origin, 0.0, km);
-                        painter.text(to_screen(top[0], top[1]), egui::Align2::CENTER_BOTTOM,
-                            format!("{km:.0} km"), egui::FontId::proportional(10.0), col);
+                        painter.text(
+                            to_screen(top[0], top[1]),
+                            egui::Align2::CENTER_BOTTOM,
+                            format!("{km:.0} km"),
+                            egui::FontId::proportional(10.0),
+                            col,
+                        );
                     }
                 }
                 for az in (0..360).step_by(45) {
@@ -4803,20 +5688,30 @@ paste_target: None,
             let current = self.views[idx].site.as_deref();
             let show_labels = cam.zoom >= 5.0;
             for s in wxdata::sites::sites() {
-                let w = crate::render::mercator::lonlat_to_world(s.longitude as f64, s.latitude as f64);
+                let w =
+                    crate::render::mercator::lonlat_to_world(s.longitude as f64, s.latitude as f64);
                 let (sx, sy) = cam.world_to_screen(w, vp);
                 let p = egui::pos2(prect.left() + sx, prect.top() + sy);
                 if !prect.contains(p) {
                     continue;
                 }
                 let is_current = current == Some(s.id);
-                let col = if is_current { accent } else { egui::Color32::from_rgb(120, 190, 255) };
+                let col = if is_current {
+                    accent
+                } else {
+                    egui::Color32::from_rgb(120, 190, 255)
+                };
                 let r = if is_current { 5.0 } else { 3.5 };
                 painter.circle_stroke(p, r, egui::Stroke::new(1.5, col));
                 painter.circle_filled(p, 1.5, col);
                 if show_labels {
-                    painter.text(p + egui::vec2(6.0, 0.0), egui::Align2::LEFT_CENTER, s.id,
-                        egui::FontId::monospace(10.0), col);
+                    painter.text(
+                        p + egui::vec2(6.0, 0.0),
+                        egui::Align2::LEFT_CENTER,
+                        s.id,
+                        egui::FontId::monospace(10.0),
+                        col,
+                    );
                 }
             }
         }
@@ -4831,17 +5726,32 @@ paste_target: None,
             }
             let col = crate::theme::accent(self.settings.theme);
             // Uploaded icon if one is loaded; otherwise the default accent dot.
-            let tex = m.icon.as_ref().and_then(|n| self.marker_icon_tex.get(n)).and_then(|t| t.as_ref());
+            let tex = m
+                .icon
+                .as_ref()
+                .and_then(|n| self.marker_icon_tex.get(n))
+                .and_then(|t| t.as_ref());
             let label_dx = if let Some(tex) = tex {
                 let r = egui::Rect::from_center_size(p, egui::vec2(24.0, 24.0));
-                painter.image(tex.id(), r, egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), egui::Color32::WHITE);
+                painter.image(
+                    tex.id(),
+                    r,
+                    egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+                    egui::Color32::WHITE,
+                );
                 14.0
             } else {
                 painter.circle_filled(p, 4.0, col);
                 painter.circle_stroke(p, 4.0, egui::Stroke::new(1.5, egui::Color32::WHITE));
                 7.0
             };
-            painter.text(p + egui::vec2(label_dx, 0.0), egui::Align2::LEFT_CENTER, &m.name, egui::FontId::proportional(12.0), col);
+            painter.text(
+                p + egui::vec2(label_dx, 0.0),
+                egui::Align2::LEFT_CENTER,
+                &m.name,
+                egui::FontId::proportional(12.0),
+                col,
+            );
         }
 
         // Measure tool.
@@ -4862,7 +5772,13 @@ paste_target: None,
                 let mi = km * 0.621_371; // statute miles
                 let txt = format!("{mi:.1} mi  @ {brg:.0}°");
                 let mid = a + (b - a) * 0.5;
-                painter.text(mid + egui::vec2(0.0, -10.0), egui::Align2::CENTER_BOTTOM, txt, egui::FontId::proportional(12.0), col);
+                painter.text(
+                    mid + egui::vec2(0.0, -10.0),
+                    egui::Align2::CENTER_BOTTOM,
+                    txt,
+                    egui::FontId::proportional(12.0),
+                    col,
+                );
             }
         }
 
@@ -4880,8 +5796,20 @@ paste_target: None,
             if self.xsection_pts.len() == 2 {
                 let (a, b) = (screen(self.xsection_pts[0]), screen(self.xsection_pts[1]));
                 painter.line_segment([a, b], egui::Stroke::new(2.0, col));
-                painter.text(a, egui::Align2::RIGHT_BOTTOM, "A", egui::FontId::proportional(12.0), col);
-                painter.text(b, egui::Align2::LEFT_BOTTOM, "B", egui::FontId::proportional(12.0), col);
+                painter.text(
+                    a,
+                    egui::Align2::RIGHT_BOTTOM,
+                    "A",
+                    egui::FontId::proportional(12.0),
+                    col,
+                );
+                painter.text(
+                    b,
+                    egui::Align2::LEFT_BOTTOM,
+                    "B",
+                    egui::FontId::proportional(12.0),
+                    col,
+                );
             }
         }
 
@@ -4913,7 +5841,15 @@ paste_target: None,
         if view.show_legend && view.volume.is_some() && !cfg!(target_os = "android") {
             let table = self.palettes.table(view.moment);
             let (df, dl) = display_units(view.moment, &self.settings);
-            ui::legend::draw(&painter, prect, view.moment, table, view.active_threshold(), df, dl);
+            ui::legend::draw(
+                &painter,
+                prect,
+                view.moment,
+                table,
+                view.active_threshold(),
+                df,
+                dl,
+            );
         }
     }
 
@@ -4923,8 +5859,13 @@ paste_target: None,
         let n = n.clamp(1, 4);
         while self.views.len() < n {
             let src = &self.views[self.active];
-            let (site, camera, basemap, tilt, date) =
-                (src.site.clone(), src.camera, src.basemap, src.tilt, src.timeline.date);
+            let (site, camera, basemap, tilt, date) = (
+                src.site.clone(),
+                src.camera,
+                src.basemap,
+                src.tilt,
+                src.timeline.date,
+            );
             let mut v = MapView::new(site, camera);
             v.basemap = basemap;
             v.tilt = tilt;
@@ -5192,7 +6133,10 @@ paste_target: None,
         use crate::render::mercator::lonlat_to_world;
         let v = &mut self.views[self.active];
         v.site = Some(site.to_ascii_uppercase());
-        v.camera = crate::render::mercator::Camera { center: lonlat_to_world(lon, lat), zoom };
+        v.camera = crate::render::mercator::Camera {
+            center: lonlat_to_world(lon, lat),
+            zoom,
+        };
         if let Some(t) = time {
             v.timeline.date = t.date_naive();
             v.timeline.following = false;
@@ -5243,7 +6187,10 @@ paste_target: None,
         let Some(path) = crate::dialog::open_path("JSON", &["json"]) else {
             return;
         };
-        match std::fs::read_to_string(&path).map_err(|e| e.to_string()).and_then(|s| crate::settings::Settings::import_bundle(&s)) {
+        match std::fs::read_to_string(&path)
+            .map_err(|e| e.to_string())
+            .and_then(|s| crate::settings::Settings::import_bundle(&s))
+        {
             Ok(settings) => self.settings = settings,
             Err(e) => log::warn!("settings import failed: {e}"),
         }
@@ -5278,7 +6225,9 @@ paste_target: None,
 
     /// Advance the loop export: wait for the stepped radar to settle, then request a screenshot.
     fn drive_loop_export(&mut self, ctx: &egui::Context) {
-        let Some(le) = &mut self.loop_export else { return };
+        let Some(le) = &mut self.loop_export else {
+            return;
+        };
         if le.capturing {
             return; // waiting for the screenshot event
         }
@@ -5294,7 +6243,9 @@ paste_target: None,
 
     /// Record one captured loop frame; step to the next, or finish + encode the GIF.
     fn record_loop_frame(&mut self, image: &egui::ColorImage) {
-        let Some(le) = &mut self.loop_export else { return };
+        let Some(le) = &mut self.loop_export else {
+            return;
+        };
         let (w, h) = (image.size[0] as u32, image.size[1] as u32);
         let mut buf = Vec::with_capacity((w * h * 4) as usize);
         for px in &image.pixels {
@@ -5318,7 +6269,11 @@ paste_target: None,
                 LoopFormat::Mp4 => crate::loopexport::encode_mp4(&le.frames, 5, &le.dest),
             };
             match res {
-                Ok(()) => log::info!("loop saved: {} ({} frames)", le.dest.display(), le.frames.len()),
+                Ok(()) => log::info!(
+                    "loop saved: {} ({} frames)",
+                    le.dest.display(),
+                    le.frames.len()
+                ),
                 Err(e) => log::warn!("loop encode failed: {e}"),
             }
         }
@@ -5366,7 +6321,15 @@ paste_target: None,
             ui.separator();
             if let Some(vol) = &v.volume {
                 let age = (Utc::now() - vol.time).num_seconds().max(0);
-                ui.label(format!("{} ({} ago)", vol.time.format("%H:%M:%SZ"), humanize(age)));
+                ui.label(format!(
+                    "{} ({} ago)",
+                    crate::timefmt::fmt_clock(
+                        vol.time,
+                        self.settings.tz_for(v.site.as_deref()),
+                        true
+                    ),
+                    humanize(age)
+                ));
             } else if v.loading {
                 ui.label("loading…");
             }
@@ -5396,7 +6359,8 @@ paste_target: None,
                 let depth = self.dvr_depth();
                 if depth > 1 {
                     ui.separator();
-                    ui.weak(format!("⟲ DVR {depth}")).on_hover_text("Frames buffered in memory for instant replay (press R)");
+                    ui.weak(format!("⟲ DVR {depth}"))
+                        .on_hover_text("Frames buffered in memory for instant replay (press R)");
                 }
             });
         });
@@ -5419,7 +6383,9 @@ pub(crate) fn to_upload(
     use crate::render::mercator::lonlat_to_world;
     let max_range_km = s.first_gate_km + s.gate_count as f32 * s.gate_interval_km;
     let dlat = (max_range_km / 111.32) as f64;
-    let coslat = (s.radar_lat as f64 * std::f64::consts::PI / 180.0).cos().max(0.01);
+    let coslat = (s.radar_lat as f64 * std::f64::consts::PI / 180.0)
+        .cos()
+        .max(0.01);
     let dlon = (max_range_km as f64 / 111.32) / coslat;
     let (lat, lon) = (s.radar_lat as f64, s.radar_lon as f64);
     let (wx0, wy0) = lonlat_to_world(lon - dlon, lat + dlat);
@@ -5507,7 +6473,11 @@ fn field_index_upload(
     lut: Vec<u8>,
 ) -> crate::render::MrmsUpload {
     use crate::render::mercator::lonlat_to_world;
-    let data: Vec<u8> = f.values.iter().map(|&v| if v.is_nan() { 0 } else { map(v) }).collect();
+    let data: Vec<u8> = f
+        .values
+        .iter()
+        .map(|&v| if v.is_nan() { 0 } else { map(v) })
+        .collect();
     let (wx0, wy0) = lonlat_to_world(f.lon_west, f.lat_north);
     let (wx1, wy1) = lonlat_to_world(f.lon_east, f.lat_south);
     crate::render::MrmsUpload {
@@ -5517,8 +6487,18 @@ fn field_index_upload(
         world_min: [wx0 as f32, wy0 as f32],
         world_max: [wx1 as f32, wy1 as f32],
         uniform: [
-            f.lon_west as f32, f.lat_north as f32, f.lon_east as f32, f.lat_south as f32,
-            f.nx as f32, f.ny as f32, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+            f.lon_west as f32,
+            f.lat_north as f32,
+            f.lon_east as f32,
+            f.lat_south as f32,
+            f.nx as f32,
+            f.ny as f32,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
         ],
         lut,
     }
@@ -5610,13 +6590,31 @@ async fn load_or_fetch_climo(
 
 /// Lightning-density upload (strikes/km²/min → log index), kept public for the headless harness.
 pub(crate) fn lightning_upload(f: &wxdata::mrms::MrmsField) -> crate::render::MrmsUpload {
-    let map = |v: f32| if v <= 0.0 { 0 } else { (2.0 + ((v.log10() + 1.7) / 2.0).clamp(0.0, 1.0) * 253.0) as u8 };
-    field_index_upload(f, map, ramp_lut(&[(0.0, [255, 255, 255]), (0.35, [255, 240, 120]), (0.65, [255, 160, 40]), (1.0, [230, 60, 200])]))
+    let map = |v: f32| {
+        if v <= 0.0 {
+            0
+        } else {
+            (2.0 + ((v.log10() + 1.7) / 2.0).clamp(0.0, 1.0) * 253.0) as u8
+        }
+    };
+    field_index_upload(
+        f,
+        map,
+        ramp_lut(&[
+            (0.0, [255, 255, 255]),
+            (0.35, [255, 240, 120]),
+            (0.65, [255, 160, 40]),
+            (1.0, [230, 60, 200]),
+        ]),
+    )
 }
 
 /// Build the GPU upload for an index-mapped field layer (everything except the reflectivity
 /// mosaic, which needs the app's color table). Kept public for the headless harness.
-pub(crate) fn field_upload_indexed(layer: crate::render::FieldLayer, f: &wxdata::mrms::MrmsField) -> crate::render::MrmsUpload {
+pub(crate) fn field_upload_indexed(
+    layer: crate::render::FieldLayer,
+    f: &wxdata::mrms::MrmsField,
+) -> crate::render::MrmsUpload {
     use crate::render::FieldLayer as FL;
     match layer {
         FL::Lightning => lightning_upload(f),
@@ -5625,108 +6623,243 @@ pub(crate) fn field_upload_indexed(layer: crate::render::FieldLayer, f: &wxdata:
         FL::Rotation | FL::AzShear => {
             let map = |v: f32| {
                 let a = v.abs();
-                if a < 4.0 { 0 } else { (2.0 + ((a - 4.0) / 36.0).clamp(0.0, 1.0) * 253.0) as u8 }
+                if a < 4.0 {
+                    0
+                } else {
+                    (2.0 + ((a - 4.0) / 36.0).clamp(0.0, 1.0) * 253.0) as u8
+                }
             };
-            field_index_upload(f, map, ramp_lut(&[(0.0, [40, 90, 200]), (0.4, [40, 200, 200]), (0.7, [240, 230, 60]), (1.0, [230, 40, 40])]))
+            field_index_upload(
+                f,
+                map,
+                ramp_lut(&[
+                    (0.0, [40, 90, 200]),
+                    (0.4, [40, 200, 200]),
+                    (0.7, [240, 230, 60]),
+                    (1.0, [230, 40, 40]),
+                ]),
+            )
         }
         // MESH max hail size (mm): 10..75 mm → green→yellow→orange→magenta.
         FL::Mesh => {
-            let map = |v: f32| if v < 10.0 { 0 } else { (2.0 + ((v - 10.0) / 65.0).clamp(0.0, 1.0) * 253.0) as u8 };
-            field_index_upload(f, map, ramp_lut(&[(0.0, [60, 200, 90]), (0.4, [240, 230, 60]), (0.7, [240, 150, 30]), (1.0, [230, 60, 200])]))
+            let map = |v: f32| {
+                if v < 10.0 {
+                    0
+                } else {
+                    (2.0 + ((v - 10.0) / 65.0).clamp(0.0, 1.0) * 253.0) as u8
+                }
+            };
+            field_index_upload(
+                f,
+                map,
+                ramp_lut(&[
+                    (0.0, [60, 200, 90]),
+                    (0.4, [240, 230, 60]),
+                    (0.7, [240, 150, 30]),
+                    (1.0, [230, 60, 200]),
+                ]),
+            )
         }
         // QPE accumulation (mm): 0.25..100 mm on a log ramp, green→yellow→red→magenta→white.
         FL::Qpe1h | FL::Qpe24h => {
             let full: f32 = if layer == FL::Qpe24h { 250.0 } else { 100.0 };
             let map = move |v: f32| {
-                if v < 0.25 { 0 } else {
-                    let t = ((v.log10() - (0.25f32).log10()) / (full.log10() - (0.25f32).log10())).clamp(0.0, 1.0);
+                if v < 0.25 {
+                    0
+                } else {
+                    let t = ((v.log10() - (0.25f32).log10()) / (full.log10() - (0.25f32).log10()))
+                        .clamp(0.0, 1.0);
                     (2.0 + t * 253.0) as u8
                 }
             };
-            field_index_upload(f, map, ramp_lut(&[
-                (0.0, [40, 180, 90]), (0.3, [230, 220, 60]), (0.55, [230, 110, 40]),
-                (0.8, [220, 40, 60]), (1.0, [230, 220, 240]),
-            ]))
+            field_index_upload(
+                f,
+                map,
+                ramp_lut(&[
+                    (0.0, [40, 180, 90]),
+                    (0.3, [230, 220, 60]),
+                    (0.55, [230, 110, 40]),
+                    (0.8, [220, 40, 60]),
+                    (1.0, [230, 220, 240]),
+                ]),
+            )
         }
         // Surface CAPE (J/kg): 100..5000 → cyan→green→yellow→orange→magenta, translucent.
         FL::Cape => {
-            let map = |v: f32| if v < 100.0 { 0 } else { (2.0 + ((v - 100.0) / 4900.0).clamp(0.0, 1.0) * 253.0) as u8 };
-            field_index_upload(f, map, ramp_lut_a(&[
-                (0.0, [0, 200, 200]), (0.25, [40, 200, 90]), (0.5, [240, 230, 60]),
-                (0.75, [240, 150, 30]), (1.0, [230, 60, 200]),
-            ], 150))
+            let map = |v: f32| {
+                if v < 100.0 {
+                    0
+                } else {
+                    (2.0 + ((v - 100.0) / 4900.0).clamp(0.0, 1.0) * 253.0) as u8
+                }
+            };
+            field_index_upload(
+                f,
+                map,
+                ramp_lut_a(
+                    &[
+                        (0.0, [0, 200, 200]),
+                        (0.25, [40, 200, 90]),
+                        (0.5, [240, 230, 60]),
+                        (0.75, [240, 150, 30]),
+                        (1.0, [230, 60, 200]),
+                    ],
+                    150,
+                ),
+            )
         }
         // Storm-relative helicity (m²/s²): 50..500 → blue→yellow→red, translucent.
         FL::Srh => {
-            let map = |v: f32| if v < 50.0 { 0 } else { (2.0 + ((v - 50.0) / 450.0).clamp(0.0, 1.0) * 253.0) as u8 };
-            field_index_upload(f, map, ramp_lut_a(&[
-                (0.0, [40, 90, 200]), (0.5, [240, 230, 60]), (1.0, [230, 40, 40]),
-            ], 150))
+            let map = |v: f32| {
+                if v < 50.0 {
+                    0
+                } else {
+                    (2.0 + ((v - 50.0) / 450.0).clamp(0.0, 1.0) * 253.0) as u8
+                }
+            };
+            field_index_upload(
+                f,
+                map,
+                ramp_lut_a(
+                    &[
+                        (0.0, [40, 90, 200]),
+                        (0.5, [240, 230, 60]),
+                        (1.0, [230, 40, 40]),
+                    ],
+                    150,
+                ),
+            )
         }
         // MRMS surface precip type flag: discrete categories via a categorical LUT.
         FL::PrecipType => {
             let map = |v: f32| v as u8; // categorical index, not a ramp
-            field_index_upload(f, map, categorical_lut(&[
-                (1, [60, 200, 90]),   // warm stratiform rain — green
-                (3, [90, 150, 240]),  // snow — blue
-                (6, [240, 230, 60]),  // convective — yellow
-                (7, [230, 40, 40]),   // hail — red
-                (10, [40, 200, 200]), // cold stratiform rain — teal
-                (91, [80, 220, 120]), // tropical/stratiform rain — green
-                (96, [80, 220, 120]), // tropical/convective rain — green
-            ], 200))
+            field_index_upload(
+                f,
+                map,
+                categorical_lut(
+                    &[
+                        (1, [60, 200, 90]),   // warm stratiform rain — green
+                        (3, [90, 150, 240]),  // snow — blue
+                        (6, [240, 230, 60]),  // convective — yellow
+                        (7, [230, 40, 40]),   // hail — red
+                        (10, [40, 200, 200]), // cold stratiform rain — teal
+                        (91, [80, 220, 120]), // tropical/stratiform rain — green
+                        (96, [80, 220, 120]), // tropical/convective rain — green
+                    ],
+                    200,
+                ),
+            )
         }
         // MRMS FLASH flash-flood ARI (years): 1..100 log ramp yellow→orange→red→purple→white.
         FL::FlashFlood => {
-            let map = |v: f32| if v < 1.0 { 0 } else { (2.0 + (v.log10() / 2.0).clamp(0.0, 1.0) * 253.0) as u8 };
-            field_index_upload(f, map, ramp_lut(&[
-                (0.0, [240, 230, 60]), (0.3, [240, 150, 30]), (0.6, [230, 40, 40]),
-                (0.85, [150, 40, 200]), (1.0, [240, 240, 240]),
-            ]))
+            let map = |v: f32| {
+                if v < 1.0 {
+                    0
+                } else {
+                    (2.0 + (v.log10() / 2.0).clamp(0.0, 1.0) * 253.0) as u8
+                }
+            };
+            field_index_upload(
+                f,
+                map,
+                ramp_lut(&[
+                    (0.0, [240, 230, 60]),
+                    (0.3, [240, 150, 30]),
+                    (0.6, [230, 40, 40]),
+                    (0.85, [150, 40, 200]),
+                    (1.0, [240, 240, 240]),
+                ]),
+            )
         }
         // Digital VIL (kg/m²): 0.1..80 → green→yellow→orange→magenta→white.
         FL::Vil => {
-            let map = |v: f32| if v < 0.1 { 0 } else { (2.0 + ((v - 0.1) / 79.9).clamp(0.0, 1.0) * 253.0) as u8 };
-            field_index_upload(f, map, ramp_lut(&[
-                (0.0, [60, 200, 90]), (0.35, [240, 230, 60]), (0.6, [240, 150, 30]),
-                (0.85, [230, 60, 200]), (1.0, [240, 240, 240]),
-            ]))
+            let map = |v: f32| {
+                if v < 0.1 {
+                    0
+                } else {
+                    (2.0 + ((v - 0.1) / 79.9).clamp(0.0, 1.0) * 253.0) as u8
+                }
+            };
+            field_index_upload(
+                f,
+                map,
+                ramp_lut(&[
+                    (0.0, [60, 200, 90]),
+                    (0.35, [240, 230, 60]),
+                    (0.6, [240, 150, 30]),
+                    (0.85, [230, 60, 200]),
+                    (1.0, [240, 240, 240]),
+                ]),
+            )
         }
         // Enhanced Echo Tops (kft): 5..70 → blue→green→yellow→white.
         FL::EchoTops => {
-            let map = |v: f32| if v < 5.0 { 0 } else { (2.0 + ((v - 5.0) / 65.0).clamp(0.0, 1.0) * 253.0) as u8 };
-            field_index_upload(f, map, ramp_lut(&[
-                (0.0, [40, 90, 200]), (0.4, [40, 200, 90]), (0.75, [240, 230, 60]), (1.0, [240, 240, 240]),
-            ]))
+            let map = |v: f32| {
+                if v < 5.0 {
+                    0
+                } else {
+                    (2.0 + ((v - 5.0) / 65.0).clamp(0.0, 1.0) * 253.0) as u8
+                }
+            };
+            field_index_upload(
+                f,
+                map,
+                ramp_lut(&[
+                    (0.0, [40, 90, 200]),
+                    (0.4, [40, 200, 90]),
+                    (0.75, [240, 230, 60]),
+                    (1.0, [240, 240, 240]),
+                ]),
+            )
         }
         // 24-h hail swaths: same MESH scale, but starting at severe-ish sizes so old small hail
         // doesn't blanket the map (19 mm ≈ 0.75 in).
         FL::HailSwath => {
-            let map = |v: f32| if v < 19.0 { 0 } else { (2.0 + ((v - 19.0) / 56.0).clamp(0.0, 1.0) * 253.0) as u8 };
-            field_index_upload(f, map, ramp_lut(&[
-                (0.0, [60, 200, 90]), (0.4, [240, 230, 60]), (0.7, [240, 150, 30]), (1.0, [230, 60, 200]),
-            ]))
+            let map = |v: f32| {
+                if v < 19.0 {
+                    0
+                } else {
+                    (2.0 + ((v - 19.0) / 56.0).clamp(0.0, 1.0) * 253.0) as u8
+                }
+            };
+            field_index_upload(
+                f,
+                map,
+                ramp_lut(&[
+                    (0.0, [60, 200, 90]),
+                    (0.4, [240, 230, 60]),
+                    (0.7, [240, 150, 30]),
+                    (1.0, [230, 60, 200]),
+                ]),
+            )
         }
         // Hybrid Hydrometeor Classification: raw HCA class codes → categorical colors
         // (per the product's class table; 140 = unknown, 150 = range-folded).
         FL::Hca => {
             let map = |v: f32| v as u8;
-            field_index_upload(f, map, categorical_lut(&[
-                (10, [140, 110, 90]),   // biological
-                (20, [95, 95, 95]),     // ground clutter / AP
-                (30, [185, 220, 255]),  // ice crystals
-                (40, [110, 160, 240]),  // dry snow
-                (50, [0, 200, 255]),    // wet snow
-                (60, [90, 200, 90]),    // light/moderate rain
-                (70, [25, 145, 50]),    // heavy rain
-                (80, [240, 200, 60]),   // big drops
-                (90, [200, 120, 220]),  // graupel
-                (100, [230, 50, 50]),   // hail (possibly with rain)
-                (110, [170, 0, 0]),     // large hail
-                (120, [120, 0, 60]),    // giant hail
-                (140, [160, 160, 160]), // unknown
-                (150, [240, 150, 200]), // range folded
-            ], 200))
+            field_index_upload(
+                f,
+                map,
+                categorical_lut(
+                    &[
+                        (10, [140, 110, 90]),   // biological
+                        (20, [95, 95, 95]),     // ground clutter / AP
+                        (30, [185, 220, 255]),  // ice crystals
+                        (40, [110, 160, 240]),  // dry snow
+                        (50, [0, 200, 255]),    // wet snow
+                        (60, [90, 200, 90]),    // light/moderate rain
+                        (70, [25, 145, 50]),    // heavy rain
+                        (80, [240, 200, 60]),   // big drops
+                        (90, [200, 120, 220]),  // graupel
+                        (100, [230, 50, 50]),   // hail (possibly with rain)
+                        (110, [170, 0, 0]),     // large hail
+                        (120, [120, 0, 60]),    // giant hail
+                        (140, [160, 160, 160]), // unknown
+                        (150, [240, 150, 200]), // range folded
+                    ],
+                    200,
+                ),
+            )
         }
         // The reflectivity-palette layers (mosaic, HRRR) route through the app method instead.
         FL::Mrms | FL::Hrrr => field_index_upload(f, |_| 0, vec![0u8; 256 * 4]),
@@ -5736,7 +6869,11 @@ pub(crate) fn field_upload_indexed(layer: crate::render::FieldLayer, f: &wxdata:
 impl HookEchoApp {
     /// Build the GPU upload for `layer` from its freshly-fetched grid, picking the value→index
     /// mapping and color LUT that suit the product's units.
-    fn field_upload(&self, layer: crate::render::FieldLayer, f: &wxdata::mrms::MrmsField) -> crate::render::MrmsUpload {
+    fn field_upload(
+        &self,
+        layer: crate::render::FieldLayer,
+        f: &wxdata::mrms::MrmsField,
+    ) -> crate::render::MrmsUpload {
         use crate::render::FieldLayer as FL;
         match layer {
             // Mosaic + HRRR forecast are both dBZ → the reflectivity palette.
@@ -5774,7 +6911,11 @@ fn draw_sprite(
         (size.x, size.y, uv.right(), uv.bottom()),
         (0.0, size.y, uv.left(), uv.bottom()),
     ] {
-        mesh.vertices.push(egui::epaint::Vertex { pos: corner(dx, dy), uv: egui::pos2(u, v), color: tint });
+        mesh.vertices.push(egui::epaint::Vertex {
+            pos: corner(dx, dy),
+            uv: egui::pos2(u, v),
+            color: tint,
+        });
     }
     mesh.add_triangle(0, 1, 2);
     mesh.add_triangle(0, 2, 3);
@@ -5794,7 +6935,10 @@ async fn fetch_icon_sheet(http: &reqwest::Client, url: &str) -> anyhow::Result<e
         .await?;
     let img = image::load_from_memory(&bytes)?.to_rgba8();
     let (w, h) = img.dimensions();
-    Ok(egui::ColorImage::from_rgba_unmultiplied([w as usize, h as usize], img.as_raw()))
+    Ok(egui::ColorImage::from_rgba_unmultiplied(
+        [w as usize, h as usize],
+        img.as_raw(),
+    ))
 }
 
 fn rgba32(c: [u8; 4]) -> egui::Color32 {
@@ -5823,20 +6967,22 @@ fn nearest_cell(cells: &[Cell], lon: f64, lat: f64, max_km: f64) -> Option<&Cell
 
 /// The longest consecutive segment of a screen-space polyline (for placing a contour label).
 fn longest_segment(pts: &[egui::Pos2]) -> Option<(egui::Pos2, egui::Pos2)> {
-    pts.windows(2)
-        .map(|w| (w[0], w[1]))
-        .max_by(|a, b| a.0.distance(a.1).partial_cmp(&b.0.distance(b.1)).unwrap_or(std::cmp::Ordering::Equal))
+    pts.windows(2).map(|w| (w[0], w[1])).max_by(|a, b| {
+        a.0.distance(a.1)
+            .partial_cmp(&b.0.distance(b.1))
+            .unwrap_or(std::cmp::Ordering::Equal)
+    })
 }
 
 /// Marker color for an SPC storm-report kind.
 fn report_color(kind: wxdata::spc::ReportKind) -> [u8; 4] {
     use wxdata::spc::ReportKind as R;
     match kind {
-        R::Tornado => [230, 40, 40, 255],  // red
-        R::Wind => [70, 130, 240, 255],    // blue
-        R::Hail => [70, 210, 110, 255],    // green
-        R::Flood => [0, 150, 90, 255],     // dark green
-        R::Other => [180, 180, 180, 255],  // gray
+        R::Tornado => [230, 40, 40, 255], // red
+        R::Wind => [70, 130, 240, 255],   // blue
+        R::Hail => [70, 210, 110, 255],   // green
+        R::Flood => [0, 150, 90, 255],    // dark green
+        R::Other => [180, 180, 180, 255], // gray
     }
 }
 
@@ -5844,9 +6990,10 @@ fn report_color(kind: wxdata::spc::ReportKind) -> [u8; 4] {
 /// setting (internal data stays m/s), everything else uses its native unit.
 pub(crate) fn display_units(moment: Moment, settings: &Settings) -> (f32, &'static str) {
     match moment {
-        Moment::Velocity | Moment::SpectrumWidth => {
-            (settings.velocity_unit.factor_from_ms(), settings.velocity_unit.label())
-        }
+        Moment::Velocity | Moment::SpectrumWidth => (
+            settings.velocity_unit.factor_from_ms(),
+            settings.velocity_unit.label(),
+        ),
         _ => (1.0, moment.units()),
     }
 }
@@ -5871,7 +7018,9 @@ fn humanize(secs: i64) -> String {
 /// True if the feature's bounding box overlaps `box = (min_lon, min_lat, max_lon, max_lat)`.
 /// Features with no geometry (no bbox) are treated as not overlapping.
 fn feature_in_box(f: &GeoFeature, bx: (f64, f64, f64, f64)) -> bool {
-    let Some((x0, y0, x1, y1)) = f.bbox() else { return false };
+    let Some((x0, y0, x1, y1)) = f.bbox() else {
+        return false;
+    };
     let (bx0, by0, bx1, by1) = bx;
     x1 >= bx0 && x0 <= bx1 && y1 >= by0 && y0 <= by1
 }
@@ -5964,13 +7113,18 @@ impl eframe::App for HookEchoApp {
         self.sync_contours(ctx);
         // NHC tropical suite: refresh every 15 min while enabled.
         if self.show_tropical
-            && self.tropical_last_fetch.is_none_or(|t| t.elapsed().as_secs() >= 900)
+            && self
+                .tropical_last_fetch
+                .is_none_or(|t| t.elapsed().as_secs() >= 900)
         {
             self.tropical_last_fetch = Some(Instant::now());
             self.spawn_overlay(ctx, OverlaySource::Tropical);
         }
         // Periodic overlay refresh (~2 min), honoring live weather cadence.
-        if self.overlay_last_fetch.is_none_or(|t| t.elapsed().as_secs() >= 120) {
+        if self
+            .overlay_last_fetch
+            .is_none_or(|t| t.elapsed().as_secs() >= 120)
+        {
             self.fetch_overlays(ctx);
         }
         // MRMS national mosaic: fetch when enabled, refresh at the ~2-min product cadence.
@@ -5978,13 +7132,17 @@ impl eframe::App for HookEchoApp {
         use crate::render::FieldLayer as FL;
         for layer in FL::DRAW_ORDER {
             // HRRR forecast, HRRR environment, and per-site L3 grids each fetch in their own block.
-            if matches!(layer, FL::Hrrr | FL::Cape | FL::Srh | FL::Vil | FL::EchoTops | FL::Hca) {
+            if matches!(
+                layer,
+                FL::Hrrr | FL::Cape | FL::Srh | FL::Vil | FL::EchoTops | FL::Hca
+            ) {
                 continue;
             }
-            let stale = self
-                .fields
-                .get(&layer)
-                .is_some_and(|s| s.show && s.last_fetch.is_none_or(|t| t.elapsed().as_secs() >= field_refresh_secs(layer)));
+            let stale = self.fields.get(&layer).is_some_and(|s| {
+                s.show
+                    && s.last_fetch
+                        .is_none_or(|t| t.elapsed().as_secs() >= field_refresh_secs(layer))
+            });
             if stale {
                 if let Some(s) = self.fields.get_mut(&layer) {
                     s.last_fetch = Some(Instant::now());
@@ -6000,22 +7158,28 @@ impl eframe::App for HookEchoApp {
                     FL::PrecipType => wxdata::mrms::PRECIP_TYPE.to_string(),
                     FL::FlashFlood => wxdata::mrms::FLASH_ARI30.to_string(),
                     FL::HailSwath => wxdata::mrms::MESH_1440.to_string(),
-                    FL::Hrrr | FL::Cape | FL::Srh | FL::Vil | FL::EchoTops | FL::Hca => unreachable!(),
+                    FL::Hrrr | FL::Cape | FL::Srh | FL::Vil | FL::EchoTops | FL::Hca => {
+                        unreachable!()
+                    }
                 };
                 self.spawn_overlay(ctx, OverlaySource::Field(layer, product));
             }
         }
         // Environment suite (HRRR CAPE/SRH): fetch each enabled layer at f00, refresh ~15 min.
         for layer in [FL::Cape, FL::Srh] {
-            let stale = self
-                .fields
-                .get(&layer)
-                .is_some_and(|s| s.show && s.last_fetch.is_none_or(|t| t.elapsed().as_secs() >= field_refresh_secs(layer)));
+            let stale = self.fields.get(&layer).is_some_and(|s| {
+                s.show
+                    && s.last_fetch
+                        .is_none_or(|t| t.elapsed().as_secs() >= field_refresh_secs(layer))
+            });
             if stale {
                 if let Some(s) = self.fields.get_mut(&layer) {
                     s.last_fetch = Some(Instant::now());
                 }
-                self.spawn_overlay(ctx, OverlaySource::Env(layer, self.env_cape_ml, self.env_srh_km));
+                self.spawn_overlay(
+                    ctx,
+                    OverlaySource::Env(layer, self.env_cape_ml, self.env_srh_km),
+                );
             }
         }
         // Gridded L3 products (DVL/EET): per-site, refetch on the L3 cadence or a site change.
@@ -6026,10 +7190,10 @@ impl eframe::App for HookEchoApp {
             if !on {
                 continue;
             }
-            let stale = self
-                .fields
-                .get(&layer)
-                .is_some_and(|s| s.last_fetch.is_none_or(|t| t.elapsed().as_secs() >= field_refresh_secs(layer)));
+            let stale = self.fields.get(&layer).is_some_and(|s| {
+                s.last_fetch
+                    .is_none_or(|t| t.elapsed().as_secs() >= field_refresh_secs(layer))
+            });
             if let Some(site) = &l3_site {
                 if stale || site_changed {
                     if let Some(s) = self.fields.get_mut(&layer) {
@@ -6051,7 +7215,9 @@ impl eframe::App for HookEchoApp {
         let hrrr_on = self.fields.get(&FL::Hrrr).is_some_and(|s| s.show);
         if hrrr_on {
             let hour_changed = self.hrrr_fetched_hour != Some(self.hrrr_fcst_hour);
-            let stale = self.hrrr_last_fetch.is_none_or(|t| t.elapsed().as_secs() >= 600);
+            let stale = self
+                .hrrr_last_fetch
+                .is_none_or(|t| t.elapsed().as_secs() >= 600);
             if hour_changed || stale {
                 self.hrrr_fetched_hour = Some(self.hrrr_fcst_hour);
                 self.hrrr_last_fetch = Some(Instant::now());
@@ -6060,28 +7226,36 @@ impl eframe::App for HookEchoApp {
         }
         // Live LSR refresh (~2-min cadence; the IEM feed is minutes-fresh).
         if self.show_storm_reports
-            && self.reports_last_fetch.is_none_or(|t| t.elapsed().as_secs() >= 120)
+            && self
+                .reports_last_fetch
+                .is_none_or(|t| t.elapsed().as_secs() >= 120)
         {
             self.reports_last_fetch = Some(Instant::now());
             self.spawn_overlay(ctx, OverlaySource::StormReports(None));
         }
         // Aviation SIGMET/AIRMET refresh (10-min cadence).
         if self.show_aviation
-            && self.aviation_last_fetch.is_none_or(|t| t.elapsed().as_secs() >= 600)
+            && self
+                .aviation_last_fetch
+                .is_none_or(|t| t.elapsed().as_secs() >= 600)
         {
             self.aviation_last_fetch = Some(Instant::now());
             self.spawn_overlay(ctx, OverlaySource::Aviation);
         }
         // Spotter Network refresh (feed's own 1-min cadence).
         if self.show_spotters
-            && self.spotters_last_fetch.is_none_or(|t| t.elapsed().as_secs() >= 60)
+            && self
+                .spotters_last_fetch
+                .is_none_or(|t| t.elapsed().as_secs() >= 60)
         {
             self.spotters_last_fetch = Some(Instant::now());
             self.spawn_overlay(ctx, OverlaySource::Spotters);
         }
         // ProbSevere refresh (~2-min product cadence).
         if self.show_probsevere
-            && self.probsevere_last_fetch.is_none_or(|t| t.elapsed().as_secs() >= 120)
+            && self
+                .probsevere_last_fetch
+                .is_none_or(|t| t.elapsed().as_secs() >= 120)
         {
             self.probsevere_last_fetch = Some(Instant::now());
             self.spawn_overlay(ctx, OverlaySource::ProbSevere);
@@ -6089,7 +7263,9 @@ impl eframe::App for HookEchoApp {
         // Sensors: fetch when the window is open and the site changed or the 10-min clock elapsed.
         if self.show_sensors {
             if let Some(site) = self.views[self.active].site.clone() {
-                let stale = self.sensor_last_fetch.is_none_or(|t| t.elapsed().as_secs() >= 600);
+                let stale = self
+                    .sensor_last_fetch
+                    .is_none_or(|t| t.elapsed().as_secs() >= 600);
                 let site_changed = self.sensor_site.as_deref() != Some(site.as_str());
                 if stale || site_changed {
                     if let Some(s) = wxdata::sites::site_by_id(&site) {
@@ -6097,11 +7273,14 @@ impl eframe::App for HookEchoApp {
                             self.sensor_data = None; // show "loading" until the new site returns
                         }
                         self.sensor_last_fetch = Some(Instant::now());
-                        self.spawn_overlay(ctx, OverlaySource::Obs {
-                            site: site.clone(),
-                            lat: s.latitude as f64,
-                            lon: s.longitude as f64,
-                        });
+                        self.spawn_overlay(
+                            ctx,
+                            OverlaySource::Obs {
+                                site: site.clone(),
+                                lat: s.latitude as f64,
+                                lon: s.longitude as f64,
+                            },
+                        );
                     }
                 }
             }
@@ -6109,7 +7288,9 @@ impl eframe::App for HookEchoApp {
         // VAD hodograph: fetch when open and the site changed or the 5-min clock elapsed.
         if self.show_hodo {
             if let Some(site) = self.views[self.active].site.clone() {
-                let stale = self.hodo_last_fetch.is_none_or(|t| t.elapsed().as_secs() >= 300);
+                let stale = self
+                    .hodo_last_fetch
+                    .is_none_or(|t| t.elapsed().as_secs() >= 300);
                 let site_changed = self.hodo_site.as_deref() != Some(site.as_str());
                 if stale || site_changed {
                     if site_changed {
@@ -6232,7 +7413,10 @@ impl eframe::App for HookEchoApp {
             // Selecting an outlook day/kind that hasn't been fetched yet pulls it on demand.
             let day = self.filters.outlook_day;
             if (1..=3).contains(&day) && self.outlook_features[(day - 1) as usize].is_empty() {
-                self.spawn_overlay(ctx, OverlaySource::Outlook(day, self.outlook_kind_for_day()));
+                self.spawn_overlay(
+                    ctx,
+                    OverlaySource::Outlook(day, self.outlook_kind_for_day()),
+                );
             }
             self.rebuild_overlays();
         }
@@ -6283,12 +7467,18 @@ impl eframe::App for HookEchoApp {
 
         // Floating windows.
         if let Some(dialog) = &mut self.site_dialog {
-            let keep = ui::site_dialog::show(ctx, dialog, &mut self.views[self.active], &mut self.settings);
+            let keep = ui::site_dialog::show(
+                ctx,
+                dialog,
+                &mut self.views[self.active],
+                &mut self.settings,
+            );
             if !keep {
                 self.site_dialog = None;
             }
         }
-        self.settings_window.show(ctx, &mut self.settings, &self.palettes);
+        self.settings_window
+            .show(ctx, &mut self.settings, &self.palettes);
         let pf_status: Vec<ui::placefile_window::PlacefileStatus> = self
             .placefiles
             .iter()
@@ -6299,7 +7489,8 @@ impl eframe::App for HookEchoApp {
                 title: lp.pf.title.clone(),
             })
             .collect();
-        self.placefile_window.show(ctx, &mut self.settings, &pf_status);
+        self.placefile_window
+            .show(ctx, &mut self.settings, &pf_status);
         if ui::layer_window::show(ctx, &mut self.layer_window_open, &mut self.settings) {
             self.overlay_gen += 1; // paint order / opacity changed — re-tessellate
         }
@@ -6321,7 +7512,12 @@ impl eframe::App for HookEchoApp {
             self.marker_window.searching = false;
             match res {
                 Ok((name, lat, lon)) => {
-                    self.settings.markers.push(crate::settings::Marker { name: name.clone(), lat, lon, icon: None });
+                    self.settings.markers.push(crate::settings::Marker {
+                        name: name.clone(),
+                        lat,
+                        lon,
+                        icon: None,
+                    });
                     self.settings.save();
                     // Fly the active pane to the new marker (same idiom as the alert panel).
                     let cam = &mut self.views[self.active].camera;
@@ -6333,7 +7529,10 @@ impl eframe::App for HookEchoApp {
                 Err(e) => self.marker_window.status = Some(e),
             }
         }
-        if let Some(query) = self.marker_window.show(ctx, &mut self.settings, &self.marker_icon_tex) {
+        if let Some(query) = self
+            .marker_window
+            .show(ctx, &mut self.settings, &self.marker_icon_tex)
+        {
             self.marker_window.searching = true;
             self.marker_window.status = Some("Searching…".into());
             let http = self.http.clone();
@@ -6359,7 +7558,8 @@ impl eframe::App for HookEchoApp {
                 ctx.request_repaint_after(std::time::Duration::from_millis(250));
             }
         }
-        self.palette_editor.show(ctx, &mut self.settings, &self.palettes);
+        self.palette_editor
+            .show(ctx, &mut self.settings, &self.palettes);
         // Storm digest: poll a pending Claude result, then render + handle Generate.
         if let Some(rx) = &self.digest_rx {
             if let Ok(res) = rx.try_recv() {
@@ -6413,7 +7613,7 @@ impl eframe::App for HookEchoApp {
                 }
             }
         }
-        self.sounding_window.show(ctx);
+        self.sounding_window.show(ctx, self.active_tz());
         // Tornado climatology: receive the loaded database, then run any queued query.
         if let Some(rx) = &self.climo_rx {
             if let Ok(res) = rx.try_recv() {
@@ -6444,7 +7644,13 @@ impl eframe::App for HookEchoApp {
         if let Some(act) = self.event_window.show(ctx, &mut self.settings) {
             use ui::event_window::EventAction;
             match act {
-                EventAction::Goto { site, lon, lat, zoom, time } => {
+                EventAction::Goto {
+                    site,
+                    lon,
+                    lat,
+                    zoom,
+                    time,
+                } => {
                     self.goto_view(&site, lon, lat, zoom, time);
                 }
                 EventAction::AddBookmark => {
@@ -6460,8 +7666,15 @@ impl eframe::App for HookEchoApp {
             }
         }
         if let Some(cell) = &self.cell_popup {
-            let trend = self.cell_trends.get(&cell.id).map(Vec::as_slice).unwrap_or(&[]);
-            let following = self.follow_cell.as_ref().is_some_and(|(_, c, _)| c.id == cell.id);
+            let trend = self
+                .cell_trends
+                .get(&cell.id)
+                .map(Vec::as_slice)
+                .unwrap_or(&[]);
+            let following = self
+                .follow_cell
+                .as_ref()
+                .is_some_and(|(_, c, _)| c.id == cell.id);
             let (open, toggled) = ui::cell_window::show(ctx, cell, trend, following);
             if toggled {
                 if following {
@@ -6484,10 +7697,14 @@ impl eframe::App for HookEchoApp {
                 self.warning_popup = None;
             }
         }
-        if self.show_sensors && !ui::sensor_window::show(ctx, self.sensor_data.as_ref()) {
+        if self.show_sensors
+            && !ui::sensor_window::show(ctx, self.sensor_data.as_ref(), self.active_tz())
+        {
             self.show_sensors = false;
         }
-        if self.show_hodo && !ui::hodograph_window::show(ctx, self.hodo_site.as_deref(), &self.hodo_data) {
+        if self.show_hodo
+            && !ui::hodograph_window::show(ctx, self.hodo_site.as_deref(), &self.hodo_data)
+        {
             self.show_hodo = false;
         }
         if let (Some(xs), Some(tex)) = (&self.xsection, &self.xsection_tex) {
@@ -6500,8 +7717,14 @@ impl eframe::App for HookEchoApp {
         if self.show_3d {
             let mut open = true;
             ui::volume3d_window::show(
-                ctx, &mut open, &mut self.vol3d_az, &mut self.vol3d_el, &mut self.vol3d_dist,
-                &mut self.vol3d_pending, 192, 48,
+                ctx,
+                &mut open,
+                &mut self.vol3d_az,
+                &mut self.vol3d_el,
+                &mut self.vol3d_dist,
+                &mut self.vol3d_pending,
+                192,
+                48,
             );
             self.show_3d = open;
         }
@@ -6511,9 +7734,11 @@ impl eframe::App for HookEchoApp {
             if let Some(tex) = self.cappi_tex.clone() {
                 open = ui::cappi_window::show(ctx, &tex, &mut self.cappi_alt_km, 300.0);
             } else {
-                crate::ui::fit_phone(ctx, egui::Window::new("CAPPI slice")).open(&mut open).show(ctx, |ui| {
-                    ui.weak("No volume loaded in the active pane.");
-                });
+                crate::ui::fit_phone(ctx, egui::Window::new("CAPPI slice"))
+                    .open(&mut open)
+                    .show(ctx, |ui| {
+                        ui.weak("No volume loaded in the active pane.");
+                    });
             }
             self.show_cappi = open;
         }
@@ -6533,7 +7758,9 @@ impl eframe::App for HookEchoApp {
             }
             if self.show_alert_panel && !self.obs_mode {
                 let bounds = self.view_bounds();
-                if let Some((id, lon, lat)) = ui::alert_panel::show(root, self.active_alert_features(), bounds) {
+                if let Some((id, lon, lat)) =
+                    ui::alert_panel::show(root, self.active_alert_features(), bounds)
+                {
                     // Fly the active camera to the alert and open its bulletin.
                     let cam = &mut self.views[self.active].camera;
                     cam.center = crate::render::mercator::lonlat_to_world(lon, lat);
@@ -6549,12 +7776,18 @@ impl eframe::App for HookEchoApp {
                 .anchor(egui::Align2::RIGHT_TOP, egui::vec2(-10.0, 10.0))
                 .interactable(false)
                 .show(root, |ui| {
-                    let txt = if self.obs_tour { "OBS · tour (F8 exit · F9 stop tour)" } else { "OBS mode (F8 exit · F9 tour)" };
+                    let txt = if self.obs_tour {
+                        "OBS · tour (F8 exit · F9 stop tour)"
+                    } else {
+                        "OBS mode (F8 exit · F9 tour)"
+                    };
                     egui::Frame::new()
                         .fill(egui::Color32::from_black_alpha(150))
                         .corner_radius(4.0)
                         .inner_margin(egui::Margin::symmetric(8, 4))
-                        .show(ui, |ui| ui.colored_label(egui::Color32::from_white_alpha(200), txt));
+                        .show(ui, |ui| {
+                            ui.colored_label(egui::Color32::from_white_alpha(200), txt)
+                        });
                 });
         }
 
@@ -6578,7 +7811,8 @@ impl eframe::App for HookEchoApp {
             let is_vector = matches!(style, BasemapStyle::Dark | BasemapStyle::Light);
             let is_raster = style.is_raster();
             let raster_style = if is_raster { style } else { BasemapStyle::None };
-            self.tiles.set_keys(&self.settings.mapbox_key, &self.settings.maptiler_key);
+            self.tiles
+                .set_keys(&self.settings.mapbox_key, &self.settings.maptiler_key);
             let mut clear_tiles = self.tiles.set_style(raster_style);
             // GOES sub-hourly scrub: fetch the available frame times when a GOES style becomes
             // active, and apply the selected frame (None = latest).
@@ -6591,11 +7825,14 @@ impl eframe::App for HookEchoApp {
                     self.goes_times_rx = Some(rx);
                     let http = self.http.clone();
                     self._rt.spawn(async move {
-                        let times = crate::tiles::fetch_goes_times(&http, raster_style, 8, 48).await;
+                        let times =
+                            crate::tiles::fetch_goes_times(&http, raster_style, 8, 48).await;
                         let _ = tx.send(times);
                     });
                 }
-                let selected = self.goes_time_idx.and_then(|i| self.goes_times.get(i).copied());
+                let selected = self
+                    .goes_time_idx
+                    .and_then(|i| self.goes_times.get(i).copied());
                 clear_tiles |= self.tiles.set_goes_time(selected);
             } else if self.goes_times_style.is_some() {
                 self.goes_times_style = None;
@@ -6605,9 +7842,13 @@ impl eframe::App for HookEchoApp {
             let mut clear_vector = false;
             if is_vector {
                 clear_vector |= self.vtiles.set_style(style == BasemapStyle::Dark);
-                clear_vector |= self.vtiles.note_zoom(self.views[self.active.min(n - 1)].camera.zoom);
+                clear_vector |= self
+                    .vtiles
+                    .note_zoom(self.views[self.active.min(n - 1)].camera.zoom);
             }
-            self.last_viewport = rects.get(self.active).map_or((full.width(), full.height()), |r| (r.width(), r.height()));
+            self.last_viewport = rects
+                .get(self.active)
+                .map_or((full.width(), full.height()), |r| (r.width(), r.height()));
 
             for (i, prect) in rects.iter().enumerate() {
                 let first = i == 0;
@@ -6633,7 +7874,12 @@ impl eframe::App for HookEchoApp {
                     } else {
                         (1.0, egui::Color32::from_gray(60))
                     };
-                    ui.painter().rect_stroke(*prect, 0.0, egui::Stroke::new(w, col), egui::StrokeKind::Inside);
+                    ui.painter().rect_stroke(
+                        *prect,
+                        0.0,
+                        egui::Stroke::new(w, col),
+                        egui::StrokeKind::Inside,
+                    );
                 }
             }
         });
@@ -6676,7 +7922,11 @@ impl eframe::App for HookEchoApp {
         // Idle heartbeat so clocks (volume age, countdowns) tick without input. Data arrivals and
         // animations (pulse, banners) request faster repaints on their own. Slower on Android to
         // spare the battery — nothing on screen changes faster than this between frames.
-        let idle = if cfg!(target_os = "android") { 250 } else { 100 };
+        let idle = if cfg!(target_os = "android") {
+            250
+        } else {
+            100
+        };
         ctx.request_repaint_after(std::time::Duration::from_millis(idle));
     }
 }
@@ -6687,7 +7937,12 @@ mod follow_tests {
     use wxdata::level3::Cell;
 
     fn cell(id: &str, lon: f64, lat: f64) -> Cell {
-        Cell { id: id.into(), lon, lat, ..Default::default() }
+        Cell {
+            id: id.into(),
+            lon,
+            lat,
+            ..Default::default()
+        }
     }
 
     #[test]

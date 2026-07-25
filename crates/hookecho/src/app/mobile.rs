@@ -3,7 +3,10 @@
 //! product · timestamp · elevation) with a Phosphor icon tool dock, a categorized product picker,
 //! a capture menu, and slide-in drawers. Every control drives the shared desktop data paths.
 
-use egui::{pos2, vec2, Align, Align2, Color32, Frame, Id, Layout, Margin, Mesh, Rect, RichText, Sense, Shape, Stroke};
+use egui::{
+    pos2, vec2, Align, Align2, Color32, Frame, Id, Layout, Margin, Mesh, Rect, RichText, Sense,
+    Shape, Stroke,
+};
 use egui_phosphor::regular as ph;
 use wxdata::level2::Moment;
 
@@ -49,15 +52,26 @@ pub(crate) fn glass(alpha: u8) -> Frame {
         .fill(Color32::from_rgba_unmultiplied(12, 14, 18, alpha))
         .corner_radius(18.0)
         .inner_margin(Margin::symmetric(12, 9))
-        .stroke(Stroke::new(1.0, Color32::from_rgba_unmultiplied(255, 255, 255, 22)))
+        .stroke(Stroke::new(
+            1.0,
+            Color32::from_rgba_unmultiplied(255, 255, 255, 22),
+        ))
 }
 
 /// A ~44px rounded-square chrome button holding one Phosphor glyph.
-pub(crate) fn square_btn(ui: &mut egui::Ui, glyph: &str, active: bool, accent: Color32) -> egui::Response {
+pub(crate) fn square_btn(
+    ui: &mut egui::Ui,
+    glyph: &str,
+    active: bool,
+    accent: Color32,
+) -> egui::Response {
     let (fg, bg) = if active {
         (Color32::BLACK, accent)
     } else {
-        (Color32::from_gray(232), Color32::from_rgba_unmultiplied(255, 255, 255, 20))
+        (
+            Color32::from_gray(232),
+            Color32::from_rgba_unmultiplied(255, 255, 255, 20),
+        )
     };
     ui.add(
         egui::Button::new(RichText::new(glyph).size(20.0).color(fg))
@@ -69,7 +83,11 @@ pub(crate) fn square_btn(ui: &mut egui::Ui, glyph: &str, active: bool, accent: C
 
 /// A flat tool-dock icon (transparent, tinted when active) — RadarOmega's bottom toolbar.
 fn dock_icon(ui: &mut egui::Ui, glyph: &str, active: bool) -> egui::Response {
-    let fg = if active { OMEGA_ORANGE } else { Color32::from_gray(205) };
+    let fg = if active {
+        OMEGA_ORANGE
+    } else {
+        Color32::from_gray(205)
+    };
     ui.add(
         egui::Button::new(RichText::new(glyph).size(23.0).color(fg))
             .min_size(vec2(34.0, 38.0))
@@ -92,7 +110,12 @@ fn omega_product_name(m: Moment, srv: bool) -> &'static str {
 }
 
 /// Paint the active product's color table as a full-width gradient strip (the top scale bar).
-fn paint_colorbar(painter: &egui::Painter, rect: Rect, moment: Moment, table: &crate::colormap::ColorTable) {
+fn paint_colorbar(
+    painter: &egui::Painter,
+    rect: Rect,
+    moment: Moment,
+    table: &crate::colormap::ColorTable,
+) {
     let (vmin, vmax) = moment.value_range();
     let span = (vmax - vmin).max(f32::EPSILON);
     let x_of = |v: f32| rect.left() + ((v - vmin) / span).clamp(0.0, 1.0) * rect.width();
@@ -121,7 +144,12 @@ fn paint_colorbar(painter: &egui::Painter, rect: Rect, moment: Moment, table: &c
                     quad(x0, x1, col(s.rgba), col(s.end.unwrap_or(n.rgba)));
                 }
             }
-            None => quad(x0, rect.right(), col(s.end.unwrap_or(s.rgba)), col(s.end.unwrap_or(s.rgba))),
+            None => quad(
+                x0,
+                rect.right(),
+                col(s.end.unwrap_or(s.rgba)),
+                col(s.end.unwrap_or(s.rgba)),
+            ),
         }
     }
     painter.add(Shape::mesh(mesh));
@@ -130,7 +158,11 @@ fn paint_colorbar(painter: &egui::Painter, rect: Rect, moment: Moment, table: &c
 impl super::HookEchoApp {
     /// Render the whole Android chrome (color scale + floating bars + drawers/popups) and return
     /// the toolbox actions the shared code processes.
-    pub(crate) fn mobile_chrome(&mut self, _root: &mut egui::Ui, ctx: &egui::Context) -> ToolboxActions {
+    pub(crate) fn mobile_chrome(
+        &mut self,
+        _root: &mut egui::Ui,
+        ctx: &egui::Context,
+    ) -> ToolboxActions {
         let mut actions = ToolboxActions::default();
         let active = self.active;
         let content = ctx.content_rect();
@@ -144,7 +176,11 @@ impl super::HookEchoApp {
             .anchor(Align2::RIGHT_TOP, vec2(-10.0, inset_top + 66.0))
             .order(egui::Order::Foreground) // above the drawer scrim, so it stays tappable + undimmed
             .show(ctx, |ui| {
-                let g = if self.mobile_chrome_hidden { ph::EYE } else { ph::EYE_SLASH };
+                let g = if self.mobile_chrome_hidden {
+                    ph::EYE
+                } else {
+                    ph::EYE_SLASH
+                };
                 if square_btn(ui, g, self.mobile_chrome_hidden, OMEGA_ORANGE).clicked() {
                     self.mobile_chrome_hidden = !self.mobile_chrome_hidden;
                     self.mobile_sheet = MobileSheet::None;
@@ -175,7 +211,10 @@ impl super::HookEchoApp {
         let max_esc = malerts.iter().map(|a| a.esc).max().unwrap_or(0);
 
         // Read-only copies used by closures that also write back (avoids borrow conflicts).
-        let site = self.views[active].site.clone().unwrap_or_else(|| "—".into());
+        let site = self.views[active]
+            .site
+            .clone()
+            .unwrap_or_else(|| "—".into());
         let cur_moment = self.views[active].moment;
         let srv = self.views[active].srv;
         let (n_tilt, cur_tilt, cur_angle): (usize, usize, f32) = {
@@ -189,18 +228,19 @@ impl super::HookEchoApp {
                 None => (0, 0, 0.0),
             }
         };
+        let tz = self.settings.tz_for(self.views[active].site.as_deref());
         let (vcp_line, when, following) = {
             let v = &self.views[active];
             let following = v.timeline.following;
             match &v.volume {
                 Some(vol) => {
                     // "VCP 35 (Clear air, SZ-2)" -> "VCP 35: Clear air, SZ-2".
-                    let vcp = vol.vcp.replacen(" (", ": ", 1).trim_end_matches(')').to_string();
-                    let when = vol
-                        .time
-                        .with_timezone(&chrono::Local)
-                        .format("%-m/%-d/%y %-I:%M %p")
+                    let vcp = vol
+                        .vcp
+                        .replacen(" (", ": ", 1)
+                        .trim_end_matches(')')
                         .to_string();
+                    let when = crate::timefmt::fmt_date_clock(vol.time, tz);
                     (vcp, when, following)
                 }
                 None => ("no volume".to_string(), String::new(), following),
@@ -212,8 +252,14 @@ impl super::HookEchoApp {
         // ---------- FULL-WIDTH COLOR SCALE (top edge, under the status bar) ----------
         if self.views[active].volume.is_some() {
             let table = self.palettes.table(cur_moment);
-            let strip = Rect::from_min_size(pos2(content.left(), content.top()), vec2(content.width(), 9.0));
-            let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Background, Id::new("m_colorbar")));
+            let strip = Rect::from_min_size(
+                pos2(content.left(), content.top()),
+                vec2(content.width(), 9.0),
+            );
+            let painter = ctx.layer_painter(egui::LayerId::new(
+                egui::Order::Background,
+                Id::new("m_colorbar"),
+            ));
             paint_colorbar(&painter, strip, cur_moment, table);
         }
 
@@ -226,7 +272,11 @@ impl super::HookEchoApp {
                     // Hamburger (its own rounded-square fill; no extra glass wrapper).
                     let on = self.mobile_sheet == MobileSheet::Menu;
                     if square_btn(ui, ph::LIST, on, OMEGA_ORANGE).clicked() {
-                        self.mobile_sheet = if on { MobileSheet::None } else { MobileSheet::Menu };
+                        self.mobile_sheet = if on {
+                            MobileSheet::None
+                        } else {
+                            MobileSheet::Menu
+                        };
                     }
                     // Center pill: VCP line + search/site line + 3D button. Its inner content width
                     // is the screen minus the two 44px squares, the 8px gaps, and the pill's own
@@ -238,22 +288,42 @@ impl super::HookEchoApp {
                             let text_w = (pill_inner - 52.0).max(60.0);
                             ui.vertical(|ui| {
                                 ui.set_width(text_w);
-                                ui.label(RichText::new(&vcp_line).size(11.0).color(Color32::from_gray(160)));
+                                ui.label(
+                                    RichText::new(&vcp_line)
+                                        .size(11.0)
+                                        .color(Color32::from_gray(160)),
+                                );
                                 let site_line = ui
                                     .horizontal(|ui| {
-                                        ui.label(RichText::new(ph::MAGNIFYING_GLASS).size(13.0).color(Color32::from_gray(180)));
-                                        ui.label(RichText::new(&site).size(16.0).strong().color(Color32::from_gray(240)))
+                                        ui.label(
+                                            RichText::new(ph::MAGNIFYING_GLASS)
+                                                .size(13.0)
+                                                .color(Color32::from_gray(180)),
+                                        );
+                                        ui.label(
+                                            RichText::new(&site)
+                                                .size(16.0)
+                                                .strong()
+                                                .color(Color32::from_gray(240)),
+                                        )
                                     })
                                     .inner;
-                                if site_line.interact(Sense::click()).clicked() && self.site_dialog.is_none() {
+                                if site_line.interact(Sense::click()).clicked()
+                                    && self.site_dialog.is_none()
+                                {
                                     self.site_dialog = Some(Default::default());
                                 }
                             });
                             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                                let b = egui::Button::new(RichText::new("3D").size(14.0).strong().color(Color32::BLACK))
-                                    .fill(OMEGA_ORANGE)
-                                    .corner_radius(9.0)
-                                    .min_size(vec2(40.0, 34.0));
+                                let b = egui::Button::new(
+                                    RichText::new("3D")
+                                        .size(14.0)
+                                        .strong()
+                                        .color(Color32::BLACK),
+                                )
+                                .fill(OMEGA_ORANGE)
+                                .corner_radius(9.0)
+                                .min_size(vec2(40.0, 34.0));
                                 if ui.add(b).clicked() {
                                     self.build_volume3d();
                                 }
@@ -262,20 +332,32 @@ impl super::HookEchoApp {
                     });
                     // Alert badge (bare rounded square).
                     let (bg, fg) = if alert_count == 0 {
-                        (Color32::from_rgba_unmultiplied(255, 255, 255, 22), Color32::from_gray(180))
+                        (
+                            Color32::from_rgba_unmultiplied(255, 255, 255, 22),
+                            Color32::from_gray(180),
+                        )
                     } else if max_esc >= 2 {
                         (Color32::from_rgb(220, 40, 40), Color32::WHITE)
                     } else {
                         (OMEGA_ORANGE, Color32::BLACK)
                     };
-                    let label = if alert_count == 0 { ph::BELL.to_string() } else { alert_count.to_string() };
+                    let label = if alert_count == 0 {
+                        ph::BELL.to_string()
+                    } else {
+                        alert_count.to_string()
+                    };
                     let on = self.mobile_sheet == MobileSheet::Alerts;
-                    let badge = egui::Button::new(RichText::new(label).size(17.0).strong().color(fg))
-                        .fill(bg)
-                        .corner_radius(13.0)
-                        .min_size(vec2(44.0, 44.0));
+                    let badge =
+                        egui::Button::new(RichText::new(label).size(17.0).strong().color(fg))
+                            .fill(bg)
+                            .corner_radius(13.0)
+                            .min_size(vec2(44.0, 44.0));
                     if ui.add(badge).clicked() {
-                        self.mobile_sheet = if on { MobileSheet::None } else { MobileSheet::Alerts };
+                        self.mobile_sheet = if on {
+                            MobileSheet::None
+                        } else {
+                            MobileSheet::Alerts
+                        };
                     }
                 });
             });
@@ -291,7 +373,10 @@ impl super::HookEchoApp {
                     ui.horizontal(|ui| {
                         ui.set_width(cwi);
                         let frames = egui::Button::new(
-                            RichText::new(format!("{} Frames", nframes.max(1))).size(14.0).strong().color(OMEGA_ORANGE),
+                            RichText::new(format!("{} Frames", nframes.max(1)))
+                                .size(14.0)
+                                .strong()
+                                .color(OMEGA_ORANGE),
                         )
                         .fill(Color32::from_rgba_unmultiplied(255, 255, 255, 14))
                         .corner_radius(10.0)
@@ -304,7 +389,10 @@ impl super::HookEchoApp {
                         }
                         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                             let prod = egui::Button::new(
-                                RichText::new(omega_product_name(cur_moment, srv)).size(14.0).strong().color(OMEGA_ORANGE),
+                                RichText::new(omega_product_name(cur_moment, srv))
+                                    .size(14.0)
+                                    .strong()
+                                    .color(OMEGA_ORANGE),
                             )
                             .fill(Color32::TRANSPARENT)
                             .stroke(Stroke::NONE);
@@ -320,14 +408,31 @@ impl super::HookEchoApp {
                     // Row B: live dot + timestamp · elevation.
                     ui.horizontal(|ui| {
                         ui.set_width(cwi);
-                        let dot = if following { OMEGA_GREEN } else { Color32::from_gray(150) };
+                        let dot = if following {
+                            OMEGA_GREEN
+                        } else {
+                            Color32::from_gray(150)
+                        };
                         let (rect, _) = ui.allocate_exact_size(vec2(12.0, 12.0), Sense::hover());
                         ui.painter().circle_filled(rect.center(), 5.0, dot);
-                        ui.label(RichText::new(&when).size(13.0).color(Color32::from_gray(210)));
+                        ui.label(
+                            RichText::new(&when)
+                                .size(13.0)
+                                .color(Color32::from_gray(210)),
+                        );
                         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                             if n_tilt > 0 {
-                                ui.label(RichText::new(format!("{cur_angle:.1}°")).size(13.0).strong().color(OMEGA_ORANGE));
-                                ui.label(RichText::new("Elevation: ").size(13.0).color(Color32::from_gray(190)));
+                                ui.label(
+                                    RichText::new(format!("{cur_angle:.1}°"))
+                                        .size(13.0)
+                                        .strong()
+                                        .color(OMEGA_ORANGE),
+                                );
+                                ui.label(
+                                    RichText::new("Elevation: ")
+                                        .size(13.0)
+                                        .color(Color32::from_gray(190)),
+                                );
                             }
                         });
                     });
@@ -343,16 +448,22 @@ impl super::HookEchoApp {
                         let iw = cwi / n;
                         let tool = self.tool;
                         let slot = |ui: &mut egui::Ui, glyph: &str, on: bool| -> bool {
-                            ui.allocate_ui_with_layout(vec2(iw, 40.0), Layout::centered_and_justified(egui::Direction::TopDown), |ui| {
-                                dock_icon(ui, glyph, on).clicked()
-                            })
+                            ui.allocate_ui_with_layout(
+                                vec2(iw, 40.0),
+                                Layout::centered_and_justified(egui::Direction::TopDown),
+                                |ui| dock_icon(ui, glyph, on).clicked(),
+                            )
                             .inner
                         };
                         if slot(ui, if playing { ph::PAUSE } else { ph::PLAY }, playing) {
                             self.views[active].timeline.toggle_play();
                         }
                         if slot(ui, ph::MAP_PIN, tool == MapTool::Marker) {
-                            self.tool = if tool == MapTool::Marker { MapTool::Interrogate } else { MapTool::Marker };
+                            self.tool = if tool == MapTool::Marker {
+                                MapTool::Interrogate
+                            } else {
+                                MapTool::Marker
+                            };
                         }
                         if slot(ui, ph::CAMERA, self.mobile_sheet == MobileSheet::Capture) {
                             self.mobile_sheet = if self.mobile_sheet == MobileSheet::Capture {
@@ -374,10 +485,18 @@ impl super::HookEchoApp {
                             self.set_pane_count(next);
                         }
                         if slot(ui, ph::POLYGON, tool == MapTool::Sounding) {
-                            self.tool = if tool == MapTool::Sounding { MapTool::Interrogate } else { MapTool::Sounding };
+                            self.tool = if tool == MapTool::Sounding {
+                                MapTool::Interrogate
+                            } else {
+                                MapTool::Sounding
+                            };
                         }
                         if slot(ui, ph::RULER, tool == MapTool::Measure) {
-                            self.tool = if tool == MapTool::Measure { MapTool::Interrogate } else { MapTool::Measure };
+                            self.tool = if tool == MapTool::Measure {
+                                MapTool::Interrogate
+                            } else {
+                                MapTool::Measure
+                            };
                         }
                         if slot(ui, ph::TARGET, self.show_range_rings) {
                             self.show_range_rings = !self.show_range_rings;
@@ -389,7 +508,11 @@ impl super::HookEchoApp {
                                 MobileSheet::QuickLayers
                             };
                         }
-                        if slot(ui, ph::PENCIL_SIMPLE, self.mobile_sheet == MobileSheet::Tools) {
+                        if slot(
+                            ui,
+                            ph::PENCIL_SIMPLE,
+                            self.mobile_sheet == MobileSheet::Tools,
+                        ) {
                             self.mobile_sheet = if self.mobile_sheet == MobileSheet::Tools {
                                 MobileSheet::None
                             } else {
@@ -420,7 +543,12 @@ impl super::HookEchoApp {
                         .corner_radius(14.0)
                         .inner_margin(Margin::symmetric(14, 8))
                         .show(ui, |ui| {
-                            ui.label(RichText::new(text).size(14.0).strong().color(Color32::BLACK));
+                            ui.label(
+                                RichText::new(text)
+                                    .size(14.0)
+                                    .strong()
+                                    .color(Color32::BLACK),
+                            );
                         });
                 });
         }
@@ -428,8 +556,12 @@ impl super::HookEchoApp {
         // ---------- POPUPS / DRAWERS ----------
         match self.mobile_sheet {
             MobileSheet::Menu => self.mobile_menu_drawer(ctx, content, vr, &mut actions),
-            MobileSheet::Alerts => self.mobile_alerts_drawer(ctx, content, vr, &malerts, alert_count),
-            MobileSheet::Products => self.mobile_products(ctx, content, vr, cur_moment, srv, n_tilt, cur_tilt, cur_angle),
+            MobileSheet::Alerts => {
+                self.mobile_alerts_drawer(ctx, content, vr, &malerts, alert_count)
+            }
+            MobileSheet::Products => self.mobile_products(
+                ctx, content, vr, cur_moment, srv, n_tilt, cur_tilt, cur_angle,
+            ),
             MobileSheet::Capture => self.mobile_capture(ctx, content, vr),
             MobileSheet::Tools => self.mobile_tools_sheet(ctx, content, vr),
             MobileSheet::QuickLayers => self.mobile_layers_sheet(ctx, content, vr),
@@ -441,19 +573,35 @@ impl super::HookEchoApp {
 
     /// A dimming scrim behind a popup; a tap outside `keep` closes the sheet.
     fn mobile_scrim(&mut self, ctx: &egui::Context, vr: Rect, keep: Rect) {
-        egui::Area::new(Id::new("m_scrim")).fixed_pos(vr.min).order(egui::Order::Middle).show(ctx, |ui| {
-            let r = ui.allocate_response(vr.size(), Sense::click());
-            ui.painter().rect_filled(r.rect, egui::CornerRadius::ZERO, Color32::from_black_alpha(150));
-            if r.clicked() && !r.interact_pointer_pos().is_some_and(|p| keep.contains(p)) {
-                self.mobile_sheet = MobileSheet::None;
-            }
-        });
+        egui::Area::new(Id::new("m_scrim"))
+            .fixed_pos(vr.min)
+            .order(egui::Order::Middle)
+            .show(ctx, |ui| {
+                let r = ui.allocate_response(vr.size(), Sense::click());
+                ui.painter().rect_filled(
+                    r.rect,
+                    egui::CornerRadius::ZERO,
+                    Color32::from_black_alpha(150),
+                );
+                if r.clicked() && !r.interact_pointer_pos().is_some_and(|p| keep.contains(p)) {
+                    self.mobile_sheet = MobileSheet::None;
+                }
+            });
     }
 
     /// Left navigation drawer (RadarOmega-style navy panel), populated with our toolbox.
-    fn mobile_menu_drawer(&mut self, ctx: &egui::Context, content: Rect, vr: Rect, actions: &mut ToolboxActions) {
+    fn mobile_menu_drawer(
+        &mut self,
+        ctx: &egui::Context,
+        content: Rect,
+        vr: Rect,
+        actions: &mut ToolboxActions,
+    ) {
         let dw = (content.width() * 0.88).min(440.0);
-        let drawer_rect = Rect::from_min_size(pos2(content.left(), content.top()), vec2(dw, content.height()));
+        let drawer_rect = Rect::from_min_size(
+            pos2(content.left(), content.top()),
+            vec2(dw, content.height()),
+        );
         self.mobile_scrim(ctx, vr, drawer_rect);
         let accent = crate::theme::accent(self.settings.theme);
         egui::Area::new(Id::new("m_drawer"))
@@ -462,16 +610,38 @@ impl super::HookEchoApp {
             .show(ctx, |ui| {
                 Frame::new()
                     .fill(DRAWER_BG)
-                    .stroke(Stroke::new(1.0, Color32::from_rgba_unmultiplied(255, 255, 255, 18)))
-                    .inner_margin(Margin { left: 14, right: 14, top: content.top() as i8 + 6, bottom: 10 })
+                    .stroke(Stroke::new(
+                        1.0,
+                        Color32::from_rgba_unmultiplied(255, 255, 255, 18),
+                    ))
+                    .inner_margin(Margin {
+                        left: 14,
+                        right: 14,
+                        top: content.top() as i8 + 6,
+                        bottom: 10,
+                    })
                     .show(ui, |ui| {
                         ui.set_width(dw - 28.0);
                         ui.set_height(vr.height() - content.top() - 12.0);
                         // Header.
                         ui.horizontal(|ui| {
-                            ui.label(RichText::new(ph::CROSSHAIR_SIMPLE).size(22.0).color(OMEGA_ORANGE));
-                            ui.label(RichText::new("Hook Echo").size(20.0).strong().color(OMEGA_TITLE));
-                            ui.label(RichText::new("WX").size(20.0).strong().color(Color32::from_gray(220)));
+                            ui.label(
+                                RichText::new(ph::CROSSHAIR_SIMPLE)
+                                    .size(22.0)
+                                    .color(OMEGA_ORANGE),
+                            );
+                            ui.label(
+                                RichText::new("Hook Echo")
+                                    .size(20.0)
+                                    .strong()
+                                    .color(OMEGA_TITLE),
+                            );
+                            ui.label(
+                                RichText::new("WX")
+                                    .size(20.0)
+                                    .strong()
+                                    .color(Color32::from_gray(220)),
+                            );
                             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                                 if square_btn(ui, ph::X, false, accent).clicked() {
                                     self.mobile_sheet = MobileSheet::None;
@@ -482,7 +652,11 @@ impl super::HookEchoApp {
                         // Pane-mode selector (RadarOmega "Single Site").
                         let modes = [(1usize, "Single Site"), (2, "Dual Pane"), (4, "Quad Pane")];
                         let cur = self.views.len();
-                        let cur_label = modes.iter().find(|(n, _)| *n == cur).map(|(_, l)| *l).unwrap_or("Single Site");
+                        let cur_label = modes
+                            .iter()
+                            .find(|(n, _)| *n == cur)
+                            .map(|(_, l)| *l)
+                            .unwrap_or("Single Site");
                         egui::ComboBox::from_id_salt("m_panemode")
                             .selected_text(RichText::new(cur_label).strong())
                             .width(dw - 40.0)
@@ -529,16 +703,30 @@ impl super::HookEchoApp {
                             ui.separator();
                             self.mobile_tools(ui);
                             ui.add_space(10.0);
-                            ui.label(RichText::new("© Hook Echo-WX 2026").size(12.0).color(Color32::from_gray(110)));
+                            ui.label(
+                                RichText::new("© Hook Echo-WX 2026")
+                                    .size(12.0)
+                                    .color(Color32::from_gray(110)),
+                            );
                         });
                     });
             });
     }
 
     /// Right alerts drawer, RadarOmega "Active Weather Alerts" styling.
-    fn mobile_alerts_drawer(&mut self, ctx: &egui::Context, content: Rect, vr: Rect, malerts: &[MAlert], alert_count: usize) {
+    fn mobile_alerts_drawer(
+        &mut self,
+        ctx: &egui::Context,
+        content: Rect,
+        vr: Rect,
+        malerts: &[MAlert],
+        alert_count: usize,
+    ) {
         let dw = (content.width() * 0.9).min(460.0);
-        let drawer_rect = Rect::from_min_size(pos2(content.right() - dw, content.top()), vec2(dw, content.height()));
+        let drawer_rect = Rect::from_min_size(
+            pos2(content.right() - dw, content.top()),
+            vec2(dw, content.height()),
+        );
         self.mobile_scrim(ctx, vr, drawer_rect);
         let active = self.active;
         egui::Area::new(Id::new("m_alerts"))
@@ -548,14 +736,22 @@ impl super::HookEchoApp {
                 Frame::new()
                     .fill(Color32::from_rgb(10, 12, 16))
                     .corner_radius(16.0)
-                    .stroke(Stroke::new(1.0, Color32::from_rgba_unmultiplied(255, 255, 255, 18)))
+                    .stroke(Stroke::new(
+                        1.0,
+                        Color32::from_rgba_unmultiplied(255, 255, 255, 18),
+                    ))
                     .inner_margin(Margin::symmetric(14, 12))
                     .show(ui, |ui| {
                         ui.set_width(dw - 28.0);
                         ui.set_height(content.height() - 20.0);
                         ui.horizontal(|ui| {
                             ui.label(RichText::new(ph::WARNING).size(22.0).color(OMEGA_ORANGE));
-                            ui.label(RichText::new("Active Weather Alerts").size(18.0).strong().color(OMEGA_ORANGE));
+                            ui.label(
+                                RichText::new("Active Weather Alerts")
+                                    .size(18.0)
+                                    .strong()
+                                    .color(OMEGA_ORANGE),
+                            );
                             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                                 if square_btn(ui, ph::X, false, OMEGA_ORANGE).clicked() {
                                     self.mobile_sheet = MobileSheet::None;
@@ -568,12 +764,26 @@ impl super::HookEchoApp {
                                 .corner_radius(10.0)
                                 .inner_margin(Margin::symmetric(10, 3));
                             pill.show(ui, |ui| {
-                                ui.label(RichText::new(format!("{alert_count}")).strong().color(OMEGA_ORANGE));
+                                ui.label(
+                                    RichText::new(format!("{alert_count}"))
+                                        .strong()
+                                        .color(OMEGA_ORANGE),
+                                );
                                 ui.label(RichText::new(" active").color(Color32::from_gray(200)));
                             });
-                            let (rect, _) = ui.allocate_exact_size(vec2(12.0, 12.0), Sense::hover());
-                            ui.painter().circle_filled(rect.center(), 5.0, Color32::from_rgb(220, 60, 60));
-                            ui.label(RichText::new("LIVE").size(13.0).strong().color(Color32::from_rgb(220, 60, 60)));
+                            let (rect, _) =
+                                ui.allocate_exact_size(vec2(12.0, 12.0), Sense::hover());
+                            ui.painter().circle_filled(
+                                rect.center(),
+                                5.0,
+                                Color32::from_rgb(220, 60, 60),
+                            );
+                            ui.label(
+                                RichText::new("LIVE")
+                                    .size(13.0)
+                                    .strong()
+                                    .color(Color32::from_rgb(220, 60, 60)),
+                            );
                         });
                         ui.separator();
                         egui::ScrollArea::vertical().show(ui, |ui| {
@@ -582,7 +792,11 @@ impl super::HookEchoApp {
                                 ui.weak("No active alerts in view.");
                             }
                             for a in malerts {
-                                let col = if a.esc >= 2 { Color32::from_rgb(255, 90, 90) } else { a.color };
+                                let col = if a.esc >= 2 {
+                                    Color32::from_rgb(255, 90, 90)
+                                } else {
+                                    a.color
+                                };
                                 let row = egui::Frame::new()
                                     .fill(Color32::from_rgba_unmultiplied(255, 255, 255, 12))
                                     .corner_radius(12.0)
@@ -591,14 +805,21 @@ impl super::HookEchoApp {
                                 let resp = row
                                     .show(ui, |ui| {
                                         ui.set_width(ui.available_width());
-                                        ui.label(RichText::new(&a.title).size(15.0).strong().color(col));
-                                        ui.label(RichText::new(&a.sub).size(12.0).color(Color32::from_gray(170)));
+                                        ui.label(
+                                            RichText::new(&a.title).size(15.0).strong().color(col),
+                                        );
+                                        ui.label(
+                                            RichText::new(&a.sub)
+                                                .size(12.0)
+                                                .color(Color32::from_gray(170)),
+                                        );
                                     })
                                     .response;
                                 ui.add_space(7.0);
                                 if resp.interact(Sense::click()).clicked() {
                                     let cam = &mut self.views[active].camera;
-                                    cam.center = crate::render::mercator::lonlat_to_world(a.lon, a.lat);
+                                    cam.center =
+                                        crate::render::mercator::lonlat_to_world(a.lon, a.lat);
                                     cam.zoom = cam.zoom.max(8.0);
                                     self.open_alert_popup(&a.id);
                                     self.mobile_sheet = MobileSheet::None;
@@ -623,7 +844,10 @@ impl super::HookEchoApp {
         cur_angle: f32,
     ) {
         let pw = (content.width() - 20.0).min(560.0);
-        let panel = Rect::from_min_size(pos2(content.center().x - pw / 2.0, content.top() + 70.0), vec2(pw, content.height() * 0.6));
+        let panel = Rect::from_min_size(
+            pos2(content.center().x - pw / 2.0, content.top() + 70.0),
+            vec2(pw, content.height() * 0.6),
+        );
         self.mobile_scrim(ctx, vr, panel);
         let active = self.active;
         egui::Area::new(Id::new("m_products"))
@@ -633,14 +857,20 @@ impl super::HookEchoApp {
                 Frame::new()
                     .fill(Color32::from_rgb(10, 12, 16))
                     .corner_radius(16.0)
-                    .stroke(Stroke::new(1.0, Color32::from_rgba_unmultiplied(255, 255, 255, 18)))
+                    .stroke(Stroke::new(
+                        1.0,
+                        Color32::from_rgba_unmultiplied(255, 255, 255, 18),
+                    ))
                     .inner_margin(Margin::symmetric(16, 14))
                     .show(ui, |ui| {
                         ui.set_width(pw - 32.0);
                         // (moment, srv, label) grouped by RadarOmega category.
                         type Row = (Moment, bool, &'static str);
                         let groups: [(&str, &[Row]); 3] = [
-                            ("Reflectivity Products", &[(Moment::Reflectivity, false, "Hi-Res Reflectivity")]),
+                            (
+                                "Reflectivity Products",
+                                &[(Moment::Reflectivity, false, "Hi-Res Reflectivity")],
+                            ),
                             (
                                 "Velocity Products",
                                 &[
@@ -652,50 +882,88 @@ impl super::HookEchoApp {
                             (
                                 "Dual-Polarization",
                                 &[
-                                    (Moment::CorrelationCoefficient, false, "Hi-Res Correlation Coefficient"),
-                                    (Moment::DifferentialReflectivity, false, "Hi-Res Differential Reflectivity"),
-                                    (Moment::DifferentialPhase, false, "Specific Differential Phase"),
+                                    (
+                                        Moment::CorrelationCoefficient,
+                                        false,
+                                        "Hi-Res Correlation Coefficient",
+                                    ),
+                                    (
+                                        Moment::DifferentialReflectivity,
+                                        false,
+                                        "Hi-Res Differential Reflectivity",
+                                    ),
+                                    (
+                                        Moment::DifferentialPhase,
+                                        false,
+                                        "Specific Differential Phase",
+                                    ),
                                 ],
                             ),
                         ];
-                        egui::ScrollArea::vertical().max_height(content.height() * 0.62).show(ui, |ui| {
-                            for (title, rows) in groups {
-                                ui.add_space(4.0);
-                                ui.label(RichText::new(title).size(15.0).strong().color(Color32::from_gray(235)));
-                                ui.add_space(2.0);
-                                for (m, want_srv, label) in rows.iter().copied() {
-                                    let selected = cur_moment == m && (m != Moment::Velocity || srv == want_srv);
-                                    ui.horizontal(|ui| {
-                                        let fg = if selected { OMEGA_ORANGE } else { Color32::from_gray(220) };
-                                        let b = egui::Button::new(RichText::new(label).size(15.0).color(fg))
+                        egui::ScrollArea::vertical()
+                            .max_height(content.height() * 0.62)
+                            .show(ui, |ui| {
+                                for (title, rows) in groups {
+                                    ui.add_space(4.0);
+                                    ui.label(
+                                        RichText::new(title)
+                                            .size(15.0)
+                                            .strong()
+                                            .color(Color32::from_gray(235)),
+                                    );
+                                    ui.add_space(2.0);
+                                    for (m, want_srv, label) in rows.iter().copied() {
+                                        let selected = cur_moment == m
+                                            && (m != Moment::Velocity || srv == want_srv);
+                                        ui.horizontal(|ui| {
+                                            let fg = if selected {
+                                                OMEGA_ORANGE
+                                            } else {
+                                                Color32::from_gray(220)
+                                            };
+                                            let b = egui::Button::new(
+                                                RichText::new(label).size(15.0).color(fg),
+                                            )
                                             .fill(Color32::TRANSPARENT)
                                             .stroke(Stroke::NONE)
                                             .min_size(vec2(ui.available_width() - 92.0, 34.0));
-                                        if ui.add(b).clicked() {
-                                            self.views[active].moment = m;
-                                            if m == Moment::Velocity {
-                                                self.views[active].srv = want_srv;
-                                            }
-                                            self.mobile_sheet = MobileSheet::None;
-                                        }
-                                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                                            if selected && n_tilt > 0 {
-                                                let tb = egui::Button::new(
-                                                    RichText::new(format!("Tilt {}  {:.1}°", cur_tilt + 1, cur_angle)).size(13.0).color(OMEGA_BLUE),
-                                                )
-                                                .fill(Color32::from_rgba_unmultiplied(45, 156, 219, 30))
-                                                .corner_radius(8.0);
-                                                if ui.add(tb).clicked() {
-                                                    self.views[active].tilt = (cur_tilt + 1) % n_tilt.max(1);
+                                            if ui.add(b).clicked() {
+                                                self.views[active].moment = m;
+                                                if m == Moment::Velocity {
+                                                    self.views[active].srv = want_srv;
                                                 }
+                                                self.mobile_sheet = MobileSheet::None;
                                             }
+                                            ui.with_layout(
+                                                Layout::right_to_left(Align::Center),
+                                                |ui| {
+                                                    if selected && n_tilt > 0 {
+                                                        let tb = egui::Button::new(
+                                                            RichText::new(format!(
+                                                                "Tilt {}  {:.1}°",
+                                                                cur_tilt + 1,
+                                                                cur_angle
+                                                            ))
+                                                            .size(13.0)
+                                                            .color(OMEGA_BLUE),
+                                                        )
+                                                        .fill(Color32::from_rgba_unmultiplied(
+                                                            45, 156, 219, 30,
+                                                        ))
+                                                        .corner_radius(8.0);
+                                                        if ui.add(tb).clicked() {
+                                                            self.views[active].tilt =
+                                                                (cur_tilt + 1) % n_tilt.max(1);
+                                                        }
+                                                    }
+                                                },
+                                            );
                                         });
-                                    });
+                                    }
+                                    ui.add_space(4.0);
+                                    ui.separator();
                                 }
-                                ui.add_space(4.0);
-                                ui.separator();
-                            }
-                        });
+                            });
                     });
             });
     }
@@ -704,7 +972,10 @@ impl super::HookEchoApp {
     fn mobile_capture(&mut self, ctx: &egui::Context, content: Rect, vr: Rect) {
         use super::ShotDest;
         let pw = (content.width() - 24.0).min(520.0);
-        let panel = Rect::from_min_size(pos2(content.center().x - pw / 2.0, content.center().y - 60.0), vec2(pw, 130.0));
+        let panel = Rect::from_min_size(
+            pos2(content.center().x - pw / 2.0, content.center().y - 60.0),
+            vec2(pw, 130.0),
+        );
         self.mobile_scrim(ctx, vr, panel);
         egui::Area::new(Id::new("m_capture"))
             .order(egui::Order::Foreground)
@@ -721,28 +992,39 @@ impl super::HookEchoApp {
                                 ui.vertical_centered(|ui| {
                                     let clicked = ui
                                         .add(
-                                            egui::Button::new(RichText::new(glyph).size(34.0).color(OMEGA_BLUE))
-                                                .fill(Color32::TRANSPARENT)
-                                                .stroke(Stroke::NONE),
+                                            egui::Button::new(
+                                                RichText::new(glyph).size(34.0).color(OMEGA_BLUE),
+                                            )
+                                            .fill(Color32::TRANSPARENT)
+                                            .stroke(Stroke::NONE),
                                         )
                                         .clicked();
-                                    ui.label(RichText::new(label).size(13.0).strong().color(OMEGA_BLUE));
+                                    ui.label(
+                                        RichText::new(label).size(13.0).strong().color(OMEGA_BLUE),
+                                    );
                                     clicked
                                 })
                                 .inner
                             };
                             if cap(&mut cols[0], ph::CAMERA, "Screenshot") {
-                                if let Some(path) = crate::dialog::save_path("hookecho.png", "png") {
+                                if let Some(path) = crate::dialog::save_path("hookecho.png", "png")
+                                {
                                     self.screenshot_pending = Some(ShotDest::File(path));
-                                    ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::UserData::default()));
+                                    ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(
+                                        egui::UserData::default(),
+                                    ));
                                 }
                                 self.mobile_sheet = MobileSheet::None;
                             }
-                            if cap(&mut cols[1], ph::VIDEO_CAMERA, "Record Video") && self.loop_export.is_none() {
+                            if cap(&mut cols[1], ph::VIDEO_CAMERA, "Record Video")
+                                && self.loop_export.is_none()
+                            {
                                 self.start_loop_export(crate::loopexport::LoopFormat::Mp4);
                                 self.mobile_sheet = MobileSheet::None;
                             }
-                            if cap(&mut cols[2], ph::GIF, "Record Gif") && self.loop_export.is_none() {
+                            if cap(&mut cols[2], ph::GIF, "Record Gif")
+                                && self.loop_export.is_none()
+                            {
                                 self.start_loop_export(crate::loopexport::LoopFormat::Gif);
                                 self.mobile_sheet = MobileSheet::None;
                             }
@@ -754,7 +1036,10 @@ impl super::HookEchoApp {
     /// Quick-layers sheet: the searchable layer registry in a bottom sheet (the phone's
     /// equivalent of the desktop Layers panel).
     fn mobile_layers_sheet(&mut self, ctx: &egui::Context, content: Rect, vr: Rect) {
-        let sheet = Rect::from_min_size(pos2(content.left(), content.center().y - 40.0), vec2(content.width(), content.height() * 0.6));
+        let sheet = Rect::from_min_size(
+            pos2(content.left(), content.center().y - 40.0),
+            vec2(content.width(), content.height() * 0.6),
+        );
         self.mobile_scrim(ctx, vr, sheet);
         let accent = crate::theme::accent(self.settings.theme);
         let entries = self.palette_entries();
@@ -767,7 +1052,10 @@ impl super::HookEchoApp {
                 Frame::new()
                     .fill(Color32::from_rgb(12, 15, 20))
                     .corner_radius(16.0)
-                    .stroke(Stroke::new(1.0, Color32::from_rgba_unmultiplied(255, 255, 255, 18)))
+                    .stroke(Stroke::new(
+                        1.0,
+                        Color32::from_rgba_unmultiplied(255, 255, 255, 18),
+                    ))
                     .inner_margin(Margin::symmetric(14, 12))
                     .show(ui, |ui| {
                         ui.set_width(content.width() - 28.0);
@@ -778,7 +1066,13 @@ impl super::HookEchoApp {
                             });
                         });
                         ui.separator();
-                        chosen = crate::ui::layers_panel::body(ui, &entries, &mut query, accent, content.height() * 0.5);
+                        chosen = crate::ui::layers_panel::body(
+                            ui,
+                            &entries,
+                            &mut query,
+                            accent,
+                            content.height() * 0.5,
+                        );
                     });
             });
         self.layers_query = query;
@@ -793,7 +1087,10 @@ impl super::HookEchoApp {
 
     /// Bottom "more tools" sheet (analysis + capture grid) driven by the pencil dock icon.
     fn mobile_tools_sheet(&mut self, ctx: &egui::Context, content: Rect, vr: Rect) {
-        let sheet = Rect::from_min_size(pos2(content.left(), content.center().y), vec2(content.width(), content.height() * 0.5));
+        let sheet = Rect::from_min_size(
+            pos2(content.left(), content.center().y),
+            vec2(content.width(), content.height() * 0.5),
+        );
         self.mobile_scrim(ctx, vr, sheet);
         egui::Area::new(Id::new("m_toolsheet"))
             .order(egui::Order::Foreground)
@@ -802,12 +1099,20 @@ impl super::HookEchoApp {
                 Frame::new()
                     .fill(Color32::from_rgb(12, 15, 20))
                     .corner_radius(16.0)
-                    .stroke(Stroke::new(1.0, Color32::from_rgba_unmultiplied(255, 255, 255, 18)))
+                    .stroke(Stroke::new(
+                        1.0,
+                        Color32::from_rgba_unmultiplied(255, 255, 255, 18),
+                    ))
                     .inner_margin(Margin::symmetric(14, 12))
                     .show(ui, |ui| {
                         ui.set_width(content.width() - 28.0);
                         ui.horizontal(|ui| {
-                            ui.label(RichText::new("Tools & Analysis").size(16.0).strong().color(Color32::from_gray(235)));
+                            ui.label(
+                                RichText::new("Tools & Analysis")
+                                    .size(16.0)
+                                    .strong()
+                                    .color(Color32::from_gray(235)),
+                            );
                             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                                 if square_btn(ui, ph::X, false, OMEGA_ORANGE).clicked() {
                                     self.mobile_sheet = MobileSheet::None;
@@ -815,9 +1120,11 @@ impl super::HookEchoApp {
                             });
                         });
                         ui.separator();
-                        egui::ScrollArea::vertical().max_height(content.height() * 0.44).show(ui, |ui| {
-                            self.mobile_tools(ui);
-                        });
+                        egui::ScrollArea::vertical()
+                            .max_height(content.height() * 0.44)
+                            .show(ui, |ui| {
+                                self.mobile_tools(ui);
+                            });
                     });
             });
     }
@@ -831,12 +1138,25 @@ impl super::HookEchoApp {
             let (fg, bg) = if active {
                 (Color32::BLACK, accent)
             } else {
-                (Color32::from_gray(225), Color32::from_rgba_unmultiplied(255, 255, 255, 20))
+                (
+                    Color32::from_gray(225),
+                    Color32::from_rgba_unmultiplied(255, 255, 255, 20),
+                )
             };
-            ui.add_sized([w, 38.0], egui::Button::new(RichText::new(label).size(14.0).color(fg)).fill(bg).corner_radius(12.0))
+            ui.add_sized(
+                [w, 38.0],
+                egui::Button::new(RichText::new(label).size(14.0).color(fg))
+                    .fill(bg)
+                    .corner_radius(12.0),
+            )
         };
 
-        ui.label(RichText::new("Map tap tool").size(13.0).strong().color(accent));
+        ui.label(
+            RichText::new("Map tap tool")
+                .size(13.0)
+                .strong()
+                .color(accent),
+        );
         ui.horizontal_wrapped(|ui| {
             for (tool, label) in [
                 (MapTool::Interrogate, "Interrogate"),
@@ -901,7 +1221,12 @@ impl super::HookEchoApp {
             }
         });
         ui.add_space(6.0);
-        ui.label(RichText::new("Panes & capture").size(13.0).strong().color(accent));
+        ui.label(
+            RichText::new("Panes & capture")
+                .size(13.0)
+                .strong()
+                .color(accent),
+        );
         ui.horizontal_wrapped(|ui| {
             for count in [1usize, 2, 4] {
                 if chip(ui, &format!("{count} pane"), self.views.len() == count).clicked() {
@@ -914,7 +1239,10 @@ impl super::HookEchoApp {
             if chip(ui, "Screenshot", false).clicked() {
                 if let Some(path) = crate::dialog::save_path("hookecho.png", "png") {
                     self.screenshot_pending = Some(ShotDest::File(path));
-                    ui.ctx().send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::UserData::default()));
+                    ui.ctx()
+                        .send_viewport_cmd(egui::ViewportCommand::Screenshot(
+                            egui::UserData::default(),
+                        ));
                 }
             }
             if chip(ui, "GIF", self.loop_export.is_some()).clicked() && self.loop_export.is_none() {

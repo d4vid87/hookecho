@@ -89,7 +89,9 @@ pub fn bake_lut(table: &ColorTable, range: (f32, f32), threshold: Option<f32>) -
     for raw in 2u32..=255 {
         let t = (raw as f32 - 2.0) / 253.0;
         let value = vmin + t * span;
-        let Some(rgba) = table.sample(value) else { continue }; // below floor -> transparent
+        let Some(rgba) = table.sample(value) else {
+            continue;
+        }; // below floor -> transparent
         let alpha = if value < cutoff {
             0
         } else {
@@ -126,7 +128,12 @@ pub fn to_pal_string(t: &ColorTable) -> String {
         if s.solid {
             out.push_str(&format!("SolidColor: {} {}\n", s.value, rgba(s.rgba)));
         } else if let Some(end) = s.end {
-            out.push_str(&format!("Color: {} {} {}\n", s.value, rgba(s.rgba), rgba(end)));
+            out.push_str(&format!(
+                "Color: {} {} {}\n",
+                s.value,
+                rgba(s.rgba),
+                rgba(end)
+            ));
         } else {
             out.push_str(&format!("Color: {} {}\n", s.value, rgba(s.rgba)));
         }
@@ -171,7 +178,8 @@ pub fn parse_pal(text: &str) -> anyhow::Result<ColorTable> {
             slice.iter().filter_map(|t| t.parse::<f32>().ok()).collect()
         };
         let byte = |f: f32| f.round().clamp(0.0, 255.0) as u8;
-        let warn = |what: &str| log::warn!(".pal line {}: malformed {} — {:?}", lineno + 1, what, line);
+        let warn =
+            |what: &str| log::warn!(".pal line {}: malformed {} — {:?}", lineno + 1, what, line);
 
         match key.as_str() {
             "product" => product = Some(rest.join(" ")),
@@ -211,14 +219,24 @@ pub fn parse_pal(text: &str) -> anyhow::Result<ColorTable> {
                         return None;
                     }
                     Some(if has_alpha {
-                        [byte(n[off]), byte(n[off + 1]), byte(n[off + 2]), byte(n[off + 3])]
+                        [
+                            byte(n[off]),
+                            byte(n[off + 1]),
+                            byte(n[off + 2]),
+                            byte(n[off + 3]),
+                        ]
                     } else {
                         [byte(n[off]), byte(n[off + 1]), byte(n[off + 2]), 255]
                     })
                 };
                 let rgba = read(1).unwrap();
                 let end = if solid { None } else { read(1 + cw) };
-                stops.push(PalStop { value, rgba, end, solid });
+                stops.push(PalStop {
+                    value,
+                    rgba,
+                    end,
+                    solid,
+                });
             }
             _ => { /* unknown key (incl. v3-only) ignored */ }
         }
@@ -237,7 +255,13 @@ pub fn parse_pal(text: &str) -> anyhow::Result<ColorTable> {
     stops.sort_by(|a, b| a.value.total_cmp(&b.value));
     let step = step.map(|s| (s / scale).abs());
 
-    Ok(ColorTable { product, units, step, rf, stops })
+    Ok(ColorTable {
+        product,
+        units,
+        step,
+        rf,
+        stops,
+    })
 }
 
 // --- Built-in defaults: real .pal files parsed through the one code path above ---
@@ -252,7 +276,8 @@ const BUILTIN_SRC: [(&str, &str); 6] = [
 ];
 
 static BUILTINS: LazyLock<[ColorTable; 6]> = LazyLock::new(|| {
-    BUILTIN_SRC.map(|(name, src)| parse_pal(src).unwrap_or_else(|e| panic!("built-in {name}.pal: {e}")))
+    BUILTIN_SRC
+        .map(|(name, src)| parse_pal(src).unwrap_or_else(|e| panic!("built-in {name}.pal: {e}")))
 });
 
 /// The built-in default table for `moment`.
@@ -271,7 +296,11 @@ pub struct Palettes {
 
 impl Default for Palettes {
     fn default() -> Self {
-        Self { tables: BUILTINS.clone(), errors: [const { None }; 6], gen: 0 }
+        Self {
+            tables: BUILTINS.clone(),
+            errors: [const { None }; 6],
+            gen: 0,
+        }
     }
 }
 
@@ -287,13 +316,18 @@ impl Palettes {
         for (i, moment) in Moment::ALL.into_iter().enumerate() {
             let (table, err) = match &paths[i] {
                 None => (default_table(moment).clone(), None),
-                Some(path) => match std::fs::read_to_string(path).map_err(|e| e.to_string()).and_then(|s| {
-                    if path.extension().is_some_and(|e| e.eq_ignore_ascii_case("pal3")) {
-                        Err(".pal3 (GRLevelX v3) not supported".to_string())
-                    } else {
-                        parse_pal(&s).map_err(|e| e.to_string())
-                    }
-                }) {
+                Some(path) => match std::fs::read_to_string(path)
+                    .map_err(|e| e.to_string())
+                    .and_then(|s| {
+                        if path
+                            .extension()
+                            .is_some_and(|e| e.eq_ignore_ascii_case("pal3"))
+                        {
+                            Err(".pal3 (GRLevelX v3) not supported".to_string())
+                        } else {
+                            parse_pal(&s).map_err(|e| e.to_string())
+                        }
+                    }) {
                     Ok(t) => (t, None),
                     Err(e) => (default_table(moment).clone(), Some(e)),
                 },
@@ -335,7 +369,11 @@ mod tests {
         let range = Moment::Reflectivity.value_range();
         let lut = bake_lut(table, range, None);
         assert_eq!(&lut[0..4], &[0, 0, 0, 0], "index 0 transparent");
-        assert_eq!(&lut[4..8], &[128, 128, 128, FOLD_ALPHA], "index 1 range-fold");
+        assert_eq!(
+            &lut[4..8],
+            &[128, 128, 128, FOLD_ALPHA],
+            "index 1 range-fold"
+        );
         assert_eq!(lut[255 * 4 + 3], VALUE_ALPHA, "top opaque");
 
         let lut = bake_lut(table, range, Some(40.0));
@@ -390,7 +428,10 @@ SolidColor: 20 0 255 0
         let src = "Color: 0 0 0 0 255 255 255\nColor: 10 255 255 255\n";
         let t = parse_pal(src).unwrap();
         let mid = t.sample(5.0).unwrap();
-        assert!((mid[0] as i16 - 128).abs() <= 2, "midpoint ~gray, got {mid:?}");
+        assert!(
+            (mid[0] as i16 - 128).abs() <= 2,
+            "midpoint ~gray, got {mid:?}"
+        );
     }
 
     #[test]

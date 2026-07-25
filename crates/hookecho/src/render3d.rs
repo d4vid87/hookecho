@@ -27,7 +27,15 @@ const BOX_MIN: Vec3 = Vec3::new(-1.0, -1.0, 0.0);
 const BOX_MAX: Vec3 = Vec3::new(1.0, 1.0, 0.5);
 
 /// Orbit-camera uniforms: azimuth/elevation in degrees, `dist` from the box center, view `aspect`.
-pub fn orbit_uniform(az_deg: f32, el_deg: f32, dist: f32, aspect: f32, n: u32, nz: u32, steps: u32) -> Uniforms {
+pub fn orbit_uniform(
+    az_deg: f32,
+    el_deg: f32,
+    dist: f32,
+    aspect: f32,
+    n: u32,
+    nz: u32,
+    steps: u32,
+) -> Uniforms {
     let center = (BOX_MIN + BOX_MAX) * 0.5;
     let (az, el) = (az_deg.to_radians(), el_deg.to_radians());
     let dir = Vec3::new(el.cos() * az.sin(), el.cos() * az.cos(), el.sin());
@@ -144,11 +152,20 @@ impl Volume3dResources {
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        Self { pipeline, bgl, uniform_buf, gpu: None }
+        Self {
+            pipeline,
+            bgl,
+            uniform_buf,
+            gpu: None,
+        }
     }
 
     fn upload(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, up: &Volume3dUpload) {
-        let size = wgpu::Extent3d { width: up.n, height: up.n, depth_or_array_layers: up.nz };
+        let size = wgpu::Extent3d {
+            width: up.n,
+            height: up.n,
+            depth_or_array_layers: up.nz,
+        };
         let tex = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("volume3d_tex"),
             size,
@@ -160,12 +177,25 @@ impl Volume3dResources {
             view_formats: &[],
         });
         queue.write_texture(
-            wgpu::TexelCopyTextureInfo { texture: &tex, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
+            wgpu::TexelCopyTextureInfo {
+                texture: &tex,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
             &up.data,
-            wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(up.n), rows_per_image: Some(up.n) },
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(up.n),
+                rows_per_image: Some(up.n),
+            },
             size,
         );
-        let lut_size = wgpu::Extent3d { width: 256, height: 1, depth_or_array_layers: 1 };
+        let lut_size = wgpu::Extent3d {
+            width: 256,
+            height: 1,
+            depth_or_array_layers: 1,
+        };
         let lut = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("volume3d_lut"),
             size: lut_size,
@@ -177,9 +207,18 @@ impl Volume3dResources {
             view_formats: &[],
         });
         queue.write_texture(
-            wgpu::TexelCopyTextureInfo { texture: &lut, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
+            wgpu::TexelCopyTextureInfo {
+                texture: &lut,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
             &up.lut,
-            wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(256 * 4), rows_per_image: Some(1) },
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(256 * 4),
+                rows_per_image: Some(1),
+            },
             lut_size,
         );
         let tex_view = tex.create_view(&wgpu::TextureViewDescriptor::default());
@@ -188,12 +227,25 @@ impl Volume3dResources {
             label: Some("raymarch_bg"),
             layout: &self.bgl,
             entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: self.uniform_buf.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&tex_view) },
-                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(&lut_view) },
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: self.uniform_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(&tex_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::TextureView(&lut_view),
+                },
             ],
         });
-        self.gpu = Some(Gpu { _tex: tex, _lut: lut, bind_group });
+        self.gpu = Some(Gpu {
+            _tex: tex,
+            _lut: lut,
+            bind_group,
+        });
     }
 
     fn record(&self, pass: &mut wgpu::RenderPass<'_>) {
@@ -216,7 +268,9 @@ impl Volume3dResources {
     ) {
         self.upload(device, queue, upload);
         queue.write_buffer(&self.uniform_buf, 0, bytemuck::bytes_of(&uniform));
-        let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("raymarch_headless") });
+        let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("raymarch_headless"),
+        });
         {
             let mut pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("raymarch_pass"),
@@ -224,7 +278,10 @@ impl Volume3dResources {
                     view,
                     resolve_target: None,
                     depth_slice: None,
-                    ops: wgpu::Operations { load: wgpu::LoadOp::Clear(clear), store: wgpu::StoreOp::Store },
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(clear),
+                        store: wgpu::StoreOp::Store,
+                    },
                 })],
                 depth_stencil_attachment: None,
                 timestamp_writes: None,

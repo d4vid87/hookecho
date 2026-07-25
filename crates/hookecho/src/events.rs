@@ -107,8 +107,16 @@ mod tests {
     fn all_event_times_parse() {
         for e in EVENTS {
             let _ = e.datetime(); // would panic on a bad literal
-            assert!(e.site.len() == 4 && e.site.starts_with('K'), "site {}", e.site);
-            assert!(e.lat > 20.0 && e.lat < 50.0 && e.lon < -60.0, "coords {}", e.name);
+            assert!(
+                e.site.len() == 4 && e.site.starts_with('K'),
+                "site {}",
+                e.site
+            );
+            assert!(
+                e.lat > 20.0 && e.lat < 50.0 && e.lon < -60.0,
+                "coords {}",
+                e.name
+            );
         }
     }
 }

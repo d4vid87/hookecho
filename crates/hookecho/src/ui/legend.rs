@@ -63,7 +63,12 @@ pub fn draw(
                     quad(x0, x1, col(s.rgba), col(s.end.unwrap_or(n.rgba)));
                 }
             }
-            None => quad(x0, bar.right(), col(s.end.unwrap_or(s.rgba)), col(s.end.unwrap_or(s.rgba))),
+            None => quad(
+                x0,
+                bar.right(),
+                col(s.end.unwrap_or(s.rgba)),
+                col(s.end.unwrap_or(s.rgba)),
+            ),
         }
     }
     painter.add(Shape::mesh(mesh));
@@ -79,13 +84,24 @@ pub fn draw(
             );
         }
     }
-    painter.rect_stroke(bar, 0.0, Stroke::new(1.0, Color32::from_gray(90)), egui::StrokeKind::Outside);
+    painter.rect_stroke(
+        bar,
+        0.0,
+        Stroke::new(1.0, Color32::from_gray(90)),
+        egui::StrokeKind::Outside,
+    );
 
     // Ticks: from Step multiples when the table declares one, else min/mid/max.
     let font = FontId::proportional(11.0);
     let label = |v: f32, align: Align2, x: f32| {
         let shown = v * disp_factor;
-        painter.text(egui::pos2(x, bar.bottom() + 2.0), align, format!("{shown:.0}"), font.clone(), Color32::WHITE);
+        painter.text(
+            egui::pos2(x, bar.bottom() + 2.0),
+            align,
+            format!("{shown:.0}"),
+            font.clone(),
+            Color32::WHITE,
+        );
     };
     match table.step.filter(|s| *s > 0.0) {
         Some(step) => {
@@ -100,7 +116,10 @@ pub fn draw(
             while v <= vmax && n < 128 {
                 let x = x_of(v);
                 painter.line_segment(
-                    [egui::pos2(x, bar.bottom()), egui::pos2(x, bar.bottom() + 3.0)],
+                    [
+                        egui::pos2(x, bar.bottom()),
+                        egui::pos2(x, bar.bottom() + 3.0),
+                    ],
                     Stroke::new(1.0, Color32::from_gray(160)),
                 );
                 // Always label the ends; thin the interior to the stride.

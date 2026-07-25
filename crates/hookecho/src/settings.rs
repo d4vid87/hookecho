@@ -79,8 +79,13 @@ pub enum AlertSound {
 
 impl AlertSound {
     /// The synthesized built-ins, for sound-picker combos.
-    pub const BUILTINS: [AlertSound; 5] =
-        [AlertSound::Chime, AlertSound::Ding, AlertSound::Siren, AlertSound::Alarm, AlertSound::Pulse];
+    pub const BUILTINS: [AlertSound; 5] = [
+        AlertSound::Chime,
+        AlertSound::Ding,
+        AlertSound::Siren,
+        AlertSound::Alarm,
+        AlertSound::Pulse,
+    ];
 
     pub fn label(&self) -> &'static str {
         match self {
@@ -117,6 +122,9 @@ pub struct Settings {
     pub palettes: BTreeMap<String, String>,
     /// Velocity/spectrum-width display unit (internal data stays m/s).
     pub velocity_unit: VelocityUnit,
+    /// Whether radar timestamps read in the site's local time or in UTC.
+    #[serde(default)]
+    pub time_display: TimeDisplay,
     /// UI text/widget zoom factor (egui `zoom_factor`); also captures Ctrl+= / Ctrl+- / Ctrl+0.
     pub ui_scale: f32,
     /// User-added GRLevelX placefile overlays.
@@ -181,6 +189,17 @@ pub struct Settings {
     /// Persisted basemap style slug for startup (empty = pane default Dark).
     #[serde(default)]
     pub basemap: String,
+}
+
+impl Settings {
+    /// Timezone to render `site`'s timestamps in — `None` means "show Zulu", either because the
+    /// user picked UTC or because the site has no known zone.
+    pub fn tz_for(&self, site: Option<&str>) -> Option<wxdata::tz::Tz> {
+        match self.time_display {
+            TimeDisplay::Utc => None,
+            TimeDisplay::SiteLocal => site.and_then(wxdata::tz::site_tz),
+        }
+    }
 }
 
 /// A saved view: site + camera, and (for archive views) the UTC instant to seek to.
@@ -254,6 +273,27 @@ pub struct Marker {
     pub icon: Option<String>,
 }
 
+/// Whether radar timestamps read in the selected site's local time or in UTC ("Zulu").
+///
+/// Site-local is the default: the clock a chaser cares about is the one the storm is under.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum TimeDisplay {
+    #[default]
+    SiteLocal,
+    Utc,
+}
+
+impl TimeDisplay {
+    pub const ALL: [TimeDisplay; 2] = [TimeDisplay::SiteLocal, TimeDisplay::Utc];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            TimeDisplay::SiteLocal => "Site local",
+            TimeDisplay::Utc => "UTC (Zulu)",
+        }
+    }
+}
+
 /// Display unit for velocity products. GRLevelX defaults to knots; internal math is m/s.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum VelocityUnit {
@@ -264,7 +304,11 @@ pub enum VelocityUnit {
 }
 
 impl VelocityUnit {
-    pub const ALL: [VelocityUnit; 3] = [VelocityUnit::Knots, VelocityUnit::MetersPerSecond, VelocityUnit::Mph];
+    pub const ALL: [VelocityUnit; 3] = [
+        VelocityUnit::Knots,
+        VelocityUnit::MetersPerSecond,
+        VelocityUnit::Mph,
+    ];
 
     pub fn label(self) -> &'static str {
         match self {
@@ -293,6 +337,7 @@ impl Default for Settings {
             presets: Vec::new(),
             palettes: BTreeMap::new(),
             velocity_unit: VelocityUnit::default(),
+            time_display: TimeDisplay::default(),
             // 1.0 everywhere: this multiplies the native scale factor, and Android's display
             // density already sizes widgets for touch — an extra 1.3 shrank the S24's logical
             // canvas to ~277 pt wide (nothing fit).
@@ -356,7 +401,9 @@ impl Settings {
 
     /// Load from disk, falling back to defaults on any error (missing file, parse failure).
     pub fn load() -> Self {
-        let Some(path) = Self::path() else { return Self::default() };
+        let Some(path) = Self::path() else {
+            return Self::default();
+        };
         let mut loaded = match std::fs::read_to_string(&path) {
             Ok(s) => serde_json::from_str(&s).unwrap_or_else(|e| {
                 log::warn!("settings parse failed ({e}); using defaults");
@@ -386,7 +433,10 @@ impl Settings {
                 Err(e) => log::warn!("bundle: skipping palette {moment} ({path}): {e}"),
             }
         }
-        let bundle = SettingsBundle { settings: self.clone(), palette_files };
+        let bundle = SettingsBundle {
+            settings: self.clone(),
+            palette_files,
+        };
         serde_json::to_string_pretty(&bundle).map_err(|e| e.to_string())
     }
 
@@ -401,7 +451,9 @@ impl Settings {
             for (moment, text) in &bundle.palette_files {
                 let path = dir.join(format!("{moment}.pal"));
                 std::fs::write(&path, text).map_err(|e| e.to_string())?;
-                settings.palettes.insert(moment.clone(), path.to_string_lossy().into_owned());
+                settings
+                    .palettes
+                    .insert(moment.clone(), path.to_string_lossy().into_owned());
             }
         }
         Ok(settings)
@@ -437,8 +489,13 @@ mod tests {
             presets: vec!["KTLX".to_string(), "KOUN".to_string()],
             palettes: BTreeMap::from([("REF".to_string(), "/tmp/foo.pal".to_string())]),
             velocity_unit: VelocityUnit::Mph,
+            time_display: TimeDisplay::Utc,
             ui_scale: 1.2,
-            placefiles: vec![PlacefileConfig { url: "http://x/p.txt".to_string(), enabled: true, opacity: 1.0 }],
+            placefiles: vec![PlacefileConfig {
+                url: "http://x/p.txt".to_string(),
+                enabled: true,
+                opacity: 1.0,
+            }],
             markers: vec![Marker {
                 name: "Home".to_string(),
                 lat: 35.3,
@@ -448,7 +505,12 @@ mod tests {
             dealias_velocity: true,
             mapbox_key: "pk.test".to_string(),
             maptiler_key: "mt.test".to_string(),
-            start_view: Some(StartView { site: "KFWS".to_string(), x: 0.3, y: 0.4, zoom: 8.0 }),
+            start_view: Some(StartView {
+                site: "KFWS".to_string(),
+                x: 0.3,
+                y: 0.4,
+                zoom: 8.0,
+            }),
             alert_sound: false,
             ntfy_topic: "hookecho-test".to_string(),
             close_to_tray: true,
