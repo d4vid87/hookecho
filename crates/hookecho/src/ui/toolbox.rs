@@ -312,6 +312,8 @@ fn overlays_section(ui: &mut egui::Ui, filters: &mut OverlayFilters, actions: &m
     }
     ui.checkbox(&mut filters.show_tds, "TDS detection")
         .on_hover_text("Auto-flag tornado debris signatures: low CC (ρhv) collocated with high reflectivity. Needs a dual-pol volume.");
+    ui.checkbox(&mut filters.show_couplets, "Rotation couplets")
+        .on_hover_text("Flag gate-to-gate velocity couplets (mesocyclone/TVS) from the dealiased velocity sweep; alarms on new detections.");
     changed |= ui.checkbox(&mut filters.show_alerts, "NWS Alerts").changed();
     if filters.show_alerts {
         ui.indent("alert_cats", |ui| {

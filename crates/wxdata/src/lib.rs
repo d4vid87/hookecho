@@ -19,6 +19,7 @@ pub mod overlay;
 pub mod placefile;
 pub mod probsevere;
 pub mod river;
+pub mod rotation;
 pub mod sounding;
 pub mod spc;
 pub mod spotters;

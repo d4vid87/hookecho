@@ -163,6 +163,9 @@ pub struct Settings {
     /// Sound played on tornado-debris-signature detection.
     #[serde(default)]
     pub tds_sound: AlertSound,
+    /// Sound played when a rotation couplet is detected (defaults to Siren — distinct from TDS).
+    #[serde(default = "default_rotation_sound")]
+    pub rotation_sound: AlertSound,
     /// Sound played on the lightning proximity alarm.
     #[serde(default)]
     pub lightning_sound: AlertSound,
@@ -196,6 +199,10 @@ pub struct Bookmark {
 
 fn default_true() -> bool {
     true
+}
+
+fn default_rotation_sound() -> AlertSound {
+    AlertSound::Siren
 }
 
 fn default_emergency_sound() -> AlertSound {
@@ -298,6 +305,7 @@ impl Default for Settings {
             setup_done: false,
             warn_sound: AlertSound::default(),
             tds_sound: AlertSound::default(),
+            rotation_sound: default_rotation_sound(),
             lightning_sound: AlertSound::default(),
             emergency_sound: default_emergency_sound(),
             alert_volume: default_volume(),
@@ -450,6 +458,7 @@ mod tests {
             setup_done: true,
             warn_sound: AlertSound::Siren,
             tds_sound: AlertSound::Custom("/tmp/tds.wav".to_string()),
+            rotation_sound: AlertSound::Siren,
             lightning_sound: AlertSound::Alarm,
             emergency_sound: AlertSound::Alarm,
             alert_volume: 0.7,

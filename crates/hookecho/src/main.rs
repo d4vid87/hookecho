@@ -265,6 +265,16 @@ fn main() -> eframe::Result<()> {
         return Ok(());
     }
 
+    // Rotation verify: `hookecho --headless-rotation [SITE]`.
+    if let Some(pos) = args.iter().position(|a| a == "--headless-rotation") {
+        let site = args.get(pos + 1).map(String::as_str).unwrap_or("KTLX");
+        if let Err(e) = headless::run_rotation(site) {
+            eprintln!("headless rotation failed: {e}");
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
+
     // Tornado climatology verify: `hookecho --headless-climatology [lon lat]` (default Moore, OK).
     if let Some(pos) = args.iter().position(|a| a == "--headless-climatology") {
         let lon = args.get(pos + 1).and_then(|s| s.parse().ok()).unwrap_or(-97.49);

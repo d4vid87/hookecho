@@ -61,6 +61,8 @@ pub struct OverlayFilters {
     pub nowcast_lead_min: u8,
     /// Auto tornado-debris-signature detection (low CC collocated with high reflectivity).
     pub show_tds: bool,
+    /// Flag velocity rotation couplets (client-side gate-to-gate azimuthal shear).
+    pub show_couplets: bool,
 }
 
 impl Default for OverlayFilters {
@@ -78,6 +80,7 @@ impl Default for OverlayFilters {
             show_nowcast: false,
             nowcast_lead_min: 15,
             show_tds: false,
+            show_couplets: false,
         }
     }
 }
@@ -388,6 +391,7 @@ pub(crate) enum OverlayToggle {
     ArrivalCones,
     Nowcast,
     Tds,
+    Couplets,
     Alerts,
     Mds,
     LinkCameras,
@@ -795,6 +799,8 @@ pub struct HookEchoApp {
     lightning_alerted: std::collections::HashMap<String, Instant>,
     /// True while a TDS is currently detected, so the alert fires on the rising edge only.
     tds_active: bool,
+    /// True while a rotation couplet is currently detected (rising-edge alarm latch).
+    rot_active: bool,
     /// Active new-warning banners (event, area, first-seen time); expire after a while.
     warning_banners: Vec<(String, String, Instant)>,
     /// Right-dock active-alerts panel toggle.
@@ -1091,6 +1097,7 @@ paste_target: None,
             warnings_seeded: false,
             lightning_alerted: std::collections::HashMap::new(),
             tds_active: false,
+            rot_active: false,
             warning_banners: Vec::new(),
             show_alert_panel: false,
             xsection_pts: Vec::new(),
@@ -1714,6 +1721,46 @@ paste_target: None,
         hits
     }
 
+    /// Client-side rotation detection for the active pane's lowest tilt: bin the dealiased
+    /// velocity sweep and flag gate-to-gate couplets. Fires a chime + banner on the rising edge,
+    /// like the TDS detector (they're complementary: rotation aloft precedes debris at the ground).
+    fn compute_couplets(&mut self, idx: usize) -> Vec<wxdata::rotation::CoupletHit> {
+        // Lowest tilt = closest to the ground; dealiased so folded gates don't fake huge shear.
+        let vel = match self.views[idx]
+            .volume
+            .as_mut()
+            .and_then(|v| v.binned(Moment::Velocity, 0, true).ok())
+        {
+            Some(s) => s.clone(),
+            None => return Vec::new(),
+        };
+        // 25 m/s gate-to-gate is the legacy weak-TVS criterion; 15-150 km is the usable range band
+        // (nearer, clutter fakes couplets; farther, the beam is too high and too coarsely sampled).
+        let hits = wxdata::rotation::detect(&vel, 25.0, 15.0, 150.0, 3);
+        let now_active = !hits.is_empty();
+        if now_active && !self.rot_active {
+            let h = hits[0]; // sorted strongest-first
+            let site = self.views[idx].site.clone().unwrap_or_default();
+            let kt = h.vrot_ms * 1.943_844;
+            let (km, bearing) = crate::geo::great_circle(
+                [vel.radar_lon as f64, vel.radar_lat as f64],
+                [h.lon, h.lat],
+            );
+            let where_ = format!("{:.0} km {} of {site}", km, cardinal(bearing));
+            self.warning_banners.push((
+                "⟳ Rotation detected".to_string(),
+                format!("{kt:.0} kt couplet — {where_}"),
+                Instant::now(),
+            ));
+            self.push_ntfy("⟳ Rotation couplet", &format!("{kt:.0} kt rotational velocity — {where_}"), true);
+            if self.settings.alert_sound {
+                crate::audio::play(&self.settings.rotation_sound, self.settings.alert_volume);
+            }
+        }
+        self.rot_active = now_active;
+        hits
+    }
+
     /// DVR instant replay: jump the active timeline to the earliest frame still buffered in the
     /// decode cache and loop-play from there, so the recent session replays instantly from RAM.
     fn instant_replay(&mut self) {
@@ -2299,6 +2346,7 @@ paste_target: None,
             T::ArrivalCones => &mut self.filters.show_arrival_cones,
             T::Nowcast => &mut self.filters.show_nowcast,
             T::Tds => &mut self.filters.show_tds,
+            T::Couplets => &mut self.filters.show_couplets,
             T::Alerts => &mut self.filters.show_alerts,
             T::Mds => &mut self.filters.show_mds,
             T::LinkCameras => &mut self.link_cameras,
@@ -2374,6 +2422,7 @@ paste_target: None,
             (T::ArrivalCones, "Severe", "Arrival-time cones"),
             (T::Nowcast, "Severe", "Nowcast (echo extrapolation)"),
             (T::Tds, "Severe", "TDS detection"),
+            (T::Couplets, "Severe", "Rotation couplets"),
             (T::Alerts, "Severe", "NWS alerts"),
             (T::Mds, "Severe", "Mesoscale discussions"),
             (T::StormReports, "Severe", "Storm reports (LSR)"),
@@ -3815,6 +3864,11 @@ paste_target: None,
         } else {
             Vec::new()
         };
+        let couplets = if self.filters.show_couplets && idx == self.active {
+            self.compute_couplets(idx)
+        } else {
+            Vec::new()
+        };
 
         // --- Painter overlays (clipped to this pane) ---
         let painter = ui.painter_at(prect);
@@ -4031,6 +4085,27 @@ paste_target: None,
                 ));
                 painter.text(p + egui::vec2(0.0, -s - 2.0), egui::Align2::CENTER_BOTTOM,
                     format!("TDS ρ{:.2}", h.min_cc), egui::FontId::proportional(11.0), m);
+            }
+
+            // Rotation couplets: a ring at each cluster — solid red at strong-TVS strength
+            // (≥36 m/s rotational velocity), hollow orange below it.
+            for h in &couplets {
+                let p = to_screen(h.lon, h.lat);
+                if !prect.contains(p) {
+                    continue;
+                }
+                let strong = h.vrot_ms >= 36.0;
+                let col = if strong {
+                    egui::Color32::from_rgb(240, 60, 60)
+                } else {
+                    egui::Color32::from_rgb(245, 160, 50)
+                };
+                painter.circle_stroke(p, 11.0, egui::Stroke::new(2.0, col));
+                if strong {
+                    painter.circle_filled(p, 3.5, col);
+                }
+                painter.text(p + egui::vec2(0.0, 13.0), egui::Align2::CENTER_TOP,
+                    format!("ROT {:.0} kt", h.vrot_ms * 1.943_844), egui::FontId::proportional(11.0), col);
             }
 
             let label_tracks = self.filters.show_tracks && cam.zoom >= 7.0;
@@ -5482,6 +5557,12 @@ pub(crate) fn display_units(moment: Moment, settings: &Settings) -> (f32, &'stat
 }
 
 /// A coarse "N ago" string for volume age.
+/// Compass point for a bearing in degrees from north (used in alarm text).
+fn cardinal(bearing_deg: f64) -> &'static str {
+    const POINTS: [&str; 8] = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"];
+    POINTS[(((bearing_deg % 360.0 + 360.0) % 360.0) / 45.0).round() as usize % 8]
+}
+
 fn humanize(secs: i64) -> String {
     if secs < 60 {
         format!("{secs}s")

@@ -329,6 +329,26 @@ pub fn run_tds(site: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Rotation verify: download the latest volume, bin the dealiased velocity at the lowest tilt,
+/// run the couplet detector, and print any hits. Proves the detection pipeline on real data.
+pub fn run_rotation(site: &str) -> anyhow::Result<()> {
+    let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
+    let vel = rt.block_on(async {
+        let scan = level2::download_latest_scan(site, chrono::Utc::now().date_naive()).await?;
+        level2::bin_scan_opts(&scan, Moment::Velocity, 0, true)
+    })?;
+    println!("{site}: V {}x{} @ {:.2}°", vel.az_bins, vel.gate_count, vel.elevation_deg);
+    let hits = wxdata::rotation::detect(&vel, 25.0, 15.0, 150.0, 3);
+    println!("rotation couplets (>=25 m/s gate-to-gate, 15-150 km, >=3 gates): {}", hits.len());
+    for h in hits.iter().take(8) {
+        println!(
+            "  {:.3},{:.3}  vrot {:.0} kt  g2g {:.0} m/s  {:.0} km  {} gates",
+            h.lat, h.lon, h.vrot_ms * 1.943_844, h.g2g_ms, h.range_km, h.gates
+        );
+    }
+    Ok(())
+}
+
 /// Fetch the VAD wind profile for a site and print the levels (altitude, dir/speed, u/v).
 pub fn run_vwp(site: &str) -> anyhow::Result<()> {
     let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
