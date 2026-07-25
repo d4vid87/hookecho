@@ -102,7 +102,7 @@ mod tests {
     fn every_site_has_a_timezone() {
         let missing: Vec<_> = crate::sites::sites()
             .iter()
-            .filter(|s| site_tz(&s.id).is_none())
+            .filter(|s| site_tz(s.id).is_none())
             .map(|s| format!("{} ({}, {})", s.id, s.city, s.state))
             .collect();
         assert!(missing.is_empty(), "sites with no timezone: {missing:?}");
@@ -137,7 +137,7 @@ mod tests {
     #[test]
     fn standard_offset_tracks_longitude() {
         for s in crate::sites::sites() {
-            let tz = site_tz(&s.id).expect("covered by every_site_has_a_timezone");
+            let tz = site_tz(s.id).expect("covered by every_site_has_a_timezone");
             let jan = tz
                 .with_ymd_and_hms(2026, 1, 15, 12, 0, 0)
                 .single()
