@@ -697,6 +697,42 @@ struct ChasePack {
     bytes: u64,
 }
 
+/// One row of the product picker: name, plain-English blurb, and the hotkey that selects it.
+fn product_row(
+    ui: &mut egui::Ui,
+    name: &str,
+    blurb: &str,
+    hotkey: u8,
+    on: bool,
+    accent: egui::Color32,
+) -> bool {
+    use crate::ui::style;
+    let mut clicked = false;
+    ui.horizontal(|ui| {
+        ui.vertical(|ui| {
+            let title = egui::RichText::new(name).size(style::FONT_BASE).strong();
+            let title = if on { title.color(accent) } else { title };
+            clicked = ui.selectable_label(on, title).clicked();
+            ui.label(
+                egui::RichText::new(blurb)
+                    .size(style::FONT_SM)
+                    .color(egui::Color32::from_gray(150)),
+            );
+        });
+        if hotkey != 0 {
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.label(
+                    egui::RichText::new(hotkey.to_string())
+                        .size(style::FONT_SM)
+                        .color(egui::Color32::from_gray(120)),
+                );
+            });
+        }
+    });
+    ui.add_space(2.0);
+    clicked
+}
+
 /// How many buttons the right-edge control column shows — the badge lane stacks below them.
 const CONTROL_BUTTONS: usize = 6;
 
@@ -2563,6 +2599,110 @@ impl HookEchoApp {
         }
     }
 
+    /// Bottom-left product pill: what you're looking at, and the two knobs that change it.
+    ///
+    /// Product and tilt used to be reachable only from the hidden Advanced toolbox (or by knowing
+    /// the 1–6 and PageUp/PageDown hotkeys), which meant a first-time user never found velocity.
+    /// The pill names the current product in full and opens a picker with a plain-English blurb
+    /// per product. Both write the same fields the toolbox and hotkeys do.
+    fn product_pill(&mut self, ctx: &egui::Context) {
+        use crate::ui::style;
+        let accent = crate::theme::accent(self.settings.theme);
+        let (moment, srv, tilt) = {
+            let v = &self.views[self.active];
+            (v.moment, v.srv, v.tilt)
+        };
+        let elevations = self.views[self.active]
+            .volume
+            .as_ref()
+            .map(|v| v.elevations.clone())
+            .unwrap_or_default();
+        let label = format!(
+            "{}{}",
+            crate::products::name(moment, srv),
+            elevations
+                .get(tilt)
+                .map(|a| format!("  ·  {a:.1}°"))
+                .unwrap_or_default()
+        );
+
+        let mut pick: Option<(wxdata::level2::Moment, bool)> = None;
+        let mut pick_tilt: Option<usize> = None;
+        egui::Area::new(egui::Id::new("product_pill"))
+            .anchor(
+                egui::Align2::LEFT_BOTTOM,
+                egui::vec2(14.0, style::LANE_BOTTOM_PRODUCT),
+            )
+            .show(ctx, |ui| {
+                style::glass(228).show(ui, |ui| {
+                    let btn = ui.add(
+                        egui::Button::new(
+                            egui::RichText::new(&label)
+                                .size(style::FONT_BASE)
+                                .strong()
+                                .color(egui::Color32::from_gray(238)),
+                        )
+                        .fill(egui::Color32::TRANSPARENT)
+                        .stroke(egui::Stroke::NONE),
+                    );
+                    egui::Popup::menu(&btn)
+                        .align(egui::RectAlign::TOP_START)
+                        .close_behavior(egui::PopupCloseBehavior::CloseOnClick)
+                        .show(|ui| {
+                            ui.set_min_width(320.0);
+                            for p in &crate::products::PRODUCTS {
+                                let on = moment == p.moment
+                                    && !(srv && p.moment == wxdata::level2::Moment::Velocity);
+                                if product_row(ui, p.name, p.blurb, p.hotkey, on, accent) {
+                                    pick = Some((p.moment, false));
+                                }
+                                // Storm-relative velocity rides directly under plain velocity.
+                                if p.moment == wxdata::level2::Moment::Velocity {
+                                    let on = moment == p.moment && srv;
+                                    if product_row(
+                                        ui,
+                                        "Storm-Relative Velocity",
+                                        "Velocity with the storm's own motion subtracted out",
+                                        0,
+                                        on,
+                                        accent,
+                                    ) {
+                                        pick = Some((p.moment, true));
+                                    }
+                                }
+                            }
+                            if !elevations.is_empty() {
+                                ui.separator();
+                                ui.label(
+                                    egui::RichText::new(
+                                        "Tilt — how high above the ground the beam is looking",
+                                    )
+                                    .size(style::FONT_SM)
+                                    .color(egui::Color32::from_gray(150)),
+                                );
+                                ui.horizontal_wrapped(|ui| {
+                                    for (i, angle) in elevations.iter().enumerate() {
+                                        if ui
+                                            .selectable_label(i == tilt, format!("{angle:.1}°"))
+                                            .clicked()
+                                        {
+                                            pick_tilt = Some(i);
+                                        }
+                                    }
+                                });
+                            }
+                        });
+                });
+            });
+
+        if let Some((m, srv)) = pick {
+            self.apply_palette(PaletteAction::SetMoment(m, srv), ctx);
+        }
+        if let Some(i) = pick_tilt {
+            self.views[self.active].tilt = i;
+        }
+    }
+
     /// Top-center place-search pill: type a place, press Enter, the camera flies there. Pure
     /// navigation — the marker window's search is what adds a marker.
     fn search_pill(&mut self, ctx: &egui::Context) {
@@ -2752,7 +2892,8 @@ impl HookEchoApp {
         let dy = if cfg!(target_os = "android") {
             -(inset_bottom + 190.0)
         } else {
-            -34.0
+            // Above the product pill, which owns the bottom-left corner.
+            crate::ui::style::LANE_BOTTOM_CHASE
         };
         egui::Area::new(egui::Id::new("chase_hud"))
             .anchor(egui::Align2::LEFT_BOTTOM, egui::vec2(14.0, dy))
@@ -7443,6 +7584,7 @@ impl eframe::App for HookEchoApp {
             }
             self.search_pill(ctx);
             self.control_column(ctx);
+            self.product_pill(ctx);
             self.timeline_pill(ctx);
             self.layers_panel(ctx);
             self.command_palette(ctx);

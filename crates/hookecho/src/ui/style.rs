@@ -48,6 +48,9 @@ pub fn lane_right_badge_y(buttons: usize) -> f32 {
 // Bottom edge.
 pub const LANE_BOTTOM_TIMELINE: f32 = -34.0;
 pub const LANE_BOTTOM_CHIP: f32 = -8.0;
+/// Bottom-left product pill, and the chase HUD stacked above it.
+pub const LANE_BOTTOM_PRODUCT: f32 = -34.0;
+pub const LANE_BOTTOM_CHASE: f32 = -92.0;
 
 /// Translucent near-black card used by the floating bars.
 pub fn glass(alpha: u8) -> Frame {
