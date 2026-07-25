@@ -34,8 +34,12 @@ pub enum OutlookKind {
 }
 
 impl OutlookKind {
-    pub const ALL: [OutlookKind; 4] =
-        [OutlookKind::Categorical, OutlookKind::Tornado, OutlookKind::Wind, OutlookKind::Hail];
+    pub const ALL: [OutlookKind; 4] = [
+        OutlookKind::Categorical,
+        OutlookKind::Tornado,
+        OutlookKind::Wind,
+        OutlookKind::Hail,
+    ];
 
     /// SPC filename slug (`day1otlk_<slug>.lyr.geojson`).
     pub fn slug(self) -> &'static str {
@@ -78,14 +82,22 @@ pub fn parse_outlook(json: &str, day: u8) -> anyhow::Result<Vec<GeoFeature>> {
 /// Parse an SPC outlook GeoJSON payload for a given hazard kind. Categorical uses the risk
 /// `LABEL2`; probabilistic layers carry a numeric `LABEL` (e.g. "0.05") plus a `SIGN` significant
 /// hatch polygon.
-pub fn parse_outlook_kind(json: &str, day: u8, kind: OutlookKind) -> anyhow::Result<Vec<GeoFeature>> {
+pub fn parse_outlook_kind(
+    json: &str,
+    day: u8,
+    kind: OutlookKind,
+) -> anyhow::Result<Vec<GeoFeature>> {
     let mut out = Vec::new();
     for_each_feature(json, |geom, props| {
         let str_of = |k: &str| props.get(k).and_then(|v| v.as_str()).unwrap_or("");
         if kind == OutlookKind::Categorical {
             let label = {
                 let l2 = str_of("LABEL2");
-                if l2.is_empty() { str_of("LABEL").to_string() } else { l2.to_string() }
+                if l2.is_empty() {
+                    str_of("LABEL").to_string()
+                } else {
+                    l2.to_string()
+                }
             };
             if label.is_empty() {
                 return;
@@ -96,7 +108,14 @@ pub fn parse_outlook_kind(json: &str, day: u8, kind: OutlookKind) -> anyhow::Res
                 "SPC Day {day} Convective Outlook\nCategory: {label}\nValid: {}",
                 str_of("VALID"),
             );
-            push_polys(&mut out, geom, [rgb[0], rgb[1], rgb[2], 70], [rgb[0], rgb[1], rgb[2], 230], title, detail);
+            push_polys(
+                &mut out,
+                geom,
+                [rgb[0], rgb[1], rgb[2], 70],
+                [rgb[0], rgb[1], rgb[2], 230],
+                title,
+                detail,
+            );
         } else {
             let label = str_of("LABEL");
             if label.is_empty() {
@@ -106,15 +125,31 @@ pub fn parse_outlook_kind(json: &str, day: u8, kind: OutlookKind) -> anyhow::Res
             // SIGN = 10%+ significant hazard hatch; probability labels are fractions like "0.05".
             if label.eq_ignore_ascii_case("SIGN") {
                 let title = format!("Day {day} {hazard}: SIG");
-                let detail = format!("SPC Day {day} {hazard} Outlook\nSignificant (10%+)\nValid: {}", str_of("VALID"));
+                let detail = format!(
+                    "SPC Day {day} {hazard} Outlook\nSignificant (10%+)\nValid: {}",
+                    str_of("VALID")
+                );
                 // ponytail: SIG hatching approximated by translucent black — lyon has no hatch pattern.
                 push_polys(&mut out, geom, [0, 0, 0, 60], [0, 0, 0, 200], title, detail);
             } else {
-                let pct = label.parse::<f32>().map(|f| (f * 100.0).round() as i32).unwrap_or(0);
+                let pct = label
+                    .parse::<f32>()
+                    .map(|f| (f * 100.0).round() as i32)
+                    .unwrap_or(0);
                 let rgb = hex_rgb(str_of("fill")).unwrap_or_else(|| risk_color(label));
                 let title = format!("Day {day} {hazard}: {pct}%");
-                let detail = format!("SPC Day {day} {hazard} Probability\n{pct}%\nValid: {}", str_of("VALID"));
-                push_polys(&mut out, geom, [rgb[0], rgb[1], rgb[2], 70], [rgb[0], rgb[1], rgb[2], 230], title, detail);
+                let detail = format!(
+                    "SPC Day {day} {hazard} Probability\n{pct}%\nValid: {}",
+                    str_of("VALID")
+                );
+                push_polys(
+                    &mut out,
+                    geom,
+                    [rgb[0], rgb[1], rgb[2], 70],
+                    [rgb[0], rgb[1], rgb[2], 230],
+                    title,
+                    detail,
+                );
             }
         }
     })?;
@@ -122,7 +157,14 @@ pub fn parse_outlook_kind(json: &str, day: u8, kind: OutlookKind) -> anyhow::Res
 }
 
 /// Push one `GeoFeature` per polygon part of `geom` with the given styling/text.
-fn push_polys(out: &mut Vec<GeoFeature>, geom: &geojson::GeometryValue, fill: [u8; 4], stroke: [u8; 4], title: String, detail: String) {
+fn push_polys(
+    out: &mut Vec<GeoFeature>,
+    geom: &geojson::GeometryValue,
+    fill: [u8; 4],
+    stroke: [u8; 4],
+    title: String,
+    detail: String,
+) {
     for poly in polygons_of(geom) {
         out.push(GeoFeature {
             rings: poly,
@@ -147,7 +189,11 @@ pub fn parse_md(json: &str) -> anyhow::Result<Vec<GeoFeature>> {
         } else {
             format!("Mesoscale Discussion {name}")
         };
-        let detail = format!("{title}\n\n{}\n{}", str_of("popupinfo"), str_of("folderpath"));
+        let detail = format!(
+            "{title}\n\n{}\n{}",
+            str_of("popupinfo"),
+            str_of("folderpath")
+        );
         for poly in polygons_of(geom) {
             out.push(GeoFeature {
                 rings: poly,
@@ -169,7 +215,11 @@ pub async fn fetch_outlook(client: &reqwest::Client, day: u8) -> anyhow::Result<
 }
 
 /// Fetch an outlook for `day` and hazard `kind` (probabilistic layers are Day-1 only).
-pub async fn fetch_outlook_kind(client: &reqwest::Client, day: u8, kind: OutlookKind) -> anyhow::Result<Vec<GeoFeature>> {
+pub async fn fetch_outlook_kind(
+    client: &reqwest::Client,
+    day: u8,
+    kind: OutlookKind,
+) -> anyhow::Result<Vec<GeoFeature>> {
     let url = format!("{OUTLOOK_BASE}/day{day}otlk_{}.lyr.geojson", kind.slug());
     let body = client
         .get(&url)
@@ -183,7 +233,9 @@ pub async fn fetch_outlook_kind(client: &reqwest::Client, day: u8, kind: Outlook
 }
 
 /// Fetch active Mesoscale Discussions.
-pub async fn fetch_mesoscale_discussions(client: &reqwest::Client) -> anyhow::Result<Vec<GeoFeature>> {
+pub async fn fetch_mesoscale_discussions(
+    client: &reqwest::Client,
+) -> anyhow::Result<Vec<GeoFeature>> {
     let body = client
         .get(MD_URL)
         .header("User-Agent", USER_AGENT)

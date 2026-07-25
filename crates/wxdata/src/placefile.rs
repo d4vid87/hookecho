@@ -49,21 +49,45 @@ pub struct PlaceItem {
 #[derive(Debug, Clone)]
 pub enum PlaceKind {
     /// Polyline in `[lon, lat]` with an RGBA color and pixel width.
-    Line { color: [u8; 4], width: f32, pts: Vec<[f64; 2]> },
+    Line {
+        color: [u8; 4],
+        width: f32,
+        pts: Vec<[f64; 2]>,
+    },
     /// Filled polygon; `rings[0]` outer, others holes, each `[lon, lat]`.
-    Polygon { color: [u8; 4], rings: Vec<Vec<[f64; 2]>> },
+    Polygon {
+        color: [u8; 4],
+        rings: Vec<Vec<[f64; 2]>>,
+    },
     /// A text label at `[lon, lat]` with hover text.
-    Text { color: [u8; 4], pos: [f64; 2], text: String, hover: String },
+    Text {
+        color: [u8; 4],
+        pos: [f64; 2],
+        text: String,
+        hover: String,
+    },
     /// A point marker at `[lon, lat]` with hover text. `sheet` is `(file number, icon number)`
     /// into [`Placefile::icon_files`] when the line referenced a sheet; without one (or before
     /// the image loads) the renderer falls back to a plain marker. `angle` rotates the icon
     /// clockwise in degrees.
-    Icon { color: [u8; 4], pos: [f64; 2], angle: f32, sheet: Option<(u32, u32)>, hover: String },
+    Icon {
+        color: [u8; 4],
+        pos: [f64; 2],
+        angle: f32,
+        sheet: Option<(u32, u32)>,
+        hover: String,
+    },
 }
 
 /// Fetch and parse a placefile from `url`.
 pub async fn fetch(http: &reqwest::Client, url: &str) -> anyhow::Result<Placefile> {
-    let text = http.get(url).send().await?.error_for_status()?.text().await?;
+    let text = http
+        .get(url)
+        .send()
+        .await?
+        .error_for_status()?
+        .text()
+        .await?;
     let mut pf = parse(&text);
     // Sheet paths are usually relative to the placefile itself.
     let base = url.rsplit_once('/').map(|(b, _)| b).unwrap_or("");
@@ -154,13 +178,20 @@ pub fn parse(text: &str) -> Placefile {
             "refresh" => pf.refresh_secs = rest.parse::<u32>().unwrap_or(0).saturating_mul(60),
             "color" => color = parse_color(rest),
             "threshold" => {
-                threshold = rest.split([',', ' ']).find(|t| !t.is_empty())
-                    .and_then(|t| t.parse().ok()).unwrap_or(threshold);
+                threshold = rest
+                    .split([',', ' '])
+                    .find(|t| !t.is_empty())
+                    .and_then(|t| t.parse().ok())
+                    .unwrap_or(threshold);
             }
             "timerange" => pending_time = parse_time_range(rest),
             "line" => {
                 // `Line: width, flags [, "hover"]` then coords until `End:`.
-                let width = rest.split(',').next().and_then(|t| t.trim().parse().ok()).unwrap_or(1.0);
+                let width = rest
+                    .split(',')
+                    .next()
+                    .and_then(|t| t.trim().parse().ok())
+                    .unwrap_or(1.0);
                 let mut pts = Vec::new();
                 while i < lines.len() {
                     let l = strip_comment(lines[i]);
@@ -216,12 +247,21 @@ pub fn parse(text: &str) -> Placefile {
                 // `Text: lat, lon, fontNumber, "string" [, "hover"]`.
                 if let Some(pos) = parse_coord(rest) {
                     let text = quoted(rest).unwrap_or_default();
-                    let hover = if rest.matches('"').count().ge(&4) { rest.rsplit('"').nth(1).unwrap_or("").to_string() } else { Default::default() };
+                    let hover = if rest.matches('"').count().ge(&4) {
+                        rest.rsplit('"').nth(1).unwrap_or("").to_string()
+                    } else {
+                        Default::default()
+                    };
                     if !text.is_empty() {
                         pf.items.push(PlaceItem {
                             threshold_nmi: threshold,
                             time: pending_time.take(),
-                            kind: PlaceKind::Text { color, pos, text, hover },
+                            kind: PlaceKind::Text {
+                                color,
+                                pos,
+                                text,
+                                hover,
+                            },
                         });
                     }
                 }
@@ -229,13 +269,21 @@ pub fn parse(text: &str) -> Placefile {
             "iconfile" => {
                 // `IconFile: fileNumber, iconWidth, iconHeight, hotX, hotY, fileName`.
                 let f: Vec<&str> = rest.split(',').map(str::trim).collect();
-                if let (Some(num), true) = (f.first().and_then(|t| t.parse::<u32>().ok()), f.len() >= 6) {
+                if let (Some(num), true) =
+                    (f.first().and_then(|t| t.parse::<u32>().ok()), f.len() >= 6)
+                {
                     let n = |i: usize| f[i].parse::<u32>().unwrap_or(0);
                     let url = f[5..].join(",").trim().trim_matches('"').to_string();
                     if n(1) > 0 && n(2) > 0 && !url.is_empty() {
                         pf.icon_files.insert(
                             num,
-                            IconSheet { url, icon_w: n(1), icon_h: n(2), hot_x: n(3), hot_y: n(4) },
+                            IconSheet {
+                                url,
+                                icon_w: n(1),
+                                icon_h: n(2),
+                                hot_x: n(3),
+                                hot_y: n(4),
+                            },
                         );
                     }
                 }
@@ -257,7 +305,13 @@ pub fn parse(text: &str) -> Placefile {
                     pf.items.push(PlaceItem {
                         threshold_nmi: threshold,
                         time: pending_time.take(),
-                        kind: PlaceKind::Icon { color, pos, angle, sheet, hover },
+                        kind: PlaceKind::Icon {
+                            color,
+                            pos,
+                            angle,
+                            sheet,
+                            hover,
+                        },
                     });
                 }
             }
@@ -350,7 +404,12 @@ Icon: 34.0, -98.0, 0, 0, 0
         assert_eq!(sheet.hot_y, 31);
         assert_eq!(sheet.url, "https://example.com/spotters.png");
         match &pf.items[0].kind {
-            PlaceKind::Icon { angle, sheet, hover, .. } => {
+            PlaceKind::Icon {
+                angle,
+                sheet,
+                hover,
+                ..
+            } => {
                 assert_eq!(*angle, 135.0);
                 assert_eq!(*sheet, Some((1, 3)));
                 assert_eq!(hover, "spotter facing SE");
@@ -358,12 +417,19 @@ Icon: 34.0, -98.0, 0, 0, 0
             k => panic!("expected icon, got {k:?}"),
         }
         // A no-hover icon still parses, and file 0 is a legitimate reference.
-        assert!(matches!(pf.items[1].kind, PlaceKind::Icon { sheet: Some((0, 0)), .. }));
+        assert!(matches!(
+            pf.items[1].kind,
+            PlaceKind::Icon {
+                sheet: Some((0, 0)),
+                ..
+            }
+        ));
     }
 
     #[test]
     fn skips_object_blocks() {
-        let src = "Object: 35, -97\n Line: 1,0\n 0,0\n 5,5\n End:\nEnd:\nText: 35, -97, 1, \"after\"";
+        let src =
+            "Object: 35, -97\n Line: 1,0\n 0,0\n 5,5\n End:\nEnd:\nText: 35, -97, 1, \"after\"";
         let pf = parse(src);
         // Object block skipped entirely; only the trailing Text survives.
         assert_eq!(pf.items.len(), 1);

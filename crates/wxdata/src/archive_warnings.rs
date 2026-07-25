@@ -40,7 +40,11 @@ pub fn parse(json: &str) -> anyhow::Result<Vec<GeoFeature>> {
         // eventid arrives as a number or a string depending on the service version.
         let eventid = props
             .get("eventid")
-            .map(|v| v.as_str().map(str::to_string).unwrap_or_else(|| v.to_string()))
+            .map(|v| {
+                v.as_str()
+                    .map(str::to_string)
+                    .unwrap_or_else(|| v.to_string())
+            })
             .unwrap_or_default();
         let id = format!("{}-{}-{}-{}", get("wfo"), phenom, eventid, issue);
         let detail = format!(

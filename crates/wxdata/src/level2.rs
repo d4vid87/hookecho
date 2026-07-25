@@ -86,11 +86,11 @@ impl Moment {
     /// 0 = below-threshold (transparent), 1 = range-folded.
     pub fn value_range(&self) -> (f32, f32) {
         match self {
-            Moment::Reflectivity => (-32.0, 95.0),   // dBZ
-            Moment::Velocity => (-127.0, 127.0),     // m/s (pre-dealias)
-            Moment::SpectrumWidth => (0.0, 63.0),    // m/s
+            Moment::Reflectivity => (-32.0, 95.0),           // dBZ
+            Moment::Velocity => (-127.0, 127.0),             // m/s (pre-dealias)
+            Moment::SpectrumWidth => (0.0, 63.0),            // m/s
             Moment::DifferentialReflectivity => (-7.9, 7.9), // dB
-            Moment::DifferentialPhase => (0.0, 360.0), // deg
+            Moment::DifferentialPhase => (0.0, 360.0),       // deg
             Moment::CorrelationCoefficient => (0.0, 1.05),
         }
     }
@@ -141,10 +141,7 @@ pub async fn latest_identifier(site: &str) -> anyhow::Result<Identifier> {
 }
 
 /// List every volume for `site` on a specific UTC `date`, oldest first.
-pub async fn list_volumes(
-    site: &str,
-    date: chrono::NaiveDate,
-) -> anyhow::Result<Vec<Identifier>> {
+pub async fn list_volumes(site: &str, date: chrono::NaiveDate) -> anyhow::Result<Vec<Identifier>> {
     use nexrad_data::aws::archive;
     let mut ids = archive::list_files(site, &date)
         .await
@@ -160,7 +157,8 @@ pub async fn download_scan(id: Identifier) -> anyhow::Result<Scan> {
         .await
         .map_err(|e| anyhow::anyhow!("download_file: {e}"))?;
     let file = if file.compressed() {
-        file.decompress().map_err(|e| anyhow::anyhow!("decompress: {e}"))?
+        file.decompress()
+            .map_err(|e| anyhow::anyhow!("decompress: {e}"))?
     } else {
         file
     };
@@ -170,10 +168,7 @@ pub async fn download_scan(id: Identifier) -> anyhow::Result<Scan> {
 /// List and download the most recent volume for `site` on `date`, decoding it to a [`Scan`].
 ///
 /// Retained for the headless harness and tests. `date` a UTC calendar day.
-pub async fn download_latest_scan(
-    site: &str,
-    date: chrono::NaiveDate,
-) -> anyhow::Result<Scan> {
+pub async fn download_latest_scan(site: &str, date: chrono::NaiveDate) -> anyhow::Result<Scan> {
     let latest = list_volumes(site, date)
         .await?
         .pop()
@@ -206,7 +201,12 @@ pub fn bin_scan(scan: &Scan, moment: Moment, tilt: usize) -> anyhow::Result<Binn
 }
 
 /// Like [`bin_scan`] but `dealias` unfolds aliased Doppler velocity (ignored for other moments).
-pub fn bin_scan_opts(scan: &Scan, moment: Moment, tilt: usize, dealias: bool) -> anyhow::Result<BinnedSweep> {
+pub fn bin_scan_opts(
+    scan: &Scan,
+    moment: Moment,
+    tilt: usize,
+    dealias: bool,
+) -> anyhow::Result<BinnedSweep> {
     let target = *elevation_angles(scan)
         .get(tilt)
         .ok_or_else(|| anyhow::anyhow!("tilt {tilt} out of range"))?;
@@ -220,7 +220,10 @@ pub fn bin_scan_opts(scan: &Scan, moment: Moment, tilt: usize, dealias: bool) ->
         })
         .find(|s| s.radials().iter().any(|r| moment.select(r).is_some()))
         .ok_or_else(|| {
-            anyhow::anyhow!("no sweep at tilt {tilt} ({target:.2}deg) carries {}", moment.short_name())
+            anyhow::anyhow!(
+                "no sweep at tilt {tilt} ({target:.2}deg) carries {}",
+                moment.short_name()
+            )
         })?;
 
     let (lat, lon) = scan
@@ -282,7 +285,9 @@ pub fn bin_sweep_opts(
         // then normalize. Below-threshold/range-folded gates stay None → code 0.
         let mut vel = vec![None; AZ_BINS * gate_count];
         for radial in radials {
-            let Some(m) = moment.select(radial) else { continue };
+            let Some(m) = moment.select(radial) else {
+                continue;
+            };
             if m.gate_count() as usize != gate_count {
                 continue;
             }
@@ -303,7 +308,9 @@ pub fn bin_sweep_opts(
         }
     } else {
         for radial in radials {
-            let Some(m) = moment.select(radial) else { continue };
+            let Some(m) = moment.select(radial) else {
+                continue;
+            };
             if m.gate_count() as usize != gate_count {
                 continue; // skip radials with mismatched geometry (rare split-cut edge)
             }
@@ -351,15 +358,20 @@ mod tests {
         let raw = vec![0u8, 1u8, 106u8];
         let moment = MomentData::from_fixed_point(3, 2125, 250, 8, 2.0, 66.0, raw);
         let radial = Radial::new(
-            0,          // collection_timestamp
-            90,         // azimuth_number
-            90.0,       // azimuth_angle_degrees -> bin 180
-            0.5,        // azimuth_spacing_degrees
+            0,    // collection_timestamp
+            90,   // azimuth_number
+            90.0, // azimuth_angle_degrees -> bin 180
+            0.5,  // azimuth_spacing_degrees
             nexrad_model::data::RadialStatus::ScanStart,
-            1,          // elevation_number
-            0.5,        // elevation_angle_degrees
+            1,   // elevation_number
+            0.5, // elevation_angle_degrees
             Some(moment),
-            None, None, None, None, None, None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
         );
         let sweep = Sweep::new(1, vec![radial]);
         let binned = bin_sweep(&sweep, Moment::Reflectivity, 35.33, -97.28).unwrap();
@@ -384,18 +396,39 @@ mod tests {
             _ => (Some(data), None),
         };
         Radial::new(
-            0, 0, 0.0, 0.5,
+            0,
+            0,
+            0.0,
+            0.5,
             nexrad_model::data::RadialStatus::ScanStart,
-            1, elevation, refl,
-            vel, None, None, None, None, None,
+            1,
+            elevation,
+            refl,
+            vel,
+            None,
+            None,
+            None,
+            None,
+            None,
         )
     }
 
     fn minimal_vcp() -> nexrad_model::data::VolumeCoveragePattern {
         use nexrad_model::data::{PulseWidth, VolumeCoveragePattern};
         VolumeCoveragePattern::new(
-            212, 0, 0.5, PulseWidth::Short,
-            false, 0, false, 0, false, false, 0, false, false,
+            212,
+            0,
+            0.5,
+            PulseWidth::Short,
+            false,
+            0,
+            false,
+            0,
+            false,
+            false,
+            0,
+            false,
+            false,
             Vec::new(),
         )
     }
@@ -410,8 +443,18 @@ mod tests {
         let site = nexrad_model::meta::Site::new(*b"KTLX", 35.33, -97.28, 380, 0);
         let scan = Scan::with_site(site, minimal_vcp(), vec![surveillance, doppler]);
 
-        assert_eq!(elevation_angles(&scan), vec![0.48], "split cut collapses to one tilt");
-        assert!(bin_scan(&scan, Moment::Velocity, 0).is_ok(), "VEL found on Doppler cut");
-        assert!(bin_scan(&scan, Moment::Reflectivity, 0).is_ok(), "REF found on surveillance cut");
+        assert_eq!(
+            elevation_angles(&scan),
+            vec![0.48],
+            "split cut collapses to one tilt"
+        );
+        assert!(
+            bin_scan(&scan, Moment::Velocity, 0).is_ok(),
+            "VEL found on Doppler cut"
+        );
+        assert!(
+            bin_scan(&scan, Moment::Reflectivity, 0).is_ok(),
+            "REF found on surveillance cut"
+        );
     }
 }

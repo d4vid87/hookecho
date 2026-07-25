@@ -110,7 +110,10 @@ impl Cell {
     /// A plain-text attribute summary (used for standalone-marker / generic detail popups).
     pub fn summary(&self) -> String {
         let mut s = String::new();
-        let f = |v: Option<f32>, u: &str| v.map(|x| format!("{x:.1}{u}")).unwrap_or_else(|| "—".into());
+        let f = |v: Option<f32>, u: &str| {
+            v.map(|x| format!("{x:.1}{u}"))
+                .unwrap_or_else(|| "—".into())
+        };
         if let (Some(a), Some(r)) = (self.az_deg, self.range_nm) {
             s.push_str(&format!("Position: {a:.0}° / {r:.0} nm\n"));
         }
@@ -118,10 +121,18 @@ impl Cell {
             s.push_str(&format!("Movement: {d:.0}° @ {k:.0} kt\n"));
         }
         if self.max_dbz.is_some() {
-            s.push_str(&format!("Max reflectivity: {} @ {}\n", f(self.max_dbz, " dBZ"), f(self.max_dbz_hgt_kft, " kft")));
+            s.push_str(&format!(
+                "Max reflectivity: {} @ {}\n",
+                f(self.max_dbz, " dBZ"),
+                f(self.max_dbz_hgt_kft, " kft")
+            ));
         }
         if self.top_kft.is_some() || self.base_kft.is_some() {
-            s.push_str(&format!("Top / base: {} / {}\n", f(self.top_kft, " kft"), f(self.base_kft, " kft")));
+            s.push_str(&format!(
+                "Top / base: {} / {}\n",
+                f(self.top_kft, " kft"),
+                f(self.base_kft, " kft")
+            ));
         }
         if self.vil.is_some() {
             s.push_str(&format!("Cell-based VIL: {}\n", f(self.vil, " kg/m²")));
@@ -129,8 +140,12 @@ impl Cell {
         if self.poh.is_some() || self.posh.is_some() {
             s.push_str(&format!(
                 "POH / POSH: {} / {}%\n",
-                self.poh.map(|v| v.to_string()).unwrap_or_else(|| "—".into()),
-                self.posh.map(|v| v.to_string()).unwrap_or_else(|| "—".into())
+                self.poh
+                    .map(|v| v.to_string())
+                    .unwrap_or_else(|| "—".into()),
+                self.posh
+                    .map(|v| v.to_string())
+                    .unwrap_or_else(|| "—".into())
             ));
         }
         if let Some(h) = self.hail_in {
@@ -192,7 +207,11 @@ pub async fn fetch_cells(http: &reqwest::Client, site: &str) -> Vec<Cell> {
                     .iter()
                     .map(|&(min, az, rng)| {
                         let (lon, lat) = azran_lonlat(lon0, lat0, az, rng);
-                        TrackPoint { minutes: min, lon, lat }
+                        TrackPoint {
+                            minutes: min,
+                            lon,
+                            lat,
+                        }
                     })
                     .collect();
             }
@@ -205,9 +224,13 @@ pub async fn fetch_cells(http: &reqwest::Client, site: &str) -> Vec<Cell> {
         }
         // Attach past-track polylines (packet 23) to the nearest cell by their current endpoint.
         for poly in &p.past_tracks {
-            let ll: Vec<(f64, f64)> =
-                poly.iter().map(|&(x, y)| offset_lonlat(lon0, lat0, x, y)).collect();
-            let Some(&(elon, elat)) = ll.last() else { continue };
+            let ll: Vec<(f64, f64)> = poly
+                .iter()
+                .map(|&(x, y)| offset_lonlat(lon0, lat0, x, y))
+                .collect();
+            let Some(&(elon, elat)) = ll.last() else {
+                continue;
+            };
             if let Some(i) = nearest_storm(&storms, elon, elat) {
                 storms[i].past_track = ll;
             }
@@ -243,7 +266,11 @@ pub async fn fetch_cells(http: &reqwest::Client, site: &str) -> Vec<Cell> {
         let (lat0, lon0) = (p.lat as f64, p.lon as f64);
         for m in &p.meso {
             let (lon, lat) = offset_lonlat(lon0, lat0, m.x_km, m.y_km);
-            meso.push(MesoFeat { lon, lat, kind: m.kind.clone() });
+            meso.push(MesoFeat {
+                lon,
+                lat,
+                kind: m.kind.clone(),
+            });
         }
     }
     merge_meso(storms, meso)
@@ -388,16 +415,33 @@ fn parse_position_forecast(tabular: &str) -> HashMap<String, PosFcst> {
         if fields.len() < 7 {
             continue;
         }
-        let Field::Pair(az, range) = fields[0] else { continue };
-        let Field::Pair(mvt_deg, mvt_kt) = fields[1] else { continue };
+        let Field::Pair(az, range) = fields[0] else {
+            continue;
+        };
+        let Field::Pair(mvt_deg, mvt_kt) = fields[1] else {
+            continue;
+        };
         let mut fcst = Vec::new();
         for (slot, min) in [15u16, 30, 45, 60].iter().enumerate() {
             if let Field::Pair(a, r) = fields[2 + slot] {
                 fcst.push((*min, a, r));
             }
         }
-        let Field::Pair(fcst_err, mean_err) = fields[6] else { continue };
-        out.insert(id.to_string(), PosFcst { az, range, mvt_deg, mvt_kt, fcst, fcst_err, mean_err });
+        let Field::Pair(fcst_err, mean_err) = fields[6] else {
+            continue;
+        };
+        out.insert(
+            id.to_string(),
+            PosFcst {
+                az,
+                range,
+                mvt_deg,
+                mvt_kt,
+                fcst,
+                fcst_err,
+                mean_err,
+            },
+        );
     }
     out
 }
@@ -408,7 +452,11 @@ fn parse_graphic_attrs(graphic: &str) -> HashMap<String, (f32, f32)> {
     let mut pending: Vec<String> = Vec::new();
     for line in graphic.lines() {
         if line.contains("STORM ID") {
-            pending = line.split_whitespace().filter(|t| is_cell_id(t)).map(String::from).collect();
+            pending = line
+                .split_whitespace()
+                .filter(|t| is_cell_id(t))
+                .map(String::from)
+                .collect();
         } else if line.contains("DBZM") {
             let nums: Vec<f32> = line
                 .split_whitespace()
@@ -549,11 +597,24 @@ fn parse_vwp(tabular: &str) -> Vec<VwpLevel> {
             continue;
         }
         // Row leads with an integer altitude in 100s of feet; header rows ("ALT", "100ft") skip.
-        let Ok(alt100) = t[1].parse::<f32>() else { continue };
-        let (Ok(u), Ok(v)) = (t[2].parse::<f32>(), t[3].parse::<f32>()) else { continue };
-        let (Ok(dir), Ok(spd)) = (t[5].parse::<f32>(), t[6].parse::<f32>()) else { continue };
+        let Ok(alt100) = t[1].parse::<f32>() else {
+            continue;
+        };
+        let (Ok(u), Ok(v)) = (t[2].parse::<f32>(), t[3].parse::<f32>()) else {
+            continue;
+        };
+        let (Ok(dir), Ok(spd)) = (t[5].parse::<f32>(), t[6].parse::<f32>()) else {
+            continue;
+        };
         let rms = t[7].parse::<f32>().unwrap_or(f32::NAN);
-        out.push(VwpLevel { alt_kft: alt100 * 0.1, u_ms: u, v_ms: v, dir_deg: dir, speed_kt: spd, rms_kt: rms });
+        out.push(VwpLevel {
+            alt_kft: alt100 * 0.1,
+            u_ms: u,
+            v_ms: v,
+            dir_deg: dir,
+            speed_kt: spd,
+            rms_kt: rms,
+        });
     }
     out
 }
@@ -561,7 +622,9 @@ fn parse_vwp(tabular: &str) -> Vec<VwpLevel> {
 /// Fetch the latest VAD wind profile (VWP) for `site` (tgftp `DS.48vwp`), sorted by altitude.
 pub async fn fetch_vwp(http: &reqwest::Client, site: &str) -> Vec<VwpLevel> {
     let s3 = l3_site(site);
-    let Some(p) = fetch_tgftp(http, &s3, "48vwp").await else { return Vec::new() };
+    let Some(p) = fetch_tgftp(http, &s3, "48vwp").await else {
+        return Vec::new();
+    };
     let mut levels = parse_vwp(&p.raw_text.unwrap_or_default());
     levels.sort_by(|a, b| a.alt_kft.total_cmp(&b.alt_kft));
     levels.dedup_by(|a, b| (a.alt_kft - b.alt_kft).abs() < 0.01);
@@ -576,7 +639,9 @@ async fn fetch_latest(http: &reqwest::Client, site: &str, product: &str) -> Opti
     for day in [today, today.pred_opt().unwrap_or(today)] {
         let prefix = format!("{site}_{product}_{}", day.format("%Y_%m_%d"));
         let url = format!("{BUCKET}/?list-type=2&prefix={prefix}");
-        let Ok(resp) = http.get(&url).send().await else { continue };
+        let Ok(resp) = http.get(&url).send().await else {
+            continue;
+        };
         let Ok(xml) = resp.text().await else { continue };
         if let Some(key) = last_key(&xml) {
             let obj_url = format!("{BUCKET}/{key}");
@@ -681,7 +746,9 @@ pub async fn fetch_dvl(http: &reqwest::Client, site: &str) -> Option<crate::mrms
 /// Fetch the latest Enhanced Echo Tops (EET, product 135) grid for `site` (kft; topped flag dropped).
 pub async fn fetch_eet(http: &reqwest::Client, site: &str) -> Option<crate::mrms::MrmsField> {
     let p = fetch_tgftp(http, &l3_site(site).to_lowercase(), "135et").await?;
-    radial_to_field(&p, 1.0, |lvl, thr| nexrad_level3::eet_value(lvl, thr).map(|(kft, _topped)| kft))
+    radial_to_field(&p, 1.0, |lvl, thr| {
+        nexrad_level3::eet_value(lvl, thr).map(|(kft, _topped)| kft)
+    })
 }
 
 /// Fetch the latest Hybrid Hydrometeor Classification (HHC, product 177) grid for `site`.
@@ -742,7 +809,11 @@ mod tests {
         for deg in (0..360).step_by(1) {
             let hot = (45..135).contains(&deg);
             let levels: Vec<u8> = (0..100).map(|_| if hot { 200 } else { 0 }).collect();
-            radials.push(Radial { start_deg: deg as f32, delta_deg: 1.0, levels });
+            radials.push(Radial {
+                start_deg: deg as f32,
+                delta_deg: 1.0,
+                levels,
+            });
         }
         let p = Level3Product {
             code: 134,
@@ -756,7 +827,11 @@ mod tests {
             tabular: None,
             graphic: None,
             raw_text: None,
-            radial: Some(RadialArray { first_bin: 0, nbins: 100, radials }),
+            radial: Some(RadialArray {
+                first_bin: 0,
+                nbins: 100,
+                radials,
+            }),
             thresholds: [0; 16],
         };
         // Decode: nonzero level → its value, else None.
@@ -775,7 +850,8 @@ mod tests {
 
     #[test]
     fn last_key_picks_newest() {
-        let xml = "<x><Key>TLX_NST_2020_03_31_00_02_54</Key><Key>TLX_NST_2020_03_31_00_39_35</Key></x>";
+        let xml =
+            "<x><Key>TLX_NST_2020_03_31_00_02_54</Key><Key>TLX_NST_2020_03_31_00_39_35</Key></x>";
         assert_eq!(last_key(xml).unwrap(), "TLX_NST_2020_03_31_00_39_35");
     }
 
@@ -885,8 +961,16 @@ P    068     9.6    12.1    -6.9   218   030   2.2   -0.0378   16.20    3.1";
         let mut storm = Cell::new(CellKind::Storm, -97.5, 35.5, "A1".into(), "A1".into());
         storm.max_dbz = Some(60.0);
         let meso = vec![
-            MesoFeat { lon: -97.49, lat: 35.5, kind: "TVS".into() },
-            MesoFeat { lon: -96.0, lat: 35.5, kind: "Mesocyclone".into() }, // far → standalone
+            MesoFeat {
+                lon: -97.49,
+                lat: 35.5,
+                kind: "TVS".into(),
+            },
+            MesoFeat {
+                lon: -96.0,
+                lat: 35.5,
+                kind: "Mesocyclone".into(),
+            }, // far → standalone
         ];
         let out = merge_meso(vec![storm], meso);
         assert_eq!(out.len(), 2);

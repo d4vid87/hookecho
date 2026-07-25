@@ -23,7 +23,13 @@ pub struct Volume3d {
 
 /// Build an `n × n × nz` reflectivity volume out to `half_km` horizontally and `top_km` up.
 /// Returns `None` if there are no sweeps.
-pub fn build(sweeps: &[BinnedSweep], n: usize, nz: usize, half_km: f32, top_km: f32) -> Option<Volume3d> {
+pub fn build(
+    sweeps: &[BinnedSweep],
+    n: usize,
+    nz: usize,
+    half_km: f32,
+    top_km: f32,
+) -> Option<Volume3d> {
     let s0 = sweeps.first()?;
     let (value_min, value_max) = (s0.value_min, s0.value_max);
     let span = (value_max - value_min).max(f32::EPSILON);
@@ -46,7 +52,9 @@ pub fn build(sweeps: &[BinnedSweep], n: usize, nz: usize, half_km: f32, top_km: 
             for s in sweeps {
                 let e = s.elevation_deg as f64;
                 let slant = ground / e.to_radians().cos();
-                let gate = ((slant - s.first_gate_km as f64) / s.gate_interval_km.max(f32::EPSILON) as f64).round();
+                let gate = ((slant - s.first_gate_km as f64)
+                    / s.gate_interval_km.max(f32::EPSILON) as f64)
+                    .round();
                 if gate < 0.0 || gate as usize >= s.gate_count {
                     continue;
                 }
@@ -74,7 +82,15 @@ pub fn build(sweeps: &[BinnedSweep], n: usize, nz: usize, half_km: f32, top_km: 
         }
     }
 
-    Some(Volume3d { data, n, nz, half_km, top_km, value_min, value_max })
+    Some(Volume3d {
+        data,
+        n,
+        nz,
+        half_km,
+        top_km,
+        value_min,
+        value_max,
+    })
 }
 
 /// A constant-altitude PPI (CAPPI): an `n × n` horizontal slice of reflectivity (dBZ) at a fixed
@@ -110,7 +126,9 @@ pub fn cappi(sweeps: &[BinnedSweep], alt_km: f32, n: usize, half_km: f32) -> Opt
             for s in sweeps {
                 let e = s.elevation_deg as f64;
                 let slant = ground / e.to_radians().cos();
-                let gate = ((slant - s.first_gate_km as f64) / s.gate_interval_km.max(f32::EPSILON) as f64).round();
+                let gate = ((slant - s.first_gate_km as f64)
+                    / s.gate_interval_km.max(f32::EPSILON) as f64)
+                    .round();
                 if gate < 0.0 || gate as usize >= s.gate_count {
                     continue;
                 }
@@ -131,7 +149,12 @@ pub fn cappi(sweeps: &[BinnedSweep], alt_km: f32, n: usize, half_km: f32) -> Opt
         }
     }
 
-    Some(Cappi { n, half_km, alt_km, dbz })
+    Some(Cappi {
+        n,
+        half_km,
+        alt_km,
+        dbz,
+    })
 }
 
 #[cfg(test)]
@@ -189,7 +212,11 @@ mod tests {
         for j in 0..128 {
             for i in 0..128 {
                 if c.dbz[i + 128 * j].is_some() {
-                    if i > mid { east_filled += 1 } else { west_filled += 1 }
+                    if i > mid {
+                        east_filled += 1
+                    } else {
+                        west_filled += 1
+                    }
                 }
             }
         }
@@ -197,6 +224,10 @@ mod tests {
         assert_eq!(west_filled, 0, "west empty");
         // Far above the echo there's nothing.
         let high = cappi(&sweeps, 14.0, 128, 120.0).unwrap();
-        assert_eq!(high.dbz.iter().filter(|v| v.is_some()).count(), 0, "14 km empty");
+        assert_eq!(
+            high.dbz.iter().filter(|v| v.is_some()).count(),
+            0,
+            "14 km empty"
+        );
     }
 }

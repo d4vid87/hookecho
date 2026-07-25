@@ -70,7 +70,7 @@ impl MrmsField {
         }
         let dlon = (self.lon_east - self.lon_west) / self.nx as f64;
         let dlat = (self.lat_north - self.lat_south) / self.ny as f64; // rows go north→south
-        // Degrees covering the radius (latitude ~111 km/deg; widen longitude by 1/cos lat).
+                                                                       // Degrees covering the radius (latitude ~111 km/deg; widen longitude by 1/cos lat).
         let dlat_deg = radius_km / 111.0;
         let dlon_deg = radius_km / (111.0 * lat.to_radians().cos().abs().max(0.05));
         let cx = ((lon - self.lon_west) / dlon).round() as isize;
@@ -91,7 +91,11 @@ impl MrmsField {
                 }
             }
         }
-        if best.is_finite() { best } else { 0.0 }
+        if best.is_finite() {
+            best
+        } else {
+            0.0
+        }
     }
 
     /// Max-pool the grid down so both dimensions are `<= max_dim` (GPU texture limits). Some MRMS
@@ -153,7 +157,13 @@ impl MrmsField {
 pub async fn fetch_latest(http: &reqwest::Client, product: &str) -> anyhow::Result<MrmsField> {
     let key = latest_key(http, product).await?;
     let url = format!("{BUCKET}/{key}");
-    let gz = http.get(&url).send().await?.error_for_status()?.bytes().await?;
+    let gz = http
+        .get(&url)
+        .send()
+        .await?
+        .error_for_status()?
+        .bytes()
+        .await?;
     let raw = gunzip(&gz)?;
     // gribberish can panic on some MRMS product packings (a slice off-by-one on rotation-track /
     // AzShear grids). Contain it so a bad product surfaces as an error, never a process abort.
@@ -167,7 +177,9 @@ async fn latest_key(http: &reqwest::Client, product: &str) -> anyhow::Result<Str
     for day in [today, today.pred_opt().unwrap_or(today)] {
         let prefix = format!("{product}/{}/", day.format("%Y%m%d"));
         let url = format!("{BUCKET}/?list-type=2&prefix={prefix}&max-keys=2000");
-        let Ok(resp) = http.get(&url).send().await else { continue };
+        let Ok(resp) = http.get(&url).send().await else {
+            continue;
+        };
         let Ok(xml) = resp.text().await else { continue };
         if let Some(key) = last_key(&xml) {
             return Ok(key);
@@ -193,8 +205,18 @@ fn decode(raw: &[u8]) -> anyhow::Result<MrmsField> {
     let (lat1, lon1) = dm.metadata.projector.latlng_end();
 
     // MRMS encodes missing as -999 and no-coverage as -99; treat anything very negative as NaN.
-    let values: Vec<f32> = dm.data.iter().map(|&v| if v < -90.0 { f32::NAN } else { v as f32 }).collect();
-    anyhow::ensure!(values.len() == nx * ny, "grid size {}x{} != {} values", nx, ny, values.len());
+    let values: Vec<f32> = dm
+        .data
+        .iter()
+        .map(|&v| if v < -90.0 { f32::NAN } else { v as f32 })
+        .collect();
+    anyhow::ensure!(
+        values.len() == nx * ny,
+        "grid size {}x{} != {} values",
+        nx,
+        ny,
+        values.len()
+    );
 
     Ok(MrmsField {
         values,
@@ -233,7 +255,8 @@ mod tests {
     fn wrap_and_last_key() {
         assert!((wrap_lon(230.005) - -129.995).abs() < 1e-6);
         assert!((wrap_lon(-60.0) - -60.0).abs() < 1e-6);
-        let xml = "<x><Key>a/20260717-000000.grib2.gz</Key><Key>a/20260717-000200.grib2.gz</Key></x>";
+        let xml =
+            "<x><Key>a/20260717-000000.grib2.gz</Key><Key>a/20260717-000200.grib2.gz</Key></x>";
         assert_eq!(last_key(xml).unwrap(), "a/20260717-000200.grib2.gz");
     }
 

@@ -71,13 +71,20 @@ pub async fn fetch_grid(http: &reqwest::Client, kind: SevereKind) -> anyhow::Res
     }
     if kind == SevereKind::Stp {
         // LCL height AGL = the adiabatic condensation level minus the surface height.
-        specs.push(("HGT", "level of adiabatic condensation from sfc", f64::NEG_INFINITY));
+        specs.push((
+            "HGT",
+            "level of adiabatic condensation from sfc",
+            f64::NEG_INFINITY,
+        ));
         specs.push(("HGT", "surface", f64::NEG_INFINITY));
     }
     let (run, fields) = hrrr::fetch_fields_one_run(http, 0, &specs).await?;
     let f0 = &fields[0];
     for f in &fields[1..] {
-        anyhow::ensure!(f.nx == f0.nx && f.ny == f0.ny, "HRRR ingredient grids disagree");
+        anyhow::ensure!(
+            f.nx == f0.nx && f.ny == f0.ny,
+            "HRRR ingredient grids disagree"
+        );
     }
 
     let mut values = vec![f32::NAN; f0.values.len()];
@@ -93,7 +100,8 @@ pub async fn fetch_grid(http: &reqwest::Client, kind: SevereKind) -> anyhow::Res
                 match kind {
                     SevereKind::Scp => scp(cape, srh, shear),
                     SevereKind::Stp => {
-                        let lcl_agl = (fields[4].values[i] as f64 - fields[5].values[i] as f64).max(0.0);
+                        let lcl_agl =
+                            (fields[4].values[i] as f64 - fields[5].values[i] as f64).max(0.0);
                         stp(cape, srh, shear, lcl_agl)
                     }
                     SevereKind::Ehi => unreachable!(),
@@ -115,7 +123,11 @@ pub async fn fetch_grid(http: &reqwest::Client, kind: SevereKind) -> anyhow::Res
         lat_south: f0.lat_south,
         time: f0.time,
     };
-    Ok(HrrrForecast { field, run, fcst_hour: 0 })
+    Ok(HrrrForecast {
+        field,
+        run,
+        fcst_hour: 0,
+    })
 }
 
 #[cfg(test)]
@@ -151,7 +163,13 @@ mod tests {
         let http = reqwest::Client::new();
         for kind in [SevereKind::Stp, SevereKind::Scp, SevereKind::Ehi] {
             let f = fetch_grid(&http, kind).await.expect("HRRR fetch");
-            let finite: Vec<f32> = f.field.values.iter().copied().filter(|v| v.is_finite()).collect();
+            let finite: Vec<f32> = f
+                .field
+                .values
+                .iter()
+                .copied()
+                .filter(|v| v.is_finite())
+                .collect();
             let max = finite.iter().copied().fold(f32::MIN, f32::max);
             let nonzero = finite.iter().filter(|v| **v > 0.01).count();
             println!(

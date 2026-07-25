@@ -32,7 +32,10 @@ pub fn parse(json: &str) -> anyhow::Result<Vec<GeoFeature>> {
         let rgb = hazard_color(hazard);
         let title = format!("{kind} {hazard}").trim().to_string();
         let alt = |k: &str| props.get(k).and_then(|v| v.as_i64());
-        let alt_line = match (alt("altitudeLow1").or_else(|| alt("altitudeLow2")), alt("altitudeHi1").or_else(|| alt("altitudeHi2"))) {
+        let alt_line = match (
+            alt("altitudeLow1").or_else(|| alt("altitudeLow2")),
+            alt("altitudeHi1").or_else(|| alt("altitudeHi2")),
+        ) {
             (Some(lo), Some(hi)) => format!("FL{:03}–FL{:03}", lo / 100, hi / 100),
             (None, Some(hi)) => format!("to FL{:03}", hi / 100),
             _ => String::new(),

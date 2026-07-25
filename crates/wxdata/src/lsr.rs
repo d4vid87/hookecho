@@ -24,11 +24,17 @@ fn kind_of(code: &str) -> ReportKind {
 
 /// Parse an IEM `lsr.geojson` payload. Tolerant: rows missing coordinates are skipped.
 pub fn parse(json: &str) -> Vec<StormReport> {
-    let Ok(v) = serde_json::from_str::<serde_json::Value>(json) else { return Vec::new() };
-    let Some(feats) = v.get("features").and_then(|f| f.as_array()) else { return Vec::new() };
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(json) else {
+        return Vec::new();
+    };
+    let Some(feats) = v.get("features").and_then(|f| f.as_array()) else {
+        return Vec::new();
+    };
     let mut out = Vec::new();
     for f in feats {
-        let Some(p) = f.get("properties") else { continue };
+        let Some(p) = f.get("properties") else {
+            continue;
+        };
         let s = |k: &str| p.get(k).and_then(|v| v.as_str()).unwrap_or("").to_string();
         let (Some(lat), Some(lon)) = (
             p.get("lat").and_then(|v| v.as_f64()),
@@ -39,14 +45,21 @@ pub fn parse(json: &str) -> Vec<StormReport> {
         // Magnitude: numeric `magf` plus its unit ("1.75 INCH", "64 MPH"); empty when unmeasured.
         let magnitude = match p.get("magf").and_then(|v| v.as_f64()) {
             Some(m) if m > 0.0 => {
-                let n = if m.fract() == 0.0 { format!("{m:.0}") } else { format!("{m:.2}") };
+                let n = if m.fract() == 0.0 {
+                    format!("{m:.0}")
+                } else {
+                    format!("{m:.2}")
+                };
                 format!("{n} {}", s("unit")).trim().to_string()
             }
             _ => String::new(),
         };
         // Valid time "2026-07-20T02:48:00Z" → HHMM to match the existing report plumbing.
         let valid = s("valid");
-        let time = valid.get(11..16).map(|t| t.replace(':', "")).unwrap_or_default();
+        let time = valid
+            .get(11..16)
+            .map(|t| t.replace(':', ""))
+            .unwrap_or_default();
         out.push(StormReport {
             kind: kind_of(&s("type")),
             lat,

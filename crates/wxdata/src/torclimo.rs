@@ -52,7 +52,8 @@ pub fn parse_tracks(csv: &str) -> Vec<TornadoTrack> {
         if f.len() <= ELON {
             continue;
         }
-        let (Ok(slat), Ok(slon)) = (f[SLAT].trim().parse::<f64>(), f[SLON].trim().parse::<f64>()) else {
+        let (Ok(slat), Ok(slon)) = (f[SLAT].trim().parse::<f64>(), f[SLON].trim().parse::<f64>())
+        else {
             continue;
         };
         if slat == 0.0 && slon == 0.0 {
@@ -66,8 +67,19 @@ pub fn parse_tracks(csv: &str) -> Vec<TornadoTrack> {
         let elat = f[ELAT].trim().parse::<f64>().unwrap_or(0.0);
         let elon = f[ELON].trim().parse::<f64>().unwrap_or(0.0);
         // Fall back to the start point when no path end was recorded.
-        let (elat, elon) = if elat == 0.0 && elon == 0.0 { (slat, slon) } else { (elat, elon) };
-        out.push(TornadoTrack { year, mag, slat, slon, elat, elon });
+        let (elat, elon) = if elat == 0.0 && elon == 0.0 {
+            (slat, slon)
+        } else {
+            (elat, elon)
+        };
+        out.push(TornadoTrack {
+            year,
+            mag,
+            slat,
+            slon,
+            elat,
+            elon,
+        });
     }
     out
 }
@@ -98,7 +110,11 @@ pub fn near(tracks: &[TornadoTrack], lon: f64, lat: f64, radius_km: f64) -> Vec<
 pub fn mag_histogram(hits: &[TornadoTrack]) -> [usize; 7] {
     let mut h = [0usize; 7];
     for t in hits {
-        let idx = if (0..=5).contains(&t.mag) { t.mag as usize } else { 6 };
+        let idx = if (0..=5).contains(&t.mag) {
+            t.mag as usize
+        } else {
+            6
+        };
         h[idx] += 1;
     }
     h
@@ -108,7 +124,8 @@ pub fn mag_histogram(hits: &[TornadoTrack]) -> [usize; 7] {
 mod tests {
     use super::*;
 
-    const SAMPLE: &str = "om,yr,mo,dy,date,time,tz,st,stf,stn,mag,inj,fat,loss,closs,slat,slon,elat,elon,len,wid\n\
+    const SAMPLE: &str =
+        "om,yr,mo,dy,date,time,tz,st,stf,stn,mag,inj,fat,loss,closs,slat,slon,elat,elon,len,wid\n\
         1,2011,4,27,2011-04-27,,3,AL,1,0,4,10,5,0,0,33.10,-87.50,33.40,-87.10,20,500\n\
         2,1999,5,3,1999-05-03,,3,OK,40,0,5,100,36,0,0,35.10,-97.50,0,0,10,300\n\
         3,2020,3,3,2020-03-03,,3,TN,47,0,-9,0,0,0,0,36.10,-86.70,36.2,-86.6,5,100\n\

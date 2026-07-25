@@ -28,11 +28,17 @@ pub struct SurfaceOb {
 
 /// Parse an aviationweather.gov METAR JSON array. Tolerant: skips entries missing lat/lon.
 pub fn parse(json: &str) -> Vec<SurfaceOb> {
-    let Ok(v) = serde_json::from_str::<serde_json::Value>(json) else { return Vec::new() };
-    let Some(arr) = v.as_array() else { return Vec::new() };
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(json) else {
+        return Vec::new();
+    };
+    let Some(arr) = v.as_array() else {
+        return Vec::new();
+    };
     let mut out = Vec::new();
     for m in arr {
-        let (Some(lat), Some(lon)) = (num(m, "lat"), num(m, "lon")) else { continue };
+        let (Some(lat), Some(lon)) = (num(m, "lat"), num(m, "lon")) else {
+            continue;
+        };
         // wdir arrives as an int, or the string "VRB" for variable wind.
         let wdir_deg = m.get("wdir").and_then(|w| w.as_f64()).map(|d| d as f32);
         out.push(SurfaceOb {

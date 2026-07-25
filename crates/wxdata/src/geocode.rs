@@ -42,7 +42,13 @@ pub async fn search(client: &reqwest::Client, query: &str) -> Result<(String, f6
     let label = first
         .get("display_name")
         .and_then(|s| s.as_str())
-        .map(|s| s.split(',').take(2).map(str::trim).collect::<Vec<_>>().join(", "))
+        .map(|s| {
+            s.split(',')
+                .take(2)
+                .map(str::trim)
+                .collect::<Vec<_>>()
+                .join(", ")
+        })
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| q.to_string());
     Ok((label, lat, lon))
@@ -62,7 +68,14 @@ mod tests {
         let lon: f64 = first["lon"].as_str().unwrap().parse().unwrap();
         assert!((lat - 35.2225).abs() < 1e-6);
         assert!((lon + 97.4394).abs() < 1e-6);
-        let label = first["display_name"].as_str().unwrap().split(',').take(2).map(str::trim).collect::<Vec<_>>().join(", ");
+        let label = first["display_name"]
+            .as_str()
+            .unwrap()
+            .split(',')
+            .take(2)
+            .map(str::trim)
+            .collect::<Vec<_>>()
+            .join(", ");
         assert_eq!(label, "Norman, Cleveland County");
     }
 

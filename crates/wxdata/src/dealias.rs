@@ -25,7 +25,12 @@ pub fn estimate_nyquist(vel: &[Option<f32>]) -> f32 {
 /// Dealias a polar velocity grid laid out as `vel[az * gate_count + gate]`.
 /// `None` gates (no data / below threshold / range folded) pass through untouched.
 /// Azimuth wraps (bin 0 neighbors bin az_bins-1); range does not.
-pub fn dealias(vel: &[Option<f32>], az_bins: usize, gate_count: usize, nyquist: f32) -> Vec<Option<f32>> {
+pub fn dealias(
+    vel: &[Option<f32>],
+    az_bins: usize,
+    gate_count: usize,
+    nyquist: f32,
+) -> Vec<Option<f32>> {
     let n = az_bins * gate_count;
     debug_assert_eq!(vel.len(), n);
     if nyquist <= 0.0 || n == 0 {
@@ -184,7 +189,10 @@ mod tests {
             .map(|&v| Some(((v + nyq).rem_euclid(2.0 * nyq)) - nyq))
             .collect();
         // Sanity: the ramp really does fold (some folded value is negative though truth is +).
-        assert!(folded.iter().any(|v| v.unwrap() < 0.0), "test ramp should fold");
+        assert!(
+            folded.iter().any(|v| v.unwrap() < 0.0),
+            "test ramp should fold"
+        );
 
         let out = dealias(&folded, 1, 10, nyq);
         for (o, t) in out.iter().zip(&truth) {

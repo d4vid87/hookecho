@@ -86,15 +86,21 @@ pub fn detect(
             if range < min_range_km {
                 continue;
             }
-            let Some(a) = decode(vel, vel.data[az * vel.gate_count + gate]) else { continue };
-            let Some(b) = decode(vel, vel.data[next * vel.gate_count + gate]) else { continue };
+            let Some(a) = decode(vel, vel.data[az * vel.gate_count + gate]) else {
+                continue;
+            };
+            let Some(b) = decode(vel, vel.data[next * vel.gate_count + gate]) else {
+                continue;
+            };
             let dv = (a - b).abs();
             if dv < g2g_min_ms || a * b >= 0.0 {
                 continue; // too weak, or both gates on the same side of zero (not a couplet)
             }
             let (lon, lat) = dest(rlon, rlat, az_deg, range as f64);
             let key = ((lon / CELL).round() as i64, (lat / CELL).round() as i64);
-            let e = cells.entry(key).or_insert((0, 0.0, 0.0, 0.0, f32::MAX, f32::MIN, 0.0));
+            let e = cells
+                .entry(key)
+                .or_insert((0, 0.0, 0.0, 0.0, f32::MAX, f32::MIN, 0.0));
             e.0 += 1;
             e.1 += lon;
             e.2 += lat;
@@ -161,9 +167,17 @@ mod tests {
         let hits = detect(&couplet_sweep(-30.0, 30.0, 0.0), 25.0, 5.0, 150.0, 3);
         assert!(!hits.is_empty(), "a ±30 m/s couplet should be flagged");
         let h = hits[0];
-        assert!((h.vrot_ms - 30.0).abs() < 2.0, "vrot ≈ 30 m/s, got {}", h.vrot_ms);
+        assert!(
+            (h.vrot_ms - 30.0).abs() < 2.0,
+            "vrot ≈ 30 m/s, got {}",
+            h.vrot_ms
+        );
         assert!(h.g2g_ms >= 55.0, "gate-to-gate ≈ 60 m/s, got {}", h.g2g_ms);
-        assert!(h.range_km > 10.0 && h.range_km < 30.0, "range {} km", h.range_km);
+        assert!(
+            h.range_km > 10.0 && h.range_km < 30.0,
+            "range {} km",
+            h.range_km
+        );
     }
 
     #[test]
@@ -178,7 +192,13 @@ mod tests {
     fn range_gates_exclude_far_and_near_couplets() {
         // The synthetic couplet sits ~12-17 km out.
         let s = couplet_sweep(-30.0, 30.0, 0.0);
-        assert!(detect(&s, 25.0, 5.0, 8.0, 3).is_empty(), "beyond the far gate");
-        assert!(detect(&s, 25.0, 30.0, 150.0, 3).is_empty(), "inside the near gate");
+        assert!(
+            detect(&s, 25.0, 5.0, 8.0, 3).is_empty(),
+            "beyond the far gate"
+        );
+        assert!(
+            detect(&s, 25.0, 30.0, 150.0, 3).is_empty(),
+            "inside the near gate"
+        );
     }
 }

@@ -30,7 +30,8 @@ impl CrossSection {
 /// 4/3-earth beam height (km) at slant range `slant_km` and elevation `elev_deg`.
 pub(crate) fn beam_height_km(slant_km: f64, elev_deg: f64) -> f64 {
     let e = elev_deg.to_radians();
-    (slant_km * slant_km + R_EFF_KM * R_EFF_KM + 2.0 * slant_km * R_EFF_KM * e.sin()).sqrt() - R_EFF_KM
+    (slant_km * slant_km + R_EFF_KM * R_EFF_KM + 2.0 * slant_km * R_EFF_KM * e.sin()).sqrt()
+        - R_EFF_KM
 }
 
 /// Great-circle distance (km) and initial bearing (deg from north) from `(lon0,lat0)` to `(lon,lat)`.
@@ -75,7 +76,9 @@ pub fn build(
             // ponytail: flat-fan slant approximation (ground/cos elev); exact inversion of the
             // 4/3-earth ground-range formula only matters past ~200 km — fine for interrogation.
             let slant = ground_km / e.to_radians().cos();
-            let gate = ((slant - s.first_gate_km as f64) / s.gate_interval_km.max(f32::EPSILON) as f64).round();
+            let gate = ((slant - s.first_gate_km as f64)
+                / s.gate_interval_km.max(f32::EPSILON) as f64)
+                .round();
             if gate < 0.0 || gate as usize >= s.gate_count {
                 continue;
             }
@@ -96,7 +99,13 @@ pub fn build(
         }
     }
 
-    Some(CrossSection { cols, rows, max_height_km, length_km, dbz })
+    Some(CrossSection {
+        cols,
+        rows,
+        max_height_km,
+        length_km,
+        dbz,
+    })
 }
 
 /// Interpolate the vertical profile at height `hr` (km): linear between the two bracketing tilt

@@ -48,7 +48,11 @@ pub fn contour_lines(f: &MrmsField, interval: f32) -> Vec<ContourLine> {
                     (f64::MAX, f64::MAX, f64::MIN, f64::MIN),
                     |(x0, y0, x1, y1), p| (x0.min(p.0), y0.min(p.1), x1.max(p.0), y1.max(p.1)),
                 );
-                out.push(ContourLine { level, pts: line, bbox });
+                out.push(ContourLine {
+                    level,
+                    pts: line,
+                    bbox,
+                });
             }
         }
         levels += 1;
@@ -66,7 +70,11 @@ fn lat_at(f: &MrmsField, r: usize) -> f64 {
 
 /// Linear crossing point on the edge from corner `pa` (value `a`) to `pb` (value `b`) at `level`.
 fn cross(a: f32, b: f32, pa: (f64, f64), pb: (f64, f64), level: f32) -> (f64, f64) {
-    let t = if (b - a).abs() < f32::EPSILON { 0.5 } else { ((level - a) / (b - a)) as f64 };
+    let t = if (b - a).abs() < f32::EPSILON {
+        0.5
+    } else {
+        ((level - a) / (b - a)) as f64
+    };
     let t = t.clamp(0.0, 1.0);
     (pa.0 + (pb.0 - pa.0) * t, pa.1 + (pb.1 - pa.1) * t)
 }
@@ -192,18 +200,26 @@ mod tests {
         assert!(!lines.is_empty(), "a cone should yield contour rings");
         // Each ring should be a closed-ish loop of many points.
         let longest = lines.iter().map(|l| l.pts.len()).max().unwrap();
-        assert!(longest >= 8, "expected a substantial ring, got {longest} points");
+        assert!(
+            longest >= 8,
+            "expected a substantial ring, got {longest} points"
+        );
         // A higher level ring must sit closer to the center (smaller bounding box) than a lower one.
         let bbox = |lvl: f32| {
             lines
                 .iter()
                 .filter(|l| (l.level - lvl).abs() < 0.5)
                 .flat_map(|l| l.pts.iter())
-                .fold((f64::MAX, f64::MIN), |(mn, mx), p| (mn.min(p.0), mx.max(p.0)))
+                .fold((f64::MAX, f64::MIN), |(mn, mx), p| {
+                    (mn.min(p.0), mx.max(p.0))
+                })
         };
         // Levels 80 and 90 both sit inside the cone (min value ≈ 72); the 90 ring is inner.
         let (lo90, hi90) = bbox(90.0);
         let (lo80, hi80) = bbox(80.0);
-        assert!((hi90 - lo90) < (hi80 - lo80), "inner ring should be tighter");
+        assert!(
+            (hi90 - lo90) < (hi80 - lo80),
+            "inner ring should be tighter"
+        );
     }
 }

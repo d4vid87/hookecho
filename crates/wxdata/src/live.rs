@@ -52,7 +52,14 @@ where
     // ponytail: sequential O(n) backfill downloads on start so the first frame is a full
     // volume; gaps are tolerated (a missing chunk just omits its radials).
     for seq in 2..latest_seq {
-        let id = ChunkIdentifier::new(site.clone(), volume, prefix, seq, ChunkType::Intermediate, None);
+        let id = ChunkIdentifier::new(
+            site.clone(),
+            volume,
+            prefix,
+            seq,
+            ChunkType::Intermediate,
+            None,
+        );
         if let Ok((_, ch)) = download_chunk(&site, &id).await {
             chunks.push(ch);
         }
@@ -91,7 +98,12 @@ where
 
 /// Assemble `chunks`, merge into `merged`, and emit if anything changed. Assembly failure
 /// (e.g. a still-incomplete volume) is skipped; the next sweep boundary self-heals.
-fn emit<F: FnMut(Update)>(it: &ChunkIterator, chunks: &[Chunk<'static>], merged: &mut Scan, on_update: &mut F) {
+fn emit<F: FnMut(Update)>(
+    it: &ChunkIterator,
+    chunks: &[Chunk<'static>],
+    merged: &mut Scan,
+    on_update: &mut F,
+) {
     let partial = match assemble_volume(chunks.iter().cloned()) {
         Ok(s) => s,
         Err(e) => {
@@ -107,10 +119,20 @@ fn emit<F: FnMut(Update)>(it: &ChunkIterator, chunks: &[Chunk<'static>], merged:
     }
     let (name, time) = it
         .current()
-        .map(|id| (id.name().to_string(), id.upload_date_time().unwrap_or_else(chrono::Utc::now)))
+        .map(|id| {
+            (
+                id.name().to_string(),
+                id.upload_date_time().unwrap_or_else(chrono::Utc::now),
+            )
+        })
         .unwrap_or_else(|| (String::from("live"), chrono::Utc::now()));
     // ponytail: one Scan clone per emit for the UI; the merge/decode cost stays on this task.
-    on_update(Update { name, time, scan: merged.clone(), changed });
+    on_update(Update {
+        name,
+        time,
+        scan: merged.clone(),
+        changed,
+    });
 }
 
 /// A cheap placeholder scan (same VCP, no sweeps) used only to move `merged` out during emit.
@@ -174,15 +196,42 @@ mod tests {
     use nexrad_model::data::{MomentData, PulseWidth, Radial, RadialStatus, VolumeCoveragePattern};
 
     fn vcp(n: u16) -> VolumeCoveragePattern {
-        VolumeCoveragePattern::new(n, 1, 0.5, PulseWidth::Short, false, 0, false, 0, false, false, 0, false, false, Vec::new())
+        VolumeCoveragePattern::new(
+            n,
+            1,
+            0.5,
+            PulseWidth::Short,
+            false,
+            0,
+            false,
+            0,
+            false,
+            false,
+            0,
+            false,
+            false,
+            Vec::new(),
+        )
     }
 
     // A sweep at the given elevation number/angle carrying a single reflectivity value.
     fn sweep(elevation_number: u8, angle: f32, refl_raw: u8) -> Sweep {
         let data = MomentData::from_fixed_point(1, 2125, 250, 8, 2.0, 66.0, vec![refl_raw]);
         let radial = Radial::new(
-            0, 90, 90.0, 0.5, RadialStatus::ScanStart, elevation_number, angle, Some(data),
-            None, None, None, None, None, None,
+            0,
+            90,
+            90.0,
+            0.5,
+            RadialStatus::ScanStart,
+            elevation_number,
+            angle,
+            Some(data),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
         );
         Sweep::new(elevation_number, vec![radial])
     }
@@ -196,7 +245,11 @@ mod tests {
         assert_eq!(merged.sweeps().len(), 2);
         // Only tilt 2 (~1.5deg) changed.
         assert_eq!(changed.len(), 1);
-        assert!((changed[0] - 1.5).abs() < 0.01, "changed angle {:?}", changed);
+        assert!(
+            (changed[0] - 1.5).abs() < 0.01,
+            "changed angle {:?}",
+            changed
+        );
     }
 
     #[test]

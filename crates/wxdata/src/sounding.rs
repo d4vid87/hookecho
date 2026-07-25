@@ -152,7 +152,10 @@ impl Sounding {
         let (h0, h1) = (heights[i - 1], heights[i]);
         let (a, b) = (&self.levels[i - 1], &self.levels[i]);
         let k = ((z_m - h0) / (h1 - h0).max(1e-6)).clamp(0.0, 1.0);
-        Some((a.u_ms + (b.u_ms - a.u_ms) * k, a.v_ms + (b.v_ms - a.v_ms) * k))
+        Some((
+            a.u_ms + (b.u_ms - a.u_ms) * k,
+            a.v_ms + (b.v_ms - a.v_ms) * k,
+        ))
     }
 
     /// Bunkers right-mover storm motion: 0–6 km mean wind plus 7.5 m/s at right angles to the
@@ -203,12 +206,25 @@ impl Sounding {
         let shear6_kt = self.bulk_shear_kt()?;
         let shear6_ms = shear6_kt / 1.943_844;
         // Shear term: zero below 10 m/s, capped at 1.0 above 20 m/s (Thompson et al. 2004).
-        let shear_term = if shear6_ms < 10.0 { 0.0 } else { (shear6_ms / 20.0).min(1.0) };
+        let shear_term = if shear6_ms < 10.0 {
+            0.0
+        } else {
+            (shear6_ms / 20.0).min(1.0)
+        };
         let scp = (sbcape / 1000.0) * (srh3.max(0.0) / 50.0) * shear_term;
         let lcl_term = ((2000.0 - lcl_m) / 1000.0).clamp(0.0, 1.0);
         let stp = (sbcape / 1500.0) * (srh1.max(0.0) / 150.0) * shear_term * lcl_term;
         let ehi1 = sbcape * srh1 / 160_000.0;
-        Some(Indices { sbcape, lcl_m, srh1, srh3, shear6_kt, scp, stp, ehi1 })
+        Some(Indices {
+            sbcape,
+            lcl_m,
+            srh1,
+            srh3,
+            shear6_kt,
+            scp,
+            stp,
+            ehi1,
+        })
     }
 }
 
@@ -218,7 +234,12 @@ pub async fn fetch(http: &reqwest::Client, lon: f64, lat: f64) -> anyhow::Result
     let mut last_err = None;
     for back in 1..=6 {
         let run = (now - chrono::Duration::hours(back))
-            .with_minute(0).unwrap().with_second(0).unwrap().with_nanosecond(0).unwrap();
+            .with_minute(0)
+            .unwrap()
+            .with_second(0)
+            .unwrap()
+            .with_nanosecond(0)
+            .unwrap();
         match fetch_run(http, run, lon, lat).await {
             Ok(s) => return Ok(s),
             Err(e) => last_err = Some(e),
@@ -227,13 +248,25 @@ pub async fn fetch(http: &reqwest::Client, lon: f64, lat: f64) -> anyhow::Result
     Err(last_err.unwrap_or_else(|| anyhow::anyhow!("no HRRR run found")))
 }
 
-async fn fetch_run(http: &reqwest::Client, run: DateTime<Utc>, lon: f64, lat: f64) -> anyhow::Result<Sounding> {
+async fn fetch_run(
+    http: &reqwest::Client,
+    run: DateTime<Utc>,
+    lon: f64,
+    lat: f64,
+) -> anyhow::Result<Sounding> {
     let date = format!("{:04}{:02}{:02}", run.year(), run.month(), run.day());
-    let base = format!("{BUCKET}/hrrr.{date}/conus/hrrr.t{:02}z.wrfprsf00.grib2", run.hour());
+    let base = format!(
+        "{BUCKET}/hrrr.{date}/conus/hrrr.t{:02}z.wrfprsf00.grib2",
+        run.hour()
+    );
     let idx = http
         .get(format!("{base}.idx"))
         .header("User-Agent", USER_AGENT)
-        .send().await?.error_for_status()?.text().await?;
+        .send()
+        .await?
+        .error_for_status()?
+        .text()
+        .await?;
 
     // Fetch all (var, level) messages concurrently, then sample each at the point.
     let mut jobs = Vec::new();
@@ -246,11 +279,17 @@ async fn fetch_run(http: &reqwest::Client, run: DateTime<Utc>, lon: f64, lat: f6
         }
     }
     // Resolve.
-    let mut by_level: std::collections::BTreeMap<u32, [Option<f64>; 4]> = std::collections::BTreeMap::new();
+    let mut by_level: std::collections::BTreeMap<u32, [Option<f64>; 4]> =
+        std::collections::BTreeMap::new();
     for (hpa, var, fut) in jobs {
         let val = fut.await.ok();
         let slot = by_level.entry(hpa).or_insert([None; 4]);
-        let i = match var { "TMP" => 0, "DPT" => 1, "UGRD" => 2, _ => 3 };
+        let i = match var {
+            "TMP" => 0,
+            "DPT" => 1,
+            "UGRD" => 2,
+            _ => 3,
+        };
         slot[i] = val;
     }
 
@@ -268,7 +307,12 @@ async fn fetch_run(http: &reqwest::Client, run: DateTime<Utc>, lon: f64, lat: f6
         }
     }
     anyhow::ensure!(levels.len() >= 3, "sounding has too few complete levels");
-    Ok(Sounding { lon, lat, run, levels })
+    Ok(Sounding {
+        lon,
+        lat,
+        run,
+        levels,
+    })
 }
 
 /// Range-GET one GRIB2 message, decode it, and return the value at the grid point nearest
@@ -289,9 +333,15 @@ async fn sample_message(
         .get(base)
         .header("User-Agent", USER_AGENT)
         .header("Range", range)
-        .send().await?.error_for_status()?.bytes().await?;
-    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| sample_nearest(&bytes, lon, lat)))
-        .unwrap_or_else(|_| anyhow::bail!("grib decode panicked"))
+        .send()
+        .await?
+        .error_for_status()?
+        .bytes()
+        .await?;
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        sample_nearest(&bytes, lon, lat)
+    }))
+    .unwrap_or_else(|_| anyhow::bail!("grib decode panicked"))
 }
 
 fn sample_nearest(raw: &[u8], lon: f64, lat: f64) -> anyhow::Result<f64> {
@@ -301,7 +351,10 @@ fn sample_nearest(raw: &[u8], lon: f64, lat: f64) -> anyhow::Result<f64> {
     let dm = DataMessage::try_from(&msg).map_err(|e| anyhow::anyhow!("decode: {e:?}"))?;
     let (lats, lons) = dm.metadata.latlng();
     let data = dm.data;
-    anyhow::ensure!(lats.len() == data.len() && lons.len() == data.len(), "latlng/data mismatch");
+    anyhow::ensure!(
+        lats.len() == data.len() && lons.len() == data.len(),
+        "latlng/data mismatch"
+    );
     let mut best = None;
     let mut best_d = f64::MAX;
     for k in 0..data.len() {
@@ -329,7 +382,10 @@ fn message_range(idx: &str, var: &str, level: &str) -> Option<(u64, Option<u64>)
         }
         if f[3] == var && f[4] == level {
             let start: u64 = f[1].parse().ok()?;
-            let end = lines.get(i + 1).and_then(|n| n.split(':').nth(1)).and_then(|s| s.parse().ok());
+            let end = lines
+                .get(i + 1)
+                .and_then(|n| n.split(':').nth(1))
+                .and_then(|s| s.parse().ok());
             return Some((start, end));
         }
     }
@@ -346,7 +402,10 @@ mod tests {
                    2:1000:d=2026:DPT:500 mb:anl:\n\
                    3:2500:d=2026:UGRD:500 mb:anl:\n";
         assert_eq!(message_range(idx, "TMP", "500 mb"), Some((0, Some(1000))));
-        assert_eq!(message_range(idx, "DPT", "500 mb"), Some((1000, Some(2500))));
+        assert_eq!(
+            message_range(idx, "DPT", "500 mb"),
+            Some((1000, Some(2500)))
+        );
         assert_eq!(message_range(idx, "UGRD", "500 mb"), Some((2500, None)));
         assert_eq!(message_range(idx, "TMP", "850 mb"), None);
     }
@@ -358,8 +417,20 @@ mod tests {
             lat: 35.0,
             run: Utc::now(),
             levels: vec![
-                SoundingLevel { pressure_hpa: 1000.0, temp_c: 20.0, dewpt_c: 18.0, u_ms: 0.0, v_ms: 0.0 },
-                SoundingLevel { pressure_hpa: 500.0, temp_c: -10.0, dewpt_c: -20.0, u_ms: 20.0, v_ms: 0.0 },
+                SoundingLevel {
+                    pressure_hpa: 1000.0,
+                    temp_c: 20.0,
+                    dewpt_c: 18.0,
+                    u_ms: 0.0,
+                    v_ms: 0.0,
+                },
+                SoundingLevel {
+                    pressure_hpa: 500.0,
+                    temp_c: -10.0,
+                    dewpt_c: -20.0,
+                    u_ms: 20.0,
+                    v_ms: 0.0,
+                },
             ],
         };
         // 20 m/s shear ≈ 38.9 kt.
@@ -369,7 +440,13 @@ mod tests {
 
     /// A classic unstable, veering Great-Plains profile.
     fn supercell_profile() -> Sounding {
-        let mk = |p, t, td, u, v| SoundingLevel { pressure_hpa: p, temp_c: t, dewpt_c: td, u_ms: u, v_ms: v };
+        let mk = |p, t, td, u, v| SoundingLevel {
+            pressure_hpa: p,
+            temp_c: t,
+            dewpt_c: td,
+            u_ms: u,
+            v_ms: v,
+        };
         Sounding {
             lon: -97.0,
             lat: 35.0,
@@ -394,30 +471,65 @@ mod tests {
         assert_eq!(h[0], 0.0);
         assert!(h.windows(2).all(|w| w[1] > w[0]));
         // 500 hPa sits near 5.5–6 km in a warm airmass.
-        assert!((4800.0..6500.0).contains(&h[4]), "500 hPa height {:.0}", h[4]);
+        assert!(
+            (4800.0..6500.0).contains(&h[4]),
+            "500 hPa height {:.0}",
+            h[4]
+        );
     }
 
     #[test]
     fn supercell_profile_yields_severe_indices() {
         let s = supercell_profile();
         let ix = s.indices().expect("indices");
-        assert!((300.0..6000.0).contains(&ix.sbcape), "CAPE plausible: {:.0}", ix.sbcape);
-        assert!((200.0..2500.0).contains(&ix.lcl_m), "LCL plausible: {:.0}", ix.lcl_m);
-        assert!(ix.srh1 > 0.0, "veering profile → positive 0-1 km SRH: {:.0}", ix.srh1);
-        assert!(ix.srh3 >= ix.srh1, "deeper layer accumulates at least as much: {:.0} vs {:.0}", ix.srh3, ix.srh1);
-        assert!((20.0..70.0).contains(&ix.shear6_kt), "0-6 shear: {:.0} kt", ix.shear6_kt);
+        assert!(
+            (300.0..6000.0).contains(&ix.sbcape),
+            "CAPE plausible: {:.0}",
+            ix.sbcape
+        );
+        assert!(
+            (200.0..2500.0).contains(&ix.lcl_m),
+            "LCL plausible: {:.0}",
+            ix.lcl_m
+        );
+        assert!(
+            ix.srh1 > 0.0,
+            "veering profile → positive 0-1 km SRH: {:.0}",
+            ix.srh1
+        );
+        assert!(
+            ix.srh3 >= ix.srh1,
+            "deeper layer accumulates at least as much: {:.0} vs {:.0}",
+            ix.srh3,
+            ix.srh1
+        );
+        assert!(
+            (20.0..70.0).contains(&ix.shear6_kt),
+            "0-6 shear: {:.0} kt",
+            ix.shear6_kt
+        );
         assert!(ix.scp > 0.0 && ix.stp > 0.0 && ix.ehi1 > 0.0);
     }
 
     #[test]
     fn stable_profile_has_no_cape() {
         // Cold, dry surface under warmer air aloft: no positive buoyancy anywhere.
-        let mk = |p, t, td| SoundingLevel { pressure_hpa: p, temp_c: t, dewpt_c: td, u_ms: 0.0, v_ms: 0.0 };
+        let mk = |p, t, td| SoundingLevel {
+            pressure_hpa: p,
+            temp_c: t,
+            dewpt_c: td,
+            u_ms: 0.0,
+            v_ms: 0.0,
+        };
         let s = Sounding {
             lon: 0.0,
             lat: 0.0,
             run: Utc::now(),
-            levels: vec![mk(1000.0, -5.0, -20.0), mk(850.0, 5.0, -15.0), mk(500.0, -10.0, -30.0)],
+            levels: vec![
+                mk(1000.0, -5.0, -20.0),
+                mk(850.0, 5.0, -15.0),
+                mk(500.0, -10.0, -30.0),
+            ],
         };
         let (cape, _) = s.sb_parcel().unwrap();
         assert!(cape < 10.0, "inversion profile CAPE ~0, got {cape:.1}");

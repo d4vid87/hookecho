@@ -4,7 +4,9 @@
 //! polygon, just UGC zones — heat warnings, advisories, marine) are resolved to their zone geometry;
 //! see [`fetch_active`], which scopes that resolution to the active radar so local ones always land.
 
-use crate::overlay::{for_each_feature, polygons_of, AlertInfo, FeatureKind, GeoFeature, StormMotion};
+use crate::overlay::{
+    for_each_feature, polygons_of, AlertInfo, FeatureKind, GeoFeature, StormMotion,
+};
 
 const ALERTS_URL: &str = "https://api.weather.gov/alerts/active";
 /// weather.gov requires a User-Agent identifying the app + a contact.
@@ -54,9 +56,17 @@ pub fn category(event: &str) -> Category {
         Category::SevereThunderstorm
     } else if e.contains("flood") || e.contains("flash flood") {
         Category::Flood
-    } else if e.contains("winter") || e.contains("snow") || e.contains("ice") || e.contains("blizzard") {
+    } else if e.contains("winter")
+        || e.contains("snow")
+        || e.contains("ice")
+        || e.contains("blizzard")
+    {
         Category::Winter
-    } else if e.contains("marine") || e.contains("small craft") || e.contains("gale") || e.contains("surf") {
+    } else if e.contains("marine")
+        || e.contains("small craft")
+        || e.contains("gale")
+        || e.contains("surf")
+    {
         Category::Marine
     } else {
         Category::Other
@@ -104,7 +114,11 @@ pub fn escalation(a: &AlertInfo) -> u8 {
     if head.contains("TORNADO EMERGENCY") || head.contains("PARTICULARLY DANGEROUS SITUATION") {
         return 3;
     }
-    let threat = a.damage_threat.as_deref().unwrap_or("").to_ascii_uppercase();
+    let threat = a
+        .damage_threat
+        .as_deref()
+        .unwrap_or("")
+        .to_ascii_uppercase();
     let observed = a
         .tornado_detection
         .as_deref()
@@ -163,7 +177,9 @@ fn param(props: &serde_json::Map<String, serde_json::Value>, key: &str) -> Optio
 
 /// Build the styling + [`AlertInfo`] + detail text for one alert's properties. `None` if it has
 /// no `event`.
-fn build_alert(props: &serde_json::Map<String, serde_json::Value>) -> Option<(FeatureKind, [u8; 3], String, AlertInfo)> {
+fn build_alert(
+    props: &serde_json::Map<String, serde_json::Value>,
+) -> Option<(FeatureKind, [u8; 3], String, AlertInfo)> {
     let get = |k: &str| props.get(k).and_then(|v| v.as_str()).unwrap_or("");
     let event = get("event");
     if event.is_empty() {
@@ -197,7 +213,9 @@ fn build_alert(props: &serde_json::Map<String, serde_json::Value>) -> Option<(Fe
         damage_threat: param(props, "thunderstormDamageThreat")
             .or_else(|| param(props, "tornadoDamageThreat")),
         source: param(props, "eventMotionDescription").or_else(|| Some("Radar indicated".into())),
-        motion: param(props, "eventMotionDescription").as_deref().and_then(parse_motion),
+        motion: param(props, "eventMotionDescription")
+            .as_deref()
+            .and_then(parse_motion),
     };
     Some((kind, rgb, detail, alert))
 }
@@ -207,7 +225,9 @@ fn build_alert(props: &serde_json::Map<String, serde_json::Value>) -> Option<(Fe
 pub fn parse_alerts(json: &str) -> anyhow::Result<Vec<GeoFeature>> {
     let mut out = Vec::new();
     for_each_feature(json, |geom, props| {
-        let Some((kind, rgb, detail, alert)) = build_alert(props) else { return };
+        let Some((kind, rgb, detail, alert)) = build_alert(props) else {
+            return;
+        };
         for poly in polygons_of(geom) {
             out.push(GeoFeature {
                 rings: poly,
@@ -229,8 +249,9 @@ type ZonePolys = Vec<Vec<Vec<[f64; 2]>>>;
 /// Process-lifetime cache of resolved zone geometries (rings), keyed by zone URL. Zone polygons
 /// are effectively static, so one fetch per zone per run is plenty.
 /// `// ponytail: in-memory only; a disk cache would survive restarts if it ever matters.`
-static ZONE_CACHE: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, ZonePolys>>> =
-    std::sync::OnceLock::new();
+static ZONE_CACHE: std::sync::OnceLock<
+    std::sync::Mutex<std::collections::HashMap<String, ZonePolys>>,
+> = std::sync::OnceLock::new();
 
 /// Cap on zone geometries fetched per refresh, so a nationwide burst of zone-only advisories
 /// can't fan out into thousands of requests.
@@ -275,20 +296,32 @@ async fn resolve_zone_alerts(
     mut budget: usize,
     seen: &mut std::collections::HashSet<String>,
 ) -> Vec<GeoFeature> {
-    let Ok(v) = serde_json::from_str::<serde_json::Value>(body) else { return Vec::new() };
-    let Some(feats) = v.get("features").and_then(|f| f.as_array()) else { return Vec::new() };
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(body) else {
+        return Vec::new();
+    };
+    let Some(feats) = v.get("features").and_then(|f| f.as_array()) else {
+        return Vec::new();
+    };
     let mut out = Vec::new();
     for feat in feats {
         // Only alerts lacking an inline geometry need zone resolution.
         if !feat.get("geometry").map(|g| g.is_null()).unwrap_or(true) {
             continue;
         }
-        let Some(props) = feat.get("properties").and_then(|p| p.as_object()) else { continue };
-        let Some((kind, rgb, detail, alert)) = build_alert(props) else { continue };
+        let Some(props) = feat.get("properties").and_then(|p| p.as_object()) else {
+            continue;
+        };
+        let Some((kind, rgb, detail, alert)) = build_alert(props) else {
+            continue;
+        };
         if !seen.insert(alert.id.clone()) {
             continue; // already resolved in an earlier pass
         }
-        let zones = props.get("affectedZones").and_then(|z| z.as_array()).cloned().unwrap_or_default();
+        let zones = props
+            .get("affectedZones")
+            .and_then(|z| z.as_array())
+            .cloned()
+            .unwrap_or_default();
         for zurl in zones.iter().filter_map(|z| z.as_str()) {
             if budget == 0 {
                 break;
@@ -340,8 +373,10 @@ pub async fn fetch_active(
 ) -> anyhow::Result<Vec<GeoFeature>> {
     let body = get_alerts(client, ALERTS_URL).await?;
     let mut feats = parse_alerts(&body)?;
-    let mut seen: std::collections::HashSet<String> =
-        feats.iter().filter_map(|f| f.alert.as_ref().map(|a| a.id.clone())).collect();
+    let mut seen: std::collections::HashSet<String> = feats
+        .iter()
+        .filter_map(|f| f.alert.as_ref().map(|a| a.id.clone()))
+        .collect();
     match near {
         Some((lat, lon)) => {
             let url = format!("{ALERTS_URL}?point={lat:.4},{lon:.4}");
@@ -353,7 +388,9 @@ pub async fn fetch_active(
                 // user still gets the feed-top zone alerts rather than none.
                 Err(e) => {
                     log::warn!("scoped alert fetch failed ({e}); using nationwide zone pass");
-                    feats.extend(resolve_zone_alerts(client, &body, MAX_ZONE_FETCHES, &mut seen).await);
+                    feats.extend(
+                        resolve_zone_alerts(client, &body, MAX_ZONE_FETCHES, &mut seen).await,
+                    );
                 }
             }
         }
@@ -402,19 +439,25 @@ mod tests {
         assert_eq!(feats.len(), 2, "one feature per polygon part");
         let hits = hit_all(&feats, -97.5, 35.2);
         // Both parts contain the point; the caller dedupes by alert id.
-        let ids: std::collections::HashSet<_> =
-            hits.iter().filter_map(|f| f.alert.as_ref().map(|a| a.id.as_str())).collect();
+        let ids: std::collections::HashSet<_> = hits
+            .iter()
+            .filter_map(|f| f.alert.as_ref().map(|a| a.id.as_str()))
+            .collect();
         assert_eq!(ids.len(), 1);
     }
 
     #[test]
     fn parse_motion_single_point() {
-        let m = parse_motion("2023-03-31T20:30:00-00:00...storm...234DEG...52KT...3540,9012").unwrap();
+        let m =
+            parse_motion("2023-03-31T20:30:00-00:00...storm...234DEG...52KT...3540,9012").unwrap();
         assert_eq!(m.deg, 234.0);
         assert_eq!(m.kt, 52.0);
         assert_eq!(m.points.len(), 1);
         assert!((m.points[0][1] - 35.40).abs() < 1e-6, "lat");
-        assert!((m.points[0][0] - -90.12).abs() < 1e-6, "lon west-positive negated");
+        assert!(
+            (m.points[0][0] - -90.12).abs() < 1e-6,
+            "lon west-positive negated"
+        );
     }
 
     #[test]
@@ -450,7 +493,10 @@ mod tests {
         assert_eq!(escalation(&mk("", Some("CONSIDERABLE"), None)), 1);
         assert_eq!(escalation(&mk("", Some("DESTRUCTIVE"), None)), 2);
         assert_eq!(escalation(&mk("", None, Some("OBSERVED"))), 2);
-        assert_eq!(escalation(&mk("THIS IS A TORNADO EMERGENCY", None, None)), 3);
+        assert_eq!(
+            escalation(&mk("THIS IS A TORNADO EMERGENCY", None, None)),
+            3
+        );
     }
 
     // Live network check (nation-wide there are essentially always active alerts).

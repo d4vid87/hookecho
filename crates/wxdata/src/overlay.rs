@@ -102,7 +102,9 @@ impl GeoFeature {
             for p in ring {
                 b = Some(match b {
                     None => (p[0], p[1], p[0], p[1]),
-                    Some((x0, y0, x1, y1)) => (x0.min(p[0]), y0.min(p[1]), x1.max(p[0]), y1.max(p[1])),
+                    Some((x0, y0, x1, y1)) => {
+                        (x0.min(p[0]), y0.min(p[1]), x1.max(p[0]), y1.max(p[1]))
+                    }
                 });
             }
         }
@@ -111,11 +113,15 @@ impl GeoFeature {
 
     /// Is `(lon, lat)` inside this feature's outer ring (minus holes)?
     pub fn contains(&self, lon: f64, lat: f64) -> bool {
-        let Some(outer) = self.rings.first() else { return false };
+        let Some(outer) = self.rings.first() else {
+            return false;
+        };
         if !point_in_ring(outer, lon, lat) {
             return false;
         }
-        !self.rings[1..].iter().any(|hole| point_in_ring(hole, lon, lat))
+        !self.rings[1..]
+            .iter()
+            .any(|hole| point_in_ring(hole, lon, lat))
     }
 }
 
@@ -170,7 +176,9 @@ pub fn polygons_of(value: &GeometryValue) -> Vec<Vec<Vec<[f64; 2]>>> {
     }
     match value {
         GeometryValue::Polygon { coordinates } => vec![poly(coordinates)],
-        GeometryValue::MultiPolygon { coordinates } => coordinates.iter().map(|p| poly(p)).collect(),
+        GeometryValue::MultiPolygon { coordinates } => {
+            coordinates.iter().map(|p| poly(p)).collect()
+        }
         _ => Vec::new(),
     }
 }
@@ -180,7 +188,9 @@ pub fn for_each_feature<F>(json: &str, mut f: F) -> anyhow::Result<()>
 where
     F: FnMut(&GeometryValue, &serde_json::Map<String, serde_json::Value>),
 {
-    let gj: GeoJson = json.parse().map_err(|e| anyhow::anyhow!("geojson parse: {e}"))?;
+    let gj: GeoJson = json
+        .parse()
+        .map_err(|e| anyhow::anyhow!("geojson parse: {e}"))?;
     let empty = serde_json::Map::new();
     match gj {
         GeoJson::FeatureCollection(fc) => {
@@ -208,7 +218,13 @@ mod tests {
 
     fn square(kind: FeatureKind) -> GeoFeature {
         GeoFeature {
-            rings: vec![vec![[0.0, 0.0], [2.0, 0.0], [2.0, 2.0], [0.0, 2.0], [0.0, 0.0]]],
+            rings: vec![vec![
+                [0.0, 0.0],
+                [2.0, 0.0],
+                [2.0, 2.0],
+                [0.0, 2.0],
+                [0.0, 0.0],
+            ]],
             fill: [0, 0, 0, 0],
             stroke: [0, 0, 0, 0],
             kind,
@@ -241,7 +257,10 @@ mod tests {
             let polys = polygons_of(geom);
             assert_eq!(polys.len(), 1);
             assert_eq!(polys[0][0].len(), 4);
-            assert_eq!(props.get("event").and_then(|v| v.as_str()), Some("Tornado Warning"));
+            assert_eq!(
+                props.get("event").and_then(|v| v.as_str()),
+                Some("Tornado Warning")
+            );
         })
         .unwrap();
         assert_eq!(count, 1);

@@ -50,9 +50,21 @@ pub async fn fetch_field(
     let now = Utc::now();
     let mut last_err = None;
     for back in 1..=6 {
-        let run = (now - chrono::Duration::hours(back)).with_minute(0).unwrap().with_second(0).unwrap().with_nanosecond(0).unwrap();
+        let run = (now - chrono::Duration::hours(back))
+            .with_minute(0)
+            .unwrap()
+            .with_second(0)
+            .unwrap()
+            .with_nanosecond(0)
+            .unwrap();
         match fetch_run_field(http, run, fh, var, level, min_valid).await {
-            Ok(field) => return Ok(HrrrForecast { field, run, fcst_hour: fh }),
+            Ok(field) => {
+                return Ok(HrrrForecast {
+                    field,
+                    run,
+                    fcst_hour: fh,
+                })
+            }
             Err(e) => last_err = Some(e),
         }
     }
@@ -72,7 +84,13 @@ pub async fn fetch_fields_one_run(
     let now = Utc::now();
     let mut last_err = None;
     for back in 1..=6 {
-        let run = (now - chrono::Duration::hours(back)).with_minute(0).unwrap().with_second(0).unwrap().with_nanosecond(0).unwrap();
+        let run = (now - chrono::Duration::hours(back))
+            .with_minute(0)
+            .unwrap()
+            .with_second(0)
+            .unwrap()
+            .with_nanosecond(0)
+            .unwrap();
         let mut fields = Vec::with_capacity(specs.len());
         let mut failed = None;
         for (var, level, min_valid) in specs {
@@ -101,7 +119,11 @@ async fn fetch_run_field(
     min_valid: f64,
 ) -> anyhow::Result<MrmsField> {
     let date = format!("{:04}{:02}{:02}", run.year(), run.month(), run.day());
-    let base = format!("{BUCKET}/hrrr.{date}/conus/hrrr.t{:02}z.wrfsfcf{:02}.grib2", run.hour(), fh);
+    let base = format!(
+        "{BUCKET}/hrrr.{date}/conus/hrrr.t{:02}z.wrfsfcf{:02}.grib2",
+        run.hour(),
+        fh
+    );
 
     // The .idx sidecar lists each message's start byte; find the one for this var+level.
     let idx = http
@@ -130,8 +152,10 @@ async fn fetch_run_field(
         .await?;
 
     // gribberish can panic on some packings; contain it (see mrms::fetch_latest).
-    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| decode_regrid(&bytes, min_valid)))
-        .unwrap_or_else(|_| anyhow::bail!("HRRR grib decode panicked"))
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        decode_regrid(&bytes, min_valid)
+    }))
+    .unwrap_or_else(|_| anyhow::bail!("HRRR grib decode panicked"))
 }
 
 /// Find the `[start, end)` byte range of the message matching `var` (field 3) and `level`
@@ -145,7 +169,10 @@ fn field_byte_range(idx: &str, var: &str, level: &str) -> Option<(u64, Option<u6
         }
         if f[3] == var && f[4] == level {
             let start: u64 = f[1].parse().ok()?;
-            let end = lines.get(i + 1).and_then(|n| n.split(':').nth(1)).and_then(|s| s.parse().ok());
+            let end = lines
+                .get(i + 1)
+                .and_then(|n| n.split(':').nth(1))
+                .and_then(|s| s.parse().ok());
             return Some((start, end));
         }
     }
@@ -174,7 +201,13 @@ fn decode_regrid(raw: &[u8], min_valid: f64) -> anyhow::Result<MrmsField> {
 /// Pure + fixture-testable. Non-finite or below-`min_valid` samples are ignored.
 /// `// ponytail: max-per-cell — for SRH this keeps the strongest (most positive) value per cell;`
 /// `// negative (anticyclonic) SRH is retained only where no positive sample shares the cell.`
-fn regrid(lats: &[f64], lons: &[f64], data: &[f64], time: DateTime<Utc>, min_valid: f64) -> anyhow::Result<MrmsField> {
+fn regrid(
+    lats: &[f64],
+    lons: &[f64],
+    data: &[f64],
+    time: DateTime<Utc>,
+    min_valid: f64,
+) -> anyhow::Result<MrmsField> {
     let mut lonmin = f64::MAX;
     let mut lonmax = f64::MIN;
     let mut latmin = f64::MAX;
@@ -188,7 +221,10 @@ fn regrid(lats: &[f64], lons: &[f64], data: &[f64], time: DateTime<Utc>, min_val
         latmin = latmin.min(lats[k]);
         latmax = latmax.max(lats[k]);
     }
-    anyhow::ensure!(lonmax > lonmin && latmax > latmin, "hrrr grid has no finite extent");
+    anyhow::ensure!(
+        lonmax > lonmin && latmax > latmin,
+        "hrrr grid has no finite extent"
+    );
 
     let nx = (((lonmax - lonmin) / RES_DEG).ceil() as usize).max(1);
     let ny = (((latmax - latmin) / RES_DEG).ceil() as usize).max(1);
@@ -202,7 +238,11 @@ fn regrid(lats: &[f64], lons: &[f64], data: &[f64], time: DateTime<Utc>, min_val
         // Row 0 is the northernmost latitude (matches MrmsField convention).
         let gy = (((latmax - lats[k]) / RES_DEG) as usize).min(ny - 1);
         let cell = &mut values[gy * nx + gx];
-        *cell = if cell.is_nan() { v as f32 } else { cell.max(v as f32) };
+        *cell = if cell.is_nan() {
+            v as f32
+        } else {
+            cell.max(v as f32)
+        };
     }
 
     Ok(MrmsField {
@@ -225,14 +265,26 @@ mod tests {
     fn idx_range_finds_field() {
         let idx = "1:0:d=2026:REFC:entire atmosphere:1 hour fcst:\n\
                    2:396353:d=2026:RETOP:cloud top:1 hour fcst:\n";
-        assert_eq!(field_byte_range(idx, "REFC", "entire atmosphere"), Some((0, Some(396353))));
+        assert_eq!(
+            field_byte_range(idx, "REFC", "entire atmosphere"),
+            Some((0, Some(396353)))
+        );
         // Last message → open-ended range; var+level disambiguates same-var different levels.
         let idx2 = "1:100:d=2026:CAPE:surface:\n\
                     2:5000:d=2026:CAPE:90-0 mb above ground:\n\
                     3:9000:d=2026:HLCY:3000-0 m above ground:\n";
-        assert_eq!(field_byte_range(idx2, "CAPE", "surface"), Some((100, Some(5000))));
-        assert_eq!(field_byte_range(idx2, "CAPE", "90-0 mb above ground"), Some((5000, Some(9000))));
-        assert_eq!(field_byte_range(idx2, "HLCY", "3000-0 m above ground"), Some((9000, None)));
+        assert_eq!(
+            field_byte_range(idx2, "CAPE", "surface"),
+            Some((100, Some(5000)))
+        );
+        assert_eq!(
+            field_byte_range(idx2, "CAPE", "90-0 mb above ground"),
+            Some((5000, Some(9000)))
+        );
+        assert_eq!(
+            field_byte_range(idx2, "HLCY", "3000-0 m above ground"),
+            Some((9000, None))
+        );
     }
 
     #[test]
@@ -244,7 +296,10 @@ mod tests {
         let f = regrid(&lats, &lons, &data, Utc::now(), -30.0).unwrap();
         assert!(f.nx >= 2 && f.ny >= 1);
         let north_west = f.values[0]; // row 0 = north, col 0 = west
-        assert!((north_west - 45.0).abs() < 1e-3, "max-per-cell kept: {north_west}");
+        assert!(
+            (north_west - 45.0).abs() < 1e-3,
+            "max-per-cell kept: {north_west}"
+        );
     }
 
     #[test]
@@ -255,7 +310,11 @@ mod tests {
         let lons = vec![-100.0, -99.0];
         let data = vec![-50.0, 20.0];
         let kept = regrid(&lats, &lons, &data, Utc::now(), f64::NEG_INFINITY).unwrap();
-        assert!((kept.values[0] - -50.0).abs() < 1e-3, "negative SRH kept in NW cell: {}", kept.values[0]);
+        assert!(
+            (kept.values[0] - -50.0).abs() < 1e-3,
+            "negative SRH kept in NW cell: {}",
+            kept.values[0]
+        );
         let dropped = regrid(&lats, &lons, &data, Utc::now(), -30.0).unwrap();
         assert!(dropped.values[0].is_nan(), "below-threshold dropped");
     }

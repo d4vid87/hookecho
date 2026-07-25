@@ -38,10 +38,16 @@ fn val(props: &serde_json::Value, field: &str) -> Option<f32> {
 /// Parse an `/observations` GeoJSON FeatureCollection into records (order preserved: newest first).
 pub fn parse_observations(json: &str) -> anyhow::Result<Vec<Observation>> {
     let v: serde_json::Value = serde_json::from_str(json)?;
-    let feats = v.get("features").and_then(|f| f.as_array()).cloned().unwrap_or_default();
+    let feats = v
+        .get("features")
+        .and_then(|f| f.as_array())
+        .cloned()
+        .unwrap_or_default();
     let mut out = Vec::new();
     for f in &feats {
-        let Some(p) = f.get("properties") else { continue };
+        let Some(p) = f.get("properties") else {
+            continue;
+        };
         out.push(Observation {
             time: p
                 .get("timestamp")
@@ -64,7 +70,11 @@ pub fn parse_observations(json: &str) -> anyhow::Result<Vec<Observation>> {
 /// Fetch the nearest station's ~24h observation series for `(lat, lon)`.
 ///
 /// `// ponytail: first station only; a nearest-N picker can follow if the closest is stale.`
-pub async fn fetch_nearest(http: &reqwest::Client, lat: f64, lon: f64) -> anyhow::Result<StationObs> {
+pub async fn fetch_nearest(
+    http: &reqwest::Client,
+    lat: f64,
+    lon: f64,
+) -> anyhow::Result<StationObs> {
     let get = |url: String| {
         let http = http.clone();
         async move {
@@ -98,11 +108,19 @@ pub async fn fetch_nearest(http: &reqwest::Client, lat: f64, lon: f64) -> anyhow
         .and_then(|v| v.as_str())
         .ok_or_else(|| anyhow::anyhow!("station has no id"))?
         .to_string();
-    let name = first.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let name = first
+        .get("name")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
 
     let obs_json = get(format!("{API}/stations/{station_id}/observations?limit=72")).await?;
     let obs = parse_observations(&obs_json)?;
-    Ok(StationObs { station_id, name, obs })
+    Ok(StationObs {
+        station_id,
+        name,
+        obs,
+    })
 }
 
 #[cfg(test)]

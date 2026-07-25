@@ -66,11 +66,17 @@ fn stage(v: Option<f64>) -> Option<f64> {
 
 /// Parse an NWPS `gauges` JSON payload. Tolerant: skips entries missing lat/lon.
 pub fn parse(json: &str) -> Vec<Gauge> {
-    let Ok(v) = serde_json::from_str::<serde_json::Value>(json) else { return Vec::new() };
-    let Some(arr) = v.get("gauges").and_then(|g| g.as_array()) else { return Vec::new() };
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(json) else {
+        return Vec::new();
+    };
+    let Some(arr) = v.get("gauges").and_then(|g| g.as_array()) else {
+        return Vec::new();
+    };
     let mut out = Vec::new();
     for g in arr {
-        let (Some(lat), Some(lon)) = (num(g, "latitude"), num(g, "longitude")) else { continue };
+        let (Some(lat), Some(lon)) = (num(g, "latitude"), num(g, "longitude")) else {
+            continue;
+        };
         let obs = g.get("status").and_then(|s| s.get("observed"));
         let fcst = g.get("status").and_then(|s| s.get("forecast"));
         out.push(Gauge {

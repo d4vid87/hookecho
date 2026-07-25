@@ -25,3 +25,4 @@ directories.workspace = true
 log.workspace = true
 geojson = "1.0.0"
 gribberish = "1.5.0"
+chrono-tz = "0.10"

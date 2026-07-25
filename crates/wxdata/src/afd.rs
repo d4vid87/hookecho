@@ -33,7 +33,12 @@ pub fn cwa_of(json: &str) -> Option<String> {
 /// The newest product id in an AFD listing (`@graph` is newest-first).
 pub fn first_product_id(json: &str) -> Option<String> {
     let v: serde_json::Value = serde_json::from_str(json).ok()?;
-    v.get("@graph")?.as_array()?.first()?.get("id")?.as_str().map(str::to_string)
+    v.get("@graph")?
+        .as_array()?
+        .first()?
+        .get("id")?
+        .as_str()
+        .map(str::to_string)
 }
 
 /// `(issuanceTime, productText)` of a product response.
@@ -60,12 +65,21 @@ async fn get(client: &reqwest::Client, url: &str) -> anyhow::Result<String> {
 pub async fn fetch(client: &reqwest::Client, lat: f64, lon: f64) -> anyhow::Result<Afd> {
     let points = get(client, &format!("{API}/points/{lat:.4},{lon:.4}")).await?;
     let office = cwa_of(&points).ok_or_else(|| anyhow::anyhow!("no cwa for point"))?;
-    let listing = get(client, &format!("{API}/products/types/AFD/locations/{office}")).await?;
-    let id = first_product_id(&listing).ok_or_else(|| anyhow::anyhow!("no AFD issued for {office}"))?;
+    let listing = get(
+        client,
+        &format!("{API}/products/types/AFD/locations/{office}"),
+    )
+    .await?;
+    let id =
+        first_product_id(&listing).ok_or_else(|| anyhow::anyhow!("no AFD issued for {office}"))?;
     let product = get(client, &format!("{API}/products/{id}")).await?;
     let (issued, text) =
         product_text(&product).ok_or_else(|| anyhow::anyhow!("AFD product has no text"))?;
-    Ok(Afd { office, issued, text })
+    Ok(Afd {
+        office,
+        issued,
+        text,
+    })
 }
 
 #[cfg(test)]
@@ -79,7 +93,10 @@ mod tests {
             Some("OUN")
         );
         // JSON-LD flattens properties to the root.
-        assert_eq!(cwa_of(r#"{"@context":{},"cwa":"OUN"}"#).as_deref(), Some("OUN"));
+        assert_eq!(
+            cwa_of(r#"{"@context":{},"cwa":"OUN"}"#).as_deref(),
+            Some("OUN")
+        );
         assert_eq!(
             first_product_id(r#"{"@graph":[{"id":"abc-123","issuanceTime":"t1"},{"id":"old"}]}"#)
                 .as_deref(),

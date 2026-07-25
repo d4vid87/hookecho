@@ -70,7 +70,9 @@ pub fn detect(
             if range > max_range_km {
                 break; // gates increase with index; nothing further qualifies on this radial
             }
-            let Some(cc_val) = decode(cc, cc.data[az * cc.gate_count + gate]) else { continue };
+            let Some(cc_val) = decode(cc, cc.data[az * cc.gate_count + gate]) else {
+                continue;
+            };
             if cc_val >= cc_max {
                 continue;
             }
@@ -79,7 +81,9 @@ pub fn detect(
             if zi < 0 || zi as usize >= z.gate_count {
                 continue;
             }
-            let Some(z_val) = decode(z, z.data[az * z.gate_count + zi as usize]) else { continue };
+            let Some(z_val) = decode(z, z.data[az * z.gate_count + zi as usize]) else {
+                continue;
+            };
             if z_val < z_min {
                 continue; // low CC in weak echo = biological/clutter, not debris
             }
@@ -112,7 +116,13 @@ mod tests {
     use super::*;
 
     /// Build a sweep where a wedge of azimuths/gates carries `hot` (index) and the rest `cold`.
-    fn sweep(moment: Moment, hot: u8, cold: u8, hot_az: std::ops::Range<usize>, hot_gate: std::ops::Range<usize>) -> BinnedSweep {
+    fn sweep(
+        moment: Moment,
+        hot: u8,
+        cold: u8,
+        hot_az: std::ops::Range<usize>,
+        hot_gate: std::ops::Range<usize>,
+    ) -> BinnedSweep {
         let (az_bins, gate_count) = (720usize, 200usize);
         let mut data = vec![cold; az_bins * gate_count];
         for az in hot_az.clone() {
@@ -149,7 +159,13 @@ mod tests {
         let cc_cold = idx(Moment::CorrelationCoefficient, 0.98);
         let z_hot = idx(Moment::Reflectivity, 52.0);
         let z_cold = idx(Moment::Reflectivity, 20.0);
-        let cc = sweep(Moment::CorrelationCoefficient, cc_hot, cc_cold, 100..112, 40..60);
+        let cc = sweep(
+            Moment::CorrelationCoefficient,
+            cc_hot,
+            cc_cold,
+            100..112,
+            40..60,
+        );
         let z = sweep(Moment::Reflectivity, z_hot, z_cold, 100..112, 40..60);
 
         let hits = detect(&z, &cc, 0.80, 40.0, 150.0, 4);
@@ -162,8 +178,20 @@ mod tests {
     #[test]
     fn ignores_low_cc_in_weak_echo() {
         // Low CC but only 15 dBZ (biological / clutter) → no debris flag.
-        let cc = sweep(Moment::CorrelationCoefficient, idx(Moment::CorrelationCoefficient, 0.5), idx(Moment::CorrelationCoefficient, 0.98), 100..112, 40..60);
-        let z = sweep(Moment::Reflectivity, idx(Moment::Reflectivity, 15.0), idx(Moment::Reflectivity, 10.0), 100..112, 40..60);
+        let cc = sweep(
+            Moment::CorrelationCoefficient,
+            idx(Moment::CorrelationCoefficient, 0.5),
+            idx(Moment::CorrelationCoefficient, 0.98),
+            100..112,
+            40..60,
+        );
+        let z = sweep(
+            Moment::Reflectivity,
+            idx(Moment::Reflectivity, 15.0),
+            idx(Moment::Reflectivity, 10.0),
+            100..112,
+            40..60,
+        );
         assert!(detect(&z, &cc, 0.80, 40.0, 150.0, 4).is_empty());
     }
 }

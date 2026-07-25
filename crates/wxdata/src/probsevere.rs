@@ -60,7 +60,12 @@ fn prob_color(pct: u8) -> [u8; 3] {
 pub fn parse_probsevere(json: &str) -> anyhow::Result<Vec<GeoFeature>> {
     let mut out = Vec::new();
     for_each_feature(json, |geom, props| {
-        let num = |k: &str| props.get(k).and_then(|v| v.as_str()).and_then(|s| s.parse::<u8>().ok());
+        let num = |k: &str| {
+            props
+                .get(k)
+                .and_then(|v| v.as_str())
+                .and_then(|s| s.parse::<u8>().ok())
+        };
         let severe = num("ProbSevere").unwrap_or(0);
         let tor = num("ProbTor").unwrap_or(0);
         let hail = num("ProbHail").unwrap_or(0);
@@ -69,11 +74,16 @@ pub fn parse_probsevere(json: &str) -> anyhow::Result<Vec<GeoFeature>> {
         let id = props.get("ID").and_then(|v| v.as_str()).unwrap_or("");
         let rgb = prob_color(dominant);
         // Badge shows the dominant probability; the storm's leading hazard tags it.
-        let lead = [("Tor", tor), ("Hail", hail), ("Wind", wind), ("Svr", severe)]
-            .into_iter()
-            .max_by_key(|&(_, p)| p)
-            .map(|(l, _)| l)
-            .unwrap_or("Svr");
+        let lead = [
+            ("Tor", tor),
+            ("Hail", hail),
+            ("Wind", wind),
+            ("Svr", severe),
+        ]
+        .into_iter()
+        .max_by_key(|&(_, p)| p)
+        .map(|(l, _)| l)
+        .unwrap_or("Svr");
         let title = format!("{lead} {dominant}%");
         let detail = format!(
             "ProbSevere storm {id}\nSevere: {severe}%\nTornado: {tor}%\nHail: {hail}%\nWind: {wind}%",
@@ -117,6 +127,9 @@ mod tests {
         let idx = r#"<a href="MRMS_PROBSEVERE_20260719_000042.json">x</a>
                      <a href="MRMS_PROBSEVERE_20260719_000442.json">y</a>
                      <a href="MRMS_PROBSEVERE_20260718_235839.json">z</a>"#;
-        assert_eq!(latest_file(idx).as_deref(), Some("MRMS_PROBSEVERE_20260719_000442.json"));
+        assert_eq!(
+            latest_file(idx).as_deref(),
+            Some("MRMS_PROBSEVERE_20260719_000442.json")
+        );
     }
 }

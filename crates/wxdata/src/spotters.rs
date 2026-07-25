@@ -67,8 +67,14 @@ pub fn parse_spotters(text: &str) -> Vec<Spotter> {
                 continue;
             }
             // Fields: 0,0,<rot>,<sheet>,<idx>[,"hover"].
-            let sheet = rest.split(',').nth(3).and_then(|s| s.trim().parse::<u32>().ok());
-            let rot = rest.split(',').nth(2).and_then(|s| s.trim().parse::<f32>().ok());
+            let sheet = rest
+                .split(',')
+                .nth(3)
+                .and_then(|s| s.trim().parse::<u32>().ok());
+            let rot = rest
+                .split(',')
+                .nth(2)
+                .and_then(|s| s.trim().parse::<f32>().ok());
             if sheet == Some(2) {
                 // Movement arrow: its rotation is the heading.
                 acc.heading = rot;
@@ -143,18 +149,31 @@ mod tests {
         assert!((s[0].lat - 44.7412376).abs() < 1e-6);
         assert!((s[0].lon - -89.0691071).abs() < 1e-6);
         assert_eq!(s[0].heading, None);
-        assert_eq!(s[0].time.format("%Y-%m-%d %H:%M:%S").to_string(), "2026-07-18 22:54:53");
+        assert_eq!(
+            s[0].time.format("%Y-%m-%d %H:%M:%S").to_string(),
+            "2026-07-18 22:54:53"
+        );
         // Status is only the movement line — no phone/twitter/email contact info.
         assert_eq!(s[0].status, "STATIONARY");
 
         assert_eq!(s[1].name, "Sam Rider");
-        assert_eq!(s[1].heading, Some(225.0), "mover arrow (sheet 2) sets heading");
+        assert_eq!(
+            s[1].heading,
+            Some(225.0),
+            "mover arrow (sheet 2) sets heading"
+        );
 
         assert_eq!(s[2].name, "Pat Smith");
 
         // No contact PII (email @, twitter handle, phone digits) may survive parsing.
         let dump = format!("{s:?}");
-        assert!(!dump.contains('@'), "email/handle leaked into parsed spotters");
-        assert!(!dump.contains("5551234567"), "phone leaked into parsed spotters");
+        assert!(
+            !dump.contains('@'),
+            "email/handle leaked into parsed spotters"
+        );
+        assert!(
+            !dump.contains("5551234567"),
+            "phone leaked into parsed spotters"
+        );
     }
 }

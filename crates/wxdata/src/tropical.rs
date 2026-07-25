@@ -69,7 +69,11 @@ pub async fn fetch_active(client: &reqwest::Client) -> anyhow::Result<TropicalDa
         .text()
         .await?;
     let storms_json: serde_json::Value = serde_json::from_str(&cs)?;
-    let active = storms_json.get("activeStorms").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+    let active = storms_json
+        .get("activeStorms")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
     if active.is_empty() {
         return Ok(TropicalData::default());
     }
@@ -84,7 +88,11 @@ pub async fn fetch_active(client: &reqwest::Client) -> anyhow::Result<TropicalDa
         .text()
         .await?;
     let layers: serde_json::Value = serde_json::from_str(&layers_json)?;
-    let layer_list = layers.get("layers").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+    let layer_list = layers
+        .get("layers")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
     let find_layer = |bin: &str, suffix: &str| -> Option<u64> {
         let want = format!("{bin} {suffix}");
         layer_list.iter().find_map(|l| {
@@ -101,8 +109,14 @@ pub async fn fetch_active(client: &reqwest::Client) -> anyhow::Result<TropicalDa
         let intensity_kt = get("intensity").parse::<f32>().unwrap_or(0.0);
         let name = get("name");
         let classification = get("classification");
-        let lat = s.get("latitudeNumeric").and_then(|v| v.as_f64()).unwrap_or(0.0);
-        let lon = s.get("longitudeNumeric").and_then(|v| v.as_f64()).unwrap_or(0.0);
+        let lat = s
+            .get("latitudeNumeric")
+            .and_then(|v| v.as_f64())
+            .unwrap_or(0.0);
+        let lon = s
+            .get("longitudeNumeric")
+            .and_then(|v| v.as_f64())
+            .unwrap_or(0.0);
         let (cat, _) = saffir_simpson(intensity_kt);
         let detail = format!(
             "{name} ({classification})\nBin: {bin}\nIntensity: {intensity_kt:.0} kt ({cat})\nNHC forecast cone",
@@ -138,15 +152,28 @@ pub async fn fetch_active(client: &reqwest::Client) -> anyhow::Result<TropicalDa
                             points.push(TrackPoint {
                                 lon: c[0],
                                 lat: c[1],
-                                kt: props.get("maxwind").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32,
-                                label: props.get("datelbl").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                                kt: props.get("maxwind").and_then(|v| v.as_f64()).unwrap_or(0.0)
+                                    as f32,
+                                label: props
+                                    .get("datelbl")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("")
+                                    .to_string(),
                             });
                         }
                     }
                 }
             }
         }
-        data.storms.push(TropicalStorm { id: get("id"), name, classification, intensity_kt, lat, lon, points });
+        data.storms.push(TropicalStorm {
+            id: get("id"),
+            name,
+            classification,
+            intensity_kt,
+            lat,
+            lon,
+            points,
+        });
     }
     Ok(data)
 }
@@ -162,11 +189,17 @@ async fn query_layer(client: &reqwest::Client, id: u64) -> anyhow::Result<GeoJso
         .error_for_status()?
         .text()
         .await?;
-    body.parse().map_err(|e| anyhow::anyhow!("tropical geojson: {e}"))
+    body.parse()
+        .map_err(|e| anyhow::anyhow!("tropical geojson: {e}"))
 }
 
 /// Extract `(geometry, properties)` pairs from a parsed GeoJSON feature collection.
-fn features(gj: &GeoJson) -> Vec<(geojson::GeometryValue, serde_json::Map<String, serde_json::Value>)> {
+fn features(
+    gj: &GeoJson,
+) -> Vec<(
+    geojson::GeometryValue,
+    serde_json::Map<String, serde_json::Value>,
+)> {
     let mut out = Vec::new();
     if let GeoJson::FeatureCollection(fc) = gj {
         for f in &fc.features {
