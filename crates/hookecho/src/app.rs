@@ -534,6 +534,8 @@ pub(crate) enum AppWindow {
 pub(crate) enum PaletteAction {
     /// Select a radar moment; the bool is the storm-relative flag (velocity only).
     SetMoment(Moment, bool),
+    /// Four panes, one product, four distinct tilts, cameras linked.
+    AllTilts,
     ToggleField(crate::render::FieldLayer),
     ToggleOverlay(OverlayToggle),
     SetContours(ContourKind),
@@ -762,6 +764,21 @@ fn product_row(
     });
     ui.add_space(2.0);
     clicked
+}
+
+/// The first `want` indices of `elevations` at distinct angles (0.1\u{b0} tolerance), lowest
+/// first. SAILS/MRLE repeat the lowest cut mid-volume, so a naive `0..4` yields duplicates.
+fn distinct_tilts(elevations: &[f32], want: usize) -> Vec<usize> {
+    let mut out: Vec<usize> = Vec::with_capacity(want);
+    for (i, &a) in elevations.iter().enumerate() {
+        if out.len() == want {
+            break;
+        }
+        if !out.iter().any(|&j| (elevations[j] - a).abs() < 0.1) {
+            out.push(i);
+        }
+    }
+    out
 }
 
 /// How many buttons the right-edge control column shows — the badge lane stacks below them.
@@ -3584,6 +3601,14 @@ impl HookEchoApp {
                 on,
             );
         }
+        push(
+            "Compare 4 tilts",
+            "Tools",
+            "Four panes of this product at four heights, cameras linked",
+            true,
+            PaletteAction::AllTilts,
+            None,
+        );
         let panes = self.views.len();
         for n in [1usize, 2, 4] {
             push(
@@ -3653,6 +3678,7 @@ impl HookEchoApp {
             PaletteAction::SetContours(k) => self.contour_kind = k,
             PaletteAction::Tool(t) => self.tool = t,
             PaletteAction::SetPanes(n) => self.set_pane_count(n),
+            PaletteAction::AllTilts => self.apply_all_tilts(),
             PaletteAction::CycleBasemap => self.apply_action(Action::CycleBasemap, ctx),
             PaletteAction::Reload => self.trigger_reload(ctx),
             PaletteAction::InstantReplay => self.instant_replay(),
@@ -6464,6 +6490,35 @@ impl HookEchoApp {
 
     /// Resize the pane grid to `n` (1/2/4). New panes copy the active pane's site/camera but
     /// default to a distinct product, so a 4-panel shows REF/VEL/ZDR/RHO out of the box.
+    /// Four panes of the SAME product at four different tilts — the layout you build by hand
+    /// every time you want to see how a couplet leans with height.
+    ///
+    /// SAILS/MRLE re-scan the lowest cut mid-volume, so the elevation list repeats angles; taking
+    /// four *distinct* ones is what makes the quad show four heights instead of three plus a
+    /// duplicate.
+    fn apply_all_tilts(&mut self) {
+        let src = &self.views[self.active];
+        let moment = src.moment;
+        let srv = src.srv;
+        let elevations = src
+            .volume
+            .as_ref()
+            .map(|v| v.elevations.clone())
+            .unwrap_or_default();
+        let picks = distinct_tilts(&elevations, 4);
+        self.set_pane_count(4);
+        for (i, v) in self.views.iter_mut().enumerate() {
+            v.moment = moment;
+            v.srv = srv;
+            if let Some(&t) = picks.get(i) {
+                v.tilt = t;
+            }
+        }
+        // Four heights of one storm only reads if all four look at the same place.
+        self.link_cameras = true;
+        self.pane_shown.clear();
+    }
+
     fn set_pane_count(&mut self, n: usize) {
         let n = n.clamp(1, 4);
         while self.views.len() < n {
@@ -8476,7 +8531,27 @@ mod warning_scope_tests {
 
 #[cfg(test)]
 mod field_lut_tests {
-    use super::{categorical_lut, ramp_lut, ramp_lut_a};
+    use super::{categorical_lut, distinct_tilts, ramp_lut, ramp_lut_a};
+
+    #[test]
+    fn distinct_tilts_skips_sails_repeats() {
+        // A VCP 212 style list: 0.5 appears three times (SAILS), 0.9 twice (MRLE).
+        let els = [0.5, 0.5, 0.9, 0.5, 0.9, 1.3, 1.8, 2.4];
+        let picks = distinct_tilts(&els, 4);
+        assert_eq!(
+            picks,
+            vec![0, 2, 5, 6],
+            "one index per distinct angle, lowest first"
+        );
+        let angles: Vec<f32> = picks.iter().map(|&i| els[i]).collect();
+        assert_eq!(angles, vec![0.5, 0.9, 1.3, 1.8]);
+    }
+
+    #[test]
+    fn distinct_tilts_clamps_to_what_exists() {
+        assert_eq!(distinct_tilts(&[0.5, 0.5], 4), vec![0]);
+        assert!(distinct_tilts(&[], 4).is_empty());
+    }
 
     #[test]
     fn categorical_lut_sets_only_listed_slots() {
