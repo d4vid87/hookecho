@@ -19,6 +19,7 @@ pub enum Action {
     ToggleObs,
     ToggleObsTour,
     ToggleToolbox,
+    ToggleLayersPanel,
     InstantReplay,
 }
 
@@ -43,6 +44,7 @@ pub const DEFAULTS: &[Binding] = &[
     Binding { key: egui::Key::Z, action: Action::CycleBasemap },
     Binding { key: egui::Key::A, action: Action::ToggleAlertPanel },
     Binding { key: egui::Key::F7, action: Action::ToggleToolbox },
+    Binding { key: egui::Key::L, action: Action::ToggleLayersPanel },
     Binding { key: egui::Key::F8, action: Action::ToggleObs },
     Binding { key: egui::Key::F9, action: Action::ToggleObsTour },
     Binding { key: egui::Key::R, action: Action::InstantReplay },

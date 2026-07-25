@@ -276,7 +276,7 @@ impl OverlaySource {
 
 /// What a left-click on the map does.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-enum MapTool {
+pub(crate) enum MapTool {
     /// Interrogate storm cells / overlay features (the default).
     #[default]
     Interrogate,
@@ -365,6 +365,77 @@ impl ContourKind {
             ContourKind::Off => egui::Color32::WHITE,
         }
     }
+}
+
+/// A boolean overlay/panel toggle addressable by name, so the layers panel and command palette
+/// can flip any of them without a match arm per surface (see [`HookEchoApp::overlay_flag`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum OverlayToggle {
+    AlertPanel,
+    StormReports,
+    Spotters,
+    RadarSites,
+    Metar,
+    Gauges,
+    Tropical,
+    ProbSevere,
+    Aviation,
+    RangeRings,
+    Sensors,
+    Hodo,
+    Cells,
+    Tracks,
+    ArrivalCones,
+    Nowcast,
+    Tds,
+    Alerts,
+    Mds,
+    LinkCameras,
+}
+
+/// A floating window the palette can open.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AppWindow {
+    Site,
+    Settings,
+    Markers,
+    Placefiles,
+    Palettes,
+    Events,
+    Digest,
+    Afd,
+    Cappi,
+    Volume3d,
+    Climatology,
+    LayerManager,
+    Wizard,
+    Toolbox,
+}
+
+/// One thing the user can do, addressable from any surface (layers panel, command palette,
+/// mobile quick-layers sheet). The single registry keeps those surfaces in sync for free.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PaletteAction {
+    /// Select a radar moment; the bool is the storm-relative flag (velocity only).
+    SetMoment(Moment, bool),
+    ToggleField(crate::render::FieldLayer),
+    ToggleOverlay(OverlayToggle),
+    SetContours(ContourKind),
+    Tool(MapTool),
+    OpenWindow(AppWindow),
+    SetPanes(usize),
+    CycleBasemap,
+    Reload,
+    InstantReplay,
+    GoLive,
+}
+
+/// A registry row: what it's called, where it lives, what it does, and (for toggles) its state.
+pub(crate) struct PaletteEntry {
+    pub label: String,
+    pub category: &'static str,
+    pub action: PaletteAction,
+    pub on: Option<bool>,
 }
 
 /// Refresh cadence (seconds) for a national field layer's product.
@@ -674,8 +745,24 @@ pub struct HookEchoApp {
     show_range_rings: bool,
     /// Draw all NEXRAD radar sites on the map; clicking one switches the pane to that radar.
     show_radar_sites: bool,
-    /// Show the left toolbox panel. Collapse it (View ▸ Toolbox / F9) for a full-width radar.
+    /// Show the left "Advanced" toolbox panel (off by default — the floating chrome covers the
+    /// common paths). View ▸ Advanced toolbox / F7 / the right-column button bring it back.
     show_toolbox: bool,
+    /// Layers panel (floating, searchable layer picker): open flag + its search text.
+    layers_open: bool,
+    layers_query: String,
+    /// Ctrl+K command palette: open flag, query, and the highlighted row.
+    palette_open: bool,
+    palette_query: String,
+    palette_sel: usize,
+    /// Top search pill: the place query and a transient "flew to …" status.
+    place_query: String,
+    place_status: Option<(String, Instant)>,
+    /// True while the in-flight geocode came from the search pill (navigate only) rather than
+    /// the marker window (which adds a marker).
+    geocode_nav: bool,
+    /// Layer manager window (per-placefile enable/order/opacity).
+    layer_window_open: bool,
     /// Android only: which slide-up sheet the mobile chrome is showing (see `app::mobile`).
     mobile_sheet: mobile::MobileSheet,
     /// Android: hide all floating chrome to view the whole radar (toggled by the eye button).
@@ -971,9 +1058,19 @@ paste_target: None,
             afd_rx: None,
             show_range_rings: false,
             show_radar_sites: true,
-            // Phone screens are ~360 pt wide — the toolbox starts as a hidden drawer there (☰ toggles).
-show_toolbox: !cfg!(target_os = "android"),
-mobile_sheet: mobile::MobileSheet::None,
+            // Map-first by default on both platforms: the floating chrome covers the common paths,
+            // and the full toolbox is one "Advanced" tap away.
+            show_toolbox: false,
+            layers_open: false,
+            layers_query: String::new(),
+            palette_open: false,
+            palette_query: String::new(),
+            palette_sel: 0,
+            place_query: String::new(),
+            place_status: None,
+            geocode_nav: false,
+            layer_window_open: false,
+            mobile_sheet: mobile::MobileSheet::None,
             mobile_chrome_hidden: false,
             show_spotters: false,
             spotters: Vec::new(),
@@ -1864,6 +1961,584 @@ mobile_sheet: mobile::MobileSheet::None,
     }
 
     /// Open the warning popup on the alert with `id` (from the alerts panel), showing its bulletin.
+    /// Floating Layers panel (desktop): a right-edge glass card holding the searchable registry.
+    /// Android hosts the same body in the quick-layers sheet (see `app::mobile`).
+    fn layers_panel(&mut self, ctx: &egui::Context) {
+        if !self.layers_open {
+            return;
+        }
+        use egui_phosphor::regular as ph;
+        let accent = crate::theme::accent(self.settings.theme);
+        let cr = ctx.content_rect();
+        let entries = self.palette_entries();
+        let mut query = std::mem::take(&mut self.layers_query);
+        let (mut chosen, mut close) = (None, false);
+        egui::Area::new(egui::Id::new("layers_panel"))
+            .anchor(egui::Align2::RIGHT_TOP, egui::vec2(-74.0, 44.0))
+            .order(egui::Order::Foreground)
+            .show(ctx, |ui| {
+                mobile::glass(232).show(ui, |ui| {
+                    ui.set_width(330.0);
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new("Layers").size(16.0).strong().color(accent));
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            close = ui
+                                .add(
+                                    egui::Button::new(egui::RichText::new(ph::X).size(14.0))
+                                        .fill(egui::Color32::TRANSPARENT)
+                                        .stroke(egui::Stroke::NONE),
+                                )
+                                .clicked();
+                        });
+                    });
+                    ui.separator();
+                    chosen = ui::layers_panel::body(ui, &entries, &mut query, accent, cr.height() - 170.0);
+                });
+            });
+        self.layers_query = query;
+        if let Some(a) = chosen {
+            self.apply_palette(a, ctx);
+        }
+        if close || ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+            self.layers_open = false;
+        }
+    }
+
+    /// Floating timeline scrubber (desktop): transport + scrub + live badge in a glass pill over
+    /// the map's bottom edge. The date picker, loop, and speed stay in the Advanced toolbox —
+    /// this is the 95% case. Drives the same `timeline` calls as `toolbox::timeline_section`.
+    fn timeline_pill(&mut self, ctx: &egui::Context) {
+        use egui_phosphor::regular as ph;
+        let accent = crate::theme::accent(self.settings.theme);
+        let cr = ctx.content_rect();
+        let pill_w = (cr.width() * 0.6).clamp(360.0, 720.0);
+        let fresh = self.views[self.active]
+            .volume
+            .as_ref()
+            .is_some_and(|v| (chrono::Utc::now() - v.time).num_seconds() < 900);
+        let mut go_head = false;
+        egui::Area::new(egui::Id::new("timeline_pill"))
+            .anchor(egui::Align2::CENTER_BOTTOM, egui::vec2(0.0, -34.0))
+            .show(ctx, |ui| {
+                mobile::glass(228).show(ui, |ui| {
+                    ui.set_width(pill_w);
+                    let t = &mut self.views[self.active].timeline;
+                    ui.horizontal(|ui| {
+                        let btn = |ui: &mut egui::Ui, glyph: &str, on: bool| {
+                            let fg = if on { accent } else { egui::Color32::from_gray(225) };
+                            ui.add(
+                                egui::Button::new(egui::RichText::new(glyph).size(18.0).color(fg))
+                                    .min_size(egui::vec2(30.0, 30.0))
+                                    .fill(egui::Color32::TRANSPARENT)
+                                    .stroke(egui::Stroke::NONE),
+                            )
+                            .clicked()
+                        };
+                        if btn(ui, ph::SKIP_BACK, false) {
+                            t.step(-1);
+                        }
+                        let playing = t.playing;
+                        if btn(ui, if playing { ph::PAUSE } else { ph::PLAY }, playing) {
+                            t.toggle_play();
+                        }
+                        if btn(ui, ph::SKIP_FORWARD, false) {
+                            t.step(1);
+                        }
+                        // Live / archive badge: click to re-pin to the newest volume.
+                        let (col, text) = if t.following && fresh {
+                            (mobile::OMEGA_GREEN, "LIVE".to_string())
+                        } else if t.following {
+                            (egui::Color32::from_rgb(220, 180, 0), "LIVE".to_string())
+                        } else {
+                            (egui::Color32::from_gray(150), format!("ARCHIVE {}", t.date.format("%m/%d")))
+                        };
+                        if ui
+                            .add(
+                                egui::Button::new(egui::RichText::new(text).size(12.0).strong().color(egui::Color32::BLACK))
+                                    .fill(col)
+                                    .corner_radius(9.0),
+                            )
+                            .on_hover_text("Jump to the newest volume")
+                            .clicked()
+                        {
+                            go_head = true;
+                        }
+                        // Scrub bar + readout fill the rest of the pill.
+                        let observed = t.frames.len();
+                        if observed == 0 {
+                            ui.weak(if t.listing { "listing volumes…" } else { "(no volumes)" });
+                            return;
+                        }
+                        let readout = match t.forecast_hour() {
+                            Some(h) => format!("F+{h}h"),
+                            None => t
+                                .current()
+                                .and_then(|id| id.date_time())
+                                .map(|d| d.format("%H:%M:%SZ").to_string())
+                                .unwrap_or_default(),
+                        };
+                        let last = t.slot_count().saturating_sub(1);
+                        let mut ph_idx = t.playhead;
+                        let slider_w = (ui.available_width() - 92.0).max(80.0);
+                        let resp = ui.add_sized(
+                            [slider_w, 20.0],
+                            egui::Slider::new(&mut ph_idx, 0..=last).show_value(false),
+                        );
+                        if resp.changed() {
+                            t.playhead = ph_idx;
+                            t.playing = false;
+                            t.following = ph_idx + 1 == observed;
+                        }
+                        ui.label(egui::RichText::new(readout).size(12.0).monospace().color(egui::Color32::from_gray(215)));
+                    });
+                });
+            });
+        if go_head {
+            self.views[self.active].timeline.go_head();
+        }
+    }
+
+    /// Right-edge column of round glass buttons (desktop): the map-first entry points. Anything
+    /// not here still lives in the menu bar and the Advanced toolbox.
+    fn control_column(&mut self, ctx: &egui::Context) {
+        use egui_phosphor::regular as ph;
+        let accent = crate::theme::accent(self.settings.theme);
+        let mut clicked: Option<&'static str> = None;
+        egui::Area::new(egui::Id::new("control_column"))
+            .anchor(egui::Align2::RIGHT_TOP, egui::vec2(-14.0, 44.0))
+            .show(ctx, |ui| {
+                ui.vertical(|ui| {
+                    ui.spacing_mut().item_spacing.y = 8.0;
+                    for (glyph, id, on, tip) in [
+                        (ph::STACK, "layers", self.layers_open, "Layers (L)"),
+                        (ph::RADIO_BUTTON, "site", self.site_dialog.is_some(), "Radar site (F3)"),
+                        (ph::WARNING, "alerts", self.show_alert_panel, "Active alerts (A)"),
+                        (ph::WRENCH, "tools", self.palette_open, "Search actions (Ctrl+K)"),
+                        (ph::SLIDERS, "advanced", self.show_toolbox, "Advanced toolbox (F7)"),
+                        (ph::GEAR, "settings", self.settings_window.open, "Settings"),
+                    ] {
+                        if mobile::square_btn(ui, glyph, on, accent).on_hover_text(tip).clicked() {
+                            clicked = Some(id);
+                        }
+                    }
+                });
+            });
+        match clicked {
+            Some("layers") => self.layers_open = !self.layers_open,
+            Some("site") => self.apply_palette(PaletteAction::OpenWindow(AppWindow::Site), ctx),
+            Some("alerts") => self.show_alert_panel = !self.show_alert_panel,
+            Some("tools") => {
+                self.palette_open = !self.palette_open;
+                self.palette_query.clear();
+                self.palette_sel = 0;
+            }
+            Some("advanced") => self.show_toolbox = !self.show_toolbox,
+            Some("settings") => self.settings_window.open = true,
+            _ => {}
+        }
+    }
+
+    /// Top-center place-search pill: type a place, press Enter, the camera flies there. Pure
+    /// navigation — the marker window's search is what adds a marker.
+    fn search_pill(&mut self, ctx: &egui::Context) {
+        use egui_phosphor::regular as ph;
+        let cr = ctx.content_rect();
+        let mut submit = None;
+        egui::Area::new(egui::Id::new("search_pill"))
+            .anchor(egui::Align2::CENTER_TOP, egui::vec2(0.0, 44.0))
+            .show(ctx, |ui| {
+                mobile::glass(226).show(ui, |ui| {
+                    ui.set_width((cr.width() * 0.3).clamp(220.0, 420.0));
+                    ui.horizontal(|ui| {
+                        ui.label(
+                            egui::RichText::new(ph::MAGNIFYING_GLASS)
+                                .size(15.0)
+                                .color(egui::Color32::from_gray(175)),
+                        );
+                        let resp = ui.add(
+                            egui::TextEdit::singleline(&mut self.place_query)
+                                .hint_text("Search a place…")
+                                .desired_width(ui.available_width() - 4.0),
+                        );
+                        if resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                            let q = self.place_query.trim().to_string();
+                            if !q.is_empty() {
+                                submit = Some(q);
+                            }
+                        }
+                    });
+                    // Transient result note (fades after ~4 s).
+                    if let Some((text, at)) = &self.place_status {
+                        if at.elapsed().as_secs() < 4 {
+                            ui.label(egui::RichText::new(text).size(11.0).color(egui::Color32::from_gray(180)));
+                        } else {
+                            self.place_status = None;
+                        }
+                    }
+                });
+            });
+        if let Some(query) = submit {
+            self.geocode_nav = true;
+            self.place_status = Some(("Searching…".to_string(), Instant::now()));
+            let http = self.http.clone();
+            let tx = self.geocode_tx.clone();
+            let ctx2 = ctx.clone();
+            self._rt.spawn(async move {
+                let _ = tx.send(wxdata::geocode::search(&http, &query).await);
+                ctx2.request_repaint();
+            });
+        }
+    }
+
+    /// Ctrl+K command palette: fuzzy-search the same registry the Layers panel shows, keyboard
+    /// first (↑/↓/Enter). The power-user path to anything in the app.
+    fn command_palette(&mut self, ctx: &egui::Context) {
+        if !self.palette_open {
+            return;
+        }
+        let accent = crate::theme::accent(self.settings.theme);
+        let entries = self.palette_entries();
+        let mut hits = ui::layers_panel::matches(&entries, &self.palette_query);
+        hits.truncate(40);
+        // Keyboard navigation before drawing, so the highlighted row is already correct.
+        let (up, down, enter, esc) = ctx.input(|i| {
+            (
+                i.key_pressed(egui::Key::ArrowUp),
+                i.key_pressed(egui::Key::ArrowDown),
+                i.key_pressed(egui::Key::Enter),
+                i.key_pressed(egui::Key::Escape),
+            )
+        });
+        if down {
+            self.palette_sel = (self.palette_sel + 1).min(hits.len().saturating_sub(1));
+        }
+        if up {
+            self.palette_sel = self.palette_sel.saturating_sub(1);
+        }
+        self.palette_sel = self.palette_sel.min(hits.len().saturating_sub(1));
+        let mut chosen = enter.then(|| hits.get(self.palette_sel).map(|i| entries[*i].action)).flatten();
+        let mut close = esc || chosen.is_some();
+        let mut query = std::mem::take(&mut self.palette_query);
+        let sel = self.palette_sel;
+        egui::Window::new("Search actions")
+            .title_bar(false)
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_TOP, egui::vec2(0.0, 120.0))
+            .fixed_size([480.0, 0.0])
+            .show(ctx, |ui| {
+                let resp = ui.add(
+                    egui::TextEdit::singleline(&mut query)
+                        .hint_text("Type a product, layer, or tool…")
+                        .desired_width(f32::INFINITY),
+                );
+                resp.request_focus();
+                ui.separator();
+                egui::ScrollArea::vertical().max_height(320.0).show(ui, |ui| {
+                    for (n, i) in hits.iter().enumerate() {
+                        let e = &entries[*i];
+                        let mark = match e.on {
+                            Some(true) => "● ",
+                            Some(false) => "○ ",
+                            None => "  ",
+                        };
+                        let text = format!("{mark}{}  ·  {}", e.label, e.category);
+                        let col = if n == sel { accent } else { egui::Color32::from_gray(215) };
+                        if ui
+                            .add(
+                                egui::Button::new(egui::RichText::new(text).size(14.0).color(col))
+                                    .min_size(egui::vec2(ui.available_width(), 26.0))
+                                    .fill(if n == sel {
+                                        egui::Color32::from_rgba_unmultiplied(255, 255, 255, 22)
+                                    } else {
+                                        egui::Color32::TRANSPARENT
+                                    })
+                                    .stroke(egui::Stroke::NONE),
+                            )
+                            .clicked()
+                        {
+                            chosen = Some(e.action);
+                            close = true;
+                        }
+                    }
+                    if hits.is_empty() {
+                        ui.weak("No matches.");
+                    }
+                });
+            });
+        self.palette_query = query;
+        if let Some(a) = chosen {
+            self.apply_palette(a, ctx);
+        }
+        if close {
+            self.palette_open = false;
+            self.palette_query.clear();
+            self.palette_sel = 0;
+        }
+    }
+
+    /// The boolean behind an [`OverlayToggle`]. One place to resolve a named toggle so the
+    /// layers panel, command palette, and mobile sheet never drift apart.
+    fn overlay_flag(&mut self, t: OverlayToggle) -> &mut bool {
+        use OverlayToggle as T;
+        match t {
+            T::AlertPanel => &mut self.show_alert_panel,
+            T::StormReports => &mut self.show_storm_reports,
+            T::Spotters => &mut self.show_spotters,
+            T::RadarSites => &mut self.show_radar_sites,
+            T::Metar => &mut self.show_metar,
+            T::Gauges => &mut self.show_gauges,
+            T::Tropical => &mut self.show_tropical,
+            T::ProbSevere => &mut self.show_probsevere,
+            T::Aviation => &mut self.show_aviation,
+            T::RangeRings => &mut self.show_range_rings,
+            T::Sensors => &mut self.show_sensors,
+            T::Hodo => &mut self.show_hodo,
+            T::Cells => &mut self.filters.show_cells,
+            T::Tracks => &mut self.filters.show_tracks,
+            T::ArrivalCones => &mut self.filters.show_arrival_cones,
+            T::Nowcast => &mut self.filters.show_nowcast,
+            T::Tds => &mut self.filters.show_tds,
+            T::Alerts => &mut self.filters.show_alerts,
+            T::Mds => &mut self.filters.show_mds,
+            T::LinkCameras => &mut self.link_cameras,
+        }
+    }
+
+    /// Every layer/product/tool/window as a searchable, categorized row. Consumed by the layers
+    /// panel (desktop slide-in + mobile sheet) and the Ctrl+K command palette.
+    pub(crate) fn palette_entries(&mut self) -> Vec<PaletteEntry> {
+        use crate::render::FieldLayer as FL;
+        use AppWindow as W;
+        use OverlayToggle as T;
+        let mut out = Vec::new();
+        let mut push = |label: &str, category, action, on| {
+            out.push(PaletteEntry { label: label.to_string(), category, action, on })
+        };
+
+        // --- Radar products (the active pane's moment). ---
+        let (cur_moment, cur_srv) = {
+            let v = &self.views[self.active];
+            (v.moment, v.srv)
+        };
+        for (m, srv, label) in [
+            (Moment::Reflectivity, false, "Reflectivity"),
+            (Moment::Velocity, false, "Velocity"),
+            (Moment::Velocity, true, "Storm-Relative Velocity"),
+            (Moment::SpectrumWidth, false, "Spectrum Width"),
+            (Moment::CorrelationCoefficient, false, "Correlation Coefficient (CC)"),
+            (Moment::DifferentialReflectivity, false, "Differential Reflectivity (ZDR)"),
+            (Moment::DifferentialPhase, false, "Specific Differential Phase (KDP)"),
+        ] {
+            let on = cur_moment == m && (m != Moment::Velocity || cur_srv == srv);
+            push(label, "Radar", PaletteAction::SetMoment(m, srv), Some(on));
+        }
+
+        // --- National / model grids. ---
+        for (layer, category, label) in [
+            (FL::Mrms, "National", "MRMS Mosaic"),
+            (FL::Rotation, "National", "Rotation tracks"),
+            (FL::Mesh, "National", "MESH hail"),
+            (FL::AzShear, "National", "AzShear (0–2 km)"),
+            (FL::Lightning, "National", "Lightning density"),
+            (FL::Qpe1h, "National", "QPE 1-hour"),
+            (FL::Qpe24h, "National", "QPE 24-hour"),
+            (FL::PrecipType, "National", "Precip type"),
+            (FL::FlashFlood, "National", "FLASH flood ARI"),
+            (FL::HailSwath, "National", "Hail swaths (24 h)"),
+            (FL::Vil, "National", "Digital VIL (L3)"),
+            (FL::EchoTops, "National", "Echo tops (L3)"),
+            (FL::Hca, "National", "Hydrometeor class (L3)"),
+            (FL::Hrrr, "Models", "HRRR future radar"),
+            (FL::Cape, "Models", "CAPE"),
+            (FL::Srh, "Models", "Storm-relative helicity"),
+        ] {
+            let on = self.fields.get(&layer).is_some_and(|s| s.show);
+            push(label, category, PaletteAction::ToggleField(layer), Some(on));
+        }
+        for k in ContourKind::ALL {
+            let label = format!("Contours: {}", k.label());
+            let on = self.contour_kind == k;
+            out.push(PaletteEntry {
+                label,
+                category: "Models",
+                action: PaletteAction::SetContours(k),
+                on: Some(on),
+            });
+        }
+
+        // --- Severe / obs / reference toggles. ---
+        for (t, category, label) in [
+            (T::Cells, "Severe", "Storm cells"),
+            (T::Tracks, "Severe", "SCIT forecast tracks"),
+            (T::ArrivalCones, "Severe", "Arrival-time cones"),
+            (T::Nowcast, "Severe", "Nowcast (echo extrapolation)"),
+            (T::Tds, "Severe", "TDS detection"),
+            (T::Alerts, "Severe", "NWS alerts"),
+            (T::Mds, "Severe", "Mesoscale discussions"),
+            (T::StormReports, "Severe", "Storm reports (LSR)"),
+            (T::ProbSevere, "Severe", "ProbSevere"),
+            (T::AlertPanel, "Severe", "Active alerts panel"),
+            (T::Metar, "Obs", "Surface obs (METAR)"),
+            (T::Gauges, "Obs", "River gauges (NWPS)"),
+            (T::Spotters, "Obs", "Spotter Network"),
+            (T::Sensors, "Obs", "Sensor dashboard"),
+            (T::Hodo, "Obs", "VAD hodograph"),
+            (T::Tropical, "Obs", "Tropical (NHC)"),
+            (T::Aviation, "Obs", "Aviation (SIGMET/AIRMET)"),
+            (T::RadarSites, "Reference", "Radar sites"),
+            (T::RangeRings, "Reference", "Range rings"),
+            (T::LinkCameras, "Reference", "Link pane cameras"),
+        ] {
+            let on = *self.overlay_flag(t);
+            out.push(PaletteEntry {
+                label: label.to_string(),
+                category,
+                action: PaletteAction::ToggleOverlay(t),
+                on: Some(on),
+            });
+        }
+        out.push(PaletteEntry {
+            label: "Cycle basemap".into(),
+            category: "Reference",
+            action: PaletteAction::CycleBasemap,
+            on: None,
+        });
+
+        // --- Tools, windows, panes. ---
+        let tool = self.tool;
+        for (t, label) in [
+            (MapTool::Interrogate, "Tool: Interrogate"),
+            (MapTool::Measure, "Tool: Measure"),
+            (MapTool::Marker, "Tool: Drop marker"),
+            (MapTool::CrossSection, "Tool: Cross-section"),
+            (MapTool::Sounding, "Tool: Sounding"),
+            (MapTool::Chase, "Tool: Set chase location"),
+            (MapTool::Climatology, "Tool: Tornado climatology"),
+        ] {
+            out.push(PaletteEntry {
+                label: label.to_string(),
+                category: "Tools",
+                action: PaletteAction::Tool(t),
+                on: Some(tool == t),
+            });
+        }
+        for (w, label) in [
+            (W::Site, "Radar site…"),
+            (W::Settings, "Settings…"),
+            (W::Markers, "Location markers…"),
+            (W::Placefiles, "Placefile manager…"),
+            (W::LayerManager, "Layer manager…"),
+            (W::Palettes, "Color-table editor…"),
+            (W::Events, "Event library…"),
+            (W::Digest, "Storm digest…"),
+            (W::Afd, "Forecast discussion (AFD)…"),
+            (W::Cappi, "CAPPI slice…"),
+            (W::Volume3d, "3D volume…"),
+            (W::Climatology, "Tornado climatology…"),
+            (W::Wizard, "Setup wizard…"),
+            (W::Toolbox, "Advanced toolbox"),
+        ] {
+            let on = (w == W::Toolbox).then_some(self.show_toolbox);
+            out.push(PaletteEntry {
+                label: label.to_string(),
+                category: "Tools",
+                action: PaletteAction::OpenWindow(w),
+                on,
+            });
+        }
+        let panes = self.views.len();
+        for n in [1usize, 2, 4] {
+            out.push(PaletteEntry {
+                label: format!("{n} pane{}", if n == 1 { "" } else { "s" }),
+                category: "Tools",
+                action: PaletteAction::SetPanes(n),
+                on: Some(panes == n),
+            });
+        }
+        out.push(PaletteEntry { label: "Reload".into(), category: "Tools", action: PaletteAction::Reload, on: None });
+        out.push(PaletteEntry {
+            label: "Instant replay (DVR)".into(),
+            category: "Tools",
+            action: PaletteAction::InstantReplay,
+            on: None,
+        });
+        out.push(PaletteEntry {
+            label: "Jump to live".into(),
+            category: "Tools",
+            action: PaletteAction::GoLive,
+            on: None,
+        });
+        out
+    }
+
+    /// Run one registry action. Every arm routes through the same handler the toolbox uses.
+    pub(crate) fn apply_palette(&mut self, action: PaletteAction, ctx: &egui::Context) {
+        use AppWindow as W;
+        match action {
+            PaletteAction::SetMoment(m, srv) => {
+                let v = &mut self.views[self.active];
+                v.moment = m;
+                if m == Moment::Velocity {
+                    v.srv = srv;
+                }
+            }
+            PaletteAction::ToggleField(layer) => {
+                if let Some(s) = self.fields.get_mut(&layer) {
+                    s.show = !s.show;
+                }
+            }
+            PaletteAction::ToggleOverlay(t) => {
+                let f = self.overlay_flag(t);
+                *f = !*f;
+                // These feed the assembled feature set rather than a painter flag.
+                use OverlayToggle as T;
+                if matches!(t, T::Tropical | T::ProbSevere | T::Aviation | T::Alerts | T::Mds) {
+                    self.rebuild_overlays();
+                }
+            }
+            PaletteAction::SetContours(k) => self.contour_kind = k,
+            PaletteAction::Tool(t) => self.tool = t,
+            PaletteAction::SetPanes(n) => self.set_pane_count(n),
+            PaletteAction::CycleBasemap => self.apply_action(Action::CycleBasemap, ctx),
+            PaletteAction::Reload => self.trigger_reload(ctx),
+            PaletteAction::InstantReplay => self.instant_replay(),
+            PaletteAction::GoLive => self.views[self.active].timeline.go_head(),
+            PaletteAction::OpenWindow(w) => match w {
+                W::Site => {
+                    if self.site_dialog.is_none() {
+                        self.site_dialog = Some(Default::default());
+                    }
+                }
+                W::Settings => self.settings_window.open = true,
+                W::Markers => self.marker_window.open = true,
+                W::Placefiles => self.placefile_window.open = true,
+                W::Palettes => self.palette_editor.open = true,
+                W::Events => self.event_window.open = true,
+                W::Digest => {
+                    self.digest_window.open = true;
+                    self.generate_digest();
+                }
+                W::Afd => {
+                    self.afd_open = true;
+                    self.fetch_afd();
+                }
+                W::Cappi => {
+                    self.show_cappi = true;
+                    self.cappi_key = None; // force a re-slice on open
+                }
+                W::Volume3d => self.build_volume3d(),
+                W::Climatology => {
+                    self.climo_open = true;
+                    self.load_climatology();
+                }
+                W::LayerManager => self.layer_window_open = true,
+                W::Wizard => self.wizard.start(),
+                W::Toolbox => self.show_toolbox = !self.show_toolbox,
+            },
+        }
+    }
+
     fn open_alert_popup(&mut self, id: &str) {
         let mut seen = std::collections::HashSet::new();
         let cards: Vec<ui::warning_window::WarnCard> = self
@@ -2588,6 +3263,7 @@ mobile_sheet: mobile::MobileSheet::None,
                 }
             }
             Action::ToggleToolbox => self.show_toolbox = !self.show_toolbox,
+            Action::ToggleLayersPanel => self.layers_open = !self.layers_open,
             Action::InstantReplay => self.instant_replay(),
         }
     }
@@ -4000,8 +4676,10 @@ mobile_sheet: mobile::MobileSheet::None,
                 }
                 ui.checkbox(&mut v.show_radar, "Radar");
                 ui.checkbox(&mut v.show_legend, "Legend");
-                ui.checkbox(&mut self.show_toolbox, "Toolbox (F7)")
-                    .on_hover_text("Collapse the left panel for a full-width radar view");
+                ui.checkbox(&mut self.layers_open, "Layers panel (L)")
+                    .on_hover_text("Searchable list of every product, layer, and tool");
+                ui.checkbox(&mut self.show_toolbox, "Advanced toolbox (F7)")
+                    .on_hover_text("The full docked panel: every setting, expanded");
                 ui.separator();
                 if ui.checkbox(&mut self.obs_mode, "Streamer / OBS mode (F8)")
                     .on_hover_text("Hide all panels, leaving only the map — clean capture for streaming")
@@ -5190,6 +5868,21 @@ impl eframe::App for HookEchoApp {
             }
         }
 
+        // Floating map-first chrome (desktop): search pill, control column, timeline pill, layers
+        // panel, command palette — all over the map, no docked chrome required.
+        if !cfg!(target_os = "android") && !self.obs_mode {
+            if ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::K)) {
+                self.palette_open = !self.palette_open;
+                self.palette_query.clear();
+                self.palette_sel = 0;
+            }
+            self.search_pill(ctx);
+            self.control_column(ctx);
+            self.timeline_pill(ctx);
+            self.layers_panel(ctx);
+            self.command_palette(ctx);
+        }
+
         // First-run setup wizard.
         let active = self.active;
         if let Some(site) = ui::wizard::show(
@@ -5230,8 +5923,21 @@ impl eframe::App for HookEchoApp {
             })
             .collect();
         self.placefile_window.show(ctx, &mut self.settings, &pf_status);
-        // Drain any geocode results into a new marker (address search in the marker window).
+        // Drain geocode results: the search pill navigates, the marker window adds a marker.
         while let Ok(res) = self.geocode_rx.try_recv() {
+            if std::mem::take(&mut self.geocode_nav) {
+                match res {
+                    Ok((name, lat, lon)) => {
+                        let cam = &mut self.views[self.active].camera;
+                        cam.center = crate::render::mercator::lonlat_to_world(lon, lat);
+                        cam.zoom = cam.zoom.max(9.0);
+                        self.place_status = Some((name, Instant::now()));
+                        self.place_query.clear();
+                    }
+                    Err(e) => self.place_status = Some((e, Instant::now())),
+                }
+                continue;
+            }
             self.marker_window.searching = false;
             match res {
                 Ok((name, lat, lon)) => {

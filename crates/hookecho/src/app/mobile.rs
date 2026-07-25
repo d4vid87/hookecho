@@ -10,9 +10,9 @@ use wxdata::level2::Moment;
 use crate::ui::toolbox::ToolboxActions;
 
 /// RadarOmega's signature accents: orange for the active/live radar chrome, blue for actions.
-const OMEGA_ORANGE: Color32 = Color32::from_rgb(0xF2, 0xA0, 0x33);
-const OMEGA_BLUE: Color32 = Color32::from_rgb(0x2D, 0x9C, 0xDB);
-const OMEGA_GREEN: Color32 = Color32::from_rgb(0x3D, 0xD5, 0x6B);
+pub(crate) const OMEGA_ORANGE: Color32 = Color32::from_rgb(0xF2, 0xA0, 0x33);
+pub(crate) const OMEGA_BLUE: Color32 = Color32::from_rgb(0x2D, 0x9C, 0xDB);
+pub(crate) const OMEGA_GREEN: Color32 = Color32::from_rgb(0x3D, 0xD5, 0x6B);
 /// Drawer navy (RadarOmega's menu background).
 const DRAWER_BG: Color32 = Color32::from_rgb(0x0E, 0x18, 0x28);
 /// RadarOmega's blue brand title color.
@@ -28,6 +28,8 @@ pub(crate) enum MobileSheet {
     Products,
     Capture,
     Tools,
+    /// Searchable layer picker — the same body as the desktop Layers panel.
+    QuickLayers,
 }
 
 /// One alert row, owned so a drawer can list + fly to it without borrowing `self`.
@@ -42,7 +44,7 @@ struct MAlert {
 }
 
 /// Translucent near-black card used by the floating bars.
-fn glass(alpha: u8) -> Frame {
+pub(crate) fn glass(alpha: u8) -> Frame {
     Frame::new()
         .fill(Color32::from_rgba_unmultiplied(12, 14, 18, alpha))
         .corner_radius(18.0)
@@ -51,7 +53,7 @@ fn glass(alpha: u8) -> Frame {
 }
 
 /// A ~44px rounded-square chrome button holding one Phosphor glyph.
-fn square_btn(ui: &mut egui::Ui, glyph: &str, active: bool, accent: Color32) -> egui::Response {
+pub(crate) fn square_btn(ui: &mut egui::Ui, glyph: &str, active: bool, accent: Color32) -> egui::Response {
     let (fg, bg) = if active {
         (Color32::BLACK, accent)
     } else {
@@ -334,10 +336,10 @@ impl super::HookEchoApp {
                     ui.horizontal(|ui| {
                         use super::MapTool;
                         ui.set_width(cwi);
-                        // Zero the inter-slot spacing: with 9 slots the accumulated item_spacing
-                        // overflowed the row and bunched the last two icons. Even slots, no gaps.
+                        // Zero the inter-slot spacing: with 9+ slots the accumulated item_spacing
+                        // overflowed the row and bunched the last icons. Even slots, no gaps.
                         ui.spacing_mut().item_spacing.x = 0.0;
-                        let n = 9.0;
+                        let n = 10.0;
                         let iw = cwi / n;
                         let tool = self.tool;
                         let slot = |ui: &mut egui::Ui, glyph: &str, on: bool| -> bool {
@@ -379,6 +381,13 @@ impl super::HookEchoApp {
                         }
                         if slot(ui, ph::TARGET, self.show_range_rings) {
                             self.show_range_rings = !self.show_range_rings;
+                        }
+                        if slot(ui, ph::STACK, self.mobile_sheet == MobileSheet::QuickLayers) {
+                            self.mobile_sheet = if self.mobile_sheet == MobileSheet::QuickLayers {
+                                MobileSheet::None
+                            } else {
+                                MobileSheet::QuickLayers
+                            };
                         }
                         if slot(ui, ph::PENCIL_SIMPLE, self.mobile_sheet == MobileSheet::Tools) {
                             self.mobile_sheet = if self.mobile_sheet == MobileSheet::Tools {
@@ -423,6 +432,7 @@ impl super::HookEchoApp {
             MobileSheet::Products => self.mobile_products(ctx, content, vr, cur_moment, srv, n_tilt, cur_tilt, cur_angle),
             MobileSheet::Capture => self.mobile_capture(ctx, content, vr),
             MobileSheet::Tools => self.mobile_tools_sheet(ctx, content, vr),
+            MobileSheet::QuickLayers => self.mobile_layers_sheet(ctx, content, vr),
             MobileSheet::None => {}
         }
 
@@ -739,6 +749,46 @@ impl super::HookEchoApp {
                         });
                     });
             });
+    }
+
+    /// Quick-layers sheet: the searchable layer registry in a bottom sheet (the phone's
+    /// equivalent of the desktop Layers panel).
+    fn mobile_layers_sheet(&mut self, ctx: &egui::Context, content: Rect, vr: Rect) {
+        let sheet = Rect::from_min_size(pos2(content.left(), content.center().y - 40.0), vec2(content.width(), content.height() * 0.6));
+        self.mobile_scrim(ctx, vr, sheet);
+        let accent = crate::theme::accent(self.settings.theme);
+        let entries = self.palette_entries();
+        let mut query = std::mem::take(&mut self.layers_query);
+        let (mut chosen, mut close) = (None, false);
+        egui::Area::new(Id::new("m_layers"))
+            .order(egui::Order::Foreground)
+            .anchor(Align2::CENTER_BOTTOM, vec2(0.0, -8.0))
+            .show(ctx, |ui| {
+                Frame::new()
+                    .fill(Color32::from_rgb(12, 15, 20))
+                    .corner_radius(16.0)
+                    .stroke(Stroke::new(1.0, Color32::from_rgba_unmultiplied(255, 255, 255, 18)))
+                    .inner_margin(Margin::symmetric(14, 12))
+                    .show(ui, |ui| {
+                        ui.set_width(content.width() - 28.0);
+                        ui.horizontal(|ui| {
+                            ui.label(RichText::new("Layers").size(16.0).strong().color(accent));
+                            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                                close = square_btn(ui, ph::X, false, OMEGA_ORANGE).clicked();
+                            });
+                        });
+                        ui.separator();
+                        chosen = crate::ui::layers_panel::body(ui, &entries, &mut query, accent, content.height() * 0.5);
+                    });
+            });
+        self.layers_query = query;
+        if let Some(a) = chosen {
+            let ctx = ctx.clone();
+            self.apply_palette(a, &ctx);
+        }
+        if close {
+            self.mobile_sheet = MobileSheet::None;
+        }
     }
 
     /// Bottom "more tools" sheet (analysis + capture grid) driven by the pencil dock icon.
