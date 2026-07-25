@@ -22,6 +22,10 @@ intelligence — on Windows, Linux, and Android.
   ALSA/Wayland/GTK dev headers — see `.github/workflows/ci.yml`). Android builds
   via `android/build.sh` (NDK + `cargo-ndk`).
 
+Versioned `v*` releases are the stable channel. Every push to `main` also
+refreshes a [`latest`](../../releases/tag/latest) rolling prerelease carrying the
+same five artifacts, if you want the newest work without waiting for a tag.
+
 First launch opens a setup wizard: pick your home radar site, a theme (13 built
 in), and how warnings should reach you (chime and/or [ntfy.sh](https://ntfy.sh)
 push to your phone). After that, three one-time callouts point at the controls
