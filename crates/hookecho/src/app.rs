@@ -2878,27 +2878,12 @@ impl HookEchoApp {
             let v = &self.views[self.active];
             (v.moment, v.srv)
         };
-        for (m, srv, label) in [
-            (Moment::Reflectivity, false, "Reflectivity"),
-            (Moment::Velocity, false, "Velocity"),
-            (Moment::Velocity, true, "Storm-Relative Velocity"),
-            (Moment::SpectrumWidth, false, "Spectrum Width"),
-            (
-                Moment::CorrelationCoefficient,
-                false,
-                "Correlation Coefficient (CC)",
-            ),
-            (
-                Moment::DifferentialReflectivity,
-                false,
-                "Differential Reflectivity (ZDR)",
-            ),
-            (
-                Moment::DifferentialPhase,
-                false,
-                "Specific Differential Phase (KDP)",
-            ),
-        ] {
+        // Every product, plus the storm-relative variant of velocity.
+        let rows = crate::products::PRODUCTS
+            .iter()
+            .map(|p| (p.moment, false, p.name))
+            .chain([(Moment::Velocity, true, "Storm-Relative Velocity")]);
+        for (m, srv, label) in rows {
             let on = cur_moment == m && (m != Moment::Velocity || cur_srv == srv);
             push(label, "Radar", PaletteAction::SetMoment(m, srv), Some(on));
         }

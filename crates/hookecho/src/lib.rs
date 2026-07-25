@@ -21,6 +21,7 @@ pub mod loopexport;
 pub mod overlay_build;
 pub mod paths;
 pub mod platform;
+pub mod products;
 pub mod render;
 pub mod render3d;
 pub mod settings;

@@ -581,8 +581,9 @@ fn level2_section(
     actions: &mut ToolboxActions,
 ) {
     ui.horizontal_wrapped(|ui| {
-        for m in Moment::ALL {
-            ui.selectable_value(&mut view.moment, m, m.short_name());
+        for p in &crate::products::PRODUCTS {
+            ui.selectable_value(&mut view.moment, p.moment, p.short)
+                .on_hover_text(format!("{} — {}", p.name, p.blurb));
         }
     });
 

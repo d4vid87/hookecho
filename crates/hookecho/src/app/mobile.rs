@@ -59,19 +59,6 @@ fn dock_icon(ui: &mut egui::Ui, glyph: &str, active: bool) -> egui::Response {
     )
 }
 
-/// RadarOmega product label for a moment (+ storm-relative flag).
-fn omega_product_name(m: Moment, srv: bool) -> &'static str {
-    match m {
-        Moment::Reflectivity => "Hi-Res Reflectivity",
-        Moment::Velocity if srv => "Hi-Res Storm Relative Velocity",
-        Moment::Velocity => "Hi-Res Velocity",
-        Moment::SpectrumWidth => "Hi-Res Spectrum Width",
-        Moment::DifferentialReflectivity => "Hi-Res Differential Reflectivity",
-        Moment::DifferentialPhase => "Specific Differential Phase",
-        Moment::CorrelationCoefficient => "Hi-Res Correlation Coefficient",
-    }
-}
-
 /// Paint the active product's color table as a full-width gradient strip (the top scale bar).
 fn paint_colorbar(
     painter: &egui::Painter,
@@ -352,7 +339,7 @@ impl super::HookEchoApp {
                         }
                         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                             let prod = egui::Button::new(
-                                RichText::new(omega_product_name(cur_moment, srv))
+                                RichText::new(crate::products::name(cur_moment, srv))
                                     .size(14.0)
                                     .strong()
                                     .color(OMEGA_ORANGE),
