@@ -2,14 +2,15 @@
 //!
 //! Placefiles are a plain-text overlay format (lines/polygons/text/icons at lat,lon) used by
 //! the spotter/warning community. We support the common drawing statements: `Color`,
-//! `Threshold`, `Line`, `Polygon`, `Text`, `Icon`/`Place`, `TimeRange`, plus `Title` and
-//! `RefreshSeconds`. `Object` (relative/pixel coords), `Triangles`, `Image`, and icon sheets
-//! are parsed-and-skipped for now.
+//! `Threshold`, `Line`, `Polygon`, `Text`, `Icon`/`Place`, `IconFile`, `TimeRange`, plus `Title`
+//! and `RefreshSeconds`. `Object` (relative/pixel coords), `Triangles`, and `Image` are
+//! parsed-and-skipped for now.
 //!
-//! `// ponytail: Object/Triangles/Image + IconFile PNG sheets deferred — the 90% case is
-//! colored lines/polygons + text labels; add the rest when a real placefile needs them.`
+//! `// ponytail: Object/Triangles/Image deferred — the 90% case is colored lines/polygons,
+//! text labels, and icon sheets; add the rest when a real placefile needs them.`
 
 use chrono::{DateTime, Utc};
+use std::collections::HashMap;
 
 /// A parsed placefile: metadata plus a flat list of drawable items.
 #[derive(Debug, Clone, Default)]
@@ -18,6 +19,20 @@ pub struct Placefile {
     /// Seconds between refetches (0 = static).
     pub refresh_secs: u32,
     pub items: Vec<PlaceItem>,
+    /// Declared icon sheets by file number, referenced by [`PlaceKind::Icon::sheet`].
+    pub icon_files: HashMap<u32, IconSheet>,
+}
+
+/// An `IconFile:` declaration — one PNG holding a row/column grid of same-size icons.
+#[derive(Debug, Clone, PartialEq)]
+pub struct IconSheet {
+    /// Absolute URL of the sheet image (relative paths are resolved against the placefile's URL).
+    pub url: String,
+    pub icon_w: u32,
+    pub icon_h: u32,
+    /// Hot spot inside one icon, in pixels — the point that lands on the coordinate.
+    pub hot_x: u32,
+    pub hot_y: u32,
 }
 
 /// One drawable, with the display gates that were in effect when it was declared.
@@ -39,14 +54,25 @@ pub enum PlaceKind {
     Polygon { color: [u8; 4], rings: Vec<Vec<[f64; 2]>> },
     /// A text label at `[lon, lat]` with hover text.
     Text { color: [u8; 4], pos: [f64; 2], text: String, hover: String },
-    /// A point marker at `[lon, lat]` (icon sheets not yet rendered) with hover text.
-    Icon { color: [u8; 4], pos: [f64; 2], hover: String },
+    /// A point marker at `[lon, lat]` with hover text. `sheet` is `(file number, icon number)`
+    /// into [`Placefile::icon_files`] when the line referenced a sheet; without one (or before
+    /// the image loads) the renderer falls back to a plain marker. `angle` rotates the icon
+    /// clockwise in degrees.
+    Icon { color: [u8; 4], pos: [f64; 2], angle: f32, sheet: Option<(u32, u32)>, hover: String },
 }
 
 /// Fetch and parse a placefile from `url`.
 pub async fn fetch(http: &reqwest::Client, url: &str) -> anyhow::Result<Placefile> {
     let text = http.get(url).send().await?.error_for_status()?.text().await?;
-    Ok(parse(&text))
+    let mut pf = parse(&text);
+    // Sheet paths are usually relative to the placefile itself.
+    let base = url.rsplit_once('/').map(|(b, _)| b).unwrap_or("");
+    for sheet in pf.icon_files.values_mut() {
+        if !sheet.url.starts_with("http") && !base.is_empty() {
+            sheet.url = format!("{base}/{}", sheet.url.trim_start_matches("./"));
+        }
+    }
+    Ok(pf)
 }
 
 /// Strip a trailing `;` comment (not inside quotes) and trim.
@@ -200,13 +226,38 @@ pub fn parse(text: &str) -> Placefile {
                     }
                 }
             }
+            "iconfile" => {
+                // `IconFile: fileNumber, iconWidth, iconHeight, hotX, hotY, fileName`.
+                let f: Vec<&str> = rest.split(',').map(str::trim).collect();
+                if let (Some(num), true) = (f.first().and_then(|t| t.parse::<u32>().ok()), f.len() >= 6) {
+                    let n = |i: usize| f[i].parse::<u32>().unwrap_or(0);
+                    let url = f[5..].join(",").trim().trim_matches('"').to_string();
+                    if n(1) > 0 && n(2) > 0 && !url.is_empty() {
+                        pf.icon_files.insert(
+                            num,
+                            IconSheet { url, icon_w: n(1), icon_h: n(2), hot_x: n(3), hot_y: n(4) },
+                        );
+                    }
+                }
+            }
             "icon" | "place" => {
+                // `Icon: lat, lon, angle, fileNumber, iconNumber [, "hover"]`. Older files stop
+                // after the coordinate, so everything past it is optional.
                 if let Some(pos) = parse_coord(rest) {
+                    let f: Vec<&str> = rest.split(',').map(str::trim).collect();
+                    let num = |i: usize| f.get(i).and_then(|t| t.parse::<f32>().ok());
+                    let angle = num(2).unwrap_or(0.0);
+                    let sheet = match (num(3), num(4)) {
+                        (Some(file), Some(icon)) if file >= 0.0 && icon >= 0.0 => {
+                            Some((file as u32, icon as u32))
+                        }
+                        _ => None,
+                    };
                     let hover = quoted(rest).unwrap_or_default();
                     pf.items.push(PlaceItem {
                         threshold_nmi: threshold,
                         time: pending_time.take(),
-                        kind: PlaceKind::Icon { color, pos, hover },
+                        kind: PlaceKind::Icon { color, pos, angle, sheet, hover },
                     });
                 }
             }
@@ -221,7 +272,7 @@ pub fn parse(text: &str) -> Placefile {
                 }
                 pending_time = None;
             }
-            _ => {} // Font, IconFile, Image, etc. — ignored.
+            _ => {} // Font, Image, etc. — ignored.
         }
     }
     pf
@@ -284,6 +335,30 @@ Icon: 34.0, -98.0, 0, 1, 5, "marker"
             k => panic!("expected text, got {k:?}"),
         }
         assert!(matches!(pf.items[3].kind, PlaceKind::Icon { .. }));
+    }
+
+    #[test]
+    fn parses_icon_sheets() {
+        let src = r#"
+IconFile: 1, 32, 32, 16, 31, "https://example.com/spotters.png"
+Icon: 35.0, -97.0, 135, 1, 3, "spotter facing SE"
+Icon: 34.0, -98.0, 0, 0, 0
+"#;
+        let pf = parse(src);
+        let sheet = pf.icon_files.get(&1).expect("sheet 1 declared");
+        assert_eq!(sheet.icon_w, 32);
+        assert_eq!(sheet.hot_y, 31);
+        assert_eq!(sheet.url, "https://example.com/spotters.png");
+        match &pf.items[0].kind {
+            PlaceKind::Icon { angle, sheet, hover, .. } => {
+                assert_eq!(*angle, 135.0);
+                assert_eq!(*sheet, Some((1, 3)));
+                assert_eq!(hover, "spotter facing SE");
+            }
+            k => panic!("expected icon, got {k:?}"),
+        }
+        // A no-hover icon still parses, and file 0 is a legitimate reference.
+        assert!(matches!(pf.items[1].kind, PlaceKind::Icon { sheet: Some((0, 0)), .. }));
     }
 
     #[test]

@@ -13,7 +13,7 @@ use tokio::runtime::Handle;
 
 // Browser-prefixed so imagery hosts (e.g. Esri) that 403 bare library UAs still serve tiles,
 // while still identifying the app.
-const USER_AGENT: &str = "Mozilla/5.0 (compatible; hookecho/0.0; +github.com/d4vid87/hookecho)";
+pub(crate) const USER_AGENT: &str = "Mozilla/5.0 (compatible; hookecho/0.0; +github.com/d4vid87/hookecho)";
 
 /// Which provider (if any) a style needs an API key for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

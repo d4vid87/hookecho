@@ -487,6 +487,23 @@ pub(crate) enum PaletteAction {
     GoLive,
 }
 
+/// A placefile label/marker the egui painter draws over the map.
+pub(crate) struct PlaceLabel {
+    pub color: egui::Color32,
+    pub pos: [f64; 2],
+    pub hover: String,
+    pub kind: PlaceLabelKind,
+}
+
+/// What a [`PlaceLabel`] draws.
+pub(crate) enum PlaceLabelKind {
+    Text(String),
+    /// An icon with no usable sheet (none declared, or the image hasn't loaded): ring + dot.
+    Marker,
+    /// One cell of a loaded icon sheet, rotated `angle` degrees clockwise.
+    Sprite { tex: egui::TextureId, uv: egui::Rect, size: egui::Vec2, hot: egui::Vec2, angle: f32 },
+}
+
 /// A registry row: what it's called, where it lives, what it does, and (for toggles) its state.
 pub(crate) struct PaletteEntry {
     pub label: String,
@@ -820,6 +837,11 @@ pub struct HookEchoApp {
     geocode_nav: bool,
     /// Layer manager window (per-placefile enable/order/opacity).
     layer_window_open: bool,
+    /// Placefile icon-sheet textures by URL. `None` = fetch in flight or failed (negative-cached
+    /// so a broken sheet isn't retried every frame), same idiom as `marker_icon_tex`.
+    pf_icon_tex: std::collections::HashMap<String, Option<egui::TextureHandle>>,
+    pf_icon_rx: Receiver<(String, egui::ColorImage)>,
+    pf_icon_tx: Sender<(String, egui::ColorImage)>,
     /// Android only: which slide-up sheet the mobile chrome is showing (see `app::mobile`).
     mobile_sheet: mobile::MobileSheet,
     /// Android: hide all floating chrome to view the whole radar (toggled by the eye button).
@@ -949,6 +971,7 @@ impl HookEchoApp {
         let (msg_tx, msg_rx) = std::sync::mpsc::channel();
         let (overlay_tx, overlay_rx) = std::sync::mpsc::channel();
         let (geocode_tx, geocode_rx) = std::sync::mpsc::channel();
+        let (pf_icon_tx, pf_icon_rx) = std::sync::mpsc::channel();
         let http = reqwest::Client::new();
 
         // Open on the saved startup view if set (and its site still resolves), else the default site.
@@ -1129,6 +1152,9 @@ paste_target: None,
             place_status: None,
             geocode_nav: false,
             layer_window_open: false,
+            pf_icon_tex: std::collections::HashMap::new(),
+            pf_icon_rx,
+            pf_icon_tx,
             mobile_sheet: mobile::MobileSheet::None,
             mobile_chrome_hidden: false,
             show_spotters: false,
@@ -3157,12 +3183,17 @@ paste_target: None,
         (world_h * 40075.017 * coslat / 1.852) as f32
     }
 
-    /// Placefile items currently visible (enabled, zoom threshold met, within time range).
-    fn visible_placefile_items(&self) -> Vec<&wxdata::placefile::PlaceItem> {
+    /// Placefile items currently visible (enabled, zoom threshold met, within time range), as
+    /// `(item, opacity, loaded-placefile index)`. Iterated in `settings.placefiles` order, which
+    /// is the paint order the Layer Manager reorders.
+    fn visible_placefile_items(&self) -> Vec<(&wxdata::placefile::PlaceItem, f32, usize)> {
         let range = self.view_range_nmi();
         let now = Utc::now();
         let mut out = Vec::new();
-        for lp in &self.placefiles {
+        for cfg in &self.settings.placefiles {
+            let Some((li, lp)) = self.placefiles.iter().enumerate().find(|(_, lp)| lp.url == cfg.url) else {
+                continue;
+            };
             if !lp.enabled {
                 continue;
             }
@@ -3175,28 +3206,97 @@ paste_target: None,
                         continue;
                     }
                 }
-                out.push(it);
+                out.push((it, cfg.opacity, li));
             }
         }
         out
     }
 
-    /// Owned text/icon labels for the visible placefile items (drawn by the egui painter).
-    /// `(color, [lon,lat], text, hover, is_icon)`.
-    fn placefile_labels(&self) -> Vec<(egui::Color32, [f64; 2], String, String, bool)> {
+    /// Owned labels/markers for the visible placefile items (drawn by the egui painter).
+    /// Icons resolve their sheet cell here, so the painter just blits a quad.
+    fn placefile_labels(&self) -> Vec<PlaceLabel> {
         use wxdata::placefile::PlaceKind;
         self.visible_placefile_items()
             .iter()
-            .filter_map(|it| match &it.kind {
-                PlaceKind::Text { color, pos, text, hover } => {
-                    Some((rgba32(*color), *pos, text.clone(), hover.clone(), false))
-                }
-                PlaceKind::Icon { color, pos, hover } => {
-                    Some((rgba32(*color), *pos, String::new(), hover.clone(), true))
-                }
-                _ => None,
+            .filter_map(|(it, opacity, li)| {
+                let fade = |c: [u8; 4]| rgba32(c).gamma_multiply(*opacity);
+                Some(match &it.kind {
+                    PlaceKind::Text { color, pos, text, hover } => PlaceLabel {
+                        color: fade(*color),
+                        pos: *pos,
+                        hover: hover.clone(),
+                        kind: PlaceLabelKind::Text(text.clone()),
+                    },
+                    PlaceKind::Icon { color, pos, angle, sheet, hover } => PlaceLabel {
+                        color: fade(*color),
+                        pos: *pos,
+                        hover: hover.clone(),
+                        kind: self.sprite_for(*li, *sheet, *angle).unwrap_or(PlaceLabelKind::Marker),
+                    },
+                    _ => return None,
+                })
             })
             .collect()
+    }
+
+    /// Resolve an icon's `(file, index)` against the placefile's sheets and the loaded textures.
+    /// `None` whenever anything is missing — the caller falls back to a plain marker.
+    fn sprite_for(&self, li: usize, sheet: Option<(u32, u32)>, angle: f32) -> Option<PlaceLabelKind> {
+        let (file, index) = sheet?;
+        let sh = self.placefiles.get(li)?.pf.icon_files.get(&file)?;
+        let tex = self.pf_icon_tex.get(&sh.url)?.as_ref()?;
+        let [tw, th] = tex.size();
+        let (cols, rows) = ((tw as u32 / sh.icon_w).max(1), (th as u32 / sh.icon_h).max(1));
+        // Icon numbering is 1-based, left to right then top to bottom.
+        let i = index.saturating_sub(1);
+        if i >= cols * rows {
+            return None;
+        }
+        let (cx, cy) = (i % cols, i / cols);
+        let (u0, v0) = (cx * sh.icon_w, cy * sh.icon_h);
+        let uv = egui::Rect::from_min_max(
+            egui::pos2(u0 as f32 / tw as f32, v0 as f32 / th as f32),
+            egui::pos2((u0 + sh.icon_w) as f32 / tw as f32, (v0 + sh.icon_h) as f32 / th as f32),
+        );
+        Some(PlaceLabelKind::Sprite {
+            tex: tex.id(),
+            uv,
+            size: egui::vec2(sh.icon_w as f32, sh.icon_h as f32),
+            hot: egui::vec2(sh.hot_x as f32, sh.hot_y as f32),
+            angle,
+        })
+    }
+
+    /// Fetch + decode any icon sheet a loaded placefile references but we don't have yet, and
+    /// upload arrivals. `// ponytail: no disk cache — sheets are a few KB and refetch on launch.`
+    fn sync_pf_icons(&mut self, ctx: &egui::Context) {
+        while let Ok((url, image)) = self.pf_icon_rx.try_recv() {
+            let tex = ctx.load_texture(format!("pficon:{url}"), image, egui::TextureOptions::LINEAR);
+            self.pf_icon_tex.insert(url, Some(tex));
+        }
+        let wanted: Vec<String> = self
+            .placefiles
+            .iter()
+            .filter(|lp| lp.enabled)
+            .flat_map(|lp| lp.pf.icon_files.values().map(|s| s.url.clone()))
+            .filter(|u| !self.pf_icon_tex.contains_key(u))
+            .collect();
+        for url in wanted {
+            // Insert the negative entry first: it doubles as the in-flight guard.
+            self.pf_icon_tex.insert(url.clone(), None);
+            let http = self.http.clone();
+            let tx = self.pf_icon_tx.clone();
+            let ctx2 = ctx.clone();
+            self._rt.spawn(async move {
+                match fetch_icon_sheet(&http, &url).await {
+                    Ok(image) => {
+                        let _ = tx.send((url, image));
+                        ctx2.request_repaint();
+                    }
+                    Err(e) => log::warn!("icon sheet {url} failed: {e}"),
+                }
+            });
+        }
     }
 
     /// Re-tessellate the overlay when its set or the zoom bucket changed.
@@ -3210,7 +3310,9 @@ paste_target: None,
         let bucket = (zoom * 2.0).round() as i32;
         if self.overlay_gen != self.built_gen || bucket != self.built_zoom_bucket {
             let mut geom = overlay_build::build(&self.overlays, zoom);
-            overlay_build::append_placefiles(&mut geom, &items, zoom);
+            let pf: Vec<(&wxdata::placefile::PlaceItem, f32)> =
+                items.iter().map(|(it, op, _)| (*it, *op)).collect();
+            overlay_build::append_placefiles(&mut geom, &pf, zoom);
             self.overlay_ready = !geom.indices.is_empty();
             self.pending_overlay = Some(OverlayUpload { vertices: geom.vertices, indices: geom.indices });
             self.built_gen = self.overlay_gen;
@@ -3682,7 +3784,7 @@ paste_target: None,
         clear_tiles: bool,
         clear_vector: bool,
         first: bool,
-        placefile_labels: &[(egui::Color32, [f64; 2], String, String, bool)],
+        placefile_labels: &[PlaceLabel],
     ) {
         use crate::tiles::BasemapStyle;
         let vp = (prect.width(), prect.height());
@@ -4630,23 +4732,32 @@ paste_target: None,
         }
 
         // Placefile labels/icons.
-        for (color, [lon, lat], text, hover, is_icon) in placefile_labels {
-            let w = crate::render::mercator::lonlat_to_world(*lon, *lat);
+        for label in placefile_labels {
+            let [lon, lat] = label.pos;
+            let w = crate::render::mercator::lonlat_to_world(lon, lat);
             let (sx, sy) = cam.world_to_screen(w, vp);
             let p = egui::pos2(prect.left() + sx, prect.top() + sy);
             if !prect.contains(p) {
                 continue;
             }
-            if *is_icon {
-                painter.circle_stroke(p, 5.0, egui::Stroke::new(1.5, *color));
-                painter.circle_filled(p, 1.5, *color);
-            } else {
-                painter.text(p, egui::Align2::CENTER_CENTER, text, egui::FontId::proportional(12.0), *color);
+            let mut hit_size = egui::vec2(16.0, 16.0);
+            match &label.kind {
+                PlaceLabelKind::Text(text) => {
+                    painter.text(p, egui::Align2::CENTER_CENTER, text, egui::FontId::proportional(12.0), label.color);
+                }
+                PlaceLabelKind::Marker => {
+                    painter.circle_stroke(p, 5.0, egui::Stroke::new(1.5, label.color));
+                    painter.circle_filled(p, 1.5, label.color);
+                }
+                PlaceLabelKind::Sprite { tex, uv, size, hot, angle } => {
+                    draw_sprite(&painter, *tex, *uv, p, *size, *hot, *angle, label.color);
+                    hit_size = *size;
+                }
             }
-            if !hover.is_empty() {
-                let hit = egui::Rect::from_center_size(p, egui::vec2(16.0, 16.0));
+            if !label.hover.is_empty() {
+                let hit = egui::Rect::from_center_size(p, hit_size);
                 if response.hover_pos().is_some_and(|hp| hit.contains(hp)) {
-                    response.clone().show_tooltip_text(hover);
+                    response.clone().show_tooltip_text(&label.hover);
                 }
             }
         }
@@ -5003,7 +5114,13 @@ paste_target: None,
                     self.palette_editor.open = true;
                     ui.close();
                 }
-                ui.add_enabled(false, egui::Button::new("Layer Manager (U7)"));
+                if ui.button("Layer Manager…")
+                    .on_hover_text("Placefile draw order, opacity, and on/off")
+                    .clicked()
+                {
+                    self.layer_window_open = true;
+                    ui.close();
+                }
                 ui.separator();
                 if ui.button("Save Screenshot…").clicked() {
                     if let Some(path) = crate::dialog::save_path("hookecho.png", "png") {
@@ -5631,6 +5748,55 @@ impl HookEchoApp {
 
 /// Marker color for a storm-cell kind (sRGB).
 /// `[r,g,b,a]` -> egui `Color32` (unmultiplied).
+/// Blit one icon-sheet cell centered on its hot spot, rotated `angle_deg` clockwise.
+/// A raw 4-vertex mesh because `Painter::image` can't rotate.
+#[allow(clippy::too_many_arguments)] // a params struct for one call site buys nothing
+fn draw_sprite(
+    painter: &egui::Painter,
+    tex: egui::TextureId,
+    uv: egui::Rect,
+    at: egui::Pos2,
+    size: egui::Vec2,
+    hot: egui::Vec2,
+    angle_deg: f32,
+    tint: egui::Color32,
+) {
+    let (sin, cos) = angle_deg.to_radians().sin_cos();
+    // Corner offsets relative to the hot spot, then rotated about it.
+    let corner = |dx: f32, dy: f32| {
+        let (x, y) = (dx - hot.x, dy - hot.y);
+        at + egui::vec2(x * cos - y * sin, x * sin + y * cos)
+    };
+    let mut mesh = egui::Mesh::with_texture(tex);
+    for (dx, dy, u, v) in [
+        (0.0, 0.0, uv.left(), uv.top()),
+        (size.x, 0.0, uv.right(), uv.top()),
+        (size.x, size.y, uv.right(), uv.bottom()),
+        (0.0, size.y, uv.left(), uv.bottom()),
+    ] {
+        mesh.vertices.push(egui::epaint::Vertex { pos: corner(dx, dy), uv: egui::pos2(u, v), color: tint });
+    }
+    mesh.add_triangle(0, 1, 2);
+    mesh.add_triangle(0, 2, 3);
+    painter.add(egui::Shape::mesh(mesh));
+}
+
+/// Download and decode a placefile icon sheet (PNG/GIF) into an egui image.
+async fn fetch_icon_sheet(http: &reqwest::Client, url: &str) -> anyhow::Result<egui::ColorImage> {
+    // Generic web hosts, so use the browser-ish UA the tile fetches already send.
+    let bytes = http
+        .get(url)
+        .header("User-Agent", crate::tiles::USER_AGENT)
+        .send()
+        .await?
+        .error_for_status()?
+        .bytes()
+        .await?;
+    let img = image::load_from_memory(&bytes)?.to_rgba8();
+    let (w, h) = img.dimensions();
+    Ok(egui::ColorImage::from_rgba_unmultiplied([w as usize, h as usize], img.as_raw()))
+}
+
 fn rgba32(c: [u8; 4]) -> egui::Color32 {
     egui::Color32::from_rgba_unmultiplied(c[0], c[1], c[2], c[3])
 }
@@ -5955,6 +6121,7 @@ impl eframe::App for HookEchoApp {
             }
         }
         self.sync_placefiles(ctx);
+        self.sync_pf_icons(ctx);
         for action in hotkeys::poll(ctx) {
             self.apply_action(action, ctx);
         }
@@ -6133,6 +6300,9 @@ impl eframe::App for HookEchoApp {
             })
             .collect();
         self.placefile_window.show(ctx, &mut self.settings, &pf_status);
+        if ui::layer_window::show(ctx, &mut self.layer_window_open, &mut self.settings) {
+            self.overlay_gen += 1; // paint order / opacity changed — re-tessellate
+        }
         // Drain geocode results: the search pill navigates, the marker window adds a marker.
         while let Ok(res) = self.geocode_rx.try_recv() {
             if std::mem::take(&mut self.geocode_nav) {

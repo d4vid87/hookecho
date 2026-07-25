@@ -79,13 +79,19 @@ pub fn build(features: &[GeoFeature], zoom: f64) -> OverlayGeom {
 }
 
 /// Append tessellated placefile line/polygon geometry to `geom` (text/icons are drawn by the
-/// egui painter). Items must be pre-filtered by threshold/time. Line widths honor `zoom`.
-pub fn append_placefiles(geom: &mut OverlayGeom, items: &[&PlaceItem], zoom: f64) {
+/// egui painter). Items must be pre-filtered by threshold/time, and come paired with their
+/// placefile's opacity (the Layer Manager's per-file dimmer). Line widths honor `zoom`.
+pub fn append_placefiles(geom: &mut OverlayGeom, items: &[(&PlaceItem, f32)], zoom: f64) {
     let mut fill_tess = FillTessellator::new();
     let mut stroke_tess = StrokeTessellator::new();
     let px = |w: f32| (w as f64 / (256.0 * 2f64.powf(zoom))) as f32;
 
-    for item in items {
+    for (item, opacity) in items {
+        let color = |c: [u8; 4]| {
+            let mut c = color(c);
+            c[3] *= opacity;
+            c
+        };
         match &item.kind {
             PlaceKind::Line { color: col, width, pts } => {
                 let stroke = color(*col);

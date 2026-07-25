@@ -557,7 +557,7 @@ pub fn run_placefile(path: &str, out_path: &str) -> anyhow::Result<()> {
 
     let zoom = 8.0;
     let camera = Camera::at_lonlat(clon, clat, zoom);
-    let items: Vec<&wxdata::placefile::PlaceItem> = pf.items.iter().collect();
+    let items: Vec<(&wxdata::placefile::PlaceItem, f32)> = pf.items.iter().map(|i| (i, 1.0)).collect();
     let mut geom = overlay_build::OverlayGeom::default();
     overlay_build::append_placefiles(&mut geom, &items, zoom);
     println!("tessellated {} verts / {} indices", geom.vertices.len(), geom.indices.len());

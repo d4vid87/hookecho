@@ -228,11 +228,18 @@ pub struct StartView {
     pub zoom: f64,
 }
 
-/// A configured placefile overlay (URL + on/off), persisted across sessions.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// A configured placefile overlay (URL + on/off + opacity), persisted across sessions.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PlacefileConfig {
     pub url: String,
     pub enabled: bool,
+    /// Draw opacity 0..=1, set in the Layer Manager.
+    #[serde(default = "default_opacity")]
+    pub opacity: f32,
+}
+
+fn default_opacity() -> f32 {
+    1.0
 }
 
 /// A named location marker at a geographic point.
@@ -431,7 +438,7 @@ mod tests {
             palettes: BTreeMap::from([("REF".to_string(), "/tmp/foo.pal".to_string())]),
             velocity_unit: VelocityUnit::Mph,
             ui_scale: 1.2,
-            placefiles: vec![PlacefileConfig { url: "http://x/p.txt".to_string(), enabled: true }],
+            placefiles: vec![PlacefileConfig { url: "http://x/p.txt".to_string(), enabled: true, opacity: 1.0 }],
             markers: vec![Marker {
                 name: "Home".to_string(),
                 lat: 35.3,

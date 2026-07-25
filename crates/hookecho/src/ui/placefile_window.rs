@@ -70,6 +70,7 @@ impl PlacefileWindow {
                         settings.placefiles.push(PlacefileConfig {
                             url: self.new_url.trim().to_string(),
                             enabled: true,
+                            opacity: 1.0,
                         });
                         self.new_url.clear();
                     }
