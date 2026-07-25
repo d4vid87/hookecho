@@ -48,8 +48,8 @@ pub(crate) fn matches(entries: &[PaletteEntry], query: &str) -> Vec<usize> {
     hits.into_iter().map(|(_, i)| i).collect()
 }
 
-/// One 40 px full-width row: label left, state pill right. Buttons (not table rows) so the
-/// whole strip is a touch target on Android.
+/// One full-width row: name over a plain-English description, state pill right. Buttons (not
+/// table rows) so the whole strip is a touch target on Android.
 fn row(ui: &mut egui::Ui, e: &PaletteEntry, accent: Color32) -> bool {
     let on = e.on.unwrap_or(false);
     let (fg, bg) = if on {
@@ -60,10 +60,19 @@ fn row(ui: &mut egui::Ui, e: &PaletteEntry, accent: Color32) -> bool {
             Color32::from_rgba_unmultiplied(255, 255, 255, 10),
         )
     };
+    // The description is what makes "AzShear (0–2 km)" mean something; it rides under the name.
+    let text = if e.desc.is_empty() {
+        RichText::new(&e.label).size(14.0).color(fg)
+    } else {
+        RichText::new(format!("{}\n{}", e.label, e.desc))
+            .size(14.0)
+            .color(fg)
+    };
     let w = ui.available_width();
     let resp = ui.add(
-        egui::Button::new(RichText::new(&e.label).size(14.0).color(fg))
-            .min_size(vec2(w, 40.0))
+        egui::Button::new(text)
+            .min_size(vec2(w, if e.desc.is_empty() { 40.0 } else { 48.0 }))
+            .wrap_mode(egui::TextWrapMode::Extend)
             .fill(bg)
             .corner_radius(10.0)
             .stroke(if on {
@@ -72,6 +81,11 @@ fn row(ui: &mut egui::Ui, e: &PaletteEntry, accent: Color32) -> bool {
                 Stroke::NONE
             }),
     );
+    let resp = if e.desc.is_empty() {
+        resp
+    } else {
+        resp.on_hover_text(e.desc)
+    };
     // State pill, drawn over the button's right edge (a nested layout inside a Button isn't a thing).
     if let Some(on) = e.on {
         let txt = if on { "ON" } else { "OFF" };
@@ -142,9 +156,31 @@ pub(crate) fn body(
                     ui.label(RichText::new(cat).size(13.0).strong().color(accent));
                 });
                 ui.add_space(3.0);
-                for i in in_cat {
+                // Everyday rows first; the long tail hides behind one expander per category so the
+                // panel reads as a short list instead of 81 flat rows. Nothing is removed — the
+                // expander and the search box both still reach every entry.
+                let expand_id = ui.id().with(("show_all", cat));
+                let show_all = ui.data(|d| d.get_temp::<bool>(expand_id).unwrap_or(false));
+                let total = in_cat.len();
+                let (shown, hidden): (Vec<usize>, Vec<usize>) = if show_all {
+                    (in_cat, Vec::new())
+                } else {
+                    in_cat.iter().copied().partition(|i| entries[*i].common)
+                };
+                for i in shown {
                     if row(ui, &entries[i], accent) {
                         chosen = Some(entries[i].action);
+                    }
+                    ui.add_space(4.0);
+                }
+                if !hidden.is_empty() || show_all {
+                    let label = if show_all {
+                        "Show less".to_string()
+                    } else {
+                        format!("Show all {total} ▾")
+                    };
+                    if ui.small_button(label).clicked() {
+                        ui.data_mut(|d| d.insert_temp(expand_id, !show_all));
                     }
                     ui.add_space(4.0);
                 }
@@ -156,6 +192,34 @@ pub(crate) fn body(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Tiering must never hide a row for good: the "Show all" expander and the search box both
+    /// read the same registry, so every non-common entry has to still be in it.
+    #[test]
+    fn every_entry_is_reachable_from_the_registry() {
+        let entries = [
+            PaletteEntry {
+                label: "Echo tops (L3)".into(),
+                category: "National",
+                action: PaletteAction::CycleBasemap,
+                on: None,
+                desc: "How tall the storm is",
+                common: false,
+            },
+            PaletteEntry {
+                label: "MRMS Mosaic".into(),
+                category: "National",
+                action: PaletteAction::CycleBasemap,
+                on: None,
+                desc: "Every radar stitched together",
+                common: true,
+            },
+        ];
+        // Empty query = the full list, common or not.
+        assert_eq!(matches(&entries, "").len(), entries.len());
+        // And an uncommon row is still findable by name.
+        assert_eq!(matches(&entries, "echo"), vec![0]);
+    }
 
     #[test]
     fn fuzzy_subsequence_and_ranking() {

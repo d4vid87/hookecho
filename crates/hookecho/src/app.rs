@@ -550,6 +550,10 @@ pub(crate) struct PaletteEntry {
     pub category: &'static str,
     pub action: PaletteAction,
     pub on: Option<bool>,
+    /// One line of plain English. Jargon labels ("AzShear (0–2 km)") mean nothing on their own.
+    pub desc: &'static str,
+    /// Shown before the "Show all" expander. Everything else is one click further in — never gone.
+    pub common: bool,
 }
 
 /// Refresh cadence (seconds) for a national field layer's product.
@@ -734,7 +738,7 @@ fn product_row(
 }
 
 /// How many buttons the right-edge control column shows — the badge lane stacks below them.
-const CONTROL_BUTTONS: usize = 6;
+const CONTROL_BUTTONS: usize = 5;
 
 pub struct HookEchoApp {
     _rt: Runtime,
@@ -2562,12 +2566,6 @@ impl HookEchoApp {
                             "Active alerts (A)",
                         ),
                         (
-                            ph::WRENCH,
-                            "tools",
-                            self.palette_open,
-                            "Search actions (Ctrl+K)",
-                        ),
-                        (
                             ph::SLIDERS,
                             "advanced",
                             self.show_toolbox,
@@ -2588,11 +2586,6 @@ impl HookEchoApp {
             Some("layers") => self.layers_open = !self.layers_open,
             Some("site") => self.apply_palette(PaletteAction::OpenWindow(AppWindow::Site), ctx),
             Some("alerts") => self.show_alert_panel = !self.show_alert_panel,
-            Some("tools") => {
-                self.palette_open = !self.palette_open;
-                self.palette_query.clear();
-                self.palette_sel = 0;
-            }
             Some("advanced") => self.show_toolbox = !self.show_toolbox,
             Some("settings") => self.settings_window.open = true,
             _ => {}
@@ -3005,12 +2998,14 @@ impl HookEchoApp {
         use AppWindow as W;
         use OverlayToggle as T;
         let mut out = Vec::new();
-        let mut push = |label: &str, category, action, on| {
+        let mut push = |label: &str, category, desc, common, action, on| {
             out.push(PaletteEntry {
                 label: label.to_string(),
                 category,
                 action,
                 on,
+                desc,
+                common,
             })
         };
 
@@ -3022,154 +3017,513 @@ impl HookEchoApp {
         // Every product, plus the storm-relative variant of velocity.
         let rows = crate::products::PRODUCTS
             .iter()
-            .map(|p| (p.moment, false, p.name))
-            .chain([(Moment::Velocity, true, "Storm-Relative Velocity")]);
-        for (m, srv, label) in rows {
+            .map(|p| (p.moment, false, p.name, p.blurb))
+            .chain([(
+                Moment::Velocity,
+                true,
+                "Storm-Relative Velocity",
+                "Velocity with the storm's own motion subtracted out",
+            )]);
+        for (m, srv, label, desc) in rows {
             let on = cur_moment == m && (m != Moment::Velocity || cur_srv == srv);
-            push(label, "Radar", PaletteAction::SetMoment(m, srv), Some(on));
+            push(
+                label,
+                "Radar",
+                desc,
+                true,
+                PaletteAction::SetMoment(m, srv),
+                Some(on),
+            );
         }
 
         // --- National / model grids. ---
-        for (layer, category, label) in [
-            (FL::Mrms, "National", "MRMS Mosaic"),
-            (FL::Rotation, "National", "Rotation tracks"),
-            (FL::Mesh, "National", "MESH hail"),
-            (FL::AzShear, "National", "AzShear (0–2 km)"),
-            (FL::Lightning, "National", "Lightning density"),
-            (FL::Qpe1h, "National", "QPE 1-hour"),
-            (FL::Qpe24h, "National", "QPE 24-hour"),
-            (FL::PrecipType, "National", "Precip type"),
-            (FL::FlashFlood, "National", "FLASH flood ARI"),
-            (FL::HailSwath, "National", "Hail swaths (24 h)"),
-            (FL::Vil, "National", "Digital VIL (L3)"),
-            (FL::EchoTops, "National", "Echo tops (L3)"),
-            (FL::Hca, "National", "Hydrometeor class (L3)"),
-            (FL::Hrrr, "Models", "HRRR future radar"),
-            (FL::Cape, "Models", "CAPE"),
-            (FL::Srh, "Models", "Storm-relative helicity"),
+        for (layer, category, label, desc, common) in [
+            (
+                FL::Mrms,
+                "National",
+                "MRMS Mosaic",
+                "Every radar in the country stitched into one picture",
+                true,
+            ),
+            (
+                FL::Rotation,
+                "National",
+                "Rotation tracks",
+                "Where rotation has passed over the last hour — the tornado-track map",
+                true,
+            ),
+            (
+                FL::Mesh,
+                "National",
+                "MESH hail",
+                "Estimated largest hail size each storm is producing",
+                true,
+            ),
+            (
+                FL::Lightning,
+                "National",
+                "Lightning density",
+                "How much lightning is striking, and where",
+                true,
+            ),
+            (
+                FL::AzShear,
+                "National",
+                "AzShear (0–2 km)",
+                "Low-level rotation strength, right now",
+                false,
+            ),
+            (
+                FL::Qpe1h,
+                "National",
+                "QPE 1-hour",
+                "How much rain has fallen in the last hour",
+                false,
+            ),
+            (
+                FL::Qpe24h,
+                "National",
+                "QPE 24-hour",
+                "How much rain has fallen in the last day",
+                false,
+            ),
+            (
+                FL::PrecipType,
+                "National",
+                "Precip type",
+                "Rain, snow, sleet or freezing rain at the surface",
+                false,
+            ),
+            (
+                FL::FlashFlood,
+                "National",
+                "FLASH flood ARI",
+                "How rare this much rain is here — flash-flood risk",
+                false,
+            ),
+            (
+                FL::HailSwath,
+                "National",
+                "Hail swaths (24 h)",
+                "Where hail has fallen over the past day",
+                false,
+            ),
+            (
+                FL::Vil,
+                "National",
+                "Digital VIL (L3)",
+                "How much water the storm is holding aloft",
+                false,
+            ),
+            (
+                FL::EchoTops,
+                "National",
+                "Echo tops (L3)",
+                "How tall the storm is",
+                false,
+            ),
+            (
+                FL::Hca,
+                "National",
+                "Hydrometeor class (L3)",
+                "What the radar thinks it's seeing: rain, hail, debris",
+                false,
+            ),
+            (
+                FL::Hrrr,
+                "Models",
+                "HRRR future radar",
+                "Forecast radar picture for the next 18 hours (not observed)",
+                true,
+            ),
+            (
+                FL::Cape,
+                "Models",
+                "CAPE",
+                "How much fuel the atmosphere has for storms",
+                false,
+            ),
+            (
+                FL::Srh,
+                "Models",
+                "Storm-relative helicity",
+                "How much spin the wind profile can feed a storm",
+                false,
+            ),
         ] {
             let on = self.fields.get(&layer).is_some_and(|s| s.show);
-            push(label, category, PaletteAction::ToggleField(layer), Some(on));
+            push(
+                label,
+                category,
+                desc,
+                common,
+                PaletteAction::ToggleField(layer),
+                Some(on),
+            );
         }
         for k in ContourKind::ALL {
             let label = format!("Contours: {}", k.label());
             let on = self.contour_kind == k;
-            out.push(PaletteEntry {
-                label,
-                category: "Models",
-                action: PaletteAction::SetContours(k),
-                on: Some(on),
-            });
+            push(
+                &label,
+                "Models",
+                "Draw this forecast field as labeled contour lines",
+                false,
+                PaletteAction::SetContours(k),
+                Some(on),
+            );
         }
 
         // --- Severe / obs / reference toggles. ---
-        for (t, category, label) in [
-            (T::Cells, "Severe", "Storm cells"),
-            (T::Tracks, "Severe", "SCIT forecast tracks"),
-            (T::ArrivalCones, "Severe", "Arrival-time cones"),
-            (T::Nowcast, "Severe", "Nowcast (echo extrapolation)"),
-            (T::Tds, "Severe", "TDS detection"),
-            (T::Couplets, "Severe", "Rotation couplets"),
-            (T::Alerts, "Severe", "NWS alerts"),
-            (T::Mds, "Severe", "Mesoscale discussions"),
-            (T::StormReports, "Severe", "Storm reports (LSR)"),
-            (T::ProbSevere, "Severe", "ProbSevere"),
-            (T::AlertPanel, "Severe", "Active alerts panel"),
-            (T::Metar, "Obs", "Surface obs (METAR)"),
-            (T::Gauges, "Obs", "River gauges (NWPS)"),
-            (T::Spotters, "Obs", "Spotter Network"),
-            (T::Sensors, "Obs", "Sensor dashboard"),
-            (T::Hodo, "Obs", "VAD hodograph"),
-            (T::Tropical, "Obs", "Tropical (NHC)"),
-            (T::Aviation, "Obs", "Aviation (SIGMET/AIRMET)"),
-            (T::RadarSites, "Reference", "Radar sites"),
-            (T::RangeRings, "Reference", "Range rings"),
-            (T::LinkCameras, "Reference", "Link pane cameras"),
+        for (t, category, label, desc, common) in [
+            (
+                T::Cells,
+                "Severe",
+                "Storm cells",
+                "Mark each storm the radar is tracking",
+                true,
+            ),
+            (
+                T::Alerts,
+                "Severe",
+                "NWS alerts",
+                "Official warning and watch polygons",
+                true,
+            ),
+            (
+                T::Couplets,
+                "Severe",
+                "Rotation couplets",
+                "Flag tight rotation that could produce a tornado",
+                true,
+            ),
+            (
+                T::Tds,
+                "Severe",
+                "TDS detection",
+                "Flag lofted debris — a tornado is likely on the ground",
+                true,
+            ),
+            (
+                T::StormReports,
+                "Severe",
+                "Storm reports (LSR)",
+                "What people on the ground actually reported today",
+                true,
+            ),
+            (
+                T::AlertPanel,
+                "Severe",
+                "Active alerts panel",
+                "Side list of every alert in view, worst first",
+                true,
+            ),
+            (
+                T::Tracks,
+                "Severe",
+                "SCIT forecast tracks",
+                "Where each tracked storm is projected to go",
+                false,
+            ),
+            (
+                T::ArrivalCones,
+                "Severe",
+                "Arrival-time cones",
+                "When a storm is expected to reach points downstream",
+                false,
+            ),
+            (
+                T::Nowcast,
+                "Severe",
+                "Nowcast (echo extrapolation)",
+                "Short-range radar forecast by sliding echoes forward",
+                false,
+            ),
+            (
+                T::Mds,
+                "Severe",
+                "Mesoscale discussions",
+                "SPC's notes on where watches may be issued next",
+                false,
+            ),
+            (
+                T::ProbSevere,
+                "Severe",
+                "ProbSevere",
+                "Per-storm probability of severe weather, from NOAA/CIMSS",
+                false,
+            ),
+            (
+                T::Metar,
+                "Obs",
+                "Surface obs (METAR)",
+                "Temperature, dewpoint and wind at airports",
+                true,
+            ),
+            (
+                T::Spotters,
+                "Obs",
+                "Spotter Network",
+                "Live positions of storm spotters near the radar",
+                true,
+            ),
+            (
+                T::Gauges,
+                "Obs",
+                "River gauges (NWPS)",
+                "River levels and flood stage",
+                false,
+            ),
+            (
+                T::Sensors,
+                "Obs",
+                "Sensor dashboard",
+                "Current conditions and 24-hour trends at the nearest station",
+                false,
+            ),
+            (
+                T::Hodo,
+                "Obs",
+                "VAD hodograph",
+                "How the wind turns with height above the radar",
+                false,
+            ),
+            (
+                T::Tropical,
+                "Obs",
+                "Tropical (NHC)",
+                "Hurricane tracks and forecast cones",
+                false,
+            ),
+            (
+                T::Aviation,
+                "Obs",
+                "Aviation (SIGMET/AIRMET)",
+                "Hazard areas for pilots: turbulence, icing, low ceilings",
+                false,
+            ),
+            (
+                T::RadarSites,
+                "Reference",
+                "Radar sites",
+                "Show every NEXRAD site; click one to switch radars",
+                true,
+            ),
+            (
+                T::RangeRings,
+                "Reference",
+                "Range rings",
+                "Distance rings around the radar, every 50 km",
+                true,
+            ),
+            (
+                T::LinkCameras,
+                "Reference",
+                "Link pane cameras",
+                "Pan and zoom every pane together",
+                false,
+            ),
         ] {
             let on = *self.overlay_flag(t);
-            out.push(PaletteEntry {
-                label: label.to_string(),
+            push(
+                label,
                 category,
-                action: PaletteAction::ToggleOverlay(t),
-                on: Some(on),
-            });
+                desc,
+                common,
+                PaletteAction::ToggleOverlay(t),
+                Some(on),
+            );
         }
-        out.push(PaletteEntry {
-            label: "Cycle basemap".into(),
-            category: "Reference",
-            action: PaletteAction::CycleBasemap,
-            on: None,
-        });
+        push(
+            "Cycle basemap",
+            "Reference",
+            "Switch the map underneath the radar",
+            true,
+            PaletteAction::CycleBasemap,
+            None,
+        );
 
         // --- Tools, windows, panes. ---
         let tool = self.tool;
-        for (t, label) in [
-            (MapTool::Interrogate, "Tool: Interrogate"),
-            (MapTool::Measure, "Tool: Measure"),
-            (MapTool::Marker, "Tool: Drop marker"),
-            (MapTool::CrossSection, "Tool: Cross-section"),
-            (MapTool::Sounding, "Tool: Sounding"),
-            (MapTool::Chase, "Tool: Set chase location"),
-            (MapTool::Climatology, "Tool: Tornado climatology"),
+        for (t, label, desc, common) in [
+            (
+                MapTool::Interrogate,
+                "Tool: Interrogate",
+                "Click anywhere to read the exact radar value",
+                true,
+            ),
+            (
+                MapTool::Measure,
+                "Tool: Measure",
+                "Drag to measure distance and bearing",
+                true,
+            ),
+            (
+                MapTool::Marker,
+                "Tool: Drop marker",
+                "Save a place — home, work, where you're headed",
+                true,
+            ),
+            (
+                MapTool::Sounding,
+                "Tool: Sounding",
+                "Click a point for the forecast vertical profile",
+                false,
+            ),
+            (
+                MapTool::CrossSection,
+                "Tool: Cross-section",
+                "Drag a line to slice the storm vertically",
+                false,
+            ),
+            (
+                MapTool::Chase,
+                "Tool: Set chase location",
+                "Tell the app where you are, for the chase readout",
+                false,
+            ),
+            (
+                MapTool::Climatology,
+                "Tool: Tornado climatology",
+                "How often tornadoes have hit this spot historically",
+                false,
+            ),
         ] {
-            out.push(PaletteEntry {
-                label: label.to_string(),
-                category: "Tools",
-                action: PaletteAction::Tool(t),
-                on: Some(tool == t),
-            });
+            push(
+                label,
+                "Tools",
+                desc,
+                common,
+                PaletteAction::Tool(t),
+                Some(tool == t),
+            );
         }
-        for (w, label) in [
-            (W::Site, "Radar site…"),
-            (W::Settings, "Settings…"),
-            (W::Markers, "Location markers…"),
-            (W::Placefiles, "Placefile manager…"),
-            (W::LayerManager, "Layer manager…"),
-            (W::Palettes, "Color-table editor…"),
-            (W::Events, "Event library…"),
-            (W::Digest, "Storm digest…"),
-            (W::Afd, "Forecast discussion (AFD)…"),
-            (W::Cappi, "CAPPI slice…"),
-            (W::Volume3d, "3D volume…"),
-            (W::Climatology, "Tornado climatology…"),
-            (W::Wizard, "Setup wizard…"),
-            (W::Toolbox, "Advanced toolbox"),
+        for (w, label, desc, common) in [
+            (
+                W::Site,
+                "Radar site…",
+                "Pick which radar you're watching",
+                true,
+            ),
+            (
+                W::Settings,
+                "Settings…",
+                "Theme, units, time display, alert sounds",
+                true,
+            ),
+            (
+                W::Markers,
+                "Location markers…",
+                "Manage your saved places and their alerts",
+                false,
+            ),
+            (
+                W::Events,
+                "Event library…",
+                "Jump to a famous storm and watch it replay",
+                false,
+            ),
+            (
+                W::Digest,
+                "Storm digest…",
+                "A plain-language summary of what's happening now",
+                false,
+            ),
+            (
+                W::Afd,
+                "Forecast discussion (AFD)…",
+                "What the local forecast office is writing",
+                false,
+            ),
+            (
+                W::Placefiles,
+                "Placefile manager…",
+                "Add GRLevelX placefile overlays",
+                false,
+            ),
+            (
+                W::LayerManager,
+                "Layer manager…",
+                "Reorder and set opacity for every layer",
+                false,
+            ),
+            (
+                W::Palettes,
+                "Color-table editor…",
+                "Change the colors a product is drawn with",
+                false,
+            ),
+            (
+                W::Cappi,
+                "CAPPI slice…",
+                "See the storm at one constant altitude",
+                false,
+            ),
+            (
+                W::Volume3d,
+                "3D volume…",
+                "Rotate the storm in three dimensions",
+                false,
+            ),
+            (
+                W::Climatology,
+                "Tornado climatology…",
+                "Historical tornado tracks for this area",
+                false,
+            ),
+            (W::Wizard, "Setup wizard…", "Re-run first-time setup", false),
+            (
+                W::Toolbox,
+                "Advanced toolbox",
+                "Every expert control, in one left-side dock",
+                false,
+            ),
         ] {
             let on = (w == W::Toolbox).then_some(self.show_toolbox);
-            out.push(PaletteEntry {
-                label: label.to_string(),
-                category: "Tools",
-                action: PaletteAction::OpenWindow(w),
+            push(
+                label,
+                "Tools",
+                desc,
+                common,
+                PaletteAction::OpenWindow(w),
                 on,
-            });
+            );
         }
         let panes = self.views.len();
         for n in [1usize, 2, 4] {
-            out.push(PaletteEntry {
-                label: format!("{n} pane{}", if n == 1 { "" } else { "s" }),
-                category: "Tools",
-                action: PaletteAction::SetPanes(n),
-                on: Some(panes == n),
-            });
+            push(
+                &format!("{n} pane{}", if n == 1 { "" } else { "s" }),
+                "Tools",
+                "Split the window to watch several radars or products at once",
+                false,
+                PaletteAction::SetPanes(n),
+                Some(panes == n),
+            );
         }
-        out.push(PaletteEntry {
-            label: "Reload".into(),
-            category: "Tools",
-            action: PaletteAction::Reload,
-            on: None,
-        });
-        out.push(PaletteEntry {
-            label: "Instant replay (DVR)".into(),
-            category: "Tools",
-            action: PaletteAction::InstantReplay,
-            on: None,
-        });
-        out.push(PaletteEntry {
-            label: "Jump to live".into(),
-            category: "Tools",
-            action: PaletteAction::GoLive,
-            on: None,
-        });
+        push(
+            "Reload",
+            "Tools",
+            "Fetch the latest data again",
+            true,
+            PaletteAction::Reload,
+            None,
+        );
+        push(
+            "Jump to live",
+            "Tools",
+            "Snap back to the newest scan",
+            true,
+            PaletteAction::GoLive,
+            None,
+        );
+        push(
+            "Instant replay (DVR)",
+            "Tools",
+            "Replay the scans already in memory",
+            false,
+            PaletteAction::InstantReplay,
+            None,
+        );
         out
     }
 
