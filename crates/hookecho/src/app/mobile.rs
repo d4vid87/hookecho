@@ -44,6 +44,28 @@ struct MAlert {
     esc: u8,
 }
 
+/// A labeled dock slot: glyph over a small caption. Ten unlabeled glyphs asked the user to guess
+/// which one was the sounding tool and which was range rings; five captioned ones don't.
+fn dock_slot(ui: &mut egui::Ui, glyph: &str, label: &str, active: bool, width: f32) -> bool {
+    let fg = if active {
+        OMEGA_ORANGE
+    } else {
+        Color32::from_gray(205)
+    };
+    ui.allocate_ui_with_layout(vec2(width, 46.0), Layout::top_down(Align::Center), |ui| {
+        ui.spacing_mut().item_spacing.y = 1.0;
+        let resp = ui.add(
+            egui::Button::new(RichText::new(glyph).size(21.0).color(fg))
+                .min_size(vec2(width, 26.0))
+                .fill(Color32::TRANSPARENT)
+                .stroke(Stroke::NONE),
+        );
+        ui.label(RichText::new(label).size(10.0).color(fg));
+        resp.clicked()
+    })
+    .inner
+}
+
 /// A flat tool-dock icon (transparent, tinted when active) — RadarOmega's bottom toolbar.
 fn dock_icon(ui: &mut egui::Ui, glyph: &str, active: bool) -> egui::Response {
     let fg = if active {
@@ -387,83 +409,55 @@ impl super::HookEchoApp {
                         });
                     });
                     ui.add_space(3.0);
-                    // Row C: tool dock. Icons drive our real tools/actions; active ones tint orange.
+                    // Row C: the dock. Five labeled slots; everything else is one tap into More.
                     ui.horizontal(|ui| {
-                        use super::MapTool;
                         ui.set_width(cwi);
-                        // Zero the inter-slot spacing: with 9+ slots the accumulated item_spacing
-                        // overflowed the row and bunched the last icons. Even slots, no gaps.
+                        // Zero the inter-slot spacing so five even slots fill the row exactly.
                         ui.spacing_mut().item_spacing.x = 0.0;
-                        let n = 10.0;
-                        let iw = cwi / n;
-                        let tool = self.tool;
-                        let slot = |ui: &mut egui::Ui, glyph: &str, on: bool| -> bool {
-                            ui.allocate_ui_with_layout(
-                                vec2(iw, 40.0),
-                                Layout::centered_and_justified(egui::Direction::TopDown),
-                                |ui| dock_icon(ui, glyph, on).clicked(),
-                            )
-                            .inner
-                        };
-                        if slot(ui, if playing { ph::PAUSE } else { ph::PLAY }, playing) {
+                        let iw = cwi / 5.0;
+                        let sheet = self.mobile_sheet;
+                        if dock_slot(
+                            ui,
+                            if playing { ph::PAUSE } else { ph::PLAY },
+                            if playing { "Pause" } else { "Play" },
+                            playing,
+                            iw,
+                        ) {
                             self.views[active].timeline.toggle_play();
                         }
-                        if slot(ui, ph::MAP_PIN, tool == MapTool::Marker) {
-                            self.tool = if tool == MapTool::Marker {
-                                MapTool::Interrogate
-                            } else {
-                                MapTool::Marker
-                            };
-                        }
-                        if slot(ui, ph::CAMERA, self.mobile_sheet == MobileSheet::Capture) {
-                            self.mobile_sheet = if self.mobile_sheet == MobileSheet::Capture {
-                                MobileSheet::None
-                            } else {
-                                MobileSheet::Capture
-                            };
-                        }
-                        if slot(ui, ph::CROSSHAIR, tool == MapTool::Interrogate) {
-                            self.tool = MapTool::Interrogate;
-                        }
-                        // Panes: cycle single -> dual -> quad -> single (RadarOmega's "=" layout).
-                        if slot(ui, ph::ROWS, self.views.len() > 1) {
-                            let next = match self.views.len() {
-                                1 => 2,
-                                2 => 4,
-                                _ => 1,
-                            };
-                            self.set_pane_count(next);
-                        }
-                        if slot(ui, ph::POLYGON, tool == MapTool::Sounding) {
-                            self.tool = if tool == MapTool::Sounding {
-                                MapTool::Interrogate
-                            } else {
-                                MapTool::Sounding
-                            };
-                        }
-                        if slot(ui, ph::RULER, tool == MapTool::Measure) {
-                            self.tool = if tool == MapTool::Measure {
-                                MapTool::Interrogate
-                            } else {
-                                MapTool::Measure
-                            };
-                        }
-                        if slot(ui, ph::TARGET, self.show_range_rings) {
-                            self.show_range_rings = !self.show_range_rings;
-                        }
-                        if slot(ui, ph::STACK, self.mobile_sheet == MobileSheet::QuickLayers) {
-                            self.mobile_sheet = if self.mobile_sheet == MobileSheet::QuickLayers {
+                        if dock_slot(
+                            ui,
+                            ph::STACK,
+                            "Layers",
+                            sheet == MobileSheet::QuickLayers,
+                            iw,
+                        ) {
+                            self.mobile_sheet = if sheet == MobileSheet::QuickLayers {
                                 MobileSheet::None
                             } else {
                                 MobileSheet::QuickLayers
                             };
                         }
-                        if slot(
+                        if dock_slot(
                             ui,
-                            ph::PENCIL_SIMPLE,
-                            self.mobile_sheet == MobileSheet::Tools,
+                            ph::DROP_HALF,
+                            "Products",
+                            sheet == MobileSheet::Products,
+                            iw,
                         ) {
-                            self.mobile_sheet = if self.mobile_sheet == MobileSheet::Tools {
+                            self.mobile_sheet = if sheet == MobileSheet::Products {
+                                MobileSheet::None
+                            } else {
+                                MobileSheet::Products
+                            };
+                        }
+                        if dock_slot(ui, ph::RADIO_BUTTON, "Site", self.site_dialog.is_some(), iw)
+                            && self.site_dialog.is_none()
+                        {
+                            self.site_dialog = Some(Default::default());
+                        }
+                        if dock_slot(ui, ph::DOTS_THREE, "More", sheet == MobileSheet::Tools, iw) {
+                            self.mobile_sheet = if sheet == MobileSheet::Tools {
                                 MobileSheet::None
                             } else {
                                 MobileSheet::Tools
@@ -620,35 +614,60 @@ impl super::HookEchoApp {
                         ui.add_space(8.0);
                         ui.separator();
                         egui::ScrollArea::vertical().show(ui, |ui| {
-                            let l3_site = self.l3grid_site.clone();
-                            let cp_ui = self.chasepack_ui();
-                            *actions = crate::ui::toolbox::show(
+                            // The drawer used to embed the entire desktop toolbox — twelve dense
+                            // sections of desktop-density widgets on a phone. It now leads with the
+                            // same categorized, described registry the Layers sheet uses, and keeps
+                            // every expert control one tap further in under "Advanced".
+                            let entries = self.palette_entries();
+                            let mut query = std::mem::take(&mut self.mobile_drawer_query);
+                            if let Some(action) = crate::ui::layers_panel::body(
                                 ui,
-                                &mut self.views[self.active],
-                                &mut self.settings,
-                                &mut self.filters,
-                                &mut self.fields,
-                                &mut self.rotation_minutes,
-                                &mut self.hrrr_fcst_hour,
-                                self.hrrr_valid,
-                                &mut self.env_cape_ml,
-                                &mut self.env_srh_km,
-                                &mut self.contour_kind,
-                                l3_site.as_deref(),
-                                &mut self.show_sensors,
-                                &mut self.show_hodo,
-                                &mut self.show_alert_panel,
-                                &mut self.show_storm_reports,
-                                &mut self.show_spotters,
-                                &mut self.show_probsevere,
-                                &mut self.show_radar_sites,
-                                &mut self.show_metar,
-                                &mut self.show_gauges,
-                                &mut self.show_tropical,
-                                &mut self.show_aviation,
-                                &mut self.show_range_rings,
-                                &cp_ui,
-                            );
+                                &entries,
+                                &mut query,
+                                accent,
+                                content.height() * 0.5,
+                            ) {
+                                self.apply_palette(action, ctx);
+                                self.mobile_sheet = MobileSheet::None;
+                            }
+                            self.mobile_drawer_query = query;
+                            ui.add_space(8.0);
+                            ui.separator();
+                            egui::CollapsingHeader::new(
+                                RichText::new("Advanced").size(14.0).strong().color(accent),
+                            )
+                            .default_open(false)
+                            .show(ui, |ui| {
+                                let l3_site = self.l3grid_site.clone();
+                                let cp_ui = self.chasepack_ui();
+                                *actions = crate::ui::toolbox::show(
+                                    ui,
+                                    &mut self.views[self.active],
+                                    &mut self.settings,
+                                    &mut self.filters,
+                                    &mut self.fields,
+                                    &mut self.rotation_minutes,
+                                    &mut self.hrrr_fcst_hour,
+                                    self.hrrr_valid,
+                                    &mut self.env_cape_ml,
+                                    &mut self.env_srh_km,
+                                    &mut self.contour_kind,
+                                    l3_site.as_deref(),
+                                    &mut self.show_sensors,
+                                    &mut self.show_hodo,
+                                    &mut self.show_alert_panel,
+                                    &mut self.show_storm_reports,
+                                    &mut self.show_spotters,
+                                    &mut self.show_probsevere,
+                                    &mut self.show_radar_sites,
+                                    &mut self.show_metar,
+                                    &mut self.show_gauges,
+                                    &mut self.show_tropical,
+                                    &mut self.show_aviation,
+                                    &mut self.show_range_rings,
+                                    &cp_ui,
+                                );
+                            });
                             ui.add_space(8.0);
                             ui.separator();
                             self.mobile_tools(ui);
@@ -1058,7 +1077,7 @@ impl super::HookEchoApp {
                         ui.set_width(content.width() - 28.0);
                         ui.horizontal(|ui| {
                             ui.label(
-                                RichText::new("Tools & Analysis")
+                                RichText::new("More")
                                     .size(16.0)
                                     .strong()
                                     .color(Color32::from_gray(235)),
@@ -1101,6 +1120,32 @@ impl super::HookEchoApp {
             )
         };
 
+        // The actions the dock used to hold as unlabeled glyphs. Still one tap from the map, now
+        // with a name attached.
+        ui.label(
+            RichText::new("Quick actions")
+                .size(13.0)
+                .strong()
+                .color(accent),
+        );
+        ui.horizontal_wrapped(|ui| {
+            if chip(ui, "Capture", self.mobile_sheet == MobileSheet::Capture).clicked() {
+                self.mobile_sheet = MobileSheet::Capture;
+            }
+            if chip(ui, "Range rings", self.show_range_rings).clicked() {
+                self.show_range_rings = !self.show_range_rings;
+            }
+            // Panes: cycle single -> dual -> quad -> single (RadarOmega's "=" layout).
+            let panes = self.views.len();
+            if chip(ui, &format!("{panes} pane(s)"), panes > 1).clicked() {
+                self.set_pane_count(match panes {
+                    1 => 2,
+                    2 => 4,
+                    _ => 1,
+                });
+            }
+        });
+        ui.add_space(6.0);
         ui.label(
             RichText::new("Map tap tool")
                 .size(13.0)

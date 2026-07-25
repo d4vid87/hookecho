@@ -813,6 +813,8 @@ pub struct HookEchoApp {
     warning_popup: Option<ui::warning_window::WarningPopup>,
     /// Newest pane error and the time it appeared, for the auto-hiding bottom-center chip.
     error_chip: Option<(String, f64)>,
+    /// Search text in the mobile navigation drawer's registry list.
+    mobile_drawer_query: String,
     /// Level 3 clickable storm cells for `cells_site` (the active site when last fetched).
     storm_cells: Vec<Cell>,
     cells_site: Option<String>,
@@ -1192,6 +1194,7 @@ impl HookEchoApp {
             follow_notice: None,
             warning_popup: None,
             error_chip: None,
+            mobile_drawer_query: String::new(),
             storm_cells: Vec::new(),
             ui_scale_applied: -1.0,
             ime_shown: false,

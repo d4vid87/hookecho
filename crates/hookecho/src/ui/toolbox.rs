@@ -503,7 +503,6 @@ fn map_section(
     }
     ui.weak("(press Z to cycle)");
     ui.checkbox(&mut view.smooth, "Smooth radar data");
-    ui.add_enabled(false, egui::Checkbox::new(&mut false, "Track location"));
 
     // Startup view: remember this site + camera as the launch position.
     ui.separator();
