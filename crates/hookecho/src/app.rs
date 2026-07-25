@@ -4915,24 +4915,37 @@ paste_target: None,
                         }
                     }
                 });
-                // gpsd is a desktop daemon; Android has no local gpsd (native location is a v2 JNI
-                // job), so this connect button only appears off-Android.
-                if !cfg!(target_os = "android") && self.gps_rx.is_none() {
-                    if ui.button("Connect GPS (gpsd)")
-                        .on_hover_text("Stream your live position from a local gpsd on :2947")
-                        .clicked()
-                    {
-                        match crate::gps::spawn() {
+                // Desktop streams from a local gpsd; Android polls the system LocationManager
+                // over JNI (see platform.rs). Both feed the same `gps_rx` channel.
+                if self.gps_rx.is_none() {
+                    let (label, tip) = if cfg!(target_os = "android") {
+                        ("Enable GPS (chase)", "Follow your device's position (asks for the location permission)")
+                    } else {
+                        ("Connect GPS (gpsd)", "Stream your live position from a local gpsd on :2947")
+                    };
+                    if ui.button(label).on_hover_text(tip).clicked() {
+                        let rx = if cfg!(target_os = "android") {
+                            crate::platform::start_location()
+                        } else {
+                            crate::gps::spawn()
+                        };
+                        match rx {
                             Some(rx) => {
                                 self.gps_rx = Some(rx);
                                 self.chase_mode = true;
                             }
-                            None => log::warn!("gpsd not reachable on 127.0.0.1:2947"),
+                            None => log::warn!("no position source available"),
                         }
                     }
                 } else {
                     ui.horizontal(|ui| {
-                        ui.weak("📡 GPS connected");
+                        // getLastKnownLocation is null until the first fix lands (cold start,
+                        // indoors, or permission still pending) — say so rather than look dead.
+                        if self.chase_pos.is_some() {
+                            ui.weak("📡 GPS connected");
+                        } else {
+                            ui.weak("📡 waiting for GPS fix…");
+                        }
                         if ui.button("Disconnect").clicked() {
                             self.gps_rx = None;
                         }

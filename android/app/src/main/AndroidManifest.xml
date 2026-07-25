@@ -11,6 +11,11 @@
 
     <uses-permission android:name="android.permission.INTERNET" />
 
+    <!-- Chase mode's follow-me: the device's own position, requested at runtime from the poll
+         loop in platform.rs. Optional — tapping the map to set your position still works. -->
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+
     <!-- The wgpu backend is Vulkan; require Vulkan 1.1 (0x00400003). -->
     <uses-feature
         android:name="android.hardware.vulkan.version"

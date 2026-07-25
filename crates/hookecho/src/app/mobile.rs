@@ -851,6 +851,24 @@ impl super::HookEchoApp {
                 }
             }
         });
+        ui.horizontal_wrapped(|ui| {
+            if chip(ui, "Chase mode", self.chase_mode).clicked() {
+                self.chase_mode = !self.chase_mode;
+                if !self.chase_mode {
+                    self.chase_applied = None;
+                }
+            }
+            // Android has no gpsd; platform.rs polls the system LocationManager over JNI.
+            let on = self.gps_rx.is_some();
+            if chip(ui, if on { "GPS on" } else { "Enable GPS" }, on).clicked() {
+                if on {
+                    self.gps_rx = None;
+                } else if let Some(rx) = crate::platform::start_location() {
+                    self.gps_rx = Some(rx);
+                    self.chase_mode = true;
+                }
+            }
+        });
         ui.add_space(6.0);
         ui.label(RichText::new("Analysis").size(13.0).strong().color(accent));
         ui.horizontal_wrapped(|ui| {

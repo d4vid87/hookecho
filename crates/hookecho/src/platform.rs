@@ -18,6 +18,13 @@ pub fn clipboard_text() -> Option<String> {
     None
 }
 
+/// Start streaming the device's location (Android only; desktop uses gpsd — see `gps.rs`).
+/// Returns `None` off-Android so the caller falls back to the gpsd path.
+#[cfg(not(target_os = "android"))]
+pub fn start_location() -> Option<std::sync::mpsc::Receiver<(f64, f64)>> {
+    None
+}
+
 #[cfg(target_os = "android")]
 mod android {
     use std::sync::OnceLock;
@@ -152,6 +159,108 @@ mod android_ime {
 }
 
 #[cfg(target_os = "android")]
+mod android_location {
+    use jni::objects::JObject;
+    use std::sync::mpsc::{self, Receiver, Sender};
+    use std::time::Duration;
+
+    /// Request the fine-location permission if it isn't already granted, then poll the system's
+    /// last known fix and stream changes to the caller.
+    ///
+    /// Polling `getLastKnownLocation` on a plain thread instead of registering a
+    /// `LocationListener` is deliberate: a listener needs a `Looper`-backed thread and a Java
+    /// callback object, and a NativeActivity has neither to spare. The cost is that a fix can be
+    /// a little stale — irrelevant at chase cadence, where the camera moves every couple of minutes.
+    ///
+    /// A NativeActivity also can't observe the permission dialog's result, so the poll re-checks
+    /// the grant each pass and starts reporting once the user says yes. Until then (and if they
+    /// say no) the tap-to-set-position path keeps working.
+    pub fn start_location() -> Option<Receiver<(f64, f64)>> {
+        super::android::app()?;
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || poll_loop(tx));
+        Some(rx)
+    }
+
+    fn poll_loop(tx: Sender<(f64, f64)>) {
+        let mut last: Option<(f64, f64)> = None;
+        let mut asked = false;
+        loop {
+            match read_fix(&mut asked) {
+                Ok(Some(pos)) => {
+                    // Only send real movement (~1 m) so the chase handoff isn't re-run every poll.
+                    let moved = last.is_none_or(|(lo, la): (f64, f64)| {
+                        (lo - pos.0).abs() > 1e-5 || (la - pos.1).abs() > 1e-5
+                    });
+                    if moved {
+                        last = Some(pos);
+                        if tx.send(pos).is_err() {
+                            return; // app dropped the receiver
+                        }
+                    }
+                }
+                Ok(None) => {}
+                Err(e) => log::warn!("location poll failed: {e:?}"),
+            }
+            std::thread::sleep(Duration::from_secs(5));
+        }
+    }
+
+    /// One permission check + `getLastKnownLocation("gps")` round trip.
+    fn read_fix(asked: &mut bool) -> jni::errors::Result<Option<(f64, f64)>> {
+        let Some(app) = super::android::app() else { return Ok(None) };
+        let vm = unsafe { jni::JavaVM::from_raw(app.vm_as_ptr() as *mut jni::sys::JavaVM) }?;
+        let mut env = vm.attach_current_thread()?;
+        let activity = unsafe { JObject::from_raw(app.activity_as_ptr() as jni::sys::jobject) };
+
+        let perm = env.new_string("android.permission.ACCESS_FINE_LOCATION")?;
+        let granted = env
+            .call_method(&activity, "checkSelfPermission", "(Ljava/lang/String;)I", &[(&perm).into()])?
+            .i()?;
+        if granted != 0 {
+            // PackageManager.PERMISSION_GRANTED == 0; anything else means we must ask (once).
+            if !*asked {
+                *asked = true;
+                let arr = env.new_object_array(1, "java/lang/String", &perm)?;
+                env.call_method(
+                    &activity,
+                    "requestPermissions",
+                    "([Ljava/lang/String;I)V",
+                    &[(&arr).into(), 1i32.into()],
+                )?;
+            }
+            let _ = env.exception_clear();
+            return Ok(None);
+        }
+
+        let service = env.new_string("location")?;
+        let lm = env
+            .call_method(&activity, "getSystemService", "(Ljava/lang/String;)Ljava/lang/Object;", &[(&service).into()])?
+            .l()?;
+        if lm.is_null() {
+            return Ok(None);
+        }
+        let provider = env.new_string("gps")?;
+        let loc = env
+            .call_method(
+                &lm,
+                "getLastKnownLocation",
+                "(Ljava/lang/String;)Landroid/location/Location;",
+                &[(&provider).into()],
+            )?
+            .l()?;
+        if loc.is_null() {
+            return Ok(None); // no fix yet (cold start / indoors)
+        }
+        let lat = env.call_method(&loc, "getLatitude", "()D", &[])?.d()?;
+        let lon = env.call_method(&loc, "getLongitude", "()D", &[])?.d()?;
+        Ok(Some((lon, lat)))
+    }
+}
+
+#[cfg(target_os = "android")]
 pub use android::{apply_safe_area, set_app};
+#[cfg(target_os = "android")]
+pub use android_location::start_location;
 #[cfg(target_os = "android")]
 pub use android_ime::{clipboard_text, show_soft_input};
