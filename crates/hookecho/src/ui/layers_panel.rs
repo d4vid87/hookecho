@@ -4,7 +4,7 @@
 //! (`HookEchoApp::palette_entries`), so they can never drift apart.
 
 use crate::app::{PaletteAction, PaletteEntry};
-use egui::{vec2, Align, Color32, Layout, RichText, Stroke};
+use egui::{vec2, Color32, RichText, Stroke};
 
 /// Category order in the panel (anything else falls to the bottom, in registry order).
 pub(crate) const CATEGORIES: [&str; 7] = [
@@ -60,19 +60,19 @@ fn row(ui: &mut egui::Ui, e: &PaletteEntry, accent: Color32) -> bool {
             Color32::from_rgba_unmultiplied(255, 255, 255, 10),
         )
     };
-    // The description is what makes "AzShear (0–2 km)" mean something; it rides under the name.
+    // Name over description, as one two-line button label: `Button` keeps the whole strip a single
+    // touch target, which matters on Android where this same body is a bottom sheet.
     let text = if e.desc.is_empty() {
         RichText::new(&e.label).size(14.0).color(fg)
     } else {
         RichText::new(format!("{}\n{}", e.label, e.desc))
-            .size(14.0)
+            .size(13.0)
             .color(fg)
     };
     let w = ui.available_width();
     let resp = ui.add(
         egui::Button::new(text)
-            .min_size(vec2(w, if e.desc.is_empty() { 40.0 } else { 48.0 }))
-            .wrap_mode(egui::TextWrapMode::Extend)
+            .min_size(vec2(w, if e.desc.is_empty() { 40.0 } else { 52.0 }))
             .fill(bg)
             .corner_radius(10.0)
             .stroke(if on {
@@ -81,18 +81,13 @@ fn row(ui: &mut egui::Ui, e: &PaletteEntry, accent: Color32) -> bool {
                 Stroke::NONE
             }),
     );
-    let resp = if e.desc.is_empty() {
-        resp
-    } else {
-        resp.on_hover_text(e.desc)
-    };
     // State pill, drawn over the button's right edge (a nested layout inside a Button isn't a thing).
     if let Some(on) = e.on {
         let txt = if on { "ON" } else { "OFF" };
         let col = if on { accent } else { Color32::from_gray(120) };
         ui.painter().text(
-            resp.rect.right_center() - vec2(12.0, 0.0),
-            egui::Align2::RIGHT_CENTER,
+            resp.rect.right_top() + vec2(-10.0, 9.0),
+            egui::Align2::RIGHT_TOP,
             txt,
             egui::FontId::proportional(11.0),
             col,
@@ -152,9 +147,9 @@ pub(crate) fn body(
                     continue;
                 }
                 ui.add_space(4.0);
-                ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
-                    ui.label(RichText::new(cat).size(13.0).strong().color(accent));
-                });
+                // A plain label, not `with_layout`: inside a ScrollArea a left_to_right region
+                // claims the whole remaining height, which pushed every row below it off-panel.
+                ui.label(RichText::new(cat).size(13.0).strong().color(accent));
                 ui.add_space(3.0);
                 // Everyday rows first; the long tail hides behind one expander per category so the
                 // panel reads as a short list instead of 81 flat rows. Nothing is removed — the

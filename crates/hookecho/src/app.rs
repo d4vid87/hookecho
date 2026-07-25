@@ -2381,7 +2381,7 @@ impl HookEchoApp {
             .order(egui::Order::Foreground)
             .show(ctx, |ui| {
                 mobile::glass(232).show(ui, |ui| {
-                    ui.set_width(330.0);
+                    ui.set_width(360.0);
                     ui.horizontal(|ui| {
                         ui.label(
                             egui::RichText::new("Layers")
