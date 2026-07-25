@@ -200,6 +200,8 @@ impl super::HookEchoApp {
             self.mobile_sheet = MobileSheet::None;
         } else if self.site_dialog.is_some() {
             self.site_dialog = None;
+        } else if self.cells_window.open {
+            self.cells_window.open = false;
         } else if self.settings_window.open {
             self.settings_window.open = false;
         } else if self.mobile_chrome_hidden {

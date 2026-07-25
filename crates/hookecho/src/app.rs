@@ -521,6 +521,7 @@ pub(crate) enum AppWindow {
     Afd,
     Cappi,
     Volume3d,
+    StormTable,
     Climatology,
     LayerManager,
     Wizard,
@@ -830,6 +831,7 @@ pub struct HookEchoApp {
     detail: Option<Detail>,
     /// Open "Storm {id} Attributes" window (a clicked storm cell).
     cell_popup: Option<Cell>,
+    cells_window: ui::cells_window::CellsWindow,
     /// Storm-follow camera: the `(site, last-snapshot cell, since)` the active pane is tracking.
     /// Each new volume recenters on this cell; a manual pan or site change cancels it.
     follow_cell: Option<(String, Cell, Instant)>,
@@ -1219,6 +1221,7 @@ impl HookEchoApp {
             overlay_last_fetch: None,
             detail: None,
             cell_popup: None,
+            cells_window: Default::default(),
             follow_cell: None,
             follow_notice: None,
             warning_popup: None,
@@ -3540,6 +3543,12 @@ impl HookEchoApp {
                 false,
             ),
             (
+                W::StormTable,
+                "Storm attributes…",
+                "Every tracked storm in one sortable table \u{2014} hail size, tops, rotation",
+                true,
+            ),
+            (
                 W::Cappi,
                 "CAPPI slice…",
                 "See the storm at one constant altitude",
@@ -3671,6 +3680,7 @@ impl HookEchoApp {
                     self.show_cappi = true;
                     self.cappi_key = None; // force a re-slice on open
                 }
+                W::StormTable => self.cells_window.toggle(),
                 W::Volume3d => self.build_volume3d(),
                 W::Climatology => {
                     self.climo_open = true;
@@ -8121,6 +8131,21 @@ impl eframe::App for HookEchoApp {
         if let Some(detail) = &self.detail {
             if !ui::detail_window::show(ctx, detail) {
                 self.detail = None;
+            }
+        }
+        // Storm attributes table: clicking a row flies there and opens that cell's popup, the
+        // same destination as clicking the dot on the map.
+        if let Some(id) = ui::cells_window::show(
+            &mut self.cells_window,
+            ctx,
+            &self.storm_cells,
+            crate::theme::accent(self.settings.theme),
+        ) {
+            if let Some(c) = self.storm_cells.iter().find(|c| c.id == id).cloned() {
+                let cam = &mut self.views[self.active].camera;
+                cam.center = crate::render::mercator::lonlat_to_world(c.lon, c.lat);
+                cam.zoom = cam.zoom.max(8.0);
+                self.cell_popup = Some(c);
             }
         }
         if let Some(cell) = &self.cell_popup {
