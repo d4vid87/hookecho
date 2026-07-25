@@ -67,18 +67,26 @@ pub fn glass(alpha: u8) -> Frame {
 
 /// A ~44px rounded-square chrome button holding one Phosphor glyph.
 pub fn square_btn(ui: &mut egui::Ui, glyph: &str, active: bool, accent: Color32) -> egui::Response {
+    // The inactive fill has to be a dark chip, not a near-transparent white wash: these buttons
+    // float over the map, and a pale glyph on a 20/255 white fill disappears completely over the
+    // light and satellite basemaps.
     let (fg, bg) = if active {
         (Color32::BLACK, accent)
     } else {
+        let (r, g, b) = CARD_FILL;
         (
-            Color32::from_gray(232),
-            Color32::from_rgba_unmultiplied(255, 255, 255, 20),
+            Color32::from_gray(238),
+            Color32::from_rgba_unmultiplied(r, g, b, 200),
         )
     };
     ui.add(
         egui::Button::new(RichText::new(glyph).size(FONT_TITLE).color(fg))
             .min_size(vec2(44.0, 44.0))
             .fill(bg)
+            .stroke(Stroke::new(
+                1.0,
+                Color32::from_rgba_unmultiplied(255, 255, 255, 26),
+            ))
             .corner_radius(13.0),
     )
 }

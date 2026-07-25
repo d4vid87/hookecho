@@ -130,12 +130,32 @@ fn paint_colorbar(
 impl super::HookEchoApp {
     /// Render the whole Android chrome (color scale + floating bars + drawers/popups) and return
     /// the toolbox actions the shared code processes.
+    /// What Android's back button dismisses, innermost first. Returns without doing anything when
+    /// nothing is open, which lets the OS handle it (leave the app).
+    fn mobile_back(&mut self) {
+        if self.mobile_sheet != MobileSheet::None {
+            self.mobile_sheet = MobileSheet::None;
+        } else if self.site_dialog.is_some() {
+            self.site_dialog = None;
+        } else if self.settings_window.open {
+            self.settings_window.open = false;
+        } else if self.mobile_chrome_hidden {
+            self.mobile_chrome_hidden = false;
+        }
+    }
+
     pub(crate) fn mobile_chrome(
         &mut self,
         _root: &mut egui::Ui,
         ctx: &egui::Context,
     ) -> ToolboxActions {
         let mut actions = ToolboxActions::default();
+        // Android's back button arrives as `BrowserBack`. Without this every sheet and drawer was
+        // a one-way door — back did nothing and the only exit was the ✕, which a sheet's own
+        // content covers on a small screen.
+        if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::BrowserBack)) {
+            self.mobile_back();
+        }
         let active = self.active;
         let content = ctx.content_rect();
         let vr = ctx.viewport_rect();
@@ -254,7 +274,7 @@ impl super::HookEchoApp {
                     // is the screen minus the two 44px squares, the 8px gaps, and the pill's own
                     // 12px×2 frame margins — so the row never overflows the edges.
                     let pill_inner = (content.width() - 44.0 - 44.0 - 32.0 - 24.0).max(110.0);
-                    glass(210).show(ui, |ui| {
+                    glass(238).show(ui, |ui| {
                         ui.set_width(pill_inner);
                         ui.horizontal(|ui| {
                             let text_w = (pill_inner - 52.0).max(60.0);
@@ -339,7 +359,7 @@ impl super::HookEchoApp {
             .anchor(Align2::CENTER_BOTTOM, vec2(0.0, -(inset_bottom + 8.0)))
             .show(ctx, |ui| {
                 let cwi = (content.width() - 56.0).max(200.0); // card inner content width (leaves side margins)
-                glass(224).show(ui, |ui| {
+                glass(246).show(ui, |ui| {
                     ui.set_width(cwi);
                     // Row A: frames + history · product name.
                     ui.horizontal(|ui| {
@@ -507,8 +527,8 @@ impl super::HookEchoApp {
                 ctx, content, vr, cur_moment, srv, n_tilt, cur_tilt, cur_angle,
             ),
             MobileSheet::Capture => self.mobile_capture(ctx, content, vr),
-            MobileSheet::Tools => self.mobile_tools_sheet(ctx, content, vr),
-            MobileSheet::QuickLayers => self.mobile_layers_sheet(ctx, content, vr),
+            MobileSheet::Tools => self.mobile_tools_sheet(ctx, content, vr, inset_bottom),
+            MobileSheet::QuickLayers => self.mobile_layers_sheet(ctx, content, vr, inset_bottom),
             MobileSheet::None => {}
         }
 
@@ -566,7 +586,7 @@ impl super::HookEchoApp {
                     })
                     .show(ui, |ui| {
                         ui.set_width(dw - 28.0);
-                        ui.set_height(vr.height() - content.top() - 12.0);
+                        ui.set_height(content.bottom() - content.top() - 12.0);
                         // Header.
                         ui.horizontal(|ui| {
                             ui.label(
@@ -833,55 +853,50 @@ impl super::HookEchoApp {
                     .inner_margin(Margin::symmetric(16, 14))
                     .show(ui, |ui| {
                         ui.set_width(pw - 32.0);
-                        // (moment, srv, label) grouped by RadarOmega category.
-                        type Row = (Moment, bool, &'static str);
-                        let groups: [(&str, &[Row]); 3] = [
+                        // Grouped by category, but the names come from `products::PRODUCTS` so
+                        // this sheet says the same thing as the Layers list and the bottom card.
+                        type Row = (Moment, bool, &'static str, &'static str);
+                        let p = |m: Moment| -> Row {
+                            let i = crate::products::info(m);
+                            (m, false, i.name, i.blurb)
+                        };
+                        let groups: [(&str, Vec<Row>); 3] = [
+                            ("Reflectivity", vec![p(Moment::Reflectivity)]),
                             (
-                                "Reflectivity Products",
-                                &[(Moment::Reflectivity, false, "Hi-Res Reflectivity")],
-                            ),
-                            (
-                                "Velocity Products",
-                                &[
-                                    (Moment::Velocity, false, "Hi-Res Velocity"),
-                                    (Moment::Velocity, true, "Hi-Res Storm Relative Velocity"),
-                                    (Moment::SpectrumWidth, false, "Hi-Res Spectrum Width"),
+                                "Velocity",
+                                vec![
+                                    p(Moment::Velocity),
+                                    (
+                                        Moment::Velocity,
+                                        true,
+                                        "Storm-Relative Velocity",
+                                        "Velocity with the storm's own motion subtracted out",
+                                    ),
+                                    p(Moment::SpectrumWidth),
                                 ],
                             ),
                             (
                                 "Dual-Polarization",
-                                &[
-                                    (
-                                        Moment::CorrelationCoefficient,
-                                        false,
-                                        "Hi-Res Correlation Coefficient",
-                                    ),
-                                    (
-                                        Moment::DifferentialReflectivity,
-                                        false,
-                                        "Hi-Res Differential Reflectivity",
-                                    ),
-                                    (
-                                        Moment::DifferentialPhase,
-                                        false,
-                                        "Specific Differential Phase",
-                                    ),
+                                vec![
+                                    p(Moment::CorrelationCoefficient),
+                                    p(Moment::DifferentialReflectivity),
+                                    p(Moment::DifferentialPhase),
                                 ],
                             ),
                         ];
                         egui::ScrollArea::vertical()
                             .max_height(content.height() * 0.62)
                             .show(ui, |ui| {
-                                for (title, rows) in groups {
+                                for (title, rows) in groups.iter() {
                                     ui.add_space(4.0);
                                     ui.label(
-                                        RichText::new(title)
+                                        RichText::new(*title)
                                             .size(15.0)
                                             .strong()
                                             .color(Color32::from_gray(235)),
                                     );
                                     ui.add_space(2.0);
-                                    for (m, want_srv, label) in rows.iter().copied() {
+                                    for (m, want_srv, label, blurb) in rows.iter().copied() {
                                         let selected = cur_moment == m
                                             && (m != Moment::Velocity || srv == want_srv);
                                         ui.horizontal(|ui| {
@@ -890,13 +905,28 @@ impl super::HookEchoApp {
                                             } else {
                                                 Color32::from_gray(220)
                                             };
-                                            let b = egui::Button::new(
-                                                RichText::new(label).size(15.0).color(fg),
-                                            )
-                                            .fill(Color32::TRANSPARENT)
-                                            .stroke(Stroke::NONE)
-                                            .min_size(vec2(ui.available_width() - 92.0, 34.0));
-                                            if ui.add(b).clicked() {
+                                            // Inside a horizontal layout `available_width` is
+                                            // effectively unbounded, so the blurb won't wrap
+                                            // unless the row is boxed to a real width first.
+                                            let row_w = (ui.available_width() - 100.0).max(120.0);
+                                            let clicked = ui
+                                                .allocate_ui(vec2(row_w, 0.0), |ui| {
+                                                    ui.set_max_width(row_w);
+                                                    let b = egui::Button::new(
+                                                        RichText::new(format!("{label}\n{blurb}"))
+                                                            .size(15.0)
+                                                            .color(fg),
+                                                    )
+                                                    .fill(Color32::TRANSPARENT)
+                                                    .stroke(Stroke::NONE)
+                                                    // egui defaults to Extend inside a horizontal
+                                                    // layout, which ran the blurb off the panel.
+                                                    .wrap_mode(egui::TextWrapMode::Wrap)
+                                                    .min_size(vec2(row_w, 44.0));
+                                                    ui.add(b).clicked()
+                                                })
+                                                .inner;
+                                            if clicked {
                                                 self.views[active].moment = m;
                                                 if m == Moment::Velocity {
                                                     self.views[active].srv = want_srv;
@@ -1004,7 +1034,7 @@ impl super::HookEchoApp {
 
     /// Quick-layers sheet: the searchable layer registry in a bottom sheet (the phone's
     /// equivalent of the desktop Layers panel).
-    fn mobile_layers_sheet(&mut self, ctx: &egui::Context, content: Rect, vr: Rect) {
+    fn mobile_layers_sheet(&mut self, ctx: &egui::Context, content: Rect, vr: Rect, inset_bottom: f32) {
         let sheet = Rect::from_min_size(
             pos2(content.left(), content.center().y - 40.0),
             vec2(content.width(), content.height() * 0.6),
@@ -1016,7 +1046,7 @@ impl super::HookEchoApp {
         let (mut chosen, mut close) = (None, false);
         egui::Area::new(Id::new("m_layers"))
             .order(egui::Order::Foreground)
-            .anchor(Align2::CENTER_BOTTOM, vec2(0.0, -8.0))
+            .anchor(Align2::CENTER_BOTTOM, vec2(0.0, -(inset_bottom + 8.0)))
             .show(ctx, |ui| {
                 Frame::new()
                     .fill(Color32::from_rgb(12, 15, 20))
@@ -1040,7 +1070,7 @@ impl super::HookEchoApp {
                             &entries,
                             &mut query,
                             accent,
-                            content.height() * 0.5,
+                            (content.height() * 0.6 - 120.0).max(160.0),
                         );
                     });
             });
@@ -1055,7 +1085,7 @@ impl super::HookEchoApp {
     }
 
     /// Bottom "more tools" sheet (analysis + capture grid) driven by the pencil dock icon.
-    fn mobile_tools_sheet(&mut self, ctx: &egui::Context, content: Rect, vr: Rect) {
+    fn mobile_tools_sheet(&mut self, ctx: &egui::Context, content: Rect, vr: Rect, inset_bottom: f32) {
         let sheet = Rect::from_min_size(
             pos2(content.left(), content.center().y),
             vec2(content.width(), content.height() * 0.5),
@@ -1063,7 +1093,7 @@ impl super::HookEchoApp {
         self.mobile_scrim(ctx, vr, sheet);
         egui::Area::new(Id::new("m_toolsheet"))
             .order(egui::Order::Foreground)
-            .anchor(Align2::CENTER_BOTTOM, vec2(0.0, -8.0))
+            .anchor(Align2::CENTER_BOTTOM, vec2(0.0, -(inset_bottom + 8.0)))
             .show(ctx, |ui| {
                 Frame::new()
                     .fill(Color32::from_rgb(12, 15, 20))
@@ -1102,7 +1132,10 @@ impl super::HookEchoApp {
     fn mobile_tools(&mut self, ui: &mut egui::Ui) {
         use super::{MapTool, ShotDest};
         let accent = crate::theme::accent(self.settings.theme);
-        let w = (ui.available_width() - 16.0) / 3.0;
+        // Three columns: subtract the two inter-item gaps, not a guessed 16 — otherwise each chip
+        // is a gap too wide and `horizontal_wrapped` drops to two per row.
+        let gap = ui.spacing().item_spacing.x;
+        let w = (ui.available_width() - 2.0 * gap) / 3.0;
         let chip = |ui: &mut egui::Ui, label: &str, active: bool| -> egui::Response {
             let (fg, bg) = if active {
                 (Color32::BLACK, accent)

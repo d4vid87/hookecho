@@ -95,7 +95,10 @@ pub fn show(
         .show(ctx, |ui| {
             ui.horizontal(|ui| {
                 ui.label("Filter:");
-                ui.text_edit_singleline(&mut dialog.filter);
+                // The field's default width plus two buttons overflows a phone, pushing None/Home
+                // off the screen edge — size it from what's actually left in the row.
+                let w = (ui.available_width() - 130.0).max(80.0);
+                ui.add(egui::TextEdit::singleline(&mut dialog.filter).desired_width(w));
                 if ui.button("None").clicked() {
                     clear = true;
                 }

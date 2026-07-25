@@ -2380,7 +2380,7 @@ impl HookEchoApp {
             .anchor(egui::Align2::RIGHT_TOP, crate::ui::style::LANE_RIGHT_PANEL)
             .order(egui::Order::Foreground)
             .show(ctx, |ui| {
-                mobile::glass(232).show(ui, |ui| {
+                mobile::glass(246).show(ui, |ui| {
                     ui.set_width(360.0);
                     ui.horizontal(|ui| {
                         ui.label(
@@ -2454,7 +2454,7 @@ impl HookEchoApp {
                 egui::vec2(0.0, crate::ui::style::LANE_BOTTOM_TIMELINE),
             )
             .show(ctx, |ui| {
-                mobile::glass(228).show(ui, |ui| {
+                mobile::glass(244).show(ui, |ui| {
                     ui.set_width(pill_w);
                     let t = &mut self.views[self.active].timeline;
                     ui.horizontal(|ui| {
@@ -2669,7 +2669,7 @@ impl HookEchoApp {
                 egui::vec2(14.0, style::LANE_BOTTOM_PRODUCT),
             )
             .show(ctx, |ui| {
-                style::glass(228).show(ui, |ui| {
+                style::glass(244).show(ui, |ui| {
                     let btn = ui.add(
                         egui::Button::new(
                             egui::RichText::new(&label)
@@ -2750,7 +2750,7 @@ impl HookEchoApp {
                 egui::vec2(0.0, crate::ui::style::LANE_TOP_SEARCH),
             )
             .show(ctx, |ui| {
-                mobile::glass(226).show(ui, |ui| {
+                mobile::glass(244).show(ui, |ui| {
                     ui.set_width((cr.width() * 0.3).clamp(220.0, 420.0));
                     ui.horizontal(|ui| {
                         ui.label(
@@ -2933,7 +2933,7 @@ impl HookEchoApp {
         egui::Area::new(egui::Id::new("chase_hud"))
             .anchor(egui::Align2::LEFT_BOTTOM, egui::vec2(14.0, dy))
             .show(ctx, |ui| {
-                let frame = mobile::glass(228).stroke(egui::Stroke::new(
+                let frame = mobile::glass(244).stroke(egui::Stroke::new(
                     if urgent { 2.0 } else { 1.0 },
                     if urgent {
                         red
@@ -6882,7 +6882,7 @@ impl HookEchoApp {
             )
             .interactable(depth > 1)
             .show(ctx, |ui| {
-                style::glass(200).show(ui, |ui| {
+                style::glass(238).show(ui, |ui| {
                     ui.horizontal(|ui| {
                         if !hint.is_empty() {
                             ui.label(egui::RichText::new(hint).size(style::FONT_SM).color(accent));
@@ -6944,7 +6944,7 @@ impl HookEchoApp {
                 egui::vec2(0.0, crate::ui::style::LANE_BOTTOM_CHASE),
             )
             .show(ctx, |ui| {
-                crate::ui::style::glass(232)
+                crate::ui::style::glass(246)
                     .stroke(egui::Stroke::new(
                         1.0,
                         egui::Color32::from_rgb(230, 100, 100).gamma_multiply(0.8),
