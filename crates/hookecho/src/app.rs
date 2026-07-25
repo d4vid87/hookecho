@@ -258,6 +258,13 @@ impl OverlaySource {
                 OverlayMsg::Gauges(wxdata::river::fetch_bbox(http, lat0, lon0, lat1, lon1).await?)
             }
             OverlaySource::Contours(kind) => {
+                // Composite parameters (STP/SCP/EHI) combine several same-run HRRR fields.
+                if let Some(sk) = kind.severe() {
+                    let fc = wxdata::severe::fetch_grid(http, sk).await?;
+                    let valid = fc.valid();
+                    let lines = wxdata::contour::contour_lines(&fc.field, kind.severe_interval());
+                    return Ok(OverlayMsg::Contours(kind, lines, valid));
+                }
                 let (var, level, interval) = kind.params().ok_or_else(|| anyhow::anyhow!("contour Off"))?;
                 let mut fc = wxdata::hrrr::fetch_field(http, var, level, 0, f64::NEG_INFINITY).await?;
                 // Convert to display units so the interval is in hPa / °F / etc, then contour off-thread.
@@ -308,11 +315,46 @@ pub(crate) enum ContourKind {
     Td2m,
     Cape,
     Srh,
+    /// Significant Tornado Parameter (composite of several HRRR fields — see `wxdata::severe`).
+    Stp,
+    /// Supercell Composite Parameter.
+    Scp,
+    /// Energy-Helicity Index, 0-1 km.
+    Ehi,
 }
 
 impl ContourKind {
-    pub(crate) const ALL: [ContourKind; 6] =
-        [ContourKind::Off, ContourKind::Mslp, ContourKind::T2m, ContourKind::Td2m, ContourKind::Cape, ContourKind::Srh];
+    pub(crate) const ALL: [ContourKind; 9] = [
+        ContourKind::Off,
+        ContourKind::Mslp,
+        ContourKind::T2m,
+        ContourKind::Td2m,
+        ContourKind::Cape,
+        ContourKind::Srh,
+        ContourKind::Stp,
+        ContourKind::Scp,
+        ContourKind::Ehi,
+    ];
+
+    /// The composite parameters, which combine several GRIB fields instead of drawing one.
+    pub(crate) fn severe(self) -> Option<wxdata::severe::SevereKind> {
+        use wxdata::severe::SevereKind as S;
+        Some(match self {
+            ContourKind::Stp => S::Stp,
+            ContourKind::Scp => S::Scp,
+            ContourKind::Ehi => S::Ehi,
+            _ => return None,
+        })
+    }
+
+    /// Contour interval in display units (composites only; single fields carry theirs in `params`).
+    pub(crate) fn severe_interval(self) -> f32 {
+        match self {
+            ContourKind::Stp => 0.5,
+            ContourKind::Scp => 2.0,
+            _ => 1.0,
+        }
+    }
 
     pub(crate) fn label(self) -> &'static str {
         match self {
@@ -322,6 +364,9 @@ impl ContourKind {
             ContourKind::Td2m => "2 m dewpoint",
             ContourKind::Cape => "SB-CAPE",
             ContourKind::Srh => "0-3 km SRH",
+            ContourKind::Stp => "STP (fixed)",
+            ContourKind::Scp => "SCP",
+            ContourKind::Ehi => "EHI 0-1 km",
         }
     }
 
@@ -333,6 +378,9 @@ impl ContourKind {
             "td2m" => ContourKind::Td2m,
             "cape" => ContourKind::Cape,
             "srh" => ContourKind::Srh,
+            "stp" => ContourKind::Stp,
+            "scp" => ContourKind::Scp,
+            "ehi" => ContourKind::Ehi,
             _ => return None,
         })
     }
@@ -346,6 +394,8 @@ impl ContourKind {
             ContourKind::Td2m => Some(("DPT", "2 m above ground", 5.0)), // °F
             ContourKind::Cape => Some(("CAPE", "surface", 500.0)),       // J/kg
             ContourKind::Srh => Some(("HLCY", "3000-0 m above ground", 100.0)), // m²/s²
+            // Composites are built from several fields — see `severe()` / `severe_interval()`.
+            ContourKind::Stp | ContourKind::Scp | ContourKind::Ehi => None,
         }
     }
 
@@ -365,6 +415,9 @@ impl ContourKind {
             ContourKind::Td2m => egui::Color32::from_rgb(90, 200, 120),
             ContourKind::Cape => egui::Color32::from_rgb(240, 160, 40),
             ContourKind::Srh => egui::Color32::from_rgb(190, 110, 230),
+            ContourKind::Stp => egui::Color32::from_rgb(230, 60, 90),
+            ContourKind::Scp => egui::Color32::from_rgb(250, 120, 50),
+            ContourKind::Ehi => egui::Color32::from_rgb(150, 110, 235),
             ContourKind::Off => egui::Color32::WHITE,
         }
     }

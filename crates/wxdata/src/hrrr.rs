@@ -59,6 +59,39 @@ pub async fn fetch_field(
     Err(last_err.unwrap_or_else(|| anyhow::anyhow!("no HRRR run found")))
 }
 
+/// Fetch several surface fields from ONE model cycle: walks back up to 6 runs and only returns
+/// when every `(var, level, min_valid)` spec resolves against the same run. Composite parameters
+/// (STP/SCP/EHI) must not mix ingredients from different cycles, and per-field [`fetch_field`]
+/// calls can land on different ones when a newer run is mid-upload.
+pub async fn fetch_fields_one_run(
+    http: &reqwest::Client,
+    fcst_hour: u8,
+    specs: &[(&str, &str, f64)],
+) -> anyhow::Result<(DateTime<Utc>, Vec<MrmsField>)> {
+    let fh = fcst_hour.min(18);
+    let now = Utc::now();
+    let mut last_err = None;
+    for back in 1..=6 {
+        let run = (now - chrono::Duration::hours(back)).with_minute(0).unwrap().with_second(0).unwrap().with_nanosecond(0).unwrap();
+        let mut fields = Vec::with_capacity(specs.len());
+        let mut failed = None;
+        for (var, level, min_valid) in specs {
+            match fetch_run_field(http, run, fh, var, level, *min_valid).await {
+                Ok(f) => fields.push(f),
+                Err(e) => {
+                    failed = Some(e);
+                    break;
+                }
+            }
+        }
+        match failed {
+            None => return Ok((run, fields)),
+            Some(e) => last_err = Some(e),
+        }
+    }
+    Err(last_err.unwrap_or_else(|| anyhow::anyhow!("no HRRR run found")))
+}
+
 async fn fetch_run_field(
     http: &reqwest::Client,
     run: DateTime<Utc>,

@@ -890,13 +890,21 @@ pub fn run_chasepack(lat: f64, lon: f64, radius_km: f64, zmax: u8, style_slug: &
 /// range / longest polyline / valid time. No PNG — the overlay is painter-based, so line counts
 /// exercise the whole fetch→regrid→marching-squares pipeline without a GPU.
 pub fn run_contours(kind_token: &str) -> anyhow::Result<()> {
-    let kind = crate::app::ContourKind::from_token(kind_token)
-        .ok_or_else(|| anyhow::anyhow!("unknown contour kind '{kind_token}' (mslp|t2m|td2m|cape|srh)"))?;
-    let (var, level, interval) = kind.params().expect("non-Off kind has params");
+    let kind = crate::app::ContourKind::from_token(kind_token).ok_or_else(|| {
+        anyhow::anyhow!("unknown contour kind '{kind_token}' (mslp|t2m|td2m|cape|srh|stp|scp|ehi)")
+    })?;
     let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
+    let interval = kind.params().map_or_else(|| kind.severe_interval(), |(_, _, i)| i);
     let (lines, valid) = rt.block_on(async {
         let client = reqwest::Client::new();
-        let mut fc = wxdata::hrrr::fetch_field(&client, var, level, 0, f64::NEG_INFINITY).await?;
+        // Composite parameters are built from several same-run fields; single fields fetch directly.
+        let mut fc = match kind.severe() {
+            Some(sk) => wxdata::severe::fetch_grid(&client, sk).await?,
+            None => {
+                let (var, level, _) = kind.params().expect("non-Off kind has params");
+                wxdata::hrrr::fetch_field(&client, var, level, 0, f64::NEG_INFINITY).await?
+            }
+        };
         for v in &mut fc.field.values {
             if v.is_finite() {
                 *v = kind.to_display(*v);
