@@ -1,4 +1,4 @@
-//! Settings window. General/Palettes/Units are live (U1/U3); the rest are later milestones.
+//! Settings window: General, Palettes, Units, Basemaps, Alerts.
 
 use crate::colormap::Palettes;
 use crate::settings::{Settings, Theme, TimeDisplay, VelocityUnit};
@@ -11,9 +11,7 @@ enum Tab {
     Palettes,
     Units,
     Basemaps,
-    Audio,
-    Text,
-    Hotkeys,
+    Alerts,
 }
 
 #[derive(Default)]
@@ -50,9 +48,7 @@ impl SettingsWindow {
                         (Tab::Palettes, "Palettes"),
                         (Tab::Units, "Units"),
                         (Tab::Basemaps, "Basemaps"),
-                        (Tab::Audio, "Audio"),
-                        (Tab::Text, "Text"),
-                        (Tab::Hotkeys, "Hotkeys"),
+                        (Tab::Alerts, "Alerts"),
                     ] {
                         ui.selectable_value(&mut self.tab, tab, label);
                     }
@@ -63,9 +59,7 @@ impl SettingsWindow {
                     Tab::Palettes => self.palettes_tab(ui, settings, palettes),
                     Tab::Units => units_tab(ui, settings),
                     Tab::Basemaps => basemaps_tab(ui, settings),
-                    Tab::Audio => audio_tab(ui, settings),
-                    Tab::Text => placeholder(ui, "Fonts & text — U8"),
-                    Tab::Hotkeys => placeholder(ui, "Configurable hotkeys — U8"),
+                    Tab::Alerts => alerts_tab(ui, settings),
                 }
             });
         self.open = open;
@@ -280,6 +274,31 @@ fn general_tab(ui: &mut egui::Ui, settings: &mut Settings) {
     if !valid && !settings.default_site.is_empty() {
         ui.colored_label(egui::Color32::YELLOW, "⚠ unknown site id");
     }
+
+    ui.add_space(8.0);
+    ui.separator();
+    ui.strong("Background");
+    ui.checkbox(
+        &mut settings.close_to_tray,
+        "Keep running in background when window closes",
+    )
+    .on_hover_text(
+        "Closing the window minimizes instead of quitting, so alert polling + push keep going",
+    );
+
+    ui.add_space(8.0);
+    ui.separator();
+    ui.strong("AI");
+    ui.horizontal(|ui| {
+        ui.label("Anthropic key:");
+        ui.add(
+            egui::TextEdit::singleline(&mut settings.anthropic_key)
+                .password(true)
+                .hint_text("sk-ant-…")
+                .desired_width(240.0),
+        );
+    });
+    ui.weak("Optional. Tools ▸ Storm Digest works offline; a key lets Claude write friendlier prose. Held locally only.");
 }
 
 /// Alert-sound controls: master toggle, volume, and a per-event sound picker with previews.
@@ -339,7 +358,8 @@ pub fn sound_picker(ui: &mut egui::Ui, settings: &mut Settings) {
         });
 }
 
-fn audio_tab(ui: &mut egui::Ui, settings: &mut Settings) {
+/// Everything that fires when weather happens: sounds, push, proximity alarms.
+fn alerts_tab(ui: &mut egui::Ui, settings: &mut Settings) {
     sound_picker(ui, settings);
 
     ui.add_space(8.0);
@@ -357,35 +377,4 @@ fn audio_tab(ui: &mut egui::Ui, settings: &mut Settings) {
     ui.strong("Proximity alarms");
     ui.checkbox(&mut settings.lightning_alarm, "Lightning within ~15 km of a saved location")
         .on_hover_text("Chime + push when CG lightning strikes near a marker. Requires the Lightning layer (National) to be on.");
-
-    ui.add_space(8.0);
-    ui.separator();
-    ui.checkbox(
-        &mut settings.close_to_tray,
-        "Keep running in background when window closes",
-    )
-    .on_hover_text(
-        "Closing the window minimizes instead of quitting, so alert polling + push keep going",
-    );
-
-    ui.add_space(8.0);
-    ui.separator();
-    ui.strong("Storm digest (Claude)");
-    ui.horizontal(|ui| {
-        ui.label("Anthropic key:");
-        ui.add(
-            egui::TextEdit::singleline(&mut settings.anthropic_key)
-                .password(true)
-                .hint_text("sk-ant-…")
-                .desired_width(240.0),
-        );
-    });
-    ui.weak("Optional. Tools ▸ Storm Digest works offline; a key lets Claude write friendlier prose. Held locally only.");
-}
-
-fn placeholder(ui: &mut egui::Ui, text: &str) {
-    ui.vertical_centered(|ui| {
-        ui.add_space(40.0);
-        ui.weak(text);
-    });
 }
