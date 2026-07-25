@@ -72,6 +72,10 @@ pub enum FieldLayer {
     HailSwath,
     /// Hybrid Hydrometeor Classification (L3 HHC packet-16 product, categorical).
     Hca,
+    /// HRRR max updraft helicity — forecast rotation tracks.
+    UpdraftHelicity,
+    /// HRRR near-surface smoke (mass density).
+    Smoke,
 }
 
 impl FieldLayer {
@@ -84,16 +88,18 @@ impl FieldLayer {
                 | FieldLayer::Cape
                 | FieldLayer::Srh
                 | FieldLayer::PrecipType
+                | FieldLayer::Smoke
         )
     }
 
     /// Fixed bottom-to-top paint order within each band.
-    pub const DRAW_ORDER: [FieldLayer; 16] = [
+    pub const DRAW_ORDER: [FieldLayer; 18] = [
         // Below-radar context band (bottom to top).
         FieldLayer::Mrms,
         FieldLayer::Hrrr,
         FieldLayer::Cape,
         FieldLayer::Srh,
+        FieldLayer::Smoke,
         FieldLayer::PrecipType,
         // Above-radar severe-signal band.
         FieldLayer::Qpe1h,
@@ -103,6 +109,7 @@ impl FieldLayer {
         FieldLayer::Vil,
         FieldLayer::EchoTops,
         FieldLayer::Hca,
+        FieldLayer::UpdraftHelicity,
         FieldLayer::Rotation,
         FieldLayer::Mesh,
         FieldLayer::AzShear,

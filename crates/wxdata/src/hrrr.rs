@@ -110,6 +110,76 @@ pub async fn fetch_fields_one_run(
     Err(last_err.unwrap_or_else(|| anyhow::anyhow!("no HRRR run found")))
 }
 
+/// Fetch one field across forecast hours `1..=through_hour` from a SINGLE model cycle and fold
+/// them into one grid by elementwise max — the "swath" a max-per-hour field is meant to be read as.
+///
+/// HRRR's max fields (MXUPHL and friends) each cover one hour's window, so a single hour answers
+/// "where was rotation strongest between F+2 and F+3" — useful, but the map chasers actually want
+/// is the union: everywhere a rotating storm is forecast to pass between now and then. Hours come
+/// from one run for the same reason [`fetch_fields_one_run`] exists.
+pub async fn fetch_field_swath(
+    http: &reqwest::Client,
+    var: &str,
+    level: &str,
+    through_hour: u8,
+    min_valid: f64,
+) -> anyhow::Result<HrrrForecast> {
+    let through = through_hour.clamp(1, 18);
+    let now = Utc::now();
+    let mut last_err = None;
+    for back in 1..=6 {
+        let run = (now - chrono::Duration::hours(back))
+            .with_minute(0)
+            .unwrap()
+            .with_second(0)
+            .unwrap()
+            .with_nanosecond(0)
+            .unwrap();
+        let mut acc: Option<MrmsField> = None;
+        let mut failed = None;
+        for fh in 1..=through {
+            match fetch_run_field(http, run, fh, var, level, min_valid).await {
+                Ok(f) => match acc.as_mut() {
+                    None => acc = Some(f),
+                    Some(a) => merge_max(a, &f),
+                },
+                Err(e) => {
+                    failed = Some(e);
+                    break;
+                }
+            }
+        }
+        match (failed, acc) {
+            (None, Some(field)) => {
+                return Ok(HrrrForecast {
+                    field,
+                    run,
+                    fcst_hour: through,
+                })
+            }
+            (e, _) => last_err = e.or(last_err),
+        }
+    }
+    Err(last_err.unwrap_or_else(|| anyhow::anyhow!("no HRRR run found")))
+}
+
+/// Fold `src` into `dst` by keeping the larger value per cell. Both come from the same run and
+/// the same regrid parameters, so the grids are aligned; mismatched shapes are left alone rather
+/// than producing a scrambled field.
+fn merge_max(dst: &mut MrmsField, src: &MrmsField) {
+    if dst.nx != src.nx || dst.ny != src.ny || dst.values.len() != src.values.len() {
+        return;
+    }
+    for (d, s) in dst.values.iter_mut().zip(&src.values) {
+        if s.is_nan() {
+            continue;
+        }
+        if d.is_nan() || s > d {
+            *d = *s;
+        }
+    }
+}
+
 async fn fetch_run_field(
     http: &reqwest::Client,
     run: DateTime<Utc>,

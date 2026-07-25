@@ -197,15 +197,39 @@ fn main() -> eframe::Result<()> {
         return Ok(());
     }
 
-    // HRRR future-radar verify: `hookecho --headless-hrrr [fcsthour] <out.png>`.
+    // HRRR layer verify: `hookecho --headless-hrrr [refc|uh|smoke] [fcsthour] <out.png>`.
+    // The layer name is optional and defaults to future radar, so the old argument order
+    // (`--headless-hrrr 3 out.png`) still works.
     if let Some(pos) = args.iter().position(|a| a == "--headless-hrrr") {
-        let fh: u8 = args.get(pos + 1).and_then(|s| s.parse().ok()).unwrap_or(1);
-        let out = args
-            .get(pos + 2)
-            .filter(|a| !a.starts_with("--"))
-            .map(String::as_str)
-            .unwrap_or("hrrr.png");
-        if let Err(e) = headless::run_hrrr(fh, out) {
+        use hookecho::render::FieldLayer as FL;
+        let mut rest = args[pos + 1..]
+            .iter()
+            .take_while(|a| !a.starts_with("--"))
+            .map(String::as_str);
+        let mut next = rest.next();
+        let layer = match next {
+            Some("uh") | Some("rotation") => {
+                next = rest.next();
+                FL::UpdraftHelicity
+            }
+            Some("smoke") => {
+                next = rest.next();
+                FL::Smoke
+            }
+            Some("refc") | Some("radar") => {
+                next = rest.next();
+                FL::Hrrr
+            }
+            _ => FL::Hrrr,
+        };
+        let fh: u8 = next.and_then(|s| s.parse().ok()).unwrap_or(1);
+        let out = if next.is_some_and(|s| s.parse::<u8>().is_ok()) {
+            rest.next()
+        } else {
+            next
+        }
+        .unwrap_or("hrrr.png");
+        if let Err(e) = headless::run_hrrr_layer(layer, fh, out) {
             eprintln!("headless hrrr render failed: {e}");
             std::process::exit(1);
         }

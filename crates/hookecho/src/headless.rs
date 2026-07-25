@@ -1308,15 +1308,98 @@ pub fn run_env(slug: &str, out_path: &str) -> anyhow::Result<()> {
 
 /// Fetch + regrid an HRRR reflectivity forecast for `fcst_hour`, print stats, render over CONUS.
 pub fn run_hrrr(fcst_hour: u8, out_path: &str) -> anyhow::Result<()> {
+    run_hrrr_layer(crate::render::FieldLayer::Hrrr, fcst_hour, out_path)
+}
+
+/// Render any HRRR-backed field layer (future radar, rotation tracks, smoke) for `fcst_hour`,
+/// printing grid stats first — decoded ranges are how a units mistake gets caught before it
+/// reaches the map.
+pub fn run_hrrr_layer(
+    layer: crate::render::FieldLayer,
+    fcst_hour: u8,
+    out_path: &str,
+) -> anyhow::Result<()> {
     use crate::render::{mercator::lonlat_to_world, FieldLayer, MrmsUpload};
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()?;
     let fc = rt.block_on(async {
         let client = reqwest::Client::new();
-        wxdata::hrrr::fetch_forecast(&client, fcst_hour).await
+        match layer {
+            FieldLayer::UpdraftHelicity => {
+                wxdata::hrrr::fetch_field_swath(
+                    &client,
+                    "MXUPHL",
+                    "5000-2000 m above ground",
+                    fcst_hour.max(1),
+                    0.0,
+                )
+                .await
+            }
+            FieldLayer::Smoke => {
+                wxdata::hrrr::fetch_field(&client, "MASSDEN", "8 m above ground", fcst_hour, 0.0)
+                    .await
+            }
+            _ => wxdata::hrrr::fetch_forecast(&client, fcst_hour).await,
+        }
     })?;
     let f = &fc.field;
+    if layer != FieldLayer::Hrrr {
+        let vmax = f
+            .values
+            .iter()
+            .cloned()
+            .filter(|v| !v.is_nan())
+            .fold(f32::MIN, f32::max);
+        let ramp = crate::render::field_ramps::ramp_for(layer);
+        println!(
+            "{:?} F+{}h  {}x{}  filled {}  max {:.3}{}  run {}",
+            layer,
+            fc.fcst_hour,
+            f.nx,
+            f.ny,
+            f.values.iter().filter(|v| !v.is_nan()).count(),
+            ramp.map_or(vmax, |r| r.display(vmax)),
+            ramp.map(|r| format!(" {}", r.units)).unwrap_or_default(),
+            fc.run.format("%Y-%m-%d %HZ"),
+        );
+        let data: Vec<u8> = f
+            .values
+            .iter()
+            .map(|&v| ramp.map_or(0, |r| if v.is_nan() { 0 } else { r.index(v) }))
+            .collect();
+        let lut = match ramp.map(|r| &r.scale) {
+            Some(crate::render::field_ramps::FieldScale::Ramp { stops, .. }) => {
+                crate::render::field_ramps::bake_ramp_lut(stops, ramp.unwrap().alpha)
+            }
+            _ => vec![0u8; 256 * 4],
+        };
+        let (wx0, wy0) = lonlat_to_world(f.lon_west, f.lat_north);
+        let (wx1, wy1) = lonlat_to_world(f.lon_east, f.lat_south);
+        let upload = MrmsUpload {
+            data,
+            nx: f.nx as u32,
+            ny: f.ny as u32,
+            world_min: [wx0 as f32, wy0 as f32],
+            world_max: [wx1 as f32, wy1 as f32],
+            uniform: [
+                f.lon_west as f32,
+                f.lat_north as f32,
+                f.lon_east as f32,
+                f.lat_south as f32,
+                f.nx as f32,
+                f.ny as f32,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+            ],
+            lut,
+        };
+        return render_field_png(&rt, layer, upload, out_path);
+    }
     let valid = f.values.iter().filter(|v| !v.is_nan()).count();
     let vmax = f
         .values
@@ -1390,6 +1473,36 @@ pub fn run_hrrr(fcst_hour: u8, out_path: &str) -> anyhow::Result<()> {
         clear_vector: false,
     };
     render_to_png(&rt, cb, out_path)
+}
+
+/// Draw one prepared gridded field over the national basemap and save it.
+fn render_field_png(
+    rt: &tokio::runtime::Runtime,
+    layer: crate::render::FieldLayer,
+    upload: crate::render::MrmsUpload,
+    out_path: &str,
+) -> anyhow::Result<()> {
+    let camera = cam_or_env(-97.0, 38.0, 4.0);
+    let (new_tiles, visible, new_vector_tiles, visible_vector) = national_basemap(rt, &camera);
+    let (center, scale) = camera.world_to_clip_uniform((SIZE as f32, SIZE as f32));
+    let cb = MapCallback {
+        pane: 0,
+        camera_center: center,
+        camera_scale: scale,
+        new_tiles,
+        visible,
+        radar_upload: None,
+        draw_radar: false,
+        overlay_upload: None,
+        draw_overlay: false,
+        field_uploads: vec![(layer, upload)],
+        field_draws: vec![layer],
+        clear_tiles: false,
+        new_vector_tiles,
+        visible_vector,
+        clear_vector: false,
+    };
+    render_to_png(rt, cb, out_path)
 }
 
 /// Reconstruct a vertical cross-section for `site` along `a`→`b` (`(lon,lat)`) and save the panel

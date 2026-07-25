@@ -40,11 +40,20 @@ pub struct FieldRamp {
     pub scale: FieldScale,
     /// Opacity for non-zero indices; environment overlays sit translucent over the basemap.
     pub alpha: u8,
+    /// Multiplier applied to raw grid values before anything else, when the wire units aren't the
+    /// units anyone reads (HRRR smoke arrives in kg/m³; people talk in µg/m³).
+    pub input_scale: f32,
 }
 
 impl FieldRamp {
+    /// Raw grid value in this layer's display units (applies [`Self::input_scale`]).
+    pub fn display(&self, v: f32) -> f32 {
+        v * self.input_scale
+    }
+
     /// Raw grid value → LUT index. Index 0 is "nothing here" (fully transparent).
     pub fn index(&self, v: f32) -> u8 {
+        let v = self.display(v);
         match &self.scale {
             FieldScale::Categorical(_) => v as u8,
             FieldScale::Ramp {
@@ -73,6 +82,7 @@ macro_rules! ramp {
             label: $label,
             units: $units,
             alpha: $alpha,
+            input_scale: 1.0,
             scale: FieldScale::Ramp {
                 lo: $lo,
                 hi: $hi,
@@ -235,6 +245,7 @@ static PRECIP_TYPE: FieldRamp = FieldRamp {
     label: "Precip type",
     units: "",
     alpha: 200,
+    input_scale: 1.0,
     scale: FieldScale::Categorical(&[
         (1, [60, 200, 90], "Rain"),
         (3, [90, 150, 240], "Snow"),
@@ -250,6 +261,7 @@ static HCA: FieldRamp = FieldRamp {
     label: "Hydrometeor class",
     units: "",
     alpha: 200,
+    input_scale: 1.0,
     scale: FieldScale::Categorical(&[
         (10, [140, 110, 90], "Biological"),
         (20, [95, 95, 95], "Clutter"),
@@ -268,6 +280,75 @@ static HCA: FieldRamp = FieldRamp {
     ]),
 };
 
+static UPDRAFT_HELICITY: FieldRamp = ramp!(
+    "Forecast rotation",
+    "m\u{b2}/s\u{b2}",
+    25.0,
+    200.0,
+    RampScale::Linear,
+    220,
+    &[
+        (0.0, [90, 60, 190]),
+        (0.35, [160, 60, 220]),
+        (0.7, [230, 70, 200]),
+        (1.0, [255, 210, 245]),
+    ]
+);
+
+static SMOKE: FieldRamp = FieldRamp {
+    input_scale: 1.0e9,
+    ..ramp_smoke()
+};
+
+const fn ramp_smoke() -> FieldRamp {
+    ramp!(
+        "Smoke",
+        "\u{b5}g/m\u{b3}",
+        2.0,
+        150.0,
+        RampScale::Log,
+        170,
+        &[
+            (0.0, [170, 170, 165]),
+            (0.4, [160, 135, 100]),
+            (0.7, [140, 95, 60]),
+            (1.0, [90, 50, 30]),
+        ]
+    )
+}
+
+/// Bake a 256-entry RGBA LUT from ramp `stops`, with `alpha` on every non-zero index (index 0
+/// stays clear = "no data"). Shared by the GPU upload path and the headless verifiers.
+pub fn bake_ramp_lut(stops: &[(f32, [u8; 3])], alpha: u8) -> Vec<u8> {
+    let mut lut = vec![0u8; 256 * 4];
+    for (i, slot) in lut.chunks_exact_mut(4).enumerate().skip(1) {
+        let t = i as f32 / 255.0;
+        let mut rgb = stops[0].1;
+        for w in stops.windows(2) {
+            let (t0, c0) = w[0];
+            let (t1, c1) = w[1];
+            if t >= t0 && t <= t1 {
+                let u = if (t1 - t0).abs() < f32::EPSILON {
+                    0.0
+                } else {
+                    (t - t0) / (t1 - t0)
+                };
+                rgb = [
+                    (c0[0] as f32 + (c1[0] as f32 - c0[0] as f32) * u) as u8,
+                    (c0[1] as f32 + (c1[1] as f32 - c0[1] as f32) * u) as u8,
+                    (c0[2] as f32 + (c1[2] as f32 - c0[2] as f32) * u) as u8,
+                ];
+                break;
+            }
+            if t > t1 {
+                rgb = c1;
+            }
+        }
+        slot.copy_from_slice(&[rgb[0], rgb[1], rgb[2], alpha]);
+    }
+    lut
+}
+
 /// The color scale for `layer`, or `None` for layers colored some other way: the reflectivity
 /// palette (`Mrms`/`Hrrr`, which follow the user's `.pal` table) and `Lightning` (own upload fn).
 pub fn ramp_for(layer: FieldLayer) -> Option<&'static FieldRamp> {
@@ -284,6 +365,8 @@ pub fn ramp_for(layer: FieldLayer) -> Option<&'static FieldRamp> {
         FL::Vil => &VIL,
         FL::EchoTops => &ECHO_TOPS,
         FL::PrecipType => &PRECIP_TYPE,
+        FL::UpdraftHelicity => &UPDRAFT_HELICITY,
+        FL::Smoke => &SMOKE,
         FL::Hca => &HCA,
         FL::Mrms | FL::Hrrr | FL::Lightning => return None,
     })

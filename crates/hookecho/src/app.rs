@@ -149,6 +149,8 @@ enum OverlaySource {
     Hrrr(u8),
     /// HRRR environment field (CAPE/SRH) at f00; `ml` = mixed-layer CAPE, `srh_km` = SRH depth.
     Env(crate::render::FieldLayer, bool, u8),
+    /// HRRR-backed field layer (rotation tracks, smoke) at a forecast hour.
+    HrrrLayer(crate::render::FieldLayer, u8),
     /// Gridded L3 product (DVL/EET) for a site, projected to a lat/lon field (feature X).
     L3Grid(crate::render::FieldLayer, String),
     /// Nearest-station observations for `site` at `(lat, lon)`.
@@ -222,6 +224,28 @@ impl OverlaySource {
             }
             OverlaySource::Hrrr(fh) => {
                 OverlayMsg::Hrrr(wxdata::hrrr::fetch_forecast(http, fh).await?)
+            }
+            OverlaySource::HrrrLayer(layer, fh) => {
+                use crate::render::FieldLayer as FL;
+                let fc = match layer {
+                    // Rotation tracks read as a swath: the union of every hourly max window from
+                    // now through the scrubbed hour, not just that one hour's slice.
+                    FL::UpdraftHelicity => {
+                        wxdata::hrrr::fetch_field_swath(
+                            http,
+                            "MXUPHL",
+                            "5000-2000 m above ground",
+                            fh.max(1),
+                            0.0,
+                        )
+                        .await?
+                    }
+                    _ => {
+                        wxdata::hrrr::fetch_field(http, "MASSDEN", "8 m above ground", fh, 0.0)
+                            .await?
+                    }
+                };
+                OverlayMsg::Field(layer, fc.field)
             }
             OverlaySource::Env(layer, ml, srh_km) => {
                 use crate::render::FieldLayer as FL;
@@ -566,6 +590,8 @@ fn field_refresh_secs(layer: crate::render::FieldLayer) -> u64 {
         FL::Qpe1h | FL::Qpe24h => 120,
         // MRMS precip type / flash-flood ARI on the ~2-min cadence; L3 grids on the 120 s L3 cadence.
         FL::PrecipType | FL::FlashFlood | FL::Vil | FL::EchoTops | FL::Hca => 120,
+        FL::UpdraftHelicity => 600,
+        FL::Smoke => 900,
         // The 24-h hail-swath accumulation moves slowly.
         FL::HailSwath => 300,
         // Environment (HRRR CAPE/SRH) refreshes slowly — 15 min.
@@ -815,6 +841,9 @@ pub struct HookEchoApp {
     error_chip: Option<(String, f64)>,
     /// Search text in the mobile navigation drawer's registry list.
     mobile_drawer_query: String,
+    /// Forecast hour each HRRR-backed field layer was last fetched for, so scrubbing the tail
+    /// refetches instead of showing a stale hour until the cadence expires.
+    hrrr_layer_hour: std::collections::HashMap<crate::render::FieldLayer, u8>,
     /// Level 3 clickable storm cells for `cells_site` (the active site when last fetched).
     storm_cells: Vec<Cell>,
     cells_site: Option<String>,
@@ -1195,6 +1224,7 @@ impl HookEchoApp {
             warning_popup: None,
             error_chip: None,
             mobile_drawer_query: String::new(),
+            hrrr_layer_hour: std::collections::HashMap::new(),
             storm_cells: Vec::new(),
             ui_scale_applied: -1.0,
             ime_shown: false,
@@ -3177,6 +3207,20 @@ impl HookEchoApp {
                 "HRRR future radar",
                 "Forecast radar picture for the next 18 hours (not observed)",
                 true,
+            ),
+            (
+                FL::UpdraftHelicity,
+                "Models",
+                "Future rotation tracks",
+                "Where storms are forecast to rotate \u{2014} scrub the timeline to extend the swath",
+                true,
+            ),
+            (
+                FL::Smoke,
+                "Models",
+                "Wildfire smoke",
+                "Forecast smoke near the ground, from active fires",
+                false,
             ),
             (
                 FL::Cape,
@@ -7239,7 +7283,7 @@ pub(crate) fn field_upload_indexed(
         return field_index_upload(f, |_| 0, vec![0u8; 256 * 4]);
     };
     let lut = match r.scale {
-        FieldScale::Ramp { stops, .. } => ramp_lut_a(stops, r.alpha),
+        FieldScale::Ramp { stops, .. } => crate::render::field_ramps::bake_ramp_lut(stops, r.alpha),
         FieldScale::Categorical(cats) => {
             let slots: Vec<(u8, [u8; 3])> = cats.iter().map(|&(i, rgb, _)| (i, rgb)).collect();
             categorical_lut(&slots, r.alpha)
@@ -7516,7 +7560,14 @@ impl eframe::App for HookEchoApp {
             // HRRR forecast, HRRR environment, and per-site L3 grids each fetch in their own block.
             if matches!(
                 layer,
-                FL::Hrrr | FL::Cape | FL::Srh | FL::Vil | FL::EchoTops | FL::Hca
+                FL::Hrrr
+                    | FL::Cape
+                    | FL::Srh
+                    | FL::Vil
+                    | FL::EchoTops
+                    | FL::Hca
+                    | FL::UpdraftHelicity
+                    | FL::Smoke
             ) {
                 continue;
             }
@@ -7540,9 +7591,14 @@ impl eframe::App for HookEchoApp {
                     FL::PrecipType => wxdata::mrms::PRECIP_TYPE.to_string(),
                     FL::FlashFlood => wxdata::mrms::FLASH_ARI30.to_string(),
                     FL::HailSwath => wxdata::mrms::MESH_1440.to_string(),
-                    FL::Hrrr | FL::Cape | FL::Srh | FL::Vil | FL::EchoTops | FL::Hca => {
-                        unreachable!()
-                    }
+                    FL::Hrrr
+                    | FL::Cape
+                    | FL::Srh
+                    | FL::Vil
+                    | FL::EchoTops
+                    | FL::Hca
+                    | FL::UpdraftHelicity
+                    | FL::Smoke => unreachable!(),
                 };
                 self.spawn_overlay(ctx, OverlaySource::Field(layer, product));
             }
@@ -7562,6 +7618,25 @@ impl eframe::App for HookEchoApp {
                     ctx,
                     OverlaySource::Env(layer, self.env_cape_ml, self.env_srh_km),
                 );
+            }
+        }
+        // HRRR rotation tracks + smoke: same forecast-hour scrub as future radar, own cadences.
+        for layer in [FL::UpdraftHelicity, FL::Smoke] {
+            let fh = self.hrrr_fcst_hour;
+            let stale = self.fields.get(&layer).is_some_and(|s| {
+                s.show
+                    && s.last_fetch
+                        .is_none_or(|t| t.elapsed().as_secs() >= field_refresh_secs(layer))
+            });
+            // Scrubbing the forecast tail must refetch immediately, not wait out the cadence.
+            let hour_changed = self.fields.get(&layer).is_some_and(|s| s.show)
+                && self.hrrr_layer_hour.get(&layer) != Some(&fh);
+            if stale || hour_changed {
+                if let Some(s) = self.fields.get_mut(&layer) {
+                    s.last_fetch = Some(Instant::now());
+                }
+                self.hrrr_layer_hour.insert(layer, fh);
+                self.spawn_overlay(ctx, OverlaySource::HrrrLayer(layer, fh));
             }
         }
         // Gridded L3 products (DVL/EET): per-site, refetch on the L3 cadence or a site change.
