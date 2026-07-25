@@ -20,16 +20,44 @@ pub fn to_image(xs: &CrossSection, table: &ColorTable) -> egui::ColorImage {
 }
 
 /// Show the cross-section window. Returns `false` when it should close.
-pub fn show(ctx: &egui::Context, xs: &CrossSection, tex: &egui::TextureHandle) -> bool {
+pub fn show(
+    ctx: &egui::Context,
+    xs: &CrossSection,
+    tex: &egui::TextureHandle,
+    moment: &mut wxdata::level2::Moment,
+) -> bool {
+    use wxdata::level2::Moment;
     let mut open = true;
+    let mut changed = false;
     crate::ui::fit_phone(ctx, egui::Window::new("Cross-section"))
         .open(&mut open)
         .default_size([560.0, 300.0])
         .show(ctx, |ui| {
-            ui.label(format!(
-                "Length {:.0} km · top {:.0} km · reflectivity",
-                xs.length_km, xs.max_height_km
-            ));
+            ui.horizontal(|ui| {
+                ui.label(format!(
+                    "Length {:.0} km · top {:.0} km",
+                    xs.length_km, xs.max_height_km
+                ));
+                ui.separator();
+                // Velocity shows how a couplet leans with height; CC shows how deep the debris
+                // ball really is. Both were unreachable while this was hard-wired to REF.
+                for m in [
+                    Moment::Reflectivity,
+                    Moment::Velocity,
+                    Moment::CorrelationCoefficient,
+                ] {
+                    let info = crate::products::info(m);
+                    if ui
+                        .selectable_label(*moment == m, info.short)
+                        .on_hover_text(info.name)
+                        .clicked()
+                        && *moment != m
+                    {
+                        *moment = m;
+                        changed = true;
+                    }
+                }
+            });
             ui.separator();
             // Draw the panel stretched to a readable size (distance wide, height tall).
             let avail = ui.available_size();
@@ -76,5 +104,9 @@ pub fn show(ctx: &egui::Context, xs: &CrossSection, tex: &egui::TextureHandle) -
             );
             ui.weak("A→B left to right; height increases upward. Gaps = no beam coverage.");
         });
+    if changed {
+        // Force a rebuild on the next frame with the new moment.
+        ctx.request_repaint();
+    }
     open
 }

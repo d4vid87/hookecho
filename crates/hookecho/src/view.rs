@@ -77,9 +77,15 @@ impl Volume {
 
     /// All reflectivity tilts as owned sweeps (lowest→highest), for vertical cross-sections.
     pub fn reflectivity_tilts(&mut self) -> Vec<BinnedSweep> {
+        self.moment_tilts(Moment::Reflectivity)
+    }
+
+    /// All tilts of `moment` as owned sweeps (lowest→highest). Cross-sections of velocity show
+    /// how a couplet leans with height; CC slices show how deep a debris ball actually is.
+    pub fn moment_tilts(&mut self, moment: Moment) -> Vec<BinnedSweep> {
         let n = self.elevations.len();
         (0..n)
-            .filter_map(|t| self.binned(Moment::Reflectivity, t, false).ok().cloned())
+            .filter_map(|t| self.binned(moment, t, false).ok().cloned())
             .collect()
     }
 }

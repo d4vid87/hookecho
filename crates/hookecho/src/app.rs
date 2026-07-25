@@ -849,6 +849,8 @@ pub struct HookEchoApp {
     /// Open "Storm {id} Attributes" window (a clicked storm cell).
     cell_popup: Option<Cell>,
     cells_window: ui::cells_window::CellsWindow,
+    /// Which moment the cross-section slices (session state, not persisted).
+    xsection_moment: Moment,
     /// Storm-follow camera: the `(site, last-snapshot cell, since)` the active pane is tracking.
     /// Each new volume recenters on this cell; a manual pan or site change cancels it.
     follow_cell: Option<(String, Cell, Instant)>,
@@ -1239,6 +1241,7 @@ impl HookEchoApp {
             detail: None,
             cell_popup: None,
             cells_window: Default::default(),
+            xsection_moment: Moment::Reflectivity,
             follow_cell: None,
             follow_notice: None,
             warning_popup: None,
@@ -1856,7 +1859,8 @@ impl HookEchoApp {
         let Some(vol) = self.views[idx].volume.as_mut() else {
             return;
         };
-        let sweeps = vol.reflectivity_tilts(); // owned → the &mut vol borrow ends here
+        let moment = self.xsection_moment;
+        let sweeps = vol.moment_tilts(moment); // owned → the &mut vol borrow ends here
         if sweeps.is_empty() {
             return;
         }
@@ -1864,7 +1868,7 @@ impl HookEchoApp {
         else {
             return;
         };
-        let img = ui::xsection_window::to_image(&xs, self.palettes.table(Moment::Reflectivity));
+        let img = ui::xsection_window::to_image(&xs, self.palettes.table(moment));
         self.xsection_tex = Some(ctx.load_texture("xsection", img, egui::TextureOptions::LINEAR));
         self.xsection = Some(xs);
     }
@@ -8246,10 +8250,16 @@ impl eframe::App for HookEchoApp {
             self.show_hodo = false;
         }
         if let (Some(xs), Some(tex)) = (&self.xsection, &self.xsection_tex) {
-            if !ui::xsection_window::show(ctx, xs, tex) {
+            let mut moment = self.xsection_moment;
+            let open = ui::xsection_window::show(ctx, xs, tex, &mut moment);
+            if !open {
                 self.xsection = None;
                 self.xsection_tex = None;
                 self.xsection_pts.clear();
+            } else if moment != self.xsection_moment {
+                self.xsection_moment = moment;
+                let idx = self.active;
+                self.build_xsection(idx, ctx);
             }
         }
         if self.show_3d {
