@@ -1052,6 +1052,10 @@ pub struct HookEchoApp {
     )>,
     forecast_cache:
         std::collections::HashMap<(i32, i32), (Instant, wxdata::forecast::PointForecast)>,
+    /// Rain-arrival alerting: per-point persistence/cooldown state, plus the current ETAs for the
+    /// on-map chip.
+    rain_detector: crate::rain_arrival::Detector,
+    rain_eta: Vec<(String, f32)>,
     hodo_site: Option<String>,
     hodo_last_fetch: Option<Instant>,
     /// Streamer/OBS mode: hide all chrome (menu/toolbox/status/docks), leaving only the map.
@@ -1387,6 +1391,8 @@ impl HookEchoApp {
             forecast_state: ui::forecast_window::State::Loading,
             forecast_rx: None,
             forecast_cache: std::collections::HashMap::new(),
+            rain_detector: Default::default(),
+            rain_eta: Vec::new(),
             hodo_site: None,
             hodo_last_fetch: None,
             obs_mode: false,
@@ -1731,6 +1737,95 @@ impl HookEchoApp {
         }
         if fired && self.settings.alert_sound {
             crate::audio::play(&self.settings.lightning_sound, self.settings.alert_volume);
+        }
+    }
+
+    /// Check whether echo is heading for any watched point (saved markers + your chase position)
+    /// and alert once per approach. Live data only — an ETA off an archived scan is meaningless.
+    fn check_rain_arrival(&mut self) {
+        use crate::rain_arrival::{upstream_eta, Verdict};
+        if !self.settings.rain_alerts {
+            self.rain_eta.clear();
+            return;
+        }
+        let Some((dir, kt)) = self.scit_mean_motion() else {
+            return;
+        };
+        let idx = self.active;
+        if !self.views[idx].timeline.following {
+            return;
+        }
+        // Watched points: every saved marker, plus where you are if chase mode knows.
+        let mut points: Vec<(String, [f64; 2])> = self
+            .settings
+            .markers
+            .iter()
+            .map(|m| (m.name.clone(), [m.lon, m.lat]))
+            .collect();
+        if let Some((lon, lat)) = self.chase_pos {
+            points.push(("your location".to_string(), [lon, lat]));
+        }
+        if points.is_empty() {
+            return;
+        }
+        let names: Vec<String> = points.iter().map(|(n, _)| n.clone()).collect();
+        self.rain_detector.retain(&names);
+
+        let tilt = self.views[idx].tilt;
+        let Some(sweep) = self.views[idx]
+            .volume
+            .as_mut()
+            .and_then(|v| v.binned(Moment::Reflectivity, tilt, false).ok())
+            .cloned()
+        else {
+            return;
+        };
+        let span = (sweep.value_max - sweep.value_min).max(1e-3);
+        let radar = [sweep.radar_lon as f64, sweep.radar_lat as f64];
+        // Reflectivity at a lon/lat, by inverting the polar bin geometry.
+        let sample = |lon: f64, lat: f64| -> Option<f32> {
+            let (range_km, bearing) = crate::geo::great_circle(radar, [lon, lat]);
+            let gate = ((range_km as f32 - sweep.first_gate_km) / sweep.gate_interval_km).round();
+            if gate < 0.0 || gate as usize >= sweep.gate_count {
+                return None;
+            }
+            let az = (bearing / 360.0 * sweep.az_bins as f64).round() as usize % sweep.az_bins;
+            let v = sweep.data[az * sweep.gate_count + gate as usize];
+            if v < 2 {
+                return Some(f32::NEG_INFINITY);
+            }
+            Some(sweep.value_min + (v as f32 - 2.0) / 253.0 * span)
+        };
+
+        let mut fired = false;
+        self.rain_eta.clear();
+        for (name, at) in &points {
+            let eta = upstream_eta(
+                sample,
+                *at,
+                dir as f64,
+                kt as f64,
+                crate::rain_arrival::MAX_MIN,
+            );
+            if let Some(min) = eta {
+                self.rain_eta.push((name.clone(), min));
+            }
+            if let Verdict::Fire(min) = self.rain_detector.update(name, eta) {
+                self.push_ntfy(
+                    &format!("\u{1f327} Rain reaching {name}"),
+                    &format!("About {min:.0} minutes out"),
+                    false,
+                );
+                self.warning_banners.push((
+                    format!("\u{1f327} Rain reaching {name}"),
+                    format!("~{min:.0} min"),
+                    Instant::now(),
+                ));
+                fired = true;
+            }
+        }
+        if fired && self.settings.alert_sound {
+            crate::audio::play(&self.settings.rain_sound, self.settings.alert_volume);
         }
     }
 
@@ -5412,6 +5507,9 @@ impl HookEchoApp {
         } else {
             Vec::new()
         };
+        if idx == self.active {
+            self.check_rain_arrival();
+        }
 
         // --- Painter overlays (clipped to this pane) ---
         let painter = ui.painter_at(prect);
@@ -7092,6 +7190,12 @@ impl HookEchoApp {
             MapTool::Climatology => "Climatology: click a point",
             MapTool::Interrogate => "",
         };
+        // Soonest rain arrival rides the info chip rather than adding another floating surface.
+        let rain = self
+            .rain_eta
+            .iter()
+            .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
+            .map(|(name, min)| format!("\u{1f327} {name} ~{min:.0} min"));
         let zoom = format!("z{:.1}", v.camera.zoom);
         let coords = self
             .cursor_ll
@@ -7107,6 +7211,17 @@ impl HookEchoApp {
             .show(ctx, |ui| {
                 style::glass(238).show(ui, |ui| {
                     ui.horizontal(|ui| {
+                        if let Some(r) = &rain {
+                            ui.label(
+                                egui::RichText::new(r)
+                                    .size(style::FONT_SM)
+                                    .color(egui::Color32::from_rgb(110, 180, 240)),
+                            )
+                            .on_hover_text(
+                                "Estimated from storm motion \u{2014} rough for backbuilding storms",
+                            );
+                            ui.separator();
+                        }
                         if !hint.is_empty() {
                             ui.label(egui::RichText::new(hint).size(style::FONT_SM).color(accent));
                             ui.separator();

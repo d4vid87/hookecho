@@ -165,6 +165,12 @@ pub struct Settings {
     /// Read new warnings aloud (system speech engine). Off by default — speech is intrusive.
     #[serde(default)]
     pub speak_warnings: bool,
+    /// Alert when radar echo is heading for a saved location.
+    #[serde(default)]
+    pub rain_alerts: bool,
+    /// Sound for the rain-arrival alert.
+    #[serde(default)]
+    pub rain_sound: AlertSound,
     /// First-run setup wizard completed (or dismissed). `false` shows it at startup.
     #[serde(default)]
     pub setup_done: bool,
@@ -361,6 +367,8 @@ impl Default for Settings {
             anthropic_key: String::new(),
             lightning_alarm: false,
             speak_warnings: false,
+            rain_alerts: false,
+            rain_sound: AlertSound::default(),
             setup_done: false,
             coach_done: false,
             warn_sound: AlertSound::default(),
@@ -533,6 +541,8 @@ mod tests {
             anthropic_key: "sk-test".to_string(),
             lightning_alarm: true,
             speak_warnings: true,
+            rain_alerts: true,
+            rain_sound: AlertSound::Ding,
             setup_done: true,
             coach_done: true,
             warn_sound: AlertSound::Siren,

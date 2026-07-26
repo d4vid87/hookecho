@@ -22,6 +22,7 @@ pub mod overlay_build;
 pub mod paths;
 pub mod platform;
 pub mod products;
+pub mod rain_arrival;
 pub mod render;
 pub mod render3d;
 pub mod settings;

@@ -385,6 +385,14 @@ fn alerts_tab(ui: &mut egui::Ui, settings: &mut Settings) {
     ui.add_space(8.0);
     ui.separator();
     ui.strong("Proximity alarms");
+    ui.checkbox(
+        &mut settings.rain_alerts,
+        "Rain heading for a saved location",
+    )
+    .on_hover_text(
+        "Watches upwind of your saved places and your chase position, and says roughly how \
+             many minutes out the rain is",
+    );
     ui.checkbox(&mut settings.lightning_alarm, "Lightning within ~15 km of a saved location")
         .on_hover_text("Chime + push when CG lightning strikes near a marker. Requires the Lightning layer (National) to be on.");
 }
