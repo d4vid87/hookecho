@@ -62,30 +62,40 @@ sliders, chase packs, and the rest.
 
 **Level 2 base data** — all six moments on a GPU polar pipeline over vector/raster
 basemaps, with VCP-aware tilt selection, velocity dealiasing, storm-relative
-velocity, and GRLevelX `.pal` color tables (editable in-app):
+velocity, and GRLevelX `.pal` color tables (editable in-app). Every product
+carries a plain-English description of what it shows, and one action opens the
+same product at four tilts with the cameras linked:
 
-| Reflectivity | Velocity (dealiased) | Correlation coefficient |
+| Live radar | Velocity (dealiased) | Four tilts at once |
 |---|---|---|
-| ![REF](docs/shots/reflectivity.jpg) | ![VEL](docs/shots/velocity.jpg) | ![CC](docs/shots/cc.jpg) |
+| ![REF](docs/shots/reflectivity.jpg) | ![VEL](docs/shots/velocity.jpg) | ![All tilts](docs/shots/alltilts.jpg) |
+
+**Looking ahead** — HRRR future radar on the timeline's forecast tail, forecast
+**rotation tracks** (max updraft-helicity swaths — where storms are forecast to
+rotate), near-surface **wildfire smoke**, the WPC **surface analysis** with its
+fronts and pressure centers, and a plain **point forecast** for anywhere you tap:
+
+| Forecast rotation tracks | Surface fronts | Tap-for-forecast |
+|---|---|---|
+| ![Rotation tracks](docs/shots/rotationtracks.jpg) | ![Fronts](docs/shots/fronts.jpg) | ![Forecast](docs/shots/forecast.jpg) |
+
+**When storms are up** — every tracked cell in one sortable table (hail size,
+tops, VIL, rotation flags — click a row to fly there), clickable NWS bulletins
+with parsed storm-motion vectors, an active-alerts panel, vertical
+cross-sections in any product, and rain-arrival ETAs for your saved places:
+
+| Storm attributes | Active alerts | Cross-section |
+|---|---|---|
+| ![Storm table](docs/shots/stormtable.jpg) | ![Alerts](docs/shots/alerts.jpg) | ![Cross-section](docs/shots/xsection.jpg) |
 
 **National view (MRMS)** — CONUS composite reflectivity, cloud-to-ground lightning
 density, rotation tracks / azimuthal shear, MESH hail size + 24-h hail swaths,
 storm-total QPE flood layers, surface precipitation type, and FLASH flash-flood
-recurrence intervals:
+recurrence intervals. Every gridded layer draws its own scale and units:
 
 | CONUS composite | 1-h QPE | HRRR future radar |
 |---|---|---|
 | ![MRMS](docs/shots/mrms.jpg) | ![QPE](docs/shots/qpe.jpg) | ![HRRR](docs/shots/hrrr.jpg) |
-
-**Warnings, alerts & analysis** — clickable NWS bulletins with polygon overlays,
-parsed storm-motion vectors with projected paths, escalation-aware alerting, an
-active-alerts panel, audible cues, and ntfy push the moment a warning covers one
-of your saved locations; plus vertical cross-sections, CAPPI altitude slices, 3D
-volume raymarching, VAD hodographs and point soundings:
-
-| Active alerts | Cross-section |
-|---|---|
-| ![Alerts](docs/shots/alerts.jpg) | ![Cross-section](docs/shots/xsection.jpg) |
 
 ## Feature highlights
 
@@ -135,6 +145,21 @@ volume raymarching, VAD hodographs and point soundings:
 - **Rotation couplets**: client-side azimuthal-shear couplet detection on the
   live volume, with its own alarm sound — a mesocyclone flag that doesn't wait
   for a Level 3 product.
+- **Forecast tools**: HRRR future radar (0–18 h) on the timeline's forecast tail,
+  **forecast rotation tracks** (MXUPHL swaths accumulated across the forecast
+  hours you scrub to), near-surface **wildfire smoke**, and the WPC **coded
+  surface analysis** — cold/warm/stationary/occluded fronts drawn with their
+  proper pips, plus H/L centers with pressures.
+- **Point forecast**: tap anywhere for that spot's NWS 7-day and hourly forecast
+  — temperature curve over precipitation-probability bars, in the site's clock.
+- **Storm attributes table**: every tracked cell at once, sortable by hail size,
+  reflectivity, tops, VIL or rotation flags; click a row to fly to that storm.
+- **Rain-arrival alerts**: watches upstream of your saved places and your chase
+  position and says roughly how many minutes out the rain is (chip, push, sound).
+- **Spoken warnings**: new warnings read aloud through the system voice — the
+  system speech engine on desktop, Android's own TTS on the phone.
+- **Wind profile over time**: the VAD hodograph plus a time-height panel of wind
+  barbs accumulated while the app runs, since the radar only publishes the latest.
 - **Radar DVR**: deep in-RAM decode buffer with one-touch instant replay (`R`).
 - **Streamer/OBS mode**: chrome-free UI (`F8`) + auto-tour of active warnings (`F9`).
 - **Chase mode**: live GPS (gpsd on desktop, the system location service on
@@ -187,7 +212,7 @@ cargo run --release -- --headless-indices -97.5 35.3
 ```
 
 ```sh
-cargo test    # 142 offline unit tests
+cargo test    # 173 offline unit tests
 ```
 
 License: MIT.
