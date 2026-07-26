@@ -7,6 +7,7 @@ pub mod aviation;
 pub mod contour;
 pub mod dealias;
 pub mod forecast;
+pub mod fronts;
 pub mod geocode;
 pub mod hrrr;
 pub mod level2;

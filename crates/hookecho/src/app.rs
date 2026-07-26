@@ -92,6 +92,8 @@ impl Default for OverlayFilters {
 /// Background overlay fetch results.
 enum OverlayMsg {
     Alerts(Vec<GeoFeature>),
+    /// WPC coded surface analysis (fronts + pressure centers).
+    Fronts(wxdata::fronts::SurfaceAnalysis),
     Outlook(u8, Vec<GeoFeature>),
     Mds(Vec<GeoFeature>),
     /// Storm cells for a specific site (dropped if the active site changed meanwhile).
@@ -145,6 +147,8 @@ enum OverlaySource {
     StormReports(Option<i64>),
     Spotters,
     ProbSevere,
+    /// WPC coded surface analysis (fronts + pressure centers).
+    Fronts,
     /// HRRR composite-reflectivity forecast for a forecast hour (0..=18).
     Hrrr(u8),
     /// HRRR environment field (CAPE/SRH) at f00; `ml` = mixed-layer CAPE, `srh_km` = SRH depth.
@@ -216,6 +220,7 @@ impl OverlaySource {
                 };
                 OverlayMsg::StormReports(bucket, reports)
             }
+            OverlaySource::Fronts => OverlayMsg::Fronts(wxdata::fronts::fetch(http).await?),
             OverlaySource::Spotters => {
                 OverlayMsg::Spotters(wxdata::spotters::fetch_spotters(http).await?)
             }
@@ -507,6 +512,7 @@ pub(crate) enum OverlayToggle {
     Couplets,
     Alerts,
     Mds,
+    Fronts,
     LinkCameras,
 }
 
@@ -1056,6 +1062,10 @@ pub struct HookEchoApp {
     /// on-map chip.
     rain_detector: crate::rain_arrival::Detector,
     rain_eta: Vec<(String, f32)>,
+    /// WPC surface analysis overlay: fronts + pressure centers, refreshed a few times an hour.
+    show_fronts: bool,
+    fronts: Option<wxdata::fronts::SurfaceAnalysis>,
+    fronts_last_fetch: Option<Instant>,
     hodo_site: Option<String>,
     hodo_last_fetch: Option<Instant>,
     /// Streamer/OBS mode: hide all chrome (menu/toolbox/status/docks), leaving only the map.
@@ -1393,6 +1403,9 @@ impl HookEchoApp {
             forecast_cache: std::collections::HashMap::new(),
             rain_detector: Default::default(),
             rain_eta: Vec::new(),
+            show_fronts: false,
+            fronts: None,
+            fronts_last_fetch: None,
             hodo_site: None,
             hodo_last_fetch: None,
             obs_mode: false,
@@ -3238,6 +3251,7 @@ impl HookEchoApp {
             T::ProbSevere => &mut self.show_probsevere,
             T::Aviation => &mut self.show_aviation,
             T::RangeRings => &mut self.show_range_rings,
+            T::Fronts => &mut self.show_fronts,
             T::Sensors => &mut self.show_sensors,
             T::Hodo => &mut self.show_hodo,
             T::Cells => &mut self.filters.show_cells,
@@ -3582,6 +3596,13 @@ impl HookEchoApp {
                 "Reference",
                 "Radar sites",
                 "Show every NEXRAD site; click one to switch radars",
+                true,
+            ),
+            (
+                T::Fronts,
+                "Reference",
+                "Surface fronts (H/L)",
+                "The cold, warm and stationary fronts from the national weather map",
                 true,
             ),
             (
@@ -3993,6 +4014,7 @@ impl HookEchoApp {
                 },
                 OverlayMsg::Aviation(f) => self.aviation_features = f,
                 OverlayMsg::Spotters(spotters) => self.spotters = spotters,
+                OverlayMsg::Fronts(a) => self.fronts = Some(a),
                 OverlayMsg::ProbSevere(f) => self.probsevere = f,
                 OverlayMsg::Hrrr(fc) => {
                     use crate::render::FieldLayer;
@@ -5598,6 +5620,18 @@ impl HookEchoApp {
                 egui::FontId::proportional(10.0),
                 col,
             );
+        }
+
+        // Surface analysis: fronts with their pips, plus H/L centers.
+        if self.show_fronts {
+            if let Some(a) = &self.fronts {
+                let to_screen = |lon: f64, lat: f64| {
+                    let w = crate::render::mercator::lonlat_to_world(lon, lat);
+                    let (sx, sy) = cam.world_to_screen(w, vp);
+                    egui::pos2(prect.left() + sx, prect.top() + sy)
+                };
+                crate::fronts_draw::draw(&painter, a, prect, to_screen);
+            }
         }
 
         // HRRR model contours (MSLP / 2 m temp / dewpoint / CAPE / SRH): labeled isolines + banner.
@@ -7918,6 +7952,15 @@ impl eframe::App for HookEchoApp {
                 self.hrrr_layer_hour.insert(layer, fh);
                 self.spawn_overlay(ctx, OverlaySource::HrrrLayer(layer, fh));
             }
+        }
+        // Surface analysis: WPC reissues it a few times an hour.
+        if self.show_fronts
+            && self
+                .fronts_last_fetch
+                .is_none_or(|t| t.elapsed().as_secs() >= 1800)
+        {
+            self.fronts_last_fetch = Some(Instant::now());
+            self.spawn_overlay(ctx, OverlaySource::Fronts);
         }
         // Gridded L3 products (DVL/EET): per-site, refetch on the L3 cadence or a site change.
         let l3_site = self.views[self.active].site.clone();

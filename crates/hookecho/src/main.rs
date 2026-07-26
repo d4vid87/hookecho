@@ -236,6 +236,56 @@ fn main() -> eframe::Result<()> {
         return Ok(());
     }
 
+    // Surface analysis verify: `hookecho --headless-fronts`.
+    if args.iter().any(|a| a == "--headless-fronts") {
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .expect("tokio runtime");
+        let res = rt.block_on(async {
+            let client = reqwest::Client::new();
+            wxdata::fronts::fetch(&client).await
+        });
+        match res {
+            Ok(a) => {
+                println!(
+                    "surface analysis: {} fronts, {} centers, valid {}",
+                    a.fronts.len(),
+                    a.centers.len(),
+                    a.valid
+                        .map(|v| v.format("%Y-%m-%d %H:%MZ").to_string())
+                        .unwrap_or_else(|| "?".into())
+                );
+                for kind in [
+                    wxdata::fronts::FrontKind::Cold,
+                    wxdata::fronts::FrontKind::Warm,
+                    wxdata::fronts::FrontKind::Stationary,
+                    wxdata::fronts::FrontKind::Occluded,
+                    wxdata::fronts::FrontKind::Trough,
+                ] {
+                    let n = a.fronts.iter().filter(|f| f.kind == kind).count();
+                    let pts: usize = a
+                        .fronts
+                        .iter()
+                        .filter(|f| f.kind == kind)
+                        .map(|f| f.pts.len())
+                        .sum();
+                    println!("  {:<18} {n:>3} segments, {pts:>4} points", kind.label());
+                }
+                let (h, l) = (
+                    a.centers.iter().filter(|c| c.high).count(),
+                    a.centers.iter().filter(|c| !c.high).count(),
+                );
+                println!("  {h} highs, {l} lows");
+            }
+            Err(e) => {
+                eprintln!("headless fronts failed: {e}");
+                std::process::exit(1);
+            }
+        }
+        return Ok(());
+    }
+
     // CAPPI verify: `hookecho --headless-cappi [SITE] [alt_km] <out.png>`.
     if let Some(pos) = args.iter().position(|a| a == "--headless-cappi") {
         let site = args
