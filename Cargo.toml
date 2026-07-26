@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
-members = ["crates/nexrad-level3", "crates/wxdata", "crates/hookecho"]
+members = [
+    "crates/hdf5lite","crates/nexrad-level3", "crates/wxdata", "crates/hookecho"]
 
 # Vendored gribberish 1.5.0 with a one-line fix to its 8-bit PNG unpack (upstream always read a
 # u16, overrunning MRMS rotation-track / AzShear grids). See vendor/gribberish/src/templates/

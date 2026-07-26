@@ -1,0 +1,178 @@
+{
+ "names": [
+  "algorithm_dynamic_input_data_container",
+  "algorithm_product_version_container",
+  "event_count",
+  "event_energy",
+  "event_id",
+  "event_lat",
+  "event_lon",
+  "event_parent_group_id",
+  "event_time_offset",
+  "flash_area",
+  "flash_count",
+  "flash_energy",
+  "flash_frame_time_offset_of_first_event",
+  "flash_frame_time_offset_of_last_event",
+  "flash_id",
+  "flash_lat",
+  "flash_lon",
+  "flash_quality_flag",
+  "flash_time_offset_of_first_event",
+  "flash_time_offset_of_last_event",
+  "flash_time_threshold",
+  "goes_lat_lon_projection",
+  "group_area",
+  "group_count",
+  "group_energy",
+  "group_frame_time_offset",
+  "group_id",
+  "group_lat",
+  "group_lon",
+  "group_parent_flash_id",
+  "group_quality_flag",
+  "group_time_offset",
+  "group_time_threshold",
+  "lat_field_of_view",
+  "lat_field_of_view_bounds",
+  "lightning_wavelength",
+  "lightning_wavelength_bounds",
+  "lon_field_of_view",
+  "lon_field_of_view_bounds",
+  "nominal_satellite_height",
+  "nominal_satellite_subpoint_lat",
+  "nominal_satellite_subpoint_lon",
+  "number_of_events",
+  "number_of_field_of_view_bounds",
+  "number_of_flashes",
+  "number_of_groups",
+  "number_of_time_bounds",
+  "number_of_wavelength_bounds",
+  "percent_navigated_L1b_events",
+  "percent_uncorrectable_L0_errors",
+  "processing_parm_version_container",
+  "product_time",
+  "product_time_bounds",
+  "yaw_flip_flag"
+ ],
+ "datasets": {
+  "flash_lat": {
+   "len": 154,
+   "first": [
+    4.048609256744385,
+    8.256507873535156,
+    6.345324516296387,
+    -2.119931697845459,
+    -21.337646484375
+   ],
+   "last": [
+    16.231353759765625,
+    19.078529357910156,
+    9.932724952697754,
+    -1.8444353342056274,
+    15.59251880645752
+   ],
+   "n_finite": 154,
+   "min": -21.338298797607422,
+   "max": 50.944854736328125,
+   "sum": 2126.2992548942566
+  },
+  "flash_lon": {
+   "len": 154,
+   "first": [
+    -91.4809341430664,
+    -108.55187225341797,
+    -77.43775177001953,
+    -62.972434997558594,
+    -121.77130126953125
+   ],
+   "last": [
+    -98.5575180053711,
+    -108.96846008300781,
+    -83.02767944335938,
+    -62.988136291503906,
+    -98.08445739746094
+   ],
+   "n_finite": 154,
+   "min": -128.2004852294922,
+   "max": -49.44173812866211,
+   "sum": -14114.585178375244
+  },
+  "flash_energy": {
+   "len": 154,
+   "first": [
+    4.882831883367088e-13,
+    4.628496507902931e-14,
+    3.7328365061129444e-13,
+    4.285133909747552e-15,
+    8.28511783063153e-15
+   ],
+   "last": [
+    4.692832647125099e-13,
+    1.528508969217849e-14,
+    6.752824366380347e-13,
+    2.8285037435051415e-14,
+    2.1532764954046642e-12
+   ],
+   "n_finite": 154,
+   "min": 2.2851419493055637e-15,
+   "max": 2.7572740674581448e-12,
+   "sum": 6.754164177124166e-11
+  },
+  "flash_time_offset_of_first_event": {
+   "len": 154,
+   "first": [
+    -1.0177761538070627,
+    -0.1384748830460012,
+    -0.8442047532880679,
+    -0.08697567629860714,
+    0.05798505380516872
+   ],
+   "last": [
+    -6.3466088875429705,
+    -5.851835027162451,
+    -6.04028397629736,
+    -5.823224356747232,
+    -5.9231709653977305
+   ],
+   "n_finite": 154,
+   "min": -17.388038814184256,
+   "max": 7.416268008993939,
+   "sum": -873.3249566131271
+  },
+  "product_time": {
+   "len": 1,
+   "first": [
+    838335600.0
+   ],
+   "last": [
+    838335600.0
+   ],
+   "n_finite": 1,
+   "min": 838335600.0,
+   "max": 838335600.0,
+   "sum": 838335600.0
+  },
+  "event_lat": {
+   "len": 9141,
+   "first": [
+    -129.0543568278663,
+    -129.0543568278663,
+    -128.981230749283,
+    -129.0543568278663,
+    -129.0543568278663
+   ],
+   "last": [
+    -117.591844009934,
+    -117.51668665139005,
+    -117.59387528989464,
+    -117.51668665139005,
+    -117.5187179313507
+   ],
+   "n_finite": 9141,
+   "min": -129.67592849582434,
+   "max": -0.911060510436073,
+   "sum": -1043724.0691258865
+  }
+ }
+}

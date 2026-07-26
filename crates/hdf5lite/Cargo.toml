@@ -1,0 +1,14 @@
+[package]
+name = "hdf5lite"
+description = "Minimal read-only HDF5 reader — just enough to read netCDF-4 files without libhdf5"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+flate2.workspace = true
+log.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
