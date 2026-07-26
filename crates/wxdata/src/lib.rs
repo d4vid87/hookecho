@@ -6,6 +6,7 @@ pub mod archive_warnings;
 pub mod aviation;
 pub mod contour;
 pub mod dealias;
+pub mod forecast;
 pub mod geocode;
 pub mod hrrr;
 pub mod level2;

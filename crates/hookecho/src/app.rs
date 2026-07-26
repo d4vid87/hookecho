@@ -358,6 +358,8 @@ pub(crate) enum MapTool {
     Sounding,
     /// Click to set your position for chase mode (follow-me + nearest-radar handoff).
     Chase,
+    /// Click a point for the plain NWS forecast there (7-day + hourly).
+    Forecast,
     /// Click a point to list historical tornado tracks near it (SPC climatology).
     Climatology,
 }
@@ -1038,6 +1040,18 @@ pub struct HookEchoApp {
     hodo_history:
         std::collections::VecDeque<(chrono::DateTime<Utc>, Vec<wxdata::level3::VwpLevel>)>,
     hodo_tab: ui::hodograph_window::Tab,
+    /// Tap-for-forecast: window state, the tapped point, the in-flight fetch, and a short cache
+    /// keyed by rounded lat/lon.
+    forecast_open: bool,
+    forecast_at: Option<(f64, f64)>,
+    forecast_state: ui::forecast_window::State,
+    #[allow(clippy::type_complexity)]
+    forecast_rx: Option<(
+        (i32, i32),
+        std::sync::mpsc::Receiver<Result<wxdata::forecast::PointForecast, String>>,
+    )>,
+    forecast_cache:
+        std::collections::HashMap<(i32, i32), (Instant, wxdata::forecast::PointForecast)>,
     hodo_site: Option<String>,
     hodo_last_fetch: Option<Instant>,
     /// Streamer/OBS mode: hide all chrome (menu/toolbox/status/docks), leaving only the map.
@@ -1368,6 +1382,11 @@ impl HookEchoApp {
             hodo_data: Vec::new(),
             hodo_history: std::collections::VecDeque::new(),
             hodo_tab: Default::default(),
+            forecast_open: false,
+            forecast_at: None,
+            forecast_state: ui::forecast_window::State::Loading,
+            forecast_rx: None,
+            forecast_cache: std::collections::HashMap::new(),
             hodo_site: None,
             hodo_last_fetch: None,
             obs_mode: false,
@@ -1998,6 +2017,31 @@ impl HookEchoApp {
     }
 
     /// Pull an HRRR point sounding at `(lon, lat)`, shown in the Skew-T window when it arrives.
+    /// Fetch the NWS point forecast for a tapped spot. Results are cached per ~0.05° cell for
+    /// 15 minutes — the grid only updates hourly, and re-tapping the same neighborhood shouldn't
+    /// re-hit the API.
+    fn fetch_point_forecast(&mut self, lon: f64, lat: f64) {
+        let key = ((lat * 20.0).round() as i32, (lon * 20.0).round() as i32);
+        self.forecast_at = Some((lon, lat));
+        self.forecast_open = true;
+        if let Some((when, f)) = self.forecast_cache.get(&key) {
+            if when.elapsed().as_secs() < 900 {
+                self.forecast_state = ui::forecast_window::State::Ready(Box::new(f.clone()));
+                return;
+            }
+        }
+        self.forecast_state = ui::forecast_window::State::Loading;
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.forecast_rx = Some((key, rx));
+        let http = self.http.clone();
+        self._rt.spawn(async move {
+            let res = wxdata::forecast::fetch(&http, lat, lon)
+                .await
+                .map_err(|e| e.to_string());
+            let _ = tx.send(res);
+        });
+    }
+
     fn fetch_sounding(&mut self, lon: f64, lat: f64) {
         let (tx, rx) = std::sync::mpsc::channel();
         self.sounding_rx = Some(rx);
@@ -3498,6 +3542,12 @@ impl HookEchoApp {
                 MapTool::Marker,
                 "Tool: Drop marker",
                 "Save a place — home, work, where you're headed",
+                true,
+            ),
+            (
+                MapTool::Forecast,
+                "Tool: Point forecast",
+                "Tap anywhere for that spot's 7-day and hourly forecast",
                 true,
             ),
             (
@@ -5123,6 +5173,7 @@ impl HookEchoApp {
                         }
                     }
                     MapTool::Sounding => self.fetch_sounding(lon, lat),
+                    MapTool::Forecast => self.fetch_point_forecast(lon, lat),
                     MapTool::Chase => {
                         self.chase_mode = true;
                         self.chase_pos = Some((lon, lat));
@@ -7036,6 +7087,7 @@ impl HookEchoApp {
             MapTool::Marker => "Drop marker: click map",
             MapTool::CrossSection => "Cross-section: click 2 points",
             MapTool::Sounding => "Sounding: click a point",
+            MapTool::Forecast => "Forecast: click a point",
             MapTool::Chase => "Chase: click your location",
             MapTool::Climatology => "Climatology: click a point",
             MapTool::Interrogate => "",
@@ -8185,6 +8237,26 @@ impl eframe::App for HookEchoApp {
             }
         }
         self.sounding_window.show(ctx, self.active_tz());
+        // Point forecast: drain the fetch, cache the win, then draw.
+        if let Some((key, rx)) = &self.forecast_rx {
+            if let Ok(res) = rx.try_recv() {
+                let key = *key;
+                self.forecast_rx = None;
+                self.forecast_state = match res {
+                    Ok(f) => {
+                        self.forecast_cache.insert(key, (Instant::now(), f.clone()));
+                        ui::forecast_window::State::Ready(Box::new(f))
+                    }
+                    Err(e) => ui::forecast_window::State::Failed(e),
+                };
+            }
+        }
+        if self.forecast_open {
+            let at = self.forecast_at.unwrap_or((0.0, 0.0));
+            if !ui::forecast_window::show(ctx, &self.forecast_state, at, self.active_tz()) {
+                self.forecast_open = false;
+            }
+        }
         // Tornado climatology: receive the loaded database, then run any queued query.
         if let Some(rx) = &self.climo_rx {
             if let Ok(res) = rx.try_recv() {

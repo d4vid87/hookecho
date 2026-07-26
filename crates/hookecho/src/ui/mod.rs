@@ -30,6 +30,7 @@ pub mod cells_window;
 pub mod detail_window;
 pub mod digest_window;
 pub mod event_window;
+pub mod forecast_window;
 pub mod hodograph_window;
 pub mod layer_window;
 pub mod layers_panel;

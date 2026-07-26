@@ -202,6 +202,8 @@ impl super::HookEchoApp {
             self.site_dialog = None;
         } else if self.cells_window.open {
             self.cells_window.open = false;
+        } else if self.forecast_open {
+            self.forecast_open = false;
         } else if self.settings_window.open {
             self.settings_window.open = false;
         } else if self.mobile_chrome_hidden {
@@ -1279,6 +1281,7 @@ impl super::HookEchoApp {
                 (MapTool::Marker, "Marker"),
                 (MapTool::CrossSection, "X-section"),
                 (MapTool::Sounding, "Sounding"),
+                (MapTool::Forecast, "Forecast"),
                 (MapTool::Climatology, "Tor climo"),
             ] {
                 if chip(ui, label, self.tool == tool).clicked() {
