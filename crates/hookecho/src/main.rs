@@ -236,6 +236,56 @@ fn main() -> eframe::Result<()> {
         return Ok(());
     }
 
+    // GLM lightning verify: `hookecho --headless-glm`.
+    if args.iter().any(|a| a == "--headless-glm") {
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .expect("tokio runtime");
+        let res = rt.block_on(async {
+            let client = reqwest::Client::new();
+            let mut feed = wxdata::glm::GlmFeed::new(15);
+            let n = feed.poll(&client).await?;
+            Ok::<_, anyhow::Error>((n, feed))
+        });
+        match res {
+            Ok((added, feed)) => {
+                let f = feed.flashes();
+                println!("GLM: {added} flashes ingested, {} in the window", f.len());
+                if let (Some(first), Some(last)) = (f.front(), f.back()) {
+                    let age = (chrono::Utc::now() - last.time).num_seconds();
+                    println!(
+                        "  span {} .. {}  (newest {age}s old)",
+                        first.time.format("%H:%M:%SZ"),
+                        last.time.format("%H:%M:%SZ")
+                    );
+                    let lats: Vec<f64> = f.iter().map(|x| x.lat).collect();
+                    let lons: Vec<f64> = f.iter().map(|x| x.lon).collect();
+                    println!(
+                        "  lat [{:.1}, {:.1}]  lon [{:.1}, {:.1}]",
+                        lats.iter().cloned().fold(f64::MAX, f64::min),
+                        lats.iter().cloned().fold(f64::MIN, f64::max),
+                        lons.iter().cloned().fold(f64::MAX, f64::min),
+                        lons.iter().cloned().fold(f64::MIN, f64::max),
+                    );
+                    let e: Vec<f64> = f.iter().map(|x| x.energy).filter(|v| *v > 0.0).collect();
+                    if !e.is_empty() {
+                        println!(
+                            "  energy [{:.3e}, {:.3e}] J",
+                            e.iter().cloned().fold(f64::MAX, f64::min),
+                            e.iter().cloned().fold(f64::MIN, f64::max)
+                        );
+                    }
+                }
+            }
+            Err(e) => {
+                eprintln!("headless glm failed: {e}");
+                std::process::exit(1);
+            }
+        }
+        return Ok(());
+    }
+
     // Surface analysis verify: `hookecho --headless-fronts`.
     if args.iter().any(|a| a == "--headless-fronts") {
         let rt = tokio::runtime::Builder::new_multi_thread()

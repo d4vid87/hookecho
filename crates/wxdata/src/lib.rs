@@ -9,6 +9,7 @@ pub mod dealias;
 pub mod forecast;
 pub mod fronts;
 pub mod geocode;
+pub mod glm;
 pub mod hrrr;
 pub mod level2;
 pub mod level3;
