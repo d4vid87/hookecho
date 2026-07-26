@@ -1624,6 +1624,25 @@ impl HookEchoApp {
                     }
                 };
                 max_esc = max_esc.max(esc);
+                // Read it out before the banner text is moved into the queue: chasing is an
+                // eyes-on-the-road activity, and a warning you have to read is one you read late.
+                if self.settings.speak_warnings {
+                    let until = a
+                        .expires
+                        .map(|t| {
+                            format!(
+                                " until {}",
+                                crate::timefmt::fmt_clock(
+                                    t,
+                                    self.settings
+                                        .tz_for(self.views[self.active].site.as_deref()),
+                                    false,
+                                )
+                            )
+                        })
+                        .unwrap_or_default();
+                    crate::speech::speak(&format!("{} for {}{}", a.event, area, until));
+                }
                 self.warning_banners.push((label, area, Instant::now()));
                 alerted = true;
             }

@@ -25,6 +25,12 @@ pub fn start_location() -> Option<std::sync::mpsc::Receiver<(f64, f64)>> {
     None
 }
 
+/// Speak `text` through the platform voice (Android only; desktop shells out — see `speech.rs`).
+#[cfg(not(target_os = "android"))]
+pub fn speak(_text: &str) -> Result<(), String> {
+    Err("not android".into())
+}
+
 #[cfg(target_os = "android")]
 mod android {
     use std::sync::OnceLock;
@@ -267,9 +273,94 @@ mod android_location {
     }
 }
 
+/// Android speech synthesis (`TextToSpeech`), for spoken warnings.
+#[cfg(target_os = "android")]
+mod android_tts {
+    use jni::objects::{JObject, JValue};
+    use std::sync::OnceLock;
+    use std::time::Duration;
+
+    /// The `TextToSpeech` instance, kept alive for the process. Building one per utterance would
+    /// re-run engine init (~1 s) every time and leak service connections.
+    static TTS: OnceLock<jni::objects::GlobalRef> = OnceLock::new();
+
+    /// Android TTS through raw JNI rather than a Kotlin helper: the APK is a pure NativeActivity
+    /// with `hasCode="false"`, and adding a Java/Kotlin source set to carry one class would mean
+    /// the Kotlin gradle plugin, a stdlib dependency, and flipping `hasCode` — a lot of build
+    /// surface for one method call.
+    ///
+    /// The cost of skipping Kotlin is the `OnInitListener`: implementing a Java interface from JNI
+    /// needs a runtime proxy, so we pass `null` (AOSP null-checks it before dispatch) and instead
+    /// poll `speak` until the engine stops returning ERROR. Init takes well under a second in
+    /// practice; the retry window is generous because a dropped tornado warning is the bad
+    /// outcome, not a slow one.
+    pub fn speak(text: &str) -> Result<(), String> {
+        let deadline = std::time::Instant::now() + Duration::from_secs(6);
+        loop {
+            match try_speak(text) {
+                Ok(true) => return Ok(()),
+                Ok(false) => {
+                    if std::time::Instant::now() >= deadline {
+                        return Err("TTS engine never became ready".into());
+                    }
+                    std::thread::sleep(Duration::from_millis(250));
+                }
+                Err(e) => return Err(format!("{e:?}")),
+            }
+        }
+    }
+
+    /// One `speak()` attempt. `Ok(false)` means the engine isn't ready yet (retry).
+    fn try_speak(text: &str) -> jni::errors::Result<bool> {
+        let Some(app) = super::android::app() else {
+            return Ok(false);
+        };
+        let vm = unsafe { jni::JavaVM::from_raw(app.vm_as_ptr() as *mut jni::sys::JavaVM) }?;
+        let mut env = vm.attach_current_thread()?;
+        let activity = unsafe { JObject::from_raw(app.activity_as_ptr() as jni::sys::jobject) };
+
+        if TTS.get().is_none() {
+            let class = env.find_class("android/speech/tts/TextToSpeech")?;
+            let obj = env.new_object(
+                &class,
+                "(Landroid/content/Context;Landroid/speech/tts/TextToSpeech$OnInitListener;)V",
+                &[JValue::Object(&activity), JValue::Object(&JObject::null())],
+            )?;
+            let global = env.new_global_ref(&obj)?;
+            let _ = TTS.set(global);
+        }
+        let tts = TTS.get().expect("just set");
+
+        let msg = env.new_string(text)?;
+        let id = env.new_string("hookecho")?;
+        // QUEUE_ADD = 1: warnings stack rather than cutting each other off.
+        let res = env.call_method(
+            tts.as_obj(),
+            "speak",
+            "(Ljava/lang/CharSequence;ILandroid/os/Bundle;Ljava/lang/String;)I",
+            &[
+                JValue::Object(&msg),
+                JValue::Int(1),
+                JValue::Object(&JObject::null()),
+                JValue::Object(&id),
+            ],
+        );
+        match res {
+            // SUCCESS = 0, ERROR = -1 (engine not bound yet).
+            Ok(v) => Ok(v.i()? == 0),
+            Err(e) => {
+                let _ = env.exception_clear();
+                Err(e)
+            }
+        }
+    }
+}
+
 #[cfg(target_os = "android")]
 pub use android::{apply_safe_area, set_app};
 #[cfg(target_os = "android")]
 pub use android_ime::{clipboard_text, show_soft_input};
 #[cfg(target_os = "android")]
 pub use android_location::start_location;
+#[cfg(target_os = "android")]
+pub use android_tts::speak;

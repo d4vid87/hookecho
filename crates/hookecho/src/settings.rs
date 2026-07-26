@@ -162,6 +162,9 @@ pub struct Settings {
     /// Chime + push when cloud-to-ground lightning strikes within ~15 km of a saved location.
     #[serde(default)]
     pub lightning_alarm: bool,
+    /// Read new warnings aloud (system speech engine). Off by default — speech is intrusive.
+    #[serde(default)]
+    pub speak_warnings: bool,
     /// First-run setup wizard completed (or dismissed). `false` shows it at startup.
     #[serde(default)]
     pub setup_done: bool,
@@ -357,6 +360,7 @@ impl Default for Settings {
             bookmarks: Vec::new(),
             anthropic_key: String::new(),
             lightning_alarm: false,
+            speak_warnings: false,
             setup_done: false,
             coach_done: false,
             warn_sound: AlertSound::default(),
@@ -528,6 +532,7 @@ mod tests {
             }],
             anthropic_key: "sk-test".to_string(),
             lightning_alarm: true,
+            speak_warnings: true,
             setup_done: true,
             coach_done: true,
             warn_sound: AlertSound::Siren,

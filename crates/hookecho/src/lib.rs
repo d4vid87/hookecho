@@ -25,6 +25,7 @@ pub mod products;
 pub mod render;
 pub mod render3d;
 pub mod settings;
+pub mod speech;
 pub mod theme;
 pub mod tiles;
 pub mod timefmt;

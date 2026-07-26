@@ -374,6 +374,16 @@ fn alerts_tab(ui: &mut egui::Ui, settings: &mut Settings) {
 
     ui.add_space(8.0);
     ui.separator();
+    ui.strong("Spoken warnings");
+    ui.checkbox(&mut settings.speak_warnings, "Read new warnings aloud")
+        .on_hover_text(
+            "Speaks the event, area and expiry through the system speech engine \u{2014} for when \
+             your eyes are on the road",
+        );
+    ui.weak("Linux needs spd-say or espeak installed; Android uses its built-in voice.");
+
+    ui.add_space(8.0);
+    ui.separator();
     ui.strong("Proximity alarms");
     ui.checkbox(&mut settings.lightning_alarm, "Lightning within ~15 km of a saved location")
         .on_hover_text("Chime + push when CG lightning strikes near a marker. Requires the Lightning layer (National) to be on.");
