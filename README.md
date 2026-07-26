@@ -33,12 +33,11 @@ you'll actually use. Re-run the wizard anytime from **⋯ More → Setup wizard*
 
 ## The interface
 
-Hook Echo-WX is a map with a few floating controls over it — there is no menu
-bar, no docked toolbar, and nothing between you and the radar:
+Hook Echo-WX is a map with a few floating controls over it — no menu bar, no
+docked toolbar, nothing between you and the radar:
 
 - **Bottom-left** names the product you're looking at. Click it to switch
-  products or tilts; every product carries a plain-English description of what
-  it shows and why you'd look at it.
+  products or tilts; each one says in plain English what it shows.
 - **Bottom-center** is the timeline: site, clock, play, scrub, and a LIVE badge
   that snaps back to the newest scan.
 - **Right edge**: Layers, radar Site, Alerts, Advanced toolbox, Settings, and
@@ -46,7 +45,7 @@ bar, no docked toolbar, and nothing between you and the radar:
 - **Top-center** searches for a place. `Ctrl+K` searches every product, layer,
   window and tool in the app — one list, described in plain English.
 
-| The product picker | The Layers panel |
+| Pick a product | Find anything |
 |---|---|
 | ![Products](docs/shots/products.jpg) | ![Layers](docs/shots/layers.jpg) |
 
@@ -60,42 +59,67 @@ sliders, chase packs, and the rest.
 
 ## Walkthrough
 
-**Level 2 base data** — all six moments on a GPU polar pipeline over vector/raster
-basemaps, with VCP-aware tilt selection, velocity dealiasing, storm-relative
-velocity, and GRLevelX `.pal` color tables (editable in-app). Every product
-carries a plain-English description of what it shows, and one action opens the
-same product at four tilts with the cameras linked:
+*(Screenshots are live data on the Mapbox Satellite Streets basemap; a dozen
+other basemaps ship too, from a dark vector map to GOES satellite imagery.)*
 
-| Live radar | Velocity (dealiased) | Four tilts at once |
+### Watching a storm
+
+All six Level 2 moments on a GPU polar pipeline, with VCP-aware tilt selection,
+velocity dealiasing, storm-relative velocity, and GRLevelX `.pal` color tables.
+Velocity here shows the inbound/outbound couplets, the SCIT cells the radar is
+tracking with their 15/30/45/60-minute forecast positions, and the warning
+polygons in force:
+
+| Reflectivity | Velocity (dealiased) |
+|---|---|
+| ![REF](docs/shots/reflectivity.jpg) | ![VEL](docs/shots/velocity.jpg) |
+
+One action opens the same product at four tilts with the cameras linked, so you
+can see how a storm leans with height; cross-sections slice it vertically in any
+product:
+
+| Four tilts at once | Cross-section |
+|---|---|
+| ![All tilts](docs/shots/alltilts.jpg) | ![Cross-section](docs/shots/xsection.jpg) |
+
+### Deciding which storm matters
+
+Every tracked cell in one sortable table — hail size, tops, VIL, rotation flags —
+with a click on any row flying you there. Alongside it, clickable NWS bulletins,
+parsed storm-motion vectors, and an active-alerts panel sorted worst-first:
+
+| Storm attributes | Active alerts |
+|---|---|
+| ![Storm table](docs/shots/stormtable.jpg) | ![Alerts](docs/shots/alerts.jpg) |
+
+### Looking ahead
+
+HRRR future radar rides the timeline's forecast tail, so scrubbing past the
+present keeps going into the model. The WPC surface analysis draws the national
+weather map — fronts with their proper pips, highs and lows with pressures. And
+any point on the map gives you the plain NWS forecast for that spot:
+
+| HRRR future radar | Surface fronts | Tap-for-forecast |
 |---|---|---|
-| ![REF](docs/shots/reflectivity.jpg) | ![VEL](docs/shots/velocity.jpg) | ![All tilts](docs/shots/alltilts.jpg) |
+| ![HRRR](docs/shots/hrrr.jpg) | ![Fronts](docs/shots/fronts.jpg) | ![Forecast](docs/shots/forecast.jpg) |
 
-**Looking ahead** — HRRR future radar on the timeline's forecast tail, forecast
-**rotation tracks** (max updraft-helicity swaths — where storms are forecast to
-rotate), near-surface **wildfire smoke**, the WPC **surface analysis** with its
-fronts and pressure centers, and a plain **point forecast** for anywhere you tap:
+Also on the forecast tail: **rotation tracks** (HRRR max updraft-helicity swaths
+— where storms are forecast to rotate, accumulated across the hours you scrub
+to) and near-surface **wildfire smoke**.
 
-| Forecast rotation tracks | Surface fronts | Tap-for-forecast |
+### The national picture
+
+MRMS composite reflectivity, 24-hour rainfall, and individual lightning flashes
+from the GOES satellite's lightning mapper, fading as they age. Every gridded
+layer draws its own scale and units:
+
+| MRMS composite | 24-hour rainfall | Satellite lightning |
 |---|---|---|
-| ![Rotation tracks](docs/shots/rotationtracks.jpg) | ![Fronts](docs/shots/fronts.jpg) | ![Forecast](docs/shots/forecast.jpg) |
+| ![MRMS](docs/shots/mrms.jpg) | ![QPE](docs/shots/qpe.jpg) | ![GLM](docs/shots/glm.jpg) |
 
-**When storms are up** — every tracked cell in one sortable table (hail size,
-tops, VIL, rotation flags — click a row to fly there), clickable NWS bulletins
-with parsed storm-motion vectors, an active-alerts panel, vertical
-cross-sections in any product, and rain-arrival ETAs for your saved places:
-
-| Storm attributes | Active alerts | Cross-section |
-|---|---|---|
-| ![Storm table](docs/shots/stormtable.jpg) | ![Alerts](docs/shots/alerts.jpg) | ![Cross-section](docs/shots/xsection.jpg) |
-
-**National view (MRMS)** — CONUS composite reflectivity, cloud-to-ground lightning
-density, rotation tracks / azimuthal shear, MESH hail size + 24-h hail swaths,
-storm-total QPE flood layers, surface precipitation type, and FLASH flash-flood
-recurrence intervals. Every gridded layer draws its own scale and units:
-
-| CONUS composite | 1-h QPE | HRRR future radar |
-|---|---|---|
-| ![MRMS](docs/shots/mrms.jpg) | ![QPE](docs/shots/qpe.jpg) | ![HRRR](docs/shots/hrrr.jpg) |
+Plus cloud-to-ground lightning density, rotation tracks / azimuthal shear, MESH
+hail size and 24-h hail swaths, surface precipitation type, and FLASH
+flash-flood recurrence intervals.
 
 ## Feature highlights
 
@@ -145,6 +169,11 @@ recurrence intervals. Every gridded layer draws its own scale and units:
 - **Rotation couplets**: client-side azimuthal-shear couplet detection on the
   live volume, with its own alarm sound — a mesocyclone flag that doesn't wait
   for a Level 3 product.
+- **Satellite lightning**: individual flashes from the GOES-19 Geostationary
+  Lightning Mapper, ~40 seconds behind real time, fading over a 15-minute window.
+  GLM sees in-cloud flashes a ground network never reports. The netCDF-4 granules
+  are decoded by a from-scratch minimal HDF5 reader (`crates/hdf5lite`), because
+  the reference C library can't ship in the Android build.
 - **Forecast tools**: HRRR future radar (0–18 h) on the timeline's forecast tail,
   **forecast rotation tracks** (MXUPHL swaths accumulated across the forecast
   hours you scrub to), near-surface **wildfire smoke**, and the WPC **coded
@@ -176,6 +205,9 @@ native GPS for chase mode.
 
 ## Workspace
 
+- `crates/hdf5lite` — minimal read-only HDF5 reader, just enough for the netCDF-4
+  files NOAA publishes (GLM lightning). Exists because the reference reader is a
+  C library the Android build can't take; checked against h5py on real granules.
 - `crates/nexrad-level3` — from-scratch NEXRAD Level 3 (RPG) product decoder:
   storm-cell packets (15/19/20/23) and digital radial arrays (packet 16,
   DVL/EET/HHC), golden-tested against MetPy.
@@ -183,6 +215,7 @@ native GPS for chase mode.
   environment fields), NWS alerts + storm motion/escalation, IEM archived
   warnings + live/archived LSRs, SPC outlooks/climatology, METAR, NHC tropical,
   aviation SIGMETs, Area Forecast Discussions, ProbSevere, placefiles, spotters,
+  GOES GLM lightning, WPC surface fronts, NWS point forecasts,
   TDS detection, sounding indices (parcel CAPE / Bunkers SRH / SCP / STP),
   CAPPI/cross-section/3D resampling.
 - `crates/hookecho` — the app: egui UI + wgpu render pipelines.
@@ -209,10 +242,13 @@ cargo run --release -- --headless-reports 2013-05-20T19:00Z 2013-05-20T21:00Z
 cargo run --release -- --headless-afd KTLX
 cargo run --release -- --headless-aviation
 cargo run --release -- --headless-indices -97.5 35.3
+cargo run --release -- --headless-glm                       # GOES satellite lightning
+cargo run --release -- --headless-fronts                    # WPC surface analysis
+cargo run --release -- --headless-hrrr uh 3 uh.png          # refc|uh|smoke
 ```
 
 ```sh
-cargo test    # 173 offline unit tests
+cargo test    # 182 offline unit tests
 ```
 
 License: MIT.
