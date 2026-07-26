@@ -513,6 +513,7 @@ pub(crate) enum OverlayToggle {
     Alerts,
     Mds,
     Fronts,
+    GlmLightning,
     LinkCameras,
 }
 
@@ -736,6 +737,27 @@ struct ChasePack {
     done: u64,
     errors: u64,
     bytes: u64,
+}
+
+/// How a lightning flash looks at `age_secs`: bright white-hot when it just happened, fading to a
+/// dim orange ember by the end of the window. The brightness IS the recency cue — a map of
+/// same-colored dots says where lightning has been, not where it is now.
+fn glm_style(age_secs: f32) -> (egui::Color32, f32) {
+    const WINDOW: f32 = 900.0; // 15 minutes, matching the feed
+    let t = (age_secs / WINDOW).clamp(0.0, 1.0);
+    // Newest flashes get a slightly bigger dot so a live storm reads at a glance.
+    let r = 3.4 - 1.4 * t;
+    let lerp = |a: f32, b: f32| (a + (b - a) * t) as u8;
+    let alpha = lerp(255.0, 70.0);
+    (
+        egui::Color32::from_rgba_unmultiplied(
+            lerp(255.0, 235.0),
+            lerp(250.0, 140.0),
+            lerp(210.0, 40.0),
+            alpha,
+        ),
+        r,
+    )
 }
 
 /// One row of the product picker: name, plain-English blurb, and the hotkey that selects it.
@@ -1066,6 +1088,12 @@ pub struct HookEchoApp {
     show_fronts: bool,
     fronts: Option<wxdata::fronts::SurfaceAnalysis>,
     fronts_last_fetch: Option<Instant>,
+    /// GOES satellite lightning: the rolling flash window and its poll clock. The feed lives
+    /// behind a mutex because the poll runs on the tokio runtime while the painter reads it.
+    show_glm: bool,
+    glm: std::sync::Arc<std::sync::Mutex<wxdata::glm::GlmFeed>>,
+    glm_last_poll: Option<Instant>,
+    glm_polling: std::sync::Arc<std::sync::atomic::AtomicBool>,
     hodo_site: Option<String>,
     hodo_last_fetch: Option<Instant>,
     /// Streamer/OBS mode: hide all chrome (menu/toolbox/status/docks), leaving only the map.
@@ -1406,6 +1434,10 @@ impl HookEchoApp {
             show_fronts: false,
             fronts: None,
             fronts_last_fetch: None,
+            show_glm: false,
+            glm: std::sync::Arc::new(std::sync::Mutex::new(wxdata::glm::GlmFeed::new(15))),
+            glm_last_poll: None,
+            glm_polling: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             hodo_site: None,
             hodo_last_fetch: None,
             obs_mode: false,
@@ -3252,6 +3284,7 @@ impl HookEchoApp {
             T::Aviation => &mut self.show_aviation,
             T::RangeRings => &mut self.show_range_rings,
             T::Fronts => &mut self.show_fronts,
+            T::GlmLightning => &mut self.show_glm,
             T::Sensors => &mut self.show_sensors,
             T::Hodo => &mut self.show_hodo,
             T::Cells => &mut self.filters.show_cells,
@@ -3596,6 +3629,13 @@ impl HookEchoApp {
                 "Reference",
                 "Radar sites",
                 "Show every NEXRAD site; click one to switch radars",
+                true,
+            ),
+            (
+                T::GlmLightning,
+                "Severe",
+                "Satellite lightning (GLM)",
+                "Individual flashes from the GOES lightning mapper, fading as they age",
                 true,
             ),
             (
@@ -5645,6 +5685,24 @@ impl HookEchoApp {
                 egui::FontId::proportional(10.0),
                 col,
             );
+        }
+
+        // GOES lightning: one dot per flash, fading as it ages.
+        if self.show_glm {
+            if let Ok(feed) = self.glm.lock() {
+                let now = chrono::Utc::now();
+                for f in feed.flashes() {
+                    let w = crate::render::mercator::lonlat_to_world(f.lon, f.lat);
+                    let (sx, sy) = cam.world_to_screen(w, vp);
+                    let p = egui::pos2(prect.left() + sx, prect.top() + sy);
+                    if !prect.contains(p) {
+                        continue;
+                    }
+                    let age = (now - f.time).num_seconds().max(0) as f32;
+                    let (col, r) = glm_style(age);
+                    painter.circle_filled(p, r, col);
+                }
+            }
         }
 
         // Surface analysis: fronts with their pips, plus H/L centers.
@@ -7984,6 +8042,38 @@ impl eframe::App for HookEchoApp {
                 self.spawn_overlay(ctx, OverlaySource::HrrrLayer(layer, fh));
             }
         }
+        // GOES lightning: granules land every 20 s, so poll about that often. One in flight at a
+        // time — a slow fetch must not queue up behind itself.
+        if self.show_glm
+            && self
+                .glm_last_poll
+                .is_none_or(|t| t.elapsed().as_secs() >= 20)
+            && !self.glm_polling.load(std::sync::atomic::Ordering::Relaxed)
+        {
+            self.glm_last_poll = Some(Instant::now());
+            self.glm_polling
+                .store(true, std::sync::atomic::Ordering::Relaxed);
+            let feed = self.glm.clone();
+            let busy = self.glm_polling.clone();
+            let http = self.http.clone();
+            let ctx2 = ctx.clone();
+            self._rt.spawn(async move {
+                // Decode outside the lock: holding it across an await would stall the painter.
+                let mut local = wxdata::glm::GlmFeed::new(15);
+                if let Some(last) = feed.lock().ok().and_then(|f| f.last_key().cloned()) {
+                    local.set_last_key(last);
+                }
+                let added = local.poll(&http).await.unwrap_or(0);
+                if let Ok(mut f) = feed.lock() {
+                    f.absorb(local);
+                }
+                if added > 0 {
+                    ctx2.request_repaint();
+                }
+                busy.store(false, std::sync::atomic::Ordering::Relaxed);
+            });
+        }
+
         // Surface analysis: WPC reissues it a few times an hour.
         if self.show_fronts
             && self
@@ -8853,7 +8943,7 @@ mod warning_scope_tests {
 
 #[cfg(test)]
 mod field_lut_tests {
-    use super::{categorical_lut, distinct_tilts, ramp_lut, ramp_lut_a};
+    use super::{categorical_lut, distinct_tilts, glm_style, ramp_lut, ramp_lut_a};
 
     #[test]
     fn distinct_tilts_skips_sails_repeats() {
@@ -8873,6 +8963,19 @@ mod field_lut_tests {
     fn distinct_tilts_clamps_to_what_exists() {
         assert_eq!(distinct_tilts(&[0.5, 0.5], 4), vec![0]);
         assert!(distinct_tilts(&[], 4).is_empty());
+    }
+
+    #[test]
+    fn glm_flashes_fade_from_white_hot_to_ember() {
+        let (fresh, r_fresh) = glm_style(0.0);
+        let (old, r_old) = glm_style(900.0);
+        assert_eq!(fresh.a(), 255, "a brand-new flash is fully opaque");
+        assert!(old.a() < 100, "a 15-minute-old flash is nearly gone");
+        assert!(r_fresh > r_old, "newest flashes draw largest");
+        // Past the window the style clamps rather than inverting.
+        assert_eq!(glm_style(5000.0), glm_style(900.0));
+        // And it warms as it ages: green drops faster than red.
+        assert!(old.g() < fresh.g() && old.r() <= fresh.r());
     }
 
     #[test]

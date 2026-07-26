@@ -48,8 +48,7 @@ pub fn decode(bytes: Vec<u8>) -> anyhow::Result<Vec<Flash>> {
         .read_f64("product_time")
         .ok()
         .and_then(|v| v.first().copied())
-        .map(|s| Utc.timestamp_opt(J2000_UNIX + s as i64, 0).single())
-        .flatten()
+        .and_then(|s| Utc.timestamp_opt(J2000_UNIX + s as i64, 0).single())
         .unwrap_or_else(Utc::now);
 
     let n = lat.len().min(lon.len());
@@ -132,6 +131,32 @@ impl GlmFeed {
 
     pub fn flashes(&self) -> &VecDeque<Flash> {
         &self.flashes
+    }
+
+    /// The newest granule key already ingested.
+    pub fn last_key(&self) -> Option<&String> {
+        self.last_key.as_ref()
+    }
+
+    /// Resume from a key another feed left off at.
+    pub fn set_last_key(&mut self, key: String) {
+        self.last_key = Some(key);
+    }
+
+    /// Fold a feed polled elsewhere into this one.
+    ///
+    /// The UI polls on a worker so a slow fetch can't stall a frame, which means the decode
+    /// happens in a throwaway feed and the result is merged back under the lock — the merge itself
+    /// has to be cheap, so it's an extend and a re-sort rather than a re-poll.
+    pub fn absorb(&mut self, other: GlmFeed) {
+        if other.last_key.is_some() {
+            self.last_key = other.last_key;
+        }
+        self.flashes.extend(other.flashes);
+        self.flashes
+            .make_contiguous()
+            .sort_by_key(|f| f.time.timestamp_millis());
+        self.expire(Utc::now());
     }
 
     /// Drop anything older than the window. Cheap enough to call every frame.
