@@ -7176,6 +7176,12 @@ impl HookEchoApp {
                 "Layers: every product and overlay, with a plain-English description of each.",
             ),
             (
+                "coach_product",
+                egui::Align2::LEFT_BOTTOM,
+                egui::vec2(14.0, style::LANE_BOTTOM_PRODUCT - 70.0),
+                "This names what you're looking at. Click it to switch products or tilts \u{2014} each one says what it shows.",
+            ),
+            (
                 "coach_timeline",
                 egui::Align2::CENTER_BOTTOM,
                 egui::vec2(0.0, style::LANE_BOTTOM_TIMELINE - 64.0),

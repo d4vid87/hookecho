@@ -5,7 +5,7 @@ use crate::settings::{Settings, Theme};
 use crate::tiles::BasemapStyle;
 use crate::ui::marker_window::IconTextures;
 
-const LAST_STEP: usize = 7;
+const LAST_STEP: usize = 9;
 
 #[derive(Default)]
 pub struct Wizard {
@@ -50,20 +50,33 @@ pub fn show(
                 1 => page_site(ui, wiz, settings),
                 2 => page_map(ui, settings, basemap),
                 3 => page_theme(ui, settings),
-                4 => {
-                    ui.strong("Sounds (5/8)");
-                    ui.small("Pick a sound per alert kind, set the volume, and preview with ▶.");
+                4 => page_alerts(ui, settings),
+                5 => {
+                    ui.strong("Sounds (6/10)");
+                    ui.small(
+                        "Pick a sound per alert kind, set the volume, and preview with \u{25b6}.",
+                    );
                     ui.add_space(6.0);
                     crate::ui::settings_window::sound_picker(ui, settings);
                 }
-                5 => {
-                    ui.strong("Saved locations (6/8)");
-                    ui.small("Add places you care about — proximity alerts and quick jumps use them. You can also drop markers later via Tools ▸ Drop marker.");
+                6 => {
+                    ui.strong("Saved locations (7/10)");
+                    ui.small(
+                        "Add places you care about \u{2014} warning alerts, lightning and \
+                         rain-arrival alerts all watch them. You can drop more later with the \
+                         Drop marker tool.",
+                    );
                     ui.add_space(6.0);
-                    egui::ScrollArea::vertical().max_height(220.0).show(ui, |ui| {
-                        crate::ui::marker_window::marker_grid(ui, &mut settings.markers, icon_tex);
-                    });
-                    if ui.button("➕ Add location").clicked() {
+                    egui::ScrollArea::vertical()
+                        .max_height(220.0)
+                        .show(ui, |ui| {
+                            crate::ui::marker_window::marker_grid(
+                                ui,
+                                &mut settings.markers,
+                                icon_tex,
+                            );
+                        });
+                    if ui.button("\u{2795} Add location").clicked() {
                         let n = settings.markers.len() + 1;
                         settings.markers.push(crate::settings::Marker {
                             name: format!("Location {n}"),
@@ -73,7 +86,8 @@ pub fn show(
                         });
                     }
                 }
-                6 => page_alerts(ui, settings),
+                7 => page_products(ui),
+                8 => page_tools(ui),
                 _ => page_done(ui, settings, *basemap),
             }
             ui.add_space(8.0);
@@ -99,8 +113,109 @@ pub fn show(
     finished
 }
 
+/// What each product shows, in the words the app uses everywhere else.
+fn page_products(ui: &mut egui::Ui) {
+    ui.strong("The radar products (8/10)");
+    ui.add_space(6.0);
+    ui.small(
+        "Switch with the pill at the bottom-left, or the number keys. Tilt is on the same pill \
+         \u{2014} how high above the ground the beam is looking.",
+    );
+    ui.add_space(6.0);
+    for p in &crate::products::PRODUCTS {
+        ui.horizontal(|ui| {
+            ui.add_sized(
+                [22.0, 16.0],
+                egui::Label::new(
+                    egui::RichText::new(p.hotkey.to_string())
+                        .small()
+                        .color(egui::Color32::from_gray(140)),
+                )
+                .selectable(false),
+            );
+            ui.vertical(|ui| {
+                ui.label(egui::RichText::new(p.name).strong());
+                ui.small(p.blurb);
+            });
+        });
+        ui.add_space(3.0);
+    }
+    ui.add_space(2.0);
+    ui.small(
+        "\u{201c}Compare 4 tilts\u{201d} (Ctrl+K) opens the same product at four heights at once.",
+    );
+}
+
+/// The rest of the toolbox, one line each — the point is to know these exist.
+fn page_tools(ui: &mut egui::Ui) {
+    ui.strong("What else is in here (9/10)");
+    ui.add_space(6.0);
+    ui.small(
+        "Everything below is one search away: press Ctrl+K, or open Layers on the right edge.",
+    );
+    ui.add_space(6.0);
+    let group = |ui: &mut egui::Ui, title: &str, rows: &[(&str, &str)]| {
+        ui.label(
+            egui::RichText::new(title)
+                .strong()
+                .color(egui::Color32::from_rgb(110, 170, 240)),
+        );
+        for (name, what) in rows {
+            ui.horizontal_wrapped(|ui| {
+                ui.label(egui::RichText::new(*name).strong());
+                ui.small(format!("\u{2014} {what}"));
+            });
+        }
+        ui.add_space(5.0);
+    };
+    group(
+        ui,
+        "Looking ahead",
+        &[
+            (
+                "Future radar",
+                "the forecast radar picture, on the timeline's tail",
+            ),
+            (
+                "Future rotation tracks",
+                "where storms are forecast to rotate",
+            ),
+            (
+                "Point forecast",
+                "tap anywhere for that spot's 7-day and hourly",
+            ),
+            ("Surface fronts", "the national weather map, fronts and H/L"),
+        ],
+    );
+    group(
+        ui,
+        "When storms are up",
+        &[
+            (
+                "Storm attributes",
+                "every tracked storm in one sortable table",
+            ),
+            ("Alerts panel", "warnings in view, worst first"),
+            ("Cross-sections", "slice a storm vertically, in any product"),
+            (
+                "Rain arrival",
+                "how many minutes until rain reaches your places",
+            ),
+        ],
+    );
+    group(
+        ui,
+        "Looking back",
+        &[
+            ("Timeline", "scrub back through any date since 2008"),
+            ("Event library", "jump straight to a famous storm"),
+            ("Instant replay", "re-play the scans already in memory (R)"),
+        ],
+    );
+}
+
 fn page_welcome(ui: &mut egui::Ui) {
-    ui.strong("Welcome (1/8)");
+    ui.strong("Welcome (1/10)");
     ui.add_space(6.0);
     ui.label("This quick setup configures your radar, map, theme, sounds, and saved locations. It takes under a minute — everything here can be changed later in Settings.");
     ui.add_space(6.0);
@@ -115,7 +230,7 @@ fn page_welcome(ui: &mut egui::Ui) {
 }
 
 fn page_site(ui: &mut egui::Ui, wiz: &mut Wizard, settings: &mut Settings) {
-    ui.strong("Home radar site (2/8)");
+    ui.strong("Home radar site (2/10)");
     ui.add_space(6.0);
     ui.add(egui::TextEdit::singleline(&mut wiz.filter).hint_text("Search by ID, city, or state…"));
     let needle = wiz.filter.to_ascii_uppercase();
@@ -142,7 +257,7 @@ fn page_site(ui: &mut egui::Ui, wiz: &mut Wizard, settings: &mut Settings) {
 }
 
 fn page_map(ui: &mut egui::Ui, settings: &mut Settings, basemap: &mut BasemapStyle) {
-    ui.strong("Map & API keys (3/8)");
+    ui.strong("Map & API keys (3/10)");
     ui.small("Optional keys unlock premium basemaps. Free keys: mapbox.com and maptiler.com. Plenty of basemaps work with no key at all.");
     ui.add_space(6.0);
     egui::Grid::new("wiz_keys")
@@ -186,7 +301,7 @@ fn page_map(ui: &mut egui::Ui, settings: &mut Settings, basemap: &mut BasemapSty
 }
 
 fn page_theme(ui: &mut egui::Ui, settings: &mut Settings) {
-    ui.strong("Look and feel (4/8)");
+    ui.strong("Look and feel (4/10)");
     ui.add_space(6.0);
     egui::ScrollArea::vertical()
         .max_height(220.0)
@@ -205,7 +320,7 @@ fn page_theme(ui: &mut egui::Ui, settings: &mut Settings) {
 }
 
 fn page_alerts(ui: &mut egui::Ui, settings: &mut Settings) {
-    ui.strong("Alerts (7/8)");
+    ui.strong("Alerts (5/10)");
     ui.add_space(6.0);
     ui.checkbox(
         &mut settings.alert_sound,
@@ -223,7 +338,7 @@ fn page_alerts(ui: &mut egui::Ui, settings: &mut Settings) {
 }
 
 fn page_done(ui: &mut egui::Ui, settings: &Settings, basemap: BasemapStyle) {
-    ui.strong("All set (8/8)");
+    ui.strong("All set (10/10)");
     ui.add_space(6.0);
     ui.label(format!("Home radar: {}", settings.default_site));
     ui.label(format!("Theme: {}", settings.theme.label()));
@@ -235,6 +350,7 @@ fn page_done(ui: &mut egui::Ui, settings: &Settings, basemap: BasemapStyle) {
     ));
     ui.add_space(4.0);
     ui.small(
-        "Press Finish to jump to your home radar. Re-run this anytime from ⋯ More ▸ Setup wizard.",
+        "Press Finish to jump to your home radar. Re-run this anytime from ⋯ More ▸ Setup \
+         wizard, and press Ctrl+K whenever you're looking for something.",
     );
 }
