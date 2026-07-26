@@ -125,19 +125,38 @@ pub use nexrad_data::aws::archive::Identifier;
 /// The yesterday fallback covers the window just after 00Z when today's UTC day has
 /// no volumes yet (e.g. evening in the US). `site` is the 4-letter ICAO id.
 pub async fn latest_identifier(site: &str) -> anyhow::Result<Identifier> {
+    Ok(latest_identifiers(site, 1).await?.remove(0))
+}
+
+/// The newest `n` volumes for `site`, newest first.
+///
+/// Callers want more than one because the newest volume on S3 is usually still being uploaded —
+/// the radar writes it as it scans. A volume caught early enough can be missing the metadata
+/// record that carries its scan strategy, and the only cure is to fall back a volume.
+pub async fn latest_identifiers(site: &str, n: usize) -> anyhow::Result<Vec<Identifier>> {
     use nexrad_data::aws::archive;
 
     let today = chrono::Utc::now().date_naive();
+    let mut out: Vec<Identifier> = Vec::new();
     for day in [today, today.pred_opt().unwrap_or(today)] {
         let mut ids = archive::list_files(site, &day)
             .await
             .map_err(|e| anyhow::anyhow!("list_files({site}, {day}): {e}"))?;
         ids.sort_by_key(|id| id.date_time());
-        if let Some(latest) = ids.pop() {
-            return Ok(latest);
+        while out.len() < n {
+            match ids.pop() {
+                Some(id) => out.push(id),
+                None => break,
+            }
+        }
+        if out.len() >= n {
+            break;
         }
     }
-    anyhow::bail!("no volumes for {site} today or yesterday")
+    if out.is_empty() {
+        anyhow::bail!("no volumes for {site} today or yesterday");
+    }
+    Ok(out)
 }
 
 /// List every volume for `site` on a specific UTC `date`, oldest first.

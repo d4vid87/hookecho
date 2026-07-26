@@ -4617,8 +4617,14 @@ impl HookEchoApp {
     ) {
         let tx = self.msg_tx.clone();
         self._rt.spawn(async move {
-            let msg = match level2::latest_identifier(&site).await {
-                Ok(id) => {
+            // Ask for two: the newest volume is usually still uploading, and one caught before
+            // its metadata record lands can't be decoded at all. Falling back one volume shows
+            // ~5-minute-old data instead of nothing.
+            let msg = match level2::latest_identifiers(&site, 2).await.map(|mut v| {
+                let first = v.remove(0);
+                (first, v.pop())
+            }) {
+                Ok((id, prev)) => {
                     let name = id.name().to_string();
                     if current_name.as_deref() == Some(name.as_str()) {
                         DataMsg::UpToDate {
@@ -4627,8 +4633,27 @@ impl HookEchoApp {
                         }
                     } else {
                         let time = id.date_time().unwrap_or_else(Utc::now);
-                        match level2::download_scan(id).await {
-                            Ok(scan) => DataMsg::Volume {
+                        let fetched = match level2::download_scan(id).await {
+                            Ok(scan) => Ok((name.clone(), time, scan)),
+                            Err(e) => match prev {
+                                // Only worth retrying when there IS an older volume and we're not
+                                // already showing it.
+                                Some(p) if current_name.as_deref() != Some(p.name()) => {
+                                    let pname = p.name().to_string();
+                                    let ptime = p.date_time().unwrap_or_else(Utc::now);
+                                    log::debug!(
+                                        "newest volume unusable ({e}); falling back to {pname}"
+                                    );
+                                    level2::download_scan(p)
+                                        .await
+                                        .map(|scan| (pname, ptime, scan))
+                                        .map_err(|_| e)
+                                }
+                                _ => Err(e),
+                            },
+                        };
+                        match fetched {
+                            Ok((name, time, scan)) => DataMsg::Volume {
                                 view: view_idx,
                                 site,
                                 name,
