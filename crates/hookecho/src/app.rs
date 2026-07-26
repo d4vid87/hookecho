@@ -1033,6 +1033,11 @@ pub struct HookEchoApp {
     /// VAD hodograph: open flag, latest profile, its site, and a refresh clock.
     show_hodo: bool,
     hodo_data: Vec<wxdata::level3::VwpLevel>,
+    /// Profiles collected this session, oldest→newest. The radar only ever publishes the newest
+    /// one, so a time-height view has to be accumulated live.
+    hodo_history:
+        std::collections::VecDeque<(chrono::DateTime<Utc>, Vec<wxdata::level3::VwpLevel>)>,
+    hodo_tab: ui::hodograph_window::Tab,
     hodo_site: Option<String>,
     hodo_last_fetch: Option<Instant>,
     /// Streamer/OBS mode: hide all chrome (menu/toolbox/status/docks), leaving only the map.
@@ -1361,6 +1366,8 @@ impl HookEchoApp {
             sensor_last_fetch: None,
             show_hodo: false,
             hodo_data: Vec::new(),
+            hodo_history: std::collections::VecDeque::new(),
+            hodo_tab: Default::default(),
             hodo_site: None,
             hodo_last_fetch: None,
             obs_mode: false,
@@ -3860,6 +3867,24 @@ impl HookEchoApp {
                 }
                 OverlayMsg::Vwp(site, levels) => {
                     if self.views[self.active].site.as_deref() == Some(site.as_str()) {
+                        // A site change starts a new time series; mixing radars on one axis would
+                        // be nonsense.
+                        if self.hodo_site.as_deref() != Some(site.as_str()) {
+                            self.hodo_history.clear();
+                        }
+                        // The product carries no timestamp, so identical profiles mean "same scan
+                        // refetched" — dedupe on content rather than stamping duplicates.
+                        let dup = self
+                            .hodo_history
+                            .back()
+                            .is_some_and(|(_, prev)| *prev == levels);
+                        if !dup && !levels.is_empty() {
+                            self.hodo_history.push_back((Utc::now(), levels.clone()));
+                            // ~2 hours at the 5-minute refetch cadence.
+                            while self.hodo_history.len() > 24 {
+                                self.hodo_history.pop_front();
+                            }
+                        }
                         self.hodo_data = levels;
                         self.hodo_site = Some(site);
                     }
@@ -8264,7 +8289,14 @@ impl eframe::App for HookEchoApp {
             self.show_sensors = false;
         }
         if self.show_hodo
-            && !ui::hodograph_window::show(ctx, self.hodo_site.as_deref(), &self.hodo_data)
+            && !ui::hodograph_window::show(
+                ctx,
+                self.hodo_site.as_deref(),
+                &self.hodo_data,
+                self.hodo_history.make_contiguous(),
+                &mut self.hodo_tab,
+                self.settings.tz_for(self.hodo_site.as_deref()),
+            )
         {
             self.show_hodo = false;
         }
