@@ -169,6 +169,15 @@ fn split_ldm_records(data: &[u8]) -> crate::result::Result<Vec<Record<'_>>> {
 
         // Check bounds for reading record size
         if position + 4 > data.len() {
+            // hookecho patch: a trailing partial record means the file is still being written
+            // (see the note on the record_end check below) — keep what decoded.
+            if !records.is_empty() {
+                log::debug!(
+                    "volume ends mid-length-prefix after {} records; using what's complete",
+                    records.len()
+                );
+                break;
+            }
             return Err(Error::TruncatedRecord {
                 expected: position + 4,
                 actual: data.len(),
@@ -190,6 +199,23 @@ fn split_ldm_records(data: &[u8]) -> crate::result::Result<Vec<Record<'_>>> {
         // Check bounds for full record
         let record_end = position + record_size + 4;
         if record_end > data.len() {
+            // hookecho patch: NEXRAD volumes are uploaded to S3 while the radar is still scanning
+            // them, so fetching the newest volume routinely lands on a file whose LAST record is
+            // half-written. Erroring out threw away every complete record with it, which left the
+            // live view stuck on a stale scan until the next volume appeared — a partial volume is
+            // simply a volume with fewer tilts, and that's what the app wants to show.
+            //
+            // A truly corrupt file still errors, because that's the case where nothing decoded.
+            if !records.is_empty() {
+                log::debug!(
+                    "volume still uploading: {} complete records, last one truncated \
+                     ({} of {} bytes)",
+                    records.len(),
+                    data.len() - position,
+                    record_size + 4
+                );
+                break;
+            }
             return Err(Error::TruncatedRecord {
                 expected: record_end,
                 actual: data.len(),
