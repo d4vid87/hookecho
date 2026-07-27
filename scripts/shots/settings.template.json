@@ -1,0 +1,17 @@
+{
+  "default_site": "KTLX",
+  "basemap": "mapbox-satellite-streets",
+  "mapbox_key": "",
+  "ui_scale": 1.0,
+  "setup_done": true,
+  "coach_done": true,
+  "dealias_velocity": true,
+  "alert_sound": false,
+  "lightning_alarm": false,
+  "rain_alerts": false,
+  "speak_warnings": false,
+  "time_display": "SiteLocal",
+  "markers": [],
+  "placefiles": [],
+  "bookmarks": []
+}

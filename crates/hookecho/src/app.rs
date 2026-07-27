@@ -1482,8 +1482,38 @@ impl HookEchoApp {
             max_texture_dim,
         };
         app.palettes.reload(&app.settings.palette_paths());
+        app.apply_goto_env();
         app.fetch_overlays(&cc.egui_ctx.clone());
         app
+    }
+
+    /// `HOOKECHO_GOTO=SITE,lon,lat,zoom[,RFC3339]` opens straight onto a view, archive time and
+    /// all — the same deep link the Event Library uses, minus the clicking.
+    ///
+    /// This exists for the screenshot harness (`scripts/shots/`): staging a historic storm by
+    /// driving the UI means hunting for a window's row coordinates, which breaks the moment the
+    /// layout moves. Companion to the headless `HOOKECHO_CAM`/`HOOKECHO_BASEMAP` knobs.
+    fn apply_goto_env(&mut self) {
+        let Ok(v) = std::env::var("HOOKECHO_GOTO") else {
+            return;
+        };
+        let p: Vec<&str> = v.split(',').map(str::trim).collect();
+        let (Some(site), Some(Ok(lon)), Some(Ok(lat)), Some(Ok(zoom))) = (
+            p.first(),
+            p.get(1).map(|s| s.parse()),
+            p.get(2).map(|s| s.parse()),
+            p.get(3).map(|s| s.parse()),
+        ) else {
+            log::warn!("HOOKECHO_GOTO: want SITE,lon,lat,zoom[,RFC3339], got {v:?}");
+            return;
+        };
+        let time = p.get(4).filter(|s| !s.is_empty()).and_then(|s| {
+            chrono::DateTime::parse_from_rfc3339(s)
+                .map(|t| t.with_timezone(&chrono::Utc))
+                .map_err(|e| log::warn!("HOOKECHO_GOTO: bad time {s:?}: {e}"))
+                .ok()
+        });
+        self.goto_view(site, lon, lat, zoom, time);
     }
 
     /// Spawn background fetches for all overlay sources (alerts, SPC outlooks, MDs).
@@ -2006,7 +2036,7 @@ impl HookEchoApp {
                 .any(|r| to_screen_hit(r.lon, r.lat) <= tap_r2(12.0)))
             || (self.cells_site.as_deref() == self.views[idx].site.as_deref()
                 && self
-                    .storm_cells
+                    .active_storm_cells()
                     .iter()
                     .any(|c| to_screen_hit(c.lon, c.lat) <= tap_r2(14.0)));
         if near_storm {
@@ -3215,7 +3245,7 @@ impl HookEchoApp {
         // Prefer the cell the camera is following, else the nearest tracked cell within 300 km.
         let cell = match &self.follow_cell {
             Some((_, c, _)) => Some(c.clone()),
-            None => nearest_cell(&self.storm_cells, lon, lat, 300.0).cloned(),
+            None => nearest_cell(self.active_storm_cells(), lon, lat, 300.0).cloned(),
         };
         let Some(c) = cell else { return };
         let (km, bearing) = crate::geo::great_circle(me, [c.lon, c.lat]);
@@ -4211,6 +4241,19 @@ impl HookEchoApp {
 
     /// The storm reports to display right now: the live trailing window, or the archived set
     /// while the active pane is scrubbed off-live (feature CC).
+    /// The storm cells to show, which is none of them once the playhead is in the archive.
+    ///
+    /// Warnings and LSRs have archived equivalents that get swapped in ([`Self::sync_archive_warnings`],
+    /// [`Self::sync_archive_lsr`]); Level 3 SCIT does not — the products are only published for the
+    /// last couple of days. Leaving the live set on screen drew this afternoon's cells, tracks and
+    /// arrival cones over a storm from 2011.
+    fn active_storm_cells(&self) -> &[Cell] {
+        if self.archive_bucket().is_some() {
+            return &[];
+        }
+        &self.storm_cells
+    }
+
     fn active_storm_reports(&self) -> &[wxdata::spc::StormReport] {
         if let Some(b) = self.arch_lsr_shown {
             if let Some(r) = self.arch_lsr.peek(&b) {
@@ -5462,10 +5505,10 @@ impl HookEchoApp {
                         } else {
                             let cell_hit = self.filters.show_cells
                                 && self.cells_site.as_deref() == self.views[idx].site.as_deref()
-                                && !self.storm_cells.is_empty();
+                                && !self.active_storm_cells().is_empty();
                             let picked = cell_hit
                                 .then(|| {
-                                    self.storm_cells.iter().find(|c| {
+                                    self.active_storm_cells().iter().find(|c| {
                                         let w =
                                             crate::render::mercator::lonlat_to_world(c.lon, c.lat);
                                         let (sx, sy) = cam.world_to_screen(w, vp);
@@ -5884,7 +5927,7 @@ impl HookEchoApp {
                 const LEAD_MIN: f64 = 60.0;
                 const HALF_ANGLE: f64 = 18.0;
                 let mut etas: Vec<(f64, String)> = Vec::new();
-                for c in &self.storm_cells {
+                for c in self.active_storm_cells() {
                     let (Some(dir), Some(kt)) = (c.mvt_deg, c.mvt_kt) else {
                         continue;
                     };
@@ -6055,7 +6098,7 @@ impl HookEchoApp {
             }
 
             let label_tracks = self.filters.show_tracks && cam.zoom >= 7.0;
-            for c in &self.storm_cells {
+            for c in self.active_storm_cells() {
                 let p = to_screen(c.lon, c.lat);
                 // Past track (packet 23): faint gray polyline leading up to the current position.
                 if self.filters.show_tracks && c.past_track.len() >= 2 {
@@ -7907,12 +7950,19 @@ fn cardinal(bearing_deg: f64) -> &'static str {
 }
 
 fn humanize(secs: i64) -> String {
+    const DAY: i64 = 86_400;
     if secs < 60 {
         format!("{secs}s")
     } else if secs < 3600 {
         format!("{}m", secs / 60)
-    } else {
+    } else if secs < 2 * DAY {
         format!("{}h{}m", secs / 3600, (secs % 3600) / 60)
+    } else if secs < 365 * DAY {
+        // Scrub back to a historic event and the hours keep counting: a 2011 storm read
+        // "133672h40m ago", which is technically true and completely useless.
+        format!("{}d", secs / DAY)
+    } else {
+        format!("{:.1}y", secs as f64 / (365.25 * DAY as f64))
     }
 }
 
@@ -8665,13 +8715,18 @@ impl eframe::App for HookEchoApp {
         }
         // Storm attributes table: clicking a row flies there and opens that cell's popup, the
         // same destination as clicking the dot on the map.
+        let cells: &[Cell] = if self.archive_bucket().is_some() {
+            &[]
+        } else {
+            &self.storm_cells
+        };
         if let Some(id) = ui::cells_window::show(
             &mut self.cells_window,
             ctx,
-            &self.storm_cells,
+            cells,
             crate::theme::accent(self.settings.theme),
         ) {
-            if let Some(c) = self.storm_cells.iter().find(|c| c.id == id).cloned() {
+            if let Some(c) = self.active_storm_cells().iter().find(|c| c.id == id).cloned() {
                 let cam = &mut self.views[self.active].camera;
                 cam.center = crate::render::mercator::lonlat_to_world(c.lon, c.lat);
                 cam.zoom = cam.zoom.max(8.0);
@@ -8969,6 +9024,22 @@ impl eframe::App for HookEchoApp {
             100
         };
         ctx.request_repaint_after(std::time::Duration::from_millis(idle));
+    }
+}
+
+#[cfg(test)]
+mod humanize_tests {
+    use super::humanize;
+
+    #[test]
+    fn ages_stay_readable_all_the_way_back_to_the_archive() {
+        assert_eq!(humanize(45), "45s");
+        assert_eq!(humanize(600), "10m");
+        assert_eq!(humanize(3 * 3600 + 20 * 60), "3h20m");
+        // Past a couple of days, hours stop meaning anything to a reader.
+        assert_eq!(humanize(5 * 86_400), "5d");
+        // Moore 2013, seen from 2026 — used to render as "113000h40m ago".
+        assert_eq!(humanize(13 * 365 * 86_400), "13.0y");
     }
 }
 
