@@ -25,7 +25,10 @@ pub fn show(ctx: &egui::Context, m: &mut Marker) -> MarkerPopupResult {
     crate::ui::fit_phone(ctx, egui::Window::new("Marker"))
         .open(&mut r.open)
         .resizable(false)
-        .default_size([260.0, 0.0])
+        // Three fixed rows: nothing to scroll, and `fit_phone`'s vscroll would otherwise stretch
+        // the frame to its 80%-of-screen cap and leave most of it empty on a phone.
+        .vscroll(false)
+        .default_width(260.0)
         .show(ctx, |ui| {
             ui.add(
                 egui::TextEdit::singleline(&mut m.name)
