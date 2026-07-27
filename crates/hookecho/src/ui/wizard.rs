@@ -63,8 +63,9 @@ pub fn show(
                     ui.strong("Saved locations (7/10)");
                     ui.small(
                         "Add places you care about \u{2014} warning alerts, lightning and \
-                         rain-arrival alerts all watch them. You can drop more later with the \
-                         Drop marker tool.",
+                         rain-arrival alerts all watch them. Later you can search a place and \
+                         save it, or drop one with the Drop marker tool. Tap any marker on the \
+                         map to rename or remove it.",
                     );
                     ui.add_space(6.0);
                     egui::ScrollArea::vertical()

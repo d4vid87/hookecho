@@ -5626,7 +5626,7 @@ impl HookEchoApp {
             .add(egui_wgpu::Callback::new_paint_callback(prect, cb));
 
         // Per-pane product picker (multi-pane only): set THIS pane's moment directly, without
-        // clicking to activate it first. Single-pane keeps using the toolbox Level 2 section.
+        // clicking to activate it first. Single-pane keeps using the toolbox Product section.
         if self.views.len() > 1 && !self.obs_mode {
             let cur = self.views[idx].moment;
             egui::Area::new(egui::Id::new(("pane_product", idx)))

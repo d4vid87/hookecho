@@ -61,7 +61,10 @@ impl MarkerWindow {
                     ui.weak(s);
                 }
                 ui.separator();
-                ui.weak("Tip: press Ctrl+K, pick \"Tool: Drop marker\", then click the map.");
+                ui.weak(
+                    "Tip: search a place in the top bar and hit Save marker, or drop one with \
+                     Ctrl+K ▸ \"Tool: Drop marker\". Tap a marker on the map to rename or remove it.",
+                );
                 ui.add_space(4.0);
                 marker_grid(ui, &mut settings.markers, icon_tex);
                 ui.add_space(6.0);

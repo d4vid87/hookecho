@@ -53,9 +53,15 @@ Radar times read in **the selected radar's local time**, not Zulu — a KEPZ pan
 shows MDT while a KTLX pane shows CDT, side by side. Settings → Units puts it
 back to UTC if you'd rather work in Zulu.
 
-Every expert control is still there. The Advanced toolbox (`F7`) holds the full
-docked panel: thresholds, dealiasing, storm motion, VCP, basemaps, forecast-hour
-sliders, chase packs, and the rest.
+Every expert control is still there. The Advanced toolbox (`F7`) docks a panel
+with the site, the basemap, the product and tilt, the same searchable layer list,
+and a Layer Options section that shows a layer's settings only once that layer is
+on — so the forecast-hour slider appears when you turn on future radar, and stays
+out of the way when you haven't.
+
+Search a place in the top bar and it flies there, with a **Save marker** button
+if you want to keep it. Markers are what the warning, lightning and rain-arrival
+alerts watch. Tap one on the map to rename or remove it.
 
 ## Walkthrough
 
