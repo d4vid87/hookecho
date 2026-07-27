@@ -737,6 +737,7 @@ impl super::HookEchoApp {
                             .show(ui, |ui| {
                                 let l3_site = self.l3grid_site.clone();
                                 let cp_ui = self.chasepack_ui();
+                                let mut tq = std::mem::take(&mut self.toolbox_query);
                                 *actions = crate::ui::toolbox::show(
                                     ui,
                                     &mut self.views[self.active],
@@ -750,20 +751,14 @@ impl super::HookEchoApp {
                                     &mut self.env_srh_km,
                                     &mut self.contour_kind,
                                     l3_site.as_deref(),
-                                    &mut self.show_sensors,
-                                    &mut self.show_hodo,
-                                    &mut self.show_alert_panel,
-                                    &mut self.show_storm_reports,
-                                    &mut self.show_spotters,
-                                    &mut self.show_probsevere,
-                                    &mut self.show_radar_sites,
-                                    &mut self.show_metar,
-                                    &mut self.show_gauges,
-                                    &mut self.show_tropical,
-                                    &mut self.show_aviation,
-                                    &mut self.show_range_rings,
+                                    // The drawer already leads with this list; nesting it again
+                                    // under Advanced would show it twice.
+                                    None,
+                                    &mut tq,
+                                    accent,
                                     &cp_ui,
                                 );
+                                self.toolbox_query = tq;
                             });
                             ui.add_space(8.0);
                             ui.separator();

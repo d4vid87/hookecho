@@ -1030,6 +1030,9 @@ pub struct HookEchoApp {
     /// Layers panel (floating, searchable layer picker): open flag + its search text.
     layers_open: bool,
     layers_query: String,
+    /// The docked toolbox embeds the same layer list; it keeps its own search text so the two
+    /// surfaces don't mirror each other's typing.
+    toolbox_query: String,
     /// Ctrl+K command palette: open flag, query, and the highlighted row.
     palette_open: bool,
     palette_query: String,
@@ -1401,6 +1404,7 @@ impl HookEchoApp {
             show_toolbox: false,
             layers_open: false,
             layers_query: String::new(),
+            toolbox_query: String::new(),
             palette_open: false,
             palette_query: String::new(),
             palette_sel: 0,
@@ -8255,6 +8259,9 @@ impl eframe::App for HookEchoApp {
                     .show(root, |ui| {
                         let l3_site = self.l3grid_site.clone();
                         let cp_ui = self.chasepack_ui();
+                        let entries = self.palette_entries();
+                        let accent = crate::theme::accent(self.settings.theme);
+                        let mut query = std::mem::take(&mut self.toolbox_query);
                         actions = ui::toolbox::show(
                             ui,
                             &mut self.views[self.active],
@@ -8268,22 +8275,17 @@ impl eframe::App for HookEchoApp {
                             &mut self.env_srh_km,
                             &mut self.contour_kind,
                             l3_site.as_deref(),
-                            &mut self.show_sensors,
-                            &mut self.show_hodo,
-                            &mut self.show_alert_panel,
-                            &mut self.show_storm_reports,
-                            &mut self.show_spotters,
-                            &mut self.show_probsevere,
-                            &mut self.show_radar_sites,
-                            &mut self.show_metar,
-                            &mut self.show_gauges,
-                            &mut self.show_tropical,
-                            &mut self.show_aviation,
-                            &mut self.show_range_rings,
+                            Some(&entries),
+                            &mut query,
+                            accent,
                             &cp_ui,
                         );
+                        self.toolbox_query = query;
                     });
             }
+        }
+        if let Some(a) = actions.palette {
+            self.apply_palette(a, ctx);
         }
         if actions.open_site_dialog && self.site_dialog.is_none() {
             self.site_dialog = Some(Default::default());
