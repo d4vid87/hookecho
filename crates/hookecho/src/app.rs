@@ -5104,6 +5104,8 @@ impl HookEchoApp {
             // `loading`, which would then block the new site's fetch forever ("no volume").
             v.loading = false;
             match &v.site {
+                // ...unless a deep link already aimed the camera at something specific.
+                Some(_) if std::mem::take(&mut v.camera_placed) => {}
                 Some(s) => ui::site_dialog::center_on_site(&mut v.camera, s),
                 None => {
                     self.pane_shown.remove(&idx);
@@ -6959,10 +6961,18 @@ impl HookEchoApp {
                 src.tilt,
                 src.timeline.date,
             );
+            // Split a scrubbed view and the new panes have to land on the same instant, not on
+            // live. Without this, splitting an archive view gave one populated pane and three
+            // empty ones, each quietly polling today's head for a site that has no storm on it.
+            let seek = (!src.timeline.following)
+                .then(|| src.timeline.current().and_then(|id| id.date_time()))
+                .flatten();
             let mut v = MapView::new(site, camera);
             v.basemap = basemap;
             v.tilt = tilt;
             v.timeline.date = date;
+            v.timeline.following = seek.is_none();
+            v.timeline.seek_target = seek;
             v.moment = Moment::ALL[self.views.len() % Moment::ALL.len()];
             self.views.push(v);
         }
@@ -7171,6 +7181,7 @@ impl HookEchoApp {
             center: lonlat_to_world(lon, lat),
             zoom,
         };
+        v.camera_placed = true;
         if let Some(t) = time {
             v.timeline.date = t.date_naive();
             v.timeline.following = false;

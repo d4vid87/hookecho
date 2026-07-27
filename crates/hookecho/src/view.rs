@@ -103,6 +103,10 @@ pub struct MapView {
     pub volume: Option<Volume>,
     /// The site the current volume/fetch belongs to; drives site-change detection.
     pub loaded_site: Option<String>,
+    /// Set when the camera was aimed deliberately (Event Library, a bookmark, `HOOKECHO_GOTO`)
+    /// rather than by panning. Switching site normally recenters on the radar, which would throw
+    /// away the framing the deep link just asked for; this survives exactly one such recenter.
+    pub camera_placed: bool,
     /// Archive/live playback state; `timeline.following` is the live auto-update flag.
     pub timeline: crate::timeline::Timeline,
     pub smooth: bool,
@@ -131,6 +135,7 @@ impl MapView {
             threshold_enabled: [false; 6],
             volume: None,
             loaded_site: None,
+            camera_placed: false,
             timeline: crate::timeline::Timeline::default(),
             smooth: false,
             srv: false,
