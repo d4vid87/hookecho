@@ -34,6 +34,9 @@ L_FORECAST="Tool: Point forecast"
 L_STORMTABLE="Storm attributes…"
 L_FRONTS="Surface fronts (H/L)"
 L_GLM="Satellite lightning (GLM)"
+L_MRMS="MRMS Mosaic"
+L_HRRR="HRRR future radar"
+L_QPE="QPE 24-hour"
 
 log() { printf '\033[36m▸\033[0m %s\n' "$*" >&2; }
 die() { printf '\033[31m✗ %s\033[0m\n' "$*" >&2; exit 1; }
@@ -48,7 +51,8 @@ preflight() {
   # since the last build, and the scene silently shoots without its layer.
   log "building release"
   (cd "$REPO" && cargo build --release --quiet)
-  for l in "$L_ALLTILTS" "$L_XSECTION" "$L_FORECAST" "$L_STORMTABLE" "$L_FRONTS" "$L_GLM"; do
+  for l in "$L_ALLTILTS" "$L_XSECTION" "$L_FORECAST" "$L_STORMTABLE" "$L_FRONTS" "$L_GLM" \
+           "$L_MRMS" "$L_QPE" "$L_HRRR"; do
     grep -qF "$l" "$REPO/crates/hookecho/src/app.rs" \
       || die "palette label '$l' is not in app.rs any more — update shoot.sh"
   done
@@ -141,12 +145,16 @@ wait_settle() { # wait_settle [floor_secs] [cap_secs]
 snap() { # snap NAME
   mkdir -p "$OUT"
   local f="$OUT/$1.jpg"
-  import -display "$DISPLAY_NUM" -window root png:- | magick - -quality 88 "$f"
-  local kb=$(( $(stat -c%s "$f") / 1024 ))
-  if [ "$kb" -gt 400 ]; then
-    import -display "$DISPLAY_NUM" -window root png:- | magick - -quality 80 "$f"
+  local raw="$WORK/$1.png"
+  import -display "$DISPLAY_NUM" -window root "$raw"
+  local kb=0
+  # Satellite basemaps under a full-screen radar field are expensive to encode; step the quality
+  # down until it fits rather than shipping one 500K tile in an otherwise budgeted set.
+  for q in 88 82 76 70; do
+    magick "$raw" -quality "$q" "$f"
     kb=$(( $(stat -c%s "$f") / 1024 ))
-  fi
+    [ "$kb" -le 400 ] && break
+  done
   log "saved $1.jpg (${kb}K)"
 }
 
@@ -156,11 +164,13 @@ snap() { # snap NAME
 # own zoom: these are portraits of one storm, not a regional view.
 
 MOORE="KTLX,-97.47,35.32,9.6,2013-05-20T20:15:00Z"
-ELRENO="KTLX,-97.96,35.53,9.4,2013-05-31T23:10:00Z"
+# Hero framing follows the storm's track rather than sitting on the radar.
+MOORE_HERO="KTLX,-97.36,35.40,9.9,2013-05-20T20:15:00Z"
+ELRENO="KTLX,-97.99,35.55,10.4,2013-05-31T23:10:00Z"
 TUSCALOOSA="KBMX,-87.55,33.20,9.3,2011-04-27T22:10:00Z"
 JOPLIN="KSGF,-94.50,37.06,9.5,2011-05-22T22:40:00Z"
 MAYFIELD="KPAH,-88.64,36.74,9.3,2021-12-11T03:30:00Z"
-IAN="KTBW,-82.20,26.70,7.4,2022-09-28T19:00:00Z"
+IAN="KTBW,-82.05,26.60,7.6,2022-09-28T19:00:00Z"
 
 scene_reflectivity() { launch "$TUSCALOOSA"; wait_settle 14; key 1; wait_settle 6; snap reflectivity; }
 scene_velocity()     { launch "$ELRENO";     wait_settle 14; key 2; wait_settle 8; snap velocity; }
@@ -170,7 +180,9 @@ scene_tropical()     { launch "$IAN";        wait_settle 16; key 1; wait_settle 
 scene_alltilts() {
   launch "$MOORE"; wait_settle 14; key 1
   palette "$L_ALLTILTS"
-  wait_settle 20 140   # four tilts = four bins off one volume, plus three more panes of tiles
+  # Each pane fetches and bins its own tilt, and the upper cuts come in last — a short wait here
+  # shoots three empty panes, which is exactly the failure the old screenshot set shipped.
+  wait_settle 60 240
   snap alltilts
 }
 
@@ -179,8 +191,8 @@ scene_xsection() {
   palette "$L_XSECTION"
   # Cut southwest-to-northeast through the mesocyclone, so the panel shows the vault and the
   # overhang rather than a slice of clear air. Screen coords hold because the camera is pinned.
-  click 690 620
-  click 900 430
+  click 640 610
+  click 920 380
   wait_settle 8
   snap xsection
 }
@@ -194,16 +206,19 @@ scene_alerts() {
 }
 
 scene_products() {
-  launch "$JOPLIN"; wait_settle 14; key 1; sleep 1
+  launch "$JOPLIN"; wait_settle 20 160; key 1; wait_settle 8
   click 68 938   # the product pill, bottom-left
-  sleep 1.5
+  sleep 2.0
   snap products
 }
 
+# The forecast API only ever answers for *now*, so this scene stays live — a sunny seven-day
+# outlook over a 2013 tornado looks like a bug, not a feature.
 scene_forecast() {
-  launch "$MOORE"; wait_settle 14; key 1
+  launch "${LIVE_SITE:-KTLX},${LIVE_LON:--97.3},${LIVE_LAT:-35.3},8.6"
+  wait_settle 20 160
   palette "$L_FORECAST"
-  click 640 560
+  click 700 430
   wait_settle 8
   snap forecast
 }
@@ -225,6 +240,32 @@ scene_fronts() {
   snap fronts
 }
 
+scene_hrrr() {
+  # The FORECAST banner only appears with the layer on, which is the whole point of the shot:
+  # this is a model picture, not observed radar, and it says so.
+  launch "KTLX,-89.5,38.5,5.4"; wait_settle 16
+  palette "$L_HRRR"
+  wait_settle 20 160
+  snap hrrr
+}
+
+scene_mrms() {
+  # CONUS proper, biased east: at continental zoom the frame is mostly Canada and ocean.
+  launch "KTLX,-91.0,38.2,5.1"; wait_settle 16
+  palette "$L_MRMS"
+  wait_settle 16 120
+  snap mrms
+}
+
+scene_qpe() {
+  # Zoomed onto wherever the rain actually fell — a CONUS-wide rainfall map is mostly empty map.
+  launch "${LIVE_SITE:-KTLX},${LIVE_LON:--97.3},${LIVE_LAT:-35.3},6.4"
+  wait_settle 16
+  palette "$L_QPE"
+  wait_settle 16 120
+  snap qpe
+}
+
 scene_glm() {
   launch "${LIVE_SITE:-KTLX},${LIVE_LON:--97.3},${LIVE_LAT:-35.3},7.2"
   wait_settle 16
@@ -236,18 +277,21 @@ scene_glm() {
 # --- hero loop --------------------------------------------------------------------------------
 
 scene_hero() {
-  launch "$MOORE"; wait_settle 16; key 1
+  launch "$MOORE_HERO"; wait_settle 20 160; key 1
   local dir="$WORK/hero"; rm -rf "$dir"; mkdir -p "$dir"
-  # Step back through the volumes leading up to the tornado, then replay forwards, so the loop
-  # shows the hook organising rather than a single frozen frame. 10 frames = the scan cache's
-  # depth, past which every step re-downloads.
-  for _ in $(seq 9); do key Left; sleep 2; done
-  wait_settle 10 120
+  # The timeline steps from the pill's transport buttons only — there is no arrow-key binding, so
+  # these are the ◀ and ▶| hit points on the bottom-centre pill at 1600x1000.
+  local back=497 fwd=585 y=940
+  # Rewind first so the loop shows the hook organising into the tornado rather than one frozen
+  # frame. Ten frames is the scan cache's depth; past that every step re-downloads from S3.
+  for _ in $(seq 8); do click "$back" "$y"; sleep 2; done
+  wait_settle 12 140
   for i in $(seq 0 9); do
+    wait_settle 4 60
     import -display "$DISPLAY_NUM" -window root "$dir/$(printf '%02d' "$i").png"
-    key Right; sleep 3
+    click "$fwd" "$y"
   done
-  ffmpeg -y -loglevel error -framerate 4 -pattern_type glob -i "$dir/*.png" \
+  ffmpeg -y -loglevel error -framerate 3 -pattern_type glob -i "$dir/*.png" \
     -vf "scale=1100:-1:flags=lanczos,split[a][b];[a]palettegen=max_colors=160[p];[b][p]paletteuse=dither=bayer:bayer_scale=3" \
     -loop 0 "$OUT/hero.gif"
   log "hero.gif $(( $(stat -c%s "$OUT/hero.gif") / 1024 ))K"
@@ -287,8 +331,8 @@ check() {
   [ "$fail" = 0 ] && log "check passed" || die "check failed"
 }
 
-ARCHIVE_SCENES=(reflectivity velocity alltilts xsection alerts products layers forecast tropical)
-LIVE_SCENES=(stormtable fronts glm)
+ARCHIVE_SCENES=(reflectivity velocity alltilts xsection alerts products layers tropical)
+LIVE_SCENES=(stormtable forecast fronts hrrr mrms qpe glm)
 
 main() {
   mkdir -p "$WORK"

@@ -1,10 +1,21 @@
 # Hook Echo-WX
 
+[![CI](https://github.com/d4vid87/hookecho/actions/workflows/ci.yml/badge.svg)](https://github.com/d4vid87/hookecho/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/d4vid87/hookecho?sort=semver)](../../releases)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](#license)
+![Platforms](https://img.shields.io/badge/platforms-Windows%20%7C%20Linux%20%7C%20Android-lightgrey)
+
 Advanced NEXRAD weather radar viewer — an open-source homage to
 [supercell-wx](https://github.com/dpaulat/supercell-wx), built from scratch in Rust
 with `wgpu` + `egui`. Deep per-site Level 2 / Level 3 analysis plus national
-situational awareness (MRMS), forecast environment overlays, and warning
-intelligence — on Windows, Linux, and Android.
+situational awareness, forecast environment overlays, and warning intelligence —
+on Windows, Linux, and Android.
+
+![Moore, Oklahoma, 20 May 2013 — KTLX 0.5° reflectivity, replayed from the archive](docs/shots/hero.gif)
+
+<sub>**KTLX 0.5° reflectivity — Moore, Oklahoma, 20 May 2013.** Replayed from the
+public archive inside the app, one scan every few seconds, with the tornado
+warning that was in force at the time.</sub>
 
 ## Install
 
@@ -45,9 +56,10 @@ docked toolbar, nothing between you and the radar:
 - **Top-center** searches for a place. `Ctrl+K` searches every product, layer,
   window and tool in the app — one list, described in plain English.
 
-| Pick a product | Find anything |
+| Pick a product | Find any layer |
 |---|---|
-| ![Products](docs/shots/products.jpg) | ![Layers](docs/shots/layers.jpg) |
+| ![The product picker open over the Joplin supercell](docs/shots/products.jpg) | ![The Layers panel open over the Mayfield supercell](docs/shots/layers.jpg) |
+| <sub>Joplin, MO — 22 May 2011</sub> | <sub>Mayfield, KY — 11 Dec 2021</sub> |
 
 Radar times read in **the selected radar's local time**, not Zulu — a KEPZ pane
 shows MDT while a KTLX pane shows CDT, side by side. Settings → Units puts it
@@ -65,49 +77,74 @@ alerts watch. Tap one on the map to rename or remove it.
 
 ## Walkthrough
 
-*(Screenshots are live data on the Mapbox Satellite Streets basemap; a dozen
-other basemaps ship too, from a dark vector map to GOES satellite imagery.)*
+*Storm screenshots are historic events replayed through the app's own archive
+timeline — the same scrubbing you'd do live. Forecast and national layers are
+live data, captured as they came in. Everything is on the Mapbox Satellite
+Streets basemap; a dozen others ship too, from a dark vector map to GOES
+satellite imagery.*
 
 ### Watching a storm
 
 All six Level 2 moments on a GPU polar pipeline, with VCP-aware tilt selection,
 velocity dealiasing, storm-relative velocity, and GRLevelX `.pal` color tables.
-Velocity here shows the inbound/outbound couplets, the SCIT cells the radar is
-tracking with their 15/30/45/60-minute forecast positions, and the warning
-polygons in force:
+Reflectivity shows you the storm's structure; velocity shows you what it's doing —
+the tight red-against-green couplet below is a tornado on the ground.
 
 | Reflectivity | Velocity (dealiased) |
 |---|---|
-| ![REF](docs/shots/reflectivity.jpg) | ![VEL](docs/shots/velocity.jpg) |
+| ![A classic supercell with a hook echo](docs/shots/reflectivity.jpg) | ![A tornadic velocity couplet](docs/shots/velocity.jpg) |
+| <sub>KBMX — Tuscaloosa, AL, 27 Apr 2011</sub> | <sub>KTLX — El Reno, OK, 31 May 2013</sub> |
 
 One action opens the same product at four tilts with the cameras linked, so you
-can see how a storm leans with height; cross-sections slice it vertically in any
-product:
+can see how a storm leans with height. Cross-sections slice it vertically in any
+product — click two points and you get the storm in profile, core and overhang
+and all.
 
 | Four tilts at once | Cross-section |
 |---|---|
-| ![All tilts](docs/shots/alltilts.jpg) | ![Cross-section](docs/shots/xsection.jpg) |
+| ![The same storm at four elevation angles](docs/shots/alltilts.jpg) | ![A vertical slice through the storm core](docs/shots/xsection.jpg) |
+| <sub>KTLX — Moore, OK, 20 May 2013</sub> | <sub>KTLX — Moore, OK, 20 May 2013</sub> |
+
+Every screenshot in this section is a replay. The timeline reaches back to 2008,
+so any archived storm loads the same way the live one does — a supercell from
+fifteen years ago, or a hurricane coming ashore:
+
+![Hurricane Ian's eyewall coming ashore over southwest Florida](docs/shots/tropical.jpg)
+
+<sub>**KTBW 0.5° reflectivity — Hurricane Ian, 28 September 2022.**</sub>
 
 ### Deciding which storm matters
 
 Every tracked cell in one sortable table — hail size, tops, VIL, rotation flags —
-with a click on any row flying you there. Alongside it, clickable NWS bulletins,
-parsed storm-motion vectors, and an active-alerts panel sorted worst-first:
+and clicking a row flies you there. Alongside it, an active-alerts panel sorted
+worst-first, with clickable NWS bulletins and parsed storm-motion vectors. Scrub
+into the archive and the panel fills with the warnings that were actually in
+force at that moment.
 
 | Storm attributes | Active alerts |
 |---|---|
-| ![Storm table](docs/shots/stormtable.jpg) | ![Alerts](docs/shots/alerts.jpg) |
+| ![The storm attributes table listing tracked cells](docs/shots/stormtable.jpg) | ![The alerts panel listing tornado warnings](docs/shots/alerts.jpg) |
+| <sub>KBMX — live</sub> | <sub>KBMX — 27 Apr 2011 outbreak</sub> |
 
 ### Looking ahead
 
 HRRR future radar rides the timeline's forecast tail, so scrubbing past the
-present keeps going into the model. The WPC surface analysis draws the national
-weather map — fronts with their proper pips, highs and lows with pressures. And
-any point on the map gives you the plain NWS forecast for that spot:
+present keeps going into the model. It is labeled the whole time it is on —
+model output should never be mistaken for something a radar actually saw.
 
-| HRRR future radar | Surface fronts | Tap-for-forecast |
-|---|---|---|
-| ![HRRR](docs/shots/hrrr.jpg) | ![Fronts](docs/shots/fronts.jpg) | ![Forecast](docs/shots/forecast.jpg) |
+![HRRR future radar one hour out, with a banner marking it as model output](docs/shots/hrrr.jpg)
+
+<sub>**HRRR future radar, +1 h.** The banner stays up for as long as the layer is
+on: forecast, not observed.</sub>
+
+Any point on the map gives you the plain NWS forecast for that spot, and the WPC
+surface analysis draws the national weather map — fronts with their proper pips,
+highs and lows with pressures.
+
+| Surface analysis | Point forecast |
+|---|---|
+| ![Fronts, highs and lows across the country](docs/shots/fronts.jpg) | ![A seven-day forecast for a clicked point](docs/shots/forecast.jpg) |
+| <sub>WPC coded surface analysis, live</sub> | <sub>Tap anywhere — KBMX, live</sub> |
 
 Also on the forecast tail: **rotation tracks** (HRRR max updraft-helicity swaths
 — where storms are forecast to rotate, accumulated across the hours you scrub
@@ -115,118 +152,121 @@ to) and near-surface **wildfire smoke**.
 
 ### The national picture
 
-MRMS composite reflectivity, 24-hour rainfall, and individual lightning flashes
-from the GOES satellite's lightning mapper, fading as they age. Every gridded
-layer draws its own scale and units:
+Every radar in the country stitched into one mosaic, updated every couple of
+minutes — the view for "what's happening everywhere" rather than "what's
+happening here" — plus rainfall accumulated over the last hour or day.
 
-| MRMS composite | 24-hour rainfall | Satellite lightning |
-|---|---|---|
-| ![MRMS](docs/shots/mrms.jpg) | ![QPE](docs/shots/qpe.jpg) | ![GLM](docs/shots/glm.jpg) |
+| National mosaic | 24-hour rainfall |
+|---|---|
+| ![MRMS composite reflectivity across the continental US](docs/shots/mrms.jpg) | ![Accumulated rainfall across the Southeast](docs/shots/qpe.jpg) |
+| <sub>MRMS composite reflectivity, live</sub> | <sub>MRMS gauge-corrected precipitation, live</sub> |
 
-Plus cloud-to-ground lightning density, rotation tracks / azimuthal shear, MESH
-hail size and 24-h hail swaths, surface precipitation type, and FLASH
-flash-flood recurrence intervals.
+Alongside them: individual lightning flashes from the GOES satellite's lightning
+mapper (fading as they age), cloud-to-ground lightning density, rotation tracks
+and azimuthal shear, MESH hail size and 24-hour hail swaths, surface
+precipitation type, and FLASH flash-flood recurrence intervals. Every gridded
+layer draws its own scale and units.
 
-## Feature highlights
+## Features
 
-- **Warning intelligence**: each warning's `eventMotionDescription` is parsed
-  into a storm-motion vector — warned-storm dot, projected 15/30/45/60-min path,
-  and ETA readouts to your saved locations. Escalation tiers (CONSIDERABLE →
-  DESTRUCTIVE/observed tornado → **Tornado Emergency / PDS**) drive a pulsing
-  polygon outline, priority sorting in the alerts panel with red threat chips,
-  a dedicated emergency siren, and `urgent`-priority phone push.
-- **Storm analysis**: SCIT cell tracks + past tracks + arrival-time cones,
-  hail/mesocyclone flags, auto **tornado debris signature (TDS)** detection
-  (low CC + high Z → chime/push), NOAA **ProbSevere** per-storm
-  severe/tor/hail/wind probabilities.
-- **Severe environment**: HRRR CAPE (surface-based or mixed-layer parcel) and
-  storm-relative helicity (0–1 or 0–3 km) as translucent map overlays; point
-  soundings (Skew-T/hodograph) with derived **SBCAPE / LCL / SRH / SCP / STP /
-  EHI** composite indices (real parcel ascent + Bunkers storm motion); the VAD
-  wind-profile hodograph; and the WFO's **Area Forecast Discussion** in-app.
-- **Gridded Level 3**: Digital VIL (DVL), Enhanced Echo Tops (EET), and
-  **Hydrometeor Classification (HHC)** — rain / snow / hail / graupel /
-  biological — for the active site, decoded by the from-scratch packet-16
-  (Digital Radial Data Array) decoder: BZIP2 symbology blocks, ICD float16
-  thresholds, 0.25-km and 1-km bin sizes, MetPy-golden-tested.
-- **Surface obs**: METAR station plots — wind barbs (US convention),
-  temperature/dewpoint, flight-category-colored stations, greedy decluttering,
-  raw METAR on hover.
-- **Tropical**: active NHC storms with forecast cones, track lines, and
-  Saffir–Simpson category-colored forecast points; layer ids discovered at
-  runtime so NHC MapServer drift can't break it.
-- **Outlooks**: SPC Day 1–3 categorical convective outlooks, plus Day-1
-  probabilistic tornado/wind/hail grids with the significant-severe (SIG) hatch.
-- **Nowcast**: 0–45 min optical-flow radar extrapolation from storm motion,
-  alongside hourly HRRR model future radar (0–18 h) on the timeline's forecast
-  tail.
-- **Time machine**: archive playback of any date since 2008 — with the storm-based
-  warning polygons **and the local storm reports** that were actually in effect
-  at the scrubbed instant (IEM archives), a curated historic events library, and
-  bookmarks.
-- **Safety**: My-Locations warning monitoring, lightning proximity alarm
-  (strike within ~15 km of a saved spot → chime/push), live NWS Local Storm
-  Reports (minutes-fresh, tornado/wind/hail/flood), and the Spotter Network
-  overlay (contact info stripped at parse).
-- **Aviation**: SIGMET/AIRMET hazard polygons (convective, turbulence, icing,
-  IFR) with the raw bulletin on click.
-- **Climatology**: click anywhere → historical tornado tracks near that point
-  (SPC 1950–2022 database) with EF-scale histogram.
-- **Rotation couplets**: client-side azimuthal-shear couplet detection on the
-  live volume, with its own alarm sound — a mesocyclone flag that doesn't wait
-  for a Level 3 product.
-- **Satellite lightning**: individual flashes from the GOES-19 Geostationary
-  Lightning Mapper, ~40 seconds behind real time, fading over a 15-minute window.
-  GLM sees in-cloud flashes a ground network never reports. The netCDF-4 granules
-  are decoded by a from-scratch minimal HDF5 reader (`crates/hdf5lite`), because
-  the reference C library can't ship in the Android build.
-- **Forecast tools**: HRRR future radar (0–18 h) on the timeline's forecast tail,
-  **forecast rotation tracks** (MXUPHL swaths accumulated across the forecast
-  hours you scrub to), near-surface **wildfire smoke**, and the WPC **coded
-  surface analysis** — cold/warm/stationary/occluded fronts drawn with their
-  proper pips, plus H/L centers with pressures.
-- **Point forecast**: tap anywhere for that spot's NWS 7-day and hourly forecast
-  — temperature curve over precipitation-probability bars, in the site's clock.
-- **Storm attributes table**: every tracked cell at once, sortable by hail size,
-  reflectivity, tops, VIL or rotation flags; click a row to fly to that storm.
-- **Rain-arrival alerts**: watches upstream of your saved places and your chase
-  position and says roughly how many minutes out the rain is (chip, push, sound).
-- **Spoken warnings**: new warnings read aloud through the system voice — the
-  system speech engine on desktop, Android's own TTS on the phone.
-- **Wind profile over time**: the VAD hodograph plus a time-height panel of wind
-  barbs accumulated while the app runs, since the radar only publishes the latest.
-- **Radar DVR**: deep in-RAM decode buffer with one-touch instant replay (`R`).
-- **Streamer/OBS mode**: chrome-free UI (`F8`) + auto-tour of active warnings (`F9`).
+### Warnings and alerting
+
+- Each warning's `eventMotionDescription` is parsed into a storm-motion vector —
+  warned-storm dot, projected 15/30/45/60-minute path, and ETA readouts to your
+  saved locations.
+- Escalation tiers (CONSIDERABLE → DESTRUCTIVE/observed tornado → **Tornado
+  Emergency / PDS**) drive a pulsing polygon outline, priority sorting with red
+  threat chips, a dedicated emergency siren, and `urgent`-priority phone push.
+- Warnings are read aloud through the system voice — the desktop speech engine,
+  or Android's own TTS on the phone.
+- Watched-location monitoring, a lightning proximity alarm (a strike within
+  ~15 km of a saved spot), rain-arrival alerts ("rain in about 20 minutes"), and
+  live NWS Local Storm Reports, minutes fresh.
+
+### Storm analysis
+
+- SCIT cell tracks, past tracks and arrival-time cones; hail and mesocyclone
+  flags; a sortable attributes table for every tracked cell at once.
+- Automatic **tornado debris signature** detection (low correlation coefficient
+  collocated with high reflectivity) and client-side azimuthal-shear couplet
+  detection on the live volume — a rotation flag that doesn't wait for a Level 3
+  product.
+- NOAA **ProbSevere** per-storm severe/tornado/hail/wind probabilities.
+- Cross-sections in any moment, a CAPPI altitude slicer, and a 3D volume view.
+
+### Environment and forecast
+
+- HRRR CAPE (surface-based or mixed-layer parcel) and storm-relative helicity
+  (0–1 or 0–3 km) as map overlays.
+- Point soundings — Skew-T and hodograph — with derived **SBCAPE / LCL / SRH /
+  SCP / STP / EHI** indices from real parcel ascent and Bunkers storm motion.
+- The VAD wind-profile hodograph, plus a time-height panel of wind barbs
+  accumulated while the app runs, since the radar only publishes the latest.
+- HRRR future radar (0–18 h), forecast rotation tracks, near-surface wildfire
+  smoke, and 0–45 minute optical-flow extrapolation of the radar you're watching.
+- SPC Day 1–3 categorical outlooks plus Day-1 probabilistic tornado/wind/hail
+  grids with the significant-severe hatch, and the WFO's **Area Forecast
+  Discussion** in-app.
+
+### Data the app decodes itself
+
+- **Gridded Level 3**: Digital VIL, Enhanced Echo Tops and **Hydrometeor
+  Classification** (rain / snow / hail / graupel / biological), via a
+  from-scratch packet-16 decoder — BZIP2 symbology blocks, ICD float16
+  thresholds, 0.25-km and 1-km bins, golden-tested against MetPy.
+- **GOES satellite lightning**: individual flashes from the GLM, ~40 seconds
+  behind real time. GLM sees in-cloud flashes a ground network never reports.
+  The netCDF-4 granules go through a from-scratch minimal HDF5 reader
+  (`crates/hdf5lite`), because the reference C library can't ship in the Android
+  build.
+- **METAR station plots** with US-convention wind barbs, flight-category colors
+  and greedy decluttering; **NHC tropical** storms with forecast cones and
+  Saffir–Simpson-colored track points; **SIGMET/AIRMET** hazard polygons.
+
+### Time machine
+
+- Archive playback of any date since 2008, with the warning polygons **and the
+  local storm reports** that were actually in effect at the scrubbed instant.
+- A curated library of historic events, plus your own bookmarks.
+- An in-RAM decode buffer with one-touch instant replay (`R`), and
+  screenshot / GIF / MP4 loop export.
+
+### Out in the field
+
 - **Chase mode**: live GPS (gpsd on desktop, the system location service on
-  Android), a storm-relative chase HUD with closest-approach and escape bearing,
-  and offline "chase packs" of pre-downloaded basemap tiles.
-- Multi-pane layouts, placefiles with icon sheets + a layer manager, sensor
-  dashboard, CAPPI altitude slicer, range rings + azimuth spokes, 13 themes,
-  tray + background alerting, screenshot/GIF/MP4 loop export.
+  Android), a storm-relative HUD with closest approach and escape bearing, and
+  offline "chase packs" of pre-downloaded basemap tiles.
+- **Streamer/OBS mode**: chrome-free UI (`F8`) and an auto-tour of active
+  warnings (`F9`).
+- Click anywhere for historical tornado tracks near that point (SPC 1950–2022)
+  with an EF-scale histogram.
+- Multi-pane layouts, placefiles with icon sheets and a layer manager, a sensor
+  dashboard, range rings, 13 themes, and tray-based background alerting.
 
 On Android the same app wears a touch-first skin: a five-slot labeled dock
 (Play · Layers · Products · Site · More), slide-up sheets, a navigation drawer
 built from the same described action list as the desktop Layers panel, and
 native GPS for chase mode.
 
-## Workspace
+## Repository layout
 
-- `crates/hdf5lite` — minimal read-only HDF5 reader, just enough for the netCDF-4
-  files NOAA publishes (GLM lightning). Exists because the reference reader is a
-  C library the Android build can't take; checked against h5py on real granules.
+- `crates/hookecho` — the app: egui UI and wgpu render pipelines.
+- `crates/wxdata` — data plumbing: Level 2 (AWS), MRMS, HRRR (future radar and
+  environment fields), NWS alerts with storm motion and escalation, IEM archived
+  warnings and live/archived storm reports, SPC outlooks and climatology, METAR,
+  NHC tropical, aviation SIGMETs, Area Forecast Discussions, ProbSevere,
+  placefiles, spotters, GOES GLM lightning, WPC surface fronts, NWS point
+  forecasts, TDS detection, sounding indices, and CAPPI/cross-section/3D
+  resampling.
 - `crates/nexrad-level3` — from-scratch NEXRAD Level 3 (RPG) product decoder:
-  storm-cell packets (15/19/20/23) and digital radial arrays (packet 16,
+  storm-cell packets (15/19/20/23) and digital radial arrays (packet 16 —
   DVL/EET/HHC), golden-tested against MetPy.
-- `crates/wxdata` — data plumbing: Level 2 (AWS), MRMS, HRRR (future radar +
-  environment fields), NWS alerts + storm motion/escalation, IEM archived
-  warnings + live/archived LSRs, SPC outlooks/climatology, METAR, NHC tropical,
-  aviation SIGMETs, Area Forecast Discussions, ProbSevere, placefiles, spotters,
-  GOES GLM lightning, WPC surface fronts, NWS point forecasts,
-  TDS detection, sounding indices (parcel CAPE / Bunkers SRH / SCP / STP),
-  CAPPI/cross-section/3D resampling.
-- `crates/hookecho` — the app: egui UI + wgpu render pipelines.
-- `vendor/gribberish` — vendored GRIB2 decoder (PNG-packing + MRMS
+- `crates/hdf5lite` — minimal read-only HDF5 reader, just enough for the
+  netCDF-4 files NOAA publishes. Exists because the reference reader is a C
+  library the Android build can't take; checked against h5py on real granules.
+- `vendor/gribberish` — vendored GRIB2 decoder (PNG-packing and MRMS
   local-parameter fixes; grep `hookecho patch:`).
+- `scripts/shots` — the screenshot harness that produced everything above.
 
 ## Verification
 
@@ -254,7 +294,13 @@ cargo run --release -- --headless-hrrr uh 3 uh.png          # refc|uh|smoke
 ```
 
 ```sh
-cargo test    # 182 offline unit tests
+cargo test    # 184 offline unit tests
 ```
 
-License: MIT.
+The screenshots in this README are regenerated by `scripts/shots/shoot.sh`,
+which drives the real binary on a nested X display — see
+[`scripts/shots/README.md`](scripts/shots/README.md).
+
+## License
+
+MIT.
