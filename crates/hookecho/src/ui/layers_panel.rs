@@ -119,7 +119,7 @@ pub(crate) fn body(
     });
     ui.add_space(6.0);
     let order = matches(entries, query);
-    egui::ScrollArea::vertical()
+    let out = egui::ScrollArea::vertical()
         .max_height(max_height)
         .show(ui, |ui| {
             if order.is_empty() {
@@ -181,7 +181,39 @@ pub(crate) fn body(
                 }
             }
         });
+    fade_out_bottom(ui, &out);
     chosen
+}
+
+/// Fade the last few pixels of the scroll viewport into the card colour when there's more below.
+/// The viewport cuts wherever the height budget runs out, which lands mid-row often enough that a
+/// half-drawn description ("Specific Differential Pha…") read as a rendering bug. A fade says
+/// "keep scrolling" instead.
+fn fade_out_bottom(ui: &mut egui::Ui, out: &egui::scroll_area::ScrollAreaOutput<()>) {
+    const H: f32 = 22.0;
+    let more_below = out.content_size.y > out.inner_rect.height() + 1.0
+        && out.state.offset.y + out.inner_rect.height() < out.content_size.y - 1.0;
+    if !more_below {
+        return;
+    }
+    let r = out.inner_rect;
+    let (cr, cg, cb) = crate::ui::style::CARD_FILL;
+    let (clear, solid) = (
+        Color32::from_rgba_unmultiplied(cr, cg, cb, 0),
+        Color32::from_rgb(cr, cg, cb),
+    );
+    let mut mesh = egui::Mesh::default();
+    for (p, c) in [
+        (egui::pos2(r.left(), r.bottom() - H), clear),
+        (egui::pos2(r.right(), r.bottom() - H), clear),
+        (r.right_bottom(), solid),
+        (r.left_bottom(), solid),
+    ] {
+        mesh.colored_vertex(p, c);
+    }
+    mesh.add_triangle(0, 1, 2);
+    mesh.add_triangle(0, 2, 3);
+    ui.painter().add(egui::Shape::mesh(mesh));
 }
 
 #[cfg(test)]

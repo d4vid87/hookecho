@@ -2663,7 +2663,9 @@ impl HookEchoApp {
             .anchor(egui::Align2::RIGHT_TOP, crate::ui::style::LANE_RIGHT_PANEL)
             .order(egui::Order::Foreground)
             .show(ctx, |ui| {
-                mobile::glass(246).show(ui, |ui| {
+                // Opaque, not glass: this card carries a wall of small text, and satellite
+                // basemaps put white place labels straight through anything translucent.
+                mobile::glass(255).show(ui, |ui| {
                     ui.set_width(360.0);
                     ui.horizontal(|ui| {
                         ui.label(
@@ -6857,7 +6859,7 @@ impl HookEchoApp {
                     df,
                     dl,
                 );
-                y += 56.0; // the moment legend's panel height
+                y += ui::legend::PANEL_H + 6.0;
             }
             // Whichever gridded layer the user actually sees on top — the last enabled one in
             // paint order — gets its scale keyed underneath. Without this, MESH/QPE/VIL and the

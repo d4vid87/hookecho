@@ -11,7 +11,29 @@ use wxdata::level2::Moment;
 
 const BAR_W: f32 = 220.0;
 const BAR_H: f32 = 16.0;
-const MARGIN: f32 = 10.0;
+/// Gap between the map edge and the legend card. The card is laid out from this inset outwards,
+/// never from the bar inwards — deriving the panel by expanding the bar used to push its top edge
+/// off the map rect entirely, so the window's rounded corner sliced the title off every screenshot.
+const INSET: f32 = 12.0;
+/// Card padding around the bar: title above, tick labels below.
+const PAD_X: f32 = 6.0;
+const PAD_TOP: f32 = 20.0;
+const PAD_BOTTOM: f32 = 20.0;
+/// Full height of the moment legend card — `app.rs` stacks field scales under it by this much.
+pub const PANEL_H: f32 = BAR_H + PAD_TOP + PAD_BOTTOM;
+
+/// Card backing. Opaque: basemap place labels are baked into the raster tiles underneath, so the
+/// only way to stop them reading through the legend is to not be translucent.
+fn card(painter: &egui::Painter, panel: Rect) {
+    let (r, g, b) = crate::ui::style::CARD_FILL;
+    painter.rect_filled(panel, 8.0, Color32::from_rgb(r, g, b));
+    painter.rect_stroke(
+        panel,
+        8.0,
+        Stroke::new(1.0, Color32::from_white_alpha(20)),
+        egui::StrokeKind::Inside,
+    );
+}
 
 /// Paint the legend into the top-left of `map_rect`. `threshold` dims the sub-threshold part.
 ///
@@ -28,12 +50,15 @@ pub fn draw(
 ) {
     let (vmin, vmax) = moment.value_range();
     let span = (vmax - vmin).max(f32::EPSILON);
-    let origin = map_rect.left_top() + Vec2::new(MARGIN, MARGIN);
-    let bar = Rect::from_min_size(origin, Vec2::new(BAR_W, BAR_H));
-
-    // Backing panel so labels stay legible over any basemap.
-    let panel = bar.expand2(Vec2::new(6.0, 20.0));
-    painter.rect_filled(panel, 4.0, Color32::from_black_alpha(160));
+    let panel = Rect::from_min_size(
+        map_rect.left_top() + Vec2::new(INSET, INSET),
+        Vec2::new(BAR_W + PAD_X * 2.0, PANEL_H),
+    );
+    let bar = Rect::from_min_size(
+        panel.min + Vec2::new(PAD_X, PAD_TOP),
+        Vec2::new(BAR_W, BAR_H),
+    );
+    card(painter, panel);
 
     let x_of = |value: f32| bar.left() + ((value - vmin) / span).clamp(0.0, 1.0) * bar.width();
     let col = |c: [u8; 4]| Color32::from_rgb(c[0], c[1], c[2]);
@@ -145,8 +170,8 @@ pub fn draw(
         }
     }
     painter.text(
-        bar.left_top() - Vec2::new(0.0, 14.0),
-        Align2::LEFT_BOTTOM,
+        panel.left_top() + Vec2::new(PAD_X, 4.0),
+        Align2::LEFT_TOP,
         format!("{} ({})", moment.short_name(), disp_label),
         font,
         Color32::WHITE,
@@ -169,16 +194,19 @@ pub fn draw_field(
         return 0.0;
     };
     let font = FontId::proportional(10.0);
-    let origin = map_rect.left_top() + Vec2::new(MARGIN, MARGIN + y_offset);
+    let origin = map_rect.left_top() + Vec2::new(INSET, INSET + y_offset);
 
     match r.scale {
         FieldScale::Ramp { lo, hi, stops, .. } => {
-            let bar = Rect::from_min_size(origin + Vec2::new(0.0, 14.0), Vec2::new(BAR_W, BAR_H));
-            let panel = Rect::from_min_max(
-                bar.left_top() - Vec2::new(6.0, 16.0),
-                bar.right_bottom() + Vec2::new(6.0, 14.0),
+            let panel = Rect::from_min_size(
+                origin,
+                Vec2::new(BAR_W + PAD_X * 2.0, BAR_H + 16.0 + 14.0),
             );
-            painter.rect_filled(panel, 4.0, Color32::from_black_alpha(160));
+            let bar = Rect::from_min_size(
+                panel.min + Vec2::new(PAD_X, 16.0),
+                Vec2::new(BAR_W, BAR_H),
+            );
+            card(painter, panel);
 
             // One quad per stop segment, per-vertex colors — same idiom as the moment legend.
             let mut mesh = Mesh::default();
@@ -236,8 +264,8 @@ pub fn draw_field(
                 format!("{} ({})", r.label, r.units)
             };
             painter.text(
-                bar.left_top() - Vec2::new(0.0, 3.0),
-                Align2::LEFT_BOTTOM,
+                panel.left_top() + Vec2::new(PAD_X, 3.0),
+                Align2::LEFT_TOP,
                 head,
                 font,
                 Color32::WHITE,
@@ -250,7 +278,7 @@ pub fn draw_field(
             let w = 132.0;
             let h = 16.0 + cats.len() as f32 * row_h;
             let panel = Rect::from_min_size(origin, Vec2::new(w, h));
-            painter.rect_filled(panel, 4.0, Color32::from_black_alpha(160));
+            card(painter, panel);
             painter.text(
                 panel.left_top() + Vec2::new(6.0, 2.0),
                 Align2::LEFT_TOP,
