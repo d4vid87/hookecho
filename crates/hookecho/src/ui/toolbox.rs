@@ -1,4 +1,4 @@
-//! The left-dock Radar Toolbox: site, VCP, map style, products, tilts, threshold, overlays, timeline.
+//! The left-dock Radar Toolbox: site, map style, products and tilts, overlays, timeline.
 
 use crate::app::OverlayFilters;
 use crate::settings::Settings;
@@ -69,10 +69,9 @@ pub(crate) fn show(
     let mut actions = ToolboxActions::default();
     let tz = settings.tz_for(view.site.as_deref());
     egui::ScrollArea::vertical().show(ui, |ui| {
-        section(ui, "Radar Site", |ui| site_section(ui, view, settings, &mut actions));
-        section(ui, "Volume", |ui| vcp_section(ui, view));
+        section(ui, "Site", |ui| site_section(ui, view, settings, &mut actions));
         section(ui, "Map", |ui| map_section(ui, view, settings, chasepack, &mut actions));
-        section(ui, "Level 2", |ui| level2_section(ui, view, settings, &mut actions));
+        section(ui, "Product", |ui| product_section(ui, view, settings, &mut actions));
         section(ui, "National", |ui| national_section(ui, fields, rotation_minutes));
         section(ui, "Future Radar", |ui| hrrr_section(ui, fields, hrrr_fcst_hour, hrrr_valid, tz));
         section(ui, "Environment", |ui| env_section(ui, fields, env_cape_ml, env_srh_km, contour_kind));
@@ -457,16 +456,10 @@ fn site_section(
                 });
         });
     }
-}
-
-fn vcp_section(ui: &mut egui::Ui, view: &MapView) {
-    ui.horizontal(|ui| {
-        ui.label("VCP:");
-        match &view.volume {
-            Some(v) => ui.strong(&v.vcp),
-            None => ui.weak("—"),
-        };
-    });
+    // The scan pattern the radar is currently running — one line, not its own section.
+    if let Some(v) = &view.volume {
+        ui.weak(format!("Scanning: {}", v.vcp));
+    }
 }
 
 fn map_section(
@@ -498,42 +491,16 @@ fn map_section(
                 }
             }
         });
-    if !mb || !mt {
-        ui.weak("(add Mapbox/MapTiler keys in Settings for more)");
-    }
-    ui.weak("(press Z to cycle)");
+    ui.weak(if mb && mt {
+        "Z cycles backgrounds".to_string()
+    } else {
+        "Z cycles backgrounds · more styles with Mapbox/MapTiler keys in Settings".to_string()
+    });
     ui.checkbox(&mut view.smooth, "Smooth radar data");
 
-    // Startup view: remember this site + camera as the launch position.
-    ui.separator();
-    if ui
-        .button("Save as startup view")
-        .on_hover_text("Open here (site + map position) on next launch")
-        .clicked()
-    {
-        if let Some(site) = &view.site {
-            settings.start_view = Some(StartView {
-                site: site.clone(),
-                x: view.camera.center.0,
-                y: view.camera.center.1,
-                zoom: view.camera.zoom,
-            });
-        }
-    }
-    if let Some(site) = settings.start_view.as_ref().map(|sv| sv.site.clone()) {
-        let mut clear = false;
-        ui.horizontal(|ui| {
-            ui.weak(format!("Starts at {site}"));
-            clear = ui.small_button("Clear").clicked();
-        });
-        if clear {
-            settings.start_view = None;
-        }
-    }
-
-    // Offline chase pack: pre-cache this view's basemap tiles to disk so it renders with no signal.
-    ui.separator();
+    // A download in flight stays above the disclosure — progress you can't find reads as a hang.
     if let Some((done, total, errors, mb)) = chasepack.progress {
+        ui.separator();
         let frac = if total > 0 {
             done as f32 / total as f32
         } else {
@@ -549,31 +516,66 @@ fn map_section(
         if ui.button("Cancel download").clicked() {
             actions.cancel_chasepack = true;
         }
-    } else if !chasepack.packable {
-        ui.weak("Offline pack: pick a raster or vector basemap");
-    } else {
-        ui.weak(format!(
-            "Offline pack: {} tiles ≈ {:.0} MB (z{}–{}, current view)",
-            chasepack.tiles, chasepack.mb, chasepack.z_lo, chasepack.z_hi
-        ));
-        let too_big = chasepack.mb > 2000.0;
+        return;
+    }
+
+    ui.collapsing("Startup & offline", |ui| {
+        // Startup view: remember this site + camera as the launch position.
         if ui
-            .add_enabled(!too_big, egui::Button::new("⬇ Download offline pack"))
-            .on_hover_text("Cache this view's basemap tiles to disk for offline use in the field")
+            .button("Save as startup view")
+            .on_hover_text("Open here (site + map position) on next launch")
             .clicked()
         {
-            actions.download_chasepack = true;
+            if let Some(site) = &view.site {
+                settings.start_view = Some(StartView {
+                    site: site.clone(),
+                    x: view.camera.center.0,
+                    y: view.camera.center.1,
+                    zoom: view.camera.zoom,
+                });
+            }
         }
-        if too_big {
-            ui.colored_label(
-                egui::Color32::from_rgb(230, 90, 90),
-                "Too large (>2 GB) — zoom in or narrow the view",
-            );
+        if let Some(site) = settings.start_view.as_ref().map(|sv| sv.site.clone()) {
+            let mut clear = false;
+            ui.horizontal(|ui| {
+                ui.weak(format!("Starts at {site}"));
+                clear = ui.small_button("Clear").clicked();
+            });
+            if clear {
+                settings.start_view = None;
+            }
         }
-    }
+
+        // Offline chase pack: pre-cache this view's basemap tiles so it renders with no signal.
+        ui.separator();
+        if !chasepack.packable {
+            ui.weak("Offline pack: pick a raster or vector basemap");
+        } else {
+            ui.weak(format!(
+                "Offline pack: {} tiles ≈ {:.0} MB (z{}–{}, current view)",
+                chasepack.tiles, chasepack.mb, chasepack.z_lo, chasepack.z_hi
+            ));
+            let too_big = chasepack.mb > 2000.0;
+            if ui
+                .add_enabled(!too_big, egui::Button::new("⬇ Download offline pack"))
+                .on_hover_text(
+                    "Cache this view's basemap tiles to disk for offline use in the field",
+                )
+                .clicked()
+            {
+                actions.download_chasepack = true;
+            }
+            if too_big {
+                ui.colored_label(
+                    egui::Color32::from_rgb(230, 90, 90),
+                    "Too large (>2 GB) — zoom in or narrow the view",
+                );
+            }
+        }
+    });
 }
 
-fn level2_section(
+fn product_section(
     ui: &mut egui::Ui,
     view: &mut MapView,
     settings: &mut Settings,
@@ -587,7 +589,8 @@ fn level2_section(
     });
 
     // Tilt buttons from the loaded volume.
-    ui.label("Tilt:");
+    ui.label("Tilt:")
+        .on_hover_text("How high the radar beam is aimed — 0.5° is closest to the ground");
     if let Some(v) = &view.volume {
         let elevations = v.elevations.clone();
         ui.horizontal_wrapped(|ui| {
@@ -599,54 +602,59 @@ fn level2_section(
         ui.weak("(no volume)");
     }
 
-    // Storm-relative velocity (velocity moment only).
-    if view.moment == Moment::Velocity {
-        ui.checkbox(&mut settings.dealias_velocity, "Dealias")
-            .on_hover_text("Unfold aliased velocity (region-based dealiasing)");
-        ui.horizontal(|ui| {
-            ui.checkbox(&mut view.srv, "Storm-relative");
-        });
-        if view.srv {
+    // Expert knobs behind a disclosure: picking a product and a tilt is the whole job for most
+    // people, and burying these keeps the panel readable without losing them.
+    ui.collapsing("Options", |ui| {
+        // Storm-relative velocity (velocity moment only).
+        if view.moment == Moment::Velocity {
+            ui.checkbox(&mut settings.dealias_velocity, "Dealias")
+                .on_hover_text("Unfold aliased velocity (region-based dealiasing)");
             ui.horizontal(|ui| {
-                ui.label("Motion:");
-                ui.add(
-                    egui::DragValue::new(&mut view.storm_dir_deg)
-                        .range(0.0..=359.0)
-                        .suffix("°"),
-                );
-                ui.add(
-                    egui::DragValue::new(&mut view.storm_speed_kt)
-                        .range(0.0..=150.0)
-                        .suffix(" kt"),
-                );
+                ui.checkbox(&mut view.srv, "Storm-relative");
             });
-            if ui
-                .button("From storm cells")
-                .on_hover_text("Set motion to the SCIT storm-cell mean (needs L3 storm cells)")
-                .clicked()
-            {
-                actions.srv_from_cells = true;
+            if view.srv {
+                ui.horizontal(|ui| {
+                    ui.label("Motion:");
+                    ui.add(
+                        egui::DragValue::new(&mut view.storm_dir_deg)
+                            .range(0.0..=359.0)
+                            .suffix("°"),
+                    );
+                    ui.add(
+                        egui::DragValue::new(&mut view.storm_speed_kt)
+                            .range(0.0..=150.0)
+                            .suffix(" kt"),
+                    );
+                });
+                if ui
+                    .button("From storm cells")
+                    .on_hover_text("Set motion to the SCIT storm-cell mean (needs L3 storm cells)")
+                    .clicked()
+                {
+                    actions.srv_from_cells = true;
+                }
             }
         }
-    }
 
-    // Threshold for the active moment. The slider value stays internal (m/s for velocity);
-    // display honors the Units setting.
-    let i = view.moment.index();
-    let (vmin, vmax) = view.moment.value_range();
-    let (factor, label) = crate::app::display_units(view.moment, settings);
-    let f = factor as f64;
-    ui.horizontal(|ui| {
-        ui.checkbox(&mut view.threshold_enabled[i], "Threshold");
-        if view.threshold_enabled[i] {
-            let t = view.thresholds[i].get_or_insert((vmin + vmax) * 0.5);
-            ui.add(
-                egui::Slider::new(t, vmin..=vmax)
-                    .custom_formatter(move |v, _| format!("{:.0}", v * f))
-                    .custom_parser(move |s| s.parse::<f64>().ok().map(|x| x / f))
-                    .suffix(label),
-            );
-        }
+        // Threshold for the active moment. The slider value stays internal (m/s for velocity);
+        // display honors the Units setting.
+        let i = view.moment.index();
+        let (vmin, vmax) = view.moment.value_range();
+        let (factor, label) = crate::app::display_units(view.moment, settings);
+        let f = factor as f64;
+        ui.horizontal(|ui| {
+            ui.checkbox(&mut view.threshold_enabled[i], "Threshold")
+                .on_hover_text("Hide everything below a value — cuts light rain out of the picture");
+            if view.threshold_enabled[i] {
+                let t = view.thresholds[i].get_or_insert((vmin + vmax) * 0.5);
+                ui.add(
+                    egui::Slider::new(t, vmin..=vmax)
+                        .custom_formatter(move |v, _| format!("{:.0}", v * f))
+                        .custom_parser(move |s| s.parse::<f64>().ok().map(|x| x / f))
+                        .suffix(label),
+                );
+            }
+        });
     });
 }
 
@@ -802,15 +810,11 @@ fn timeline_section(
 
     ui.horizontal(|ui| {
         ui.checkbox(&mut t.loop_enabled, "Loop");
-        ui.label("Speed");
         ui.add(
             egui::Slider::new(&mut t.speed, 1.0..=15.0)
                 .suffix(" fps")
                 .show_value(true),
         );
-    });
-    ui.horizontal(|ui| {
-        ui.label("Live loop window");
         ui.add(
             egui::DragValue::new(&mut settings.live_loop_frames)
                 .range(2..=30)
