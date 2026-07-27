@@ -35,6 +35,7 @@ pub mod hodograph_window;
 pub mod layer_window;
 pub mod layers_panel;
 pub mod legend;
+pub mod marker_popup;
 pub mod marker_window;
 pub mod palette_editor;
 pub mod placefile_window;

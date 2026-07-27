@@ -198,6 +198,8 @@ impl super::HookEchoApp {
     fn mobile_back(&mut self) {
         if self.mobile_sheet != MobileSheet::None {
             self.mobile_sheet = MobileSheet::None;
+        } else if self.marker_popup.is_some() {
+            self.marker_popup = None;
         } else if self.site_dialog.is_some() {
             self.site_dialog = None;
         } else if self.cells_window.open {

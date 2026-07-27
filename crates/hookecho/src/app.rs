@@ -884,6 +884,10 @@ pub struct HookEchoApp {
     detail: Option<Detail>,
     /// Open "Storm {id} Attributes" window (a clicked storm cell).
     cell_popup: Option<Cell>,
+    /// Which of `settings.markers` the tapped-marker popup is editing.
+    // ponytail: index identity — markers have no id, and their names aren't unique ("Marker 3"
+    // comes back after a delete). A bounds check closes the popup if the list shrinks under it.
+    marker_popup: Option<usize>,
     cells_window: ui::cells_window::CellsWindow,
     /// Which moment the cross-section slices (session state, not persisted).
     xsection_moment: Moment,
@@ -1313,6 +1317,7 @@ impl HookEchoApp {
             overlay_last_fetch: None,
             detail: None,
             cell_popup: None,
+            marker_popup: None,
             cells_window: Default::default(),
             xsection_moment: Moment::Reflectivity,
             follow_cell: None,
@@ -5359,12 +5364,41 @@ impl HookEchoApp {
                 let px = (pos.x - prect.left(), pos.y - prect.top());
                 let w = cam.screen_to_world(px, vp);
                 let (lon, lat) = crate::render::mercator::world_to_lonlat(w.0, w.1);
+                // Your own markers win over everything else on the map: you put them at a place you
+                // chose, so a tap there means that pin, not whatever the radar drew underneath.
+                // Nearest wins, so clustered markers stay individually reachable.
+                let marker_hit = matches!(self.tool, MapTool::Interrogate | MapTool::Marker)
+                    .then(|| {
+                        self.settings
+                            .markers
+                            .iter()
+                            .enumerate()
+                            .filter_map(|(i, m)| {
+                                let w = crate::render::mercator::lonlat_to_world(m.lon, m.lat);
+                                let (sx, sy) = cam.world_to_screen(w, vp);
+                                let (dx, dy) =
+                                    (prect.left() + sx - pos.x, prect.top() + sy - pos.y);
+                                let d2 = dx * dx + dy * dy;
+                                (d2 <= tap_r2(14.0)).then_some((i, d2))
+                            })
+                            .min_by(|a, b| a.1.total_cmp(&b.1))
+                            .map(|(i, _)| i)
+                    })
+                    .flatten();
                 // Interrogate + a click on a radar-site ring switches radars (storm features win,
                 // handled inside try_pick_site). Consumes the click so no popup opens underneath.
-                let picked_site = self.tool == MapTool::Interrogate
+                let picked_site = marker_hit.is_none()
+                    && self.tool == MapTool::Interrogate
                     && self.show_radar_sites
                     && self.try_pick_site(idx, pos, cam, prect, vp);
                 match self.tool {
+                    // Also catches the drop tool: a second marker within a finger's width of an
+                    // existing one is never what someone meant, and this makes a stray drop undoable.
+                    _ if marker_hit.is_some() => {
+                        self.marker_popup = marker_hit;
+                        self.cell_popup = None;
+                        self.detail = None;
+                    }
                     _ if picked_site => {}
                     MapTool::Measure => {
                         if self.measure.len() >= 2 {
@@ -8663,6 +8697,24 @@ impl eframe::App for HookEchoApp {
             }
             if !open {
                 self.cell_popup = None;
+            }
+        }
+        if let Some(i) = self.marker_popup {
+            match self.settings.markers.get_mut(i) {
+                // The list shrank under us (the manager window deleted a row this frame).
+                None => self.marker_popup = None,
+                Some(m) => {
+                    let r = ui::marker_popup::show(ctx, m);
+                    if r.manage {
+                        self.marker_window.open = true;
+                    }
+                    if r.remove {
+                        self.settings.markers.remove(i);
+                        self.marker_popup = None;
+                    } else if !r.open {
+                        self.marker_popup = None;
+                    }
+                }
             }
         }
         self.follow_badge(ctx);
