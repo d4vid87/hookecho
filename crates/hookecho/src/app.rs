@@ -44,6 +44,12 @@ fn tap_r2(px: f32) -> f32 {
     r * r
 }
 
+/// The first segment of a geocoder result — "Norman, Cleveland County, Oklahoma, United States"
+/// is a fine answer to a query and a terrible name for a pin on a map.
+fn short_place_name(s: &str) -> &str {
+    s.split(',').next().unwrap_or(s).trim()
+}
+
 /// Which severe-weather overlays are shown.
 pub struct OverlayFilters {
     pub show_alerts: bool,
@@ -1040,6 +1046,9 @@ pub struct HookEchoApp {
     /// Top search pill: the place query and a transient "flew to …" status.
     place_query: String,
     place_status: Option<(String, Instant)>,
+    /// After a search flies somewhere, the offer to keep it: `(name, lat, lon, when)`. Searching is
+    /// how you look around, so dropping a pin every time would litter the map — this asks first.
+    save_offer: Option<(String, f64, f64, Instant)>,
     /// True while the in-flight geocode came from the search pill (navigate only) rather than
     /// the marker window (which adds a marker).
     geocode_nav: bool,
@@ -1410,6 +1419,7 @@ impl HookEchoApp {
             palette_sel: 0,
             place_query: String::new(),
             place_status: None,
+            save_offer: None,
             geocode_nav: false,
             layer_window_open: false,
             pf_icon_tex: std::collections::HashMap::new(),
@@ -3050,10 +3060,32 @@ impl HookEchoApp {
                             self.place_status = None;
                         }
                     }
+                    // Offer to keep the place you just flew to. Outlives the status caption so the
+                    // offer is still there once you've looked at the map and decided.
+                    if let Some((name, lat, lon, at)) = &self.save_offer {
+                        if at.elapsed().as_secs() >= 10 {
+                            self.save_offer = None;
+                        } else if ui
+                            .small_button(format!("{} Save marker", ph::MAP_PIN))
+                            .on_hover_text("Keep this place — alerts and storm ETAs use your markers")
+                            .clicked()
+                        {
+                            self.settings.markers.push(crate::settings::Marker {
+                                name: name.clone(),
+                                lat: *lat,
+                                lon: *lon,
+                                icon: None,
+                            });
+                            self.place_status = Some(("Marker saved".to_string(), Instant::now()));
+                            self.save_offer = None;
+                        }
+                    }
                 });
             });
         if let Some(query) = submit {
             self.geocode_nav = true;
+            self.save_offer = None; // a new search retires the previous offer
+
             self.place_status = Some(("Searching…".to_string(), Instant::now()));
             let http = self.http.clone();
             let tx = self.geocode_tx.clone();
@@ -8406,6 +8438,12 @@ impl eframe::App for HookEchoApp {
                         let cam = &mut self.views[self.active].camera;
                         cam.center = crate::render::mercator::lonlat_to_world(lon, lat);
                         cam.zoom = cam.zoom.max(9.0);
+                        self.save_offer = Some((
+                            short_place_name(&name).to_string(),
+                            lat,
+                            lon,
+                            Instant::now(),
+                        ));
                         self.place_status = Some((name, Instant::now()));
                         self.place_query.clear();
                     }
@@ -8877,6 +8915,24 @@ impl eframe::App for HookEchoApp {
             100
         };
         ctx.request_repaint_after(std::time::Duration::from_millis(idle));
+    }
+}
+
+#[cfg(test)]
+mod place_name_tests {
+    use super::short_place_name;
+
+    #[test]
+    fn keeps_the_place_and_drops_the_administrative_tail() {
+        // What Nominatim actually returns for a town query.
+        assert_eq!(
+            short_place_name("Norman, Cleveland County, Oklahoma, United States"),
+            "Norman"
+        );
+        // Already short, or oddly shaped: pass it through rather than blanking the name.
+        assert_eq!(short_place_name("Dallas"), "Dallas");
+        assert_eq!(short_place_name(""), "");
+        assert_eq!(short_place_name("  Tulsa , Oklahoma"), "Tulsa");
     }
 }
 
