@@ -152,7 +152,7 @@ fn page_tools(ui: &mut egui::Ui) {
     ui.strong("What else is in here (9/10)");
     ui.add_space(6.0);
     ui.small(
-        "Everything below is one search away: press Ctrl+K, or open Layers on the right edge.",
+        "Everything below is one search away: open the menu (top-left) and type, or press Ctrl+K.",
     );
     ui.add_space(6.0);
     let group = |ui: &mut egui::Ui, title: &str, rows: &[(&str, &str)]| {
@@ -224,8 +224,9 @@ fn page_welcome(ui: &mut egui::Ui) {
     ui.add_space(2.0);
     ui.small("• The bar along the bottom is the timeline — play, scrub, and jump back to live.");
     ui.small("• Bottom-left names the product you're looking at; tap it to switch.");
-    ui.small("• The buttons down the right edge open Layers, radar Site, Alerts and Settings.");
-    ui.small("• Search the top pill for a place, or press Ctrl+K to search every action.");
+    ui.small("• The menu button (top-left) opens everything: layers, tools, radar site, settings.");
+    ui.small("• The bell (top-right) shows active alerts; its number is how many.");
+    ui.small("• Search the menu for a place or any action — on desktop, Ctrl+K opens it straight.");
     ui.add_space(4.0);
     ui.small("Press Next to begin.");
 }
@@ -261,25 +262,11 @@ fn page_map(ui: &mut egui::Ui, settings: &mut Settings, basemap: &mut BasemapSty
     ui.strong("Map & API keys (3/10)");
     ui.small("Optional keys unlock premium basemaps. Free keys: mapbox.com and maptiler.com. Plenty of basemaps work with no key at all.");
     ui.add_space(6.0);
-    egui::Grid::new("wiz_keys")
-        .num_columns(2)
-        .spacing([10.0, 6.0])
-        .show(ui, |ui| {
-            ui.label("Mapbox token");
-            ui.add(
-                egui::TextEdit::singleline(&mut settings.mapbox_key)
-                    .password(true)
-                    .desired_width(240.0),
-            );
-            ui.end_row();
-            ui.label("MapTiler key");
-            ui.add(
-                egui::TextEdit::singleline(&mut settings.maptiler_key)
-                    .password(true)
-                    .desired_width(240.0),
-            );
-            ui.end_row();
-        });
+    // Same widget as the Settings > Basemaps tab: responsive width plus the Android Paste button
+    // (a soft keyboard cannot reach the system clipboard on a NativeActivity).
+    super::settings_window::key_field(ui, "Mapbox token", &mut settings.mapbox_key);
+    ui.add_space(4.0);
+    super::settings_window::key_field(ui, "MapTiler key", &mut settings.maptiler_key);
     ui.add_space(6.0);
     // Basemap picker, filtered by whichever keys are set this frame (typing a key unlocks styles).
     let mb = !settings.mapbox_key.is_empty();

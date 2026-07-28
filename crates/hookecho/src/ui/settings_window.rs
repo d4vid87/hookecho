@@ -193,7 +193,7 @@ fn basemaps_tab(ui: &mut egui::Ui, settings: &mut Settings) {
 /// on Android a Paste button that fills the field straight from the system clipboard (typing long
 /// keys on a soft keyboard is impractical, and reading the clipboard directly sidesteps IME
 /// quirks). Laid out responsively so it fits any width, phone included.
-fn key_field(ui: &mut egui::Ui, label: &str, value: &mut String) {
+pub(crate) fn key_field(ui: &mut egui::Ui, label: &str, value: &mut String) {
     ui.label(label);
     ui.horizontal(|ui| {
         // Reserve space for the trailing buttons; the field takes the rest.
@@ -218,7 +218,13 @@ fn key_field(ui: &mut egui::Ui, label: &str, value: &mut String) {
                 *value = t.trim().to_string();
             }
         }
-        if !value.is_empty() && ui.small_button("✕").on_hover_text("Clear").clicked() {
+        // Phosphor X, not "✕": the Android fallback face has no U+2715 and drew a tofu box.
+        if !value.is_empty()
+            && ui
+                .small_button(egui_phosphor::regular::X)
+                .on_hover_text("Clear")
+                .clicked()
+        {
             value.clear();
         }
     });
