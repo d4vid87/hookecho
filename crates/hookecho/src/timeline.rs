@@ -174,12 +174,31 @@ impl Timeline {
         self.playhead = 0;
     }
 
+    /// How long until the next playback frame is due, or `None` when not playing. The UI turns
+    /// this into a repaint deadline — without it, playback advances only as fast as frames
+    /// happen to be drawn, which the idle heartbeat caps at 4/s on Android and 10/s on desktop
+    /// no matter what speed the user picked.
+    pub fn time_to_next_frame(&self) -> Option<std::time::Duration> {
+        if !self.playing || self.frames.is_empty() {
+            return None;
+        }
+        let interval = self.frame_interval();
+        Some(match self.last_advance {
+            Some(t) => interval.saturating_sub(t.elapsed()),
+            None => std::time::Duration::ZERO,
+        })
+    }
+
+    fn frame_interval(&self) -> std::time::Duration {
+        std::time::Duration::from_secs_f32((1.0 / self.speed).clamp(0.05, 10.0))
+    }
+
     /// Advance playback if a frame interval has elapsed. Returns true if the playhead moved.
     pub fn tick(&mut self) -> bool {
         if !self.playing || self.frames.is_empty() {
             return false;
         }
-        let interval = std::time::Duration::from_secs_f32((1.0 / self.speed).clamp(0.05, 10.0));
+        let interval = self.frame_interval();
         if self.last_advance.is_some_and(|t| t.elapsed() < interval) {
             return false;
         }
@@ -212,6 +231,15 @@ mod tests {
     // `Identifier` has no cheap public constructor, so the populated-frame paths are exercised
     // by the app integration; here we lock the empty-list safety and the index arithmetic that
     // `step`/`tick` rely on.
+    #[test]
+    fn no_repaint_deadline_when_not_playing() {
+        let mut t = Timeline::default();
+        assert!(t.time_to_next_frame().is_none(), "idle asks for nothing");
+        // Still nothing to pace with an empty frame list, even once "playing".
+        t.playing = true;
+        assert!(t.time_to_next_frame().is_none());
+    }
+
     #[test]
     fn empty_timeline_is_safe() {
         let mut t = Timeline::default();

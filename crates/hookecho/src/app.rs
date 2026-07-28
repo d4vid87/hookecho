@@ -5245,6 +5245,11 @@ impl HookEchoApp {
         // Advance playback (if playing) then reconcile the displayed volume with the timeline.
         self.views[idx].timeline.live_window = self.settings.live_loop_frames.max(1);
         self.views[idx].timeline.tick();
+        // Playback paces itself rather than riding whatever the idle heartbeat happens to give
+        // it: ask for a repaint exactly when the next frame is due.
+        if let Some(dt) = self.views[idx].timeline.time_to_next_frame() {
+            ctx.request_repaint_after(dt);
+        }
         self.sync_timeline(idx, ctx, site_changed);
 
         // Live streaming is limited to the active pane; others poll their head.
