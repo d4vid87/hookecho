@@ -354,6 +354,43 @@ impl OverlaySource {
     }
 }
 
+/// One freehand annotation stroke: a lon/lat polyline and the colour it was drawn in.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct Stroke2d {
+    pub points: Vec<[f64; 2]>,
+    pub color: egui::Color32,
+}
+
+/// The four annotation colours, picked to stay legible over both radar and satellite basemaps.
+pub(crate) const DRAW_COLORS: [egui::Color32; 4] = [
+    egui::Color32::from_rgb(255, 80, 80),
+    egui::Color32::from_rgb(255, 215, 60),
+    egui::Color32::from_rgb(90, 220, 255),
+    egui::Color32::WHITE,
+];
+
+/// Append `pt` to the newest stroke, or start one in `color` when `new_stroke`.
+pub(crate) fn draw_append(
+    strokes: &mut Vec<Stroke2d>,
+    pt: [f64; 2],
+    color: egui::Color32,
+    new_stroke: bool,
+) {
+    if new_stroke || strokes.is_empty() {
+        strokes.push(Stroke2d {
+            points: vec![pt],
+            color,
+        });
+        return;
+    }
+    let last = strokes.last_mut().expect("checked non-empty");
+    // Skip points the previous one already covers — a 60 fps drag would otherwise pile up
+    // thousands of coincident vertices.
+    if last.points.last() != Some(&pt) {
+        last.points.push(pt);
+    }
+}
+
 /// What a left-click on the map does.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub(crate) enum MapTool {
@@ -374,6 +411,8 @@ pub(crate) enum MapTool {
     Forecast,
     /// Click a point to list historical tornado tracks near it (SPC climatology).
     Climatology,
+    /// Freehand annotation: drag to draw a line on the map (session-only).
+    Draw,
 }
 
 /// HRRR model field drawn as contour lines over the radar (surface `f00`). SB-CAPE / 0-3 km SRH
@@ -944,6 +983,11 @@ pub struct HookEchoApp {
     tool: MapTool,
     /// Measure-tool clicked endpoints in `[lon, lat]` (max 2).
     measure: Vec<[f64; 2]>,
+    /// Freehand annotation strokes, in lon/lat so they stick to the ground through pan and zoom.
+    /// Session-only by design: this is for pointing at a storm on a stream, not a saved document.
+    strokes: Vec<Stroke2d>,
+    /// The colour the next stroke gets.
+    draw_color: egui::Color32,
     marker_window: ui::marker_window::MarkerWindow,
     event_window: ui::event_window::EventWindow,
     palette_editor: ui::palette_editor::PaletteEditor,
@@ -1355,6 +1399,8 @@ impl HookEchoApp {
             last_viewport: (1000.0, 800.0),
             tool: MapTool::default(),
             measure: Vec::new(),
+            strokes: Vec::new(),
+            draw_color: DRAW_COLORS[0],
             marker_window: Default::default(),
             event_window: Default::default(),
             palette_editor: Default::default(),
@@ -4142,6 +4188,12 @@ impl HookEchoApp {
                 "How often tornadoes have hit this spot historically",
                 false,
             ),
+            (
+                MapTool::Draw,
+                "Tool: Draw",
+                "Scribble on the map — circle the storm you're talking about",
+                false,
+            ),
         ] {
             push(
                 label,
@@ -5702,7 +5754,25 @@ impl HookEchoApp {
         // would ALSO register as a drag and fight the zoom — the gesture block below owns both
         // pan and zoom while two fingers are down.
         let gesture = ui.input(|i| i.multi_touch());
-        if response.dragged() && gesture.is_none() {
+        // The draw tool takes the drag away from the pan, the same deal the measure tool makes
+        // with the click: while it's armed, a drag draws. Disarm it (Esc / another tool) to pan.
+        if self.tool == MapTool::Draw && gesture.is_none() {
+            if response.dragged() {
+                self.active = idx;
+                if let Some(pos) = response.interact_pointer_pos() {
+                    let cam = self.views[idx].camera;
+                    let px = (pos.x - prect.left(), pos.y - prect.top());
+                    let w = cam.screen_to_world(px, vp);
+                    let ll = crate::render::mercator::world_to_lonlat(w.0, w.1);
+                    draw_append(
+                        &mut self.strokes,
+                        [ll.0, ll.1],
+                        self.draw_color,
+                        response.drag_started(),
+                    );
+                }
+            }
+        } else if response.dragged() && gesture.is_none() {
             self.active = idx;
             let d = response.drag_delta();
             self.views[idx].camera.pan_pixels(d.x, d.y);
@@ -5817,6 +5887,8 @@ impl HookEchoApp {
                         self.chase_pos = Some((lon, lat));
                     }
                     MapTool::Climatology => self.query_climatology(lon, lat),
+                    // Drawing happens on drag, not on click; a bare click leaves no mark.
+                    MapTool::Draw => {}
                     MapTool::Interrogate => {
                         // Storm reports sit on top: a click near a report dot opens its detail.
                         let report = self
@@ -7194,6 +7266,25 @@ impl HookEchoApp {
             );
         }
 
+        // Freehand annotation strokes. Painted with the rest of the tool graphics so they sit
+        // above every overlay, and drawn in OBS mode too — circling a storm on a stream is the
+        // whole point of the tool.
+        for st in &self.strokes {
+            if st.points.len() < 2 {
+                continue;
+            }
+            let pts: Vec<egui::Pos2> = st
+                .points
+                .iter()
+                .map(|ll| {
+                    let w = crate::render::mercator::lonlat_to_world(ll[0], ll[1]);
+                    let (sx, sy) = cam.world_to_screen(w, vp);
+                    egui::pos2(prect.left() + sx, prect.top() + sy)
+                })
+                .collect();
+            painter.add(egui::Shape::line(pts, egui::Stroke::new(2.5, st.color)));
+        }
+
         // Measure tool.
         if !self.measure.is_empty() {
             let col = egui::Color32::from_rgb(255, 210, 80);
@@ -7843,6 +7934,7 @@ impl HookEchoApp {
             MapTool::Forecast => "Forecast: click a point",
             MapTool::Chase => "Chase: click your location",
             MapTool::Climatology => "Climatology: click a point",
+            MapTool::Draw => "Draw: drag to scribble",
             MapTool::Interrogate => "",
         };
         // Nothing armed, nothing to say. The chip used to be a permanent readout of the cursor's
@@ -7856,10 +7948,48 @@ impl HookEchoApp {
                 egui::Align2::RIGHT_BOTTOM,
                 egui::vec2(-14.0, style::LANE_BOTTOM_CHIP),
             )
-            .interactable(false)
+            // The draw tool's chip carries buttons; the rest are read-only hints that must never
+            // swallow a click meant for the map underneath.
+            .interactable(self.tool == MapTool::Draw)
             .show(ctx, |ui| {
                 style::glass(238).show(ui, |ui| {
-                    ui.label(egui::RichText::new(hint).size(style::FONT_SM).color(accent));
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new(hint).size(style::FONT_SM).color(accent));
+                        if self.tool != MapTool::Draw {
+                            return;
+                        }
+                        ui.separator();
+                        for c in DRAW_COLORS {
+                            let sel = self.draw_color == c;
+                            let (rect, resp) =
+                                ui.allocate_exact_size(egui::vec2(18.0, 18.0), egui::Sense::click());
+                            let p = ui.painter_at(rect);
+                            p.circle_filled(rect.center(), 7.0, c);
+                            if sel {
+                                p.circle_stroke(
+                                    rect.center(),
+                                    8.5,
+                                    egui::Stroke::new(1.5, egui::Color32::WHITE),
+                                );
+                            }
+                            if resp.clicked() {
+                                self.draw_color = c;
+                            }
+                        }
+                        ui.separator();
+                        if ui
+                            .add_enabled(!self.strokes.is_empty(), egui::Button::new("Undo"))
+                            .clicked()
+                        {
+                            self.strokes.pop();
+                        }
+                        if ui
+                            .add_enabled(!self.strokes.is_empty(), egui::Button::new("Clear"))
+                            .clicked()
+                        {
+                            self.strokes.clear();
+                        }
+                    });
                 });
             });
     }
@@ -9521,5 +9651,33 @@ mod field_lut_tests {
         assert_eq!(opaque[3], 0, "index 0 clear");
         let translucent = ramp_lut_a(&[(0.0, [0, 0, 0]), (1.0, [255, 255, 255])], 150);
         assert_eq!(translucent[255 * 4 + 3], 150, "top index uses given alpha");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The draw tool must append into the stroke in flight and start a new one per drag, and Undo
+    /// must drop exactly one stroke — the whole contract of a scribble layer.
+    #[test]
+    fn draw_strokes_append_and_undo() {
+        let red = DRAW_COLORS[0];
+        let cyan = DRAW_COLORS[2];
+        let mut strokes = Vec::new();
+        draw_append(&mut strokes, [-97.0, 35.0], red, true);
+        draw_append(&mut strokes, [-97.1, 35.1], red, false);
+        // A repeated point (a still finger during a drag) adds nothing.
+        draw_append(&mut strokes, [-97.1, 35.1], red, false);
+        assert_eq!(strokes.len(), 1);
+        assert_eq!(strokes[0].points.len(), 2);
+
+        draw_append(&mut strokes, [-98.0, 36.0], cyan, true);
+        assert_eq!(strokes.len(), 2);
+        assert_eq!(strokes[1].color, cyan);
+
+        strokes.pop(); // Undo
+        assert_eq!(strokes.len(), 1);
+        assert_eq!(strokes[0].color, red);
     }
 }
