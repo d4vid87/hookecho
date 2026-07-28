@@ -1,10 +1,10 @@
-//! Hook Echo-WX application shell: menu bar, radar toolbox, map view, and async data flow.
+//! Hook Echo-WX application shell: the map view, its floating chrome, and the async data flow.
 //!
 //! UI code only mutates the active [`MapView`]; a single per-frame sync step turns those
 //! mutations into GPU uploads and background fetches, so buttons and hotkeys share one path.
 
 /// Touch-first Android chrome (top bar, bottom dock, slide-up sheets), replacing the desktop
-/// menu bar / left toolbox / status bar / right alert dock. Only the chrome differs; the map,
+/// drawer / pills / alert dock. Only the chrome differs; the map,
 /// windows, and every data path are shared.
 mod mobile;
 
@@ -81,7 +81,7 @@ impl Default for OverlayFilters {
         Self {
             show_alerts: true,
             alert_cats: [true; 6],
-            outlook_day: 0, // SPC outlook off by default; user opts in via the toolbox
+            outlook_day: 0, // SPC outlook off by default; user opts in from Layer options
             outlook_kind: wxdata::spc::OutlookKind::Categorical,
 
             show_mds: true,
@@ -541,7 +541,6 @@ pub(crate) enum AppWindow {
     Climatology,
     LayerManager,
     Wizard,
-    Toolbox,
 }
 
 /// One thing the user can do, addressable from any surface (layers panel, command palette,
@@ -738,7 +737,7 @@ type ShownKey = (
 );
 
 /// An in-progress offline chase-pack download: the worker outcome channel, a cancel flag the
-/// workers poll, and running tallies for the toolbox progress bar.
+/// workers poll, and running tallies for the Map ▸ offline-pack progress bar.
 struct ChasePack {
     rx: Receiver<(bool, u64)>,
     cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
@@ -1052,15 +1051,9 @@ pub struct HookEchoApp {
     show_range_rings: bool,
     /// Draw all NEXRAD radar sites on the map; clicking one switches the pane to that radar.
     show_radar_sites: bool,
-    /// Show the left "Advanced" toolbox panel (off by default — the floating chrome covers the
-    /// common paths). View ▸ Advanced toolbox / F7 / the right-column button bring it back.
-    show_toolbox: bool,
     /// Layers panel (floating, searchable layer picker): open flag + its search text.
     drawer_open: bool,
     layers_query: String,
-    /// The docked toolbox embeds the same layer list; it keeps its own search text so the two
-    /// surfaces don't mirror each other's typing.
-    toolbox_query: String,
     /// Ctrl+K command palette: open flag, query, and the highlighted row.
     /// Set by Ctrl+K so the drawer grabs the search field on the frame it opens.
     drawer_focus_search: bool,
@@ -1129,7 +1122,7 @@ pub struct HookEchoApp {
     glm_polling: std::sync::Arc<std::sync::atomic::AtomicBool>,
     hodo_site: Option<String>,
     hodo_last_fetch: Option<Instant>,
-    /// Streamer/OBS mode: hide all chrome (menu/toolbox/status/docks), leaving only the map.
+    /// Streamer/OBS mode: hide all chrome (drawer/pills/docks), leaving only the map.
     obs_mode: bool,
     /// Auto-tour: cycle the camera through active-warning centroids while in OBS mode.
     obs_tour: bool,
@@ -1443,10 +1436,8 @@ impl HookEchoApp {
             show_radar_sites: true,
             // Map-first by default on both platforms: the floating chrome covers the common paths,
             // and the full toolbox is one "Advanced" tap away.
-            show_toolbox: false,
             drawer_open: false,
             layers_query: String::new(),
-            toolbox_query: String::new(),
             drawer_focus_search: false,
             place_query: String::new(),
             place_status: None,
@@ -2712,8 +2703,8 @@ impl HookEchoApp {
         (z_lo, (z_lo + 4).min(max_z))
     }
 
-    /// Per-frame chase-pack estimate + progress the toolbox renders (see [`ui::toolbox::ChasePackUi`]).
-    fn chasepack_ui(&self) -> ui::toolbox::ChasePackUi {
+    /// Per-frame chase-pack estimate + progress [`map_rows`](Self::map_rows) renders.
+    fn chasepack_ui(&self) -> ui::layer_options::ChasePackUi {
         use crate::tiles::BasemapStyle;
         let style = self.views[self.active].basemap;
         let packable = if style.is_raster() {
@@ -2736,7 +2727,7 @@ impl HookEchoApp {
             .chasepack
             .as_ref()
             .map(|p| (p.done, p.total, p.errors, p.bytes as f64 / 1e6));
-        ui::toolbox::ChasePackUi {
+        ui::layer_options::ChasePackUi {
             tiles,
             mb,
             packable,
@@ -2778,6 +2769,169 @@ impl HookEchoApp {
             done: 0,
             errors: 0,
             bytes: 0,
+        });
+    }
+
+    /// Act on the signals the chrome raised this frame (drawer sections, mobile sheets, pills).
+    fn apply_ui_actions(&mut self, actions: ui::layer_options::UiActions, ctx: &egui::Context) {
+        if let Some(a) = actions.palette {
+            self.apply_palette(a, ctx);
+        }
+        if actions.open_site_dialog && self.site_dialog.is_none() {
+            self.site_dialog = Some(Default::default());
+        }
+        if actions.reload {
+            self.trigger_reload(ctx);
+        }
+        if actions.instant_replay {
+            self.instant_replay();
+        }
+        if actions.download_chasepack {
+            self.start_chasepack();
+        }
+        if actions.cancel_chasepack {
+            if let Some(p) = &self.chasepack {
+                p.cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+            }
+            self.chasepack = None;
+        }
+        if actions.outlook_kind_changed && self.filters.outlook_day == 1 {
+            // Hazard switched: drop the stale Day-1 features so the empty-check refetches it.
+            self.outlook_features[0].clear();
+        }
+        if actions.overlays_changed {
+            // Selecting an outlook day/kind that hasn't been fetched yet pulls it on demand.
+            let day = self.filters.outlook_day;
+            if (1..=3).contains(&day) && self.outlook_features[(day - 1) as usize].is_empty() {
+                self.spawn_overlay(
+                    ctx,
+                    OverlaySource::Outlook(day, self.outlook_kind_for_day()),
+                );
+            }
+            self.rebuild_overlays();
+        }
+        if actions.srv_from_cells {
+            if let Some((dir, spd)) = self.scit_mean_motion() {
+                let v = &mut self.views[self.active];
+                v.storm_dir_deg = dir;
+                v.storm_speed_kt = spd;
+                v.srv = true;
+            }
+        }
+
+    }
+
+    /// Basemap style, smoothing, the startup view and the offline chase pack — the map knobs you
+    /// set once and forget. They used to be the toolbox's "Map" section; they now sit under the
+    /// drawer's App group (and the mobile drawer's Advanced group), which is the only other place
+    /// per-map state is edited.
+    fn map_rows(&mut self, ui: &mut egui::Ui, actions: &mut ui::layer_options::UiActions) {
+        use crate::settings::StartView;
+        use crate::tiles::BasemapStyle;
+        let chasepack = self.chasepack_ui();
+        let (mb_key, mt_key) = (
+            !self.settings.mapbox_key.is_empty(),
+            !self.settings.maptiler_key.is_empty(),
+        );
+        // Split the borrow: the combo writes both the pane's style and the persisted default.
+        let (view, settings) = (&mut self.views[self.active], &mut self.settings);
+        egui::ComboBox::from_label("Background")
+            .selected_text(view.basemap.label())
+            .show_ui(ui, |ui| {
+                // Only styles whose provider key is set are selectable.
+                for s in BasemapStyle::ALL
+                    .into_iter()
+                    .filter(|s| s.available(mb_key, mt_key))
+                {
+                    if ui
+                        .selectable_value(&mut view.basemap, s, s.label())
+                        .clicked()
+                    {
+                        settings.basemap = s.slug().to_string(); // persist across restarts
+                    }
+                }
+            });
+        ui.weak(if mb_key && mt_key {
+            "Z cycles backgrounds"
+        } else {
+            "Z cycles backgrounds · more styles with Mapbox/MapTiler keys in Settings"
+        });
+        ui.checkbox(&mut view.smooth, "Smooth radar data");
+
+        // A download in flight stays above the disclosure — progress you can't find reads as a hang.
+        if let Some((done, total, errors, mb)) = chasepack.progress {
+            ui.separator();
+            let frac = if total > 0 {
+                done as f32 / total as f32
+            } else {
+                1.0
+            };
+            ui.add(egui::ProgressBar::new(frac).text(format!("{done}/{total} tiles · {mb:.0} MB")));
+            if errors > 0 {
+                ui.colored_label(
+                    egui::Color32::from_rgb(230, 120, 60),
+                    format!("{errors} failed"),
+                );
+            }
+            if ui.button("Cancel download").clicked() {
+                actions.cancel_chasepack = true;
+            }
+            return;
+        }
+
+        ui.collapsing("Startup & offline", |ui| {
+            // Startup view: remember this site + camera as the launch position.
+            if ui
+                .button("Save as startup view")
+                .on_hover_text("Open here (site + map position) on next launch")
+                .clicked()
+            {
+                if let Some(site) = &view.site {
+                    settings.start_view = Some(StartView {
+                        site: site.clone(),
+                        x: view.camera.center.0,
+                        y: view.camera.center.1,
+                        zoom: view.camera.zoom,
+                    });
+                }
+            }
+            if let Some(site) = settings.start_view.as_ref().map(|sv| sv.site.clone()) {
+                let mut clear = false;
+                ui.horizontal(|ui| {
+                    ui.weak(format!("Starts at {site}"));
+                    clear = ui.small_button("Clear").clicked();
+                });
+                if clear {
+                    settings.start_view = None;
+                }
+            }
+
+            // Offline chase pack: pre-cache this view's basemap tiles so it renders with no signal.
+            ui.separator();
+            if !chasepack.packable {
+                ui.weak("Offline pack: pick a raster or vector basemap");
+            } else {
+                ui.weak(format!(
+                    "Offline pack: {} tiles ≈ {:.0} MB (z{}–{}, current view)",
+                    chasepack.tiles, chasepack.mb, chasepack.z_lo, chasepack.z_hi
+                ));
+                let too_big = chasepack.mb > 2000.0;
+                if ui
+                    .add_enabled(!too_big, egui::Button::new("⬇ Download offline pack"))
+                    .on_hover_text(
+                        "Cache this view's basemap tiles to disk for offline use in the field",
+                    )
+                    .clicked()
+                {
+                    actions.download_chasepack = true;
+                }
+                if too_big {
+                    ui.colored_label(
+                        egui::Color32::from_rgb(230, 90, 90),
+                        "Too large (>2 GB) — zoom in or narrow the view",
+                    );
+                }
+            }
         });
     }
 
@@ -2869,6 +3023,7 @@ impl HookEchoApp {
         let entries = self.palette_entries();
         let mut query = std::mem::take(&mut self.layers_query);
         let (mut chosen, mut close, mut fly_to) = (None, false, None);
+        let mut opts = ui::layer_options::UiActions::default();
         let mut focus_search = std::mem::take(&mut self.drawer_focus_search);
         egui::Area::new(egui::Id::new("drawer"))
             .anchor(egui::Align2::LEFT_TOP, crate::ui::style::LANE_LEFT_DRAWER)
@@ -2929,12 +3084,38 @@ impl HookEchoApp {
                         }
                     }
                     ui.add_space(4.0);
+                    // Knobs for layers that are already on, then the set-once map knobs. Both are
+                    // collapsed by default: the drawer's job is the layer list above.
+                    egui::CollapsingHeader::new("Layer options")
+                        .default_open(false)
+                        .show(ui, |ui| {
+                            let l3_site = self.l3grid_site.clone();
+                            let tz = self.active_tz();
+                            crate::ui::layer_options::show(
+                                ui,
+                                &mut self.filters,
+                                &mut self.fields,
+                                &mut self.rotation_minutes,
+                                &mut self.hrrr_fcst_hour,
+                                self.hrrr_valid,
+                                tz,
+                                &mut self.env_cape_ml,
+                                &mut self.env_srh_km,
+                                &mut self.contour_kind,
+                                l3_site.as_deref(),
+                                &mut opts,
+                            );
+                        });
+                    egui::CollapsingHeader::new("Map")
+                        .default_open(false)
+                        .show(ui, |ui| self.map_rows(ui, &mut opts));
                     egui::CollapsingHeader::new("App")
                         .default_open(false)
                         .show(ui, |ui| self.app_rows(ui));
                 });
             });
         self.layers_query = query;
+        self.apply_ui_actions(opts, ctx);
         if let Some(a) = chosen {
             self.apply_palette(a, ctx);
         }
@@ -2956,8 +3137,8 @@ impl HookEchoApp {
     }
 
     /// Floating timeline scrubber (desktop): transport + scrub + live badge in a glass pill over
-    /// the map's bottom edge. The date picker, loop, and speed stay in the Advanced toolbox —
-    /// this is the 95% case. Drives the same `timeline` calls as `toolbox::timeline_section`.
+    /// the map's bottom edge. The date picker, loop and speed are one right-click away on the
+    /// LIVE/ARCHIVE badge — the transport is the 95% case and gets the pixels.
     /// [`Settings::tz_for`] for the active pane — the zone for chrome that isn't per-pane.
     pub(crate) fn active_tz(&self) -> Option<wxdata::tz::Tz> {
         self.settings
@@ -2985,6 +3166,8 @@ impl HookEchoApp {
         });
         let loading = self.views[self.active].loading;
         let mut go_head = false;
+        // Edited through a local so the pill closure keeps its single `&mut self.views` borrow.
+        let mut loop_frames = self.settings.live_loop_frames;
         egui::Area::new(egui::Id::new("timeline_pill"))
             .anchor(
                 egui::Align2::CENTER_BOTTOM,
@@ -3036,22 +3219,65 @@ impl HookEchoApp {
                                 format!("ARCHIVE {}", t.date.format("%m/%d")),
                             )
                         };
-                        if ui
-                            .add(
-                                egui::Button::new(
-                                    egui::RichText::new(text)
-                                        .size(12.0)
-                                        .strong()
-                                        .color(egui::Color32::BLACK),
-                                )
-                                .fill(col)
-                                .corner_radius(9.0),
+                        let badge = ui.add(
+                            egui::Button::new(
+                                egui::RichText::new(text)
+                                    .size(12.0)
+                                    .strong()
+                                    .color(egui::Color32::BLACK),
                             )
-                            .on_hover_text("Jump to the newest volume")
-                            .clicked()
-                        {
+                            .fill(col)
+                            .corner_radius(9.0),
+                        );
+                        if badge.clicked() {
                             go_head = true;
                         }
+                        // Right-click the badge for the knobs that used to sit in the toolbox's
+                        // Timeline section: which archive day, and how playback loops.
+                        egui::Popup::context_menu(&badge)
+                            .align(egui::RectAlign::TOP_START)
+                            .show(|ui| {
+                                ui.set_min_width(240.0);
+                                ui.horizontal(|ui| {
+                                    ui.label("Date:");
+                                    if ui.button("◀").clicked() {
+                                        if let Some(d) = t.date.pred_opt() {
+                                            t.date = d;
+                                            t.following = false;
+                                        }
+                                    }
+                                    ui.monospace(t.date.format("%Y-%m-%d").to_string())
+                                        .on_hover_text(
+                                            "Archive days are UTC days — the S3 buckets are \
+                                             bucketed that way",
+                                        );
+                                    let is_today = t.date >= chrono::Utc::now().date_naive();
+                                    if ui.add_enabled(!is_today, egui::Button::new("▶")).clicked() {
+                                        if let Some(d) = t.date.succ_opt() {
+                                            t.date = d;
+                                        }
+                                    }
+                                });
+                                ui.horizontal(|ui| {
+                                    if ui.button("⏮").on_hover_text("First frame").clicked() {
+                                        t.go_begin();
+                                    }
+                                    ui.checkbox(&mut t.loop_enabled, "Loop");
+                                });
+                                ui.add(
+                                    egui::Slider::new(&mut t.speed, 1.0..=15.0)
+                                        .suffix(" fps")
+                                        .show_value(true),
+                                );
+                                ui.add(
+                                    egui::DragValue::new(&mut loop_frames)
+                                        .range(2..=30)
+                                        .suffix(" frames"),
+                                )
+                                .on_hover_text(
+                                    "How many of the newest volumes ▶ cycles through when live",
+                                );
+                            });
                         // Scrub bar + readout fill the rest of the pill.
                         let observed = t.frames.len();
                         if observed == 0 {
@@ -3104,6 +3330,7 @@ impl HookEchoApp {
                     });
                 });
             });
+        self.settings.live_loop_frames = loop_frames;
         if go_head {
             self.views[self.active].timeline.go_head();
         }
@@ -3113,8 +3340,9 @@ impl HookEchoApp {
     ///
     /// Product and tilt used to be reachable only from the hidden Advanced toolbox (or by knowing
     /// the 1–6 and PageUp/PageDown hotkeys), which meant a first-time user never found velocity.
+    /// The toolbox is gone; its per-product knobs live in this popup's Options disclosure.
     /// The pill names the current product in full and opens a picker with a plain-English blurb
-    /// per product. Both write the same fields the toolbox and hotkeys do.
+    /// per product. Both write the same fields the hotkeys do.
     fn product_pill(&mut self, ctx: &egui::Context) {
         use crate::ui::style;
         let accent = crate::theme::accent(self.settings.theme);
@@ -3138,6 +3366,20 @@ impl HookEchoApp {
 
         let mut pick: Option<(wxdata::level2::Moment, bool)> = None;
         let mut pick_tilt: Option<usize> = None;
+        // Expert knobs for the product you're on, edited through locals so the popup closure
+        // doesn't need `self`. They used to live in the toolbox's Product ▸ Options disclosure.
+        let mut srv_from_cells = false;
+        let mut dealias = self.settings.dealias_velocity;
+        let mut srv_on = srv;
+        let mi = moment.index();
+        let (mut dir_deg, mut speed_kt) = {
+            let v = &self.views[self.active];
+            (v.storm_dir_deg, v.storm_speed_kt)
+        };
+        let mut thr_on = self.views[self.active].threshold_enabled[mi];
+        let mut thr = self.views[self.active].thresholds[mi];
+        let (vmin, vmax) = moment.value_range();
+        let (unit_factor, unit_label) = display_units(moment, &self.settings);
         egui::Area::new(egui::Id::new("product_pill"))
             .anchor(
                 egui::Align2::LEFT_BOTTOM,
@@ -3201,6 +3443,60 @@ impl HookEchoApp {
                                     }
                                 });
                             }
+                            // Per-product knobs, behind a disclosure: picking a product and a tilt
+                            // is the whole job for most people.
+                            ui.separator();
+                            ui.collapsing("Options", |ui| {
+                                if moment == wxdata::level2::Moment::Velocity {
+                                    ui.checkbox(&mut dealias, "Dealias").on_hover_text(
+                                        "Unfold aliased velocity (region-based dealiasing)",
+                                    );
+                                    ui.checkbox(&mut srv_on, "Storm-relative");
+                                    if srv_on {
+                                        ui.horizontal(|ui| {
+                                            ui.label("Motion:");
+                                            ui.add(
+                                                egui::DragValue::new(&mut dir_deg)
+                                                    .range(0.0..=359.0)
+                                                    .suffix("°"),
+                                            );
+                                            ui.add(
+                                                egui::DragValue::new(&mut speed_kt)
+                                                    .range(0.0..=150.0)
+                                                    .suffix(" kt"),
+                                            );
+                                        });
+                                        if ui
+                                            .button("From storm cells")
+                                            .on_hover_text(
+                                                "Set motion to the SCIT storm-cell mean (needs L3 storm cells)",
+                                            )
+                                            .clicked()
+                                        {
+                                            srv_from_cells = true;
+                                        }
+                                    }
+                                }
+                                // Threshold for the active moment. The slider value stays internal
+                                // (m/s for velocity); display honors the Units setting.
+                                let f = unit_factor as f64;
+                                ui.horizontal(|ui| {
+                                    ui.checkbox(&mut thr_on, "Threshold").on_hover_text(
+                                        "Hide everything below a value — cuts light rain out of the picture",
+                                    );
+                                    if thr_on {
+                                        let t = thr.get_or_insert((vmin + vmax) * 0.5);
+                                        ui.add(
+                                            egui::Slider::new(t, vmin..=vmax)
+                                                .custom_formatter(move |v, _| format!("{:.0}", v * f))
+                                                .custom_parser(move |s| {
+                                                    s.parse::<f64>().ok().map(|x| x / f)
+                                                })
+                                                .suffix(unit_label),
+                                        );
+                                    }
+                                });
+                            });
                         });
                 });
             });
@@ -3210,6 +3506,25 @@ impl HookEchoApp {
         }
         if let Some(i) = pick_tilt {
             self.views[self.active].tilt = i;
+        }
+        self.settings.dealias_velocity = dealias;
+        // A product row was clicked this frame: it already set the moment and SRV flag, so the
+        // knob write-back must not put the pre-click values back.
+        if pick.is_none() {
+            let v = &mut self.views[self.active];
+            v.srv = srv_on;
+            v.storm_dir_deg = dir_deg;
+            v.storm_speed_kt = speed_kt;
+            v.threshold_enabled[mi] = thr_on;
+            v.thresholds[mi] = thr;
+        }
+        if srv_from_cells {
+            if let Some((dir, spd)) = self.scit_mean_motion() {
+                let v = &mut self.views[self.active];
+                v.storm_dir_deg = dir;
+                v.storm_speed_kt = spd;
+                v.srv = true;
+            }
         }
     }
 
@@ -3893,14 +4208,8 @@ impl HookEchoApp {
                 false,
             ),
             (W::Wizard, "Setup wizard…", "Re-run first-time setup", false),
-            (
-                W::Toolbox,
-                "Advanced toolbox",
-                "Every expert control, in one left-side dock",
-                false,
-            ),
         ] {
-            let on = (w == W::Toolbox).then_some(self.show_toolbox);
+            let on = None;
             push(
                 label,
                 "Tools",
@@ -3956,7 +4265,7 @@ impl HookEchoApp {
         out
     }
 
-    /// Run one registry action. Every arm routes through the same handler the toolbox uses.
+    /// Run one registry action. Every surface (drawer, pills, mobile sheets) routes through it.
     pub(crate) fn apply_palette(&mut self, action: PaletteAction, ctx: &egui::Context) {
         use AppWindow as W;
         match action {
@@ -4023,7 +4332,6 @@ impl HookEchoApp {
                 }
                 W::LayerManager => self.layer_window_open = true,
                 W::Wizard => self.wizard.start(),
-                W::Toolbox => self.show_toolbox = !self.show_toolbox,
             },
         }
     }
@@ -5037,7 +5345,6 @@ impl HookEchoApp {
                     self.obs_mode = true;
                 }
             }
-            Action::ToggleToolbox => self.show_toolbox = !self.show_toolbox,
             Action::ToggleLayersPanel => self.drawer_open = !self.drawer_open,
             Action::InstantReplay => self.instant_replay(),
         }
@@ -5709,7 +6016,7 @@ impl HookEchoApp {
             .add(egui_wgpu::Callback::new_paint_callback(prect, cb));
 
         // Per-pane product picker (multi-pane only): set THIS pane's moment directly, without
-        // clicking to activate it first. Single-pane keeps using the toolbox Product section.
+        // clicking to activate it first. Single-pane keeps using the product pill.
         if self.views.len() > 1 && !self.obs_mode {
             let cur = self.views[idx].moment;
             egui::Area::new(egui::Id::new(("pane_product", idx)))
@@ -8491,90 +8798,13 @@ impl eframe::App for HookEchoApp {
         }
 
         // Chrome: touch-first on Android (top bar + dock + slide-up sheets), desktop otherwise
-        // (menu bar + left toolbox). Both funnel into the same `ToolboxActions` handling below.
-        let mut actions = ui::toolbox::ToolboxActions::default();
-        if cfg!(target_os = "android") {
-            if !self.obs_mode {
-                actions = self.mobile_chrome(root, ctx);
-                self.coach_marks(ctx);
-            }
-        } else {
-            if !self.obs_mode && self.show_toolbox {
-                egui::Panel::left("toolbox")
-                    .resizable(true)
-                    .default_size(240.0)
-                    .show(root, |ui| {
-                        let l3_site = self.l3grid_site.clone();
-                        let cp_ui = self.chasepack_ui();
-                        let entries = self.palette_entries();
-                        let accent = crate::theme::accent(self.settings.theme);
-                        let mut query = std::mem::take(&mut self.toolbox_query);
-                        actions = ui::toolbox::show(
-                            ui,
-                            &mut self.views[self.active],
-                            &mut self.settings,
-                            &mut self.filters,
-                            &mut self.fields,
-                            &mut self.rotation_minutes,
-                            &mut self.hrrr_fcst_hour,
-                            self.hrrr_valid,
-                            &mut self.env_cape_ml,
-                            &mut self.env_srh_km,
-                            &mut self.contour_kind,
-                            l3_site.as_deref(),
-                            Some(&entries),
-                            &mut query,
-                            accent,
-                            &cp_ui,
-                        );
-                        self.toolbox_query = query;
-                    });
-            }
+        // (the floating map-first chrome below). Both funnel into the same `UiActions` handling.
+        let mut actions = ui::layer_options::UiActions::default();
+        if cfg!(target_os = "android") && !self.obs_mode {
+            actions = self.mobile_chrome(root, ctx);
+            self.coach_marks(ctx);
         }
-        if let Some(a) = actions.palette {
-            self.apply_palette(a, ctx);
-        }
-        if actions.open_site_dialog && self.site_dialog.is_none() {
-            self.site_dialog = Some(Default::default());
-        }
-        if actions.reload {
-            self.trigger_reload(ctx);
-        }
-        if actions.instant_replay {
-            self.instant_replay();
-        }
-        if actions.download_chasepack {
-            self.start_chasepack();
-        }
-        if actions.cancel_chasepack {
-            if let Some(p) = &self.chasepack {
-                p.cancel.store(true, std::sync::atomic::Ordering::Relaxed);
-            }
-            self.chasepack = None;
-        }
-        if actions.outlook_kind_changed && self.filters.outlook_day == 1 {
-            // Hazard switched: drop the stale Day-1 features so the empty-check refetches it.
-            self.outlook_features[0].clear();
-        }
-        if actions.overlays_changed {
-            // Selecting an outlook day/kind that hasn't been fetched yet pulls it on demand.
-            let day = self.filters.outlook_day;
-            if (1..=3).contains(&day) && self.outlook_features[(day - 1) as usize].is_empty() {
-                self.spawn_overlay(
-                    ctx,
-                    OverlaySource::Outlook(day, self.outlook_kind_for_day()),
-                );
-            }
-            self.rebuild_overlays();
-        }
-        if actions.srv_from_cells {
-            if let Some((dir, spd)) = self.scit_mean_motion() {
-                let v = &mut self.views[self.active];
-                v.storm_dir_deg = dir;
-                v.storm_speed_kt = spd;
-                v.srv = true;
-            }
-        }
+        self.apply_ui_actions(actions, ctx);
 
         // Floating map-first chrome (desktop): a hamburger, an alert bell, the two bottom pills.
         // Everything else is one drawer behind the hamburger.

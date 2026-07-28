@@ -923,7 +923,7 @@ fn sweep_tile_cache(root: &std::path::Path) {
 pub type PackJob = (String, std::path::PathBuf);
 
 /// Number of tiles a chase-pack download covers over zoom `z_lo..=z_hi` for the lon/lat bbox.
-/// Pure — the toolbox calls it each frame to show a live size estimate. `≈ tiles × 25 KB`.
+/// Pure — the drawer's Map section calls it each frame for a live size estimate. `≈ tiles × 25 KB`.
 pub fn pack_tile_count(
     min_lon: f64,
     min_lat: f64,

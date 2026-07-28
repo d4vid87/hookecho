@@ -1,7 +1,7 @@
 //! Keyboard shortcuts.
 //!
 //! A flat binding table maps keys to [`Action`]s; the app applies each action by mutating
-//! the active `MapView`, so hotkeys and toolbox buttons share one code path. U8's Hotkeys
+//! the active `MapView`, so hotkeys and drawer rows share one code path. U8's Hotkeys
 //! settings tab swaps `DEFAULTS` for a user-loaded list without touching call sites.
 
 use wxdata::level2::Moment;
@@ -18,7 +18,6 @@ pub enum Action {
     ToggleAlertPanel,
     ToggleObs,
     ToggleObsTour,
-    ToggleToolbox,
     ToggleLayersPanel,
     InstantReplay,
 }
@@ -79,9 +78,11 @@ pub const DEFAULTS: &[Binding] = &[
         key: egui::Key::A,
         action: Action::ToggleAlertPanel,
     },
+    // F7 opened the Advanced toolbox before it was dissolved into the drawer; it keeps working,
+    // pointed at the drawer, so the muscle memory still lands somewhere.
     Binding {
         key: egui::Key::F7,
-        action: Action::ToggleToolbox,
+        action: Action::ToggleLayersPanel,
     },
     Binding {
         key: egui::Key::L,

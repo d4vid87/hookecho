@@ -1,4 +1,4 @@
-//! egui UI: the radar toolbox, site picker, settings window, and color legend.
+//! egui UI: the drawer's layer list and options, site picker, settings window, color legend.
 
 /// Clamp a floating window to the screen on Android (no-op elsewhere): egui windows size to
 /// their content, and desktop-sized content overflows a ~360-pt-wide portrait phone display.
@@ -44,7 +44,7 @@ pub mod settings_window;
 pub mod site_dialog;
 pub mod sounding_window;
 pub mod style;
-pub mod toolbox;
+pub mod layer_options;
 pub mod volume3d_window;
 pub mod warning_window;
 pub mod wizard;

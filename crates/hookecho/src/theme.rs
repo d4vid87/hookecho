@@ -387,7 +387,7 @@ pub fn sparkline(ui: &mut egui::Ui, vals: &[f32], color: Color32) {
     );
 }
 
-/// A collapsible, accent-labelled toolbox section with consistent inner spacing.
+/// A collapsible, accent-labelled section with consistent inner spacing.
 pub fn section<R>(
     ui: &mut egui::Ui,
     title: &str,

@@ -10,7 +10,7 @@ use egui::{
 use egui_phosphor::regular as ph;
 use wxdata::level2::Moment;
 
-use crate::ui::toolbox::ToolboxActions;
+use crate::ui::layer_options::UiActions;
 
 pub(crate) use crate::ui::style::{glass, square_btn, OMEGA_BLUE, OMEGA_GREEN, OMEGA_ORANGE};
 
@@ -192,7 +192,7 @@ fn paint_colorbar(
 
 impl super::HookEchoApp {
     /// Render the whole Android chrome (color scale + floating bars + drawers/popups) and return
-    /// the toolbox actions the shared code processes.
+    /// the UI actions the shared code processes.
     /// What Android's back button dismisses, innermost first. Returns without doing anything when
     /// nothing is open, which lets the OS handle it (leave the app).
     fn mobile_back(&mut self) {
@@ -217,8 +217,8 @@ impl super::HookEchoApp {
         &mut self,
         _root: &mut egui::Ui,
         ctx: &egui::Context,
-    ) -> ToolboxActions {
-        let mut actions = ToolboxActions::default();
+    ) -> UiActions {
+        let mut actions = UiActions::default();
         // Android's back button arrives as `BrowserBack`. Without this every sheet and drawer was
         // a one-way door — back did nothing and the only exit was the ✕, which a sheet's own
         // content covers on a small screen.
@@ -638,7 +638,7 @@ impl super::HookEchoApp {
         ctx: &egui::Context,
         content: Rect,
         vr: Rect,
-        actions: &mut ToolboxActions,
+        actions: &mut UiActions,
     ) {
         let dw = (content.width() * 0.88).min(440.0);
         let drawer_rect = Rect::from_min_size(
@@ -739,29 +739,23 @@ impl super::HookEchoApp {
                             .default_open(false)
                             .show(ui, |ui| {
                                 let l3_site = self.l3grid_site.clone();
-                                let cp_ui = self.chasepack_ui();
-                                let mut tq = std::mem::take(&mut self.toolbox_query);
-                                *actions = crate::ui::toolbox::show(
+                                let tz = self.active_tz();
+                                crate::ui::layer_options::show(
                                     ui,
-                                    &mut self.views[self.active],
-                                    &mut self.settings,
                                     &mut self.filters,
                                     &mut self.fields,
                                     &mut self.rotation_minutes,
                                     &mut self.hrrr_fcst_hour,
                                     self.hrrr_valid,
+                                    tz,
                                     &mut self.env_cape_ml,
                                     &mut self.env_srh_km,
                                     &mut self.contour_kind,
                                     l3_site.as_deref(),
-                                    // The drawer already leads with this list; nesting it again
-                                    // under Advanced would show it twice.
-                                    None,
-                                    &mut tq,
-                                    accent,
-                                    &cp_ui,
+                                    actions,
                                 );
-                                self.toolbox_query = tq;
+                                ui.separator();
+                                self.map_rows(ui, actions);
                             });
                             ui.add_space(8.0);
                             ui.separator();
