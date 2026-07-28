@@ -2,12 +2,13 @@
 //!
 //! Placefiles are a plain-text overlay format (lines/polygons/text/icons at lat,lon) used by
 //! the spotter/warning community. We support the common drawing statements: `Color`,
-//! `Threshold`, `Line`, `Polygon`, `Text`, `Icon`/`Place`, `IconFile`, `TimeRange`, plus `Title`
-//! and `RefreshSeconds`. `Object` (relative/pixel coords), `Triangles`, and `Image` are
-//! parsed-and-skipped for now.
+//! `Threshold`, `Line`, `Polygon`, `Text`, `Icon`/`Place`, `IconFile`, `TimeRange`, `Object`
+//! (screen-anchored shapes) and `Triangles` (per-vertex-colored mesh), plus `Title` and
+//! `RefreshSeconds`.
 //!
-//! `// ponytail: Object/Triangles/Image deferred — the 90% case is colored lines/polygons,
-//! text labels, and icon sheets; add the rest when a real placefile needs them.`
+//! `Image:` is still parsed-and-skipped. `// ponytail: Image needs a georeferenced textured quad
+//! and its corner/UV syntax varies between real files — add it when one in the wild needs it,
+//! with that file as the fixture.`
 
 use chrono::{DateTime, Utc};
 use std::collections::HashMap;
@@ -42,6 +43,10 @@ pub struct PlaceItem {
     pub threshold_nmi: f32,
     /// Optional valid-time window; outside it the item is hidden.
     pub time: Option<(DateTime<Utc>, DateTime<Utc>)>,
+    /// `Object:` anchor in `[lon, lat]`. When set, every coordinate in `kind` is a *pixel offset*
+    /// from this point (x right, y up) rather than a position — that's how placefiles draw
+    /// fixed-size symbols, which stay the same size on screen as you zoom.
+    pub anchor: Option<[f64; 2]>,
     pub kind: PlaceKind,
 }
 
@@ -66,6 +71,10 @@ pub enum PlaceKind {
         text: String,
         hover: String,
     },
+    /// A per-vertex-colored triangle mesh: every three entries are one triangle, each a
+    /// `([lon, lat], rgba)`. Goes straight into the overlay buffers — no tessellation needed,
+    /// the file already did it.
+    Triangles { verts: Vec<([f64; 2], [u8; 4])> },
     /// A point marker at `[lon, lat]` with hover text. `sheet` is `(file number, icon number)`
     /// into [`Placefile::icon_files`] when the line referenced a sheet; without one (or before
     /// the image loads) the renderer falls back to a plain marker. `angle` rotates the icon
@@ -152,6 +161,21 @@ fn parse_time_range(args: &str) -> Option<(DateTime<Utc>, DateTime<Utc>)> {
     Some((pa, pb))
 }
 
+/// Flip every coordinate in an item from `[lon, lat]` back to `[x, y]`.
+///
+/// Object bodies reuse the ordinary statement parsers, which read placefile coordinate order
+/// (`lat, lon`) and store `[lon, lat]`. Inside an object the same pair is `x, y` pixels, so the
+/// swap has to be undone once here instead of threading a flag through every statement.
+fn swap_coords(kind: &mut PlaceKind) {
+    let swap = |p: &mut [f64; 2]| p.swap(0, 1);
+    match kind {
+        PlaceKind::Line { pts, .. } => pts.iter_mut().for_each(swap),
+        PlaceKind::Polygon { rings, .. } => rings.iter_mut().flatten().for_each(swap),
+        PlaceKind::Triangles { verts } => verts.iter_mut().for_each(|(p, _)| swap(p)),
+        PlaceKind::Text { pos, .. } | PlaceKind::Icon { pos, .. } => swap(pos),
+    }
+}
+
 /// Parse placefile `text` into a [`Placefile`]. Malformed lines are skipped, not fatal.
 pub fn parse(text: &str) -> Placefile {
     let mut pf = Placefile::default();
@@ -207,6 +231,7 @@ pub fn parse(text: &str) -> Placefile {
                     pf.items.push(PlaceItem {
                         threshold_nmi: threshold,
                         time: pending_time.take(),
+                        anchor: None,
                         kind: PlaceKind::Line { color, width, pts },
                     });
                 } else {
@@ -237,6 +262,7 @@ pub fn parse(text: &str) -> Placefile {
                     pf.items.push(PlaceItem {
                         threshold_nmi: threshold,
                         time: pending_time.take(),
+                        anchor: None,
                         kind: PlaceKind::Polygon { color, rings },
                     });
                 } else {
@@ -256,6 +282,7 @@ pub fn parse(text: &str) -> Placefile {
                         pf.items.push(PlaceItem {
                             threshold_nmi: threshold,
                             time: pending_time.take(),
+                            anchor: None,
                             kind: PlaceKind::Text {
                                 color,
                                 pos,
@@ -305,6 +332,7 @@ pub fn parse(text: &str) -> Placefile {
                     pf.items.push(PlaceItem {
                         threshold_nmi: threshold,
                         time: pending_time.take(),
+                        anchor: None,
                         kind: PlaceKind::Icon {
                             color,
                             pos,
@@ -315,16 +343,78 @@ pub fn parse(text: &str) -> Placefile {
                     });
                 }
             }
-            // Skip block bodies we don't render yet.
-            "object" | "triangles" => {
+            "object" => {
+                // `Object: lat, lon` … nested statements … `End:`. The body is ordinary placefile
+                // syntax, so it is parsed by recursion rather than by a second copy of this loop;
+                // the only difference is that its coordinates are pixel offsets, which is what
+                // `anchor` records for the renderer.
+                let anchor = parse_coord(rest);
+                let mut depth = 1usize;
+                let mut body = String::new();
+                while i < lines.len() {
+                    let l = strip_comment(lines[i]);
+                    i += 1;
+                    let head = l.split(':').next().unwrap_or("").trim();
+                    if head.eq_ignore_ascii_case("end") {
+                        depth -= 1;
+                        if depth == 0 {
+                            break;
+                        }
+                    } else if ["object", "line", "polygon", "triangles"]
+                        .contains(&head.to_ascii_lowercase().as_str())
+                    {
+                        depth += 1;
+                    }
+                    body.push_str(l);
+                    body.push('\n');
+                }
+                if let Some(anchor) = anchor {
+                    let inner = parse(&body);
+                    for mut item in inner.items {
+                        // `parse_coord` reads `lat, lon`; inside an object the pair is `x, y`,
+                        // so undo the swap rather than teaching every statement about objects.
+                        swap_coords(&mut item.kind);
+                        item.anchor = Some(anchor);
+                        if item.time.is_none() {
+                            item.time = pending_time;
+                        }
+                        pf.items.push(item);
+                    }
+                }
+                pending_time = None;
+            }
+            "triangles" => {
+                // Vertices until `End:`, three to a triangle, each optionally carrying its own
+                // color: `lat, lon [, r, g, b [, a]]`.
+                let mut verts = Vec::new();
                 while i < lines.len() {
                     let l = strip_comment(lines[i]);
                     i += 1;
                     if l.eq_ignore_ascii_case("end") || l.eq_ignore_ascii_case("end:") {
                         break;
                     }
+                    let Some(pos) = parse_coord(l) else { continue };
+                    let n = l.split(',').count();
+                    let vc = if n >= 5 {
+                        let rest: String = l.splitn(3, ',').nth(2).unwrap_or("").to_string();
+                        parse_color(&rest)
+                    } else {
+                        color
+                    };
+                    verts.push((pos, vc));
                 }
-                pending_time = None;
+                // A trailing partial triangle is a malformed file, not a hint.
+                verts.truncate(verts.len() - verts.len() % 3);
+                if !verts.is_empty() {
+                    pf.items.push(PlaceItem {
+                        threshold_nmi: threshold,
+                        time: pending_time.take(),
+                        anchor: None,
+                        kind: PlaceKind::Triangles { verts },
+                    });
+                } else {
+                    pending_time = None;
+                }
             }
             _ => {} // Font, Image, etc. — ignored.
         }
@@ -392,6 +482,67 @@ Icon: 34.0, -98.0, 0, 1, 5, "marker"
     }
 
     #[test]
+    fn parses_objects_as_pixel_offsets() {
+        // A hollow square drawn around a point — the classic Object use: a symbol that stays the
+        // same size on screen however far you zoom in.
+        let src = r#"
+Object: 35.5, -97.5
+ Threshold: 999
+ Color: 255 255 0
+ Line: 2, 0
+  -10, -10
+  10, -10
+  10, 10
+  -10, 10
+  -10, -10
+ End:
+ Text: 0, 14, 1, "hail"
+End:
+"#;
+        let pf = parse(src);
+        assert_eq!(pf.items.len(), 2, "the object's body, flattened");
+        for it in &pf.items {
+            assert_eq!(it.anchor, Some([-97.5, 35.5]));
+        }
+        match &pf.items[0].kind {
+            // Stored as [x, y] pixels, not [lon, lat]: the first vertex is 10 left, 10 down.
+            PlaceKind::Line { pts, .. } => assert_eq!(pts[0], [-10.0, -10.0]),
+            k => panic!("expected line, got {k:?}"),
+        }
+        match &pf.items[1].kind {
+            PlaceKind::Text { pos, text, .. } => {
+                assert_eq!(*pos, [0.0, 14.0], "14 pixels above the anchor");
+                assert_eq!(text, "hail");
+            }
+            k => panic!("expected text, got {k:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_triangle_meshes() {
+        let src = r#"
+Color: 0 0 255
+Triangles:
+ 35.0, -97.0, 255, 0, 0
+ 35.0, -96.0, 0, 255, 0, 128
+ 34.0, -96.0
+ 34.0, -97.0
+End:
+"#;
+        let pf = parse(src);
+        match &pf.items[0].kind {
+            PlaceKind::Triangles { verts } => {
+                // Four vertices in the file, but only whole triangles survive.
+                assert_eq!(verts.len(), 3);
+                assert_eq!(verts[0], ([-97.0, 35.0], [255, 0, 0, 255]));
+                assert_eq!(verts[1].1, [0, 255, 0, 128], "per-vertex alpha");
+                assert_eq!(verts[2].1, [0, 0, 255, 255], "falls back to the current Color");
+            }
+            k => panic!("expected triangles, got {k:?}"),
+        }
+    }
+
+    #[test]
     fn parses_icon_sheets() {
         let src = r#"
 IconFile: 1, 32, 32, 16, 31, "https://example.com/spotters.png"
@@ -427,12 +578,16 @@ Icon: 34.0, -98.0, 0, 0, 0
     }
 
     #[test]
-    fn skips_object_blocks() {
+    fn object_blocks_end_where_they_should() {
+        // The nested `End:` closes the Line, the second closes the Object — miscount either and
+        // the statement after the block is swallowed or reparented.
         let src =
             "Object: 35, -97\n Line: 1,0\n 0,0\n 5,5\n End:\nEnd:\nText: 35, -97, 1, \"after\"";
         let pf = parse(src);
-        // Object block skipped entirely; only the trailing Text survives.
-        assert_eq!(pf.items.len(), 1);
-        assert!(matches!(pf.items[0].kind, PlaceKind::Text { .. }));
+        assert_eq!(pf.items.len(), 2);
+        assert_eq!(pf.items[0].anchor, Some([-97.0, 35.0]));
+        assert!(matches!(pf.items[0].kind, PlaceKind::Line { .. }));
+        assert_eq!(pf.items[1].anchor, None, "the trailing Text is not in the object");
+        assert!(matches!(pf.items[1].kind, PlaceKind::Text { .. }));
     }
 }

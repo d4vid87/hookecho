@@ -632,6 +632,8 @@ pub(crate) enum PaletteAction {
 pub(crate) struct PlaceLabel {
     pub color: egui::Color32,
     pub pos: [f64; 2],
+    /// `Object:` anchor: when set, `pos` is a pixel offset from this point rather than a position.
+    pub anchor: Option<[f64; 2]>,
     pub hover: String,
     pub kind: PlaceLabelKind,
 }
@@ -5358,6 +5360,7 @@ impl HookEchoApp {
                     } => PlaceLabel {
                         color: fade(*color),
                         pos: *pos,
+                        anchor: it.anchor,
                         hover: hover.clone(),
                         kind: PlaceLabelKind::Text(text.clone()),
                     },
@@ -5370,6 +5373,7 @@ impl HookEchoApp {
                     } => PlaceLabel {
                         color: fade(*color),
                         pos: *pos,
+                        anchor: it.anchor,
                         hover: hover.clone(),
                         kind: self
                             .sprite_for(*li, *sheet, *angle)
@@ -7572,10 +7576,15 @@ impl HookEchoApp {
 
         // Placefile labels/icons.
         for label in placefile_labels {
-            let [lon, lat] = label.pos;
-            let w = crate::render::mercator::lonlat_to_world(lon, lat);
+            // An anchored label is placed by projecting its object's anchor and then stepping the
+            // stated pixels from it (y up), so it holds its offset as the map zooms.
+            let (base, off) = match label.anchor {
+                Some(a) => (a, egui::vec2(label.pos[0] as f32, -label.pos[1] as f32)),
+                None => (label.pos, egui::Vec2::ZERO),
+            };
+            let w = crate::render::mercator::lonlat_to_world(base[0], base[1]);
             let (sx, sy) = cam.world_to_screen(w, vp);
-            let p = egui::pos2(prect.left() + sx, prect.top() + sy);
+            let p = egui::pos2(prect.left() + sx, prect.top() + sy) + off;
             if !prect.contains(p) {
                 continue;
             }

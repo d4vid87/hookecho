@@ -778,8 +778,14 @@ pub fn run_placefile(path: &str, out_path: &str) -> anyhow::Result<()> {
         n += 1;
     };
     for it in &pf.items {
+        // Object bodies are pixel offsets, not positions — their anchor is the coordinate.
+        if let Some(a) = it.anchor {
+            acc(a[0], a[1]);
+            continue;
+        }
         match &it.kind {
             PlaceKind::Line { pts, .. } => pts.iter().for_each(|p| acc(p[0], p[1])),
+            PlaceKind::Triangles { verts } => verts.iter().for_each(|(p, _)| acc(p[0], p[1])),
             PlaceKind::Polygon { rings, .. } => {
                 rings.iter().flatten().for_each(|p| acc(p[0], p[1]))
             }

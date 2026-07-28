@@ -86,11 +86,26 @@ pub fn append_placefiles(geom: &mut OverlayGeom, items: &[(&PlaceItem, f32)], zo
     let mut stroke_tess = StrokeTessellator::new();
     let px = |w: f32| (w as f64 / (256.0 * 2f64.powf(zoom))) as f32;
 
+    // World units per screen pixel at this zoom. `Object:` bodies are in pixels, and this is
+    // what turns them into geometry — the overlay is retessellated when the zoom bucket changes,
+    // so an anchored symbol keeps its size on screen instead of growing with the map.
+    let world_per_px = 1.0 / (256.0 * 2f64.powf(zoom));
     for (item, opacity) in items {
         let color = |c: [u8; 4]| {
             let mut c = color(c);
             c[3] *= opacity;
             c
+        };
+        // Anchored (Object) coordinates are `[x_right, y_up]` pixel offsets; plain ones are
+        // `[lon, lat]`. One closure so every statement below projects the same way.
+        let project = |p: [f64; 2]| -> (f64, f64) {
+            match item.anchor {
+                Some([lon, lat]) => {
+                    let (ax, ay) = lonlat_to_world(lon, lat);
+                    (ax + p[0] * world_per_px, ay - p[1] * world_per_px)
+                }
+                None => lonlat_to_world(p[0], p[1]),
+            }
         };
         match &item.kind {
             PlaceKind::Line {
@@ -100,8 +115,8 @@ pub fn append_placefiles(geom: &mut OverlayGeom, items: &[(&PlaceItem, f32)], zo
             } => {
                 let stroke = color(*col);
                 let mut b = Path::builder();
-                let mut it = pts.iter().map(|&[lon, lat]| {
-                    let (wx, wy) = lonlat_to_world(lon, lat);
+                let mut it = pts.iter().map(|&p| {
+                    let (wx, wy) = project(p);
                     lyon::math::point(wx as f32, wy as f32)
                 });
                 if let Some(first) = it.next() {
@@ -131,8 +146,8 @@ pub fn append_placefiles(geom: &mut OverlayGeom, items: &[(&PlaceItem, f32)], zo
                 let fill = color(*col);
                 let mut b = Path::builder();
                 for ring in rings {
-                    let mut it = ring.iter().map(|&[lon, lat]| {
-                        let (wx, wy) = lonlat_to_world(lon, lat);
+                    let mut it = ring.iter().map(|&p| {
+                        let (wx, wy) = project(p);
                         lyon::math::point(wx as f32, wy as f32)
                     });
                     if let Some(first) = it.next() {
@@ -155,6 +170,24 @@ pub fn append_placefiles(geom: &mut OverlayGeom, items: &[(&PlaceItem, f32)], zo
                     }),
                 );
                 append(geom, buf);
+            }
+            PlaceKind::Triangles { verts } => {
+                // No tessellator: the file already emitted triangles, so these go straight into
+                // the buffers.
+                let base = geom.vertices.len() as u32;
+                for (p, c) in verts {
+                    let (wx, wy) = project(*p);
+                    geom.vertices.push(OverlayVertex {
+                        world: [wx as f32, wy as f32],
+                        color: color(*c),
+                    });
+                }
+                geom.indices.extend(0..verts.len() as u32);
+                geom.indices
+                    .iter_mut()
+                    .rev()
+                    .take(verts.len())
+                    .for_each(|i| *i += base);
             }
             PlaceKind::Text { .. } | PlaceKind::Icon { .. } => {} // painter pass
         }
