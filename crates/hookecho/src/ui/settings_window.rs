@@ -1,4 +1,4 @@
-//! Settings window: General, Palettes, Units, Basemaps, Alerts.
+//! Settings window: General, Palettes, Units, Basemaps, Alerts, Sync.
 
 use crate::colormap::Palettes;
 use crate::settings::{Settings, Theme, TimeDisplay, VelocityUnit};
@@ -12,6 +12,25 @@ enum Tab {
     Units,
     Basemaps,
     Alerts,
+    Sync,
+}
+
+/// What the app knows about the sync session, handed in so this window stays state-free.
+pub struct SyncView<'a> {
+    pub signed_in: bool,
+    pub status: &'a str,
+    /// The code pair to type in a browser while a sign-in is in flight.
+    pub device: Option<(&'a str, &'a str)>,
+    /// Unix seconds of the last successful sync (0 = never).
+    pub last_sync: i64,
+}
+
+/// What the user asked for in the Sync tab.
+#[derive(PartialEq, Eq, Clone, Copy)]
+pub enum SyncAction {
+    SignIn,
+    SignOut,
+    SyncNow,
 }
 
 #[derive(Default)]
@@ -27,7 +46,14 @@ pub struct SettingsWindow {
 impl SettingsWindow {
     /// `palettes` is read-only here (for parse-error badges); edits go through `settings` and
     /// the app reloads tables via the settings dirty-diff.
-    pub fn show(&mut self, ctx: &egui::Context, settings: &mut Settings, palettes: &Palettes) {
+    pub fn show(
+        &mut self,
+        ctx: &egui::Context,
+        settings: &mut Settings,
+        palettes: &Palettes,
+        sync: SyncView,
+    ) -> Option<SyncAction> {
+        let mut action = None;
         if self.open && !self.prev_open {
             self.scanned = false; // rescan the folder each time the window opens
         }
@@ -49,6 +75,7 @@ impl SettingsWindow {
                         (Tab::Units, "Units"),
                         (Tab::Basemaps, "Basemaps"),
                         (Tab::Alerts, "Alerts"),
+                        (Tab::Sync, "Sync"),
                     ] {
                         ui.selectable_value(&mut self.tab, tab, label);
                     }
@@ -60,9 +87,11 @@ impl SettingsWindow {
                     Tab::Units => units_tab(ui, settings),
                     Tab::Basemaps => basemaps_tab(ui, settings),
                     Tab::Alerts => alerts_tab(ui, settings),
+                    Tab::Sync => action = sync_tab(ui, settings, &sync),
                 }
             });
         self.open = open;
+        action
     }
 
     fn rescan(&mut self) {
@@ -228,6 +257,68 @@ pub(crate) fn key_field(ui: &mut egui::Ui, label: &str, value: &mut String) {
             value.clear();
         }
     });
+}
+
+/// Sign in with Google and keep every machine's settings the same. The data goes to the hidden
+/// per-app folder in the user's own Drive — there is no Hook Echo account and no server.
+fn sync_tab(ui: &mut egui::Ui, settings: &mut Settings, sync: &SyncView) -> Option<SyncAction> {
+    let mut action = None;
+    ui.label("Sign in with Google to keep your settings, saved locations, placefiles and API keys the same on every machine.");
+    ui.add_space(6.0);
+    if sync.signed_in {
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new("✓ Signed in").strong());
+            if ui.button("Sign out").clicked() {
+                action = Some(SyncAction::SignOut);
+            }
+        });
+        ui.checkbox(&mut settings.sync_enabled, "Sync automatically (every 5 minutes)");
+        if ui.button("Sync now").clicked() {
+            action = Some(SyncAction::SyncNow);
+        }
+        if sync.last_sync > 0 {
+            let ago = (crate::share::now() - sync.last_sync).max(0);
+            ui.weak(match ago {
+                0..=59 => "last synced just now".to_string(),
+                60..=3599 => format!("last synced {} min ago", ago / 60),
+                _ => format!("last synced {} h ago", ago / 3600),
+            });
+        }
+    } else if let Some((url, code)) = sync.device {
+        // The device flow's whole UI: a URL and a short code the user types there.
+        ui.label("Open this page and enter the code:");
+        ui.horizontal(|ui| {
+            ui.hyperlink(url);
+            if ui.small_button("Copy link").clicked() {
+                ui.ctx().copy_text(url.to_string());
+            }
+        });
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new(code).monospace().size(20.0).strong());
+            if ui.small_button("Copy code").clicked() {
+                ui.ctx().copy_text(code.to_string());
+            }
+        });
+    } else {
+        ui.label("Your own Google OAuth client (one-time setup — see docs/sync.md):");
+        key_field(ui, "Client ID", &mut settings.sync_client_id);
+        ui.add_space(4.0);
+        key_field(ui, "Client secret", &mut settings.sync_client_secret);
+        ui.add_space(6.0);
+        if ui.button("Sign in with Google").clicked() {
+            action = Some(SyncAction::SignIn);
+        }
+    }
+    if !sync.status.is_empty() {
+        ui.add_space(6.0);
+        ui.weak(sync.status);
+    }
+    ui.add_space(6.0);
+    ui.weak(
+        "Screen scale, device name and background alerts stay local to each machine; everything \
+         else follows the sync. The grant covers only this app's own Drive folder.",
+    );
+    action
 }
 
 fn general_tab(ui: &mut egui::Ui, settings: &mut Settings) {

@@ -261,6 +261,14 @@ layer draws its own scale and units.
 - An in-RAM decode buffer with one-touch instant replay (`R`), and
   screenshot / GIF / MP4 loop export.
 
+### Across your machines
+
+- **Sign in with Google** (Settings → Sync) and your settings, saved locations,
+  placefiles, palettes and API keys follow you to every machine. The data lives
+  in your own Drive's hidden per-app folder — no Hook Echo account, no server,
+  and a scope that cannot see the rest of your Drive. Screen scale and device
+  name stay local. One-time OAuth client setup: [docs/sync.md](docs/sync.md).
+
 ### Out in the field
 
 - **Chase mode**: live GPS (gpsd on desktop, the system location service on

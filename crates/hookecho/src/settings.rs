@@ -143,6 +143,15 @@ pub struct Settings {
     /// Saved startup view (radar site + camera). `None` = open on `default_site`.
     #[serde(default)]
     pub start_view: Option<StartView>,
+    /// Google OAuth client id + secret for settings sync (see `docs/sync.md`). You create the
+    /// client; there is no shipped default, so an open-source binary carries nobody's quota.
+    #[serde(default)]
+    pub sync_client_id: String,
+    #[serde(default)]
+    pub sync_client_secret: String,
+    /// Sync settings through your Google Drive app folder once signed in.
+    #[serde(default)]
+    pub sync_enabled: bool,
     /// Share your GPS position with other Hook Echo instances (LAN broadcast, and the relay below
     /// when one is set). Off by default: your live position is not shared without asking.
     #[serde(default)]
@@ -400,6 +409,9 @@ impl Default for Settings {
             mapbox_key: String::new(),
             maptiler_key: String::new(),
             start_view: None,
+            sync_client_id: String::new(),
+            sync_client_secret: String::new(),
+            sync_enabled: false,
             share_position: false,
             share_name: String::new(),
             share_relay: String::new(),
@@ -552,6 +564,9 @@ mod tests {
             velocity_unit: VelocityUnit::Mph,
             time_display: TimeDisplay::Utc,
             ui_scale: 1.2,
+            sync_client_id: String::new(),
+            sync_client_secret: String::new(),
+            sync_enabled: false,
             share_position: true,
             share_name: "chaser".to_string(),
             share_relay: String::new(),

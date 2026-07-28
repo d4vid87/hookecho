@@ -706,6 +706,23 @@ pub(crate) struct FieldState {
     pub last_fetch: Option<Instant>,
 }
 
+/// What a settings-sync worker reports back. Everything network lives on the runtime; the app
+/// thread only ever applies the outcome.
+enum SyncMsg {
+    /// A sign-in started: show this code and URL until the user finishes.
+    Device(crate::cloud::DeviceAuth),
+    /// Fresh tokens (from finishing a sign-in, or from a refresh mid-sync).
+    Signed(crate::cloud::Tokens),
+    /// The remote settings blob, to merge over the local one.
+    Pulled { body: String, modified: String },
+    /// Our settings are now the remote ones, as of this `modifiedTime`.
+    Pushed { modified: String, hash: u64 },
+    /// Both sides had edits. We took the remote copy; say so rather than pretend.
+    Conflict,
+    UpToDate,
+    Error(String),
+}
+
 /// Where a pending screenshot is delivered: saved to a file, or copied to the clipboard, or
 /// captured as one frame of a loop-GIF export.
 enum ShotDest {
@@ -1061,6 +1078,14 @@ pub struct HookEchoApp {
     chase_applied: Option<(f64, f64)>,
     /// Live position stream from gpsd, when the user has connected it.
     gps_rx: Option<std::sync::mpsc::Receiver<(f64, f64)>>,
+    /// Google Drive settings sync: the saved tokens, the last-agreed state, an in-flight
+    /// sign-in's code pair, the line shown in the Sync tab, worker replies, and the poll clock.
+    sync_tokens: Option<crate::cloud::Tokens>,
+    sync_state: crate::cloud::SyncState,
+    sync_device: Option<crate::cloud::DeviceAuth>,
+    sync_status: String,
+    sync_rx: Option<std::sync::mpsc::Receiver<SyncMsg>>,
+    sync_checked: Option<std::time::Instant>,
     /// Position sharing (LAN broadcast + optional relay), started on first use.
     share: Option<crate::share::Share>,
     /// Everyone else's last known position, keyed by their device id.
@@ -1488,6 +1513,12 @@ impl HookEchoApp {
             climo_pending_query: None,
             chase_applied: None,
             gps_rx: None,
+            sync_tokens: crate::cloud::Tokens::load(),
+            sync_state: crate::cloud::SyncState::load(),
+            sync_device: None,
+            sync_status: String::new(),
+            sync_rx: None,
+            sync_checked: None,
             share: None,
             peers: std::collections::HashMap::new(),
             share_sent: None,
@@ -2469,6 +2500,207 @@ impl HookEchoApp {
             self.goto_view(&site, lon, lat, zoom, None);
         }
         self.chase_applied = Some((lon, lat));
+    }
+
+    /// Start the Google device-code sign-in. The user types the code Google gives us into any
+    /// browser; we poll until they finish.
+    fn sync_sign_in(&mut self) {
+        let (id, secret) = (
+            self.settings.sync_client_id.trim().to_string(),
+            self.settings.sync_client_secret.trim().to_string(),
+        );
+        if id.is_empty() {
+            self.sync_status = "Add your OAuth client id first (see docs/sync.md)".into();
+            return;
+        }
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.sync_rx = Some(rx);
+        self.sync_status = "Asking Google for a code…".into();
+        self._rt.spawn(async move {
+            let auth = match crate::cloud::start_device_auth(&id).await {
+                Ok(a) => a,
+                Err(e) => {
+                    let _ = tx.send(SyncMsg::Error(e));
+                    return;
+                }
+            };
+            if tx.send(SyncMsg::Device(auth.clone())).is_err() {
+                return;
+            }
+            match crate::cloud::poll_device_token(&id, &secret, &auth).await {
+                Ok(t) => {
+                    t.save();
+                    let _ = tx.send(SyncMsg::Signed(t));
+                }
+                Err(e) => {
+                    let _ = tx.send(SyncMsg::Error(e));
+                }
+            }
+        });
+    }
+
+    /// Forget the tokens (and the bookkeeping, so a later sign-in starts clean). The Drive copy
+    /// is left alone — signing out of a laptop should not wipe the phone's settings.
+    fn sync_sign_out(&mut self) {
+        crate::cloud::Tokens::forget();
+        self.sync_tokens = None;
+        self.sync_device = None;
+        self.sync_state = crate::cloud::SyncState::default();
+        self.sync_state.save();
+        self.sync_status = "Signed out".into();
+    }
+
+    /// One sync pass: refresh the token, look at what Drive has, and push or pull accordingly.
+    fn sync_now(&mut self) {
+        let Some(tokens) = self.sync_tokens.clone() else {
+            self.sync_status = "Not signed in".into();
+            return;
+        };
+        let local = match serde_json::to_value(&self.settings) {
+            Ok(v) => v,
+            Err(e) => {
+                self.sync_status = format!("Sync failed: {e}");
+                return;
+            }
+        };
+        let share = crate::cloud::shareable(&local);
+        let hash = crate::cloud::hash(&share);
+        let body = serde_json::to_string_pretty(&share).unwrap_or_default();
+        let st = self.sync_state.clone();
+        let (id, secret) = (
+            self.settings.sync_client_id.trim().to_string(),
+            self.settings.sync_client_secret.trim().to_string(),
+        );
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.sync_rx = Some(rx);
+        self.sync_checked = Some(std::time::Instant::now());
+        self.sync_status = "Syncing…".into();
+        self._rt.spawn(async move {
+            let mut tokens = tokens;
+            let access = match crate::cloud::access_token(&id, &secret, &mut tokens).await {
+                Ok(a) => a,
+                Err(e) => {
+                    let _ = tx.send(SyncMsg::Error(e));
+                    return;
+                }
+            };
+            let _ = tx.send(SyncMsg::Signed(tokens));
+            let remote = match crate::cloud::fetch(&access).await {
+                Ok(r) => r,
+                Err(e) => {
+                    let _ = tx.send(SyncMsg::Error(e));
+                    return;
+                }
+            };
+            let local_changed = hash != st.local_hash;
+            let remote_changed = remote
+                .as_ref()
+                .is_some_and(|r| r.modified != st.remote_modified);
+            let action = crate::cloud::decide(local_changed, remote_changed, remote.is_some());
+            let msg = match (action, remote) {
+                (crate::cloud::Action::Push, r) => {
+                    match crate::cloud::push(&access, r.as_ref().map(|r| r.id.as_str()), body).await
+                    {
+                        Ok(modified) => SyncMsg::Pushed { modified, hash },
+                        Err(e) => SyncMsg::Error(e),
+                    }
+                }
+                (crate::cloud::Action::Pull, Some(r)) => SyncMsg::Pulled {
+                    body: r.body,
+                    modified: r.modified,
+                },
+                (crate::cloud::Action::Conflict, Some(r)) => {
+                    let _ = tx.send(SyncMsg::Conflict);
+                    SyncMsg::Pulled {
+                        body: r.body,
+                        modified: r.modified,
+                    }
+                }
+                _ => SyncMsg::UpToDate,
+            };
+            let _ = tx.send(msg);
+        });
+    }
+
+    /// How often a signed-in, sync-enabled app checks Drive on its own.
+    const SYNC_SECS: u64 = 300;
+
+    /// Apply whatever the sync worker sent, and start a pass when one is due.
+    fn poll_sync(&mut self) {
+        while let Some(msg) = self.sync_rx.as_ref().and_then(|rx| rx.try_recv().ok()) {
+            match msg {
+                SyncMsg::Device(a) => {
+                    self.sync_status = "Waiting for you to finish in the browser…".into();
+                    self.sync_device = Some(a);
+                }
+                SyncMsg::Signed(t) => {
+                    let first = self.sync_tokens.is_none();
+                    self.sync_tokens = Some(t);
+                    if first {
+                        self.sync_device = None;
+                        self.settings.sync_enabled = true;
+                        self.sync_status = "Signed in".into();
+                        self.sync_now();
+                    }
+                }
+                SyncMsg::Pulled { body, modified } => match self.apply_synced(&body) {
+                    Ok(hash) => {
+                        self.sync_state = crate::cloud::SyncState {
+                            remote_modified: modified,
+                            local_hash: hash,
+                            last_sync: crate::share::now(),
+                        };
+                        self.sync_state.save();
+                        if self.sync_status != "Kept the synced copy (both sides had edits)" {
+                            self.sync_status = "Settings pulled from Drive".into();
+                        }
+                    }
+                    Err(e) => self.sync_status = format!("Sync failed: {e}"),
+                },
+                SyncMsg::Pushed { modified, hash } => {
+                    self.sync_state = crate::cloud::SyncState {
+                        remote_modified: modified,
+                        local_hash: hash,
+                        last_sync: crate::share::now(),
+                    };
+                    self.sync_state.save();
+                    self.sync_status = "Settings pushed to Drive".into();
+                }
+                SyncMsg::Conflict => {
+                    self.sync_status = "Kept the synced copy (both sides had edits)".into();
+                }
+                SyncMsg::UpToDate => {
+                    self.sync_state.last_sync = crate::share::now();
+                    self.sync_state.save();
+                    self.sync_status = "Up to date".into();
+                }
+                SyncMsg::Error(e) => self.sync_status = format!("Sync failed: {e}"),
+            }
+        }
+        // Periodic pass, plus the one at startup (`sync_checked` starts unset).
+        if self.settings.sync_enabled
+            && self.sync_tokens.is_some()
+            && self
+                .sync_checked
+                .is_none_or(|t| t.elapsed().as_secs() >= Self::SYNC_SECS)
+        {
+            self.sync_now();
+        }
+    }
+
+    /// Replace the settings with the synced ones, keeping this machine's own fields, and persist.
+    /// Returns the hash the sync bookkeeping should record.
+    fn apply_synced(&mut self, body: &str) -> Result<u64, String> {
+        let local = serde_json::to_value(&self.settings).map_err(|e| e.to_string())?;
+        let merged = crate::cloud::merge_in(&local, body)?;
+        let settings: crate::settings::Settings =
+            serde_json::from_value(merged).map_err(|e| e.to_string())?;
+        self.settings = settings;
+        self.settings.save();
+        let hash = crate::cloud::hash(&crate::cloud::shareable(
+            &serde_json::to_value(&self.settings).map_err(|e| e.to_string())?,
+        ));
+        Ok(hash)
     }
 
     /// How often our own fix goes out on both transports. Fast enough to follow a chase vehicle,
@@ -9354,6 +9586,7 @@ impl eframe::App for HookEchoApp {
         self.drive_loop_export(ctx);
         self.apply_chase();
         self.sync_share(ctx);
+        self.poll_sync();
         self.sync_forecast_scrub();
         self.poll_messages();
         self.poll_overlays();
@@ -9736,8 +9969,24 @@ impl eframe::App for HookEchoApp {
                 self.site_dialog = None;
             }
         }
-        self.settings_window
-            .show(ctx, &mut self.settings, &self.palettes);
+        let sync_view = ui::settings_window::SyncView {
+            signed_in: self.sync_tokens.is_some(),
+            status: &self.sync_status,
+            device: self
+                .sync_device
+                .as_ref()
+                .map(|d| (d.verification_url.as_str(), d.user_code.as_str())),
+            last_sync: self.sync_state.last_sync,
+        };
+        let sync_action = self
+            .settings_window
+            .show(ctx, &mut self.settings, &self.palettes, sync_view);
+        match sync_action {
+            Some(ui::settings_window::SyncAction::SignIn) => self.sync_sign_in(),
+            Some(ui::settings_window::SyncAction::SignOut) => self.sync_sign_out(),
+            Some(ui::settings_window::SyncAction::SyncNow) => self.sync_now(),
+            None => {}
+        }
         let pf_status: Vec<ui::placefile_window::PlacefileStatus> = self
             .placefiles
             .iter()
