@@ -7546,7 +7546,31 @@ impl HookEchoApp {
         }
         let accent = crate::theme::accent(self.settings.theme);
         let mut done = false;
-        for (id, align, offset, text) in [
+        // Mobile has its own chrome (dock + sheets) and its own gestures, so it gets its own
+        // three callouts rather than pointing at pills that aren't there.
+        let marks: &[(&str, egui::Align2, egui::Vec2, &str)] = if cfg!(target_os = "android") {
+            &[
+                (
+                    "coach_m_dock",
+                    egui::Align2::CENTER_BOTTOM,
+                    egui::vec2(0.0, -110.0),
+                    "Everything lives down here: play the loop, pick layers and products, change radar site.",
+                ),
+                (
+                    "coach_m_map",
+                    egui::Align2::CENTER_CENTER,
+                    egui::vec2(0.0, -60.0),
+                    "Pinch to zoom, drag to pan. Long-press anywhere on the map for what's there — alerts, storms, distance.",
+                ),
+                (
+                    "coach_m_time",
+                    egui::Align2::CENTER_BOTTOM,
+                    egui::vec2(0.0, -240.0),
+                    "This row is the timeline: tap the frame count to scrub back through the storm, or jump to live.",
+                ),
+            ]
+        } else {
+            &[
             (
                 "coach_search",
                 egui::Align2::CENTER_TOP,
@@ -7571,7 +7595,10 @@ impl HookEchoApp {
                 egui::vec2(0.0, style::LANE_BOTTOM_TIMELINE - 64.0),
                 "This is the timeline — play the loop, scrub back through the storm, jump to live.",
             ),
-        ] {
+            ]
+        };
+        for (id, align, offset, text) in marks {
+            let (id, align, offset, text) = (*id, *align, *offset, *text);
             egui::Area::new(egui::Id::new(id))
                 .anchor(align, offset)
                 .order(egui::Order::Foreground)
@@ -8586,6 +8613,7 @@ impl eframe::App for HookEchoApp {
         if cfg!(target_os = "android") {
             if !self.obs_mode {
                 actions = self.mobile_chrome(root, ctx);
+                self.coach_marks(ctx);
             }
         } else {
             if !self.obs_mode && self.show_toolbox {
