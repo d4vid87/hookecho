@@ -9,6 +9,9 @@ use std::collections::HashMap;
 /// Texture cache keyed by marker icon filename. `None` = load failed / missing (negative cache).
 pub type IconTextures = HashMap<String, Option<TextureHandle>>;
 
+/// Diameter of a marker icon on the map, in points. Icons are drawn as discs.
+pub const ICON_D: f32 = 24.0;
+
 #[derive(Default)]
 pub struct MarkerWindow {
     pub open: bool,
@@ -117,7 +120,12 @@ pub fn marker_grid(ui: &mut egui::Ui, markers: &mut Vec<Marker>, icon_tex: &Icon
                         .and_then(|n| icon_tex.get(n))
                         .and_then(|t| t.as_ref())
                     {
-                        ui.add(egui::Image::new(tex).fit_to_exact_size(egui::vec2(20.0, 20.0)));
+                        // Rounded to match how the marker actually draws on the map.
+                        ui.add(
+                            egui::Image::new(tex)
+                                .fit_to_exact_size(egui::vec2(20.0, 20.0))
+                                .corner_radius(10.0),
+                        );
                     }
                     if ui.button("Browse…").clicked() {
                         if let Some(name) = pick_and_store_icon() {

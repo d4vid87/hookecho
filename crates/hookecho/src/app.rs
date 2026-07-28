@@ -6836,14 +6836,28 @@ impl HookEchoApp {
                 .and_then(|n| self.marker_icon_tex.get(n))
                 .and_then(|t| t.as_ref());
             let label_dx = if let Some(tex) = tex {
-                let r = egui::Rect::from_center_size(p, egui::vec2(24.0, 24.0));
-                painter.image(
-                    tex.id(),
-                    r,
-                    egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
-                    egui::Color32::WHITE,
+                // Round the icon into a disc with a white ring, so a marker reads as a map pin
+                // rather than a photo pasted on the map. A corner radius of half the size is a
+                // circle; the ring also separates a dark photo from a dark basemap.
+                let d = crate::ui::marker_window::ICON_D;
+                let r = egui::Rect::from_center_size(p, egui::vec2(d, d));
+                painter.add(
+                    egui::epaint::RectShape::filled(
+                        r,
+                        egui::CornerRadius::same((d / 2.0) as u8),
+                        egui::Color32::WHITE,
+                    )
+                    .with_texture(
+                        tex.id(),
+                        egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+                    ),
                 );
-                14.0
+                painter.circle_stroke(
+                    p,
+                    d / 2.0,
+                    egui::Stroke::new(1.5, egui::Color32::from_white_alpha(230)),
+                );
+                d / 2.0 + 2.0
             } else {
                 painter.circle_filled(p, 4.0, col);
                 painter.circle_stroke(p, 4.0, egui::Stroke::new(1.5, egui::Color32::WHITE));
