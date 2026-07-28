@@ -4898,7 +4898,15 @@ impl HookEchoApp {
                 DataMsg::Error { view, err, .. } => {
                     let v = &mut self.views[view];
                     v.loading = false;
-                    v.error = Some(err);
+                    // The newest archive volume is published while the radar is still writing it,
+                    // so the head can briefly lack its VCP message. That is a "not finished yet",
+                    // not a failure: the next poll gets a complete file a minute later. Showing a
+                    // red chip for it left the map looking broken while nothing was wrong.
+                    if err.contains("missing coverage pattern") {
+                        log::debug!("head volume not complete yet: {err}");
+                    } else {
+                        v.error = Some(err);
+                    }
                 }
                 DataMsg::LiveEnded { .. } => unreachable!("handled above"),
             }

@@ -8,6 +8,15 @@ use lru::LruCache;
 use std::collections::HashMap;
 use std::num::NonZeroUsize;
 
+/// Resize `cache` so this frame's `visible` tiles all fit, never below `resting`. Shrinks back
+/// once the view needs less, so a single wide zoom-out doesn't pin memory for the session.
+fn fit<K: std::hash::Hash + Eq, V>(cache: &mut LruCache<K, V>, resting: usize, visible: usize) {
+    let want = resting.max(visible + 16);
+    if cache.cap().get() != want {
+        cache.resize(NonZeroUsize::new(want).unwrap());
+    }
+}
+
 /// GPU tile cache sizes. A raster tile is 256x256 RGBA (~256 KB with mips off), so 512 is ~134 MB
 /// on a desktop GPU and 128 keeps a phone near 34 MB. Vector tiles are geometry buffers, much
 /// smaller, but unbounded growth is unbounded growth.
@@ -735,6 +744,16 @@ impl RenderResources {
         if let Some(o) = &cb.overlay_upload {
             self.upload_overlay(device, o);
         }
+        // Grow to fit the frame before touching anything. A zoomed-out view can need more tiles
+        // than the resting cap, and promoting a visible tile into a full cache evicts another
+        // visible one — which showed up as a band of basemap with the rest of the map bare.
+        // The cap is a resting size, not a limit on what one frame may hold.
+        fit(&mut self.tiles, RASTER_TILE_CACHE, cb.visible.len());
+        fit(
+            &mut self.vector_tiles,
+            VECTOR_TILE_CACHE,
+            cb.visible_vector.len(),
+        );
         // Touch everything this frame draws so the LRU evicts what is off screen, not what is in
         // front of the user. Visible entries can't be evicted mid-frame: the caches only shrink
         // here, before any drawing.
