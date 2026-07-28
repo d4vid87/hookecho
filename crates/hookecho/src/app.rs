@@ -3775,10 +3775,12 @@ impl HookEchoApp {
         self.layers_query = query;
         self.apply_ui_actions(opts, ctx);
         if let Some(a) = chosen {
+            // Opening a window is a launcher gesture, and so is picking a search hit: get out of
+            // the way, because the drawer overlaps whatever just opened. Browsing the list without
+            // a query is the opposite — you're flipping layers on and off, so it stays.
+            let launcher = searched || matches!(a, PaletteAction::OpenWindow(_));
             self.apply_palette(a, ctx);
-            // Searched-and-picked is a launcher gesture: get out of the way. Browsing the list
-            // without a query is the opposite — you're flipping layers on and off, so it stays.
-            if searched {
+            if launcher {
                 self.layers_query.clear();
                 self.drawer_open = false;
             }
