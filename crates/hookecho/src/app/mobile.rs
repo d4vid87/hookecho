@@ -28,9 +28,6 @@ pub(crate) enum MobileSheet {
     Alerts,
     Products,
     Capture,
-    Tools,
-    /// Searchable layer picker — the same body as the desktop Layers panel.
-    QuickLayers,
 }
 
 /// One alert row, owned so a drawer can list + fly to it without borrowing `self`.
@@ -524,17 +521,15 @@ impl super::HookEchoApp {
                         ) {
                             self.views[active].timeline.toggle_play();
                         }
-                        if dock_slot(
-                            ui,
-                            ph::STACK,
-                            "Layers",
-                            sheet == MobileSheet::QuickLayers,
-                            iw,
-                        ) {
-                            self.mobile_sheet = if sheet == MobileSheet::QuickLayers {
+                        // Layers and More are the same destination: the Menu sheet leads with the
+                        // layer registry and keeps everything else one scroll below it. Two slots,
+                        // one surface — a phone doesn't have room for two lists of the same thing.
+                        // ponytail: fold the two slots into one if the dock ever needs the width.
+                        if dock_slot(ui, ph::STACK, "Layers", sheet == MobileSheet::Menu, iw) {
+                            self.mobile_sheet = if sheet == MobileSheet::Menu {
                                 MobileSheet::None
                             } else {
-                                MobileSheet::QuickLayers
+                                MobileSheet::Menu
                             };
                         }
                         if dock_slot(
@@ -555,11 +550,11 @@ impl super::HookEchoApp {
                         {
                             self.site_dialog = Some(Default::default());
                         }
-                        if dock_slot(ui, ph::DOTS_THREE, "More", sheet == MobileSheet::Tools, iw) {
-                            self.mobile_sheet = if sheet == MobileSheet::Tools {
+                        if dock_slot(ui, ph::DOTS_THREE, "More", sheet == MobileSheet::Menu, iw) {
+                            self.mobile_sheet = if sheet == MobileSheet::Menu {
                                 MobileSheet::None
                             } else {
-                                MobileSheet::Tools
+                                MobileSheet::Menu
                             };
                         }
                     });
@@ -606,8 +601,6 @@ impl super::HookEchoApp {
                 ctx, content, vr, cur_moment, srv, n_tilt, cur_tilt, cur_angle,
             ),
             MobileSheet::Capture => self.mobile_capture(ctx, content, vr),
-            MobileSheet::Tools => self.mobile_tools_sheet(ctx, content, vr, inset_bottom),
-            MobileSheet::QuickLayers => self.mobile_layers_sheet(ctx, content, vr, inset_bottom),
             MobileSheet::None => {}
         }
 
@@ -647,6 +640,8 @@ impl super::HookEchoApp {
         );
         self.mobile_scrim(ctx, vr, drawer_rect);
         let accent = crate::theme::accent(self.settings.theme);
+        // Set inside the drawer body, acted on after it closes its borrow of `self`.
+        let mut open_capture = false;
         egui::Area::new(Id::new("m_drawer"))
             .order(egui::Order::Foreground)
             .fixed_pos(pos2(vr.left(), vr.top()))
@@ -759,7 +754,12 @@ impl super::HookEchoApp {
                             });
                             ui.add_space(8.0);
                             ui.separator();
-                            self.mobile_tools(ui);
+                            if ui.button("Capture…").clicked() {
+                                open_capture = true;
+                            }
+                            // The same App rows the desktop drawer shows — one list, not a phone
+                            // copy of it that drifts.
+                            self.app_rows(ui);
                             ui.add_space(10.0);
                             ui.label(
                                 RichText::new("© Hook Echo-WX 2026")
@@ -769,6 +769,9 @@ impl super::HookEchoApp {
                         });
                     });
             });
+        if open_capture {
+            self.mobile_sheet = MobileSheet::Capture;
+        }
     }
 
     /// Right alerts drawer, RadarOmega "Active Weather Alerts" styling.
@@ -1100,271 +1103,5 @@ impl super::HookEchoApp {
                     });
             });
     }
-
-    /// Quick-layers sheet: the searchable layer registry in a bottom sheet (the phone's
-    /// equivalent of the desktop Layers panel).
-    fn mobile_layers_sheet(
-        &mut self,
-        ctx: &egui::Context,
-        content: Rect,
-        vr: Rect,
-        inset_bottom: f32,
-    ) {
-        let sheet = Rect::from_min_size(
-            pos2(content.left(), content.center().y - 40.0),
-            vec2(content.width(), content.height() * 0.6),
-        );
-        self.mobile_scrim(ctx, vr, sheet);
-        let accent = crate::theme::accent(self.settings.theme);
-        let entries = self.palette_entries();
-        let mut query = std::mem::take(&mut self.layers_query);
-        let (mut chosen, mut close) = (None, false);
-        egui::Area::new(Id::new("m_layers"))
-            .order(egui::Order::Foreground)
-            .anchor(Align2::CENTER_BOTTOM, vec2(0.0, -(inset_bottom + 8.0)))
-            .show(ctx, |ui| {
-                Frame::new()
-                    .fill(Color32::from_rgb(12, 15, 20))
-                    .corner_radius(16.0)
-                    .stroke(Stroke::new(
-                        1.0,
-                        Color32::from_rgba_unmultiplied(255, 255, 255, 18),
-                    ))
-                    .inner_margin(Margin::symmetric(14, 12))
-                    .show(ui, |ui| {
-                        ui.set_width(content.width() - 28.0);
-                        ui.horizontal(|ui| {
-                            ui.label(RichText::new("Layers").size(16.0).strong().color(accent));
-                            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                                close = square_btn(ui, ph::X, false, OMEGA_ORANGE).clicked();
-                            });
-                        });
-                        ui.separator();
-                        chosen = crate::ui::layers_panel::body(
-                            ui,
-                            &entries,
-                            &mut query,
-                            accent,
-                            (content.height() * 0.6 - 120.0).max(160.0),
-                            false,
-                        );
-                    });
-            });
-        self.layers_query = query;
-        if let Some(a) = chosen {
-            let ctx = ctx.clone();
-            self.apply_palette(a, &ctx);
-        }
-        if close {
-            self.mobile_sheet = MobileSheet::None;
-        }
-    }
-
-    /// Bottom "more tools" sheet (analysis + capture grid) driven by the pencil dock icon.
-    fn mobile_tools_sheet(
-        &mut self,
-        ctx: &egui::Context,
-        content: Rect,
-        vr: Rect,
-        inset_bottom: f32,
-    ) {
-        let sheet = Rect::from_min_size(
-            pos2(content.left(), content.center().y),
-            vec2(content.width(), content.height() * 0.5),
-        );
-        self.mobile_scrim(ctx, vr, sheet);
-        egui::Area::new(Id::new("m_toolsheet"))
-            .order(egui::Order::Foreground)
-            .anchor(Align2::CENTER_BOTTOM, vec2(0.0, -(inset_bottom + 8.0)))
-            .show(ctx, |ui| {
-                Frame::new()
-                    .fill(Color32::from_rgb(12, 15, 20))
-                    .corner_radius(16.0)
-                    .stroke(Stroke::new(
-                        1.0,
-                        Color32::from_rgba_unmultiplied(255, 255, 255, 18),
-                    ))
-                    .inner_margin(Margin::symmetric(14, 12))
-                    .show(ui, |ui| {
-                        ui.set_width(content.width() - 28.0);
-                        ui.horizontal(|ui| {
-                            ui.label(
-                                RichText::new("More")
-                                    .size(16.0)
-                                    .strong()
-                                    .color(Color32::from_gray(235)),
-                            );
-                            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                                if square_btn(ui, ph::X, false, OMEGA_ORANGE).clicked() {
-                                    self.mobile_sheet = MobileSheet::None;
-                                }
-                            });
-                        });
-                        ui.separator();
-                        egui::ScrollArea::vertical()
-                            .max_height(content.height() * 0.44)
-                            .show(ui, |ui| {
-                                self.mobile_tools(ui);
-                            });
-                    });
-            });
-    }
-
-    /// The Tools grid: map-tap tools plus one-tap openers for the analysis windows.
-    fn mobile_tools(&mut self, ui: &mut egui::Ui) {
-        use super::{MapTool, ShotDest};
-        let accent = crate::theme::accent(self.settings.theme);
-        // Three columns: subtract the two inter-item gaps, not a guessed 16 — otherwise each chip
-        // is a gap too wide and `horizontal_wrapped` drops to two per row.
-        let gap = ui.spacing().item_spacing.x;
-        let w = (ui.available_width() - 2.0 * gap) / 3.0;
-        let chip = |ui: &mut egui::Ui, label: &str, active: bool| -> egui::Response {
-            let (fg, bg) = if active {
-                (Color32::BLACK, accent)
-            } else {
-                (
-                    Color32::from_gray(225),
-                    Color32::from_rgba_unmultiplied(255, 255, 255, 20),
-                )
-            };
-            ui.add_sized(
-                [w, 38.0],
-                egui::Button::new(RichText::new(label).size(14.0).color(fg))
-                    .fill(bg)
-                    .corner_radius(12.0),
-            )
-        };
-
-        // The actions the dock used to hold as unlabeled glyphs. Still one tap from the map, now
-        // with a name attached.
-        ui.label(
-            RichText::new("Quick actions")
-                .size(13.0)
-                .strong()
-                .color(accent),
-        );
-        ui.horizontal_wrapped(|ui| {
-            if chip(ui, "Capture", self.mobile_sheet == MobileSheet::Capture).clicked() {
-                self.mobile_sheet = MobileSheet::Capture;
-            }
-            if chip(ui, "Range rings", self.show_range_rings).clicked() {
-                self.show_range_rings = !self.show_range_rings;
-            }
-            // Panes: cycle single -> dual -> quad -> single (RadarOmega's "=" layout).
-            let panes = self.views.len();
-            if chip(ui, &format!("{panes} pane(s)"), panes > 1).clicked() {
-                self.set_pane_count(match panes {
-                    1 => 2,
-                    2 => 4,
-                    _ => 1,
-                });
-            }
-        });
-        ui.add_space(6.0);
-        ui.label(
-            RichText::new("Map tap tool")
-                .size(13.0)
-                .strong()
-                .color(accent),
-        );
-        ui.horizontal_wrapped(|ui| {
-            for (tool, label) in [
-                (MapTool::Interrogate, "Interrogate"),
-                (MapTool::Measure, "Measure"),
-                (MapTool::Marker, "Marker"),
-                (MapTool::CrossSection, "X-section"),
-                (MapTool::Sounding, "Sounding"),
-                (MapTool::Forecast, "Forecast"),
-                (MapTool::Climatology, "Tor climo"),
-            ] {
-                if chip(ui, label, self.tool == tool).clicked() {
-                    self.tool = tool;
-                }
-            }
-        });
-        ui.horizontal_wrapped(|ui| {
-            if chip(ui, "Chase mode", self.chase_mode).clicked() {
-                self.chase_mode = !self.chase_mode;
-                if !self.chase_mode {
-                    self.chase_applied = None;
-                }
-            }
-            // Android has no gpsd; platform.rs polls the system LocationManager over JNI.
-            let on = self.gps_rx.is_some();
-            if chip(ui, if on { "GPS on" } else { "Enable GPS" }, on).clicked() {
-                if on {
-                    self.gps_rx = None;
-                } else if let Some(rx) = crate::platform::start_location() {
-                    self.gps_rx = Some(rx);
-                    self.chase_mode = true;
-                }
-            }
-        });
-        ui.add_space(6.0);
-        ui.label(RichText::new("Analysis").size(13.0).strong().color(accent));
-        ui.horizontal_wrapped(|ui| {
-            if chip(ui, "3D volume", false).clicked() {
-                self.build_volume3d();
-            }
-            if chip(ui, "CAPPI", false).clicked() {
-                self.show_cappi = true;
-                self.cappi_key = None;
-            }
-            if chip(ui, "Digest", false).clicked() {
-                self.digest_window.open = true;
-                self.generate_digest();
-            }
-            if chip(ui, "AFD", false).clicked() {
-                self.afd_open = true;
-                self.fetch_afd();
-            }
-            if chip(ui, "Events", false).clicked() {
-                self.event_window.open = true;
-            }
-            if chip(ui, "Markers", false).clicked() {
-                self.marker_window.open = true;
-            }
-            if chip(ui, "Placefiles", false).clicked() {
-                self.placefile_window.open = true;
-            }
-            if chip(ui, "Palettes", false).clicked() {
-                self.palette_editor.open = true;
-            }
-        });
-        ui.add_space(6.0);
-        ui.label(
-            RichText::new("Panes & capture")
-                .size(13.0)
-                .strong()
-                .color(accent),
-        );
-        ui.horizontal_wrapped(|ui| {
-            for count in [1usize, 2, 4] {
-                if chip(ui, &format!("{count} pane"), self.views.len() == count).clicked() {
-                    self.set_pane_count(count);
-                }
-            }
-            if chip(ui, "Link", self.link_cameras).clicked() {
-                self.link_cameras = !self.link_cameras;
-            }
-            if chip(ui, "Screenshot", false).clicked() {
-                if let Some(path) = crate::dialog::save_path("hookecho.png", "png") {
-                    self.screenshot_pending = Some(ShotDest::File(path));
-                    ui.ctx()
-                        .send_viewport_cmd(egui::ViewportCommand::Screenshot(
-                            egui::UserData::default(),
-                        ));
-                }
-            }
-            if chip(ui, "GIF", self.loop_export.is_some()).clicked() && self.loop_export.is_none() {
-                self.start_loop_export(crate::loopexport::LoopFormat::Gif);
-            }
-            if chip(ui, "OBS", self.obs_mode).clicked() {
-                self.obs_mode = true;
-            }
-            if chip(ui, "Wizard", false).clicked() {
-                self.wizard.start();
-            }
-        });
-    }
 }
+
