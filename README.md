@@ -118,6 +118,17 @@ fifteen years ago, or a hurricane coming ashore:
 
 <sub>**KTBW 0.5° reflectivity — Hurricane Ian, 28 September 2022.**</sub>
 
+And because the archive is there, you can ask how the warnings did. The
+verification lab scores an office's warnings for a day against the storm reports
+that came in — POD, FAR, CSI, lead times, and the individual rows behind them,
+including the reports nobody warned for (the red dots on the map). The
+arbitration is the Iowa Environmental Mesonet's, so the numbers agree with the
+published ones instead of being a private opinion.
+
+![Warning verification for Norman, OK on 20 May 2013](docs/shots/verify.jpg)
+
+<sub>**KTLX — 20 May 2013.** OUN's warnings scored against that day's reports.</sub>
+
 ### Deciding which storm matters
 
 Every tracked cell in one sortable table — hail size, tops, VIL, rotation flags —

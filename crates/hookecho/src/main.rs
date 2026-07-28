@@ -588,6 +588,20 @@ fn main() -> eframe::Result<()> {
         return Ok(());
     }
 
+    // Warning verification: `hookecho --headless-verify WFO START END`.
+    if let Some(pos) = args.iter().position(|a| a == "--headless-verify") {
+        let (wfo, start, end) = (args.get(pos + 1), args.get(pos + 2), args.get(pos + 3));
+        let (Some(wfo), Some(start), Some(end)) = (wfo, start, end) else {
+            eprintln!("usage: --headless-verify WFO START END   (e.g. OUN 2013-05-20 2013-05-21)");
+            std::process::exit(2);
+        };
+        if let Err(e) = headless::run_verify(wfo, start, end) {
+            eprintln!("headless verify failed: {e}");
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
+
     // Sensor/obs verify: `hookecho --headless-obs [SITE]`.
     if let Some(pos) = args.iter().position(|a| a == "--headless-obs") {
         let site = args

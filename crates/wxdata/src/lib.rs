@@ -33,6 +33,7 @@ pub mod tds;
 pub mod torclimo;
 pub mod tropical;
 pub mod tz;
+pub mod verify;
 pub mod volume3d;
 pub mod webcams;
 pub mod xsection;

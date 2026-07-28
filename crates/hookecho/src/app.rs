@@ -601,6 +601,8 @@ pub(crate) enum AppWindow {
     Cappi,
     Volume3d,
     StormTable,
+    /// Warning verification lab (IEM Cow): how the office's warnings scored on an event day.
+    Verify,
     Climatology,
     LayerManager,
     Wizard,
@@ -968,6 +970,9 @@ pub struct HookEchoApp {
     // comes back after a delete). A bounds check closes the popup if the list shrinks under it.
     marker_popup: Option<usize>,
     cells_window: ui::cells_window::CellsWindow,
+    /// Warning verification lab and its in-flight query.
+    verify_window: ui::verify_window::VerifyWindow,
+    verify_rx: Option<std::sync::mpsc::Receiver<Result<wxdata::verify::Verification, String>>>,
     /// Which moment the cross-section slices (session state, not persisted).
     xsection_moment: Moment,
     /// Storm-follow camera: the `(site, last-snapshot cell, since)` the active pane is tracking.
@@ -1418,6 +1423,8 @@ impl HookEchoApp {
             cell_popup: None,
             marker_popup: None,
             cells_window: Default::default(),
+            verify_window: Default::default(),
+            verify_rx: None,
             xsection_moment: Moment::Reflectivity,
             follow_cell: None,
             follow_notice: None,
@@ -2384,6 +2391,70 @@ impl HookEchoApp {
         let http = self.http.clone();
         self._rt.spawn(async move {
             let res = wxdata::forecast::fetch(&http, lat, lon)
+                .await
+                .map_err(|e| e.to_string());
+            let _ = tx.send(res);
+        });
+    }
+
+    /// Open the verification lab, prefilled from what's on screen: the office whose warnings are
+    /// in view, and the archive day the timeline is parked on. Typing either again is a fallback,
+    /// not the normal path.
+    fn open_verify(&mut self) {
+        if self.verify_window.wfo.is_empty() {
+            // Archived warnings carry their issuing office in `area`; a live pane has none, and
+            // the field stays blank rather than guessing.
+            // The office whose warning actually covers the camera, not merely the first one in
+            // the national archive fetch — otherwise a KTLX view opens scored against St. Louis.
+            let (clon, clat) = {
+                let c = self.views[self.active].camera.center;
+                crate::render::mercator::world_to_lonlat(c.0, c.1)
+            };
+            self.verify_window.wfo = self
+                .arch_warns
+                .iter()
+                .flat_map(|(_, feats)| feats.iter())
+                .filter(|f| {
+                    f.bbox().is_some_and(|(w, s, e, n)| {
+                        clon >= w && clon <= e && clat >= s && clat <= n
+                    })
+                })
+                .find_map(|f| f.alert.as_ref().map(|a| a.area.clone()))
+                .unwrap_or_default();
+        }
+        if self.verify_window.day.is_empty() {
+            self.verify_window.day = self.views[self.active]
+                .timeline
+                .date
+                .format("%Y-%m-%d")
+                .to_string();
+        }
+        self.verify_window.open = true;
+        if self.verify_window.data.is_none() && !self.verify_window.wfo.is_empty() {
+            self.fetch_verify();
+        }
+    }
+
+    fn fetch_verify(&mut self) {
+        let wfo = self.verify_window.wfo.trim().to_ascii_uppercase();
+        let Ok(day) = chrono::NaiveDate::parse_from_str(self.verify_window.day.trim(), "%Y-%m-%d")
+        else {
+            self.verify_window.error = Some("Day must look like 2013-05-20".into());
+            return;
+        };
+        if wfo.is_empty() {
+            self.verify_window.error = Some("Enter a WFO, e.g. OUN".into());
+            return;
+        }
+        let start = day.and_hms_opt(0, 0, 0).unwrap_or_default().and_utc();
+        let end = start + chrono::Duration::days(1);
+        self.verify_window.busy = true;
+        self.verify_window.error = None;
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.verify_rx = Some(rx);
+        let http = self.http.clone();
+        self._rt.spawn(async move {
+            let res = wxdata::verify::fetch(&http, &wfo, start, end)
                 .await
                 .map_err(|e| e.to_string());
             let _ = tx.send(res);
@@ -4391,6 +4462,12 @@ impl HookEchoApp {
                 true,
             ),
             (
+                W::Verify,
+                "Warning verification…",
+                "Score an office's warnings against what actually happened",
+                false,
+            ),
+            (
                 W::Cappi,
                 "CAPPI slice…",
                 "See the storm at one constant altitude",
@@ -4526,6 +4603,7 @@ impl HookEchoApp {
                     self.cappi_key = None; // force a re-slice on open
                 }
                 W::StormTable => self.cells_window.toggle(),
+                W::Verify => self.open_verify(),
                 W::Volume3d => self.build_volume3d(),
                 W::Climatology => {
                     self.climo_open = true;
@@ -6968,6 +7046,32 @@ impl HookEchoApp {
                         &site.name,
                         egui::FontId::proportional(10.0),
                         col,
+                    );
+                }
+            }
+        }
+
+        // Verification reports, while the lab is open: green where a warning was already out,
+        // red where nothing was. The red dots are the point of the whole feature.
+        if self.verify_window.open {
+            if let Some(v) = &self.verify_window.data {
+                for r in &v.reports {
+                    let w = crate::render::mercator::lonlat_to_world(r.lon, r.lat);
+                    let (sx, sy) = cam.world_to_screen(w, vp);
+                    let p = egui::pos2(prect.left() + sx, prect.top() + sy);
+                    if !prect.contains(p) {
+                        continue;
+                    }
+                    let color = if r.warned {
+                        egui::Color32::from_rgb(120, 220, 140)
+                    } else {
+                        egui::Color32::from_rgb(230, 70, 70)
+                    };
+                    painter.circle_filled(p, 4.0, color);
+                    painter.circle_stroke(
+                        p,
+                        4.0,
+                        egui::Stroke::new(1.0, egui::Color32::from_black_alpha(180)),
                     );
                 }
             }
@@ -9487,6 +9591,29 @@ impl eframe::App for HookEchoApp {
             }
         }
         self.sounding_window.show(ctx, self.active_tz());
+        // Warning verification lab: drain the query, then draw and act on its clicks.
+        if let Some(rx) = &self.verify_rx {
+            if let Ok(res) = rx.try_recv() {
+                self.verify_window.busy = false;
+                self.verify_rx = None;
+                match res {
+                    Ok(v) => self.verify_window.data = Some(v),
+                    Err(e) => {
+                        self.verify_window.error =
+                            Some(format!("verification unavailable: {e}"));
+                    }
+                }
+            }
+        }
+        let vact = self.verify_window.show(ctx, self.active_tz());
+        if vact.refresh {
+            self.verify_window.data = None;
+            self.fetch_verify();
+        }
+        if let Some((lon, lat, time)) = vact.goto {
+            let site = self.views[self.active].site.clone().unwrap_or_default();
+            self.goto_view(&site, lon, lat, 8.5, time);
+        }
         // Point forecast: drain the fetch, cache the win, then draw.
         if let Some((key, rx)) = &self.forecast_rx {
             if let Ok(res) = rx.try_recv() {

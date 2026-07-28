@@ -45,6 +45,7 @@ pub mod site_dialog;
 pub mod sounding_window;
 pub mod style;
 pub mod layer_options;
+pub mod verify_window;
 pub mod volume3d_window;
 pub mod warning_window;
 pub mod wizard;

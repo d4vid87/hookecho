@@ -32,6 +32,7 @@ L_ALLTILTS="Compare 4 tilts"
 L_XSECTION="Tool: Cross-section"
 L_FORECAST="Tool: Point forecast"
 L_STORMTABLE="Storm attributes…"
+L_VERIFY="Warning verification…"
 L_FRONTS="Surface fronts (H/L)"
 L_GLM="Satellite lightning (GLM)"
 L_MRMS="MRMS Mosaic"
@@ -53,7 +54,7 @@ preflight() {
   log "building release"
   (cd "$REPO" && cargo build --release --quiet)
   for l in "$L_ALLTILTS" "$L_XSECTION" "$L_FORECAST" "$L_STORMTABLE" "$L_FRONTS" "$L_GLM" \
-           "$L_MRMS" "$L_MOSAIC" "$L_QPE" "$L_HRRR"; do
+           "$L_MRMS" "$L_MOSAIC" "$L_QPE" "$L_HRRR" "$L_VERIFY"; do
     grep -qF "$l" "$REPO/crates/hookecho/src/app.rs" \
       || die "palette label '$l' is not in app.rs any more — update shoot.sh"
   done
@@ -196,6 +197,14 @@ scene_xsection() {
   click 920 380
   wait_settle 8
   snap xsection
+}
+
+scene_verify() {
+  # Moore, 20 May 2013: the office's own warnings scored against what was reported that day.
+  launch "$MOORE"; wait_settle 14
+  palette "$L_VERIFY"
+  wait_settle 10 60
+  snap verify
 }
 
 scene_alerts() {
@@ -342,7 +351,7 @@ check() {
   [ "$fail" = 0 ] && log "check passed" || die "check failed"
 }
 
-ARCHIVE_SCENES=(reflectivity velocity alltilts xsection alerts products layers tropical)
+ARCHIVE_SCENES=(reflectivity velocity alltilts xsection alerts products layers tropical verify)
 LIVE_SCENES=(stormtable forecast fronts hrrr mrms mosaic qpe glm)
 
 main() {

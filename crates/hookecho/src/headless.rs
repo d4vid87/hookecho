@@ -403,6 +403,58 @@ pub fn run_mosaic(site: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Warning-verification lab, headless: `--headless-verify WFO START END` (RFC3339 or `YYYY-MM-DD`).
+/// Prints the skill table and the warning list, which is checkable against IEM's own Cow web UI.
+pub fn run_verify(wfo: &str, start: &str, end: &str) -> anyhow::Result<()> {
+    let parse_when = |s: &str| -> anyhow::Result<chrono::DateTime<chrono::Utc>> {
+        if let Ok(t) = chrono::DateTime::parse_from_rfc3339(s) {
+            return Ok(t.with_timezone(&chrono::Utc));
+        }
+        let d = chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d")?;
+        Ok(d.and_hms_opt(0, 0, 0)
+            .ok_or_else(|| anyhow::anyhow!("bad date {s}"))?
+            .and_utc())
+    };
+    let (start, end) = (parse_when(start)?, parse_when(end)?);
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?;
+    let v = rt.block_on(async {
+        let http = reqwest::Client::new();
+        wxdata::verify::fetch(&http, wfo, start, end).await
+    })?;
+    let s = &v.stats;
+    println!(
+        "{} {} → {}",
+        v.wfo,
+        start.format("%Y-%m-%d %H:%MZ"),
+        end.format("%Y-%m-%d %H:%MZ")
+    );
+    println!(
+        "  POD {:.2}  FAR {:.2}  CSI {:.2}   lead avg {:.1} / max {} min",
+        s.pod, s.far, s.csi, s.avg_lead_min, s.max_lead_min
+    );
+    println!(
+        "  warnings {}/{} verified   reports {} ({} warned, {} missed)   avg polygon {:.0} km²",
+        s.events_verified, s.events_total, s.reports_total, s.warned_reports, s.unwarned_reports,
+        s.avg_size_km2
+    );
+    for w in v.warnings.iter().take(20) {
+        println!(
+            "  {} {}-{:04}  {}  {}  {}",
+            if w.verified { "✓" } else { "✗" },
+            w.phenomena,
+            w.eventid,
+            w.issue.format("%d %H:%MZ"),
+            w.lead_min
+                .map(|m| format!("lead {m:>3} min"))
+                .unwrap_or_else(|| "  no verify  ".into()),
+            w.counties.join(", ")
+        );
+    }
+    Ok(())
+}
+
 /// TDS verify: download the latest dual-pol volume, bin reflectivity + CC at the lowest tilt, run
 /// the debris-signature detector, and print any hits. Proves the detection pipeline on real data.
 pub fn run_tds(site: &str) -> anyhow::Result<()> {
