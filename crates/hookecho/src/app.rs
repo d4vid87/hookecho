@@ -5613,13 +5613,17 @@ impl HookEchoApp {
         let cam = self.views[idx].camera;
         // High-DPI screens render a 256-px raster tile across `ppp`× more physical pixels, which
         // looks blurry (bad on the S24's ~3.75× density). Fetch `round(log2(ppp))` levels deeper so
-        // tiles land near 1:1. Capped at +2 to bound the tile count. Desktop (ppp 1) → +0.
+        // tiles land near 1:1. Desktop (ppp 1) → +0.
+        //
+        // Capped at +1, not +2: each level quadruples the tiles covering the same ground, so +2
+        // asked a phone to fetch, decode, and hold 16× the imagery of a desktop for a screen that
+        // is a few inches across. +1 is 4×, still sharper than the panel resolves.
         let raster_bias = ctx
             .pixels_per_point()
             .max(1.0)
             .log2()
             .round()
-            .clamp(0.0, 2.0) as f64;
+            .clamp(0.0, 1.0) as f64;
         let visible = if is_raster {
             let vis = self.tiles.visible(&cam, vp, raster_bias);
             self.tiles.request_missing(&vis);
