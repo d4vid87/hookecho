@@ -1,14 +1,40 @@
-//! Skew-T / hodograph window for an HRRR point sounding. A simplified Skew-T (temperature +
-//! dewpoint vs log-pressure, temperature skewed) beside a hodograph of the wind profile.
+//! Skew-T / hodograph window for a point sounding. A simplified Skew-T (temperature + dewpoint
+//! vs log-pressure, temperature skewed) beside a hodograph of the wind profile.
+//!
+//! Two profiles can share the plot: the HRRR forecast (solid) and, when a radiosonde site is near
+//! enough, the observed ascent from that site (dashed). Seeing them together is the point — the
+//! model's idea of the atmosphere against a sample of the real one.
 
 use wxdata::sounding::Sounding;
 
-#[derive(Default)]
 pub struct SoundingWindow {
     pub open: bool,
     pub busy: bool,
     pub sounding: Option<Sounding>,
     pub error: Option<String>,
+    /// The observed radiosonde ascent nearest the clicked point, and the station it came from.
+    pub observed: Option<Sounding>,
+    pub observed_station: String,
+    /// Why there's no observed profile — no station in range, or the balloon didn't fly.
+    pub observed_error: Option<String>,
+    pub show_observed: bool,
+}
+
+impl Default for SoundingWindow {
+    fn default() -> Self {
+        Self {
+            open: false,
+            busy: false,
+            sounding: None,
+            error: None,
+            observed: None,
+            observed_station: String::new(),
+            observed_error: None,
+            // On by default: an observed profile is the more trustworthy of the two, and hiding it
+            // behind a toggle nobody finds would waste the fetch.
+            show_observed: true,
+        }
+    }
 }
 
 impl SoundingWindow {
@@ -17,7 +43,7 @@ impl SoundingWindow {
             return;
         }
         let mut open = self.open;
-        crate::ui::fit_phone(ctx, egui::Window::new("Point Sounding (HRRR)"))
+        crate::ui::fit_phone(ctx, egui::Window::new("Point Sounding"))
             .open(&mut open)
             .default_size([560.0, 460.0])
             .show(ctx, |ui| {
@@ -58,20 +84,38 @@ impl SoundingWindow {
                     });
                     ui.weak("Fixed-layer forms from 10 mandatory levels — coarser than SPC mesoanalysis.");
                 }
+                // Observed ascent: a line about where it came from, and the toggle.
+                ui.horizontal(|ui| match (&self.observed, &self.observed_error) {
+                    (Some(o), _) => {
+                        ui.checkbox(&mut self.show_observed, "Observed (RAOB)");
+                        ui.weak(format!(
+                            "{} · {}",
+                            self.observed_station,
+                            crate::timefmt::fmt_date_clock(o.run, tz)
+                        ));
+                    }
+                    (None, Some(e)) => {
+                        ui.weak(format!("Observed sounding: {e}"));
+                    }
+                    (None, None) => {
+                        ui.weak("Observed sounding: fetching\u{2026}");
+                    }
+                });
+                let observed = self.show_observed.then_some(self.observed.as_ref()).flatten();
                 ui.separator();
                 // Phone: the fixed-width plots (300 + 240 px) side by side overflow the screen —
                 // stack them vertically inside a scroll instead (fixed-width content overrides
                 // fit_phone's max_width; same pattern as cell_window's grid).
                 if cfg!(target_os = "android") {
                     egui::ScrollArea::vertical().show(ui, |ui| {
-                        skewt(ui, s);
+                        skewt(ui, s, observed);
                         ui.add_space(6.0);
-                        hodograph(ui, s);
+                        hodograph(ui, s, observed);
                     });
                 } else {
                     ui.horizontal(|ui| {
-                        skewt(ui, s);
-                        hodograph(ui, s);
+                        skewt(ui, s, observed);
+                        hodograph(ui, s, observed);
                     });
                 }
             });
@@ -81,7 +125,7 @@ impl SoundingWindow {
 
 /// Simplified Skew-T: temperature (red) and dewpoint (green) plotted against log-pressure, with
 /// temperature skewed 45° to the right (the classic emagram layout).
-fn skewt(ui: &mut egui::Ui, s: &Sounding) {
+fn skewt(ui: &mut egui::Ui, s: &Sounding, observed: Option<&Sounding>) {
     let (rect, _) = ui.allocate_exact_size(egui::vec2(300.0, 380.0), egui::Sense::hover());
     let p = ui.painter_at(rect);
     p.rect_filled(rect, 4.0, ui.visuals().extreme_bg_color);
@@ -120,18 +164,37 @@ fn skewt(ui: &mut egui::Ui, s: &Sounding) {
         );
     }
 
-    let line = |color: egui::Color32, pick: &dyn Fn(&wxdata::sounding::SoundingLevel) -> f64| {
-        let pts: Vec<egui::Pos2> = s
+    let trace = |src: &Sounding,
+                 color: egui::Color32,
+                 dashed: bool,
+                 pick: &dyn Fn(&wxdata::sounding::SoundingLevel) -> f64| {
+        let pts: Vec<egui::Pos2> = src
             .levels
             .iter()
+            .filter(|l| l.pressure_hpa >= 195.0) // the plot stops at 200 hPa
             .map(|l| egui::pos2(x_of(pick(l), l.pressure_hpa), y_of(l.pressure_hpa)))
             .collect();
-        if pts.len() >= 2 {
-            p.add(egui::Shape::line(pts, egui::Stroke::new(2.0, color)));
+        if pts.len() < 2 {
+            return;
+        }
+        let stroke = egui::Stroke::new(2.0, color);
+        if dashed {
+            p.extend(egui::Shape::dashed_line(&pts, stroke, 5.0, 4.0));
+        } else {
+            p.add(egui::Shape::line(pts, stroke));
         }
     };
-    line(egui::Color32::from_rgb(120, 230, 120), &|l| l.dewpt_c); // dewpoint
-    line(egui::Color32::from_rgb(240, 90, 90), &|l| l.temp_c); // temperature
+    let (green, red) = (
+        egui::Color32::from_rgb(120, 230, 120),
+        egui::Color32::from_rgb(240, 90, 90),
+    );
+    // Observed underneath, so the forecast trace stays readable where they overlap.
+    if let Some(o) = observed {
+        trace(o, green.gamma_multiply(0.85), true, &|l| l.dewpt_c);
+        trace(o, red.gamma_multiply(0.85), true, &|l| l.temp_c);
+    }
+    trace(s, green, false, &|l| l.dewpt_c);
+    trace(s, red, false, &|l| l.temp_c);
     p.text(
         rect.center_top() + egui::vec2(0.0, 10.0),
         egui::Align2::CENTER_TOP,
@@ -142,7 +205,7 @@ fn skewt(ui: &mut egui::Ui, s: &Sounding) {
 }
 
 /// Hodograph: wind (u, v) at each level, connected surface→top, in knots.
-fn hodograph(ui: &mut egui::Ui, s: &Sounding) {
+fn hodograph(ui: &mut egui::Ui, s: &Sounding, observed: Option<&Sounding>) {
     let (rect, _) = ui.allocate_exact_size(egui::vec2(240.0, 380.0), egui::Sense::hover());
     let p = ui.painter_at(rect);
     p.rect_filled(rect, 4.0, ui.visuals().extreme_bg_color);
@@ -183,6 +246,25 @@ fn hodograph(ui: &mut egui::Ui, s: &Sounding) {
             center.y - r_px * (v_kt as f32 / max_kt),
         )
     };
+    // The observed hodograph is dashed and dimmer, drawn first so the forecast sits on top. Its
+    // levels are thinned to the plotted layer: a 111-level radiosonde otherwise draws a hairball
+    // of stratospheric wind above everything a chaser cares about.
+    if let Some(o) = observed {
+        let opts: Vec<egui::Pos2> = o
+            .levels
+            .iter()
+            .filter(|l| l.pressure_hpa >= 250.0)
+            .map(|l| to_px(l.u_ms, l.v_ms))
+            .collect();
+        if opts.len() >= 2 {
+            p.extend(egui::Shape::dashed_line(
+                &opts,
+                egui::Stroke::new(2.0, egui::Color32::from_rgb(120, 180, 255).gamma_multiply(0.7)),
+                5.0,
+                4.0,
+            ));
+        }
+    }
     let pts: Vec<egui::Pos2> = s.levels.iter().map(|l| to_px(l.u_ms, l.v_ms)).collect();
     if pts.len() >= 2 {
         p.add(egui::Shape::line(

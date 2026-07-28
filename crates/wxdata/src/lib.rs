@@ -21,6 +21,7 @@ pub mod obs;
 pub mod overlay;
 pub mod placefile;
 pub mod probsevere;
+pub mod raob;
 pub mod river;
 pub mod rotation;
 pub mod severe;

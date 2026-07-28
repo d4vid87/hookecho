@@ -1003,6 +1003,8 @@ pub struct HookEchoApp {
     digest_rx: Option<std::sync::mpsc::Receiver<Result<String, String>>>,
     sounding_window: ui::sounding_window::SoundingWindow,
     sounding_rx: Option<std::sync::mpsc::Receiver<Result<wxdata::sounding::Sounding, String>>>,
+    /// The observed RAOB fetched alongside the HRRR profile, for the same click.
+    raob_rx: Option<std::sync::mpsc::Receiver<Result<wxdata::sounding::Sounding, String>>>,
     /// Chase mode: follow a position, auto-switching the active pane to the nearest radar.
     chase_mode: bool,
     chase_pos: Option<(f64, f64)>,
@@ -1421,6 +1423,7 @@ impl HookEchoApp {
             digest_rx: None,
             sounding_window: Default::default(),
             sounding_rx: None,
+        raob_rx: None,
             chase_mode: false,
             chase_pos: None,
             climo_tracks: None,
@@ -2351,6 +2354,41 @@ impl HookEchoApp {
         let http = self.http.clone();
         self._rt.spawn(async move {
             let res = wxdata::sounding::fetch(&http, lon, lat)
+                .await
+                .map_err(|e| e.to_string());
+            let _ = tx.send(res);
+        });
+        self.fetch_raob(lon, lat);
+    }
+
+    /// The observed ascent to draw beside the model profile: the nearest radiosonde station, at
+    /// the synoptic time before whatever instant the active pane is showing (so an archive scrub
+    /// gets that day's sounding, not today's).
+    fn fetch_raob(&mut self, lon: f64, lat: f64) {
+        self.sounding_window.observed = None;
+        self.sounding_window.observed_error = None;
+        self.sounding_window.observed_station.clear();
+        self.raob_rx = None;
+        let Some(station) = wxdata::raob::nearest_station(lon, lat) else {
+            return;
+        };
+        let when = self.views[self.active]
+            .timeline
+            .current()
+            .and_then(|id| id.date_time())
+            .unwrap_or_else(chrono::Utc::now);
+        self.sounding_window.observed_station = format!(
+            "{} ({}) {}",
+            station.name,
+            station.id,
+            wxdata::raob::synoptic_before(when).format("%d %b %HZ")
+        );
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.raob_rx = Some(rx);
+        let http = self.http.clone();
+        let cache = crate::paths::cache_dir();
+        self._rt.spawn(async move {
+            let res = wxdata::raob::fetch(&http, station, when, cache)
                 .await
                 .map_err(|e| e.to_string());
             let _ = tx.send(res);
@@ -6804,6 +6842,30 @@ impl HookEchoApp {
             }
         }
 
+        // Radiosonde sites, only while the sounding tool is armed — a click anywhere takes the
+        // nearest of these, so showing them is how you know what "nearest" will pick.
+        if self.tool == MapTool::Sounding {
+            for st in &wxdata::raob::STATIONS {
+                let w = crate::render::mercator::lonlat_to_world(st.lon, st.lat);
+                let (sx, sy) = cam.world_to_screen(w, vp);
+                let p = egui::pos2(prect.left() + sx, prect.top() + sy);
+                if !prect.contains(p) {
+                    continue;
+                }
+                let color = egui::Color32::from_rgb(150, 200, 255);
+                painter.circle_stroke(p, 4.0, egui::Stroke::new(1.5, color));
+                if cam.zoom >= 6.0 {
+                    painter.text(
+                        p + egui::vec2(6.0, 0.0),
+                        egui::Align2::LEFT_CENTER,
+                        st.id,
+                        egui::FontId::proportional(10.0),
+                        color,
+                    );
+                }
+            }
+        }
+
         if self.show_spotters {
             if let Some(site_pos) = self.views[idx]
                 .site
@@ -9269,6 +9331,15 @@ impl eframe::App for HookEchoApp {
                     Err(e) => {
                         self.sounding_window.error = Some(e);
                     }
+                }
+            }
+        }
+        if let Some(rx) = &self.raob_rx {
+            if let Ok(res) = rx.try_recv() {
+                self.raob_rx = None;
+                match res {
+                    Ok(s) => self.sounding_window.observed = Some(s),
+                    Err(e) => self.sounding_window.observed_error = Some(e),
                 }
             }
         }
