@@ -16,10 +16,14 @@ members = [
 gribberish = { path = "vendor/gribberish" }
 nexrad-data = { path = "vendor/nexrad-data" }
 
-# Release builds strip symbols and use thin LTO — wgpu+egui debug info dominates size, and the
-# AppImage ships the release binary. Dev builds are untouched.
+# Release builds strip symbols and use fat LTO — wgpu+egui debug info dominates size, and the
+# AppImage ships the release binary. `codegen-units = 1` costs build time and buys inlining across
+# the whole graph, which matters most on the phone. `panic = "abort"` is deliberately NOT set:
+# decode paths guard themselves with `catch_unwind` (wxdata `mrms.rs`, `sounding.rs`, `hrrr.rs`),
+# and aborting would turn a bad GRIB message into a crash. Dev builds are untouched.
 [profile.release]
-lto = "thin"
+lto = "fat"
+codegen-units = 1
 strip = true
 
 [workspace.package]

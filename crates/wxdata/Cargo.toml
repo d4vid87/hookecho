@@ -25,5 +25,7 @@ lru.workspace = true
 directories.workspace = true
 log.workspace = true
 geojson = "1.0.0"
-gribberish = "1.5.0"
+# No `jpeg`: that feature pulls openjpeg-sys (a vendored C JPEG2000 codec) for a packing template
+# no NOAA product we read uses — MRMS and HRRR are PNG / simple / complex packing.
+gribberish = { version = "1.5.0", default-features = false, features = ["png"] }
 chrono-tz = "0.10"

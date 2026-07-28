@@ -27,11 +27,15 @@ puffin = { version = "0.20", optional = true }
 puffin_http = { version = "0.17", optional = true }
 # Base eframe (all platforms); Linux windowing backends are added target-conditionally below so
 # Windows/macOS builds don't pull the Linux-only wayland/x11 deps.
-eframe = { version = "0.35", default-features = false, features = ["default_fonts", "wgpu"] }
+# `wgpu_no_default_features` + `default-features = false` on egui-wgpu and wgpu below hand the
+# backend choice to us: wgpu's own default turns on every backend for every platform (dx12 and
+# metal get compiled into the Linux and Android builds and never run). We union in exactly the
+# backends each target can use, further down.
+eframe = { version = "0.35", default-features = false, features = ["default_fonts", "wgpu_no_default_features"] }
 egui = "0.35"
 egui_extras = "0.35"
-egui-wgpu = "0.35"
-wgpu = "29"
+egui-wgpu = { version = "0.35", default-features = false, features = ["winit"] }
+wgpu = { version = "29", default-features = false, features = ["wgsl", "std"] }
 bytemuck.workspace = true
 anyhow.workspace = true
 tokio.workspace = true
@@ -56,6 +60,17 @@ egui-phosphor = "0.13.0"
 # fixed exports dir + Storage-Access-Framework (deferred); see `dialog.rs`.
 [target.'cfg(not(target_os = "android"))'.dependencies]
 rfd = "0.15"
+
+# One wgpu backend set per platform, feature-unioned onto the base wgpu above.
+[target.'cfg(any(target_os = "linux", target_os = "android"))'.dependencies]
+wgpu = { version = "29", default-features = false, features = ["vulkan", "gles"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+wgpu = { version = "29", default-features = false, features = ["dx12", "vulkan"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+wgpu = { version = "29", default-features = false, features = ["metal"] }
+egui-wgpu = { version = "0.35", default-features = false, features = ["macos-window-resize-jitter-fix"] }
 
 # Linux windowing backends (Wayland + X11). Feature-unioned onto the base eframe above, so only
 # Linux builds pull them; Windows/macOS use their native winit backends.
