@@ -672,7 +672,8 @@ enum DataMsg {
         site: String,
         name: String,
         time: DateTime<Utc>,
-        scan: Scan,
+        /// Already shared with the streaming task's running volume (see `live::Update`).
+        scan: Arc<Scan>,
         changed: Vec<f32>,
     },
     /// The live stream for `view` ended (error or clean exit); polling resumes.
@@ -4894,8 +4895,8 @@ impl HookEchoApp {
                 } => {
                     let v = &mut self.views[view];
                     match &mut v.volume {
-                        Some(vol) => vol.apply_live(Arc::new(scan), name, time, &changed),
-                        None => v.volume = Some(Volume::new(Arc::new(scan), name, time)),
+                        Some(vol) => vol.apply_live(scan, name, time, &changed),
+                        None => v.volume = Some(Volume::new(scan, name, time)),
                     }
                     v.loading = false;
                     v.error = None;

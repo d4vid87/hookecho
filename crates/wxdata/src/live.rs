@@ -13,6 +13,7 @@ use nexrad_data::aws::realtime::{
     assemble_volume, download_chunk, Chunk, ChunkIdentifier, ChunkIterator, ChunkType,
 };
 use nexrad_model::data::Sweep;
+use std::sync::Arc;
 use std::time::Duration;
 
 /// A merged live volume ready to display.
@@ -20,7 +21,9 @@ pub struct Update {
     /// A synthetic name identifying this update (volume prefix + sequence).
     pub name: String,
     pub time: chrono::DateTime<chrono::Utc>,
-    pub scan: Scan,
+    /// Shared with the streaming task's running volume — the app puts this straight into its
+    /// volume cache, so a live sweep arrival copies a refcount rather than a whole scan.
+    pub scan: Arc<Scan>,
     /// Elevation angles (deg) whose sweeps changed vs. the previous update — the app uses
     /// this to evict only the affected tilts from its binned-sweep cache.
     pub changed: Vec<f32>,
@@ -66,7 +69,7 @@ where
     }
     chunks.push(init.latest_chunk.chunk);
 
-    let mut merged = base;
+    let mut merged = Arc::new(base);
     emit(&it, &chunks, &mut merged, &mut on_update);
 
     loop {
@@ -101,7 +104,7 @@ where
 fn emit<F: FnMut(Update)>(
     it: &ChunkIterator,
     chunks: &[Chunk<'static>],
-    merged: &mut Scan,
+    merged: &mut Arc<Scan>,
     on_update: &mut F,
 ) {
     let partial = match assemble_volume(chunks.iter().cloned()) {
@@ -111,12 +114,11 @@ fn emit<F: FnMut(Update)>(
             return;
         }
     };
-    let base = std::mem::replace(merged, empty_like(&partial));
-    let (new_scan, changed) = merge_scan(base, partial);
-    *merged = new_scan;
+    let (new_scan, changed) = merge_scan(merged, partial);
     if changed.is_empty() {
-        return; // nothing new since the last emit
+        return; // nothing new since the last emit; `merged` already holds this content
     }
+    *merged = Arc::new(new_scan);
     let (name, time) = it
         .current()
         .map(|id| {
@@ -126,21 +128,12 @@ fn emit<F: FnMut(Update)>(
             )
         })
         .unwrap_or_else(|| (String::from("live"), chrono::Utc::now()));
-    // ponytail: one Scan clone per emit for the UI; the merge/decode cost stays on this task.
     on_update(Update {
         name,
         time,
-        scan: merged.clone(),
+        scan: Arc::clone(merged),
         changed,
     });
-}
-
-/// A cheap placeholder scan (same VCP, no sweeps) used only to move `merged` out during emit.
-fn empty_like(like: &Scan) -> Scan {
-    match like.site() {
-        Some(s) => Scan::with_site(s.clone(), like.coverage_pattern().clone(), Vec::new()),
-        None => Scan::new(like.coverage_pattern().clone(), Vec::new()),
-    }
 }
 
 /// Merge `partial` into `base`, newest-wins by elevation number.
@@ -149,7 +142,10 @@ fn empty_like(like: &Scan) -> Scan {
 /// sweep replaces the base sweep with the same elevation number only when it actually differs
 /// (`Sweep: PartialEq`), keeping split cuts and the tilt list stable mid-stream. Returns the
 /// merged scan and the angles of the sweeps that changed.
-pub fn merge_scan(base: Scan, partial: Scan) -> (Scan, Vec<f32>) {
+/// ponytail: `base`'s sweeps are cloned into the merged scan because `nexrad_model::Scan` has no
+/// `into_sweeps` to move them out of. Vendoring that crate for one accessor isn't worth it while
+/// this runs off the UI thread.
+pub fn merge_scan(base: &Scan, partial: Scan) -> (Scan, Vec<f32>) {
     if base.coverage_pattern_number() != partial.coverage_pattern_number() {
         let changed = elevation_angles(&partial);
         return (partial, changed);
@@ -241,7 +237,7 @@ mod tests {
         let base = Scan::new(vcp(212), vec![sweep(1, 0.5, 100), sweep(2, 1.5, 100)]);
         // Partial re-sends tilt 1 unchanged and tilt 2 with new data.
         let partial = Scan::new(vcp(212), vec![sweep(1, 0.5, 100), sweep(2, 1.5, 150)]);
-        let (merged, changed) = merge_scan(base, partial);
+        let (merged, changed) = merge_scan(&base, partial);
         assert_eq!(merged.sweeps().len(), 2);
         // Only tilt 2 (~1.5deg) changed.
         assert_eq!(changed.len(), 1);
@@ -256,7 +252,7 @@ mod tests {
     fn merge_appends_new_tilt() {
         let base = Scan::new(vcp(212), vec![sweep(1, 0.5, 100)]);
         let partial = Scan::new(vcp(212), vec![sweep(3, 2.4, 120)]);
-        let (merged, changed) = merge_scan(base, partial);
+        let (merged, changed) = merge_scan(&base, partial);
         assert_eq!(merged.sweeps().len(), 2, "new tilt appended");
         assert_eq!(changed.len(), 1);
     }
@@ -265,7 +261,7 @@ mod tests {
     fn vcp_change_replaces_wholesale() {
         let base = Scan::new(vcp(212), vec![sweep(1, 0.5, 100), sweep(2, 1.5, 100)]);
         let partial = Scan::new(vcp(35), vec![sweep(1, 0.5, 100)]);
-        let (merged, _) = merge_scan(base, partial);
+        let (merged, _) = merge_scan(&base, partial);
         assert_eq!(merged.coverage_pattern_number(), vcp(35).pattern_number());
         assert_eq!(merged.sweeps().len(), 1, "wholesale replace");
     }
