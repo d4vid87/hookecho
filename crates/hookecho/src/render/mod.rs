@@ -11,7 +11,11 @@ use std::num::NonZeroUsize;
 /// GPU tile cache sizes. A raster tile is 256x256 RGBA (~256 KB with mips off), so 512 is ~134 MB
 /// on a desktop GPU and 128 keeps a phone near 34 MB. Vector tiles are geometry buffers, much
 /// smaller, but unbounded growth is unbounded growth.
-const RASTER_TILE_CACHE: usize = if cfg!(target_os = "android") { 128 } else { 512 };
+const RASTER_TILE_CACHE: usize = if cfg!(target_os = "android") {
+    128
+} else {
+    512
+};
 const VECTOR_TILE_CACHE: usize = if cfg!(target_os = "android") { 96 } else { 256 };
 use std::num::NonZeroU64;
 use wgpu::util::DeviceExt;

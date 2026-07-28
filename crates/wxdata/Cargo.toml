@@ -28,4 +28,7 @@ geojson = "1.0.0"
 # No `jpeg`: that feature pulls openjpeg-sys (a vendored C JPEG2000 codec) for a packing template
 # no NOAA product we read uses — MRMS and HRRR are PNG / simple / complex packing.
 gribberish = { version = "1.5.0", default-features = false, features = ["png"] }
+# Already in the tree under reqwest; used here to run the per-forecast-hour HRRR fetches with
+# bounded concurrency instead of one at a time.
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
 chrono-tz = "0.10"

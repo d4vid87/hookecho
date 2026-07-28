@@ -8,6 +8,7 @@
 use crate::alerts::USER_AGENT;
 use crate::mrms::MrmsField;
 use chrono::{DateTime, Datelike, Timelike, Utc};
+use futures_util::StreamExt;
 
 const BUCKET: &str = "https://noaa-hrrr-bdp-pds.s3.amazonaws.com";
 /// Regular-grid cell size (degrees) for the regrid. Slightly coarser than HRRR's ~3 km so the
@@ -71,6 +72,10 @@ pub async fn fetch_field(
     Err(last_err.unwrap_or_else(|| anyhow::anyhow!("no HRRR run found")))
 }
 
+/// How many HRRR field fetches run at once. NOMADS is a shared public service; six is brisk
+/// without being rude, and past that the regrid work dominates anyway.
+const HRRR_CONCURRENCY: usize = 6;
+
 /// Fetch several surface fields from ONE model cycle: walks back up to 6 runs and only returns
 /// when every `(var, level, min_valid)` spec resolves against the same run. Composite parameters
 /// (STP/SCP/EHI) must not mix ingredients from different cycles, and per-field [`fetch_field`]
@@ -81,6 +86,12 @@ pub async fn fetch_fields_one_run(
     specs: &[(&str, &str, f64)],
 ) -> anyhow::Result<(DateTime<Utc>, Vec<MrmsField>)> {
     let fh = fcst_hour.min(18);
+    // Owned up front: the concurrent stream below must not borrow `specs` across an await, or
+    // the whole future stops being `Send` and the app can't spawn it.
+    let owned_specs: Vec<(String, String, f64)> = specs
+        .iter()
+        .map(|(v, l, m)| (v.to_string(), l.to_string(), *m))
+        .collect();
     let now = Utc::now();
     let mut last_err = None;
     for back in 1..=6 {
@@ -91,10 +102,19 @@ pub async fn fetch_fields_one_run(
             .unwrap()
             .with_nanosecond(0)
             .unwrap();
+        let results: Vec<_> = futures_util::stream::iter(owned_specs.clone().into_iter().map(
+            |(var, level, mv): (String, String, f64)| {
+                let http = http.clone();
+                async move { fetch_run_field(&http, run, fh, &var, &level, mv).await }
+            },
+        ))
+        .buffered(HRRR_CONCURRENCY)
+        .collect()
+        .await;
         let mut fields = Vec::with_capacity(specs.len());
         let mut failed = None;
-        for (var, level, min_valid) in specs {
-            match fetch_run_field(http, run, fh, var, level, *min_valid).await {
+        for r in results {
+            match r {
                 Ok(f) => fields.push(f),
                 Err(e) => {
                     failed = Some(e);
@@ -135,10 +155,22 @@ pub async fn fetch_field_swath(
             .unwrap()
             .with_nanosecond(0)
             .unwrap();
+        // Up to 18 forecast hours, each its own ranged GRIB fetch. Sequentially that is 18
+        // round trips stacked end to end; six at a time cuts the wall clock to roughly a third.
+        // The fold is still ordered, and still all-or-nothing.
+        // Each future owns its inputs (a `reqwest::Client` clone is a refcount bump): borrowed
+        // ones make the combined future non-`Send`, which the app's tokio spawn requires.
+        let results: Vec<_> = futures_util::stream::iter((1..=through).map(|fh| {
+            let (http, var, level) = (http.clone(), var.to_string(), level.to_string());
+            async move { fetch_run_field(&http, run, fh, &var, &level, min_valid).await }
+        }))
+        .buffered(HRRR_CONCURRENCY)
+        .collect()
+        .await;
         let mut acc: Option<MrmsField> = None;
         let mut failed = None;
-        for fh in 1..=through {
-            match fetch_run_field(http, run, fh, var, level, min_valid).await {
+        for r in results {
+            match r {
                 Ok(f) => match acc.as_mut() {
                     None => acc = Some(f),
                     Some(a) => merge_max(a, &f),

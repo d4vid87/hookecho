@@ -841,7 +841,10 @@ const DISK_CACHE_BYTES: u64 = if cfg!(target_os = "android") {
 /// packs live under the same root and are deliberately not spared — they are re-downloadable, and
 /// a pack the user still cares about is a pack they have been looking at recently.
 fn sweep_tile_cache(root: &std::path::Path) {
-    fn walk(dir: &std::path::Path, out: &mut Vec<(std::time::SystemTime, u64, std::path::PathBuf)>) {
+    fn walk(
+        dir: &std::path::Path,
+        out: &mut Vec<(std::time::SystemTime, u64, std::path::PathBuf)>,
+    ) {
         let Ok(rd) = std::fs::read_dir(dir) else {
             return;
         };

@@ -163,18 +163,48 @@ pub async fn fetch_latest(http: &reqwest::Client, product: &str) -> anyhow::Resu
         .unwrap_or_else(|_| anyhow::bail!("grib decode panicked for {product}"))
 }
 
+/// Newest key seen per product, so refreshes can ask S3 only for what came after it.
+static LAST_SEEN: std::sync::Mutex<Option<std::collections::HashMap<String, String>>> =
+    std::sync::Mutex::new(None);
+
 /// Find the newest object key (list today's UTC folder, with a yesterday fallback).
+///
+/// MRMS writes a file every couple of minutes, so a day folder holds hundreds of keys and the
+/// first listing of a product is a few hundred kilobytes of XML — once every refresh, per layer.
+/// After that first call we remember the newest key and pass it as `start-after`, which is
+/// lexicographically ordered the same way the timestamps in the names are: the refresh listing
+/// then contains only the handful of files written since. An empty result means nothing new, and
+/// the remembered key is still the answer.
 async fn latest_key(http: &reqwest::Client, product: &str) -> anyhow::Result<String> {
+    let known = LAST_SEEN
+        .lock()
+        .ok()
+        .and_then(|g| g.as_ref().and_then(|m| m.get(product).cloned()));
     let today = chrono::Utc::now().date_naive();
     for day in [today, today.pred_opt().unwrap_or(today)] {
         let prefix = format!("{product}/{}/", day.format("%Y%m%d"));
-        let url = format!("{BUCKET}/?list-type=2&prefix={prefix}&max-keys=2000");
+        // `start-after` only helps within the folder the known key belongs to.
+        let after = match &known {
+            Some(k) if k.starts_with(&prefix) => format!("&start-after={k}"),
+            _ => String::new(),
+        };
+        let url = format!("{BUCKET}/?list-type=2&prefix={prefix}&max-keys=2000{after}");
         let Ok(resp) = http.get(&url).send().await else {
             continue;
         };
         let Ok(xml) = resp.text().await else { continue };
         if let Some(key) = last_key(&xml) {
+            if let Ok(mut g) = LAST_SEEN.lock() {
+                g.get_or_insert_with(Default::default)
+                    .insert(product.to_string(), key.clone());
+            }
             return Ok(key);
+        }
+        // Nothing newer than what we already have.
+        if !after.is_empty() {
+            if let Some(k) = known {
+                return Ok(k);
+            }
         }
     }
     anyhow::bail!("no MRMS objects found for today or yesterday")
