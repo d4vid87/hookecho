@@ -1522,6 +1522,18 @@ impl HookEchoApp {
         self.goto_view(site, lon, lat, zoom, time);
     }
 
+    /// Volume poll cadence, doubled on a metered link. A phone on mobile data pulls a multi-MB
+    /// volume every interval; halving that rate costs at most a couple of minutes of latency on
+    /// the live head, which the chunk stream covers anyway when it is running.
+    fn poll_interval_secs(&self) -> u64 {
+        let base = self.settings.poll_interval_secs;
+        if crate::platform::is_metered() {
+            base * 2
+        } else {
+            base
+        }
+    }
+
     /// Largest edge a national field grid may keep. Bounded by what the GPU will accept, and
     /// then hard-capped: at 8192 a single f32 grid is ~268 MB of RAM before it is ever indexed,
     /// which no phone should be asked to hold — and the Adreno 750 reports 16384, so the device
@@ -5208,7 +5220,7 @@ impl HookEchoApp {
                 let v = &self.views[idx];
                 let due = v
                     .last_poll
-                    .is_none_or(|t| t.elapsed().as_secs() >= self.settings.poll_interval_secs);
+                    .is_none_or(|t| t.elapsed().as_secs() >= self.poll_interval_secs());
                 let current_name = if looping {
                     v.timeline.frames.last().map(|id| id.name().to_string())
                 } else {
@@ -5618,12 +5630,19 @@ impl HookEchoApp {
         // Capped at +1, not +2: each level quadruples the tiles covering the same ground, so +2
         // asked a phone to fetch, decode, and hold 16× the imagery of a desktop for a screen that
         // is a few inches across. +1 is 4×, still sharper than the panel resolves.
+        // A metered link drops to +0: the deeper level is a sharpness nicety, and it costs four
+        // tile downloads for every one.
+        let bias_cap = if crate::platform::is_metered() {
+            0.0
+        } else {
+            1.0
+        };
         let raster_bias = ctx
             .pixels_per_point()
             .max(1.0)
             .log2()
             .round()
-            .clamp(0.0, 1.0) as f64;
+            .clamp(0.0, bias_cap) as f64;
         let visible = if is_raster {
             let vis = self.tiles.visible(&cam, vp, raster_bias);
             self.tiles.request_missing(&vis);
@@ -8135,10 +8154,15 @@ impl eframe::App for HookEchoApp {
         }
         // Periodic overlay refresh (~2 min), honoring live weather cadence. Skipped entirely
         // while backgrounded — see `platform::activity`.
+        let overlay_secs = if crate::platform::is_metered() {
+            240
+        } else {
+            120
+        };
         if crate::platform::activity::is_active()
             && self
                 .overlay_last_fetch
-                .is_none_or(|t| t.elapsed().as_secs() >= 120)
+                .is_none_or(|t| t.elapsed().as_secs() >= overlay_secs)
         {
             self.fetch_overlays(ctx);
         }

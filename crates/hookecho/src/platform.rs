@@ -75,6 +75,34 @@ pub fn speak(_text: &str) -> Result<(), String> {
     Err("not android".into())
 }
 
+/// Whether the active network bills by the byte (Android only; a desktop link is never metered
+/// for our purposes). Cached for a minute — the answer changes when the user walks out of Wi-Fi
+/// range, not between frames.
+pub fn is_metered() -> bool {
+    #[cfg(not(target_os = "android"))]
+    {
+        false
+    }
+    #[cfg(target_os = "android")]
+    {
+        use std::sync::Mutex;
+        use std::time::{Duration, Instant};
+        static CACHE: Mutex<Option<(Instant, bool)>> = Mutex::new(None);
+        let mut c = CACHE.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some((at, v)) = *c {
+            if at.elapsed() < Duration::from_secs(60) {
+                return v;
+            }
+        }
+        let v = android_net::metered().unwrap_or(false);
+        if c.map(|(_, prev)| prev) != Some(v) {
+            log::info!("network metered: {v}");
+        }
+        *c = Some((Instant::now(), v));
+        v
+    }
+}
+
 #[cfg(target_os = "android")]
 mod android {
     use std::sync::OnceLock;
@@ -202,6 +230,49 @@ mod android_ime {
             .l()?;
         let out: String = env.get_string(&JString::from(s))?.into();
         Ok((!out.is_empty()).then_some(out))
+    }
+}
+
+/// ConnectivityManager glue for [`is_metered`].
+#[cfg(target_os = "android")]
+mod android_net {
+    use jni::objects::JObject;
+    use jni::JNIEnv;
+
+    pub(super) fn metered() -> Option<bool> {
+        let app = super::android::app()?;
+        let vm = unsafe { jni::JavaVM::from_raw(app.vm_as_ptr() as *mut jni::sys::JavaVM) }.ok()?;
+        let mut env = vm.attach_current_thread().ok()?;
+        let activity = unsafe { JObject::from_raw(app.activity_as_ptr() as jni::sys::jobject) };
+        match read_metered(&mut env, &activity) {
+            Ok(v) => v,
+            Err(e) => {
+                log::warn!("metered check failed: {e:?}");
+                let _ = env.exception_clear();
+                None
+            }
+        }
+    }
+
+    /// `ConnectivityManager.isActiveNetworkMetered()` — one call, and it already accounts for the
+    /// user's "treat this Wi-Fi as metered" override, which capability flags alone do not.
+    fn read_metered(env: &mut JNIEnv, activity: &JObject) -> jni::errors::Result<Option<bool>> {
+        let service = env.new_string("connectivity")?;
+        let cm = env
+            .call_method(
+                activity,
+                "getSystemService",
+                "(Ljava/lang/String;)Ljava/lang/Object;",
+                &[(&service).into()],
+            )?
+            .l()?;
+        if cm.is_null() {
+            return Ok(None);
+        }
+        Ok(Some(
+            env.call_method(&cm, "isActiveNetworkMetered", "()Z", &[])?
+                .z()?,
+        ))
     }
 }
 

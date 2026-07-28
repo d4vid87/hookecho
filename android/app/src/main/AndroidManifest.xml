@@ -11,6 +11,10 @@
 
     <uses-permission android:name="android.permission.INTERNET" />
 
+    <!-- Read-only: whether the active link is metered, so mobile data gets a lighter refresh
+         cadence and fewer basemap tiles (see `platform::is_metered`). Not a runtime prompt. -->
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+
     <!-- Chase mode's follow-me: the device's own position, requested at runtime from the poll
          loop in platform.rs. Optional — tapping the map to set your position still works. -->
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
