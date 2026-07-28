@@ -35,7 +35,8 @@ repository = "https://github.com/d4vid87/hookecho"
 [workspace.dependencies]
 anyhow = "1"
 thiserror = "2"
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }
+# `process` + `io-util` are for the external-process plugin runner (crates/hookecho/src/plugins.rs).
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "process", "io-util"] }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
 flate2 = "1"
 serde = { version = "1", features = ["derive"] }

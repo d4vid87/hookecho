@@ -283,6 +283,15 @@ alerting: a foreground service watches your saved locations and notifies you
 with the app closed, tiered by watch / warning / emergency, tapping through to
 the storm.
 
+### Extending it
+
+Placefiles work as they do everywhere else — URLs, icon sheets, a layer manager with per-file
+opacity and paint order. Beyond that, anything that can print a placefile can be a plugin: the app
+runs your command on a cadence, hands it the current site, view box, product and **the instant on
+screen** (so it works during an archive replay too), and draws what comes back. No SDK, no build
+step, no language requirement — the shipped examples are a Python script and twenty lines of
+shell. See [docs/plugins.md](docs/plugins.md).
+
 ## Repository layout
 
 - `crates/hookecho` — the app: egui UI and wgpu render pipelines.

@@ -149,6 +149,10 @@ pub struct Settings {
     /// ntfy.sh topic for push notifications when a warning covers a saved location (empty = off).
     #[serde(default)]
     pub ntfy_topic: String,
+    /// External-process plugins that emit placefiles (desktop only). Off by default and empty:
+    /// each entry is a command the user chose to run.
+    #[serde(default)]
+    pub plugins: Vec<PluginConfig>,
     /// Android only: run a foreground service that watches `markers` for NWS alerts and posts a
     /// notification, so warnings arrive with the app closed. Opt-in — it costs a permanent
     /// notification and some battery. The Kotlin service reads `markers` and this flag straight
@@ -265,6 +269,25 @@ pub struct StartView {
     pub zoom: f64,
 }
 
+/// One external-process plugin: a command that prints a placefile on stdout.
+///
+/// `refresh_secs` is the app's cadence, not the placefile's own `RefreshSeconds` — a plugin that
+/// samples something live wants to be asked again on a schedule the user controls.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct PluginConfig {
+    pub name: String,
+    pub command: String,
+    #[serde(default)]
+    pub args: Vec<String>,
+    #[serde(default = "default_plugin_refresh")]
+    pub refresh_secs: u32,
+    pub enabled: bool,
+}
+
+fn default_plugin_refresh() -> u32 {
+    60
+}
+
 /// A configured placefile overlay (URL + on/off + opacity), persisted across sessions.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PlacefileConfig {
@@ -369,6 +392,7 @@ impl Default for Settings {
             alert_sound: true,
             ntfy_topic: String::new(),
             background_alerts: false,
+            plugins: Vec::new(),
             close_to_tray: false,
             bookmarks: Vec::new(),
             anthropic_key: String::new(),
@@ -537,6 +561,7 @@ mod tests {
             alert_sound: false,
             ntfy_topic: "hookecho-test".to_string(),
             background_alerts: false,
+            plugins: Vec::new(),
             close_to_tray: true,
             bookmarks: vec![Bookmark {
                 name: "Storm".to_string(),

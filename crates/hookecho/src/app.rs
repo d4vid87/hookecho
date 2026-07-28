@@ -127,6 +127,8 @@ enum OverlayMsg {
     Metar(Vec<wxdata::metar::SurfaceOb>),
     /// FAA camera sites for the requested bbox.
     Webcams(Vec<wxdata::webcams::CamSite>),
+    /// A plugin or placefile that failed to load, with why (shown in the manager window).
+    PlacefileError(String, String),
     /// A finished multi-radar reflectivity composite: the grid, its contributing sites, and the
     /// oldest contributing scan time.
     Mosaic(
@@ -187,6 +189,9 @@ enum OverlaySource {
     Aviation,
     /// Surface observations within a lat/lon bbox `(lat0, lon0, lat1, lon1)` (feature U).
     Metar(f64, f64, f64, f64),
+    /// Run an external-process plugin: `(key, command, args, context)`. The key is the synthetic
+    /// `plugin:<name>` id it shares with the placefile pipeline it feeds.
+    Plugin(String, String, Vec<String>, crate::plugins::Context),
     /// FAA camera sites within a lon/lat bbox `(min_lon, min_lat, max_lon, max_lat)`.
     Webcams(f64, f64, f64, f64),
     /// Multi-radar mosaic over a named set of sites (chosen from the view before spawning, so the
@@ -219,6 +224,14 @@ impl OverlaySource {
             OverlaySource::Placefile(url) => {
                 let pf = wxdata::placefile::fetch(http, &url).await?;
                 OverlayMsg::Placefile(url, pf)
+            }
+            OverlaySource::Plugin(key, command, args, pctx) => {
+                // A plugin failure is the user's own command misbehaving, so it has to reach the
+                // manager window rather than only the log — hence a message either way.
+                match crate::plugins::run(&command, &args, &pctx).await {
+                    Ok(pf) => OverlayMsg::Placefile(key, pf),
+                    Err(e) => OverlayMsg::PlacefileError(key, e.to_string()),
+                }
             }
             OverlaySource::Field(layer, product) => {
                 OverlayMsg::Field(layer, wxdata::mrms::fetch_latest(http, &product).await?)
@@ -717,11 +730,14 @@ struct LoopExport {
 
 /// A placefile the app has fetched and is tracking (mirrors a `PlacefileConfig` by URL).
 struct LoadedPlacefile {
+    /// A URL, or the synthetic `plugin:<name>` key for a plugin-produced overlay.
     url: String,
     enabled: bool,
     pf: wxdata::placefile::Placefile,
     last_fetch: Option<Instant>,
     loaded: bool,
+    /// Why the last load failed, if it did.
+    error: Option<String>,
 }
 
 /// A background fetch result routed back to a specific view.
@@ -1738,11 +1754,42 @@ impl HookEchoApp {
     /// Reconcile loaded placefiles with `settings.placefiles`: fetch new/enabled URLs, drop
     /// removed ones, mirror the enabled flag, and refetch on each file's `RefreshSeconds`.
     fn sync_placefiles(&mut self, ctx: &egui::Context) {
+        // Plugins ride the same pipeline as placefiles — they produce the same format — keyed by
+        // a synthetic `plugin:<name>` instead of a URL.
+        let plugin_keys: Vec<(String, bool)> = self
+            .settings
+            .plugins
+            .iter()
+            .map(|p| (format!("plugin:{}", p.name), p.enabled))
+            .collect();
         // Drop entries no longer configured.
         let before = self.placefiles.len();
-        self.placefiles
-            .retain(|lp| self.settings.placefiles.iter().any(|c| c.url == lp.url));
+        self.placefiles.retain(|lp| {
+            self.settings.placefiles.iter().any(|c| c.url == lp.url)
+                || plugin_keys.iter().any(|(k, _)| *k == lp.url)
+        });
         let mut changed = self.placefiles.len() != before;
+        for (key, enabled) in &plugin_keys {
+            match self.placefiles.iter_mut().find(|lp| lp.url == *key) {
+                Some(lp) => {
+                    if lp.enabled != *enabled {
+                        lp.enabled = *enabled;
+                        changed = true;
+                    }
+                }
+                None => {
+                    changed = true;
+                    self.placefiles.push(LoadedPlacefile {
+                        url: key.clone(),
+                        enabled: *enabled,
+                        pf: Default::default(),
+                        last_fetch: None,
+                        loaded: false,
+                        error: None,
+                    });
+                }
+            }
+        }
         for cfg in &self.settings.placefiles {
             match self.placefiles.iter_mut().find(|lp| lp.url == cfg.url) {
                 Some(lp) => {
@@ -1759,6 +1806,7 @@ impl HookEchoApp {
                         pf: Default::default(),
                         last_fetch: None,
                         loaded: false,
+                        error: None,
                     });
                 }
             }
@@ -1769,9 +1817,19 @@ impl HookEchoApp {
             if !lp.enabled {
                 continue;
             }
-            let stale = match lp.last_fetch {
-                None => true,
-                Some(t) => {
+            // A plugin's cadence is the user's setting, not the placefile's own RefreshSeconds:
+            // a plugin sampling something live should be asked again on a schedule they control.
+            let plugin_secs = self
+                .settings
+                .plugins
+                .iter()
+                .find(|p| lp.url == format!("plugin:{}", p.name))
+                .map(|p| p.refresh_secs);
+            let stale = match (lp.last_fetch, plugin_secs) {
+                (None, _) => true,
+                // A failed plugin retries on its cadence rather than every frame.
+                (Some(t), Some(secs)) => t.elapsed().as_secs() >= secs.max(5) as u64,
+                (Some(t), None) => {
                     lp.loaded
                         && lp.pf.refresh_secs > 0
                         && t.elapsed().as_secs() >= lp.pf.refresh_secs.max(15) as u64
@@ -1785,10 +1843,41 @@ impl HookEchoApp {
             if let Some(lp) = self.placefiles.iter_mut().find(|lp| lp.url == url) {
                 lp.last_fetch = Some(Instant::now());
             }
-            self.spawn_overlay(ctx, OverlaySource::Placefile(url));
+            let source = match self
+                .settings
+                .plugins
+                .iter()
+                .find(|p| url == format!("plugin:{}", p.name))
+            {
+                Some(p) => OverlaySource::Plugin(
+                    url.clone(),
+                    p.command.clone(),
+                    p.args.clone(),
+                    self.plugin_context(),
+                ),
+                None => OverlaySource::Placefile(url),
+            };
+            self.spawn_overlay(ctx, source);
         }
         if changed {
             self.overlay_gen = self.overlay_gen.wrapping_add(1);
+        }
+    }
+
+    /// What the active pane is showing, for a plugin to answer about. Archive-aware: scrubbing
+    /// back gives the plugin the historic instant, not now.
+    fn plugin_context(&self) -> crate::plugins::Context {
+        let v = &self.views[self.active];
+        let (min_lon, min_lat, max_lon, max_lat) = self.view_bounds();
+        crate::plugins::Context {
+            site: v.site.clone().unwrap_or_default(),
+            bbox: (min_lon, min_lat, max_lon, max_lat),
+            time: v
+                .timeline
+                .current()
+                .and_then(|id| id.date_time())
+                .unwrap_or_else(chrono::Utc::now),
+            product: v.moment.short_name().to_string(),
         }
     }
 
@@ -4689,6 +4778,15 @@ impl HookEchoApp {
                     if let Some(lp) = self.placefiles.iter_mut().find(|lp| lp.url == url) {
                         lp.pf = pf;
                         lp.loaded = true;
+                        lp.error = None;
+                        lp.last_fetch = Some(Instant::now());
+                        self.overlay_gen = self.overlay_gen.wrapping_add(1);
+                    }
+                }
+                OverlayMsg::PlacefileError(url, err) => {
+                    log::warn!("{url}: {err}");
+                    if let Some(lp) = self.placefiles.iter_mut().find(|lp| lp.url == url) {
+                        lp.error = Some(err);
                         lp.last_fetch = Some(Instant::now());
                     }
                 }
@@ -5316,12 +5414,25 @@ impl HookEchoApp {
         let range = self.view_range_nmi();
         let now = Utc::now();
         let mut out = Vec::new();
-        for cfg in &self.settings.placefiles {
+        // Configured placefiles in Layer-Manager order, then plugin output on top of them: a
+        // plugin is something the user wrote for this session, so it should not be buried.
+        let sources = self
+            .settings
+            .placefiles
+            .iter()
+            .map(|c| (c.url.clone(), c.opacity))
+            .chain(
+                self.settings
+                    .plugins
+                    .iter()
+                    .map(|p| (format!("plugin:{}", p.name), 1.0)),
+            );
+        for (url, opacity) in sources {
             let Some((li, lp)) = self
                 .placefiles
                 .iter()
                 .enumerate()
-                .find(|(_, lp)| lp.url == cfg.url)
+                .find(|(_, lp)| lp.url == url)
             else {
                 continue;
             };
@@ -5337,7 +5448,7 @@ impl HookEchoApp {
                         continue;
                     }
                 }
-                out.push((it, cfg.opacity, li));
+                out.push((it, opacity, li));
             }
         }
         out
@@ -9458,6 +9569,7 @@ impl eframe::App for HookEchoApp {
                 loaded: lp.loaded,
                 items: lp.pf.items.len(),
                 title: lp.pf.title.clone(),
+                error: lp.error.clone(),
             })
             .collect();
         self.placefile_window
