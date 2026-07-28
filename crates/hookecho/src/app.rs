@@ -125,6 +125,8 @@ enum OverlayMsg {
     ArchiveWarnings(i64, Vec<GeoFeature>),
     /// Surface observations (METAR station plots) for the requested bbox (feature U).
     Metar(Vec<wxdata::metar::SurfaceOb>),
+    /// FAA camera sites for the requested bbox.
+    Webcams(Vec<wxdata::webcams::CamSite>),
     /// River flood gauges (NWPS) for the requested bbox.
     Gauges(Vec<wxdata::river::Gauge>),
     /// HRRR model contour polylines for a kind, plus the forecast valid time.
@@ -178,6 +180,8 @@ enum OverlaySource {
     Aviation,
     /// Surface observations within a lat/lon bbox `(lat0, lon0, lat1, lon1)` (feature U).
     Metar(f64, f64, f64, f64),
+    /// FAA camera sites within a lon/lat bbox `(min_lon, min_lat, max_lon, max_lat)`.
+    Webcams(f64, f64, f64, f64),
     /// River flood gauges within a lat/lon bbox `(lat0, lon0, lat1, lon1)`.
     Gauges(f64, f64, f64, f64),
     /// HRRR model contours for a field kind (fetched at surface f00, contoured off-thread).
@@ -315,6 +319,9 @@ impl OverlaySource {
             OverlaySource::Metar(lat0, lon0, lat1, lon1) => {
                 OverlayMsg::Metar(wxdata::metar::fetch_bbox(http, lat0, lon0, lat1, lon1).await?)
             }
+            OverlaySource::Webcams(min_lon, min_lat, max_lon, max_lat) => OverlayMsg::Webcams(
+                wxdata::webcams::fetch_bbox(http, min_lon, min_lat, max_lon, max_lat).await?,
+            ),
             OverlaySource::Gauges(lat0, lon0, lat1, lon1) => {
                 OverlayMsg::Gauges(wxdata::river::fetch_bbox(http, lat0, lon0, lat1, lon1).await?)
             }
@@ -543,6 +550,7 @@ pub(crate) enum OverlayToggle {
     Spotters,
     RadarSites,
     Metar,
+    Webcams,
     Gauges,
     Tropical,
     ProbSevere,
@@ -1122,6 +1130,11 @@ pub struct HookEchoApp {
     mobile_chrome_hidden: bool,
     /// Spotter Network positions + toggle + refresh clock (filtered to active site at draw).
     show_spotters: bool,
+    /// FAA WeatherCams: the toggle, the sites in view, and the bbox//time they were fetched for.
+    show_webcams: bool,
+    webcams: Vec<wxdata::webcams::CamSite>,
+    webcam_bounds: Option<(f64, f64, f64, f64)>,
+    webcam_last_fetch: Option<Instant>,
     spotters: Vec<wxdata::spotters::Spotter>,
     spotters_last_fetch: Option<Instant>,
     /// Sensor dashboard: open flag, latest fetch (Ok/Err), the site it's for, and a refresh clock.
@@ -1494,6 +1507,10 @@ impl HookEchoApp {
             mobile_sheet: mobile::MobileSheet::None,
             mobile_chrome_hidden: false,
             show_spotters: false,
+            show_webcams: false,
+            webcams: Vec::new(),
+            webcam_bounds: None,
+            webcam_last_fetch: None,
             spotters: Vec::new(),
             spotters_last_fetch: None,
             show_sensors: false,
@@ -3718,6 +3735,7 @@ impl HookEchoApp {
             T::Spotters => &mut self.show_spotters,
             T::RadarSites => &mut self.show_radar_sites,
             T::Metar => &mut self.show_metar,
+            T::Webcams => &mut self.show_webcams,
             T::Gauges => &mut self.show_gauges,
             T::Tropical => &mut self.show_tropical,
             T::ProbSevere => &mut self.show_probsevere,
@@ -4039,6 +4057,13 @@ impl HookEchoApp {
                 "Surface obs (METAR)",
                 "Temperature, dewpoint and wind at airports",
                 true,
+            ),
+            (
+                T::Webcams,
+                "Obs",
+                "Airport webcams (FAA)",
+                "Look at the sky through an airport's camera",
+                false,
             ),
             (
                 T::Spotters,
@@ -4556,6 +4581,7 @@ impl HookEchoApp {
                     }
                 }
                 OverlayMsg::Metar(obs) => self.metars = obs,
+                OverlayMsg::Webcams(sites) => self.webcams = sites,
                 OverlayMsg::Gauges(g) => self.gauges = g,
                 OverlayMsg::Contours(kind, lines, valid) => {
                     // Keep only if the selection didn't change while the fetch was in flight.
@@ -4725,6 +4751,90 @@ impl HookEchoApp {
             self.metar_bounds = Some((lat0, lon0, lat1, lon1));
             self.spawn_overlay(ctx, OverlaySource::Metar(lat0, lon0, lat1, lon1));
         }
+    }
+
+    /// Keep the FAA camera sites in view loaded. Same shape as [`Self::sync_metar`] but far
+    /// lazier: the camera network doesn't move, so this only refetches when the view drifts out
+    /// of the last box (or every 10 min, to pick up sites going in and out of maintenance).
+    fn sync_webcams(&mut self, ctx: &egui::Context) {
+        if !self.show_webcams {
+            return;
+        }
+        let (min_lon, min_lat, max_lon, max_lat) = self.view_bounds();
+        if (max_lon - min_lon) > 20.0 {
+            return; // zoomed out past the point where individual cameras mean anything
+        }
+        let (clon, clat) = ((min_lon + max_lon) * 0.5, (min_lat + max_lat) * 0.5);
+        let stale = self
+            .webcam_last_fetch
+            .is_none_or(|t| t.elapsed().as_secs() >= 600);
+        let drifted = self.webcam_bounds.is_none_or(|(lo0, la0, lo1, la1)| {
+            let (mlon, mlat) = ((lo0 + lo1) * 0.5, (la0 + la1) * 0.5);
+            let (hw, hh) = ((lo1 - lo0) * 0.25, (la1 - la0) * 0.25);
+            (clon - mlon).abs() > hw || (clat - mlat).abs() > hh
+        });
+        if stale || drifted {
+            let pad_lon = ((max_lon - min_lon) * 0.25).min(10.0);
+            let pad_lat = ((max_lat - min_lat) * 0.25).min(10.0);
+            let b = (
+                min_lon - pad_lon,
+                min_lat - pad_lat,
+                max_lon + pad_lon,
+                max_lat + pad_lat,
+            );
+            self.webcam_last_fetch = Some(Instant::now());
+            self.webcam_bounds = Some(b);
+            self.spawn_overlay(ctx, OverlaySource::Webcams(b.0, b.1, b.2, b.3));
+        }
+    }
+
+    /// Open a camera site's detail popup and start pulling its newest frame.
+    ///
+    /// The image rides the placefile-icon texture cache: same fetch, same decode, same upload, and
+    /// the key is known before the fetch resolves, so the window can show a placeholder and swap
+    /// the picture in when it lands.
+    fn open_webcam(&mut self, site: &wxdata::webcams::CamSite, ctx: &egui::Context) {
+        let mut body = String::new();
+        if !site.icao.is_empty() {
+            body.push_str(&format!("{} ({})\n", site.icao, site.ident));
+        }
+        for c in &site.cameras {
+            let state = if c.out_of_order { "  (out of order)" } else { "" };
+            body.push_str(&format!("{}  {}{}\n", c.name, c.direction, state));
+        }
+        body.push_str("\nFAA WeatherCams");
+        // The first working camera is the one we show; the rest are listed above.
+        let cam = site.cameras.iter().find(|c| !c.out_of_order);
+        let key = cam.map(|c| format!("cam:{}", c.id));
+        self.detail = Some(Detail {
+            title: format!("{} webcam", site.name),
+            body,
+            color: [110, 180, 240, 255],
+            image: key.clone(),
+        });
+        let (Some(key), Some(cam_id)) = (key, cam.map(|c| c.id)) else {
+            return;
+        };
+        if self.pf_icon_tex.contains_key(&key) {
+            return; // already loaded, or a fetch is already in flight
+        }
+        self.pf_icon_tex.insert(key.clone(), None);
+        let http = self.http.clone();
+        let tx = self.pf_icon_tx.clone();
+        let ctx2 = ctx.clone();
+        self._rt.spawn(async move {
+            match wxdata::webcams::latest_image(&http, cam_id).await {
+                Ok(Some(url)) => match fetch_icon_sheet(&http, &url).await {
+                    Ok(image) => {
+                        let _ = tx.send((key, image));
+                        ctx2.request_repaint();
+                    }
+                    Err(e) => log::warn!("webcam image {url} failed: {e}"),
+                },
+                Ok(None) => log::info!("camera {cam_id} has no recent image"),
+                Err(e) => log::warn!("webcam {cam_id} lookup failed: {e}"),
+            }
+        });
     }
 
     /// Drive the river-gauge fetch (NWPS), mirroring [`Self::sync_metar`] but with a slower cadence
@@ -5847,6 +5957,25 @@ impl HookEchoApp {
                     && self.tool == MapTool::Interrogate
                     && self.show_radar_sites
                     && self.try_pick_site(idx, pos, cam, prect, vp);
+                // A camera site under an interrogate click wins over everything below it: the
+                // markers are sparse, so a tap on one is never ambiguous.
+                let cam_site = (marker_hit.is_none()
+                    && !picked_site
+                    && self.tool == MapTool::Interrogate
+                    && self.show_webcams)
+                    .then(|| {
+                        self.webcams
+                            .iter()
+                            .find(|s| {
+                                let w = crate::render::mercator::lonlat_to_world(s.lon, s.lat);
+                                let (sx, sy) = cam.world_to_screen(w, vp);
+                                let (dx, dy) =
+                                    (prect.left() + sx - pos.x, prect.top() + sy - pos.y);
+                                dx * dx + dy * dy <= tap_r2(12.0)
+                            })
+                            .cloned()
+                    })
+                    .flatten();
                 match self.tool {
                     // Also catches the drop tool: a second marker within a finger's width of an
                     // existing one is never what someone meant, and this makes a stray drop undoable.
@@ -5856,6 +5985,12 @@ impl HookEchoApp {
                         self.detail = None;
                     }
                     _ if picked_site => {}
+                    _ if cam_site.is_some() => {
+                        self.cell_popup = None;
+                        self.warning_popup = None;
+                        let site = cam_site.expect("checked Some");
+                        self.open_webcam(&site, ctx);
+                    }
                     MapTool::Measure => {
                         if self.measure.len() >= 2 {
                             self.measure.clear();
@@ -5914,6 +6049,7 @@ impl HookEchoApp {
                                     r.location, r.state, r.county, r.time, r.comments
                                 ),
                                 color: report_color(r.kind),
+                                image: None,
                             });
                         } else {
                             let cell_hit = self.filters.show_cells
@@ -5945,6 +6081,7 @@ impl HookEchoApp {
                                         title: c.title.clone(),
                                         body: c.summary(),
                                         color: cell_color(c.kind),
+                                        image: None,
                                     });
                                 }
                                 None => {
@@ -5976,6 +6113,7 @@ impl HookEchoApp {
                                             title: f.title.clone(),
                                             body: f.detail.clone(),
                                             color: f.stroke,
+                                            image: None,
                                         });
                                     }
                                 }
@@ -6628,6 +6766,36 @@ impl HookEchoApp {
         }
 
         // Spotter Network positions, filtered to within Level-II range of this pane's site.
+        // FAA camera sites: a small camera-blue dot per airport, named once you're close enough
+        // to tell them apart. Clicking one opens its newest frame (see `open_webcam`).
+        if self.show_webcams {
+            let show_labels = cam.zoom >= 8.0;
+            let col = egui::Color32::from_rgb(110, 180, 240);
+            for site in &self.webcams {
+                let w = crate::render::mercator::lonlat_to_world(site.lon, site.lat);
+                let (sx, sy) = cam.world_to_screen(w, vp);
+                let p = egui::pos2(prect.left() + sx, prect.top() + sy);
+                if !prect.contains(p) {
+                    continue;
+                }
+                painter.circle_filled(p, 4.0, col);
+                painter.circle_stroke(
+                    p,
+                    4.0,
+                    egui::Stroke::new(1.0, egui::Color32::from_black_alpha(170)),
+                );
+                if show_labels {
+                    painter.text(
+                        p + egui::vec2(6.0, -5.0),
+                        egui::Align2::LEFT_BOTTOM,
+                        &site.name,
+                        egui::FontId::proportional(10.0),
+                        col,
+                    );
+                }
+            }
+        }
+
         if self.show_spotters {
             if let Some(site_pos) = self.views[idx]
                 .site
@@ -8583,6 +8751,7 @@ impl eframe::App for HookEchoApp {
         self.sync_archive_lsr(ctx);
         // Surface obs (METAR station plots).
         self.sync_metar(ctx);
+        self.sync_webcams(ctx);
         // River flood gauges (NWPS).
         self.sync_gauges(ctx);
         // HRRR model contours.
@@ -9163,7 +9332,12 @@ impl eframe::App for HookEchoApp {
         }
 
         if let Some(detail) = &self.detail {
-            if !ui::detail_window::show(ctx, detail) {
+            let tex = detail
+                .image
+                .as_ref()
+                .and_then(|k| self.pf_icon_tex.get(k))
+                .and_then(|t| t.as_ref());
+            if !ui::detail_window::show(ctx, detail, tex) {
                 self.detail = None;
             }
         }

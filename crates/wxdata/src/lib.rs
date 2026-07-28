@@ -32,6 +32,7 @@ pub mod torclimo;
 pub mod tropical;
 pub mod tz;
 pub mod volume3d;
+pub mod webcams;
 pub mod xsection;
 
 /// NEXRAD site registry (id, city, state, lat/lon, elevation) for the ~319 US sites.
