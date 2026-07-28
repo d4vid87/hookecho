@@ -4,7 +4,15 @@
 pub mod field_ramps;
 pub mod mercator;
 
+use lru::LruCache;
 use std::collections::HashMap;
+use std::num::NonZeroUsize;
+
+/// GPU tile cache sizes. A raster tile is 256x256 RGBA (~256 KB with mips off), so 512 is ~134 MB
+/// on a desktop GPU and 128 keeps a phone near 34 MB. Vector tiles are geometry buffers, much
+/// smaller, but unbounded growth is unbounded growth.
+const RASTER_TILE_CACHE: usize = if cfg!(target_os = "android") { 128 } else { 512 };
+const VECTOR_TILE_CACHE: usize = if cfg!(target_os = "android") { 96 } else { 256 };
 use std::num::NonZeroU64;
 use wgpu::util::DeviceExt;
 
@@ -251,8 +259,12 @@ pub struct RenderResources {
     sampler: wgpu::Sampler,
     // Shared across panes: tile image cache, vector tile geometry, and the world-space overlay
     // (severe weather + placefiles) — the overlay is camera-independent, drawn per-pane camera.
-    tiles: HashMap<TileId, TileGpu>,
-    vector_tiles: HashMap<TileId, OverlayGpu>,
+    //
+    // Both are LRUs, not plain maps: nothing ever evicted from them, so a long pan across the
+    // country grew GPU memory until the process died. Recency is bumped in `upload_frame`, where
+    // the visible list is known and `&mut self` is available; the draw pass then peeks.
+    tiles: LruCache<TileId, TileGpu>,
+    vector_tiles: LruCache<TileId, OverlayGpu>,
     overlay: Option<OverlayGpu>,
     fields: HashMap<FieldLayer, MrmsGpu>,
     field_draws: Vec<FieldLayer>,
@@ -494,8 +506,8 @@ impl RenderResources {
             tile_bgl,
             radar_bgl,
             sampler,
-            tiles: HashMap::new(),
-            vector_tiles: HashMap::new(),
+            tiles: LruCache::new(NonZeroUsize::new(RASTER_TILE_CACHE).unwrap()),
+            vector_tiles: LruCache::new(NonZeroUsize::new(VECTOR_TILE_CACHE).unwrap()),
             overlay: None,
             fields: HashMap::new(),
             field_draws: Vec::new(),
@@ -593,7 +605,7 @@ impl RenderResources {
                 },
             ],
         });
-        self.tiles.insert(
+        self.tiles.put(
             t.id,
             TileGpu {
                 _tex: tex,
@@ -719,6 +731,15 @@ impl RenderResources {
         if let Some(o) = &cb.overlay_upload {
             self.upload_overlay(device, o);
         }
+        // Touch everything this frame draws so the LRU evicts what is off screen, not what is in
+        // front of the user. Visible entries can't be evicted mid-frame: the caches only shrink
+        // here, before any drawing.
+        for v in &cb.visible {
+            self.tiles.promote(&v.id);
+        }
+        for id in &cb.visible_vector {
+            self.vector_tiles.promote(id);
+        }
         for (layer, up) in &cb.field_uploads {
             let gpu = self.build_field_layer(device, queue, up);
             self.fields.insert(*layer, gpu);
@@ -743,7 +764,7 @@ impl RenderResources {
             if tverts.len() as u64 + 6 > MAX_TILE_VERTS {
                 break;
             }
-            if !self.tiles.contains_key(&v.id) {
+            if !self.tiles.contains(&v.id) {
                 continue;
             }
             let [x0, y0] = v.world_min;
@@ -953,7 +974,7 @@ impl RenderResources {
 
     fn upload_vector_tile(&mut self, device: &wgpu::Device, t: &PendingVectorTile) {
         if t.indices.is_empty() {
-            self.vector_tiles.remove(&t.id);
+            self.vector_tiles.pop(&t.id);
             return;
         }
         let vbuf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -966,7 +987,7 @@ impl RenderResources {
             contents: bytemuck::cast_slice(&t.indices),
             usage: wgpu::BufferUsages::INDEX,
         });
-        self.vector_tiles.insert(
+        self.vector_tiles.put(
             t.id,
             OverlayGpu {
                 vbuf,
@@ -1005,7 +1026,7 @@ impl RenderResources {
             pass.set_pipeline(&self.overlay_pipeline);
             pass.set_bind_group(0, cam, &[]);
             for tid in &pane.frame_visible_vector {
-                if let Some(t) = self.vector_tiles.get(tid) {
+                if let Some(t) = self.vector_tiles.peek(tid) {
                     pass.set_vertex_buffer(0, t.vbuf.slice(..));
                     pass.set_index_buffer(t.ibuf.slice(..), wgpu::IndexFormat::Uint32);
                     pass.draw_indexed(0..t.index_count, 0, 0..1);
@@ -1016,7 +1037,7 @@ impl RenderResources {
         pass.set_bind_group(0, cam, &[]);
         pass.set_vertex_buffer(0, pane.tile_vbuf.slice(..));
         for (i, v) in pane.frame_visible.iter().enumerate() {
-            if let Some(tile) = self.tiles.get(&v.id) {
+            if let Some(tile) = self.tiles.peek(&v.id) {
                 pass.set_bind_group(1, &tile.bind_group, &[]);
                 let base = (i * 6) as u32;
                 pass.draw(base..base + 6, 0..1);

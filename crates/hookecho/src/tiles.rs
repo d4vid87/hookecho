@@ -586,6 +586,9 @@ impl TileManager {
             .build()
             .expect("build reqwest client");
         let cache_root = crate::paths::cache_dir().map(|d| d.join("tiles"));
+        if let Some(root) = cache_root.clone() {
+            std::thread::spawn(move || sweep_tile_cache(&root));
+        }
         Self {
             rt,
             client,
@@ -799,8 +802,7 @@ pub async fn fetch_visible(
 /// Read-through disk cache: return the cached PNG if present, else fetch and store it.
 ///
 /// A corrupt/partial cache file just fails to decode upstream and gets re-fetched next view,
-/// so no locking or temp-rename dance is needed. `// ponytail: unbounded cache (~10-30KB/tile);
-/// add a size cap when it ever matters.`
+/// so no locking or temp-rename dance is needed. Bounded by [`sweep_tile_cache`] at startup.
 pub(crate) async fn load_tile_bytes(
     client: &reqwest::Client,
     url: &str,
@@ -822,6 +824,58 @@ pub(crate) async fn load_tile_bytes(
         let _ = std::fs::write(p, &bytes);
     }
     Ok(bytes)
+}
+
+/// Largest the on-disk tile cache may get. It grows by ~20 KB a tile and nothing ever removed
+/// anything, so a few long sessions of panning could quietly fill a phone.
+const DISK_CACHE_BYTES: u64 = if cfg!(target_os = "android") {
+    150 * 1024 * 1024
+} else {
+    500 * 1024 * 1024
+};
+
+/// Trim the on-disk tile cache to [`DISK_CACHE_BYTES`], oldest-touched first.
+///
+/// Runs once at startup on its own thread: a cache sweep mid-session would race the fetch tasks
+/// writing into it, and a tile deleted out from under a read just gets re-fetched anyway. Chase
+/// packs live under the same root and are deliberately not spared — they are re-downloadable, and
+/// a pack the user still cares about is a pack they have been looking at recently.
+fn sweep_tile_cache(root: &std::path::Path) {
+    fn walk(dir: &std::path::Path, out: &mut Vec<(std::time::SystemTime, u64, std::path::PathBuf)>) {
+        let Ok(rd) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for e in rd.flatten() {
+            let Ok(md) = e.metadata() else { continue };
+            if md.is_dir() {
+                walk(&e.path(), out);
+            } else {
+                let t = md.modified().unwrap_or(std::time::UNIX_EPOCH);
+                out.push((t, md.len(), e.path()));
+            }
+        }
+    }
+    let mut files = Vec::new();
+    walk(root, &mut files);
+    let total: u64 = files.iter().map(|(_, n, _)| *n).sum();
+    if total <= DISK_CACHE_BYTES {
+        return;
+    }
+    files.sort_by_key(|(t, _, _)| *t); // oldest first
+    let mut freed = 0u64;
+    for (_, n, path) in files {
+        if total - freed <= DISK_CACHE_BYTES {
+            break;
+        }
+        if std::fs::remove_file(&path).is_ok() {
+            freed += n;
+        }
+    }
+    log::info!(
+        "tile cache: {:.0} MB over cap, freed {:.0} MB",
+        (total - DISK_CACHE_BYTES) as f64 / 1e6,
+        freed as f64 / 1e6
+    );
 }
 
 /// A chase-pack download job: the tile URL and the disk path to cache it at.
