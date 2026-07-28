@@ -398,6 +398,23 @@ pub fn dvl_value(level: u8, thr: &[i16; 16]) -> Option<f32> {
     }
 }
 
+/// Decode a Digital Base Reflectivity (N0B, product 153) data level to dBZ.
+///
+/// Unlike DVL, this product's thresholds are plain tenths — HW31 is the minimum value ×10 and
+/// HW32 the increment ×10 (a live TLX product reads `[-320, 5, 254, …]`, i.e. −32 dBZ in 0.5 dB
+/// steps). Levels 0 and 1 are below-threshold and range-folded.
+pub fn n0b_value(level: u8, thr: &[i16; 16]) -> Option<f32> {
+    if level < 2 {
+        return None;
+    }
+    let min = thr[0] as f32 / 10.0;
+    let inc = thr[1] as f32 / 10.0;
+    if inc == 0.0 {
+        return None;
+    }
+    Some(min + (level as f32 - 2.0) * inc)
+}
+
 /// Decode an Enhanced Echo Tops (product 135) data level to (kft, topped-flag), via the threshold
 /// table. Levels 0/1 are below-threshold / flagged → `None`.
 pub fn eet_value(level: u8, thr: &[i16; 16]) -> Option<(f32, bool)> {

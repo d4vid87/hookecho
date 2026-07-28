@@ -127,6 +127,13 @@ enum OverlayMsg {
     Metar(Vec<wxdata::metar::SurfaceOb>),
     /// FAA camera sites for the requested bbox.
     Webcams(Vec<wxdata::webcams::CamSite>),
+    /// A finished multi-radar reflectivity composite: the grid, its contributing sites, and the
+    /// oldest contributing scan time.
+    Mosaic(
+        wxdata::mrms::MrmsField,
+        Vec<String>,
+        chrono::DateTime<chrono::Utc>,
+    ),
     /// River flood gauges (NWPS) for the requested bbox.
     Gauges(Vec<wxdata::river::Gauge>),
     /// HRRR model contour polylines for a kind, plus the forecast valid time.
@@ -182,6 +189,9 @@ enum OverlaySource {
     Metar(f64, f64, f64, f64),
     /// FAA camera sites within a lon/lat bbox `(min_lon, min_lat, max_lon, max_lat)`.
     Webcams(f64, f64, f64, f64),
+    /// Multi-radar mosaic over a named set of sites (chosen from the view before spawning, so the
+    /// fetch task needs no camera state).
+    Mosaic(Vec<String>),
     /// River flood gauges within a lat/lon bbox `(lat0, lon0, lat1, lon1)`.
     Gauges(f64, f64, f64, f64),
     /// HRRR model contours for a field kind (fetched at surface f00, contoured off-thread).
@@ -322,6 +332,12 @@ impl OverlaySource {
             OverlaySource::Webcams(min_lon, min_lat, max_lon, max_lat) => OverlayMsg::Webcams(
                 wxdata::webcams::fetch_bbox(http, min_lon, min_lat, max_lon, max_lat).await?,
             ),
+            OverlaySource::Mosaic(sites) => {
+                let m = wxdata::mosaic::fetch(http, &sites)
+                    .await
+                    .ok_or_else(|| anyhow::anyhow!("no radar mosaic for {sites:?}"))?;
+                OverlayMsg::Mosaic(m.field, m.sites, m.oldest)
+            }
             OverlaySource::Gauges(lat0, lon0, lat1, lon1) => {
                 OverlayMsg::Gauges(wxdata::river::fetch_bbox(http, lat0, lon0, lat1, lon1).await?)
             }
@@ -651,7 +667,7 @@ fn field_refresh_secs(layer: crate::render::FieldLayer) -> u64 {
     use crate::render::FieldLayer as FL;
     match layer {
         FL::Lightning | FL::AzShear => 60,
-        FL::Mrms | FL::Mesh | FL::Rotation | FL::Hrrr => 120,
+        FL::Mrms | FL::Mesh | FL::Rotation | FL::Hrrr | FL::Mosaic => 120,
         // QPE accumulations update on a ~2-minute MRMS cadence.
         FL::Qpe1h | FL::Qpe24h => 120,
         // MRMS precip type / flash-flood ARI on the ~2-min cadence; L3 grids on the 120 s L3 cadence.
@@ -1137,6 +1153,11 @@ pub struct HookEchoApp {
     webcams: Vec<wxdata::webcams::CamSite>,
     webcam_bounds: Option<(f64, f64, f64, f64)>,
     webcam_last_fetch: Option<Instant>,
+    /// Multi-radar mosaic: which sites the last composite used, the oldest scan in it, the view it
+    /// was built for — panning off the composite refetches instead of leaving a stale picture.
+    mosaic_sites: Vec<String>,
+    mosaic_oldest: Option<chrono::DateTime<chrono::Utc>>,
+    mosaic_bounds: Option<(f64, f64, f64, f64)>,
     spotters: Vec<wxdata::spotters::Spotter>,
     spotters_last_fetch: Option<Instant>,
     /// Sensor dashboard: open flag, latest fetch (Ok/Err), the site it's for, and a refresh clock.
@@ -1514,6 +1535,9 @@ impl HookEchoApp {
             webcams: Vec::new(),
             webcam_bounds: None,
             webcam_last_fetch: None,
+            mosaic_sites: Vec::new(),
+            mosaic_oldest: None,
+            mosaic_bounds: None,
             spotters: Vec::new(),
             spotters_last_fetch: None,
             show_sensors: false,
@@ -3211,6 +3235,7 @@ impl HookEchoApp {
                         .show(ui, |ui| {
                             let l3_site = self.l3grid_site.clone();
                             let tz = self.active_tz();
+                            let mosaic = self.mosaic_status();
                             crate::ui::layer_options::show(
                                 ui,
                                 &mut self.filters,
@@ -3223,6 +3248,7 @@ impl HookEchoApp {
                                 &mut self.env_srh_km,
                                 &mut self.contour_kind,
                                 l3_site.as_deref(),
+                                Some(mosaic.as_str()),
                                 &mut opts,
                             );
                         });
@@ -3894,6 +3920,13 @@ impl HookEchoApp {
                 "National",
                 "MRMS Mosaic",
                 "Every radar in the country stitched into one picture",
+                true,
+            ),
+            (
+                FL::Mosaic,
+                "National",
+                "Radar Mosaic",
+                "Every nearby radar's own base reflectivity, stitched seamlessly",
                 true,
             ),
             (
@@ -4649,6 +4682,15 @@ impl HookEchoApp {
                 }
                 OverlayMsg::Metar(obs) => self.metars = obs,
                 OverlayMsg::Webcams(sites) => self.webcams = sites,
+                OverlayMsg::Mosaic(field, sites, oldest) => {
+                    self.mosaic_sites = sites;
+                    self.mosaic_oldest = Some(oldest);
+                    let layer = crate::render::FieldLayer::Mosaic;
+                    let upload = self.field_upload(layer, &field);
+                    if let Some(s) = self.fields.get_mut(&layer) {
+                        s.pending = Some(upload);
+                    }
+                }
                 OverlayMsg::Gauges(g) => self.gauges = g,
                 OverlayMsg::Contours(kind, lines, valid) => {
                     // Keep only if the selection didn't change while the fetch was in flight.
@@ -4823,6 +4865,74 @@ impl HookEchoApp {
     /// Keep the FAA camera sites in view loaded. Same shape as [`Self::sync_metar`] but far
     /// lazier: the camera network doesn't move, so this only refetches when the view drifts out
     /// of the last box (or every 10 min, to pick up sites going in and out of maintenance).
+    /// Keep the multi-radar composite current: refetch on the L3 cadence, and immediately when the
+    /// camera has moved far enough that the sites in view changed.
+    ///
+    /// Live only. An archive scrub would need per-site historic N0B for the same minute, which is a
+    /// different (and much slower) fetch; until that exists the toggle simply has nothing to show,
+    /// so it reports that rather than lying with a live composite over a historic scene.
+    /// One line describing the live composite for the drawer: which radars are in it and how stale
+    /// its oldest scan is.
+    fn mosaic_status(&self) -> String {
+        if !self.views[self.active].timeline.following {
+            return "Live only — the composite is hidden while you're scrubbing the archive."
+                .to_string();
+        }
+        if self.mosaic_sites.is_empty() {
+            return "building…".to_string();
+        }
+        let age = self
+            .mosaic_oldest
+            .map(|t| (chrono::Utc::now() - t).num_minutes().max(0))
+            .unwrap_or(0);
+        format!(
+            "{} — oldest scan {age} min old",
+            self.mosaic_sites.join(", ")
+        )
+    }
+
+    fn sync_mosaic(&mut self, ctx: &egui::Context) {
+        use crate::render::FieldLayer as FL;
+        if !self.fields.get(&FL::Mosaic).is_some_and(|s| s.show) {
+            return;
+        }
+        if !self.views[self.active].timeline.following {
+            return;
+        }
+        let (min_lon, min_lat, max_lon, max_lat) = self.view_bounds();
+        let cap = if cfg!(target_os = "android") { 4 } else { 6 };
+        // A metered link pays per site; halve the composite rather than drop it.
+        let cap = if crate::platform::is_metered() {
+            cap / 2
+        } else {
+            cap
+        };
+        let sites = wxdata::mosaic::sites_for_view(
+            self.views[self.active].site.as_deref(),
+            min_lon,
+            min_lat,
+            max_lon,
+            max_lat,
+            cap,
+        );
+        if sites.is_empty() {
+            return;
+        }
+        let stale = self.fields.get(&FL::Mosaic).is_some_and(|s| {
+            s.last_fetch
+                .is_none_or(|t| t.elapsed().as_secs() >= field_refresh_secs(FL::Mosaic))
+        });
+        let moved = self.mosaic_bounds != Some((min_lon, min_lat, max_lon, max_lat))
+            && sites != self.mosaic_sites;
+        if stale || moved {
+            if let Some(s) = self.fields.get_mut(&FL::Mosaic) {
+                s.last_fetch = Some(Instant::now());
+            }
+            self.mosaic_bounds = Some((min_lon, min_lat, max_lon, max_lat));
+            self.spawn_overlay(ctx, OverlaySource::Mosaic(sites));
+        }
+    }
+
     fn sync_webcams(&mut self, ctx: &egui::Context) {
         if !self.show_webcams {
             return;
@@ -8584,7 +8694,9 @@ impl HookEchoApp {
         use crate::render::FieldLayer as FL;
         match layer {
             // Mosaic + HRRR forecast are both dBZ → the reflectivity palette.
-            FL::Mrms | FL::Hrrr => mrms_upload(f, self.palettes.table(Moment::Reflectivity)),
+            FL::Mrms | FL::Mosaic | FL::Hrrr => {
+                mrms_upload(f, self.palettes.table(Moment::Reflectivity))
+            }
             other => field_upload_indexed(other, f),
         }
     }
@@ -8850,6 +8962,7 @@ impl eframe::App for HookEchoApp {
         // Surface obs (METAR station plots).
         self.sync_metar(ctx);
         self.sync_webcams(ctx);
+        self.sync_mosaic(ctx);
         // River flood gauges (NWPS).
         self.sync_gauges(ctx);
         // HRRR model contours.
@@ -8892,6 +9005,7 @@ impl eframe::App for HookEchoApp {
                     | FL::Hca
                     | FL::UpdraftHelicity
                     | FL::Smoke
+                    | FL::Mosaic
             ) {
                 continue;
             }
@@ -8922,7 +9036,8 @@ impl eframe::App for HookEchoApp {
                     | FL::EchoTops
                     | FL::Hca
                     | FL::UpdraftHelicity
-                    | FL::Smoke => unreachable!(),
+                    | FL::Smoke
+                    | FL::Mosaic => unreachable!(),
                 };
                 self.spawn_overlay(ctx, OverlaySource::Field(layer, product));
             }

@@ -354,6 +354,55 @@ pub fn run_cells(site: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Multi-radar mosaic verify: pick the radars covering a box around `site`, fetch each one's N0B,
+/// composite them, and print the grid plus what went into it. Proves the whole F2 path — site
+/// selection, L3 decode, nearest-radar compositing — against live data without a GPU.
+pub fn run_mosaic(site: &str) -> anyhow::Result<()> {
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?;
+    let s = wxdata::sites::site_by_id(site)
+        .ok_or_else(|| anyhow::anyhow!("unknown radar site {site}"))?;
+    let (lon, lat) = (s.longitude as f64, s.latitude as f64);
+    // ~2.5° box, which is roughly a regional view at zoom 7.
+    let sites = wxdata::mosaic::sites_for_view(
+        Some(site),
+        lon - 2.5,
+        lat - 2.5,
+        lon + 2.5,
+        lat + 2.5,
+        6,
+    );
+    println!("{site}: mosaic over {sites:?}");
+    let m = rt
+        .block_on(async {
+            let http = reqwest::Client::new();
+            wxdata::mosaic::fetch(&http, &sites).await
+        })
+        .ok_or_else(|| anyhow::anyhow!("no N0B came back for any of {sites:?}"))?;
+    let f = &m.field;
+    let data = f.values.iter().filter(|v| !v.is_nan()).count();
+    let max = f.values.iter().cloned().fold(f32::MIN, f32::max);
+    println!(
+        "  contributed: {}
+  grid {}x{}  lon {:.2}..{:.2}  lat {:.2}..{:.2}",
+        m.sites.join(", "),
+        f.nx,
+        f.ny,
+        f.lon_west,
+        f.lon_east,
+        f.lat_south,
+        f.lat_north
+    );
+    println!(
+        "  {data} cells with data ({:.1}%), max {max:.1} dBZ, oldest scan {}",
+        100.0 * data as f64 / (f.nx * f.ny) as f64,
+        m.oldest.format("%Y-%m-%d %H:%M:%SZ")
+    );
+    anyhow::ensure!(data > 0, "composite is entirely empty");
+    Ok(())
+}
+
 /// TDS verify: download the latest dual-pol volume, bin reflectivity + CC at the lowest tilt, run
 /// the debris-signature detector, and print any hits. Proves the detection pipeline on real data.
 pub fn run_tds(site: &str) -> anyhow::Result<()> {

@@ -55,6 +55,10 @@ pub(crate) fn show(
     env_srh_km: &mut u8,
     contour_kind: &mut crate::app::ContourKind,
     l3grid_site: Option<&str>,
+    // One line about the live composite: contributing sites and the age of its oldest scan, or
+    // why there isn't one. Radars scan on their own schedules, so a composite is always a little
+    // ragged in time and the honest thing is to show by how much.
+    mosaic: Option<&str>,
     actions: &mut UiActions,
 ) {
     use crate::render::FieldLayer as FL;
@@ -127,6 +131,13 @@ pub(crate) fn show(
                 }
             }
         });
+    }
+
+    if fields.get(&FL::Mosaic).is_some_and(|s| s.show) {
+        header(ui, "Radar mosaic");
+        if let Some(m) = mosaic {
+            ui.weak(m);
+        }
     }
 
     if fields.get(&FL::Hrrr).is_some_and(|s| s.show) {

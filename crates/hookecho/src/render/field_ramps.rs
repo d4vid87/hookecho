@@ -368,7 +368,7 @@ pub fn ramp_for(layer: FieldLayer) -> Option<&'static FieldRamp> {
         FL::UpdraftHelicity => &UPDRAFT_HELICITY,
         FL::Smoke => &SMOKE,
         FL::Hca => &HCA,
-        FL::Mrms | FL::Hrrr | FL::Lightning => return None,
+        FL::Mrms | FL::Mosaic | FL::Hrrr | FL::Lightning => return None,
     })
 }
 
@@ -378,7 +378,12 @@ mod tests {
 
     /// Layers colored outside this table. A new `FieldLayer` must join the table or this list —
     /// forgetting both silently ships a layer with no legend.
-    const NO_RAMP: [FieldLayer; 3] = [FieldLayer::Mrms, FieldLayer::Hrrr, FieldLayer::Lightning];
+    const NO_RAMP: [FieldLayer; 4] = [
+        FieldLayer::Mrms,
+        FieldLayer::Mosaic,
+        FieldLayer::Hrrr,
+        FieldLayer::Lightning,
+    ];
 
     #[test]
     fn every_layer_is_either_ramped_or_explicitly_exempt() {

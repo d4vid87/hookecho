@@ -35,6 +35,7 @@ L_STORMTABLE="Storm attributes…"
 L_FRONTS="Surface fronts (H/L)"
 L_GLM="Satellite lightning (GLM)"
 L_MRMS="MRMS Mosaic"
+L_MOSAIC="Radar Mosaic"
 L_HRRR="HRRR future radar"
 L_QPE="QPE 24-hour"
 
@@ -52,7 +53,7 @@ preflight() {
   log "building release"
   (cd "$REPO" && cargo build --release --quiet)
   for l in "$L_ALLTILTS" "$L_XSECTION" "$L_FORECAST" "$L_STORMTABLE" "$L_FRONTS" "$L_GLM" \
-           "$L_MRMS" "$L_QPE" "$L_HRRR"; do
+           "$L_MRMS" "$L_MOSAIC" "$L_QPE" "$L_HRRR"; do
     grep -qF "$l" "$REPO/crates/hookecho/src/app.rs" \
       || die "palette label '$l' is not in app.rs any more — update shoot.sh"
   done
@@ -257,6 +258,16 @@ scene_mrms() {
   snap mrms
 }
 
+scene_mosaic() {
+  # Regional, not continental: the point of this shot is that neighbouring radars join without a
+  # seam, which you can only see at a zoom where individual storms are still storms.
+  launch "${LIVE_SITE:-KTLX},${LIVE_LON:--97.3},${LIVE_LAT:-35.3},6.2"
+  wait_settle 16
+  palette "$L_MOSAIC"
+  wait_settle 20 160
+  snap mosaic
+}
+
 scene_qpe() {
   # Zoomed onto wherever the rain actually fell — a CONUS-wide rainfall map is mostly empty map.
   launch "${LIVE_SITE:-KTLX},${LIVE_LON:--97.3},${LIVE_LAT:-35.3},6.4"
@@ -332,7 +343,7 @@ check() {
 }
 
 ARCHIVE_SCENES=(reflectivity velocity alltilts xsection alerts products layers tropical)
-LIVE_SCENES=(stormtable forecast fronts hrrr mrms qpe glm)
+LIVE_SCENES=(stormtable forecast fronts hrrr mrms mosaic qpe glm)
 
 main() {
   mkdir -p "$WORK"

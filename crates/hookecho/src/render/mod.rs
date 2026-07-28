@@ -77,6 +77,8 @@ pub enum FieldLayer {
     UpdraftHelicity,
     /// HRRR near-surface smoke (mass density).
     Smoke,
+    /// Multi-radar base-reflectivity composite (L3 N0B from every radar covering the view).
+    Mosaic,
 }
 
 impl FieldLayer {
@@ -85,6 +87,7 @@ impl FieldLayer {
         matches!(
             self,
             FieldLayer::Mrms
+                | FieldLayer::Mosaic
                 | FieldLayer::Hrrr
                 | FieldLayer::Cape
                 | FieldLayer::Srh
@@ -94,9 +97,10 @@ impl FieldLayer {
     }
 
     /// Fixed bottom-to-top paint order within each band.
-    pub const DRAW_ORDER: [FieldLayer; 18] = [
+    pub const DRAW_ORDER: [FieldLayer; 19] = [
         // Below-radar context band (bottom to top).
         FieldLayer::Mrms,
+        FieldLayer::Mosaic,
         FieldLayer::Hrrr,
         FieldLayer::Cape,
         FieldLayer::Srh,

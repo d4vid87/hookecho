@@ -16,6 +16,7 @@ pub mod level3;
 pub mod live;
 pub mod lsr;
 pub mod metar;
+pub mod mosaic;
 pub mod mrms;
 pub mod obs;
 pub mod overlay;

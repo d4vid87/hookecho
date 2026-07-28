@@ -574,6 +574,20 @@ fn main() -> eframe::Result<()> {
         return Ok(());
     }
 
+    // Multi-radar mosaic verify: `hookecho --headless-mosaic [SITE]`.
+    if let Some(pos) = args.iter().position(|a| a == "--headless-mosaic") {
+        let site = args
+            .get(pos + 1)
+            .filter(|a| !a.starts_with("--"))
+            .map(String::as_str)
+            .unwrap_or("KTLX");
+        if let Err(e) = headless::run_mosaic(site) {
+            eprintln!("headless mosaic failed: {e}");
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
+
     // Sensor/obs verify: `hookecho --headless-obs [SITE]`.
     if let Some(pos) = args.iter().position(|a| a == "--headless-obs") {
         let site = args

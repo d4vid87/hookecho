@@ -186,7 +186,7 @@ pub async fn fetch_cells(http: &reqwest::Client, site: &str) -> Vec<Cell> {
     let mut storms: Vec<Cell> = Vec::new();
     let mut by_id: HashMap<String, usize> = HashMap::new();
 
-    if let Some(p) = fetch_latest(http, &s3, "NST").await {
+    if let Some((p, _)) = fetch_latest(http, &s3, "NST").await {
         let (lat0, lon0) = (p.lat as f64, p.lon as f64);
         let table = p.tabular.clone().unwrap_or_default();
         let graphic = p.graphic.clone().unwrap_or_default();
@@ -262,7 +262,7 @@ pub async fn fetch_cells(http: &reqwest::Client, site: &str) -> Vec<Cell> {
     }
 
     let mut meso = Vec::new();
-    if let Some(p) = fetch_latest(http, &s3, "NMD").await {
+    if let Some((p, _)) = fetch_latest(http, &s3, "NMD").await {
         let (lat0, lon0) = (p.lat as f64, p.lon as f64);
         for m in &p.meso {
             let (lon, lat) = offset_lonlat(lon0, lat0, m.x_km, m.y_km);
@@ -634,7 +634,14 @@ pub async fn fetch_vwp(http: &reqwest::Client, site: &str) -> Vec<VwpLevel> {
 // --- Fetch helpers ----------------------------------------------------------------------------
 
 /// List the latest object for `SITE_PRODUCT` today (with a yesterday fallback) and decode it.
-async fn fetch_latest(http: &reqwest::Client, site: &str, product: &str) -> Option<Level3Product> {
+/// The newest S3 object for `site`/`product`, decoded, with the scan time parsed out of the key
+/// (the decoded product carries no timestamp, and a mosaic has to be able to say how old each
+/// contributing scan is).
+async fn fetch_latest(
+    http: &reqwest::Client,
+    site: &str,
+    product: &str,
+) -> Option<(Level3Product, Option<chrono::DateTime<chrono::Utc>>)> {
     let today = chrono::Utc::now().date_naive();
     for day in [today, today.pred_opt().unwrap_or(today)] {
         let prefix = format!("{site}_{product}_{}", day.format("%Y_%m_%d"));
@@ -648,7 +655,7 @@ async fn fetch_latest(http: &reqwest::Client, site: &str, product: &str) -> Opti
             if let Ok(resp) = http.get(&obj_url).send().await {
                 if let Ok(bytes) = resp.bytes().await {
                     match decode(&bytes) {
-                        Ok(p) => return Some(p),
+                        Ok(p) => return Some((p, key_time(&key))),
                         Err(e) => log::warn!("level3 decode {key}: {e}"),
                     }
                 }
@@ -751,6 +758,28 @@ pub async fn fetch_eet(http: &reqwest::Client, site: &str) -> Option<crate::mrms
     })
 }
 
+/// Fetch the latest Digital Base Reflectivity (N0B, product 153) for `site` as a grid — the
+/// per-radar ingredient of the multi-radar mosaic. 0.25-km range bins, 460 km, ~260 KB on the wire.
+///
+/// S3 rather than the tgftp `sn.last` feed the other grids use: tgftp only carries a handful of
+/// products per site, and the mosaic needs whichever radars the view covers, not a curated set.
+pub async fn fetch_n0b(http: &reqwest::Client, site: &str) -> Option<crate::mrms::MrmsField> {
+    let (p, time) = fetch_latest(http, &l3_site(site), "N0B").await?;
+    let mut f = radial_to_field(&p, 0.25, nexrad_level3::n0b_value)?;
+    if let Some(t) = time {
+        f.time = t;
+    }
+    Some(f)
+}
+
+/// Scan time out of an S3 key like `TLX_N0B_2026_07_28_18_30_40`.
+fn key_time(key: &str) -> Option<chrono::DateTime<chrono::Utc>> {
+    let stamp = key.split('_').skip(2).take(6).collect::<Vec<_>>().join("_");
+    chrono::NaiveDateTime::parse_from_str(&stamp, "%Y_%m_%d_%H_%M_%S")
+        .ok()
+        .map(|t| t.and_utc())
+}
+
 /// Fetch the latest Hybrid Hydrometeor Classification (HHC, product 177) grid for `site`.
 /// Cell values are the raw HCA class codes (10 = biological … 150 = range-folded); the caller
 /// colors them with a categorical LUT. 0.25-km range bins per the ICD.
@@ -793,6 +822,13 @@ fn last_key(xml: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn key_time_parses_the_s3_naming() {
+        let t = key_time("TLX_N0B_2026_07_28_18_30_40").unwrap();
+        assert_eq!(t.to_rfc3339(), "2026-07-28T18:30:40+00:00");
+        assert!(key_time("TLX_N0B_garbage").is_none());
+    }
 
     #[test]
     fn site_id_strips_k() {

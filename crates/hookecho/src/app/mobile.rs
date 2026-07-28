@@ -735,6 +735,7 @@ impl super::HookEchoApp {
                             .show(ui, |ui| {
                                 let l3_site = self.l3grid_site.clone();
                                 let tz = self.active_tz();
+                                let mosaic = self.mosaic_status();
                                 crate::ui::layer_options::show(
                                     ui,
                                     &mut self.filters,
@@ -747,6 +748,7 @@ impl super::HookEchoApp {
                                     &mut self.env_srh_km,
                                     &mut self.contour_kind,
                                     l3_site.as_deref(),
+                                    Some(mosaic.as_str()),
                                     actions,
                                 );
                                 ui.separator();

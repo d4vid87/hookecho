@@ -166,6 +166,17 @@ happening here" — plus rainfall accumulated over the last hour or day.
 | ![MRMS composite reflectivity across the continental US](docs/shots/mrms.jpg) | ![Accumulated rainfall across the Southeast](docs/shots/qpe.jpg) |
 | <sub>MRMS composite reflectivity, live</sub> | <sub>MRMS gauge-corrected precipitation, live</sub> |
 
+There is also a **multi-radar mosaic** built the other way round: instead of a
+national 1 km product, every radar covering your view contributes its own base
+reflectivity at full resolution, composited nearest-radar-wins so neighbouring
+sites join without a seam. It shows which radars it used and how old the oldest
+scan in it is, because radars scan on their own schedules and a composite is
+never one instant.
+
+![Base reflectivity from six radars composited across the southern Plains](docs/shots/mosaic.jpg)
+
+<sub>Six radars, one picture — live N0B composite</sub>
+
 Alongside them: individual lightning flashes from the GOES satellite's lightning
 mapper (fading as they age), cloud-to-ground lightning density, rotation tracks
 and azimuthal shear, MESH hail size and 24-hour hail swaths, surface
