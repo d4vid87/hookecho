@@ -17,6 +17,10 @@
          cadence and fewer basemap tiles (see `platform::is_metered`). Not a runtime prompt. -->
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 
+    <!-- Position sharing listens for UDP broadcasts from other Hook Echo instances on the same
+         network; Android drops those packets unless the app holds a Wi-Fi multicast lock. -->
+    <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
+
     <!-- Chase mode's follow-me: the device's own position, requested at runtime from the poll
          loop in platform.rs. Optional — tapping the map to set your position still works. -->
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />

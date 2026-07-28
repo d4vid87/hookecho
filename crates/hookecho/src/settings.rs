@@ -143,6 +143,17 @@ pub struct Settings {
     /// Saved startup view (radar site + camera). `None` = open on `default_site`.
     #[serde(default)]
     pub start_view: Option<StartView>,
+    /// Share your GPS position with other Hook Echo instances (LAN broadcast, and the relay below
+    /// when one is set). Off by default: your live position is not shared without asking.
+    #[serde(default)]
+    pub share_position: bool,
+    /// The name other instances label your dot with. Empty = "me".
+    #[serde(default)]
+    pub share_name: String,
+    /// Optional HTTP endpoint that relays positions when the devices aren't on one network
+    /// (`POST` a peer, `GET` the list). Empty = LAN only. You host it; it sees your position.
+    #[serde(default)]
+    pub share_relay: String,
     /// Play an audible chime when a new NWS warning appears.
     #[serde(default = "default_true")]
     pub alert_sound: bool,
@@ -389,6 +400,9 @@ impl Default for Settings {
             mapbox_key: String::new(),
             maptiler_key: String::new(),
             start_view: None,
+            share_position: false,
+            share_name: String::new(),
+            share_relay: String::new(),
             alert_sound: true,
             ntfy_topic: String::new(),
             background_alerts: false,
@@ -538,6 +552,9 @@ mod tests {
             velocity_unit: VelocityUnit::Mph,
             time_display: TimeDisplay::Utc,
             ui_scale: 1.2,
+            share_position: true,
+            share_name: "chaser".to_string(),
+            share_relay: String::new(),
             placefiles: vec![PlacefileConfig {
                 url: "http://x/p.txt".to_string(),
                 enabled: true,

@@ -82,6 +82,22 @@ pub fn set_background_alerts(_enabled: bool) {
     android_alerts::set_enabled(_enabled);
 }
 
+/// Hold a Wi-Fi multicast lock for the process, so Android stops dropping the broadcast packets
+/// position sharing listens for (it filters them out to save power unless a lock is held). No-op
+/// elsewhere, and acquired once — the lock is released when the process dies.
+pub fn hold_multicast_lock() {
+    #[cfg(target_os = "android")]
+    {
+        use std::sync::Once;
+        static ONCE: Once = Once::new();
+        ONCE.call_once(|| {
+            if let Err(e) = android_net::multicast_lock() {
+                log::warn!("multicast lock failed, LAN position sharing may not receive: {e:?}");
+            }
+        });
+    }
+}
+
 /// Whether the active network bills by the byte (Android only; a desktop link is never metered
 /// for our purposes). Cached for a minute — the answer changes when the user walks out of Wi-Fi
 /// range, not between frames.
@@ -334,6 +350,51 @@ mod android_net {
                 .z()?,
         ))
     }
+
+    /// `WifiManager.createMulticastLock("hookecho").acquire()`. The lock object is deliberately
+    /// leaked into a global ref: releasing it would put the packet filter back, and it must
+    /// outlive this call for the whole process.
+    pub(super) fn multicast_lock() -> jni::errors::Result<()> {
+        let Some(app) = super::android::app() else {
+            return Ok(());
+        };
+        let vm = unsafe { jni::JavaVM::from_raw(app.vm_as_ptr() as *mut jni::sys::JavaVM) }?;
+        let mut env = vm.attach_current_thread()?;
+        let activity = unsafe { JObject::from_raw(app.activity_as_ptr() as jni::sys::jobject) };
+        let service = env.new_string("wifi")?;
+        let wm = env
+            .call_method(
+                &activity,
+                "getApplicationContext",
+                "()Landroid/content/Context;",
+                &[],
+            )?
+            .l()?;
+        let wm = env
+            .call_method(
+                &wm,
+                "getSystemService",
+                "(Ljava/lang/String;)Ljava/lang/Object;",
+                &[(&service).into()],
+            )?
+            .l()?;
+        if wm.is_null() {
+            return Ok(());
+        }
+        let tag = env.new_string("hookecho")?;
+        let lock = env
+            .call_method(
+                &wm,
+                "createMulticastLock",
+                "(Ljava/lang/String;)Landroid/net/wifi/WifiManager$MulticastLock;",
+                &[(&tag).into()],
+            )?
+            .l()?;
+        env.call_method(&lock, "setReferenceCounted", "(Z)V", &[false.into()])?;
+        env.call_method(&lock, "acquire", "()V", &[])?;
+        std::mem::forget(env.new_global_ref(&lock)?);
+        Ok(())
+    }
 }
 
 #[cfg(target_os = "android")]
@@ -435,17 +496,30 @@ mod android_location {
         if lm.is_null() {
             return Ok(None);
         }
-        let provider = env.new_string("gps")?;
-        let loc = env
-            .call_method(
-                &lm,
-                "getLastKnownLocation",
-                "(Ljava/lang/String;)Landroid/location/Location;",
-                &[(&provider).into()],
-            )?
-            .l()?;
+        // "gps" alone is null indoors and for the first minutes of a cold start. "fused" is the
+        // one the platform actually keeps warm, and "network" is the last resort — take whichever
+        // answers first.
+        let mut loc = JObject::null();
+        for name in ["fused", "gps", "network"] {
+            let provider = env.new_string(name)?;
+            let l = env
+                .call_method(
+                    &lm,
+                    "getLastKnownLocation",
+                    "(Ljava/lang/String;)Landroid/location/Location;",
+                    &[(&provider).into()],
+                )
+                .map(|v| v.l());
+            let _ = env.exception_clear(); // an unknown provider throws; try the next one
+            if let Ok(Ok(l)) = l {
+                if !l.is_null() {
+                    loc = l;
+                    break;
+                }
+            }
+        }
         if loc.is_null() {
-            return Ok(None); // no fix yet (cold start / indoors)
+            return Ok(None); // no fix yet from any provider
         }
         let lat = env.call_method(&loc, "getLatitude", "()D", &[])?.d()?;
         let lon = env.call_method(&loc, "getLongitude", "()D", &[])?.d()?;

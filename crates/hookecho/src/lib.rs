@@ -15,6 +15,7 @@ pub mod events;
 pub mod fronts_draw;
 pub mod geo;
 pub mod gps;
+pub mod share;
 pub mod headless;
 pub mod hotkeys;
 pub mod icon;

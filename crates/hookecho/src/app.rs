@@ -1061,6 +1061,12 @@ pub struct HookEchoApp {
     chase_applied: Option<(f64, f64)>,
     /// Live position stream from gpsd, when the user has connected it.
     gps_rx: Option<std::sync::mpsc::Receiver<(f64, f64)>>,
+    /// Position sharing (LAN broadcast + optional relay), started on first use.
+    share: Option<crate::share::Share>,
+    /// Everyone else's last known position, keyed by their device id.
+    peers: std::collections::HashMap<String, crate::share::Peer>,
+    /// When we last put our own fix on the wire (both transports share the cadence).
+    share_sent: Option<std::time::Instant>,
     /// GOES satellite frame times (for the sub-hourly scrub), the style they were fetched for,
     /// and the selected index (`None` = latest).
     goes_times: Vec<chrono::DateTime<chrono::Utc>>,
@@ -1482,6 +1488,9 @@ impl HookEchoApp {
             climo_pending_query: None,
             chase_applied: None,
             gps_rx: None,
+            share: None,
+            peers: std::collections::HashMap::new(),
+            share_sent: None,
             goes_times: Vec::new(),
             goes_times_style: None,
             goes_time_idx: None,
@@ -2460,6 +2469,88 @@ impl HookEchoApp {
             self.goto_view(&site, lon, lat, zoom, None);
         }
         self.chase_applied = Some((lon, lat));
+    }
+
+    /// How often our own fix goes out on both transports. Fast enough to follow a chase vehicle,
+    /// slow enough to be free on a metered connection.
+    const SHARE_SECS: u64 = 10;
+
+    /// Push our position out and pull everyone else's in. Sharing runs whenever the setting is on
+    /// — receiving works even with no fix of our own, which is the desktop-at-home half of it.
+    fn sync_share(&mut self, ctx: &egui::Context) {
+        if !self.settings.share_position {
+            if self.share.is_some() {
+                self.share = None;
+                self.peers.clear();
+            }
+            return;
+        }
+        let share = self
+            .share
+            .get_or_insert_with(crate::share::Share::start);
+        if share.drain(&mut self.peers) {
+            ctx.request_repaint();
+        }
+        let due = self
+            .share_sent
+            .is_none_or(|t| t.elapsed().as_secs() >= Self::SHARE_SECS);
+        let Some((lon, lat)) = self.chase_pos.filter(|_| due) else {
+            return;
+        };
+        self.share_sent = Some(std::time::Instant::now());
+        let name = if self.settings.share_name.is_empty() {
+            "me"
+        } else {
+            &self.settings.share_name
+        };
+        let me = share.me(name, lon, lat);
+        share.broadcast(&me);
+        let relay = self.settings.share_relay.clone();
+        if relay.is_empty() {
+            return;
+        }
+        // Relay round trip: hand it our fix, take back the list. One request pair per tick, and
+        // failures are logged rather than surfaced — a dead relay must not break chase mode.
+        let tx = share.sender();
+        let id = share.id.clone();
+        self._rt.spawn(async move {
+            let client = reqwest::Client::new();
+            let body = match serde_json::to_string(&me) {
+                Ok(b) => b,
+                Err(e) => {
+                    log::warn!("share encode failed: {e}");
+                    return;
+                }
+            };
+            if let Err(e) = client
+                .post(&relay)
+                .header("content-type", "application/json")
+                .body(body)
+                .send()
+                .await
+            {
+                log::warn!("share relay post failed: {e}");
+                return;
+            }
+            match client.get(&relay).send().await {
+                Ok(r) => match r
+                    .text()
+                    .await
+                    .map_err(|e| e.to_string())
+                    .and_then(|t| {
+                        serde_json::from_str::<Vec<crate::share::Peer>>(&t)
+                            .map_err(|e| e.to_string())
+                    }) {
+                    Ok(list) => {
+                        for p in list.into_iter().filter(|p| p.id != id) {
+                            let _ = tx.send(p);
+                        }
+                    }
+                    Err(e) => log::warn!("share relay list unreadable: {e}"),
+                },
+                Err(e) => log::warn!("share relay get failed: {e}"),
+            }
+        });
     }
 
     /// Pull an HRRR point sounding at `(lon, lat)`, shown in the Skew-T window when it arrives.
@@ -7861,6 +7952,59 @@ impl HookEchoApp {
             );
         }
 
+        // You, and anyone sharing their position with you. Drawn after the saved markers so a
+        // moving dot is never hidden under a static one.
+        let me = self.chase_pos.map(|(lon, lat)| crate::share::Peer {
+            id: String::new(),
+            name: "You".to_string(),
+            lon,
+            lat,
+            ts: crate::share::now(),
+        });
+        for (p, is_me) in me
+            .iter()
+            .map(|p| (p, true))
+            .chain(self.peers.values().map(|p| (p, false)))
+        {
+            let w = crate::render::mercator::lonlat_to_world(p.lon, p.lat);
+            let (sx, sy) = cam.world_to_screen(w, vp);
+            let pt = egui::pos2(prect.left() + sx, prect.top() + sy);
+            if !prect.contains(pt) {
+                continue;
+            }
+            // You are blue (the convention every map app trained people on); peers are amber, and
+            // fade as their fix ages so a frozen dot looks frozen.
+            let col = if is_me {
+                egui::Color32::from_rgb(60, 140, 255)
+            } else {
+                let age = (crate::share::now() - p.ts).clamp(0, crate::share::STALE_SECS) as f32;
+                let a = 255.0 - 155.0 * (age / crate::share::STALE_SECS as f32);
+                egui::Color32::from_rgba_unmultiplied(255, 180, 60, a as u8)
+            };
+            painter.circle_filled(pt, 9.0, egui::Color32::from_rgba_unmultiplied(
+                col.r(), col.g(), col.b(), 45,
+            ));
+            painter.circle_filled(pt, 5.0, col);
+            painter.circle_stroke(pt, 5.0, egui::Stroke::new(2.0, egui::Color32::WHITE));
+            let label = if is_me {
+                p.name.clone()
+            } else {
+                let mins = (crate::share::now() - p.ts) / 60;
+                if mins > 0 {
+                    format!("{} ({mins}m)", p.name)
+                } else {
+                    p.name.clone()
+                }
+            };
+            painter.text(
+                pt + egui::vec2(10.0, 0.0),
+                egui::Align2::LEFT_CENTER,
+                label,
+                egui::FontId::proportional(12.0),
+                col,
+            );
+        }
+
         // Freehand annotation strokes. Painted with the rest of the tool graphics so they sit
         // above every overlay, and drawn in OBS mode too — circling a storm on a stream is the
         // whole point of the tool.
@@ -8154,6 +8298,36 @@ impl HookEchoApp {
                 if ui.button("Disconnect GPS").clicked() {
                     self.gps_rx = None;
                 }
+            }
+            // Position sharing: the phone in the field and the desktop at home showing each other
+            // as dots on the same radar. LAN needs no setup; the relay covers cellular.
+            ui.checkbox(&mut self.settings.share_position, "Share my position")
+                .on_hover_text("Broadcast your GPS fix to other Hook Echo instances, and show theirs");
+            if self.settings.share_position {
+                ui.horizontal(|ui| {
+                    ui.label("Name");
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.settings.share_name)
+                            .hint_text("me")
+                            .desired_width(120.0),
+                    );
+                });
+                ui.horizontal(|ui| {
+                    ui.label("Relay");
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.settings.share_relay)
+                            .hint_text("https://… (optional)")
+                            .desired_width(180.0),
+                    )
+                    .on_hover_text(
+                        "HTTP endpoint you host: POST a position, GET the list. Leave empty for \
+                         same-network sharing only. The endpoint sees your live position.",
+                    );
+                });
+                match self.peers.len() {
+                    0 => ui.weak("no one else sharing yet"),
+                    n => ui.weak(format!("👥 {n} sharing")),
+                };
             }
 
             ui.separator();
@@ -9179,6 +9353,7 @@ impl eframe::App for HookEchoApp {
         self.load_marker_icons(ctx);
         self.drive_loop_export(ctx);
         self.apply_chase();
+        self.sync_share(ctx);
         self.sync_forecast_scrub();
         self.poll_messages();
         self.poll_overlays();

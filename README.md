@@ -264,8 +264,15 @@ layer draws its own scale and units.
 ### Out in the field
 
 - **Chase mode**: live GPS (gpsd on desktop, the system location service on
-  Android), a storm-relative HUD with closest approach and escape bearing, and
-  offline "chase packs" of pre-downloaded basemap tiles.
+  Android) drawn as a blue dot on the radar, a storm-relative HUD with closest
+  approach and escape bearing, and offline "chase packs" of pre-downloaded
+  basemap tiles.
+- **Position sharing**: opt in and every Hook Echo on the same network sees
+  everyone else's dot, no account and no configuration (UDP broadcast on
+  :41777). For devices that aren't on one network — the phone chasing on
+  cellular, the desktop at home — set a relay URL in the same panel: any HTTP
+  endpoint you host that takes `POST` of one position and returns `GET` of the
+  list. There is no default relay; the endpoint sees your live position.
 - **Streamer/OBS mode**: chrome-free UI (`F8`) and an auto-tour of active
   warnings (`F9`).
 - Click anywhere for historical tornado tracks near that point (SPC 1950–2022)
