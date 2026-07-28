@@ -4454,7 +4454,7 @@ impl HookEchoApp {
             (
                 MapTool::Sounding,
                 "Tool: Sounding",
-                "Click a point for the forecast vertical profile",
+                "Click a point for the model profile plus the nearest balloon sounding",
                 false,
             ),
             (
@@ -7208,7 +7208,9 @@ impl HookEchoApp {
                     painter.text(
                         p + egui::vec2(6.0, 0.0),
                         egui::Align2::LEFT_CENTER,
-                        st.id,
+                        // The station's place name, not its WMO number: "72249" on a map tells
+                        // nobody anything.
+                        st.name.split(',').next().unwrap_or(st.name),
                         egui::FontId::proportional(10.0),
                         color,
                     );

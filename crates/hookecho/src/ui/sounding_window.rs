@@ -7,6 +7,9 @@
 
 use wxdata::sounding::Sounding;
 
+/// Width one `theme::stat_card` occupies: its fixed 108 pt plus frame margins and item spacing.
+const CARD_W: f32 = 132.0;
+
 pub struct SoundingWindow {
     pub open: bool,
     pub busy: bool,
@@ -62,7 +65,7 @@ impl SoundingWindow {
                     ui.weak("Press Ctrl+K, pick \"Tool: Sounding\", then click a point on the map.");
                     return;
                 };
-                ui.horizontal(|ui| {
+                ui.horizontal_wrapped(|ui| {
                     ui.strong(format!("{:.2}, {:.2}", s.lat, s.lon));
                     ui.separator();
                     ui.weak(format!("run {}", crate::timefmt::fmt_date_clock(s.run, tz)));
@@ -73,19 +76,34 @@ impl SoundingWindow {
                 });
                 // Fixed-layer composite indices (feature FF): the numbers a chaser scans first.
                 if let Some(ix) = s.indices() {
-                    ui.horizontal_wrapped(|ui| {
-                        crate::theme::stat_card(ui, "SBCAPE", &format!("{:.0} J/kg", ix.sbcape));
-                        crate::theme::stat_card(ui, "LCL", &format!("{:.0} m", ix.lcl_m));
-                        crate::theme::stat_card(ui, "SRH 0–1", &format!("{:.0}", ix.srh1));
-                        crate::theme::stat_card(ui, "SRH 0–3", &format!("{:.0}", ix.srh3));
-                        crate::theme::stat_card(ui, "SCP", &format!("{:.1}", ix.scp));
-                        crate::theme::stat_card(ui, "STP", &format!("{:.1}", ix.stp));
-                        crate::theme::stat_card(ui, "EHI 0–1", &format!("{:.1}", ix.ehi1));
-                    });
+                    let cards = [
+                        ("SBCAPE", format!("{:.0} J/kg", ix.sbcape)),
+                        ("LCL", format!("{:.0} m", ix.lcl_m)),
+                        ("SRH 0–1", format!("{:.0}", ix.srh1)),
+                        ("SRH 0–3", format!("{:.0}", ix.srh3)),
+                        ("SCP", format!("{:.1}", ix.scp)),
+                        ("STP", format!("{:.1}", ix.stp)),
+                        ("EHI 0–1", format!("{:.1}", ix.ehi1)),
+                    ];
+                    // Chunked by hand rather than `horizontal_wrapped`: a `Frame` with `set_width`
+                    // — which is what `stat_card` is — doesn't participate in egui's wrapping, so
+                    // all seven stayed on one 900 pt line and dragged the whole window off both
+                    // edges of a phone screen.
+                    let per_row = ((ui.available_width() / CARD_W) as usize).max(1);
+                    for row in cards.chunks(per_row) {
+                        ui.horizontal(|ui| {
+                            for (label, value) in row {
+                                crate::theme::stat_card(ui, label, value);
+                            }
+                        });
+                    }
                     ui.weak("Fixed-layer forms from 10 mandatory levels — coarser than SPC mesoanalysis.");
                 }
                 // Observed ascent: a line about where it came from, and the toggle.
-                ui.horizontal(|ui| match (&self.observed, &self.observed_error) {
+                // Wrapped, not a plain `horizontal`: this row is long ("Fort Worth, TX (72249)
+                // 28 Jul 12Z · …") and a non-wrapping row sets the window's minimum width, which
+                // on a phone pushed the whole window off both screen edges.
+                ui.horizontal_wrapped(|ui| match (&self.observed, &self.observed_error) {
                     (Some(o), _) => {
                         ui.checkbox(&mut self.show_observed, "Observed (RAOB)");
                         ui.weak(format!(

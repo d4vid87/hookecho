@@ -86,6 +86,21 @@ impl PlacefileWindow {
                     }
                 });
 
+                // Android can't execute a user-supplied program from app storage, so the whole
+                // section would be a form whose every entry fails. Placefile URLs still work.
+                if !cfg!(target_os = "android") {
+                    self.plugins_section(ui, settings, status);
+                }
+            });
+        self.open = open;
+    }
+
+    fn plugins_section(
+        &mut self,
+        ui: &mut egui::Ui,
+        settings: &mut Settings,
+        status: &[PlacefileStatus],
+    ) {
                 ui.add_space(10.0);
                 ui.separator();
                 ui.strong("Plugins");
@@ -128,7 +143,7 @@ impl PlacefileWindow {
                 if let Some(i) = drop_plugin {
                     settings.plugins.remove(i);
                 }
-                ui.horizontal(|ui| {
+                ui.horizontal_wrapped(|ui| {
                     ui.label("Name:");
                     ui.add(
                         egui::TextEdit::singleline(&mut self.new_plugin)
@@ -162,8 +177,6 @@ impl PlacefileWindow {
                         self.new_command.clear();
                     }
                 });
-            });
-        self.open = open;
     }
 }
 

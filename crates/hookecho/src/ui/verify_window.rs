@@ -37,12 +37,12 @@ impl VerifyWindow {
             return act;
         }
         let mut open = self.open;
-        egui::Window::new("Warning Verification")
+        crate::ui::fit_phone(ctx, egui::Window::new("Warning Verification"))
             .open(&mut open)
             .default_width(560.0)
             .default_height(460.0)
             .show(ctx, |ui| {
-                ui.horizontal(|ui| {
+                ui.horizontal_wrapped(|ui| {
                     ui.label("Office:");
                     ui.add(egui::TextEdit::singleline(&mut self.wfo).desired_width(56.0));
                     ui.label("Day (UTC):");

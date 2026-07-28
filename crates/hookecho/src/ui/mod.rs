@@ -12,8 +12,17 @@ pub(crate) fn fit_phone<'a>(ctx: &egui::Context, w: egui::Window<'a>) -> egui::W
         // `resizable(false)` is load-bearing: a resizable window keeps a stored width from a wider
         // session (or grows to its content) and spills off both screen edges — the reported cell
         // popup clipping. Pinning width + disabling resize keeps every popup inside the screen.
+        //
+        // min == max width, not `max_width` alone, because every call site chains
+        // `.default_size(…)` AFTER this — and on a non-resizable window that wider desired size
+        // won, which is why the 560 pt sounding window and the 720 pt attributes table hung off
+        // both edges of a 512 pt screen. Pinning both bounds leaves a later default nothing to
+        // override.
         w.resizable(false)
-            .max_width(r.width() - 16.0)
+            // The budget is for the *inner* width; the window frame's margins, stroke and shadow
+            // sit outside it, so leaving only 16 px still hung the frame off both edges.
+            .min_width(r.width() - 56.0)
+            .max_width(r.width() - 56.0)
             .max_height(r.height() * 0.80)
             .vscroll(true)
             .anchor(egui::Align2::CENTER_TOP, [0.0, r.top() + 6.0])
