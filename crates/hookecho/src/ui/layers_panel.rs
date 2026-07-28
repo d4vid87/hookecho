@@ -124,6 +124,13 @@ pub(crate) fn body(
     });
     ui.add_space(6.0);
     let order = matches(entries, query);
+    // Enter runs the top-ranked match. Type-and-Enter was the whole point of the command palette
+    // this drawer replaced; without it the search box is a filter, not a launcher.
+    if !query.is_empty() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+        if let Some(i) = order.first() {
+            return Some(entries[*i].action);
+        }
+    }
     let out = egui::ScrollArea::vertical()
         .max_height(max_height)
         .show(ui, |ui| {
@@ -251,6 +258,23 @@ mod tests {
         assert_eq!(matches(&entries, "").len(), entries.len());
         // And an uncommon row is still findable by name.
         assert_eq!(matches(&entries, "echo"), vec![0]);
+    }
+
+    /// The drawer's Enter key runs `matches(...)[0]`, so the ranking has to put the obvious
+    /// answer first for the labels people actually type.
+    #[test]
+    fn top_match_is_the_obvious_one() {
+        let e = |label: &str| PaletteEntry {
+            label: label.into(),
+            category: "Radar",
+            action: PaletteAction::CycleBasemap,
+            on: None,
+            desc: "",
+            common: true,
+        };
+        let entries = [e("Storm-Relative Velocity"), e("Velocity"), e("Reflectivity")];
+        assert_eq!(matches(&entries, "velocity").first(), Some(&1));
+        assert_eq!(matches(&entries, "refl").first(), Some(&2));
     }
 
     #[test]

@@ -3175,10 +3175,18 @@ impl HookEchoApp {
                         .show(ui, |ui| self.app_rows(ui));
                 });
             });
+        // `query` is the live text; `self.layers_query` was taken from at the top of the frame.
+        let searched = !query.trim().is_empty();
         self.layers_query = query;
         self.apply_ui_actions(opts, ctx);
         if let Some(a) = chosen {
             self.apply_palette(a, ctx);
+            // Searched-and-picked is a launcher gesture: get out of the way. Browsing the list
+            // without a query is the opposite — you're flipping layers on and off, so it stays.
+            if searched {
+                self.layers_query.clear();
+                self.drawer_open = false;
+            }
         }
         if let Some(place) = fly_to {
             self.geocode_nav = true;
