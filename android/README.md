@@ -24,11 +24,14 @@ Prerequisites:
 Then, from the repo root:
 
 ```sh
-android/build.sh            # debug APK (directly sideloadable)
+android/build.sh            # release .so in a debug-signed APK (directly sideloadable)
 adb install -r android/app/build/outputs/apk/debug/app-debug.apk
 ```
 
-`build.sh release` produces an unsigned/CI-signed release APK instead.
+`INSTALL=1 android/build.sh` installs it for you. The Rust library is always
+optimised; `build.sh debug` builds an opt-level-0 `.so` with symbols for native crash
+hunts, and `build.sh signed` produces a release-signed APK. `FEATURES=profiling
+android/build.sh` enables the puffin server (see `crates/hookecho/src/profiling.rs`).
 
 ## First run
 
