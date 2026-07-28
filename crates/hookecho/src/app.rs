@@ -21,6 +21,7 @@ use chrono::{DateTime, NaiveDate, Utc};
 use lru::LruCache;
 use std::num::NonZeroUsize;
 use std::sync::mpsc::{Receiver, Sender};
+use std::sync::Arc;
 use std::time::Instant;
 use tokio::runtime::Runtime;
 use wxdata::alerts::{self};
@@ -848,7 +849,7 @@ pub struct HookEchoApp {
     last_stream_attempt: Option<Instant>,
     /// Decoded-volume LRU keyed by AWS object name, so scrubbing back and forth on the
     /// timeline doesn't re-download. ~10 volumes; each ~a few MB.
-    scan_cache: LruCache<String, Scan>,
+    scan_cache: LruCache<String, Arc<Scan>>,
     // --- Overlays (severe-weather layers; geographic, shared across views) ---
     http: reqwest::Client,
     overlay_rx: Receiver<OverlayMsg>,
@@ -1291,7 +1292,11 @@ impl HookEchoApp {
             last_stream_attempt: None,
             // DVR: retain a deep buffer of decoded volumes so instant replay serves recent frames
             // from RAM without re-downloading (~30 volumes ≈ 2.5 h at a 5-min cadence).
-            scan_cache: LruCache::new(NonZeroUsize::new(30).unwrap()),
+            // Phones can't hold a 2.5 h DVR buffer of decoded volumes — each is tens of MB and
+            // Android kills the process long before the LRU fills.
+            scan_cache: LruCache::new(
+                NonZeroUsize::new(if cfg!(target_os = "android") { 6 } else { 30 }).unwrap(),
+            ),
             http,
             overlay_rx,
             overlay_tx,
@@ -4835,7 +4840,8 @@ impl HookEchoApp {
                     scan,
                     ..
                 } => {
-                    self.scan_cache.put(name.clone(), scan.clone());
+                    let scan = Arc::new(scan);
+                    self.scan_cache.put(name.clone(), Arc::clone(&scan));
                     let v = &mut self.views[view];
                     let looping = v.timeline.live_looping();
                     // A newly-arrived live head (following): roll the day at UTC midnight, or grow
@@ -4888,8 +4894,8 @@ impl HookEchoApp {
                 } => {
                     let v = &mut self.views[view];
                     match &mut v.volume {
-                        Some(vol) => vol.apply_live(scan, name, time, &changed),
-                        None => v.volume = Some(Volume::new(scan, name, time)),
+                        Some(vol) => vol.apply_live(Arc::new(scan), name, time, &changed),
+                        None => v.volume = Some(Volume::new(Arc::new(scan), name, time)),
                     }
                     v.loading = false;
                     v.error = None;
@@ -4926,7 +4932,9 @@ impl HookEchoApp {
             (
                 want,
                 v.site.clone(),
-                v.volume.as_ref().map(|vol| vol.scan.clone()),
+                // The streamer needs its own mutable base to merge chunks into, so this is the
+                // one place a decoded volume is still deep-copied — once per stream start.
+                v.volume.as_ref().map(|vol| (*vol.scan).clone()),
             )
         };
 
@@ -5206,7 +5214,7 @@ impl HookEchoApp {
             if let Some((name, time, id)) = target {
                 let shown = self.views[idx].volume.as_ref().map(|v| v.name.clone());
                 if shown.as_deref() != Some(name.as_str()) {
-                    if let Some(scan) = self.scan_cache.get(&name).cloned() {
+                    if let Some(scan) = self.scan_cache.get(&name).map(Arc::clone) {
                         let v = &mut self.views[idx];
                         v.volume = Some(Volume::new(scan, name, time));
                         v.loading = false;

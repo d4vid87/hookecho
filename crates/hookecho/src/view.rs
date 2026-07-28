@@ -4,13 +4,22 @@
 //! All per-pane UI state lives here so the app shell stays a thin orchestrator.
 
 use chrono::{DateTime, Utc};
-use std::collections::HashMap;
+use lru::LruCache;
+use std::num::NonZeroUsize;
+use std::sync::Arc;
 use std::time::Instant;
 use wxdata::level2::{self, BinnedSweep, Moment, Scan};
 
+/// How many binned sweeps one volume keeps. A sweep is ~1.3 MB, and the working set while
+/// flipping through moments and tilts is a handful — 12 covers it without the old unbounded
+/// map's ~120 MB worst case (6 moments x ~15 tilts, all resident at once).
+const BINNED_CACHE: usize = 12;
+
 /// A decoded volume plus lazily-binned sweeps for the moments/tilts the user has viewed.
 pub struct Volume {
-    pub scan: Scan,
+    /// Shared with the app's decoded-volume LRU: the cache and every pane showing this volume
+    /// point at one allocation, so a scrub or a live arrival costs a refcount, not a deep copy.
+    pub scan: Arc<Scan>,
     /// AWS object name; used to detect when a newer volume has arrived.
     pub name: String,
     pub time: DateTime<Utc>,
@@ -18,14 +27,11 @@ pub struct Volume {
     pub vcp: String,
     /// Sorted, deduped tilt angles; the tilt index selects into this.
     pub elevations: Vec<f32>,
-    // ponytail: unbounded per-volume cache; ~1.3 MB/sweep, cleared whenever the volume
-    // changes. Worst case a user cycles all 6 moments × ~15 tilts ≈ 120 MB; add an LRU
-    // only if that ever bites.
-    binned: HashMap<(Moment, usize, bool), BinnedSweep>,
+    binned: LruCache<(Moment, usize, bool), BinnedSweep>,
 }
 
 impl Volume {
-    pub fn new(scan: Scan, name: String, time: DateTime<Utc>) -> Self {
+    pub fn new(scan: Arc<Scan>, name: String, time: DateTime<Utc>) -> Self {
         let vcp = scan.coverage_pattern_number().to_string();
         let elevations = level2::elevation_angles(&scan);
         Self {
@@ -34,13 +40,19 @@ impl Volume {
             time,
             vcp,
             elevations,
-            binned: HashMap::new(),
+            binned: LruCache::new(NonZeroUsize::new(BINNED_CACHE).unwrap()),
         }
     }
 
     /// Apply a live merged volume: swap in the new scan, recompute tilts, and evict only the
     /// binned sweeps whose tilts changed (a shifted tilt set clears the whole cache to be safe).
-    pub fn apply_live(&mut self, scan: Scan, name: String, time: DateTime<Utc>, changed: &[f32]) {
+    pub fn apply_live(
+        &mut self,
+        scan: Arc<Scan>,
+        name: String,
+        time: DateTime<Utc>,
+        changed: &[f32],
+    ) {
         self.scan = scan;
         let new_elev = level2::elevation_angles(&self.scan);
         if new_elev != self.elevations {
@@ -48,7 +60,15 @@ impl Volume {
         } else {
             for angle in changed {
                 if let Some(idx) = new_elev.iter().position(|e| (e - angle).abs() < 0.15) {
-                    self.binned.retain(|(_, t, _), _| *t != idx);
+                    let stale: Vec<_> = self
+                        .binned
+                        .iter()
+                        .map(|(k, _)| *k)
+                        .filter(|(_, t, _)| *t == idx)
+                        .collect();
+                    for k in stale {
+                        self.binned.pop(&k);
+                    }
                 }
             }
         }
@@ -65,14 +85,11 @@ impl Volume {
         tilt: usize,
         dealias: bool,
     ) -> anyhow::Result<&BinnedSweep> {
-        use std::collections::hash_map::Entry;
-        match self.binned.entry((moment, tilt, dealias)) {
-            Entry::Occupied(e) => Ok(e.into_mut()),
-            Entry::Vacant(e) => {
-                let sweep = level2::bin_scan_opts(&self.scan, moment, tilt, dealias)?;
-                Ok(e.insert(sweep))
-            }
-        }
+        let scan = Arc::clone(&self.scan);
+        self.binned
+            .try_get_or_insert((moment, tilt, dealias), || {
+                level2::bin_scan_opts(&scan, moment, tilt, dealias)
+            })
     }
 
     /// All reflectivity tilts as owned sweeps (lowest→highest), for vertical cross-sections.
