@@ -64,12 +64,20 @@ pub(crate) fn show(
     let mut actions = ToolboxActions::default();
     let tz = settings.tz_for(view.site.as_deref());
     egui::ScrollArea::vertical().show(ui, |ui| {
-        section(ui, "Site", |ui| site_section(ui, view, settings, &mut actions));
-        section(ui, "Map", |ui| map_section(ui, view, settings, chasepack, &mut actions));
-        section(ui, "Product", |ui| product_section(ui, view, settings, &mut actions));
+        section(ui, "Site", |ui| {
+            site_section(ui, view, settings, &mut actions)
+        });
+        section(ui, "Map", |ui| {
+            map_section(ui, view, settings, chasepack, &mut actions)
+        });
+        section(ui, "Product", |ui| {
+            product_section(ui, view, settings, &mut actions)
+        });
         if let Some(entries) = layers {
             section(ui, "Layers", |ui| {
-                if let Some(a) = crate::ui::layers_panel::body(ui, entries, layers_query, accent, 420.0) {
+                if let Some(a) =
+                    crate::ui::layers_panel::body(ui, entries, layers_query, accent, 420.0)
+                {
                     actions.palette = Some(a);
                 }
             });
@@ -90,7 +98,9 @@ pub(crate) fn show(
                 &mut actions,
             )
         });
-        section(ui, "Timeline", |ui| timeline_section(ui, view, settings, &mut actions));
+        section(ui, "Timeline", |ui| {
+            timeline_section(ui, view, settings, &mut actions)
+        });
     });
     actions
 }
@@ -503,7 +513,9 @@ fn product_section(
         let f = factor as f64;
         ui.horizontal(|ui| {
             ui.checkbox(&mut view.threshold_enabled[i], "Threshold")
-                .on_hover_text("Hide everything below a value — cuts light rain out of the picture");
+                .on_hover_text(
+                    "Hide everything below a value — cuts light rain out of the picture",
+                );
             if view.threshold_enabled[i] {
                 let t = view.thresholds[i].get_or_insert((vmin + vmax) * 0.5);
                 ui.add(

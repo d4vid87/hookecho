@@ -1527,7 +1527,11 @@ impl HookEchoApp {
     /// which no phone should be asked to hold — and the Adreno 750 reports 16384, so the device
     /// limit alone never bit. 4096 on Android is still finer than the screen can show.
     fn field_texture_cap(&self) -> usize {
-        let ceiling = if cfg!(target_os = "android") { 4096 } else { 8192 };
+        let ceiling = if cfg!(target_os = "android") {
+            4096
+        } else {
+            8192
+        };
         (self.max_texture_dim as usize).min(ceiling)
     }
 
@@ -3127,7 +3131,9 @@ impl HookEchoApp {
                             self.save_offer = None;
                         } else if ui
                             .small_button(format!("{} Save marker", ph::MAP_PIN))
-                            .on_hover_text("Keep this place — alerts and storm ETAs use your markers")
+                            .on_hover_text(
+                                "Keep this place — alerts and storm ETAs use your markers",
+                            )
                             .clicked()
                         {
                             self.settings.markers.push(crate::settings::Marker {
@@ -4987,7 +4993,7 @@ impl HookEchoApp {
             let cb_tx = tx.clone();
             let cb_ctx = ctx.clone();
             let cb_site = site.clone();
-            let res = live::stream(site, base, move |u| {
+            let res = live::stream(site, base, crate::platform::activity::is_active, move |u| {
                 let _ = cb_tx.send(DataMsg::Live {
                     view: view_idx,
                     site: cb_site.clone(),
@@ -5170,6 +5176,9 @@ impl HookEchoApp {
     /// Reconcile the frame listing and the displayed volume with the timeline: keep the
     /// listing current, poll the live head while following, or load the scrubbed frame.
     fn sync_timeline(&mut self, idx: usize, ctx: &egui::Context, site_changed: bool) {
+        if !crate::platform::activity::is_active() {
+            return; // backgrounded: no listings, no head polls, no downloads
+        }
         // (Re)list volumes when the site or selected date changed.
         let (site, date, following, need_list, listing) = {
             let v = &self.views[idx];
@@ -8029,6 +8038,17 @@ impl eframe::App for HookEchoApp {
         let ctx = root.ctx().clone();
         let ctx = &ctx;
 
+        // Stamp this frame for the background workers' foreground gate (see
+        // `platform::activity`). A frame that follows a gap means the app just came back, so
+        // force one refresh rather than making the user wait out the poll interval.
+        let focused = ctx.input(|i| i.viewport().focused.unwrap_or(true));
+        if crate::platform::activity::mark_frame(focused) {
+            self.overlay_last_fetch = None;
+            for v in &mut self.views {
+                v.last_poll = None;
+            }
+        }
+
         // Android paste: re-focus the text field that lost focus to the Paste-button tap, before
         // any window draws, so the queued Paste event (see `raw_input_hook`) lands in it.
         if let Some(id) = self.paste_target.take() {
@@ -8109,10 +8129,12 @@ impl eframe::App for HookEchoApp {
             self.tropical_last_fetch = Some(Instant::now());
             self.spawn_overlay(ctx, OverlaySource::Tropical);
         }
-        // Periodic overlay refresh (~2 min), honoring live weather cadence.
-        if self
-            .overlay_last_fetch
-            .is_none_or(|t| t.elapsed().as_secs() >= 120)
+        // Periodic overlay refresh (~2 min), honoring live weather cadence. Skipped entirely
+        // while backgrounded — see `platform::activity`.
+        if crate::platform::activity::is_active()
+            && self
+                .overlay_last_fetch
+                .is_none_or(|t| t.elapsed().as_secs() >= 120)
         {
             self.fetch_overlays(ctx);
         }
@@ -8764,7 +8786,12 @@ impl eframe::App for HookEchoApp {
             cells,
             crate::theme::accent(self.settings.theme),
         ) {
-            if let Some(c) = self.active_storm_cells().iter().find(|c| c.id == id).cloned() {
+            if let Some(c) = self
+                .active_storm_cells()
+                .iter()
+                .find(|c| c.id == id)
+                .cloned()
+            {
                 let cam = &mut self.views[self.active].camera;
                 cam.center = crate::render::mercator::lonlat_to_world(c.lon, c.lat);
                 cam.zoom = cam.zoom.max(8.0);
@@ -9056,7 +9083,9 @@ impl eframe::App for HookEchoApp {
         // Idle heartbeat so clocks (volume age, countdowns) tick without input. Data arrivals and
         // animations (pulse, banners) request faster repaints on their own. Slower on Android to
         // spare the battery — nothing on screen changes faster than this between frames.
-        let idle = if cfg!(target_os = "android") {
+        let idle = if !crate::platform::activity::is_active() {
+            2_000 // backgrounded: just enough to notice coming back
+        } else if cfg!(target_os = "android") {
             250
         } else {
             100

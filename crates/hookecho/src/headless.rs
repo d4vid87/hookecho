@@ -596,9 +596,14 @@ pub fn run_live(out_path: &str, site: &str, moment: Moment) -> anyhow::Result<()
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
         let site_owned = site.to_string();
         let handle = tokio::spawn(async move {
-            let _ = wxdata::live::stream(site_owned, base, move |u| {
-                let _ = tx.send(u);
-            })
+            let _ = wxdata::live::stream(
+                site_owned,
+                base,
+                || true,
+                move |u| {
+                    let _ = tx.send(u);
+                },
+            )
             .await;
         });
 

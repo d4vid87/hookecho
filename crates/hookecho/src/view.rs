@@ -86,10 +86,9 @@ impl Volume {
         dealias: bool,
     ) -> anyhow::Result<&BinnedSweep> {
         let scan = Arc::clone(&self.scan);
-        self.binned
-            .try_get_or_insert((moment, tilt, dealias), || {
-                level2::bin_scan_opts(&scan, moment, tilt, dealias)
-            })
+        self.binned.try_get_or_insert((moment, tilt, dealias), || {
+            level2::bin_scan_opts(&scan, moment, tilt, dealias)
+        })
     }
 
     /// All reflectivity tilts as owned sweeps (lowest→highest), for vertical cross-sections.

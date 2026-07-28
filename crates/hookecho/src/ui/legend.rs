@@ -198,14 +198,10 @@ pub fn draw_field(
 
     match r.scale {
         FieldScale::Ramp { lo, hi, stops, .. } => {
-            let panel = Rect::from_min_size(
-                origin,
-                Vec2::new(BAR_W + PAD_X * 2.0, BAR_H + 16.0 + 14.0),
-            );
-            let bar = Rect::from_min_size(
-                panel.min + Vec2::new(PAD_X, 16.0),
-                Vec2::new(BAR_W, BAR_H),
-            );
+            let panel =
+                Rect::from_min_size(origin, Vec2::new(BAR_W + PAD_X * 2.0, BAR_H + 16.0 + 14.0));
+            let bar =
+                Rect::from_min_size(panel.min + Vec2::new(PAD_X, 16.0), Vec2::new(BAR_W, BAR_H));
             card(painter, panel);
 
             // One quad per stop segment, per-vertex colors — same idiom as the moment legend.

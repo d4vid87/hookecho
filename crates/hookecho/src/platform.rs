@@ -4,6 +4,50 @@
 //! under the status bar and gesture bar. With the insets fed, egui's root Ui, panels, and
 //! windows avoid the system chrome natively.
 
+/// Foreground gating for background work.
+///
+/// eframe stops calling `update()` once Android tears the surface down, so anything on its own
+/// thread or on the tokio pool — the volume poller, the live chunk stream, the GPS loop — keeps
+/// burning battery and mobile data behind a screen nobody is looking at. Rather than plumbing
+/// winit lifecycle events into every one of them, the UI stamps each frame here and the workers
+/// ask whether a frame happened recently and the window still has focus.
+///
+/// Off-Android this is always "active": desktop background windows are cheap and users expect a
+/// tiled radar pane to keep updating.
+pub mod activity {
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+    use std::sync::OnceLock;
+    use std::time::Instant;
+
+    /// A frame older than this means the surface is gone, whatever the last focus event said.
+    const STALE_MS: u64 = 3_000;
+
+    static START: OnceLock<Instant> = OnceLock::new();
+    static LAST_FRAME_MS: AtomicU64 = AtomicU64::new(0);
+    static FOCUSED: AtomicBool = AtomicBool::new(true);
+
+    fn now_ms() -> u64 {
+        START.get_or_init(Instant::now).elapsed().as_millis() as u64
+    }
+
+    /// Called once per frame from the UI. Returns true when this frame follows a gap — the
+    /// caller uses that to kick one refresh so a resumed app isn't showing stale radar.
+    pub fn mark_frame(focused: bool) -> bool {
+        let last = LAST_FRAME_MS.swap(now_ms(), Ordering::Relaxed);
+        let was_active = FOCUSED.swap(focused, Ordering::Relaxed);
+        focused && (!was_active || now_ms().saturating_sub(last) > STALE_MS)
+    }
+
+    /// Whether background workers should do anything right now.
+    pub fn is_active() -> bool {
+        if !cfg!(target_os = "android") {
+            return true;
+        }
+        FOCUSED.load(Ordering::Relaxed)
+            && now_ms().saturating_sub(LAST_FRAME_MS.load(Ordering::Relaxed)) <= STALE_MS
+    }
+}
+
 /// Feed system-bar insets into egui's safe-area input (no-op off-Android).
 #[cfg(not(target_os = "android"))]
 pub fn apply_safe_area(_ctx: &egui::Context, _raw_input: &mut egui::RawInput) {}
@@ -189,6 +233,11 @@ mod android_location {
         let mut last: Option<(f64, f64)> = None;
         let mut asked = false;
         loop {
+            if !super::activity::is_active() {
+                // Backgrounded: skip both JNI round trips, keep the thread parked.
+                std::thread::sleep(Duration::from_secs(5));
+                continue;
+            }
             match read_fix(&mut asked) {
                 Ok(Some(pos)) => {
                     // Only send real movement (~1 m) so the chase handoff isn't re-run every poll.

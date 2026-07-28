@@ -32,9 +32,19 @@ pub struct Update {
 /// Stream live chunks for `site`, starting from `base` (the last polled volume), calling
 /// `on_update` with a full merged [`Scan`] at each sweep boundary.
 ///
+/// `active` is polled before each chunk fetch; returning false ends the stream cleanly, so a
+/// backgrounded phone stops pulling chunks over mobile data and stops holding a timer awake (the
+/// app passes its foreground gate and restarts the stream on resume). Keeping it a plain `fn`
+/// pointer keeps this crate free of any windowing or platform dependency.
+///
 /// Returns `Ok(())` only if the iterator ends cleanly (it normally runs until aborted);
 /// any error returns so the caller can fall back to interval polling.
-pub async fn stream<F>(site: String, base: Scan, mut on_update: F) -> anyhow::Result<()>
+pub async fn stream<F>(
+    site: String,
+    base: Scan,
+    active: fn() -> bool,
+    mut on_update: F,
+) -> anyhow::Result<()>
 where
     F: FnMut(Update),
 {
@@ -79,6 +89,14 @@ where
             .unwrap_or(Duration::from_secs(2))
             .clamp(Duration::from_secs(1), Duration::from_secs(15));
         tokio::time::sleep(wait).await;
+
+        if !active() {
+            // Backgrounded: end the stream rather than idle in it. Idling would keep a timer
+            // (and this task) alive across the whole background period; the caller restarts the
+            // stream when the app comes back, which is what it already does after any other
+            // stream end.
+            return Ok(());
+        }
 
         match it.try_next().await {
             Ok(Some(dc)) => {
