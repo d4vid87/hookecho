@@ -3375,6 +3375,7 @@ impl HookEchoApp {
     /// Every layer/product/tool/window as a searchable, categorized row. Consumed by the layers
     /// panel (desktop slide-in + mobile sheet) and the Ctrl+K command palette.
     pub(crate) fn palette_entries(&mut self) -> Vec<PaletteEntry> {
+        crate::prof_scope!("palette_entries");
         use crate::render::FieldLayer as FL;
         use AppWindow as W;
         use OverlayToggle as T;
@@ -4050,6 +4051,7 @@ impl HookEchoApp {
     }
 
     fn poll_overlays(&mut self) {
+        crate::prof_scope!("poll_overlays");
         let mut changed = false;
         while let Ok(msg) = self.overlay_rx.try_recv() {
             match msg {
@@ -4710,6 +4712,7 @@ impl HookEchoApp {
 
     /// Re-tessellate the overlay when its set or the zoom bucket changed.
     fn sync_overlay(&mut self) {
+        crate::prof_scope!("sync_overlay");
         let items = self.visible_placefile_items();
         if self.overlays.is_empty() && items.is_empty() {
             self.overlay_ready = false;
@@ -5274,6 +5277,7 @@ impl HookEchoApp {
     /// with pane `idx`'s product/tilt. Returns `(upload_when_changed, draw_radar)`; the pane's GPU
     /// buffer persists, so `None` means "reuse what's uploaded". Caches per pane via `pane_shown`.
     fn pane_radar(&mut self, idx: usize, data: usize) -> (Option<RadarUpload>, bool) {
+        crate::prof_scope!("pane_radar");
         let has_volume = self.views[data].volume.is_some();
         if !self.views[idx].show_radar || !has_volume {
             self.pane_shown.remove(&idx);
@@ -7999,6 +8003,8 @@ impl eframe::App for HookEchoApp {
     }
 
     fn ui(&mut self, root: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        crate::profiling::new_frame();
+        crate::prof_scope!("ui");
         let ctx = root.ctx().clone();
         let ctx = &ctx;
 

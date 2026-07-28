@@ -17,8 +17,14 @@ crate-type = ["lib", "cdylib"]
 name = "hookecho"
 path = "src/main.rs"
 
+[features]
+# Frame profiling over TCP (see `profiling.rs`). Off by default — zero cost when not enabled.
+profiling = ["dep:puffin", "dep:puffin_http"]
+
 [dependencies]
 wxdata = { path = "../wxdata" }
+puffin = { version = "0.20", optional = true }
+puffin_http = { version = "0.17", optional = true }
 # Base eframe (all platforms); Linux windowing backends are added target-conditionally below so
 # Windows/macOS builds don't pull the Linux-only wayland/x11 deps.
 eframe = { version = "0.35", default-features = false, features = ["default_fonts", "wgpu"] }

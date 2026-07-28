@@ -1108,6 +1108,7 @@ impl egui_wgpu::CallbackTrait for MapCallback {
         _encoder: &mut wgpu::CommandEncoder,
         resources: &mut egui_wgpu::CallbackResources,
     ) -> Vec<wgpu::CommandBuffer> {
+        crate::prof_scope!("render prepare");
         let res: &mut RenderResources = resources.get_mut().unwrap();
         res.upload_frame(device, queue, self);
         Vec::new()
@@ -1119,6 +1120,7 @@ impl egui_wgpu::CallbackTrait for MapCallback {
         pass: &mut wgpu::RenderPass<'static>,
         resources: &egui_wgpu::CallbackResources,
     ) {
+        crate::prof_scope!("render paint");
         let res: &RenderResources = resources.get().unwrap();
         res.record_pane(self.pane, pass);
     }
