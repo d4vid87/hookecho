@@ -839,6 +839,14 @@ pub struct HookEchoApp {
     chasepack: Option<ChasePack>,
     /// Per-pane "what's uploaded" key, so each pane re-bins/re-uploads only on a real change.
     pane_shown: std::collections::HashMap<usize, ShownKey>,
+    /// Last result of each per-volume detector, keyed by what it depends on (see `volume_key`).
+    #[allow(clippy::type_complexity)]
+    nowcast_cache: Option<(
+        ((usize, String, usize), usize, u8, Option<(u32, u32)>, u64),
+        Vec<(f64, f64, egui::Color32)>,
+    )>,
+    tds_cache: Option<((usize, String, usize), Vec<wxdata::tds::TdsHit>)>,
+    couplet_cache: Option<((usize, String, usize), Vec<wxdata::rotation::CoupletHit>)>,
     site_dialog: Option<ui::site_dialog::SiteDialog>,
     wizard: ui::wizard::Wizard,
     settings_window: ui::settings_window::SettingsWindow,
@@ -1278,6 +1286,9 @@ impl HookEchoApp {
             geocode_rx,
             chasepack: None,
             pane_shown: std::collections::HashMap::new(),
+            nowcast_cache: None,
+            tds_cache: None,
+            couplet_cache: None,
             site_dialog: None,
             wizard: {
                 let mut w = ui::wizard::Wizard::default();
@@ -2288,7 +2299,40 @@ impl HookEchoApp {
     /// Optical-flow nowcast: advect every strong reflectivity gate of the active pane forward by
     /// the mean SCIT storm motion to the configured lead time. Returns advected `(lon, lat, color)`
     /// points for the painter. Coarse (subsampled gates) — a first-order extrapolation, not a model.
+    /// Cached wrapper: these three detectors each bin (and clone) a full sweep and then walk it,
+    /// but their inputs only change when a new volume arrives — running them every frame while
+    /// their layer was toggled on burned that cost 4-60 times a second for an identical answer.
     fn compute_nowcast(&mut self, idx: usize) -> Vec<(f64, f64, egui::Color32)> {
+        let key = (
+            self.volume_key(idx),
+            self.views[idx].tilt,
+            self.filters.nowcast_lead_min,
+            self.scit_mean_motion()
+                .map(|(d, k)| (d.to_bits(), k.to_bits())),
+            self.palettes.gen,
+        );
+        if let Some((k, v)) = &self.nowcast_cache {
+            if *k == key {
+                return v.clone();
+            }
+        }
+        let out = self.compute_nowcast_uncached(idx);
+        self.nowcast_cache = Some((key, out.clone()));
+        out
+    }
+
+    /// The volume identity a detector's result depends on: pane, volume name, and how many sweeps
+    /// have merged into it (a live volume keeps the same name as it fills out).
+    fn volume_key(&self, idx: usize) -> (usize, String, usize) {
+        let v = self.views[idx].volume.as_ref();
+        (
+            idx,
+            v.map(|v| v.name.clone()).unwrap_or_default(),
+            v.map(|v| v.scan.sweeps().len()).unwrap_or(0),
+        )
+    }
+
+    fn compute_nowcast_uncached(&mut self, idx: usize) -> Vec<(f64, f64, egui::Color32)> {
         let Some((dir, kt)) = self.scit_mean_motion() else {
             return Vec::new();
         };
@@ -2337,6 +2381,18 @@ impl HookEchoApp {
     /// Auto TDS detection for the active pane's lowest tilt: bin reflectivity + CC and flag debris
     /// signatures (low CC in high Z). Fires a chime + banner on the rising edge of a new detection.
     fn compute_tds(&mut self, idx: usize) -> Vec<wxdata::tds::TdsHit> {
+        let key = self.volume_key(idx);
+        if let Some((k, v)) = &self.tds_cache {
+            if *k == key {
+                return v.clone();
+            }
+        }
+        let out = self.compute_tds_uncached(idx);
+        self.tds_cache = Some((key, out.clone()));
+        out
+    }
+
+    fn compute_tds_uncached(&mut self, idx: usize) -> Vec<wxdata::tds::TdsHit> {
         // Lowest tilt carries the near-ground debris; dual-pol CC must be present.
         let z = match self.views[idx]
             .volume
@@ -2383,6 +2439,18 @@ impl HookEchoApp {
     /// velocity sweep and flag gate-to-gate couplets. Fires a chime + banner on the rising edge,
     /// like the TDS detector (they're complementary: rotation aloft precedes debris at the ground).
     fn compute_couplets(&mut self, idx: usize) -> Vec<wxdata::rotation::CoupletHit> {
+        let key = self.volume_key(idx);
+        if let Some((k, v)) = &self.couplet_cache {
+            if *k == key {
+                return v.clone();
+            }
+        }
+        let out = self.compute_couplets_uncached(idx);
+        self.couplet_cache = Some((key, out.clone()));
+        out
+    }
+
+    fn compute_couplets_uncached(&mut self, idx: usize) -> Vec<wxdata::rotation::CoupletHit> {
         // Lowest tilt = closest to the ground; dealiased so folded gates don't fake huge shear.
         let vel = match self.views[idx]
             .volume
