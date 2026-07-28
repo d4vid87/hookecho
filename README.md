@@ -204,7 +204,10 @@ layer draws its own scale and units.
 - HRRR CAPE (surface-based or mixed-layer parcel) and storm-relative helicity
   (0–1 or 0–3 km) as map overlays.
 - Point soundings — Skew-T and hodograph — with derived **SBCAPE / LCL / SRH /
-  SCP / STP / EHI** indices from real parcel ascent and Bunkers storm motion.
+  SCP / STP / EHI** indices from real parcel ascent and Bunkers storm motion,
+  and the **observed radiosonde ascent** from the nearest station drawn dashed
+  beside the model profile (University of Wyoming archive, so an event replay
+  gets that morning's real balloon, back to 1973).
 - The VAD wind-profile hodograph, plus a time-height panel of wind barbs
   accumulated while the app runs, since the radar only publishes the latest.
 - HRRR future radar (0–18 h), forecast rotation tracks, near-surface wildfire
@@ -253,7 +256,10 @@ layer draws its own scale and units.
 On Android the same app wears a touch-first skin: a five-slot labeled dock
 (Play · Layers · Products · Site · More), slide-up sheets, and a navigation
 drawer that is the desktop drawer — same described action list, same layer
-options, same app rows — plus native GPS for chase mode.
+options, same app rows — plus native GPS for chase mode and opt-in background
+alerting: a foreground service watches your saved locations and notifies you
+with the app closed, tiered by watch / warning / emergency, tapping through to
+the storm.
 
 ## Repository layout
 

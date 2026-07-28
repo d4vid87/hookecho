@@ -39,6 +39,13 @@ pub fn data_dir() -> Option<PathBuf> {
     root("data")
 }
 
+/// Deep-link drop box: the Android alert service's notification tap writes `SITE,lon,lat,zoom`
+/// here (see `MainActivity.kt`) and the app consumes it at startup and on resume. `None` on
+/// desktop, where the env var does the same job.
+pub fn goto_file() -> Option<PathBuf> {
+    BASE.get().map(|b| b.join("goto.txt"))
+}
+
 /// Cache root (tiles, vector tiles, climatology CSV).
 pub fn cache_dir() -> Option<PathBuf> {
     root("cache")

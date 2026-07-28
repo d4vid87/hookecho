@@ -1564,6 +1564,8 @@ impl HookEchoApp {
         };
         app.palettes.reload(&app.settings.palette_paths());
         app.apply_goto_env();
+        app.drain_goto_file();
+        crate::platform::set_background_alerts(app.settings.background_alerts);
         app.fetch_overlays(&cc.egui_ctx.clone());
         app
     }
@@ -1578,6 +1580,25 @@ impl HookEchoApp {
         let Ok(v) = std::env::var("HOOKECHO_GOTO") else {
             return;
         };
+        self.apply_goto(&v);
+    }
+
+    /// Consume a `goto.txt` dropped in the storage base by the Android notification tap
+    /// (`MainActivity`), which is how a background alert deep-links into the storm it fired on.
+    /// The file is deleted as it's read so the jump happens once, not on every resume.
+    fn drain_goto_file(&mut self) {
+        let Some(path) = crate::paths::goto_file() else {
+            return;
+        };
+        let Ok(v) = std::fs::read_to_string(&path) else {
+            return;
+        };
+        let _ = std::fs::remove_file(&path);
+        self.apply_goto(v.trim());
+    }
+
+    /// `SITE,lon,lat,zoom[,RFC3339]`.
+    fn apply_goto(&mut self, v: &str) {
         let p: Vec<&str> = v.split(',').map(str::trim).collect();
         let (Some(site), Some(Ok(lon)), Some(Ok(lat)), Some(Ok(zoom))) = (
             p.first(),
@@ -7885,7 +7906,11 @@ impl HookEchoApp {
     ) {
         use crate::render::mercator::lonlat_to_world;
         let v = &mut self.views[self.active];
-        v.site = Some(site.to_ascii_uppercase());
+        // An empty site means "fly there, keep the radar" — the Android alert notification uses it,
+        // since the service knows a latitude and longitude but nothing about radar coverage.
+        if !site.is_empty() {
+            v.site = Some(site.to_ascii_uppercase());
+        }
         v.camera = crate::render::mercator::Camera {
             center: lonlat_to_world(lon, lat),
             zoom,
@@ -8748,6 +8773,9 @@ impl eframe::App for HookEchoApp {
             for v in &mut self.views {
                 v.last_poll = None;
             }
+            // A resume is also how a notification tap arrives: the activity wrote the target
+            // before handing us back the surface.
+            self.drain_goto_file();
         }
 
         // Android paste: re-focus the text field that lost focus to the Paste-button tap, before

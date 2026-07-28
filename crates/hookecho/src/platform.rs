@@ -75,6 +75,13 @@ pub fn speak(_text: &str) -> Result<(), String> {
     Err("not android".into())
 }
 
+/// Start or stop the Android background alert service (`AlertService.kt`). No-op elsewhere —
+/// desktop already keeps watching because the window is still open.
+pub fn set_background_alerts(_enabled: bool) {
+    #[cfg(target_os = "android")]
+    android_alerts::set_enabled(_enabled);
+}
+
 /// Whether the active network bills by the byte (Android only; a desktop link is never metered
 /// for our purposes). Cached for a minute — the answer changes when the user walks out of Wi-Fi
 /// range, not between frames.
@@ -230,6 +237,59 @@ mod android_ime {
             .l()?;
         let out: String = env.get_string(&JString::from(s))?.into();
         Ok((!out.is_empty()).then_some(out))
+    }
+}
+
+/// The one JNI call into our own Kotlin: `AlertService.setEnabled(activity, enabled)`.
+///
+/// The class is loaded through the activity's own ClassLoader rather than `find_class`, because
+/// this runs on a Rust thread attached to the VM, where the default loader is the system one and
+/// knows nothing about the APK's classes.
+#[cfg(target_os = "android")]
+mod android_alerts {
+    use jni::objects::{JClass, JObject, JValue};
+
+    pub(super) fn set_enabled(enabled: bool) {
+        if let Err(e) = try_set(enabled) {
+            log::warn!("background alerts toggle failed: {e:?}");
+        }
+    }
+
+    fn try_set(enabled: bool) -> jni::errors::Result<()> {
+        let Some(app) = super::android::app() else {
+            return Ok(());
+        };
+        let vm = unsafe { jni::JavaVM::from_raw(app.vm_as_ptr() as *mut jni::sys::JavaVM) }?;
+        let mut env = vm.attach_current_thread()?;
+        let activity = unsafe { JObject::from_raw(app.activity_as_ptr() as jni::sys::jobject) };
+        let loader = env
+            .call_method(
+                &activity,
+                "getClassLoader",
+                "()Ljava/lang/ClassLoader;",
+                &[],
+            )?
+            .l()?;
+        let name = env.new_string("zip.batman.hookecho.AlertService")?;
+        let class = env
+            .call_method(
+                &loader,
+                "loadClass",
+                "(Ljava/lang/String;)Ljava/lang/Class;",
+                &[(&name).into()],
+            )?
+            .l()?;
+        let class = JClass::from(class);
+        let res = env.call_static_method(
+            &class,
+            "setEnabled",
+            "(Landroid/content/Context;Z)V",
+            &[JValue::Object(&activity), JValue::Bool(enabled as u8)],
+        );
+        if res.is_err() {
+            let _ = env.exception_clear();
+        }
+        res.map(|_| ())
     }
 }
 
@@ -404,10 +464,9 @@ mod android_tts {
     /// re-run engine init (~1 s) every time and leak service connections.
     static TTS: OnceLock<jni::objects::GlobalRef> = OnceLock::new();
 
-    /// Android TTS through raw JNI rather than a Kotlin helper: the APK is a pure NativeActivity
-    /// with `hasCode="false"`, and adding a Java/Kotlin source set to carry one class would mean
-    /// the Kotlin gradle plugin, a stdlib dependency, and flipping `hasCode` — a lot of build
-    /// surface for one method call.
+    /// Android TTS through raw JNI rather than a Kotlin helper: this predates the alert service's
+    /// Kotlin source set, and it works, so it stays raw. (A helper class would now be cheap — if
+    /// this ever needs touching, that is the direction.)
     ///
     /// The cost of skipping Kotlin is the `OnInitListener`: implementing a Java interface from JNI
     /// needs a runtime proxy, so we pass `null` (AOSP null-checks it before dispatch) and instead

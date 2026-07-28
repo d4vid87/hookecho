@@ -1,6 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  Pure NativeActivity app: no Java/Kotlin (`android:hasCode="false"`). The activity loads
+  NativeActivity app: Rust draws everything, and the only Kotlin is the background alert service
+  plus the thin `MainActivity` that receives its notification taps (`android:hasCode="true"`).
+  The activity loads
   libhookecho.so and calls its `android_main` (see the `android.app.lib_name` meta-data, which must
   match the crate/.so name). `configChanges` keeps rotation/resize in-process so egui just gets a
   resize event instead of an activity restart. `screenOrientation="sensor"` makes the app follow the
@@ -20,6 +22,12 @@
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
 
+    <!-- Opt-in background alerting (Settings switch, off by default): a foreground service polls
+         api.weather.gov for the saved markers so warnings arrive with the app closed. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+
     <!-- The wgpu backend is Vulkan; require Vulkan 1.1 (0x00400003). -->
     <uses-feature
         android:name="android.hardware.vulkan.version"
@@ -28,11 +36,11 @@
 
     <application
         android:allowBackup="true"
-        android:hasCode="false"
+        android:hasCode="true"
         android:icon="@mipmap/ic_launcher"
         android:label="Hook Echo-WX">
         <activity
-            android:name="android.app.NativeActivity"
+            android:name=".MainActivity"
             android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboard|keyboardHidden|navigation|uiMode|density"
             android:screenOrientation="sensor"
             android:windowSoftInputMode="adjustResize"
@@ -46,5 +54,10 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <service
+            android:name=".AlertService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
     </application>
 </manifest>

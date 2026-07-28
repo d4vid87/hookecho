@@ -149,6 +149,12 @@ pub struct Settings {
     /// ntfy.sh topic for push notifications when a warning covers a saved location (empty = off).
     #[serde(default)]
     pub ntfy_topic: String,
+    /// Android only: run a foreground service that watches `markers` for NWS alerts and posts a
+    /// notification, so warnings arrive with the app closed. Opt-in — it costs a permanent
+    /// notification and some battery. The Kotlin service reads `markers` and this flag straight
+    /// out of settings.json, so both names are load-bearing across the language boundary.
+    #[serde(default)]
+    pub background_alerts: bool,
     /// Keep running in the background (hide to tray) instead of quitting when the window closes.
     #[serde(default)]
     pub close_to_tray: bool,
@@ -362,6 +368,7 @@ impl Default for Settings {
             start_view: None,
             alert_sound: true,
             ntfy_topic: String::new(),
+            background_alerts: false,
             close_to_tray: false,
             bookmarks: Vec::new(),
             anthropic_key: String::new(),
@@ -529,6 +536,7 @@ mod tests {
             }),
             alert_sound: false,
             ntfy_topic: "hookecho-test".to_string(),
+            background_alerts: false,
             close_to_tray: true,
             bookmarks: vec![Bookmark {
                 name: "Storm".to_string(),
@@ -581,5 +589,30 @@ mod tests {
         let s: Settings = serde_json::from_str(json).unwrap();
         assert_eq!(s.default_site, "KDMX");
         assert_eq!(s.poll_interval_secs, 30, "missing field defaults");
+    }
+
+    /// The Android alert service (`android/app/src/main/kotlin/.../AlertService.kt`) parses
+    /// settings.json by hand, in another language, with no compiler to tell it when a field is
+    /// renamed here. This test is that compiler: rename one of these and it fails, loudly,
+    /// pointing at the Kotlin that has to change with it.
+    #[test]
+    fn kotlin_alert_service_field_names_survive() {
+        let json = serde_json::to_string(&Settings {
+            markers: vec![Marker {
+                name: "Home".to_string(),
+                lat: 35.0,
+                lon: -97.0,
+                icon: None,
+            }],
+            background_alerts: true,
+            ..Settings::default()
+        })
+        .unwrap();
+        let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(v["background_alerts"], serde_json::json!(true));
+        let m = &v["markers"][0];
+        for key in ["name", "lat", "lon"] {
+            assert!(m.get(key).is_some(), "AlertService.kt reads markers[].{key}");
+        }
     }
 }

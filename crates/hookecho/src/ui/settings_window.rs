@@ -372,6 +372,28 @@ fn alerts_tab(ui: &mut egui::Ui, settings: &mut Settings) {
     ui.weak("When a warning covers a saved location marker, a push is sent to ntfy.sh/<topic>.");
     ui.weak("Subscribe to the same topic in the ntfy app on your phone. Leave blank to disable.");
 
+    if cfg!(target_os = "android") {
+        ui.add_space(8.0);
+        ui.separator();
+        ui.strong("Background alerts");
+        if ui
+            .checkbox(
+                &mut settings.background_alerts,
+                "Watch my saved locations while the app is closed",
+            )
+            .on_hover_text(
+                "Runs a small service that checks api.weather.gov for your marker locations and \
+                 posts a notification. Tapping it flies the map to that location. Costs a \
+                 permanent notification and some battery.",
+            )
+            .changed()
+        {
+            crate::platform::set_background_alerts(settings.background_alerts);
+        }
+        ui.weak("Some phones kill background services aggressively — if alerts stop arriving, \
+                 exempt Hook Echo-WX from battery optimisation in system settings.");
+    }
+
     ui.add_space(8.0);
     ui.separator();
     ui.strong("Spoken warnings");
