@@ -5,7 +5,9 @@
 //! is cleared in the render layer via the callback's `clear_tiles` flag.
 
 use crate::render::{mercator::Camera, PendingTile, TileId, VisibleTile};
+use lru::LruCache;
 use std::collections::HashSet;
+use std::num::NonZeroUsize;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{Arc, Mutex};
@@ -569,7 +571,12 @@ pub struct TileManager {
     tx: Sender<FetchedTile>,
     rx: Receiver<FetchedTile>,
     requested: HashSet<TileId>,
-    uploaded: HashSet<TileId>,
+    /// Tiles believed to be live on the GPU, newest-touched first. This mirrors the renderer's
+    /// tile map exactly: the CPU side decides what gets evicted and tells the renderer, so the
+    /// two can never disagree about whether a tile still exists.
+    uploaded: LruCache<TileId, ()>,
+    /// Ids evicted by the last `touch_visible`, handed to the renderer to drop.
+    evicted: Vec<TileId>,
     style: BasemapStyle,
     cache_root: Option<std::path::PathBuf>,
     mapbox_key: String,
@@ -595,7 +602,8 @@ impl TileManager {
             tx,
             rx,
             requested: HashSet::new(),
-            uploaded: HashSet::new(),
+            uploaded: LruCache::new(NonZeroUsize::new(RASTER_TILE_CACHE).unwrap()),
+            evicted: Vec::new(),
             style: BasemapStyle::Dark,
             cache_root,
             mapbox_key: String::new(),
@@ -751,7 +759,7 @@ impl TileManager {
     pub fn drain_ready(&mut self) -> Vec<PendingTile> {
         let mut ready = Vec::new();
         while let Ok(t) = self.rx.try_recv() {
-            if self.uploaded.insert(t.id) {
+            if self.uploaded.put(t.id, ()).is_none() {
                 ready.push(PendingTile {
                     id: t.id,
                     rgba: t.rgba,
@@ -761,6 +769,28 @@ impl TileManager {
             }
         }
         ready
+    }
+
+    /// Mark this frame's tiles as most-recently-used and return anything that fell out of the
+    /// cache, so the renderer can free it. Tiles on screen are touched first and so can never be
+    /// the ones evicted; an evicted tile also drops out of `requested`, so revisiting that area
+    /// re-fetches it (from disk, usually) instead of leaving a black square.
+    pub fn touch_visible(&mut self, visible: &[VisibleTile]) -> Vec<TileId> {
+        // Grow to fit a wide view: the cap is a resting size, not a per-frame limit.
+        let want = RASTER_TILE_CACHE.max(visible.len() + 16);
+        if self.uploaded.cap().get() != want {
+            self.uploaded.resize(NonZeroUsize::new(want).unwrap());
+        }
+        for v in visible {
+            self.uploaded.promote(&v.id);
+        }
+        while self.uploaded.len() > want {
+            if let Some((id, _)) = self.uploaded.pop_lru() {
+                self.requested.remove(&id);
+                self.evicted.push(id);
+            }
+        }
+        std::mem::take(&mut self.evicted)
     }
 }
 
@@ -825,6 +855,14 @@ pub(crate) async fn load_tile_bytes(
     }
     Ok(bytes)
 }
+
+/// How many uploaded raster tiles to keep. A 256x256 RGBA tile is ~256 KB on the GPU, so 512 is
+/// ~134 MB on a desktop and 128 keeps a phone near 34 MB.
+const RASTER_TILE_CACHE: usize = if cfg!(target_os = "android") {
+    128
+} else {
+    512
+};
 
 /// Largest the on-disk tile cache may get. It grows by ~20 KB a tile and nothing ever removed
 /// anything, so a few long sessions of panning could quietly fill a phone.

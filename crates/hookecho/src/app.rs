@@ -5637,6 +5637,13 @@ impl HookEchoApp {
             (if is_vector { ids } else { Vec::new() }, labels)
         };
         // Drain finished fetches once (on the first pane) — they upload into the shared cache.
+        // Eviction lives with the tile manager (it also owns `requested`/`uploaded`), and only
+        // the first pane runs it so a multi-pane frame doesn't evict what a later pane needs.
+        let drop_tiles = if first && is_raster {
+            self.tiles.touch_visible(&visible)
+        } else {
+            Vec::new()
+        };
         let (new_tiles, new_vector_tiles) = if first {
             let nt = self.tiles.drain_ready();
             // Drain vtiles regardless of basemap (it populates the label cache); only upload the
@@ -5693,6 +5700,7 @@ impl HookEchoApp {
             field_uploads,
             field_draws,
             clear_tiles,
+            drop_tiles,
             new_vector_tiles,
             visible_vector,
             clear_vector,
