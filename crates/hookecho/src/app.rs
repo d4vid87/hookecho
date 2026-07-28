@@ -588,6 +588,7 @@ pub(crate) enum PlaceLabelKind {
 }
 
 /// A registry row: what it's called, where it lives, what it does, and (for toggles) its state.
+#[derive(Clone)]
 pub(crate) struct PaletteEntry {
     pub label: String,
     pub category: &'static str,
@@ -839,6 +840,9 @@ pub struct HookEchoApp {
     chasepack: Option<ChasePack>,
     /// Per-pane "what's uploaded" key, so each pane re-bins/re-uploads only on a real change.
     pane_shown: std::collections::HashMap<usize, ShownKey>,
+    /// Frame counter, only used to invalidate within-frame memos.
+    frame_nr: u64,
+    palette_cache: Option<(u64, Vec<PaletteEntry>)>,
     /// Last result of each per-volume detector, keyed by what it depends on (see `volume_key`).
     #[allow(clippy::type_complexity)]
     nowcast_cache: Option<(
@@ -1286,6 +1290,8 @@ impl HookEchoApp {
             geocode_rx,
             chasepack: None,
             pane_shown: std::collections::HashMap::new(),
+            frame_nr: 0,
+            palette_cache: None,
             nowcast_cache: None,
             tds_cache: None,
             couplet_cache: None,
@@ -3483,7 +3489,24 @@ impl HookEchoApp {
 
     /// Every layer/product/tool/window as a searchable, categorized row. Consumed by the layers
     /// panel (desktop slide-in + mobile sheet) and the Ctrl+K command palette.
+    /// The action registry, rebuilt at most once a frame.
+    ///
+    /// Building it allocates ~150 owned strings, and up to five places render from it in the same
+    /// frame (drawer, mobile sheets, legend, palette). Nothing can change it mid-frame — an
+    /// action dispatched from one of those lists takes effect on the next one — so a per-frame
+    /// memo is both free and honest.
     pub(crate) fn palette_entries(&mut self) -> Vec<PaletteEntry> {
+        if let Some((frame, entries)) = &self.palette_cache {
+            if *frame == self.frame_nr {
+                return entries.clone();
+            }
+        }
+        let entries = self.palette_entries_build();
+        self.palette_cache = Some((self.frame_nr, entries.clone()));
+        entries
+    }
+
+    fn palette_entries_build(&mut self) -> Vec<PaletteEntry> {
         crate::prof_scope!("palette_entries");
         use crate::render::FieldLayer as FL;
         use AppWindow as W;
@@ -5895,22 +5918,19 @@ impl HookEchoApp {
                     continue;
                 }
                 let font = egui::FontId::proportional(if l.city { big } else { big - 2.5 });
-                let galley = painter.layout_no_wrap(l.name.clone(), font.clone(), text_col);
+                let galley = painter.layout_no_wrap(l.name.clone(), font, text_col);
                 let r = egui::Rect::from_min_size(p, galley.size()).expand(4.0);
                 if placed.iter().any(|q| q.intersects(r)) {
                     continue;
                 }
                 placed.push(r);
+                // One layout per label, reused for all nine draws. `painter.text` would lay the
+                // string out again every time, which at eight halo offsets meant ten text
+                // layouts per visible place name, every frame.
                 for off in HALO {
-                    painter.text(
-                        p + off,
-                        egui::Align2::LEFT_TOP,
-                        &l.name,
-                        font.clone(),
-                        halo_col,
-                    );
+                    painter.galley_with_override_text_color(p + off, galley.clone(), halo_col);
                 }
-                painter.text(p, egui::Align2::LEFT_TOP, &l.name, font.clone(), text_col);
+                painter.galley_with_override_text_color(p, galley, text_col);
             }
             // OpenMapTiles/OpenStreetMap credit for the label data (raster imagery is credited below).
             painter.text(
@@ -8137,6 +8157,7 @@ impl eframe::App for HookEchoApp {
         // Stamp this frame for the background workers' foreground gate (see
         // `platform::activity`). A frame that follows a gap means the app just came back, so
         // force one refresh rather than making the user wait out the poll interval.
+        self.frame_nr = self.frame_nr.wrapping_add(1);
         let focused = ctx.input(|i| i.viewport().focused.unwrap_or(true));
         if crate::platform::activity::mark_frame(focused) {
             self.overlay_last_fetch = None;
