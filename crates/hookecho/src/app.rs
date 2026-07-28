@@ -840,6 +840,10 @@ pub struct HookEchoApp {
     chasepack: Option<ChasePack>,
     /// Per-pane "what's uploaded" key, so each pane re-bins/re-uploads only on a real change.
     pane_shown: std::collections::HashMap<usize, ShownKey>,
+    /// Last `(theme, system_dark)` handed to `theme::apply`.
+    theme_applied: Option<(crate::settings::Theme, bool)>,
+    /// When the settings tree was last diffed against the saved copy.
+    settings_checked: Option<Instant>,
     /// Frame counter, only used to invalidate within-frame memos.
     frame_nr: u64,
     palette_cache: Option<(u64, Vec<PaletteEntry>)>,
@@ -1290,6 +1294,8 @@ impl HookEchoApp {
             geocode_rx,
             chasepack: None,
             pane_shown: std::collections::HashMap::new(),
+            theme_applied: None,
+            settings_checked: None,
             frame_nr: 0,
             palette_cache: None,
             nowcast_cache: None,
@@ -5958,7 +5964,19 @@ impl HookEchoApp {
         if self.show_glm {
             if let Ok(feed) = self.glm.lock() {
                 let now = chrono::Utc::now();
+                // Reject off-screen flashes in lon/lat before projecting each one: a GLM feed can
+                // carry tens of thousands of flashes while the pane shows a corner of one state.
+                let corner = |px: (f32, f32)| {
+                    let w = cam.screen_to_world(px, vp);
+                    crate::render::mercator::world_to_lonlat(w.0, w.1)
+                };
+                let (c0, c1) = (corner((0.0, 0.0)), corner((vp.0, vp.1)));
+                let (lon_lo, lon_hi) = (c0.0.min(c1.0), c0.0.max(c1.0));
+                let (lat_lo, lat_hi) = (c0.1.min(c1.1), c0.1.max(c1.1));
                 for f in feed.flashes() {
+                    if f.lon < lon_lo || f.lon > lon_hi || f.lat < lat_lo || f.lat > lat_hi {
+                        continue;
+                    }
                     let w = crate::render::mercator::lonlat_to_world(f.lon, f.lat);
                     let (sx, sy) = cam.world_to_screen(w, vp);
                     let p = egui::pos2(prect.left() + sx, prect.top() + sy);
@@ -6348,8 +6366,15 @@ impl HookEchoApp {
             {
                 let now = Utc::now();
                 let show_labels = cam.zoom >= 9.0;
+                // 230 km is at most ~2.1° of latitude and, at CONUS latitudes, under 3° of
+                // longitude — a cheap box rejects almost every spotter before the haversine runs.
+                let (max_dlon, max_dlat) = (3.0, 2.1);
                 for sp in &self.spotters {
-                    // ponytail: ~1400 haversines/frame is microseconds; cache per site if it profiles.
+                    if (sp.lon - site_pos[0]).abs() > max_dlon
+                        || (sp.lat - site_pos[1]).abs() > max_dlat
+                    {
+                        continue;
+                    }
                     if crate::geo::great_circle(site_pos, [sp.lon, sp.lat]).0 > 230.0 {
                         continue;
                     }
@@ -8138,6 +8163,13 @@ fn feature_in_box(f: &GeoFeature, bx: (f64, f64, f64, f64)) -> bool {
 }
 
 impl eframe::App for HookEchoApp {
+    /// Flush any settings change the one-second dirty-diff throttle hasn't picked up yet.
+    fn on_exit(&mut self) {
+        if self.settings != self.saved {
+            self.settings.save();
+        }
+    }
+
     fn raw_input_hook(&mut self, ctx: &egui::Context, raw_input: &mut egui::RawInput) {
         // Android: feed the status-bar / gesture-bar insets so no UI draws under system chrome.
         crate::platform::apply_safe_area(ctx, raw_input);
@@ -8205,10 +8237,14 @@ impl eframe::App for HookEchoApp {
             ctx.send_viewport_cmd(cmd);
         }
 
-        // "Modern dark pro" styling (palette/spacing/rounding/accent), applied every frame so
-        // it survives runtime theme switches.
+        // "Modern dark pro" styling (palette/spacing/rounding/accent). Re-applied when the theme
+        // or the system light/dark preference changes — it rebuilds and installs a whole
+        // `egui::Style`, which is wasted work on every other frame.
         let system_dark = ctx.input(|i| i.raw.system_theme) != Some(egui::Theme::Light);
-        crate::theme::apply(ctx, self.settings.theme, system_dark);
+        if self.theme_applied != Some((self.settings.theme, system_dark)) {
+            crate::theme::apply(ctx, self.settings.theme, system_dark);
+            self.theme_applied = Some((self.settings.theme, system_dark));
+        }
 
         // UI scale: apply the setting when the slider moved, else absorb built-in keyboard zoom
         // (Ctrl+= / Ctrl+- / Ctrl+0) back into the setting so it persists.
@@ -9167,8 +9203,16 @@ impl eframe::App for HookEchoApp {
             }
         });
 
-        // Dirty-diff persistence: one write per actual change, from any mutation site.
-        if self.settings != self.saved {
+        // Dirty-diff persistence: one write per actual change, from any mutation site. The
+        // comparison walks the whole settings tree (palettes, placefiles, markers), so it runs at
+        // most once a second rather than every frame; a change waits under a second to reach disk.
+        let due = self
+            .settings_checked
+            .is_none_or(|t| t.elapsed() >= std::time::Duration::from_secs(1));
+        if due {
+            self.settings_checked = Some(Instant::now());
+        }
+        if due && self.settings != self.saved {
             // A palette-map change reloads the color tables (bumps gen -> LUT re-bake).
             if self.settings.palettes != self.saved.palettes {
                 self.palettes.reload(&self.settings.palette_paths());
