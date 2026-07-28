@@ -201,6 +201,10 @@ layer draws its own scale and units.
 - Each warning's `eventMotionDescription` is parsed into a storm-motion vector —
   warned-storm dot, projected 15/30/45/60-minute path, and ETA readouts to your
   saved locations.
+- **Home marker with a watch radius**: mark one saved location as home and set
+  how close a warning has to come (20 miles by default) — you're alerted when
+  the polygon's *edge* reaches that ring, not only when it swallows your house.
+  Every marker carries its own radius; home draws its ring on the map.
 - Escalation tiers (CONSIDERABLE → DESTRUCTIVE/observed tornado → **Tornado
   Emergency / PDS**) drive a pulsing polygon outline, priority sorting with red
   threat chips, a dedicated emergency siren, and `urgent`-priority phone push.

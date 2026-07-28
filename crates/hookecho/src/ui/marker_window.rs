@@ -78,6 +78,8 @@ impl MarkerWindow {
                         lat: 0.0,
                         lon: 0.0,
                         icon: None,
+                        alert_radius_mi: crate::settings::default_alert_radius_mi(),
+                        home: false,
                     });
                 }
             });
@@ -86,19 +88,28 @@ impl MarkerWindow {
     }
 }
 
-/// Editable marker table (name/lat/lon/icon). Shared by the manager window and the wizard.
+/// Editable marker table (home/name/lat/lon/watch radius/icon). Shared by the manager window and
+/// the wizard.
 pub fn marker_grid(ui: &mut egui::Ui, markers: &mut Vec<Marker>, icon_tex: &IconTextures) {
     let mut remove: Option<usize> = None;
+    let mut make_home: Option<usize> = None;
     egui::Grid::new("markers_grid")
-        .num_columns(5)
+        .num_columns(7)
         .spacing([8.0, 6.0])
         .show(ui, |ui| {
+            ui.strong("Home").on_hover_text("The one place alerts speak of first");
             ui.strong("Name");
             ui.strong("Lat");
             ui.strong("Lon");
+            ui.strong("Watch")
+                .on_hover_text("Alert when a warning comes within this many miles");
             ui.strong("Icon");
             ui.end_row();
             for (i, m) in markers.iter_mut().enumerate() {
+                // Radio, not a checkbox: exactly one marker is home.
+                if ui.radio(m.home, "").clicked() {
+                    make_home = Some(i);
+                }
                 ui.add(egui::TextEdit::singleline(&mut m.name).desired_width(140.0));
                 ui.add(
                     egui::DragValue::new(&mut m.lat)
@@ -112,6 +123,14 @@ pub fn marker_grid(ui: &mut egui::Ui, markers: &mut Vec<Marker>, icon_tex: &Icon
                         .speed(0.01)
                         .max_decimals(4),
                 );
+                ui.add(
+                    egui::DragValue::new(&mut m.alert_radius_mi)
+                        .range(0.0..=200.0)
+                        .speed(1.0)
+                        .max_decimals(0)
+                        .suffix(" mi"),
+                )
+                .on_hover_text("0 = only alert when the warning polygon actually covers this spot");
                 ui.horizontal(|ui| {
                     // Thumbnail of the current icon, if its texture is loaded.
                     if let Some(tex) = m
@@ -145,6 +164,11 @@ pub fn marker_grid(ui: &mut egui::Ui, markers: &mut Vec<Marker>, icon_tex: &Icon
         });
     if let Some(i) = remove {
         markers.remove(i);
+    }
+    if let Some(i) = make_home {
+        for (j, m) in markers.iter_mut().enumerate() {
+            m.home = j == i;
+        }
     }
 }
 

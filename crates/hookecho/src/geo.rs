@@ -14,6 +14,10 @@ pub fn great_circle(a: [f64; 2], b: [f64; 2]) -> (f64, f64) {
     (km, bearing)
 }
 
+/// Kilometers in one statute mile — alert radii are set in miles because that's how people
+/// describe how far away weather is.
+pub const KM_PER_MILE: f64 = 1.609_344;
+
 /// Kilometers to nautical miles.
 pub fn km_to_nmi(km: f64) -> f64 {
     km / 1.852

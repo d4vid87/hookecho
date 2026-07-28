@@ -2016,14 +2016,24 @@ impl HookEchoApp {
             if self.known_warning_ids.insert(a.id.clone()) && self.warnings_seeded {
                 let esc = wxdata::alerts::escalation(a);
                 let urgent = esc >= 2;
-                // A watched location (saved marker) inside the polygon always alerts + pushes.
+                // A watched location always alerts + pushes: inside the polygon, or within that
+                // marker's radius of it. Home first, then the closest — a warning that clips two
+                // saved places should name the one you sleep in.
                 let hit = self
                     .settings
                     .markers
                     .iter()
-                    .find(|m| f.contains(m.lon, m.lat));
+                    .filter_map(|m| {
+                        let km = f.distance_km(m.lon, m.lat);
+                        (km <= m.alert_radius_mi * crate::geo::KM_PER_MILE).then_some((m, km))
+                    })
+                    .min_by(|(a, ka), (b, kb)| {
+                        b.home.cmp(&a.home).then(
+                            ka.partial_cmp(kb).unwrap_or(std::cmp::Ordering::Equal),
+                        )
+                    });
                 let (label, area) = match hit {
-                    Some(m) => {
+                    Some((m, km)) => {
                         // Watched location covered → push to the phone (opt-in ntfy topic).
                         self.push_ntfy(
                             &format!("⚠ {} — {}", a.event, m.name),
@@ -2034,7 +2044,16 @@ impl HookEchoApp {
                             },
                             urgent,
                         );
-                        (format!("⚠ {}", a.event), format!("covers {}", m.name))
+                        let where_ = if km <= 0.05 {
+                            format!("covers {}", m.name)
+                        } else {
+                            format!(
+                                "{:.0} mi from {}",
+                                km / crate::geo::KM_PER_MILE,
+                                m.name
+                            )
+                        };
+                        (format!("⚠ {}", a.event), where_)
                     }
                     None => {
                         // No watched location: banner only if it's near the selected radar.
@@ -6732,6 +6751,8 @@ impl HookEchoApp {
                             lat,
                             lon,
                             icon: None,
+                            alert_radius_mi: crate::settings::default_alert_radius_mi(),
+                            home: false,
                         });
                     }
                     MapTool::CrossSection => {
@@ -8176,6 +8197,25 @@ impl HookEchoApp {
                 continue;
             }
             let col = crate::theme::accent(self.settings.theme);
+            // Home wears its watch radius: the ring is the ground truth for "within 20 miles",
+            // and a circle you can see beats a number you have to trust.
+            if m.home && m.alert_radius_mi > 0.0 {
+                let km = m.alert_radius_mi * crate::geo::KM_PER_MILE;
+                let edge = crate::geo::destination_point([m.lon, m.lat], 90.0, km);
+                let ew = crate::render::mercator::lonlat_to_world(edge[0], edge[1]);
+                let (ex, _) = cam.world_to_screen(ew, vp);
+                let r = (prect.left() + ex - p.x).abs();
+                if r > 4.0 && r < 4000.0 {
+                    painter.circle_stroke(
+                        p,
+                        r,
+                        egui::Stroke::new(
+                            1.0,
+                            egui::Color32::from_rgba_unmultiplied(col.r(), col.g(), col.b(), 70),
+                        ),
+                    );
+                }
+            }
             // Uploaded icon if one is loaded; otherwise the default accent dot.
             let tex = m
                 .icon
@@ -10064,6 +10104,8 @@ impl eframe::App for HookEchoApp {
                         lat,
                         lon,
                         icon: None,
+                        alert_radius_mi: crate::settings::default_alert_radius_mi(),
+                        home: false,
                     });
                     self.settings.save();
                     // Fly the active pane to the new marker (same idiom as the alert panel).

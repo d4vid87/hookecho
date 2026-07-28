@@ -84,6 +84,8 @@ pub fn show(
                             lat: 0.0,
                             lon: 0.0,
                             icon: None,
+                            alert_radius_mi: crate::settings::default_alert_radius_mi(),
+                            home: false,
                         });
                     }
                 }

@@ -111,6 +111,38 @@ impl GeoFeature {
         b
     }
 
+    /// Great-circle kilometers from `(lon, lat)` to the nearest point on this feature's boundary,
+    /// or 0 when the point is inside it. Used by the watched-location radius: an NWS polygon three
+    /// counties wide still matters when its edge is a few miles from your house.
+    ///
+    /// Distance to each edge is computed by projecting onto the segment in a local flat frame
+    /// (longitude scaled by cos(lat)), which is exact enough at the scales this is asked about.
+    pub fn distance_km(&self, lon: f64, lat: f64) -> f64 {
+        if self.contains(lon, lat) {
+            return 0.0;
+        }
+        const KM_PER_DEG: f64 = 111.194_927;
+        let scale = lat.to_radians().cos().max(0.01);
+        let to_xy = |p: [f64; 2]| [(p[0] - lon) * scale * KM_PER_DEG, (p[1] - lat) * KM_PER_DEG];
+        let mut best = f64::INFINITY;
+        for ring in &self.rings {
+            for pair in ring.windows(2) {
+                let (a, b) = (to_xy(pair[0]), to_xy(pair[1]));
+                let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
+                let len2 = dx * dx + dy * dy;
+                // Clamp the projection to the segment, so endpoints win for a point "past" it.
+                let t = if len2 <= f64::EPSILON {
+                    0.0
+                } else {
+                    ((-a[0] * dx - a[1] * dy) / len2).clamp(0.0, 1.0)
+                };
+                let (cx, cy) = (a[0] + t * dx, a[1] + t * dy);
+                best = best.min((cx * cx + cy * cy).sqrt());
+            }
+        }
+        best
+    }
+
     /// Is `(lon, lat)` inside this feature's outer ring (minus holes)?
     pub fn contains(&self, lon: f64, lat: f64) -> bool {
         let Some(outer) = self.rings.first() else {
@@ -232,6 +264,21 @@ mod tests {
             detail: String::new(),
             alert: None,
         }
+    }
+
+    #[test]
+    fn distance_is_zero_inside_and_grows_outside() {
+        let f = square(FeatureKind::Warning);
+        assert_eq!(f.distance_km(1.0, 1.0), 0.0);
+        // One degree of latitude due north of the top edge is ~111 km.
+        let north = f.distance_km(1.0, 3.0);
+        assert!((north - 111.2).abs() < 1.0, "{north}");
+        // Just outside the east edge at the equator: 0.1 deg lon is ~11 km.
+        let east = f.distance_km(2.1, 1.0);
+        assert!((east - 11.1).abs() < 0.5, "{east}");
+        // Diagonally off a corner, so the nearest point is the vertex, not an edge projection.
+        let corner = f.distance_km(3.0, 3.0);
+        assert!((corner - 157.0).abs() < 2.0, "{corner}");
     }
 
     #[test]

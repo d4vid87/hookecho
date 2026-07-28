@@ -338,6 +338,19 @@ pub struct Marker {
     /// settings stay portable). `None` draws the default accent dot.
     #[serde(default)]
     pub icon: Option<String>,
+    /// Alert when a warning comes within this many miles of the marker, not only when the polygon
+    /// covers it. A warning three counties wide still matters when its edge is down the road.
+    #[serde(default = "default_alert_radius_mi")]
+    pub alert_radius_mi: f64,
+    /// The one marker that is home: drawn with a ring, and the place alerts speak of by default.
+    /// At most one marker has this set (the marker editor enforces it).
+    #[serde(default)]
+    pub home: bool,
+}
+
+/// Default watch radius for a marker, in miles.
+pub fn default_alert_radius_mi() -> f64 {
+    20.0
 }
 
 /// Whether radar timestamps read in the selected site's local time or in UTC ("Zulu").
@@ -586,6 +599,8 @@ mod tests {
                 lat: 35.3,
                 lon: -97.5,
                 icon: Some("home.png".to_string()),
+                alert_radius_mi: 20.0,
+                home: true,
             }],
             dealias_velocity: true,
             mapbox_key: "pk.test".to_string(),
@@ -666,6 +681,8 @@ mod tests {
                 lat: 35.0,
                 lon: -97.0,
                 icon: None,
+                alert_radius_mi: crate::settings::default_alert_radius_mi(),
+                home: false,
             }],
             background_alerts: true,
             ..Settings::default()
