@@ -90,6 +90,18 @@ fn append_builtin(sink: &Sink, sound: &AlertSound) {
                 sink.append(tone(950.0, 90).amplify(0.0));
             }
         }
+        // The EAS/NWS Attention Signal: 853 Hz and 960 Hz sounded together. Eight seconds is the
+        // broadcast length; two is plenty on a desktop, and unmistakable. Amplitudes are halved
+        // so summing the pair doesn't clip.
+        AlertSound::Eas => {
+            let a = SineWave::new(853.0).amplify(0.5);
+            let b = SineWave::new(960.0).amplify(0.5);
+            sink.append(
+                a.mix(b)
+                    .take_duration(Duration::from_millis(2000))
+                    .fade_in(Duration::from_millis(30)),
+            );
+        }
         // Four rapid low ticks.
         AlertSound::Pulse => {
             for _ in 0..4 {

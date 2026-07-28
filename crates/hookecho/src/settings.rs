@@ -74,17 +74,22 @@ pub enum AlertSound {
     Siren,
     Alarm,
     Pulse,
+    /// The EAS/NWS Attention Signal: 853 Hz and 960 Hz together, the sound that precedes an
+    /// emergency broadcast. Synthesized from the two published frequencies like every other
+    /// built-in — no recording is bundled.
+    Eas,
     Custom(String),
 }
 
 impl AlertSound {
     /// The synthesized built-ins, for sound-picker combos.
-    pub const BUILTINS: [AlertSound; 5] = [
+    pub const BUILTINS: [AlertSound; 6] = [
         AlertSound::Chime,
         AlertSound::Ding,
         AlertSound::Siren,
         AlertSound::Alarm,
         AlertSound::Pulse,
+        AlertSound::Eas,
     ];
 
     pub fn label(&self) -> &'static str {
@@ -94,6 +99,7 @@ impl AlertSound {
             AlertSound::Siren => "Siren",
             AlertSound::Alarm => "Alarm",
             AlertSound::Pulse => "Pulse",
+            AlertSound::Eas => "Emergency (EAS tone)",
             AlertSound::Custom(_) => "Custom…",
         }
     }
@@ -267,7 +273,7 @@ fn default_rotation_sound() -> AlertSound {
 }
 
 fn default_emergency_sound() -> AlertSound {
-    AlertSound::Siren
+    AlertSound::Eas
 }
 
 /// A portable settings export: the full settings plus inlined `.pal` contents (by moment short
