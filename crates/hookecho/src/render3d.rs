@@ -59,8 +59,12 @@ struct Gpu {
 }
 
 /// Long-lived raymarch resources (pipeline + latest volume), stored in egui's callback map.
+///
+/// The pipeline is built the first time a 3D volume is uploaded, not at startup: compiling the
+/// raymarch shader costs real time on a phone's driver, and most sessions never open the 3D view.
 pub struct Volume3dResources {
-    pipeline: wgpu::RenderPipeline,
+    format: wgpu::TextureFormat,
+    pipeline: Option<wgpu::RenderPipeline>,
     bgl: wgpu::BindGroupLayout,
     uniform_buf: wgpu::Buffer,
     gpu: Option<Gpu>,
@@ -68,7 +72,6 @@ pub struct Volume3dResources {
 
 impl Volume3dResources {
     pub fn new(device: &wgpu::Device, format: wgpu::TextureFormat) -> Self {
-        let shader = device.create_shader_module(wgpu::include_wgsl!("shaders/raymarch.wgsl"));
         let bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("raymarch_bgl"),
             entries: &[
@@ -104,9 +107,32 @@ impl Volume3dResources {
                 },
             ],
         });
+        let uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("raymarch_uniform"),
+            size: std::mem::size_of::<Uniforms>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        Self {
+            format,
+            pipeline: None,
+            bgl,
+            uniform_buf,
+            gpu: None,
+        }
+    }
+
+    /// Compile the raymarch pipeline on first use.
+    fn ensure_pipeline(&mut self, device: &wgpu::Device) {
+        if self.pipeline.is_some() {
+            return;
+        }
+        let format = self.format;
+        let bgl = &self.bgl;
+        let shader = device.create_shader_module(wgpu::include_wgsl!("shaders/raymarch.wgsl"));
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("raymarch_layout"),
-            bind_group_layouts: &[Some(&bgl)],
+            bind_group_layouts: &[Some(bgl)],
             immediate_size: 0,
         });
         let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -146,21 +172,13 @@ impl Volume3dResources {
             multiview_mask: None,
             cache: None,
         });
-        let uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("raymarch_uniform"),
-            size: std::mem::size_of::<Uniforms>() as u64,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        Self {
-            pipeline,
-            bgl,
-            uniform_buf,
-            gpu: None,
-        }
+        self.pipeline = Some(pipeline);
     }
 
     fn upload(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, up: &Volume3dUpload) {
+        // Every route to a 3D draw goes through here (the egui callback and `render_once`), so
+        // this is the one place the pipeline has to exist by.
+        self.ensure_pipeline(device);
         let size = wgpu::Extent3d {
             width: up.n,
             height: up.n,
@@ -249,8 +267,8 @@ impl Volume3dResources {
     }
 
     fn record(&self, pass: &mut wgpu::RenderPass<'_>) {
-        if let Some(gpu) = &self.gpu {
-            pass.set_pipeline(&self.pipeline);
+        if let (Some(gpu), Some(pipeline)) = (&self.gpu, &self.pipeline) {
+            pass.set_pipeline(pipeline);
             pass.set_bind_group(0, &gpu.bind_group, &[]);
             pass.draw(0..3, 0..1);
         }
