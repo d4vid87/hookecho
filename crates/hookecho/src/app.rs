@@ -857,7 +857,6 @@ pub struct HookEchoApp {
     site_dialog: Option<ui::site_dialog::SiteDialog>,
     wizard: ui::wizard::Wizard,
     settings_window: ui::settings_window::SettingsWindow,
-    cursor_ll: Option<(f64, f64)>,
     /// Active color tables (one per moment); reloaded when the palette settings change.
     palettes: Palettes,
     /// Live chunk stream for the active view: (view index, site, task handle).
@@ -1302,7 +1301,6 @@ impl HookEchoApp {
                 w
             },
             settings_window: Default::default(),
-            cursor_ll: None,
             palettes: Palettes::default(),
             live_stream: None,
             last_stream_attempt: None,
@@ -3166,6 +3164,14 @@ impl HookEchoApp {
         });
         let loading = self.views[self.active].loading;
         let mut go_head = false;
+        // Soonest rain arrival and the DVR buffer depth ride the pill: both are about time, and
+        // both used to sit in an always-on chip in the opposite corner.
+        let rain = self
+            .rain_eta
+            .iter()
+            .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
+            .map(|(name, min)| format!("\u{1f327} {name} ~{min:.0} min"));
+        let dvr = self.dvr_depth();
         // Edited through a local so the pill closure keeps its single `&mut self.views` borrow.
         let mut loop_frames = self.settings.live_loop_frames;
         egui::Area::new(egui::Id::new("timeline_pill"))
@@ -3314,6 +3320,24 @@ impl HookEchoApp {
                                 .monospace()
                                 .color(egui::Color32::from_gray(215)),
                         );
+                        if let Some(r) = &rain {
+                            ui.label(
+                                egui::RichText::new(r)
+                                    .size(crate::ui::style::FONT_SM)
+                                    .color(egui::Color32::from_rgb(110, 180, 240)),
+                            )
+                            .on_hover_text(
+                                "Estimated from storm motion \u{2014} rough for backbuilding storms",
+                            );
+                        }
+                        if dvr > 1 {
+                            ui.label(
+                                egui::RichText::new(format!("\u{27f2} {dvr}"))
+                                    .size(crate::ui::style::FONT_SM)
+                                    .color(egui::Color32::from_gray(150)),
+                            )
+                            .on_hover_text("Frames buffered in memory for instant replay (R)");
+                        }
                         if let Some(age) = &age {
                             ui.label(
                                 egui::RichText::new(age)
@@ -5719,15 +5743,6 @@ impl HookEchoApp {
                 }
             }
         }
-        if response.hover_pos().is_some_and(|p| prect.contains(p)) {
-            let cam = self.views[idx].camera;
-            self.cursor_ll = response.hover_pos().map(|pos| {
-                let px = (pos.x - prect.left(), pos.y - prect.top());
-                let w = cam.screen_to_world(px, vp);
-                crate::render::mercator::world_to_lonlat(w.0, w.1)
-            });
-        }
-
         if response.clicked() {
             self.active = idx;
             if let Some(pos) = response.interact_pointer_pos() {
@@ -7820,7 +7835,6 @@ impl HookEchoApp {
     /// volume time it also carried now live in the timeline pill where the clock belongs.
     fn info_chip(&mut self, ctx: &egui::Context) {
         use crate::ui::style;
-        let v = &self.views[self.active];
         let hint = match self.tool {
             MapTool::Measure => "Measure: click 2 points",
             MapTool::Marker => "Drop marker: click map",
@@ -7831,68 +7845,21 @@ impl HookEchoApp {
             MapTool::Climatology => "Climatology: click a point",
             MapTool::Interrogate => "",
         };
-        // Soonest rain arrival rides the info chip rather than adding another floating surface.
-        let rain = self
-            .rain_eta
-            .iter()
-            .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
-            .map(|(name, min)| format!("\u{1f327} {name} ~{min:.0} min"));
-        let zoom = format!("z{:.1}", v.camera.zoom);
-        let coords = self
-            .cursor_ll
-            .map(|(lon, lat)| format!("{lat:.3}, {lon:.3}"));
-        let depth = self.dvr_depth();
+        // Nothing armed, nothing to say. The chip used to be a permanent readout of the cursor's
+        // lat/lon and the zoom level — numbers nobody was reading, in the corner where the map is.
+        if hint.is_empty() {
+            return;
+        }
         let accent = crate::theme::accent(self.settings.theme);
         egui::Area::new(egui::Id::new("info_chip"))
             .anchor(
                 egui::Align2::RIGHT_BOTTOM,
                 egui::vec2(-14.0, style::LANE_BOTTOM_CHIP),
             )
-            .interactable(depth > 1)
+            .interactable(false)
             .show(ctx, |ui| {
                 style::glass(238).show(ui, |ui| {
-                    ui.horizontal(|ui| {
-                        if let Some(r) = &rain {
-                            ui.label(
-                                egui::RichText::new(r)
-                                    .size(style::FONT_SM)
-                                    .color(egui::Color32::from_rgb(110, 180, 240)),
-                            )
-                            .on_hover_text(
-                                "Estimated from storm motion \u{2014} rough for backbuilding storms",
-                            );
-                            ui.separator();
-                        }
-                        if !hint.is_empty() {
-                            ui.label(egui::RichText::new(hint).size(style::FONT_SM).color(accent));
-                            ui.separator();
-                        }
-                        if depth > 1 {
-                            ui.label(
-                                egui::RichText::new(format!("⟲ DVR {depth}"))
-                                    .size(style::FONT_SM)
-                                    .color(egui::Color32::from_gray(170)),
-                            )
-                            .on_hover_text(
-                                "Frames buffered in memory for instant replay (press R)",
-                            );
-                            ui.separator();
-                        }
-                        if let Some(c) = coords {
-                            ui.label(
-                                egui::RichText::new(c)
-                                    .size(style::FONT_SM)
-                                    .monospace()
-                                    .color(egui::Color32::from_gray(170)),
-                            );
-                            ui.separator();
-                        }
-                        ui.label(
-                            egui::RichText::new(zoom)
-                                .size(style::FONT_SM)
-                                .color(egui::Color32::from_gray(170)),
-                        );
-                    });
+                    ui.label(egui::RichText::new(hint).size(style::FONT_SM).color(accent));
                 });
             });
     }
