@@ -1522,15 +1522,32 @@ impl HookEchoApp {
         self.goto_view(site, lon, lat, zoom, time);
     }
 
+    /// Largest edge a national field grid may keep. Bounded by what the GPU will accept, and
+    /// then hard-capped: at 8192 a single f32 grid is ~268 MB of RAM before it is ever indexed,
+    /// which no phone should be asked to hold — and the Adreno 750 reports 16384, so the device
+    /// limit alone never bit. 4096 on Android is still finer than the screen can show.
+    fn field_texture_cap(&self) -> usize {
+        let ceiling = if cfg!(target_os = "android") { 4096 } else { 8192 };
+        (self.max_texture_dim as usize).min(ceiling)
+    }
+
     /// Spawn background fetches for all overlay sources (alerts, SPC outlooks, MDs).
     /// Spawn a background overlay fetch, routing the result to `overlay_rx`.
     fn spawn_overlay(&self, ctx: &egui::Context, source: OverlaySource) {
         let http = self.http.clone();
         let tx = self.overlay_tx.clone();
         let ctx = ctx.clone();
+        let cap = self.field_texture_cap();
         self._rt.spawn(async move {
             match source.fetch(&http).await {
                 Ok(msg) => {
+                    // Max-pool oversized grids here, on the fetch task: MRMS rotation tracks and
+                    // AzShear arrive 14000x7000, and doing this on the UI thread stalled a frame
+                    // for the whole pool.
+                    let msg = match msg {
+                        OverlayMsg::Field(layer, f) => OverlayMsg::Field(layer, f.decimated(cap)),
+                        other => other,
+                    };
                     let _ = tx.send(msg);
                     ctx.request_repaint();
                 }
@@ -4114,11 +4131,6 @@ impl HookEchoApp {
                     if layer == crate::render::FieldLayer::Lightning {
                         self.check_lightning_proximity(&field);
                     }
-                    // Some MRMS products (rotation/AzShear) are 14000×7000 — over the GPU texture
-                    // cap; max-pool to the smaller of an 8192 ceiling and the device's real limit
-                    // (mobile GPUs can be as low as 4096).
-                    let cap = (self.max_texture_dim as usize).min(8192);
-                    let field = field.decimated(cap);
                     let upload = self.field_upload(layer, &field);
                     if let Some(s) = self.fields.get_mut(&layer) {
                         s.pending = Some(upload);

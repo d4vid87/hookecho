@@ -39,6 +39,7 @@ pub fn rotation_track(minutes: u16) -> &'static str {
 }
 
 /// A decoded MRMS reflectivity field: a regular lat/lon grid of dBZ (`NaN` = no data).
+#[derive(Clone)]
 pub struct MrmsField {
     /// Row-major `ny × nx` dBZ values; row 0 is the northernmost latitude.
     pub values: Vec<f32>,
@@ -101,19 +102,10 @@ impl MrmsField {
     /// Max-pool the grid down so both dimensions are `<= max_dim` (GPU texture limits). Some MRMS
     /// products (rotation tracks, AzShear) are 14000×7000 — larger than the 8192 texture cap.
     /// Max-pooling keeps the strongest signal in each block (right for shear/reflectivity).
-    pub fn decimated(&self, max_dim: usize) -> MrmsField {
+    pub fn decimated(self, max_dim: usize) -> MrmsField {
         let factor = self.nx.max(self.ny).div_ceil(max_dim);
         if factor <= 1 {
-            return MrmsField {
-                values: self.values.clone(),
-                nx: self.nx,
-                ny: self.ny,
-                lon_west: self.lon_west,
-                lon_east: self.lon_east,
-                lat_north: self.lat_north,
-                lat_south: self.lat_south,
-                time: self.time,
-            };
+            return self; // already fits — hand the grid straight back, no copy
         }
         let nx = self.nx.div_ceil(factor);
         let ny = self.ny.div_ceil(factor);
@@ -298,14 +290,17 @@ mod tests {
             lat_south: 36.0,
             time: chrono::Utc::now(),
         };
-        let d = f.decimated(2);
+        let d = f.clone().decimated(2);
         assert_eq!((d.nx, d.ny), (2, 2));
         // Top-left block {0,1,4,5} → max 5; bottom-right {10,11,14,15} → max 15.
         assert_eq!(d.values[0], 5.0);
         assert_eq!(d.values[3], 15.0);
         // Corners preserved (no reprojection).
         assert_eq!(d.lon_west, -100.0);
-        // Already-small grids pass through unchanged.
-        assert_eq!(f.decimated(8192).nx, 4);
+        // Already-small grids pass straight back with no copy: same allocation, same values.
+        let ptr = f.values.as_ptr();
+        let passthrough = f.decimated(8192);
+        assert_eq!(passthrough.nx, 4);
+        assert_eq!(passthrough.values.as_ptr(), ptr);
     }
 }
