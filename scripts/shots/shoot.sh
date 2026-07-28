@@ -150,7 +150,7 @@ snap() { # snap NAME
   local kb=0
   # Satellite basemaps under a full-screen radar field are expensive to encode; step the quality
   # down until it fits rather than shipping one 500K tile in an otherwise budgeted set.
-  for q in 88 82 76 70; do
+  for q in 88 82 76 70 64 58; do
     magick "$raw" -quality "$q" "$f"
     kb=$(( $(stat -c%s "$f") / 1024 ))
     [ "$kb" -le 400 ] && break

@@ -40,38 +40,43 @@ same five artifacts, if you want the newest work without waiting for a tag.
 First launch opens a setup wizard: pick your home radar site, a theme (13 built
 in), and how warnings should reach you (chime and/or [ntfy.sh](https://ntfy.sh)
 push to your phone). After that, three one-time callouts point at the controls
-you'll actually use. Re-run the wizard anytime from **⋯ More → Setup wizard**.
+you'll actually use. Re-run the wizard anytime from the drawer's **App → Setup wizard**.
 
 ## The interface
 
 Hook Echo-WX is a map with a few floating controls over it — no menu bar, no
 docked toolbar, nothing between you and the radar:
 
+- **Top-left** is the hamburger. It opens the one drawer that holds everything:
+  every product, layer, window and tool, searchable and described in plain
+  English, plus the layer options, the map settings and the app's own commands.
+  `Ctrl+K` opens it typing-ready, and Enter runs the top match.
+- **Top-right** is the alert bell, badged with how many alerts cover your view.
 - **Bottom-left** names the product you're looking at. Click it to switch
-  products or tilts; each one says in plain English what it shows.
+  products or tilts; each one says in plain English what it shows, and its
+  Options disclosure holds the expert knobs for that product.
 - **Bottom-center** is the timeline: site, clock, play, scrub, and a LIVE badge
-  that snaps back to the newest scan.
-- **Right edge**: Layers, radar Site, Alerts, Advanced toolbox, Settings, and
-  **⋯ More**.
-- **Top-center** searches for a place. `Ctrl+K` searches every product, layer,
-  window and tool in the app — one list, described in plain English.
+  that snaps back to the newest scan. Right-click the badge for the archive day,
+  loop and playback speed.
 
-| Pick a product | Find any layer |
+That's the whole of it. Searching for a place is the same box — type a name and
+take the **Fly to** row at the bottom of the results.
+
+| Pick a product | One drawer for everything |
 |---|---|
-| ![The product picker open over the Joplin supercell](docs/shots/products.jpg) | ![The Layers panel open over the Mayfield supercell](docs/shots/layers.jpg) |
+| ![The product picker open over the Joplin supercell](docs/shots/products.jpg) | ![The drawer open over the Mayfield supercell](docs/shots/layers.jpg) |
 | <sub>Joplin, MO — 22 May 2011</sub> | <sub>Mayfield, KY — 11 Dec 2021</sub> |
 
 Radar times read in **the selected radar's local time**, not Zulu — a KEPZ pane
 shows MDT while a KTLX pane shows CDT, side by side. Settings → Units puts it
 back to UTC if you'd rather work in Zulu.
 
-Every expert control is still there. The Advanced toolbox (`F7`) docks a panel
-with the site, the basemap, the product and tilt, the same searchable layer list,
-and a Layer Options section that shows a layer's settings only once that layer is
-on — so the forecast-hour slider appears when you turn on future radar, and stays
-out of the way when you haven't.
+Every expert control is still there, in the drawer's **Layer options** section,
+which shows a layer's settings only once that layer is on — so the forecast-hour
+slider appears when you turn on future radar, and stays out of the way when you
+haven't.
 
-Search a place in the top bar and it flies there, with a **Save marker** button
+Search a place in the drawer and it flies there, with a **Save marker** button
 if you want to keep it. Markers are what the warning, lightning and rain-arrival
 alerts watch. Tap one on the map to rename or remove it.
 
@@ -240,13 +245,15 @@ layer draws its own scale and units.
   warnings (`F9`).
 - Click anywhere for historical tornado tracks near that point (SPC 1950–2022)
   with an EF-scale histogram.
+- Draw on the map freehand to circle the storm you're talking about, and look
+  through FAA airport webcams to see what the sky actually looks like.
 - Multi-pane layouts, placefiles with icon sheets and a layer manager, a sensor
   dashboard, range rings, 13 themes, and tray-based background alerting.
 
 On Android the same app wears a touch-first skin: a five-slot labeled dock
-(Play · Layers · Products · Site · More), slide-up sheets, a navigation drawer
-built from the same described action list as the desktop Layers panel, and
-native GPS for chase mode.
+(Play · Layers · Products · Site · More), slide-up sheets, and a navigation
+drawer that is the desktop drawer — same described action list, same layer
+options, same app rows — plus native GPS for chase mode.
 
 ## Repository layout
 
