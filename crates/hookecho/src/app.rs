@@ -4986,7 +4986,15 @@ impl HookEchoApp {
                 }
             }
             PaletteAction::SetContours(k) => self.contour_kind = k,
-            PaletteAction::Tool(t) => self.tool = t,
+            // Tapping the armed tool disarms it. Interrogate is the resting state, so "off" means
+            // back to it — without this the row read ON with no way to turn it off.
+            PaletteAction::Tool(t) => {
+                self.tool = if self.tool == t {
+                    MapTool::Interrogate
+                } else {
+                    t
+                }
+            }
             PaletteAction::SetPanes(n) => self.set_pane_count(n),
             PaletteAction::AllTilts => self.apply_all_tilts(),
             PaletteAction::CycleBasemap => self.apply_action(Action::CycleBasemap, ctx),
