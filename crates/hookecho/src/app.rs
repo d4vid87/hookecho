@@ -709,8 +709,6 @@ pub(crate) struct FieldState {
 /// What a settings-sync worker reports back. Everything network lives on the runtime; the app
 /// thread only ever applies the outcome.
 enum SyncMsg {
-    /// A sign-in started: show this code and URL until the user finishes.
-    Device(crate::cloud::DeviceAuth),
     /// Fresh tokens (from finishing a sign-in, or from a refresh mid-sync).
     Signed(crate::cloud::Tokens),
     /// The remote settings blob, to merge over the local one.
@@ -1082,7 +1080,7 @@ pub struct HookEchoApp {
     /// sign-in's code pair, the line shown in the Sync tab, worker replies, and the poll clock.
     sync_tokens: Option<crate::cloud::Tokens>,
     sync_state: crate::cloud::SyncState,
-    sync_device: Option<crate::cloud::DeviceAuth>,
+    sync_login: Option<crate::cloud::Pending>,
     sync_status: String,
     sync_rx: Option<std::sync::mpsc::Receiver<SyncMsg>>,
     sync_checked: Option<std::time::Instant>,
@@ -1515,7 +1513,7 @@ impl HookEchoApp {
             gps_rx: None,
             sync_tokens: crate::cloud::Tokens::load(),
             sync_state: crate::cloud::SyncState::load(),
-            sync_device: None,
+            sync_login: None,
             sync_status: String::new(),
             sync_rx: None,
             sync_checked: None,
@@ -2502,40 +2500,70 @@ impl HookEchoApp {
         self.chase_applied = Some((lon, lat));
     }
 
-    /// Start the Google device-code sign-in. The user types the code Google gives us into any
-    /// browser; we poll until they finish.
+    /// Start the Google sign-in: bind a loopback port, send the browser to Google, and wait for
+    /// the redirect to come back with a code.
     fn sync_sign_in(&mut self) {
-        let (id, secret) = (
-            self.settings.sync_client_id.trim().to_string(),
-            self.settings.sync_client_secret.trim().to_string(),
-        );
+        let id = self.settings.sync_client_id.trim().to_string();
         if id.is_empty() {
             self.sync_status = "Add your OAuth client id first (see docs/sync.md)".into();
             return;
         }
-        let (tx, rx) = std::sync::mpsc::channel();
-        self.sync_rx = Some(rx);
-        self.sync_status = "Asking Google for a code…".into();
-        self._rt.spawn(async move {
-            let auth = match crate::cloud::start_device_auth(&id).await {
-                Ok(a) => a,
-                Err(e) => {
-                    let _ = tx.send(SyncMsg::Error(e));
-                    return;
-                }
-            };
-            if tx.send(SyncMsg::Device(auth.clone())).is_err() {
+        match crate::cloud::start_login(&id) {
+            Ok(pending) => {
+                self.sync_status = match crate::platform::open_url(&pending.url) {
+                    Ok(()) => "Finish in the browser window that just opened…".into(),
+                    // No browser we could launch — the URL is on screen with a Copy button.
+                    Err(e) => format!("Open the sign-in link below ({e})"),
+                };
+                self.sync_login = Some(pending);
+            }
+            Err(e) => self.sync_status = format!("Sign-in failed: {e}"),
+        }
+    }
+
+    /// Watch the loopback listener for the redirect, then swap the code for tokens.
+    fn poll_login(&mut self) {
+        let Some(code) = self
+            .sync_login
+            .as_ref()
+            .and_then(|p| p.rx.try_recv().ok())
+        else {
+            return;
+        };
+        let Some(pending) = self.sync_login.take() else {
+            return;
+        };
+        let code = match code {
+            Ok(c) => c,
+            Err(e) => {
+                self.sync_status = format!("Sign-in failed: {e}");
                 return;
             }
-            match crate::cloud::poll_device_token(&id, &secret, &auth).await {
+        };
+        let (id, secret) = (
+            self.settings.sync_client_id.trim().to_string(),
+            self.settings.sync_client_secret.trim().to_string(),
+        );
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.sync_rx = Some(rx);
+        self.sync_status = "Finishing sign-in…".into();
+        self._rt.spawn(async move {
+            let msg = match crate::cloud::exchange(
+                &id,
+                &secret,
+                &code,
+                &pending.verifier,
+                &pending.redirect,
+            )
+            .await
+            {
                 Ok(t) => {
                     t.save();
-                    let _ = tx.send(SyncMsg::Signed(t));
+                    SyncMsg::Signed(t)
                 }
-                Err(e) => {
-                    let _ = tx.send(SyncMsg::Error(e));
-                }
-            }
+                Err(e) => SyncMsg::Error(e),
+            };
+            let _ = tx.send(msg);
         });
     }
 
@@ -2544,7 +2572,7 @@ impl HookEchoApp {
     fn sync_sign_out(&mut self) {
         crate::cloud::Tokens::forget();
         self.sync_tokens = None;
-        self.sync_device = None;
+        self.sync_login = None;
         self.sync_state = crate::cloud::SyncState::default();
         self.sync_state.save();
         self.sync_status = "Signed out".into();
@@ -2627,17 +2655,14 @@ impl HookEchoApp {
 
     /// Apply whatever the sync worker sent, and start a pass when one is due.
     fn poll_sync(&mut self) {
+        self.poll_login();
         while let Some(msg) = self.sync_rx.as_ref().and_then(|rx| rx.try_recv().ok()) {
             match msg {
-                SyncMsg::Device(a) => {
-                    self.sync_status = "Waiting for you to finish in the browser…".into();
-                    self.sync_device = Some(a);
-                }
                 SyncMsg::Signed(t) => {
                     let first = self.sync_tokens.is_none();
                     self.sync_tokens = Some(t);
                     if first {
-                        self.sync_device = None;
+                        self.sync_login = None;
                         self.settings.sync_enabled = true;
                         self.sync_status = "Signed in".into();
                         self.sync_now();
@@ -9980,10 +10005,7 @@ impl eframe::App for HookEchoApp {
         let sync_view = ui::settings_window::SyncView {
             signed_in: self.sync_tokens.is_some(),
             status: &self.sync_status,
-            device: self
-                .sync_device
-                .as_ref()
-                .map(|d| (d.verification_url.as_str(), d.user_code.as_str())),
+            login_url: self.sync_login.as_ref().map(|p| p.url.as_str()),
             last_sync: self.sync_state.last_sync,
         };
         let sync_action = self

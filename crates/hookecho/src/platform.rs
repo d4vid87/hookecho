@@ -82,6 +82,31 @@ pub fn set_background_alerts(_enabled: bool) {
     android_alerts::set_enabled(_enabled);
 }
 
+/// Open `url` in the system browser. Used by the Google sign-in, which has to hand the user off
+/// to a real browser and get them back. Desktop shells out to the platform opener; Android goes
+/// through an `ACTION_VIEW` intent.
+pub fn open_url(url: &str) -> Result<(), String> {
+    #[cfg(target_os = "android")]
+    {
+        android_browser::open(url).map_err(|e| format!("could not open a browser: {e:?}"))
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let opener = if cfg!(target_os = "macos") {
+            "open"
+        } else if cfg!(target_os = "windows") {
+            "explorer"
+        } else {
+            "xdg-open"
+        };
+        std::process::Command::new(opener)
+            .arg(url)
+            .spawn()
+            .map(|_| ())
+            .map_err(|e| format!("could not open {opener}: {e}"))
+    }
+}
+
 /// Hold a Wi-Fi multicast lock for the process, so Android stops dropping the broadcast packets
 /// position sharing listens for (it filters them out to save power unless a lock is held). No-op
 /// elsewhere, and acquired once — the lock is released when the process dies.
@@ -394,6 +419,46 @@ mod android_net {
         env.call_method(&lock, "acquire", "()V", &[])?;
         std::mem::forget(env.new_global_ref(&lock)?);
         Ok(())
+    }
+}
+
+/// `startActivity(new Intent(ACTION_VIEW, Uri.parse(url)))` — the Android half of [`open_url`].
+#[cfg(target_os = "android")]
+mod android_browser {
+    use jni::objects::JObject;
+
+    pub(super) fn open(url: &str) -> jni::errors::Result<()> {
+        let Some(app) = super::android::app() else {
+            return Ok(());
+        };
+        let vm = unsafe { jni::JavaVM::from_raw(app.vm_as_ptr() as *mut jni::sys::JavaVM) }?;
+        let mut env = vm.attach_current_thread()?;
+        let activity = unsafe { JObject::from_raw(app.activity_as_ptr() as jni::sys::jobject) };
+        let url = env.new_string(url)?;
+        let uri = env
+            .call_static_method(
+                "android/net/Uri",
+                "parse",
+                "(Ljava/lang/String;)Landroid/net/Uri;",
+                &[(&url).into()],
+            )?
+            .l()?;
+        let action = env.new_string("android.intent.action.VIEW")?;
+        let intent = env.new_object(
+            "android/content/Intent",
+            "(Ljava/lang/String;Landroid/net/Uri;)V",
+            &[(&action).into(), (&uri).into()],
+        )?;
+        let res = env.call_method(
+            &activity,
+            "startActivity",
+            "(Landroid/content/Intent;)V",
+            &[(&intent).into()],
+        );
+        if res.is_err() {
+            let _ = env.exception_clear();
+        }
+        res.map(|_| ())
     }
 }
 

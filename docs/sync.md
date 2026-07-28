@@ -25,17 +25,22 @@ minutes and it is yours.
    `drive.appdata` is not a restricted scope, and a testing-mode app works indefinitely for its
    own test users.
 4. **APIs & Services → Credentials → Create credentials → OAuth client ID**, application type
-   **TVs and Limited Input devices**. That type is what enables the device-code flow the app
-   uses, and it is the only type that works the same way on desktop and on Android.
+   **Desktop app**. That type allows the loopback redirect (`http://127.0.0.1:<port>`) the app
+   signs in with — no redirect URIs to configure, any port is accepted.
+
+   (Not "TVs and Limited Input devices": Google refuses Drive scopes on the device-code flow with
+   `invalid device flow scope`.)
 5. Copy the **client ID** and **client secret** into **Settings → Sync** in the app.
 
-The "secret" here is not really secret — Google issues it to installed apps that can't keep one,
-which is why the flow also requires you to type a code in a browser. Treat it as an identifier.
+The "secret" here is not really secret — Google issues it to installed apps that cannot keep one,
+which is why the flow also uses PKCE. Treat it as an identifier.
 
 ## Signing in
 
-**Settings → Sync → Sign in with Google.** The app shows a short code and a URL. Open the URL on
-any device, type the code, approve, and the app picks it up within a few seconds. The refresh
+**Settings → Sync → Sign in with Google.** Your browser opens at Google; approve, and the page
+redirects to a port the app is listening on, which finishes the sign-in. If no browser opens
+(some phones, or a desktop with no `xdg-open`), the Sync tab shows the link with a **Copy link**
+button — pasting it into any browser *on the same device* works just as well. The refresh
 token is stored in `google-tokens.json` next to `settings.json`, never inside it — that file is
 what travels, and credentials must not.
 

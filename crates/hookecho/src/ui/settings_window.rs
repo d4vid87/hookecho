@@ -19,8 +19,8 @@ enum Tab {
 pub struct SyncView<'a> {
     pub signed_in: bool,
     pub status: &'a str,
-    /// The code pair to type in a browser while a sign-in is in flight.
-    pub device: Option<(&'a str, &'a str)>,
+    /// The Google URL to visit, while a sign-in is in flight.
+    pub login_url: Option<&'a str>,
     /// Unix seconds of the last successful sync (0 = never).
     pub last_sync: i64,
 }
@@ -284,19 +284,18 @@ fn sync_tab(ui: &mut egui::Ui, settings: &mut Settings, sync: &SyncView) -> Opti
                 _ => format!("last synced {} h ago", ago / 3600),
             });
         }
-    } else if let Some((url, code)) = sync.device {
-        // The device flow's whole UI: a URL and a short code the user types there.
-        ui.label("Open this page and enter the code:");
+    } else if let Some(url) = sync.login_url {
+        // The browser has the user right now. Show the link anyway: on a phone (or a desktop with
+        // no opener) launching it can fail, and then this is the only way through.
+        ui.label("Waiting for you to finish in the browser…");
         ui.horizontal(|ui| {
-            ui.hyperlink(url);
-            if ui.small_button("Copy link").clicked() {
-                ui.ctx().copy_text(url.to_string());
+            if ui.button("Open sign-in page").clicked() {
+                if let Err(e) = crate::platform::open_url(url) {
+                    log::warn!("open_url failed: {e}");
+                }
             }
-        });
-        ui.horizontal(|ui| {
-            ui.label(egui::RichText::new(code).monospace().size(20.0).strong());
-            if ui.small_button("Copy code").clicked() {
-                ui.ctx().copy_text(code.to_string());
+            if ui.button("Copy link").clicked() {
+                ui.ctx().copy_text(url.to_string());
             }
         });
     } else {

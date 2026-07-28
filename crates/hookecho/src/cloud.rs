@@ -2,9 +2,11 @@
 //!
 //! The data lives in **your own Drive**, in the hidden per-app folder (`appDataFolder`) that only
 //! this app and you can see — there is no Hook Echo server, no account, and nothing to pay for.
-//! Sign-in uses the OAuth 2.0 **device flow**: the app shows a short code, you type it on any
-//! browser, and Google hands back a refresh token. That one flow works identically on a desktop
-//! and on a phone, which is why it is here instead of a loopback redirect.
+//! Sign-in is the OAuth 2.0 **loopback redirect with PKCE**: the app listens on a random port on
+//! 127.0.0.1, opens your browser at Google, and Google redirects back to that port with the code.
+//! (The device flow would be less machinery, but Google does not allow Drive scopes on it — it
+//! answers `invalid device flow scope` — so loopback it is. It works on Android too: the phone's
+//! browser reaches the phone's own localhost.)
 //!
 //! You supply the OAuth client (see `docs/sync.md`) — shipping a shared client id in an
 //! open-source binary would put every user's quota, and Google's trust in it, in one basket.
@@ -12,7 +14,7 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
-const DEVICE_CODE_URL: &str = "https://oauth2.googleapis.com/device/code";
+const AUTH_URL: &str = "https://accounts.google.com/o/oauth2/v2/auth";
 const TOKEN_URL: &str = "https://oauth2.googleapis.com/token";
 const FILES_URL: &str = "https://www.googleapis.com/drive/v3/files";
 const UPLOAD_URL: &str = "https://www.googleapis.com/upload/drive/v3/files";
@@ -74,25 +76,175 @@ impl Tokens {
     }
 }
 
-/// The half-finished sign-in shown to the user: type `user_code` at `verification_url`.
-#[derive(Debug, Clone, Deserialize)]
-pub struct DeviceAuth {
-    pub device_code: String,
-    pub user_code: String,
-    pub verification_url: String,
-    pub interval: u64,
-    pub expires_in: i64,
+/// A sign-in in flight: the URL to visit, the PKCE verifier the token exchange needs, the
+/// redirect the listener is serving, and the channel the listener reports the code on.
+pub struct Pending {
+    pub url: String,
+    pub verifier: String,
+    pub redirect: String,
+    pub rx: std::sync::mpsc::Receiver<Result<String, String>>,
 }
 
-/// Ask Google for a code pair to show the user.
-pub async fn start_device_auth(client_id: &str) -> Result<DeviceAuth, String> {
+/// Bind a loopback port, and build the URL that sends the browser to Google. The returned
+/// listener thread serves exactly one request — the redirect — and then ends.
+pub fn start_login(client_id: &str) -> Result<Pending, String> {
+    let listener =
+        std::net::TcpListener::bind(("127.0.0.1", 0)).map_err(|e| format!("no local port: {e}"))?;
+    let port = listener.local_addr().map_err(|e| e.to_string())?.port();
+    let redirect = format!("http://127.0.0.1:{port}");
+    let verifier = pkce_verifier();
+    let url = format!(
+        "{AUTH_URL}?client_id={}&redirect_uri={}&response_type=code&scope={}\
+         &code_challenge={}&code_challenge_method=S256&access_type=offline&prompt=consent",
+        urlencode(client_id),
+        urlencode(&redirect),
+        urlencode(SCOPE),
+        pkce_challenge(&verifier),
+    );
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(serve_redirect(&listener));
+    });
+    Ok(Pending {
+        url,
+        verifier,
+        redirect,
+        rx,
+    })
+}
+
+/// Accept the browser's one request and pull `code` (or `error`) out of its query string.
+fn serve_redirect(listener: &std::net::TcpListener) -> Result<String, String> {
+    use std::io::{BufRead, BufReader, Write};
+    let (mut stream, _) = listener.accept().map_err(|e| e.to_string())?;
+    let mut line = String::new();
+    BufReader::new(stream.try_clone().map_err(|e| e.to_string())?)
+        .read_line(&mut line)
+        .map_err(|e| e.to_string())?;
+    // "GET /?code=…&scope=… HTTP/1.1"
+    let query = line
+        .split_whitespace()
+        .nth(1)
+        .and_then(|p| p.split_once('?').map(|(_, q)| q.to_string()))
+        .unwrap_or_default();
+    let result = match param(&query, "code") {
+        Some(code) => Ok(code),
+        None => Err(param(&query, "error").unwrap_or_else(|| "no code in redirect".into())),
+    };
+    let body = match &result {
+        Ok(_) => "<h2>Signed in.</h2><p>You can close this tab and go back to Hook Echo-WX.</p>",
+        Err(_) => "<h2>Sign-in failed.</h2><p>Go back to Hook Echo-WX for the reason.</p>",
+    };
+    let _ = write!(
+        stream,
+        "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    );
+    result
+}
+
+/// One `a=b` value out of a query string, percent-decoded. Google's auth codes contain a `/`,
+/// which arrives as `%2F` — handing that to the token endpoint verbatim earns an `invalid_grant`.
+fn param(query: &str, key: &str) -> Option<String> {
+    let raw = query.split('&').find_map(|kv| {
+        let (k, v) = kv.split_once('=')?;
+        (k == key).then_some(v)
+    })?;
+    Some(percent_decode(&raw.replace('+', " ")))
+}
+
+fn percent_decode(s: &str) -> String {
+    let mut out = Vec::with_capacity(s.len());
+    let b = s.as_bytes();
+    let mut i = 0;
+    while i < b.len() {
+        match (b[i], b.get(i + 1), b.get(i + 2)) {
+            (b'%', Some(h), Some(l)) => {
+                match u8::from_str_radix(&format!("{}{}", *h as char, *l as char), 16) {
+                    Ok(byte) => {
+                        out.push(byte);
+                        i += 3;
+                    }
+                    Err(_) => {
+                        out.push(b[i]);
+                        i += 1;
+                    }
+                }
+            }
+            _ => {
+                out.push(b[i]);
+                i += 1;
+            }
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+/// Swap the code for tokens. The verifier is what proves this is the same app that started the
+/// flow, which is the whole point of PKCE on a public client.
+pub async fn exchange(
+    client_id: &str,
+    client_secret: &str,
+    code: &str,
+    verifier: &str,
+    redirect: &str,
+) -> Result<Tokens, String> {
     let r = client()
-        .post(DEVICE_CODE_URL)
-        .form(&[("client_id", client_id), ("scope", SCOPE)])
+        .post(TOKEN_URL)
+        .form(&[
+            ("client_id", client_id),
+            ("client_secret", client_secret),
+            ("code", code),
+            ("code_verifier", verifier),
+            ("redirect_uri", redirect),
+            ("grant_type", "authorization_code"),
+        ])
         .send()
         .await
         .map_err(|e| e.to_string())?;
-    parse(r).await
+    let t: TokenReply = parse(r).await?;
+    if t.refresh_token.is_empty() {
+        return Err("Google returned no refresh token — revoke the app at \
+                    myaccount.google.com/permissions and sign in again"
+            .into());
+    }
+    Ok(Tokens {
+        refresh_token: t.refresh_token,
+        access_token: t.access_token,
+        expires_at: crate::share::now() + t.expires_in,
+    })
+}
+
+/// A high-entropy PKCE verifier: 32 random bytes, base64url. `getrandom` is already in the tree
+/// via rustls, but the runtime's own randomness is enough here and needs no new import path —
+/// time and address entropy mixed through the hasher we already use for sync state.
+fn pkce_verifier() -> String {
+    use base64::Engine;
+    let mut bytes = [0u8; 32];
+    getrandom::fill(&mut bytes).expect("system randomness");
+    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes)
+}
+
+fn pkce_challenge(verifier: &str) -> String {
+    use base64::Engine;
+    use sha2::Digest;
+    let digest = sha2::Sha256::digest(verifier.as_bytes());
+    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(digest)
+}
+
+/// Percent-encode a query parameter value. Only the characters Google's URLs actually need.
+fn urlencode(s: &str) -> String {
+    s.chars()
+        .map(|c| match c {
+            'A'..='Z' | 'a'..='z' | '0'..='9' | '-' | '.' | '_' | '~' => c.to_string(),
+            c => c
+                .to_string()
+                .into_bytes()
+                .iter()
+                .map(|b| format!("%{b:02X}"))
+                .collect(),
+        })
+        .collect()
 }
 
 #[derive(Deserialize)]
@@ -103,49 +255,6 @@ struct TokenReply {
     refresh_token: String,
     #[serde(default)]
     expires_in: i64,
-}
-
-/// Poll until the user finishes (or refuses) the browser half. `authorization_pending` and
-/// `slow_down` are the normal answers while they're still typing, not failures.
-pub async fn poll_device_token(
-    client_id: &str,
-    client_secret: &str,
-    auth: &DeviceAuth,
-) -> Result<Tokens, String> {
-    let deadline = crate::share::now() + auth.expires_in.min(600);
-    let mut wait = auth.interval.max(1);
-    loop {
-        tokio::time::sleep(std::time::Duration::from_secs(wait)).await;
-        let r = client()
-            .post(TOKEN_URL)
-            .form(&[
-                ("client_id", client_id),
-                ("client_secret", client_secret),
-                ("device_code", &auth.device_code),
-                ("grant_type", "urn:ietf:params:oauth:grant-type:device_code"),
-            ])
-            .send()
-            .await
-            .map_err(|e| e.to_string())?;
-        let body = r.text().await.map_err(|e| e.to_string())?;
-        let v: serde_json::Value = serde_json::from_str(&body).map_err(|e| e.to_string())?;
-        match v.get("error").and_then(|e| e.as_str()) {
-            Some("authorization_pending") => {}
-            Some("slow_down") => wait += 5,
-            Some(e) => return Err(e.to_string()),
-            None => {
-                let t: TokenReply = serde_json::from_str(&body).map_err(|e| e.to_string())?;
-                return Ok(Tokens {
-                    refresh_token: t.refresh_token,
-                    access_token: t.access_token,
-                    expires_at: crate::share::now() + t.expires_in,
-                });
-            }
-        }
-        if crate::share::now() > deadline {
-            return Err("sign-in timed out".into());
-        }
-    }
 }
 
 /// A usable access token, refreshing (and re-saving) when the old one is about to expire.
@@ -391,6 +500,56 @@ pub fn hash(v: &serde_json::Value) -> u64 {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn loopback_listener_hands_back_the_code() {
+        use std::io::Write;
+        let p = start_login("test-client").unwrap();
+        assert!(p.url.starts_with(AUTH_URL));
+        let port: u16 = p.redirect.rsplit(':').next().unwrap().parse().unwrap();
+        // Play the browser: request the redirect exactly as Google would.
+        let mut c = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
+        write!(c, "GET /?code=4%2Fabc&scope=x HTTP/1.1\r\nHost: localhost\r\n\r\n").unwrap();
+        let got = p
+            .rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .unwrap();
+        assert_eq!(got.unwrap(), "4/abc"); // %2F decoded — Google's codes contain a slash
+    }
+
+    #[test]
+    fn pkce_challenge_matches_rfc7636_vector() {
+        // Appendix B of RFC 7636 — if this drifts, Google rejects every sign-in.
+        assert_eq!(
+            pkce_challenge("dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"),
+            "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM"
+        );
+    }
+
+    #[test]
+    fn verifier_is_long_and_unique() {
+        let (a, b) = (pkce_verifier(), pkce_verifier());
+        assert_ne!(a, b);
+        assert!(a.len() >= 43, "{a}"); // RFC 7636 minimum
+    }
+
+    #[test]
+    fn redirect_query_yields_code_or_error() {
+        assert_eq!(param("code=4%2Fabc&scope=x", "code").as_deref(), Some("4/abc"));
+        assert_eq!(
+            param("error=access_denied", "error").as_deref(),
+            Some("access_denied")
+        );
+        assert!(param("error=access_denied", "code").is_none());
+    }
+
+    #[test]
+    fn urlencode_escapes_what_google_urls_need() {
+        assert_eq!(
+            urlencode("https://www.googleapis.com/auth/drive.appdata"),
+            "https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fdrive.appdata"
+        );
+    }
 
     #[test]
     fn merge_keeps_device_local_fields() {
