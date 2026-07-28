@@ -1062,9 +1062,8 @@ pub struct HookEchoApp {
     /// surfaces don't mirror each other's typing.
     toolbox_query: String,
     /// Ctrl+K command palette: open flag, query, and the highlighted row.
-    palette_open: bool,
-    palette_query: String,
-    palette_sel: usize,
+    /// Set by Ctrl+K so the drawer grabs the search field on the frame it opens.
+    drawer_focus_search: bool,
     /// Top search pill: the place query and a transient "flew to …" status.
     place_query: String,
     place_status: Option<(String, Instant)>,
@@ -1448,9 +1447,7 @@ impl HookEchoApp {
             drawer_open: false,
             layers_query: String::new(),
             toolbox_query: String::new(),
-            palette_open: false,
-            palette_query: String::new(),
-            palette_sel: 0,
+            drawer_focus_search: false,
             place_query: String::new(),
             place_status: None,
             save_offer: None,
@@ -2811,7 +2808,8 @@ impl HookEchoApp {
         use egui_phosphor::regular as ph;
         let accent = crate::theme::accent(self.settings.theme);
         egui::Area::new(egui::Id::new("drawer_hamburger"))
-            .anchor(egui::Align2::LEFT_TOP, egui::vec2(14.0, 40.0))
+            // Below the legend card, which owns the very top-left corner.
+            .anchor(egui::Align2::LEFT_TOP, egui::vec2(14.0, 92.0))
             .order(egui::Order::Foreground)
             .show(ctx, |ui| {
                 if mobile::square_btn(ui, ph::LIST, self.drawer_open, accent)
@@ -2870,7 +2868,8 @@ impl HookEchoApp {
         let cr = ctx.content_rect();
         let entries = self.palette_entries();
         let mut query = std::mem::take(&mut self.layers_query);
-        let (mut chosen, mut close) = (None, false);
+        let (mut chosen, mut close, mut fly_to) = (None, false, None);
+        let mut focus_search = std::mem::take(&mut self.drawer_focus_search);
         egui::Area::new(egui::Id::new("drawer"))
             .anchor(egui::Align2::LEFT_TOP, crate::ui::style::LANE_LEFT_DRAWER)
             .order(egui::Order::Foreground)
@@ -2903,7 +2902,32 @@ impl HookEchoApp {
                         &mut query,
                         accent,
                         cr.height() - 260.0,
+                        std::mem::take(&mut focus_search),
                     );
+                    // Place search folds in here rather than keeping a pill of its own: action
+                    // matches rank first, and this row is the explicit "I meant a place" answer.
+                    if !query.trim().is_empty() {
+                        ui.add_space(4.0);
+                        let w = ui.available_width();
+                        if ui
+                            .add(
+                                egui::Button::new(
+                                    egui::RichText::new(format!(
+                                        "{}  Fly to \u{201c}{}\u{201d}",
+                                        egui_phosphor::regular::MAP_PIN,
+                                        query.trim()
+                                    ))
+                                    .size(13.0),
+                                )
+                                .min_size(egui::vec2(w, 34.0))
+                                .corner_radius(10.0),
+                            )
+                            .on_hover_text("Search the place name and move the map there")
+                            .clicked()
+                        {
+                            fly_to = Some(query.trim().to_string());
+                        }
+                    }
                     ui.add_space(4.0);
                     egui::CollapsingHeader::new("App")
                         .default_open(false)
@@ -2913,6 +2937,18 @@ impl HookEchoApp {
         self.layers_query = query;
         if let Some(a) = chosen {
             self.apply_palette(a, ctx);
+        }
+        if let Some(place) = fly_to {
+            self.geocode_nav = true;
+            self.save_offer = None; // a new search retires the previous offer
+            self.place_status = Some(("Searching…".to_string(), Instant::now()));
+            let http = self.http.clone();
+            let tx = self.geocode_tx.clone();
+            let ctx2 = ctx.clone();
+            self._rt.spawn(async move {
+                let _ = tx.send(wxdata::geocode::search(&http, &place).await);
+                ctx2.request_repaint();
+            });
         }
         if close || ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
             self.drawer_open = false;
@@ -3073,68 +3109,6 @@ impl HookEchoApp {
         }
     }
 
-    /// Right-edge column of round glass buttons (desktop): the map-first entry points. Anything
-    /// not here still lives in the menu bar and the Advanced toolbox.
-    fn control_column(&mut self, ctx: &egui::Context) {
-        use egui_phosphor::regular as ph;
-        let accent = crate::theme::accent(self.settings.theme);
-        let mut clicked: Option<&'static str> = None;
-        egui::Area::new(egui::Id::new("control_column"))
-            .anchor(
-                egui::Align2::RIGHT_TOP,
-                crate::ui::style::LANE_RIGHT_CONTROLS,
-            )
-            .show(ctx, |ui| {
-                ui.vertical(|ui| {
-                    ui.spacing_mut().item_spacing.y = 8.0;
-                    for (glyph, id, on, tip) in [
-                        (ph::STACK, "layers", self.drawer_open, "Layers (L)"),
-                        (
-                            ph::RADIO_BUTTON,
-                            "site",
-                            self.site_dialog.is_some(),
-                            "Radar site (F3)",
-                        ),
-                        (
-                            ph::WARNING,
-                            "alerts",
-                            self.show_alert_panel,
-                            "Active alerts (A)",
-                        ),
-                        (
-                            ph::SLIDERS,
-                            "advanced",
-                            self.show_toolbox,
-                            "Advanced toolbox (F7)",
-                        ),
-                        (ph::GEAR, "settings", self.settings_window.open, "Settings"),
-                    ] {
-                        if mobile::square_btn(ui, glyph, on, accent)
-                            .on_hover_text(tip)
-                            .clicked()
-                        {
-                            clicked = Some(id);
-                        }
-                    }
-                    // Everything the retired menu bar held that isn't in the action registry.
-                    let more =
-                        mobile::square_btn(ui, ph::DOTS_THREE, false, accent).on_hover_text("More");
-                    if more.clicked() {
-                        egui::Popup::toggle_id(ui.ctx(), more.id);
-                    }
-                    self.more_menu(&more);
-                });
-            });
-        match clicked {
-            Some("layers") => self.drawer_open = !self.drawer_open,
-            Some("site") => self.apply_palette(PaletteAction::OpenWindow(AppWindow::Site), ctx),
-            Some("alerts") => self.show_alert_panel = !self.show_alert_panel,
-            Some("advanced") => self.show_toolbox = !self.show_toolbox,
-            Some("settings") => self.settings_window.open = true,
-            _ => {}
-        }
-    }
-
     /// Bottom-left product pill: what you're looking at, and the two knobs that change it.
     ///
     /// Product and tilt used to be reachable only from the hidden Advanced toolbox (or by knowing
@@ -3236,186 +3210,6 @@ impl HookEchoApp {
         }
         if let Some(i) = pick_tilt {
             self.views[self.active].tilt = i;
-        }
-    }
-
-    /// Top-center place-search pill: type a place, press Enter, the camera flies there. Pure
-    /// navigation — the marker window's search is what adds a marker.
-    fn search_pill(&mut self, ctx: &egui::Context) {
-        use egui_phosphor::regular as ph;
-        let cr = ctx.content_rect();
-        let mut submit = None;
-        egui::Area::new(egui::Id::new("search_pill"))
-            .anchor(
-                egui::Align2::CENTER_TOP,
-                egui::vec2(0.0, crate::ui::style::LANE_TOP_SEARCH),
-            )
-            .show(ctx, |ui| {
-                mobile::glass(244).show(ui, |ui| {
-                    ui.set_width((cr.width() * 0.3).clamp(220.0, 420.0));
-                    ui.horizontal(|ui| {
-                        ui.label(
-                            egui::RichText::new(ph::MAGNIFYING_GLASS)
-                                .size(15.0)
-                                .color(egui::Color32::from_gray(175)),
-                        );
-                        let resp = ui.add(
-                            egui::TextEdit::singleline(&mut self.place_query)
-                                .hint_text("Search a place…")
-                                .desired_width(ui.available_width() - 4.0),
-                        );
-                        if resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-                            let q = self.place_query.trim().to_string();
-                            if !q.is_empty() {
-                                submit = Some(q);
-                            }
-                        }
-                    });
-                    // Transient result note (fades after ~4 s).
-                    if let Some((text, at)) = &self.place_status {
-                        if at.elapsed().as_secs() < 4 {
-                            ui.label(
-                                egui::RichText::new(text)
-                                    .size(11.0)
-                                    .color(egui::Color32::from_gray(180)),
-                            );
-                        } else {
-                            self.place_status = None;
-                        }
-                    }
-                    // Offer to keep the place you just flew to. Outlives the status caption so the
-                    // offer is still there once you've looked at the map and decided.
-                    if let Some((name, lat, lon, at)) = &self.save_offer {
-                        if at.elapsed().as_secs() >= 10 {
-                            self.save_offer = None;
-                        } else if ui
-                            .small_button(format!("{} Save marker", ph::MAP_PIN))
-                            .on_hover_text(
-                                "Keep this place — alerts and storm ETAs use your markers",
-                            )
-                            .clicked()
-                        {
-                            self.settings.markers.push(crate::settings::Marker {
-                                name: name.clone(),
-                                lat: *lat,
-                                lon: *lon,
-                                icon: None,
-                            });
-                            self.place_status = Some(("Marker saved".to_string(), Instant::now()));
-                            self.save_offer = None;
-                        }
-                    }
-                });
-            });
-        if let Some(query) = submit {
-            self.geocode_nav = true;
-            self.save_offer = None; // a new search retires the previous offer
-
-            self.place_status = Some(("Searching…".to_string(), Instant::now()));
-            let http = self.http.clone();
-            let tx = self.geocode_tx.clone();
-            let ctx2 = ctx.clone();
-            self._rt.spawn(async move {
-                let _ = tx.send(wxdata::geocode::search(&http, &query).await);
-                ctx2.request_repaint();
-            });
-        }
-    }
-
-    /// Ctrl+K command palette: fuzzy-search the same registry the Layers panel shows, keyboard
-    /// first (↑/↓/Enter). The power-user path to anything in the app.
-    fn command_palette(&mut self, ctx: &egui::Context) {
-        if !self.palette_open {
-            return;
-        }
-        let accent = crate::theme::accent(self.settings.theme);
-        let entries = self.palette_entries();
-        let mut hits = ui::layers_panel::matches(&entries, &self.palette_query);
-        hits.truncate(40);
-        // Keyboard navigation before drawing, so the highlighted row is already correct.
-        let (up, down, enter, esc) = ctx.input(|i| {
-            (
-                i.key_pressed(egui::Key::ArrowUp),
-                i.key_pressed(egui::Key::ArrowDown),
-                i.key_pressed(egui::Key::Enter),
-                i.key_pressed(egui::Key::Escape),
-            )
-        });
-        if down {
-            self.palette_sel = (self.palette_sel + 1).min(hits.len().saturating_sub(1));
-        }
-        if up {
-            self.palette_sel = self.palette_sel.saturating_sub(1);
-        }
-        self.palette_sel = self.palette_sel.min(hits.len().saturating_sub(1));
-        let mut chosen = enter
-            .then(|| hits.get(self.palette_sel).map(|i| entries[*i].action))
-            .flatten();
-        let mut close = esc || chosen.is_some();
-        let mut query = std::mem::take(&mut self.palette_query);
-        let sel = self.palette_sel;
-        crate::ui::fit_phone(ctx, egui::Window::new("Search actions"))
-            .title_bar(false)
-            .collapsible(false)
-            .resizable(false)
-            .anchor(egui::Align2::CENTER_TOP, egui::vec2(0.0, 120.0))
-            .fixed_size([480.0, 0.0])
-            .show(ctx, |ui| {
-                let resp = ui.add(
-                    egui::TextEdit::singleline(&mut query)
-                        .hint_text("Type a product, layer, or tool…")
-                        .desired_width(f32::INFINITY),
-                );
-                resp.request_focus();
-                ui.separator();
-                egui::ScrollArea::vertical()
-                    .max_height(320.0)
-                    .show(ui, |ui| {
-                        for (n, i) in hits.iter().enumerate() {
-                            let e = &entries[*i];
-                            let mark = match e.on {
-                                Some(true) => "● ",
-                                Some(false) => "○ ",
-                                None => "  ",
-                            };
-                            let text = format!("{mark}{}  ·  {}", e.label, e.category);
-                            let col = if n == sel {
-                                accent
-                            } else {
-                                egui::Color32::from_gray(215)
-                            };
-                            if ui
-                                .add(
-                                    egui::Button::new(
-                                        egui::RichText::new(text).size(14.0).color(col),
-                                    )
-                                    .min_size(egui::vec2(ui.available_width(), 26.0))
-                                    .fill(if n == sel {
-                                        egui::Color32::from_rgba_unmultiplied(255, 255, 255, 22)
-                                    } else {
-                                        egui::Color32::TRANSPARENT
-                                    })
-                                    .stroke(egui::Stroke::NONE),
-                                )
-                                .clicked()
-                            {
-                                chosen = Some(e.action);
-                                close = true;
-                            }
-                        }
-                        if hits.is_empty() {
-                            ui.weak("No matches.");
-                        }
-                    });
-            });
-        self.palette_query = query;
-        if let Some(a) = chosen {
-            self.apply_palette(a, ctx);
-        }
-        if close {
-            self.palette_open = false;
-            self.palette_query.clear();
-            self.palette_sel = 0;
         }
     }
 
@@ -7225,22 +7019,6 @@ impl HookEchoApp {
         self.pane_shown.clear();
     }
 
-    /// The "⋯ More" popup: everything the old menu bar held that the action registry, the control
-    /// column and Settings don't already cover.
-    ///
-    /// The menu bar was a third parallel navigation system on top of the floating chrome and the
-    /// Advanced toolbox — three doors to overlapping sets of the same commands. It's gone; every
-    /// item it held either lives in the registry (Ctrl+K / the Layers panel) or lives here.
-    fn more_menu(&mut self, btn: &egui::Response) {
-        egui::Popup::menu(btn)
-            .align(egui::RectAlign::LEFT_START)
-            .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
-            .show(|ui| {
-                ui.set_min_width(250.0);
-                self.app_rows(ui);
-            });
-    }
-
     /// The app's own commands — the ones that aren't a layer, product, tool or window, and so
     /// have no place in the action registry: view toggles, chase, capture, settings bundles.
     /// Rendered inside the drawer, and (for one more commit) inside the old More popup.
@@ -8768,24 +8546,21 @@ impl eframe::App for HookEchoApp {
             }
         }
 
-        // Floating map-first chrome (desktop): search pill, control column, timeline pill, layers
-        // panel, command palette — all over the map, no docked chrome required.
+        // Floating map-first chrome (desktop): a hamburger, an alert bell, the two bottom pills.
+        // Everything else is one drawer behind the hamburger.
         if !cfg!(target_os = "android") && !self.obs_mode {
             if ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::K)) {
-                self.palette_open = !self.palette_open;
-                self.palette_query.clear();
-                self.palette_sel = 0;
+                self.drawer_open = true;
+                self.layers_query.clear();
+                self.drawer_focus_search = true;
             }
             self.drawer_chrome(ctx);
-            self.search_pill(ctx);
-            self.control_column(ctx);
             self.product_pill(ctx);
             self.timeline_pill(ctx);
             self.info_chip(ctx);
             self.error_chip(ctx);
             self.coach_marks(ctx);
             self.drawer(ctx);
-            self.command_palette(ctx);
         }
 
         // First-run setup wizard.

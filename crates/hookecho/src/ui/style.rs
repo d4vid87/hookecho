@@ -39,7 +39,7 @@ pub const LANE_TOP_SEARCH: f32 = 44.0;
 // Right edge, RIGHT_TOP: the control column is outermost, panels open inboard of it, and
 // status badges stack below both.
 /// The one drawer slides in from here, clear of the hamburger that opens it.
-pub const LANE_LEFT_DRAWER: egui::Vec2 = vec2(14.0, 92.0);
+pub const LANE_LEFT_DRAWER: egui::Vec2 = vec2(14.0, 144.0);
 pub const LANE_RIGHT_CONTROLS: egui::Vec2 = vec2(-14.0, 44.0);
 pub const LANE_RIGHT_PANEL: egui::Vec2 = vec2(-74.0, 44.0);
 pub const LANE_RIGHT_BADGE_X: f32 = -14.0;

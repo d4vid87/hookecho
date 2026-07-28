@@ -97,12 +97,14 @@ fn row(ui: &mut egui::Ui, e: &PaletteEntry, accent: Color32) -> bool {
 }
 
 /// The panel body: search box + categorized rows. Returns the clicked action, if any.
+/// `focus_search` grabs the search field this frame (Ctrl+K opens the drawer typing-ready).
 pub(crate) fn body(
     ui: &mut egui::Ui,
     entries: &[PaletteEntry],
     query: &mut String,
     accent: Color32,
     max_height: f32,
+    focus_search: bool,
 ) -> Option<PaletteAction> {
     let mut chosen = None;
     ui.horizontal(|ui| {
@@ -111,11 +113,14 @@ pub(crate) fn body(
                 .size(15.0)
                 .color(Color32::from_gray(170)),
         );
-        ui.add(
+        let field = ui.add(
             egui::TextEdit::singleline(query)
-                .hint_text("Search layers…")
+                .hint_text("Search layers, tools, places…")
                 .desired_width(ui.available_width() - 4.0),
         );
+        if focus_search {
+            field.request_focus();
+        }
     });
     ui.add_space(6.0);
     let order = matches(entries, query);

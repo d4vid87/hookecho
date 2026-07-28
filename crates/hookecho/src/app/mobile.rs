@@ -725,6 +725,7 @@ impl super::HookEchoApp {
                                 &mut query,
                                 accent,
                                 content.height() * 0.5,
+                                false,
                             ) {
                                 self.apply_palette(action, ctx);
                                 self.mobile_sheet = MobileSheet::None;
@@ -1151,6 +1152,7 @@ impl super::HookEchoApp {
                             &mut query,
                             accent,
                             (content.height() * 0.6 - 120.0).max(160.0),
+                            false,
                         );
                     });
             });

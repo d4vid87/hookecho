@@ -76,7 +76,7 @@ pub(crate) fn show(
         if let Some(entries) = layers {
             section(ui, "Layers", |ui| {
                 if let Some(a) =
-                    crate::ui::layers_panel::body(ui, entries, layers_query, accent, 420.0)
+                    crate::ui::layers_panel::body(ui, entries, layers_query, accent, 420.0, false)
                 {
                     actions.palette = Some(a);
                 }
