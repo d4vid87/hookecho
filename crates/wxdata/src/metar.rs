@@ -21,6 +21,14 @@ pub struct SurfaceOb {
     /// Wind direction (° from north); `None` for variable ("VRB") or calm.
     pub wdir_deg: Option<f32>,
     pub wspd_kt: f32,
+    /// Gust (kt); `None` when the station reported no gust.
+    pub wgst_kt: Option<f32>,
+    /// Altimeter setting (mb).
+    pub altim_mb: Option<f32>,
+    /// Field elevation (m).
+    pub elev_m: Option<f32>,
+    /// Observation time (Unix seconds).
+    pub obs_time: Option<i64>,
     /// Flight category: VFR / MVFR / IFR / LIFR (empty if unreported).
     pub flt_cat: String,
     pub raw: String,
@@ -50,6 +58,10 @@ pub fn parse(json: &str) -> Vec<SurfaceOb> {
             dewp_c: num(m, "dewp").map(|t| t as f32),
             wdir_deg,
             wspd_kt: num(m, "wspd").map(|s| s as f32).unwrap_or(0.0),
+            wgst_kt: num(m, "wgst").map(|s| s as f32),
+            altim_mb: num(m, "altim").map(|s| s as f32),
+            elev_m: num(m, "elev").map(|s| s as f32),
+            obs_time: m.get("obsTime").and_then(|v| v.as_i64()),
             flt_cat: str_of(m, "fltCat"),
             raw: str_of(m, "rawOb"),
         });
