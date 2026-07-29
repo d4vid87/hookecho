@@ -7,6 +7,7 @@ pub mod aviation;
 pub mod contour;
 pub mod dat;
 pub mod dealias;
+pub mod dotcams;
 pub mod efield;
 pub mod forecast;
 pub mod fronts;
