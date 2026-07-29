@@ -10549,6 +10549,14 @@ impl eframe::App for HookEchoApp {
                 .show(root, |_| {});
         }
 
+        // F11: OS-native fullscreen (desktop only; mobile is already fullscreen).
+        if !cfg!(target_os = "android")
+            && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::F11))
+        {
+            let cur = ctx.input(|i| i.viewport().fullscreen.unwrap_or(false));
+            ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(!cur));
+        }
+
         // Chrome: touch-first on Android (top bar + dock + slide-up sheets), desktop otherwise
         // (the floating map-first chrome below). Both funnel into the same `UiActions` handling.
         let mut actions = ui::layer_options::UiActions::default();
