@@ -237,6 +237,11 @@ pub struct Settings {
     /// Persisted basemap style slug for startup (empty = pane default Dark).
     #[serde(default)]
     pub basemap: String,
+    /// NOAA Weather Radio relays to listen to. Empty by default on purpose: NOAA runs no streams of
+    /// its own, so every URL here is a third-party relay someone runs for their own county, and
+    /// shipping a guessed list would mostly ship dead links. Add the one for your area.
+    #[serde(default)]
+    pub nwr_streams: Vec<NwrStream>,
 }
 
 impl Settings {
@@ -312,6 +317,15 @@ pub struct PluginConfig {
 
 fn default_plugin_refresh() -> u32 {
     60
+}
+
+/// One NOAA Weather Radio relay the user has added.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct NwrStream {
+    /// What to call it in the picker, e.g. "KEC55 Norman".
+    pub name: String,
+    /// A streaming audio URL (Icecast-style MP3).
+    pub url: String,
 }
 
 /// A configured placefile overlay (URL + on/off + opacity), persisted across sessions.
@@ -455,6 +469,7 @@ impl Default for Settings {
             alert_volume: default_volume(),
             live_loop_frames: default_live_loop_frames(),
             basemap: String::new(),
+            nwr_streams: Vec::new(),
         }
     }
 }
@@ -639,6 +654,10 @@ mod tests {
             alert_volume: 0.7,
             live_loop_frames: 12,
             basemap: "carto-dark".to_string(),
+            nwr_streams: vec![NwrStream {
+                name: "KEC55 Norman".into(),
+                url: "https://example.invalid/nwr.mp3".into(),
+            }],
         };
         let json = serde_json::to_string(&s).unwrap();
         let back: Settings = serde_json::from_str(&json).unwrap();

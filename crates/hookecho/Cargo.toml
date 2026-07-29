@@ -43,7 +43,8 @@ log.workspace = true
 env_logger = "0.11"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif"] }
 chrono.workspace = true
-reqwest.workspace = true
+# `stream` gives `bytes_stream()`, which the weather-radio player reads the live MP3 body from.
+reqwest = { workspace = true, features = ["stream"] }
 serde.workspace = true
 serde_json.workspace = true
 directories.workspace = true
@@ -53,6 +54,10 @@ mvt-reader = "2.4"
 geo-types = "0.7"
 flate2.workspace = true
 rodio = { version = "0.19", default-features = false, features = ["wav", "mp3", "vorbis", "flac"] }
+# Already compiled as rodio's mp3 backend; named directly so the weather-radio player can decode a
+# live stream, which rodio's own `Decoder` can't (it needs `Seek`).
+symphonia = { version = "0.5", default-features = false, features = ["mp3"] }
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
 glam = { version = "0.29", features = ["bytemuck"] }
 egui-phosphor = "0.13.0"
 # Already in the dependency graph (rustls, hyper); named here for the OAuth PKCE challenge.

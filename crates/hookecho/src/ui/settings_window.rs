@@ -492,6 +492,41 @@ fn alerts_tab(ui: &mut egui::Ui, settings: &mut Settings) {
 
     ui.add_space(8.0);
     ui.separator();
+    ui.strong("Weather radio relays");
+    ui.weak(
+        "NOAA broadcasts NWR on VHF and streams nothing itself, so these are listener-run relays \
+         — find the MP3 URL for your county and paste it here. Play them from the drawer.",
+    );
+    let mut remove = None;
+    for (i, s) in settings.nwr_streams.iter_mut().enumerate() {
+        ui.horizontal(|ui| {
+            ui.add(
+                egui::TextEdit::singleline(&mut s.name)
+                    .hint_text("KEC55 Norman")
+                    .desired_width(130.0),
+            );
+            ui.add(
+                egui::TextEdit::singleline(&mut s.url)
+                    .hint_text("https://…/stream.mp3")
+                    .desired_width(220.0),
+            );
+            if ui.button("✖").on_hover_text("Remove").clicked() {
+                remove = Some(i);
+            }
+        });
+    }
+    if let Some(i) = remove {
+        settings.nwr_streams.remove(i);
+    }
+    if ui.button("Add relay").clicked() {
+        settings.nwr_streams.push(crate::settings::NwrStream {
+            name: String::new(),
+            url: String::new(),
+        });
+    }
+
+    ui.add_space(8.0);
+    ui.separator();
     ui.strong("Spoken warnings");
     ui.checkbox(&mut settings.speak_warnings, "Read new warnings aloud")
         .on_hover_text(

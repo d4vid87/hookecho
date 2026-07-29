@@ -1258,6 +1258,10 @@ pub struct HookEchoApp {
     webcams: Vec<wxdata::webcams::CamSite>,
     webcam_bounds: Option<(f64, f64, f64, f64)>,
     webcam_last_fetch: Option<Instant>,
+    /// NOAA Weather Radio: the running player (dropping it stops playback) and the relay picked
+    /// in the drawer.
+    nwr: Option<crate::nwr::Player>,
+    nwr_pick: String,
     /// NWS damage surveys: the toggle, the last result, and the `(bbox, day)` it was fetched for
     /// (surveys never change, so the key alone decides when to refetch).
     show_dat: bool,
@@ -1660,6 +1664,8 @@ impl HookEchoApp {
             webcams: Vec::new(),
             webcam_bounds: None,
             webcam_last_fetch: None,
+            nwr: None,
+            nwr_pick: String::new(),
             show_dat: false,
             dat_points: Vec::new(),
             dat_tracks: Vec::new(),
@@ -5736,6 +5742,66 @@ impl HookEchoApp {
         });
     }
 
+    /// The weather-radio rows: pick a configured relay, play or stop it, and see honestly whether
+    /// it is actually on the air. One stream at a time.
+    fn nwr_rows(&mut self, ui: &mut egui::Ui) {
+        if self.settings.nwr_streams.is_empty() {
+            ui.weak("No relays yet — add one in Settings → Alerts.");
+            ui.weak("NOAA broadcasts on VHF only; these are listener-run relays.");
+            return;
+        }
+        let playing = self.nwr.as_ref().map(|p| p.name.clone());
+        ui.horizontal(|ui| {
+            egui::ComboBox::from_id_salt("nwr_pick")
+                .selected_text(if self.nwr_pick.is_empty() {
+                    "Pick a relay".to_string()
+                } else {
+                    self.nwr_pick.clone()
+                })
+                .show_ui(ui, |ui| {
+                    for s in &self.settings.nwr_streams {
+                        ui.selectable_value(&mut self.nwr_pick, s.name.clone(), &s.name);
+                    }
+                });
+            match &playing {
+                Some(_) => {
+                    if ui.button("⏹ Stop").clicked() {
+                        self.nwr = None; // Drop stops the thread.
+                    }
+                }
+                None => {
+                    let stream = self
+                        .settings
+                        .nwr_streams
+                        .iter()
+                        .find(|s| s.name == self.nwr_pick)
+                        .cloned();
+                    if ui.add_enabled(stream.is_some(), egui::Button::new("▶ Play")).clicked() {
+                        if let Some(s) = stream {
+                            self.nwr = Some(crate::nwr::Player::start(
+                                s.name,
+                                s.url,
+                                self.settings.alert_volume,
+                                self._rt.handle(),
+                            ));
+                        }
+                    }
+                }
+            }
+        });
+        if let Some(p) = &self.nwr {
+            match p.status() {
+                crate::nwr::Status::Playing => ui.weak(format!("🔊 {}", p.name)),
+                crate::nwr::Status::Connecting => ui.weak("connecting…"),
+                crate::nwr::Status::Offline(why) => ui.colored_label(
+                    egui::Color32::from_rgb(230, 150, 90),
+                    format!("stream offline ({why}) — retrying"),
+                ),
+                crate::nwr::Status::Stopped => ui.weak("stopped"),
+            };
+        }
+    }
+
     /// Open a damage-survey point's detail popup, pulling its survey photo when one was attached.
     /// Shares the placefile-icon texture cache with the webcam popup.
     fn open_damage_point(&mut self, p: &wxdata::dat::DamagePoint, ctx: &egui::Context) {
@@ -8921,6 +8987,10 @@ impl HookEchoApp {
                     n => ui.weak(format!("👥 {n} sharing")),
                 };
             }
+
+            ui.separator();
+            ui.label(egui::RichText::new("Weather radio").strong());
+            self.nwr_rows(ui);
 
             ui.separator();
             ui.label(egui::RichText::new("Capture").strong());

@@ -21,6 +21,7 @@ pub mod headless;
 pub mod hotkeys;
 pub mod icon;
 pub mod loopexport;
+pub mod nwr;
 pub mod overlay_build;
 pub mod paths;
 pub mod platform;
