@@ -227,8 +227,11 @@ layer draws its own scale and units.
 
 ### Environment and forecast
 
-- HRRR CAPE (surface-based or mixed-layer parcel) and storm-relative helicity
-  (0–1 or 0–3 km) as map overlays.
+- CAPE (surface-based or mixed-layer parcel) and storm-relative helicity (0–1 or
+  0–3 km) as map overlays, from either the **HRRR forecast (3 km)** or the **RAP
+  f00 analysis (13 km)** — the observed mesoanalysis, assimilated from obs rather
+  than projected forward. Same switch drives the contour fields and the
+  STP/SCP/EHI composites.
 - Point soundings — Skew-T and hodograph — with derived **SBCAPE / LCL / SRH /
   SCP / STP / EHI** indices from real parcel ascent and Bunkers storm motion,
   and the **observed radiosonde ascent** from the nearest station drawn dashed
@@ -288,7 +291,13 @@ layer draws its own scale and units.
 - **Streamer/OBS mode**: chrome-free UI (`F8`) and an auto-tour of active
   warnings (`F9`).
 - Click anywhere for historical tornado tracks near that point (SPC 1950–2022)
-  with an EF-scale histogram.
+  with an EF-scale histogram, plus how often that spot has actually been warned —
+  warning counts by type, first year on record, busiest year and worst day.
+- **NWS damage surveys**: the EF-rated damage points and surveyed track a survey
+  crew filed after the storm, with photos, on the day your timeline is showing.
+  Ground truth to lay over the hook you were watching.
+- Listen to a **NOAA Weather Radio** relay while you watch (bring your county's
+  stream URL — NOAA broadcasts on VHF and streams nothing itself).
 - Draw on the map freehand to circle the storm you're talking about, and look
   through FAA airport webcams to see what the sky actually looks like.
 - Multi-pane layouts, placefiles with icon sheets and a layer manager, a sensor
