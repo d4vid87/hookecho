@@ -188,8 +188,9 @@ enum OverlaySource {
     Fronts,
     /// HRRR composite-reflectivity forecast for a forecast hour (0..=18).
     Hrrr(u8),
-    /// HRRR environment field (CAPE/SRH) at f00; `ml` = mixed-layer CAPE, `srh_km` = SRH depth.
-    Env(crate::render::FieldLayer, bool, u8),
+    /// Environment field (CAPE/SRH) at f00 from `model`; `ml` = mixed-layer CAPE, `srh_km` = SRH
+    /// depth. RAP makes it an observed analysis rather than an HRRR forecast at hour zero.
+    Env(crate::render::FieldLayer, wxdata::hrrr::Model, bool, u8),
     /// HRRR-backed field layer (rotation tracks, smoke) at a forecast hour.
     HrrrLayer(crate::render::FieldLayer, u8),
     /// Gridded L3 product (DVL/EET) for a site, projected to a lat/lon field (feature X).
@@ -220,8 +221,9 @@ enum OverlaySource {
     Mosaic(Vec<String>),
     /// River flood gauges within a lat/lon bbox `(lat0, lon0, lat1, lon1)`.
     Gauges(f64, f64, f64, f64),
-    /// HRRR model contours for a field kind (fetched at surface f00, contoured off-thread).
-    Contours(ContourKind),
+    /// Model contours for a field kind (surface f00, contoured off-thread), from HRRR or the RAP
+    /// analysis.
+    Contours(ContourKind, wxdata::hrrr::Model),
     /// NHC tropical cyclones (feature V).
     Tropical,
 }
@@ -301,13 +303,20 @@ impl OverlaySource {
                         .await?
                     }
                     _ => {
-                        wxdata::hrrr::fetch_field(http, "MASSDEN", "8 m above ground", fh, 0.0)
+                        wxdata::hrrr::fetch_field(
+                            http,
+                            wxdata::hrrr::Model::Hrrr,
+                            "MASSDEN",
+                            "8 m above ground",
+                            fh,
+                            0.0,
+                        )
                             .await?
                     }
                 };
                 OverlayMsg::Field(layer, fc.field)
             }
-            OverlaySource::Env(layer, ml, srh_km) => {
+            OverlaySource::Env(layer, model, ml, srh_km) => {
                 use crate::render::FieldLayer as FL;
                 let (var, level, min_valid) = match layer {
                     FL::Cape if ml => ("CAPE", "90-0 mb above ground".to_string(), 0.0),
@@ -319,7 +328,7 @@ impl OverlaySource {
                     ),
                     _ => ("REFC", "entire atmosphere".to_string(), -30.0),
                 };
-                let fc = wxdata::hrrr::fetch_field(http, var, &level, 0, min_valid).await?;
+                let fc = wxdata::hrrr::fetch_field(http, model, var, &level, 0, min_valid).await?;
                 OverlayMsg::Field(layer, fc.field)
             }
             OverlaySource::L3Grid(layer, site) => {
@@ -389,10 +398,10 @@ impl OverlaySource {
             OverlaySource::Gauges(lat0, lon0, lat1, lon1) => {
                 OverlayMsg::Gauges(wxdata::river::fetch_bbox(http, lat0, lon0, lat1, lon1).await?)
             }
-            OverlaySource::Contours(kind) => {
+            OverlaySource::Contours(kind, model) => {
                 // Composite parameters (STP/SCP/EHI) combine several same-run HRRR fields.
                 if let Some(sk) = kind.severe() {
-                    let fc = wxdata::severe::fetch_grid(http, sk).await?;
+                    let fc = wxdata::severe::fetch_grid(http, model, sk).await?;
                     let valid = fc.valid();
                     let lines = wxdata::contour::contour_lines(&fc.field, kind.severe_interval());
                     return Ok(OverlayMsg::Contours(kind, lines, valid));
@@ -401,7 +410,7 @@ impl OverlaySource {
                     .params()
                     .ok_or_else(|| anyhow::anyhow!("contour Off"))?;
                 let mut fc =
-                    wxdata::hrrr::fetch_field(http, var, level, 0, f64::NEG_INFINITY).await?;
+                    wxdata::hrrr::fetch_field(http, model, var, level, 0, f64::NEG_INFINITY).await?;
                 // Convert to display units so the interval is in hPa / °F / etc, then contour off-thread.
                 for v in &mut fc.field.values {
                     if v.is_finite() {
@@ -1152,6 +1161,9 @@ pub struct HookEchoApp {
     /// layer's last_fetch so the next frame refetches.
     env_cape_ml: bool,
     env_srh_km: u8,
+    /// Where the environment fields and contours come from: the HRRR forecast, or the RAP f00
+    /// analysis (13 km, observation-assimilated — "mesoanalysis"). Changing it refetches both.
+    env_model: wxdata::hrrr::Model,
     /// The site the L3 gridded products (DVL/EET) were last fetched for (feature X); refetch on
     /// site change.
     l3grid_site: Option<String>,
@@ -1172,7 +1184,7 @@ pub struct HookEchoApp {
     contours: Vec<wxdata::contour::ContourLine>,
     contour_valid: Option<DateTime<Utc>>,
     contour_last_fetch: Option<Instant>,
-    contour_fetched_kind: Option<ContourKind>,
+    contour_fetched_kind: Option<(ContourKind, wxdata::hrrr::Model)>,
     /// NHC tropical suite (feature V): toggle, fetched data, refresh clock.
     show_tropical: bool,
     tropical: Option<wxdata::tropical::TropicalData>,
@@ -1599,6 +1611,7 @@ impl HookEchoApp {
             contour_valid: None,
             contour_last_fetch: None,
             contour_fetched_kind: None,
+            env_model: wxdata::hrrr::Model::Hrrr,
             show_tropical: false,
             tropical: None,
             tropical_last_fetch: None,
@@ -3879,6 +3892,7 @@ impl HookEchoApp {
                                 tz,
                                 &mut self.env_cape_ml,
                                 &mut self.env_srh_km,
+                                &mut self.env_model,
                                 &mut self.contour_kind,
                                 l3_site.as_deref(),
                                 Some(mosaic.as_str()),
@@ -5822,7 +5836,7 @@ impl HookEchoApp {
             self.contour_fetched_kind = None;
             return;
         }
-        let changed = self.contour_fetched_kind != Some(self.contour_kind);
+        let changed = self.contour_fetched_kind != Some((self.contour_kind, self.env_model));
         let stale = self
             .contour_last_fetch
             .is_none_or(|t| t.elapsed().as_secs() >= 900);
@@ -5832,8 +5846,11 @@ impl HookEchoApp {
         }
         if changed || stale {
             self.contour_last_fetch = Some(Instant::now());
-            self.contour_fetched_kind = Some(self.contour_kind);
-            self.spawn_overlay(ctx, OverlaySource::Contours(self.contour_kind));
+            self.contour_fetched_kind = Some((self.contour_kind, self.env_model));
+            self.spawn_overlay(
+                ctx,
+                OverlaySource::Contours(self.contour_kind, self.env_model),
+            );
         }
     }
 
@@ -10033,7 +10050,7 @@ impl eframe::App for HookEchoApp {
                 }
                 self.spawn_overlay(
                     ctx,
-                    OverlaySource::Env(layer, self.env_cape_ml, self.env_srh_km),
+                    OverlaySource::Env(layer, self.env_model, self.env_cape_ml, self.env_srh_km),
                 );
             }
         }

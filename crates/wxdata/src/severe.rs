@@ -53,7 +53,17 @@ pub fn ehi1(sbcape: f64, srh1: f64) -> f64 {
 /// All surface fields regrid onto the same deterministic 0.04° lat/lon grid (see
 /// [`crate::hrrr`]), so the composites are a straight per-cell evaluation. `NaN` in any
 /// ingredient yields `NaN` out, leaving masked regions as gaps rather than zeros.
-pub async fn fetch_grid(http: &reqwest::Client, kind: SevereKind) -> anyhow::Result<HrrrForecast> {
+pub async fn fetch_grid(
+    http: &reqwest::Client,
+    model: hrrr::Model,
+    kind: SevereKind,
+) -> anyhow::Result<HrrrForecast> {
+    // STP needs an LCL height, and the RAP analysis file doesn't carry the adiabatic-condensation
+    // level HRRR does. Say so rather than quietly serving a different parameter.
+    anyhow::ensure!(
+        !(model == hrrr::Model::Rap && kind == SevereKind::Stp),
+        "STP needs an LCL height the RAP analysis doesn't publish — use the HRRR source"
+    );
     // (var, level, min_valid). Helicity and shear components must keep their negatives, so their
     // drop threshold is -inf; CAPE below zero is meaningless.
     let srh_level = match kind {
@@ -78,12 +88,13 @@ pub async fn fetch_grid(http: &reqwest::Client, kind: SevereKind) -> anyhow::Res
         ));
         specs.push(("HGT", "surface", f64::NEG_INFINITY));
     }
-    let (run, fields) = hrrr::fetch_fields_one_run(http, 0, &specs).await?;
+    let (run, fields) = hrrr::fetch_fields_one_run(http, model, 0, &specs).await?;
     let f0 = &fields[0];
     for f in &fields[1..] {
         anyhow::ensure!(
             f.nx == f0.nx && f.ny == f0.ny,
-            "HRRR ingredient grids disagree"
+            "{} ingredient grids disagree",
+            model.label()
         );
     }
 
@@ -162,7 +173,7 @@ mod tests {
     async fn severe_live() {
         let http = reqwest::Client::new();
         for kind in [SevereKind::Stp, SevereKind::Scp, SevereKind::Ehi] {
-            let f = fetch_grid(&http, kind).await.expect("HRRR fetch");
+            let f = fetch_grid(&http, hrrr::Model::Hrrr, kind).await.expect("HRRR fetch");
             let finite: Vec<f32> = f
                 .field
                 .values

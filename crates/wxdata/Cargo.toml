@@ -25,9 +25,11 @@ lru.workspace = true
 directories.workspace = true
 log.workspace = true
 geojson = "1.0.0"
-# No `jpeg`: that feature pulls openjpeg-sys (a vendored C JPEG2000 codec) for a packing template
-# no NOAA product we read uses — MRMS and HRRR are PNG / simple / complex packing.
-gribberish = { version = "1.5.0", default-features = false, features = ["png"] }
+# `jpeg` pulls openjpeg-sys (a vendored C JPEG2000 codec). MRMS and HRRR don't need it — they are
+# PNG / simple / complex packing — but the RAP analysis files are JPEG2000 (section 5 template 40),
+# so the mesoanalysis source doesn't decode without it. Cost measured before adding it back:
+# +363 KB on the release binary, and it cross-compiles for arm64-v8a under the NDK unchanged.
+gribberish = { version = "1.5.0", default-features = false, features = ["png", "jpeg"] }
 # Already in the tree under reqwest; used here to run the per-forecast-hour HRRR fetches with
 # bounded concurrency instead of one at a time.
 futures-util = { version = "0.3", default-features = false, features = ["std"] }

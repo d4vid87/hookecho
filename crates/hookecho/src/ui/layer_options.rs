@@ -53,6 +53,7 @@ pub(crate) fn show(
     tz: Option<wxdata::tz::Tz>,
     env_cape_ml: &mut bool,
     env_srh_km: &mut u8,
+    env_model: &mut wxdata::hrrr::Model,
     contour_kind: &mut crate::app::ContourKind,
     l3grid_site: Option<&str>,
     // One line about the live composite: contributing sites and the age of its oldest scan, or
@@ -97,16 +98,44 @@ pub(crate) fn show(
         });
     }
 
-    // HRRR model contours (isolines) — MSLP / 2 m temp / dewpoint / SB-CAPE / 0-3 km SRH.
+    // Where the environment fields and contours come from. RAP f00 is an analysis of what the
+    // atmosphere is doing now (assimilated obs, 13 km) rather than an HRRR forecast at hour zero —
+    // the thing people mean by "mesoanalysis". Labelled honestly, coarser grid and all.
+    let env_before = *env_model;
+    ui.horizontal(|ui| {
+        ui.label("Environment:");
+        ui.selectable_value(env_model, wxdata::hrrr::Model::Hrrr, "HRRR 3 km")
+            .on_hover_text("HRRR forecast model, 3 km grid (analysis at F+0)");
+        ui.selectable_value(env_model, wxdata::hrrr::Model::Rap, "RAP analysis")
+            .on_hover_text("RAP f00 observed analysis, 13 km grid — coarser, but what is, not what's forecast");
+    });
+    if *env_model != env_before {
+        // Both sources feed CAPE/SRH and the contours; drop their clocks so the next frame refetches.
+        for l in [FL::Cape, FL::Srh] {
+            if let Some(s) = fields.get_mut(&l) {
+                s.last_fetch = None;
+            }
+        }
+        // STP needs an LCL height the RAP file doesn't carry (see wxdata::severe::fetch_grid).
+        if *env_model == wxdata::hrrr::Model::Rap && *contour_kind == crate::app::ContourKind::Stp {
+            *contour_kind = crate::app::ContourKind::Off;
+        }
+        changed = true;
+    }
+
+    // Model contours (isolines) — MSLP / 2 m temp / dewpoint / SB-CAPE / 0-3 km SRH.
     egui::ComboBox::from_label("Contours")
         .selected_text(contour_kind.label())
         .show_ui(ui, |ui| {
             for k in crate::app::ContourKind::ALL {
+                if k == crate::app::ContourKind::Stp && *env_model == wxdata::hrrr::Model::Rap {
+                    continue; // no LCL height in the RAP analysis file
+                }
                 ui.selectable_value(contour_kind, k, k.label());
             }
         })
         .response
-        .on_hover_text("Draw an HRRR surface field as labeled contour lines (analysis f00)");
+        .on_hover_text("Draw a surface field as labeled contour lines (f00)");
 
     // Everything below belongs to a layer that has to be on for it to mean anything.
     let header = |ui: &mut egui::Ui, text: &str| {

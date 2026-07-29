@@ -754,6 +754,7 @@ impl super::HookEchoApp {
                                     tz,
                                     &mut self.env_cape_ml,
                                     &mut self.env_srh_km,
+                                    &mut self.env_model,
                                     &mut self.contour_kind,
                                     l3_site.as_deref(),
                                     Some(mosaic.as_str()),

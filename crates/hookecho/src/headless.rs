@@ -1265,10 +1265,10 @@ pub fn run_contours(kind_token: &str) -> anyhow::Result<()> {
         let client = reqwest::Client::new();
         // Composite parameters are built from several same-run fields; single fields fetch directly.
         let mut fc = match kind.severe() {
-            Some(sk) => wxdata::severe::fetch_grid(&client, sk).await?,
+            Some(sk) => wxdata::severe::fetch_grid(&client, wxdata::hrrr::Model::Hrrr, sk).await?,
             None => {
                 let (var, level, _) = kind.params().expect("non-Off kind has params");
-                wxdata::hrrr::fetch_field(&client, var, level, 0, f64::NEG_INFINITY).await?
+                wxdata::hrrr::fetch_field(&client, wxdata::hrrr::Model::Hrrr, var, level, 0, f64::NEG_INFINITY).await?
             }
         };
         for v in &mut fc.field.values {
@@ -1376,7 +1376,7 @@ pub fn run_env(slug: &str, out_path: &str) -> anyhow::Result<()> {
         .build()?;
     let fc = rt.block_on(async {
         let client = reqwest::Client::new();
-        wxdata::hrrr::fetch_field(&client, var, level, 0, min_valid).await
+        wxdata::hrrr::fetch_field(&client, wxdata::hrrr::Model::Hrrr, var, level, 0, min_valid).await
     })?;
     let f = &fc.field;
     let filled = f.values.iter().filter(|v| !v.is_nan()).count();
@@ -1459,7 +1459,7 @@ pub fn run_hrrr_layer(
                 .await
             }
             FieldLayer::Smoke => {
-                wxdata::hrrr::fetch_field(&client, "MASSDEN", "8 m above ground", fcst_hour, 0.0)
+                wxdata::hrrr::fetch_field(&client, wxdata::hrrr::Model::Hrrr, "MASSDEN", "8 m above ground", fcst_hour, 0.0)
                     .await
             }
             _ => wxdata::hrrr::fetch_forecast(&client, fcst_hour).await,
