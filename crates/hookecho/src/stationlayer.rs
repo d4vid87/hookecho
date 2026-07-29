@@ -111,7 +111,30 @@ impl Layer {
         let mut card = Card::new(ob.clone(), self.efield_kind());
         card.push(ob.clone(), e);
 
-        if let Some(cam) = nearest_cam(&self.cams, ob.lat, ob.lon) {
+        self.cards.push(card);
+        self.pair_cameras(rt, http, ctx);
+    }
+
+    /// Give every camera-less card its nearest camera. Called when a card opens and again each
+    /// time the catalog lands — the district files are megabytes and often arrive after the first
+    /// click, and a card opened in that window would otherwise stay blank until reopened.
+    pub fn pair_cameras(
+        &mut self,
+        rt: &tokio::runtime::Handle,
+        http: &reqwest::Client,
+        ctx: &egui::Context,
+    ) {
+        if self.cams.is_empty() {
+            return;
+        }
+        let mut stills = Vec::new();
+        for card in self.cards.iter_mut() {
+            if card.cam.is_some() || card.still_key.is_some() {
+                continue;
+            }
+            let Some(cam) = nearest_cam(&self.cams, card.ob.lat, card.ob.lon) else {
+                continue;
+            };
             card.cam_owner = cam.agency.clone();
             card.cam_name = if cam.place.is_empty() {
                 cam.name.clone()
@@ -120,16 +143,18 @@ impl Layer {
             };
             match &cam.stream_url {
                 Some(url) => card.cam = Some(crate::cam::Stream::start(url.clone(), rt)),
-                // No stream: fall back to the still, refreshed whenever the card is reopened.
+                // No stream: fall back to the newest still.
                 None => {
                     if let Some(url) = cam.image_url.clone() {
                         card.still_key = Some(url.clone());
-                        self.fetch_still(url, http, rt, ctx);
+                        stills.push(url);
                     }
                 }
             }
         }
-        self.cards.push(card);
+        for url in stills {
+            self.fetch_still(url, http, rt, ctx);
+        }
     }
 
     /// Pull a still image for a camera that doesn't stream.

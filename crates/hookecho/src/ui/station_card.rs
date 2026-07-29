@@ -100,14 +100,12 @@ impl Card {
         }
     }
 
-    /// Record a fresh observation. Readings that repeat the timestamp we already hold are the
-    /// same METAR being served again, not a new sample.
+    /// Record a poll. Sampled at the time we asked, not the time the station reported: an
+    /// airport METAR is an hour old the moment it lands and repeats until the next one, so the
+    /// series steps and holds through the gap rather than staying a single point forever. How
+    /// stale the underlying report is stays visible on the card's own "updated N ago" line.
     pub fn push(&mut self, ob: StationOb, efield: Option<f32>) {
-        let t = ob.time.unwrap_or_else(Utc::now);
-        if self.history.back().is_some_and(|s| s.t == t) {
-            self.ob = ob;
-            return;
-        }
+        let t = Utc::now();
         self.history.push_back(Sample {
             t,
             temp_c: ob.temp_c,
@@ -128,8 +126,9 @@ impl Card {
     /// the card says "—" rather than reporting a short window as if it were a long one.
     pub fn peak_gust(&self, secs: i64) -> Option<f32> {
         let (first, last) = (self.history.front()?, self.history.back()?);
-        let span = (last.t - first.t).num_seconds();
-        if span < secs && self.history.len() > 1 {
+        // One sample covers no window at all, so a fresh card reports every window as unknown
+        // rather than repeating its only reading across all six.
+        if (last.t - first.t).num_seconds() < secs {
             return None;
         }
         let cutoff = last.t - ChronoDuration::seconds(secs);
@@ -447,10 +446,17 @@ fn sparkline(ui: &mut egui::Ui, values: &[f32], color: Color32) {
         })
         .collect();
     p.add(egui::Shape::line(pts, egui::Stroke::new(1.3, color)));
+    // Electric field lives in thousandths where temperature lives in tens, so let the range
+    // itself pick the precision rather than rounding a real reading away to "0.0 – 0.0".
+    let dp = match hi.abs().max(lo.abs()) {
+        m if m >= 10.0 => 0,
+        m if m >= 1.0 => 1,
+        _ => 3,
+    };
     p.text(
         rect.right_top() + egui::vec2(-3.0, 1.0),
         egui::Align2::RIGHT_TOP,
-        format!("{lo:.1} – {hi:.1}"),
+        format!("{lo:.dp$} – {hi:.dp$}"),
         egui::FontId::proportional(8.5),
         Color32::from_gray(150),
     );
@@ -483,26 +489,35 @@ mod tests {
     }
 
     #[test]
-    fn repeated_observations_do_not_grow_the_history() {
+    fn a_repeated_report_holds_rather_than_stalling_the_series() {
         let mut card = Card::new(ob(0, 10.0), EFieldKind::Ppef);
         card.push(ob(0, 10.0), None);
         card.push(ob(0, 10.0), None);
-        assert_eq!(card.history.len(), 1, "same timestamp is the same reading");
-        card.push(ob(60, 12.0), None);
+        // An hourly METAR repeats between reports; the series holds its value across the gap
+        // instead of freezing at one point forever.
         assert_eq!(card.history.len(), 2);
+        assert_eq!(card.history[1].temp_c, Some(20.0));
     }
 
     #[test]
     fn gust_windows_only_report_what_the_card_has_seen() {
         let mut card = Card::new(ob(0, 10.0), EFieldKind::Ppef);
+        // Samples are stamped when they are polled, so drive the clock directly here.
+        let t0 = Utc::now() - ChronoDuration::seconds(60);
         for (i, g) in [10.0, 25.0, 14.0].iter().enumerate() {
-            card.push(ob(i as i64 * 30, *g), None);
+            card.push(ob(0, *g), None);
+            card.history.back_mut().unwrap().t = t0 + ChronoDuration::seconds(i as i64 * 30);
         }
         // One minute of samples: the 60 s window is answerable, the 12 h one is not.
         assert_eq!(card.peak_gust(60), Some(25.0));
         assert_eq!(card.peak_gust(43_200), None);
         // A shorter window keeps only the samples inside it.
         assert_eq!(card.peak_gust(30), Some(25.0));
+        // A card with one reading covers no window, however short.
+        let mut fresh = Card::new(ob(0, 10.0), EFieldKind::Ppef);
+        fresh.push(ob(0, 10.0), None);
+        assert_eq!(fresh.history.len(), 1);
+        assert_eq!(fresh.peak_gust(10), None);
     }
 
     #[test]

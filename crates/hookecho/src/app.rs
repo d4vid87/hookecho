@@ -10754,6 +10754,9 @@ impl eframe::App for HookEchoApp {
         // for the next frame itself rather than waiting for the idle heartbeat.
         #[cfg(not(target_os = "android"))]
         {
+            // A card opened before the camera catalog landed gets its camera as soon as it does.
+            let (rt, http) = (self._rt.handle().clone(), self.http.clone());
+            self.stations.pair_cameras(&rt, &http, ctx);
             let tz = self.active_tz();
             if self.stations.show_cards(ctx, tz) {
                 ctx.request_repaint_after(std::time::Duration::from_millis(33));
