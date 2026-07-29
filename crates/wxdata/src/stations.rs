@@ -75,7 +75,7 @@ pub fn rh_from_dewpoint(temp_c: f32, dewp_c: f32) -> f32 {
 }
 
 const MS_TO_KT: f32 = 1.943_844;
-const MPH_TO_KT: f32 = 0.868_976;
+const KMH_TO_KT: f32 = 0.539_957;
 
 /// Convert the METAR station plots we already fetch into station cards. Free — no extra request.
 pub fn from_metars(obs: &[crate::metar::SurfaceOb]) -> Vec<StationOb> {
@@ -290,8 +290,8 @@ pub fn parse_wu_ob(json: &str) -> Option<StationOb> {
         rh_pct,
         wdir_deg: o.get("winddir").and_then(|x| x.as_f64()).map(|x| x as f32),
         // WU's "metric" block reports wind in km/h.
-        wspd_kt: f("windSpeed").map(|v| v * 0.539_957),
-        gust_kt: f("windGust").map(|v| v * 0.539_957),
+        wspd_kt: f("windSpeed").map(|v| v * KMH_TO_KT),
+        gust_kt: f("windGust").map(|v| v * KMH_TO_KT),
         pressure_mb: f("pressure"),
         precip_rate_mmh: f("precipRate"),
         elev_m: f("elev"),

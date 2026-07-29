@@ -8,6 +8,9 @@
 pub mod app;
 pub mod audio;
 pub mod basemap_style;
+/// Live camera video (desktop only — Android cannot spawn an ffmpeg child).
+#[cfg(not(target_os = "android"))]
+pub mod cam;
 pub mod colormap;
 pub mod dialog;
 pub mod digest;
