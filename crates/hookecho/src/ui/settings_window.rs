@@ -216,6 +216,21 @@ fn basemaps_tab(ui: &mut egui::Ui, settings: &mut Settings) {
     key_field(ui, "MapTiler API key", &mut settings.maptiler_key);
     ui.add_space(6.0);
     ui.weak("Keys are stored locally in settings.json and sent only to the provider's tile API.");
+    ui.add_space(12.0);
+    ui.separator();
+    ui.label("Live station cards");
+    ui.weak("Optional. Airport METARs need no key; these add personal weather stations.");
+    ui.add_space(6.0);
+    key_field(ui, "WeatherFlow Tempest token", &mut settings.tempest_token);
+    ui.add_space(8.0);
+    key_field(ui, "Weather Underground API key", &mut settings.wu_key);
+    ui.add_space(8.0);
+    ui.label("Field mill URL (JSON, kV/m)");
+    ui.text_edit_singleline(&mut settings.field_mill_url)
+        .on_hover_text(
+            "A ground field mill publishing {\"time\": …, \"kv_per_m\": …}. Left empty, the cards \
+             chart NOAA's ionospheric PPEF model in mV/m instead — a different quantity entirely.",
+        );
 }
 
 /// A masked API-key entry: a label above a field that fills the row, then a Clear (✕) button, and

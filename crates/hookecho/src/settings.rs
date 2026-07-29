@@ -146,6 +146,17 @@ pub struct Settings {
     /// MapTiler API key (enables the MapTiler raster basemap styles). Held locally only.
     #[serde(default)]
     pub maptiler_key: String,
+    /// WeatherFlow Tempest personal access token — adds your Tempest stations to the live station
+    /// cards. Held locally only, same as the basemap keys.
+    #[serde(default)]
+    pub tempest_token: String,
+    /// Weather Underground API key — adds nearby PWS stations to the live station cards.
+    #[serde(default)]
+    pub wu_key: String,
+    /// A ground field mill publishing JSON (`{"time":…, "kv_per_m":…}`, or an array of those).
+    /// When set, the station cards chart real kV/m instead of NOAA's ionospheric model.
+    #[serde(default)]
+    pub field_mill_url: String,
     /// Saved startup view (radar site + camera). `None` = open on `default_site`.
     #[serde(default)]
     pub start_view: Option<StartView>,
@@ -441,6 +452,9 @@ impl Default for Settings {
             dealias_velocity: false,
             mapbox_key: String::new(),
             maptiler_key: String::new(),
+            tempest_token: String::new(),
+            wu_key: String::new(),
+            field_mill_url: String::new(),
             start_view: None,
             sync_client_id: String::new(),
             sync_client_secret: String::new(),
@@ -619,6 +633,9 @@ mod tests {
             }],
             dealias_velocity: true,
             mapbox_key: "pk.test".to_string(),
+            tempest_token: String::new(),
+            wu_key: String::new(),
+            field_mill_url: String::new(),
             maptiler_key: "mt.test".to_string(),
             start_view: Some(StartView {
                 site: "KFWS".to_string(),

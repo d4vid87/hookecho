@@ -52,6 +52,9 @@ pub mod sensor_window;
 pub mod settings_window;
 pub mod site_dialog;
 pub mod sounding_window;
+/// Live station telemetry cards (desktop only — they carry camera video).
+#[cfg(not(target_os = "android"))]
+pub mod station_card;
 pub mod style;
 pub mod layer_options;
 pub mod verify_window;

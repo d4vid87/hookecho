@@ -141,6 +141,18 @@ enum OverlayMsg {
     Metar(Vec<wxdata::metar::SurfaceOb>),
     /// FAA camera sites for the requested bbox.
     Webcams(Vec<wxdata::webcams::CamSite>),
+    /// Live surface stations for the telemetry cards.
+    #[cfg(not(target_os = "android"))]
+    Stations(Vec<wxdata::stations::StationOb>),
+    /// The current PPEF electric-field table (ionospheric, mV/m).
+    #[cfg(not(target_os = "android"))]
+    Ppef(wxdata::efield::Ppef),
+    /// Highway cameras for the requested bbox.
+    #[cfg(not(target_os = "android"))]
+    DotCams(Vec<wxdata::dotcams::DotCam>),
+    /// Newest reading from a configured ground field mill (kV/m).
+    #[cfg(not(target_os = "android"))]
+    Mill(f32),
     /// NWS damage-survey points and surveyed tracks for the requested bbox + storm day.
     Dat(
         Vec<wxdata::dat::DamagePoint>,
@@ -214,6 +226,24 @@ enum OverlaySource {
     Plugin(String, String, Vec<String>, crate::plugins::Context),
     /// FAA camera sites within a lon/lat bbox `(min_lon, min_lat, max_lon, max_lat)`.
     Webcams(f64, f64, f64, f64),
+    /// Live stations in a lat/lon bbox, plus the view centre the keyed networks are asked around
+    /// and the keys themselves (empty = that network stays off).
+    #[cfg(not(target_os = "android"))]
+    Stations {
+        bbox: (f64, f64, f64, f64),
+        center: (f64, f64),
+        tempest: String,
+        wu: String,
+    },
+    /// NOAA's PPEF electric-field table.
+    #[cfg(not(target_os = "android"))]
+    Ppef,
+    /// Highway cameras within a lon/lat bbox.
+    #[cfg(not(target_os = "android"))]
+    DotCams(f64, f64, f64, f64),
+    /// A user-configured field-mill endpoint.
+    #[cfg(not(target_os = "android"))]
+    Mill(String),
     /// Damage surveys: a lon/lat bbox plus the UTC day whose storms to ask for.
     Dat((f64, f64, f64, f64), chrono::NaiveDate),
     /// Multi-radar mosaic over a named set of sites (chosen from the view before spawning, so the
@@ -375,6 +405,34 @@ impl OverlaySource {
             OverlaySource::Webcams(min_lon, min_lat, max_lon, max_lat) => OverlayMsg::Webcams(
                 wxdata::webcams::fetch_bbox(http, min_lon, min_lat, max_lon, max_lat).await?,
             ),
+            #[cfg(not(target_os = "android"))]
+            OverlaySource::Stations {
+                bbox,
+                center,
+                tempest,
+                wu,
+            } => {
+                // METARs come first and cost one request; the keyed networks add themselves.
+                let metars = wxdata::metar::fetch_bbox(http, bbox.0, bbox.1, bbox.2, bbox.3)
+                    .await
+                    .unwrap_or_default();
+                OverlayMsg::Stations(
+                    wxdata::stations::fetch_all(http, &metars, &tempest, &wu, center.0, center.1)
+                        .await,
+                )
+            }
+            #[cfg(not(target_os = "android"))]
+            OverlaySource::Ppef => OverlayMsg::Ppef(wxdata::efield::fetch_ppef(http).await?),
+            #[cfg(not(target_os = "android"))]
+            OverlaySource::DotCams(min_lon, min_lat, max_lon, max_lat) => OverlayMsg::DotCams(
+                wxdata::dotcams::fetch_bbox(http, min_lon, min_lat, max_lon, max_lat).await?,
+            ),
+            #[cfg(not(target_os = "android"))]
+            OverlaySource::Mill(url) => {
+                let mut r = wxdata::efield::fetch_mill(http, &url).await?;
+                r.sort_by_key(|x| x.time);
+                OverlayMsg::Mill(r.last().map(|x| x.kv_per_m).unwrap_or(0.0))
+            }
             OverlaySource::Dat(bbox, day) => {
                 // A survey is filed against the storm's local date, which can be either side of the
                 // UTC one for an evening event — ask for the day either side and let the bbox and
@@ -624,6 +682,8 @@ pub(crate) enum OverlayToggle {
     RadarSites,
     Metar,
     Webcams,
+    #[cfg(not(target_os = "android"))]
+    Stations,
     Dat,
     Gauges,
     Tropical,
@@ -1258,6 +1318,17 @@ pub struct HookEchoApp {
     webcams: Vec<wxdata::webcams::CamSite>,
     webcam_bounds: Option<(f64, f64, f64, f64)>,
     webcam_last_fetch: Option<Instant>,
+    /// Live station cards: the toggle, the layer state, and the poll clocks behind it.
+    #[cfg(not(target_os = "android"))]
+    show_stations: bool,
+    #[cfg(not(target_os = "android"))]
+    stations: crate::stationlayer::Layer,
+    #[cfg(not(target_os = "android"))]
+    station_last_poll: Option<Instant>,
+    #[cfg(not(target_os = "android"))]
+    ppef_last_fetch: Option<Instant>,
+    #[cfg(not(target_os = "android"))]
+    dotcam_bounds: Option<(f64, f64, f64, f64)>,
     /// NOAA Weather Radio: the running player (dropping it stops playback) and the relay picked
     /// in the drawer.
     nwr: Option<crate::nwr::Player>,
@@ -1664,6 +1735,16 @@ impl HookEchoApp {
             webcams: Vec::new(),
             webcam_bounds: None,
             webcam_last_fetch: None,
+            #[cfg(not(target_os = "android"))]
+            show_stations: false,
+            #[cfg(not(target_os = "android"))]
+            stations: Default::default(),
+            #[cfg(not(target_os = "android"))]
+            station_last_poll: None,
+            #[cfg(not(target_os = "android"))]
+            ppef_last_fetch: None,
+            #[cfg(not(target_os = "android"))]
+            dotcam_bounds: None,
             nwr: None,
             nwr_pick: String::new(),
             show_dat: false,
@@ -4484,6 +4565,8 @@ impl HookEchoApp {
             T::RadarSites => &mut self.show_radar_sites,
             T::Metar => &mut self.show_metar,
             T::Webcams => &mut self.show_webcams,
+            #[cfg(not(target_os = "android"))]
+            T::Stations => &mut self.show_stations,
             T::Dat => &mut self.show_dat,
             T::Gauges => &mut self.show_gauges,
             T::Tropical => &mut self.show_tropical,
@@ -4819,6 +4902,14 @@ impl HookEchoApp {
                 "Obs",
                 "Airport webcams (FAA)",
                 "Look at the sky through an airport's camera",
+                false,
+            ),
+            #[cfg(not(target_os = "android"))]
+            (
+                T::Stations,
+                "Obs",
+                "Live station cards",
+                "Cameras and live telemetry from surface stations, one floating card each",
                 false,
             ),
             (
@@ -5369,6 +5460,14 @@ impl HookEchoApp {
                 }
                 OverlayMsg::Metar(obs) => self.metars = obs,
                 OverlayMsg::Webcams(sites) => self.webcams = sites,
+                #[cfg(not(target_os = "android"))]
+                OverlayMsg::Stations(obs) => self.stations.ingest(obs),
+                #[cfg(not(target_os = "android"))]
+                OverlayMsg::Ppef(p) => self.stations.ppef = Some(p),
+                #[cfg(not(target_os = "android"))]
+                OverlayMsg::DotCams(cams) => self.stations.cams = cams,
+                #[cfg(not(target_os = "android"))]
+                OverlayMsg::Mill(kv) => self.stations.mill_kv_per_m = Some(kv),
                 OverlayMsg::Dat(mut points, tracks) => {
                     // Weakest first, so the EF4/EF5 points end up painted on top of the EF0 and
                     // straight-line-wind ones that outnumber them ten to one.
@@ -5656,6 +5755,65 @@ impl HookEchoApp {
             self.webcam_last_fetch = Some(Instant::now());
             self.webcam_bounds = Some(b);
             self.spawn_overlay(ctx, OverlaySource::Webcams(b.0, b.1, b.2, b.3));
+        }
+    }
+
+    /// Drive the live-station layer: poll the networks on a clock, refresh the electric field
+    /// far more slowly (the model publishes every five minutes), and pull the camera catalog only
+    /// when the view has moved somewhere new.
+    ///
+    /// The poll is what fills every open card's ring buffer, so it keeps running while any card is
+    /// open even if the layer itself has been switched off.
+    #[cfg(not(target_os = "android"))]
+    fn sync_stations(&mut self, ctx: &egui::Context) {
+        if !self.show_stations && self.stations.cards.is_empty() {
+            return;
+        }
+        let (min_lon, min_lat, max_lon, max_lat) = self.view_bounds();
+        // A continental view would ask for thousands of stations to draw a dot each; the cards are
+        // a close-in tool, so the layer waits until the view is regional.
+        if (max_lon - min_lon) > 20.0 {
+            return;
+        }
+        if self
+            .station_last_poll
+            .is_none_or(|t| t.elapsed().as_secs() >= 60)
+        {
+            self.station_last_poll = Some(Instant::now());
+            self.spawn_overlay(
+                ctx,
+                OverlaySource::Stations {
+                    bbox: (min_lat, min_lon, max_lat, max_lon),
+                    center: ((min_lat + max_lat) * 0.5, (min_lon + max_lon) * 0.5),
+                    tempest: self.settings.tempest_token.clone(),
+                    wu: self.settings.wu_key.clone(),
+                },
+            );
+            if !self.settings.field_mill_url.is_empty() {
+                self.spawn_overlay(
+                    ctx,
+                    OverlaySource::Mill(self.settings.field_mill_url.clone()),
+                );
+            }
+        }
+        if self
+            .ppef_last_fetch
+            .is_none_or(|t| t.elapsed().as_secs() >= 300)
+        {
+            self.ppef_last_fetch = Some(Instant::now());
+            self.spawn_overlay(ctx, OverlaySource::Ppef);
+        }
+        // The camera catalog is megabytes of slow-changing agency data: fetch it per view box, not
+        // per tick.
+        let bbox = (
+            (min_lon * 2.0).round() / 2.0,
+            (min_lat * 2.0).round() / 2.0,
+            (max_lon * 2.0).round() / 2.0,
+            (max_lat * 2.0).round() / 2.0,
+        );
+        if self.dotcam_bounds != Some(bbox) {
+            self.dotcam_bounds = Some(bbox);
+            self.spawn_overlay(ctx, OverlaySource::DotCams(bbox.0, bbox.1, bbox.2, bbox.3));
         }
     }
 
@@ -7018,6 +7176,24 @@ impl HookEchoApp {
                             .cloned()
                     })
                     .flatten();
+                // A live station under an interrogate click. Ranked above the FAA cameras: where
+                // both sit on one airport, the card carries the camera and the telemetry.
+                #[cfg(not(target_os = "android"))]
+                let station_hit = (marker_hit.is_none()
+                    && !picked_site
+                    && self.tool == MapTool::Interrogate
+                    && self.show_stations)
+                    .then(|| {
+                        let to_screen = |lon: f64, lat: f64| {
+                            let w = crate::render::mercator::lonlat_to_world(lon, lat);
+                            let (sx, sy) = cam.world_to_screen(w, vp);
+                            egui::pos2(prect.left() + sx, prect.top() + sy)
+                        };
+                        self.stations.hit(pos, tap_r2(12.0), to_screen)
+                    })
+                    .flatten();
+                #[cfg(not(target_os = "android"))]
+                let cam_site = if station_hit.is_some() { None } else { cam_site };
                 // A surveyed damage point under an interrogate click, same rule as the cameras.
                 let dat_hit = (marker_hit.is_none()
                     && !picked_site
@@ -7037,6 +7213,14 @@ impl HookEchoApp {
                             .cloned()
                     })
                     .flatten();
+                #[cfg(not(target_os = "android"))]
+                if let Some(ob) = station_hit {
+                    self.cell_popup = None;
+                    self.warning_popup = None;
+                    let (rt, http) = (self._rt.handle().clone(), self.http.clone());
+                    self.stations.open_card(ob, &rt, &http, ctx);
+                    return;
+                }
                 match self.tool {
                     // Also catches the drop tool: a second marker within a finger's width of an
                     // existing one is never what someone meant, and this makes a stray drop undoable.
@@ -7860,6 +8044,48 @@ impl HookEchoApp {
                         &site.name,
                         egui::FontId::proportional(10.0),
                         col,
+                    );
+                }
+            }
+        }
+
+        // Live stations: a dot per station, warm where it is hot and cool where it is not, so a
+        // boundary reads off the map before any card is open. Clicking one opens its card.
+        #[cfg(not(target_os = "android"))]
+        if self.show_stations {
+            let show_labels = cam.zoom >= 8.0;
+            for ob in &self.stations.obs {
+                let w = crate::render::mercator::lonlat_to_world(ob.lon, ob.lat);
+                let (sx, sy) = cam.world_to_screen(w, vp);
+                let p = egui::pos2(prect.left() + sx, prect.top() + sy);
+                if !prect.contains(p) {
+                    continue;
+                }
+                let col = match ob.temp_c {
+                    // Blue at freezing through red at 38 C, the span US surface weather lives in.
+                    Some(t) => {
+                        let f = ((t / 38.0).clamp(0.0, 1.0) * 255.0) as u8;
+                        egui::Color32::from_rgb(f, 90, 255 - f)
+                    }
+                    None => egui::Color32::from_gray(150),
+                };
+                painter.circle_filled(p, 5.0, col);
+                painter.circle_stroke(
+                    p,
+                    5.0,
+                    egui::Stroke::new(1.0, egui::Color32::from_black_alpha(180)),
+                );
+                if show_labels {
+                    let label = match ob.temp_c {
+                        Some(t) => format!("{:.0}F", t * 9.0 / 5.0 + 32.0),
+                        None => ob.id.clone(),
+                    };
+                    painter.text(
+                        p + egui::vec2(7.0, 0.0),
+                        egui::Align2::LEFT_CENTER,
+                        label,
+                        egui::FontId::proportional(10.0),
+                        egui::Color32::from_gray(230),
                     );
                 }
             }
@@ -10026,6 +10252,8 @@ impl eframe::App for HookEchoApp {
         // Surface obs (METAR station plots).
         self.sync_metar(ctx);
         self.sync_webcams(ctx);
+        #[cfg(not(target_os = "android"))]
+        self.sync_stations(ctx);
         self.sync_dat(ctx);
         self.sync_mosaic(ctx);
         // River flood gauges (NWPS).
@@ -10521,6 +10749,15 @@ impl eframe::App for HookEchoApp {
         }
         if let Some(ui::digest_window::DigestAction::Generate) = self.digest_window.show(ctx) {
             self.generate_digest();
+        }
+        // Live station cards. Video keeps arriving between input events, so a playing card asks
+        // for the next frame itself rather than waiting for the idle heartbeat.
+        #[cfg(not(target_os = "android"))]
+        {
+            let tz = self.active_tz();
+            if self.stations.show_cards(ctx, tz) {
+                ctx.request_repaint_after(std::time::Duration::from_millis(33));
+            }
         }
         // Area Forecast Discussion: poll the async fetch, then render the text window.
         if let Some(rx) = &self.afd_rx {
