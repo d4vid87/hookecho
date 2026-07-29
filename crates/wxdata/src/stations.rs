@@ -474,4 +474,19 @@ mod tests {
         // A payload without observations is a quiet station, not a panic.
         assert!(parse_wu_ob(r#"{"observations":[]}"#).is_none());
     }
+
+    /// Run the real Tempest path against a real token, the way the app does. WeatherFlow changes
+    /// field names without notice, so this is the check that says whether a missing card is our
+    /// bug or their payload. `HOOKECHO_TEMPEST_TOKEN=... cargo test -p wxdata live_tempest -- --ignored --nocapture`
+    #[tokio::test]
+    #[ignore]
+    async fn live_tempest_stations_report() {
+        let token = std::env::var("HOOKECHO_TEMPEST_TOKEN").expect("set HOOKECHO_TEMPEST_TOKEN");
+        let client = reqwest::Client::new();
+        let obs = fetch_all(&client, &[], &token, "", 33.0, -96.0).await;
+        for o in &obs {
+            println!("{} {} {:.4},{:.4} temp={:?}", o.key(), o.name, o.lat, o.lon, o.temp_c);
+        }
+        assert!(!obs.is_empty(), "token saw no stations");
+    }
 }

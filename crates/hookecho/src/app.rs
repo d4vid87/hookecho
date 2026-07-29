@@ -8038,20 +8038,32 @@ impl HookEchoApp {
                     }
                     None => egui::Color32::from_gray(150),
                 };
-                painter.circle_filled(p, 5.0, col);
-                painter.circle_stroke(
-                    p,
-                    5.0,
-                    egui::Stroke::new(1.0, egui::Color32::from_black_alpha(180)),
-                );
+                // A personal station usually sits within a mile of the airport METAR that already
+                // has a dot here, so the networks get different shapes and opposite label sides —
+                // otherwise the PWS is drawn, invisible, underneath the METAR.
+                let stroke = egui::Stroke::new(1.0, egui::Color32::from_black_alpha(180));
+                let metar = ob.network == wxdata::stations::Network::Metar;
+                if metar {
+                    painter.circle_filled(p, 5.0, col);
+                    painter.circle_stroke(p, 5.0, stroke);
+                } else {
+                    let r = egui::Rect::from_center_size(p, egui::vec2(9.0, 9.0));
+                    painter.rect_filled(r, 1.0, col);
+                    painter.rect_stroke(r, 1.0, stroke, egui::StrokeKind::Middle);
+                }
                 if show_labels {
                     let label = match ob.temp_c {
                         Some(t) => format!("{:.0}F", t * 9.0 / 5.0 + 32.0),
                         None => ob.id.clone(),
                     };
+                    let (off, align) = if metar {
+                        (7.0, egui::Align2::LEFT_CENTER)
+                    } else {
+                        (-7.0, egui::Align2::RIGHT_CENTER)
+                    };
                     painter.text(
-                        p + egui::vec2(7.0, 0.0),
-                        egui::Align2::LEFT_CENTER,
+                        p + egui::vec2(off, 0.0),
+                        align,
                         label,
                         egui::FontId::proportional(10.0),
                         egui::Color32::from_gray(230),

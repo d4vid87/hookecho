@@ -13,7 +13,7 @@ use egui::ColorImage;
 use std::sync::mpsc::{Receiver, Sender};
 use wxdata::dotcams::DotCam;
 use wxdata::efield::Ppef;
-use wxdata::stations::StationOb;
+use wxdata::stations::{Network, StationOb};
 
 /// The still-image fetch channel: decoded images in, keyed by their URL.
 type StillChannel = (Sender<(String, ColorImage)>, Receiver<(String, ColorImage)>);
@@ -86,7 +86,12 @@ impl Layer {
             .iter()
             .map(|o| (o, to_screen(o.lon, o.lat).distance_sq(pos)))
             .filter(|(_, d2)| *d2 <= radius2)
-            .min_by(|a, b| a.1.total_cmp(&b.1))
+            // A personal station a block from the airport wins the tie: the user added that one
+            // on purpose, and it reports every minute instead of every hour.
+            .min_by(|a, b| {
+                let rank = |o: &StationOb| u8::from(o.network == Network::Metar);
+                rank(a.0).cmp(&rank(b.0)).then(a.1.total_cmp(&b.1))
+            })
             .map(|(o, _)| o.clone())
     }
 
@@ -378,6 +383,22 @@ mod tests {
         layer.mill_kv_per_m = Some(4.2);
         assert_eq!(layer.efield_kind(), EFieldKind::Mill);
         assert_eq!(layer.efield_for(-121.5), Some(4.2));
+    }
+
+    #[test]
+    fn a_personal_station_on_top_of_a_metar_takes_the_click() {
+        let mut layer = Layer::default();
+        let metar = station(38.500, -121.500);
+        let mut pws = station(38.502, -121.500);
+        pws.network = Network::Tempest;
+        pws.id = "175710".into();
+        layer.obs = vec![metar, pws];
+        // Both are inside the tap radius, with the METAR marginally closer.
+        let to_screen = |lon: f64, lat: f64| {
+            egui::pos2((lon as f32 + 121.5) * 5000.0, (lat as f32 - 38.5) * -5000.0)
+        };
+        let hit = layer.hit(egui::pos2(0.0, 0.0), 400.0, to_screen).unwrap();
+        assert_eq!(hit.network, Network::Tempest, "the PWS must win the tie");
     }
 
     #[test]
