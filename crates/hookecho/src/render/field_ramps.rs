@@ -317,12 +317,14 @@ const fn ramp_smoke() -> FieldRamp {
     )
 }
 
-/// Bake a 256-entry RGBA LUT from ramp `stops`, with `alpha` on every non-zero index (index 0
-/// stays clear = "no data"). Shared by the GPU upload path and the headless verifiers.
+/// Bake a 256-entry RGBA LUT from ramp `stops`, with `alpha` on every data index. Indices 0 and
+/// 1 stay clear — [`FieldRamp::index`] emits 0 for "no data" and 2..=255 for t in 0..=1, so the
+/// bake must use the same mapping or every color sits a hair off its value.
+/// Shared by the GPU upload path and the headless verifiers.
 pub fn bake_ramp_lut(stops: &[(f32, [u8; 3])], alpha: u8) -> Vec<u8> {
     let mut lut = vec![0u8; 256 * 4];
-    for (i, slot) in lut.chunks_exact_mut(4).enumerate().skip(1) {
-        let t = i as f32 / 255.0;
+    for (i, slot) in lut.chunks_exact_mut(4).enumerate().skip(2) {
+        let t = (i - 2) as f32 / 253.0;
         let mut rgb = stops[0].1;
         for w in stops.windows(2) {
             let (t0, c0) = w[0];
@@ -437,5 +439,14 @@ mod tests {
     fn categorical_index_is_the_raw_class_code() {
         let h = ramp_for(FieldLayer::Hca).unwrap();
         assert_eq!(h.index(110.0), 110);
+    }
+
+    #[test]
+    fn lut_uses_the_encoder_index_mapping() {
+        let stops = [(0.0, [10, 20, 30]), (1.0, [200, 210, 220])];
+        let lut = bake_ramp_lut(&stops, 255);
+        assert_eq!(&lut[2 * 4..2 * 4 + 3], &[10, 20, 30], "index 2 is t=0");
+        assert_eq!(&lut[255 * 4..255 * 4 + 3], &[200, 210, 220], "index 255 is t=1");
+        assert_eq!(lut[4 + 3], 0, "index 1 is never emitted, stays clear");
     }
 }

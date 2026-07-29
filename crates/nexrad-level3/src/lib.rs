@@ -383,15 +383,16 @@ pub fn dvl_value(level: u8, thr: &[i16; 16]) -> Option<f32> {
     }
     let lin_scale = icd_float16(thr[0] as u16);
     let lin_offset = icd_float16(thr[1] as u16);
-    let log_start = thr[2] as u16;
+    let log_start = thr[2];
     let log_scale = icd_float16(thr[3] as u16);
     let log_offset = icd_float16(thr[4] as u16);
-    // Thresholds come off the wire; a zero scale (garbled product) must not produce ±inf.
-    if lin_scale == 0.0 || log_scale == 0.0 {
+    // Thresholds come off the wire; a zero scale or a negative breakpoint (garbled product)
+    // must not produce ±inf or a silently all-linear decode.
+    if lin_scale == 0.0 || log_scale == 0.0 || log_start < 0 {
         return None;
     }
     let i = level as f32;
-    if (level as u16) < log_start {
+    if i16::from(level) < log_start {
         Some((i - lin_offset) / lin_scale)
     } else {
         Some(((i - log_offset) / log_scale).exp())

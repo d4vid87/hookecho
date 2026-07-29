@@ -57,7 +57,7 @@ impl Tokens {
         }
         match serde_json::to_string(self) {
             Ok(j) => {
-                if let Err(e) = std::fs::write(&path, j) {
+                if let Err(e) = crate::settings::atomic_write(&path, j.as_bytes()) {
                     log::warn!("token save failed: {e}");
                 }
             }
@@ -482,7 +482,7 @@ impl SyncState {
             let _ = std::fs::create_dir_all(p);
         }
         if let Ok(j) = serde_json::to_string(self) {
-            let _ = std::fs::write(path, j);
+            let _ = crate::settings::atomic_write(&path, j.as_bytes());
         }
     }
 }

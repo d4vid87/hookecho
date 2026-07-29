@@ -186,3 +186,14 @@ fn nmd_mesocyclone_decodes() {
     // NMD carries mesocyclone/MDA point features (packet 20).
     assert!(!p.meso.is_empty(), "at least one meso feature");
 }
+
+#[test]
+fn dvl_rejects_a_negative_log_breakpoint() {
+    // A garbled negative breakpoint used to wrap through `as u16` to ~65k, silently
+    // decoding the entire product on the linear branch. It must refuse instead.
+    let mut thr = [0i16; 16];
+    thr[0] = 0x4000; // lin scale 1.0
+    thr[2] = -5;
+    thr[3] = 0x4000; // log scale 1.0
+    assert_eq!(nexrad_level3::dvl_value(100, &thr), None);
+}

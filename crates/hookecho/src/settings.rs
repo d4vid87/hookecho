@@ -588,13 +588,25 @@ impl Settings {
         }
         match serde_json::to_string_pretty(self) {
             Ok(json) => {
-                if let Err(e) = std::fs::write(&path, json) {
+                if let Err(e) = atomic_write(&path, json.as_bytes()) {
                     log::warn!("settings save failed: {e}");
                 }
             }
             Err(e) => log::warn!("settings serialize failed: {e}"),
         }
     }
+}
+
+/// Write via a sibling temp file + rename. A crash mid-write must never tear a config file:
+/// a torn settings.json loses every setting on the next launch, and on Android the Kotlin
+/// alert service reads this file while we write it.
+pub fn atomic_write(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+    let tmp = path.with_extension("tmp");
+    let mut f = std::fs::File::create(&tmp)?;
+    f.write_all(bytes)?;
+    f.sync_all()?;
+    std::fs::rename(&tmp, path)
 }
 
 #[cfg(test)]
