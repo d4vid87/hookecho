@@ -1073,6 +1073,11 @@ pub struct HookEchoApp {
     climo_loading: bool,
     climo_error: Option<String>,
     climo_pending_query: Option<(f64, f64)>,
+    /// Warning history for the same clicked point (IEM VTEC by-point), fetched alongside the
+    /// tornado tracks. `Some(rx)` while the request is in flight.
+    climo_warn: Option<wxdata::archive_warnings::PointSummary>,
+    climo_warn_rx:
+        Option<std::sync::mpsc::Receiver<Result<wxdata::archive_warnings::PointSummary, String>>>,
     chase_applied: Option<(f64, f64)>,
     /// Live position stream from gpsd, when the user has connected it.
     gps_rx: Option<std::sync::mpsc::Receiver<(f64, f64)>>,
@@ -1509,6 +1514,8 @@ impl HookEchoApp {
             climo_loading: false,
             climo_error: None,
             climo_pending_query: None,
+            climo_warn: None,
+            climo_warn_rx: None,
             chase_applied: None,
             gps_rx: None,
             sync_tokens: crate::cloud::Tokens::load(),
@@ -3213,44 +3220,76 @@ impl HookEchoApp {
                         ui.spinner();
                         ui.label("Loading SPC tornado database (1950–2022)…");
                     });
-                    return;
-                }
-                if let Some(e) = &self.climo_error {
+                } else if let Some(e) = &self.climo_error {
                     ui.colored_label(
                         egui::Color32::from_rgb(230, 90, 90),
                         format!("Load failed: {e}"),
                     );
-                    return;
-                }
-                ui.strong(format!("{} tornadoes on record", self.climo_hits.len()));
-                let hist = wxdata::torclimo::mag_histogram(&self.climo_hits);
-                ui.horizontal_wrapped(|ui| {
-                    for (i, label) in ["EF0", "EF1", "EF2", "EF3", "EF4", "EF5", "Unk"]
-                        .iter()
-                        .enumerate()
-                    {
-                        crate::theme::stat_card(ui, label, &hist[i].to_string());
-                    }
-                });
-                ui.separator();
-                egui::ScrollArea::vertical()
-                    .max_height(240.0)
-                    .show(ui, |ui| {
-                        for t in self.climo_hits.iter().take(50) {
-                            let mag = if t.mag < 0 {
-                                "EF?".to_string()
-                            } else {
-                                format!("EF{}", t.mag)
-                            };
-                            ui.label(format!(
-                                "{}  {}  start {:.2},{:.2}",
-                                t.year, mag, t.slat, t.slon
-                            ));
-                        }
-                        if self.climo_hits.len() > 50 {
-                            ui.weak(format!("… and {} more", self.climo_hits.len() - 50));
+                } else {
+                    ui.strong(format!("{} tornadoes on record", self.climo_hits.len()));
+                    let hist = wxdata::torclimo::mag_histogram(&self.climo_hits);
+                    ui.horizontal_wrapped(|ui| {
+                        for (i, label) in ["EF0", "EF1", "EF2", "EF3", "EF4", "EF5", "Unk"]
+                            .iter()
+                            .enumerate()
+                        {
+                            crate::theme::stat_card(ui, label, &hist[i].to_string());
                         }
                     });
+                    ui.separator();
+                    egui::ScrollArea::vertical()
+                        .max_height(240.0)
+                        .show(ui, |ui| {
+                            for t in self.climo_hits.iter().take(50) {
+                                let mag = if t.mag < 0 {
+                                    "EF?".to_string()
+                                } else {
+                                    format!("EF{}", t.mag)
+                                };
+                                ui.label(format!(
+                                    "{}  {}  start {:.2},{:.2}",
+                                    t.year, mag, t.slat, t.slon
+                                ));
+                            }
+                            if self.climo_hits.len() > 50 {
+                                ui.weak(format!("… and {} more", self.climo_hits.len() - 50));
+                            }
+                        });
+                }
+                ui.separator();
+                ui.strong("Warning history");
+                ui.weak("How often this spot's county has been warned (IEM, 1986–present).");
+                match (&self.climo_warn, self.climo_warn_rx.is_some()) {
+                    (Some(s), _) if s.total == 0 => {
+                        ui.label("No warnings on record here.");
+                    }
+                    (Some(s), _) => {
+                        ui.horizontal_wrapped(|ui| {
+                            crate::theme::stat_card(ui, "Warnings", &s.total.to_string());
+                            if let Some(y) = s.first_year {
+                                crate::theme::stat_card(ui, "Since", &y.to_string());
+                            }
+                            if let Some((y, n)) = s.busiest_year {
+                                crate::theme::stat_card(ui, "Busiest year", &format!("{y} ({n})"));
+                            }
+                            if let Some((d, n)) = s.worst_day {
+                                crate::theme::stat_card(ui, "Worst day", &format!("{d} ({n})"));
+                            }
+                        });
+                        for (name, n) in s.by_name.iter().take(8) {
+                            ui.label(format!("{n} × {name}"));
+                        }
+                    }
+                    (None, true) => {
+                        ui.horizontal(|ui| {
+                            ui.spinner();
+                            ui.label("Loading warning history…");
+                        });
+                    }
+                    (None, false) => {
+                        ui.weak("Warning history unavailable.");
+                    }
+                }
             });
         self.climo_open = open;
     }
@@ -3261,6 +3300,7 @@ impl HookEchoApp {
         const RADIUS_KM: f64 = 40.0; // ~25 mi
         self.climo_open = true;
         self.climo_error = None;
+        self.query_warning_history(lon, lat);
         if let Some(tracks) = self.climo_tracks.clone() {
             self.climo_hits = wxdata::torclimo::near(&tracks, lon, lat, RADIUS_KM);
             self.climo_center = Some((lon, lat));
@@ -3269,6 +3309,24 @@ impl HookEchoApp {
         self.climo_center = Some((lon, lat));
         self.climo_pending_query = Some((lon, lat));
         self.load_climatology();
+    }
+
+    /// Fetch the archived NWS warning history for `(lon, lat)`. Cheap (one JSON request), so it runs
+    /// per click rather than being cached; the IEM archive starts in 1986.
+    fn query_warning_history(&mut self, lon: f64, lat: f64) {
+        self.climo_warn = None;
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.climo_warn_rx = Some(rx);
+        let http = self.http.clone();
+        let edate = chrono::Utc::now().format("%Y-%m-%d").to_string();
+        self._rt.spawn(async move {
+            let res =
+                wxdata::archive_warnings::fetch_point_events(&http, lon, lat, "1986-01-01", &edate)
+                    .await
+                    .map(|e| wxdata::archive_warnings::summarize(&e))
+                    .map_err(|e| e.to_string());
+            let _ = tx.send(res);
+        });
     }
 
     /// Kick off the one-time tornado-database load: read the on-disk cache if present, else download
@@ -10270,6 +10328,17 @@ impl eframe::App for HookEchoApp {
                         }
                     }
                     Err(e) => self.climo_error = Some(e),
+                }
+            }
+        }
+        // Warning history for the same point (independent request; a failure just leaves the
+        // section blank rather than sinking the whole card).
+        if let Some(rx) = &self.climo_warn_rx {
+            if let Ok(res) = rx.try_recv() {
+                self.climo_warn_rx = None;
+                match res {
+                    Ok(s) => self.climo_warn = Some(s),
+                    Err(e) => log::warn!("warning history: {e}"),
                 }
             }
         }
