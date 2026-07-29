@@ -5,6 +5,7 @@ pub mod alerts;
 pub mod archive_warnings;
 pub mod aviation;
 pub mod contour;
+pub mod dat;
 pub mod dealias;
 pub mod forecast;
 pub mod fronts;

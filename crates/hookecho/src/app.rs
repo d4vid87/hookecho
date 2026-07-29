@@ -45,6 +45,20 @@ fn tap_r2(px: f32) -> f32 {
     r * r
 }
 
+/// Colour for an EF rating, running the same yellow→red ramp the NWS uses in its own survey maps.
+/// Unrateable damage (EFU) draws grey so it can't be mistaken for a weak rating.
+fn ef_color(efscale: &str) -> egui::Color32 {
+    match wxdata::dat::ef_number(efscale) {
+        Some(0) => egui::Color32::from_rgb(120, 200, 120),
+        Some(1) => egui::Color32::from_rgb(240, 220, 80),
+        Some(2) => egui::Color32::from_rgb(245, 165, 50),
+        Some(3) => egui::Color32::from_rgb(240, 100, 50),
+        Some(4) => egui::Color32::from_rgb(225, 45, 45),
+        Some(_) => egui::Color32::from_rgb(200, 60, 200),
+        None => egui::Color32::from_rgb(160, 160, 165),
+    }
+}
+
 /// The first segment of a geocoder result — "Norman, Cleveland County, Oklahoma, United States"
 /// is a fine answer to a query and a terrible name for a pin on a map.
 fn short_place_name(s: &str) -> &str {
@@ -127,6 +141,11 @@ enum OverlayMsg {
     Metar(Vec<wxdata::metar::SurfaceOb>),
     /// FAA camera sites for the requested bbox.
     Webcams(Vec<wxdata::webcams::CamSite>),
+    /// NWS damage-survey points and surveyed tracks for the requested bbox + storm day.
+    Dat(
+        Vec<wxdata::dat::DamagePoint>,
+        Vec<wxdata::dat::DamageTrack>,
+    ),
     /// A plugin or placefile that failed to load, with why (shown in the manager window).
     PlacefileError(String, String),
     /// A finished multi-radar reflectivity composite: the grid, its contributing sites, and the
@@ -194,6 +213,8 @@ enum OverlaySource {
     Plugin(String, String, Vec<String>, crate::plugins::Context),
     /// FAA camera sites within a lon/lat bbox `(min_lon, min_lat, max_lon, max_lat)`.
     Webcams(f64, f64, f64, f64),
+    /// Damage surveys: a lon/lat bbox plus the UTC day whose storms to ask for.
+    Dat((f64, f64, f64, f64), chrono::NaiveDate),
     /// Multi-radar mosaic over a named set of sites (chosen from the view before spawning, so the
     /// fetch task needs no camera state).
     Mosaic(Vec<String>),
@@ -345,6 +366,20 @@ impl OverlaySource {
             OverlaySource::Webcams(min_lon, min_lat, max_lon, max_lat) => OverlayMsg::Webcams(
                 wxdata::webcams::fetch_bbox(http, min_lon, min_lat, max_lon, max_lat).await?,
             ),
+            OverlaySource::Dat(bbox, day) => {
+                // A survey is filed against the storm's local date, which can be either side of the
+                // UTC one for an evening event — ask for the day either side and let the bbox and
+                // the map do the rest.
+                let start = day
+                    .pred_opt()
+                    .unwrap_or(day)
+                    .and_hms_opt(0, 0, 0)
+                    .unwrap_or_default()
+                    .and_utc();
+                let end = start + chrono::Duration::days(3);
+                let (points, tracks) = wxdata::dat::fetch(http, bbox, start, end).await?;
+                OverlayMsg::Dat(points, tracks)
+            }
             OverlaySource::Mosaic(sites) => {
                 let m = wxdata::mosaic::fetch(http, &sites)
                     .await
@@ -580,6 +615,7 @@ pub(crate) enum OverlayToggle {
     RadarSites,
     Metar,
     Webcams,
+    Dat,
     Gauges,
     Tropical,
     ProbSevere,
@@ -1210,6 +1246,12 @@ pub struct HookEchoApp {
     webcams: Vec<wxdata::webcams::CamSite>,
     webcam_bounds: Option<(f64, f64, f64, f64)>,
     webcam_last_fetch: Option<Instant>,
+    /// NWS damage surveys: the toggle, the last result, and the `(bbox, day)` it was fetched for
+    /// (surveys never change, so the key alone decides when to refetch).
+    show_dat: bool,
+    dat_points: Vec<wxdata::dat::DamagePoint>,
+    dat_tracks: Vec<wxdata::dat::DamageTrack>,
+    dat_key: Option<((f64, f64, f64, f64), chrono::NaiveDate)>,
     /// Multi-radar mosaic: which sites the last composite used, the oldest scan in it, the view it
     /// was built for — panning off the composite refetches instead of leaving a stale picture.
     mosaic_sites: Vec<String>,
@@ -1605,6 +1647,10 @@ impl HookEchoApp {
             webcams: Vec::new(),
             webcam_bounds: None,
             webcam_last_fetch: None,
+            show_dat: false,
+            dat_points: Vec::new(),
+            dat_tracks: Vec::new(),
+            dat_key: None,
             mosaic_sites: Vec::new(),
             mosaic_oldest: None,
             mosaic_bounds: None,
@@ -4418,6 +4464,7 @@ impl HookEchoApp {
             T::RadarSites => &mut self.show_radar_sites,
             T::Metar => &mut self.show_metar,
             T::Webcams => &mut self.show_webcams,
+            T::Dat => &mut self.show_dat,
             T::Gauges => &mut self.show_gauges,
             T::Tropical => &mut self.show_tropical,
             T::ProbSevere => &mut self.show_probsevere,
@@ -4752,6 +4799,13 @@ impl HookEchoApp {
                 "Obs",
                 "Airport webcams (FAA)",
                 "Look at the sky through an airport's camera",
+                false,
+            ),
+            (
+                T::Dat,
+                "Obs",
+                "Damage surveys (NWS DAT)",
+                "What the survey crews found on the ground, rated point by point",
                 false,
             ),
             (
@@ -5295,6 +5349,13 @@ impl HookEchoApp {
                 }
                 OverlayMsg::Metar(obs) => self.metars = obs,
                 OverlayMsg::Webcams(sites) => self.webcams = sites,
+                OverlayMsg::Dat(mut points, tracks) => {
+                    // Weakest first, so the EF4/EF5 points end up painted on top of the EF0 and
+                    // straight-line-wind ones that outnumber them ten to one.
+                    points.sort_by_key(|p| wxdata::dat::ef_number(&p.efscale).unwrap_or(0));
+                    self.dat_points = points;
+                    self.dat_tracks = tracks;
+                }
                 OverlayMsg::Mosaic(field, sites, oldest) => {
                     self.mosaic_sites = sites;
                     self.mosaic_oldest = Some(oldest);
@@ -5578,6 +5639,40 @@ impl HookEchoApp {
         }
     }
 
+    /// Drive the damage-survey overlay. Surveys are immutable history, so the fetch key is just the
+    /// (rounded) view box and the day the active pane is looking at — scrub the timeline onto a
+    /// storm date and the survey for that day appears over it.
+    fn sync_dat(&mut self, ctx: &egui::Context) {
+        if !self.show_dat {
+            return;
+        }
+        let (min_lon, min_lat, max_lon, max_lat) = self.view_bounds();
+        if (max_lon - min_lon) > 12.0 {
+            return; // a continental query is tens of thousands of points
+        }
+        let day = self.views[self.active]
+            .volume
+            .as_ref()
+            .map(|v| v.time.date_naive())
+            .unwrap_or_else(|| chrono::Utc::now().date_naive());
+        // Snap the box to a half-degree grid so panning around inside a county doesn't refetch.
+        let snap = |v: f64, up: bool| {
+            let g = v * 2.0;
+            (if up { g.ceil() } else { g.floor() }) / 2.0
+        };
+        let bbox = (
+            snap(min_lon, false),
+            snap(min_lat, false),
+            snap(max_lon, true),
+            snap(max_lat, true),
+        );
+        if self.dat_key == Some((bbox, day)) {
+            return;
+        }
+        self.dat_key = Some((bbox, day));
+        self.spawn_overlay(ctx, OverlaySource::Dat(bbox, day));
+    }
+
     /// Open a camera site's detail popup and start pulling its newest frame.
     ///
     /// The image rides the placefile-icon texture cache: same fetch, same decode, same upload, and
@@ -5623,6 +5718,65 @@ impl HookEchoApp {
                 },
                 Ok(None) => log::info!("camera {cam_id} has no recent image"),
                 Err(e) => log::warn!("webcam {cam_id} lookup failed: {e}"),
+            }
+        });
+    }
+
+    /// Open a damage-survey point's detail popup, pulling its survey photo when one was attached.
+    /// Shares the placefile-icon texture cache with the webcam popup.
+    fn open_damage_point(&mut self, p: &wxdata::dat::DamagePoint, ctx: &egui::Context) {
+        let mut body = String::new();
+        if !p.damage.is_empty() {
+            body.push_str(&format!("{}\n", p.damage));
+        }
+        if !p.dod.is_empty() {
+            body.push_str(&format!("{}\n", p.dod));
+        }
+        if let Some(w) = p.windspeed {
+            body.push_str(&format!("Estimated wind: {w} mph\n"));
+        }
+        if p.deaths > 0 || p.injuries > 0 {
+            body.push_str(&format!("Deaths {} · injuries {}\n", p.deaths, p.injuries));
+        }
+        if let Some(t) = p.storm {
+            body.push_str(&format!("Storm: {}\n", t.format("%Y-%m-%d %H:%M UTC")));
+        }
+        if let Some(c) = &p.comments {
+            body.push_str(&format!("\n{c}\n"));
+        }
+        body.push_str(&format!("\nNWS {} survey (DAT)", p.office));
+        let key = p.image.as_ref().map(|url| format!("dat:{url}"));
+        let color = ef_color(&p.efscale).to_array();
+        self.detail = Some(Detail {
+            title: format!(
+                "{} damage",
+                if p.efscale.is_empty() {
+                    "Surveyed"
+                } else {
+                    &p.efscale
+                }
+            ),
+            body,
+            color,
+            image: key.clone(),
+        });
+        let (Some(key), Some(url)) = (key, p.image.clone()) else {
+            return;
+        };
+        if self.pf_icon_tex.contains_key(&key) {
+            return; // loaded, or already in flight
+        }
+        self.pf_icon_tex.insert(key.clone(), None);
+        let http = self.http.clone();
+        let tx = self.pf_icon_tx.clone();
+        let ctx2 = ctx.clone();
+        self._rt.spawn(async move {
+            match fetch_icon_sheet(&http, &url).await {
+                Ok(image) => {
+                    let _ = tx.send((key, image));
+                    ctx2.request_repaint();
+                }
+                Err(e) => log::warn!("survey photo {url} failed: {e}"),
             }
         });
     }
@@ -6781,6 +6935,25 @@ impl HookEchoApp {
                             .cloned()
                     })
                     .flatten();
+                // A surveyed damage point under an interrogate click, same rule as the cameras.
+                let dat_hit = (marker_hit.is_none()
+                    && !picked_site
+                    && cam_site.is_none()
+                    && self.tool == MapTool::Interrogate
+                    && self.show_dat)
+                    .then(|| {
+                        self.dat_points
+                            .iter()
+                            .find(|p| {
+                                let w = crate::render::mercator::lonlat_to_world(p.lon, p.lat);
+                                let (sx, sy) = cam.world_to_screen(w, vp);
+                                let (dx, dy) =
+                                    (prect.left() + sx - pos.x, prect.top() + sy - pos.y);
+                                dx * dx + dy * dy <= tap_r2(10.0)
+                            })
+                            .cloned()
+                    })
+                    .flatten();
                 match self.tool {
                     // Also catches the drop tool: a second marker within a finger's width of an
                     // existing one is never what someone meant, and this makes a stray drop undoable.
@@ -6795,6 +6968,12 @@ impl HookEchoApp {
                         self.warning_popup = None;
                         let site = cam_site.expect("checked Some");
                         self.open_webcam(&site, ctx);
+                    }
+                    _ if dat_hit.is_some() => {
+                        self.cell_popup = None;
+                        self.warning_popup = None;
+                        let p = dat_hit.expect("checked Some");
+                        self.open_damage_point(&p, ctx);
                     }
                     MapTool::Measure => {
                         if self.measure.len() >= 2 {
@@ -7600,6 +7779,37 @@ impl HookEchoApp {
                         col,
                     );
                 }
+            }
+        }
+
+        // Damage surveys: the fitted path first, then a dot per surveyed indicator coloured by its
+        // EF rating, so the rating gradient along the track reads at a glance.
+        if self.show_dat {
+            let to_screen = |lon: f64, lat: f64| {
+                let w = crate::render::mercator::lonlat_to_world(lon, lat);
+                let (sx, sy) = cam.world_to_screen(w, vp);
+                egui::pos2(prect.left() + sx, prect.top() + sy)
+            };
+            for t in &self.dat_tracks {
+                let pts: Vec<egui::Pos2> = t.path.iter().map(|p| to_screen(p[0], p[1])).collect();
+                if pts.len() >= 2 {
+                    painter.add(egui::Shape::line(
+                        pts,
+                        egui::Stroke::new(2.5, ef_color(&t.efscale).gamma_multiply(0.9)),
+                    ));
+                }
+            }
+            for p in &self.dat_points {
+                let s = to_screen(p.lon, p.lat);
+                if !prect.contains(s) {
+                    continue;
+                }
+                painter.circle_filled(s, 3.5, ef_color(&p.efscale));
+                painter.circle_stroke(
+                    s,
+                    3.5,
+                    egui::Stroke::new(1.0, egui::Color32::from_black_alpha(180)),
+                );
             }
         }
 
@@ -9729,6 +9939,7 @@ impl eframe::App for HookEchoApp {
         // Surface obs (METAR station plots).
         self.sync_metar(ctx);
         self.sync_webcams(ctx);
+        self.sync_dat(ctx);
         self.sync_mosaic(ctx);
         // River flood gauges (NWPS).
         self.sync_gauges(ctx);
