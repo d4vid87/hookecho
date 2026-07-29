@@ -129,7 +129,11 @@ impl Layer {
         }
         let mut stills = Vec::new();
         for card in self.cards.iter_mut() {
-            if card.cam.is_some() || card.still_key.is_some() {
+            #[cfg(not(target_os = "android"))]
+            if card.cam.is_some() {
+                continue;
+            }
+            if card.still_key.is_some() {
                 continue;
             }
             let Some(cam) = nearest_cam(&self.cams, card.ob.lat, card.ob.lon) else {
@@ -141,14 +145,16 @@ impl Layer {
             } else {
                 format!("{} · {}", cam.name, cam.place)
             };
-            match &cam.stream_url {
-                Some(url) => card.cam = Some(crate::cam::Stream::start(url.clone(), rt)),
-                // No stream: fall back to the newest still.
-                None => {
-                    if let Some(url) = cam.image_url.clone() {
-                        card.still_key = Some(url.clone());
-                        stills.push(url);
-                    }
+            #[cfg(not(target_os = "android"))]
+            if let Some(url) = &cam.stream_url {
+                card.cam = Some(crate::cam::Stream::start(url.clone(), rt));
+            }
+            // No stream (and on a phone, never a stream): fall back to the newest still.
+            let streaming = cfg!(not(target_os = "android")) && cam.stream_url.is_some();
+            if !streaming {
+                if let Some(url) = cam.image_url.clone() {
+                    card.still_key = Some(url.clone());
+                    stills.push(url);
                 }
             }
         }
@@ -178,6 +184,24 @@ impl Layer {
         });
     }
 
+    /// Re-pull the still for every card showing one. A still-only camera posts a new frame every
+    /// minute or so; without this the picture on the card is whatever it was when it opened.
+    pub fn refresh_stills(
+        &mut self,
+        rt: &tokio::runtime::Handle,
+        http: &reqwest::Client,
+        ctx: &egui::Context,
+    ) {
+        let urls: Vec<String> = self
+            .cards
+            .iter()
+            .filter_map(|c| c.still_key.clone())
+            .collect();
+        for url in urls {
+            self.fetch_still(url, http, rt, ctx);
+        }
+    }
+
     /// Draw every open card, upload any new video frames, and drop the ones the user closed.
     /// Returns true while at least one card is showing live video, so the caller can keep the
     /// frame loop awake.
@@ -199,8 +223,11 @@ impl Layer {
             }
         }
 
+        // Only a video card animates, and only desktop has video.
+        #[allow(unused_mut)]
         let mut animating = false;
         for (i, card) in self.cards.iter_mut().enumerate() {
+            #[cfg(not(target_os = "android"))]
             if let Some(stream) = &card.cam {
                 let seq = stream.seq();
                 if seq != card.last_seq {

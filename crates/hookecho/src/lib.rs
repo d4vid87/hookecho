@@ -20,8 +20,7 @@ pub mod geo;
 pub mod gps;
 pub mod cloud;
 pub mod share;
-/// Live station markers and their telemetry cards (desktop only).
-#[cfg(not(target_os = "android"))]
+/// Live station markers and their telemetry cards.
 pub mod stationlayer;
 pub mod headless;
 pub mod hotkeys;

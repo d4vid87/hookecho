@@ -73,6 +73,10 @@ pub struct Card {
     /// Which camera is showing, if any: its label, its owner, and the stream itself.
     pub cam_name: String,
     pub cam_owner: String,
+    /// Live video. Desktop only — a phone gets the newest still instead, refreshed on the poll
+    /// clock, because HLS needs an ffmpeg it cannot spawn and decoding video per open card is not
+    /// what a handset's battery is for.
+    #[cfg(not(target_os = "android"))]
     pub cam: Option<crate::cam::Stream>,
     /// The still-image texture key, for cameras that post frames instead of streaming.
     pub still_key: Option<String>,
@@ -91,6 +95,7 @@ impl Card {
             history: VecDeque::new(),
             cam_name: String::new(),
             cam_owner: String::new(),
+            #[cfg(not(target_os = "android"))]
             cam: None,
             still_key: None,
             tex: None,
@@ -169,13 +174,20 @@ pub fn show(
     let title = format!("{} — {}", card.ob.name, card.ob.network.label());
     // Cascade the first placement so several cards don't land on top of each other.
     let offset = 24.0 * (index % 8) as f32;
-    egui::Window::new(RichText::new(&title).size(13.0))
-        .id(egui::Id::new(("station-card", &card.key)))
-        .open(&mut open)
-        .default_pos([80.0 + offset, 90.0 + offset])
-        .default_width(330.0)
-        .resizable(true)
-        .show(ctx, |ui| {
+    let w = crate::ui::fit_phone(
+        ctx,
+        egui::Window::new(RichText::new(&title).size(13.0))
+            .id(egui::Id::new(("station-card", &card.key)))
+            .open(&mut open)
+            .default_pos([80.0 + offset, 90.0 + offset]),
+    );
+    // fit_phone pins the width on Android; on desktop the card sizes itself.
+    let w = if cfg!(target_os = "android") {
+        w
+    } else {
+        w.default_width(330.0).resizable(true)
+    };
+    w.show(ctx, |ui| {
             camera_pane(ui, card);
             header(ui, card, tz);
             ui.separator();
@@ -184,6 +196,7 @@ pub fn show(
             wind_block(ui, card);
             ui.separator();
             efield_block(ui, card);
+            still_note(ui);
         });
     card.open = open;
     open
@@ -193,7 +206,10 @@ pub fn show(
 /// published for looking at, not for putting on a stream — the banner says so where a viewer
 /// will actually read it.
 fn camera_pane(ui: &mut egui::Ui, card: &mut Card) {
+    #[cfg(not(target_os = "android"))]
     let status = card.cam.as_ref().map(|c| c.status());
+    #[cfg(target_os = "android")]
+    let status: Option<()> = None;
 
     if card.tex.is_none() && status.is_none() && card.still_key.is_none() {
         return;
@@ -208,16 +224,7 @@ fn camera_pane(ui: &mut egui::Ui, card: &mut Card) {
         None => {
             let (rect, _) = ui.allocate_exact_size(egui::vec2(w, 120.0), egui::Sense::hover());
             ui.painter().rect_filled(rect, 4.0, Color32::from_gray(24));
-            let msg = match &status {
-                Some(crate::cam::Status::NeedsFfmpeg) => {
-                    "This camera streams HLS — install ffmpeg to watch it".to_string()
-                }
-                Some(crate::cam::Status::Offline(e)) => format!("Camera offline: {e}"),
-                Some(crate::cam::Status::Connecting) | Some(crate::cam::Status::Playing) => {
-                    "Connecting\u{2026}".to_string()
-                }
-                _ => "Waiting for a frame\u{2026}".to_string(),
-            };
+            let msg = camera_status_text(&status);
             ui.painter().text(
                 rect.center(),
                 egui::Align2::CENTER_CENTER,
@@ -241,6 +248,40 @@ fn camera_pane(ui: &mut egui::Ui, card: &mut Card) {
             .color(Color32::from_rgb(220, 120, 90)),
     );
     ui.add_space(2.0);
+}
+
+/// On a phone the picture is the newest still, not video. Say so rather than letting a frame
+/// that updates once a minute read as a frozen stream.
+#[cfg(target_os = "android")]
+fn still_note(ui: &mut egui::Ui) {
+    ui.label(
+        RichText::new("Camera shows the newest still; live video is desktop-only")
+            .size(9.5)
+            .weak(),
+    );
+}
+
+#[cfg(not(target_os = "android"))]
+fn still_note(_ui: &mut egui::Ui) {}
+
+/// The line shown in place of a picture, in whatever terms that platform can honour.
+#[cfg(not(target_os = "android"))]
+fn camera_status_text(status: &Option<crate::cam::Status>) -> String {
+    match status {
+        Some(crate::cam::Status::NeedsFfmpeg) => {
+            "This camera streams HLS — install ffmpeg to watch it".to_string()
+        }
+        Some(crate::cam::Status::Offline(e)) => format!("Camera offline: {e}"),
+        Some(crate::cam::Status::Connecting) | Some(crate::cam::Status::Playing) => {
+            "Connecting\u{2026}".to_string()
+        }
+        _ => "Waiting for a frame\u{2026}".to_string(),
+    }
+}
+
+#[cfg(target_os = "android")]
+fn camera_status_text(_status: &Option<()>) -> String {
+    "Waiting for a frame\u{2026}".to_string()
 }
 
 fn chip(ui: &mut egui::Ui, text: &str, bg: Color32) {
