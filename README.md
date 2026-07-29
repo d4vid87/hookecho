@@ -300,7 +300,7 @@ layer draws its own scale and units.
   stream URL — NOAA broadcasts on VHF and streams nothing itself).
 - Draw on the map freehand to circle the storm you're talking about, and look
   through FAA airport webcams to see what the sky actually looks like.
-- **Live station cards** (desktop): click a surface station and get a floating,
+- **Live station cards**: click a surface station and get a floating,
   draggable card — a live highway camera on top, then the station's local clock
   and how stale its reading is, temperature with humidity and dewpoint, a wind
   dial with the trailing-gust ladder (10 s through 24 h), and the electric field.
@@ -316,6 +316,9 @@ layer draws its own scale and units.
   in mV/m, predicted from solar wind. That is space weather, not the storm over
   your head — for the kV/m a chaser means, point the card at a ground field
   mill's JSON in Settings and it charts that instead.
+  On Android the cards work the same, minus live video: the camera shows its
+  newest still instead, refreshed on the poll clock (a phone can't spawn ffmpeg,
+  and a video decoder per open card is not what its battery is for).
 - Multi-pane layouts, placefiles with icon sheets and a layer manager, a sensor
   dashboard, range rings, 13 themes, and tray-based background alerting.
 
