@@ -253,6 +253,14 @@ pub struct Settings {
     /// shipping a guessed list would mostly ship dead links. Add the one for your area.
     #[serde(default)]
     pub nwr_streams: Vec<NwrStream>,
+    /// Silence every alert (sound, speech, banner, ntfy push) until manually unmuted.
+    #[serde(default)]
+    pub alerts_muted: bool,
+    /// Silence every alert until this Unix-epoch second, then resume automatically. Set by the
+    /// "mute for 1h/8h" quick actions; cleared once it elapses. Independent of `alerts_muted`, so
+    /// a timed snooze and an indefinite mute can't fight over which one wins when un-set.
+    #[serde(default)]
+    pub mute_until: Option<i64>,
 }
 
 impl Settings {
@@ -263,6 +271,12 @@ impl Settings {
             TimeDisplay::Utc => None,
             TimeDisplay::SiteLocal => site.and_then(wxdata::tz::site_tz),
         }
+    }
+
+    /// Whether alerts are currently silenced — either muted indefinitely or within an active
+    /// timed snooze. `now` is Unix-epoch seconds (caller's clock, so tests don't need real time).
+    pub fn alerts_silenced(&self, now: i64) -> bool {
+        self.alerts_muted || self.mute_until.is_some_and(|t| now < t)
     }
 }
 
@@ -484,6 +498,8 @@ impl Default for Settings {
             live_loop_frames: default_live_loop_frames(),
             basemap: String::new(),
             nwr_streams: Vec::new(),
+            alerts_muted: false,
+            mute_until: None,
         }
     }
 }
@@ -687,10 +703,24 @@ mod tests {
                 name: "KEC55 Norman".into(),
                 url: "https://example.invalid/nwr.mp3".into(),
             }],
+            alerts_muted: true,
+            mute_until: Some(1_700_000_000),
         };
         let json = serde_json::to_string(&s).unwrap();
         let back: Settings = serde_json::from_str(&json).unwrap();
         assert_eq!(s, back);
+    }
+
+    #[test]
+    fn alerts_silenced_covers_mute_and_snooze() {
+        let mut s = Settings::default();
+        assert!(!s.alerts_silenced(1000));
+        s.alerts_muted = true;
+        assert!(s.alerts_silenced(1000));
+        s.alerts_muted = false;
+        s.mute_until = Some(2000);
+        assert!(s.alerts_silenced(1000), "still before the snooze deadline");
+        assert!(!s.alerts_silenced(2000), "deadline has elapsed");
     }
 
     #[test]

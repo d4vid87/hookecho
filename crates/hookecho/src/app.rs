@@ -2144,6 +2144,9 @@ impl HookEchoApp {
             // Mark every warning seen so it can't re-banner later, but only alert on genuinely new
             // ones after the first (seeding) pass.
             if self.known_warning_ids.insert(a.id.clone()) && self.warnings_seeded {
+                if self.alerts_muted() {
+                    continue;
+                }
                 let esc = wxdata::alerts::escalation(a);
                 let urgent = esc >= 2;
                 // A watched location always alerts + pushes: inside the polygon, or within that
@@ -2238,7 +2241,8 @@ impl HookEchoApp {
     /// of any saved location. Debounced per location (re-alerts only after ≥10 min of quiet) so a
     /// persistent storm doesn't spam. No-op unless the opt-in alarm is enabled and locations exist.
     fn check_lightning_proximity(&mut self, field: &wxdata::mrms::MrmsField) {
-        if !self.settings.lightning_alarm || self.settings.markers.is_empty() {
+        if !self.settings.lightning_alarm || self.settings.markers.is_empty() || self.alerts_muted()
+        {
             return;
         }
         const RADIUS_KM: f64 = 15.0;
@@ -2284,6 +2288,9 @@ impl HookEchoApp {
         use crate::rain_arrival::{upstream_eta, Verdict};
         if !self.settings.rain_alerts {
             self.rain_eta.clear();
+            return;
+        }
+        if self.alerts_muted() {
             return;
         }
         let Some((dir, kt)) = self.scit_mean_motion() else {
@@ -2553,7 +2560,19 @@ impl HookEchoApp {
 
     /// POST a high-priority push notification to the user's ntfy.sh topic (no-op if unset).
     /// Best-effort on the shared tokio runtime; failures are logged, never fatal.
+    /// Whether alerts are currently silenced (indefinite mute or an active timed snooze).
+    fn alerts_muted(&self) -> bool {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+        self.settings.alerts_silenced(now)
+    }
+
     fn push_ntfy(&self, title: &str, body: &str, urgent: bool) {
+        if self.alerts_muted() {
+            return;
+        }
         let topic = self.settings.ntfy_topic.trim().to_string();
         if topic.is_empty() {
             return;
@@ -3216,7 +3235,7 @@ impl HookEchoApp {
         let hits = wxdata::tds::detect(&z, &cc, 0.80, 40.0, 150.0, 4);
         // Rising-edge alert.
         let now_active = !hits.is_empty();
-        if now_active && !self.tds_active {
+        if now_active && !self.tds_active && !self.alerts_muted() {
             print!("\x07");
             use std::io::Write;
             let _ = std::io::stdout().flush();
@@ -3267,7 +3286,7 @@ impl HookEchoApp {
         // (nearer, clutter fakes couplets; farther, the beam is too high and too coarsely sampled).
         let hits = wxdata::rotation::detect(&vel, 25.0, 15.0, 150.0, 3);
         let now_active = !hits.is_empty();
-        if now_active && !self.rot_active {
+        if now_active && !self.rot_active && !self.alerts_muted() {
             let h = hits[0]; // sorted strongest-first
             let site = self.views[idx].site.clone().unwrap_or_default();
             let kt = h.vrot_ms * 1.943_844;
@@ -11051,9 +11070,25 @@ impl eframe::App for HookEchoApp {
         if !cfg!(target_os = "android") && self.show_alert_panel && !self.obs_mode {
             {
                 let bounds = self.view_bounds();
-                if let Some((id, lon, lat)) =
-                    ui::alert_panel::show(root, self.active_alert_features(), bounds)
+                let muted_before = self.settings.alerts_muted;
+                let snooze_before = self.settings.mute_until;
+                let mut alerts_muted = self.settings.alerts_muted;
+                let mut mute_until = self.settings.mute_until;
+                let result = ui::alert_panel::show(
+                    root,
+                    self.active_alert_features(),
+                    bounds,
+                    &mut alerts_muted,
+                    &mut mute_until,
+                );
+                self.settings.alerts_muted = alerts_muted;
+                self.settings.mute_until = mute_until;
+                if self.settings.alerts_muted != muted_before
+                    || self.settings.mute_until != snooze_before
                 {
+                    self.settings.save();
+                }
+                if let Some((id, lon, lat)) = result {
                     // Fly the active camera to the alert and open its bulletin.
                     let cam = &mut self.views[self.active].camera;
                     cam.center = crate::render::mercator::lonlat_to_world(lon, lat);

@@ -75,6 +75,8 @@ pub fn show(
     root: &mut egui::Ui,
     feats: &[GeoFeature],
     bounds: (f64, f64, f64, f64),
+    alerts_muted: &mut bool,
+    mute_until: &mut Option<i64>,
 ) -> Option<(String, f64, f64)> {
     let rows = rows_in_view(feats, bounds);
     let mut clicked = None;
@@ -85,6 +87,9 @@ pub fn show(
             ui.horizontal(|ui| {
                 ui.heading("Active Alerts");
                 ui.weak(format!("({})", rows.len()));
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    mute_button(ui, alerts_muted, mute_until);
+                });
             });
             ui.separator();
             if rows.is_empty() {
@@ -146,6 +151,33 @@ pub fn show(
             });
         });
     clicked
+}
+
+/// One-click mute/unmute for the panel header. Mutes indefinitely (the settings ▸ Alerts tab has
+/// the timed-snooze buttons); a click here always clears both an indefinite mute and any snooze.
+fn mute_button(ui: &mut egui::Ui, alerts_muted: &mut bool, mute_until: &mut Option<i64>) {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    let silenced = *alerts_muted || mute_until.is_some_and(|t| now < t);
+    let label = if silenced { "🔇" } else { "🔊" };
+    if ui
+        .button(label)
+        .on_hover_text(if silenced {
+            "Alerts muted — click to unmute"
+        } else {
+            "Mute all alerts"
+        })
+        .clicked()
+    {
+        if silenced {
+            *alerts_muted = false;
+            *mute_until = None;
+        } else {
+            *alerts_muted = true;
+        }
+    }
 }
 
 fn color32(c: [u8; 4]) -> egui::Color32 {

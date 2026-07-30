@@ -412,6 +412,50 @@ fn general_tab(ui: &mut egui::Ui, settings: &mut Settings) {
     ui.weak("Optional. Storm Digest (Ctrl+K) works offline; a key lets Claude write friendlier prose. Held locally only.");
 }
 
+fn now_unix() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
+/// Mute/snooze controls: an indefinite toggle plus quick-snooze buttons. Muting suppresses every
+/// alert channel (sound, speech, banner, ntfy push) without touching the per-event settings below
+/// it, so turning alerts back on restores exactly what was configured before.
+pub fn mute_controls(ui: &mut egui::Ui, settings: &mut Settings) {
+    ui.strong("Mute");
+    let now = now_unix();
+    let snoozed = settings.mute_until.is_some_and(|t| now < t);
+    if settings.alerts_muted || snoozed {
+        ui.horizontal(|ui| {
+            let label = if settings.alerts_muted {
+                "🔇 Alerts muted".to_string()
+            } else {
+                let mins = ((settings.mute_until.unwrap() - now).max(0) + 59) / 60;
+                format!("🔇 Alerts muted for {mins} more min")
+            };
+            ui.colored_label(egui::Color32::YELLOW, label);
+            if ui.button("Unmute").clicked() {
+                settings.alerts_muted = false;
+                settings.mute_until = None;
+            }
+        });
+    } else {
+        ui.horizontal(|ui| {
+            if ui.button("Mute now").clicked() {
+                settings.alerts_muted = true;
+            }
+            if ui.button("Snooze 1h").clicked() {
+                settings.mute_until = Some(now + 3600);
+            }
+            if ui.button("Snooze 8h").clicked() {
+                settings.mute_until = Some(now + 8 * 3600);
+            }
+        });
+    }
+    ui.weak("Silences sound, speech, banners and ntfy push everywhere \u{2014} the per-event toggles below are left alone.");
+}
+
 /// Alert-sound controls: master toggle, volume, and a per-event sound picker with previews.
 /// Shared by the Settings ▸ Audio tab and the first-run wizard.
 pub fn sound_picker(ui: &mut egui::Ui, settings: &mut Settings) {
@@ -471,6 +515,10 @@ pub fn sound_picker(ui: &mut egui::Ui, settings: &mut Settings) {
 
 /// Everything that fires when weather happens: sounds, push, proximity alarms.
 fn alerts_tab(ui: &mut egui::Ui, settings: &mut Settings) {
+    mute_controls(ui, settings);
+
+    ui.add_space(8.0);
+    ui.separator();
     sound_picker(ui, settings);
 
     ui.add_space(8.0);
