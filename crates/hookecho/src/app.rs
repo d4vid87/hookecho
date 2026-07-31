@@ -711,6 +711,7 @@ pub(crate) enum AppWindow {
     Climatology,
     LayerManager,
     Wizard,
+    About,
 }
 
 /// One thing the user can do, addressable from any surface (layers panel, command palette,
@@ -1041,6 +1042,11 @@ pub struct HookEchoApp {
     msg_rx: Receiver<DataMsg>,
     msg_tx: Sender<DataMsg>,
     /// Geocode results for the marker window's address search: `(label, lat, lon)` or an error.
+    /// About window + the once-per-session release check.
+    about_open: bool,
+    update_state: ui::about_window::UpdateState,
+    update_tx: Sender<Option<String>>,
+    update_rx: Receiver<Option<String>>,
     geocode_tx: Sender<Result<(String, f64, f64), String>>,
     geocode_rx: Receiver<Result<(String, f64, f64), String>>,
     /// In-progress offline chase-pack tile download (basemap pre-cache for the current view).
@@ -1517,6 +1523,7 @@ impl HookEchoApp {
         let vtiles = crate::vector_tiles::VectorTileManager::new(rt.handle().clone());
         let (msg_tx, msg_rx) = std::sync::mpsc::channel();
         let (overlay_tx, overlay_rx) = std::sync::mpsc::channel();
+        let (update_tx, update_rx) = std::sync::mpsc::channel();
         let (geocode_tx, geocode_rx) = std::sync::mpsc::channel();
         let (pf_icon_tx, pf_icon_rx) = std::sync::mpsc::channel();
         let http = reqwest::Client::new();
@@ -1555,6 +1562,10 @@ impl HookEchoApp {
             active: 0,
             msg_rx,
             msg_tx,
+            about_open: false,
+            update_state: ui::about_window::UpdateState::Idle,
+            update_tx,
+            update_rx,
             geocode_tx,
             geocode_rx,
             chasepack: None,
@@ -2096,6 +2107,38 @@ impl HookEchoApp {
         let (u, v) = (u / n as f32, v / n as f32);
         let dir = u.atan2(v).to_degrees().rem_euclid(360.0);
         Some((dir, (u * u + v * v).sqrt()))
+    }
+
+    /// Ask GitHub for the newest tagged release, once per session. `/releases/latest` skips
+    /// prereleases, which is exactly right here: the rolling `latest` build is a prerelease.
+    fn check_for_update(&mut self, ctx: &egui::Context) {
+        if self.update_state != ui::about_window::UpdateState::Idle {
+            return;
+        }
+        self.update_state = ui::about_window::UpdateState::Checking;
+        let http = self.http.clone();
+        let tx = self.update_tx.clone();
+        let ctx2 = ctx.clone();
+        self._rt.spawn(async move {
+            let url = "https://api.github.com/repos/d4vid87/hookecho/releases/latest";
+            // GitHub rejects requests without a User-Agent.
+            let tag = async {
+                let text = http
+                    .get(url)
+                    .header("User-Agent", "hookecho")
+                    .send()
+                    .await
+                    .ok()?
+                    .text()
+                    .await
+                    .ok()?;
+                let body: serde_json::Value = serde_json::from_str(&text).ok()?;
+                body.get("tag_name")?.as_str().map(str::to_string)
+            }
+            .await;
+            let _ = tx.send(tag);
+            ctx2.request_repaint();
+        });
     }
 
     /// Say something happened. Operation results used to reach the user only through the log.
@@ -5102,6 +5145,14 @@ impl HookEchoApp {
             PaletteAction::CycleBasemap,
             None,
         );
+        push(
+            "About Hook Echo-WX",
+            "Reference",
+            "Version, links, and whether a newer release is out",
+            false,
+            PaletteAction::OpenWindow(AppWindow::About),
+            None,
+        );
 
         // --- Tools, windows, panes. ---
         let tool = self.tool;
@@ -5396,6 +5447,10 @@ impl HookEchoApp {
                 }
                 W::LayerManager => self.layer_window_open = true,
                 W::Wizard => self.wizard.start(),
+                W::About => {
+                    self.about_open = true;
+                    self.check_for_update(ctx);
+                }
             },
         }
     }
@@ -10723,6 +10778,27 @@ impl eframe::App for HookEchoApp {
             self.error_chip(ctx);
             self.coach_marks(ctx);
             self.drawer(ctx);
+        }
+
+        // One quiet check per session, once the app has settled — so a stale build tells you so
+        // without anyone opening About.
+        if ctx.input(|i| i.time) > 30.0 {
+            self.check_for_update(ctx);
+        }
+        while let Ok(tag) = self.update_rx.try_recv() {
+            self.update_state = match tag {
+                Some(tag) => ui::about_window::compare(&tag),
+                None => ui::about_window::UpdateState::Failed,
+            };
+            if let ui::about_window::UpdateState::Newer(v) = self.update_state.clone() {
+                self.toast(ToastKind::Info, format!("Hook Echo-WX {v} is available"));
+            }
+        }
+        if self.about_open {
+            let accent = crate::theme::accent(self.settings.theme);
+            let mut open = self.about_open;
+            ui::about_window::show(ctx, &mut open, &self.update_state, accent);
+            self.about_open = open;
         }
 
         // The `?` cheat sheet floats over everything, including the wizard.

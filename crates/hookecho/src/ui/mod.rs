@@ -1,5 +1,14 @@
 //! egui UI: the drawer's layer list and options, site picker, settings window, color legend.
 
+/// A spinner with a label. A bare spinner says "something is happening"; the label says what,
+/// which is the difference between a professional app and a hung one.
+pub(crate) fn loading(ui: &mut egui::Ui, what: &str) {
+    ui.horizontal(|ui| {
+        ui.spinner();
+        ui.label(egui::RichText::new(what).weak());
+    });
+}
+
 /// Clamp a floating window to the screen on Android (no-op elsewhere): egui windows size to
 /// their content, and desktop-sized content overflows a ~360-pt-wide portrait phone display.
 /// Height overflow gets a scrollbar instead of a clip. The window is pinned near the top so its
@@ -35,6 +44,7 @@ pub mod afd_window;
 pub mod alert_panel;
 pub mod cappi_window;
 pub mod cell_window;
+pub mod about_window;
 pub mod cheatsheet;
 pub mod cells_window;
 pub mod detail_window;
