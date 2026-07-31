@@ -81,6 +81,17 @@ fn row(ui: &mut egui::Ui, e: &PaletteEntry, accent: Color32) -> bool {
                 Stroke::NONE
             }),
     );
+    // Binding chip, left of where the state pill goes: the shortcut is learnable from the row.
+    if let Some(key) = &e.key {
+        let dx = if e.on.is_some() { -44.0 } else { -10.0 };
+        ui.painter().text(
+            resp.rect.right_top() + vec2(dx, 9.0),
+            egui::Align2::RIGHT_TOP,
+            key,
+            egui::FontId::monospace(10.0),
+            Color32::from_gray(150),
+        );
+    }
     // State pill, drawn over the button's right edge (a nested layout inside a Button isn't a thing).
     if let Some(on) = e.on {
         let txt = if on { "ON" } else { "OFF" };
@@ -244,6 +255,7 @@ mod tests {
                 on: None,
                 desc: "How tall the storm is",
                 common: false,
+                key: None,
             },
             PaletteEntry {
                 label: "MRMS Mosaic".into(),
@@ -252,6 +264,7 @@ mod tests {
                 on: None,
                 desc: "Every radar stitched together",
                 common: true,
+                key: None,
             },
         ];
         // Empty query = the full list, common or not.
@@ -271,6 +284,7 @@ mod tests {
             on: None,
             desc: "",
             common: true,
+            key: None,
         };
         let entries = [e("Storm-Relative Velocity"), e("Velocity"), e("Reflectivity")];
         assert_eq!(matches(&entries, "velocity").first(), Some(&1));

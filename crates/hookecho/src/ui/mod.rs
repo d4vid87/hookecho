@@ -35,6 +35,7 @@ pub mod afd_window;
 pub mod alert_panel;
 pub mod cappi_window;
 pub mod cell_window;
+pub mod cheatsheet;
 pub mod cells_window;
 pub mod detail_window;
 pub mod digest_window;

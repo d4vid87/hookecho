@@ -9,7 +9,7 @@
 mod mobile;
 
 use crate::colormap::{ColorTable, Palettes};
-use crate::hotkeys::{self, Action};
+use crate::hotkeys::{self, BindableAction};
 use crate::overlay_build;
 use crate::render::{mercator::Camera, MapCallback, OverlayUpload, RadarUpload, RenderResources};
 use crate::settings::Settings;
@@ -518,7 +518,7 @@ pub(crate) fn draw_append(
 }
 
 /// What a left-click on the map does.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub(crate) enum MapTool {
     /// Interrogate storm cells / overlay features (the default).
     #[default]
@@ -543,7 +543,7 @@ pub(crate) enum MapTool {
 
 /// HRRR model field drawn as contour lines over the radar (surface `f00`). SB-CAPE / 0-3 km SRH
 /// are fixed here — `// ponytail: not wired to the env suite's env_cape_ml / env_srh_km toggles.`
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub(crate) enum ContourKind {
     #[default]
     Off,
@@ -662,7 +662,7 @@ impl ContourKind {
 
 /// A boolean overlay/panel toggle addressable by name, so the layers panel and command palette
 /// can flip any of them without a match arm per surface (see [`HookEchoApp::overlay_flag`]).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub(crate) enum OverlayToggle {
     AlertPanel,
     StormReports,
@@ -693,7 +693,7 @@ pub(crate) enum OverlayToggle {
 }
 
 /// A floating window the palette can open.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub(crate) enum AppWindow {
     Site,
     Settings,
@@ -715,7 +715,7 @@ pub(crate) enum AppWindow {
 
 /// One thing the user can do, addressable from any surface (layers panel, command palette,
 /// mobile quick-layers sheet). The single registry keeps those surfaces in sync for free.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub(crate) enum PaletteAction {
     /// Select a radar moment; the bool is the storm-relative flag (velocity only).
     SetMoment(Moment, bool),
@@ -769,6 +769,9 @@ pub(crate) struct PaletteEntry {
     pub desc: &'static str,
     /// Shown before the "Show all" expander. Everything else is one click further in — never gone.
     pub common: bool,
+    /// The key bound to this action, if any — drawn as a chip on the row so the shortcut is
+    /// learnable from the place you already click.
+    pub key: Option<String>,
 }
 
 /// Refresh cadence (seconds) for a national field layer's product.
@@ -1278,6 +1281,11 @@ pub struct HookEchoApp {
     /// Ctrl+K command palette: open flag, query, and the highlighted row.
     /// Set by Ctrl+K so the drawer grabs the search field on the frame it opens.
     drawer_focus_search: bool,
+    /// The `?` keyboard cheat sheet is up.
+    show_cheatsheet: bool,
+    /// The Hotkeys settings tab is waiting for the next keypress to bind; the global hotkey table
+    /// stands down while it is.
+    capture_key: bool,
     /// Top search pill: the place query and a transient "flew to …" status.
     place_query: String,
     place_status: Option<(String, Instant)>,
@@ -1702,6 +1710,8 @@ impl HookEchoApp {
             drawer_open: false,
             layers_query: String::new(),
             drawer_focus_search: false,
+            show_cheatsheet: false,
+            capture_key: false,
             place_query: String::new(),
             place_status: None,
             save_offer: None,
@@ -4590,6 +4600,16 @@ impl HookEchoApp {
         use AppWindow as W;
         use OverlayToggle as T;
         let mut out = Vec::new();
+        // Reverse index from the live bindings, so a rebind relabels every row that shows a chip.
+        let keys: Vec<(PaletteAction, String)> = crate::hotkeys::active(&self.settings)
+            .iter()
+            .filter_map(|b| match b.action {
+                crate::hotkeys::BindableAction::Palette(p) => {
+                    Some((p, crate::hotkeys::pretty(&b.shortcut)))
+                }
+                _ => None,
+            })
+            .collect();
         let mut push = |label: &str, category, desc, common, action, on| {
             out.push(PaletteEntry {
                 label: label.to_string(),
@@ -4598,6 +4618,10 @@ impl HookEchoApp {
                 on,
                 desc,
                 common,
+                key: keys
+                    .iter()
+                    .find(|(a, _)| *a == action)
+                    .map(|(_, k)| k.clone()),
             })
         };
 
@@ -5241,7 +5265,14 @@ impl HookEchoApp {
             }
             PaletteAction::SetPanes(n) => self.set_pane_count(n),
             PaletteAction::AllTilts => self.apply_all_tilts(),
-            PaletteAction::CycleBasemap => self.apply_action(Action::CycleBasemap, ctx),
+            PaletteAction::CycleBasemap => {
+                let (mb, mt) = (
+                    !self.settings.mapbox_key.is_empty(),
+                    !self.settings.maptiler_key.is_empty(),
+                );
+                let v = &mut self.views[self.active];
+                v.basemap = v.basemap.next(mb, mt);
+            }
             PaletteAction::Reload => self.trigger_reload(ctx),
             PaletteAction::InstantReplay => self.instant_replay(),
             PaletteAction::GoLive => self.views[self.active].timeline.go_head(),
@@ -6661,10 +6692,12 @@ impl HookEchoApp {
         })
     }
 
-    fn apply_action(&mut self, action: Action, ctx: &egui::Context) {
+    fn apply_action(&mut self, action: BindableAction, ctx: &egui::Context) {
+        use BindableAction as A;
         match action {
-            Action::Product(m) => self.views[self.active].moment = m,
-            Action::TiltUp => {
+            // Everything the registry already knows how to do runs through the one executor.
+            A::Palette(p) => self.apply_palette(p, ctx),
+            A::TiltUp => {
                 let v = &mut self.views[self.active];
                 if let Some(vol) = &v.volume {
                     if v.tilt + 1 < vol.elevations.len() {
@@ -6672,40 +6705,43 @@ impl HookEchoApp {
                     }
                 }
             }
-            Action::TiltDown => {
+            A::TiltDown => {
                 let v = &mut self.views[self.active];
                 v.tilt = v.tilt.saturating_sub(1);
             }
-            Action::OpenSiteDialog => {
+            A::OpenSiteDialog => {
                 if self.site_dialog.is_none() {
                     self.site_dialog = Some(Default::default());
                 }
             }
-            Action::Reload => self.trigger_reload(ctx),
-            Action::CycleBasemap => {
-                let (mb, mt) = (
-                    !self.settings.mapbox_key.is_empty(),
-                    !self.settings.maptiler_key.is_empty(),
-                );
-                let v = &mut self.views[self.active];
-                v.basemap = v.basemap.next(mb, mt);
-            }
-            Action::ToggleAlertPanel => self.show_alert_panel = !self.show_alert_panel,
-            Action::ToggleObs => {
+            A::ToggleAlertPanel => self.show_alert_panel = !self.show_alert_panel,
+            A::ToggleObs => {
                 self.obs_mode = !self.obs_mode;
                 if !self.obs_mode {
                     self.obs_tour = false;
                 }
             }
-            Action::ToggleObsTour => {
+            A::ToggleObsTour => {
                 self.obs_tour = !self.obs_tour;
                 self.obs_tour_last = None; // step immediately on enable
                 if self.obs_tour {
                     self.obs_mode = true;
                 }
             }
-            Action::ToggleLayersPanel => self.drawer_open = !self.drawer_open,
-            Action::InstantReplay => self.instant_replay(),
+            A::ToggleDrawer => self.drawer_open = !self.drawer_open,
+            A::Fullscreen => {
+                // Desktop only; mobile is already fullscreen.
+                if !cfg!(target_os = "android") {
+                    let cur = ctx.input(|i| i.viewport().fullscreen.unwrap_or(false));
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(!cur));
+                }
+            }
+            A::CommandSearch => {
+                self.drawer_open = true;
+                self.layers_query.clear();
+                self.drawer_focus_search = true;
+            }
+            A::CheatSheet => self.show_cheatsheet = !self.show_cheatsheet,
         }
     }
 
@@ -10513,8 +10549,14 @@ impl eframe::App for HookEchoApp {
         }
         self.sync_placefiles(ctx);
         self.sync_pf_icons(ctx);
-        for action in hotkeys::poll(ctx) {
-            self.apply_action(action, ctx);
+        // Bindings are polled once, globally: a hotkey works the same in OBS mode, on mobile, and
+        // with the drawer open. `capture_key` suppresses the table while the Hotkeys tab is
+        // listening for the next keypress.
+        if !self.capture_key {
+            let bindings = hotkeys::active(&self.settings).into_owned();
+            for action in hotkeys::poll(ctx, &bindings) {
+                self.apply_action(action, ctx);
+            }
         }
 
         self.drive_obs_tour();
@@ -10549,14 +10591,6 @@ impl eframe::App for HookEchoApp {
                 .show(root, |_| {});
         }
 
-        // F11: OS-native fullscreen (desktop only; mobile is already fullscreen).
-        if !cfg!(target_os = "android")
-            && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::F11))
-        {
-            let cur = ctx.input(|i| i.viewport().fullscreen.unwrap_or(false));
-            ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(!cur));
-        }
-
         // Chrome: touch-first on Android (top bar + dock + slide-up sheets), desktop otherwise
         // (the floating map-first chrome below). Both funnel into the same `UiActions` handling.
         let mut actions = ui::layer_options::UiActions::default();
@@ -10569,11 +10603,6 @@ impl eframe::App for HookEchoApp {
         // Floating map-first chrome (desktop): a hamburger, an alert bell, the two bottom pills.
         // Everything else is one drawer behind the hamburger.
         if !cfg!(target_os = "android") && !self.obs_mode {
-            if ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::K)) {
-                self.drawer_open = true;
-                self.layers_query.clear();
-                self.drawer_focus_search = true;
-            }
             self.drawer_chrome(ctx);
             self.product_pill(ctx);
             self.timeline_pill(ctx);
@@ -10581,6 +10610,14 @@ impl eframe::App for HookEchoApp {
             self.error_chip(ctx);
             self.coach_marks(ctx);
             self.drawer(ctx);
+        }
+
+        // The `?` cheat sheet floats over everything, including the wizard.
+        if self.show_cheatsheet {
+            let entries = self.palette_entries();
+            let bindings = hotkeys::active(&self.settings).into_owned();
+            let accent = crate::theme::accent(self.settings.theme);
+            self.show_cheatsheet = ui::cheatsheet::show(ctx, &bindings, &entries, accent);
         }
 
         // First-run setup wizard.
@@ -10616,15 +10653,17 @@ impl eframe::App for HookEchoApp {
                 self.site_dialog = None;
             }
         }
+        let entries = self.palette_entries();
         let sync_view = ui::settings_window::SyncView {
             signed_in: self.sync_tokens.is_some(),
             status: &self.sync_status,
             login_url: self.sync_login.as_ref().map(|p| p.url.as_str()),
             last_sync: self.sync_state.last_sync,
         };
-        let sync_action = self
-            .settings_window
-            .show(ctx, &mut self.settings, &self.palettes, sync_view);
+        let sync_action =
+            self.settings_window
+                .show(ctx, &mut self.settings, &self.palettes, sync_view, &entries);
+        self.capture_key = self.settings_window.capturing;
         match sync_action {
             Some(ui::settings_window::SyncAction::SignIn) => self.sync_sign_in(),
             Some(ui::settings_window::SyncAction::SignOut) => self.sync_sign_out(),

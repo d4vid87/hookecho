@@ -1,6 +1,8 @@
-//! Settings window: General, Palettes, Units, Basemaps, Alerts, Sync.
+//! Settings window: General, Palettes, Units, Basemaps, Alerts, Hotkeys, Sync.
 
+use crate::app::PaletteEntry;
 use crate::colormap::Palettes;
+use crate::hotkeys::{self, Binding, BindableAction};
 use crate::settings::{Settings, Theme, TimeDisplay, VelocityUnit};
 use wxdata::level2::Moment;
 
@@ -12,6 +14,7 @@ enum Tab {
     Units,
     Basemaps,
     Alerts,
+    Hotkeys,
     Sync,
 }
 
@@ -41,17 +44,26 @@ pub struct SettingsWindow {
     /// Cached `.pal` file stems in the color-tables folder; rescanned on window/tab open.
     pal_stems: Vec<String>,
     scanned: bool,
+    /// Hotkeys tab: the action whose key we're waiting on, the filter box, and the last conflict
+    /// we resolved by stealing (shown inline so the theft isn't silent).
+    rebinding: Option<BindableAction>,
+    hotkey_query: String,
+    stolen: Option<String>,
+    /// True while a keypress is being captured — the app stands its global hotkey table down so
+    /// binding `A` doesn't also toggle the alert panel.
+    pub capturing: bool,
 }
 
 impl SettingsWindow {
     /// `palettes` is read-only here (for parse-error badges); edits go through `settings` and
     /// the app reloads tables via the settings dirty-diff.
-    pub fn show(
+    pub(crate) fn show(
         &mut self,
         ctx: &egui::Context,
         settings: &mut Settings,
         palettes: &Palettes,
         sync: SyncView,
+        entries: &[PaletteEntry],
     ) -> Option<SyncAction> {
         let mut action = None;
         if self.open && !self.prev_open {
@@ -75,6 +87,7 @@ impl SettingsWindow {
                         (Tab::Units, "Units"),
                         (Tab::Basemaps, "Basemaps"),
                         (Tab::Alerts, "Alerts"),
+                        (Tab::Hotkeys, "Hotkeys"),
                         (Tab::Sync, "Sync"),
                     ] {
                         ui.selectable_value(&mut self.tab, tab, label);
@@ -87,11 +100,132 @@ impl SettingsWindow {
                     Tab::Units => units_tab(ui, settings),
                     Tab::Basemaps => basemaps_tab(ui, settings),
                     Tab::Alerts => alerts_tab(ui, settings),
+                    Tab::Hotkeys => self.hotkeys_tab(ui, settings, entries),
                     Tab::Sync => action = sync_tab(ui, settings, &sync),
                 }
             });
+        self.capturing = self.rebinding.is_some() && open;
+        if !open {
+            self.rebinding = None;
+        }
         self.open = open;
         action
+    }
+
+    /// Rebindable keyboard shortcuts. Rows come from the binding table itself, so anything the
+    /// command registry can do is bindable; `Palette` rows borrow the registry's own label.
+    fn hotkeys_tab(&mut self, ui: &mut egui::Ui, settings: &mut Settings, entries: &[PaletteEntry]) {
+        let name = |a: BindableAction| -> String {
+            match a {
+                BindableAction::Palette(p) => entries
+                    .iter()
+                    .find(|e| e.action == p)
+                    .map(|e| e.label.clone())
+                    .unwrap_or_else(|| format!("{p:?}")),
+                other => hotkeys::label(other).unwrap_or("").to_string(),
+            }
+        };
+
+        ui.horizontal(|ui| {
+            ui.label("Filter");
+            ui.text_edit_singleline(&mut self.hotkey_query);
+            if ui.button("Reset to defaults").clicked() {
+                settings.keybinds.clear();
+                self.rebinding = None;
+                self.stolen = None;
+            }
+        });
+        ui.label(
+            egui::RichText::new(
+                "Click a shortcut, then press the key you want. Escape cancels — it always closes \
+                 whatever is in front of you, so it can't be bound.",
+            )
+            .weak()
+            .small(),
+        );
+        ui.separator();
+
+        // First edit copies the whole shipped table into settings, so a later change to the
+        // defaults doesn't silently rewrite keys the user already learned.
+        if settings.keybinds.is_empty() {
+            settings.keybinds = hotkeys::defaults();
+        }
+
+        // Capture: the first real keypress while a row is armed becomes its binding.
+        if let Some(target) = self.rebinding {
+            if let Some((mods, key)) = ui.ctx().input(|i| {
+                i.events.iter().find_map(|e| match e {
+                    egui::Event::Key {
+                        key,
+                        pressed: true,
+                        modifiers,
+                        ..
+                    } if *key != egui::Key::Escape => Some((*modifiers, *key)),
+                    _ => None,
+                })
+            }) {
+                let shortcut = egui::KeyboardShortcut::new(mods, key);
+                self.stolen = hotkeys::conflict(&settings.keybinds, shortcut, target)
+                    .map(|b| name(b.action));
+                settings.keybinds.retain(|b| b.shortcut != shortcut);
+                if let Some(row) = settings.keybinds.iter_mut().find(|b| b.action == target) {
+                    row.shortcut = shortcut;
+                } else {
+                    settings.keybinds.push(Binding {
+                        shortcut,
+                        action: target,
+                    });
+                }
+                self.rebinding = None;
+            } else if ui
+                .ctx()
+                .input(|i| i.key_pressed(egui::Key::Escape) || i.pointer.any_click())
+            {
+                self.rebinding = None;
+            }
+        }
+
+        if let Some(lost) = &self.stolen {
+            ui.colored_label(
+                egui::Color32::from_rgb(230, 170, 60),
+                format!("“{lost}” lost that key and is now unbound."),
+            );
+        }
+
+        let rows: Vec<(usize, String)> = settings
+            .keybinds
+            .iter()
+            .enumerate()
+            .map(|(i, b)| (i, name(b.action)))
+            .filter(|(_, label)| {
+                crate::ui::layers_panel::fuzzy(&self.hotkey_query, label).is_some()
+            })
+            .collect();
+
+        egui::ScrollArea::vertical().show(ui, |ui| {
+            for (i, label) in rows {
+                let armed = self.rebinding == Some(settings.keybinds[i].action);
+                let text = if armed {
+                    "press a key…".to_string()
+                } else {
+                    ui.ctx().format_shortcut(&settings.keybinds[i].shortcut)
+                };
+                ui.horizontal(|ui| {
+                    ui.set_min_width(ui.available_width());
+                    ui.label(label);
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.selectable_label(armed, text).clicked() {
+                            self.rebinding = if armed {
+                                None
+                            } else {
+                                self.stolen = None;
+                                Some(settings.keybinds[i].action)
+                            };
+                        }
+                    });
+                });
+            }
+        });
     }
 
     fn rescan(&mut self) {

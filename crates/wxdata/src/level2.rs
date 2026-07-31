@@ -11,7 +11,7 @@ use nexrad_model::data::{DataMoment, MomentData, MomentValue, Sweep};
 pub use nexrad_model::data::Scan;
 
 /// Which radar moment to extract from a sweep.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum Moment {
     Reflectivity,
     Velocity,

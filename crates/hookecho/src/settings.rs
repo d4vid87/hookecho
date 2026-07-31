@@ -253,6 +253,11 @@ pub struct Settings {
     /// shipping a guessed list would mostly ship dead links. Add the one for your area.
     #[serde(default)]
     pub nwr_streams: Vec<NwrStream>,
+    /// User keyboard bindings. Empty means "never edited" and the app uses
+    /// [`crate::hotkeys::defaults`]; the Hotkeys settings tab materializes the whole table on the
+    /// first edit, so a later change to the defaults doesn't silently rewrite someone's keys.
+    #[serde(default)]
+    pub(crate) keybinds: Vec<crate::hotkeys::Binding>,
 }
 
 impl Settings {
@@ -484,6 +489,7 @@ impl Default for Settings {
             live_loop_frames: default_live_loop_frames(),
             basemap: String::new(),
             nwr_streams: Vec::new(),
+            keybinds: Vec::new(),
         }
     }
 }
@@ -686,6 +692,12 @@ mod tests {
             nwr_streams: vec![NwrStream {
                 name: "KEC55 Norman".into(),
                 url: "https://example.invalid/nwr.mp3".into(),
+            }],
+            keybinds: vec![crate::hotkeys::Binding {
+                shortcut: egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::K),
+                action: crate::hotkeys::BindableAction::Palette(
+                    crate::app::PaletteAction::SetMoment(wxdata::level2::Moment::Velocity, true),
+                ),
             }],
         };
         let json = serde_json::to_string(&s).unwrap();

@@ -119,13 +119,15 @@ mod tests {
                 6 => egui::Key::Num6,
                 n => panic!("no key for hotkey {n}"),
             };
-            let bound = crate::hotkeys::DEFAULTS
-                .iter()
-                .find(|b| b.key == key)
+            let bound = crate::hotkeys::defaults()
+                .into_iter()
+                .find(|b| b.shortcut == egui::KeyboardShortcut::new(egui::Modifiers::NONE, key))
                 .map(|b| b.action);
             assert_eq!(
                 bound,
-                Some(crate::hotkeys::Action::Product(p.moment)),
+                Some(crate::hotkeys::BindableAction::Palette(
+                    crate::app::PaletteAction::SetMoment(p.moment, false)
+                )),
                 "{}",
                 p.short
             );

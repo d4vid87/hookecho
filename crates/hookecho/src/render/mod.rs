@@ -47,7 +47,7 @@ pub struct RadarUpload {
 
 /// A national gridded field layer (all share the MRMS warp pipeline; they differ only in data,
 /// LUT, and draw order). `below_radar` layers paint under the single-site radar; the rest above.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum FieldLayer {
     Mrms,
     Hrrr,
