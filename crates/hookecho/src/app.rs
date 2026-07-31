@@ -758,6 +758,21 @@ pub(crate) enum PlaceLabelKind {
     },
 }
 
+/// How loud a [`Toast`] is.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ToastKind {
+    Info,
+    Success,
+    Error,
+}
+
+/// A short-lived note about something the user just did.
+pub(crate) struct Toast {
+    pub text: String,
+    pub kind: ToastKind,
+    pub at: Instant,
+}
+
 /// A registry row: what it's called, where it lives, what it does, and (for toggles) its state.
 #[derive(Clone)]
 pub(crate) struct PaletteEntry {
@@ -1395,6 +1410,9 @@ pub struct HookEchoApp {
     rot_active: bool,
     /// Active new-warning banners (event, area, first-seen time); expire after a while.
     warning_banners: Vec<(String, String, Instant)>,
+    /// Transient results of things the user just did (export saved, encode failed). The third
+    /// lane, distinct from the warning banners (weather) and the error chip (radar feed).
+    toasts: Vec<Toast>,
     /// Right-dock active-alerts panel toggle.
     show_alert_panel: bool,
     /// Cross-section tool: clicked endpoints `[lon,lat]` (max 2), the built section + its texture.
@@ -1777,6 +1795,7 @@ impl HookEchoApp {
             tds_active: false,
             rot_active: false,
             warning_banners: Vec::new(),
+            toasts: Vec::new(),
             show_alert_panel: false,
             xsection_pts: Vec::new(),
             xsection: None,
@@ -2077,6 +2096,66 @@ impl HookEchoApp {
         let (u, v) = (u / n as f32, v / n as f32);
         let dir = u.atan2(v).to_degrees().rem_euclid(360.0);
         Some((dir, (u * u + v * v).sqrt()))
+    }
+
+    /// Say something happened. Operation results used to reach the user only through the log.
+    fn toast(&mut self, kind: ToastKind, text: impl Into<String>) {
+        self.toasts.push(Toast {
+            text: text.into(),
+            kind,
+            at: Instant::now(),
+        });
+    }
+
+    /// Toast stack, below the right-hand control column. Expires after ~4 s, fading out over the
+    /// last second; click to dismiss.
+    /// ponytail: clock-based fade, no per-toast animation ids.
+    fn show_toasts(&mut self, ctx: &egui::Context) {
+        const LIFE: f32 = 4.0;
+        self.toasts.retain(|t| t.at.elapsed().as_secs_f32() < LIFE);
+        if self.toasts.is_empty() {
+            return;
+        }
+        ctx.request_repaint_after(std::time::Duration::from_millis(100));
+        let accent = crate::theme::accent(self.settings.theme);
+        let mut dismiss = None;
+        egui::Area::new(egui::Id::new("toasts"))
+            .anchor(
+                egui::Align2::RIGHT_TOP,
+                egui::vec2(
+                    crate::ui::style::LANE_RIGHT_BADGE_X,
+                    crate::ui::style::lane_right_badge_y(6),
+                ),
+            )
+            .show(ctx, |ui| {
+                for (i, t) in self.toasts.iter().enumerate() {
+                    let left = LIFE - t.at.elapsed().as_secs_f32();
+                    let alpha = left.min(1.0).clamp(0.0, 1.0);
+                    let stripe = match t.kind {
+                        ToastKind::Info => accent,
+                        ToastKind::Success => crate::ui::style::OMEGA_GREEN,
+                        ToastKind::Error => egui::Color32::from_rgb(220, 90, 90),
+                    };
+                    let resp = crate::ui::style::glass((220.0 * alpha) as u8)
+                        .stroke(egui::Stroke::new(1.0, stripe.gamma_multiply(alpha)))
+                        .show(ui, |ui| {
+                            ui.set_max_width(320.0);
+                            ui.label(
+                                egui::RichText::new(&t.text)
+                                    .size(crate::ui::style::FONT_BASE)
+                                    .color(egui::Color32::from_gray(235).gamma_multiply(alpha)),
+                            );
+                        })
+                        .response;
+                    if resp.interact(egui::Sense::click()).clicked() {
+                        dismiss = Some(i);
+                    }
+                    ui.add_space(6.0);
+                }
+            });
+        if let Some(i) = dismiss {
+            self.toasts.remove(i);
+        }
     }
 
     /// Draw new-warning banners at top-center (auto-expire ~45s; click to dismiss all).
@@ -9365,13 +9444,16 @@ impl HookEchoApp {
         let Some(path) = crate::dialog::save_path("hookecho-settings.json", "json") else {
             return;
         };
-        match self.settings.export_bundle() {
-            Ok(json) => {
-                if let Err(e) = std::fs::write(&path, json) {
-                    log::warn!("settings export failed: {e}");
-                }
+        match self
+            .settings
+            .export_bundle()
+            .and_then(|json| std::fs::write(&path, json).map_err(|e| e.to_string()))
+        {
+            Ok(()) => self.toast(ToastKind::Success, format!("Settings saved to {}", path.display())),
+            Err(e) => {
+                log::warn!("settings export failed: {e}");
+                self.toast(ToastKind::Error, format!("Settings export failed: {e}"));
             }
-            Err(e) => log::warn!("settings export failed: {e}"),
         }
     }
 
@@ -9385,8 +9467,14 @@ impl HookEchoApp {
             .map_err(|e| e.to_string())
             .and_then(|s| crate::settings::Settings::import_bundle(&s))
         {
-            Ok(settings) => self.settings = settings,
-            Err(e) => log::warn!("settings import failed: {e}"),
+            Ok(settings) => {
+                self.settings = settings;
+                self.toast(ToastKind::Success, "Settings imported");
+            }
+            Err(e) => {
+                log::warn!("settings import failed: {e}");
+                self.toast(ToastKind::Error, format!("Settings import failed: {e}"));
+            }
         }
     }
 
@@ -9404,6 +9492,7 @@ impl HookEchoApp {
         let slots = v.timeline.frames.len(); // observed frames only (skip forecast tail)
         if slots == 0 {
             log::warn!("loop export: no timeline frames");
+        self.toast(ToastKind::Info, "Nothing to export — no frames in the timeline yet");
             return;
         }
         v.timeline.go_begin();
@@ -9463,12 +9552,19 @@ impl HookEchoApp {
                 LoopFormat::Mp4 => crate::loopexport::encode_mp4(&le.frames, 5, &le.dest),
             };
             match res {
-                Ok(()) => log::info!(
-                    "loop saved: {} ({} frames)",
-                    le.dest.display(),
-                    le.frames.len()
-                ),
-                Err(e) => log::warn!("loop encode failed: {e}"),
+                Ok(()) => {
+                    log::info!(
+                        "loop saved: {} ({} frames)",
+                        le.dest.display(),
+                        le.frames.len()
+                    );
+                    let msg = format!("Loop saved ({} frames)", le.frames.len());
+                    self.toast(ToastKind::Success, msg);
+                }
+                Err(e) => {
+                    log::warn!("loop encode failed: {e}");
+                    self.toast(ToastKind::Error, format!("Loop export failed: {e}"));
+                }
             }
         }
     }
@@ -9494,14 +9590,22 @@ impl HookEchoApp {
                         rgba.extend_from_slice(&[px.r(), px.g(), px.b(), px.a()]);
                     }
                     match image::save_buffer(&path, &rgba, w, h, image::ColorType::Rgba8) {
-                        Ok(()) => log::info!("screenshot saved: {}", path.display()),
-                        Err(e) => log::warn!("screenshot save failed: {e}"),
+                        Ok(()) => {
+                            log::info!("screenshot saved: {}", path.display());
+                            let msg = format!("Saved {}", path.display());
+                            self.toast(ToastKind::Success, msg);
+                        }
+                        Err(e) => {
+                            log::warn!("screenshot save failed: {e}");
+                            self.toast(ToastKind::Error, format!("Screenshot failed: {e}"));
+                        }
                     }
                 }
                 ShotDest::Clipboard => {
                     // `image` here is already an egui ColorImage; hand it straight to the clipboard.
                     ctx.copy_image((*image).clone());
                     log::info!("view copied to clipboard");
+                    self.toast(ToastKind::Success, "View copied to clipboard");
                 }
                 ShotDest::Loop => self.record_loop_frame(&image),
             }
@@ -11078,6 +11182,7 @@ impl eframe::App for HookEchoApp {
             self.show_cappi = open;
         }
         self.show_warning_banners(ctx);
+        self.show_toasts(ctx);
 
         // Turn this frame's UI mutations into uploads/fetches before painting the map.
         for idx in 0..self.views.len() {
