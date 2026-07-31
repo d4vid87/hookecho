@@ -2172,33 +2172,35 @@ impl HookEchoApp {
             )
             .show(ctx, |ui| {
                 let mut dismiss = false;
-                for (event, area, _) in &self.warning_banners {
+                for (event, area, at) in &self.warning_banners {
+                    // Fade out over the last two seconds instead of vanishing mid-read.
+                    let a = ((45.0 - at.elapsed().as_secs_f32()) / 2.0).clamp(0.0, 1.0);
                     let resp = egui::Frame::new()
-                        .fill(egui::Color32::from_rgb(150, 20, 20))
+                        .fill(egui::Color32::from_rgb(150, 20, 20).gamma_multiply(a))
                         .stroke(egui::Stroke::new(
                             1.0,
-                            egui::Color32::from_rgb(255, 120, 120),
+                            egui::Color32::from_rgb(255, 120, 120).gamma_multiply(a),
                         ))
                         .corner_radius(egui::CornerRadius::same(6))
                         .inner_margin(egui::Margin::symmetric(12, 6))
                         .show(ui, |ui| {
                             ui.horizontal(|ui| {
                                 ui.label(
-                                    egui::RichText::new("⚠")
+                                    egui::RichText::new(egui_phosphor::regular::WARNING)
                                         .size(16.0)
-                                        .color(egui::Color32::WHITE),
+                                        .color(egui::Color32::WHITE.gamma_multiply(a)),
                                 );
                                 ui.vertical(|ui| {
                                     ui.label(
                                         egui::RichText::new(format!("New {event}"))
                                             .strong()
-                                            .color(egui::Color32::WHITE),
+                                            .color(egui::Color32::WHITE.gamma_multiply(a)),
                                     );
                                     if !area.is_empty() {
                                         ui.label(
                                             egui::RichText::new(area)
                                                 .small()
-                                                .color(egui::Color32::from_gray(230)),
+                                                .color(egui::Color32::from_gray(230).gamma_multiply(a)),
                                         );
                                     }
                                 });
@@ -2214,7 +2216,8 @@ impl HookEchoApp {
                     self.warning_banners.clear();
                 }
             });
-        ctx.request_repaint_after(std::time::Duration::from_secs(1));
+        // Fast enough for the fade-out; the banner is only up for 45 s.
+        ctx.request_repaint_after(std::time::Duration::from_millis(100));
     }
 
     /// Detect warning-tier alerts whose id we haven't seen, raising a banner + audible cue for
@@ -3957,7 +3960,10 @@ impl HookEchoApp {
     /// entry points; the map keeps a hamburger, an alert bell, and the two bottom pills, and
     /// nothing else.
     fn drawer(&mut self, ctx: &egui::Context) {
-        if !self.drawer_open {
+        // Slide in from the left edge rather than appearing: a 360 px card popping into existence
+        // over the map reads as a glitch. `t` also keeps the card alive through the slide out.
+        let t = ctx.animate_bool_with_time(egui::Id::new("drawer_slide"), self.drawer_open, 0.15);
+        if t <= 0.0 {
             return;
         }
         use egui_phosphor::regular as ph;
@@ -3969,7 +3975,10 @@ impl HookEchoApp {
         let mut opts = ui::layer_options::UiActions::default();
         let mut focus_search = std::mem::take(&mut self.drawer_focus_search);
         egui::Area::new(egui::Id::new("drawer"))
-            .anchor(egui::Align2::LEFT_TOP, crate::ui::style::LANE_LEFT_DRAWER)
+            .anchor(
+                egui::Align2::LEFT_TOP,
+                crate::ui::style::LANE_LEFT_DRAWER + egui::vec2((t - 1.0) * 380.0, 0.0),
+            )
             .order(egui::Order::Foreground)
             .show(ctx, |ui| {
                 // Opaque, not glass: this card carries a wall of small text, and satellite
