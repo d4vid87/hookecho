@@ -729,6 +729,7 @@ pub(crate) enum PaletteAction {
     OpenWindow(AppWindow),
     SetPanes(usize),
     CycleBasemap,
+    ToggleMute,
     Reload,
     InstantReplay,
     GoLive,
@@ -2141,6 +2142,15 @@ impl HookEchoApp {
         });
     }
 
+    /// Every alert sound goes through here, so one mute switch covers all of them (and any that
+    /// get added later) instead of a guard per call site.
+    fn play_alert(&self, sound: &crate::settings::AlertSound) {
+        if self.settings.mute_alerts {
+            return;
+        }
+        crate::audio::play(sound, self.settings.alert_volume);
+    }
+
     /// Say something happened. Operation results used to reach the user only through the log.
     fn toast(&mut self, kind: ToastKind, text: impl Into<String>) {
         self.toasts.push(Toast {
@@ -2346,7 +2356,9 @@ impl HookEchoApp {
                             )
                         })
                         .unwrap_or_default();
+                    if !self.settings.mute_alerts {
                     crate::speech::speak(&format!("{} for {}{}", a.event, area, until));
+                }
                 }
                 self.warning_banners.push((label, area, Instant::now()));
                 alerted = true;
@@ -2364,7 +2376,7 @@ impl HookEchoApp {
                 } else {
                     &self.settings.warn_sound
                 };
-                crate::audio::play(sound, self.settings.alert_volume);
+                self.play_alert(sound);
             }
         }
     }
@@ -2409,7 +2421,7 @@ impl HookEchoApp {
             fired = true;
         }
         if fired && self.settings.alert_sound {
-            crate::audio::play(&self.settings.lightning_sound, self.settings.alert_volume);
+            self.play_alert(&self.settings.lightning_sound.clone());
         }
     }
 
@@ -2498,7 +2510,7 @@ impl HookEchoApp {
             }
         }
         if fired && self.settings.alert_sound {
-            crate::audio::play(&self.settings.rain_sound, self.settings.alert_volume);
+            self.play_alert(&self.settings.rain_sound.clone());
         }
     }
 
@@ -3366,7 +3378,7 @@ impl HookEchoApp {
                 true,
             );
             if self.settings.alert_sound {
-                crate::audio::play(&self.settings.tds_sound, self.settings.alert_volume);
+                self.play_alert(&self.settings.tds_sound.clone());
             }
         }
         self.tds_active = now_active;
@@ -3422,7 +3434,7 @@ impl HookEchoApp {
                 true,
             );
             if self.settings.alert_sound {
-                crate::audio::play(&self.settings.rotation_sound, self.settings.alert_volume);
+                self.play_alert(&self.settings.rotation_sound.clone());
             }
         }
         self.rot_active = now_active;
@@ -5146,6 +5158,14 @@ impl HookEchoApp {
             None,
         );
         push(
+            "Mute audio alerts",
+            "Alerts",
+            "Silence every chime and spoken warning without changing your sound choices",
+            true,
+            PaletteAction::ToggleMute,
+            Some(self.settings.mute_alerts),
+        );
+        push(
             "About Hook Echo-WX",
             "Reference",
             "Version, links, and whether a newer release is out",
@@ -5412,6 +5432,7 @@ impl HookEchoApp {
                 let v = &mut self.views[self.active];
                 v.basemap = v.basemap.next(mb, mt);
             }
+            PaletteAction::ToggleMute => self.apply_action(BindableAction::ToggleMute, ctx),
             PaletteAction::Reload => self.trigger_reload(ctx),
             PaletteAction::InstantReplay => self.instant_replay(),
             PaletteAction::GoLive => self.views[self.active].timeline.go_head(),
@@ -6885,6 +6906,15 @@ impl HookEchoApp {
                 self.drawer_focus_search = true;
             }
             A::CheatSheet => self.show_cheatsheet = !self.show_cheatsheet,
+            A::ToggleMute => {
+                self.settings.mute_alerts = !self.settings.mute_alerts;
+                let msg = if self.settings.mute_alerts {
+                    "Audio alerts muted"
+                } else {
+                    "Audio alerts unmuted"
+                };
+                self.toast(ToastKind::Info, msg);
+            }
         }
     }
 
@@ -11280,9 +11310,11 @@ impl eframe::App for HookEchoApp {
         if !cfg!(target_os = "android") && self.show_alert_panel && !self.obs_mode {
             {
                 let bounds = self.view_bounds();
-                if let Some((id, lon, lat)) =
-                    ui::alert_panel::show(root, self.active_alert_features(), bounds)
-                {
+                let feats = self.active_alert_features().to_vec();
+                let mut muted = self.settings.mute_alerts;
+                let hit = ui::alert_panel::show(root, &feats, bounds, &mut muted);
+                self.settings.mute_alerts = muted;
+                if let Some((id, lon, lat)) = hit {
                     // Fly the active camera to the alert and open its bulletin.
                     let cam = &mut self.views[self.active].camera;
                     cam.center = crate::render::mercator::lonlat_to_world(lon, lat);

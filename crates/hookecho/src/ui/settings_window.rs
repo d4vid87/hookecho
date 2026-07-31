@@ -551,6 +551,8 @@ fn general_tab(ui: &mut egui::Ui, settings: &mut Settings) {
 pub fn sound_picker(ui: &mut egui::Ui, settings: &mut Settings) {
     use crate::settings::AlertSound;
 
+    ui.checkbox(&mut settings.mute_alerts, "Mute all alert audio")
+        .on_hover_text("Silences chimes and spoken warnings without changing the choices below");
     ui.checkbox(&mut settings.alert_sound, "Play a sound on alerts")
         .on_hover_text("Master switch for the warning / TDS / lightning alert sounds");
     ui.horizontal(|ui| {

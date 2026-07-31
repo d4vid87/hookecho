@@ -75,6 +75,7 @@ pub fn show(
     root: &mut egui::Ui,
     feats: &[GeoFeature],
     bounds: (f64, f64, f64, f64),
+    muted: &mut bool,
 ) -> Option<(String, f64, f64)> {
     let rows = rows_in_view(feats, bounds);
     let mut clicked = None;
@@ -85,6 +86,26 @@ pub fn show(
             ui.horizontal(|ui| {
                 ui.heading("Active Alerts");
                 ui.weak(format!("({})", rows.len()));
+                // Silence switch, where you look when something is making noise at you.
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let glyph = if *muted {
+                        egui_phosphor::regular::BELL_SLASH
+                    } else {
+                        egui_phosphor::regular::BELL
+                    };
+                    let hover = if *muted {
+                        "Alert sounds are muted — click to unmute"
+                    } else {
+                        "Mute all alert sounds"
+                    };
+                    if ui
+                        .selectable_label(*muted, egui::RichText::new(glyph).size(16.0))
+                        .on_hover_text(hover)
+                        .clicked()
+                    {
+                        *muted = !*muted;
+                    }
+                });
             });
             ui.separator();
             if rows.is_empty() {

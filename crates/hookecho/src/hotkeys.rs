@@ -26,6 +26,7 @@ pub(crate) enum BindableAction {
     Fullscreen,
     CommandSearch,
     CheatSheet,
+    ToggleMute,
 }
 
 /// A key (with modifiers) bound to an action.
@@ -81,6 +82,7 @@ pub(crate) fn defaults() -> Vec<Binding> {
         plain(K::F8, A::ToggleObs),
         plain(K::F9, A::ToggleObsTour),
         plain(K::R, A::Palette(P::InstantReplay)),
+        plain(K::M, A::ToggleMute),
         plain(K::F11, A::Fullscreen),
         plain(K::Questionmark, A::CheatSheet),
         Binding {
@@ -165,6 +167,7 @@ pub(crate) fn label(action: BindableAction) -> Option<&'static str> {
         BindableAction::Fullscreen => "Fullscreen",
         BindableAction::CommandSearch => "Search commands",
         BindableAction::CheatSheet => "Keyboard shortcuts",
+        BindableAction::ToggleMute => "Mute audio alerts",
     })
 }
 

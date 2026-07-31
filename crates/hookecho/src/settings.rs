@@ -253,6 +253,10 @@ pub struct Settings {
     /// shipping a guessed list would mostly ship dead links. Add the one for your area.
     #[serde(default)]
     pub nwr_streams: Vec<NwrStream>,
+    /// Silence every alert sound and spoken warning at once, without touching the per-feature
+    /// sound choices — the "I'm in a meeting" switch.
+    #[serde(default)]
+    pub mute_alerts: bool,
     /// User keyboard bindings. Empty means "never edited" and the app uses
     /// [`crate::hotkeys::defaults`]; the Hotkeys settings tab materializes the whole table on the
     /// first edit, so a later change to the defaults doesn't silently rewrite someone's keys.
@@ -489,6 +493,7 @@ impl Default for Settings {
             live_loop_frames: default_live_loop_frames(),
             basemap: String::new(),
             nwr_streams: Vec::new(),
+            mute_alerts: false,
             keybinds: Vec::new(),
         }
     }
@@ -693,6 +698,7 @@ mod tests {
                 name: "KEC55 Norman".into(),
                 url: "https://example.invalid/nwr.mp3".into(),
             }],
+            mute_alerts: true,
             keybinds: vec![crate::hotkeys::Binding {
                 shortcut: egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::K),
                 action: crate::hotkeys::BindableAction::Palette(
