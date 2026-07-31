@@ -3,6 +3,14 @@
 //! The desktop binary: dispatches the `--headless-*` verifiers, then launches the windowed app.
 //! The shared app + render pipelines live in the `hookecho` library crate (see `lib.rs`), so the
 //! Android `cdylib` reuses all of it through its own `android_main` entry.
+//!
+//! Windows release builds link the GUI subsystem so launching from Explorer doesn't pop a console
+//! window; `AttachConsole` at the top of `main` re-attaches to a parent terminal when there is one,
+//! so the `--headless-*` verifiers and `--version` still print. Debug builds keep the console.
+#![cfg_attr(
+    all(target_os = "windows", not(debug_assertions)),
+    windows_subsystem = "windows"
+)]
 
 #[cfg(not(target_os = "android"))]
 use hookecho::{audio, headless, icon, settings, tiles, tray};
@@ -17,9 +25,24 @@ fn main() {}
 
 #[cfg(not(target_os = "android"))]
 fn main() -> eframe::Result<()> {
+    // GUI-subsystem exes start with no stdout; borrow the parent terminal's if we were launched
+    // from one. Fails harmlessly from Explorer.
+    #[cfg(windows)]
+    unsafe {
+        windows_sys::Win32::System::Console::AttachConsole(
+            windows_sys::Win32::System::Console::ATTACH_PARENT_PROCESS,
+        );
+    }
+
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
 
     let args: Vec<String> = std::env::args().collect();
+
+    // `hookecho --version` — matches what the About window and the update check compare against.
+    if args.iter().any(|a| a == "--version" || a == "-V") {
+        println!("hookecho {}", env!("CARGO_PKG_VERSION"));
+        return Ok(());
+    }
 
     // Logo export: `hookecho --headless-icon <out.png>` (PNG inspection, not a desktop capture).
     if let Some(pos) = args.iter().position(|a| a == "--headless-icon") {

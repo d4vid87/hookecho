@@ -76,6 +76,8 @@ wgpu = { version = "29", default-features = false, features = ["vulkan", "gles"]
 
 [target.'cfg(target_os = "windows")'.dependencies]
 wgpu = { version = "29", default-features = false, features = ["dx12", "vulkan"] }
+# Already in the graph via winit; named here for `AttachConsole` and the `CREATE_NO_WINDOW` flag.
+windows-sys = { version = "0.61", features = ["Win32_System_Console"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 wgpu = { version = "29", default-features = false, features = ["metal"] }
