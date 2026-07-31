@@ -26,7 +26,9 @@ pub fn encode_mp4(frames: &[RgbaImage], fps: u32, path: &Path) -> anyhow::Result
         img.save(dir.join(format!("f{i:04}.png")))?;
     }
     // Even dimensions are required by yuv420p; pad if odd.
-    let status = std::process::Command::new("ffmpeg")
+    let mut ffmpeg = std::process::Command::new("ffmpeg");
+    crate::platform::no_window(&mut ffmpeg);
+    let status = ffmpeg
         .args(["-y", "-framerate", &fps.to_string(), "-i"])
         .arg(dir.join("f%04d.png"))
         .args([

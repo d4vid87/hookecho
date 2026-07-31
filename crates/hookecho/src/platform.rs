@@ -99,12 +99,29 @@ pub fn open_url(url: &str) -> Result<(), String> {
         } else {
             "xdg-open"
         };
-        std::process::Command::new(opener)
-            .arg(url)
+        let mut cmd = std::process::Command::new(opener);
+        no_window(&mut cmd);
+        cmd.arg(url)
             .spawn()
             .map(|_| ())
             .map_err(|e| format!("could not open {opener}: {e}"))
     }
+}
+
+/// Keep a child process from flashing its own console window on Windows.
+///
+/// Every helper we shell out to (the PowerShell speech synthesizer, ffmpeg, the URL opener) is a
+/// console program, so Windows hands each one a fresh black window for the half-second it lives.
+/// `CREATE_NO_WINDOW` suppresses it; a no-op everywhere else.
+pub fn no_window(cmd: &mut std::process::Command) {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    #[cfg(not(windows))]
+    let _ = cmd;
 }
 
 /// Hold a Wi-Fi multicast lock for the process, so Android stops dropping the broadcast packets

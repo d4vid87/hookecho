@@ -47,7 +47,9 @@ mod imp {
         let candidates: Vec<(&str, Vec<String>)> = Vec::new();
 
         for (bin, args) in &candidates {
-            match Command::new(bin)
+            let mut cmd = Command::new(bin);
+            crate::platform::no_window(&mut cmd);
+            match cmd
                 .args(args)
                 .stdout(Stdio::null())
                 .stderr(Stdio::null())

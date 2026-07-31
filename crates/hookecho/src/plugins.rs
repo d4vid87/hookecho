@@ -59,6 +59,10 @@ pub async fn run(
     use tokio::io::AsyncReadExt;
 
     let mut cmd = tokio::process::Command::new(command);
+    // ponytail: tokio Command, same CREATE_NO_WINDOW flag inline — a generic trait for one site
+    // isn't worth it.
+    #[cfg(windows)]
+    cmd.creation_flags(0x0800_0000);
     cmd.args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())

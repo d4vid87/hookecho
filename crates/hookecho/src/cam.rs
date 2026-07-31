@@ -332,7 +332,9 @@ fn play_hls(
     frame: &Arc<Mutex<Option<ColorImage>>>,
     seq: &Arc<AtomicU64>,
 ) -> anyhow::Result<()> {
-    let mut child = std::process::Command::new("ffmpeg")
+    let mut ffmpeg = std::process::Command::new("ffmpeg");
+    crate::platform::no_window(&mut ffmpeg);
+    let mut child = ffmpeg
         .args(ffmpeg_args(url))
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null())
