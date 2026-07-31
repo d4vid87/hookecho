@@ -34,7 +34,7 @@ pub(crate) fn show(
         .order(egui::Order::Foreground)
         .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
         .show(ctx, |ui| {
-            style::glass((235.0 * t) as u8).show(ui, |ui| {
+            style::glass(ui, (235.0 * t) as u8).show(ui, |ui| {
                 ui.set_max_width((screen.width() - 80.0).min(720.0));
                 ui.label(
                     egui::RichText::new("Keyboard shortcuts")

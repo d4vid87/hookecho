@@ -350,7 +350,7 @@ impl super::HookEchoApp {
                     // is the screen minus the two 44px squares, the 8px gaps, and the pill's own
                     // 12px×2 frame margins — so the row never overflows the edges.
                     let pill_inner = (content.width() - 44.0 - 44.0 - 32.0 - 24.0).max(110.0);
-                    glass(238).show(ui, |ui| {
+                    glass(ui, 238).show(ui, |ui| {
                         ui.set_width(pill_inner);
                         ui.horizontal(|ui| {
                             let text_w = (pill_inner - 52.0).max(60.0);
@@ -435,7 +435,7 @@ impl super::HookEchoApp {
             .anchor(Align2::CENTER_BOTTOM, vec2(0.0, -(inset_bottom + 8.0)))
             .show(ctx, |ui| {
                 let cwi = (content.width() - 56.0).max(200.0); // card inner content width (leaves side margins)
-                glass(246).show(ui, |ui| {
+                glass(ui, 246).show(ui, |ui| {
                     ui.set_width(cwi);
                     // Row A: frames + history · product name.
                     ui.horizontal(|ui| {

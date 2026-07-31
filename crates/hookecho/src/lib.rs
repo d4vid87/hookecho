@@ -56,7 +56,12 @@ pub fn run_desktop() -> eframe::Result<()> {
     let native_options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1280.0, 800.0])
+            // The floating chrome has fixed-width cards; below this they stack on top of the map
+            // and each other.
+            .with_min_inner_size([800.0, 500.0])
             .with_title("Hook Echo-WX")
+            // Matches the .desktop file, so Wayland taskbars find the icon.
+            .with_app_id("hookecho")
             .with_icon(icon::icon_data()),
         renderer: eframe::Renderer::Wgpu,
         ..Default::default()

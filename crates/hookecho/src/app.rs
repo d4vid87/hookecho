@@ -2179,7 +2179,7 @@ impl HookEchoApp {
                         ToastKind::Success => crate::ui::style::OMEGA_GREEN,
                         ToastKind::Error => egui::Color32::from_rgb(220, 90, 90),
                     };
-                    let resp = crate::ui::style::glass((220.0 * alpha) as u8)
+                    let resp = crate::ui::style::glass(ui, (220.0 * alpha) as u8)
                         .stroke(egui::Stroke::new(1.0, stripe.gamma_multiply(alpha)))
                         .show(ui, |ui| {
                             ui.set_max_width(320.0);
@@ -4026,7 +4026,7 @@ impl HookEchoApp {
             .show(ctx, |ui| {
                 // Opaque, not glass: this card carries a wall of small text, and satellite
                 // basemaps put white place labels straight through anything translucent.
-                mobile::glass(255).show(ui, |ui| {
+                mobile::glass(ui, 255).show(ui, |ui| {
                     ui.set_width(360.0);
                     ui.horizontal(|ui| {
                         ui.label(
@@ -4190,7 +4190,7 @@ impl HookEchoApp {
                 egui::vec2(0.0, crate::ui::style::LANE_BOTTOM_TIMELINE),
             )
             .show(ctx, |ui| {
-                mobile::glass(244).show(ui, |ui| {
+                mobile::glass(ui, 244).show(ui, |ui| {
                     ui.set_width(pill_w);
                     let t = &mut self.views[self.active].timeline;
                     ui.horizontal(|ui| {
@@ -4420,7 +4420,7 @@ impl HookEchoApp {
                 egui::vec2(14.0, style::LANE_BOTTOM_PRODUCT),
             )
             .show(ctx, |ui| {
-                style::glass(244).show(ui, |ui| {
+                style::glass(ui, 244).show(ui, |ui| {
                     let btn = ui.add(
                         egui::Button::new(
                             egui::RichText::new(&label)
@@ -4601,7 +4601,7 @@ impl HookEchoApp {
         egui::Area::new(egui::Id::new("chase_hud"))
             .anchor(egui::Align2::LEFT_BOTTOM, egui::vec2(14.0, dy))
             .show(ctx, |ui| {
-                let frame = mobile::glass(244).stroke(egui::Stroke::new(
+                let frame = mobile::glass(ui, 244).stroke(egui::Stroke::new(
                     if urgent { 2.0 } else { 1.0 },
                     if urgent {
                         red
@@ -9745,7 +9745,7 @@ impl HookEchoApp {
                 .anchor(align, offset)
                 .order(egui::Order::Foreground)
                 .show(ctx, |ui| {
-                    style::glass(240)
+                    style::glass(ui, 240)
                         .stroke(egui::Stroke::new(1.5, accent))
                         .show(ui, |ui| {
                             ui.set_max_width(300.0);
@@ -9798,7 +9798,7 @@ impl HookEchoApp {
             // swallow a click meant for the map underneath.
             .interactable(self.tool == MapTool::Draw)
             .show(ctx, |ui| {
-                style::glass(238).show(ui, |ui| {
+                style::glass(ui, 238).show(ui, |ui| {
                     ui.horizontal(|ui| {
                         ui.label(egui::RichText::new(hint).size(style::FONT_SM).color(accent));
                         if self.tool != MapTool::Draw {
@@ -9866,7 +9866,7 @@ impl HookEchoApp {
                 egui::vec2(0.0, crate::ui::style::LANE_BOTTOM_CHASE),
             )
             .show(ctx, |ui| {
-                crate::ui::style::glass(246)
+                crate::ui::style::glass(ui, 246)
                     .stroke(egui::Stroke::new(
                         1.0,
                         egui::Color32::from_rgb(230, 100, 100).gamma_multiply(0.8),
