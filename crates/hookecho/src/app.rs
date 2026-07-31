@@ -9802,16 +9802,19 @@ impl HookEchoApp {
     /// volume time it also carried now live in the timeline pill where the clock belongs.
     fn info_chip(&mut self, ctx: &egui::Context) {
         use crate::ui::style;
-        let hint = match self.tool {
-            MapTool::Measure => "Measure: click 2 points",
-            MapTool::Marker => "Drop marker: click map",
-            MapTool::CrossSection => "Cross-section: click 2 points",
-            MapTool::Sounding => "Sounding: click a point",
-            MapTool::Forecast => "Forecast: click a point",
-            MapTool::Chase => "Chase: click your location",
-            MapTool::Climatology => "Climatology: click a point",
-            MapTool::Draw => "Draw: drag to scribble",
-            MapTool::Interrogate => "",
+        use egui_phosphor::regular as ph;
+        // Icon, tool name, and what to do with it — an armed tool should look armed, not leave a
+        // sentence of instructions as the only sign anything changed.
+        let (glyph, name, hint) = match self.tool {
+            MapTool::Measure => (ph::RULER, "Measure", "click two points"),
+            MapTool::Marker => (ph::MAP_PIN, "Drop marker", "click the map"),
+            MapTool::CrossSection => (ph::CHART_LINE, "Cross-section", "click two points"),
+            MapTool::Sounding => (ph::THERMOMETER_SIMPLE, "Sounding", "click a point"),
+            MapTool::Forecast => (ph::CLOUD_SUN, "Forecast", "click a point"),
+            MapTool::Chase => (ph::CROSSHAIR, "Chase", "click your location"),
+            MapTool::Climatology => (ph::TORNADO, "Climatology", "click a point"),
+            MapTool::Draw => (ph::PENCIL_SIMPLE, "Draw", "drag to scribble"),
+            MapTool::Interrogate => ("", "", ""),
         };
         // Nothing armed, nothing to say. The chip used to be a permanent readout of the cursor's
         // lat/lon and the zoom level — numbers nobody was reading, in the corner where the map is.
@@ -9819,6 +9822,13 @@ impl HookEchoApp {
             return;
         }
         let accent = crate::theme::accent(self.settings.theme);
+        // An armed tool changes what a click means, so the cursor says so over the whole map.
+        ctx.set_cursor_icon(egui::CursorIcon::Crosshair);
+        // Escape disarms, the same way it closes every other transient thing.
+        if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+            self.tool = MapTool::Interrogate;
+            return;
+        }
         egui::Area::new(egui::Id::new("info_chip"))
             .anchor(
                 egui::Align2::RIGHT_BOTTOM,
@@ -9830,7 +9840,19 @@ impl HookEchoApp {
             .show(ctx, |ui| {
                 style::glass(ui, 238).show(ui, |ui| {
                     ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new(hint).size(style::FONT_SM).color(accent));
+                        ui.label(egui::RichText::new(glyph).size(15.0).color(accent));
+                        ui.label(
+                            egui::RichText::new(name)
+                                .size(style::FONT_BASE)
+                                .color(accent)
+                                .strong(),
+                        );
+                        ui.label(egui::RichText::new(hint).size(style::FONT_SM).weak());
+                        ui.label(
+                            egui::RichText::new("· Esc cancels")
+                                .size(style::FONT_SM)
+                                .weak(),
+                        );
                         if self.tool != MapTool::Draw {
                             return;
                         }
