@@ -12,6 +12,11 @@
     <MajorUpgrade DowngradeErrorMessage="A newer version of Hook Echo-WX is already installed." />
     <MediaTemplate EmbedCab="yes" />
 
+    <!-- The exe embeds its icon (see build.rs), so Add/Remove Programs and the Start Menu
+         shortcut both point at it rather than shipping a second copy of the .ico. -->
+    <Icon Id="AppIcon.exe" SourceFile="$(var.ExePath)" />
+    <Property Id="ARPPRODUCTICON" Value="AppIcon.exe" />
+
     <Directory Id="TARGETDIR" Name="SourceDir">
       <Directory Id="ProgramFiles64Folder">
         <Directory Id="INSTALLFOLDER" Name="Hook Echo-WX">
@@ -24,7 +29,8 @@
         <Component Id="StartMenuShortcut" Guid="8f0f2f65-1f5e-4bfa-9c2b-51df6ad9f0be">
           <Shortcut Id="AppShortcut" Name="Hook Echo-WX"
                     Target="[INSTALLFOLDER]hookecho.exe"
-                    WorkingDirectory="INSTALLFOLDER" />
+                    WorkingDirectory="INSTALLFOLDER"
+                    Icon="AppIcon.exe" />
           <RemoveFolder Id="CleanMenu" On="uninstall" />
           <RegistryValue Root="HKCU" Key="Software\HookEchoWX" Name="installed"
                          Type="integer" Value="1" KeyPath="yes" />

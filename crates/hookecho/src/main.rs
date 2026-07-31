@@ -56,6 +56,18 @@ fn main() -> eframe::Result<()> {
         return Ok(());
     }
 
+    // Windows icon export: `hookecho --headless-ico <out.ico>`. Run by hand when the logo changes;
+    // the result is checked in as packaging/windows/icon.ico and embedded by build.rs.
+    if let Some(pos) = args.iter().position(|a| a == "--headless-ico") {
+        let out = args.get(pos + 1).map(String::as_str).unwrap_or("icon.ico");
+        if let Err(e) = write_ico(out) {
+            eprintln!("ico export failed: {e}");
+            std::process::exit(1);
+        }
+        println!("wrote {out}");
+        return Ok(());
+    }
+
     // Tray self-check: `hookecho --tray-test` spawns the tray and reports availability.
     if args.iter().any(|a| a == "--tray-test") {
         match tray::spawn() {
@@ -742,6 +754,20 @@ fn main() -> eframe::Result<()> {
     }
 
     hookecho::run_desktop()
+}
+
+/// Write a multi-resolution Windows `.ico` of the app logo (16/32/48/256 px, the sizes Explorer,
+/// the taskbar and the installer ask for).
+#[cfg(not(target_os = "android"))]
+fn write_ico(out: &str) -> anyhow::Result<()> {
+    use image::codecs::ico::{IcoEncoder, IcoFrame};
+
+    let frames: Vec<IcoFrame> = [16u32, 32, 48, 256]
+        .iter()
+        .map(|&n| IcoFrame::as_png(&icon::rgba(n as usize), n, n, image::ExtendedColorType::Rgba8))
+        .collect::<Result<_, _>>()?;
+    IcoEncoder::new(std::io::BufWriter::new(std::fs::File::create(out)?)).encode_images(&frames)?;
+    Ok(())
 }
 
 /// The token following `flag` on the command line, if present.

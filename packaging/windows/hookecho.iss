@@ -14,6 +14,9 @@ Compression=lzma2
 SolidCompression=yes
 ArchitecturesInstallIn64BitMode=x64compatible
 WizardStyle=modern
+; Relative to this script's directory.
+SetupIconFile=icon.ico
+UninstallDisplayIcon={app}\hookecho.exe
 
 [Files]
 Source: "{#ExeDir}\hookecho.exe"; DestDir: "{app}"; Flags: ignoreversion

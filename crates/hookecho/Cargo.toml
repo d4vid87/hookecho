@@ -17,6 +17,11 @@ crate-type = ["lib", "cdylib"]
 name = "hookecho"
 path = "src/main.rs"
 
+# Embeds the Windows icon + version resource (build.rs). Small, and it compiles on every host, so
+# it stays an unconditional build-dep rather than a cfg'd one that breaks cross builds.
+[build-dependencies]
+winresource = "0.1"
+
 [features]
 # Frame profiling over TCP (see `profiling.rs`). Off by default — zero cost when not enabled.
 profiling = ["dep:puffin", "dep:puffin_http"]
@@ -41,7 +46,7 @@ anyhow.workspace = true
 tokio.workspace = true
 log.workspace = true
 env_logger = "0.11"
-image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "ico"] }
 chrono.workspace = true
 # `stream` gives `bytes_stream()`, which the weather-radio player reads the live MP3 body from.
 reqwest = { workspace = true, features = ["stream"] }
