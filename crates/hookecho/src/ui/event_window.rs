@@ -37,7 +37,7 @@ impl EventWindow {
                     for e in crate::events::EVENTS {
                         ui.horizontal(|ui| {
                             if ui
-                                .button("▶")
+                                .button(egui_phosphor::regular::CARET_RIGHT)
                                 .on_hover_text("Jump the active pane here")
                                 .clicked()
                             {
@@ -64,7 +64,7 @@ impl EventWindow {
                     }
                     for (i, b) in settings.bookmarks.iter().enumerate() {
                         ui.horizontal(|ui| {
-                            if ui.button("▶").clicked() {
+                            if ui.button(egui_phosphor::regular::CARET_RIGHT).clicked() {
                                 let (lon, lat) = crate::render::mercator::world_to_lonlat(b.x, b.y);
                                 action = Some(EventAction::Goto {
                                     site: b.site.clone(),

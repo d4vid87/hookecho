@@ -26,7 +26,7 @@ pub fn show(
                     }
                 }
                 if busy {
-                    ui.spinner();
+                    crate::ui::loading(ui, "Fetching discussion…");
                 }
                 if ui.button("⟳ Refresh").clicked() {
                     refresh = true;

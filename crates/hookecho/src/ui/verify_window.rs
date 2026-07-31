@@ -51,7 +51,7 @@ impl VerifyWindow {
                         act.refresh = true;
                     }
                     if self.busy {
-                        ui.spinner();
+                        crate::ui::loading(ui, "Scoring warnings…");
                     }
                 });
                 if let Some(e) = &self.error {

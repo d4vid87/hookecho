@@ -595,7 +595,7 @@ pub fn sound_picker(ui: &mut egui::Ui, settings: &mut Settings) {
                         }
                     });
                 let preview = sound.clone();
-                if ui.button("▶").on_hover_text("Preview").clicked() {
+                if ui.button(egui_phosphor::regular::PLAY).on_hover_text("Preview").clicked() {
                     crate::audio::play(&preview, volume);
                 }
                 ui.end_row();

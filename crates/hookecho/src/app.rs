@@ -2727,7 +2727,7 @@ impl HookEchoApp {
                         // Effective index (None = latest = n-1).
                         let cur = self.goes_time_idx.unwrap_or(n - 1);
                         ui.label("🛰 GOES:");
-                        if ui.add_enabled(cur > 0, egui::Button::new("◀")).clicked() {
+                        if ui.add_enabled(cur > 0, egui::Button::new(egui_phosphor::regular::CARET_LEFT)).clicked() {
                             self.goes_time_idx = Some(cur.saturating_sub(1));
                         }
                         let label = crate::timefmt::fmt_clock(
@@ -2737,7 +2737,7 @@ impl HookEchoApp {
                         );
                         ui.monospace(label);
                         if ui
-                            .add_enabled(cur + 1 < n, egui::Button::new("▶"))
+                            .add_enabled(cur + 1 < n, egui::Button::new(egui_phosphor::regular::CARET_RIGHT))
                             .clicked()
                         {
                             let ni = cur + 1;
@@ -4256,7 +4256,7 @@ impl HookEchoApp {
                                 ui.set_min_width(240.0);
                                 ui.horizontal(|ui| {
                                     ui.label("Date:");
-                                    if ui.button("◀").clicked() {
+                                    if ui.button(egui_phosphor::regular::CARET_LEFT).clicked() {
                                         if let Some(d) = t.date.pred_opt() {
                                             t.date = d;
                                             t.following = false;
@@ -4268,7 +4268,7 @@ impl HookEchoApp {
                                              bucketed that way",
                                         );
                                     let is_today = t.date >= chrono::Utc::now().date_naive();
-                                    if ui.add_enabled(!is_today, egui::Button::new("▶")).clicked() {
+                                    if ui.add_enabled(!is_today, egui::Button::new(egui_phosphor::regular::CARET_RIGHT)).clicked() {
                                         if let Some(d) = t.date.succ_opt() {
                                             t.date = d;
                                         }
