@@ -277,6 +277,10 @@ pub struct Settings {
     /// Enhanced Echo Tops product; raise it to track the core rather than the anvil.
     #[serde(default = "default_etop_dbz")]
     pub etop_dbz: f32,
+    /// Hide the docked sidebar on the left (desktop). A floating button on the map's top-left
+    /// brings it back, as does the drawer hotkey.
+    #[serde(default)]
+    pub hide_sidebar: bool,
     /// Hide the docked timeline bar under the map (desktop). The transport keeps working from the
     /// keyboard; this is for people who want the map edge-to-edge.
     #[serde(default)]
@@ -474,6 +478,7 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             default_site: "KTLX".to_string(),
+            hide_sidebar: false,
             hide_toolbar: false,
             layer_order: Vec::new(),
             mping_key: String::new(),
@@ -662,6 +667,7 @@ mod tests {
     fn roundtrips() {
         let s = Settings {
             smooth_radar: false,
+            hide_sidebar: false,
             hide_toolbar: false,
             layer_order: Vec::new(),
             mping_key: String::new(),

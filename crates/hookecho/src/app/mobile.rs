@@ -719,6 +719,8 @@ impl super::HookEchoApp {
                                 content.height() * 0.5,
                                 false,
                                 &mut self.settings.layer_order,
+                                // The phone keeps its knobs in the Advanced section below.
+                                |_| {},
                             );
                             if self.settings.layer_order != order_was {
                                 self.settings.save();

@@ -870,6 +870,8 @@ pub(crate) enum PaletteAction {
     ToggleMute,
     /// Show/hide the docked timeline bar under the map (desktop).
     ToggleToolbar,
+    /// Show/hide the docked sidebar on the left (desktop).
+    ToggleSidebar,
     Reload,
     InstantReplay,
     GoLive,
@@ -4349,6 +4351,13 @@ impl HookEchoApp {
         let feats = self.active_alert_features().to_vec();
         let mut muted = self.settings.mute_alerts;
         let mut alert_hit = None;
+        // Read before the panel closure: the Layer options callback runs inside a `&mut self`
+        // borrow and can only touch plain fields, not `&self` methods.
+        let l3_site = self.l3grid_site.clone();
+        let tz = self.active_tz();
+        let mosaic = self.mosaic_status();
+        let mut etop_dbz = self.settings.etop_dbz;
+        let mut hide = false;
         egui::Panel::left("sidebar")
             .exact_size(264.0)
             .show(root, |ui| {
@@ -4375,6 +4384,27 @@ impl HookEchoApp {
                     if ui.selectable_label(alerts_tab, label).clicked() {
                         alerts_tab = true;
                     }
+                    // Collapse, on the row it collapses. The floating button that brings the
+                    // panel back lands in the same corner this one sits in.
+                    ui.with_layout(
+                        egui::Layout::right_to_left(egui::Align::Center),
+                        |ui| {
+                            if ui
+                                .add(
+                                    egui::Button::new(
+                                        egui::RichText::new(egui_phosphor::regular::CARET_LEFT)
+                                            .size(14.0),
+                                    )
+                                    .fill(egui::Color32::TRANSPARENT)
+                                    .stroke(egui::Stroke::NONE),
+                                )
+                                .on_hover_text("Hide the sidebar")
+                                .clicked()
+                            {
+                                hide = true;
+                            }
+                        },
+                    );
                 });
                 ui.separator();
                 if alerts_tab {
@@ -4394,7 +4424,37 @@ impl HookEchoApp {
                     (ui.available_height() - 110.0).max(120.0),
                     std::mem::take(&mut focus_search),
                     &mut self.settings.layer_order,
+                    |ui| {
+                        // Knobs for the layers that are already on, drawn between the Radar group
+                        // and the rest. Collapsed by default: the list is still the panel's job.
+                        egui::CollapsingHeader::new("Layer options")
+                            .default_open(false)
+                            .show(ui, |ui| {
+                                crate::ui::layer_options::show(
+                                    ui,
+                                    &mut self.filters,
+                                    &mut self.fields,
+                                    &mut self.rotation_minutes,
+                                    &mut self.hrrr_fcst_hour,
+                                    self.hrrr_valid,
+                                    tz,
+                                    &mut self.env_cape_ml,
+                                    &mut self.env_srh_km,
+                                    &mut self.env_model,
+                                    &mut self.contour_kind,
+                                    &mut etop_dbz,
+                                    &mut self.snow_hours,
+                                    &self.show_tropical,
+                                    &mut self.tropical_wind_kt,
+                                    &mut self.tropical_surge,
+                                    l3_site.as_deref(),
+                                    Some(mosaic.as_str()),
+                                    &mut opts,
+                                );
+                            });
+                    },
                 );
+                self.settings.etop_dbz = etop_dbz;
                 if self.settings.layer_order != order_was {
                     self.settings.save();
                 }
@@ -4423,36 +4483,7 @@ impl HookEchoApp {
                     }
                 }
                 ui.add_space(4.0);
-                // Knobs for layers that are already on, then the set-once map knobs. Both are
-                // collapsed by default: the drawer's job is the layer list above.
-                egui::CollapsingHeader::new("Layer options")
-                    .default_open(false)
-                    .show(ui, |ui| {
-                        let l3_site = self.l3grid_site.clone();
-                        let tz = self.active_tz();
-                        let mosaic = self.mosaic_status();
-                        crate::ui::layer_options::show(
-                            ui,
-                            &mut self.filters,
-                            &mut self.fields,
-                            &mut self.rotation_minutes,
-                            &mut self.hrrr_fcst_hour,
-                            self.hrrr_valid,
-                            tz,
-                            &mut self.env_cape_ml,
-                            &mut self.env_srh_km,
-                            &mut self.env_model,
-                            &mut self.contour_kind,
-                            &mut self.settings.etop_dbz,
-                            &mut self.snow_hours,
-                            &self.show_tropical,
-                            &mut self.tropical_wind_kt,
-                            &mut self.tropical_surge,
-                            l3_site.as_deref(),
-                            Some(mosaic.as_str()),
-                            &mut opts,
-                        );
-                    });
+                // The set-once map knobs, and the app's own commands.
                 egui::CollapsingHeader::new("Map")
                     .default_open(false)
                     .show(ui, |ui| self.map_rows(ui, &mut opts));
@@ -4462,6 +4493,10 @@ impl HookEchoApp {
             });
         self.show_alert_panel = alerts_tab;
         self.settings.mute_alerts = muted;
+        if hide {
+            self.settings.hide_sidebar = true;
+            self.settings.save();
+        }
         if let Some((id, lon, lat)) = alert_hit {
             // Fly the active camera to the alert and open its bulletin.
             let cam = &mut self.views[self.active].camera;
@@ -5582,6 +5617,14 @@ impl HookEchoApp {
             Some(self.settings.mute_alerts),
         );
         push(
+            "Sidebar",
+            "Reference",
+            "This panel \u{2014} hide it and the map runs to the left edge",
+            false,
+            PaletteAction::ToggleSidebar,
+            Some(!self.settings.hide_sidebar),
+        );
+        push(
             "Timeline bar",
             "Reference",
             "The transport strip under the map \u{2014} hide it for an edge-to-edge map",
@@ -5859,6 +5902,10 @@ impl HookEchoApp {
             PaletteAction::ToggleMute => self.apply_action(BindableAction::ToggleMute, ctx),
             PaletteAction::ToggleToolbar => {
                 self.settings.hide_toolbar = !self.settings.hide_toolbar;
+                self.settings.save();
+            }
+            PaletteAction::ToggleSidebar => {
+                self.settings.hide_sidebar = !self.settings.hide_sidebar;
                 self.settings.save();
             }
             PaletteAction::Reload => self.trigger_reload(ctx),
@@ -7479,7 +7526,15 @@ impl HookEchoApp {
                     self.obs_mode = true;
                 }
             }
-            A::ToggleDrawer => self.sidebar_focus_search = true,
+            A::ToggleDrawer => {
+                // Hidden: bring it back and land in the search box. Visible: focus the search,
+                // which is what the key always did.
+                if self.settings.hide_sidebar {
+                    self.settings.hide_sidebar = false;
+                    self.settings.save();
+                }
+                self.sidebar_focus_search = true;
+            }
             A::StepBack => self.views[self.active].timeline.step(-1),
             A::StepForward => self.views[self.active].timeline.step(1),
             A::Fullscreen => {
@@ -10552,6 +10607,36 @@ impl HookEchoApp {
     /// This is what the docked status bar used to hold. A full-width bar for four short readouts
     /// cost a strip of map on every frame; the chip floats over the map instead, and the site and
     /// volume time it also carried now live in the timeline pill where the clock belongs.
+    /// The way back to a hidden sidebar: one floating button in the corner it used to occupy.
+    /// Nothing else on the map reaches the layer list, so this is not optional chrome.
+    fn sidebar_button(&mut self, ctx: &egui::Context) {
+        if !self.settings.hide_sidebar {
+            return;
+        }
+        egui::Area::new(egui::Id::new("sidebar_button"))
+            .constrain_to(self.chrome_rect)
+            .anchor(egui::Align2::LEFT_TOP, egui::vec2(10.0, 10.0))
+            .show(ctx, |ui| {
+                crate::ui::style::glass(ui, 238).show(ui, |ui| {
+                    if ui
+                        .add(
+                            egui::Button::new(
+                                egui::RichText::new(egui_phosphor::regular::LIST).size(18.0),
+                            )
+                            .min_size(egui::vec2(30.0, 30.0))
+                            .fill(egui::Color32::TRANSPARENT)
+                            .stroke(egui::Stroke::NONE),
+                        )
+                        .on_hover_text("Show the sidebar")
+                        .clicked()
+                    {
+                        self.settings.hide_sidebar = false;
+                        self.settings.save();
+                    }
+                });
+            });
+    }
+
     fn info_chip(&mut self, ctx: &egui::Context) {
         use crate::ui::style;
         use egui_phosphor::regular as ph;
@@ -11679,7 +11764,9 @@ impl eframe::App for HookEchoApp {
         // Docked desktop chrome. Declared before every floating Area so those constrain to what's
         // left of the viewport (`self.chrome_rect`) instead of covering the bars.
         if !cfg!(target_os = "android") && !self.obs_mode {
-            self.sidebar(root, ctx);
+            if !self.settings.hide_sidebar {
+                self.sidebar(root, ctx);
+            }
             if !self.settings.hide_toolbar {
                 self.timeline_bar(root);
             }
@@ -11700,6 +11787,7 @@ impl eframe::App for HookEchoApp {
         // Floating map-first chrome (desktop): a hamburger, an alert bell, the two bottom pills.
         // Everything else is one drawer behind the hamburger.
         if !cfg!(target_os = "android") && !self.obs_mode {
+            self.sidebar_button(ctx);
             self.info_chip(ctx);
             self.error_chip(ctx);
             self.coach_marks(ctx);

@@ -204,6 +204,7 @@ fn row(
 /// The panel body: search box + categorized rows. Returns the clicked action, if any.
 /// `focus_search` grabs the search field this frame (Ctrl+K opens the drawer typing-ready).
 /// `pref` is the persisted drag order and is rewritten in place when a row is dropped.
+#[allow(clippy::too_many_arguments)] // two call sites, both flat; a params struct buys nothing
 pub(crate) fn body(
     ui: &mut egui::Ui,
     entries: &[PaletteEntry],
@@ -212,6 +213,7 @@ pub(crate) fn body(
     max_height: f32,
     focus_search: bool,
     pref: &mut Vec<String>,
+    mut after_radar: impl FnMut(&mut egui::Ui),
 ) -> Option<PaletteAction> {
     let mut chosen = None;
     // (dragged label, label it was dropped on) — applied after the loop so the borrow of `pref`
@@ -313,6 +315,13 @@ pub(crate) fn body(
                             ui.add_space(2.0);
                         }
                     });
+                // The knobs for the products right above them, not at the bottom of the panel:
+                // a threshold or a forecast hour is read together with the layer it belongs to.
+                if cat == "Radar" {
+                    ui.add_space(2.0);
+                    after_radar(ui);
+                    ui.add_space(2.0);
+                }
                 if let Some((drag, before)) = moved.take() {
                     // Only the category the row was dropped in is rewritten — a cross-category
                     // drag would move a layer out of the group its label says it's in.
