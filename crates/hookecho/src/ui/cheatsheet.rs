@@ -4,7 +4,7 @@
 //! commands. It reads the live binding table, so a rebind shows up here without a second edit.
 
 use crate::app::PaletteEntry;
-use crate::hotkeys::{self, Binding, BindableAction};
+use crate::hotkeys::{self, BindableAction, Binding};
 use crate::ui::style;
 
 /// Draw the sheet. Returns false when the user dismissed it.
@@ -68,12 +68,7 @@ pub(crate) fn show(
 }
 
 /// Two columns of `category → rows`, balanced by row count.
-fn columns(
-    ui: &mut egui::Ui,
-    ctx: &egui::Context,
-    bindings: &[Binding],
-    entries: &[PaletteEntry],
-) {
+fn columns(ui: &mut egui::Ui, ctx: &egui::Context, bindings: &[Binding], entries: &[PaletteEntry]) {
     let mut groups: Vec<(&'static str, Vec<(String, String)>)> = Vec::new();
     for b in bindings {
         let (cat, label) = match b.action {

@@ -363,7 +363,9 @@ mod tests {
     #[test]
     fn ingest_feeds_open_cards_and_leaves_others_alone() {
         let mut layer = Layer::default();
-        layer.cards.push(Card::new(station(38.5, -121.5), EFieldKind::Ppef));
+        layer
+            .cards
+            .push(Card::new(station(38.5, -121.5), EFieldKind::Ppef));
         let mut fresh = station(38.5, -121.5);
         fresh.temp_c = Some(31.0);
         fresh.time = Some(chrono::Utc::now());

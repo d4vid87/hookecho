@@ -365,14 +365,8 @@ pub fn run_mosaic(site: &str) -> anyhow::Result<()> {
         .ok_or_else(|| anyhow::anyhow!("unknown radar site {site}"))?;
     let (lon, lat) = (s.longitude as f64, s.latitude as f64);
     // ~2.5° box, which is roughly a regional view at zoom 7.
-    let sites = wxdata::mosaic::sites_for_view(
-        Some(site),
-        lon - 2.5,
-        lat - 2.5,
-        lon + 2.5,
-        lat + 2.5,
-        6,
-    );
+    let sites =
+        wxdata::mosaic::sites_for_view(Some(site), lon - 2.5, lat - 2.5, lon + 2.5, lat + 2.5, 6);
     println!("{site}: mosaic over {sites:?}");
     let m = rt
         .block_on(async {
@@ -436,7 +430,11 @@ pub fn run_verify(wfo: &str, start: &str, end: &str) -> anyhow::Result<()> {
     );
     println!(
         "  warnings {}/{} verified   reports {} ({} warned, {} missed)   avg polygon {:.0} km²",
-        s.events_verified, s.events_total, s.reports_total, s.warned_reports, s.unwarned_reports,
+        s.events_verified,
+        s.events_total,
+        s.reports_total,
+        s.warned_reports,
+        s.unwarned_reports,
         s.avg_size_km2
     );
     for w in v.warnings.iter().take(20) {
@@ -1268,7 +1266,15 @@ pub fn run_contours(kind_token: &str) -> anyhow::Result<()> {
             Some(sk) => wxdata::severe::fetch_grid(&client, wxdata::hrrr::Model::Hrrr, sk).await?,
             None => {
                 let (var, level, _) = kind.params().expect("non-Off kind has params");
-                wxdata::hrrr::fetch_field(&client, wxdata::hrrr::Model::Hrrr, var, level, 0, f64::NEG_INFINITY).await?
+                wxdata::hrrr::fetch_field(
+                    &client,
+                    wxdata::hrrr::Model::Hrrr,
+                    var,
+                    level,
+                    0,
+                    f64::NEG_INFINITY,
+                )
+                .await?
             }
         };
         for v in &mut fc.field.values {
@@ -1376,7 +1382,8 @@ pub fn run_env(slug: &str, out_path: &str) -> anyhow::Result<()> {
         .build()?;
     let fc = rt.block_on(async {
         let client = reqwest::Client::new();
-        wxdata::hrrr::fetch_field(&client, wxdata::hrrr::Model::Hrrr, var, level, 0, min_valid).await
+        wxdata::hrrr::fetch_field(&client, wxdata::hrrr::Model::Hrrr, var, level, 0, min_valid)
+            .await
     })?;
     let f = &fc.field;
     let filled = f.values.iter().filter(|v| !v.is_nan()).count();
@@ -1459,8 +1466,15 @@ pub fn run_hrrr_layer(
                 .await
             }
             FieldLayer::Smoke => {
-                wxdata::hrrr::fetch_field(&client, wxdata::hrrr::Model::Hrrr, "MASSDEN", "8 m above ground", fcst_hour, 0.0)
-                    .await
+                wxdata::hrrr::fetch_field(
+                    &client,
+                    wxdata::hrrr::Model::Hrrr,
+                    "MASSDEN",
+                    "8 m above ground",
+                    fcst_hour,
+                    0.0,
+                )
+                .await
             }
             _ => wxdata::hrrr::fetch_forecast(&client, fcst_hour).await,
         }

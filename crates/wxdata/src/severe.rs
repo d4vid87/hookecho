@@ -173,7 +173,9 @@ mod tests {
     async fn severe_live() {
         let http = reqwest::Client::new();
         for kind in [SevereKind::Stp, SevereKind::Scp, SevereKind::Ehi] {
-            let f = fetch_grid(&http, hrrr::Model::Hrrr, kind).await.expect("HRRR fetch");
+            let f = fetch_grid(&http, hrrr::Model::Hrrr, kind)
+                .await
+                .expect("HRRR fetch");
             let finite: Vec<f32> = f
                 .field
                 .values

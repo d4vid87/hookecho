@@ -220,7 +220,11 @@ mod tests {
     #[test]
     fn parses_cameras_and_drops_the_unusable() {
         let cams = parse_caltrans(D3, "Caltrans D3");
-        assert_eq!(cams.len(), 1, "out-of-service and fix-less cameras must drop");
+        assert_eq!(
+            cams.len(),
+            1,
+            "out-of-service and fix-less cameras must drop"
+        );
         let c = &cams[0];
         assert_eq!(c.id, "Caltrans D3:1");
         assert_eq!(c.place, "Sacramento");
@@ -258,7 +262,11 @@ mod tests {
         for s in SOURCES {
             let cams = fetch_source(&client, s).await.unwrap();
             let streaming = cams.iter().filter(|c| c.stream_url.is_some()).count();
-            println!("{}: {} cameras, {streaming} streaming", s.agency, cams.len());
+            println!(
+                "{}: {} cameras, {streaming} streaming",
+                s.agency,
+                cams.len()
+            );
             assert!(!cams.is_empty(), "{} returned nothing", s.agency);
         }
     }

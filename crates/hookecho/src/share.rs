@@ -209,9 +209,17 @@ mod tests {
     fn drain_ignores_own_packets_and_keeps_newest() {
         let s = Share::start();
         let tx = s.sender();
-        tx.send(Peer { id: s.id.clone(), ..peer("x", now()) }).unwrap();
+        tx.send(Peer {
+            id: s.id.clone(),
+            ..peer("x", now())
+        })
+        .unwrap();
         tx.send(peer("other", now() - 60)).unwrap();
-        tx.send(Peer { lat: 40.0, ..peer("other", now()) }).unwrap();
+        tx.send(Peer {
+            lat: 40.0,
+            ..peer("other", now())
+        })
+        .unwrap();
         let mut peers = HashMap::new();
         assert!(s.drain(&mut peers));
         assert_eq!(peers.len(), 1);

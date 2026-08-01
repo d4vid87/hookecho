@@ -869,6 +869,7 @@ mod tests {
                 radials,
             }),
             thresholds: [0; 16],
+            elevation_deg: None,
         };
         // Decode: nonzero level → its value, else None.
         let f = radial_to_field(&p, 1.0, |lvl, _| (lvl >= 2).then_some(lvl as f32)).unwrap();

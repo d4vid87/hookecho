@@ -223,11 +223,7 @@ async fn fetch_layer(
 fn exceeded_limit(body: &str) -> bool {
     serde_json::from_str::<serde_json::Value>(body)
         .ok()
-        .and_then(|v| {
-            v.get("properties")?
-                .get("exceededTransferLimit")?
-                .as_bool()
-        })
+        .and_then(|v| v.get("properties")?.get("exceededTransferLimit")?.as_bool())
         .unwrap_or(false)
 }
 
@@ -330,6 +326,8 @@ mod tests {
         assert!(exceeded_limit(
             r#"{"type":"FeatureCollection","features":[],"properties":{"exceededTransferLimit":true}}"#
         ));
-        assert!(!exceeded_limit(r#"{"type":"FeatureCollection","features":[]}"#));
+        assert!(!exceeded_limit(
+            r#"{"type":"FeatureCollection","features":[]}"#
+        ));
     }
 }

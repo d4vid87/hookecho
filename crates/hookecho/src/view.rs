@@ -196,6 +196,18 @@ impl MapView {
         }
     }
 
+    /// Snap the selected product to one this volume actually carries — a TDWR has no dual-pol
+    /// moments, and neither does anything from before the 2011-13 upgrade.
+    pub fn clamp_moment(&mut self) {
+        let Some(v) = &self.volume else { return };
+        let have = level2::available_moments(&v.scan);
+        if !have[self.moment.index()] {
+            if let Some(m) = Moment::ALL.into_iter().find(|m| have[m.index()]) {
+                self.moment = m;
+            }
+        }
+    }
+
     /// Number of tilts in this pane's own loaded volume (0 if none).
     pub fn elevation_count(&self) -> usize {
         self.volume.as_ref().map_or(0, |v| v.elevations.len())

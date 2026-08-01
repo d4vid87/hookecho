@@ -117,7 +117,10 @@ pub fn parse_ppef(html: &str) -> Ppef {
             && fields.iter().all(|f| f.parse::<f64>().is_ok())
             && fields[0].parse::<f64>().unwrap_or(0.0) < 1900.0
         {
-            longitudes = fields.iter().filter_map(|f| f.parse::<f64>().ok()).collect();
+            longitudes = fields
+                .iter()
+                .filter_map(|f| f.parse::<f64>().ok())
+                .collect();
             continue;
         }
         // A data row: YR MO DA HH MM then one value per longitude.
@@ -195,10 +198,7 @@ pub fn parse_mill(json: &str) -> Vec<MillReading> {
                         .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
                         .map(|d| d.with_timezone(&Utc))
                 })?;
-            Some(MillReading {
-                time,
-                kv_per_m: kv,
-            })
+            Some(MillReading { time, kv_per_m: kv })
         })
         .collect()
 }

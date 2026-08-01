@@ -258,7 +258,11 @@ struct TokenReply {
 }
 
 /// A usable access token, refreshing (and re-saving) when the old one is about to expire.
-pub async fn access_token(client_id: &str, client_secret: &str, t: &mut Tokens) -> Result<String, String> {
+pub async fn access_token(
+    client_id: &str,
+    client_secret: &str,
+    t: &mut Tokens,
+) -> Result<String, String> {
     if t.fresh() {
         return Ok(t.access_token.clone());
     }
@@ -509,11 +513,14 @@ mod tests {
         let port: u16 = p.redirect.rsplit(':').next().unwrap().parse().unwrap();
         // Play the browser: request the redirect exactly as Google would.
         let mut c = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
-        write!(c, "GET /?code=4%2Fabc&scope=x HTTP/1.1\r\nHost: localhost\r\n\r\n").unwrap();
-        let got = p
-            .rx
-            .recv_timeout(std::time::Duration::from_secs(5))
-            .unwrap();
+        write!(
+            c,
+            "GET /?code=4%2Fabc&scope=x HTTP/1.1\r\nHost: localhost\r\n\r\n"
+        )
+        .unwrap();
+        let got =
+            p.rx.recv_timeout(std::time::Duration::from_secs(5))
+                .unwrap();
         assert_eq!(got.unwrap(), "4/abc"); // %2F decoded — Google's codes contain a slash
     }
 
@@ -535,7 +542,10 @@ mod tests {
 
     #[test]
     fn redirect_query_yields_code_or_error() {
-        assert_eq!(param("code=4%2Fabc&scope=x", "code").as_deref(), Some("4/abc"));
+        assert_eq!(
+            param("code=4%2Fabc&scope=x", "code").as_deref(),
+            Some("4/abc")
+        );
         assert_eq!(
             param("error=access_denied", "error").as_deref(),
             Some("access_denied")

@@ -51,8 +51,9 @@ pub fn show(
 
     // Build filtered rows (cloned so no borrow is held across the table).
     let needle = dialog.filter.to_ascii_uppercase();
-    let mut rows: Vec<Row> = wxdata::sites::sites()
-        .iter()
+    // The WSR-88D registry and the TDWR table, in one list. A site's kind comes from which table
+    // it is in — the old `starts_with('T')` guess labelled TJUA (a WSR-88D) a terminal radar.
+    let mut rows: Vec<Row> = wxdata::sites::all()
         .filter(|s| {
             needle.is_empty()
                 || s.id.to_ascii_uppercase().contains(&needle)
@@ -63,7 +64,9 @@ pub fn show(
             id: s.id.to_string(),
             city: s.city.to_string(),
             state: s.state.to_string(),
-            kind: if s.id.starts_with('T') {
+            // Which table it came from, not which letter it starts with: the old
+            // `starts_with('T')` guess labelled TJUA (a WSR-88D) a terminal radar.
+            kind: if wxdata::tdwr::is_tdwr(s.id) {
                 "TDWR"
             } else {
                 "WSR-88D"

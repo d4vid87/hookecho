@@ -104,6 +104,9 @@ pub struct Level3Product {
     pub radial: Option<RadialArray>,
     /// The 16 product-dependent threshold halfwords (PDB HW31-46), decoded per product.
     pub thresholds: [i16; 16],
+    /// Elevation angle in degrees for elevation-based products (the halfword just ahead of the
+    /// thresholds), or `None` for volume products that have no single tilt.
+    pub elevation_deg: Option<f32>,
 }
 
 /// Decode a Level 3 product from raw file bytes (WMO header + optional zlib body).
@@ -127,6 +130,13 @@ pub fn decode(raw: &[u8]) -> Result<Level3Product> {
     let lon = r.i32("lon")? as f32 / 1000.0;
     let height_ft = r.i16("height")?;
     let code = r.i16("prod_code")?;
+    // Elevation angle (tenths of a degree) sits in the product-dependent halfword immediately
+    // ahead of the threshold table; 0 means "not an elevation product".
+    r.pos = pdb_start + 40;
+    let elevation_deg = match r.i16("elevation") {
+        Ok(t) if t != 0 => Some(t as f32 / 10.0),
+        _ => None,
+    };
     // Product-dependent thresholds: PDB halfwords 31-46 (16 i16) at pdb_start+42.
     let mut thresholds = [0i16; 16];
     r.pos = pdb_start + 42;
@@ -206,6 +216,7 @@ pub fn decode(raw: &[u8]) -> Result<Level3Product> {
         raw_text,
         radial,
         thresholds,
+        elevation_deg,
     })
 }
 

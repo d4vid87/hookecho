@@ -97,7 +97,8 @@ pub fn marker_grid(ui: &mut egui::Ui, markers: &mut Vec<Marker>, icon_tex: &Icon
         .num_columns(7)
         .spacing([8.0, 6.0])
         .show(ui, |ui| {
-            ui.strong("Home").on_hover_text("The one place alerts speak of first");
+            ui.strong("Home")
+                .on_hover_text("The one place alerts speak of first");
             ui.strong("Name");
             ui.strong("Lat");
             ui.strong("Lon");

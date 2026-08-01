@@ -108,7 +108,9 @@ pub(crate) fn show(
         ui.selectable_value(env_model, wxdata::hrrr::Model::Hrrr, "HRRR 3 km")
             .on_hover_text("HRRR forecast model, 3 km grid (analysis at F+0)");
         ui.selectable_value(env_model, wxdata::hrrr::Model::Rap, "RAP analysis")
-            .on_hover_text("RAP f00 observed analysis, 13 km grid — coarser, but what is, not what's forecast");
+            .on_hover_text(
+                "RAP f00 observed analysis, 13 km grid — coarser, but what is, not what's forecast",
+            );
     });
     if *env_model != env_before {
         // Both sources feed CAPE/SRH and the contours; drop their clocks so the next frame refetches.

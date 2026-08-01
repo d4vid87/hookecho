@@ -2005,6 +2005,15 @@ impl HookEchoApp {
 
     /// Spawn background fetches for all overlay sources (alerts, SPC outlooks, MDs).
     /// Spawn a background overlay fetch, routing the result to `overlay_rx`.
+    /// Which moments the active pane's volume carries. All true when nothing is loaded, so an
+    /// empty pane still offers the full product list.
+    fn available_moments(&self) -> [bool; 6] {
+        self.views[self.active]
+            .volume
+            .as_ref()
+            .map_or([true; 6], |v| level2::available_moments(&v.scan))
+    }
+
     /// Recompute the locally derived products (VIL, VIL density, echo tops) when the active pane's
     /// volume, the echo-top threshold, or the set of enabled derived layers changed.
     ///
@@ -2080,8 +2089,7 @@ impl HookEchoApp {
                 }
             }
             if let Some((h0, hm20)) = levels.filter(|_| mask & HAIL_BITS != 0) {
-                if let Some(h) =
-                    wxdata::derived::hail(&sweeps, h0 - radar_m, hm20 - radar_m, &opts)
+                if let Some(h) = wxdata::derived::hail(&sweeps, h0 - radar_m, hm20 - radar_m, &opts)
                 {
                     out.extend([(FL::HailMehs, h.mehs), (FL::HailPosh, h.posh)]);
                 }
@@ -4929,7 +4937,12 @@ impl HookEchoApp {
                 "Storm-Relative Velocity",
                 "Velocity with the storm's own motion subtracted out",
             )]);
+        let have = self.available_moments();
         for (m, srv, label, desc) in rows {
+            // A product this radar doesn't send is absent, not a row that paints nothing.
+            if !have[m.index()] {
+                continue;
+            }
             let on = cur_moment == m && (m != Moment::Velocity || cur_srv == srv);
             push(
                 label,
@@ -6882,6 +6895,36 @@ impl HookEchoApp {
         ctx: egui::Context,
     ) {
         let tx = self.msg_tx.clone();
+        if wxdata::tdwr::is_tdwr(&site) {
+            // Terminal radars have no Level 2 feed and no archive: one synthesized volume per
+            // poll, from the newest Level 3 tilt products.
+            let http = self.http.clone();
+            self._rt.spawn(async move {
+                let msg = match wxdata::tdwr::fetch_volume(&http, &site).await {
+                    Ok((name, _, _)) if current_name.as_deref() == Some(name.as_str()) => {
+                        DataMsg::UpToDate {
+                            view: view_idx,
+                            site,
+                        }
+                    }
+                    Ok((name, time, scan)) => DataMsg::Volume {
+                        view: view_idx,
+                        site,
+                        name,
+                        time,
+                        scan,
+                    },
+                    Err(e) => DataMsg::Error {
+                        view: view_idx,
+                        site,
+                        err: e.to_string(),
+                    },
+                };
+                let _ = tx.send(msg);
+                ctx.request_repaint();
+            });
+            return;
+        }
         self._rt.spawn(async move {
             // Ask for two: the newest volume is usually still uploading, and one caught before
             // its metadata record lands can't be decoded at all. Falling back one volume shows
@@ -6979,20 +7022,23 @@ impl HookEchoApp {
                     // A newly-arrived live head (following): roll the day at UTC midnight, or grow
                     // the frame list so the loop window slides forward. A frame-fetch result for a
                     // scrubbed/loop-display frame is older than the head and isn't a new head.
-                    let new_head = v.timeline.following && {
-                        let last_time = v.timeline.frames.last().and_then(|id| id.date_time());
-                        if time.date_naive() != v.timeline.date {
-                            v.timeline.date = time.date_naive(); // re-list fires via frames_key
-                            true
-                        } else if last_time.is_none_or(|t| time > t)
-                            && v.timeline.frames.last().map(|id| id.name()) != Some(name.as_str())
-                        {
-                            v.timeline.append_head(Identifier::new(name.clone()));
-                            true
-                        } else {
-                            false
-                        }
-                    };
+                    let new_head = v.timeline.following
+                        && !v.site.as_deref().is_some_and(wxdata::tdwr::is_tdwr)
+                        && {
+                            let last_time = v.timeline.frames.last().and_then(|id| id.date_time());
+                            if time.date_naive() != v.timeline.date {
+                                v.timeline.date = time.date_naive(); // re-list fires via frames_key
+                                true
+                            } else if last_time.is_none_or(|t| time > t)
+                                && v.timeline.frames.last().map(|id| id.name())
+                                    != Some(name.as_str())
+                            {
+                                v.timeline.append_head(Identifier::new(name.clone()));
+                                true
+                            } else {
+                                false
+                            }
+                        };
                     // While looping, the playhead frame owns the display; a genuinely new head is
                     // only appended, not shown. Every other case updates the displayed volume.
                     if !(looping && new_head) {
@@ -7001,6 +7047,7 @@ impl HookEchoApp {
                     v.loading = false;
                     v.error = None;
                     v.clamp_tilt();
+                    v.clamp_moment();
                     self.pane_shown.remove(&view);
                 }
                 DataMsg::Frames {
@@ -7032,6 +7079,7 @@ impl HookEchoApp {
                     v.loading = false;
                     v.error = None;
                     v.clamp_tilt();
+                    v.clamp_moment();
                     // A healthy stream pushes the poll deadline forward — this line IS the
                     // fallback: if the stream dies, interval polling resumes on schedule.
                     v.last_poll = Some(Instant::now());
@@ -7323,7 +7371,9 @@ impl HookEchoApp {
         let (site, date, following, need_list, listing) = {
             let v = &self.views[idx];
             let key = v.site.clone().map(|s| (s, v.timeline.date));
-            let need = v.site.is_some() && v.timeline.frames_key != key;
+            // TDWRs have no archive to list; their timeline stays empty and always live.
+            let need = v.site.as_deref().is_some_and(|s| !wxdata::tdwr::is_tdwr(s))
+                && v.timeline.frames_key != key;
             (
                 v.site.clone(),
                 v.timeline.date,
@@ -7382,6 +7432,7 @@ impl HookEchoApp {
                         v.loading = false;
                         v.error = None;
                         v.clamp_tilt();
+                        v.clamp_moment();
                         self.pane_shown.remove(&idx);
                     } else if !self.views[idx].loading {
                         let s = self.views[idx].site.clone().unwrap_or_default();
@@ -7467,8 +7518,14 @@ impl HookEchoApp {
         };
         let name = self.views[data].volume.as_ref().unwrap().name.clone();
         let uv_key = storm_uv.map(|(e, n)| (e.to_bits(), n.to_bits()));
-        // Dealiasing only applies to Doppler velocity.
-        let dealias = self.settings.dealias_velocity && moment == Moment::Velocity;
+        // Dealiasing only applies to Doppler velocity, and only where it is actually folded:
+        // a TDWR's Level 3 velocity is already unfolded before it leaves the radar.
+        let dealias = self.settings.dealias_velocity
+            && moment == Moment::Velocity
+            && !self.views[idx]
+                .site
+                .as_deref()
+                .is_some_and(wxdata::tdwr::is_tdwr);
         let key: ShownKey = (
             name,
             moment,
@@ -7965,6 +8022,10 @@ impl HookEchoApp {
         // clicking to activate it first. Single-pane keeps using the product pill.
         if self.views.len() > 1 && !self.obs_mode {
             let cur = self.views[idx].moment;
+            let have = self.views[idx]
+                .volume
+                .as_ref()
+                .map_or([true; 6], |v| level2::available_moments(&v.scan));
             egui::Area::new(egui::Id::new(("pane_product", idx)))
                 .order(egui::Order::Foreground)
                 .fixed_pos(prect.left_top() + egui::vec2(6.0, 6.0))
@@ -7973,7 +8034,7 @@ impl HookEchoApp {
                         .inner_margin(egui::Margin::symmetric(4, 2))
                         .show(ui, |ui| {
                             ui.horizontal(|ui| {
-                                for m in Moment::ALL {
+                                for m in Moment::ALL.into_iter().filter(|m| have[m.index()]) {
                                     if ui.selectable_label(m == cur, m.short_name()).clicked() {
                                         self.views[idx].moment = m;
                                         self.active = idx;

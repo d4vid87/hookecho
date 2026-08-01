@@ -71,7 +71,10 @@ impl Moment {
         Moment::ALL.iter().position(|m| *m == self).unwrap()
     }
 
-    fn select<'a>(&self, radial: &'a nexrad_model::data::Radial) -> Option<&'a MomentData> {
+    pub(crate) fn select<'a>(
+        &self,
+        radial: &'a nexrad_model::data::Radial,
+    ) -> Option<&'a MomentData> {
         match self {
             Moment::Reflectivity => radial.reflectivity(),
             Moment::Velocity => radial.velocity(),
@@ -208,6 +211,26 @@ pub fn elevation_angles(scan: &Scan) -> Vec<f32> {
     angles.sort_by(f32::total_cmp);
     angles.dedup_by(|a, b| (*a - *b).abs() < 0.15);
     angles
+}
+
+/// Which moments this volume actually carries, indexed by [`Moment::index`].
+///
+/// Not every radar sends everything: a TDWR has only reflectivity and velocity, and volumes from
+/// before the 2011-13 dual-polarization upgrade have no ZDR/PHI/CC. The UI reads this so those
+/// products are absent rather than selectable-and-blank.
+pub fn available_moments(scan: &Scan) -> [bool; 6] {
+    let mut got = [false; 6];
+    for sweep in scan.sweeps() {
+        for radial in sweep.radials() {
+            for m in Moment::ALL {
+                got[m.index()] |= m.select(radial).is_some();
+            }
+        }
+        if got.iter().all(|g| *g) {
+            break;
+        }
+    }
+    got
 }
 
 /// Bin the sweep at tilt index `tilt` (into [`elevation_angles`]) for `moment`.

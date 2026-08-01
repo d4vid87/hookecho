@@ -2,7 +2,7 @@
 
 use crate::app::PaletteEntry;
 use crate::colormap::Palettes;
-use crate::hotkeys::{self, Binding, BindableAction};
+use crate::hotkeys::{self, BindableAction, Binding};
 use crate::settings::{Settings, Theme, TimeDisplay, VelocityUnit};
 use wxdata::level2::Moment;
 
@@ -114,7 +114,12 @@ impl SettingsWindow {
 
     /// Rebindable keyboard shortcuts. Rows come from the binding table itself, so anything the
     /// command registry can do is bindable; `Palette` rows borrow the registry's own label.
-    fn hotkeys_tab(&mut self, ui: &mut egui::Ui, settings: &mut Settings, entries: &[PaletteEntry]) {
+    fn hotkeys_tab(
+        &mut self,
+        ui: &mut egui::Ui,
+        settings: &mut Settings,
+        entries: &[PaletteEntry],
+    ) {
         let name = |a: BindableAction| -> String {
             match a {
                 BindableAction::Palette(p) => entries
@@ -165,8 +170,8 @@ impl SettingsWindow {
                 })
             }) {
                 let shortcut = egui::KeyboardShortcut::new(mods, key);
-                self.stolen = hotkeys::conflict(&settings.keybinds, shortcut, target)
-                    .map(|b| name(b.action));
+                self.stolen =
+                    hotkeys::conflict(&settings.keybinds, shortcut, target).map(|b| name(b.action));
                 settings.keybinds.retain(|b| b.shortcut != shortcut);
                 if let Some(row) = settings.keybinds.iter_mut().find(|b| b.action == target) {
                     row.shortcut = shortcut;
@@ -430,7 +435,10 @@ fn sync_tab(ui: &mut egui::Ui, settings: &mut Settings, sync: &SyncView) -> Opti
                 action = Some(SyncAction::SignOut);
             }
         });
-        ui.checkbox(&mut settings.sync_enabled, "Sync automatically (every 5 minutes)");
+        ui.checkbox(
+            &mut settings.sync_enabled,
+            "Sync automatically (every 5 minutes)",
+        );
         if ui.button("Sync now").clicked() {
             action = Some(SyncAction::SyncNow);
         }
@@ -606,7 +614,11 @@ pub fn sound_picker(ui: &mut egui::Ui, settings: &mut Settings) {
                         }
                     });
                 let preview = sound.clone();
-                if ui.button(egui_phosphor::regular::PLAY).on_hover_text("Preview").clicked() {
+                if ui
+                    .button(egui_phosphor::regular::PLAY)
+                    .on_hover_text("Preview")
+                    .clicked()
+                {
                     crate::audio::play(&preview, volume);
                 }
                 ui.end_row();
@@ -646,8 +658,10 @@ fn alerts_tab(ui: &mut egui::Ui, settings: &mut Settings) {
         {
             crate::platform::set_background_alerts(settings.background_alerts);
         }
-        ui.weak("Some phones kill background services aggressively — if alerts stop arriving, \
-                 exempt Hook Echo-WX from battery optimisation in system settings.");
+        ui.weak(
+            "Some phones kill background services aggressively — if alerts stop arriving, \
+                 exempt Hook Echo-WX from battery optimisation in system settings.",
+        );
     }
 
     ui.add_space(8.0);

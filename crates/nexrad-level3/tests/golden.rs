@@ -197,3 +197,39 @@ fn dvl_rejects_a_negative_log_breakpoint() {
     thr[3] = 0x4000; // log scale 1.0
     assert_eq!(nexrad_level3::dvl_value(100, &thr), None);
 }
+
+/// TDWR terminal-radar base reflectivity (product 180). The packet-16 reader is product-agnostic,
+/// so the interesting part is that the TDWR flavour of the PDB decodes the same way — including
+/// the elevation angle, which is the only place a TDWR tilt announces itself.
+#[test]
+fn tdwr_base_reflectivity_matches_metpy_golden() {
+    let p = decode(include_bytes!("data/tz0_okc.l3")).expect("decode TZ0");
+    let g: RadialGolden = serde_json::from_str(include_str!("data/tz0_okc.golden.json")).unwrap();
+    assert_eq!(p.code, g.prod_code, "product code");
+    assert!(
+        (p.lat - g.lat).abs() < 0.001 && (p.lon - g.lon).abs() < 0.001,
+        "radar location"
+    );
+    assert_eq!(p.elevation_deg, Some(0.5), "TDWR lowest tilt");
+    let r = p.radial.as_ref().expect("TZ0 radial array");
+    assert_eq!(r.radials.len(), g.nrad, "radial count");
+    assert_eq!(r.nbins as usize, g.nbins, "bin count");
+    assert_eq!(r.first_bin, g.first, "first bin");
+    let maxlvl = r
+        .radials
+        .iter()
+        .flat_map(|rad| rad.levels.iter().copied())
+        .max()
+        .unwrap_or(0);
+    assert_eq!(maxlvl, g.max_level, "max data level");
+    // TDWR digital products carry plain tenths thresholds, same as N0B.
+    for s in &g.samples {
+        let level = r.radials[s.rad].levels[s.bin];
+        assert_eq!(level, s.level, "sampled level rad={} bin={}", s.rad, s.bin);
+        match (nexrad_level3::n0b_value(level, &p.thresholds), s.value) {
+            (Some(v), Some(want)) => assert!((v - want).abs() < 0.01, "TZ0 value {v} vs {want}"),
+            (None, None) => {}
+            (a, b) => panic!("TZ0 missing-ness mismatch: {a:?} vs {b:?}"),
+        }
+    }
+}

@@ -87,6 +87,33 @@ pub fn site_tz(id: &str) -> Option<Tz> {
         "KJKL" | "KLVX" => America__New_York, // KY — Jackson and Fort Knox
         "KMRX" => America__New_York,          // TN — Knoxville
 
+        // TDWRs (terminal radars at airports), in the same geographic order.
+        "TLAS" => America__Los_Angeles,                         // NV
+        "TPHX" => America__Phoenix,                             // AZ, no DST
+        "TDEN" => America__Denver,                              // CO
+        "TSLC" => America__Denver,                              // UT
+        "TDAL" | "TDFW" | "THOU" | "TIAH" => America__Chicago,  // TX
+        "TOKC" | "TTUL" => America__Chicago,                    // OK
+        "TMCI" | "TSTL" => America__Chicago,                    // MO
+        "TMSP" => America__Chicago,                             // MN
+        "TMKE" => America__Chicago,                             // WI
+        "TMDW" | "TORD" => America__Chicago,                    // IL
+        "TMEM" | "TBNA" => America__Chicago,                    // TN
+        "TMSY" => America__Chicago,                             // LA
+        "TSDF" => America__New_York,                            // KY — Louisville is Eastern
+        "TIDS" => America__Indiana__Indianapolis,               // IN
+        "TDTW" => America__Detroit,                             // MI
+        "TCMH" | "TCVG" | "TDAY" | "TLVE" => America__New_York, // OH
+        "TPIT" | "TPHL" => America__New_York,                   // PA
+        "TEWR" => America__New_York,                            // NJ
+        "TJFK" => America__New_York,                            // NY
+        "TBOS" => America__New_York,                            // MA
+        "TADW" | "TBWI" | "TDCA" | "TIAD" => America__New_York, // DC / MD / VA
+        "TCLT" | "TRDU" => America__New_York,                   // NC
+        "TATL" => America__New_York,                            // GA
+        "TFLL" | "TMCO" | "TMIA" | "TPBI" | "TTPA" => America__New_York, // FL
+        "TSJU" => America__Puerto_Rico,                         // PR
+
         _ => return None,
     })
 }
@@ -100,8 +127,7 @@ mod tests {
     /// Tripwire: the registry is upstream, so a new site must not silently fall through to `None`.
     #[test]
     fn every_site_has_a_timezone() {
-        let missing: Vec<_> = crate::sites::sites()
-            .iter()
+        let missing: Vec<_> = crate::sites::all()
             .filter(|s| site_tz(s.id).is_none())
             .map(|s| format!("{} ({}, {})", s.id, s.city, s.state))
             .collect();

@@ -47,15 +47,14 @@ impl Player {
         let stop = Arc::new(AtomicBool::new(false));
         let (s2, st2, rt2) = (status.clone(), stop.clone(), rt.clone());
         std::thread::spawn(move || run(url, volume, s2, st2, rt2));
-        Player {
-            name,
-            status,
-            stop,
-        }
+        Player { name, status, stop }
     }
 
     pub fn status(&self) -> Status {
-        self.status.lock().map(|s| s.clone()).unwrap_or(Status::Stopped)
+        self.status
+            .lock()
+            .map(|s| s.clone())
+            .unwrap_or(Status::Stopped)
     }
 
     pub fn stop(&self) {
@@ -200,7 +199,12 @@ async fn download(url: String, tx: SyncSender<Vec<u8>>, stop: Arc<AtomicBool>) {
     };
     // Icecast wants to be asked before it will send its metadata-free stream to some clients; we
     // don't ask for metadata, so the body is plain MP3 frames.
-    let resp = match client.get(&url).send().await.and_then(|r| r.error_for_status()) {
+    let resp = match client
+        .get(&url)
+        .send()
+        .await
+        .and_then(|r| r.error_for_status())
+    {
         Ok(r) => r,
         Err(e) => {
             log::warn!("NWR connect {url}: {e}");

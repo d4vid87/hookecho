@@ -40,18 +40,19 @@ pub(crate) fn fit_phone<'a>(ctx: &egui::Context, w: egui::Window<'a>) -> egui::W
     }
 }
 
+pub mod about_window;
 pub mod afd_window;
 pub mod alert_panel;
 pub mod cappi_window;
 pub mod cell_window;
-pub mod about_window;
-pub mod cheatsheet;
 pub mod cells_window;
+pub mod cheatsheet;
 pub mod detail_window;
 pub mod digest_window;
 pub mod event_window;
 pub mod forecast_window;
 pub mod hodograph_window;
+pub mod layer_options;
 pub mod layer_window;
 pub mod layers_panel;
 pub mod legend;
@@ -66,7 +67,6 @@ pub mod sounding_window;
 /// Live station telemetry cards.
 pub mod station_card;
 pub mod style;
-pub mod layer_options;
 pub mod verify_window;
 pub mod volume3d_window;
 pub mod warning_window;

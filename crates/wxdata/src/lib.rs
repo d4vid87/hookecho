@@ -35,6 +35,7 @@ pub mod spc;
 pub mod spotters;
 pub mod stations;
 pub mod tds;
+pub mod tdwr;
 pub mod torclimo;
 pub mod tropical;
 pub mod tz;
@@ -43,7 +44,21 @@ pub mod volume3d;
 pub mod webcams;
 pub mod xsection;
 
-/// NEXRAD site registry (id, city, state, lat/lon, elevation) for the ~319 US sites.
+/// Radar site registry (id, city, state, lat/lon, elevation).
 ///
-/// Re-exported from `nexrad-model` so the app has one dependency surface for site data.
-pub use nexrad_model::meta::registry as sites;
+/// Wraps `nexrad-model`'s WSR-88D registry so the app has one dependency surface for site data,
+/// and folds in the TDWR table — everything that resolves a site id gets terminal radars for
+/// free, instead of each call site remembering there are two networks.
+pub mod sites {
+    pub use nexrad_model::meta::registry::{nearest_site, sites, SiteEntry};
+
+    /// The site with this id, from either network (case-insensitive).
+    pub fn site_by_id(id: &str) -> Option<&'static SiteEntry> {
+        nexrad_model::meta::registry::site_by_id(id).or_else(|| crate::tdwr::site_by_id(id))
+    }
+
+    /// Every site in both networks: WSR-88Ds first, then TDWRs.
+    pub fn all() -> impl Iterator<Item = &'static SiteEntry> {
+        sites().iter().chain(crate::tdwr::SITES)
+    }
+}

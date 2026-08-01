@@ -141,7 +141,9 @@ impl Card {
             .iter()
             .filter(|s| s.t >= cutoff)
             .filter_map(|s| s.gust_kt.or(s.wspd_kt))
-            .fold(None, |acc: Option<f32>, v| Some(acc.map_or(v, |a| a.max(v))))
+            .fold(None, |acc: Option<f32>, v| {
+                Some(acc.map_or(v, |a| a.max(v)))
+            })
     }
 
     fn series(&self, f: impl Fn(&Sample) -> Option<f32>) -> Vec<f32> {
@@ -188,16 +190,16 @@ pub fn show(
         w.default_width(330.0).resizable(true)
     };
     w.show(ctx, |ui| {
-            camera_pane(ui, card);
-            header(ui, card, tz);
-            ui.separator();
-            temperature_block(ui, card);
-            ui.separator();
-            wind_block(ui, card);
-            ui.separator();
-            efield_block(ui, card);
-            still_note(ui);
-        });
+        camera_pane(ui, card);
+        header(ui, card, tz);
+        ui.separator();
+        temperature_block(ui, card);
+        ui.separator();
+        wind_block(ui, card);
+        ui.separator();
+        efield_block(ui, card);
+        still_note(ui);
+    });
     card.open = open;
     open
 }
@@ -218,7 +220,11 @@ fn camera_pane(ui: &mut egui::Ui, card: &mut Card) {
     match &card.tex {
         Some(tex) => {
             let size = tex.size_vec2();
-            let h = if size.x > 0.0 { w * size.y / size.x } else { 180.0 };
+            let h = if size.x > 0.0 {
+                w * size.y / size.x
+            } else {
+                180.0
+            };
             ui.add(egui::Image::new(tex).fit_to_exact_size(egui::vec2(w, h)));
         }
         None => {
@@ -317,7 +323,10 @@ fn header(ui: &mut egui::Ui, card: &Card, tz: Option<wxdata::tz::Tz>) {
         if let Some(t) = card.ob.time {
             let age = (now - t).num_seconds().max(0);
             let (txt, col) = if age < 300 {
-                (format!("updated {age}s ago"), Color32::from_rgb(120, 200, 130))
+                (
+                    format!("updated {age}s ago"),
+                    Color32::from_rgb(120, 200, 130),
+                )
             } else {
                 (
                     format!("updated {} min ago", age / 60),
@@ -333,7 +342,11 @@ fn temperature_block(ui: &mut egui::Ui, card: &Card) {
     ui.label(RichText::new("Outdoor temperature").size(11.0).weak());
     ui.horizontal(|ui| {
         match card.ob.temp_c {
-            Some(t) => ui.label(RichText::new(format!("{:.1}°F", c_to_f(t))).size(28.0).strong()),
+            Some(t) => ui.label(
+                RichText::new(format!("{:.1}°F", c_to_f(t)))
+                    .size(28.0)
+                    .strong(),
+            ),
             None => ui.label(RichText::new("—").size(28.0).weak()),
         };
         ui.vertical(|ui| {
@@ -353,7 +366,11 @@ fn temperature_block(ui: &mut egui::Ui, card: &Card) {
             );
         });
     });
-    let temps: Vec<f32> = card.series(|s| s.temp_c).iter().map(|c| c_to_f(*c)).collect();
+    let temps: Vec<f32> = card
+        .series(|s| s.temp_c)
+        .iter()
+        .map(|c| c_to_f(*c))
+        .collect();
     sparkline(ui, &temps, Color32::from_rgb(230, 140, 90));
 }
 

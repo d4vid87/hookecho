@@ -277,7 +277,10 @@ fn hodograph(ui: &mut egui::Ui, s: &Sounding, observed: Option<&Sounding>) {
         if opts.len() >= 2 {
             p.extend(egui::Shape::dashed_line(
                 &opts,
-                egui::Stroke::new(2.0, egui::Color32::from_rgb(120, 180, 255).gamma_multiply(0.7)),
+                egui::Stroke::new(
+                    2.0,
+                    egui::Color32::from_rgb(120, 180, 255).gamma_multiply(0.7),
+                ),
                 5.0,
                 4.0,
             ));

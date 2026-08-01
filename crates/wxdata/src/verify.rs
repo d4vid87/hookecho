@@ -153,7 +153,10 @@ pub fn parse(
     warnings.sort_by_key(|w| w.issue);
 
     let mut reports = Vec::new();
-    if let Some(feats) = v.pointer("/stormreports/features").and_then(|x| x.as_array()) {
+    if let Some(feats) = v
+        .pointer("/stormreports/features")
+        .and_then(|x| x.as_array())
+    {
         for feat in feats {
             let Some(p) = feat.get("properties") else {
                 continue;

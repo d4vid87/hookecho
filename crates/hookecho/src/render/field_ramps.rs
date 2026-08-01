@@ -515,7 +515,11 @@ mod tests {
         let stops = [(0.0, [10, 20, 30]), (1.0, [200, 210, 220])];
         let lut = bake_ramp_lut(&stops, 255);
         assert_eq!(&lut[2 * 4..2 * 4 + 3], &[10, 20, 30], "index 2 is t=0");
-        assert_eq!(&lut[255 * 4..255 * 4 + 3], &[200, 210, 220], "index 255 is t=1");
+        assert_eq!(
+            &lut[255 * 4..255 * 4 + 3],
+            &[200, 210, 220],
+            "index 255 is t=1"
+        );
         assert_eq!(lut[4 + 3], 0, "index 1 is never emitted, stays clear");
     }
 }

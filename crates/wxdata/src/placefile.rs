@@ -536,7 +536,11 @@ End:
                 assert_eq!(verts.len(), 3);
                 assert_eq!(verts[0], ([-97.0, 35.0], [255, 0, 0, 255]));
                 assert_eq!(verts[1].1, [0, 255, 0, 128], "per-vertex alpha");
-                assert_eq!(verts[2].1, [0, 0, 255, 255], "falls back to the current Color");
+                assert_eq!(
+                    verts[2].1,
+                    [0, 0, 255, 255],
+                    "falls back to the current Color"
+                );
             }
             k => panic!("expected triangles, got {k:?}"),
         }
@@ -587,7 +591,10 @@ Icon: 34.0, -98.0, 0, 0, 0
         assert_eq!(pf.items.len(), 2);
         assert_eq!(pf.items[0].anchor, Some([-97.0, 35.0]));
         assert!(matches!(pf.items[0].kind, PlaceKind::Line { .. }));
-        assert_eq!(pf.items[1].anchor, None, "the trailing Text is not in the object");
+        assert_eq!(
+            pf.items[1].anchor, None,
+            "the trailing Text is not in the object"
+        );
         assert!(matches!(pf.items[1].kind, PlaceKind::Text { .. }));
     }
 }

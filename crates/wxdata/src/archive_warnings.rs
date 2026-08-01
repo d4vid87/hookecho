@@ -158,9 +158,7 @@ pub fn summarize(events: &[PointEvent]) -> PointSummary {
     for e in events.iter().filter(|e| e.significance == "W") {
         total += 1;
         *by_name.entry(e.name.as_str()).or_default() += 1;
-        *by_year
-            .entry(chrono::Datelike::year(&e.issue))
-            .or_default() += 1;
+        *by_year.entry(chrono::Datelike::year(&e.issue)).or_default() += 1;
         *by_day.entry(e.issue.date_naive()).or_default() += 1;
     }
     let mut by_name: Vec<(String, usize)> = by_name

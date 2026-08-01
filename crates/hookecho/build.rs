@@ -17,7 +17,10 @@ fn main() {
         let mut res = winresource::WindowsResource::new();
         res.set_icon("../../packaging/windows/icon.ico")
             .set("ProductName", "Hook Echo-WX")
-            .set("FileDescription", "Hook Echo-WX — NEXRAD weather radar viewer")
+            .set(
+                "FileDescription",
+                "Hook Echo-WX — NEXRAD weather radar viewer",
+            )
             .set("LegalCopyright", "MIT licensed");
         if let Err(e) = res.compile() {
             println!("cargo:warning=windows resource compile failed: {e}");

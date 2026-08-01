@@ -162,7 +162,10 @@ pub fn parse_tempest_obs(json: &str, station: &TempestStation) -> Option<Station
             .unwrap_or(&station.name)
             .to_string(),
         network: Network::Tempest,
-        lat: v.get("latitude").and_then(|x| x.as_f64()).unwrap_or(station.lat),
+        lat: v
+            .get("latitude")
+            .and_then(|x| x.as_f64())
+            .unwrap_or(station.lat),
         lon: v
             .get("longitude")
             .and_then(|x| x.as_f64())
@@ -485,7 +488,14 @@ mod tests {
         let client = reqwest::Client::new();
         let obs = fetch_all(&client, &[], &token, "", 33.0, -96.0).await;
         for o in &obs {
-            println!("{} {} {:.4},{:.4} temp={:?}", o.key(), o.name, o.lat, o.lon, o.temp_c);
+            println!(
+                "{} {} {:.4},{:.4} temp={:?}",
+                o.key(),
+                o.name,
+                o.lat,
+                o.lon,
+                o.temp_c
+            );
         }
         assert!(!obs.is_empty(), "token saw no stations");
     }

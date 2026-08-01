@@ -268,7 +268,10 @@ pub async fn fetch_windy_bbox(
 }
 
 /// Fetch the URL of a camera's most recent still. `None` when the camera has posted nothing.
-pub async fn latest_image(client: &reqwest::Client, camera_id: u64) -> anyhow::Result<Option<String>> {
+pub async fn latest_image(
+    client: &reqwest::Client,
+    camera_id: u64,
+) -> anyhow::Result<Option<String>> {
     let body = client
         .get(format!("{API}/cameras/{camera_id}/images/last/1"))
         .header("User-Agent", USER_AGENT)
@@ -345,11 +348,19 @@ mod tests {
             s.link.as_deref(),
             Some("https://www.windy.com/webcams/1358084658")
         );
-        assert!(s.cameras[0].image_url.as_deref().unwrap().ends_with("preview.jpg"));
+        assert!(s.cameras[0]
+            .image_url
+            .as_deref()
+            .unwrap()
+            .ends_with("preview.jpg"));
         assert!(!s.cameras[0].out_of_order);
 
         // Falls back down the size list, and a non-"active" status reads as out of order.
-        assert!(sites[1].cameras[0].image_url.as_deref().unwrap().ends_with("t2.jpg"));
+        assert!(sites[1].cameras[0]
+            .image_url
+            .as_deref()
+            .unwrap()
+            .ends_with("t2.jpg"));
         assert!(sites[1].cameras[0].out_of_order);
 
         // Garbage and an empty envelope are empty layers, not errors.

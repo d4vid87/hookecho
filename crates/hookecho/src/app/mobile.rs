@@ -210,11 +210,7 @@ impl super::HookEchoApp {
         }
     }
 
-    pub(crate) fn mobile_chrome(
-        &mut self,
-        _root: &mut egui::Ui,
-        ctx: &egui::Context,
-    ) -> UiActions {
+    pub(crate) fn mobile_chrome(&mut self, _root: &mut egui::Ui, ctx: &egui::Context) -> UiActions {
         let mut actions = UiActions::default();
         // Android's back button arrives as `BrowserBack`. Without this every sheet and drawer was
         // a one-way door — back did nothing and the only exit was the ✕, which a sheet's own
@@ -1116,4 +1112,3 @@ impl super::HookEchoApp {
             });
     }
 }
-

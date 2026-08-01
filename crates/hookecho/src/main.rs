@@ -764,7 +764,14 @@ fn write_ico(out: &str) -> anyhow::Result<()> {
 
     let frames: Vec<IcoFrame> = [16u32, 32, 48, 256]
         .iter()
-        .map(|&n| IcoFrame::as_png(&icon::rgba(n as usize), n, n, image::ExtendedColorType::Rgba8))
+        .map(|&n| {
+            IcoFrame::as_png(
+                &icon::rgba(n as usize),
+                n,
+                n,
+                image::ExtendedColorType::Rgba8,
+            )
+        })
         .collect::<Result<_, _>>()?;
     IcoEncoder::new(std::io::BufWriter::new(std::fs::File::create(out)?)).encode_images(&frames)?;
     Ok(())

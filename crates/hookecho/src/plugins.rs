@@ -81,7 +81,10 @@ pub async fn run(
     let read = async {
         if let Some(mut so) = child.stdout.take() {
             // `take` caps the read itself, so a plugin that never stops writing can't grow us.
-            (&mut so).take(MAX_OUTPUT as u64).read_to_end(&mut out).await?;
+            (&mut so)
+                .take(MAX_OUTPUT as u64)
+                .read_to_end(&mut out)
+                .await?;
         }
         if let Some(mut se) = child.stderr.take() {
             (&mut se).take(64 * 1024).read_to_string(&mut err).await?;

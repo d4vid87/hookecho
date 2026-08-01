@@ -53,7 +53,10 @@ pub(crate) fn defaults() -> Vec<Binding> {
     use BindableAction as A;
     use PaletteAction as P;
     vec![
-        plain(K::Num1, A::Palette(P::SetMoment(Moment::Reflectivity, false))),
+        plain(
+            K::Num1,
+            A::Palette(P::SetMoment(Moment::Reflectivity, false)),
+        ),
         plain(K::Num2, A::Palette(P::SetMoment(Moment::Velocity, false))),
         plain(
             K::Num3,

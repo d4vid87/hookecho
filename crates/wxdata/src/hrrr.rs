@@ -77,7 +77,15 @@ impl HrrrForecast {
 /// Fetch the REFC forecast for `fcst_hour` (0..=18) from the most recent available HRRR run.
 /// Tries recent cycles (allowing for the ~1–2 h data latency), newest first.
 pub async fn fetch_forecast(http: &reqwest::Client, fcst_hour: u8) -> anyhow::Result<HrrrForecast> {
-    fetch_field(http, Model::Hrrr, "REFC", "entire atmosphere", fcst_hour, -30.0).await
+    fetch_field(
+        http,
+        Model::Hrrr,
+        "REFC",
+        "entire atmosphere",
+        fcst_hour,
+        -30.0,
+    )
+    .await
 }
 
 /// Fetch any single HRRR surface field for `fcst_hour` by variable + level idx strings, regridding
@@ -284,13 +292,16 @@ pub async fn fetch_field_swath(
         // The fold is still ordered, and still all-or-nothing.
         // Each future owns its inputs (a `reqwest::Client` clone is a refcount bump): borrowed
         // ones make the combined future non-`Send`, which the app's tokio spawn requires.
-        let results: Vec<_> = futures_util::stream::iter((1..=through).map(|fh| {
-            let (http, var, level) = (http.clone(), var.to_string(), level.to_string());
-            async move { fetch_run_field(&http, Model::Hrrr, run, fh, &var, &level, min_valid).await }
-        }))
-        .buffered(HRRR_CONCURRENCY)
-        .collect()
-        .await;
+        let results: Vec<_> =
+            futures_util::stream::iter((1..=through).map(|fh| {
+                let (http, var, level) = (http.clone(), var.to_string(), level.to_string());
+                async move {
+                    fetch_run_field(&http, Model::Hrrr, run, fh, &var, &level, min_valid).await
+                }
+            }))
+            .buffered(HRRR_CONCURRENCY)
+            .collect()
+            .await;
         let mut acc: Option<MrmsField> = None;
         let mut failed = None;
         for r in results {
@@ -532,7 +543,10 @@ mod tests {
         assert!(Model::Rap
             .url("20260728", 21, 0)
             .ends_with("rap.20260728/rap.t21z.awp130pgrbf00.grib2"));
-        assert!(Model::Rap.res_deg() > Model::Hrrr.res_deg(), "13 km vs 3 km");
+        assert!(
+            Model::Rap.res_deg() > Model::Hrrr.res_deg(),
+            "13 km vs 3 km"
+        );
     }
 
     #[tokio::test]
@@ -542,7 +556,13 @@ mod tests {
         let fc = fetch_field(&http, Model::Rap, "CAPE", "surface", 0, 0.0)
             .await
             .expect("RAP f00 CAPE");
-        let finite: Vec<f32> = fc.field.values.iter().copied().filter(|v| v.is_finite()).collect();
+        let finite: Vec<f32> = fc
+            .field
+            .values
+            .iter()
+            .copied()
+            .filter(|v| v.is_finite())
+            .collect();
         let max = finite.iter().copied().fold(f32::MIN, f32::max);
         eprintln!(
             "RAP {}x{} run {} — {} finite cells, max {max:.0} J/kg",
@@ -577,7 +597,9 @@ mod tests {
     #[ignore = "network"]
     async fn hrrr_wind_decodes_as_a_matched_pair() {
         let http = reqwest::Client::new();
-        let (run, u, v) = fetch_wind(&http, WindLevel::Surface, 1).await.expect("HRRR wind");
+        let (run, u, v) = fetch_wind(&http, WindLevel::Surface, 1)
+            .await
+            .expect("HRRR wind");
         assert_eq!((u.nx, u.ny), (v.nx, v.ny));
 
         let finite = u
@@ -618,14 +640,24 @@ mod tests {
             neg_v as f64 / n as f64 * 100.0,
         );
 
-        assert!(n > u.values.len() / 2, "coverage holes: {:.1}% empty", holes * 100.0);
+        assert!(
+            n > u.values.len() / 2,
+            "coverage holes: {:.1}% empty",
+            holes * 100.0
+        );
         // Both signs must survive `min_valid`: a CONUS-wide field always has wind blowing every way.
         assert!(neg_u > n / 20 && neg_v > n / 20, "one sign got clipped");
         // Surface wind peaks somewhere in the country, but not at jet-stream speeds.
-        assert!((10.0..120.0).contains(&max_kt), "implausible peak {max_kt} kt");
+        assert!(
+            (10.0..120.0).contains(&max_kt),
+            "implausible peak {max_kt} kt"
+        );
         // The RAP trap, checked from the outside: identical components mean one field read twice.
         assert!(
-            u.values.iter().zip(&v.values).any(|(a, b)| (a - b).abs() > 0.5),
+            u.values
+                .iter()
+                .zip(&v.values)
+                .any(|(a, b)| (a - b).abs() > 0.5),
             "u and v are the same field — submessage aliasing"
         );
 
@@ -644,7 +676,10 @@ mod tests {
             .filter(|(a, b)| a.is_finite() && b.is_finite())
             .filter(|(a, b)| (*a - *b).abs() > 0.01)
             .count();
-        assert_eq!(diff, 0, "fetch_wind's `u` is not UGRD — the pair is swapped");
+        assert_eq!(
+            diff, 0,
+            "fetch_wind's `u` is not UGRD — the pair is swapped"
+        );
     }
 
     #[test]

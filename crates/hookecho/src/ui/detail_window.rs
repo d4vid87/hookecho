@@ -38,7 +38,11 @@ pub fn show(ctx: &egui::Context, detail: &Detail, image: Option<&egui::TextureHa
                         // stills at original size or smaller and forbid stretching, and their
                         // previews are often narrower than this window.
                         let w = ui.available_width().min(size.x);
-                        let h = if size.x > 0.0 { w * size.y / size.x } else { 0.0 };
+                        let h = if size.x > 0.0 {
+                            w * size.y / size.x
+                        } else {
+                            0.0
+                        };
                         ui.add(egui::Image::new(tex).fit_to_exact_size(egui::vec2(w, h)));
                     }
                     // Offline, or the camera posted nothing recently: the text below still stands.

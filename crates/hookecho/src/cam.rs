@@ -303,19 +303,24 @@ fn find_jpeg(buf: &[u8]) -> Option<(usize, usize)> {
 /// The ffmpeg invocation, split out so the "how do I test this by hand" answer is one line.
 fn ffmpeg_args(url: &str) -> Vec<String> {
     [
-        "-loglevel", "error",
+        "-loglevel",
+        "error",
         "-nostdin",
         // Live playlists: start near the live edge rather than replaying the whole window.
-        "-fflags", "nobuffer",
-        "-i", url,
+        "-fflags",
+        "nobuffer",
+        "-i",
+        url,
         "-an",
         "-vf",
         &format!(
             "scale={HLS_W}:{HLS_H}:force_original_aspect_ratio=decrease,\
              pad={HLS_W}:{HLS_H}:(ow-iw)/2:(oh-ih)/2"
         ),
-        "-f", "rawvideo",
-        "-pix_fmt", "rgba",
+        "-f",
+        "rawvideo",
+        "-pix_fmt",
+        "rgba",
         "-",
     ]
     .iter()
@@ -433,7 +438,12 @@ mod tests {
         for _ in 0..60 {
             std::thread::sleep(Duration::from_millis(500));
             if let Some(img) = stream.take_frame() {
-                println!("{:?} frame {:?} seq {}", stream.transport, img.size, stream.seq());
+                println!(
+                    "{:?} frame {:?} seq {}",
+                    stream.transport,
+                    img.size,
+                    stream.seq()
+                );
                 last = Some(img);
                 if stream.seq() >= 3 {
                     break;

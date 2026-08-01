@@ -63,8 +63,8 @@ pub(crate) fn column_samples(
         // ponytail: flat-fan slant approximation (ground/cos elev); exact inversion of the
         // 4/3-earth ground-range formula only matters past ~200 km — fine for interrogation.
         let slant = ground_km / e.to_radians().cos();
-        let gate =
-            ((slant - s.first_gate_km as f64) / s.gate_interval_km.max(f32::EPSILON) as f64).round();
+        let gate = ((slant - s.first_gate_km as f64) / s.gate_interval_km.max(f32::EPSILON) as f64)
+            .round();
         if gate < 0.0 || gate as usize >= s.gate_count {
             continue;
         }

@@ -112,7 +112,10 @@ impl MrmsField {
         if self.nx == 0 || self.ny == 0 {
             return None;
         }
-        if lon < self.lon_west || lon > self.lon_east || lat < self.lat_south || lat > self.lat_north
+        if lon < self.lon_west
+            || lon > self.lon_east
+            || lat < self.lat_south
+            || lat > self.lat_north
         {
             return None;
         }

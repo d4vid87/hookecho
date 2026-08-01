@@ -71,7 +71,10 @@ impl WindField {
     /// Eastward/northward components (m/s) at a point, or `None` off the HRRR domain. Both
     /// components must resolve — half a vector points somewhere the wind isn't going.
     pub fn sample(&self, lon: f64, lat: f64) -> Option<(f32, f32)> {
-        Some((self.u.sample_bilinear(lon, lat)?, self.v.sample_bilinear(lon, lat)?))
+        Some((
+            self.u.sample_bilinear(lon, lat)?,
+            self.v.sample_bilinear(lon, lat)?,
+        ))
     }
 }
 
@@ -299,12 +302,7 @@ mod tests {
         ps.p.iter()
             .zip(&before)
             .filter(|(p, _)| p.age > 0)
-            .map(|(p, b)| {
-                (
-                    (p.trail[0].0 - b.0) / wpp,
-                    (p.trail[0].1 - b.1) / wpp,
-                )
-            })
+            .map(|(p, b)| ((p.trail[0].0 - b.0) / wpp, (p.trail[0].1 - b.1) / wpp))
             .collect()
     }
 
@@ -317,7 +315,10 @@ mod tests {
         assert!(!moved.is_empty());
         let expect = 10.0 * PX_PER_SEC_PER_MS * dt as f64;
         for (dx, dy) in moved {
-            assert!(dy.abs() < 1e-6, "a westerly must not move north or south: {dy}");
+            assert!(
+                dy.abs() < 1e-6,
+                "a westerly must not move north or south: {dy}"
+            );
             // Relative: the speed is an f32 widened to f64, so the error scales with the answer.
             assert!(
                 (dx - expect).abs() < expect * 1e-5,
@@ -348,7 +349,10 @@ mod tests {
         let field = uniform(100.0, 0.0);
         let cam = Camera::at_lonlat(-100.0, 40.0, 10.0);
         for (dx, _) in step_pixels(&field, &cam, (800.0, 600.0), 0.1) {
-            assert!(dx <= MAX_STEP_PX + 1e-6, "stepped {dx} px, cap is {MAX_STEP_PX}");
+            assert!(
+                dx <= MAX_STEP_PX + 1e-6,
+                "stepped {dx} px, cap is {MAX_STEP_PX}"
+            );
         }
     }
 
@@ -361,7 +365,10 @@ mod tests {
         let mut ps = Particles::default();
         ps.update(&field, &cam, vp, 0.02);
         ps.update(&field, &cam, vp, 0.02);
-        assert!(ps.p.iter().all(|p| p.n == 1), "off-domain particles must keep respawning");
+        assert!(
+            ps.p.iter().all(|p| p.n == 1),
+            "off-domain particles must keep respawning"
+        );
         // Nothing to draw is better than a frozen field of stale streaks.
         let mesh = ps.build_mesh(&cam, vp, Pos2::ZERO, 1.0);
         assert!(mesh.is_empty());

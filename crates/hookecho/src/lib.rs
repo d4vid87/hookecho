@@ -11,18 +11,14 @@ pub mod basemap_style;
 /// Live camera video (desktop only — Android cannot spawn an ffmpeg child).
 #[cfg(not(target_os = "android"))]
 pub mod cam;
+pub mod cloud;
 pub mod colormap;
 pub mod dialog;
 pub mod digest;
 pub mod events;
 pub mod fronts_draw;
-pub mod wind_draw;
 pub mod geo;
 pub mod gps;
-pub mod cloud;
-pub mod share;
-/// Live station markers and their telemetry cards.
-pub mod stationlayer;
 pub mod headless;
 pub mod hotkeys;
 pub mod icon;
@@ -38,7 +34,10 @@ pub mod rain_arrival;
 pub mod render;
 pub mod render3d;
 pub mod settings;
+pub mod share;
 pub mod speech;
+/// Live station markers and their telemetry cards.
+pub mod stationlayer;
 pub mod theme;
 pub mod tiles;
 pub mod timefmt;
@@ -47,6 +46,7 @@ pub mod tray;
 pub mod ui;
 pub mod vector_tiles;
 pub mod view;
+pub mod wind_draw;
 
 pub use app::HookEchoApp;
 
