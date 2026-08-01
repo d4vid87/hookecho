@@ -16,6 +16,7 @@ pub mod dialog;
 pub mod digest;
 pub mod events;
 pub mod fronts_draw;
+pub mod wind_draw;
 pub mod geo;
 pub mod gps;
 pub mod cloud;

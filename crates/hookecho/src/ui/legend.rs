@@ -189,10 +189,21 @@ pub fn draw_field(
     layer: crate::render::FieldLayer,
     y_offset: f32,
 ) -> f32 {
-    use crate::render::field_ramps::{ramp_for, FieldScale};
-    let Some(r) = ramp_for(layer) else {
-        return 0.0;
-    };
+    match crate::render::field_ramps::ramp_for(layer) {
+        Some(r) => draw_ramp(painter, map_rect, r, y_offset),
+        None => 0.0,
+    }
+}
+
+/// The same key, for a ramp that isn't a [`crate::render::FieldLayer`] — the wind particles carry
+/// their scale rather than uploading a grid, but they still owe the reader a legend.
+pub fn draw_ramp(
+    painter: &egui::Painter,
+    map_rect: Rect,
+    r: &crate::render::field_ramps::FieldRamp,
+    y_offset: f32,
+) -> f32 {
+    use crate::render::field_ramps::FieldScale;
     let font = FontId::proportional(10.0);
     let origin = map_rect.left_top() + Vec2::new(INSET, INSET + y_offset);
 

@@ -131,6 +131,14 @@ enum OverlayMsg {
     ProbSevere(Vec<GeoFeature>),
     /// An HRRR composite-reflectivity forecast (regridded + run/valid metadata).
     Hrrr(wxdata::hrrr::HrrrForecast),
+    /// HRRR wind components for the particle layer.
+    ///
+    /// Deliberately not an [`OverlayMsg::Field`]: `spawn_overlay` runs `decimated` on every
+    /// `Field` message, and `decimated` **max-pools**. That is right for reflectivity and wrong
+    /// for a signed vector component — it would bias u and v independently toward positive, i.e.
+    /// a phantom northeasterly drift. Boxed because a pair of CONUS grids is ~11 MB and this enum
+    /// is moved by value through the channel.
+    Wind(Box<crate::wind_draw::WindField>),
     /// Nearest-station observations for a site (or an error string).
     Obs(String, Result<wxdata::obs::StationObs, String>),
     /// VAD wind profile for a site.
@@ -248,6 +256,8 @@ enum OverlaySource {
     Contours(ContourKind, wxdata::hrrr::Model),
     /// NHC tropical cyclones (feature V).
     Tropical,
+    /// HRRR wind components for the particle layer, at a level and forecast hour.
+    Wind(wxdata::hrrr::WindLevel, u8),
 }
 
 impl OverlaySource {
@@ -473,6 +483,16 @@ impl OverlaySource {
             OverlaySource::Tropical => {
                 OverlayMsg::Tropical(wxdata::tropical::fetch_active(http).await?)
             }
+            OverlaySource::Wind(level, fh) => {
+                let (run, u, v) = wxdata::hrrr::fetch_wind(http, level, fh).await?;
+                OverlayMsg::Wind(Box::new(crate::wind_draw::WindField {
+                    u,
+                    v,
+                    level,
+                    run,
+                    fcst_hour: fh,
+                }))
+            }
             OverlaySource::Aviation => {
                 OverlayMsg::Aviation(wxdata::aviation::fetch_airsigmet(http).await?)
             }
@@ -689,6 +709,7 @@ pub(crate) enum OverlayToggle {
     Mds,
     Fronts,
     GlmLightning,
+    Wind,
     LinkCameras,
 }
 
@@ -1397,6 +1418,24 @@ pub struct HookEchoApp {
     glm: std::sync::Arc<std::sync::Mutex<wxdata::glm::GlmFeed>>,
     glm_last_poll: Option<Instant>,
     glm_polling: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    /// Animated wind particles. The grids are shared; the particle sets are per pane, because each
+    /// pane has its own camera. Nothing here persists to settings — neither do fronts or GLM.
+    show_wind: bool,
+    wind: Option<crate::wind_draw::WindField>,
+    wind_level: wxdata::hrrr::WindLevel,
+    wind_particles: std::collections::HashMap<usize, crate::wind_draw::Particles>,
+    /// What the current grids are of, so a level or forecast-hour change refetches at once.
+    wind_fetched: Option<(wxdata::hrrr::WindLevel, u8)>,
+    wind_last_fetch: Option<Instant>,
+    /// When the in-flight fetch started, or `None` if none is. One at a time: 10 m u+v is 4.5 MB
+    /// an hour, and a fast scrub across the forecast tail would otherwise queue ~82 MB of GRIB
+    /// behind itself. A timestamp rather than a flag because `spawn_overlay` drops fetch errors
+    /// into the log — a plain flag would never be cleared on failure and would wedge the layer.
+    wind_inflight: Option<Instant>,
+    /// Previous frame's instant, and the clamped timestep derived from it. Computed once per
+    /// frame so every pane advects by the same amount.
+    wind_last_frame: Option<Instant>,
+    wind_dt: f32,
     hodo_site: Option<String>,
     hodo_last_fetch: Option<Instant>,
     /// Streamer/OBS mode: hide all chrome (drawer/pills/docks), leaving only the map.
@@ -1795,6 +1834,15 @@ impl HookEchoApp {
             glm: std::sync::Arc::new(std::sync::Mutex::new(wxdata::glm::GlmFeed::new(15))),
             glm_last_poll: None,
             glm_polling: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            show_wind: false,
+            wind: None,
+            wind_level: wxdata::hrrr::WindLevel::Surface,
+            wind_particles: std::collections::HashMap::new(),
+            wind_fetched: None,
+            wind_last_fetch: None,
+            wind_inflight: None,
+            wind_last_frame: None,
+            wind_dt: 0.0,
             hodo_site: None,
             hodo_last_fetch: None,
             obs_mode: false,
@@ -4704,6 +4752,7 @@ impl HookEchoApp {
             T::RangeRings => &mut self.show_range_rings,
             T::Fronts => &mut self.show_fronts,
             T::GlmLightning => &mut self.show_glm,
+            T::Wind => &mut self.show_wind,
             T::Sensors => &mut self.show_sensors,
             T::Hodo => &mut self.show_hodo,
             T::Cells => &mut self.filters.show_cells,
@@ -5108,6 +5157,13 @@ impl HookEchoApp {
                 "Reference",
                 "Radar sites",
                 "Show every NEXRAD site; click one to switch radars",
+                true,
+            ),
+            (
+                T::Wind,
+                "Models",
+                "Wind (animated)",
+                "HRRR 10 m wind as drifting particles \u{2014} forecast output, CONUS only",
                 true,
             ),
             (
@@ -5659,6 +5715,13 @@ impl HookEchoApp {
                     }
                 }
                 OverlayMsg::Tropical(data) => self.tropical = Some(data),
+                OverlayMsg::Wind(w) => {
+                    self.wind_inflight = None;
+                    // Keep only if the selection didn't change while the fetch was in flight.
+                    if self.wind_fetched == Some((w.level, w.fcst_hour)) {
+                        self.wind = Some(*w);
+                    }
+                }
             }
             changed = true;
         }
@@ -7831,6 +7894,45 @@ impl HookEchoApp {
             }
         }
 
+        // Animated wind particles.
+        //
+        // Painter shapes land ABOVE the radar and there is no cheap way under it — `record_pane`
+        // finishes the whole `MapCallback` before this runs, so getting beneath would need a new
+        // GPU draw slot. Thin lines and a low alpha instead, halved again over a reflectivity
+        // product; Windy layers over its own radar exactly this way.
+        if self.show_wind {
+            // Past zoom 12 the 0.04 degree regrid goes visibly piecewise-linear, so fade out
+            // rather than present interpolation artifacts as if they were eddies.
+            let zoom_fade = (13.0 - cam.zoom).clamp(0.0, 1.0) as f32;
+            let v = &self.views[idx];
+            let over_radar = v.show_radar
+                && matches!(v.moment, wxdata::level2::Moment::Reflectivity)
+                && v.volume.is_some();
+            // Scrubbed to a past frame, while these grids are for the current hour: the two layers
+            // now disagree about what time it is. Dim rather than lie confidently — the same
+            // treatment the HRRR field layers already get.
+            let off_live = !v.timeline.following;
+            let alpha = zoom_fade
+                * if over_radar { 0.7 } else { 1.0 }
+                * if off_live { 0.4 } else { 1.0 };
+            // Split borrow: the grids and the per-pane particle sets are disjoint fields, and the
+            // advection needs both at once.
+            let Self {
+                wind,
+                wind_particles,
+                wind_dt,
+                ..
+            } = self;
+            if let (Some(field), true) = (wind.as_ref(), alpha > 0.01) {
+                let ps = wind_particles.entry(idx).or_default();
+                ps.update(field, &cam, vp, *wind_dt);
+                let mesh = ps.build_mesh(&cam, vp, prect.left_top(), alpha);
+                if !mesh.is_empty() {
+                    painter.add(egui::Shape::mesh(mesh));
+                }
+            }
+        }
+
         // Surface analysis: fronts with their pips, plus H/L centers.
         if self.show_fronts {
             if let Some(a) = &self.fronts {
@@ -9206,7 +9308,17 @@ impl HookEchoApp {
                 .rev()
                 .find(|l| self.fields.get(l).is_some_and(|s| s.show))
             {
-                ui::legend::draw_field(&painter, prect, *top, y);
+                y += ui::legend::draw_field(&painter, prect, *top, y);
+            }
+            // Wind particles carry their own scale — it isn't a FieldLayer, so it needs its own
+            // call rather than a slot in DRAW_ORDER.
+            if self.show_wind && self.wind.is_some() {
+                ui::legend::draw_ramp(
+                    &painter,
+                    prect,
+                    &crate::render::field_ramps::WIND,
+                    y,
+                );
             }
         }
     }
@@ -10637,6 +10749,56 @@ impl eframe::App for HookEchoApp {
                 }
                 busy.store(false, std::sync::atomic::Ordering::Relaxed);
             });
+        }
+
+        // Wind particles. HRRR posts hourly, so this gets its own 15-minute clock rather than
+        // riding the 120 s overlay block — that would re-download 4.5 MB about thirty times per
+        // useful update. Doubled on a metered connection.
+        if self.show_wind {
+            // Advection timestep, shared by every pane so they stay in step. Clamped because a
+            // stalled frame or a resume from background would otherwise teleport the whole field.
+            let now = Instant::now();
+            self.wind_dt = self
+                .wind_last_frame
+                .map_or(0.0, |t| now.duration_since(t).as_secs_f32())
+                // Headroom above the 100 ms Android cadence, so a normal phone frame is never
+                // itself treated as a hitch and quietly slowed down.
+                .clamp(0.0, 0.15);
+            self.wind_last_frame = Some(now);
+            // The app is otherwise idle-driven; this is its first always-on animation, and the
+            // cost is not the particle mesh — it is re-rendering the whole map (radar warp,
+            // vector basemap) every frame instead of sitting idle. Measured on an S24 Ultra:
+            // 7% CPU idle, 78% animating at 20 fps, so the cadence is the battery knob. 10 fps on
+            // a phone reads fine because the trail is itself the motion blur.
+            if crate::platform::activity::is_active() {
+                let ms = if cfg!(target_os = "android") { 100 } else { 33 };
+                ctx.request_repaint_after(std::time::Duration::from_millis(ms));
+            }
+
+            // Panes come and go with the layout; their particle sets should not outlive them.
+            self.wind_particles.retain(|k, _| *k < self.views.len());
+
+            let want = (self.wind_level, self.hrrr_fcst_hour);
+            let interval = if crate::platform::is_metered() { 1800 } else { 900 };
+            let stale = self
+                .wind_last_fetch
+                .is_none_or(|t| t.elapsed().as_secs() >= interval);
+            // A level or forecast-hour change refetches at once — but the ~200 ms floor keeps a
+            // fast drag across the forecast tail from firing a request per frame.
+            let changed = self.wind_fetched != Some(want)
+                && self
+                    .wind_last_fetch
+                    .is_none_or(|t| t.elapsed().as_millis() >= 200);
+            // A dropped fetch (spawn_overlay only logs errors) expires rather than wedging.
+            let free = self
+                .wind_inflight
+                .is_none_or(|t| t.elapsed().as_secs() >= 60);
+            if (stale || changed) && free {
+                self.wind_last_fetch = Some(Instant::now());
+                self.wind_inflight = Some(Instant::now());
+                self.wind_fetched = Some(want);
+                self.spawn_overlay(ctx, OverlaySource::Wind(want.0, want.1));
+            }
         }
 
         // Surface analysis: WPC reissues it a few times an hour.

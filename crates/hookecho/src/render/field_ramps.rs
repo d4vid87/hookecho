@@ -108,6 +108,35 @@ static ROTATION: FieldRamp = ramp!(
     ]
 );
 
+/// Wind speed, for the animated particle layer.
+///
+/// Public and deliberately absent from [`ramp_for`]: wind is not a [`FieldLayer`] — nothing is
+/// uploaded to the GPU as a scalar grid — but the particles still need a value→color rule and the
+/// legend still needs to explain it. `input_scale` converts the model's m/s to the knots people
+/// actually read, so both get the same conversion for free.
+pub static WIND: FieldRamp = FieldRamp {
+    input_scale: 1.943_844,
+    ..ramp!(
+        "Wind",
+        "kt",
+        0.0,
+        // 50, not 80: surface wind is 5-20 kt almost everywhere almost always, and a scale topping
+        // out at jet speeds leaves every particle in the pale bottom tenth of the palette. The
+        // live decode test peaked at 39 kt over the whole of CONUS.
+        50.0,
+        RampScale::Linear,
+        255,
+        &[
+            (0.0, [120, 165, 205]),
+            (0.25, [95, 200, 175]),
+            (0.5, [235, 225, 120]),
+            (0.7, [240, 155, 70]),
+            (0.85, [225, 80, 70]),
+            (1.0, [230, 95, 200]),
+        ]
+    )
+};
+
 static MESH: FieldRamp = ramp!(
     "Hail size",
     "mm",

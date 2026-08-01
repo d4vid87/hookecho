@@ -628,6 +628,23 @@ mod tests {
             u.values.iter().zip(&v.values).any(|(a, b)| (a - b).abs() > 0.5),
             "u and v are the same field — submessage aliasing"
         );
+
+        // `fetch_wind` pops the pair off a `.buffered()` stream assuming input order. A silent
+        // swap there would point every vector 90 degrees wrong and still look like weather, so
+        // pin it against single-field fetches that cannot be reordered. Same run, same hour.
+        let lvl = WindLevel::Surface.idx_level();
+        let solo_u = fetch_run_field(&http, Model::Hrrr, run, 1, "UGRD", lvl, f64::NEG_INFINITY)
+            .await
+            .expect("solo UGRD");
+        assert_eq!((solo_u.nx, solo_u.ny), (u.nx, u.ny));
+        let diff = solo_u
+            .values
+            .iter()
+            .zip(&u.values)
+            .filter(|(a, b)| a.is_finite() && b.is_finite())
+            .filter(|(a, b)| (*a - *b).abs() > 0.01)
+            .count();
+        assert_eq!(diff, 0, "fetch_wind's `u` is not UGRD — the pair is swapped");
     }
 
     #[test]
