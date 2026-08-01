@@ -846,6 +846,8 @@ fn field_refresh_secs(layer: crate::render::FieldLayer) -> u64 {
         FL::HailSwath => 300,
         // Environment (HRRR CAPE/SRH) refreshes slowly — 15 min.
         FL::Cape | FL::Srh => 900,
+        // Derived products cost no network: they recompute when the volume does, not on a clock.
+        FL::VilLocal | FL::VilDensity | FL::EtopLocal => 60,
     }
 }
 
@@ -1264,6 +1266,10 @@ pub struct HookEchoApp {
     /// The site the L3 gridded products (DVL/EET) were last fetched for (feature X); refetch on
     /// site change.
     l3grid_site: Option<String>,
+    /// What the locally derived products (VIL/VILD/echo tops) were last computed from:
+    /// `(volume name, echo-top threshold, enabled-layer mask)`. A new volume, a moved threshold,
+    /// or a newly toggled layer recomputes.
+    derived_key: Option<(String, u32, u8)>,
     /// Surface obs (METAR station plots, feature U): toggle, current obs, fetch clock + bbox.
     show_metar: bool,
     metars: Vec<wxdata::metar::SurfaceOb>,
@@ -1739,6 +1745,7 @@ impl HookEchoApp {
             env_cape_ml: false,
             env_srh_km: 3,
             l3grid_site: None,
+            derived_key: None,
             show_metar: false,
             metars: Vec::new(),
             metar_last_fetch: None,
@@ -1958,6 +1965,62 @@ impl HookEchoApp {
 
     /// Spawn background fetches for all overlay sources (alerts, SPC outlooks, MDs).
     /// Spawn a background overlay fetch, routing the result to `overlay_rx`.
+    /// Recompute the locally derived products (VIL, VIL density, echo tops) when the active pane's
+    /// volume, the echo-top threshold, or the set of enabled derived layers changed.
+    ///
+    /// Unlike every other field layer this costs no network — the volume is already decoded here —
+    /// so it has no cadence: it recomputes exactly when its inputs move, which is what makes it
+    /// work in archive replay and on each live tilt.
+    fn recompute_derived(&mut self, ctx: &egui::Context) {
+        use crate::render::FieldLayer as FL;
+        const LAYERS: [FL; 3] = [FL::VilLocal, FL::VilDensity, FL::EtopLocal];
+        let mask = LAYERS.iter().enumerate().fold(0u8, |m, (i, l)| {
+            m | u8::from(self.fields.get(l).is_some_and(|s| s.show)) << i
+        });
+        if mask == 0 {
+            self.derived_key = None;
+            return;
+        }
+        let Some(vol) = self.views[self.active].volume.as_mut() else {
+            return;
+        };
+        let key = (vol.name.clone(), self.settings.etop_dbz.to_bits(), mask);
+        if self.derived_key.as_ref() == Some(&key) {
+            return;
+        }
+        // Binning is cached on the volume; the integral is the expensive half and runs off-thread.
+        let sweeps = vol.reflectivity_tilts();
+        if sweeps.len() < 2 {
+            return;
+        }
+        let opts = wxdata::derived::DerivedOpts {
+            etop_dbz: self.settings.etop_dbz,
+            time: vol.time,
+        };
+        self.derived_key = Some(key);
+        let tx = self.overlay_tx.clone();
+        let cap = self.field_texture_cap();
+        let ctx = ctx.clone();
+        self._rt.spawn_blocking(move || {
+            let Some(d) = wxdata::derived::derive(&sweeps, &opts) else {
+                return;
+            };
+            for (i, (layer, f)) in [
+                (FL::VilLocal, d.vil),
+                (FL::VilDensity, d.vild),
+                (FL::EtopLocal, d.etop),
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                if mask & (1 << i) != 0 {
+                    let _ = tx.send(OverlayMsg::Field(layer, f.decimated(cap)));
+                }
+            }
+            ctx.request_repaint();
+        });
+    }
+
     fn spawn_overlay(&self, ctx: &egui::Context, source: OverlaySource) {
         let http = self.http.clone();
         let tx = self.overlay_tx.clone();
@@ -4124,6 +4187,7 @@ impl HookEchoApp {
                             &mut self.env_srh_km,
                             &mut self.env_model,
                             &mut self.contour_kind,
+                            &mut self.settings.etop_dbz,
                             l3_site.as_deref(),
                             Some(mosaic.as_str()),
                             &mut opts,
@@ -4878,6 +4942,27 @@ impl HookEchoApp {
                 "National",
                 "Hydrometeor class (L3)",
                 "What the radar thinks it's seeing: rain, hail, debris",
+                false,
+            ),
+            (
+                FL::VilLocal,
+                "Radar",
+                "VIL (derived)",
+                "Water held aloft, computed from this volume \u{2014} works in archive replay",
+                false,
+            ),
+            (
+                FL::VilDensity,
+                "Radar",
+                "VIL density (derived)",
+                "Water aloft per unit storm depth \u{2014} high values mean large hail",
+                false,
+            ),
+            (
+                FL::EtopLocal,
+                "Radar",
+                "Echo tops (derived)",
+                "Storm-top height at a threshold you pick, from this volume",
                 false,
             ),
             (
@@ -10662,6 +10747,9 @@ impl eframe::App for HookEchoApp {
                     | FL::UpdraftHelicity
                     | FL::Smoke
                     | FL::Mosaic
+                    | FL::VilLocal
+                    | FL::VilDensity
+                    | FL::EtopLocal
             ) {
                 continue;
             }
@@ -10693,7 +10781,10 @@ impl eframe::App for HookEchoApp {
                     | FL::Hca
                     | FL::UpdraftHelicity
                     | FL::Smoke
-                    | FL::Mosaic => unreachable!(),
+                    | FL::Mosaic
+                    | FL::VilLocal
+                    | FL::VilDensity
+                    | FL::EtopLocal => unreachable!(),
                 };
                 self.spawn_overlay(ctx, OverlaySource::Field(layer, product));
             }
@@ -10829,6 +10920,8 @@ impl eframe::App for HookEchoApp {
             self.fronts_last_fetch = Some(Instant::now());
             self.spawn_overlay(ctx, OverlaySource::Fronts);
         }
+        // Locally derived products: no fetch, just a recompute when the volume or threshold moves.
+        self.recompute_derived(ctx);
         // Gridded L3 products (DVL/EET): per-site, refetch on the L3 cadence or a site change.
         let l3_site = self.views[self.active].site.clone();
         let site_changed = self.l3grid_site != l3_site;

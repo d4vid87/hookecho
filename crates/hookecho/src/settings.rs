@@ -269,6 +269,10 @@ pub struct Settings {
     /// first edit, so a later change to the defaults doesn't silently rewrite someone's keys.
     #[serde(default)]
     pub(crate) keybinds: Vec<crate::hotkeys::Binding>,
+    /// Reflectivity threshold (dBZ) defining the derived echo-top height. 18.5 matches the NWS
+    /// Enhanced Echo Tops product; raise it to track the core rather than the anvil.
+    #[serde(default = "default_etop_dbz")]
+    pub etop_dbz: f32,
 }
 
 impl Settings {
@@ -298,6 +302,10 @@ pub struct Bookmark {
 
 fn default_true() -> bool {
     true
+}
+
+fn default_etop_dbz() -> f32 {
+    18.5
 }
 
 fn default_rotation_sound() -> AlertSound {
@@ -453,6 +461,7 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             default_site: "KTLX".to_string(),
+            etop_dbz: default_etop_dbz(),
             poll_interval_secs: 30,
             theme: Theme::Dark,
             presets: Vec::new(),
@@ -637,6 +646,7 @@ mod tests {
     fn roundtrips() {
         let s = Settings {
             smooth_radar: false,
+            etop_dbz: 30.0,
             default_site: "KFWS".to_string(),
             poll_interval_secs: 45,
             theme: Theme::Synthwave,

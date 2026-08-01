@@ -55,6 +55,7 @@ pub(crate) fn show(
     env_srh_km: &mut u8,
     env_model: &mut wxdata::hrrr::Model,
     contour_kind: &mut crate::app::ContourKind,
+    etop_dbz: &mut f32,
     l3grid_site: Option<&str>,
     // One line about the live composite: contributing sites and the age of its oldest scan, or
     // why there isn't one. Radars scan on their own schedules, so a composite is always a little
@@ -242,6 +243,20 @@ pub(crate) fn show(
                 .checkbox(&mut filters.alert_cats[cat.index()], cat.label())
                 .changed();
         }
+    }
+
+    if [FL::VilLocal, FL::VilDensity, FL::EtopLocal]
+        .iter()
+        .any(|l| fields.get(l).is_some_and(|s| s.show))
+    {
+        header(ui, "Derived products");
+        ui.horizontal(|ui| {
+            ui.label("Echo top:");
+            changed |= ui
+                .add(egui::Slider::new(etop_dbz, 5.0..=50.0).suffix(" dBZ"))
+                .on_hover_text("Reflectivity that counts as the storm top (18.5 = NWS EET)")
+                .changed();
+        });
     }
 
     if [FL::Vil, FL::EchoTops, FL::Hca]

@@ -79,6 +79,12 @@ pub enum FieldLayer {
     Smoke,
     /// Multi-radar base-reflectivity composite (L3 N0B from every radar covering the view).
     Mosaic,
+    /// VIL integrated locally from the Level 2 volume (works in archive replay, unlike L3 DVL).
+    VilLocal,
+    /// VIL density — VIL over echo-top height, the classic large-hail discriminator.
+    VilDensity,
+    /// Echo tops integrated locally from the Level 2 volume, at a user-set dBZ threshold.
+    EtopLocal,
 }
 
 impl FieldLayer {
@@ -97,7 +103,7 @@ impl FieldLayer {
     }
 
     /// Fixed bottom-to-top paint order within each band.
-    pub const DRAW_ORDER: [FieldLayer; 19] = [
+    pub const DRAW_ORDER: [FieldLayer; 22] = [
         // Below-radar context band (bottom to top).
         FieldLayer::Mrms,
         FieldLayer::Mosaic,
@@ -112,7 +118,10 @@ impl FieldLayer {
         FieldLayer::FlashFlood,
         FieldLayer::HailSwath,
         FieldLayer::Vil,
+        FieldLayer::VilLocal,
         FieldLayer::EchoTops,
+        FieldLayer::EtopLocal,
+        FieldLayer::VilDensity,
         FieldLayer::Hca,
         FieldLayer::UpdraftHelicity,
         FieldLayer::Rotation,

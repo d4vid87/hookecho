@@ -270,6 +270,24 @@ static ECHO_TOPS: FieldRamp = ramp!(
     ]
 );
 
+/// VIL density: water aloft per unit storm depth. Above ~3.5 g/m³ is the classic large-hail
+/// signature, so the scale turns hot exactly there rather than spending its range on drizzle.
+static VIL_DENSITY: FieldRamp = ramp!(
+    "VIL density",
+    "g/m\u{b3}",
+    0.5,
+    5.0,
+    RampScale::Linear,
+    255,
+    &[
+        (0.0, [40, 90, 200]),
+        (0.45, [60, 200, 90]),
+        (0.65, [240, 230, 60]),
+        (0.8, [240, 150, 30]),
+        (1.0, [230, 60, 200]),
+    ]
+);
+
 static PRECIP_TYPE: FieldRamp = FieldRamp {
     label: "Precip type",
     units: "",
@@ -393,8 +411,11 @@ pub fn ramp_for(layer: FieldLayer) -> Option<&'static FieldRamp> {
         FL::Cape => &CAPE,
         FL::Srh => &SRH,
         FL::FlashFlood => &FLASH_FLOOD,
-        FL::Vil => &VIL,
-        FL::EchoTops => &ECHO_TOPS,
+        // Locally derived twins share their L3 counterparts' scales — one VIL scale app-wide, so
+        // a number means the same thing whichever source drew it.
+        FL::Vil | FL::VilLocal => &VIL,
+        FL::EchoTops | FL::EtopLocal => &ECHO_TOPS,
+        FL::VilDensity => &VIL_DENSITY,
         FL::PrecipType => &PRECIP_TYPE,
         FL::UpdraftHelicity => &UPDRAFT_HELICITY,
         FL::Smoke => &SMOKE,

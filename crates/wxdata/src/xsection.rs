@@ -46,6 +46,40 @@ pub(crate) fn dist_bearing(lon0: f64, lat0: f64, lon: f64, lat: f64) -> (f64, f6
     (dist, brg)
 }
 
+/// Sample every tilt's beam passing over one ground point, as `(height_km, value)` sorted by
+/// height. `out` is cleared first so callers can reuse one buffer across a whole grid.
+///
+/// This is the vertical profile at a point: cross-sections walk it along a line, derived products
+/// ([`crate::derived`]) integrate it over a grid.
+pub(crate) fn column_samples(
+    sweeps: &[BinnedSweep],
+    ground_km: f64,
+    az: f64,
+    out: &mut Vec<(f64, f32)>,
+) {
+    out.clear();
+    for s in sweeps {
+        let e = s.elevation_deg as f64;
+        // ponytail: flat-fan slant approximation (ground/cos elev); exact inversion of the
+        // 4/3-earth ground-range formula only matters past ~200 km — fine for interrogation.
+        let slant = ground_km / e.to_radians().cos();
+        let gate =
+            ((slant - s.first_gate_km as f64) / s.gate_interval_km.max(f32::EPSILON) as f64).round();
+        if gate < 0.0 || gate as usize >= s.gate_count {
+            continue;
+        }
+        let bin = ((az / 360.0 * s.az_bins as f64) as usize) % s.az_bins;
+        let idx = s.data[bin * s.gate_count + gate as usize];
+        if idx < 2 {
+            continue; // 0/1 = no data / below threshold
+        }
+        let h = beam_height_km(slant, e);
+        let v = s.value_min + (idx as f32 - 2.0) / 253.0 * (s.value_max - s.value_min);
+        out.push((h, v));
+    }
+    out.sort_by(|x, y| x.0.partial_cmp(&y.0).unwrap_or(std::cmp::Ordering::Equal));
+}
+
 /// Build a cross-section along the ground line A→B (both `(lon, lat)`), sampling all `sweeps`.
 /// Returns `None` if there are no sweeps.
 pub fn build(
@@ -62,6 +96,7 @@ pub fn build(
     let rows = rows.max(2);
     let length_km = dist_bearing(a.0, a.1, b.0, b.1).0;
     let mut dbz = vec![None; cols * rows];
+    let mut samples: Vec<(f64, f32)> = Vec::with_capacity(sweeps.len());
 
     for i in 0..cols {
         let t = i as f64 / (cols - 1) as f64;
@@ -70,28 +105,7 @@ pub fn build(
         let (ground_km, az) = dist_bearing(rlon, rlat, plon, plat);
 
         // One sample per tilt whose beam reaches this ground range and has data at (az, range).
-        let mut samples: Vec<(f64, f32)> = Vec::with_capacity(sweeps.len());
-        for s in sweeps {
-            let e = s.elevation_deg as f64;
-            // ponytail: flat-fan slant approximation (ground/cos elev); exact inversion of the
-            // 4/3-earth ground-range formula only matters past ~200 km — fine for interrogation.
-            let slant = ground_km / e.to_radians().cos();
-            let gate = ((slant - s.first_gate_km as f64)
-                / s.gate_interval_km.max(f32::EPSILON) as f64)
-                .round();
-            if gate < 0.0 || gate as usize >= s.gate_count {
-                continue;
-            }
-            let bin = ((az / 360.0 * s.az_bins as f64) as usize) % s.az_bins;
-            let idx = s.data[bin * s.gate_count + gate as usize];
-            if idx < 2 {
-                continue; // 0/1 = no data / below threshold
-            }
-            let h = beam_height_km(slant, e);
-            let v = s.value_min + (idx as f32 - 2.0) / 253.0 * (s.value_max - s.value_min);
-            samples.push((h, v));
-        }
-        samples.sort_by(|x, y| x.0.partial_cmp(&y.0).unwrap_or(std::cmp::Ordering::Equal));
+        column_samples(sweeps, ground_km, az, &mut samples);
 
         for r in 0..rows {
             let hr = max_height_km as f64 * (1.0 - r as f64 / (rows - 1) as f64); // row 0 = top
