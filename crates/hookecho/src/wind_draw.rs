@@ -318,7 +318,11 @@ mod tests {
         let expect = 10.0 * PX_PER_SEC_PER_MS * dt as f64;
         for (dx, dy) in moved {
             assert!(dy.abs() < 1e-6, "a westerly must not move north or south: {dy}");
-            assert!((dx - expect).abs() < 1e-6, "stepped {dx} px, expected {expect}");
+            // Relative: the speed is an f32 widened to f64, so the error scales with the answer.
+            assert!(
+                (dx - expect).abs() < expect * 1e-5,
+                "stepped {dx} px, expected {expect}"
+            );
         }
     }
 
@@ -330,7 +334,12 @@ mod tests {
         let vp = (800.0, 600.0);
         let wide = step_pixels(&field, &Camera::at_lonlat(-100.0, 40.0, 5.0), vp, 0.033);
         let close = step_pixels(&field, &Camera::at_lonlat(-100.0, 40.0, 10.0), vp, 0.033);
-        assert!((wide[0].0 - close[0].0).abs() < 1e-6, "{:?} vs {:?}", wide[0], close[0]);
+        assert!(
+            (wide[0].0 - close[0].0).abs() < wide[0].0.abs() * 1e-5,
+            "{:?} vs {:?}",
+            wide[0],
+            close[0]
+        );
     }
 
     #[test]

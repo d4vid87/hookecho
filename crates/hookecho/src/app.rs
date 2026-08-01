@@ -754,6 +754,8 @@ pub(crate) enum PaletteAction {
     Reload,
     InstantReplay,
     GoLive,
+    /// Hand the current view off to windy.com in the browser.
+    OpenInWindy,
 }
 
 /// A placefile label/marker the egui painter draws over the map.
@@ -976,6 +978,22 @@ struct ChasePack {
     done: u64,
     errors: u64,
     bytes: u64,
+}
+
+/// Build a windy.com permalink for a map position.
+///
+/// Grammar, from Windy's own URL-parameters documentation and matching the share links their
+/// satellite view produces: `https://www.windy.com/?{overlay},{lat},{lon},{zoom}`. `lat,lon,zoom`
+/// are required and must appear in that order; the overlay is optional and goes first. Two rules
+/// worth keeping: **latitude comes before longitude** (the opposite of this codebase's own
+/// `(lon, lat)` convention, which is exactly how that gets written backwards), and coordinates
+/// must carry a decimal part or Windy ignores them.
+///
+/// Windy's zoom tops out at 18 and its overlay names are its own — `radar`, `satellite` and `cape`
+/// all resolve, alongside the documented `wind`, `temp`, `rain` and friends.
+fn windy_url(overlay: &str, lon: f64, lat: f64, zoom: f64) -> String {
+    let z = zoom.round().clamp(3.0, 18.0) as u32;
+    format!("https://www.windy.com/?{overlay},{lat:.3},{lon:.3},{z}")
 }
 
 /// How a lightning flash looks at `age_secs`: bright white-hot when it just happened, fading to a
@@ -5214,6 +5232,14 @@ impl HookEchoApp {
             None,
         );
         push(
+            "Open this view in Windy",
+            "Reference",
+            "Open windy.com in your browser, looking at the same place",
+            true,
+            PaletteAction::OpenInWindy,
+            None,
+        );
+        push(
             "Mute audio alerts",
             "Alerts",
             "Silence every chime and spoken warning without changing your sound choices",
@@ -5492,6 +5518,33 @@ impl HookEchoApp {
             PaletteAction::Reload => self.trigger_reload(ctx),
             PaletteAction::InstantReplay => self.instant_replay(),
             PaletteAction::GoLive => self.views[self.active].timeline.go_head(),
+            PaletteAction::OpenInWindy => {
+                let v = &self.views[self.active];
+                let c = v.camera.center;
+                let (lon, lat) = crate::render::mercator::world_to_lonlat(c.0, c.1);
+                // Pick the layer the user deliberately turned on, not the one that is always
+                // there: radar is the default state, so leading with it would make every other
+                // branch dead code and always land people on the same Windy page.
+                let overlay = if self.show_wind {
+                    "wind"
+                } else if self
+                    .fields
+                    .get(&crate::render::FieldLayer::Cape)
+                    .is_some_and(|s| s.show)
+                {
+                    "cape"
+                } else if v.basemap.slug().starts_with("goes") {
+                    "satellite"
+                } else if v.show_radar && v.volume.is_some() {
+                    "radar"
+                } else {
+                    "wind"
+                };
+                let url = windy_url(overlay, lon, lat, v.camera.zoom);
+                if let Err(e) = crate::platform::open_url(&url) {
+                    log::warn!("could not open {url}: {e}");
+                }
+            }
             PaletteAction::OpenWindow(w) => match w {
                 W::Site => {
                     if self.site_dialog.is_none() {
@@ -11778,7 +11831,7 @@ mod warning_scope_tests {
 
 #[cfg(test)]
 mod field_lut_tests {
-    use super::{categorical_lut, distinct_tilts, glm_style, ramp_lut, ramp_lut_a};
+    use super::{categorical_lut, distinct_tilts, glm_style, ramp_lut, ramp_lut_a, windy_url};
 
     #[test]
     fn distinct_tilts_skips_sails_repeats() {
@@ -11798,6 +11851,19 @@ mod field_lut_tests {
     fn distinct_tilts_clamps_to_what_exists() {
         assert_eq!(distinct_tilts(&[0.5, 0.5], 4), vec![0]);
         assert!(distinct_tilts(&[], 4).is_empty());
+    }
+
+    #[test]
+    fn windy_url_puts_latitude_first() {
+        // KTLX, zoom 7.4. Windy wants lat,lon — this codebase says (lon, lat) everywhere else,
+        // so a swap here would silently send people to the Indian Ocean.
+        let u = windy_url("radar", -97.3, 35.4, 7.4);
+        assert_eq!(u, "https://www.windy.com/?radar,35.400,-97.300,7");
+        // Decimals are mandatory: Windy ignores a whole-number coordinate.
+        assert!(windy_url("wind", -97.0, 35.0, 5.0).contains("35.000,-97.000"));
+        // Zoom is clamped into Windy's own range rather than passed through.
+        assert!(windy_url("wind", 0.0, 0.0, 2.0).ends_with(",3"));
+        assert!(windy_url("wind", 0.0, 0.0, 18.9).ends_with(",18"));
     }
 
     #[test]
