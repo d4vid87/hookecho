@@ -99,6 +99,53 @@ impl MrmsField {
         }
     }
 
+    /// Value at `(lon, lat)` by bilinear interpolation of the four surrounding cell centres, or
+    /// `None` outside the grid. Point sampling for things that walk the field continuously rather
+    /// than drawing it as pixels (wind advection); [`max_within_km`](Self::max_within_km) answers a
+    /// different question and answers it over a radius.
+    ///
+    /// NaN-aware: HRRR's scatter regrid leaves holes, so the weights of whichever corners are
+    /// finite are renormalised over the corners that survive. That makes an isolated empty cell
+    /// invisible and softens the domain edge by half a cell, instead of punching a hole through
+    /// every sample that touches one. All four NaN → `None`, same as being off the grid.
+    pub fn sample_bilinear(&self, lon: f64, lat: f64) -> Option<f32> {
+        if self.nx == 0 || self.ny == 0 {
+            return None;
+        }
+        if lon < self.lon_west || lon > self.lon_east || lat < self.lat_south || lat > self.lat_north
+        {
+            return None;
+        }
+        let dlon = (self.lon_east - self.lon_west) / self.nx as f64;
+        let dlat = (self.lat_north - self.lat_south) / self.ny as f64; // rows go north→south
+                                                                       // Cell *centres* sit half a cell in from the corners, as max_within_km also assumes.
+        let fx = (lon - self.lon_west) / dlon - 0.5;
+        let fy = (self.lat_north - lat) / dlat - 0.5;
+        let (x0, y0) = (fx.floor(), fy.floor());
+        let (tx, ty) = ((fx - x0) as f32, (fy - y0) as f32);
+        let (x0, y0) = (x0 as isize, y0 as isize);
+        let mut acc = 0.0f32;
+        let mut wsum = 0.0f32;
+        for (dx, dy, w) in [
+            (0, 0, (1.0 - tx) * (1.0 - ty)),
+            (1, 0, tx * (1.0 - ty)),
+            (0, 1, (1.0 - tx) * ty),
+            (1, 1, tx * ty),
+        ] {
+            let (x, y) = (x0 + dx, y0 + dy);
+            if x < 0 || y < 0 || x >= self.nx as isize || y >= self.ny as isize {
+                continue;
+            }
+            let v = self.values[y as usize * self.nx + x as usize];
+            if !v.is_finite() {
+                continue;
+            }
+            acc += v * w;
+            wsum += w;
+        }
+        (wsum > 0.0).then(|| acc / wsum)
+    }
+
     /// Max-pool the grid down so both dimensions are `<= max_dim` (GPU texture limits). Some MRMS
     /// products (rotation tracks, AzShear) are 14000×7000 — larger than the 8192 texture cap.
     /// Max-pooling keeps the strongest signal in each block (right for shear/reflectivity).
@@ -305,6 +352,53 @@ mod tests {
         assert_eq!(f.max_within_km(-97.0, 35.0, 500.0), 9.0);
         // A point far from the grid sees nothing.
         assert_eq!(f.max_within_km(-80.0, 40.0, 20.0), 0.0);
+    }
+
+    /// 4×4 grid of 1° cells; each cell holds its own centre longitude, so the field is exactly
+    /// linear and bilinear interpolation has an analytic answer everywhere.
+    fn linear_field() -> MrmsField {
+        let mut values = vec![0.0f32; 16];
+        for j in 0..4 {
+            for i in 0..4 {
+                values[j * 4 + i] = -100.0 + i as f32 + 0.5;
+            }
+        }
+        MrmsField {
+            values,
+            nx: 4,
+            ny: 4,
+            lon_west: -100.0,
+            lon_east: -96.0,
+            lat_north: 40.0,
+            lat_south: 36.0,
+            time: chrono::Utc::now(),
+        }
+    }
+
+    #[test]
+    fn sample_bilinear_is_exact_on_a_linear_field() {
+        let f = linear_field();
+        // On a cell centre, and halfway between two — both reproduce the underlying line.
+        assert!((f.sample_bilinear(-98.5, 38.5).unwrap() - -98.5).abs() < 1e-4);
+        assert!((f.sample_bilinear(-98.0, 38.0).unwrap() - -98.0).abs() < 1e-4);
+        // Outside the box in either axis is None, not a clamped edge value.
+        assert_eq!(f.sample_bilinear(-90.0, 38.0), None);
+        assert_eq!(f.sample_bilinear(-98.0, 10.0), None);
+    }
+
+    #[test]
+    fn sample_bilinear_renormalises_over_nan_corners() {
+        let mut f = linear_field();
+        // Midpoint of the four centres around (-98.0, 38.0): all corners weigh 0.25.
+        f.values[5] = f32::NAN; // row 1, col 1 — one of the four; the other three carry the sample
+        let v = f.sample_bilinear(-98.0, 38.0).unwrap();
+        // Surviving corners are -97.5 (twice, at x=2) and -98.5 (once), weights 0.25 each.
+        assert!((v - (-97.5 * 2.0 + -98.5) / 3.0).abs() < 1e-4, "got {v}");
+        // Every corner gone → None, indistinguishable from off-grid, which is what callers want.
+        for v in f.values.iter_mut() {
+            *v = f32::NAN;
+        }
+        assert_eq!(f.sample_bilinear(-98.0, 38.0), None);
     }
 
     #[test]
