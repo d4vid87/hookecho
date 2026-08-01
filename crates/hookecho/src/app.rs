@@ -4528,22 +4528,6 @@ impl HookEchoApp {
     }
 
     /// Thin right-edge colorbar: the active pane's moment scale, docked so it never covers the map.
-    fn colorbar(&mut self, root: &mut egui::Ui) {
-        let view = &self.views[self.active];
-        if !view.show_legend || view.volume.is_none() {
-            return;
-        }
-        let (moment, threshold) = (view.moment, view.active_threshold());
-        let table = self.palettes.table(moment).clone();
-        let (df, dl) = display_units(moment, &self.settings);
-        egui::Panel::right("colorbar")
-            .exact_size(54.0)
-            .show(root, |ui| {
-                let rect = ui.max_rect();
-                ui::legend::draw_vertical(ui.painter(), rect, moment, &table, threshold, df, dl);
-            });
-    }
-
     /// Docked timeline scrubber (desktop): transport + scrub + live badge in a full-width bar
     /// under the map. The date picker, loop and speed are one right-click away on the
     /// LIVE/ARCHIVE badge — the transport is the 95% case and gets the pixels.
@@ -10010,8 +9994,20 @@ impl HookEchoApp {
         // The boxed legend is desktop-only; Android draws a full-width color scale in the mobile
         // chrome (see `app::mobile`), so drawing both would be redundant.
         if view.show_legend && !cfg!(target_os = "android") {
-            // The moment's own scale is the docked right-edge colorbar (see `colorbar`); only the
-            // categorical field/wind ramps still need a card over the map.
+            // The moment's scale floats over this pane's right edge (no panel, no card) so the map
+            // keeps the pixels; the field/wind ramps still need their cards.
+            if view.volume.is_some() {
+                let (df, dl) = display_units(view.moment, &self.settings);
+                ui::legend::draw_vertical(
+                    &painter,
+                    prect,
+                    view.moment,
+                    self.palettes.table(view.moment),
+                    view.active_threshold(),
+                    df,
+                    dl,
+                );
+            }
             let mut y = 0.0;
             // Whichever gridded layer the user actually sees on top — the last enabled one in
             // paint order — gets its scale keyed underneath. Without this, MESH/QPE/VIL and the
@@ -11787,7 +11783,6 @@ impl eframe::App for HookEchoApp {
             if !self.settings.hide_toolbar {
                 self.timeline_bar(root);
             }
-            self.colorbar(root);
         }
 
         self.chrome_rect = root.available_rect_before_wrap();

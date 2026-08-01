@@ -1,7 +1,7 @@
 //! Color scales for what's on the map.
 //!
-//! The active moment's scale is the docked right-edge colorbar ([`draw_vertical`]); gridded field
-//! layers and the wind ramp keep their small cards over the map's top-left.
+//! The active moment's scale is a thin bar floating over the map's right edge ([`draw_vertical`]);
+//! gridded field layers and the wind ramp keep their small cards over the map's top-left.
 //!
 //! Draws the active moment's `ColorTable` across its data range as a gradient bar (one
 //! `egui::Mesh` quad per stop segment, per-vertex colors so `Color:` gradients show), with
@@ -34,10 +34,12 @@ fn card(painter: &egui::Painter, panel: Rect) {
     );
 }
 
-/// Paint the moment scale as a thin vertical bar filling `rect` (the right-edge colorbar panel).
+/// Paint the moment scale as a thin vertical bar floating over the right edge of `rect` (the map).
 ///
-/// Same table, same threshold dim, same tick stride logic as [`draw`] with the axes swapped:
-/// vmax at the top, ticks and labels to the left of the bar, unit caption above it.
+/// No card: the bar is the legend, so the map reads through everywhere else. It spans the color
+/// table's own stops rather than the moment's full encodable range — reflectivity's -32..10 dBZ
+/// is uncolored, and a third of the bar spent on nothing is a third of the map's edge wasted.
+/// Labels ride on the bar (halo'd, so they read over any color) instead of a gutter beside it.
 pub fn draw_vertical(
     painter: &egui::Painter,
     rect: Rect,
@@ -47,12 +49,15 @@ pub fn draw_vertical(
     disp_factor: f32,
     disp_label: &str,
 ) {
-    const W: f32 = 12.0;
-    let (vmin, vmax) = moment.value_range();
+    const W: f32 = 16.0;
+    let (vmin, vmax) = match (table.stops.first(), table.stops.last()) {
+        (Some(a), Some(b)) if b.value > a.value => (a.value, b.value),
+        _ => moment.value_range(),
+    };
     let span = (vmax - vmin).max(f32::EPSILON);
     let bar = Rect::from_min_max(
-        egui::pos2(rect.right() - W - 8.0, rect.top() + 26.0),
-        egui::pos2(rect.right() - 8.0, rect.bottom() - 8.0),
+        egui::pos2(rect.right() - W - INSET, rect.top() + INSET + 32.0),
+        egui::pos2(rect.right() - INSET, rect.bottom() - INSET),
     );
     let y_of = |value: f32| bar.bottom() - ((value - vmin) / span).clamp(0.0, 1.0) * bar.height();
     let col = |c: [u8; 4]| Color32::from_rgb(c[0], c[1], c[2]);
@@ -109,11 +114,29 @@ pub fn draw_vertical(
     );
 
     let font = FontId::proportional(10.0);
+    // On-bar text needs its own contrast: an 8-way black halo, the same trick the map's city
+    // labels use over imagery.
     let label = |v: f32, y: f32| {
+        let text = format!("{:.0}", v * disp_factor);
+        let at = egui::pos2(bar.center().x, y);
+        for dx in [-1.0, 0.0, 1.0] {
+            for dy in [-1.0, 0.0, 1.0] {
+                if dx == 0.0 && dy == 0.0 {
+                    continue;
+                }
+                painter.text(
+                    at + Vec2::new(dx, dy),
+                    Align2::CENTER_CENTER,
+                    &text,
+                    font.clone(),
+                    Color32::BLACK,
+                );
+            }
+        }
         painter.text(
-            egui::pos2(bar.left() - 4.0, y),
-            Align2::RIGHT_CENTER,
-            format!("{:.0}", v * disp_factor),
+            at,
+            Align2::CENTER_CENTER,
+            text,
             font.clone(),
             Color32::WHITE,
         );
@@ -127,8 +150,8 @@ pub fn draw_vertical(
             while v <= vmax && n < 128 {
                 let y = y_of(v);
                 painter.line_segment(
-                    [egui::pos2(bar.left() - 3.0, y), egui::pos2(bar.left(), y)],
-                    Stroke::new(1.0, Color32::from_gray(160)),
+                    [egui::pos2(bar.left(), y), egui::pos2(bar.left() + 3.0, y)],
+                    Stroke::new(1.0, Color32::from_black_alpha(120)),
                 );
                 if v <= vmin + 0.01 || v >= vmax - 0.01 || n % label_stride == 0 {
                     label(v, y);
@@ -143,20 +166,30 @@ pub fn draw_vertical(
             label(vmax, bar.top());
         }
     }
-    painter.text(
-        egui::pos2(bar.center().x, rect.top() + 6.0),
-        Align2::CENTER_TOP,
-        moment.short_name(),
-        FontId::proportional(10.0),
-        Color32::WHITE,
-    );
-    painter.text(
-        egui::pos2(bar.center().x, rect.top() + 16.0),
-        Align2::CENTER_TOP,
-        disp_label,
-        FontId::proportional(9.0),
-        Color32::from_gray(170),
-    );
+    // Caption above the bar: product then units, small — the bar itself is the legend. Above,
+    // because the bottom end carries the busiest tick labels.
+    for (i, (text, size, color)) in [
+        (moment.short_name(), 10.0, Color32::WHITE),
+        (disp_label, 9.0, Color32::from_gray(200)),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let at = egui::pos2(bar.center().x, bar.top() - 32.0 + i as f32 * 11.0);
+        for d in [Vec2::new(1.0, 1.0), Vec2::ZERO] {
+            painter.text(
+                at + d,
+                Align2::CENTER_TOP,
+                text,
+                FontId::proportional(size),
+                if d == Vec2::ZERO {
+                    color
+                } else {
+                    Color32::BLACK
+                },
+            );
+        }
+    }
 }
 
 /// Paint a gridded field layer's scale under the moment legend (or at the top-left when the radar
