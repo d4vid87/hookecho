@@ -82,7 +82,6 @@ impl File {
     /// data.
     #[cfg(feature = "nexrad-model")]
     pub fn scan(&self) -> crate::result::Result<nexrad_model::data::Scan> {
-        use crate::result::Error;
         use nexrad_decode::messages::volume_coverage_pattern as vcp;
         use nexrad_decode::messages::MessageContents;
         use nexrad_model::data::{
@@ -129,6 +128,11 @@ impl File {
                         }
                         radials.push(m.into_radial()?);
                     }
+                    // hookecho patch: pre-2008 volumes carry Type-1 legacy radar data messages.
+                    // They have no volume data block, so the site comes from the registry later.
+                    MessageContents::DigitalRadarDataLegacy(m) => {
+                        radials.push(m.into_radial()?);
+                    }
                     MessageContents::VolumeCoveragePattern(m) => {
                         if vcp.is_none() {
                             vcp = Some(m.into_owned());
@@ -168,79 +172,102 @@ impl File {
             radials.extend(r);
         }
 
-        // Convert the VCP message to the model representation
-        let vcp_msg = coverage_pattern_message.ok_or(Error::MissingCoveragePattern)?;
-        let header = vcp_msg.header();
+        // Convert the VCP message to the model representation.
+        //
+        // hookecho patch: pre-2008 volumes carry no message type 5 at all — the archive reaches
+        // back to June 1991, and refusing those files threw away a decade of storms. Without a
+        // VCP message the scan strategy is simply unknown; the radials still decode.
+        let coverage_pattern = match coverage_pattern_message {
+            Some(vcp_msg) => {
+                let header = vcp_msg.header();
 
-        let pulse_width = match header.pulse_width() {
-            vcp::PulseWidth::Short => PulseWidth::Short,
-            vcp::PulseWidth::Long => PulseWidth::Long,
-            vcp::PulseWidth::Unknown => PulseWidth::Unknown,
-        };
-
-        let elevation_cuts: Vec<ElevationCut> = vcp_msg
-            .elevations()
-            .iter()
-            .map(|elev| {
-                let channel_config = match elev.channel_configuration() {
-                    vcp::ChannelConfiguration::ConstantPhase => ChannelConfiguration::ConstantPhase,
-                    vcp::ChannelConfiguration::RandomPhase => ChannelConfiguration::RandomPhase,
-                    vcp::ChannelConfiguration::SZ2Phase => ChannelConfiguration::SZ2Phase,
-                    vcp::ChannelConfiguration::UnknownPhase => ChannelConfiguration::Unknown,
+                let pulse_width = match header.pulse_width() {
+                    vcp::PulseWidth::Short => PulseWidth::Short,
+                    vcp::PulseWidth::Long => PulseWidth::Long,
+                    vcp::PulseWidth::Unknown => PulseWidth::Unknown,
                 };
 
-                let waveform = match elev.waveform_type() {
-                    vcp::WaveformType::CS => WaveformType::CS,
-                    vcp::WaveformType::CDW => WaveformType::CDW,
-                    vcp::WaveformType::CDWO => WaveformType::CDWO,
-                    vcp::WaveformType::B => WaveformType::B,
-                    vcp::WaveformType::SPP => WaveformType::SPP,
-                    vcp::WaveformType::Unknown => WaveformType::Unknown,
-                };
+                let elevation_cuts: Vec<ElevationCut> = vcp_msg
+                    .elevations()
+                    .iter()
+                    .map(|elev| {
+                        let channel_config = match elev.channel_configuration() {
+                            vcp::ChannelConfiguration::ConstantPhase => ChannelConfiguration::ConstantPhase,
+                            vcp::ChannelConfiguration::RandomPhase => ChannelConfiguration::RandomPhase,
+                            vcp::ChannelConfiguration::SZ2Phase => ChannelConfiguration::SZ2Phase,
+                            vcp::ChannelConfiguration::UnknownPhase => ChannelConfiguration::Unknown,
+                        };
 
-                ElevationCut::new(
-                    elev.elevation_angle(),
-                    channel_config,
-                    waveform,
-                    elev.azimuth_rate(),
-                    elev.super_resolution_half_degree_azimuth(),
-                    elev.super_resolution_quarter_km_reflectivity(),
-                    elev.super_resolution_doppler_to_300km(),
-                    elev.super_resolution_dual_pol_to_300km(),
-                    elev.surveillance_prf_number(),
-                    elev.surveillance_prf_pulse_count_radial(),
-                    elev.reflectivity_threshold(),
-                    elev.velocity_threshold(),
-                    elev.spectrum_width_threshold(),
-                    elev.differential_reflectivity_threshold(),
-                    elev.differential_phase_threshold(),
-                    elev.correlation_coefficient_threshold(),
-                    elev.is_sails_cut(),
-                    elev.sails_sequence_number(),
-                    elev.is_mrle_cut(),
-                    elev.mrle_sequence_number(),
-                    elev.is_mpda_cut(),
-                    elev.is_base_tilt_cut(),
+                        let waveform = match elev.waveform_type() {
+                            vcp::WaveformType::CS => WaveformType::CS,
+                            vcp::WaveformType::CDW => WaveformType::CDW,
+                            vcp::WaveformType::CDWO => WaveformType::CDWO,
+                            vcp::WaveformType::B => WaveformType::B,
+                            vcp::WaveformType::SPP => WaveformType::SPP,
+                            vcp::WaveformType::Unknown => WaveformType::Unknown,
+                        };
+
+                        ElevationCut::new(
+                            elev.elevation_angle(),
+                            channel_config,
+                            waveform,
+                            elev.azimuth_rate(),
+                            elev.super_resolution_half_degree_azimuth(),
+                            elev.super_resolution_quarter_km_reflectivity(),
+                            elev.super_resolution_doppler_to_300km(),
+                            elev.super_resolution_dual_pol_to_300km(),
+                            elev.surveillance_prf_number(),
+                            elev.surveillance_prf_pulse_count_radial(),
+                            elev.reflectivity_threshold(),
+                            elev.velocity_threshold(),
+                            elev.spectrum_width_threshold(),
+                            elev.differential_reflectivity_threshold(),
+                            elev.differential_phase_threshold(),
+                            elev.correlation_coefficient_threshold(),
+                            elev.is_sails_cut(),
+                            elev.sails_sequence_number(),
+                            elev.is_mrle_cut(),
+                            elev.mrle_sequence_number(),
+                            elev.is_mpda_cut(),
+                            elev.is_base_tilt_cut(),
+                        )
+                    })
+                    .collect();
+
+                VolumeCoveragePattern::new(
+                    header.pattern_number(),
+                    header.version(),
+                    header.doppler_velocity_resolution(),
+                    pulse_width,
+                    header.is_sails_vcp(),
+                    header.number_of_sails_cuts(),
+                    header.is_mrle_vcp(),
+                    header.number_of_mrle_cuts(),
+                    header.is_mpda_vcp(),
+                    header.is_base_tilt_vcp(),
+                    header.number_of_base_tilts(),
+                    header.vcp_sequencing_sequence_active(),
+                    header.vcp_sequencing_truncated(),
+                    elevation_cuts,
                 )
-            })
-            .collect();
-
-        let coverage_pattern = VolumeCoveragePattern::new(
-            header.pattern_number(),
-            header.version(),
-            header.doppler_velocity_resolution(),
-            pulse_width,
-            header.is_sails_vcp(),
-            header.number_of_sails_cuts(),
-            header.is_mrle_vcp(),
-            header.number_of_mrle_cuts(),
-            header.is_mpda_vcp(),
-            header.is_base_tilt_vcp(),
-            header.number_of_base_tilts(),
-            header.vcp_sequencing_sequence_active(),
-            header.vcp_sequencing_truncated(),
-            elevation_cuts,
-        );
+            }
+            None => VolumeCoveragePattern::new(
+                0,
+                0,
+                0.0,
+                PulseWidth::Unknown,
+                false,
+                0,
+                false,
+                0,
+                false,
+                false,
+                0,
+                false,
+                false,
+                Vec::new(),
+            ),
+        };
 
         // Build the site from the volume header ICAO and the location from radar messages.
         let site = site_location.map(|loc| {

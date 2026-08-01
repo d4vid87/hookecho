@@ -175,6 +175,7 @@ pub async fn list_volumes(site: &str, date: chrono::NaiveDate) -> anyhow::Result
 /// Download and decode a specific volume to a [`Scan`].
 pub async fn download_scan(id: Identifier) -> anyhow::Result<Scan> {
     use nexrad_data::aws::archive;
+    let name = id.name().to_string();
     let file = archive::download_file(id)
         .await
         .map_err(|e| anyhow::anyhow!("download_file: {e}"))?;
@@ -184,7 +185,26 @@ pub async fn download_scan(id: Identifier) -> anyhow::Result<Scan> {
     } else {
         file
     };
-    file.scan().map_err(|e| anyhow::anyhow!("scan: {e}"))
+    let scan = file.scan().map_err(|e| anyhow::anyhow!("scan: {e}"))?;
+    // Legacy (pre-2008) volumes carry no volume data block, so the decoder can't name the radar.
+    // The volume's own filename can: "KTLX19910605_162126".
+    Ok(match scan.site() {
+        Some(_) => scan,
+        None => with_registry_site(scan, &name[..4.min(name.len())]),
+    })
+}
+
+/// Attach registry site metadata to a scan that arrived without any — everything downstream
+/// (binning, cross-sections, derived products) needs the radar's position.
+fn with_registry_site(scan: Scan, id: &str) -> Scan {
+    match crate::sites::site_by_id(id) {
+        Some(entry) => Scan::with_site(
+            entry.to_site(),
+            scan.coverage_pattern().clone(),
+            scan.sweeps().to_vec(),
+        ),
+        None => scan,
+    }
 }
 
 /// List and download the most recent volume for `site` on `date`, decoding it to a [`Scan`].
@@ -498,5 +518,27 @@ mod tests {
             bin_scan(&scan, Moment::Reflectivity, 0).is_ok(),
             "REF found on surveillance cut"
         );
+    }
+
+    /// The AWS archive reaches back to June 1991 — a decade earlier than the app used to claim.
+    /// Those volumes are gzip files of legacy (pre-2008, pre-dual-pol) Type-1 messages, so this
+    /// is really a test that the whole legacy path still decodes.
+    #[tokio::test]
+    #[ignore = "network"]
+    async fn decodes_a_1990s_legacy_volume() {
+        let day = chrono::NaiveDate::from_ymd_opt(1991, 6, 5).unwrap();
+        let scan = download_latest_scan("KTLX", day)
+            .await
+            .expect("1991 volume");
+        let tilts = elevation_angles(&scan);
+        assert!(!tilts.is_empty(), "legacy volume has tilts");
+        let have = available_moments(&scan);
+        assert!(have[Moment::Reflectivity.index()], "legacy REF");
+        // Dual-polarization did not exist yet; the UI hides those products via available_moments.
+        assert!(
+            !have[Moment::CorrelationCoefficient.index()],
+            "no dual-pol in 1991"
+        );
+        assert!(bin_scan_opts(&scan, Moment::Reflectivity, 0, false).is_ok());
     }
 }

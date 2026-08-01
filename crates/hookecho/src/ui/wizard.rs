@@ -210,7 +210,7 @@ fn page_tools(ui: &mut egui::Ui) {
         ui,
         "Looking back",
         &[
-            ("Timeline", "scrub back through any date since 2008"),
+            ("Timeline", "scrub back through any date since June 1991"),
             ("Event library", "jump straight to a famous storm"),
             ("Instant replay", "re-play the scans already in memory (R)"),
         ],

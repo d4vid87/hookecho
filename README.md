@@ -118,9 +118,9 @@ the storm in profile, core and overhang and all.
 | ![The same storm in reflectivity, velocity, correlation coefficient and differential reflectivity](docs/shots/alltilts.jpg) | ![A vertical slice through the storm core](docs/shots/xsection.jpg) |
 | <sub>KTLX — Moore, OK, 20 May 2013</sub> | <sub>KTLX — Moore, OK, 20 May 2013</sub> |
 
-Every screenshot in this section is a replay. The timeline reaches back to 2008,
-so any archived storm loads the same way the live one does — a supercell from
-fifteen years ago, or a hurricane coming ashore:
+Every screenshot in this section is a replay. The timeline reaches back to June
+1991, so any archived storm loads the same way the live one does — a supercell
+from fifteen years ago, or a hurricane coming ashore:
 
 ![Hurricane Ian's eyewall coming ashore over southwest Florida](docs/shots/tropical.jpg)
 
@@ -270,8 +270,9 @@ layer draws its own scale and units.
 
 ### Time machine
 
-- Archive playback of any date since 2008, with the warning polygons **and the
-  local storm reports** that were actually in effect at the scrubbed instant.
+- Archive playback of any date since June 1991, with the warning polygons **and
+  the local storm reports** that were actually in effect at the scrubbed instant.
+  Volumes from before the dual-polarization upgrade simply don't offer ZDR/CC.
 - A curated library of historic events, plus your own bookmarks.
 - An in-RAM decode buffer with one-touch instant replay (`R`), and
   screenshot / GIF / MP4 loop export.
