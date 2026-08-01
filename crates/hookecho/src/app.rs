@@ -124,6 +124,8 @@ enum OverlayMsg {
     Wssi(u8, Vec<GeoFeature>),
     /// mPING crowd precipitation-type reports.
     Mping(Vec<wxdata::mping::Report>),
+    /// Pilot reports within the fetched bbox.
+    Pireps(Vec<wxdata::aviation::Pirep>),
     /// Storm cells for a specific site (dropped if the active site changed meanwhile).
     Cells(String, Vec<Cell>),
     /// A fetched placefile keyed by its URL.
@@ -201,6 +203,8 @@ enum OverlaySource {
     Wssi(u8),
     /// mPING crowd reports from the last hour, with the user's API key.
     Mping(String),
+    /// Pilot reports within a lat/lon bbox `(lat0, lon0, lat1, lon1)`.
+    Pireps(f64, f64, f64, f64),
     Outlook(u8, wxdata::spc::OutlookKind),
     Cells(String),
     Placefile(String),
@@ -290,6 +294,9 @@ impl OverlaySource {
             OverlaySource::Mping(key) => {
                 OverlayMsg::Mping(wxdata::mping::fetch(http, &key, 60).await?)
             }
+            OverlaySource::Pireps(lat0, lon0, lat1, lon1) => OverlayMsg::Pireps(
+                wxdata::aviation::fetch_pireps(http, lat0, lon0, lat1, lon1).await?,
+            ),
             OverlaySource::Outlook(day, kind) => {
                 OverlayMsg::Outlook(day, wxdata::spc::fetch_outlook_kind(http, day, kind).await?)
             }
@@ -793,6 +800,7 @@ pub(crate) enum OverlayToggle {
     Alerts,
     Mds,
     Mping,
+    Pireps,
     Fronts,
     GlmLightning,
     Wind,
@@ -1207,6 +1215,10 @@ pub struct HookEchoApp {
     show_mping: bool,
     mping_reports: Vec<wxdata::mping::Report>,
     mping_last_fetch: Option<Instant>,
+    /// Pilot reports: toggle, current reports, fetch clock (rides the METAR view bbox).
+    show_pireps: bool,
+    pireps: Vec<wxdata::aviation::Pirep>,
+    pirep_last_fetch: Option<Instant>,
     /// ProbSevere storm-probability polygons + badges (toggle + refresh clock).
     show_probsevere: bool,
     probsevere: Vec<GeoFeature>,
@@ -1753,6 +1765,9 @@ impl HookEchoApp {
             show_mping: false,
             mping_reports: Vec::new(),
             mping_last_fetch: None,
+            show_pireps: false,
+            pireps: Vec::new(),
+            pirep_last_fetch: None,
             show_probsevere: false,
             probsevere: Vec::new(),
             probsevere_last_fetch: None,
@@ -4935,6 +4950,7 @@ impl HookEchoApp {
             T::Alerts => &mut self.filters.show_alerts,
             T::Mds => &mut self.filters.show_mds,
             T::Mping => &mut self.show_mping,
+            T::Pireps => &mut self.show_pireps,
             T::LinkCameras => &mut self.link_cameras,
         }
     }
@@ -5377,6 +5393,13 @@ impl HookEchoApp {
                 "Obs",
                 "Crowd reports (mPING)",
                 "What people outside say is falling: rain, snow, sleet, freezing rain",
+                false,
+            ),
+            (
+                T::Pireps,
+                "Obs",
+                "Pilot reports (PIREPs)",
+                "What pilots actually flew through: turbulence, icing, cloud tops",
                 false,
             ),
             (
@@ -5833,6 +5856,7 @@ impl HookEchoApp {
                 }
                 OverlayMsg::Mds(f) => self.md_features = f,
                 OverlayMsg::Mping(r) => self.mping_reports = r,
+                OverlayMsg::Pireps(p) => self.pireps = p,
                 OverlayMsg::Wssi(day, f) => {
                     // A day change in flight must not overwrite the day now selected.
                     if day == self.filters.wssi_day {
@@ -6142,6 +6166,20 @@ impl HookEchoApp {
     /// Drive the METAR station-plot fetch (feature U): only when enabled and zoomed in enough,
     /// refetching every 75 s or when the view center drifts out of the fetched bbox's middle half.
     fn sync_metar(&mut self, ctx: &egui::Context) {
+        // Pilot reports share this function's view-bbox logic but not its zoom gate: they are
+        // sparse enough to plot nationwide, and on their own two-minute clock.
+        if self.show_pireps
+            && self
+                .pirep_last_fetch
+                .is_none_or(|t| t.elapsed().as_secs() >= 120)
+        {
+            let (min_lon, min_lat, max_lon, max_lat) = self.view_bounds();
+            self.pirep_last_fetch = Some(Instant::now());
+            self.spawn_overlay(
+                ctx,
+                OverlaySource::Pireps(min_lat, min_lon, max_lat, max_lon),
+            );
+        }
         if !self.show_metar {
             return;
         }
@@ -8683,6 +8721,47 @@ impl HookEchoApp {
             }
         }
 
+        // Pilot reports: a small triangle per report, filled when it carries a hazard so a
+        // turbulence report stands out from a routine sky observation.
+        if self.show_pireps {
+            for r in &self.pireps {
+                let w = crate::render::mercator::lonlat_to_world(r.lon, r.lat);
+                let (sx, sy) = cam.world_to_screen(w, vp);
+                let p = egui::pos2(prect.left() + sx, prect.top() + sy);
+                if !prect.contains(p) {
+                    continue;
+                }
+                let col = if r.urgent {
+                    egui::Color32::from_rgb(235, 70, 70)
+                } else if r.hazard.is_empty() {
+                    egui::Color32::from_rgb(150, 165, 185)
+                } else {
+                    egui::Color32::from_rgb(240, 190, 50)
+                };
+                let d = 5.0;
+                painter.add(egui::Shape::convex_polygon(
+                    vec![
+                        p + egui::vec2(0.0, -d),
+                        p + egui::vec2(d, d * 0.8),
+                        p + egui::vec2(-d, d * 0.8),
+                    ],
+                    col,
+                    egui::Stroke::new(1.0, egui::Color32::from_black_alpha(160)),
+                ));
+                // Hover → altitude, aircraft and the raw report, which is what pilots read.
+                let hit = egui::Rect::from_center_size(p, egui::vec2(16.0, 16.0));
+                if response.hover_pos().is_some_and(|hp| hit.contains(hp)) {
+                    let alt = r
+                        .alt_ft
+                        .map_or_else(|| "—".to_string(), |a| format!("{a} ft"));
+                    response.clone().show_tooltip_text(format!(
+                        "{alt}  {}\n{}\n{}",
+                        r.ac_type, r.hazard, r.raw
+                    ));
+                }
+            }
+        }
+
         // Crowd precipitation-type reports: a lettered dot per report, so the rain/snow line
         // reads straight off the map.
         if self.show_mping {
@@ -8704,6 +8783,15 @@ impl HookEchoApp {
                     egui::FontId::proportional(8.0),
                     egui::Color32::BLACK,
                 );
+                let hit = egui::Rect::from_center_size(p, egui::vec2(14.0, 14.0));
+                if response.hover_pos().is_some_and(|hp| hit.contains(hp)) {
+                    let tz = self.settings.tz_for(self.views[idx].site.as_deref());
+                    response.clone().show_tooltip_text(format!(
+                        "{}\n{}",
+                        r.description,
+                        crate::timefmt::fmt_clock(r.time, tz, false)
+                    ));
+                }
             }
         }
 
