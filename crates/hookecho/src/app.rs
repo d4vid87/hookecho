@@ -158,10 +158,7 @@ enum OverlayMsg {
     /// Newest reading from a configured ground field mill (kV/m).
     Mill(f32),
     /// NWS damage-survey points and surveyed tracks for the requested bbox + storm day.
-    Dat(
-        Vec<wxdata::dat::DamagePoint>,
-        Vec<wxdata::dat::DamageTrack>,
-    ),
+    Dat(Vec<wxdata::dat::DamagePoint>, Vec<wxdata::dat::DamageTrack>),
     /// A plugin or placefile that failed to load, with why (shown in the manager window).
     PlacefileError(String, String),
     /// A finished multi-radar reflectivity composite: the grid, its contributing sites, and the
@@ -344,7 +341,7 @@ impl OverlaySource {
                             fh,
                             0.0,
                         )
-                            .await?
+                        .await?
                     }
                 };
                 OverlayMsg::Field(layer, fc.field)
@@ -484,7 +481,8 @@ impl OverlaySource {
                     .params()
                     .ok_or_else(|| anyhow::anyhow!("contour Off"))?;
                 let mut fc =
-                    wxdata::hrrr::fetch_field(http, model, var, level, 0, f64::NEG_INFINITY).await?;
+                    wxdata::hrrr::fetch_field(http, model, var, level, 0, f64::NEG_INFINITY)
+                        .await?;
                 // Convert to display units so the interval is in hPa / °F / etc, then contour off-thread.
                 for v in &mut fc.field.values {
                     if v.is_finite() {
@@ -865,9 +863,15 @@ enum SyncMsg {
     /// Fresh tokens (from finishing a sign-in, or from a refresh mid-sync).
     Signed(crate::cloud::Tokens),
     /// The remote settings blob, to merge over the local one.
-    Pulled { body: String, modified: String },
+    Pulled {
+        body: String,
+        modified: String,
+    },
     /// Our settings are now the remote ones, as of this `modifiedTime`.
-    Pushed { modified: String, hash: u64 },
+    Pushed {
+        modified: String,
+        hash: u64,
+    },
     /// Both sides had edits. We took the remote copy; say so rather than pretend.
     Conflict,
     UpToDate,
@@ -1033,42 +1037,6 @@ fn glm_style(age_secs: f32) -> (egui::Color32, f32) {
         ),
         r,
     )
-}
-
-/// One row of the product picker: name, plain-English blurb, and the hotkey that selects it.
-fn product_row(
-    ui: &mut egui::Ui,
-    name: &str,
-    blurb: &str,
-    hotkey: u8,
-    on: bool,
-    accent: egui::Color32,
-) -> bool {
-    use crate::ui::style;
-    let mut clicked = false;
-    ui.horizontal(|ui| {
-        ui.vertical(|ui| {
-            let title = egui::RichText::new(name).size(style::FONT_BASE).strong();
-            let title = if on { title.color(accent) } else { title };
-            clicked = ui.selectable_label(on, title).clicked();
-            ui.label(
-                egui::RichText::new(blurb)
-                    .size(style::FONT_SM)
-                    .color(egui::Color32::from_gray(150)),
-            );
-        });
-        if hotkey != 0 {
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                ui.label(
-                    egui::RichText::new(hotkey.to_string())
-                        .size(style::FONT_SM)
-                        .color(egui::Color32::from_gray(120)),
-                );
-            });
-        }
-    });
-    ui.add_space(2.0);
-    clicked
 }
 
 /// The first `want` indices of `elevations` at distinct angles (0.1\u{b0} tolerance), lowest
@@ -1355,11 +1323,13 @@ pub struct HookEchoApp {
     /// Draw all NEXRAD radar sites on the map; clicking one switches the pane to that radar.
     show_radar_sites: bool,
     /// Layers panel (floating, searchable layer picker): open flag + its search text.
-    drawer_open: bool,
+    /// Viewport minus the docked bars, refreshed each frame — floating `Area`s constrain to this
+    /// instead of `content_rect`, which egui measures before panels take their bite.
+    chrome_rect: egui::Rect,
     layers_query: String,
     /// Ctrl+K command palette: open flag, query, and the highlighted row.
     /// Set by Ctrl+K so the drawer grabs the search field on the frame it opens.
-    drawer_focus_search: bool,
+    sidebar_focus_search: bool,
     /// The `?` keyboard cheat sheet is up.
     show_cheatsheet: bool,
     /// The Hotkeys settings tab is waiting for the next keypress to bind; the global hotkey table
@@ -1622,6 +1592,7 @@ impl HookEchoApp {
             }
         };
         let mut view = MapView::new(Some(start.clone()), camera);
+        view.smooth = settings.smooth_radar;
         // Restore the persisted basemap (empty slug = keep the default; from_slug("") = None).
         if !settings.basemap.is_empty() {
             view.basemap = crate::tiles::BasemapStyle::from_slug(&settings.basemap);
@@ -1727,7 +1698,7 @@ impl HookEchoApp {
             digest_rx: None,
             sounding_window: Default::default(),
             sounding_rx: None,
-        raob_rx: None,
+            raob_rx: None,
             chase_mode: false,
             chase_pos: None,
             climo_tracks: None,
@@ -1812,9 +1783,9 @@ impl HookEchoApp {
             show_radar_sites: true,
             // Map-first by default on both platforms: the floating chrome covers the common paths,
             // and the full toolbox is one "Advanced" tap away.
-            drawer_open: false,
+            chrome_rect: egui::Rect::EVERYTHING,
             layers_query: String::new(),
-            drawer_focus_search: false,
+            sidebar_focus_search: false,
             show_cheatsheet: false,
             capture_key: false,
             place_query: String::new(),
@@ -2257,6 +2228,7 @@ impl HookEchoApp {
         let accent = crate::theme::accent(self.settings.theme);
         let mut dismiss = None;
         egui::Area::new(egui::Id::new("toasts"))
+            .constrain_to(self.chrome_rect)
             .anchor(
                 egui::Align2::RIGHT_TOP,
                 egui::vec2(
@@ -2303,6 +2275,7 @@ impl HookEchoApp {
             return;
         }
         egui::Area::new(egui::Id::new("warning_banners"))
+            .constrain_to(self.chrome_rect)
             .anchor(
                 egui::Align2::CENTER_TOP,
                 egui::vec2(0.0, crate::ui::style::LANE_TOP_BANNER),
@@ -2334,11 +2307,9 @@ impl HookEchoApp {
                                             .color(egui::Color32::WHITE.gamma_multiply(a)),
                                     );
                                     if !area.is_empty() {
-                                        ui.label(
-                                            egui::RichText::new(area)
-                                                .small()
-                                                .color(egui::Color32::from_gray(230).gamma_multiply(a)),
-                                        );
+                                        ui.label(egui::RichText::new(area).small().color(
+                                            egui::Color32::from_gray(230).gamma_multiply(a),
+                                        ));
                                     }
                                 });
                             });
@@ -2387,9 +2358,9 @@ impl HookEchoApp {
                         (km <= m.alert_radius_mi * crate::geo::KM_PER_MILE).then_some((m, km))
                     })
                     .min_by(|(a, ka), (b, kb)| {
-                        b.home.cmp(&a.home).then(
-                            ka.partial_cmp(kb).unwrap_or(std::cmp::Ordering::Equal),
-                        )
+                        b.home
+                            .cmp(&a.home)
+                            .then(ka.partial_cmp(kb).unwrap_or(std::cmp::Ordering::Equal))
                     });
                 let (label, area) = match hit {
                     Some((m, km)) => {
@@ -2406,11 +2377,7 @@ impl HookEchoApp {
                         let where_ = if km <= 0.05 {
                             format!("covers {}", m.name)
                         } else {
-                            format!(
-                                "{:.0} mi from {}",
-                                km / crate::geo::KM_PER_MILE,
-                                m.name
-                            )
+                            format!("{:.0} mi from {}", km / crate::geo::KM_PER_MILE, m.name)
                         };
                         (format!("⚠ {}", a.event), where_)
                     }
@@ -2441,8 +2408,8 @@ impl HookEchoApp {
                         })
                         .unwrap_or_default();
                     if !self.settings.mute_alerts {
-                    crate::speech::speak(&format!("{} for {}{}", a.event, area, until));
-                }
+                        crate::speech::speak(&format!("{} for {}{}", a.event, area, until));
+                    }
                 }
                 self.warning_banners.push((label, area, Instant::now()));
                 alerted = true;
@@ -2815,6 +2782,7 @@ impl HookEchoApp {
             return;
         }
         egui::Area::new(egui::Id::new("goes_time_bar"))
+            .constrain_to(self.chrome_rect)
             .anchor(egui::Align2::CENTER_BOTTOM, egui::vec2(0.0, -34.0))
             .show(ctx, |ui| {
                 egui::Frame::popup(ui.style()).show(ui, |ui| {
@@ -2823,7 +2791,13 @@ impl HookEchoApp {
                         // Effective index (None = latest = n-1).
                         let cur = self.goes_time_idx.unwrap_or(n - 1);
                         ui.label("🛰 GOES:");
-                        if ui.add_enabled(cur > 0, egui::Button::new(egui_phosphor::regular::CARET_LEFT)).clicked() {
+                        if ui
+                            .add_enabled(
+                                cur > 0,
+                                egui::Button::new(egui_phosphor::regular::CARET_LEFT),
+                            )
+                            .clicked()
+                        {
                             self.goes_time_idx = Some(cur.saturating_sub(1));
                         }
                         let label = crate::timefmt::fmt_clock(
@@ -2833,7 +2807,10 @@ impl HookEchoApp {
                         );
                         ui.monospace(label);
                         if ui
-                            .add_enabled(cur + 1 < n, egui::Button::new(egui_phosphor::regular::CARET_RIGHT))
+                            .add_enabled(
+                                cur + 1 < n,
+                                egui::Button::new(egui_phosphor::regular::CARET_RIGHT),
+                            )
                             .clicked()
                         {
                             let ni = cur + 1;
@@ -2903,11 +2880,7 @@ impl HookEchoApp {
 
     /// Watch the loopback listener for the redirect, then swap the code for tokens.
     fn poll_login(&mut self) {
-        let Some(code) = self
-            .sync_login
-            .as_ref()
-            .and_then(|p| p.rx.try_recv().ok())
-        else {
+        let Some(code) = self.sync_login.as_ref().and_then(|p| p.rx.try_recv().ok()) else {
             return;
         };
         let Some(pending) = self.sync_login.take() else {
@@ -3122,9 +3095,7 @@ impl HookEchoApp {
             }
             return;
         }
-        let share = self
-            .share
-            .get_or_insert_with(crate::share::Share::start);
+        let share = self.share.get_or_insert_with(crate::share::Share::start);
         if share.drain(&mut self.peers) {
             ctx.request_repaint();
         }
@@ -3170,14 +3141,9 @@ impl HookEchoApp {
                 return;
             }
             match client.get(&relay).send().await {
-                Ok(r) => match r
-                    .text()
-                    .await
-                    .map_err(|e| e.to_string())
-                    .and_then(|t| {
-                        serde_json::from_str::<Vec<crate::share::Peer>>(&t)
-                            .map_err(|e| e.to_string())
-                    }) {
+                Ok(r) => match r.text().await.map_err(|e| e.to_string()).and_then(|t| {
+                    serde_json::from_str::<Vec<crate::share::Peer>>(&t).map_err(|e| e.to_string())
+                }) {
                     Ok(list) => {
                         for p in list.into_iter().filter(|p| p.id != id) {
                             let _ = tx.send(p);
@@ -3903,7 +3869,6 @@ impl HookEchoApp {
                 v.srv = true;
             }
         }
-
     }
 
     /// Basemap style, smoothing, the startup view and the offline chase pack — the map knobs you
@@ -3941,7 +3906,15 @@ impl HookEchoApp {
         } else {
             "Z cycles backgrounds · more styles with Mapbox/MapTiler keys in Settings"
         });
-        ui.checkbox(&mut view.smooth, "Smooth radar data");
+        // One taste setting, not a per-pane one: flip it and every pane follows, and it persists.
+        let mut smooth = settings.smooth_radar;
+        let smooth_changed = ui
+            .checkbox(&mut smooth, "Smooth radar data")
+            .on_hover_text("Interpolate between gates instead of drawing hard gate squares")
+            .changed();
+        if smooth_changed {
+            settings.smooth_radar = smooth;
+        }
 
         // A download in flight stays above the disclosure — progress you can't find reads as a hang.
         if let Some((done, total, errors, mb)) = chasepack.progress {
@@ -4018,6 +3991,11 @@ impl HookEchoApp {
                 }
             }
         });
+        if smooth_changed {
+            for v in &mut self.views {
+                v.smooth = smooth;
+            }
+        }
     }
 
     /// Lon/lat box `±radius_km` around the active pane's radar site (its coverage area), or `None`
@@ -4042,186 +4020,143 @@ impl HookEchoApp {
         (rows.len(), max_esc)
     }
 
-    /// The two buttons the map keeps: the hamburger that opens the drawer, and the alert bell.
-    fn drawer_chrome(&mut self, ctx: &egui::Context) {
-        use egui_phosphor::regular as ph;
-        let accent = crate::theme::accent(self.settings.theme);
-        egui::Area::new(egui::Id::new("drawer_hamburger"))
-            // Below the legend card, which owns the very top-left corner.
-            .anchor(egui::Align2::LEFT_TOP, egui::vec2(14.0, 92.0))
-            .order(egui::Order::Foreground)
-            .show(ctx, |ui| {
-                if mobile::square_btn(ui, ph::LIST, self.drawer_open, accent)
-                    .on_hover_text("Everything: layers, products, tools, places (Ctrl+K)")
-                    .clicked()
-                {
-                    self.drawer_open = !self.drawer_open;
-                }
-            });
-        let (count, max_esc) = self.alert_badge();
-        egui::Area::new(egui::Id::new("drawer_bell"))
-            .anchor(egui::Align2::RIGHT_TOP, egui::vec2(-14.0, 40.0))
-            .order(egui::Order::Foreground)
-            .show(ctx, |ui| {
-                let (bg, fg) = if count == 0 {
-                    (
-                        egui::Color32::from_rgba_unmultiplied(255, 255, 255, 22),
-                        egui::Color32::from_gray(180),
-                    )
-                } else if max_esc >= 2 {
-                    (egui::Color32::from_rgb(220, 40, 40), egui::Color32::WHITE)
-                } else {
-                    (mobile::OMEGA_ORANGE, egui::Color32::BLACK)
-                };
-                let label = if count == 0 {
-                    ph::BELL.to_string()
-                } else {
-                    count.to_string()
-                };
-                let b = egui::Button::new(egui::RichText::new(label).size(16.0).strong().color(fg))
-                    .fill(bg)
-                    .corner_radius(12.0)
-                    .min_size(egui::vec2(42.0, 42.0));
-                if ui
-                    .add(b)
-                    .on_hover_text("Active alerts in view (A)")
-                    .clicked()
-                {
-                    self.show_alert_panel = !self.show_alert_panel;
-                }
-            });
-    }
-
-    /// The one drawer: everything that isn't the map.
+    /// The sidebar: everything that isn't the map.
     ///
-    /// One slide-in from the left holding the whole action registry (products, layers, tools,
+    /// A docked left column holding the whole action registry (products, layers, tools,
     /// windows — searchable) with the app's own commands below it. It replaces a wall of parallel
-    /// entry points; the map keeps a hamburger, an alert bell, and the two bottom pills, and
-    /// nothing else.
-    fn drawer(&mut self, ctx: &egui::Context) {
-        // Slide in from the left edge rather than appearing: a 360 px card popping into existence
-        // over the map reads as a glitch. `t` also keeps the card alive through the slide out.
-        let t = ctx.animate_bool_with_time(egui::Id::new("drawer_slide"), self.drawer_open, 0.15);
-        if t <= 0.0 {
-            return;
-        }
-        use egui_phosphor::regular as ph;
+    /// entry points; the map keeps the alert bell and the product pill, and nothing else.
+    fn sidebar(&mut self, root: &mut egui::Ui, ctx: &egui::Context) {
         let accent = crate::theme::accent(self.settings.theme);
         let cr = ctx.content_rect();
         let entries = self.palette_entries();
         let mut query = std::mem::take(&mut self.layers_query);
-        let (mut chosen, mut close, mut fly_to) = (None, false, None);
+        let (mut chosen, mut fly_to) = (None, None);
         let mut opts = ui::layer_options::UiActions::default();
-        let mut focus_search = std::mem::take(&mut self.drawer_focus_search);
-        egui::Area::new(egui::Id::new("drawer"))
-            .anchor(
-                egui::Align2::LEFT_TOP,
-                crate::ui::style::LANE_LEFT_DRAWER + egui::vec2((t - 1.0) * 380.0, 0.0),
-            )
-            .order(egui::Order::Foreground)
-            .show(ctx, |ui| {
-                // Opaque, not glass: this card carries a wall of small text, and satellite
-                // basemaps put white place labels straight through anything translucent.
-                mobile::glass(ui, 255).show(ui, |ui| {
-                    ui.set_width(360.0);
-                    ui.horizontal(|ui| {
-                        ui.label(
-                            egui::RichText::new("Hook Echo-WX")
-                                .size(16.0)
-                                .strong()
-                                .color(accent),
-                        );
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            close = ui
-                                .add(
-                                    egui::Button::new(egui::RichText::new(ph::X).size(14.0))
-                                        .fill(egui::Color32::TRANSPARENT)
-                                        .stroke(egui::Stroke::NONE),
-                                )
-                                .clicked();
-                        });
-                    });
-                    ui.separator();
-                    chosen = ui::layers_panel::body(
-                        ui,
-                        &entries,
-                        &mut query,
-                        accent,
-                        cr.height() - 260.0,
-                        std::mem::take(&mut focus_search),
-                    );
-                    // Place search folds in here rather than keeping a pill of its own: action
-                    // matches rank first, and this row is the explicit "I meant a place" answer.
-                    if !query.trim().is_empty() {
-                        ui.add_space(4.0);
-                        let w = ui.available_width();
-                        if ui
-                            .add(
-                                egui::Button::new(
-                                    egui::RichText::new(format!(
-                                        "{}  Fly to \u{201c}{}\u{201d}",
-                                        egui_phosphor::regular::MAP_PIN,
-                                        query.trim()
-                                    ))
-                                    .size(13.0),
-                                )
-                                .min_size(egui::vec2(w, 34.0))
-                                .corner_radius(10.0),
-                            )
-                            .on_hover_text("Search the place name and move the map there")
-                            .clicked()
-                        {
-                            fly_to = Some(query.trim().to_string());
-                        }
+        let mut focus_search = std::mem::take(&mut self.sidebar_focus_search);
+        let mut alerts_tab = self.show_alert_panel;
+        let (alert_count, _) = self.alert_badge();
+        let bounds = self.view_bounds();
+        let feats = self.active_alert_features().to_vec();
+        let mut muted = self.settings.mute_alerts;
+        let mut alert_hit = None;
+        egui::Panel::left("sidebar")
+            .exact_size(320.0)
+            .show(root, |ui| {
+                ui.label(
+                    egui::RichText::new("Hook Echo-WX")
+                        .size(16.0)
+                        .strong()
+                        .color(accent),
+                );
+                ui.separator();
+                // Data | Alerts. `show_alert_panel` is the same flag the bell and the A hotkey
+                // flip, so every entry point lands on the same tab.
+                ui.horizontal(|ui| {
+                    if ui.selectable_label(!alerts_tab, "Data").clicked() {
+                        alerts_tab = false;
                     }
-                    ui.add_space(4.0);
-                    // Knobs for layers that are already on, then the set-once map knobs. Both are
-                    // collapsed by default: the drawer's job is the layer list above.
-                    egui::CollapsingHeader::new("Layer options")
-                        .default_open(false)
-                        .show(ui, |ui| {
-                            let l3_site = self.l3grid_site.clone();
-                            let tz = self.active_tz();
-                            let mosaic = self.mosaic_status();
-                            crate::ui::layer_options::show(
-                                ui,
-                                &mut self.filters,
-                                &mut self.fields,
-                                &mut self.rotation_minutes,
-                                &mut self.hrrr_fcst_hour,
-                                self.hrrr_valid,
-                                tz,
-                                &mut self.env_cape_ml,
-                                &mut self.env_srh_km,
-                                &mut self.env_model,
-                                &mut self.contour_kind,
-                                l3_site.as_deref(),
-                                Some(mosaic.as_str()),
-                                &mut opts,
-                            );
-                        });
-                    egui::CollapsingHeader::new("Map")
-                        .default_open(false)
-                        .show(ui, |ui| self.map_rows(ui, &mut opts));
-                    egui::CollapsingHeader::new("App")
-                        .default_open(false)
-                        .show(ui, |ui| self.app_rows(ui));
+                    let label = if alert_count == 0 {
+                        "Alerts".to_string()
+                    } else {
+                        format!("Alerts ({alert_count})")
+                    };
+                    if ui.selectable_label(alerts_tab, label).clicked() {
+                        alerts_tab = true;
+                    }
                 });
+                ui.separator();
+                if alerts_tab {
+                    alert_hit = ui::alert_panel::body(ui, &feats, bounds, &mut muted);
+                    return;
+                }
+                self.product_section(ui, &mut opts);
+                ui.separator();
+                chosen = ui::layers_panel::body(
+                    ui,
+                    &entries,
+                    &mut query,
+                    accent,
+                    cr.height() - 260.0,
+                    std::mem::take(&mut focus_search),
+                );
+                // Place search folds in here rather than keeping a pill of its own: action
+                // matches rank first, and this row is the explicit "I meant a place" answer.
+                if !query.trim().is_empty() {
+                    ui.add_space(4.0);
+                    let w = ui.available_width();
+                    if ui
+                        .add(
+                            egui::Button::new(
+                                egui::RichText::new(format!(
+                                    "{}  Fly to \u{201c}{}\u{201d}",
+                                    egui_phosphor::regular::MAP_PIN,
+                                    query.trim()
+                                ))
+                                .size(13.0),
+                            )
+                            .min_size(egui::vec2(w, 34.0))
+                            .corner_radius(10.0),
+                        )
+                        .on_hover_text("Search the place name and move the map there")
+                        .clicked()
+                    {
+                        fly_to = Some(query.trim().to_string());
+                    }
+                }
+                ui.add_space(4.0);
+                // Knobs for layers that are already on, then the set-once map knobs. Both are
+                // collapsed by default: the drawer's job is the layer list above.
+                egui::CollapsingHeader::new("Layer options")
+                    .default_open(false)
+                    .show(ui, |ui| {
+                        let l3_site = self.l3grid_site.clone();
+                        let tz = self.active_tz();
+                        let mosaic = self.mosaic_status();
+                        crate::ui::layer_options::show(
+                            ui,
+                            &mut self.filters,
+                            &mut self.fields,
+                            &mut self.rotation_minutes,
+                            &mut self.hrrr_fcst_hour,
+                            self.hrrr_valid,
+                            tz,
+                            &mut self.env_cape_ml,
+                            &mut self.env_srh_km,
+                            &mut self.env_model,
+                            &mut self.contour_kind,
+                            l3_site.as_deref(),
+                            Some(mosaic.as_str()),
+                            &mut opts,
+                        );
+                    });
+                egui::CollapsingHeader::new("Map")
+                    .default_open(false)
+                    .show(ui, |ui| self.map_rows(ui, &mut opts));
+                egui::CollapsingHeader::new("App")
+                    .default_open(false)
+                    .show(ui, |ui| self.app_rows(ui));
             });
+        self.show_alert_panel = alerts_tab;
+        self.settings.mute_alerts = muted;
+        if let Some((id, lon, lat)) = alert_hit {
+            // Fly the active camera to the alert and open its bulletin.
+            let cam = &mut self.views[self.active].camera;
+            cam.center = crate::render::mercator::lonlat_to_world(lon, lat);
+            cam.zoom = cam.zoom.max(8.0);
+            self.open_alert_popup(&id);
+        }
         // `query` is the live text; `self.layers_query` was taken from at the top of the frame.
         let searched = !query.trim().is_empty();
         self.layers_query = query;
         self.apply_ui_actions(opts, ctx);
         if let Some(a) = chosen {
-            // Opening a window is a launcher gesture, and so is picking a search hit: get out of
-            // the way, because the drawer overlaps whatever just opened. Browsing the list without
-            // a query is the opposite — you're flipping layers on and off, so it stays.
-            let launcher = searched || matches!(a, PaletteAction::OpenWindow(_));
-            self.apply_palette(a, ctx);
-            if launcher {
+            // Picking a search hit means you're done searching: clear the query so the tree comes
+            // back. Browsing the list without a query is the opposite — you're flipping layers on
+            // and off, so it stays put.
+            if searched || matches!(a, PaletteAction::OpenWindow(_)) {
                 self.layers_query.clear();
-                self.drawer_open = false;
             }
+            self.apply_palette(a, ctx);
         }
         if let Some(place) = fly_to {
             self.geocode_nav = true;
@@ -4235,13 +4170,27 @@ impl HookEchoApp {
                 ctx2.request_repaint();
             });
         }
-        if close || ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
-            self.drawer_open = false;
-        }
     }
 
-    /// Floating timeline scrubber (desktop): transport + scrub + live badge in a glass pill over
-    /// the map's bottom edge. The date picker, loop and speed are one right-click away on the
+    /// Thin right-edge colorbar: the active pane's moment scale, docked so it never covers the map.
+    fn colorbar(&mut self, root: &mut egui::Ui) {
+        let view = &self.views[self.active];
+        if !view.show_legend || view.volume.is_none() {
+            return;
+        }
+        let (moment, threshold) = (view.moment, view.active_threshold());
+        let table = self.palettes.table(moment).clone();
+        let (df, dl) = display_units(moment, &self.settings);
+        egui::Panel::right("colorbar")
+            .exact_size(46.0)
+            .show(root, |ui| {
+                let rect = ui.max_rect();
+                ui::legend::draw_vertical(ui.painter(), rect, moment, &table, threshold, df, dl);
+            });
+    }
+
+    /// Docked timeline scrubber (desktop): transport + scrub + live badge in a full-width bar
+    /// under the map. The date picker, loop and speed are one right-click away on the
     /// LIVE/ARCHIVE badge — the transport is the 95% case and gets the pixels.
     /// [`Settings::tz_for`] for the active pane — the zone for chrome that isn't per-pane.
     pub(crate) fn active_tz(&self) -> Option<wxdata::tz::Tz> {
@@ -4249,12 +4198,10 @@ impl HookEchoApp {
             .tz_for(self.views[self.active].site.as_deref())
     }
 
-    fn timeline_pill(&mut self, ctx: &egui::Context) {
+    fn timeline_bar(&mut self, root: &mut egui::Ui) {
         use egui_phosphor::regular as ph;
         let accent = crate::theme::accent(self.settings.theme);
         let tz = self.active_tz();
-        let cr = ctx.content_rect();
-        let pill_w = (cr.width() * 0.6).clamp(360.0, 720.0);
         let fresh = self.views[self.active]
             .volume
             .as_ref()
@@ -4280,184 +4227,184 @@ impl HookEchoApp {
         let dvr = self.dvr_depth();
         // Edited through a local so the pill closure keeps its single `&mut self.views` borrow.
         let mut loop_frames = self.settings.live_loop_frames;
-        egui::Area::new(egui::Id::new("timeline_pill"))
-            .anchor(
-                egui::Align2::CENTER_BOTTOM,
-                egui::vec2(0.0, crate::ui::style::LANE_BOTTOM_TIMELINE),
-            )
-            .show(ctx, |ui| {
-                mobile::glass(ui, 244).show(ui, |ui| {
-                    ui.set_width(pill_w);
-                    let t = &mut self.views[self.active].timeline;
-                    ui.horizontal(|ui| {
-                        ui.label(
-                            egui::RichText::new(&site)
-                                .size(crate::ui::style::FONT_BASE)
-                                .strong()
-                                .color(egui::Color32::from_gray(238)),
-                        );
-                        let btn = |ui: &mut egui::Ui, glyph: &str, on: bool| {
-                            let fg = if on {
-                                accent
-                            } else {
-                                egui::Color32::from_gray(225)
-                            };
-                            ui.add(
-                                egui::Button::new(egui::RichText::new(glyph).size(18.0).color(fg))
-                                    .min_size(egui::vec2(30.0, 30.0))
-                                    .fill(egui::Color32::TRANSPARENT)
-                                    .stroke(egui::Stroke::NONE),
-                            )
-                            .clicked()
-                        };
-                        if btn(ui, ph::SKIP_BACK, false) {
-                            t.step(-1);
-                        }
-                        let playing = t.playing;
-                        if btn(ui, if playing { ph::PAUSE } else { ph::PLAY }, playing) {
-                            t.toggle_play();
-                        }
-                        if btn(ui, ph::SKIP_FORWARD, false) {
-                            t.step(1);
-                        }
-                        // Live / archive badge: click to re-pin to the newest volume.
-                        let (col, text) = if t.following && fresh {
-                            (mobile::OMEGA_GREEN, "LIVE".to_string())
-                        } else if t.following {
-                            (egui::Color32::from_rgb(220, 180, 0), "LIVE".to_string())
+        egui::Panel::bottom("timeline_bar")
+            .exact_size(44.0)
+            .show(root, |ui| {
+                let t = &mut self.views[self.active].timeline;
+                ui.horizontal_centered(|ui| {
+                    ui.label(
+                        egui::RichText::new(&site)
+                            .size(crate::ui::style::FONT_BASE)
+                            .strong()
+                            .color(egui::Color32::from_gray(238)),
+                    );
+                    let btn = |ui: &mut egui::Ui, glyph: &str, on: bool| {
+                        let fg = if on {
+                            accent
                         } else {
-                            (
-                                egui::Color32::from_gray(150),
-                                format!("ARCHIVE {}", t.date.format("%m/%d")),
-                            )
+                            egui::Color32::from_gray(225)
                         };
-                        let badge = ui.add(
-                            egui::Button::new(
-                                egui::RichText::new(text)
-                                    .size(12.0)
-                                    .strong()
-                                    .color(egui::Color32::BLACK),
-                            )
-                            .fill(col)
-                            .corner_radius(9.0),
-                        );
-                        if badge.clicked() {
-                            go_head = true;
-                        }
-                        // Right-click the badge for the knobs that used to sit in the toolbox's
-                        // Timeline section: which archive day, and how playback loops.
-                        egui::Popup::context_menu(&badge)
-                            .align(egui::RectAlign::TOP_START)
-                            .show(|ui| {
-                                ui.set_min_width(240.0);
-                                ui.horizontal(|ui| {
-                                    ui.label("Date:");
-                                    if ui.button(egui_phosphor::regular::CARET_LEFT).clicked() {
-                                        if let Some(d) = t.date.pred_opt() {
-                                            t.date = d;
-                                            t.following = false;
-                                        }
-                                    }
-                                    ui.monospace(t.date.format("%Y-%m-%d").to_string())
-                                        .on_hover_text(
-                                            "Archive days are UTC days — the S3 buckets are \
-                                             bucketed that way",
-                                        );
-                                    let is_today = t.date >= chrono::Utc::now().date_naive();
-                                    if ui.add_enabled(!is_today, egui::Button::new(egui_phosphor::regular::CARET_RIGHT)).clicked() {
-                                        if let Some(d) = t.date.succ_opt() {
-                                            t.date = d;
-                                        }
-                                    }
-                                });
-                                ui.horizontal(|ui| {
-                                    if ui.button("⏮").on_hover_text("First frame").clicked() {
-                                        t.go_begin();
-                                    }
-                                    ui.checkbox(&mut t.loop_enabled, "Loop");
-                                });
-                                ui.add(
-                                    egui::Slider::new(&mut t.speed, 1.0..=15.0)
-                                        .suffix(" fps")
-                                        .show_value(true),
-                                );
-                                ui.add(
-                                    egui::DragValue::new(&mut loop_frames)
-                                        .range(2..=30)
-                                        .suffix(" frames"),
-                                )
-                                .on_hover_text(
-                                    "How many of the newest volumes ▶ cycles through when live",
-                                );
-                            });
-                        // Scrub bar + readout fill the rest of the pill.
-                        let observed = t.frames.len();
-                        if observed == 0 {
-                            ui.weak(if t.listing {
-                                "listing volumes…"
-                            } else {
-                                "(no volumes)"
-                            });
-                            return;
-                        }
-                        let readout = match t.forecast_hour() {
-                            Some(h) => format!("F+{h}h"),
-                            None => t
-                                .current()
-                                .and_then(|id| id.date_time())
-                                .map(|d| crate::timefmt::fmt_clock(d, tz, true))
-                                .unwrap_or_default(),
-                        };
-                        let last = t.slot_count().saturating_sub(1);
-                        let mut ph_idx = t.playhead;
-                        let slider_w = (ui.available_width() - 92.0).max(80.0);
-                        let resp = ui.add_sized(
-                            [slider_w, 20.0],
-                            egui::Slider::new(&mut ph_idx, 0..=last).show_value(false),
-                        );
-                        if resp.changed() {
-                            t.playhead = ph_idx;
-                            t.playing = false;
-                            t.following = ph_idx + 1 == observed;
-                        }
-                        ui.label(
-                            egui::RichText::new(readout)
+                        ui.add(
+                            egui::Button::new(egui::RichText::new(glyph).size(18.0).color(fg))
+                                .min_size(egui::vec2(30.0, 30.0))
+                                .fill(egui::Color32::TRANSPARENT)
+                                .stroke(egui::Stroke::NONE),
+                        )
+                        .clicked()
+                    };
+                    if btn(ui, ph::SKIP_BACK, false) {
+                        t.step(-1);
+                    }
+                    let playing = t.playing;
+                    if btn(ui, if playing { ph::PAUSE } else { ph::PLAY }, playing) {
+                        t.toggle_play();
+                    }
+                    if btn(ui, ph::SKIP_FORWARD, false) {
+                        t.step(1);
+                    }
+                    // Live / archive badge: click to re-pin to the newest volume.
+                    let (col, text) = if t.following && fresh {
+                        (mobile::OMEGA_GREEN, "LIVE".to_string())
+                    } else if t.following {
+                        (egui::Color32::from_rgb(220, 180, 0), "LIVE".to_string())
+                    } else {
+                        (
+                            egui::Color32::from_gray(150),
+                            format!("ARCHIVE {}", t.date.format("%m/%d")),
+                        )
+                    };
+                    let badge = ui.add(
+                        egui::Button::new(
+                            egui::RichText::new(text)
                                 .size(12.0)
-                                .monospace()
-                                .color(egui::Color32::from_gray(215)),
-                        );
-                        if let Some(r) = &rain {
-                            ui.label(
-                                egui::RichText::new(r)
-                                    .size(crate::ui::style::FONT_SM)
-                                    .color(egui::Color32::from_rgb(110, 180, 240)),
+                                .strong()
+                                .color(egui::Color32::BLACK),
+                        )
+                        .fill(col)
+                        .corner_radius(9.0),
+                    );
+                    if badge.clicked() {
+                        go_head = true;
+                    }
+                    // Right-click the badge for the knobs that used to sit in the toolbox's
+                    // Timeline section: which archive day, and how playback loops.
+                    egui::Popup::context_menu(&badge)
+                        .align(egui::RectAlign::TOP_START)
+                        .show(|ui| {
+                            ui.set_min_width(240.0);
+                            ui.horizontal(|ui| {
+                                ui.label("Date:");
+                                if ui.button(egui_phosphor::regular::CARET_LEFT).clicked() {
+                                    if let Some(d) = t.date.pred_opt() {
+                                        t.date = d;
+                                        t.following = false;
+                                    }
+                                }
+                                ui.monospace(t.date.format("%Y-%m-%d").to_string())
+                                    .on_hover_text(
+                                        "Archive days are UTC days — the S3 buckets are \
+                                             bucketed that way",
+                                    );
+                                let is_today = t.date >= chrono::Utc::now().date_naive();
+                                if ui
+                                    .add_enabled(
+                                        !is_today,
+                                        egui::Button::new(egui_phosphor::regular::CARET_RIGHT),
+                                    )
+                                    .clicked()
+                                {
+                                    if let Some(d) = t.date.succ_opt() {
+                                        t.date = d;
+                                    }
+                                }
+                            });
+                            ui.horizontal(|ui| {
+                                if ui.button("⏮").on_hover_text("First frame").clicked() {
+                                    t.go_begin();
+                                }
+                                ui.checkbox(&mut t.loop_enabled, "Loop");
+                            });
+                            ui.add(
+                                egui::Slider::new(&mut t.speed, 1.0..=15.0)
+                                    .suffix(" fps")
+                                    .show_value(true),
+                            );
+                            ui.add(
+                                egui::DragValue::new(&mut loop_frames)
+                                    .range(2..=30)
+                                    .suffix(" frames"),
                             )
                             .on_hover_text(
-                                "Estimated from storm motion \u{2014} rough for backbuilding storms",
+                                "How many of the newest volumes ▶ cycles through when live",
                             );
-                        }
-                        if dvr > 1 {
-                            ui.label(
-                                egui::RichText::new(format!("\u{27f2} {dvr}"))
-                                    .size(crate::ui::style::FONT_SM)
-                                    .color(egui::Color32::from_gray(150)),
-                            )
-                            .on_hover_text("Frames buffered in memory for instant replay (R)");
-                        }
-                        if let Some(age) = &age {
-                            ui.label(
-                                egui::RichText::new(age)
-                                    .size(crate::ui::style::FONT_SM)
-                                    .color(egui::Color32::from_gray(150)),
-                            );
-                        } else if loading {
-                            ui.label(
-                                egui::RichText::new("loading…")
-                                    .size(crate::ui::style::FONT_SM)
-                                    .color(egui::Color32::from_gray(150)),
-                            );
-                        }
-                    });
+                        });
+                    // Scrub bar + readout fill the rest of the pill.
+                    let observed = t.frames.len();
+                    if observed == 0 {
+                        ui.weak(if t.listing {
+                            "listing volumes…"
+                        } else {
+                            "(no volumes)"
+                        });
+                        return;
+                    }
+                    let readout = match t.forecast_hour() {
+                        Some(h) => format!("F+{h}h"),
+                        None => t
+                            .current()
+                            .and_then(|id| id.date_time())
+                            .map(|d| crate::timefmt::fmt_clock(d, tz, true))
+                            .unwrap_or_default(),
+                    };
+                    let last = t.slot_count().saturating_sub(1);
+                    let mut ph_idx = t.playhead;
+                    let slider_w = (ui.available_width() - 92.0).max(80.0);
+                    let resp = ui.add_sized(
+                        [slider_w, 20.0],
+                        egui::Slider::new(&mut ph_idx, 0..=last).show_value(false),
+                    );
+                    if resp.changed() {
+                        t.playhead = ph_idx;
+                        t.playing = false;
+                        t.following = ph_idx + 1 == observed;
+                    }
+                    ui.label(
+                        egui::RichText::new(readout)
+                            .size(12.0)
+                            .monospace()
+                            .color(egui::Color32::from_gray(215)),
+                    );
+                    if let Some(r) = &rain {
+                        ui.label(
+                            egui::RichText::new(r)
+                                .size(crate::ui::style::FONT_SM)
+                                .color(egui::Color32::from_rgb(110, 180, 240)),
+                        )
+                        .on_hover_text(
+                            "Estimated from storm motion \u{2014} rough for backbuilding storms",
+                        );
+                    }
+                    if dvr > 1 {
+                        ui.label(
+                            egui::RichText::new(format!("\u{27f2} {dvr}"))
+                                .size(crate::ui::style::FONT_SM)
+                                .color(egui::Color32::from_gray(150)),
+                        )
+                        .on_hover_text("Frames buffered in memory for instant replay (R)");
+                    }
+                    if let Some(age) = &age {
+                        ui.label(
+                            egui::RichText::new(age)
+                                .size(crate::ui::style::FONT_SM)
+                                .color(egui::Color32::from_gray(150)),
+                        );
+                    } else if loading {
+                        ui.label(
+                            egui::RichText::new("loading…")
+                                .size(crate::ui::style::FONT_SM)
+                                .color(egui::Color32::from_gray(150)),
+                        );
+                    }
                 });
             });
         self.settings.live_loop_frames = loop_frames;
@@ -4466,16 +4413,13 @@ impl HookEchoApp {
         }
     }
 
-    /// Bottom-left product pill: what you're looking at, and the two knobs that change it.
+    /// Sidebar header: the site, what you're looking at, its tilt, and the per-product knobs.
     ///
-    /// Product and tilt used to be reachable only from the hidden Advanced toolbox (or by knowing
-    /// the 1–6 and PageUp/PageDown hotkeys), which meant a first-time user never found velocity.
-    /// The toolbox is gone; its per-product knobs live in this popup's Options disclosure.
-    /// The pill names the current product in full and opens a picker with a plain-English blurb
-    /// per product. Both write the same fields the hotkeys do.
-    fn product_pill(&mut self, ctx: &egui::Context) {
+    /// The product list itself is the tree's Radar category (with a plain-English blurb per row);
+    /// this section owns everything about the *current* product — the tilt strip and the expert
+    /// options that used to hide in the toolbox. All of it writes the same fields the hotkeys do.
+    fn product_section(&mut self, ui: &mut egui::Ui, actions: &mut ui::layer_options::UiActions) {
         use crate::ui::style;
-        let accent = crate::theme::accent(self.settings.theme);
         let (moment, srv, tilt) = {
             let v = &self.views[self.active];
             (v.moment, v.srv, v.tilt)
@@ -4485,16 +4429,12 @@ impl HookEchoApp {
             .as_ref()
             .map(|v| v.elevations.clone())
             .unwrap_or_default();
-        let label = format!(
-            "{}{}",
-            crate::products::name(moment, srv),
-            elevations
-                .get(tilt)
-                .map(|a| format!("  ·  {a:.1}°"))
-                .unwrap_or_default()
-        );
+        let site = self.views[self.active]
+            .site
+            .clone()
+            .unwrap_or_else(|| "Pick a site".to_string());
 
-        let mut pick: Option<(wxdata::level2::Moment, bool)> = None;
+        let pick: Option<(wxdata::level2::Moment, bool)> = None;
         let mut pick_tilt: Option<usize> = None;
         // Expert knobs for the product you're on, edited through locals so the popup closure
         // doesn't need `self`. They used to live in the toolbox's Product ▸ Options disclosure.
@@ -4510,130 +4450,89 @@ impl HookEchoApp {
         let mut thr = self.views[self.active].thresholds[mi];
         let (vmin, vmax) = moment.value_range();
         let (unit_factor, unit_label) = display_units(moment, &self.settings);
-        egui::Area::new(egui::Id::new("product_pill"))
-            .anchor(
-                egui::Align2::LEFT_BOTTOM,
-                egui::vec2(14.0, style::LANE_BOTTOM_PRODUCT),
-            )
-            .show(ctx, |ui| {
-                style::glass(ui, 244).show(ui, |ui| {
-                    let btn = ui.add(
-                        egui::Button::new(
-                            egui::RichText::new(&label)
-                                .size(style::FONT_BASE)
-                                .strong()
-                                .color(egui::Color32::from_gray(238)),
-                        )
-                        .fill(egui::Color32::TRANSPARENT)
-                        .stroke(egui::Stroke::NONE),
-                    );
-                    egui::Popup::menu(&btn)
-                        .align(egui::RectAlign::TOP_START)
-                        .close_behavior(egui::PopupCloseBehavior::CloseOnClick)
-                        .show(|ui| {
-                            ui.set_min_width(320.0);
-                            for p in &crate::products::PRODUCTS {
-                                let on = moment == p.moment
-                                    && !(srv && p.moment == wxdata::level2::Moment::Velocity);
-                                if product_row(ui, p.name, p.blurb, p.hotkey, on, accent) {
-                                    pick = Some((p.moment, false));
-                                }
-                                // Storm-relative velocity rides directly under plain velocity.
-                                if p.moment == wxdata::level2::Moment::Velocity {
-                                    let on = moment == p.moment && srv;
-                                    if product_row(
-                                        ui,
-                                        "Storm-Relative Velocity",
-                                        "Velocity with the storm's own motion subtracted out",
-                                        0,
-                                        on,
-                                        accent,
-                                    ) {
-                                        pick = Some((p.moment, true));
-                                    }
-                                }
-                            }
-                            if !elevations.is_empty() {
-                                ui.separator();
-                                ui.label(
-                                    egui::RichText::new(
-                                        "Tilt — how high above the ground the beam is looking",
-                                    )
-                                    .size(style::FONT_SM)
-                                    .color(egui::Color32::from_gray(150)),
-                                );
-                                ui.horizontal_wrapped(|ui| {
-                                    for (i, angle) in elevations.iter().enumerate() {
-                                        if ui
-                                            .selectable_label(i == tilt, format!("{angle:.1}°"))
-                                            .clicked()
-                                        {
-                                            pick_tilt = Some(i);
-                                        }
-                                    }
-                                });
-                            }
-                            // Per-product knobs, behind a disclosure: picking a product and a tilt
-                            // is the whole job for most people.
-                            ui.separator();
-                            ui.collapsing("Options", |ui| {
-                                if moment == wxdata::level2::Moment::Velocity {
-                                    ui.checkbox(&mut dealias, "Dealias").on_hover_text(
-                                        "Unfold aliased velocity (region-based dealiasing)",
-                                    );
-                                    ui.checkbox(&mut srv_on, "Storm-relative");
-                                    if srv_on {
-                                        ui.horizontal(|ui| {
-                                            ui.label("Motion:");
-                                            ui.add(
-                                                egui::DragValue::new(&mut dir_deg)
-                                                    .range(0.0..=359.0)
-                                                    .suffix("°"),
-                                            );
-                                            ui.add(
-                                                egui::DragValue::new(&mut speed_kt)
-                                                    .range(0.0..=150.0)
-                                                    .suffix(" kt"),
-                                            );
-                                        });
-                                        if ui
-                                            .button("From storm cells")
-                                            .on_hover_text(
-                                                "Set motion to the SCIT storm-cell mean (needs L3 storm cells)",
-                                            )
-                                            .clicked()
-                                        {
-                                            srv_from_cells = true;
-                                        }
-                                    }
-                                }
-                                // Threshold for the active moment. The slider value stays internal
-                                // (m/s for velocity); display honors the Units setting.
-                                let f = unit_factor as f64;
-                                ui.horizontal(|ui| {
-                                    ui.checkbox(&mut thr_on, "Threshold").on_hover_text(
-                                        "Hide everything below a value — cuts light rain out of the picture",
-                                    );
-                                    if thr_on {
-                                        let t = thr.get_or_insert((vmin + vmax) * 0.5);
-                                        ui.add(
-                                            egui::Slider::new(t, vmin..=vmax)
-                                                .custom_formatter(move |v, _| format!("{:.0}", v * f))
-                                                .custom_parser(move |s| {
-                                                    s.parse::<f64>().ok().map(|x| x / f)
-                                                })
-                                                .suffix(unit_label),
-                                        );
-                                    }
-                                });
-                            });
+        ui.horizontal(|ui| {
+            if ui
+                .button(format!("{}  {site}", egui_phosphor::regular::BROADCAST))
+                .on_hover_text("Choose the radar site")
+                .clicked()
+            {
+                actions.open_site_dialog = true;
+            }
+            ui.label(
+                egui::RichText::new(crate::products::name(moment, srv))
+                    .size(style::FONT_BASE)
+                    .strong(),
+            );
+        });
+        if !elevations.is_empty() {
+            ui.horizontal_wrapped(|ui| {
+                ui.label(
+                    egui::RichText::new("Tilt")
+                        .size(style::FONT_SM)
+                        .color(egui::Color32::from_gray(150)),
+                )
+                .on_hover_text("How high above the ground the beam is looking");
+                for (i, angle) in elevations.iter().enumerate() {
+                    if ui
+                        .selectable_label(i == tilt, format!("{angle:.1}\u{b0}"))
+                        .clicked()
+                    {
+                        pick_tilt = Some(i);
+                    }
+                }
+            });
+        }
+        egui::CollapsingHeader::new("Product options")
+            .default_open(false)
+            .show(ui, |ui| {
+                if moment == wxdata::level2::Moment::Velocity {
+                    ui.checkbox(&mut dealias, "Dealias")
+                        .on_hover_text("Unfold aliased velocity (region-based dealiasing)");
+                    ui.checkbox(&mut srv_on, "Storm-relative");
+                    if srv_on {
+                        ui.horizontal(|ui| {
+                            ui.label("Motion:");
+                            ui.add(
+                                egui::DragValue::new(&mut dir_deg)
+                                    .range(0.0..=359.0)
+                                    .suffix("\u{b0}"),
+                            );
+                            ui.add(
+                                egui::DragValue::new(&mut speed_kt)
+                                    .range(0.0..=150.0)
+                                    .suffix(" kt"),
+                            );
                         });
+                        if ui
+                            .button("From storm cells")
+                            .on_hover_text(
+                                "Set motion to the SCIT storm-cell mean (needs L3 storm cells)",
+                            )
+                            .clicked()
+                        {
+                            srv_from_cells = true;
+                        }
+                    }
+                }
+                // Threshold for the active moment. The slider value stays internal (m/s for
+                // velocity); display honors the Units setting.
+                let f = unit_factor as f64;
+                ui.horizontal(|ui| {
+                    ui.checkbox(&mut thr_on, "Threshold").on_hover_text(
+                        "Hide everything below a value \u{2014} cuts light rain out of the picture",
+                    );
+                    if thr_on {
+                        let t = thr.get_or_insert((vmin + vmax) * 0.5);
+                        ui.add(
+                            egui::Slider::new(t, vmin..=vmax)
+                                .custom_formatter(move |v, _| format!("{:.0}", v * f))
+                                .custom_parser(move |s| s.parse::<f64>().ok().map(|x| x / f))
+                                .suffix(unit_label),
+                        );
+                    }
                 });
             });
 
-        if let Some((m, srv)) = pick {
-            self.apply_palette(PaletteAction::SetMoment(m, srv), ctx);
-        }
         if let Some(i) = pick_tilt {
             self.views[self.active].tilt = i;
         }
@@ -4695,6 +4594,7 @@ impl HookEchoApp {
             crate::ui::style::LANE_BOTTOM_CHASE
         };
         egui::Area::new(egui::Id::new("chase_hud"))
+            .constrain_to(self.chrome_rect)
             .anchor(egui::Align2::LEFT_BOTTOM, egui::vec2(14.0, dy))
             .show(ctx, |ui| {
                 let frame = mobile::glass(ui, 244).stroke(egui::Stroke::new(
@@ -6176,7 +6076,11 @@ impl HookEchoApp {
             body.push_str(&format!("{} ({})\n", site.icao, site.ident));
         }
         for c in &site.cameras {
-            let state = if c.out_of_order { "  (out of order)" } else { "" };
+            let state = if c.out_of_order {
+                "  (out of order)"
+            } else {
+                ""
+            };
             body.push_str(&format!("{}  {}{}\n", c.name, c.direction, state));
         }
         // Which network this came from, and the credit each one is owed. Windy's terms require a
@@ -6274,7 +6178,10 @@ impl HookEchoApp {
                         .iter()
                         .find(|s| s.name == self.nwr_pick)
                         .cloned();
-                    if ui.add_enabled(stream.is_some(), egui::Button::new("▶ Play")).clicked() {
+                    if ui
+                        .add_enabled(stream.is_some(), egui::Button::new("▶ Play"))
+                        .clicked()
+                    {
                         if let Some(s) = stream {
                             self.nwr = Some(crate::nwr::Player::start(
                                 s.name,
@@ -6338,7 +6245,7 @@ impl HookEchoApp {
             color,
             image: key.clone(),
             link: None,
-});
+        });
         let (Some(key), Some(url)) = (key, p.image.clone()) else {
             return;
         };
@@ -7065,7 +6972,7 @@ impl HookEchoApp {
                     self.obs_mode = true;
                 }
             }
-            A::ToggleDrawer => self.drawer_open = !self.drawer_open,
+            A::ToggleDrawer => self.sidebar_focus_search = true,
             A::Fullscreen => {
                 // Desktop only; mobile is already fullscreen.
                 if !cfg!(target_os = "android") {
@@ -7074,9 +6981,8 @@ impl HookEchoApp {
                 }
             }
             A::CommandSearch => {
-                self.drawer_open = true;
                 self.layers_query.clear();
-                self.drawer_focus_search = true;
+                self.sidebar_focus_search = true;
             }
             A::CheatSheet => self.show_cheatsheet = !self.show_cheatsheet,
             A::ToggleMute => {
@@ -7546,7 +7452,11 @@ impl HookEchoApp {
                         self.stations.hit(pos, tap_r2(12.0), to_screen)
                     })
                     .flatten();
-                let cam_site = if station_hit.is_some() { None } else { cam_site };
+                let cam_site = if station_hit.is_some() {
+                    None
+                } else {
+                    cam_site
+                };
                 // A surveyed damage point under an interrogate click, same rule as the cameras.
                 let dat_hit = (marker_hit.is_none()
                     && !picked_site
@@ -7656,7 +7566,7 @@ impl HookEchoApp {
                                 color: report_color(r.kind),
                                 image: None,
                                 link: None,
-});
+                            });
                         } else {
                             let cell_hit = self.filters.show_cells
                                 && self.cells_site.as_deref() == self.views[idx].site.as_deref()
@@ -7689,7 +7599,7 @@ impl HookEchoApp {
                                         color: cell_color(c.kind),
                                         image: None,
                                         link: None,
-});
+                                    });
                                 }
                                 None => {
                                     // Warnings/watches open the warning window (deduped by alert id
@@ -7722,7 +7632,7 @@ impl HookEchoApp {
                                             color: f.stroke,
                                             image: None,
                                             link: None,
-});
+                                        });
                                     }
                                 }
                             }
@@ -8025,9 +7935,8 @@ impl HookEchoApp {
             // now disagree about what time it is. Dim rather than lie confidently — the same
             // treatment the HRRR field layers already get.
             let off_live = !v.timeline.following;
-            let alpha = zoom_fade
-                * if over_radar { 0.7 } else { 1.0 }
-                * if off_live { 0.4 } else { 1.0 };
+            let alpha =
+                zoom_fade * if over_radar { 0.7 } else { 1.0 } * if off_live { 0.4 } else { 1.0 };
             // Split borrow: the grids and the per-pane particle sets are disjoint fields, and the
             // advection needs both at once.
             let Self {
@@ -9270,9 +9179,11 @@ impl HookEchoApp {
                 let a = 255.0 - 155.0 * (age / crate::share::STALE_SECS as f32);
                 egui::Color32::from_rgba_unmultiplied(255, 180, 60, a as u8)
             };
-            painter.circle_filled(pt, 9.0, egui::Color32::from_rgba_unmultiplied(
-                col.r(), col.g(), col.b(), 45,
-            ));
+            painter.circle_filled(
+                pt,
+                9.0,
+                egui::Color32::from_rgba_unmultiplied(col.r(), col.g(), col.b(), 45),
+            );
             painter.circle_filled(pt, 5.0, col);
             painter.circle_stroke(pt, 5.0, egui::Stroke::new(2.0, egui::Color32::WHITE));
             let label = if is_me {
@@ -9398,21 +9309,9 @@ impl HookEchoApp {
         // The boxed legend is desktop-only; Android draws a full-width color scale in the mobile
         // chrome (see `app::mobile`), so drawing both would be redundant.
         if view.show_legend && !cfg!(target_os = "android") {
+            // The moment's own scale is the docked right-edge colorbar (see `colorbar`); only the
+            // categorical field/wind ramps still need a card over the map.
             let mut y = 0.0;
-            if view.volume.is_some() {
-                let table = self.palettes.table(view.moment);
-                let (df, dl) = display_units(view.moment, &self.settings);
-                ui::legend::draw(
-                    &painter,
-                    prect,
-                    view.moment,
-                    table,
-                    view.active_threshold(),
-                    df,
-                    dl,
-                );
-                y += ui::legend::PANEL_H + 6.0;
-            }
             // Whichever gridded layer the user actually sees on top — the last enabled one in
             // paint order — gets its scale keyed underneath. Without this, MESH/QPE/VIL and the
             // categorical classifications were unlabeled color.
@@ -9426,12 +9325,7 @@ impl HookEchoApp {
             // Wind particles carry their own scale — it isn't a FieldLayer, so it needs its own
             // call rather than a slot in DRAW_ORDER.
             if self.show_wind && self.wind.is_some() {
-                ui::legend::draw_ramp(
-                    &painter,
-                    prect,
-                    &crate::render::field_ramps::WIND,
-                    y,
-                );
+                ui::legend::draw_ramp(&painter, prect, &crate::render::field_ramps::WIND, y);
             }
         }
     }
@@ -9485,6 +9379,7 @@ impl HookEchoApp {
                 .then(|| src.timeline.current().and_then(|id| id.date_time()))
                 .flatten();
             let mut v = MapView::new(site, camera);
+            v.smooth = self.settings.smooth_radar;
             v.basemap = basemap;
             v.tilt = tilt;
             v.timeline.date = date;
@@ -9601,7 +9496,9 @@ impl HookEchoApp {
             // Position sharing: the phone in the field and the desktop at home showing each other
             // as dots on the same radar. LAN needs no setup; the relay covers cellular.
             ui.checkbox(&mut self.settings.share_position, "Share my position")
-                .on_hover_text("Broadcast your GPS fix to other Hook Echo instances, and show theirs");
+                .on_hover_text(
+                    "Broadcast your GPS fix to other Hook Echo instances, and show theirs",
+                );
             if self.settings.share_position {
                 ui.horizontal(|ui| {
                     ui.label("Name");
@@ -9768,7 +9665,10 @@ impl HookEchoApp {
             .export_bundle()
             .and_then(|json| std::fs::write(&path, json).map_err(|e| e.to_string()))
         {
-            Ok(()) => self.toast(ToastKind::Success, format!("Settings saved to {}", path.display())),
+            Ok(()) => self.toast(
+                ToastKind::Success,
+                format!("Settings saved to {}", path.display()),
+            ),
             Err(e) => {
                 log::warn!("settings export failed: {e}");
                 self.toast(ToastKind::Error, format!("Settings export failed: {e}"));
@@ -9811,7 +9711,10 @@ impl HookEchoApp {
         let slots = v.timeline.frames.len(); // observed frames only (skip forecast tail)
         if slots == 0 {
             log::warn!("loop export: no timeline frames");
-        self.toast(ToastKind::Info, "Nothing to export — no frames in the timeline yet");
+            self.toast(
+                ToastKind::Info,
+                "Nothing to export — no frames in the timeline yet",
+            );
             return;
         }
         v.timeline.go_begin();
@@ -9969,27 +9872,21 @@ impl HookEchoApp {
         } else {
             &[
             (
-                "coach_search",
-                egui::Align2::CENTER_TOP,
-                egui::vec2(0.0, style::LANE_TOP_SEARCH + 52.0),
-                "Search for a place up here — or press Ctrl+K to search every product, layer and tool.",
-            ),
-            (
-                "coach_layers",
-                egui::Align2::RIGHT_TOP,
-                egui::vec2(-78.0, style::LANE_TOP_SEARCH + 4.0),
-                "Layers: every product and overlay, with a plain-English description of each.",
+                "coach_sidebar",
+                egui::Align2::LEFT_TOP,
+                egui::vec2(340.0, 60.0),
+                "Everything lives in this sidebar: every product, layer and tool, each with a plain-English description. Ctrl+K jumps to its search.",
             ),
             (
                 "coach_product",
                 egui::Align2::LEFT_BOTTOM,
-                egui::vec2(14.0, style::LANE_BOTTOM_PRODUCT - 70.0),
-                "This names what you're looking at. Click it to switch products or tilts \u{2014} each one says what it shows.",
+                egui::vec2(340.0, -60.0),
+                "The current product, its tilt, and its expert knobs live at the top of the sidebar.",
             ),
             (
                 "coach_timeline",
                 egui::Align2::CENTER_BOTTOM,
-                egui::vec2(0.0, style::LANE_BOTTOM_TIMELINE - 64.0),
+                egui::vec2(0.0, -14.0),
                 "This is the timeline — play the loop, scrub back through the storm, jump to live.",
             ),
             ]
@@ -9997,6 +9894,7 @@ impl HookEchoApp {
         for (id, align, offset, text) in marks {
             let (id, align, offset, text) = (*id, *align, *offset, *text);
             egui::Area::new(egui::Id::new(id))
+                .constrain_to(self.chrome_rect)
                 .anchor(align, offset)
                 .order(egui::Order::Foreground)
                 .show(ctx, |ui| {
@@ -10055,6 +9953,7 @@ impl HookEchoApp {
             return;
         }
         egui::Area::new(egui::Id::new("info_chip"))
+            .constrain_to(self.chrome_rect)
             .anchor(
                 egui::Align2::RIGHT_BOTTOM,
                 egui::vec2(-14.0, style::LANE_BOTTOM_CHIP),
@@ -10084,8 +9983,8 @@ impl HookEchoApp {
                         ui.separator();
                         for c in DRAW_COLORS {
                             let sel = self.draw_color == c;
-                            let (rect, resp) =
-                                ui.allocate_exact_size(egui::vec2(18.0, 18.0), egui::Sense::click());
+                            let (rect, resp) = ui
+                                .allocate_exact_size(egui::vec2(18.0, 18.0), egui::Sense::click());
                             let p = ui.painter_at(rect);
                             p.circle_filled(rect.center(), 7.0, c);
                             if sel {
@@ -10138,6 +10037,7 @@ impl HookEchoApp {
         }
         ctx.request_repaint_after(std::time::Duration::from_millis(500));
         egui::Area::new(egui::Id::new("error_chip"))
+            .constrain_to(self.chrome_rect)
             .anchor(
                 egui::Align2::CENTER_BOTTOM,
                 egui::vec2(0.0, crate::ui::style::LANE_BOTTOM_CHASE),
@@ -10892,7 +10792,11 @@ impl eframe::App for HookEchoApp {
             self.wind_particles.retain(|k, _| *k < self.views.len());
 
             let want = (self.wind_level, self.hrrr_fcst_hour);
-            let interval = if crate::platform::is_metered() { 1800 } else { 900 };
+            let interval = if crate::platform::is_metered() {
+                1800
+            } else {
+                900
+            };
             let stale = self
                 .wind_last_fetch
                 .is_none_or(|t| t.elapsed().as_secs() >= interval);
@@ -11086,6 +10990,16 @@ impl eframe::App for HookEchoApp {
                 .show(root, |_| {});
         }
 
+        // Docked desktop chrome. Declared before every floating Area so those constrain to what's
+        // left of the viewport (`self.chrome_rect`) instead of covering the bars.
+        if !cfg!(target_os = "android") && !self.obs_mode {
+            self.sidebar(root, ctx);
+            self.timeline_bar(root);
+            self.colorbar(root);
+        }
+
+        self.chrome_rect = root.available_rect_before_wrap();
+
         // Chrome: touch-first on Android (top bar + dock + slide-up sheets), desktop otherwise
         // (the floating map-first chrome below). Both funnel into the same `UiActions` handling.
         let mut actions = ui::layer_options::UiActions::default();
@@ -11098,13 +11012,9 @@ impl eframe::App for HookEchoApp {
         // Floating map-first chrome (desktop): a hamburger, an alert bell, the two bottom pills.
         // Everything else is one drawer behind the hamburger.
         if !cfg!(target_os = "android") && !self.obs_mode {
-            self.drawer_chrome(ctx);
-            self.product_pill(ctx);
-            self.timeline_pill(ctx);
             self.info_chip(ctx);
             self.error_chip(ctx);
             self.coach_marks(ctx);
-            self.drawer(ctx);
         }
 
         // One quiet check per session, once the app has settled — so a stale build tells you so
@@ -11358,8 +11268,7 @@ impl eframe::App for HookEchoApp {
                 match res {
                     Ok(v) => self.verify_window.data = Some(v),
                     Err(e) => {
-                        self.verify_window.error =
-                            Some(format!("verification unavailable: {e}"));
+                        self.verify_window.error = Some(format!("verification unavailable: {e}"));
                     }
                 }
             }
@@ -11601,25 +11510,6 @@ impl eframe::App for HookEchoApp {
             self.sync_pane(idx, ctx);
         }
         self.sync_overlay();
-
-        // Desktop right-dock alert panel. On Android the alerts live in the bell's slide-up sheet
-        // (see `app::mobile`).
-        if !cfg!(target_os = "android") && self.show_alert_panel && !self.obs_mode {
-            {
-                let bounds = self.view_bounds();
-                let feats = self.active_alert_features().to_vec();
-                let mut muted = self.settings.mute_alerts;
-                let hit = ui::alert_panel::show(root, &feats, bounds, &mut muted);
-                self.settings.mute_alerts = muted;
-                if let Some((id, lon, lat)) = hit {
-                    // Fly the active camera to the alert and open its bulletin.
-                    let cam = &mut self.views[self.active].camera;
-                    cam.center = crate::render::mercator::lonlat_to_world(lon, lat);
-                    cam.zoom = cam.zoom.max(8.0);
-                    self.open_alert_popup(&id);
-                }
-            }
-        }
 
         // OBS-mode hint so the chrome-free view is still escapable.
         if self.obs_mode {

@@ -134,6 +134,23 @@ pub(crate) fn body(
         }
     });
     ui.add_space(6.0);
+    // Category pills: the scoping control. Picking one narrows the tree to that category and drops
+    // the common/long-tail tiering — you already said what you're looking for.
+    let pill_id = ui.id().with("cat_pill");
+    let mut pill = ui.data(|d| d.get_temp::<usize>(pill_id).unwrap_or(0));
+    ui.horizontal_wrapped(|ui| {
+        for (i, name) in std::iter::once("All").chain(CATEGORIES).enumerate() {
+            if ui
+                .selectable_label(pill == i, RichText::new(name).size(12.0))
+                .clicked()
+            {
+                pill = i;
+                ui.data_mut(|d| d.insert_temp(pill_id, i));
+            }
+        }
+    });
+    let scoped: Option<&str> = pill.checked_sub(1).map(|i| CATEGORIES[i]);
+    ui.add_space(6.0);
     let order = matches(entries, query);
     // Enter runs the top-ranked match. Type-and-Enter was the whole point of the command palette
     // this drawer replaced; without it the search box is a filter, not a launcher.
@@ -155,6 +172,20 @@ pub(crate) fn body(
                 for i in &order {
                     if row(ui, &entries[*i], accent) {
                         chosen = Some(entries[*i].action);
+                    }
+                    ui.add_space(4.0);
+                }
+                return;
+            }
+            if let Some(cat) = scoped {
+                // One category, everything in it: no tiering, no headers.
+                for i in order
+                    .iter()
+                    .copied()
+                    .filter(|i| entries[*i].category == cat)
+                {
+                    if row(ui, &entries[i], accent) {
+                        chosen = Some(entries[i].action);
                     }
                     ui.add_space(4.0);
                 }
@@ -286,7 +317,11 @@ mod tests {
             common: true,
             key: None,
         };
-        let entries = [e("Storm-Relative Velocity"), e("Velocity"), e("Reflectivity")];
+        let entries = [
+            e("Storm-Relative Velocity"),
+            e("Velocity"),
+            e("Reflectivity"),
+        ];
         assert_eq!(matches(&entries, "velocity").first(), Some(&1));
         assert_eq!(matches(&entries, "refl").first(), Some(&2));
     }

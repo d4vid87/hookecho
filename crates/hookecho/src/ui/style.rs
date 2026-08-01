@@ -35,11 +35,8 @@ pub const CARD_FILL: (u8, u8, u8) = (12, 14, 18);
 // ---------- Anchor lanes ----------
 // Top edge, CENTER_TOP: banners sit above the search pill.
 pub const LANE_TOP_BANNER: f32 = 8.0;
-pub const LANE_TOP_SEARCH: f32 = 44.0;
 // Right edge, RIGHT_TOP: the control column is outermost, panels open inboard of it, and
 // status badges stack below both.
-/// The one drawer slides in from here, clear of the hamburger that opens it.
-pub const LANE_LEFT_DRAWER: egui::Vec2 = vec2(14.0, 144.0);
 pub const LANE_RIGHT_CONTROLS: egui::Vec2 = vec2(-14.0, 44.0);
 pub const LANE_RIGHT_PANEL: egui::Vec2 = vec2(-74.0, 44.0);
 pub const LANE_RIGHT_BADGE_X: f32 = -14.0;
@@ -48,10 +45,8 @@ pub fn lane_right_badge_y(buttons: usize) -> f32 {
     LANE_RIGHT_CONTROLS.y + buttons as f32 * 50.0 + 8.0
 }
 // Bottom edge.
-pub const LANE_BOTTOM_TIMELINE: f32 = -34.0;
 pub const LANE_BOTTOM_CHIP: f32 = -8.0;
-/// Bottom-left product pill, and the chase HUD stacked above it.
-pub const LANE_BOTTOM_PRODUCT: f32 = -34.0;
+/// The chase HUD sits above the bottom edge.
 pub const LANE_BOTTOM_CHASE: f32 = -92.0;
 
 /// Translucent card used by the floating bars, in the current theme's colors.

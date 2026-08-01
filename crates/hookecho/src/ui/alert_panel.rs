@@ -70,22 +70,20 @@ fn expiry_key(a: &AlertInfo) -> i64 {
     a.expires.map(|e| e.timestamp()).unwrap_or(i64::MAX)
 }
 
-/// Render the panel. Returns the clicked alert's `(id, center_lon, center_lat)` when a row is picked.
-pub fn show(
-    root: &mut egui::Ui,
+/// Render the alerts list into whatever hosts it (the sidebar's Alerts tab on desktop, the bell
+/// sheet on Android). Returns the clicked alert's `(id, center_lon, center_lat)`.
+pub fn body(
+    ui: &mut egui::Ui,
     feats: &[GeoFeature],
     bounds: (f64, f64, f64, f64),
     muted: &mut bool,
 ) -> Option<(String, f64, f64)> {
     let rows = rows_in_view(feats, bounds);
     let mut clicked = None;
-    egui::Panel::right("alerts_panel")
-        .resizable(true)
-        .default_size(280.0)
-        .show(root, |ui| {
+    {
+        {
             ui.horizontal(|ui| {
-                ui.heading("Active Alerts");
-                ui.weak(format!("({})", rows.len()));
+                ui.weak(format!("{} in view", rows.len()));
                 // Silence switch, where you look when something is making noise at you.
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     let glyph = if *muted {
@@ -110,7 +108,7 @@ pub fn show(
             ui.separator();
             if rows.is_empty() {
                 ui.weak("No alerts in view.");
-                return;
+                return None;
             }
             egui::ScrollArea::vertical().show(ui, |ui| {
                 for row in &rows {
@@ -165,7 +163,8 @@ pub fn show(
                     ui.add_space(4.0);
                 }
             });
-        });
+        }
+    }
     clicked
 }
 

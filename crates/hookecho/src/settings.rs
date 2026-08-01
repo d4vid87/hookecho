@@ -187,6 +187,9 @@ pub struct Settings {
     /// Play an audible chime when a new NWS warning appears.
     #[serde(default = "default_true")]
     pub alert_sound: bool,
+    /// Interpolate radar gates (and the color lookup) instead of drawing hard gate squares.
+    #[serde(default = "default_true")]
+    pub smooth_radar: bool,
     /// ntfy.sh topic for push notifications when a warning covers a saved location (empty = off).
     #[serde(default)]
     pub ntfy_topic: String,
@@ -477,6 +480,7 @@ impl Default for Settings {
             share_name: String::new(),
             share_relay: String::new(),
             alert_sound: true,
+            smooth_radar: true,
             ntfy_topic: String::new(),
             background_alerts: false,
             plugins: Vec::new(),
@@ -632,6 +636,7 @@ mod tests {
     #[test]
     fn roundtrips() {
         let s = Settings {
+            smooth_radar: false,
             default_site: "KFWS".to_string(),
             poll_interval_secs: 45,
             theme: Theme::Synthwave,
@@ -764,7 +769,10 @@ mod tests {
         assert_eq!(v["background_alerts"], serde_json::json!(true));
         let m = &v["markers"][0];
         for key in ["name", "lat", "lon"] {
-            assert!(m.get(key).is_some(), "AlertService.kt reads markers[].{key}");
+            assert!(
+                m.get(key).is_some(),
+                "AlertService.kt reads markers[].{key}"
+            );
         }
     }
 }

@@ -256,6 +256,26 @@ pub fn apply(ctx: &egui::Context, theme: Theme, system_dark: bool) {
     ]
     .into();
 
+    // Desktop runs denser than touch: the sidebar has to fit a product section, a category row,
+    // a tree and three disclosures in 320 px, and a mouse doesn't need 26 px targets. Android
+    // keeps the touch-scale values above.
+    if !cfg!(target_os = "android") {
+        style.spacing.item_spacing = egui::vec2(6.0, 4.0);
+        style.spacing.button_padding = egui::vec2(8.0, 3.0);
+        style.spacing.interact_size.y = 22.0;
+        style.text_styles = [
+            (TextStyle::Heading, FontId::new(14.0, Proportional)),
+            (TextStyle::Body, FontId::new(12.5, Proportional)),
+            (TextStyle::Button, FontId::new(12.5, Proportional)),
+            (TextStyle::Small, FontId::new(11.0, Proportional)),
+            (
+                TextStyle::Monospace,
+                FontId::new(12.0, egui::FontFamily::Monospace),
+            ),
+        ]
+        .into();
+    }
+
     let egui_theme = if pal.is_dark {
         egui::Theme::Dark
     } else {

@@ -340,7 +340,7 @@ fn page_done(ui: &mut egui::Ui, settings: &Settings, basemap: BasemapStyle) {
     ));
     ui.add_space(4.0);
     ui.small(
-        "Press Finish to jump to your home radar. Re-run this anytime from ⋯ More ▸ Setup \
-         wizard, and press Ctrl+K whenever you're looking for something.",
+        "Press Finish to jump to your home radar. Re-run this anytime from the sidebar's App \
+         section, and press Ctrl+K whenever you're looking for something.",
     );
 }

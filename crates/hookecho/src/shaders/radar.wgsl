@@ -81,7 +81,10 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let az_bin = az / 360.0 * radar.az_bins;
 
     let nbins = i32(radar.az_bins);
-    var raw: u32;
+    // Carried as a float so the smoothed path can also interpolate the LUT lookup: a nearest
+    // lookup quantizes back to the table's bands, which is what made smoothed data still show
+    // hard color edges. The nearest path rounds at the end and stays bit-identical.
+    var rawf: f32;
     if (radar.smoothing > 0.5) {
         // Bilinear over the four surrounding gates, blending only valid data cells
         // (raw >= 2). Interpolating raw indices is meaningful because each colormap is
@@ -109,26 +112,36 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
             }
         }
         if (wsum <= 0.0) { discard; }
-        raw = u32(round(acc / wsum));
+        rawf = acc / wsum;
     } else {
         let gx = i32(gate_f);
         let gy = i32(az_bin) % nbins;
-        raw = textureLoad(sweep_tex, vec2<i32>(gx, gy), 0).r;
+        rawf = f32(textureLoad(sweep_tex, vec2<i32>(gx, gy), 0).r);
     }
 
     // Storm-relative velocity: shift the value-band index by the storm-motion component
     // along this radial. SRV = v_r - (mu*sin az + mv*cos az); motion_* are already in
     // raw-index units, so we shift the index directly. 0/1 (no-data / range-fold) pass through.
-    if (radar.srv > 0.5 && raw >= 2u) {
+    if (radar.srv > 0.5 && rawf >= 2.0) {
         let az_rad = az * PI / 180.0;
         let delta = -(radar.motion_e * sin(az_rad) + radar.motion_n * cos(az_rad));
-        raw = u32(clamp(round(f32(raw) + delta), 2.0, 255.0));
+        rawf = clamp(rawf + delta, 2.0, 255.0);
     }
 
     // The LUT encodes everything: 0 -> transparent, 1 -> range-fold, 2..255 -> value band,
     // threshold baked into the alpha. Colormap selection is the choice of LUT, so the shader
     // is moment-agnostic.
-    let color = textureLoad(lut_tex, vec2<i32>(i32(raw), 0), 0);
+    var color: vec4<f32>;
+    if (radar.smoothing > 0.5) {
+        // Blend adjacent LUT entries. Only ever adjacent, so this stays correct for the diverging
+        // velocity maps too — the zero crossing spans two neighbouring bands.
+        let i0 = i32(floor(rawf));
+        let a = textureLoad(lut_tex, vec2<i32>(i0, 0), 0);
+        let b = textureLoad(lut_tex, vec2<i32>(min(i0 + 1, 255), 0), 0);
+        color = mix(a, b, fract(rawf));
+    } else {
+        color = textureLoad(lut_tex, vec2<i32>(i32(round(rawf)), 0), 0);
+    }
     if (color.a == 0.0) { discard; }
     return color;
 }

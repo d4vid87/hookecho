@@ -153,7 +153,7 @@ impl MapView {
             loaded_site: None,
             camera_placed: false,
             timeline: crate::timeline::Timeline::default(),
-            smooth: false,
+            smooth: true,
             srv: false,
             storm_dir_deg: 240.0,
             storm_speed_kt: 25.0,
