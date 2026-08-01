@@ -175,6 +175,85 @@ pub async fn fetch_fields_one_run(
     Err(last_err.unwrap_or_else(|| anyhow::anyhow!("no HRRR run found")))
 }
 
+/// Which wind the particle layer flies on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum WindLevel {
+    /// 10 m above ground — the wind you stand in, and what surface obs report.
+    #[default]
+    Surface,
+    /// 500 mb — mid-level flow, roughly what steers storms. A quarter the bytes of 10 m.
+    Steering,
+}
+
+impl WindLevel {
+    /// The `.idx` level string. Both live in `wrfsfc`, so neither needs the much larger `wrfprs`
+    /// file that [`crate::sounding`] pulls for a full profile.
+    fn idx_level(self) -> &'static str {
+        match self {
+            WindLevel::Surface => "10 m above ground",
+            WindLevel::Steering => "500 mb",
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            WindLevel::Surface => "10 m",
+            WindLevel::Steering => "500 mb",
+        }
+    }
+}
+
+/// Fetch the `u`/`v` wind components for `level` as a matched pair from one model cycle.
+///
+/// **HRRR only, deliberately — do not add a [`Model`] parameter.** RAP's `awp130pgrb` packs the two
+/// components as *submessages of a single GRIB2 message*, so its `.idx` lists them at one shared
+/// byte offset:
+///
+/// ```text
+/// 92.1:4703714:d=2026073012:UGRD:500 mb:anl:
+/// 92.2:4703714:d=2026073012:VGRD:500 mb:anl:      <- same offset
+/// ```
+///
+/// [`field_byte_range`] hands back the same range for both, and `gribberish`'s `Message::data()`
+/// decodes the *first* data section, so a RAP `VGRD` request quietly returns u-wind: every vector
+/// at 45° with `|u| == |v|`, wrong everywhere and plausible-looking for about three seconds. HRRR's
+/// `wrfsfc` stores them as separate messages, so this path is safe. The same trap waits for any
+/// future RAP-sourced vector field.
+///
+/// `min_valid` is `-∞` for both: wind components are signed, and the regrid's threshold is a drop
+/// test, so anything higher would silently delete every westward or southward vector.
+pub async fn fetch_wind(
+    http: &reqwest::Client,
+    level: WindLevel,
+    fcst_hour: u8,
+) -> anyhow::Result<(DateTime<Utc>, MrmsField, MrmsField)> {
+    let lvl = level.idx_level();
+    let (run, mut fields) = fetch_fields_one_run(
+        http,
+        Model::Hrrr,
+        fcst_hour,
+        &[
+            ("UGRD", lvl, f64::NEG_INFINITY),
+            ("VGRD", lvl, f64::NEG_INFINITY),
+        ],
+    )
+    .await?;
+    anyhow::ensure!(fields.len() == 2, "expected u and v, got {}", fields.len());
+    // `.buffered` preserves input order, but a wind field is unreadable if u and v ever swap, so
+    // pop them back-to-front explicitly rather than trusting that at a distance.
+    let v = fields.pop().unwrap();
+    let u = fields.pop().unwrap();
+    anyhow::ensure!(
+        u.nx == v.nx && u.ny == v.ny,
+        "u/v grid mismatch: {}x{} vs {}x{}",
+        u.nx,
+        u.ny,
+        v.nx,
+        v.ny
+    );
+    Ok((run, u, v))
+}
+
 /// Fetch one field across forecast hours `1..=through_hour` from a SINGLE model cycle and fold
 /// them into one grid by elementwise max — the "swath" a max-per-hour field is meant to be read as.
 ///
@@ -492,6 +571,86 @@ mod tests {
         eprintln!("peak CAPE — RAP {max:.0} vs HRRR {hmax:.0} J/kg");
         let ratio = (max as f64 / hmax.max(1.0) as f64).max(hmax as f64 / max.max(1.0) as f64);
         assert!(ratio < 3.0, "RAP {max} and HRRR {hmax} disagree wildly");
+    }
+
+    #[tokio::test]
+    #[ignore = "network"]
+    async fn hrrr_wind_decodes_as_a_matched_pair() {
+        let http = reqwest::Client::new();
+        let (run, u, v) = fetch_wind(&http, WindLevel::Surface, 1).await.expect("HRRR wind");
+        assert_eq!((u.nx, u.ny), (v.nx, v.ny));
+
+        let finite = u
+            .values
+            .iter()
+            .zip(&v.values)
+            .filter(|(a, b)| a.is_finite() && b.is_finite());
+        let (mut n, mut max_kt) = (0usize, 0.0f32);
+        let (mut neg_u, mut neg_v) = (0usize, 0usize);
+        for (a, b) in finite {
+            n += 1;
+            max_kt = max_kt.max((a * a + b * b).sqrt() * 1.943_844);
+            neg_u += (*a < 0.0) as usize;
+            neg_v += (*b < 0.0) as usize;
+        }
+        let holes = 1.0 - n as f64 / u.values.len() as f64;
+        // The whole-grid figure is dominated by the Lambert domain's corners, which fall outside
+        // the model entirely and are supposed to be empty. The middle third is all inside CONUS,
+        // so its empty fraction is the one that says whether the regrid leaves real holes.
+        let (mut inner, mut inner_empty) = (0usize, 0usize);
+        for y in u.ny / 3..u.ny * 2 / 3 {
+            for x in u.nx / 3..u.nx * 2 / 3 {
+                inner += 1;
+                inner_empty += !u.values[y * u.nx + x].is_finite() as usize;
+            }
+        }
+        eprintln!(
+            "interior (middle third) — {:.2}% empty of {inner} cells",
+            inner_empty as f64 / inner as f64 * 100.0
+        );
+        eprintln!(
+            "HRRR 10 m wind {}x{} run {run} — {n} paired cells, {:.1}% empty, max {max_kt:.0} kt, \
+             {:.0}% easterly, {:.0}% southerly",
+            u.nx,
+            u.ny,
+            holes * 100.0,
+            neg_u as f64 / n as f64 * 100.0,
+            neg_v as f64 / n as f64 * 100.0,
+        );
+
+        assert!(n > u.values.len() / 2, "coverage holes: {:.1}% empty", holes * 100.0);
+        // Both signs must survive `min_valid`: a CONUS-wide field always has wind blowing every way.
+        assert!(neg_u > n / 20 && neg_v > n / 20, "one sign got clipped");
+        // Surface wind peaks somewhere in the country, but not at jet-stream speeds.
+        assert!((10.0..120.0).contains(&max_kt), "implausible peak {max_kt} kt");
+        // The RAP trap, checked from the outside: identical components mean one field read twice.
+        assert!(
+            u.values.iter().zip(&v.values).any(|(a, b)| (a - b).abs() > 0.5),
+            "u and v are the same field — submessage aliasing"
+        );
+
+        // `fetch_wind` pops the pair off a `.buffered()` stream assuming input order. A silent
+        // swap there would point every vector 90 degrees wrong and still look like weather, so
+        // pin it against single-field fetches that cannot be reordered. Same run, same hour.
+        let lvl = WindLevel::Surface.idx_level();
+        let solo_u = fetch_run_field(&http, Model::Hrrr, run, 1, "UGRD", lvl, f64::NEG_INFINITY)
+            .await
+            .expect("solo UGRD");
+        assert_eq!((solo_u.nx, solo_u.ny), (u.nx, u.ny));
+        let diff = solo_u
+            .values
+            .iter()
+            .zip(&u.values)
+            .filter(|(a, b)| a.is_finite() && b.is_finite())
+            .filter(|(a, b)| (*a - *b).abs() > 0.01)
+            .count();
+        assert_eq!(diff, 0, "fetch_wind's `u` is not UGRD — the pair is swapped");
+    }
+
+    #[test]
+    fn wind_levels_map_to_idx_strings() {
+        assert_eq!(WindLevel::Surface.idx_level(), "10 m above ground");
+        assert_eq!(WindLevel::Steering.idx_level(), "500 mb");
     }
 
     #[test]

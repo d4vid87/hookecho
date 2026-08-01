@@ -358,6 +358,15 @@ fn basemaps_tab(ui: &mut egui::Ui, settings: &mut Settings) {
     key_field(ui, "WeatherFlow Tempest token", &mut settings.tempest_token);
     ui.add_space(8.0);
     key_field(ui, "Weather Underground API key", &mut settings.wu_key);
+    ui.add_space(12.0);
+    ui.separator();
+    ui.label("Webcams");
+    ui.weak(
+        "Optional. The FAA's ~2,600 cameras need no key but stop at the US border; a free Windy \
+         key adds their global network. Windy returns the 50 most popular cameras in view.",
+    );
+    ui.add_space(6.0);
+    key_field(ui, "Windy API key", &mut settings.windy_key);
     ui.add_space(8.0);
     ui.label("Field mill URL (JSON, kV/m)");
     ui.text_edit_singleline(&mut settings.field_mill_url)

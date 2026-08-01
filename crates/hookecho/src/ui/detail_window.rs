@@ -8,6 +8,9 @@ pub struct Detail {
     /// Texture-cache key of a picture to show above the text (webcam stills). `None` for the
     /// text-only features this window was built for.
     pub image: Option<String>,
+    /// `(label, url)` for a "see this on its own site" button. Windy's webcam terms require every
+    /// image to link back to the camera's page, so for those this is not decoration.
+    pub link: Option<(String, String)>,
 }
 
 /// Show the detail window. Returns `false` when it should close. `image` is the resolved texture
@@ -30,8 +33,11 @@ pub fn show(ctx: &egui::Context, detail: &Detail, image: Option<&egui::TextureHa
             if detail.image.is_some() {
                 match image {
                     Some(tex) => {
-                        let w = ui.available_width();
                         let size = tex.size_vec2();
+                        // Never wider than the image really is. Windy's webcam terms allow their
+                        // stills at original size or smaller and forbid stretching, and their
+                        // previews are often narrower than this window.
+                        let w = ui.available_width().min(size.x);
                         let h = if size.x > 0.0 { w * size.y / size.x } else { 0.0 };
                         ui.add(egui::Image::new(tex).fit_to_exact_size(egui::vec2(w, h)));
                     }
@@ -46,6 +52,16 @@ pub fn show(ctx: &egui::Context, detail: &Detail, image: Option<&egui::TextureHa
                 // Monospace keeps L3 attribute-table columns aligned.
                 ui.add(egui::Label::new(egui::RichText::new(&detail.body).monospace()).wrap());
             });
+            // A button rather than `ui.hyperlink_to`: Android needs the JNI ACTION_VIEW path in
+            // platform::open_url, which egui's own hyperlink does not go through.
+            if let Some((label, url)) = &detail.link {
+                ui.add_space(6.0);
+                if ui.button(label).clicked() {
+                    if let Err(e) = crate::platform::open_url(url) {
+                        log::warn!("could not open {url}: {e}");
+                    }
+                }
+            }
         });
     open
 }

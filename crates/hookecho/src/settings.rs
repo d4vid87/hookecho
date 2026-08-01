@@ -153,6 +153,10 @@ pub struct Settings {
     /// Weather Underground API key — adds nearby PWS stations to the live station cards.
     #[serde(default)]
     pub wu_key: String,
+    /// Windy API key — adds the Windy webcam network to the keyless FAA cameras, which is what
+    /// gives the layer any coverage outside the United States. Held locally, same as the rest.
+    #[serde(default)]
+    pub windy_key: String,
     /// A ground field mill publishing JSON (`{"time":…, "kv_per_m":…}`, or an array of those).
     /// When set, the station cards chart real kV/m instead of NOAA's ionospheric model.
     #[serde(default)]
@@ -463,6 +467,7 @@ impl Default for Settings {
             maptiler_key: String::new(),
             tempest_token: String::new(),
             wu_key: String::new(),
+            windy_key: String::new(),
             field_mill_url: String::new(),
             start_view: None,
             sync_client_id: String::new(),
@@ -658,6 +663,7 @@ mod tests {
             mapbox_key: "pk.test".to_string(),
             tempest_token: String::new(),
             wu_key: String::new(),
+            windy_key: String::new(),
             field_mill_url: String::new(),
             maptiler_key: "mt.test".to_string(),
             start_view: Some(StartView {
