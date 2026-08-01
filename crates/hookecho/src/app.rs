@@ -212,6 +212,8 @@ enum OverlaySource {
     L3Grid(crate::render::FieldLayer, String),
     /// Melting-level and −20 °C heights at `(lon, lat)`, for the derived hail grids.
     FreezingLevels(f64, f64),
+    /// NOHRSC observed snowfall analysis over an accumulation window (hours).
+    Snow(u16),
     /// Nearest-station observations for `site` at `(lat, lon)`.
     Obs {
         site: String,
@@ -390,6 +392,10 @@ impl OverlaySource {
                     None => anyhow::bail!("no L3 grid for {site}"),
                 }
             }
+            OverlaySource::Snow(hours) => OverlayMsg::Field(
+                crate::render::FieldLayer::SnowAnalysis,
+                wxdata::nohrsc::fetch(http, hours).await?,
+            ),
             OverlaySource::FreezingLevels(lon, lat) => {
                 // HRRR carries both isotherm heights as analysis fields, so the hail algorithm
                 // sources its own thermodynamics instead of asking the user for a freezing level.
@@ -889,6 +895,8 @@ fn field_refresh_secs(layer: crate::render::FieldLayer) -> u64 {
         FL::UpdraftHelicity => 600,
         // Snowfall accumulates over a whole model run; it moves as slowly as the run does.
         FL::Snowfall => 600,
+        // The analysis is reissued four times a day; half an hour is plenty.
+        FL::SnowAnalysis => 1800,
         FL::Smoke => 900,
         // The 24-h hail-swath accumulation moves slowly.
         FL::HailSwath => 300,
@@ -1322,6 +1330,9 @@ pub struct HookEchoApp {
     /// the clock that refreshes them on the environment cadence.
     freezing: Option<(String, f64, f64)>,
     freezing_last_fetch: Option<Instant>,
+    /// Accumulation window (hours) for the observed snowfall analysis, and the one last fetched.
+    snow_hours: u16,
+    snow_fetched: Option<u16>,
     /// Surface obs (METAR station plots, feature U): toggle, current obs, fetch clock + bbox.
     show_metar: bool,
     metars: Vec<wxdata::metar::SurfaceOb>,
@@ -1798,6 +1809,8 @@ impl HookEchoApp {
             env_srh_km: 3,
             l3grid_site: None,
             derived_key: None,
+            snow_hours: 24,
+            snow_fetched: None,
             freezing: None,
             freezing_last_fetch: None,
             show_metar: false,
@@ -4307,6 +4320,7 @@ impl HookEchoApp {
                             &mut self.env_model,
                             &mut self.contour_kind,
                             &mut self.settings.etop_dbz,
+                            &mut self.snow_hours,
                             l3_site.as_deref(),
                             Some(mosaic.as_str()),
                             &mut opts,
@@ -5116,6 +5130,13 @@ impl HookEchoApp {
                 "Future rotation tracks",
                 "Where storms are forecast to rotate \u{2014} scrub the timeline to extend the swath",
                 true,
+            ),
+            (
+                FL::SnowAnalysis,
+                "National",
+                "Snowfall analysis",
+                "How much snow actually fell \u{2014} pick the window in layer options",
+                false,
             ),
             (
                 FL::Snowfall,
@@ -10951,6 +10972,7 @@ impl eframe::App for HookEchoApp {
                     | FL::HailMehs
                     | FL::HailPosh
                     | FL::Snowfall
+                    | FL::SnowAnalysis
             ) {
                 continue;
             }
@@ -10988,7 +11010,8 @@ impl eframe::App for HookEchoApp {
                     | FL::EtopLocal
                     | FL::HailMehs
                     | FL::HailPosh
-                    | FL::Snowfall => unreachable!(),
+                    | FL::Snowfall
+                    | FL::SnowAnalysis => unreachable!(),
                 };
                 self.spawn_overlay(ctx, OverlaySource::Field(layer, product));
             }
@@ -11115,6 +11138,23 @@ impl eframe::App for HookEchoApp {
             }
         }
 
+        // Observed snowfall analysis: its own block because the accumulation window is a knob,
+        // and changing it must refetch at once rather than wait out the cadence.
+        {
+            let on = self.fields.get(&FL::SnowAnalysis).is_some_and(|s| s.show);
+            let stale = self.fields.get(&FL::SnowAnalysis).is_some_and(|s| {
+                s.last_fetch
+                    .is_none_or(|t| t.elapsed().as_secs() >= field_refresh_secs(FL::SnowAnalysis))
+            });
+            let window_changed = self.snow_fetched != Some(self.snow_hours);
+            if on && (stale || window_changed) {
+                if let Some(s) = self.fields.get_mut(&FL::SnowAnalysis) {
+                    s.last_fetch = Some(Instant::now());
+                }
+                self.snow_fetched = Some(self.snow_hours);
+                self.spawn_overlay(ctx, OverlaySource::Snow(self.snow_hours));
+            }
+        }
         // Surface analysis: WPC reissues it a few times an hour.
         if self.show_fronts
             && self

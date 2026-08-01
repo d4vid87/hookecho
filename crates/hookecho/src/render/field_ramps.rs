@@ -324,6 +324,27 @@ static SNOWFALL: FieldRamp = FieldRamp {
     )
 };
 
+/// Observed snowfall. Same units and shape as the forecast scale, one decade taller: a 72-hour
+/// analysis of a lake-effect band goes places a model run does not.
+static SNOW_ANALYSIS: FieldRamp = FieldRamp {
+    input_scale: 39.370_08, // m → in
+    ..ramp!(
+        "Snowfall (observed)",
+        "in",
+        0.1,
+        48.0,
+        RampScale::Log,
+        220,
+        &[
+            (0.0, [200, 235, 255]),
+            (0.35, [90, 170, 235]),
+            (0.6, [60, 90, 210]),
+            (0.8, [140, 60, 200]),
+            (1.0, [240, 240, 255]),
+        ]
+    )
+};
+
 static PRECIP_TYPE: FieldRamp = FieldRamp {
     label: "Precip type",
     units: "",
@@ -459,6 +480,7 @@ pub fn ramp_for(layer: FieldLayer) -> Option<&'static FieldRamp> {
         FL::UpdraftHelicity => &UPDRAFT_HELICITY,
         FL::Smoke => &SMOKE,
         FL::Snowfall => &SNOWFALL,
+        FL::SnowAnalysis => &SNOW_ANALYSIS,
         FL::Hca => &HCA,
         FL::Mrms | FL::Mosaic | FL::Hrrr | FL::Lightning => return None,
     })

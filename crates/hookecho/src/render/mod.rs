@@ -91,6 +91,8 @@ pub enum FieldLayer {
     HailPosh,
     /// HRRR accumulated snowfall through the scrubbed forecast hour.
     Snowfall,
+    /// NOHRSC observed snowfall analysis over the last 6/24/48/72 hours.
+    SnowAnalysis,
 }
 
 impl FieldLayer {
@@ -106,11 +108,12 @@ impl FieldLayer {
                 | FieldLayer::PrecipType
                 | FieldLayer::Smoke
                 | FieldLayer::Snowfall
+                | FieldLayer::SnowAnalysis
         )
     }
 
     /// Fixed bottom-to-top paint order within each band.
-    pub const DRAW_ORDER: [FieldLayer; 25] = [
+    pub const DRAW_ORDER: [FieldLayer; 26] = [
         // Below-radar context band (bottom to top).
         FieldLayer::Mrms,
         FieldLayer::Mosaic,
@@ -119,6 +122,7 @@ impl FieldLayer {
         FieldLayer::Srh,
         FieldLayer::Smoke,
         FieldLayer::Snowfall,
+        FieldLayer::SnowAnalysis,
         FieldLayer::PrecipType,
         // Above-radar severe-signal band.
         FieldLayer::Qpe1h,

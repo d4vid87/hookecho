@@ -209,7 +209,7 @@ pub async fn fetch_latest(http: &reqwest::Client, product: &str) -> anyhow::Resu
     let raw = gunzip(&gz)?;
     // gribberish can panic on some MRMS product packings (a slice off-by-one on rotation-track /
     // AzShear grids). Contain it so a bad product surfaces as an error, never a process abort.
-    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| decode(&raw)))
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| decode_grib2(&raw)))
         .unwrap_or_else(|_| anyhow::bail!("grib decode panicked for {product}"))
 }
 
@@ -267,8 +267,11 @@ fn gunzip(bytes: &[u8]) -> anyhow::Result<Vec<u8>> {
     Ok(out)
 }
 
-/// Decode a single-message MRMS GRIB2 into a [`MrmsField`].
-fn decode(raw: &[u8]) -> anyhow::Result<MrmsField> {
+/// Decode a single-message GRIB2 into a [`MrmsField`].
+///
+/// Shared with [`crate::nohrsc`]: NOHRSC's snowfall analysis is the same plate-carrée single
+/// message with the same very-negative missing convention, so it decodes the same way.
+pub(crate) fn decode_grib2(raw: &[u8]) -> anyhow::Result<MrmsField> {
     let msg = read_message(raw, 0).ok_or_else(|| anyhow::anyhow!("no GRIB2 message"))?;
     let time = msg.forecast_date().unwrap_or_else(|_| chrono::Utc::now());
     let dm = DataMessage::try_from(&msg).map_err(|e| anyhow::anyhow!("grib decode: {e:?}"))?;

@@ -22,6 +22,7 @@ pub mod lsr;
 pub mod metar;
 pub mod mosaic;
 pub mod mrms;
+pub mod nohrsc;
 pub mod obs;
 pub mod overlay;
 pub mod placefile;

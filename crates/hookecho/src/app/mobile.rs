@@ -753,6 +753,7 @@ impl super::HookEchoApp {
                                     &mut self.env_model,
                                     &mut self.contour_kind,
                                     &mut self.settings.etop_dbz,
+                                    &mut self.snow_hours,
                                     l3_site.as_deref(),
                                     Some(mosaic.as_str()),
                                     actions,
