@@ -119,6 +119,7 @@ pub fn body(
                         .corner_radius(egui::CornerRadius::same(5))
                         .inner_margin(egui::Margin::same(6))
                         .show(ui, |ui| {
+                            ui.set_width(ui.available_width());
                             ui.horizontal(|ui| {
                                 let (rect, _) = ui.allocate_exact_size(
                                     egui::vec2(5.0, 15.0),
