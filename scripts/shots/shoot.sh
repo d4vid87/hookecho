@@ -185,9 +185,11 @@ scene_layers()       { launch "$MAYFIELD";   wait_settle 14; key 1; sleep 1; key
 scene_tropical()     { launch "$IAN";        wait_settle 16; key 1; wait_settle 6; snap tropical; }
 
 scene_alltilts() {
-  launch "$MOORE"; wait_settle 14; key 1
-  palette "$L_PANES"
-  palette "$L_LINKCAM"   # four products of one storm only reads if all four look at the same place
+  # Tighter than $MOORE: CC and ZDR are mostly clear-air noise away from the core, so the quad
+  # only reads if the panes are filled by the storm itself rather than the county around it.
+  launch "KTLX,-97.52,35.37,11.2,2013-05-20T20:15:00Z"; wait_settle 14; key 1
+  palette "$L_LINKCAM"
+  palette "$L_PANES"   # four products of one storm only reads if all four look at the same place
   wait_settle 20 120
   # One product per pane, clicked on each pane's own REF/VEL/SW/ZDR/PHI/CC strip: the strip both
   # picks the pane and sets its moment, so no separate "focus this pane" click is needed. Coords
