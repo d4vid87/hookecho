@@ -101,14 +101,16 @@ the tight red-against-green couplet below is a tornado on the ground.
 | ![A classic supercell with a hook echo](docs/shots/reflectivity.jpg) | ![A tornadic velocity couplet](docs/shots/velocity.jpg) |
 | <sub>KBMX — Tuscaloosa, AL, 27 Apr 2011</sub> | <sub>KTLX — El Reno, OK, 31 May 2013</sub> |
 
-One action opens the same product at four tilts with the cameras linked, so you
-can see how a storm leans with height. Cross-sections slice it vertically in any
-product — click two points and you get the storm in profile, core and overhang
-and all.
+Split the window into four panes and give each one its own product, cameras
+linked — reflectivity, velocity, correlation coefficient and differential
+reflectivity on the same storm at the same second. One action does the same
+trick with four tilts instead, so you can see how a storm leans with height.
+Cross-sections slice it vertically in any product — click two points and you get
+the storm in profile, core and overhang and all.
 
-| Four tilts at once | Cross-section |
+| Four products at once | Cross-section |
 |---|---|
-| ![The same storm at four elevation angles](docs/shots/alltilts.jpg) | ![A vertical slice through the storm core](docs/shots/xsection.jpg) |
+| ![The same storm in reflectivity, velocity, correlation coefficient and differential reflectivity](docs/shots/alltilts.jpg) | ![A vertical slice through the storm core](docs/shots/xsection.jpg) |
 | <sub>KTLX — Moore, OK, 20 May 2013</sub> | <sub>KTLX — Moore, OK, 20 May 2013</sub> |
 
 Every screenshot in this section is a replay. The timeline reaches back to 2008,

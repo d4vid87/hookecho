@@ -29,6 +29,8 @@ PROFILE="$WORK/profile"
 # Registry labels typed into the command palette. These are matched against the source in
 # preflight — a renamed action silently shoots the wrong scene otherwise.
 L_ALLTILTS="Compare 4 tilts"
+L_PANES="4 panes"
+L_LINKCAM="Link pane cameras"
 L_XSECTION="Tool: Cross-section"
 L_FORECAST="Tool: Point forecast"
 L_STORMTABLE="Storm attributes…"
@@ -53,7 +55,10 @@ preflight() {
   # since the last build, and the scene silently shoots without its layer.
   log "building release"
   (cd "$REPO" && cargo build --release --quiet)
-  for l in "$L_ALLTILTS" "$L_XSECTION" "$L_FORECAST" "$L_STORMTABLE" "$L_FRONTS" "$L_GLM" \
+  # "4 panes" is built by format!("{n} pane{}"), so it never appears literally in the source.
+  grep -qF '{n} pane' "$REPO/crates/hookecho/src/app.rs" \
+    || die "palette label '$L_PANES' is not in app.rs any more — update shoot.sh"
+  for l in "$L_ALLTILTS" "$L_LINKCAM" "$L_XSECTION" "$L_FORECAST" "$L_STORMTABLE" "$L_FRONTS" "$L_GLM" \
            "$L_MRMS" "$L_MOSAIC" "$L_QPE" "$L_HRRR" "$L_VERIFY"; do
     grep -qF "$l" "$REPO/crates/hookecho/src/app.rs" \
       || die "palette label '$l' is not in app.rs any more — update shoot.sh"
@@ -181,9 +186,17 @@ scene_tropical()     { launch "$IAN";        wait_settle 16; key 1; wait_settle 
 
 scene_alltilts() {
   launch "$MOORE"; wait_settle 14; key 1
-  palette "$L_ALLTILTS"
-  # Each pane fetches and bins its own tilt, and the upper cuts come in last — a short wait here
-  # shoots three empty panes, which is exactly the failure the old screenshot set shipped.
+  palette "$L_PANES"
+  palette "$L_LINKCAM"   # four products of one storm only reads if all four look at the same place
+  wait_settle 20 120
+  # One product per pane, clicked on each pane's own REF/VEL/SW/ZDR/PHI/CC strip: the strip both
+  # picks the pane and sets its moment, so no separate "focus this pane" click is needed. Coords
+  # are the strip hit points at 1600x1000 — top row y=28, bottom row y=498.
+  click 1004 28    # top-right   VEL
+  click  559 498   # bottom-left CC
+  click 1085 498   # bottom-right ZDR
+  # Each pane bins its own moment from the same volume, and the last one lands last — a short
+  # wait here shoots half-empty panes, which is exactly the failure the old screenshot set shipped.
   wait_settle 60 240
   snap alltilts
 }
