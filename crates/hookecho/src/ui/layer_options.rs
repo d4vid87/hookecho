@@ -22,6 +22,8 @@ pub struct UiActions {
     pub instant_replay: bool,
     /// The Day-1 outlook hazard changed; the app must clear + refetch that day's outlook.
     pub outlook_kind_changed: bool,
+    /// The WSSI day changed; the app must clear + refetch it.
+    pub wssi_day_changed: bool,
     /// Start an offline chase-pack download of the current view's basemap.
     pub download_chasepack: bool,
     /// Cancel the in-progress chase-pack download.
@@ -99,6 +101,25 @@ pub(crate) fn show(
             });
         });
     }
+
+    // Winter Storm Severity Index: same off-plus-three-days shape as the outlook selector.
+    ui.horizontal(|ui| {
+        ui.label("Winter impacts:");
+        for day in 0u8..=3 {
+            let label = if day == 0 {
+                "Off".to_string()
+            } else {
+                format!("D{day}")
+            };
+            if ui
+                .selectable_value(&mut filters.wssi_day, day, label)
+                .changed()
+            {
+                actions.wssi_day_changed = true;
+                changed = true;
+            }
+        }
+    });
 
     // Where the environment fields and contours come from. RAP f00 is an analysis of what the
     // atmosphere is doing now (assimilated obs, 13 km) rather than an HRRR forecast at hour zero —

@@ -74,6 +74,8 @@ pub struct OverlayFilters {
     /// Day-1 outlook hazard: categorical risk, or a tornado/wind/hail probability grid.
     pub outlook_kind: wxdata::spc::OutlookKind,
     pub show_mds: bool,
+    /// WPC Winter Storm Severity Index day (0 = off, else 1-3).
+    pub wssi_day: u8,
     /// Level 3 storm cells (clickable dots: storm tracking, hail, mesocyclone).
     pub show_cells: bool,
     /// SCIT forecast tracks (painter-only; no overlay rebuild).
@@ -97,6 +99,7 @@ impl Default for OverlayFilters {
             alert_cats: [true; 6],
             outlook_day: 0, // SPC outlook off by default; user opts in from Layer options
             outlook_kind: wxdata::spc::OutlookKind::Categorical,
+            wssi_day: 0, // off by default, like the SPC outlook
 
             show_mds: true,
             show_cells: true,
@@ -117,6 +120,8 @@ enum OverlayMsg {
     Fronts(wxdata::fronts::SurfaceAnalysis),
     Outlook(u8, Vec<GeoFeature>),
     Mds(Vec<GeoFeature>),
+    /// WPC Winter Storm Severity Index polygons for a day.
+    Wssi(u8, Vec<GeoFeature>),
     /// Storm cells for a specific site (dropped if the active site changed meanwhile).
     Cells(String, Vec<Cell>),
     /// A fetched placefile keyed by its URL.
@@ -190,6 +195,8 @@ enum OverlaySource {
     /// NWS alerts; the `Option<(lat, lon)>` scopes zone-only alert resolution to the active radar.
     Alerts(Option<(f64, f64)>),
     Mds,
+    /// Winter Storm Severity Index for a day (1-3).
+    Wssi(u8),
     Outlook(u8, wxdata::spc::OutlookKind),
     Cells(String),
     Placefile(String),
@@ -272,6 +279,9 @@ impl OverlaySource {
             }
             OverlaySource::Mds => {
                 OverlayMsg::Mds(wxdata::spc::fetch_mesoscale_discussions(http).await?)
+            }
+            OverlaySource::Wssi(day) => {
+                OverlayMsg::Wssi(day, wxdata::wssi::fetch(http, day).await?)
             }
             OverlaySource::Outlook(day, kind) => {
                 OverlayMsg::Outlook(day, wxdata::spc::fetch_outlook_kind(http, day, kind).await?)
@@ -1183,6 +1193,8 @@ pub struct HookEchoApp {
     arch_lsr_shown: Option<i64>,
     outlook_features: [Vec<GeoFeature>; 3],
     md_features: Vec<GeoFeature>,
+    /// Winter Storm Severity Index polygons for the selected day.
+    wssi_features: Vec<GeoFeature>,
     /// ProbSevere storm-probability polygons + badges (toggle + refresh clock).
     show_probsevere: bool,
     probsevere: Vec<GeoFeature>,
@@ -1725,6 +1737,7 @@ impl HookEchoApp {
             arch_lsr_shown: None,
             outlook_features: [Vec::new(), Vec::new(), Vec::new()],
             md_features: Vec::new(),
+            wssi_features: Vec::new(),
             show_probsevere: false,
             probsevere: Vec::new(),
             probsevere_last_fetch: None,
@@ -2197,6 +2210,9 @@ impl HookEchoApp {
             .map(|s| (s.latitude as f64, s.longitude as f64));
         self.spawn_overlay(ctx, OverlaySource::Alerts(near));
         self.spawn_overlay(ctx, OverlaySource::Mds);
+        if (1..=3).contains(&self.filters.wssi_day) {
+            self.spawn_overlay(ctx, OverlaySource::Wssi(self.filters.wssi_day));
+        }
         // Only fetch the SPC outlook the user has selected (off = day 0 fetches nothing).
         if (1..=3).contains(&self.filters.outlook_day) {
             self.spawn_overlay(
@@ -4045,6 +4061,13 @@ impl HookEchoApp {
             // Hazard switched: drop the stale Day-1 features so the empty-check refetches it.
             self.outlook_features[0].clear();
         }
+        if actions.wssi_day_changed {
+            // Day switched: the shown polygons belong to the old day until the new ones land.
+            self.wssi_features.clear();
+            if (1..=3).contains(&self.filters.wssi_day) {
+                self.spawn_overlay(ctx, OverlaySource::Wssi(self.filters.wssi_day));
+            }
+        }
         if actions.overlays_changed {
             // Selecting an outlook day/kind that hasn't been fetched yet pulls it on demand.
             let day = self.filters.outlook_day;
@@ -5786,6 +5809,12 @@ impl HookEchoApp {
                     self.alert_features = f;
                 }
                 OverlayMsg::Mds(f) => self.md_features = f,
+                OverlayMsg::Wssi(day, f) => {
+                    // A day change in flight must not overwrite the day now selected.
+                    if day == self.filters.wssi_day {
+                        self.wssi_features = f;
+                    }
+                }
                 OverlayMsg::Outlook(day, f) => {
                     if (1..=3).contains(&day) {
                         self.outlook_features[(day - 1) as usize] = f;
@@ -6708,6 +6737,9 @@ impl HookEchoApp {
         }
         if self.filters.show_mds {
             v.extend(self.md_features.iter().cloned());
+        }
+        if (1..=3).contains(&self.filters.wssi_day) {
+            v.extend(self.wssi_features.iter().cloned());
         }
         if self.filters.show_alerts {
             for f in self.active_alert_features() {

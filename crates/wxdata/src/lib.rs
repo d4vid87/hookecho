@@ -43,6 +43,7 @@ pub mod tz;
 pub mod verify;
 pub mod volume3d;
 pub mod webcams;
+pub mod wssi;
 pub mod xsection;
 
 /// Radar site registry (id, city, state, lat/lon, elevation).
