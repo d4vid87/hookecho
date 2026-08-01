@@ -277,6 +277,15 @@ pub struct Settings {
     /// Enhanced Echo Tops product; raise it to track the core rather than the anvil.
     #[serde(default = "default_etop_dbz")]
     pub etop_dbz: f32,
+    /// Hide the docked timeline bar under the map (desktop). The transport keeps working from the
+    /// keyboard; this is for people who want the map edge-to-edge.
+    #[serde(default)]
+    pub hide_toolbar: bool,
+    /// Registry labels in the order the user dragged them, across every category. Labels not in
+    /// here keep their registry order behind the ones that are — so a reorder never hides a row,
+    /// and a renamed action just falls back to its default place.
+    #[serde(default)]
+    pub layer_order: Vec<String>,
 }
 
 impl Settings {
@@ -465,6 +474,8 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             default_site: "KTLX".to_string(),
+            hide_toolbar: false,
+            layer_order: Vec::new(),
             mping_key: String::new(),
             etop_dbz: default_etop_dbz(),
             poll_interval_secs: 30,
@@ -651,6 +662,8 @@ mod tests {
     fn roundtrips() {
         let s = Settings {
             smooth_radar: false,
+            hide_toolbar: false,
+            layer_order: Vec::new(),
             mping_key: String::new(),
             etop_dbz: 30.0,
             default_site: "KFWS".to_string(),

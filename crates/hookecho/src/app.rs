@@ -868,6 +868,8 @@ pub(crate) enum PaletteAction {
     SetPanes(usize),
     CycleBasemap,
     ToggleMute,
+    /// Show/hide the docked timeline bar under the map (desktop).
+    ToggleToolbar,
     Reload,
     InstantReplay,
     GoLive,
@@ -4381,6 +4383,8 @@ impl HookEchoApp {
                 }
                 self.product_section(ui, &mut opts);
                 ui.separator();
+                // A drag rewrites the order in place, so persist it when it moves.
+                let order_was = self.settings.layer_order.clone();
                 chosen = ui::layers_panel::body(
                     ui,
                     &entries,
@@ -4389,7 +4393,11 @@ impl HookEchoApp {
                     // Leave room for the disclosures under the tree, whatever the window height.
                     (ui.available_height() - 110.0).max(120.0),
                     std::mem::take(&mut focus_search),
+                    &mut self.settings.layer_order,
                 );
+                if self.settings.layer_order != order_was {
+                    self.settings.save();
+                }
                 // Place search folds in here rather than keeping a pill of its own: action
                 // matches rank first, and this row is the explicit "I meant a place" answer.
                 if !query.trim().is_empty() {
@@ -5574,6 +5582,14 @@ impl HookEchoApp {
             Some(self.settings.mute_alerts),
         );
         push(
+            "Timeline bar",
+            "Reference",
+            "The transport strip under the map \u{2014} hide it for an edge-to-edge map",
+            false,
+            PaletteAction::ToggleToolbar,
+            Some(!self.settings.hide_toolbar),
+        );
+        push(
             "About Hook Echo-WX",
             "Reference",
             "Version, links, and whether a newer release is out",
@@ -5841,6 +5857,10 @@ impl HookEchoApp {
                 v.basemap = v.basemap.next(mb, mt);
             }
             PaletteAction::ToggleMute => self.apply_action(BindableAction::ToggleMute, ctx),
+            PaletteAction::ToggleToolbar => {
+                self.settings.hide_toolbar = !self.settings.hide_toolbar;
+                self.settings.save();
+            }
             PaletteAction::Reload => self.trigger_reload(ctx),
             PaletteAction::InstantReplay => self.instant_replay(),
             PaletteAction::GoLive => self.views[self.active].timeline.go_head(),
@@ -11660,7 +11680,9 @@ impl eframe::App for HookEchoApp {
         // left of the viewport (`self.chrome_rect`) instead of covering the bars.
         if !cfg!(target_os = "android") && !self.obs_mode {
             self.sidebar(root, ctx);
-            self.timeline_bar(root);
+            if !self.settings.hide_toolbar {
+                self.timeline_bar(root);
+            }
             self.colorbar(root);
         }
 

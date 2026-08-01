@@ -710,6 +710,7 @@ impl super::HookEchoApp {
                             // every expert control one tap further in under "Advanced".
                             let entries = self.palette_entries();
                             let mut query = std::mem::take(&mut self.mobile_drawer_query);
+                            let order_was = self.settings.layer_order.clone();
                             let chosen = crate::ui::layers_panel::body(
                                 ui,
                                 &entries,
@@ -717,7 +718,11 @@ impl super::HookEchoApp {
                                 accent,
                                 content.height() * 0.5,
                                 false,
+                                &mut self.settings.layer_order,
                             );
+                            if self.settings.layer_order != order_was {
+                                self.settings.save();
+                            }
                             // Clear a search once it's been used, exactly as the desktop drawer
                             // does. Leaving it set meant the next open showed a stale query — and
                             // since the soft keyboard appends, the search after that was garbage.
