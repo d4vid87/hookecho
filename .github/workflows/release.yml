@@ -61,11 +61,11 @@ jobs:
         with:
           tag_name: latest
           name: Latest build (main)
-          prerelease: true
-          make_latest: false
+          prerelease: false
+          make_latest: true
           body: |
-            Rolling build of `main` — updated on every push. For a pinned, versioned
-            download use the newest `v*` release instead.
+            Rolling build of `main` — rebuilt and re-published on every push, so this
+            is always the newest code. Older releases are kept as drafts.
           files: dist/Hook_Echo-WX-x86_64.AppImage
 
   windows:
@@ -148,11 +148,11 @@ jobs:
         with:
           tag_name: latest
           name: Latest build (main)
-          prerelease: true
-          make_latest: false
+          prerelease: false
+          make_latest: true
           body: |
-            Rolling build of `main` — updated on every push. For a pinned, versioned
-            download use the newest `v*` release instead.
+            Rolling build of `main` — rebuilt and re-published on every push, so this
+            is always the newest code. Older releases are kept as drafts.
           files: |
             dist/hookecho-windows-x86_64.zip
             dist/Hook_Echo-WX-x86_64.msi
@@ -238,9 +238,35 @@ jobs:
         with:
           tag_name: latest
           name: Latest build (main)
-          prerelease: true
-          make_latest: false
+          prerelease: false
+          make_latest: true
           body: |
-            Rolling build of `main` — updated on every push. For a pinned, versioned
-            download use the newest `v*` release instead.
+            Rolling build of `main` — rebuilt and re-published on every push, so this
+            is always the newest code. Older releases are kept as drafts.
           files: Hook_Echo-WX-arm64-v8a.apk
+
+  # Only the current build should be public. Everything else gets demoted to a draft:
+  # still on the Releases page for anyone with push access, assets intact, but invisible
+  # (and undownloadable) to the public. Deleting would lose the binaries; drafts don't.
+  # The git tags stay public either way — they're repo history, not release pages.
+  demote-old:
+    name: Hide superseded releases
+    needs: [appimage, windows, android]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Draft every release except the current one
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          REF: ${{ github.ref }}
+        run: |
+          # Keep the rolling build; on a tag push keep that tag's release too.
+          keep="latest"
+          case "$REF" in refs/tags/*) keep="$keep ${REF#refs/tags/}";; esac
+          gh api "repos/$REPO/releases" --paginate \
+            --jq '.[] | select(.draft == false) | "\(.id) \(.tag_name)"' |
+          while read -r id tag; do
+            case " $keep " in *" $tag "*) continue;; esac
+            echo "drafting $tag (id $id)"
+            gh api -X PATCH "repos/$REPO/releases/$id" -F draft=true >/dev/null
+          done
