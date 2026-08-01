@@ -121,7 +121,7 @@ pub fn draw_vertical(
     match table.step.filter(|s| *s > 0.0) {
         Some(step) => {
             let tick_px = (step / span) * bar.height();
-            let label_stride = (14.0 / tick_px.max(0.1)).ceil().max(1.0) as i32;
+            let label_stride = (18.0 / tick_px.max(0.1)).ceil().max(1.0) as i32;
             let mut v = (vmin / step).ceil() * step;
             let mut n = 0;
             while v <= vmax && n < 128 {

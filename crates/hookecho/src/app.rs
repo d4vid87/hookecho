@@ -4024,10 +4024,9 @@ impl HookEchoApp {
     ///
     /// A docked left column holding the whole action registry (products, layers, tools,
     /// windows — searchable) with the app's own commands below it. It replaces a wall of parallel
-    /// entry points; the map keeps the alert bell and the product pill, and nothing else.
+    /// entry points; the map keeps nothing but transient status.
     fn sidebar(&mut self, root: &mut egui::Ui, ctx: &egui::Context) {
         let accent = crate::theme::accent(self.settings.theme);
-        let cr = ctx.content_rect();
         let entries = self.palette_entries();
         let mut query = std::mem::take(&mut self.layers_query);
         let (mut chosen, mut fly_to) = (None, None);
@@ -4076,7 +4075,8 @@ impl HookEchoApp {
                     &entries,
                     &mut query,
                     accent,
-                    cr.height() - 260.0,
+                    // Leave room for the disclosures under the tree, whatever the window height.
+                    (ui.available_height() - 110.0).max(120.0),
                     std::mem::take(&mut focus_search),
                 );
                 // Place search folds in here rather than keeping a pill of its own: action
@@ -4182,7 +4182,7 @@ impl HookEchoApp {
         let table = self.palettes.table(moment).clone();
         let (df, dl) = display_units(moment, &self.settings);
         egui::Panel::right("colorbar")
-            .exact_size(46.0)
+            .exact_size(54.0)
             .show(root, |ui| {
                 let rect = ui.max_rect();
                 ui::legend::draw_vertical(ui.painter(), rect, moment, &table, threshold, df, dl);
@@ -4979,8 +4979,8 @@ impl HookEchoApp {
             (
                 T::AlertPanel,
                 "Severe",
-                "Active alerts panel",
-                "Side list of every alert in view, worst first",
+                "Active alerts list",
+                "Every alert in view, worst first (the sidebar's Alerts tab)",
                 true,
             ),
             (
