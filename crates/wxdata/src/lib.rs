@@ -23,6 +23,7 @@ pub mod metar;
 pub mod mosaic;
 pub mod mping;
 pub mod mrms;
+pub mod ndbc;
 pub mod nohrsc;
 pub mod obs;
 pub mod overlay;

@@ -476,7 +476,15 @@ impl OverlaySource {
                 OverlayMsg::ArchiveWarnings(bucket, feats)
             }
             OverlaySource::Metar(lat0, lon0, lat1, lon1) => {
-                OverlayMsg::Metar(wxdata::metar::fetch_bbox(http, lat0, lon0, lat1, lon1).await?)
+                let mut obs = wxdata::metar::fetch_bbox(http, lat0, lon0, lat1, lon1).await?;
+                // Buoys extend the same layer offshore and over the Great Lakes, where the
+                // airport network simply has no stations. A buoy outage must not take the
+                // METARs down with it.
+                match wxdata::ndbc::fetch_bbox(http, lat0, lon0, lat1, lon1).await {
+                    Ok(buoys) => obs.extend(buoys),
+                    Err(e) => log::warn!("ndbc buoys: {e}"),
+                }
+                OverlayMsg::Metar(obs)
             }
             OverlaySource::Webcams(min_lon, min_lat, max_lon, max_lat, windy_key) => {
                 // Both networks, merged: the FAA is keyless but US-only, Windy covers the rest of
