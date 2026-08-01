@@ -228,8 +228,9 @@ enum OverlaySource {
     /// Run an external-process plugin: `(key, command, args, context)`. The key is the synthetic
     /// `plugin:<name>` id it shares with the placefile pipeline it feeds.
     Plugin(String, String, Vec<String>, crate::plugins::Context),
-    /// FAA camera sites within a lon/lat bbox `(min_lon, min_lat, max_lon, max_lat)`.
-    Webcams(f64, f64, f64, f64),
+    /// Camera sites within a lon/lat bbox `(min_lon, min_lat, max_lon, max_lat)`, plus the user's
+    /// Windy API key — empty for FAA-only, which is the keyless default.
+    Webcams(f64, f64, f64, f64, String),
     /// Live stations in a lat/lon bbox, plus the view centre the keyed networks are asked around
     /// and the keys themselves (empty = that network stays off).
     Stations {
@@ -404,9 +405,26 @@ impl OverlaySource {
             OverlaySource::Metar(lat0, lon0, lat1, lon1) => {
                 OverlayMsg::Metar(wxdata::metar::fetch_bbox(http, lat0, lon0, lat1, lon1).await?)
             }
-            OverlaySource::Webcams(min_lon, min_lat, max_lon, max_lat) => OverlayMsg::Webcams(
-                wxdata::webcams::fetch_bbox(http, min_lon, min_lat, max_lon, max_lat).await?,
-            ),
+            OverlaySource::Webcams(min_lon, min_lat, max_lon, max_lat, windy_key) => {
+                // Both networks, merged: the FAA is keyless but US-only, Windy covers the rest of
+                // the world for anyone who has supplied a key. Nothing for the user to choose.
+                let mut sites =
+                    wxdata::webcams::fetch_bbox(http, min_lon, min_lat, max_lon, max_lat)
+                        .await
+                        .unwrap_or_default();
+                if !windy_key.is_empty() {
+                    // A bad or throttled key must not take the FAA cameras down with it.
+                    match wxdata::webcams::fetch_windy_bbox(
+                        http, &windy_key, min_lon, min_lat, max_lon, max_lat,
+                    )
+                    .await
+                    {
+                        Ok(w) => sites.extend(w),
+                        Err(e) => log::warn!("windy webcams: {e}"),
+                    }
+                }
+                OverlayMsg::Webcams(sites)
+            }
             OverlaySource::Stations {
                 bbox,
                 center,
@@ -5110,8 +5128,9 @@ impl HookEchoApp {
             (
                 T::Webcams,
                 "Obs",
-                "Airport webcams (FAA)",
-                "Look at the sky through an airport's camera",
+                "Webcams (FAA + Windy)",
+                "Look at the sky through a real camera \u{2014} FAA airports, plus the Windy \
+                 network worldwide with a key in Settings",
                 false,
             ),
             (
@@ -5738,7 +5757,13 @@ impl HookEchoApp {
                     }
                 }
                 OverlayMsg::Metar(obs) => self.metars = obs,
-                OverlayMsg::Webcams(sites) => self.webcams = sites,
+                OverlayMsg::Webcams(sites) => {
+                    // Drop the cached stills with the list they belonged to. Windy's free-tier
+                    // image URLs expire after ten minutes, and a kept texture would otherwise
+                    // show the same frame until the layer was toggled off and on.
+                    self.pf_icon_tex.retain(|k, _| !k.starts_with("cam:"));
+                    self.webcams = sites;
+                }
                 OverlayMsg::Stations(obs) => self.stations.ingest(obs),
                 OverlayMsg::Ppef(p) => self.stations.ppef = Some(p),
                 OverlayMsg::DotCams(cams) => self.stations.cams = cams,
@@ -6017,9 +6042,11 @@ impl HookEchoApp {
             return; // zoomed out past the point where individual cameras mean anything
         }
         let (clon, clat) = ((min_lon + max_lon) * 0.5, (min_lat + max_lat) * 0.5);
+        // Under ten minutes on purpose: Windy's free-tier image URLs carry a token that expires at
+        // exactly ten, so a 600 s clock would race it and serve 401s.
         let stale = self
             .webcam_last_fetch
-            .is_none_or(|t| t.elapsed().as_secs() >= 600);
+            .is_none_or(|t| t.elapsed().as_secs() >= 480);
         let drifted = self.webcam_bounds.is_none_or(|(lo0, la0, lo1, la1)| {
             let (mlon, mlat) = ((lo0 + lo1) * 0.5, (la0 + la1) * 0.5);
             let (hw, hh) = ((lo1 - lo0) * 0.25, (la1 - la0) * 0.25);
@@ -6036,7 +6063,10 @@ impl HookEchoApp {
             );
             self.webcam_last_fetch = Some(Instant::now());
             self.webcam_bounds = Some(b);
-            self.spawn_overlay(ctx, OverlaySource::Webcams(b.0, b.1, b.2, b.3));
+            self.spawn_overlay(
+                ctx,
+                OverlaySource::Webcams(b.0, b.1, b.2, b.3, self.settings.windy_key.clone()),
+            );
         }
     }
 
@@ -6149,7 +6179,14 @@ impl HookEchoApp {
             let state = if c.out_of_order { "  (out of order)" } else { "" };
             body.push_str(&format!("{}  {}{}\n", c.name, c.direction, state));
         }
-        body.push_str("\nFAA WeatherCams");
+        // Which network this came from, and the credit each one is owed. Windy's terms require a
+        // visible "Webcams provided by Windy.com" wherever their cameras appear.
+        let from_windy = site.link.is_some();
+        body.push_str(if from_windy {
+            "\nWebcams provided by Windy.com"
+        } else {
+            "\nFAA WeatherCams"
+        });
         // The first working camera is the one we show; the rest are listed above.
         let cam = site.cameras.iter().find(|c| !c.out_of_order);
         let key = cam.map(|c| format!("cam:{}", c.id));
@@ -6158,8 +6195,14 @@ impl HookEchoApp {
             body,
             color: [110, 180, 240, 255],
             image: key.clone(),
+            // Not decoration: the link back to the camera's own page is a condition of using
+            // Windy's images at all.
+            link: site
+                .link
+                .clone()
+                .map(|u| ("View on Windy.com".to_string(), u)),
         });
-        let (Some(key), Some(cam_id)) = (key, cam.map(|c| c.id)) else {
+        let (Some(key), Some(cam)) = (key, cam) else {
             return;
         };
         if self.pf_icon_tex.contains_key(&key) {
@@ -6169,17 +6212,30 @@ impl HookEchoApp {
         let http = self.http.clone();
         let tx = self.pf_icon_tx.clone();
         let ctx2 = ctx.clone();
+        // Windy hands back the still's URL inline, so only the FAA needs a second round trip.
+        let inline = cam.image_url.clone();
+        let cam_id = cam.id;
         self._rt.spawn(async move {
-            match wxdata::webcams::latest_image(&http, cam_id).await {
-                Ok(Some(url)) => match fetch_icon_sheet(&http, &url).await {
-                    Ok(image) => {
-                        let _ = tx.send((key, image));
-                        ctx2.request_repaint();
+            let url = match inline {
+                Some(u) => Some(u),
+                None => match wxdata::webcams::latest_image(&http, cam_id).await {
+                    Ok(u) => u,
+                    Err(e) => {
+                        log::warn!("webcam {cam_id} lookup failed: {e}");
+                        None
                     }
-                    Err(e) => log::warn!("webcam image {url} failed: {e}"),
                 },
-                Ok(None) => log::info!("camera {cam_id} has no recent image"),
-                Err(e) => log::warn!("webcam {cam_id} lookup failed: {e}"),
+            };
+            let Some(url) = url else {
+                log::info!("camera {cam_id} has no recent image");
+                return;
+            };
+            match fetch_icon_sheet(&http, &url).await {
+                Ok(image) => {
+                    let _ = tx.send((key, image));
+                    ctx2.request_repaint();
+                }
+                Err(e) => log::warn!("webcam image {url} failed: {e}"),
             }
         });
     }
@@ -6281,7 +6337,8 @@ impl HookEchoApp {
             body,
             color,
             image: key.clone(),
-        });
+            link: None,
+});
         let (Some(key), Some(url)) = (key, p.image.clone()) else {
             return;
         };
@@ -7598,7 +7655,8 @@ impl HookEchoApp {
                                 ),
                                 color: report_color(r.kind),
                                 image: None,
-                            });
+                                link: None,
+});
                         } else {
                             let cell_hit = self.filters.show_cells
                                 && self.cells_site.as_deref() == self.views[idx].site.as_deref()
@@ -7630,7 +7688,8 @@ impl HookEchoApp {
                                         body: c.summary(),
                                         color: cell_color(c.kind),
                                         image: None,
-                                    });
+                                        link: None,
+});
                                 }
                                 None => {
                                     // Warnings/watches open the warning window (deduped by alert id
@@ -7662,7 +7721,8 @@ impl HookEchoApp {
                                             body: f.detail.clone(),
                                             color: f.stroke,
                                             image: None,
-                                        });
+                                            link: None,
+});
                                     }
                                 }
                             }
