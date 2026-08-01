@@ -65,5 +65,6 @@ Look at every frame. The script cannot tell a good screenshot from a bad one.
 - The product and timestamp in the chrome match what the README caption claims.
 - It still reads at README thumbnail width (~420 px), not just at full size.
 
-Then `./shoot.sh check` for the mechanical part, and confirm the whole set shares one theme and
-one basemap.
+Then `./shoot.sh check` for the mechanical part, and confirm the whole set shares one basemap.
+The theme is pinned to Dark in `settings.template.json` — the shoot no longer inherits whatever
+theme your own config happens to be on, so the set can't drift a shot at a time.

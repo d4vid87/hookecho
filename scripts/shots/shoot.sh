@@ -84,14 +84,13 @@ start_xvfb() {
 write_profile() {
   local extra="${1:-{\}}"
   mkdir -p "$PROFILE/hookecho"
-  local key theme
+  local key
   key="$(jq -r '.mapbox_key // ""' "$HOME/.config/hookecho/settings.json" 2>/dev/null || echo "")"
-  theme="$(jq -r '.theme // "Dark"' "$HOME/.config/hookecho/settings.json" 2>/dev/null || echo Dark)"
   [ -n "$key" ] || log "WARNING: no mapbox_key found — shots will fall back to the dark vector basemap"
   jq -n --argjson base "$(cat "$REPO/scripts/shots/settings.template.json")" \
         --argjson extra "$extra" \
-        --arg key "$key" --arg theme "$theme" \
-        '$base * $extra * {mapbox_key: $key, theme: $theme}' \
+        --arg key "$key" \
+        '$base * $extra * {mapbox_key: $key}' \
     > "$PROFILE/hookecho/settings.json"
 }
 
@@ -242,7 +241,7 @@ scene_alltilts() {
   # picks the pane and sets its moment, so no separate "focus this pane" click is needed. Coords
   # are the strip hit points at 1600x1000 — top row y=28, bottom row y=498.
   click 1004 28    # top-right   VEL
-  click  559 498   # bottom-left CC
+  click  503 498   # bottom-left CC
   click 1085 498   # bottom-right ZDR
   # Each pane bins its own moment from the same volume, and the last one lands last — a short
   # wait here shoots half-empty panes, which is exactly the failure the old screenshot set shipped.
@@ -255,8 +254,8 @@ scene_xsection() {
   palette "$L_XSECTION"
   # Cut southwest-to-northeast through the mesocyclone, so the panel shows the vault and the
   # overhang rather than a slice of clear air. Screen coords hold because the camera is pinned.
-  click 640 610
-  click 920 380
+  click 700 590
+  click 960 390
   wait_settle 8
   snap xsection
 }
@@ -279,7 +278,10 @@ scene_alerts() {
 
 scene_products() {
   launch "$JOPLIN"; wait_settle 20 160; key 1; wait_settle 8
-  click 68 938   # the product pill, bottom-left
+  # The product and its tilts live in the sidebar header now (the old bottom-left pill is gone),
+  # so this shot is about finding things: Ctrl+K, type, and every matching layer/tool/place lists.
+  DISPLAY="$DISPLAY_NUM" xdotool key --clearmodifiers ctrl+k; sleep 0.6
+  DISPLAY="$DISPLAY_NUM" xdotool type --delay 45 -- "hail"; sleep 1.2
   sleep 2.0
   snap products
 }

@@ -116,8 +116,11 @@ pub fn draw_vertical(
     let font = FontId::proportional(10.0);
     // On-bar text needs its own contrast: an 8-way black halo, the same trick the map's city
     // labels use over imagery.
+    // Correlation coefficient spans 0..1.05: rounded to whole numbers its whole scale reads
+    // "1 1 1 … 0 0". Anything that narrow gets decimals.
+    let decimals = if span * disp_factor >= 10.0 { 0 } else { 2 };
     let label = |v: f32, y: f32| {
-        let text = format!("{:.0}", v * disp_factor);
+        let text = format!("{:.*}", decimals, v * disp_factor);
         let at = egui::pos2(bar.center().x, y);
         for dx in [-1.0, 0.0, 1.0] {
             for dy in [-1.0, 0.0, 1.0] {

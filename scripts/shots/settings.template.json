@@ -1,5 +1,6 @@
 {
   "default_site": "KTLX",
+  "theme": "Dark",
   "basemap": "mapbox-satellite-streets",
   "mapbox_key": "",
   "ui_scale": 1.0,
