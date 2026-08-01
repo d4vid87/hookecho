@@ -126,9 +126,10 @@ fn row(
             Color32::from_rgba_unmultiplied(255, 255, 255, 8),
         )
     };
-    let icon = RichText::new(glyph(e))
-        .size(14.0)
-        .color(if on { accent } else { Color32::from_gray(150) });
+    let icon =
+        RichText::new(glyph(e))
+            .size(14.0)
+            .color(if on { accent } else { Color32::from_gray(150) });
     let mut clicked = false;
     let outer = ui
         .horizontal(|ui| {
@@ -307,10 +308,7 @@ pub(crate) fn body(
                                 );
                             }
                             if let Some(drag) = resp.dnd_release_payload::<String>() {
-                                moved = Some((
-                                    (*drag).clone(),
-                                    entries[i].label.clone(),
-                                ));
+                                moved = Some(((*drag).clone(), entries[i].label.clone()));
                             }
                             ui.add_space(2.0);
                         }

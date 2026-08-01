@@ -97,6 +97,11 @@ egui-wgpu = { version = "0.35", default-features = false, features = ["macos-win
 # dialogs reach the XDG portal over that same zbus with `async-io`. With both executors compiled in,
 # zbus picks tokio and every file dialog panicked ("there is no reactor running") because the UI
 # thread has no runtime context. Dropping the default leaves one executor and one behaviour.
+# Tests only: hand-built Scans for the volume/tilt logic in `view.rs`. wxdata re-exports `Scan`
+# but not the constructors a synthetic sweep needs.
+[dev-dependencies]
+nexrad-model = "1.0.0-rc.2"
+
 [target.'cfg(target_os = "linux")'.dependencies]
 eframe = { version = "0.35", default-features = false, features = ["wayland", "x11"] }
 ksni = { version = "0.3", default-features = false, features = ["blocking", "async-io"] }

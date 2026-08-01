@@ -53,8 +53,15 @@ impl Volume {
         time: DateTime<Utc>,
         changed: &[f32],
     ) {
+        // The first chunks of a new volume carry the metadata and a sweep with no radials yet, so
+        // the merged scan has no elevation angles at all. Applying it emptied the tilt list, blanked
+        // the moment rows, and made the next frame's bin fail with "tilt 0 out of range". Keep
+        // showing the volume we have until the new one has a tilt in it.
+        let new_elev = level2::elevation_angles(&scan);
+        if new_elev.is_empty() {
+            return;
+        }
         self.scan = scan;
-        let new_elev = level2::elevation_angles(&self.scan);
         if new_elev != self.elevations {
             self.binned.clear(); // tilt indices may have shifted
         } else {
@@ -138,6 +145,13 @@ pub struct MapView {
     pub loading: bool,
     pub last_poll: Option<Instant>,
     pub error: Option<String>,
+    /// Every moment seen in any volume from `loaded_site`, cleared when the site changes.
+    ///
+    /// A single live volume is only as complete as the tilts that have arrived: early in a scan
+    /// the merged volume is reflectivity-only, so reading availability off it alone made the
+    /// dual-pol rows blink out of the sidebar once a volume. What a radar sends doesn't change
+    /// mid-session, so remember it.
+    pub moments_seen: [bool; 6],
 }
 
 impl MapView {
@@ -163,6 +177,7 @@ impl MapView {
             loading: false,
             last_poll: None,
             error: None,
+            moments_seen: [false; 6],
         }
     }
 
@@ -196,11 +211,28 @@ impl MapView {
         }
     }
 
+    /// What this site's radar sends: the union over every volume seen since the site was
+    /// selected, or "everything" before the first one lands.
+    pub fn moments(&self) -> [bool; 6] {
+        if self.moments_seen.iter().any(|m| *m) {
+            self.moments_seen
+        } else {
+            [true; 6]
+        }
+    }
+
     /// Snap the selected product to one this volume actually carries — a TDWR has no dual-pol
     /// moments, and neither does anything from before the 2011-13 upgrade.
     pub fn clamp_moment(&mut self) {
         let Some(v) = &self.volume else { return };
-        let have = level2::available_moments(&v.scan);
+        for (seen, got) in self
+            .moments_seen
+            .iter_mut()
+            .zip(level2::available_moments(&v.scan))
+        {
+            *seen |= got;
+        }
+        let have = self.moments();
         if !have[self.moment.index()] {
             if let Some(m) = Moment::ALL.into_iter().find(|m| have[m.index()]) {
                 self.moment = m;
@@ -225,6 +257,90 @@ impl MapView {
 mod tests {
     use super::*;
     use crate::render::mercator::Camera;
+
+    use nexrad_model::data::{
+        MomentData, PulseWidth, Radial, RadialStatus, Sweep, VolumeCoveragePattern,
+    };
+
+    /// A scan with one radial per given elevation, carrying reflectivity only.
+    fn scan_at(elevations: &[f32]) -> Arc<Scan> {
+        let sweeps: Vec<Sweep> = elevations
+            .iter()
+            .map(|e| {
+                let data = MomentData::from_fixed_point(1, 2125, 250, 8, 2.0, 66.0, vec![106u8]);
+                let radial = Radial::new(
+                    0,
+                    0,
+                    0.0,
+                    0.5,
+                    RadialStatus::ScanStart,
+                    1,
+                    *e,
+                    Some(data),
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                );
+                Sweep::new(1, vec![radial])
+            })
+            .collect();
+        let vcp = VolumeCoveragePattern::new(
+            212,
+            0,
+            0.5,
+            PulseWidth::Short,
+            false,
+            0,
+            false,
+            0,
+            false,
+            false,
+            0,
+            false,
+            false,
+            Vec::new(),
+        );
+        let site = nexrad_model::meta::Site::new(*b"KTLX", 35.33, -97.28, 380, 0);
+        Arc::new(Scan::with_site(site, vcp, sweeps))
+    }
+
+    /// A live volume that has only just started has no tilts in it yet. Applying it emptied the
+    /// tilt list and made the next bin fail with "tilt 0 out of range".
+    #[test]
+    fn a_tiltless_live_update_does_not_replace_the_volume_on_screen() {
+        let now = chrono::Utc::now();
+        let mut vol = Volume::new(scan_at(&[0.5, 1.5]), "a".into(), now);
+        assert_eq!(vol.elevations, vec![0.5, 1.5]);
+        vol.apply_live(scan_at(&[]), "b".into(), now, &[]);
+        assert_eq!(vol.elevations, vec![0.5, 1.5], "kept the tilts it had");
+        assert_eq!(vol.name, "a", "and the volume they came from");
+        // A real volume still applies.
+        vol.apply_live(scan_at(&[0.5]), "c".into(), now, &[]);
+        assert_eq!(vol.elevations, vec![0.5]);
+        assert_eq!(vol.name, "c");
+    }
+
+    /// Early in a live volume only reflectivity has arrived; the dual-pol rows must not blink out
+    /// of the sidebar and come back once a scan.
+    #[test]
+    fn moment_availability_is_remembered_across_volumes() {
+        let mut v = MapView::new(Some("KTLX".into()), Camera::at_lonlat(-97.0, 35.0, 8.0));
+        // Nothing loaded yet: assume the radar sends everything rather than hiding rows.
+        assert_eq!(v.moments(), [true; 6]);
+        v.volume = Some(Volume::new(scan_at(&[0.5]), "a".into(), chrono::Utc::now()));
+        v.clamp_moment();
+        let refl_only = v.moments();
+        assert!(refl_only[Moment::Reflectivity.index()]);
+        assert!(!refl_only[Moment::Velocity.index()], "REF-only volume");
+        // A later volume carrying velocity adds to the union and never subtracts from it.
+        v.moments_seen[Moment::Velocity.index()] = true;
+        v.volume = Some(Volume::new(scan_at(&[0.5]), "b".into(), chrono::Utc::now()));
+        v.clamp_moment();
+        assert!(v.moments()[Moment::Velocity.index()], "still velocity");
+    }
 
     #[test]
     fn storm_motion_uv_is_velocity_only_and_directional() {

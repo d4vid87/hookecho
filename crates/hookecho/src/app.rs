@@ -2121,10 +2121,9 @@ impl HookEchoApp {
     /// Which moments the active pane's volume carries. All true when nothing is loaded, so an
     /// empty pane still offers the full product list.
     fn available_moments(&self) -> [bool; 6] {
-        self.views[self.active]
-            .volume
-            .as_ref()
-            .map_or([true; 6], |v| level2::available_moments(&v.scan))
+        // The pane's remembered union, not this instant's volume: a half-arrived live volume
+        // carries fewer moments than the radar sends, and the rows must not blink.
+        self.views[self.active].moments()
     }
 
     /// Recompute the locally derived products (VIL, VIL density, echo tops) when the active pane's
@@ -4386,25 +4385,22 @@ impl HookEchoApp {
                     }
                     // Collapse, on the row it collapses. The floating button that brings the
                     // panel back lands in the same corner this one sits in.
-                    ui.with_layout(
-                        egui::Layout::right_to_left(egui::Align::Center),
-                        |ui| {
-                            if ui
-                                .add(
-                                    egui::Button::new(
-                                        egui::RichText::new(egui_phosphor::regular::CARET_LEFT)
-                                            .size(14.0),
-                                    )
-                                    .fill(egui::Color32::TRANSPARENT)
-                                    .stroke(egui::Stroke::NONE),
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui
+                            .add(
+                                egui::Button::new(
+                                    egui::RichText::new(egui_phosphor::regular::CARET_LEFT)
+                                        .size(14.0),
                                 )
-                                .on_hover_text("Hide the sidebar")
-                                .clicked()
-                            {
-                                hide = true;
-                            }
-                        },
-                    );
+                                .fill(egui::Color32::TRANSPARENT)
+                                .stroke(egui::Stroke::NONE),
+                            )
+                            .on_hover_text("Hide the sidebar")
+                            .clicked()
+                        {
+                            hide = true;
+                        }
+                    });
                 });
                 ui.separator();
                 if alerts_tab {
@@ -7624,6 +7620,7 @@ impl HookEchoApp {
             let v = &mut self.views[idx];
             v.loaded_site = v.site.clone();
             v.volume = None;
+            v.moments_seen = [false; 6];
             v.error = None;
             // Clear a stuck in-flight flag: if the previous site's fetch is still running when the
             // site changes, its result is dropped on arrival (site mismatch) without clearing
@@ -7855,6 +7852,11 @@ impl HookEchoApp {
         let table = self.palettes.table(moment);
         let upload = {
             let vol = self.views[data].volume.as_mut().unwrap();
+            // No tilts yet (a volume that has only just started arriving) is a "wait", not a
+            // failure: erroring here put "tilt 0 out of range" on the map once per volume.
+            if vol.elevations.is_empty() {
+                return (None, false);
+            }
             vol.binned(moment, tilt, dealias)
                 .map(|s| to_upload(s, table, threshold, smooth, storm_uv))
         };
@@ -8335,10 +8337,8 @@ impl HookEchoApp {
         // clicking to activate it first. Single-pane keeps using the product pill.
         if self.views.len() > 1 && !self.obs_mode {
             let cur = self.views[idx].moment;
-            let have = self.views[idx]
-                .volume
-                .as_ref()
-                .map_or([true; 6], |v| level2::available_moments(&v.scan));
+            // Same union as the sidebar uses, so this picker doesn't blink either.
+            let have = self.views[idx].moments();
             egui::Area::new(egui::Id::new(("pane_product", idx)))
                 .order(egui::Order::Foreground)
                 .fixed_pos(prect.left_top() + egui::vec2(6.0, 6.0))
