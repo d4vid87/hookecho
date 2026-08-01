@@ -4348,18 +4348,20 @@ impl HookEchoApp {
         let mut muted = self.settings.mute_alerts;
         let mut alert_hit = None;
         egui::Panel::left("sidebar")
-            .exact_size(320.0)
+            .exact_size(264.0)
             .show(root, |ui| {
-                ui.label(
-                    egui::RichText::new("Hook Echo-WX")
-                        .size(16.0)
-                        .strong()
-                        .color(accent),
-                );
-                ui.separator();
-                // Data | Alerts. `show_alert_panel` is the same flag the bell and the A hotkey
-                // flip, so every entry point lands on the same tab.
+                // Title on the same line as the tabs: the name is branding, not a section, and
+                // its own row plus separator cost 30 px of every screen height.
                 ui.horizontal(|ui| {
+                    ui.label(
+                        egui::RichText::new("Hook Echo-WX")
+                            .size(13.0)
+                            .strong()
+                            .color(accent),
+                    );
+                    ui.add_space(4.0);
+                    // Data | Alerts. `show_alert_panel` is the same flag the bell and the A hotkey
+                    // flip, so every entry point lands on the same tab.
                     if ui.selectable_label(!alerts_tab, "Data").clicked() {
                         alerts_tab = false;
                     }

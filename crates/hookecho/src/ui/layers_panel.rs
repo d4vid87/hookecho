@@ -48,60 +48,54 @@ pub(crate) fn matches(entries: &[PaletteEntry], query: &str) -> Vec<usize> {
     hits.into_iter().map(|(_, i)| i).collect()
 }
 
-/// One full-width row: name over a plain-English description, state pill right. Buttons (not
-/// table rows) so the whole strip is a touch target on Android.
+/// Row height: one line, tall enough to stay a touch target on Android.
+const ROW_H: f32 = 28.0;
+
+/// One full-width row: the name, a state dot on the right, the description on hover. It used to
+/// be a two-line 52 px card, which turned a category into a wall and pushed everything below the
+/// fold; the description is a hint, not something you read twenty times in a row.
 fn row(ui: &mut egui::Ui, e: &PaletteEntry, accent: Color32) -> bool {
     let on = e.on.unwrap_or(false);
     let (fg, bg) = if on {
-        (accent, Color32::from_rgba_unmultiplied(255, 255, 255, 26))
+        (accent, Color32::from_rgba_unmultiplied(255, 255, 255, 22))
     } else {
         (
-            Color32::from_gray(224),
-            Color32::from_rgba_unmultiplied(255, 255, 255, 10),
+            Color32::from_gray(216),
+            Color32::from_rgba_unmultiplied(255, 255, 255, 8),
         )
     };
-    // Name over description, as one two-line button label: `Button` keeps the whole strip a single
-    // touch target, which matters on Android where this same body is a bottom sheet.
-    let text = if e.desc.is_empty() {
-        RichText::new(&e.label).size(14.0).color(fg)
-    } else {
-        RichText::new(format!("{}\n{}", e.label, e.desc))
-            .size(13.0)
-            .color(fg)
-    };
     let w = ui.available_width();
-    let resp = ui.add(
-        egui::Button::new(text)
-            .min_size(vec2(w, if e.desc.is_empty() { 40.0 } else { 52.0 }))
+    let mut resp = ui.add(
+        egui::Button::new(RichText::new(&e.label).size(13.0).color(fg))
+            .min_size(vec2(w, ROW_H))
             .fill(bg)
-            .corner_radius(10.0)
+            .corner_radius(7.0)
             .stroke(if on {
                 Stroke::new(1.0, accent.gamma_multiply(0.7))
             } else {
                 Stroke::NONE
             }),
     );
-    // Binding chip, left of where the state pill goes: the shortcut is learnable from the row.
+    if !e.desc.is_empty() {
+        resp = resp.on_hover_text(e.desc);
+    }
+    // Binding chip, left of where the state dot goes: the shortcut stays learnable from the row.
     if let Some(key) = &e.key {
-        let dx = if e.on.is_some() { -44.0 } else { -10.0 };
+        let dx = if e.on.is_some() { -22.0 } else { -8.0 };
         ui.painter().text(
-            resp.rect.right_top() + vec2(dx, 9.0),
-            egui::Align2::RIGHT_TOP,
+            resp.rect.right_center() + vec2(dx, 0.0),
+            egui::Align2::RIGHT_CENTER,
             key,
             egui::FontId::monospace(10.0),
-            Color32::from_gray(150),
+            Color32::from_gray(140),
         );
     }
-    // State pill, drawn over the button's right edge (a nested layout inside a Button isn't a thing).
+    // State dot, drawn over the button's right edge (a nested layout inside a Button isn't a thing).
     if let Some(on) = e.on {
-        let txt = if on { "ON" } else { "OFF" };
-        let col = if on { accent } else { Color32::from_gray(120) };
-        ui.painter().text(
-            resp.rect.right_top() + vec2(-10.0, 9.0),
-            egui::Align2::RIGHT_TOP,
-            txt,
-            egui::FontId::proportional(11.0),
-            col,
+        ui.painter().circle_filled(
+            resp.rect.right_center() + vec2(-10.0, 0.0),
+            3.5,
+            if on { accent } else { Color32::from_gray(90) },
         );
     }
     resp.clicked()
@@ -133,24 +127,7 @@ pub(crate) fn body(
             field.request_focus();
         }
     });
-    ui.add_space(6.0);
-    // Category pills: the scoping control. Picking one narrows the tree to that category and drops
-    // the common/long-tail tiering — you already said what you're looking for.
-    let pill_id = ui.id().with("cat_pill");
-    let mut pill = ui.data(|d| d.get_temp::<usize>(pill_id).unwrap_or(0));
-    ui.horizontal_wrapped(|ui| {
-        for (i, name) in std::iter::once("All").chain(CATEGORIES).enumerate() {
-            if ui
-                .selectable_label(pill == i, RichText::new(name).size(12.0))
-                .clicked()
-            {
-                pill = i;
-                ui.data_mut(|d| d.insert_temp(pill_id, i));
-            }
-        }
-    });
-    let scoped: Option<&str> = pill.checked_sub(1).map(|i| CATEGORIES[i]);
-    ui.add_space(6.0);
+    ui.add_space(4.0);
     let order = matches(entries, query);
     // Enter runs the top-ranked match. Type-and-Enter was the whole point of the command palette
     // this drawer replaced; without it the search box is a filter, not a launcher.
@@ -173,26 +150,16 @@ pub(crate) fn body(
                     if row(ui, &entries[*i], accent) {
                         chosen = Some(entries[*i].action);
                     }
-                    ui.add_space(4.0);
+                    ui.add_space(2.0);
                 }
                 return;
             }
-            if let Some(cat) = scoped {
-                // One category, everything in it: no tiering, no headers.
-                for i in order
-                    .iter()
-                    .copied()
-                    .filter(|i| entries[*i].category == cat)
-                {
-                    if row(ui, &entries[i], accent) {
-                        chosen = Some(entries[i].action);
-                    }
-                    ui.add_space(4.0);
-                }
-                return;
-            }
+            // Not searching: one collapsible group per category, only Radar open. Seven headers
+            // fit on screen at once, so the whole app is visible as an outline instead of as a
+            // scroll. This replaces the category pills *and* the per-category "Show all"
+            // expander — three scoping controls were two too many.
             for cat in CATEGORIES {
-                let in_cat: Vec<usize> = order
+                let mut in_cat: Vec<usize> = order
                     .iter()
                     .copied()
                     .filter(|i| entries[*i].category == cat)
@@ -200,39 +167,23 @@ pub(crate) fn body(
                 if in_cat.is_empty() {
                     continue;
                 }
-                ui.add_space(4.0);
-                // A plain label, not `with_layout`: inside a ScrollArea a left_to_right region
-                // claims the whole remaining height, which pushed every row below it off-panel.
-                ui.label(RichText::new(cat).size(13.0).strong().color(accent));
-                ui.add_space(3.0);
-                // Everyday rows first; the long tail hides behind one expander per category so the
-                // panel reads as a short list instead of 81 flat rows. Nothing is removed — the
-                // expander and the search box both still reach every entry.
-                let expand_id = ui.id().with(("show_all", cat));
-                let show_all = ui.data(|d| d.get_temp::<bool>(expand_id).unwrap_or(false));
-                let total = in_cat.len();
-                let (shown, hidden): (Vec<usize>, Vec<usize>) = if show_all {
-                    (in_cat, Vec::new())
-                } else {
-                    in_cat.iter().copied().partition(|i| entries[*i].common)
-                };
-                for i in shown {
-                    if row(ui, &entries[i], accent) {
-                        chosen = Some(entries[i].action);
-                    }
-                    ui.add_space(4.0);
-                }
-                if !hidden.is_empty() || show_all {
-                    let label = if show_all {
-                        "Show less".to_string()
-                    } else {
-                        format!("Show all {total} ▾")
-                    };
-                    if ui.small_button(label).clicked() {
-                        ui.data_mut(|d| d.insert_temp(expand_id, !show_all));
-                    }
-                    ui.add_space(4.0);
-                }
+                // Everyday entries first inside the group; the long tail keeps registry order.
+                in_cat.sort_by_key(|i| !entries[*i].common);
+                let head = RichText::new(format!("{cat}  ({})", in_cat.len()))
+                    .size(12.0)
+                    .strong()
+                    .color(accent);
+                egui::CollapsingHeader::new(head)
+                    .id_salt(("cat", cat))
+                    .default_open(cat == "Radar")
+                    .show_unindented(ui, |ui| {
+                        for i in in_cat {
+                            if row(ui, &entries[i], accent) {
+                                chosen = Some(entries[i].action);
+                            }
+                            ui.add_space(2.0);
+                        }
+                    });
             }
         });
     fade_out_bottom(ui, &out);
