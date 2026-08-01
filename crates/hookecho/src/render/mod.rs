@@ -89,6 +89,8 @@ pub enum FieldLayer {
     HailMehs,
     /// Probability of Severe Hail derived from the volume (Witt et al. 1998).
     HailPosh,
+    /// HRRR accumulated snowfall through the scrubbed forecast hour.
+    Snowfall,
 }
 
 impl FieldLayer {
@@ -103,11 +105,12 @@ impl FieldLayer {
                 | FieldLayer::Srh
                 | FieldLayer::PrecipType
                 | FieldLayer::Smoke
+                | FieldLayer::Snowfall
         )
     }
 
     /// Fixed bottom-to-top paint order within each band.
-    pub const DRAW_ORDER: [FieldLayer; 24] = [
+    pub const DRAW_ORDER: [FieldLayer; 25] = [
         // Below-radar context band (bottom to top).
         FieldLayer::Mrms,
         FieldLayer::Mosaic,
@@ -115,6 +118,7 @@ impl FieldLayer {
         FieldLayer::Cape,
         FieldLayer::Srh,
         FieldLayer::Smoke,
+        FieldLayer::Snowfall,
         FieldLayer::PrecipType,
         // Above-radar severe-signal band.
         FieldLayer::Qpe1h,

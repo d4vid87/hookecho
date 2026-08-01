@@ -503,10 +503,16 @@ mod tests {
     #[test]
     fn idx_range_finds_field() {
         let idx = "1:0:d=2026:REFC:entire atmosphere:1 hour fcst:\n\
-                   2:396353:d=2026:RETOP:cloud top:1 hour fcst:\n";
+                   2:396353:d=2026:RETOP:cloud top:1 hour fcst:\n\
+                   3:500000:d=2026:ASNOW:surface:0-6 hour acc fcst:\n";
         assert_eq!(
             field_byte_range(idx, "REFC", "entire atmosphere"),
             Some((0, Some(396353)))
+        );
+        // Accumulations name a window in the forecast field, not a plain hour.
+        assert_eq!(
+            field_byte_range(idx, "ASNOW", "surface"),
+            Some((500000, None))
         );
         // Last message → open-ended range; var+level disambiguates same-var different levels.
         let idx2 = "1:100:d=2026:CAPE:surface:\n\

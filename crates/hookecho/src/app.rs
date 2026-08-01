@@ -336,6 +336,18 @@ impl OverlaySource {
                         )
                         .await?
                     }
+                    // Accumulated snowfall since the run started, through the scrubbed hour.
+                    FL::Snowfall => {
+                        wxdata::hrrr::fetch_field(
+                            http,
+                            wxdata::hrrr::Model::Hrrr,
+                            "ASNOW",
+                            "surface",
+                            fh,
+                            0.0,
+                        )
+                        .await?
+                    }
                     _ => {
                         wxdata::hrrr::fetch_field(
                             http,
@@ -875,6 +887,8 @@ fn field_refresh_secs(layer: crate::render::FieldLayer) -> u64 {
         // MRMS precip type / flash-flood ARI on the ~2-min cadence; L3 grids on the 120 s L3 cadence.
         FL::PrecipType | FL::FlashFlood | FL::Vil | FL::EchoTops | FL::Hca => 120,
         FL::UpdraftHelicity => 600,
+        // Snowfall accumulates over a whole model run; it moves as slowly as the run does.
+        FL::Snowfall => 600,
         FL::Smoke => 900,
         // The 24-h hail-swath accumulation moves slowly.
         FL::HailSwath => 300,
@@ -5102,6 +5116,13 @@ impl HookEchoApp {
                 "Future rotation tracks",
                 "Where storms are forecast to rotate \u{2014} scrub the timeline to extend the swath",
                 true,
+            ),
+            (
+                FL::Snowfall,
+                "Models",
+                "Forecast snowfall",
+                "How much snow is forecast to pile up \u{2014} scrub the timeline to add hours",
+                false,
             ),
             (
                 FL::Smoke,
@@ -10929,6 +10950,7 @@ impl eframe::App for HookEchoApp {
                     | FL::EtopLocal
                     | FL::HailMehs
                     | FL::HailPosh
+                    | FL::Snowfall
             ) {
                 continue;
             }
@@ -10965,7 +10987,8 @@ impl eframe::App for HookEchoApp {
                     | FL::VilDensity
                     | FL::EtopLocal
                     | FL::HailMehs
-                    | FL::HailPosh => unreachable!(),
+                    | FL::HailPosh
+                    | FL::Snowfall => unreachable!(),
                 };
                 self.spawn_overlay(ctx, OverlaySource::Field(layer, product));
             }
@@ -10988,7 +11011,7 @@ impl eframe::App for HookEchoApp {
             }
         }
         // HRRR rotation tracks + smoke: same forecast-hour scrub as future radar, own cadences.
-        for layer in [FL::UpdraftHelicity, FL::Smoke] {
+        for layer in [FL::UpdraftHelicity, FL::Smoke, FL::Snowfall] {
             let fh = self.hrrr_fcst_hour;
             let stale = self.fields.get(&layer).is_some_and(|s| {
                 s.show

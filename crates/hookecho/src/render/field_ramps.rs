@@ -304,6 +304,26 @@ static POSH: FieldRamp = ramp!(
     ]
 );
 
+/// Forecast snowfall accumulation. The model reports metres; nobody talks in metres of snow.
+static SNOWFALL: FieldRamp = FieldRamp {
+    input_scale: 39.370_08, // m → in
+    ..ramp!(
+        "Snowfall",
+        "in",
+        0.1,
+        24.0,
+        RampScale::Log,
+        220,
+        &[
+            (0.0, [200, 235, 255]),
+            (0.35, [90, 170, 235]),
+            (0.6, [60, 90, 210]),
+            (0.8, [140, 60, 200]),
+            (1.0, [240, 240, 255]),
+        ]
+    )
+};
+
 static PRECIP_TYPE: FieldRamp = FieldRamp {
     label: "Precip type",
     units: "",
@@ -438,6 +458,7 @@ pub fn ramp_for(layer: FieldLayer) -> Option<&'static FieldRamp> {
         FL::PrecipType => &PRECIP_TYPE,
         FL::UpdraftHelicity => &UPDRAFT_HELICITY,
         FL::Smoke => &SMOKE,
+        FL::Snowfall => &SNOWFALL,
         FL::Hca => &HCA,
         FL::Mrms | FL::Mosaic | FL::Hrrr | FL::Lightning => return None,
     })
