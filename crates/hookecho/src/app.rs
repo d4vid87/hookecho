@@ -2981,8 +2981,7 @@ impl HookEchoApp {
         if near_storm {
             return false;
         }
-        let hit = wxdata::sites::sites()
-            .iter()
+        let hit = wxdata::sites::all()
             .filter(|s| to_screen_hit(s.longitude as f64, s.latitude as f64) <= tap_r2(12.0))
             .min_by(|a, b| {
                 to_screen_hit(a.longitude as f64, a.latitude as f64)
@@ -4735,6 +4734,8 @@ impl HookEchoApp {
     /// options that used to hide in the toolbox. All of it writes the same fields the hotkeys do.
     fn product_section(&mut self, ui: &mut egui::Ui, actions: &mut ui::layer_options::UiActions) {
         use crate::ui::style;
+        /// Height reserved for the tilt row whether or not a volume is loaded.
+        const TILT_ROW_H: f32 = 24.0;
         let (moment, srv, tilt) = {
             let v = &self.views[self.active];
             (v.moment, v.srv, v.tilt)
@@ -4779,24 +4780,35 @@ impl HookEchoApp {
                     .strong(),
             );
         });
-        if !elevations.is_empty() {
-            ui.horizontal_wrapped(|ui| {
-                ui.label(
-                    egui::RichText::new("Tilt")
-                        .size(style::FONT_SM)
-                        .color(egui::Color32::from_gray(150)),
-                )
-                .on_hover_text("How high above the ground the beam is looking");
-                for (i, angle) in elevations.iter().enumerate() {
-                    if ui
-                        .selectable_label(i == tilt, format!("{angle:.1}\u{b0}"))
-                        .clicked()
-                    {
-                        pick_tilt = Some(i);
-                    }
-                }
-            });
-        }
+        // Always one line, always present: a wrapping row reflowed between 9- and 14-tilt VCPs and
+        // vanished entirely between volumes, which slid the whole layer tree below it up and down.
+        // A fixed-height horizontal scroll keeps the sidebar still and scrolls the extra tilts.
+        ui.scope(|ui| {
+            ui.set_height(TILT_ROW_H);
+            egui::ScrollArea::horizontal()
+                .id_salt("tilt_row")
+                .show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(
+                            egui::RichText::new("Tilt")
+                                .size(style::FONT_SM)
+                                .color(egui::Color32::from_gray(150)),
+                        )
+                        .on_hover_text("How high above the ground the beam is looking");
+                        if elevations.is_empty() {
+                            ui.weak("\u{2014}");
+                        }
+                        for (i, angle) in elevations.iter().enumerate() {
+                            if ui
+                                .selectable_label(i == tilt, format!("{angle:.1}\u{b0}"))
+                                .clicked()
+                            {
+                                pick_tilt = Some(i);
+                            }
+                        }
+                    });
+                });
+        });
         egui::CollapsingHeader::new("Product options")
             .default_open(false)
             .show(ui, |ui| {
@@ -9638,13 +9650,14 @@ impl HookEchoApp {
             }
         }
 
-        // Radar sites: a ring per NEXRAD site; the active site in accent, others muted. IDs only
-        // when zoomed in so the CONUS view isn't cluttered. Click handled in the Interrogate tool.
+        // Radar sites: a ring per site — both networks, so a TDWR you can select is a TDWR you can
+        // see. The active site in accent, others muted. IDs only when zoomed in so the CONUS view
+        // isn't cluttered. Click handled in the Interrogate tool.
         if self.show_radar_sites {
             let accent = crate::theme::accent(self.settings.theme);
             let current = self.views[idx].site.as_deref();
             let show_labels = cam.zoom >= 5.0;
-            for s in wxdata::sites::sites() {
+            for s in wxdata::sites::all() {
                 let w =
                     crate::render::mercator::lonlat_to_world(s.longitude as f64, s.latitude as f64);
                 let (sx, sy) = cam.world_to_screen(w, vp);
