@@ -39,6 +39,10 @@ L_STORMTABLE="Storm attributes…"
 L_VERIFY="Warning verification…"
 L_FRONTS="Surface fronts (H/L)"
 L_GLM="Satellite lightning (GLM)"
+L_VILD="VIL density (derived)"
+L_MEHS="Max hail size (derived)"
+L_SNOW="Snowfall analysis"
+L_RECON="Recon flight track"
 L_MRMS="MRMS Mosaic"
 L_MOSAIC="Radar Mosaic"
 L_HRRR="HRRR future radar"
@@ -61,7 +65,8 @@ preflight() {
   grep -qF '{n} pane' "$REPO/crates/hookecho/src/app.rs" \
     || die "palette label '$L_PANES' is not in app.rs any more — update shoot.sh"
   for l in "$L_ALLTILTS" "$L_LINKCAM" "$L_WIND" "$L_SITES" "$L_XSECTION" "$L_FORECAST" "$L_STORMTABLE" "$L_FRONTS" "$L_GLM" \
-           "$L_MRMS" "$L_MOSAIC" "$L_QPE" "$L_HRRR" "$L_VERIFY"; do
+           "$L_MRMS" "$L_MOSAIC" "$L_QPE" "$L_HRRR" "$L_VERIFY" \
+           "$L_VILD" "$L_MEHS" "$L_SNOW" "$L_RECON"; do
     grep -qF "$l" "$REPO/crates/hookecho/src/app.rs" \
       || die "palette label '$l' is not in app.rs any more — update shoot.sh"
   done
@@ -185,6 +190,46 @@ scene_reflectivity() { launch "$TUSCALOOSA"; wait_settle 14; key 1; wait_settle 
 scene_velocity()     { launch "$ELRENO";     wait_settle 14; key 2; wait_settle 8; snap velocity; }
 scene_layers()       { launch "$MAYFIELD";   wait_settle 14; key 1; sleep 1; key l; sleep 1.5; snap layers; }
 scene_tropical()     { launch "$IAN";        wait_settle 16; key 1; wait_settle 6; snap tropical; }
+
+# Products computed from the volume rather than fetched: they work in archive replay, which is
+# exactly what this shot has to show, so it is framed on a historic storm and not on today.
+scene_derived() {
+  launch "$MAYFIELD"; wait_settle 14; key 1
+  palette "$L_VILD"
+  wait_settle 14 90
+  # The palette leaves the keyboard in the drawer's search box, so clicking the map first is
+  # what makes the close-drawer key land at all.
+  click 1100 700
+  sleep 0.5
+  key l
+  sleep 1.5
+  snap derived
+}
+
+# A terminal radar next to the metro it watches; TOKC is the one with storms most often.
+scene_tdwr() {
+  launch "TOKC,-97.51,35.28,9.4"; wait_settle 16 120
+  key 1; wait_settle 8
+  snap tdwr
+}
+
+# Seasonal: an empty snowfall analysis in July is an honest picture of nothing.
+scene_winter() {
+  launch "${LIVE_SITE:-KMPX},${LIVE_LON:--93.4},${LIVE_LAT:-45.0},6.0"
+  wait_settle 16
+  palette "$L_SNOW"
+  wait_settle 20 120
+  snap winter
+}
+
+# Seasonal: only shows anything while a hurricane hunter is flying.
+scene_recon() {
+  launch "${LIVE_SITE:-KTBW},${LIVE_LON:--82.5},${LIVE_LAT:-26.0},5.4"
+  wait_settle 16
+  palette "$L_RECON"
+  wait_settle 20 120
+  snap recon
+}
 
 scene_alltilts() {
   # Tighter than $MOORE: CC and ZDR are mostly clear-air noise away from the core, so the quad
@@ -389,8 +434,8 @@ check() {
   [ "$fail" = 0 ] && log "check passed" || die "check failed"
 }
 
-ARCHIVE_SCENES=(reflectivity velocity alltilts xsection alerts products layers tropical verify)
-LIVE_SCENES=(wind stormtable forecast fronts hrrr mrms mosaic qpe glm)
+ARCHIVE_SCENES=(reflectivity velocity alltilts xsection alerts products layers tropical verify derived)
+LIVE_SCENES=(wind stormtable forecast fronts hrrr mrms mosaic qpe glm tdwr winter recon)
 
 main() {
   mkdir -p "$WORK"

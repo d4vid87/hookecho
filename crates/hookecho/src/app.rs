@@ -2148,6 +2148,15 @@ impl HookEchoApp {
             return;
         }
         let site = self.views[self.active].site.clone();
+        // The hail algorithm needs the melting level, and the only source for it is the current
+        // model analysis — so, like the live mosaic, the hail grids are live-only rather than
+        // quietly applying today's freezing level to a storm from 2021.
+        let live = self.views[self.active].timeline.following;
+        let mask = if live { mask } else { mask & !HAIL_BITS };
+        if mask == 0 {
+            self.derived_key = None;
+            return;
+        }
         // Freezing levels are only worth a request when a hail grid is actually on.
         let levels = match (mask & HAIL_BITS != 0, &self.freezing, &site) {
             (true, Some((s, h0, hm20)), Some(cur)) if s == cur => Some((*h0, *hm20)),
@@ -2292,8 +2301,13 @@ impl HookEchoApp {
                 OverlaySource::Outlook(self.filters.outlook_day, self.outlook_kind_for_day()),
             );
         }
-        // Storm cells for the active view's site (Level 3 products are per-site).
-        if let Some(site) = self.views[self.active].site.clone() {
+        // Storm cells for the active view's site (Level 3 products are per-site). Terminal
+        // radars don't run the storm-cell algorithms under their four-letter id.
+        if let Some(site) = self.views[self.active]
+            .site
+            .clone()
+            .filter(|s| !wxdata::tdwr::is_tdwr(s))
+        {
             self.spawn_overlay(ctx, OverlaySource::Cells(site));
         }
     }
@@ -5214,14 +5228,14 @@ impl HookEchoApp {
                 FL::HailMehs,
                 "Radar",
                 "Max hail size (derived)",
-                "Largest hail this storm can be making, from the volume aloft",
+                "Largest hail this storm can be making, from the volume aloft (live only)",
                 false,
             ),
             (
                 FL::HailPosh,
                 "Radar",
                 "Severe hail probability (derived)",
-                "Odds this storm is producing hail an inch or larger",
+                "Odds this storm is producing hail an inch or larger (live only)",
                 false,
             ),
             (
@@ -7321,9 +7335,11 @@ impl HookEchoApp {
             // Stream only while pinned to the live head; scrubbing pauses it. A live loop is
             // suppressed too — the loop shows past frames, so interval polling (not the sweep
             // stream) carries new-volume arrival. ponytail: stream resumes on pause / go_head.
+            // TDWRs have no Level 2 chunk stream to merge — asking for one downloads a
+            // WSR-88D-shaped file that isn't there and decodes garbage.
             let want = v.timeline.following
                 && !v.timeline.live_looping()
-                && v.site.is_some()
+                && v.site.as_deref().is_some_and(|s| !wxdata::tdwr::is_tdwr(s))
                 && v.volume.is_some();
             (
                 want,

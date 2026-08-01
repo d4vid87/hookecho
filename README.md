@@ -253,6 +253,22 @@ layer draws its own scale and units.
   grids with the significant-severe hatch, and the WFO's **Area Forecast
   Discussion** in-app.
 
+### Products computed from the volume itself
+
+![VIL density over the Mayfield supercell, computed from an archived 2021 volume](docs/shots/derived.jpg)
+
+<sub>VIL density over the Mayfield, KY supercell — computed here from the 11 Dec
+2021 volume, four years after it was recorded.</sub>
+
+- **VIL, VIL density and echo tops**, integrated here from the stacked tilts
+  rather than read from a Level 3 grid — so they work in **any archive replay**,
+  at the volume's own resolution, with an echo-top threshold you can move.
+- **Maximum expected hail size and probability of severe hail** (Witt et al.
+  1998), with the melting-level and −20 °C heights the algorithm needs sourced
+  automatically from HRRR instead of typed in by hand. Live only: those heights
+  come from the current analysis, and applying today's freezing level to a storm
+  from 2021 would be an answer with no meaning.
+
 ### Data the app decodes itself
 
 - **Gridded Level 3**: Digital VIL, Enhanced Echo Tops and **Hydrometeor
@@ -265,8 +281,19 @@ layer draws its own scale and units.
   (`crates/hdf5lite`), because the reference C library can't ship in the Android
   build.
 - **METAR station plots** with US-convention wind barbs, flight-category colors
-  and greedy decluttering; **NHC tropical** storms with forecast cones and
-  Saffir–Simpson-colored track points; **SIGMET/AIRMET** hazard polygons.
+  and greedy decluttering — extended offshore and over the Great Lakes by the
+  **NDBC buoy network**, where the airport network simply has no stations.
+- **TDWR terminal radars**: the FAA's airport radars, synthesized into volumes
+  from their Level 3 tilt products, so all 44 of them behave like any other site.
+- **NHC tropical** storms with forecast cones and Saffir–Simpson-colored track
+  points, the **forecast wind field** at 34/50/64 kt, **potential storm surge**,
+  and **hurricane-hunter flight tracks** with the measured SFMR surface wind.
+- **SIGMET/AIRMET** hazard polygons and **PIREPs** — what pilots actually flew
+  through, rather than what was forecast.
+- **Winter**: HRRR forecast snowfall, the **NOHRSC observed snowfall analysis**
+  (6/24/48/72 h), the **Winter Storm Severity Index** — how disruptive, not just
+  how much — and **mPING** crowd reports of what is actually falling.
+- **WPC Excessive Rainfall Outlook**, the flood half of a severe-weather day.
 
 ### Time machine
 
