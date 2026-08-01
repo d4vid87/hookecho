@@ -131,6 +131,8 @@ enum OverlayMsg {
     Mping(Vec<wxdata::mping::Report>),
     /// Pilot reports within the fetched bbox.
     Pireps(Vec<wxdata::aviation::Pirep>),
+    /// Hurricane-hunter flight-track observations.
+    Recon(Vec<wxdata::recon::HdobOb>),
     /// Storm cells for a specific site (dropped if the active site changed meanwhile).
     Cells(String, Vec<Cell>),
     /// A fetched placefile keyed by its URL.
@@ -212,6 +214,8 @@ enum OverlaySource {
     Mping(String),
     /// Pilot reports within a lat/lon bbox `(lat0, lon0, lat1, lon1)`.
     Pireps(f64, f64, f64, f64),
+    /// Hurricane-hunter HDOBs from the last few hours.
+    Recon,
     Outlook(u8, wxdata::spc::OutlookKind),
     Cells(String),
     Placefile(String),
@@ -306,6 +310,7 @@ impl OverlaySource {
                 wxdata::aviation::fetch_pireps(http, lat0, lon0, lat1, lon1).await?,
             ),
             OverlaySource::Ero(day) => OverlayMsg::Ero(day, wxdata::ero::fetch(http, day).await?),
+            OverlaySource::Recon => OverlayMsg::Recon(wxdata::recon::fetch(http, 6).await?),
             OverlaySource::Outlook(day, kind) => {
                 OverlayMsg::Outlook(day, wxdata::spc::fetch_outlook_kind(http, day, kind).await?)
             }
@@ -818,6 +823,7 @@ pub(crate) enum OverlayToggle {
     Mds,
     Mping,
     Pireps,
+    Recon,
     Fronts,
     GlmLightning,
     Wind,
@@ -1234,6 +1240,10 @@ pub struct HookEchoApp {
     show_mping: bool,
     mping_reports: Vec<wxdata::mping::Report>,
     mping_last_fetch: Option<Instant>,
+    /// Hurricane-hunter flight-track observations: toggle, obs, fetch clock.
+    show_recon: bool,
+    recon: Vec<wxdata::recon::HdobOb>,
+    recon_last_fetch: Option<Instant>,
     /// Tropical wind-field threshold (34/50/64 kt), or `None` for no wind field, and whether
     /// to draw the potential storm-surge flooding polygons.
     tropical_wind_kt: Option<u8>,
@@ -1789,6 +1799,9 @@ impl HookEchoApp {
             show_mping: false,
             mping_reports: Vec::new(),
             mping_last_fetch: None,
+            show_recon: false,
+            recon: Vec::new(),
+            recon_last_fetch: None,
             tropical_wind_kt: None,
             tropical_surge: false,
             show_pireps: false,
@@ -4989,6 +5002,7 @@ impl HookEchoApp {
             T::Mds => &mut self.filters.show_mds,
             T::Mping => &mut self.show_mping,
             T::Pireps => &mut self.show_pireps,
+            T::Recon => &mut self.show_recon,
             T::LinkCameras => &mut self.link_cameras,
         }
     }
@@ -5438,6 +5452,13 @@ impl HookEchoApp {
                 "Obs",
                 "Pilot reports (PIREPs)",
                 "What pilots actually flew through: turbulence, icing, cloud tops",
+                false,
+            ),
+            (
+                T::Recon,
+                "Obs",
+                "Recon flight track",
+                "Hurricane-hunter observations: flight-level and surface wind, measured",
                 false,
             ),
             (
@@ -5895,6 +5916,7 @@ impl HookEchoApp {
                 OverlayMsg::Mds(f) => self.md_features = f,
                 OverlayMsg::Mping(r) => self.mping_reports = r,
                 OverlayMsg::Pireps(p) => self.pireps = p,
+                OverlayMsg::Recon(o) => self.recon = o,
                 OverlayMsg::Ero(day, f) => {
                     if day == self.filters.ero_day {
                         self.ero_features = f;
@@ -8771,6 +8793,38 @@ impl HookEchoApp {
             }
         }
 
+        // Hurricane-hunter flight track: one dot per 30-second observation, colored by the
+        // surface wind the SFMR measured (or flight-level wind when it reported nothing).
+        if self.show_recon {
+            for o in &self.recon {
+                let w = crate::render::mercator::lonlat_to_world(o.lon, o.lat);
+                let (sx, sy) = cam.world_to_screen(w, vp);
+                let p = egui::pos2(prect.left() + sx, prect.top() + sy);
+                if !prect.contains(p) {
+                    continue;
+                }
+                let kt = o.sfmr_kt.or(o.wspd_kt).unwrap_or(0.0);
+                let (_, c) = wxdata::tropical::saffir_simpson(kt);
+                painter.circle_filled(p, 2.5, egui::Color32::from_rgb(c[0], c[1], c[2]));
+                let hit = egui::Rect::from_center_size(p, egui::vec2(10.0, 10.0));
+                if response.hover_pos().is_some_and(|hp| hit.contains(hp)) {
+                    let fl = o
+                        .wspd_kt
+                        .map_or_else(|| "\u{2014}".into(), |v| format!("{v:.0} kt"));
+                    let sfc = o
+                        .sfmr_kt
+                        .map_or_else(|| "\u{2014}".into(), |v| format!("{v:.0} kt"));
+                    let mb = o
+                        .press_mb
+                        .map_or_else(|| "\u{2014}".into(), |v| format!("{v:.1} mb"));
+                    response.clone().show_tooltip_text(format!(
+                        "{} \u{2014} flight level {fl}, surface {sfc}\n{mb}",
+                        o.mission
+                    ));
+                }
+            }
+        }
+
         // Pilot reports: a small triangle per report, filled when it carries a hazard so a
         // turbulence report stands out from a routine sky observation.
         if self.show_pireps {
@@ -11145,6 +11199,15 @@ impl eframe::App for HookEchoApp {
         self.sync_gauges(ctx);
         // HRRR model contours.
         self.sync_contours(ctx);
+        // Hurricane-hunter observations: a mission transmits every 30 s, so 10 min is plenty.
+        if self.show_recon
+            && self
+                .recon_last_fetch
+                .is_none_or(|t| t.elapsed().as_secs() >= 600)
+        {
+            self.recon_last_fetch = Some(Instant::now());
+            self.spawn_overlay(ctx, OverlaySource::Recon);
+        }
         // NHC tropical suite: refresh every 15 min while enabled.
         if self.show_tropical
             && self
