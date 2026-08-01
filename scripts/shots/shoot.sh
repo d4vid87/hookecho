@@ -299,17 +299,17 @@ scene_glm() {
 scene_hero() {
   launch "$MOORE_HERO"; wait_settle 20 160; key 1
   local dir="$WORK/hero"; rm -rf "$dir"; mkdir -p "$dir"
-  # The timeline steps from the pill's transport buttons only — there is no arrow-key binding, so
-  # these are the ◀ and ▶| hit points on the bottom-centre pill at 1600x1000.
-  local back=497 fwd=585 y=940
+  # Left/Right step the timeline (hotkeys::StepBack/StepForward) — the transport buttons moved
+  # when the pill became the docked bottom bar, and pixel-hunting them silently produced ten
+  # identical frames.
   # Rewind first so the loop shows the hook organising into the tornado rather than one frozen
   # frame. Ten frames is the scan cache's depth; past that every step re-downloads from S3.
-  for _ in $(seq 8); do click "$back" "$y"; sleep 2; done
+  for _ in $(seq 8); do key Left; sleep 2; done
   wait_settle 12 140
   for i in $(seq 0 9); do
     wait_settle 4 60
     import -display "$DISPLAY_NUM" -window root "$dir/$(printf '%02d' "$i").png"
-    click "$fwd" "$y"
+    key Right
   done
   ffmpeg -y -loglevel error -framerate 3 -pattern_type glob -i "$dir/*.png" \
     -vf "scale=1100:-1:flags=lanczos,split[a][b];[a]palettegen=max_colors=160[p];[b][p]paletteuse=dither=bayer:bayer_scale=3" \

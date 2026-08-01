@@ -6973,6 +6973,8 @@ impl HookEchoApp {
                 }
             }
             A::ToggleDrawer => self.sidebar_focus_search = true,
+            A::StepBack => self.views[self.active].timeline.step(-1),
+            A::StepForward => self.views[self.active].timeline.step(1),
             A::Fullscreen => {
                 // Desktop only; mobile is already fullscreen.
                 if !cfg!(target_os = "android") {

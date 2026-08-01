@@ -23,6 +23,8 @@ pub(crate) enum BindableAction {
     ToggleObs,
     ToggleObsTour,
     ToggleDrawer,
+    StepBack,
+    StepForward,
     Fullscreen,
     CommandSearch,
     CheatSheet,
@@ -79,6 +81,10 @@ pub(crate) fn defaults() -> Vec<Binding> {
         // working, pointed at the drawer, so the muscle memory still lands somewhere.
         plain(K::F7, A::ToggleDrawer),
         plain(K::L, A::ToggleDrawer),
+        // Arrow keys scrub the timeline: the transport buttons were the only way to step a frame,
+        // which made every scripted capture depend on hitting them by pixel.
+        plain(K::ArrowLeft, A::StepBack),
+        plain(K::ArrowRight, A::StepForward),
         plain(K::F8, A::ToggleObs),
         plain(K::F9, A::ToggleObsTour),
         plain(K::R, A::Palette(P::InstantReplay)),
@@ -164,6 +170,8 @@ pub(crate) fn label(action: BindableAction) -> Option<&'static str> {
         BindableAction::ToggleObs => "Streamer (OBS) mode",
         BindableAction::ToggleObsTour => "Streamer auto-tour",
         BindableAction::ToggleDrawer => "Layers drawer",
+        BindableAction::StepBack => "Previous frame",
+        BindableAction::StepForward => "Next frame",
         BindableAction::Fullscreen => "Fullscreen",
         BindableAction::CommandSearch => "Search commands",
         BindableAction::CheatSheet => "Keyboard shortcuts",
