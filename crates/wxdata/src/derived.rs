@@ -185,6 +185,83 @@ pub fn derive(sweeps: &[BinnedSweep], opts: &DerivedOpts) -> Option<Derived> {
     })
 }
 
+/// Hail kinetic energy flux Ė (J m⁻² s⁻¹) at reflectivity `dbz` — Witt et al. (1998) eq. 2, with
+/// the weighting that ramps 40→50 dBZ from "all rain" to "all hail".
+fn hail_energy(dbz: f32) -> f64 {
+    let w = ((dbz - 40.0) / 10.0).clamp(0.0, 1.0) as f64;
+    5e-6 * 10f64.powf(0.084 * dbz.min(Z_CAP_DBZ) as f64) * w
+}
+
+/// Severe Hail Index (J m⁻¹ s⁻¹) of one profile: the hail energy integrated from the melting
+/// level up, weighted toward the −20 °C level where large hail grows.
+///
+/// `h0_km`/`hm20_km` are heights above the radar, matching the profile's beam heights.
+fn shi_of(samples: &[(f64, f32)], h0_km: f64, hm20_km: f64) -> f64 {
+    let span = (hm20_km - h0_km).max(0.1);
+    let mut shi = 0.0;
+    for w in samples.windows(2) {
+        let (h0, v0) = w[0];
+        let (h1, v1) = w[1];
+        let dh_m = (h1 - h0) * 1000.0;
+        if dh_m <= 0.0 {
+            continue;
+        }
+        let h_mid = (h0 + h1) / 2.0;
+        let wt = ((h_mid - h0_km) / span).clamp(0.0, 1.0);
+        if wt <= 0.0 {
+            continue;
+        }
+        let e = (hail_energy(v0) + hail_energy(v1)) / 2.0;
+        shi += 0.1 * wt * e * dh_m;
+    }
+    shi
+}
+
+/// The two hail grids: maximum expected hail size (mm) and the probability of severe hail (%).
+pub struct Hail {
+    /// Maximum Expected Hail Size, mm — the same units the MRMS MESH layer is drawn in.
+    pub mehs: MrmsField,
+    /// Probability of Severe Hail (≥ 19 mm), percent.
+    pub posh: MrmsField,
+}
+
+/// MEHS/POSH grids from the volume, per Witt et al. (1998).
+///
+/// `h0_m` and `hm20_m` are the 0 °C and −20 °C level heights **above the radar**, in metres —
+/// the app takes them from the HRRR `HGT:0C isotherm` and `HGT:253 K level` fields so nobody has
+/// to hand-enter a freezing level the way GR2Analyst makes you.
+pub fn hail(sweeps: &[BinnedSweep], h0_m: f64, hm20_m: f64, opts: &DerivedOpts) -> Option<Hail> {
+    let g = Grid::for_sweeps(sweeps)?;
+    let (h0_km, hm20_km) = (h0_m / 1000.0, hm20_m / 1000.0);
+    // Witt's warning threshold: the SHI that means "severe hail is as likely as not here".
+    let wt = (57.5 * h0_km - 121.0).max(1.0);
+    let n = g.nx * g.ny;
+    let (mut mehs, mut posh) = (vec![f32::NAN; n], vec![f32::NAN; n]);
+    let mut samples: Vec<(f64, f32)> = Vec::with_capacity(sweeps.len());
+
+    for gy in 0..g.ny {
+        for gx in 0..g.nx {
+            let (ground_km, az) = g.ground_az(gx, gy);
+            column_samples(sweeps, ground_km, az, &mut samples);
+            if samples.len() < 2 {
+                continue;
+            }
+            let shi = shi_of(&samples, h0_km, hm20_km);
+            if shi <= 0.0 {
+                continue;
+            }
+            let i = gy * g.nx + gx;
+            mehs[i] = (2.54 * shi.sqrt()) as f32;
+            posh[i] = ((29.0 * (shi / wt).ln() + 50.0).clamp(0.0, 100.0)) as f32;
+        }
+    }
+
+    Some(Hail {
+        mehs: g.field(mehs, opts.time),
+        posh: g.field(posh, opts.time),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -267,6 +344,53 @@ mod tests {
         assert!(sample(&d.vild, -97.0, 35.3) > 0.0);
         // The grid corner is past the 200 km range disk.
         assert!(sample(&d.vil, d.lon_west_corner(), d.lat_north_corner()).is_nan());
+    }
+
+    #[test]
+    fn hail_energy_ignores_rain_and_saturates_at_hail() {
+        assert_eq!(hail_energy(35.0), 0.0, "35 dBZ is rain");
+        assert!(hail_energy(45.0) > 0.0 && hail_energy(45.0) < hail_energy(50.0));
+        // Above the cap the weighting is 1 and Z is pinned, so the flux stops climbing.
+        assert_eq!(hail_energy(60.0), hail_energy(Z_CAP_DBZ));
+    }
+
+    #[test]
+    fn posh_is_fifty_percent_at_the_warning_threshold() {
+        // 3 km melting level → WT = 57.5*3 - 121 = 51.5 J/m/s.
+        let (h0_km, wt) = (3.0, 57.5 * 3.0 - 121.0);
+        // A deep 60 dBZ column above the melting level clears that threshold comfortably.
+        let s: Vec<(f64, f32)> = (0..12).map(|i| (i as f64, 60.0f32)).collect();
+        let shi = shi_of(&s, h0_km, 6.0);
+        assert!(shi > wt, "shi {shi} vs threshold {wt}");
+        let posh = 29.0 * (shi / wt).ln() + 50.0;
+        assert!(posh > 50.0 && posh <= 100.0, "posh {posh}");
+        // The definition itself: SHI == WT is exactly 50%.
+        assert!((29.0f64 * (wt / wt).ln() + 50.0 - 50.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn hail_grows_with_a_deeper_hail_column() {
+        let shallow = shi_of(&[(3.0, 60.0f32), (5.0, 60.0)], 3.0, 6.0);
+        let deep = shi_of(&[(3.0, 60.0f32), (9.0, 60.0)], 3.0, 6.0);
+        assert!(deep > shallow);
+        // MEHS spot value: SHI = 100 → 2.54*10 = 25.4 mm.
+        assert!((2.54 * 100f64.sqrt() - 25.4).abs() < 1e-9);
+        // Nothing below the melting level counts.
+        assert_eq!(shi_of(&[(0.0, 60.0f32), (2.0, 60.0)], 3.0, 6.0), 0.0);
+    }
+
+    #[test]
+    fn hail_fills_a_grid() {
+        let sweeps = uniform_sweeps(58.0, &[0.5, 2.4, 6.0, 12.0]);
+        let h = hail(&sweeps, 3000.0, 6000.0, &DerivedOpts::default()).unwrap();
+        let sample = |f: &MrmsField, lon: f64, lat: f64| {
+            let gx = (((lon - f.lon_west) / RES_DEG) as usize).min(f.nx - 1);
+            let gy = (((f.lat_north - lat) / RES_DEG) as usize).min(f.ny - 1);
+            f.values[gy * f.nx + gx]
+        };
+        // 0.5° north (~55 km) puts the upper tilts above the melting level.
+        assert!(sample(&h.mehs, -97.0, 35.5) > 0.0);
+        assert!(sample(&h.posh, -97.0, 35.5) > 0.0);
     }
 
     impl Derived {

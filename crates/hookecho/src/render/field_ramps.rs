@@ -288,6 +288,22 @@ static VIL_DENSITY: FieldRamp = ramp!(
     ]
 );
 
+/// Probability of severe hail. 50% is Witt's warning threshold, so the scale turns warm there.
+static POSH: FieldRamp = ramp!(
+    "Severe hail probability",
+    "%",
+    10.0,
+    100.0,
+    RampScale::Linear,
+    255,
+    &[
+        (0.0, [40, 90, 200]),
+        (0.45, [240, 230, 60]),
+        (0.75, [240, 150, 30]),
+        (1.0, [230, 60, 200]),
+    ]
+);
+
 static PRECIP_TYPE: FieldRamp = FieldRamp {
     label: "Precip type",
     units: "",
@@ -416,6 +432,9 @@ pub fn ramp_for(layer: FieldLayer) -> Option<&'static FieldRamp> {
         FL::Vil | FL::VilLocal => &VIL,
         FL::EchoTops | FL::EtopLocal => &ECHO_TOPS,
         FL::VilDensity => &VIL_DENSITY,
+        // MEHS shares the MRMS MESH scale: one hail scale app-wide.
+        FL::HailMehs => &MESH,
+        FL::HailPosh => &POSH,
         FL::PrecipType => &PRECIP_TYPE,
         FL::UpdraftHelicity => &UPDRAFT_HELICITY,
         FL::Smoke => &SMOKE,

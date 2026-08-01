@@ -123,6 +123,8 @@ enum OverlayMsg {
     Placefile(String, wxdata::placefile::Placefile),
     /// The latest grid for a national field layer (mosaic, rotation, MESH, AzShear, lightning).
     Field(crate::render::FieldLayer, wxdata::mrms::MrmsField),
+    /// `(0 °C, −20 °C)` level heights above sea level, in metres, at the active radar.
+    FreezingLevels(f64, f64),
     /// Local storm reports: live trailing window (`None`) or an archive bucket (feature CC).
     StormReports(Option<i64>, Vec<wxdata::spc::StormReport>),
     /// Live Spotter Network positions (CONUS-wide; filtered to the active site at draw time).
@@ -208,6 +210,8 @@ enum OverlaySource {
     HrrrLayer(crate::render::FieldLayer, u8),
     /// Gridded L3 product (DVL/EET) for a site, projected to a lat/lon field (feature X).
     L3Grid(crate::render::FieldLayer, String),
+    /// Melting-level and −20 °C heights at `(lon, lat)`, for the derived hail grids.
+    FreezingLevels(f64, f64),
     /// Nearest-station observations for `site` at `(lat, lon)`.
     Obs {
         site: String,
@@ -372,6 +376,36 @@ impl OverlaySource {
                 match field {
                     Some(f) => OverlayMsg::Field(layer, f),
                     None => anyhow::bail!("no L3 grid for {site}"),
+                }
+            }
+            OverlaySource::FreezingLevels(lon, lat) => {
+                // HRRR carries both isotherm heights as analysis fields, so the hail algorithm
+                // sources its own thermodynamics instead of asking the user for a freezing level.
+                let h0 = wxdata::hrrr::fetch_field(
+                    http,
+                    wxdata::hrrr::Model::Hrrr,
+                    "HGT",
+                    "0C isotherm",
+                    0,
+                    f64::NEG_INFINITY,
+                )
+                .await?;
+                // 253 K is −20.15 °C — the level Witt's hail weighting tops out at.
+                let hm20 = wxdata::hrrr::fetch_field(
+                    http,
+                    wxdata::hrrr::Model::Hrrr,
+                    "HGT",
+                    "253 K level",
+                    0,
+                    f64::NEG_INFINITY,
+                )
+                .await?;
+                match (
+                    h0.field.sample_bilinear(lon, lat),
+                    hm20.field.sample_bilinear(lon, lat),
+                ) {
+                    (Some(a), Some(b)) => OverlayMsg::FreezingLevels(a as f64, b as f64),
+                    _ => anyhow::bail!("no freezing levels at {lon},{lat}"),
                 }
             }
             OverlaySource::Obs { site, lat, lon } => {
@@ -847,7 +881,7 @@ fn field_refresh_secs(layer: crate::render::FieldLayer) -> u64 {
         // Environment (HRRR CAPE/SRH) refreshes slowly — 15 min.
         FL::Cape | FL::Srh => 900,
         // Derived products cost no network: they recompute when the volume does, not on a clock.
-        FL::VilLocal | FL::VilDensity | FL::EtopLocal => 60,
+        FL::VilLocal | FL::VilDensity | FL::EtopLocal | FL::HailMehs | FL::HailPosh => 60,
     }
 }
 
@@ -1267,9 +1301,13 @@ pub struct HookEchoApp {
     /// site change.
     l3grid_site: Option<String>,
     /// What the locally derived products (VIL/VILD/echo tops) were last computed from:
-    /// `(volume name, echo-top threshold, enabled-layer mask)`. A new volume, a moved threshold,
-    /// or a newly toggled layer recomputes.
-    derived_key: Option<(String, u32, u8)>,
+    /// `(volume name, echo-top threshold, enabled-layer mask, melting level)`. Any of them moving
+    /// recomputes.
+    derived_key: Option<(String, u32, u8, i32)>,
+    /// `(site, 0 °C height, −20 °C height)` above sea level in metres, for the hail grids, plus
+    /// the clock that refreshes them on the environment cadence.
+    freezing: Option<(String, f64, f64)>,
+    freezing_last_fetch: Option<Instant>,
     /// Surface obs (METAR station plots, feature U): toggle, current obs, fetch clock + bbox.
     show_metar: bool,
     metars: Vec<wxdata::metar::SurfaceOb>,
@@ -1746,6 +1784,8 @@ impl HookEchoApp {
             env_srh_km: 3,
             l3grid_site: None,
             derived_key: None,
+            freezing: None,
+            freezing_last_fetch: None,
             show_metar: false,
             metars: Vec::new(),
             metar_last_fetch: None,
@@ -1973,7 +2013,15 @@ impl HookEchoApp {
     /// work in archive replay and on each live tilt.
     fn recompute_derived(&mut self, ctx: &egui::Context) {
         use crate::render::FieldLayer as FL;
-        const LAYERS: [FL; 3] = [FL::VilLocal, FL::VilDensity, FL::EtopLocal];
+        const LAYERS: [FL; 5] = [
+            FL::VilLocal,
+            FL::VilDensity,
+            FL::EtopLocal,
+            FL::HailMehs,
+            FL::HailPosh,
+        ];
+        /// Bit positions in the mask for the two hail grids.
+        const HAIL_BITS: u8 = 0b11000;
         let mask = LAYERS.iter().enumerate().fold(0u8, |m, (i, l)| {
             m | u8::from(self.fields.get(l).is_some_and(|s| s.show)) << i
         });
@@ -1981,10 +2029,29 @@ impl HookEchoApp {
             self.derived_key = None;
             return;
         }
+        let site = self.views[self.active].site.clone();
+        // Freezing levels are only worth a request when a hail grid is actually on.
+        let levels = match (mask & HAIL_BITS != 0, &self.freezing, &site) {
+            (true, Some((s, h0, hm20)), Some(cur)) if s == cur => Some((*h0, *hm20)),
+            _ => None,
+        };
+        if mask & HAIL_BITS != 0 && levels.is_none() {
+            self.fetch_freezing_levels(ctx);
+        }
+        // Beam heights are above the radar; the model heights are above sea level.
+        let radar_m = site
+            .as_deref()
+            .and_then(wxdata::sites::site_by_id)
+            .map_or(0.0, |s| s.elevation_meters as f64);
         let Some(vol) = self.views[self.active].volume.as_mut() else {
             return;
         };
-        let key = (vol.name.clone(), self.settings.etop_dbz.to_bits(), mask);
+        let key = (
+            vol.name.clone(),
+            self.settings.etop_dbz.to_bits(),
+            mask,
+            levels.map_or(0, |(h0, _)| h0 as i32),
+        );
         if self.derived_key.as_ref() == Some(&key) {
             return;
         }
@@ -2002,23 +2069,53 @@ impl HookEchoApp {
         let cap = self.field_texture_cap();
         let ctx = ctx.clone();
         self._rt.spawn_blocking(move || {
-            let Some(d) = wxdata::derived::derive(&sweeps, &opts) else {
-                return;
-            };
-            for (i, (layer, f)) in [
-                (FL::VilLocal, d.vil),
-                (FL::VilDensity, d.vild),
-                (FL::EtopLocal, d.etop),
-            ]
-            .into_iter()
-            .enumerate()
-            {
-                if mask & (1 << i) != 0 {
+            let mut out: Vec<(FL, wxdata::mrms::MrmsField)> = Vec::new();
+            if mask & !HAIL_BITS != 0 {
+                if let Some(d) = wxdata::derived::derive(&sweeps, &opts) {
+                    out.extend([
+                        (FL::VilLocal, d.vil),
+                        (FL::VilDensity, d.vild),
+                        (FL::EtopLocal, d.etop),
+                    ]);
+                }
+            }
+            if let Some((h0, hm20)) = levels.filter(|_| mask & HAIL_BITS != 0) {
+                if let Some(h) =
+                    wxdata::derived::hail(&sweeps, h0 - radar_m, hm20 - radar_m, &opts)
+                {
+                    out.extend([(FL::HailMehs, h.mehs), (FL::HailPosh, h.posh)]);
+                }
+            }
+            for (layer, f) in out {
+                let bit = LAYERS.iter().position(|l| *l == layer).unwrap_or(0);
+                if mask & (1 << bit) != 0 {
                     let _ = tx.send(OverlayMsg::Field(layer, f.decimated(cap)));
                 }
             }
             ctx.request_repaint();
         });
+    }
+
+    /// Refresh the melting-level heights the hail grids need, on the environment cadence.
+    fn fetch_freezing_levels(&mut self, ctx: &egui::Context) {
+        let Some(site) = self.views[self.active]
+            .site
+            .as_deref()
+            .and_then(wxdata::sites::site_by_id)
+        else {
+            return;
+        };
+        if self
+            .freezing_last_fetch
+            .is_some_and(|t| t.elapsed().as_secs() < 900)
+        {
+            return;
+        }
+        self.freezing_last_fetch = Some(Instant::now());
+        self.spawn_overlay(
+            ctx,
+            OverlaySource::FreezingLevels(site.longitude as f64, site.latitude as f64),
+        );
     }
 
     fn spawn_overlay(&self, ctx: &egui::Context, source: OverlaySource) {
@@ -4966,6 +5063,20 @@ impl HookEchoApp {
                 false,
             ),
             (
+                FL::HailMehs,
+                "Radar",
+                "Max hail size (derived)",
+                "Largest hail this storm can be making, from the volume aloft",
+                false,
+            ),
+            (
+                FL::HailPosh,
+                "Radar",
+                "Severe hail probability (derived)",
+                "Odds this storm is producing hail an inch or larger",
+                false,
+            ),
+            (
                 FL::Hrrr,
                 "Models",
                 "HRRR future radar",
@@ -5694,6 +5805,11 @@ impl HookEchoApp {
                 OverlayMsg::Aviation(f) => self.aviation_features = f,
                 OverlayMsg::Spotters(spotters) => self.spotters = spotters,
                 OverlayMsg::Fronts(a) => self.fronts = Some(a),
+                OverlayMsg::FreezingLevels(h0, hm20) => {
+                    if let Some(site) = self.views[self.active].site.clone() {
+                        self.freezing = Some((site, h0, hm20));
+                    }
+                }
                 OverlayMsg::ProbSevere(f) => self.probsevere = f,
                 OverlayMsg::Hrrr(fc) => {
                     use crate::render::FieldLayer;
@@ -10750,6 +10866,8 @@ impl eframe::App for HookEchoApp {
                     | FL::VilLocal
                     | FL::VilDensity
                     | FL::EtopLocal
+                    | FL::HailMehs
+                    | FL::HailPosh
             ) {
                 continue;
             }
@@ -10784,7 +10902,9 @@ impl eframe::App for HookEchoApp {
                     | FL::Mosaic
                     | FL::VilLocal
                     | FL::VilDensity
-                    | FL::EtopLocal => unreachable!(),
+                    | FL::EtopLocal
+                    | FL::HailMehs
+                    | FL::HailPosh => unreachable!(),
                 };
                 self.spawn_overlay(ctx, OverlaySource::Field(layer, product));
             }

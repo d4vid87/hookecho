@@ -85,6 +85,10 @@ pub enum FieldLayer {
     VilDensity,
     /// Echo tops integrated locally from the Level 2 volume, at a user-set dBZ threshold.
     EtopLocal,
+    /// Maximum Expected Hail Size derived from the volume (Witt et al. 1998).
+    HailMehs,
+    /// Probability of Severe Hail derived from the volume (Witt et al. 1998).
+    HailPosh,
 }
 
 impl FieldLayer {
@@ -103,7 +107,7 @@ impl FieldLayer {
     }
 
     /// Fixed bottom-to-top paint order within each band.
-    pub const DRAW_ORDER: [FieldLayer; 22] = [
+    pub const DRAW_ORDER: [FieldLayer; 24] = [
         // Below-radar context band (bottom to top).
         FieldLayer::Mrms,
         FieldLayer::Mosaic,
@@ -122,6 +126,8 @@ impl FieldLayer {
         FieldLayer::EchoTops,
         FieldLayer::EtopLocal,
         FieldLayer::VilDensity,
+        FieldLayer::HailMehs,
+        FieldLayer::HailPosh,
         FieldLayer::Hca,
         FieldLayer::UpdraftHelicity,
         FieldLayer::Rotation,
