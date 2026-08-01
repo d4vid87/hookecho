@@ -10,6 +10,7 @@ pub mod dealias;
 pub mod derived;
 pub mod dotcams;
 pub mod efield;
+pub mod ero;
 pub mod forecast;
 pub mod fronts;
 pub mod geocode;

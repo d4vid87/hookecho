@@ -24,6 +24,8 @@ pub struct UiActions {
     pub outlook_kind_changed: bool,
     /// The WSSI day changed; the app must clear + refetch it.
     pub wssi_day_changed: bool,
+    /// The Excessive Rainfall Outlook day changed; the app must clear + refetch it.
+    pub ero_day_changed: bool,
     /// Start an offline chase-pack download of the current view's basemap.
     pub download_chasepack: bool,
     /// Cancel the in-progress chase-pack download.
@@ -101,6 +103,25 @@ pub(crate) fn show(
             });
         });
     }
+
+    // Excessive Rainfall Outlook: the flood half of the day, directly under the severe half.
+    ui.horizontal(|ui| {
+        ui.label("Rainfall outlook:");
+        for day in 0u8..=3 {
+            let label = if day == 0 {
+                "Off".to_string()
+            } else {
+                format!("D{day}")
+            };
+            if ui
+                .selectable_value(&mut filters.ero_day, day, label)
+                .changed()
+            {
+                actions.ero_day_changed = true;
+                changed = true;
+            }
+        }
+    });
 
     // Winter Storm Severity Index: same off-plus-three-days shape as the outlook selector.
     ui.horizontal(|ui| {

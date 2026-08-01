@@ -76,6 +76,8 @@ pub struct OverlayFilters {
     pub show_mds: bool,
     /// WPC Winter Storm Severity Index day (0 = off, else 1-3).
     pub wssi_day: u8,
+    /// WPC Excessive Rainfall Outlook day (0 = off, else 1-3).
+    pub ero_day: u8,
     /// Level 3 storm cells (clickable dots: storm tracking, hail, mesocyclone).
     pub show_cells: bool,
     /// SCIT forecast tracks (painter-only; no overlay rebuild).
@@ -100,6 +102,7 @@ impl Default for OverlayFilters {
             outlook_day: 0, // SPC outlook off by default; user opts in from Layer options
             outlook_kind: wxdata::spc::OutlookKind::Categorical,
             wssi_day: 0, // off by default, like the SPC outlook
+            ero_day: 0,
 
             show_mds: true,
             show_cells: true,
@@ -122,6 +125,8 @@ enum OverlayMsg {
     Mds(Vec<GeoFeature>),
     /// WPC Winter Storm Severity Index polygons for a day.
     Wssi(u8, Vec<GeoFeature>),
+    /// WPC Excessive Rainfall Outlook polygons for a day.
+    Ero(u8, Vec<GeoFeature>),
     /// mPING crowd precipitation-type reports.
     Mping(Vec<wxdata::mping::Report>),
     /// Pilot reports within the fetched bbox.
@@ -201,6 +206,8 @@ enum OverlaySource {
     Mds,
     /// Winter Storm Severity Index for a day (1-3).
     Wssi(u8),
+    /// Excessive Rainfall Outlook for a day (1-3).
+    Ero(u8),
     /// mPING crowd reports from the last hour, with the user's API key.
     Mping(String),
     /// Pilot reports within a lat/lon bbox `(lat0, lon0, lat1, lon1)`.
@@ -297,6 +304,7 @@ impl OverlaySource {
             OverlaySource::Pireps(lat0, lon0, lat1, lon1) => OverlayMsg::Pireps(
                 wxdata::aviation::fetch_pireps(http, lat0, lon0, lat1, lon1).await?,
             ),
+            OverlaySource::Ero(day) => OverlayMsg::Ero(day, wxdata::ero::fetch(http, day).await?),
             OverlaySource::Outlook(day, kind) => {
                 OverlayMsg::Outlook(day, wxdata::spc::fetch_outlook_kind(http, day, kind).await?)
             }
@@ -1219,6 +1227,8 @@ pub struct HookEchoApp {
     md_features: Vec<GeoFeature>,
     /// Winter Storm Severity Index polygons for the selected day.
     wssi_features: Vec<GeoFeature>,
+    /// Excessive Rainfall Outlook polygons for the selected day.
+    ero_features: Vec<GeoFeature>,
     /// Crowd precipitation-type reports (mPING), and their fetch clock.
     show_mping: bool,
     mping_reports: Vec<wxdata::mping::Report>,
@@ -1770,6 +1780,7 @@ impl HookEchoApp {
             outlook_features: [Vec::new(), Vec::new(), Vec::new()],
             md_features: Vec::new(),
             wssi_features: Vec::new(),
+            ero_features: Vec::new(),
             show_mping: false,
             mping_reports: Vec::new(),
             mping_last_fetch: None,
@@ -2250,6 +2261,9 @@ impl HookEchoApp {
         self.spawn_overlay(ctx, OverlaySource::Mds);
         if (1..=3).contains(&self.filters.wssi_day) {
             self.spawn_overlay(ctx, OverlaySource::Wssi(self.filters.wssi_day));
+        }
+        if (1..=3).contains(&self.filters.ero_day) {
+            self.spawn_overlay(ctx, OverlaySource::Ero(self.filters.ero_day));
         }
         // Only fetch the SPC outlook the user has selected (off = day 0 fetches nothing).
         if (1..=3).contains(&self.filters.outlook_day) {
@@ -4099,6 +4113,12 @@ impl HookEchoApp {
             // Hazard switched: drop the stale Day-1 features so the empty-check refetches it.
             self.outlook_features[0].clear();
         }
+        if actions.ero_day_changed {
+            self.ero_features.clear();
+            if (1..=3).contains(&self.filters.ero_day) {
+                self.spawn_overlay(ctx, OverlaySource::Ero(self.filters.ero_day));
+            }
+        }
         if actions.wssi_day_changed {
             // Day switched: the shown polygons belong to the old day until the new ones land.
             self.wssi_features.clear();
@@ -5865,6 +5885,11 @@ impl HookEchoApp {
                 OverlayMsg::Mds(f) => self.md_features = f,
                 OverlayMsg::Mping(r) => self.mping_reports = r,
                 OverlayMsg::Pireps(p) => self.pireps = p,
+                OverlayMsg::Ero(day, f) => {
+                    if day == self.filters.ero_day {
+                        self.ero_features = f;
+                    }
+                }
                 OverlayMsg::Wssi(day, f) => {
                     // A day change in flight must not overwrite the day now selected.
                     if day == self.filters.wssi_day {
@@ -6810,6 +6835,9 @@ impl HookEchoApp {
         }
         if (1..=3).contains(&self.filters.wssi_day) {
             v.extend(self.wssi_features.iter().cloned());
+        }
+        if (1..=3).contains(&self.filters.ero_day) {
+            v.extend(self.ero_features.iter().cloned());
         }
         if self.filters.show_alerts {
             for f in self.active_alert_features() {

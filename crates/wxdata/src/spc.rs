@@ -11,7 +11,7 @@ const OUTLOOK_BASE: &str = "https://www.spc.noaa.gov/products/outlook";
 const MD_URL: &str = "https://mapservices.weather.noaa.gov/vector/rest/services/outlooks/spc_mesoscale_discussion/MapServer/0/query?where=1%3D1&outFields=*&f=geojson";
 
 /// Fill color for a categorical risk label, when the GeoJSON doesn't supply one.
-fn risk_color(label: &str) -> [u8; 3] {
+pub(crate) fn risk_color(label: &str) -> [u8; 3] {
     match label.to_ascii_uppercase().as_str() {
         "TSTM" => [192, 224, 163],
         "MRGL" => [127, 197, 127],
