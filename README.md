@@ -299,7 +299,16 @@ layer draws its own scale and units.
 - Listen to a **NOAA Weather Radio** relay while you watch (bring your county's
   stream URL — NOAA broadcasts on VHF and streams nothing itself).
 - Draw on the map freehand to circle the storm you're talking about, and look
-  through FAA airport webcams to see what the sky actually looks like.
+  through webcams to see what the sky actually looks like. The FAA's ~2,600
+  airport cameras need no key but stop at the US border; a free **Windy** key in
+  Settings adds their global network, which returns the 50 most popular cameras
+  in view rather than every one of them.
+- **Animated wind**: HRRR 10 m wind drawn as drifting particles, coloured by
+  speed — the Windy look, built from NOAA's own free GRIB grids rather than
+  licensed, so it needs no key and works offline of any paid API. CONUS only,
+  because HRRR is. Model output, not observation, and the layer says so.
+- **Open this view in Windy** from the command palette when you want their
+  models next to ours — same place, same zoom, matching overlay.
 - **Live station cards**: click a surface station and get a floating,
   draggable card — a live highway camera on top, then the station's local clock
   and how stale its reading is, temperature with humidity and dewpoint, a wind
