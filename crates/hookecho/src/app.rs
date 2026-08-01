@@ -281,7 +281,8 @@ enum OverlaySource {
     /// analysis.
     Contours(ContourKind, wxdata::hrrr::Model),
     /// NHC tropical cyclones (feature V).
-    Tropical,
+    /// NHC tropical suite: `(wind-field threshold in kt, include storm surge)`.
+    Tropical(Option<u8>, bool),
     /// HRRR wind components for the particle layer, at a level and forecast hour.
     Wind(wxdata::hrrr::WindLevel, u8),
 }
@@ -588,9 +589,9 @@ impl OverlaySource {
                     valid,
                 )
             }
-            OverlaySource::Tropical => {
-                OverlayMsg::Tropical(wxdata::tropical::fetch_active(http).await?)
-            }
+            OverlaySource::Tropical(wind_kt, surge) => OverlayMsg::Tropical(
+                wxdata::tropical::fetch_active_opts(http, wind_kt, surge).await?,
+            ),
             OverlaySource::Wind(level, fh) => {
                 let (run, u, v) = wxdata::hrrr::fetch_wind(http, level, fh).await?;
                 OverlayMsg::Wind(Box::new(crate::wind_draw::WindField {
@@ -1233,6 +1234,10 @@ pub struct HookEchoApp {
     show_mping: bool,
     mping_reports: Vec<wxdata::mping::Report>,
     mping_last_fetch: Option<Instant>,
+    /// Tropical wind-field threshold (34/50/64 kt), or `None` for no wind field, and whether
+    /// to draw the potential storm-surge flooding polygons.
+    tropical_wind_kt: Option<u8>,
+    tropical_surge: bool,
     /// Pilot reports: toggle, current reports, fetch clock (rides the METAR view bbox).
     show_pireps: bool,
     pireps: Vec<wxdata::aviation::Pirep>,
@@ -1784,6 +1789,8 @@ impl HookEchoApp {
             show_mping: false,
             mping_reports: Vec::new(),
             mping_last_fetch: None,
+            tropical_wind_kt: None,
+            tropical_surge: false,
             show_pireps: false,
             pireps: Vec::new(),
             pirep_last_fetch: None,
@@ -4402,6 +4409,9 @@ impl HookEchoApp {
                             &mut self.contour_kind,
                             &mut self.settings.etop_dbz,
                             &mut self.snow_hours,
+                            &self.show_tropical,
+                            &mut self.tropical_wind_kt,
+                            &mut self.tropical_surge,
                             l3_site.as_deref(),
                             Some(mosaic.as_str()),
                             &mut opts,
@@ -6851,6 +6861,10 @@ impl HookEchoApp {
         }
         if self.show_tropical {
             if let Some(t) = &self.tropical {
+                // Surge and wind field go under the cones: the cone is the headline, these are
+                // the context it sits on.
+                v.extend(t.surge.iter().cloned());
+                v.extend(t.wind_radii.iter().cloned());
                 v.extend(t.cones.iter().cloned());
             }
         }
@@ -11138,7 +11152,10 @@ impl eframe::App for HookEchoApp {
                 .is_none_or(|t| t.elapsed().as_secs() >= 900)
         {
             self.tropical_last_fetch = Some(Instant::now());
-            self.spawn_overlay(ctx, OverlaySource::Tropical);
+            self.spawn_overlay(
+                ctx,
+                OverlaySource::Tropical(self.tropical_wind_kt, self.tropical_surge),
+            );
         }
         // Periodic overlay refresh (~2 min), honoring live weather cadence. Skipped entirely
         // while backgrounded — see `platform::activity`.

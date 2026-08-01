@@ -61,6 +61,9 @@ pub(crate) fn show(
     contour_kind: &mut crate::app::ContourKind,
     etop_dbz: &mut f32,
     snow_hours: &mut u16,
+    show_tropical: &bool,
+    tropical_wind_kt: &mut Option<u8>,
+    tropical_surge: &mut bool,
     l3grid_site: Option<&str>,
     // One line about the live composite: contributing sites and the age of its oldest scan, or
     // why there isn't one. Radars scan on their own schedules, so a composite is always a little
@@ -288,6 +291,26 @@ pub(crate) fn show(
                 .checkbox(&mut filters.alert_cats[cat.index()], cat.label())
                 .changed();
         }
+    }
+
+    if *show_tropical {
+        header(ui, "Tropical");
+        ui.horizontal(|ui| {
+            ui.label("Wind field:");
+            changed |= ui.selectable_value(tropical_wind_kt, None, "Off").changed();
+            for kt in [34u8, 50, 64] {
+                changed |= ui
+                    .selectable_value(tropical_wind_kt, Some(kt), format!("{kt} kt"))
+                    .on_hover_text("How far out the forecast wind of that strength reaches")
+                    .changed();
+            }
+        });
+        changed |= ui
+            .checkbox(tropical_surge, "Potential storm surge")
+            .on_hover_text(
+                "How deep water could get above ground if the peak surge arrives at high tide",
+            )
+            .changed();
     }
 
     if fields.get(&FL::SnowAnalysis).is_some_and(|s| s.show) {

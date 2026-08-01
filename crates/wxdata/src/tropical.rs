@@ -43,6 +43,21 @@ pub struct TropicalStorm {
 pub struct TropicalData {
     pub cones: Vec<GeoFeature>,
     pub storms: Vec<TropicalStorm>,
+    /// Forecast wind-field polygons at the requested threshold (34/50/64 kt), if one was asked
+    /// for. Drawn beneath the cones: the cone is where the centre might go, this is how far out
+    /// the damaging wind reaches.
+    pub wind_radii: Vec<GeoFeature>,
+    /// Potential storm surge flooding polygons (NHC P-Surge), when requested.
+    pub surge: Vec<GeoFeature>,
+}
+
+/// Fill for a wind threshold: tropical-storm force through hurricane force.
+fn wind_color(kt: u8) -> [u8; 3] {
+    match kt {
+        64 => [230, 60, 60],
+        50 => [240, 160, 50],
+        _ => [70, 200, 220],
+    }
 }
 
 /// Saffir–Simpson category label + color for a max-wind in knots.
@@ -60,6 +75,16 @@ pub fn saffir_simpson(kt: f32) -> (&'static str, [u8; 3]) {
 
 /// Fetch the active-storm cones + tracks. Off-season (no active storms) returns empty (`Ok`).
 pub async fn fetch_active(client: &reqwest::Client) -> anyhow::Result<TropicalData> {
+    fetch_active_opts(client, None, false).await
+}
+
+/// Fetch the tropical picture, optionally adding the forecast wind field at `wind_kt`
+/// (34/50/64) and the potential storm-surge flooding polygons.
+pub async fn fetch_active_opts(
+    client: &reqwest::Client,
+    wind_kt: Option<u8>,
+    surge: bool,
+) -> anyhow::Result<TropicalData> {
     let cs = client
         .get(CURRENT_STORMS)
         .header("User-Agent", USER_AGENT)
@@ -165,6 +190,39 @@ pub async fn fetch_active(client: &reqwest::Client) -> anyhow::Result<TropicalDa
                 }
             }
         }
+        // Forecast wind field at the requested threshold. `radii` is the threshold in knots and
+        // `tau` the forecast hour; the union over all hours is the swath people want to see.
+        if let Some(kt) = wind_kt {
+            if let Some(id) = find_layer(&bin, "Forecast Wind Radii") {
+                if let Ok(gj) = query_layer(client, id).await {
+                    let rgb = wind_color(kt);
+                    for (geom, props) in features(&gj) {
+                        let radii = props
+                            .get("radii")
+                            .and_then(|v| v.as_f64().or_else(|| v.as_str()?.parse().ok()))
+                            .unwrap_or(0.0);
+                        if (radii - f64::from(kt)).abs() > 0.5 {
+                            continue;
+                        }
+                        let tau = props.get("tau").and_then(|v| v.as_f64()).unwrap_or(0.0);
+                        for poly in polygons_of(&geom) {
+                            data.wind_radii.push(GeoFeature {
+                                rings: poly,
+                                fill: [rgb[0], rgb[1], rgb[2], 35],
+                                stroke: [rgb[0], rgb[1], rgb[2], 170],
+                                kind: FeatureKind::TropicalCone,
+                                title: format!("{name} {kt} kt wind"),
+                                detail: format!(
+                                    "{name} \u{2014} forecast {kt} kt wind field\nForecast hour: +{tau:.0} h"
+                                ),
+                                alert: None,
+                            });
+                        }
+                    }
+                }
+            }
+        }
+
         data.storms.push(TropicalStorm {
             id: get("id"),
             name,
@@ -175,7 +233,76 @@ pub async fn fetch_active(client: &reqwest::Client) -> anyhow::Result<TropicalDa
             points,
         });
     }
+    if surge {
+        match fetch_surge(client).await {
+            // Surge is a separate service; its outage must not cost the cones.
+            Ok(f) => data.surge = f,
+            Err(e) => log::warn!("storm surge: {e}"),
+        }
+    }
     Ok(data)
+}
+
+/// Potential Storm Surge Flooding (NHC P-Surge): how deep water could get above ground.
+const SURGE_SERVICE: &str =
+    "https://mapservices.weather.noaa.gov/tropical/rest/services/tropical/NHC_PeakStormSurge/MapServer";
+
+/// Fill for a surge depth band, read from the band's own label ("greater than 3 feet").
+fn surge_color(label: &str) -> [u8; 3] {
+    let l = label.to_ascii_lowercase();
+    match () {
+        _ if l.contains('9') => [150, 40, 190],
+        _ if l.contains('6') => [225, 60, 60],
+        _ if l.contains('3') => [240, 160, 50],
+        _ => [240, 230, 90],
+    }
+}
+
+/// Fetch the potential storm-surge flooding polygons. Empty (`Ok`) when nothing is threatened.
+pub async fn fetch_surge(client: &reqwest::Client) -> anyhow::Result<Vec<GeoFeature>> {
+    let url = format!("{SURGE_SERVICE}/2/query?where=1%3D1&outFields=name,snippet&f=geojson");
+    let body = client
+        .get(&url)
+        .header("User-Agent", USER_AGENT)
+        .send()
+        .await?
+        .error_for_status()?
+        .text()
+        .await?;
+    parse_surge(&body)
+}
+
+/// Parse a P-Surge polygons payload.
+pub fn parse_surge(json: &str) -> anyhow::Result<Vec<GeoFeature>> {
+    let gj: GeoJson = body_geojson(json)?;
+    let mut out = Vec::new();
+    for (geom, props) in features(&gj) {
+        let label = props
+            .get("name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("Storm surge");
+        let rgb = surge_color(label);
+        for poly in polygons_of(&geom) {
+            out.push(GeoFeature {
+                rings: poly,
+                fill: [rgb[0], rgb[1], rgb[2], 90],
+                stroke: [rgb[0], rgb[1], rgb[2], 220],
+                kind: FeatureKind::TropicalCone,
+                title: format!("Surge: {label}"),
+                detail: format!(
+                    "Potential storm surge flooding\n{label}\n\nDepths are above ground, in the \
+                     areas that could be inundated if the peak surge arrives at high tide."
+                ),
+                alert: None,
+            });
+        }
+    }
+    Ok(out)
+}
+
+fn body_geojson(json: &str) -> anyhow::Result<GeoJson> {
+    json.parse()
+        .map_err(|e| anyhow::anyhow!("tropical geojson: {e}"))
 }
 
 /// Query an ArcGIS MapServer layer for all features as GeoJSON.
@@ -214,6 +341,32 @@ fn features(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const SURGE: &str = r#"{"type":"FeatureCollection","features":[
+      {"type":"Feature","properties":{"name":"greater than 3 feet above ground"},
+       "geometry":{"type":"Polygon","coordinates":[[[-90.0,29.0],[-89.5,29.0],[-89.5,29.5],[-90.0,29.0]]]}},
+      {"type":"Feature","properties":{"name":"greater than 9 feet above ground"},
+       "geometry":{"type":"Polygon","coordinates":[[[-89.4,29.1],[-89.2,29.1],[-89.2,29.3],[-89.4,29.1]]]}}]}"#;
+
+    #[test]
+    fn surge_bands_label_and_deepen() {
+        let f = parse_surge(SURGE).unwrap();
+        assert_eq!(f.len(), 2);
+        assert!(f[0].title.contains("3 feet"));
+        assert_eq!(f[0].fill[..3], surge_color("greater than 3 feet"));
+        assert_ne!(
+            f[0].fill[..3],
+            f[1].fill[..3],
+            "deeper bands read differently"
+        );
+        assert!(f[1].detail.contains("above ground"));
+    }
+
+    #[test]
+    fn wind_thresholds_have_distinct_colors() {
+        assert_ne!(wind_color(34), wind_color(50));
+        assert_ne!(wind_color(50), wind_color(64));
+    }
 
     #[test]
     fn saffir_simpson_boundaries() {
