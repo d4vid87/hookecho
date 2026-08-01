@@ -17,6 +17,11 @@ on Windows, Linux, and Android.
 public archive inside the app, one scan every few seconds, with the tornado
 warning that was in force at the time.</sub>
 
+![HRRR 10 m wind drawn as drifting particles across the CONUS](docs/shots/wind.gif)
+
+<sub>**Animated wind.** HRRR 10 m wind as drifting particles coloured by speed —
+built from NOAA's free GRIB grids, so it needs no API key.</sub>
+
 ## Install
 
 - **Linux**: download `Hook_Echo-WX-x86_64.AppImage` from

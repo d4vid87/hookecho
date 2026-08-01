@@ -31,6 +31,8 @@ PROFILE="$WORK/profile"
 L_ALLTILTS="Compare 4 tilts"
 L_PANES="4 panes"
 L_LINKCAM="Link pane cameras"
+L_WIND="Wind (animated)"
+L_SITES="Radar sites"
 L_XSECTION="Tool: Cross-section"
 L_FORECAST="Tool: Point forecast"
 L_STORMTABLE="Storm attributes…"
@@ -58,7 +60,7 @@ preflight() {
   # "4 panes" is built by format!("{n} pane{}"), so it never appears literally in the source.
   grep -qF '{n} pane' "$REPO/crates/hookecho/src/app.rs" \
     || die "palette label '$L_PANES' is not in app.rs any more — update shoot.sh"
-  for l in "$L_ALLTILTS" "$L_LINKCAM" "$L_XSECTION" "$L_FORECAST" "$L_STORMTABLE" "$L_FRONTS" "$L_GLM" \
+  for l in "$L_ALLTILTS" "$L_LINKCAM" "$L_WIND" "$L_SITES" "$L_XSECTION" "$L_FORECAST" "$L_STORMTABLE" "$L_FRONTS" "$L_GLM" \
            "$L_MRMS" "$L_MOSAIC" "$L_QPE" "$L_HRRR" "$L_VERIFY"; do
     grep -qF "$l" "$REPO/crates/hookecho/src/app.rs" \
       || die "palette label '$l' is not in app.rs any more — update shoot.sh"
@@ -309,6 +311,27 @@ scene_glm() {
   snap glm
 }
 
+scene_wind() {
+  # The particles are the point, so this is a loop, not a still. HRRR is CONUS-only and this is
+  # live model output: it shoots whatever the wind is doing today, which is fine — the feature
+  # reads the same in a quiet pattern as in a windy one.
+  launch "${LIVE_SITE:-KTLX},-98.5,39.5,4.3"; wait_settle 16
+  palette "$L_WIND"
+  palette "$L_SITES"   # the 160 site rings tile the whole CONUS view and fight the streaks
+  wait_settle 20 120
+  local dir="$WORK/wind"; rm -rf "$dir"; mkdir -p "$dir"
+  # No stepping and no settling here: the layer animates continuously, so frames are just taken
+  # as fast as `import` can round-trip the root window.
+  for i in $(seq 0 23); do
+    import -display "$DISPLAY_NUM" -window root "$dir/$(printf '%02d' "$i").png"
+    sleep 0.2
+  done
+  ffmpeg -y -loglevel error -framerate 10 -pattern_type glob -i "$dir/*.png" \
+    -vf "scale=900:-1:flags=lanczos,split[a][b];[a]palettegen=max_colors=96[p];[b][p]paletteuse=dither=bayer:bayer_scale=3" \
+    -loop 0 "$OUT/wind.gif"
+  log "wind.gif $(( $(stat -c%s "$OUT/wind.gif") / 1024 ))K"
+}
+
 # --- hero loop --------------------------------------------------------------------------------
 
 scene_hero() {
@@ -367,7 +390,7 @@ check() {
 }
 
 ARCHIVE_SCENES=(reflectivity velocity alltilts xsection alerts products layers tropical verify)
-LIVE_SCENES=(stormtable forecast fronts hrrr mrms mosaic qpe glm)
+LIVE_SCENES=(wind stormtable forecast fronts hrrr mrms mosaic qpe glm)
 
 main() {
   mkdir -p "$WORK"
