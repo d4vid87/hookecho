@@ -27,6 +27,8 @@ pub struct Volume {
     pub vcp: String,
     /// Sorted, deduped tilt angles; the tilt index selects into this.
     pub elevations: Vec<f32>,
+    /// Which moments *this* volume carries (the pane keeps the wider union for its UI rows).
+    pub moments: [bool; 6],
     binned: LruCache<(Moment, usize, bool), BinnedSweep>,
 }
 
@@ -34,12 +36,14 @@ impl Volume {
     pub fn new(scan: Arc<Scan>, name: String, time: DateTime<Utc>) -> Self {
         let vcp = scan.coverage_pattern_number().to_string();
         let elevations = level2::elevation_angles(&scan);
+        let moments = level2::available_moments(&scan);
         Self {
             scan,
             name,
             time,
             vcp,
             elevations,
+            moments,
             binned: LruCache::new(NonZeroUsize::new(BINNED_CACHE).unwrap()),
         }
     }
@@ -80,6 +84,7 @@ impl Volume {
             }
         }
         self.elevations = new_elev;
+        self.moments = level2::available_moments(&self.scan);
         self.vcp = self.scan.coverage_pattern_number().to_string();
         self.name = name;
         self.time = time;
@@ -225,11 +230,7 @@ impl MapView {
     /// moments, and neither does anything from before the 2011-13 upgrade.
     pub fn clamp_moment(&mut self) {
         let Some(v) = &self.volume else { return };
-        for (seen, got) in self
-            .moments_seen
-            .iter_mut()
-            .zip(level2::available_moments(&v.scan))
-        {
+        for (seen, got) in self.moments_seen.iter_mut().zip(v.moments) {
             *seen |= got;
         }
         let have = self.moments();
@@ -340,6 +341,9 @@ mod tests {
         v.volume = Some(Volume::new(scan_at(&[0.5]), "b".into(), chrono::Utc::now()));
         v.clamp_moment();
         assert!(v.moments()[Moment::Velocity.index()], "still velocity");
+        // The union is for the UI rows; the volume keeps its own list so the renderer can fall
+        // back instead of drawing nothing for a frame that lacks the selected product.
+        assert!(!v.volume.as_ref().unwrap().moments[Moment::Velocity.index()]);
     }
 
     #[test]

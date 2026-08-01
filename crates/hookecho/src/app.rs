@@ -7826,6 +7826,23 @@ impl HookEchoApp {
                 v.storm_motion_uv(),
             )
         };
+        // The pane's product list is the union over every volume from this site, so a single frame
+        // in a loop can lack the selected moment (a legacy volume, a split cut that hasn't arrived).
+        // Draw what this volume does have rather than blanking the radar for that frame.
+        let have = self.views[data].volume.as_ref().unwrap().moments;
+        let moment = if have[moment.index()] {
+            moment
+        } else {
+            match Moment::ALL.into_iter().find(|m| have[m.index()]) {
+                Some(m) => m,
+                None => return (None, true), // nothing decodable yet: keep the last image up
+            }
+        };
+        let storm_uv = if moment == Moment::Velocity {
+            storm_uv
+        } else {
+            None
+        };
         let name = self.views[data].volume.as_ref().unwrap().name.clone();
         let uv_key = storm_uv.map(|(e, n)| (e.to_bits(), n.to_bits()));
         // Dealiasing only applies to Doppler velocity, and only where it is actually folded:
@@ -7855,7 +7872,7 @@ impl HookEchoApp {
             // No tilts yet (a volume that has only just started arriving) is a "wait", not a
             // failure: erroring here put "tilt 0 out of range" on the map once per volume.
             if vol.elevations.is_empty() {
-                return (None, false);
+                return (None, true);
             }
             vol.binned(moment, tilt, dealias)
                 .map(|s| to_upload(s, table, threshold, smooth, storm_uv))
