@@ -21,6 +21,7 @@ pub mod live;
 pub mod lsr;
 pub mod metar;
 pub mod mosaic;
+pub mod mping;
 pub mod mrms;
 pub mod nohrsc;
 pub mod obs;

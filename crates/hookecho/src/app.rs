@@ -122,6 +122,8 @@ enum OverlayMsg {
     Mds(Vec<GeoFeature>),
     /// WPC Winter Storm Severity Index polygons for a day.
     Wssi(u8, Vec<GeoFeature>),
+    /// mPING crowd precipitation-type reports.
+    Mping(Vec<wxdata::mping::Report>),
     /// Storm cells for a specific site (dropped if the active site changed meanwhile).
     Cells(String, Vec<Cell>),
     /// A fetched placefile keyed by its URL.
@@ -197,6 +199,8 @@ enum OverlaySource {
     Mds,
     /// Winter Storm Severity Index for a day (1-3).
     Wssi(u8),
+    /// mPING crowd reports from the last hour, with the user's API key.
+    Mping(String),
     Outlook(u8, wxdata::spc::OutlookKind),
     Cells(String),
     Placefile(String),
@@ -282,6 +286,9 @@ impl OverlaySource {
             }
             OverlaySource::Wssi(day) => {
                 OverlayMsg::Wssi(day, wxdata::wssi::fetch(http, day).await?)
+            }
+            OverlaySource::Mping(key) => {
+                OverlayMsg::Mping(wxdata::mping::fetch(http, &key, 60).await?)
             }
             OverlaySource::Outlook(day, kind) => {
                 OverlayMsg::Outlook(day, wxdata::spc::fetch_outlook_kind(http, day, kind).await?)
@@ -785,6 +792,7 @@ pub(crate) enum OverlayToggle {
     Couplets,
     Alerts,
     Mds,
+    Mping,
     Fronts,
     GlmLightning,
     Wind,
@@ -1195,6 +1203,10 @@ pub struct HookEchoApp {
     md_features: Vec<GeoFeature>,
     /// Winter Storm Severity Index polygons for the selected day.
     wssi_features: Vec<GeoFeature>,
+    /// Crowd precipitation-type reports (mPING), and their fetch clock.
+    show_mping: bool,
+    mping_reports: Vec<wxdata::mping::Report>,
+    mping_last_fetch: Option<Instant>,
     /// ProbSevere storm-probability polygons + badges (toggle + refresh clock).
     show_probsevere: bool,
     probsevere: Vec<GeoFeature>,
@@ -1738,6 +1750,9 @@ impl HookEchoApp {
             outlook_features: [Vec::new(), Vec::new(), Vec::new()],
             md_features: Vec::new(),
             wssi_features: Vec::new(),
+            show_mping: false,
+            mping_reports: Vec::new(),
+            mping_last_fetch: None,
             show_probsevere: false,
             probsevere: Vec::new(),
             probsevere_last_fetch: None,
@@ -4919,6 +4934,7 @@ impl HookEchoApp {
             T::Couplets => &mut self.filters.show_couplets,
             T::Alerts => &mut self.filters.show_alerts,
             T::Mds => &mut self.filters.show_mds,
+            T::Mping => &mut self.show_mping,
             T::LinkCameras => &mut self.link_cameras,
         }
     }
@@ -5354,6 +5370,13 @@ impl HookEchoApp {
                 "Obs",
                 "Tropical (NHC)",
                 "Hurricane tracks and forecast cones",
+                false,
+            ),
+            (
+                T::Mping,
+                "Obs",
+                "Crowd reports (mPING)",
+                "What people outside say is falling: rain, snow, sleet, freezing rain",
                 false,
             ),
             (
@@ -5809,6 +5832,7 @@ impl HookEchoApp {
                     self.alert_features = f;
                 }
                 OverlayMsg::Mds(f) => self.md_features = f,
+                OverlayMsg::Mping(r) => self.mping_reports = r,
                 OverlayMsg::Wssi(day, f) => {
                     // A day change in flight must not overwrite the day now selected.
                     if day == self.filters.wssi_day {
@@ -8659,6 +8683,30 @@ impl HookEchoApp {
             }
         }
 
+        // Crowd precipitation-type reports: a lettered dot per report, so the rain/snow line
+        // reads straight off the map.
+        if self.show_mping {
+            for r in &self.mping_reports {
+                let w = crate::render::mercator::lonlat_to_world(r.lon, r.lat);
+                let (sx, sy) = cam.world_to_screen(w, vp);
+                let p = egui::pos2(prect.left() + sx, prect.top() + sy);
+                if !prect.contains(p) {
+                    continue;
+                }
+                let c = r.precip.color();
+                let color = egui::Color32::from_rgb(c[0], c[1], c[2]);
+                painter.circle_filled(p, 5.0, color);
+                painter.circle_stroke(p, 5.0, egui::Stroke::new(1.0, egui::Color32::BLACK));
+                painter.text(
+                    p,
+                    egui::Align2::CENTER_CENTER,
+                    r.precip.glyph(),
+                    egui::FontId::proportional(8.0),
+                    egui::Color32::BLACK,
+                );
+            }
+        }
+
         // Spotter Network positions, filtered to within Level-II range of this pane's site.
         // FAA camera sites: a small camera-blue dot per airport, named once you're close enough
         // to tell them apart. Clicking one opens its newest frame (see `open_webcam`).
@@ -11186,6 +11234,18 @@ impl eframe::App for HookEchoApp {
                 self.snow_fetched = Some(self.snow_hours);
                 self.spawn_overlay(ctx, OverlaySource::Snow(self.snow_hours));
             }
+        }
+        // Crowd precip-type reports. Skipped entirely without a key — the layer is opt-in twice
+        // over: you turn it on, and you supply your own mPING key.
+        if self.show_mping
+            && !self.settings.mping_key.trim().is_empty()
+            && self
+                .mping_last_fetch
+                .is_none_or(|t| t.elapsed().as_secs() >= 300)
+        {
+            self.mping_last_fetch = Some(Instant::now());
+            let key = self.settings.mping_key.trim().to_string();
+            self.spawn_overlay(ctx, OverlaySource::Mping(key));
         }
         // Surface analysis: WPC reissues it a few times an hour.
         if self.show_fronts

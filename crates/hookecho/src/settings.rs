@@ -269,6 +269,10 @@ pub struct Settings {
     /// first edit, so a later change to the defaults doesn't silently rewrite someone's keys.
     #[serde(default)]
     pub(crate) keybinds: Vec<crate::hotkeys::Binding>,
+    /// mPING API key (free, from mping.ou.edu) — enables the crowd precipitation-type reports.
+    /// Held locally only, same as the other keys.
+    #[serde(default)]
+    pub mping_key: String,
     /// Reflectivity threshold (dBZ) defining the derived echo-top height. 18.5 matches the NWS
     /// Enhanced Echo Tops product; raise it to track the core rather than the anvil.
     #[serde(default = "default_etop_dbz")]
@@ -461,6 +465,7 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             default_site: "KTLX".to_string(),
+            mping_key: String::new(),
             etop_dbz: default_etop_dbz(),
             poll_interval_secs: 30,
             theme: Theme::Dark,
@@ -646,6 +651,7 @@ mod tests {
     fn roundtrips() {
         let s = Settings {
             smooth_radar: false,
+            mping_key: String::new(),
             etop_dbz: 30.0,
             default_site: "KFWS".to_string(),
             poll_interval_secs: 45,

@@ -365,6 +365,15 @@ fn basemaps_tab(ui: &mut egui::Ui, settings: &mut Settings) {
     key_field(ui, "Weather Underground API key", &mut settings.wu_key);
     ui.add_space(12.0);
     ui.separator();
+    ui.label("Crowd reports");
+    ui.weak(
+        "Optional. A free mPING key (mping.ou.edu) adds crowd-sourced precipitation-type \
+         reports \u{2014} the only source that says whether it is landing as rain or snow.",
+    );
+    ui.add_space(6.0);
+    key_field(ui, "mPING API key", &mut settings.mping_key);
+    ui.add_space(12.0);
+    ui.separator();
     ui.label("Webcams");
     ui.weak(
         "Optional. The FAA's ~2,600 cameras need no key but stop at the US border; a free Windy \
