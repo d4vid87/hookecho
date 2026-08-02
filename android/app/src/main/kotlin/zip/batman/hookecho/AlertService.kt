@@ -9,10 +9,6 @@ import android.content.Context
 import android.content.Intent
 import android.os.Build
 import android.os.IBinder
-import org.json.JSONObject
-import java.io.File
-import java.net.HttpURLConnection
-import java.net.URL
 
 /**
  * Watches the user's saved markers for NWS alerts while the app is closed.
@@ -50,13 +46,16 @@ class AlertService : Service() {
         while (running) {
             var hot = false
             runCatching {
-                for (m in watched()) {
-                    for (a in alertsAt(m.lat, m.lon)) {
-                        if (a.tier >= TIER_WARNING) hot = true
+                for (m in Nws.watched(filesDir)) {
+                    for (a in Nws.alertsAt(m.lat, m.lon)) {
+                        if (a.tier >= Nws.TIER_WARNING) hot = true
                         if (seen.add(a.id)) notify(m, a)
                     }
                 }
             }.onFailure { /* offline or NWS hiccup: try again next pass */ }
+            // The widget's own 30-minute clock is a floor; while the service runs it stays as
+            // fresh as the poll it just did.
+            AlertWidget.refresh(this)
             // Tighten the cadence while something is actually warned at a watched point.
             val waitMs = if (hot) 60_000L else 300_000L
             var slept = 0L
@@ -67,63 +66,7 @@ class AlertService : Service() {
         }
     }
 
-    private data class Watch(val name: String, val lat: Double, val lon: Double)
-
-    private data class Alert(val id: String, val event: String, val headline: String, val tier: Int)
-
-    /** Saved markers from settings.json — the same file the Rust app reads and writes. */
-    private fun watched(): List<Watch> {
-        val f = File(filesDir, "config/settings.json")
-        if (!f.exists()) return emptyList()
-        val markers = JSONObject(f.readText()).optJSONArray("markers") ?: return emptyList()
-        return (0 until markers.length()).mapNotNull { i ->
-            val m = markers.optJSONObject(i) ?: return@mapNotNull null
-            Watch(m.optString("name", "Saved location"), m.optDouble("lat"), m.optDouble("lon"))
-        }.filter { it.lat.isFinite() && it.lon.isFinite() }
-    }
-
-    private fun alertsAt(lat: Double, lon: Double): List<Alert> {
-        val url = URL("https://api.weather.gov/alerts/active?point=%.4f,%.4f".format(lat, lon))
-        val conn = (url.openConnection() as HttpURLConnection).apply {
-            setRequestProperty("User-Agent", USER_AGENT)
-            setRequestProperty("Accept", "application/geo+json")
-            connectTimeout = 15_000
-            readTimeout = 15_000
-        }
-        val body = try {
-            if (conn.responseCode != 200) return emptyList()
-            conn.inputStream.bufferedReader().readText()
-        } finally {
-            conn.disconnect()
-        }
-        val features = JSONObject(body).optJSONArray("features") ?: return emptyList()
-        return (0 until features.length()).mapNotNull { i ->
-            val p = features.optJSONObject(i)?.optJSONObject("properties") ?: return@mapNotNull null
-            val event = p.optString("event")
-            val id = p.optString("id").ifEmpty { event + p.optString("sent") }
-            Alert(id, event, p.optString("headline", event), tierOf(p, event))
-        }.filter { it.tier > 0 }
-    }
-
-    /**
-     * Escalation tier from the alert's own words. `tornadoDamageThreat` is the field that
-     * separates a routine tornado warning from a PDS/emergency one, and it is only ever set on
-     * the alerts that matter.
-     */
-    private fun tierOf(p: JSONObject, event: String): Int {
-        val threat = p.optJSONObject("parameters")?.optJSONArray("tornadoDamageThreat")
-            ?.optString(0).orEmpty()
-        val text = (p.optString("description") + " " + p.optString("headline")).uppercase()
-        return when {
-            threat == "CATASTROPHIC" || text.contains("TORNADO EMERGENCY") -> TIER_EMERGENCY
-            threat == "CONSIDERABLE" || event.contains("Flash Flood Emergency") -> TIER_EMERGENCY
-            event.endsWith("Warning") -> TIER_WARNING
-            event.endsWith("Watch") -> TIER_WATCH
-            else -> 0
-        }
-    }
-
-    private fun notify(m: Watch, a: Alert) {
+    private fun notify(m: Nws.Watch, a: Nws.Alert) {
         // Deep-link back to the watched point. The site field is left empty: the app keeps
         // whichever radar it was on and just flies the camera there.
         val goto = ",%.4f,%.4f,9".format(m.lon, m.lat)
@@ -135,8 +78,8 @@ class AlertService : Service() {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
         val channel = when (a.tier) {
-            TIER_EMERGENCY -> CH_EMERGENCY
-            TIER_WARNING -> CH_WARNING
+            Nws.TIER_EMERGENCY -> CH_EMERGENCY
+            Nws.TIER_WARNING -> CH_WARNING
             else -> CH_WATCH
         }
         val n = Notification.Builder(this, channel)
@@ -184,10 +127,6 @@ class AlertService : Service() {
         private const val CH_WATCH = "watch"
         private const val CH_WARNING = "warning"
         private const val CH_EMERGENCY = "emergency"
-        private const val TIER_WATCH = 1
-        private const val TIER_WARNING = 2
-        private const val TIER_EMERGENCY = 3
-        private const val USER_AGENT = "hookecho (github.com/d4vid87/hookecho)"
 
         /**
          * Start/stop entry point, called from Rust over JNI (see `platform::set_background_alerts`)
