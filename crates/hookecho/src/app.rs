@@ -4791,6 +4791,26 @@ impl HookEchoApp {
                         t.playing = false;
                         t.following = ph_idx + 1 == observed;
                     }
+                    // Mark where observed radar ends and the HRRR forecast tail begins, so a
+                    // scrub past the head reads as a model run and not as more radar.
+                    if t.slot_count() > observed {
+                        let frac = observed as f32 / t.slot_count() as f32;
+                        let r = resp.rect;
+                        let x = r.left() + frac * r.width();
+                        let p = ui.painter_at(r);
+                        p.rect_filled(
+                            egui::Rect::from_min_max(
+                                egui::pos2(x, r.top()),
+                                egui::pos2(r.right(), r.bottom()),
+                            ),
+                            0.0,
+                            egui::Color32::from_rgba_unmultiplied(120, 170, 240, 36),
+                        );
+                        p.line_segment(
+                            [egui::pos2(x, r.top()), egui::pos2(x, r.bottom())],
+                            egui::Stroke::new(1.0, egui::Color32::from_rgb(120, 170, 240)),
+                        );
+                    }
                     ui.label(
                         egui::RichText::new(readout)
                             .size(12.0)
