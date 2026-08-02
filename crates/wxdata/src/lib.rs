@@ -28,6 +28,7 @@ pub mod mrms;
 pub mod ndbc;
 pub mod nohrsc;
 pub mod obs;
+pub mod openmeteo;
 pub mod overlay;
 pub mod placefile;
 pub mod probsevere;

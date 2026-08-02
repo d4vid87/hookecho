@@ -34,7 +34,7 @@ pub fn show(
                 ui.strong(format!("{:.3}, {:.3}", at.1, at.0));
                 if let State::Ready(f) = state {
                     if !f.office.is_empty() {
-                        ui.weak(format!("· NWS {}", f.office));
+                        ui.weak(format!("· {}", f.office));
                     }
                 }
             });
@@ -56,7 +56,7 @@ pub fn show(
                 }
                 State::Failed(e) => {
                     ui.colored_label(Color32::from_rgb(230, 120, 120), e);
-                    ui.small("The NWS grid occasionally 500s; tap the map again to retry.");
+                    ui.small("Forecast services go down; tap the map again to retry.");
                 }
                 State::Ready(f) => body(ui, f, tz),
             }

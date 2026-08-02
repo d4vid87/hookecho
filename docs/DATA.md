@@ -66,6 +66,7 @@ the 44 TDWRs are addressable.
 | HRRR fields (wind, CAPE, SRH, snow, smoke) | same | hourly runs | ~1–2 h | no |
 | RAP mesoanalysis | RAP on AWS | hourly runs | ~1 h | no |
 | NWS point forecast | `api.weather.gov` gridpoints | ~hourly | minutes | no |
+| Point forecast outside the US | Open-Meteo (ECMWF/GFS/ICON) | hourly | minutes | no |
 | Area forecast discussions | `api.weather.gov` products | per issue (~2×/day + updates) | minutes | no |
 | Surface fronts | WPC `CODSUS` bulletin | ~4×/day | ~1 h | no |
 | Tropical cyclones (positions, cones, tracks) | NHC `CurrentStorms.json` + MapServer | per advisory (6 h, plus intermediates) | minutes | no |

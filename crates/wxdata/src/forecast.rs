@@ -3,6 +3,10 @@
 //! Everything else in this app answers a radar question. This one answers the question a person
 //! actually asks when they open a weather app, and it's the only NWS endpoint we use that returns
 //! a forecast rather than an observation or a warning.
+//!
+//! The NWS grid stops at the US border, so when `/points` doesn't answer, [`fetch`] falls back to
+//! the global [`crate::openmeteo`] forecast. That also covers a transient NWS 500 for a US point,
+//! which now yields somebody's forecast instead of an error — the `office` field says which.
 
 use crate::alerts::USER_AGENT;
 use chrono::{DateTime, Utc};
@@ -101,13 +105,25 @@ pub async fn fetch(http: &reqwest::Client, lat: f64, lon: f64) -> anyhow::Result
         }
     };
 
-    let points = get(format!("{API}/points/{lat:.4},{lon:.4}")).await?;
+    let points = match get(format!("{API}/points/{lat:.4},{lon:.4}")).await {
+        Ok(body) => body,
+        Err(e) => {
+            log::info!("NWS has no forecast for {lat:.3},{lon:.3} ({e}); using Open-Meteo");
+            return crate::openmeteo::fetch(http, lat, lon).await;
+        }
+    };
     let pv: serde_json::Value = serde_json::from_str(&points)?;
     let str_at = |ptr: &str| pv.pointer(ptr).and_then(|v| v.as_str()).map(str::to_string);
-    let daily_url = str_at("/properties/forecast")
-        .ok_or_else(|| anyhow::anyhow!("no forecast for this point"))?;
+    let Some(daily_url) = str_at("/properties/forecast") else {
+        log::info!("NWS point {lat:.3},{lon:.3} carries no forecast grid; using Open-Meteo");
+        return crate::openmeteo::fetch(http, lat, lon).await;
+    };
     let hourly_url = str_at("/properties/forecastHourly");
-    let office = str_at("/properties/cwa").unwrap_or_default();
+    // Provenance the window prints verbatim, so it has to name the provider, not just the office.
+    let office = match str_at("/properties/cwa") {
+        Some(cwa) if !cwa.is_empty() => format!("NWS {cwa}"),
+        _ => "NWS".to_string(),
+    };
 
     let daily = parse_periods(&get(daily_url).await?)?;
     // The hourly grid 500s more often than the daily one; a missing strip shouldn't sink the
