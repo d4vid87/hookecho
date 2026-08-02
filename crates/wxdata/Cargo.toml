@@ -26,7 +26,7 @@ log.workspace = true
 geojson = "1.0.0"
 # Already in the tree under reqwest; used here to run the per-forecast-hour HRRR fetches with
 # bounded concurrency instead of one at a time.
-futures-util = { version = "0.3", default-features = false, features = ["std"] }
+futures-util = { version = "0.3", default-features = false, features = ["std", "async-await-macro"] }
 chrono-tz = "0.10"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]

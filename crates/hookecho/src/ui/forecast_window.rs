@@ -282,7 +282,8 @@ fn conditions_line(o: &wxdata::obs::Observation, station: &str) -> String {
     parts.join(" · ")
 }
 
-/// `↑ 6:14 AM · ↓ 8:42 PM · Waxing gibbous`, or just the moon during polar day/night.
+/// `Sunrise 6:14 AM · Sunset 8:42 PM · Waxing gibbous`, or just the moon during polar day/night.
+// ponytail: words, not ↑/↓ arrows — those render as tofu boxes in the Android font stack.
 fn almanac_line(at: (f64, f64), tz: Option<wxdata::tz::Tz>) -> String {
     let now = Utc::now();
     let date = match tz {
@@ -292,7 +293,11 @@ fn almanac_line(at: (f64, f64), tz: Option<wxdata::tz::Tz>) -> String {
     let (moon, _) = crate::astro::moon_label(crate::astro::moon_phase(now));
     match crate::astro::sun_times(at.1, at.0, date) {
         Some((rise, set)) => {
-            format!("↑ {} · ↓ {} · {moon}", clock(rise, tz), clock(set, tz))
+            format!(
+                "Sunrise {} · Sunset {} · {moon}",
+                clock(rise, tz),
+                clock(set, tz)
+            )
         }
         None => moon.to_string(),
     }
@@ -386,9 +391,9 @@ mod tests {
     #[test]
     fn almanac_line_has_both_events_in_the_tropics() {
         let s = almanac_line((-97.5, 35.5), None);
-        assert!(s.contains('↑') && s.contains('↓'), "got {s}");
+        assert!(s.contains("Sunrise") && s.contains("Sunset"), "got {s}");
         // Polar latitudes lose the sun but keep the moon.
         let polar = almanac_line((15.0, 89.0), None);
-        assert!(!polar.contains('↑'), "got {polar}");
+        assert!(!polar.contains("Sunrise"), "got {polar}");
     }
 }
