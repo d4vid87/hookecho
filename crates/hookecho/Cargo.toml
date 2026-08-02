@@ -41,11 +41,9 @@ eframe = { version = "0.35", default-features = false, features = ["default_font
 # lets user keybinds live in settings.json.
 egui = { version = "0.35", features = ["serde"] }
 egui_extras = "0.35"
-egui-wgpu = { version = "0.35", default-features = false, features = ["winit"] }
 wgpu = { version = "29", default-features = false, features = ["wgsl", "std"] }
 bytemuck.workspace = true
 anyhow.workspace = true
-tokio.workspace = true
 log.workspace = true
 env_logger = "0.11"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "ico"] }
@@ -71,6 +69,23 @@ egui-phosphor = "0.13.0"
 sha2 = "0.10"
 base64 = "0.22"
 getrandom = "0.3"
+
+# Everything below is per-target. egui-wgpu carries the winit integration on every native target
+# and none on the web, where there is no winit; tokio is a native runtime and simply does not
+# build for wasm (the browser's event loop is the runtime there — see `rt.rs`).
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+egui-wgpu = { version = "0.35", default-features = false, features = ["winit"] }
+tokio.workspace = true
+
+# The web build. wgpu's backends are feature-unioned per platform below, and wasm has to name its
+# own: without these the browser build compiles and then finds zero adapters at runtime. WebGPU
+# where the browser has it, WebGL2 everywhere else — the renderer is written to work on both.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wgpu = { version = "29", default-features = false, features = ["webgpu", "webgl"] }
+egui-wgpu = { version = "0.35", default-features = false }
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+getrandom = { version = "0.3", features = ["wasm_js"] }
 
 # Native file dialogs — desktop only. rfd has no Android backend, and Android replaces it with a
 # fixed exports dir + Storage-Access-Framework (deferred); see `dialog.rs`.
