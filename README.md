@@ -32,8 +32,8 @@ built from NOAA's free GRIB grids, so it needs no API key.</sub>
   `hookecho-windows-x86_64.zip` is there too: unzip, run `hookecho.exe`.
 - **Android** (arm64, Android 10+): sideload `Hook_Echo-WX-arm64-v8a.apk` from
   [Releases](../../releases) (`adb install -r …`, or open it on-device with
-  "install unknown apps" enabled). The same Rust app as desktop, as a
-  `NativeActivity` — see [`android/README.md`](android/README.md).
+  "install unknown apps" enabled). The same Rust app as desktop,
+  with a Material 3 phone UI — see [`android/README.md`](android/README.md).
 - **From source**: `cargo run --release` (needs a Rust toolchain; on Linux also
   ALSA/Wayland/GTK dev headers — see `.github/workflows/ci.yml`). Android builds
   via `android/build.sh` (NDK + `cargo-ndk`).
@@ -386,14 +386,37 @@ layer draws its own scale and units.
 - Multi-pane layouts, placefiles with icon sheets and a layer manager, a sensor
   dashboard, range rings, 13 themes, and tray-based background alerting.
 
-On Android the same app wears a touch-first skin: a five-slot labeled dock
-(Play · Layers · Products · Site · More), slide-up sheets, and a navigation
-drawer holding the desktop sidebar's contents — same described action list,
-same collapsible
-categories, same layer options, same app rows — plus native GPS for chase mode and opt-in background
-alerting: a foreground service watches your saved locations and notifies you
-with the app closed, tiered by watch / warning / emergency, tapping through to
-the storm.
+### On your phone
+
+![Hook Echo-WX on Android replaying the Moore, Oklahoma tornado of 20 May 2013](docs/shots/android/hero.gif)
+
+<sub>**The same Rust app, rebuilt around the phone.** KTLX 0.5° reflectivity,
+20 May 2013, playing out of the archive at half speed with the tornado warnings
+of the day counting up on the alert badge.</sub>
+
+Android is not the desktop squeezed onto a smaller screen — it is a Material 3
+layout over the same renderer, the same data paths and the same action registry:
+
+| | |
+|---|---|
+| ![The map with the sheet at peek](docs/shots/android/map.jpg) | ![The sheet at half height, showing the scrubber and product chips](docs/shots/android/sheet.jpg) |
+| **Map first.** The radar owns the screen; one chip names the site and VCP. | **One sheet, three snaps.** Drag it up for the scrubber, speed, products and tilts; drag it to full for the archive. |
+| ![The layers and tools sheet](docs/shots/android/layers.jpg) | ![Active alerts listed in a modal sheet](docs/shots/android/alerts.jpg) |
+| **Everything else is a sheet.** The same described, categorized action registry the desktop sidebar uses. | **Alerts in view**, tap to fly there and read the full text. |
+
+- A docked five-action toolbar along the sheet's bottom edge — no second bar
+  stacked under it.
+- Every tool window (soundings, cross-sections, settings, the site picker) is a
+  full-screen surface, because that is what the compact width class is for.
+- Real `WindowInsets`, including the keyboard, so a focused field rises above it.
+- The real system IME through GameActivity: autocorrect, suggestions, and every
+  language the phone has, instead of NativeActivity's raw ASCII key events.
+- Predictive back: back dismisses the innermost surface, and with nothing open
+  Android draws its own home-screen preview as you drag.
+- In landscape the sheet becomes a full-height side rail.
+- Native GPS for chase mode, and opt-in background alerting: a foreground
+  service watches your saved locations and notifies you with the app closed,
+  tiered by watch / warning / emergency, tapping through to the storm.
 
 ### Without opening the app
 
