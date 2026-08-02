@@ -189,15 +189,29 @@ mod android {
         APP.get()
     }
 
-    /// Convert the activity's content rect (pixels, relative to the full window) into egui
-    /// safe-area insets (points). On gesture-nav phones the system bars are transparent
-    /// overlays, so the content rect legitimately reports full-screen — floor the top/bottom at
-    /// the standard status-bar / gesture-bar heights so the UI clears them anyway.
-    /// `// ponytail: real per-device insets need a JNI WindowInsets query — floors cover v1.`
+    /// Feed egui the real window insets, in points.
+    ///
+    /// The source of truth is `decorView.getRootWindowInsets()` masked to system bars, the
+    /// display cutout and the IME — that last one is what makes a focused text field rise above
+    /// the keyboard instead of hiding under it, and it is why the phone UI no longer has to pin
+    /// dialogs to the top of the screen.
+    ///
+    /// The content rect is the fallback, floored at the standard status-bar / gesture-bar heights
+    /// (on gesture-nav phones the bars are transparent overlays, so the content rect honestly
+    /// reports full-screen and the floors are all that keeps chrome off them).
     pub fn apply_safe_area(ctx: &egui::Context, raw_input: &mut egui::RawInput) {
         let Some(app) = APP.get() else { return };
-        let rect = app.content_rect();
         let ppp = ctx.pixels_per_point();
+        if let Some(i) = super::android_insets::window_insets() {
+            raw_input.safe_area_insets = Some(egui::SafeAreaInsets(egui::epaint::MarginF32 {
+                left: i[0] as f32 / ppp,
+                right: i[2] as f32 / ppp,
+                top: i[1] as f32 / ppp,
+                bottom: i[3] as f32 / ppp,
+            }));
+            return;
+        }
+        let rect = app.content_rect();
         let (mut left, mut right, mut top, mut bottom) = (0.0f32, 0.0f32, 0.0f32, 0.0f32);
         if rect.bottom > rect.top {
             if let Some(win) = app.native_window() {
@@ -424,6 +438,103 @@ mod android_alerts {
             let _ = env.exception_clear();
         }
         res.map(|_| ())
+    }
+}
+
+/// `WindowInsets` glue for [`android::apply_safe_area`].
+///
+/// Answers in *pixels* as `[left, top, right, bottom]`, or `None` when the query fails (API 29,
+/// no attached window yet, a thrown exception) so the caller falls back to the content rect.
+#[cfg(target_os = "android")]
+mod android_insets {
+    use jni::objects::{JObject, JValue};
+    use jni::JNIEnv;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::Mutex;
+
+    /// Frames between refreshes.
+    ///
+    /// ponytail: polled, not pushed. Insets change on rotation, on a bar hiding, and when the
+    /// keyboard animates — the first two are rare and the third is a ~250ms animation, so 1-in-6
+    /// frames (~10Hz at 60fps) is imperceptible and costs a JNI round trip instead of an
+    /// OnApplyWindowInsetsListener plumbed back through Kotlin. Add the listener if the keyboard
+    /// animation ever visibly stutters the layout.
+    const REFRESH_FRAMES: u64 = 6;
+
+    static TICK: AtomicU64 = AtomicU64::new(0);
+    static CACHE: Mutex<Option<[i32; 4]>> = Mutex::new(None);
+
+    pub(super) fn window_insets() -> Option<[i32; 4]> {
+        let n = TICK.fetch_add(1, Ordering::Relaxed);
+        let mut cache = CACHE.lock().unwrap_or_else(|e| e.into_inner());
+        if n % REFRESH_FRAMES == 0 || cache.is_none() {
+            if let Some(v) = read() {
+                *cache = Some(v);
+            }
+        }
+        *cache
+    }
+
+    fn read() -> Option<[i32; 4]> {
+        let app = super::android::app()?;
+        let vm = unsafe { jni::JavaVM::from_raw(app.vm_as_ptr() as *mut jni::sys::JavaVM) }.ok()?;
+        let mut env = vm.attach_current_thread().ok()?;
+        let activity = unsafe { JObject::from_raw(app.activity_as_ptr() as jni::sys::jobject) };
+        match query(&mut env, &activity) {
+            Ok(v) => v,
+            Err(e) => {
+                log::warn!("window insets query failed, using content rect: {e:?}");
+                let _ = env.exception_clear();
+                None
+            }
+        }
+    }
+
+    /// `decorView.rootWindowInsets.getInsets(systemBars | displayCutout | ime)`.
+    ///
+    /// `getInsets` is API 30; on 29 the call throws `NoSuchMethodError`, which `read` turns into
+    /// the content-rect fallback.
+    fn query(env: &mut JNIEnv, activity: &JObject) -> jni::errors::Result<Option<[i32; 4]>> {
+        let window = env
+            .call_method(activity, "getWindow", "()Landroid/view/Window;", &[])?
+            .l()?;
+        let decor = env
+            .call_method(&window, "getDecorView", "()Landroid/view/View;", &[])?
+            .l()?;
+        let insets = env
+            .call_method(
+                &decor,
+                "getRootWindowInsets",
+                "()Landroid/view/WindowInsets;",
+                &[],
+            )?
+            .l()?;
+        if insets.is_null() {
+            return Ok(None);
+        }
+        let types = env.find_class("android/view/WindowInsets$Type")?;
+        let mut mask = 0i32;
+        for m in ["systemBars", "displayCutout", "ime"] {
+            mask |= env.call_static_method(&types, m, "()I", &[])?.i()?;
+        }
+        let got = env
+            .call_method(
+                &insets,
+                "getInsets",
+                "(I)Landroid/graphics/Insets;",
+                &[JValue::Int(mask)],
+            )?
+            .l()?;
+        if got.is_null() {
+            return Ok(None);
+        }
+        let f = |env: &mut JNIEnv, name: &str| env.get_field(&got, name, "I").and_then(|v| v.i());
+        Ok(Some([
+            f(env, "left")?,
+            f(env, "top")?,
+            f(env, "right")?,
+            f(env, "bottom")?,
+        ]))
     }
 }
 
