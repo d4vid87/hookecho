@@ -1,18 +1,19 @@
 package zip.batman.hookecho
 
-import android.app.NativeActivity
+import com.google.androidgamesdk.GameActivity
 import android.content.Intent
 import android.os.Bundle
 import java.io.File
 
 /**
- * The app is still a NativeActivity — Rust draws every pixel. This subclass exists for one reason:
+ * Rust draws every pixel; this is the `GameActivity` it runs inside. The subclass exists for one
+ * reason beyond naming the native library:
  * a notification tap has to reach the Rust side, and the Rust side has no Java callback to receive
  * it. So the target is written to `filesDir/goto.txt` and picked up by `paths::goto_file()` at
  * startup and on the next resume. A file, not an IPC channel, because the activity may be starting
  * cold and there is nothing on the other end to talk to yet.
  */
-class MainActivity : NativeActivity() {
+class MainActivity : GameActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         writeGoto(intent)
         super.onCreate(savedInstanceState)

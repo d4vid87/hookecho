@@ -56,6 +56,10 @@ pub fn apply_safe_area(_ctx: &egui::Context, _raw_input: &mut egui::RawInput) {}
 #[cfg(not(target_os = "android"))]
 pub fn show_soft_input(_show: bool) {}
 
+/// Translate the Android IME's editor state into egui input events (no-op off-Android).
+#[cfg(not(target_os = "android"))]
+pub fn pump_ime(_raw_input: &mut egui::RawInput) {}
+
 /// Read the system clipboard (Android JNI; desktop text fields already paste natively).
 #[cfg(not(target_os = "android"))]
 pub fn clipboard_text() -> Option<String> {
@@ -219,15 +223,87 @@ mod android_ime {
     use jni::JNIEnv;
 
     /// Ask Android for the soft keyboard. `android-activity` does the JNI for this one.
+    ///
+    /// Showing also resets the GameTextInput buffer and our mirror of it, so the first keystroke
+    /// into a newly focused field doesn't replay whatever the last field contained.
     pub fn show_soft_input(show: bool) {
         let Some(app) = super::android::app() else {
             return;
         };
         if show {
+            reset_text_input(app);
             app.show_soft_input(true);
         } else {
             app.hide_soft_input(false);
+            reset_text_input(app);
         }
+    }
+
+    fn reset_text_input(app: &winit::platform::android::activity::AndroidApp) {
+        app.set_text_input_state(TextInputState {
+            text: String::new(),
+            selection: TextSpan { start: 0, end: 0 },
+            compose_region: None,
+        });
+        *MIRROR.lock().unwrap() = String::new();
+    }
+
+    use std::sync::Mutex;
+    use winit::platform::android::activity::input::{TextInputState, TextSpan};
+
+    /// Our copy of what GameTextInput last reported.
+    static MIRROR: Mutex<String> = Mutex::new(String::new());
+
+    /// Turn GameTextInput's buffer into egui input events.
+    ///
+    /// GameActivity replaces NativeActivity's raw ASCII key events with a real IME — autocorrect,
+    /// suggestions, composing regions, every language the phone has — but it reports the result as
+    /// *editor state*, not keystrokes, and neither winit nor egui reads that state. So the bridge
+    /// lives here: each frame, diff the IME's buffer against our mirror and synthesise the
+    /// backspaces and text insertions that get egui's focused field to the same string.
+    ///
+    /// ponytail: the diff assumes edits land at the end of the buffer (common prefix, then delete
+    /// the tail and retype it), which is exactly what typing, autocorrect and suggestion taps do
+    /// in the single-line fields this app has. A caret moved into the middle of a long string
+    /// retypes more than it strictly needs to — invisible unless the field is huge. Track the
+    /// reported selection instead if a multi-line field ever shows up.
+    pub fn pump_ime(raw_input: &mut egui::RawInput) {
+        let Some(app) = super::android::app() else {
+            return;
+        };
+        let text = app.text_input_state().text;
+        let mut mirror = MIRROR.lock().unwrap();
+        if text == *mirror {
+            return;
+        }
+        let old: Vec<char> = mirror.chars().collect();
+        let new: Vec<char> = text.chars().collect();
+        let prefix = old
+            .iter()
+            .zip(new.iter())
+            .take_while(|(a, b)| a == b)
+            .count();
+        for _ in prefix..old.len() {
+            raw_input.events.push(egui::Event::Key {
+                key: egui::Key::Backspace,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            });
+            raw_input.events.push(egui::Event::Key {
+                key: egui::Key::Backspace,
+                physical_key: None,
+                pressed: false,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            });
+        }
+        let inserted: String = new[prefix..].iter().collect();
+        if !inserted.is_empty() {
+            raw_input.events.push(egui::Event::Text(inserted));
+        }
+        *mirror = text;
     }
 
     /// Read the system clipboard as text: `ClipboardManager.getPrimaryClip()` →
@@ -694,7 +770,7 @@ mod android_tts {
 #[cfg(target_os = "android")]
 pub use android::{apply_safe_area, set_app};
 #[cfg(target_os = "android")]
-pub use android_ime::{clipboard_text, show_soft_input};
+pub use android_ime::{clipboard_text, pump_ime, show_soft_input};
 #[cfg(target_os = "android")]
 pub use android_location::start_location;
 #[cfg(target_os = "android")]

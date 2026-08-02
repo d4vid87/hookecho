@@ -11783,6 +11783,9 @@ impl eframe::App for HookEchoApp {
     fn raw_input_hook(&mut self, ctx: &egui::Context, raw_input: &mut egui::RawInput) {
         // Android: feed the status-bar / gesture-bar insets so no UI draws under system chrome.
         crate::platform::apply_safe_area(ctx, raw_input);
+        // Android: GameActivity's IME reports edits as editor state, not keystrokes; turn that
+        // state into the text/backspace events egui's focused field expects.
+        crate::platform::pump_ime(raw_input);
         // Android: clipboard text fetched by the paste bar lands as a real egui Paste event, so
         // the focused text field inserts it exactly like Ctrl+V would.
         if let Some(text) = self.pending_paste.take() {
@@ -13027,8 +13030,8 @@ impl eframe::App for HookEchoApp {
         }
 
         // Android text input: summon/dismiss the soft keyboard as egui focus moves in/out of
-        // text fields, and float a Paste button (the system clipboard is unreachable from a
-        // NativeActivity keyboard otherwise — egui gets the text as a Paste event next frame).
+        // text fields, and float a Paste button (the system clipboard is unreachable from the
+        // soft keyboard otherwise — egui gets the text as a Paste event next frame).
         if cfg!(target_os = "android") {
             let wants = ctx.egui_wants_keyboard_input();
             if wants != self.ime_shown {
