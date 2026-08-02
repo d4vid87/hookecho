@@ -481,6 +481,25 @@ live and what is warned there; `--bind 0.0.0.0` exposes that to everything on
 your network, and there is no authentication in front of it. Put it behind a
 reverse proxy if it needs to leave the machine.
 
+### In Home Assistant
+
+The `command_line` sensor above is the no-install path. For something richer
+there's a custom component in [`custom_components/hookecho`](custom_components/hookecho):
+point it at a machine running `--serve` and you get, per saved location, a
+device carrying temperature, dewpoint, humidity, wind, gust and pressure
+sensors, an **alert count** sensor and an **alert active** binary sensor
+(attributes: event, expiry, distance, escalation tier), plus one **radar
+camera** entity showing the live snapshot.
+
+Install via HACS as a custom repository, or copy the `custom_components/hookecho`
+directory into your Home Assistant `config/custom_components/` and restart. Then
+add the integration and give it the host and port. Polling is once a minute,
+which is the server's own cache window.
+
+Remember the server has to be reachable from Home Assistant — that means
+`--bind 0.0.0.0` (or the container), and a network you're willing to expose your
+saved locations on.
+
 ### Extending it
 
 Placefiles work as they do everywhere else — URLs, icon sheets, a layer manager with per-file

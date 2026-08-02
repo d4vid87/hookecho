@@ -1,0 +1,11 @@
+{
+  "domain": "hookecho",
+  "name": "Hook Echo-WX",
+  "codeowners": ["@d4vid87"],
+  "config_flow": true,
+  "documentation": "https://github.com/d4vid87/hookecho",
+  "iot_class": "local_polling",
+  "issue_tracker": "https://github.com/d4vid87/hookecho/issues",
+  "requirements": [],
+  "version": "0.5.0"
+}
