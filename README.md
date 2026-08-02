@@ -395,6 +395,54 @@ alerting: a foreground service watches your saved locations and notifies you
 with the app closed, tiered by watch / warning / emergency, tapping through to
 the storm.
 
+### Without opening the app
+
+`hookecho --status` prints what's happening at your saved locations — current
+conditions from the nearest station and any active alert whose polygon comes
+within that location's watch radius:
+
+```
+$ hookecho --status
+Home: 74°F 62%rh SW 12kt (KOKC)
+  ‼ Tornado Warning until 14:30
+Cabin: 71°F 70%rh calm (KSWO)
+```
+
+Pass `LAT,LON` to report on somewhere you haven't saved, `--line` for a single
+line about home (status bars), or `--json` for the whole report:
+
+```sh
+hookecho --status 35.3,-97.5
+hookecho --status --line     # 74°F 62%rh SW 12kt · ‼ Tornado Warning until 14:30
+hookecho --status --json
+```
+
+Home Assistant, without leaving the machine hookecho runs on:
+
+```yaml
+command_line:
+  - sensor:
+      name: Home weather alerts
+      command: "hookecho --status --json"
+      value_template: "{{ (value_json | selectattr('home') | first).alerts | count }}"
+      scan_interval: 300
+```
+
+polybar:
+
+```ini
+[module/hookecho]
+type = custom/script
+exec = hookecho --status --line
+interval = 300
+```
+
+tmux:
+
+```
+set -g status-right '#(hookecho --status --line) | %H:%M'
+```
+
 ### Extending it
 
 Placefiles work as they do everywhere else — URLs, icon sheets, a layer manager with per-file

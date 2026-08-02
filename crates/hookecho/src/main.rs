@@ -44,6 +44,31 @@ fn main() -> eframe::Result<()> {
         return Ok(());
     }
 
+    // Terminal report: `hookecho --status [--json|--line] [LAT,LON]` — conditions and nearby
+    // alerts for your markers, for a status bar, a cron job, or Home Assistant.
+    if let Some(pos) = args.iter().position(|a| a == "--status") {
+        use hookecho::status;
+        let mode = if args.iter().any(|a| a == "--json") {
+            status::Mode::Json
+        } else if args.iter().any(|a| a == "--line") {
+            status::Mode::Line
+        } else {
+            status::Mode::Human
+        };
+        // The point is the first non-flag argument after `--status`, so `--status --json 35,-97`
+        // and `--status 35,-97 --json` both work.
+        let point = args[pos + 1..]
+            .iter()
+            .find(|a| !a.starts_with("--"))
+            .map(String::as_str);
+        let spots = status::spots(&settings::Settings::load(), point);
+        if let Err(e) = status::run(&spots, mode) {
+            eprintln!("status failed: {e}");
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
+
     // Logo export: `hookecho --headless-icon <out.png>` (PNG inspection, not a desktop capture).
     if let Some(pos) = args.iter().position(|a| a == "--headless-icon") {
         let out = args.get(pos + 1).map(String::as_str).unwrap_or("icon.png");

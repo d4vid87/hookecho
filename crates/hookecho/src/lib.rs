@@ -39,6 +39,7 @@ pub mod share;
 pub mod speech;
 /// Live station markers and their telemetry cards.
 pub mod stationlayer;
+pub mod status;
 pub mod theme;
 pub mod tiles;
 pub mod timefmt;
