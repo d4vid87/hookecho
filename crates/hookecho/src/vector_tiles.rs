@@ -442,6 +442,8 @@ pub struct VectorTileManager {
     client: reqwest::Client,
     tx: Sender<FetchedVector>,
     rx: Receiver<FetchedVector>,
+    /// Repaint handle, so a finished tile draws now instead of at the next idle heartbeat.
+    ctx: Option<egui::Context>,
     requested: HashSet<TileId>,
     uploaded: HashSet<TileId>,
     labels: HashMap<TileId, Vec<PlaceLabel>>,
@@ -460,6 +462,8 @@ impl VectorTileManager {
         let (template_tx, template_rx) = std::sync::mpsc::channel();
         let client = reqwest::Client::builder()
             .user_agent(USER_AGENT)
+            .connect_timeout(std::time::Duration::from_secs(10))
+            .timeout(std::time::Duration::from_secs(30))
             .build()
             .expect("build reqwest client");
         let cache_root = crate::paths::cache_dir().map(|d| d.join("vector"));
@@ -468,6 +472,7 @@ impl VectorTileManager {
             client,
             tx,
             rx,
+            ctx: None,
             requested: HashSet::new(),
             uploaded: HashSet::new(),
             labels: HashMap::new(),
@@ -479,6 +484,11 @@ impl VectorTileManager {
             template_rx,
             template_requested: false,
         }
+    }
+
+    /// Repaint handle for the fetch tasks — set once at startup.
+    pub fn set_ctx(&mut self, ctx: egui::Context) {
+        self.ctx = Some(ctx);
     }
 
     /// Switch dark/light. Returns true if changed (caller should clear the GPU vector cache).
@@ -551,14 +561,23 @@ impl VectorTileManager {
             let client = self.client.clone();
             let tx = self.tx.clone();
             let id = v.id;
+            let ctx = self.ctx.clone();
+            let blocking = self.spawner.clone();
             self.spawner.spawn(async move {
                 if let Ok(bytes) = load_tile_bytes(&client, &url, path.as_deref()).await {
-                    let (vertices, indices, labels) = build_tile(&bytes, id, dark, tess_zoom);
-                    let _ = tx.send(FetchedVector {
-                        id,
-                        vertices,
-                        indices,
-                        labels,
+                    // gunzip + lyon tessellation is the heaviest CPU in the app after the volume
+                    // decode; running it on the async worker starves every other fetch.
+                    blocking.spawn_blocking(move || {
+                        let (vertices, indices, labels) = build_tile(&bytes, id, dark, tess_zoom);
+                        let _ = tx.send(FetchedVector {
+                            id,
+                            vertices,
+                            indices,
+                            labels,
+                        });
+                        if let Some(ctx) = ctx {
+                            ctx.request_repaint();
+                        }
                     });
                 }
             });

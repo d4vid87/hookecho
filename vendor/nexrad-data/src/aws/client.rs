@@ -20,6 +20,10 @@ pub fn client() -> &'static Client {
         #[cfg(not(target_arch = "wasm32"))]
         {
             builder = builder.pool_max_idle_per_host(4);
+            // hookecho patch: timeouts. Volume fetches are the app's slowest path, and a request
+            // that never answers wedges the pane's `loading` flag with no way back.
+            builder = builder.connect_timeout(std::time::Duration::from_secs(10));
+            builder = builder.timeout(std::time::Duration::from_secs(60));
             // hookecho patch: reqwest 0.13's `rustls` feature wires rustls-platform-verifier as
             // the cert verifier, which on Android needs a bundled Kotlin helper class (and panics
             // if uninitialized). Hand reqwest a fully-built rustls config using webpki roots

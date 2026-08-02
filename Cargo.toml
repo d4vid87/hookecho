@@ -37,7 +37,9 @@ anyhow = "1"
 thiserror = "2"
 # `process` + `io-util` are for the external-process plugin runner (crates/hookecho/src/plugins.rs).
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "process", "io-util"] }
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+# `http2`: tile CDNs all speak h2, and one multiplexed connection beats ~28 TLS handshakes for a
+# screenful of tiles. ALPN falls back to HTTP/1.1 where h2 isn't offered.
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "http2"] }
 flate2 = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

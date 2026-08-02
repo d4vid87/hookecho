@@ -1879,14 +1879,24 @@ impl HookEchoApp {
         }
 
         let settings = Settings::load();
-        let tiles = TileManager::new(spawner.clone());
-        let vtiles = crate::vector_tiles::VectorTileManager::new(spawner.clone());
+        let mut tiles = TileManager::new(spawner.clone());
+        let mut vtiles = crate::vector_tiles::VectorTileManager::new(spawner.clone());
+        // Tile workers wake the UI the moment a tile is ready; without this a finished tile waits
+        // for the next repaint the app happens to want.
+        tiles.set_ctx(cc.egui_ctx.clone());
+        vtiles.set_ctx(cc.egui_ctx.clone());
         let (msg_tx, msg_rx) = std::sync::mpsc::channel();
         let (overlay_tx, overlay_rx) = std::sync::mpsc::channel();
         let (update_tx, update_rx) = std::sync::mpsc::channel();
         let (geocode_tx, geocode_rx) = std::sync::mpsc::channel();
         let (pf_icon_tx, pf_icon_rx) = std::sync::mpsc::channel();
-        let http = reqwest::Client::new();
+        // Every app-level fetch (alerts, overlays, placefiles, radar index) goes through this one.
+        // A hung request with no timeout leaves whatever it was loading stuck loading forever.
+        let http = reqwest::Client::builder()
+            .connect_timeout(std::time::Duration::from_secs(10))
+            .timeout(std::time::Duration::from_secs(30))
+            .build()
+            .unwrap_or_default();
 
         // Open on the saved startup view if set (and its site still resolves), else where the app
         // was last looking, else the default site.
