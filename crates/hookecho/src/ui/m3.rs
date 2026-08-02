@@ -39,7 +39,9 @@ pub const T_LABEL_SM: f32 = 11.0;
 // ---------- Touch + component metrics ----------
 /// M3's minimum touch target. Anything tappable is at least this tall.
 pub const MIN_TARGET: f32 = 48.0;
-pub const TOOLBAR_H: f32 = 64.0;
+// 68, not M3's bare 64: these slots carry a caption under the glyph, and ten unlabeled icons
+// would be a guessing game.
+pub const TOOLBAR_H: f32 = 68.0;
 pub const CHIP_H: f32 = 32.0;
 pub const ROW_H: f32 = 56.0;
 pub const SHEET_HANDLE: Vec2 = vec2(32.0, 4.0);
@@ -117,12 +119,14 @@ pub fn blend(base: Color32, over: Color32) -> Color32 {
     )
 }
 
-/// The 32×4 drag pill at the top of a bottom sheet, in a 48pt-tall hit area.
+/// The 32×4 drag pill at the top of a bottom sheet, in a full-width 29pt hit strip.
 ///
-/// Returns the response for the whole strip so the caller can drag the sheet from it.
+/// Returns the response for the whole strip so the caller can drag the sheet from it — and it
+/// senses clicks too, because a tap on the handle is how M3 expects you to step through the snap
+/// points without dragging anything.
 pub fn drag_handle(ui: &mut egui::Ui) -> Response {
     let w = ui.available_width();
-    let (rect, resp) = ui.allocate_exact_size(vec2(w, MIN_TARGET * 0.6), Sense::drag());
+    let (rect, resp) = ui.allocate_exact_size(vec2(w, MIN_TARGET * 0.6), Sense::click_and_drag());
     let c = ui.visuals().weak_text_color();
     let pill = egui::Rect::from_center_size(rect.center(), SHEET_HANDLE);
     ui.painter()
@@ -146,7 +150,10 @@ pub fn chip(ui: &mut egui::Ui, text: &str, selected: bool) -> Response {
             .min_size(vec2(0.0, CHIP_H))
             .corner_radius(R_SM)
             .fill(bg)
-            .stroke(Stroke::new(1.0, ui.visuals().widgets.inactive.bg_stroke.color)),
+            .stroke(Stroke::new(
+                1.0,
+                ui.visuals().widgets.inactive.bg_stroke.color,
+            )),
     );
     resp
 }
@@ -170,7 +177,10 @@ pub fn list_row(
         Color32::TRANSPARENT
     };
     let fill = if resp.is_pointer_button_down_on() {
-        blend(base, Color32::from_rgba_unmultiplied(255, 255, 255, A_PRESSED))
+        blend(
+            base,
+            Color32::from_rgba_unmultiplied(255, 255, 255, A_PRESSED),
+        )
     } else {
         base
     };
@@ -251,10 +261,13 @@ pub fn snap_to(pos: f32, vel: f32, snaps: &[f32]) -> f32 {
             return b;
         }
     }
-    snaps
-        .iter()
-        .copied()
-        .fold(snaps[0], |a, s| if (s - pos).abs() < (a - pos).abs() { s } else { a })
+    snaps.iter().copied().fold(snaps[0], |a, s| {
+        if (s - pos).abs() < (a - pos).abs() {
+            s
+        } else {
+            a
+        }
+    })
 }
 
 #[cfg(test)]

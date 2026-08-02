@@ -1,7 +1,13 @@
-//! Touch-first Android chrome, RadarOmega-style: a full-bleed map under a full-width color scale,
-//! floating chrome — a top bar (menu · VCP/site pill · 3D · alert badge), a bottom card (frames ·
-//! product · timestamp · elevation) with a Phosphor icon tool dock, a categorized product picker,
-//! a capture menu, and slide-in drawers. Every control drives the shared desktop data paths.
+//! Touch-first Android chrome, Material 3 map-first: a full-bleed map under a full-width color
+//! scale, a slim top chip row, and one persistent bottom sheet — draggable between three snap
+//! points — that carries the radar context and docks the five-action toolbar along its bottom
+//! edge. Everything else opens over the map from there. Every control drives the shared desktop
+//! data paths.
+
+pub(crate) mod sheet;
+mod toolbar;
+
+use sheet::{SheetInfo, SheetSnap};
 
 use egui::{
     pos2, vec2, Align, Align2, Color32, Frame, Id, Layout, Margin, Mesh, Rect, RichText, Sense,
@@ -26,7 +32,6 @@ pub(crate) enum MobileSheet {
     None,
     Menu,
     Alerts,
-    Products,
     Capture,
 }
 
@@ -39,43 +44,6 @@ struct MAlert {
     lon: f64,
     lat: f64,
     esc: u8,
-}
-
-/// A labeled dock slot: glyph over a small caption. Ten unlabeled glyphs asked the user to guess
-/// which one was the sounding tool and which was range rings; five captioned ones don't.
-fn dock_slot(ui: &mut egui::Ui, glyph: &str, label: &str, active: bool, width: f32) -> bool {
-    let fg = if active {
-        OMEGA_ORANGE
-    } else {
-        Color32::from_gray(205)
-    };
-    ui.allocate_ui_with_layout(vec2(width, 46.0), Layout::top_down(Align::Center), |ui| {
-        ui.spacing_mut().item_spacing.y = 1.0;
-        let resp = ui.add(
-            egui::Button::new(RichText::new(glyph).size(21.0).color(fg))
-                .min_size(vec2(width, 26.0))
-                .fill(Color32::TRANSPARENT)
-                .stroke(Stroke::NONE),
-        );
-        ui.label(RichText::new(label).size(10.0).color(fg));
-        resp.clicked()
-    })
-    .inner
-}
-
-/// A flat tool-dock icon (transparent, tinted when active) — RadarOmega's bottom toolbar.
-fn dock_icon(ui: &mut egui::Ui, glyph: &str, active: bool) -> egui::Response {
-    let fg = if active {
-        OMEGA_ORANGE
-    } else {
-        Color32::from_gray(205)
-    };
-    ui.add(
-        egui::Button::new(RichText::new(glyph).size(23.0).color(fg))
-            .min_size(vec2(34.0, 38.0))
-            .fill(Color32::TRANSPARENT)
-            .stroke(Stroke::NONE),
-    )
 }
 
 /// A slim full-width strip for a gridded field layer, with its name and range inline.
@@ -195,6 +163,9 @@ impl super::HookEchoApp {
     fn mobile_back(&mut self) {
         if self.mobile_sheet != MobileSheet::None {
             self.mobile_sheet = MobileSheet::None;
+        } else if let Some(next) = self.mobile_snap.collapsed() {
+            // The persistent sheet collapses a step at a time before back leaves the app.
+            self.mobile_snap = next;
         } else if self.marker_popup.is_some() {
             self.marker_popup = None;
         } else if self.site_dialog.is_some() {
@@ -222,12 +193,12 @@ impl super::HookEchoApp {
         let content = ctx.content_rect();
         let vr = ctx.viewport_rect();
         let inset_top = (content.top() - vr.top()).max(0.0);
-        let inset_bottom = (vr.bottom() - content.bottom()).max(0.0);
 
         // Hide/show all chrome (view the whole radar). This button is always drawn; when hidden it
-        // is the only floating control, so the map is fully visible.
+        // is the only floating control, so the map is fully visible. It rides the top chip row —
+        // parked lower it collided with the sheet once the sheet could reach full height.
         egui::Area::new(Id::new("m_chrome_toggle"))
-            .anchor(Align2::RIGHT_TOP, vec2(-10.0, inset_top + 66.0))
+            .anchor(Align2::RIGHT_TOP, vec2(-crate::ui::m3::SP_3, inset_top + 26.0))
             .order(egui::Order::Foreground) // above the drawer scrim, so it stays tappable + undimmed
             .show(ctx, |ui| {
                 let g = if self.mobile_chrome_hidden {
@@ -327,265 +298,42 @@ impl super::HookEchoApp {
             }
         }
 
-        // ---------- TOP BAR ----------
-        egui::Area::new(Id::new("m_topbar"))
-            .anchor(Align2::CENTER_TOP, vec2(0.0, inset_top + 14.0))
-            .show(ctx, |ui| {
-                ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing.x = 8.0;
-                    // Hamburger (its own rounded-square fill; no extra glass wrapper).
-                    let on = self.mobile_sheet == MobileSheet::Menu;
-                    if square_btn(ui, ph::LIST, on, OMEGA_ORANGE).clicked() {
-                        self.mobile_sheet = if on {
-                            MobileSheet::None
-                        } else {
-                            MobileSheet::Menu
-                        };
-                    }
-                    // Center pill: VCP line + search/site line + 3D button. Its inner content width
-                    // is the screen minus the two 44px squares, the 8px gaps, and the pill's own
-                    // 12px×2 frame margins — so the row never overflows the edges.
-                    let pill_inner = (content.width() - 44.0 - 44.0 - 32.0 - 24.0).max(110.0);
-                    glass(ui, 238).show(ui, |ui| {
-                        ui.set_width(pill_inner);
-                        ui.horizontal(|ui| {
-                            let text_w = (pill_inner - 52.0).max(60.0);
-                            ui.vertical(|ui| {
-                                ui.set_width(text_w);
-                                ui.label(
-                                    RichText::new(&vcp_line)
-                                        .size(11.0)
-                                        .color(Color32::from_gray(160)),
-                                );
-                                let site_line = ui
-                                    .horizontal(|ui| {
-                                        ui.label(
-                                            RichText::new(ph::MAGNIFYING_GLASS)
-                                                .size(13.0)
-                                                .color(Color32::from_gray(180)),
-                                        );
-                                        ui.label(
-                                            RichText::new(&site)
-                                                .size(16.0)
-                                                .strong()
-                                                .color(Color32::from_gray(240)),
-                                        )
-                                    })
-                                    .inner;
-                                if site_line.interact(Sense::click()).clicked()
-                                    && self.site_dialog.is_none()
-                                {
-                                    self.site_dialog = Some(Default::default());
-                                }
-                            });
-                            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                                let b = egui::Button::new(
-                                    RichText::new("3D")
-                                        .size(14.0)
-                                        .strong()
-                                        .color(Color32::BLACK),
-                                )
-                                .fill(OMEGA_ORANGE)
-                                .corner_radius(9.0)
-                                .min_size(vec2(40.0, 34.0));
-                                if ui.add(b).clicked() {
-                                    self.build_volume3d();
-                                }
-                            });
-                        });
-                    });
-                    // Alert badge (bare rounded square).
-                    let (bg, fg) = if alert_count == 0 {
-                        (
-                            Color32::from_rgba_unmultiplied(255, 255, 255, 22),
-                            Color32::from_gray(180),
-                        )
-                    } else if max_esc >= 2 {
-                        (Color32::from_rgb(220, 40, 40), Color32::WHITE)
-                    } else {
-                        (OMEGA_ORANGE, Color32::BLACK)
-                    };
-                    let label = if alert_count == 0 {
-                        ph::BELL.to_string()
-                    } else {
-                        alert_count.to_string()
-                    };
-                    let on = self.mobile_sheet == MobileSheet::Alerts;
-                    let badge =
-                        egui::Button::new(RichText::new(label).size(17.0).strong().color(fg))
-                            .fill(bg)
-                            .corner_radius(13.0)
-                            .min_size(vec2(44.0, 44.0));
-                    if ui.add(badge).clicked() {
-                        self.mobile_sheet = if on {
-                            MobileSheet::None
-                        } else {
-                            MobileSheet::Alerts
-                        };
-                    }
-                });
-            });
+        // ---------- TOP CHIPS ----------
+        let chip_rect = self.mobile_top_chips(ctx, content, &site, &vcp_line);
 
-        // ---------- BOTTOM INFO CARD + TOOL DOCK ----------
-        egui::Area::new(Id::new("m_bottom"))
-            .anchor(Align2::CENTER_BOTTOM, vec2(0.0, -(inset_bottom + 8.0)))
-            .show(ctx, |ui| {
-                let cwi = (content.width() - 56.0).max(200.0); // card inner content width (leaves side margins)
-                glass(ui, 246).show(ui, |ui| {
-                    ui.set_width(cwi);
-                    // Row A: frames + history · product name.
-                    ui.horizontal(|ui| {
-                        ui.set_width(cwi);
-                        let frames = egui::Button::new(
-                            RichText::new(format!("{} Frames", nframes.max(1)))
-                                .size(14.0)
-                                .strong()
-                                .color(OMEGA_ORANGE),
-                        )
-                        .fill(Color32::from_rgba_unmultiplied(255, 255, 255, 14))
-                        .corner_radius(10.0)
-                        .min_size(vec2(0.0, 34.0));
-                        if ui.add(frames).clicked() {
-                            self.views[active].timeline.toggle_play();
-                        }
-                        if dock_icon(ui, ph::CLOCK_COUNTER_CLOCKWISE, playing).clicked() {
-                            self.views[active].timeline.toggle_play();
-                        }
-                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                            let prod = egui::Button::new(
-                                RichText::new(crate::products::name(cur_moment, srv))
-                                    .size(14.0)
-                                    .strong()
-                                    .color(OMEGA_ORANGE),
-                            )
-                            .fill(Color32::TRANSPARENT)
-                            .stroke(Stroke::NONE);
-                            if ui.add(prod).clicked() {
-                                self.mobile_sheet = if self.mobile_sheet == MobileSheet::Products {
-                                    MobileSheet::None
-                                } else {
-                                    MobileSheet::Products
-                                };
-                            }
-                        });
-                    });
-                    // Row B: live dot + timestamp · elevation.
-                    ui.horizontal(|ui| {
-                        ui.set_width(cwi);
-                        let dot = if following {
-                            OMEGA_GREEN
-                        } else {
-                            Color32::from_gray(150)
-                        };
-                        let (rect, _) = ui.allocate_exact_size(vec2(12.0, 12.0), Sense::hover());
-                        ui.painter().circle_filled(rect.center(), 5.0, dot);
-                        ui.label(
-                            RichText::new(&when)
-                                .size(13.0)
-                                .color(Color32::from_gray(210)),
-                        );
-                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                            if n_tilt > 0 {
-                                ui.label(
-                                    RichText::new(format!("{cur_angle:.1}°"))
-                                        .size(13.0)
-                                        .strong()
-                                        .color(OMEGA_ORANGE),
-                                );
-                                ui.label(
-                                    RichText::new("Elevation: ")
-                                        .size(13.0)
-                                        .color(Color32::from_gray(190)),
-                                );
-                            }
-                        });
-                    });
-                    ui.add_space(3.0);
-                    // Row C: the dock. Five labeled slots; everything else is one tap into More.
-                    ui.horizontal(|ui| {
-                        ui.set_width(cwi);
-                        // Zero the inter-slot spacing so five even slots fill the row exactly.
-                        ui.spacing_mut().item_spacing.x = 0.0;
-                        let iw = cwi / 5.0;
-                        let sheet = self.mobile_sheet;
-                        if dock_slot(
-                            ui,
-                            if playing { ph::PAUSE } else { ph::PLAY },
-                            if playing { "Pause" } else { "Play" },
-                            playing,
-                            iw,
-                        ) {
-                            self.views[active].timeline.toggle_play();
-                        }
-                        // Layers and More are the same destination: the Menu sheet leads with the
-                        // layer registry and keeps everything else one scroll below it. Two slots,
-                        // one surface — a phone doesn't have room for two lists of the same thing.
-                        // ponytail: fold the two slots into one if the dock ever needs the width.
-                        if dock_slot(ui, ph::STACK, "Layers", sheet == MobileSheet::Menu, iw) {
-                            self.mobile_sheet = if sheet == MobileSheet::Menu {
-                                MobileSheet::None
-                            } else {
-                                MobileSheet::Menu
-                            };
-                        }
-                        if dock_slot(
-                            ui,
-                            ph::DROP_HALF,
-                            "Products",
-                            sheet == MobileSheet::Products,
-                            iw,
-                        ) {
-                            self.mobile_sheet = if sheet == MobileSheet::Products {
-                                MobileSheet::None
-                            } else {
-                                MobileSheet::Products
-                            };
-                        }
-                        if dock_slot(ui, ph::RADIO_BUTTON, "Site", self.site_dialog.is_some(), iw)
-                            && self.site_dialog.is_none()
-                        {
-                            self.site_dialog = Some(Default::default());
-                        }
-                        if dock_slot(ui, ph::DOTS_THREE, "More", sheet == MobileSheet::Menu, iw) {
-                            self.mobile_sheet = if sheet == MobileSheet::Menu {
-                                MobileSheet::None
-                            } else {
-                                MobileSheet::Menu
-                            };
-                        }
-                    });
-                });
-            });
-
-        // ---------- ARMED TOOL HINT ----------
-        // The desktop status bar (which tells you a tap-tool is armed and needs 2 points) is hidden
-        // on mobile, so measure/cross-section read as "broken". Float the guidance above the card.
-        let hint = match self.tool {
-            super::MapTool::Measure => Some("Tap two points to measure"),
-            super::MapTool::Marker => Some("Tap the map to drop a marker"),
-            super::MapTool::CrossSection => Some("Tap two points for a cross-section"),
-            super::MapTool::Sounding => Some("Tap a point for a sounding"),
-            super::MapTool::Climatology => Some("Tap a point for tornado climatology"),
-            _ => None,
+        // ---------- PERSISTENT SHEET + DOCKED TOOLBAR ----------
+        let info = SheetInfo {
+            moment: cur_moment,
+            srv,
+            when,
+            following,
+            playing,
+            nframes,
+            playhead: self.views[active].timeline.playhead,
+            n_tilt,
+            cur_tilt,
+            cur_angle,
+            speed: self.views[active].timeline.speed,
+            frame_labels: if self.mobile_snap == SheetSnap::Full {
+                let tl = &self.views[active].timeline;
+                tl.frames
+                    .iter()
+                    .map(|f| match f.date_time() {
+                        Some(t) => crate::timefmt::fmt_date_clock(t, tz),
+                        None => f.name().to_string(),
+                    })
+                    .collect()
+            } else {
+                Vec::new()
+            },
         };
-        if let Some(text) = hint {
-            egui::Area::new(Id::new("m_toolhint"))
-                .anchor(Align2::CENTER_BOTTOM, vec2(0.0, -(inset_bottom + 172.0)))
-                .show(ctx, |ui| {
-                    Frame::new()
-                        .fill(Color32::from_rgba_unmultiplied(242, 160, 51, 236))
-                        .corner_radius(14.0)
-                        .inner_margin(Margin::symmetric(14, 8))
-                        .show(ui, |ui| {
-                            ui.label(
-                                RichText::new(text)
-                                    .size(14.0)
-                                    .strong()
-                                    .color(Color32::BLACK),
-                            );
-                        });
-                });
-        }
+        let sheet_rect = self.mobile_sheet_surface(ctx, content, &info, alert_count, max_esc);
+
+        // Two-finger gestures are read raw off the input state (see the pane input block), which
+        // knows nothing about egui's layers — so without these rects a pinch on the sheet zoomed
+        // the map underneath it.
+        self.mobile_occlusion.push(sheet_rect);
+        self.mobile_occlusion.push(chip_rect);
 
         // ---------- POPUPS / DRAWERS ----------
         match self.mobile_sheet {
@@ -593,9 +341,6 @@ impl super::HookEchoApp {
             MobileSheet::Alerts => {
                 self.mobile_alerts_drawer(ctx, content, vr, &malerts, alert_count)
             }
-            MobileSheet::Products => self.mobile_products(
-                ctx, content, vr, cur_moment, srv, n_tilt, cur_tilt, cur_angle,
-            ),
             MobileSheet::Capture => self.mobile_capture(ctx, content, vr),
             MobileSheet::None => {}
         }
@@ -906,154 +651,6 @@ impl super::HookEchoApp {
                                 }
                             }
                         });
-                    });
-            });
-    }
-
-    /// Categorized product picker (RadarOmega "Reflectivity / Velocity / Dual-Polarization").
-    #[allow(clippy::too_many_arguments)]
-    fn mobile_products(
-        &mut self,
-        ctx: &egui::Context,
-        content: Rect,
-        vr: Rect,
-        cur_moment: Moment,
-        srv: bool,
-        n_tilt: usize,
-        cur_tilt: usize,
-        cur_angle: f32,
-    ) {
-        let pw = (content.width() - 20.0).min(560.0);
-        let panel = Rect::from_min_size(
-            pos2(content.center().x - pw / 2.0, content.top() + 70.0),
-            vec2(pw, content.height() * 0.6),
-        );
-        self.mobile_scrim(ctx, vr, panel);
-        let active = self.active;
-        egui::Area::new(Id::new("m_products"))
-            .order(egui::Order::Foreground)
-            .fixed_pos(panel.min)
-            .show(ctx, |ui| {
-                Frame::new()
-                    .fill(Color32::from_rgb(10, 12, 16))
-                    .corner_radius(16.0)
-                    .stroke(Stroke::new(
-                        1.0,
-                        Color32::from_rgba_unmultiplied(255, 255, 255, 18),
-                    ))
-                    .inner_margin(Margin::symmetric(16, 14))
-                    .show(ui, |ui| {
-                        ui.set_width(pw - 32.0);
-                        // Grouped by category, but the names come from `products::PRODUCTS` so
-                        // this sheet says the same thing as the Layers list and the bottom card.
-                        type Row = (Moment, bool, &'static str, &'static str);
-                        let p = |m: Moment| -> Row {
-                            let i = crate::products::info(m);
-                            (m, false, i.name, i.blurb)
-                        };
-                        let groups: [(&str, Vec<Row>); 3] = [
-                            ("Reflectivity", vec![p(Moment::Reflectivity)]),
-                            (
-                                "Velocity",
-                                vec![
-                                    p(Moment::Velocity),
-                                    (
-                                        Moment::Velocity,
-                                        true,
-                                        "Storm-Relative Velocity",
-                                        "Velocity with the storm's own motion subtracted out",
-                                    ),
-                                    p(Moment::SpectrumWidth),
-                                ],
-                            ),
-                            (
-                                "Dual-Polarization",
-                                vec![
-                                    p(Moment::CorrelationCoefficient),
-                                    p(Moment::DifferentialReflectivity),
-                                    p(Moment::DifferentialPhase),
-                                ],
-                            ),
-                        ];
-                        egui::ScrollArea::vertical()
-                            .max_height(content.height() * 0.62)
-                            .show(ui, |ui| {
-                                for (title, rows) in groups.iter() {
-                                    ui.add_space(4.0);
-                                    ui.label(
-                                        RichText::new(*title)
-                                            .size(15.0)
-                                            .strong()
-                                            .color(Color32::from_gray(235)),
-                                    );
-                                    ui.add_space(2.0);
-                                    for (m, want_srv, label, blurb) in rows.iter().copied() {
-                                        let selected = cur_moment == m
-                                            && (m != Moment::Velocity || srv == want_srv);
-                                        ui.horizontal(|ui| {
-                                            let fg = if selected {
-                                                OMEGA_ORANGE
-                                            } else {
-                                                Color32::from_gray(220)
-                                            };
-                                            // Inside a horizontal layout `available_width` is
-                                            // effectively unbounded, so the blurb won't wrap
-                                            // unless the row is boxed to a real width first.
-                                            let row_w = (ui.available_width() - 100.0).max(120.0);
-                                            let clicked = ui
-                                                .allocate_ui(vec2(row_w, 0.0), |ui| {
-                                                    ui.set_max_width(row_w);
-                                                    let b = egui::Button::new(
-                                                        RichText::new(format!("{label}\n{blurb}"))
-                                                            .size(15.0)
-                                                            .color(fg),
-                                                    )
-                                                    .fill(Color32::TRANSPARENT)
-                                                    .stroke(Stroke::NONE)
-                                                    // egui defaults to Extend inside a horizontal
-                                                    // layout, which ran the blurb off the panel.
-                                                    .wrap_mode(egui::TextWrapMode::Wrap)
-                                                    .min_size(vec2(row_w, 44.0));
-                                                    ui.add(b).clicked()
-                                                })
-                                                .inner;
-                                            if clicked {
-                                                self.views[active].moment = m;
-                                                if m == Moment::Velocity {
-                                                    self.views[active].srv = want_srv;
-                                                }
-                                                self.mobile_sheet = MobileSheet::None;
-                                            }
-                                            ui.with_layout(
-                                                Layout::right_to_left(Align::Center),
-                                                |ui| {
-                                                    if selected && n_tilt > 0 {
-                                                        let tb = egui::Button::new(
-                                                            RichText::new(format!(
-                                                                "Tilt {}  {:.1}°",
-                                                                cur_tilt + 1,
-                                                                cur_angle
-                                                            ))
-                                                            .size(13.0)
-                                                            .color(OMEGA_BLUE),
-                                                        )
-                                                        .fill(Color32::from_rgba_unmultiplied(
-                                                            45, 156, 219, 30,
-                                                        ))
-                                                        .corner_radius(8.0);
-                                                        if ui.add(tb).clicked() {
-                                                            self.views[active].tilt =
-                                                                (cur_tilt + 1) % n_tilt.max(1);
-                                                        }
-                                                    }
-                                                },
-                                            );
-                                        });
-                                    }
-                                    ui.add_space(4.0);
-                                    ui.separator();
-                                }
-                            });
                     });
             });
     }
