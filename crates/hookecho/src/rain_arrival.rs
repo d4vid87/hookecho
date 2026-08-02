@@ -50,6 +50,41 @@ pub fn upstream_eta(
     None
 }
 
+/// Per-minute reflectivity over `point` for the next `max_min` minutes, same upstream walk as
+/// [`upstream_eta`] but sampling every minute instead of stopping at the first echo. `None` when
+/// the storms aren't moving (nothing to advect) — the whole method needs translation.
+pub fn upstream_profile(
+    sample: impl Fn(f64, f64) -> Option<f32>,
+    point: [f64; 2],
+    mvt_deg: f64,
+    mvt_kt: f64,
+    max_min: u32,
+) -> Option<Vec<Option<f32>>> {
+    if mvt_kt <= 1.0 {
+        return None;
+    }
+    let kmh = mvt_kt * 1.852;
+    let upwind = (mvt_deg + 180.0).rem_euclid(360.0);
+    Some(
+        (0..=max_min)
+            .map(|m| {
+                let at = crate::geo::destination_point(point, upwind, kmh * m as f64 / 60.0);
+                sample(at[0], at[1])
+            })
+            .collect(),
+    )
+}
+
+/// Rain intensity bucket for a dBZ value: 0 none, 1 light, 2 moderate, 3 heavy.
+pub fn intensity(dbz: f32) -> u8 {
+    match dbz {
+        v if v >= 45.0 => 3,
+        v if v >= 35.0 => 2,
+        v if v >= THRESH_DBZ => 1,
+        _ => 0,
+    }
+}
+
 /// Per-point state: how many consecutive scans have agreed, and when we last spoke up.
 #[derive(Default)]
 pub struct Detector {
@@ -146,6 +181,29 @@ mod tests {
     fn stationary_storms_produce_no_eta() {
         let eta = upstream_eta(band(90.0, 10.0), [0.0, 40.0], 90.0, 0.5, MAX_MIN);
         assert_eq!(eta, None, "no motion means no arrival time");
+    }
+
+    #[test]
+    fn profile_is_wet_when_the_band_arrives() {
+        // Same geometry as the ETA test: the band lands around minute 30.
+        let p = upstream_profile(band(90.0, 27.8), [0.0, 40.0], 90.0, 30.0, 60).unwrap();
+        assert_eq!(p.len(), 61);
+        let wet: Vec<usize> = p
+            .iter()
+            .enumerate()
+            .filter(|(_, v)| v.is_some_and(|d| intensity(d) > 0))
+            .map(|(i, _)| i)
+            .collect();
+        assert!(!wet.is_empty(), "band should show up somewhere");
+        assert!(
+            (28..=32).contains(&wet[0]),
+            "rain should start near minute 30, got {wet:?}"
+        );
+    }
+
+    #[test]
+    fn stationary_storms_produce_no_profile() {
+        assert!(upstream_profile(band(90.0, 10.0), [0.0, 40.0], 90.0, 0.5, 60).is_none());
     }
 
     #[test]

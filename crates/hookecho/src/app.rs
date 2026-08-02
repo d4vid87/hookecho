@@ -1556,6 +1556,10 @@ pub struct HookEchoApp {
     /// on-map chip.
     rain_detector: crate::rain_arrival::Detector,
     rain_eta: Vec<(String, f32)>,
+    /// Minute-by-minute rain over the forecast point, and the (volume, point, motion) key it was
+    /// computed for — the walk samples the whole sweep, so it runs once per volume, not per frame.
+    minute_profile: Option<Vec<Option<f32>>>,
+    minute_key: Option<String>,
     /// WPC surface analysis overlay: fronts + pressure centers, refreshed a few times an hour.
     show_fronts: bool,
     fronts: Option<wxdata::fronts::SurfaceAnalysis>,
@@ -1992,6 +1996,8 @@ impl HookEchoApp {
             forecast_state: ui::forecast_window::State::Loading,
             forecast_rx: None,
             forecast_cache: std::collections::HashMap::new(),
+            minute_profile: None,
+            minute_key: None,
             rain_detector: Default::default(),
             rain_eta: Vec::new(),
             show_fronts: false,
@@ -2776,6 +2782,47 @@ impl HookEchoApp {
         }
     }
 
+    /// Per-minute rain over `at` for the next hour, advected off the current volume. Live only —
+    /// an advection off an archived scan describes a time that already happened. Cached per
+    /// (volume, point, storm motion); recomputing the 61-point walk every frame is wasted work.
+    fn minute_profile(&mut self, at: (f64, f64)) -> Option<&[Option<f32>]> {
+        let idx = self.active;
+        if !self.views[idx].timeline.following {
+            self.minute_key = None;
+            self.minute_profile = None;
+            return None;
+        }
+        let (dir, kt) = self.scit_mean_motion()?;
+        let vol = self.views[idx]
+            .timeline
+            .current()
+            .map(|id| id.name().to_string())
+            .unwrap_or_default();
+        let key = format!("{vol}|{:.4},{:.4}|{dir:.0},{kt:.0}", at.0, at.1);
+        if self.minute_key.as_deref() != Some(key.as_str()) {
+            self.minute_key = Some(key);
+            self.minute_profile = self.compute_minute_profile(at, dir, kt);
+        }
+        self.minute_profile.as_deref()
+    }
+
+    fn compute_minute_profile(
+        &mut self,
+        at: (f64, f64),
+        dir: f32,
+        kt: f32,
+    ) -> Option<Vec<Option<f32>>> {
+        let idx = self.active;
+        let tilt = self.views[idx].tilt;
+        let sweep = self.views[idx]
+            .volume
+            .as_mut()
+            .and_then(|v| v.binned(Moment::Reflectivity, tilt, false).ok())
+            .cloned()?;
+        let sample = refl_sampler(&sweep);
+        crate::rain_arrival::upstream_profile(sample, [at.0, at.1], dir as f64, kt as f64, 60)
+    }
+
     /// Check whether echo is heading for any watched point (saved markers + your chase position)
     /// and alert once per approach. Live data only — an ETA off an archived scan is meaningless.
     fn check_rain_arrival(&mut self) {
@@ -2816,28 +2863,13 @@ impl HookEchoApp {
         else {
             return;
         };
-        let span = (sweep.value_max - sweep.value_min).max(1e-3);
-        let radar = [sweep.radar_lon as f64, sweep.radar_lat as f64];
-        // Reflectivity at a lon/lat, by inverting the polar bin geometry.
-        let sample = |lon: f64, lat: f64| -> Option<f32> {
-            let (range_km, bearing) = crate::geo::great_circle(radar, [lon, lat]);
-            let gate = ((range_km as f32 - sweep.first_gate_km) / sweep.gate_interval_km).round();
-            if gate < 0.0 || gate as usize >= sweep.gate_count {
-                return None;
-            }
-            let az = (bearing / 360.0 * sweep.az_bins as f64).round() as usize % sweep.az_bins;
-            let v = sweep.data[az * sweep.gate_count + gate as usize];
-            if v < 2 {
-                return Some(f32::NEG_INFINITY);
-            }
-            Some(sweep.value_min + (v as f32 - 2.0) / 253.0 * span)
-        };
+        let sample = refl_sampler(&sweep);
 
         let mut fired = false;
         self.rain_eta.clear();
         for (name, at) in &points {
             let eta = upstream_eta(
-                sample,
+                &sample,
                 *at,
                 dir as f64,
                 kt as f64,
@@ -10845,6 +10877,26 @@ pub(crate) fn to_upload(
     }
 }
 
+/// Reflectivity at a lon/lat off a binned sweep, by inverting the polar bin geometry. `None`
+/// outside the sweep's gates; below-threshold bins read as -inf (in coverage, but no echo).
+fn refl_sampler(sweep: &wxdata::level2::BinnedSweep) -> impl Fn(f64, f64) -> Option<f32> + '_ {
+    let span = (sweep.value_max - sweep.value_min).max(1e-3);
+    let radar = [sweep.radar_lon as f64, sweep.radar_lat as f64];
+    move |lon: f64, lat: f64| {
+        let (range_km, bearing) = crate::geo::great_circle(radar, [lon, lat]);
+        let gate = ((range_km as f32 - sweep.first_gate_km) / sweep.gate_interval_km).round();
+        if gate < 0.0 || gate as usize >= sweep.gate_count {
+            return None;
+        }
+        let az = (bearing / 360.0 * sweep.az_bins as f64).round() as usize % sweep.az_bins;
+        let v = sweep.data[az * sweep.gate_count + gate as usize];
+        if v < 2 {
+            return Some(f32::NEG_INFINITY);
+        }
+        Some(sweep.value_min + (v as f32 - 2.0) / 253.0 * span)
+    }
+}
+
 /// Convert an MRMS reflectivity field into a GPU upload: dBZ → 2..=255 index band
 /// (no-data/NaN → 0 = transparent), the reflectivity color LUT, and the grid's
 /// mercator world-space quad (plate-carrée corners projected).
@@ -12095,7 +12147,15 @@ impl eframe::App for HookEchoApp {
         }
         if self.forecast_open {
             let at = self.forecast_at.unwrap_or((0.0, 0.0));
-            if !ui::forecast_window::show(ctx, &self.forecast_state, at, self.active_tz()) {
+            let tz = self.active_tz();
+            let minute = self.minute_profile(at).map(|m| m.to_vec());
+            if !ui::forecast_window::show(
+                ctx,
+                &self.forecast_state,
+                at,
+                tz,
+                minute.as_deref(),
+            ) {
                 self.forecast_open = false;
             }
         }

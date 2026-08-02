@@ -14,12 +14,14 @@ pub enum State {
     Failed(String),
 }
 
-/// Show the window. Returns `false` when it should close.
+/// Show the window. `minute` is the per-minute radar-advection profile over the point (dBZ per
+/// minute from now); `None` in archive or without a volume, which hides that section.
 pub fn show(
     ctx: &egui::Context,
     state: &State,
     at: (f64, f64),
     tz: Option<wxdata::tz::Tz>,
+    minute: Option<&[Option<f32>]>,
 ) -> bool {
     let mut open = true;
     crate::ui::fit_phone(ctx, egui::Window::new("Forecast"))
@@ -35,6 +37,10 @@ pub fn show(
                 }
             });
             ui.separator();
+            if let Some(m) = minute {
+                minute_strip(ui, m);
+                ui.add_space(6.0);
+            }
             match state {
                 State::Loading => {
                     ui.horizontal(|ui| {
@@ -95,6 +101,48 @@ fn body(ui: &mut egui::Ui, f: &PointForecast, tz: Option<wxdata::tz::Tz>) {
                 format!("{}\nWind {}", p.short, p.wind)
             });
         }
+    });
+}
+
+/// Minute-by-minute rain over the point for the next hour, advected from the current radar scan.
+/// This is a nowcast off one volume, not a forecast product — hence the "~" in the caption.
+fn minute_strip(ui: &mut egui::Ui, minute: &[Option<f32>]) {
+    use crate::rain_arrival::intensity;
+    if minute.len() < 2 {
+        return;
+    }
+    ui.label(RichText::new("Next hour (radar)").strong());
+    let w = ui.available_width().max(220.0);
+    let (rect, _) = ui.allocate_exact_size(Vec2::new(w, 26.0), Sense::hover());
+    let p = ui.painter_at(rect);
+    p.rect_filled(rect, 4.0, Color32::from_black_alpha(90));
+    let bw = rect.width() / minute.len() as f32;
+    for (i, v) in minute.iter().enumerate() {
+        let lvl = v.map(intensity).unwrap_or(0);
+        if lvl == 0 {
+            continue;
+        }
+        let (color, frac) = match lvl {
+            3 => (Color32::from_rgb(230, 90, 90), 1.0),
+            2 => (Color32::from_rgb(80, 170, 230), 0.75),
+            _ => (Color32::from_rgb(90, 130, 190), 0.45),
+        };
+        let bar = egui::Rect::from_min_max(
+            egui::pos2(rect.left() + i as f32 * bw, rect.bottom() - 22.0 * frac),
+            egui::pos2(rect.left() + (i + 1) as f32 * bw, rect.bottom() - 2.0),
+        );
+        p.rect_filled(bar, 0.0, color);
+    }
+    let wet: Vec<usize> = minute
+        .iter()
+        .enumerate()
+        .filter(|(_, v)| v.is_some_and(|d| intensity(d) > 0))
+        .map(|(i, _)| i)
+        .collect();
+    ui.small(match (wet.first(), wet.last()) {
+        (Some(0), Some(e)) => format!("raining now · ends ~{e} min"),
+        (Some(s), Some(e)) => format!("rain starts ~{s} min · ends ~{e} min"),
+        _ => "no rain in the next hour".to_string(),
     });
 }
 
