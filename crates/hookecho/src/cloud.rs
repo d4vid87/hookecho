@@ -145,7 +145,7 @@ fn serve_redirect(listener: &std::net::TcpListener) -> Result<String, String> {
 
 /// One `a=b` value out of a query string, percent-decoded. Google's auth codes contain a `/`,
 /// which arrives as `%2F` — handing that to the token endpoint verbatim earns an `invalid_grant`.
-fn param(query: &str, key: &str) -> Option<String> {
+pub(crate) fn param(query: &str, key: &str) -> Option<String> {
     let raw = query.split('&').find_map(|kv| {
         let (k, v) = kv.split_once('=')?;
         (k == key).then_some(v)
@@ -153,7 +153,7 @@ fn param(query: &str, key: &str) -> Option<String> {
     Some(percent_decode(&raw.replace('+', " ")))
 }
 
-fn percent_decode(s: &str) -> String {
+pub(crate) fn percent_decode(s: &str) -> String {
     let mut out = Vec::with_capacity(s.len());
     let b = s.as_bytes();
     let mut i = 0;

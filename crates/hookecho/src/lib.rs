@@ -34,6 +34,9 @@ pub mod profiling;
 pub mod rain_arrival;
 pub mod render;
 pub mod render3d;
+/// The `--serve` HTTP endpoint (desktop only — Android has no headless mode to render from).
+#[cfg(not(target_os = "android"))]
+pub mod serve;
 pub mod settings;
 pub mod share;
 pub mod speech;

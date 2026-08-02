@@ -443,6 +443,31 @@ tmux:
 set -g status-right '#(hookecho --status --line) | %H:%M'
 ```
 
+### As a service
+
+`hookecho --serve` answers the same questions over HTTP, for the machine with no
+display attached:
+
+```sh
+hookecho --serve             # http://127.0.0.1:8080
+hookecho --serve 9000 --bind 0.0.0.0
+```
+
+| Endpoint | What it returns |
+| --- | --- |
+| `/status.json` | conditions and nearby alerts for every saved location |
+| `/alerts.json` | alerts only |
+| `/obs.json` | conditions only |
+| `/snapshot.png?site=KTLX` | a 1000×1000 radar render — `&product=VEL`, `&basemap=none` |
+
+JSON answers are cached for a minute and snapshots for five, so polling it every
+30 seconds costs the upstream services nothing extra.
+
+**It binds loopback unless you tell it otherwise.** This endpoint says where you
+live and what is warned there; `--bind 0.0.0.0` exposes that to everything on
+your network, and there is no authentication in front of it. Put it behind a
+reverse proxy if it needs to leave the machine.
+
 ### Extending it
 
 Placefiles work as they do everywhere else — URLs, icon sheets, a layer manager with per-file

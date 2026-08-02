@@ -69,6 +69,23 @@ fn main() -> eframe::Result<()> {
         return Ok(());
     }
 
+    // HTTP mode: `hookecho --serve [PORT] [--bind ADDR]` — the same report over the network, plus
+    // a radar snapshot. Loopback by default; `--bind 0.0.0.0` is a deliberate act.
+    if let Some(pos) = args.iter().position(|a| a == "--serve") {
+        let port = args
+            .get(pos + 1)
+            .filter(|a| !a.starts_with("--"))
+            .and_then(|p| p.parse::<u16>().ok())
+            .unwrap_or(8080);
+        let bind = flag_value(&args, "--bind").unwrap_or("127.0.0.1");
+        let spots = hookecho::status::spots(&settings::Settings::load(), None);
+        if let Err(e) = hookecho::serve::run(spots, bind, port) {
+            eprintln!("serve failed: {e}");
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
+
     // Logo export: `hookecho --headless-icon <out.png>` (PNG inspection, not a desktop capture).
     if let Some(pos) = args.iter().position(|a| a == "--headless-icon") {
         let out = args.get(pos + 1).map(String::as_str).unwrap_or("icon.png");
