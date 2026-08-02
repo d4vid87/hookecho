@@ -25,7 +25,7 @@ pub fn show(
 ) -> (bool, bool) {
     let mut open = true;
     let mut follow_toggled = false;
-    crate::ui::fit_phone(
+    crate::ui::phone_surface(
         ctx,
         egui::Window::new(format!("Storm {} Attributes", cell.id)),
     )

@@ -153,21 +153,55 @@ impl super::HookEchoApp {
     /// What Android's back button dismisses, innermost first. Returns without doing anything when
     /// nothing is open, which lets the OS handle it (leave the app).
     fn mobile_back(&mut self) {
+        // Full-screen surfaces first, then the modal sheet, then the persistent sheet's snaps,
+        // and only then nothing (which lets Android leave the app). Every surface the phone can
+        // open is in here; one that isn't is a one-way door, because a full-screen surface hides
+        // the map you'd otherwise tap to get out.
+        macro_rules! close {
+            ($($flag:expr),* $(,)?) => {
+                $(if $flag { $flag = false; return; })*
+            };
+        }
+        macro_rules! clear {
+            ($($opt:expr),* $(,)?) => {
+                $(if $opt.is_some() { $opt = None; return; })*
+            };
+        }
+        clear!(
+            self.marker_popup,
+            self.detail,
+            self.warning_popup,
+            self.cell_popup,
+            self.xsection,
+            self.site_dialog,
+        );
+        close!(
+            self.sounding_window.open,
+            self.show_hodo,
+            self.show_cappi,
+            self.show_3d,
+            self.show_sensors,
+            self.climo_open,
+            self.afd_open,
+            self.digest_window.open,
+            self.verify_window.open,
+            self.event_window.open,
+            self.marker_window.open,
+            self.placefile_window.open,
+            self.palette_editor.open,
+            self.layer_window_open,
+            self.show_cheatsheet,
+            self.about_open,
+            self.wizard.open,
+            self.cells_window.open,
+            self.forecast_open,
+            self.settings_window.open,
+        );
         if self.mobile_sheet != MobileSheet::None {
             self.mobile_sheet = MobileSheet::None;
         } else if let Some(next) = self.mobile_snap.collapsed() {
             // The persistent sheet collapses a step at a time before back leaves the app.
             self.mobile_snap = next;
-        } else if self.marker_popup.is_some() {
-            self.marker_popup = None;
-        } else if self.site_dialog.is_some() {
-            self.site_dialog = None;
-        } else if self.cells_window.open {
-            self.cells_window.open = false;
-        } else if self.forecast_open {
-            self.forecast_open = false;
-        } else if self.settings_window.open {
-            self.settings_window.open = false;
         } else if self.mobile_chrome_hidden {
             self.mobile_chrome_hidden = false;
         }
@@ -194,7 +228,9 @@ impl super::HookEchoApp {
                 Align2::RIGHT_TOP,
                 vec2(-crate::ui::m3::SP_3, inset_top + 26.0),
             )
-            .order(egui::Order::Foreground) // above the drawer scrim, so it stays tappable + undimmed
+            // Plain Middle order, so any surface opened afterwards (a full-screen window, a
+            // modal sheet's scrim) covers it instead of leaving an eye floating over the
+            // content — it was overlapping the site picker's buttons at Foreground.
             .show(ctx, |ui| {
                 let g = if self.mobile_chrome_hidden {
                     ph::EYE

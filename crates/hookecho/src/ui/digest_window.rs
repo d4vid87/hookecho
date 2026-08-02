@@ -21,7 +21,7 @@ impl DigestWindow {
         }
         let mut open = self.open;
         let mut action = None;
-        crate::ui::fit_phone(ctx, egui::Window::new("Storm Digest"))
+        crate::ui::phone_surface(ctx, egui::Window::new("Storm Digest"))
             .open(&mut open)
             .default_size([420.0, 240.0])
             .show(ctx, |ui| {

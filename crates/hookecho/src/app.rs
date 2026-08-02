@@ -4082,7 +4082,7 @@ impl HookEchoApp {
             return;
         }
         let mut open = self.climo_open;
-        crate::ui::fit_phone(ctx, egui::Window::new("Tornado climatology"))
+        crate::ui::phone_surface(ctx, egui::Window::new("Tornado climatology"))
             .open(&mut open)
             .default_width(360.0)
             .show(ctx, |ui| {
@@ -8346,10 +8346,14 @@ impl HookEchoApp {
             // The mobile chrome floats over the map, and `multi_touch()` is raw input with no
             // notion of which layer the fingers are on — so a pinch on the bottom sheet used to
             // zoom the map underneath it. The chrome publishes what it covers; skip those rects.
-            let occluded = self
-                .mobile_occlusion
-                .iter()
-                .any(|r| r.contains(mt.center_pos));
+            // Explicit rects cover the always-on chrome; `is_pointer_over_area` covers every
+            // window and popup on top of it, which is what keeps a pinch on a Skew-T or a
+            // full-screen settings surface from also zooming the map behind it.
+            let occluded = ui.ctx().is_pointer_over_egui()
+                || self
+                    .mobile_occlusion
+                    .iter()
+                    .any(|r| r.contains(mt.center_pos));
             if prect.contains(mt.center_pos) && !occluded {
                 self.active = idx;
                 let t = mt.translation_delta;
@@ -12893,7 +12897,7 @@ impl eframe::App for HookEchoApp {
             if let Some(tex) = self.cappi_tex.clone() {
                 open = ui::cappi_window::show(ctx, &tex, &mut self.cappi_alt_km, 300.0);
             } else {
-                crate::ui::fit_phone(ctx, egui::Window::new("CAPPI slice"))
+                crate::ui::phone_surface(ctx, egui::Window::new("CAPPI slice"))
                     .open(&mut open)
                     .show(ctx, |ui| {
                         ui.weak("No volume loaded in the active pane.");

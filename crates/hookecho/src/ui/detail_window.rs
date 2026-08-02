@@ -17,7 +17,7 @@ pub struct Detail {
 /// for `detail.image`, if it has finished loading.
 pub fn show(ctx: &egui::Context, detail: &Detail, image: Option<&egui::TextureHandle>) -> bool {
     let mut open = true;
-    crate::ui::fit_phone(ctx, egui::Window::new("Feature Details"))
+    crate::ui::phone_surface(ctx, egui::Window::new("Feature Details"))
         .open(&mut open)
         .default_size([380.0, 320.0])
         .show(ctx, |ui| {

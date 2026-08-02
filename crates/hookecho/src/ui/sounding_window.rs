@@ -46,7 +46,7 @@ impl SoundingWindow {
             return;
         }
         let mut open = self.open;
-        crate::ui::fit_phone(ctx, egui::Window::new("Point Sounding"))
+        crate::ui::phone_surface(ctx, egui::Window::new("Point Sounding"))
             .open(&mut open)
             .default_size([560.0, 460.0])
             .show(ctx, |ui| {
@@ -123,7 +123,7 @@ impl SoundingWindow {
                 ui.separator();
                 // Phone: the fixed-width plots (300 + 240 px) side by side overflow the screen —
                 // stack them vertically inside a scroll instead (fixed-width content overrides
-                // fit_phone's max_width; same pattern as cell_window's grid).
+                // phone_surface's max_width; same pattern as cell_window's grid).
                 if cfg!(target_os = "android") {
                     egui::ScrollArea::vertical().show(ui, |ui| {
                         skewt(ui, s, observed);

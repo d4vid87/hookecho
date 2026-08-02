@@ -35,7 +35,7 @@ impl MarkerWindow {
     ) -> Option<String> {
         let mut open = self.open;
         let mut go: Option<String> = None;
-        crate::ui::fit_phone(ctx, egui::Window::new("Location Markers"))
+        crate::ui::phone_surface(ctx, egui::Window::new("Location Markers"))
             .open(&mut open)
             .default_size([520.0, 360.0])
             .show(ctx, |ui| {

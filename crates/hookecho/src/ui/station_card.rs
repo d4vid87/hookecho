@@ -176,14 +176,14 @@ pub fn show(
     let title = format!("{} — {}", card.ob.name, card.ob.network.label());
     // Cascade the first placement so several cards don't land on top of each other.
     let offset = 24.0 * (index % 8) as f32;
-    let w = crate::ui::fit_phone(
+    let w = crate::ui::phone_surface(
         ctx,
         egui::Window::new(RichText::new(&title).size(13.0))
             .id(egui::Id::new(("station-card", &card.key)))
             .open(&mut open)
             .default_pos([80.0 + offset, 90.0 + offset]),
     );
-    // fit_phone pins the width on Android; on desktop the card sizes itself.
+    // phone_surface pins the width on Android; on desktop the card sizes itself.
     let w = if cfg!(target_os = "android") {
         w
     } else {

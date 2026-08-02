@@ -23,7 +23,7 @@ pub(crate) fn show(
     }
     let mut changed = false;
     let mut win_open = *open;
-    crate::ui::fit_phone(ctx, egui::Window::new("Layer Manager"))
+    crate::ui::phone_surface(ctx, egui::Window::new("Layer Manager"))
         .open(&mut win_open)
         .default_width(420.0)
         .show(ctx, |ui| {

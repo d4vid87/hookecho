@@ -28,7 +28,7 @@ impl PlacefileWindow {
         status: &[PlacefileStatus],
     ) {
         let mut open = self.open;
-        crate::ui::fit_phone(ctx, egui::Window::new("Placefile Manager"))
+        crate::ui::phone_surface(ctx, egui::Window::new("Placefile Manager"))
             .open(&mut open)
             .default_size([520.0, 320.0])
             .show(ctx, |ui| {

@@ -9,32 +9,39 @@ pub(crate) fn loading(ui: &mut egui::Ui, what: &str) {
     });
 }
 
-/// Clamp a floating window to the screen on Android (no-op elsewhere): egui windows size to
-/// their content, and desktop-sized content overflows a ~360-pt-wide portrait phone display.
-/// Height overflow gets a scrollbar instead of a clip. The window is pinned near the top so its
-/// first fields stay visible when the soft keyboard covers the lower ~40% of the screen (the
-/// NativeActivity draws edge-to-edge, so the IME doesn't resize the content rect). Callers that
-/// set their own `.anchor` after this override the pin.
-pub(crate) fn fit_phone<'a>(ctx: &egui::Context, w: egui::Window<'a>) -> egui::Window<'a> {
+/// Turn a desktop tool window into a phone surface (no-op elsewhere).
+///
+/// Material 3's rule for the compact width class is that a secondary screen takes the whole
+/// screen — no floating panel, no dialog margins, no dragging a window around a display it barely
+/// fits on. So on Android every one of these windows becomes a full-screen surface: pinned to the
+/// content rect (which already excludes the system bars and grows to clear the keyboard), not
+/// draggable, not resizable, not collapsible, scrolling its body, with square corners because
+/// there is nothing behind it to round against. The title bar stays: its ✕ is the surface's back
+/// affordance, and it is already wired to each caller's `open` flag.
+///
+/// One function, because there is exactly one right answer for all twenty-odd of these windows,
+/// and a per-window conversion would be twenty chances to get it slightly different.
+///
+/// ponytail: `Window` rather than a hand-rolled surface widget — it already does the title row,
+/// the close button, the open flag and the scroll body, and reusing it keeps the desktop and
+/// phone call sites identical.
+pub(crate) fn phone_surface<'a>(ctx: &egui::Context, w: egui::Window<'a>) -> egui::Window<'a> {
     if cfg!(target_os = "android") {
         let r = ctx.content_rect();
-        // `resizable(false)` is load-bearing: a resizable window keeps a stored width from a wider
-        // session (or grows to its content) and spills off both screen edges — the reported cell
-        // popup clipping. Pinning width + disabling resize keeps every popup inside the screen.
-        //
-        // min == max width, not `max_width` alone, because every call site chains
-        // `.default_size(…)` AFTER this — and on a non-resizable window that wider desired size
-        // won, which is why the 560 pt sounding window and the 720 pt attributes table hung off
-        // both edges of a 512 pt screen. Pinning both bounds leaves a later default nothing to
-        // override.
-        w.resizable(false)
-            // The budget is for the *inner* width; the window frame's margins, stroke and shadow
-            // sit outside it, so leaving only 16 px still hung the frame off both edges.
-            .min_width(r.width() - 56.0)
-            .max_width(r.width() - 56.0)
-            .max_height(r.height() * 0.80)
+        let frame = egui::Frame::window(&ctx.style_of(ctx.theme()))
+            .corner_radius(0)
+            .shadow(egui::epaint::Shadow::NONE)
+            .inner_margin(egui::Margin::symmetric(
+                crate::ui::m3::SP_4 as i8,
+                crate::ui::m3::SP_3 as i8,
+            ));
+        // `fixed_rect` beats the `.default_size(…)` / `.anchor(…)` that most call sites chain on
+        // after this — the old width-pinning trick had to fight those and lost more than once.
+        w.fixed_rect(r)
+            .resizable(false)
+            .collapsible(false)
             .vscroll(true)
-            .anchor(egui::Align2::CENTER_TOP, [0.0, r.top() + 6.0])
+            .frame(frame)
     } else {
         w
     }

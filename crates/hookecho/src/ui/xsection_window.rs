@@ -29,7 +29,7 @@ pub fn show(
     use wxdata::level2::Moment;
     let mut open = true;
     let mut changed = false;
-    crate::ui::fit_phone(ctx, egui::Window::new("Cross-section"))
+    crate::ui::phone_surface(ctx, egui::Window::new("Cross-section"))
         .open(&mut open)
         .default_size([560.0, 300.0])
         .show(ctx, |ui| {

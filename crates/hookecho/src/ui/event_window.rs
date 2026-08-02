@@ -29,7 +29,7 @@ impl EventWindow {
         let mut open = self.open;
         let mut action = None;
         let mut remove: Option<usize> = None;
-        crate::ui::fit_phone(ctx, egui::Window::new("Event Library"))
+        crate::ui::phone_surface(ctx, egui::Window::new("Event Library"))
             .open(&mut open)
             .default_size([460.0, 460.0])
             .show(ctx, |ui| {

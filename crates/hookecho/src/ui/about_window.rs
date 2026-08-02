@@ -17,7 +17,7 @@ pub enum UpdateState {
 
 /// Draw the window. Returns false once the user closed it.
 pub fn show(ctx: &egui::Context, open: &mut bool, update: &UpdateState, accent: egui::Color32) {
-    crate::ui::fit_phone(ctx, egui::Window::new("About Hook Echo-WX"))
+    crate::ui::phone_surface(ctx, egui::Window::new("About Hook Echo-WX"))
         .open(open)
         .default_size([380.0, 260.0])
         .show(ctx, |ui| {

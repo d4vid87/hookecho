@@ -129,7 +129,7 @@ pub fn show(
     let mut chosen = None;
     let mut open = w.open;
     let order = sorted_indices(cells, w.sort, w.desc);
-    crate::ui::fit_phone(ctx, egui::Window::new("Storm attributes"))
+    crate::ui::phone_surface(ctx, egui::Window::new("Storm attributes"))
         .open(&mut open)
         .default_size([720.0, 420.0])
         .show(ctx, |ui| {
