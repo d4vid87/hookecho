@@ -8221,8 +8221,13 @@ impl HookEchoApp {
     /// stops being enough to tell a stutter from a stall.
     #[cfg(debug_assertions)]
     fn frame_time_overlay(&mut self, ctx: &egui::Context) {
-        let dt = ctx.input(|i| i.unstable_dt) * 1000.0;
-        let text = format!("{dt:.1} ms  ({:.0} fps)", 1000.0 / dt.max(0.001));
+        let (dt, pinching) = ctx.input(|i| (i.unstable_dt * 1000.0, i.multi_touch().is_some()));
+        let text = format!(
+            "{dt:.1} ms ({:.0} fps)  z{:.2}{}",
+            1000.0 / dt.max(0.001),
+            self.views[self.active].camera.zoom,
+            if pinching { "  pinch" } else { "" }
+        );
         egui::Area::new(egui::Id::new("frame_time_overlay"))
             .anchor(egui::Align2::LEFT_TOP, egui::vec2(6.0, 6.0))
             .order(egui::Order::Tooltip)
