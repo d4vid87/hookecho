@@ -9,23 +9,15 @@ mod toolbar;
 
 use sheet::{SheetInfo, SheetSnap};
 
-use egui::{
-    pos2, vec2, Align, Align2, Color32, Frame, Id, Layout, Margin, Mesh, Rect, RichText, Sense,
-    Shape, Stroke,
-};
+use egui::{pos2, vec2, Align2, Color32, Id, Margin, Mesh, Rect, RichText, Sense, Shape, Stroke};
 use egui_phosphor::regular as ph;
 use wxdata::level2::Moment;
 
 use crate::ui::layer_options::UiActions;
 
-pub(crate) use crate::ui::style::{glass, square_btn, OMEGA_BLUE, OMEGA_GREEN, OMEGA_ORANGE};
+pub(crate) use crate::ui::style::{glass, square_btn, OMEGA_GREEN, OMEGA_ORANGE};
 
-/// Drawer navy (RadarOmega's menu background).
-const DRAWER_BG: Color32 = Color32::from_rgb(0x0E, 0x18, 0x28);
-/// RadarOmega's blue brand title color.
-const OMEGA_TITLE: Color32 = Color32::from_rgb(0x38, 0xB6, 0xFF);
-
-/// Which slide-in surface is open (`None` = just the floating chrome over the map).
+/// Which modal sheet is open over the map (`None` = just the persistent sheet and the chips).
 #[derive(Default, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum MobileSheet {
     #[default]
@@ -198,7 +190,10 @@ impl super::HookEchoApp {
         // is the only floating control, so the map is fully visible. It rides the top chip row —
         // parked lower it collided with the sheet once the sheet could reach full height.
         egui::Area::new(Id::new("m_chrome_toggle"))
-            .anchor(Align2::RIGHT_TOP, vec2(-crate::ui::m3::SP_3, inset_top + 26.0))
+            .anchor(
+                Align2::RIGHT_TOP,
+                vec2(-crate::ui::m3::SP_3, inset_top + 26.0),
+            )
             .order(egui::Order::Foreground) // above the drawer scrim, so it stays tappable + undimmed
             .show(ctx, |ui| {
                 let g = if self.mobile_chrome_hidden {
@@ -335,388 +330,249 @@ impl super::HookEchoApp {
         self.mobile_occlusion.push(sheet_rect);
         self.mobile_occlusion.push(chip_rect);
 
-        // ---------- POPUPS / DRAWERS ----------
-        match self.mobile_sheet {
-            MobileSheet::Menu => self.mobile_menu_drawer(ctx, content, vr, &mut actions),
-            MobileSheet::Alerts => {
-                self.mobile_alerts_drawer(ctx, content, vr, &malerts, alert_count)
-            }
-            MobileSheet::Capture => self.mobile_capture(ctx, content, vr),
-            MobileSheet::None => {}
+        // ---------- MODAL SHEETS ----------
+        let modal = match self.mobile_sheet {
+            MobileSheet::Menu => Some(self.mobile_menu_sheet(ctx, content, &mut actions)),
+            MobileSheet::Alerts => Some(self.mobile_alerts_sheet(ctx, content, &malerts)),
+            MobileSheet::Capture => Some(self.mobile_capture(ctx, content)),
+            MobileSheet::None => None,
+        };
+        if let Some(r) = modal {
+            self.mobile_occlusion.push(r);
         }
 
         actions
     }
 
-    /// A dimming scrim behind a popup; a tap outside `keep` closes the sheet.
-    fn mobile_scrim(&mut self, ctx: &egui::Context, vr: Rect, keep: Rect) {
-        egui::Area::new(Id::new("m_scrim"))
-            .fixed_pos(vr.min)
-            .order(egui::Order::Middle)
-            .show(ctx, |ui| {
-                let r = ui.allocate_response(vr.size(), Sense::click());
-                ui.painter().rect_filled(
-                    r.rect,
-                    egui::CornerRadius::ZERO,
-                    Color32::from_black_alpha(150),
-                );
-                if r.clicked() && !r.interact_pointer_pos().is_some_and(|p| keep.contains(p)) {
-                    self.mobile_sheet = MobileSheet::None;
-                }
-            });
-    }
-
-    /// Left navigation drawer (RadarOmega-style navy panel), populated with our toolbox.
-    fn mobile_menu_drawer(
+    /// The main menu, as a modal bottom sheet: the shared layer registry up top, the expert
+    /// controls behind "Advanced", app rows below. Same content the desktop drawer shows — one
+    /// list, not a phone copy of it that drifts.
+    fn mobile_menu_sheet(
         &mut self,
         ctx: &egui::Context,
         content: Rect,
-        vr: Rect,
         actions: &mut UiActions,
-    ) {
-        let dw = (content.width() * 0.88).min(440.0);
-        let drawer_rect = Rect::from_min_size(
-            pos2(content.left(), content.top()),
-            vec2(dw, content.height()),
-        );
-        self.mobile_scrim(ctx, vr, drawer_rect);
+    ) -> Rect {
         let accent = crate::theme::accent(self.settings.theme);
-        // Set inside the drawer body, acted on after it closes its borrow of `self`.
+        let mut close = false;
         let mut open_capture = false;
-        egui::Area::new(Id::new("m_drawer"))
-            .order(egui::Order::Foreground)
-            .fixed_pos(pos2(vr.left(), vr.top()))
-            .show(ctx, |ui| {
-                Frame::new()
-                    .fill(DRAWER_BG)
-                    .stroke(Stroke::new(
-                        1.0,
-                        Color32::from_rgba_unmultiplied(255, 255, 255, 18),
-                    ))
-                    .inner_margin(Margin {
-                        left: 14,
-                        right: 14,
-                        top: content.top() as i8 + 6,
-                        bottom: 10,
-                    })
-                    .show(ui, |ui| {
-                        ui.set_width(dw - 28.0);
-                        ui.set_height(content.bottom() - content.top() - 12.0);
-                        // Header.
-                        ui.horizontal(|ui| {
-                            ui.label(
-                                RichText::new(ph::CROSSHAIR_SIMPLE)
-                                    .size(22.0)
-                                    .color(OMEGA_ORANGE),
-                            );
-                            ui.label(
-                                RichText::new("Hook Echo")
-                                    .size(20.0)
-                                    .strong()
-                                    .color(OMEGA_TITLE),
-                            );
-                            ui.label(
-                                RichText::new("WX")
-                                    .size(20.0)
-                                    .strong()
-                                    .color(Color32::from_gray(220)),
-                            );
-                            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                                if square_btn(ui, ph::X, false, accent).clicked() {
-                                    self.mobile_sheet = MobileSheet::None;
-                                }
-                            });
-                        });
-                        ui.add_space(6.0);
-                        // Pane-mode selector (RadarOmega "Single Site").
-                        let modes = [(1usize, "Single Site"), (2, "Dual Pane"), (4, "Quad Pane")];
-                        let cur = self.views.len();
-                        let cur_label = modes
-                            .iter()
-                            .find(|(n, _)| *n == cur)
-                            .map(|(_, l)| *l)
-                            .unwrap_or("Single Site");
-                        egui::ComboBox::from_id_salt("m_panemode")
-                            .selected_text(RichText::new(cur_label).strong())
-                            .width(dw - 40.0)
-                            .show_ui(ui, |ui| {
-                                for (n, label) in modes {
-                                    if ui.selectable_label(cur == n, label).clicked() {
-                                        self.set_pane_count(n);
-                                    }
-                                }
-                            });
-                        ui.add_space(8.0);
-                        ui.separator();
-                        egui::ScrollArea::vertical().show(ui, |ui| {
-                            // The drawer used to embed the entire desktop toolbox — twelve dense
-                            // sections of desktop-density widgets on a phone. It now leads with the
-                            // same categorized, described registry the Layers sheet uses, and keeps
-                            // every expert control one tap further in under "Advanced".
-                            let entries = self.palette_entries();
-                            let mut query = std::mem::take(&mut self.mobile_drawer_query);
-                            let order_was = self.settings.layer_order.clone();
-                            let chosen = crate::ui::layers_panel::body(
-                                ui,
-                                &entries,
-                                &mut query,
-                                accent,
-                                content.height() * 0.5,
-                                false,
-                                &mut self.settings.layer_order,
-                                // The phone keeps its knobs in the Advanced section below.
-                                |_| {},
-                            );
-                            if self.settings.layer_order != order_was {
-                                self.settings.save();
-                            }
-                            // Clear a search once it's been used, exactly as the desktop drawer
-                            // does. Leaving it set meant the next open showed a stale query — and
-                            // since the soft keyboard appends, the search after that was garbage.
-                            let searched = !query.trim().is_empty();
-                            self.mobile_drawer_query = query;
-                            if let Some(action) = chosen {
-                                self.apply_palette(action, ctx);
-                                self.mobile_sheet = MobileSheet::None;
-                                if searched {
-                                    self.mobile_drawer_query.clear();
-                                }
-                            }
-                            ui.add_space(8.0);
-                            ui.separator();
-                            egui::CollapsingHeader::new(
-                                RichText::new("Advanced").size(14.0).strong().color(accent),
-                            )
-                            .default_open(false)
-                            .show(ui, |ui| {
-                                let l3_site = self.l3grid_site.clone();
-                                let tz = self.active_tz();
-                                let mosaic = self.mosaic_status();
-                                crate::ui::layer_options::show(
-                                    ui,
-                                    &mut self.filters,
-                                    &mut self.fields,
-                                    &mut self.rotation_minutes,
-                                    &mut self.hrrr_fcst_hour,
-                                    self.hrrr_valid,
-                                    tz,
-                                    &mut self.env_cape_ml,
-                                    &mut self.env_srh_km,
-                                    &mut self.env_model,
-                                    &mut self.contour_kind,
-                                    &mut self.settings.etop_dbz,
-                                    &mut self.snow_hours,
-                                    &self.show_tropical,
-                                    &mut self.tropical_wind_kt,
-                                    &mut self.tropical_surge,
-                                    l3_site.as_deref(),
-                                    Some(mosaic.as_str()),
-                                    actions,
-                                );
-                                ui.separator();
-                                self.map_rows(ui, actions);
-                            });
-                            ui.add_space(8.0);
-                            ui.separator();
-                            if ui.button("Capture…").clicked() {
-                                open_capture = true;
-                            }
-                            // The same App rows the desktop drawer shows — one list, not a phone
-                            // copy of it that drifts.
-                            self.app_rows(ui);
-                            ui.add_space(10.0);
-                            ui.label(
-                                RichText::new("© Hook Echo-WX 2026")
-                                    .size(12.0)
-                                    .color(Color32::from_gray(110)),
-                            );
-                        });
-                    });
+        let rect = sheet::modal_sheet(ctx, content, "m_menu", "Layers & tools", &mut close, |ui| {
+            // Pane mode: one row of chips instead of a combo box a thumb has to hit twice.
+            let cur = self.views.len();
+            ui.horizontal_wrapped(|ui| {
+                for (n, label) in [(1usize, "Single"), (2, "Dual pane"), (4, "Quad pane")] {
+                    if crate::ui::m3::chip(ui, label, cur == n).clicked() {
+                        self.set_pane_count(n);
+                    }
+                }
             });
+            ui.add_space(crate::ui::m3::SP_2);
+            let entries = self.palette_entries();
+            let mut query = std::mem::take(&mut self.mobile_drawer_query);
+            let order_was = self.settings.layer_order.clone();
+            let chosen = crate::ui::layers_panel::body(
+                ui,
+                &entries,
+                &mut query,
+                accent,
+                content.height() * 0.5,
+                false,
+                &mut self.settings.layer_order,
+                // The phone keeps its knobs in the Advanced section below.
+                |_| {},
+            );
+            if self.settings.layer_order != order_was {
+                self.settings.save();
+            }
+            // Clear a search once it's been used, exactly as the desktop drawer does. Leaving it
+            // set meant the next open showed a stale query.
+            let searched = !query.trim().is_empty();
+            self.mobile_drawer_query = query;
+            if let Some(action) = chosen {
+                self.apply_palette(action, ctx);
+                self.mobile_sheet = MobileSheet::None;
+                if searched {
+                    self.mobile_drawer_query.clear();
+                }
+            }
+            ui.add_space(crate::ui::m3::SP_2);
+            ui.separator();
+            egui::CollapsingHeader::new(
+                RichText::new("Advanced")
+                    .size(crate::ui::m3::T_TITLE_SM)
+                    .strong()
+                    .color(accent),
+            )
+            .default_open(false)
+            .show(ui, |ui| {
+                let l3_site = self.l3grid_site.clone();
+                let tz = self.active_tz();
+                let mosaic = self.mosaic_status();
+                crate::ui::layer_options::show(
+                    ui,
+                    &mut self.filters,
+                    &mut self.fields,
+                    &mut self.rotation_minutes,
+                    &mut self.hrrr_fcst_hour,
+                    self.hrrr_valid,
+                    tz,
+                    &mut self.env_cape_ml,
+                    &mut self.env_srh_km,
+                    &mut self.env_model,
+                    &mut self.contour_kind,
+                    &mut self.settings.etop_dbz,
+                    &mut self.snow_hours,
+                    &self.show_tropical,
+                    &mut self.tropical_wind_kt,
+                    &mut self.tropical_surge,
+                    l3_site.as_deref(),
+                    Some(mosaic.as_str()),
+                    actions,
+                );
+                ui.separator();
+                self.map_rows(ui, actions);
+            });
+            ui.add_space(crate::ui::m3::SP_2);
+            ui.separator();
+            if ui.button("Capture\u{2026}").clicked() {
+                open_capture = true;
+            }
+            self.app_rows(ui);
+            ui.add_space(crate::ui::m3::SP_3);
+            ui.label(
+                RichText::new("\u{a9} Hook Echo-WX 2026")
+                    .size(crate::ui::m3::T_LABEL)
+                    .color(Color32::from_gray(110)),
+            );
+        });
+        if close {
+            self.mobile_sheet = MobileSheet::None;
+        }
         if open_capture {
             self.mobile_sheet = MobileSheet::Capture;
         }
+        rect
     }
 
-    /// Right alerts drawer, RadarOmega "Active Weather Alerts" styling.
-    fn mobile_alerts_drawer(
+    /// Active alerts, as a modal bottom sheet. Tapping a row flies the map to it and opens the
+    /// full alert text, exactly as the desktop panel does.
+    fn mobile_alerts_sheet(
         &mut self,
         ctx: &egui::Context,
         content: Rect,
-        vr: Rect,
         malerts: &[MAlert],
-        alert_count: usize,
-    ) {
-        let dw = (content.width() * 0.9).min(460.0);
-        let drawer_rect = Rect::from_min_size(
-            pos2(content.right() - dw, content.top()),
-            vec2(dw, content.height()),
-        );
-        self.mobile_scrim(ctx, vr, drawer_rect);
+    ) -> Rect {
+        let mut close = false;
+        // The body has its own flag: `close` is already borrowed by the sheet shell for its
+        // handle/scrim/✕ dismissals.
+        let mut picked = false;
         let active = self.active;
-        egui::Area::new(Id::new("m_alerts"))
-            .order(egui::Order::Foreground)
-            .fixed_pos(pos2(content.right() - dw, content.top()))
-            .show(ctx, |ui| {
-                Frame::new()
-                    .fill(Color32::from_rgb(10, 12, 16))
-                    .corner_radius(16.0)
-                    .stroke(Stroke::new(
-                        1.0,
-                        Color32::from_rgba_unmultiplied(255, 255, 255, 18),
+        let title = format!("Alerts in view ({})", malerts.len());
+        let rect = sheet::modal_sheet(ctx, content, "m_alerts", &title, &mut close, |ui| {
+            if malerts.is_empty() {
+                ui.add_space(crate::ui::m3::SP_4);
+                ui.weak("No active alerts in view.");
+            }
+            for a in malerts {
+                let col = if a.esc >= 2 {
+                    Color32::from_rgb(255, 90, 90)
+                } else {
+                    a.color
+                };
+                let resp = egui::Frame::new()
+                    .fill(Color32::from_rgba_unmultiplied(255, 255, 255, 12))
+                    .corner_radius(crate::ui::m3::R_MD)
+                    .inner_margin(Margin::symmetric(
+                        crate::ui::m3::SP_3 as i8,
+                        crate::ui::m3::SP_3 as i8,
                     ))
-                    .inner_margin(Margin::symmetric(14, 12))
+                    // The severity stripe is the row's only color coding, so it stays a real
+                    // 3px edge rather than a tint that a dark theme swallows.
+                    .stroke(Stroke::new(3.0, col))
                     .show(ui, |ui| {
-                        ui.set_width(dw - 28.0);
-                        ui.set_height(content.height() - 20.0);
-                        ui.horizontal(|ui| {
-                            ui.label(RichText::new(ph::WARNING).size(22.0).color(OMEGA_ORANGE));
-                            ui.label(
-                                RichText::new("Active Weather Alerts")
-                                    .size(18.0)
-                                    .strong()
-                                    .color(OMEGA_ORANGE),
-                            );
-                            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                                if square_btn(ui, ph::X, false, OMEGA_ORANGE).clicked() {
-                                    self.mobile_sheet = MobileSheet::None;
-                                }
-                            });
-                        });
-                        ui.horizontal(|ui| {
-                            let pill = egui::Frame::new()
-                                .fill(Color32::from_rgba_unmultiplied(242, 160, 51, 40))
-                                .corner_radius(10.0)
-                                .inner_margin(Margin::symmetric(10, 3));
-                            pill.show(ui, |ui| {
-                                ui.label(
-                                    RichText::new(format!("{alert_count}"))
-                                        .strong()
-                                        .color(OMEGA_ORANGE),
-                                );
-                                ui.label(RichText::new(" active").color(Color32::from_gray(200)));
-                            });
-                            let (rect, _) =
-                                ui.allocate_exact_size(vec2(12.0, 12.0), Sense::hover());
-                            ui.painter().circle_filled(
-                                rect.center(),
-                                5.0,
-                                Color32::from_rgb(220, 60, 60),
-                            );
-                            ui.label(
-                                RichText::new("LIVE")
-                                    .size(13.0)
-                                    .strong()
-                                    .color(Color32::from_rgb(220, 60, 60)),
-                            );
-                        });
-                        ui.separator();
-                        egui::ScrollArea::vertical().show(ui, |ui| {
-                            if malerts.is_empty() {
-                                ui.add_space(10.0);
-                                ui.weak("No active alerts in view.");
-                            }
-                            for a in malerts {
-                                let col = if a.esc >= 2 {
-                                    Color32::from_rgb(255, 90, 90)
-                                } else {
-                                    a.color
-                                };
-                                let row = egui::Frame::new()
-                                    .fill(Color32::from_rgba_unmultiplied(255, 255, 255, 12))
-                                    .corner_radius(12.0)
-                                    .inner_margin(Margin::symmetric(12, 10))
-                                    .stroke(Stroke::new(3.0, col));
-                                let resp = row
-                                    .show(ui, |ui| {
-                                        ui.set_width(ui.available_width());
-                                        ui.label(
-                                            RichText::new(&a.title).size(15.0).strong().color(col),
-                                        );
-                                        ui.label(
-                                            RichText::new(&a.sub)
-                                                .size(12.0)
-                                                .color(Color32::from_gray(170)),
-                                        );
-                                    })
-                                    .response;
-                                ui.add_space(7.0);
-                                if resp.interact(Sense::click()).clicked() {
-                                    let cam = &mut self.views[active].camera;
-                                    cam.center =
-                                        crate::render::mercator::lonlat_to_world(a.lon, a.lat);
-                                    cam.zoom = cam.zoom.max(8.0);
-                                    self.open_alert_popup(&a.id);
-                                    self.mobile_sheet = MobileSheet::None;
-                                }
-                            }
-                        });
-                    });
-            });
+                        ui.set_width(ui.available_width());
+                        ui.label(
+                            RichText::new(&a.title)
+                                .size(crate::ui::m3::T_BODY_LG)
+                                .strong()
+                                .color(col),
+                        );
+                        ui.label(
+                            RichText::new(&a.sub)
+                                .size(crate::ui::m3::T_LABEL)
+                                .color(ui.visuals().weak_text_color()),
+                        );
+                    })
+                    .response;
+                ui.add_space(crate::ui::m3::SP_2);
+                if resp.interact(Sense::click()).clicked() {
+                    let cam = &mut self.views[active].camera;
+                    cam.center = crate::render::mercator::lonlat_to_world(a.lon, a.lat);
+                    cam.zoom = cam.zoom.max(8.0);
+                    self.open_alert_popup(&a.id);
+                    picked = true;
+                }
+            }
+        });
+        if close || picked {
+            self.mobile_sheet = MobileSheet::None;
+        }
+        rect
     }
 
-    /// Capture menu (Screenshot / Record GIF / Record Video) — RadarOmega's blue tri-icon sheet.
-    fn mobile_capture(&mut self, ctx: &egui::Context, content: Rect, vr: Rect) {
+    /// Capture: screenshot, video, GIF — as a modal sheet with three big targets.
+    fn mobile_capture(&mut self, ctx: &egui::Context, content: Rect) -> Rect {
         use super::ShotDest;
-        let pw = (content.width() - 24.0).min(520.0);
-        let panel = Rect::from_min_size(
-            pos2(content.center().x - pw / 2.0, content.center().y - 60.0),
-            vec2(pw, 130.0),
-        );
-        self.mobile_scrim(ctx, vr, panel);
-        egui::Area::new(Id::new("m_capture"))
-            .order(egui::Order::Foreground)
-            .fixed_pos(panel.min)
-            .show(ctx, |ui| {
-                Frame::new()
-                    .fill(Color32::from_rgb(24, 30, 42))
-                    .corner_radius(16.0)
-                    .inner_margin(Margin::symmetric(14, 14))
-                    .show(ui, |ui| {
-                        ui.set_width(pw - 28.0);
-                        ui.columns(3, |cols| {
-                            let cap = |ui: &mut egui::Ui, glyph: &str, label: &str| -> bool {
-                                ui.vertical_centered(|ui| {
-                                    let clicked = ui
-                                        .add(
-                                            egui::Button::new(
-                                                RichText::new(glyph).size(34.0).color(OMEGA_BLUE),
-                                            )
-                                            .fill(Color32::TRANSPARENT)
-                                            .stroke(Stroke::NONE),
-                                        )
-                                        .clicked();
-                                    ui.label(
-                                        RichText::new(label).size(13.0).strong().color(OMEGA_BLUE),
-                                    );
-                                    clicked
-                                })
-                                .inner
-                            };
-                            if cap(&mut cols[0], ph::CAMERA, "Screenshot") {
-                                if let Some(path) = crate::dialog::save_path("hookecho.png", "png")
-                                {
-                                    self.screenshot_pending = Some(ShotDest::File(path));
-                                    ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(
-                                        egui::UserData::default(),
-                                    ));
-                                }
-                                self.mobile_sheet = MobileSheet::None;
-                            }
-                            if cap(&mut cols[1], ph::VIDEO_CAMERA, "Record Video")
-                                && self.loop_export.is_none()
-                            {
-                                self.start_loop_export(crate::loopexport::LoopFormat::Mp4);
-                                self.mobile_sheet = MobileSheet::None;
-                            }
-                            if cap(&mut cols[2], ph::GIF, "Record Gif")
-                                && self.loop_export.is_none()
-                            {
-                                self.start_loop_export(crate::loopexport::LoopFormat::Gif);
-                                self.mobile_sheet = MobileSheet::None;
-                            }
-                        });
-                    });
-            });
+        let mut close = false;
+        let mut picked = false;
+        let rect = sheet::modal_sheet(ctx, content, "m_capture", "Capture", &mut close, |ui| {
+            if crate::ui::m3::list_row(
+                ui,
+                ph::CAMERA,
+                "Screenshot",
+                Some("Save the current view as a PNG"),
+                false,
+            )
+            .clicked()
+            {
+                if let Some(path) = crate::dialog::save_path("hookecho.png", "png") {
+                    self.screenshot_pending = Some(ShotDest::File(path));
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(
+                        egui::UserData::default(),
+                    ));
+                }
+                picked = true;
+            }
+            if crate::ui::m3::list_row(
+                ui,
+                ph::VIDEO_CAMERA,
+                "Record video",
+                Some("Loop the current frames to MP4"),
+                false,
+            )
+            .clicked()
+                && self.loop_export.is_none()
+            {
+                self.start_loop_export(crate::loopexport::LoopFormat::Mp4);
+                picked = true;
+            }
+            if crate::ui::m3::list_row(
+                ui,
+                ph::GIF,
+                "Record GIF",
+                Some("Loop the current frames to an animated GIF"),
+                false,
+            )
+            .clicked()
+                && self.loop_export.is_none()
+            {
+                self.start_loop_export(crate::loopexport::LoopFormat::Gif);
+                picked = true;
+            }
+        });
+        if close || picked {
+            self.mobile_sheet = MobileSheet::None;
+        }
+        rect
     }
 }

@@ -126,11 +126,17 @@ impl crate::app::HookEchoApp {
         vcp: &str,
     ) -> Rect {
         let accent = crate::theme::accent(self.settings.theme);
-        // Clear the colorbar + field strips painted at the very top of the content rect.
+        // Clear the colorbar + field strips painted at the very top of the content rect, and in
+        // landscape clear the side rail too.
         let y = content.top() + 26.0;
+        let x = if m3::is_landscape(content) {
+            m3::RAIL_W.min(content.width() * 0.45) + m3::SP_3
+        } else {
+            m3::SP_3
+        };
         let mut occl = Rect::NOTHING;
         egui::Area::new(Id::new("m_chips"))
-            .anchor(Align2::LEFT_TOP, vec2(m3::SP_3, y - content.top()))
+            .anchor(Align2::LEFT_TOP, vec2(x, y - content.top()))
             .show(ctx, |ui| {
                 let resp = pill(ui, |ui| {
                     ui.label(

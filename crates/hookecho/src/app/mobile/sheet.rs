@@ -88,15 +88,28 @@ impl crate::app::HookEchoApp {
         alert_count: usize,
         max_esc: u8,
     ) -> Rect {
-        let target = self.mobile_snap.height(content);
-        // While a drag is live the finger owns the height; otherwise it eases to the snap.
-        let h = match self.mobile_sheet_drag {
-            Some(dragged) => dragged,
-            None => ctx.animate_value_with_time(Id::new("m_sheet_h"), target, m3::DUR_MED),
-        }
-        .clamp(FIXED_H, SheetSnap::Full.height(content));
-
-        let rect = Rect::from_min_max(pos2(content.left(), content.bottom() - h), content.max);
+        // Landscape has height to spare and no width: the sheet becomes a full-height rail down
+        // the leading edge, with the same body and the same docked toolbar at its foot. No snaps
+        // — a rail that is already floor-to-ceiling has nothing to expand into.
+        let rail = m3::is_landscape(content);
+        let rect = if rail {
+            Rect::from_min_max(
+                content.min,
+                pos2(
+                    content.left() + m3::RAIL_W.min(content.width() * 0.45),
+                    content.bottom(),
+                ),
+            )
+        } else {
+            let target = self.mobile_snap.height(content);
+            // While a drag is live the finger owns the height; otherwise it eases to the snap.
+            let h = match self.mobile_sheet_drag {
+                Some(dragged) => dragged,
+                None => ctx.animate_value_with_time(Id::new("m_sheet_h"), target, m3::DUR_MED),
+            }
+            .clamp(FIXED_H, SheetSnap::Full.height(content));
+            Rect::from_min_max(pos2(content.left(), content.bottom() - h), content.max)
+        };
         let accent = crate::theme::accent(self.settings.theme);
 
         egui::Area::new(Id::new("m_sheet"))
@@ -114,18 +127,30 @@ impl crate::app::HookEchoApp {
                 ui.allocate_rect(rect, egui::Sense::click_and_drag());
                 ui.set_clip_rect(rect);
                 let painter = ui.painter().clone();
-                painter.rect_filled(
-                    rect,
+                // Rounded on the edges that face the map, square where it meets the screen.
+                let radius = if rail {
+                    egui::CornerRadius {
+                        ne: m3::R_XL as u8,
+                        se: m3::R_XL as u8,
+                        nw: 0,
+                        sw: 0,
+                    }
+                } else {
                     egui::CornerRadius {
                         nw: m3::R_XL as u8,
                         ne: m3::R_XL as u8,
                         sw: 0,
                         se: 0,
-                    },
-                    sheet_fill(ui),
-                );
+                    }
+                };
+                painter.rect_filled(rect, radius, sheet_fill(ui));
+                let edge = if rail {
+                    [rect.right_top(), rect.right_bottom()]
+                } else {
+                    [rect.left_top(), rect.right_top()]
+                };
                 painter.line_segment(
-                    [rect.left_top(), rect.right_top()],
+                    edge,
                     Stroke::new(1.0, Color32::from_rgba_unmultiplied(255, 255, 255, 20)),
                 );
                 ui.scope_builder(
@@ -133,7 +158,11 @@ impl crate::app::HookEchoApp {
                     |ui| {
                         ui.set_width(rect.width() - m3::SP_4 * 2.0);
                         ui.spacing_mut().item_spacing.y = m3::SP_2;
-                        self.sheet_handle(ui, content);
+                        if rail {
+                            ui.add_space(m3::SP_2);
+                        } else {
+                            self.sheet_handle(ui, content);
+                        }
                         self.sheet_summary(ui, info, accent);
                         // The scrollable middle gets whatever is left between the summary and the
                         // docked toolbar; at Peek that is nothing and the section doesn't draw.
@@ -390,3 +419,97 @@ pub(crate) fn icon_button(
 
 /// Reserved for the orange live/record semantics the toolbar keeps.
 pub(crate) const LIVE_TINT: Color32 = OMEGA_ORANGE;
+
+/// A modal bottom sheet: scrim, drag handle, title bar with a close button, scrollable body.
+///
+/// This is what the phone opens instead of a desktop drawer. It is the same shape as the
+/// persistent sheet (top corners, handle, surface tint) so the two read as one system, but it is
+/// modal: the scrim dims the map and a tap outside dismisses it.
+///
+/// Returns the rect it covers, for gesture occlusion.
+///
+/// ponytail: fixed at the "expanded" height rather than draggable. These sheets are lists you
+/// came to read, not a summary you peek at — give them a snap ladder when one of them grows a
+/// map-adjacent preview worth half-opening.
+pub(crate) fn modal_sheet<R>(
+    ctx: &egui::Context,
+    content: Rect,
+    id: &str,
+    title: &str,
+    close: &mut bool,
+    add: impl FnOnce(&mut egui::Ui) -> R,
+) -> Rect {
+    let h = content.height() * 0.88;
+    let rect = Rect::from_min_max(pos2(content.left(), content.bottom() - h), content.max);
+
+    // Scrim first, in its own layer under the sheet.
+    egui::Area::new(Id::new(format!("{id}_scrim")))
+        .order(egui::Order::Middle)
+        .fixed_pos(content.min)
+        .show(ctx, |ui| {
+            let resp = ui.allocate_rect(content, Sense::click());
+            ui.painter().rect_filled(
+                content,
+                egui::CornerRadius::ZERO,
+                Color32::from_black_alpha(m3::A_SCRIM),
+            );
+            if resp.clicked()
+                && !resp
+                    .interact_pointer_pos()
+                    .is_some_and(|p| rect.contains(p))
+            {
+                *close = true;
+            }
+        });
+
+    egui::Area::new(Id::new(id))
+        .order(egui::Order::Foreground)
+        .fixed_pos(rect.min)
+        .show(ctx, |ui| {
+            ui.allocate_rect(rect, Sense::click_and_drag());
+            ui.set_clip_rect(rect);
+            let painter = ui.painter().clone();
+            painter.rect_filled(
+                rect,
+                egui::CornerRadius {
+                    nw: m3::R_XL as u8,
+                    ne: m3::R_XL as u8,
+                    sw: 0,
+                    se: 0,
+                },
+                sheet_fill(ui),
+            );
+            ui.scope_builder(
+                egui::UiBuilder::new().max_rect(rect.shrink2(vec2(m3::SP_4, 0.0))),
+                |ui| {
+                    ui.set_width(rect.width() - m3::SP_4 * 2.0);
+                    if m3::drag_handle(ui).clicked() {
+                        *close = true;
+                    }
+                    ui.horizontal(|ui| {
+                        ui.set_height(m3::MIN_TARGET);
+                        ui.label(
+                            RichText::new(title)
+                                .size(m3::T_TITLE)
+                                .strong()
+                                .color(ui.visuals().strong_text_color()),
+                        );
+                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                            let accent = ui.visuals().selection.bg_fill;
+                            if icon_button(ui, ph::X, false, accent).clicked() {
+                                *close = true;
+                            }
+                        });
+                    });
+                    egui::ScrollArea::vertical()
+                        .auto_shrink([false, false])
+                        .max_height(rect.bottom() - ui.cursor().top() - m3::SP_2)
+                        .show(ui, |ui| {
+                            add(ui);
+                            ui.add_space(m3::SP_6);
+                        });
+                },
+            );
+        });
+    rect
+}
