@@ -2,13 +2,21 @@
 //!
 //! `settings.placefiles` order *is* the paint order (see `visible_placefile_items`), so the
 //! ↑/↓ buttons here reorder the list directly. Field layers keep their fixed `DRAW_ORDER`;
-//! `// ponytail: per-field opacity means re-baking the color LUTs — placefiles first.`
+//! field-layer opacity rides in the grid uniform's spare word (`shaders/mrms.wgsl`), so those
+//! sliders are free — no LUT re-bake.
 
+use crate::render::FieldLayer;
 use crate::settings::Settings;
 
-/// Show the window. Returns `true` if anything changed (the caller bumps the overlay generation
-/// so the tessellated geometry rebuilds).
-pub(crate) fn show(ctx: &egui::Context, open: &mut bool, settings: &mut Settings) -> bool {
+/// Show the window. `active` is the field layers currently painting (only those get a slider).
+/// Returns `true` if anything changed (the caller bumps the overlay generation so the tessellated
+/// geometry rebuilds).
+pub(crate) fn show(
+    ctx: &egui::Context,
+    open: &mut bool,
+    settings: &mut Settings,
+    active: &[FieldLayer],
+) -> bool {
     if !*open {
         return false;
     }
@@ -18,6 +26,22 @@ pub(crate) fn show(ctx: &egui::Context, open: &mut bool, settings: &mut Settings
         .open(&mut win_open)
         .default_width(420.0)
         .show(ctx, |ui| {
+            if !active.is_empty() {
+                ui.label(egui::RichText::new("Field layers").strong());
+                for layer in active {
+                    let op = settings.field_opacity.entry(*layer).or_insert(1.0);
+                    ui.horizontal(|ui| {
+                        ui.label(format!("{layer:?}"));
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            changed |= ui
+                                .add(egui::Slider::new(op, 0.05..=1.0).show_value(false))
+                                .on_hover_text(format!("Opacity {:.0}%", *op * 100.0))
+                                .changed();
+                        });
+                    });
+                }
+                ui.separator();
+            }
             if settings.placefiles.is_empty() {
                 ui.weak("No placefiles configured — add one from Layers ▸ Placefile manager.");
                 return;

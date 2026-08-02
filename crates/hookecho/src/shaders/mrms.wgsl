@@ -17,7 +17,8 @@ struct Mrms {
     lat_south: f32,
     nx: f32,
     ny: f32,
-    _pad0: f32,
+    /// Layer opacity 0..1, rewritten per frame from the Layer Manager slider.
+    opacity: f32,
     _pad1: f32,
     _pad2: f32,
     _pad3: f32,
@@ -65,5 +66,5 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
 
     let color = textureLoad(lut_tex, vec2<i32>(i32(raw), 0), 0);
     if (color.a == 0.0) { discard; }
-    return color;
+    return vec4<f32>(color.rgb, color.a * mrms.opacity);
 }

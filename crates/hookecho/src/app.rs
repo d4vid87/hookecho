@@ -8300,11 +8300,11 @@ impl HookEchoApp {
         } else {
             Vec::new()
         };
-        let field_draws: Vec<crate::render::FieldLayer> = self
+        let field_draws: Vec<(crate::render::FieldLayer, f32)> = self
             .fields
             .iter()
             .filter(|(_, s)| s.show)
-            .map(|(k, _)| *k)
+            .map(|(k, _)| (*k, self.settings.field_opacity.get(k).copied().unwrap_or(1.0)))
             .collect();
 
         let cam = self.views[idx].camera;
@@ -10879,7 +10879,7 @@ fn mrms_upload(f: &wxdata::mrms::MrmsField, table: &ColorTable) -> crate::render
             f.lat_south as f32,
             f.nx as f32,
             f.ny as f32,
-            0.0,
+            1.0, // opacity; rewritten per frame from settings.field_opacity
             0.0,
             0.0,
             0.0,
@@ -10918,7 +10918,7 @@ fn field_index_upload(
             f.lat_south as f32,
             f.nx as f32,
             f.ny as f32,
-            0.0,
+            1.0, // opacity; rewritten per frame from settings.field_opacity
             0.0,
             0.0,
             0.0,
@@ -11897,7 +11897,16 @@ impl eframe::App for HookEchoApp {
             .collect();
         self.placefile_window
             .show(ctx, &mut self.settings, &pf_status);
-        if ui::layer_window::show(ctx, &mut self.layer_window_open, &mut self.settings) {
+        let active_fields: Vec<crate::render::FieldLayer> = crate::render::FieldLayer::DRAW_ORDER
+            .into_iter()
+            .filter(|l| self.fields.get(l).is_some_and(|s| s.show))
+            .collect();
+        if ui::layer_window::show(
+            ctx,
+            &mut self.layer_window_open,
+            &mut self.settings,
+            &active_fields,
+        ) {
             self.overlay_gen += 1; // paint order / opacity changed — re-tessellate
         }
         // Drain geocode results: the search pill navigates, the marker window adds a marker.

@@ -153,6 +153,9 @@ pub struct Settings {
     /// Weather Underground API key — adds nearby PWS stations to the live station cards.
     #[serde(default)]
     pub wu_key: String,
+    /// Per-field-layer opacity 0..1 (Layer Manager sliders). A missing entry means fully opaque.
+    #[serde(default)]
+    pub field_opacity: std::collections::HashMap<crate::render::FieldLayer, f32>,
     /// Windy API key — adds the Windy webcam network to the keyless FAA cameras, which is what
     /// gives the layer any coverage outside the United States. Held locally, same as the rest.
     #[serde(default)]
@@ -500,6 +503,7 @@ impl Default for Settings {
             maptiler_key: String::new(),
             tempest_token: String::new(),
             wu_key: String::new(),
+            field_opacity: Default::default(),
             windy_key: String::new(),
             field_mill_url: String::new(),
             start_view: None,
@@ -664,6 +668,24 @@ mod tests {
     use super::*;
 
     #[test]
+    fn field_opacity_roundtrips_and_defaults() {
+        let mut s = Settings::default();
+        assert!(s.field_opacity.is_empty(), "no entry = fully opaque");
+        s.field_opacity.insert(crate::render::FieldLayer::Mrms, 0.4);
+        let json = serde_json::to_string(&s).unwrap();
+        let back: Settings = serde_json::from_str(&json).unwrap();
+        assert_eq!(
+            back.field_opacity
+                .get(&crate::render::FieldLayer::Mrms)
+                .copied(),
+            Some(0.4)
+        );
+        // Old config files without the key still load.
+        let bare: Settings = serde_json::from_str("{}").unwrap();
+        assert!(bare.field_opacity.is_empty());
+    }
+
+    #[test]
     fn roundtrips() {
         let s = Settings {
             smooth_radar: false,
@@ -703,6 +725,7 @@ mod tests {
             mapbox_key: "pk.test".to_string(),
             tempest_token: String::new(),
             wu_key: String::new(),
+            field_opacity: Default::default(),
             windy_key: String::new(),
             field_mill_url: String::new(),
             maptiler_key: "mt.test".to_string(),

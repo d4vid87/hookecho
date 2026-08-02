@@ -153,7 +153,9 @@ pub struct MrmsUpload {
     /// World-space quad (mercator bbox of the grid).
     pub world_min: [f32; 2],
     pub world_max: [f32; 2],
-    /// [lon_west, lat_north, lon_east, lat_south, nx, ny, +6 pad] (see `shaders/mrms.wgsl`).
+    /// [lon_west, lat_north, lon_east, lat_south, nx, ny, opacity, +5 pad] (see
+    /// `shaders/mrms.wgsl`). Opacity is rewritten each frame from `field_draws`, so the value
+    /// here only matters until the first draw.
     pub uniform: [f32; 12],
     pub lut: Vec<u8>,
 }
@@ -199,8 +201,8 @@ pub struct MapCallback {
     pub drop_tiles: Vec<TileId>,
     /// Field layers whose grid changed this frame (uploaded now); others reuse the last upload.
     pub field_uploads: Vec<(FieldLayer, MrmsUpload)>,
-    /// Which field layers to paint this frame.
-    pub field_draws: Vec<FieldLayer>,
+    /// Which field layers to paint this frame, with their opacity (0..1).
+    pub field_draws: Vec<(FieldLayer, f32)>,
     /// Newly tessellated vector basemap tiles to upload this frame.
     pub new_vector_tiles: Vec<PendingVectorTile>,
     /// Vector tile ids to draw this frame (drawn first, under the raster/radar layers).
@@ -250,7 +252,8 @@ struct OverlayGpu {
 struct MrmsGpu {
     _tex: wgpu::Texture,
     _lut: wgpu::Texture,
-    _uni: wgpu::Buffer,
+    /// Kept (not `_`-prefixed) so `prepare` can rewrite the opacity word each frame.
+    uni: wgpu::Buffer,
     bind_group: wgpu::BindGroup,
     vbuf: wgpu::Buffer,
 }
@@ -769,13 +772,15 @@ impl RenderResources {
             let gpu = self.build_field_layer(device, queue, up);
             self.fields.insert(*layer, gpu);
         }
-        // Draw only the requested layers that actually have GPU data.
-        self.field_draws = cb
-            .field_draws
-            .iter()
-            .copied()
-            .filter(|l| self.fields.contains_key(l))
-            .collect();
+        // Draw only the requested layers that actually have GPU data. Opacity rides in the grid
+        // uniform's first pad word, so it costs one 4-byte write per drawn layer — no LUT re-bake.
+        self.field_draws.clear();
+        for (layer, opacity) in &cb.field_draws {
+            if let Some(f) = self.fields.get(layer) {
+                queue.write_buffer(&f.uni, 24, &opacity.to_le_bytes());
+                self.field_draws.push(*layer);
+            }
+        }
 
         // --- Per-pane state ---
         let new_radar = cb
@@ -921,7 +926,7 @@ impl RenderResources {
         let uni = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("mrms_uniform"),
             contents: bytemuck::cast_slice(&m.uniform),
-            usage: wgpu::BufferUsages::UNIFORM,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
         let lut_size = wgpu::Extent3d {
             width: 256,
@@ -991,7 +996,7 @@ impl RenderResources {
         MrmsGpu {
             _tex: tex,
             _lut: lut_tex,
-            _uni: uni,
+            uni,
             bind_group,
             vbuf,
         }
