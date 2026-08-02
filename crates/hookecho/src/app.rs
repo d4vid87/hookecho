@@ -4829,7 +4829,9 @@ impl HookEchoApp {
                                 egui::pos2(r.right(), r.bottom()),
                             ),
                             0.0,
-                            egui::Color32::from_rgba_unmultiplied(120, 170, 240, 36),
+                            // Faint enough to stay behind the slider, solid enough to read on
+                            // the dark bar — at alpha 36 it was invisible in a screenshot.
+                            egui::Color32::from_rgba_unmultiplied(120, 170, 240, 90),
                         );
                         p.line_segment(
                             [egui::pos2(x, r.top()), egui::pos2(x, r.bottom())],
