@@ -1110,6 +1110,13 @@ struct LoadedPlacefile {
 }
 
 /// A background fetch result routed back to a specific view.
+/// Loop frames a phone keeps decoded at once. Each volume is tens of MB; a longer loop than this
+/// pushes the process into the range Android kills.
+#[cfg(target_os = "android")]
+const ANDROID_LOOP_WINDOW: usize = 6;
+#[cfg(not(target_os = "android"))]
+const ANDROID_LOOP_WINDOW: usize = 6;
+
 enum DataMsg {
     Volume {
         view: usize,
@@ -1359,7 +1366,8 @@ pub struct HookEchoApp {
     /// timeline doesn't re-download. ~10 volumes; each ~a few MB.
     scan_cache: LruCache<String, Arc<Scan>>,
     /// Loop frames being fetched ahead of the playhead, with when they were kicked off. A fetch
-    /// whose result never arrives (site changed under it) ages out rather than blocking a retry.
+    /// whose result never arrives (it failed, or the site changed under it) ages out rather than
+    /// blocking a retry — nothing here is ever waited on indefinitely.
     prefetching: std::collections::HashMap<String, Instant>,
     // --- Overlays (severe-weather layers; geographic, shared across views) ---
     http: reqwest::Client,
@@ -1898,8 +1906,12 @@ impl HookEchoApp {
         }
 
         let settings = Settings::load();
+        // A decoded volume is tens of MB, so the phone's cache is sized to the loop window it can
+        // actually afford (see ANDROID_LOOP_WINDOW) plus the head and the frame in flight —
+        // enough that a loop stops re-downloading itself on every wrap, without the ~900 MB RSS
+        // that holding a full desktop-sized window cost.
         let scan_cache_cap = if cfg!(target_os = "android") {
-            settings.live_loop_frames.clamp(6, 16) + 2
+            ANDROID_LOOP_WINDOW + 2
         } else {
             30
         };
@@ -8092,7 +8104,11 @@ impl HookEchoApp {
         }
 
         // Advance playback (if playing) then reconcile the displayed volume with the timeline.
-        self.views[idx].timeline.live_window = self.settings.live_loop_frames.max(1);
+        self.views[idx].timeline.live_window = if cfg!(target_os = "android") {
+            self.settings.live_loop_frames.clamp(1, ANDROID_LOOP_WINDOW)
+        } else {
+            self.settings.live_loop_frames.max(1)
+        };
         // Hold the playhead while the next frame is still downloading. Advancing on the wall clock
         // regardless meant playback skipped frames it hadn't got yet and the loop read as juddery;
         // waiting reads as buffering, which is what it is. Only while there's a fetch to wait for,
@@ -8105,7 +8121,11 @@ impl HookEchoApp {
                     .get(tl.playhead + 1)
                     .map(|id| id.name().to_string())
                     .is_some_and(|n| {
-                        !self.scan_cache.contains(&n) && self.prefetching.contains_key(&n)
+                        !self.scan_cache.contains(&n)
+                            && self.prefetching.get(&n).is_some_and(|at| {
+                                // Bounded: a fetch that never answers must not park the loop.
+                                at.elapsed() < std::time::Duration::from_secs(8)
+                            })
                     })
         };
         if !next_pending {
@@ -8248,7 +8268,7 @@ impl HookEchoApp {
     /// site changed under it) ages out after a minute.
     fn prefetch_frames(&mut self, idx: usize, ctx: &egui::Context) {
         self.prefetching
-            .retain(|_, at| at.elapsed() < std::time::Duration::from_secs(60));
+            .retain(|_, at| at.elapsed() < std::time::Duration::from_secs(15));
         if self.prefetching.len() >= 2 {
             return;
         }
