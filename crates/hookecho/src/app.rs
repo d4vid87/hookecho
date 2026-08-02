@@ -1144,6 +1144,14 @@ enum DataMsg {
         view: usize,
         site: String,
     },
+    /// A loop frame fetched ahead of the playhead. Goes into the scan cache and nowhere else —
+    /// showing it would jump the display forward.
+    Prefetched {
+        view: usize,
+        site: String,
+        name: String,
+        scan: Scan,
+    },
     Error {
         view: usize,
         site: String,
@@ -1159,6 +1167,7 @@ impl DataMsg {
             | DataMsg::LiveEnded { view, .. }
             | DataMsg::Frames { view, .. }
             | DataMsg::UpToDate { view, .. }
+            | DataMsg::Prefetched { view, .. }
             | DataMsg::Error { view, .. } => *view,
         }
     }
@@ -1169,6 +1178,7 @@ impl DataMsg {
             | DataMsg::LiveEnded { site, .. }
             | DataMsg::Frames { site, .. }
             | DataMsg::UpToDate { site, .. }
+            | DataMsg::Prefetched { site, .. }
             | DataMsg::Error { site, .. } => site,
         }
     }
@@ -1342,6 +1352,9 @@ pub struct HookEchoApp {
     /// Decoded-volume LRU keyed by AWS object name, so scrubbing back and forth on the
     /// timeline doesn't re-download. ~10 volumes; each ~a few MB.
     scan_cache: LruCache<String, Arc<Scan>>,
+    /// Loop frames being fetched ahead of the playhead, with when they were kicked off. A fetch
+    /// whose result never arrives (site changed under it) ages out rather than blocking a retry.
+    prefetching: std::collections::HashMap<String, Instant>,
     // --- Overlays (severe-weather layers; geographic, shared across views) ---
     http: reqwest::Client,
     overlay_rx: Receiver<OverlayMsg>,
@@ -1879,6 +1892,11 @@ impl HookEchoApp {
         }
 
         let settings = Settings::load();
+        let scan_cache_cap = if cfg!(target_os = "android") {
+            settings.live_loop_frames.clamp(6, 16) + 2
+        } else {
+            30
+        };
         let mut tiles = TileManager::new(spawner.clone());
         let mut vtiles = crate::vector_tiles::VectorTileManager::new(spawner.clone());
         // Tile workers wake the UI the moment a tile is ready; without this a finished tile waits
@@ -1969,9 +1987,11 @@ impl HookEchoApp {
             // from RAM without re-downloading (~30 volumes ≈ 2.5 h at a 5-min cadence).
             // Phones can't hold a 2.5 h DVR buffer of decoded volumes — each is tens of MB and
             // Android kills the process long before the LRU fills.
-            scan_cache: LruCache::new(
-                NonZeroUsize::new(if cfg!(target_os = "android") { 6 } else { 30 }).unwrap(),
-            ),
+            // On Android the cap used to be 6 against a 10-frame loop window, so every wrap of the
+            // loop missed on every frame and re-downloaded the whole thing, forever. It has to
+            // hold the window plus the head and the frame being fetched.
+            prefetching: std::collections::HashMap::new(),
+            scan_cache: LruCache::new(NonZeroUsize::new(scan_cache_cap).unwrap()),
             http,
             overlay_rx,
             overlay_tx,
@@ -7779,6 +7799,11 @@ impl HookEchoApp {
                     self.pane_shown.remove(&view);
                 }
                 DataMsg::UpToDate { view, .. } => self.views[view].loading = false,
+                DataMsg::Prefetched { name, scan, .. } => {
+                    self.prefetching.remove(&name);
+
+                    self.scan_cache.put(name, Arc::new(scan));
+                }
                 DataMsg::Error { view, err, .. } => {
                     let v = &mut self.views[view];
                     v.loading = false;
@@ -8058,7 +8083,24 @@ impl HookEchoApp {
 
         // Advance playback (if playing) then reconcile the displayed volume with the timeline.
         self.views[idx].timeline.live_window = self.settings.live_loop_frames.max(1);
-        self.views[idx].timeline.tick();
+        // Hold the playhead while the next frame is still downloading. Advancing on the wall clock
+        // regardless meant playback skipped frames it hadn't got yet and the loop read as juddery;
+        // waiting reads as buffering, which is what it is. Only while there's a fetch to wait for,
+        // so a permanently-failed frame can't stall the loop.
+        let next_pending = {
+            let tl = &self.views[idx].timeline;
+            tl.playing
+                && tl
+                    .frames
+                    .get(tl.playhead + 1)
+                    .map(|id| id.name().to_string())
+                    .is_some_and(|n| {
+                        !self.scan_cache.contains(&n) && self.prefetching.contains_key(&n)
+                    })
+        };
+        if !next_pending {
+            self.views[idx].timeline.tick();
+        }
         // Playback paces itself rather than riding whatever the idle heartbeat happens to give
         // it: ask for a repaint exactly when the next frame is due.
         if let Some(dt) = self.views[idx].timeline.time_to_next_frame() {
@@ -8151,7 +8193,54 @@ impl HookEchoApp {
                         self.spawn_frame_fetch(idx, s, id, ctx.clone());
                     }
                 }
+                // Pull the next two frames in behind the playhead, on their own in-flight book
+                // so they never compete with the frame being shown or with the head poll. Without
+                // this, playback is a serial download per frame with the loop stalled between.
+                if self.views[idx].timeline.playing {
+                    self.prefetch_frames(idx, ctx);
+                }
             }
+        }
+    }
+
+    /// Fetch the two frames after the playhead into the scan cache, so playback isn't a serial
+    /// download-per-frame. At most two are in flight, and an entry that never comes back (its
+    /// site changed under it) ages out after a minute.
+    fn prefetch_frames(&mut self, idx: usize, ctx: &egui::Context) {
+        self.prefetching
+            .retain(|_, at| at.elapsed() < std::time::Duration::from_secs(60));
+        if self.prefetching.len() >= 2 {
+            return;
+        }
+        let Some(site) = self.views[idx].site.clone() else {
+            return;
+        };
+        let tl = &self.views[idx].timeline;
+        let next: Vec<Identifier> = (1..=2)
+            .filter_map(|d| tl.frames.get(tl.playhead + d))
+            .cloned()
+            .collect();
+        for id in next {
+            let name = id.name().to_string();
+            if self.scan_cache.contains(&name) || self.prefetching.contains_key(&name) {
+                continue;
+            }
+            self.prefetching.insert(name, Instant::now());
+            let tx = self.msg_tx.clone();
+            let (site, ctx) = (site.clone(), ctx.clone());
+            let view = idx;
+            self.spawner.spawn(async move {
+                let name = id.name().to_string();
+                if let Ok(scan) = level2::download_scan(id).await {
+                    let _ = tx.send(DataMsg::Prefetched {
+                        view,
+                        site,
+                        name,
+                        scan,
+                    });
+                    ctx.request_repaint();
+                }
+            });
         }
     }
 
