@@ -8762,7 +8762,7 @@ impl HookEchoApp {
         // Always run the vector-tile pipeline for its city/town labels — raster basemaps (satellite)
         // bake in faint labels that are hard to read, so we overlay crisp haloed ones. Only the
         // *geometry* is basemap-specific: vector basemaps draw it, raster keeps its own imagery.
-        let (visible_vector, vlabels) = {
+        let (visible_vector, vlabels, visible_vector_tiles) = {
             let vis = self.vtiles.visible(&cam, vp);
             self.vtiles.request_missing(&vis);
             let ids: Vec<crate::render::TileId> = vis.iter().map(|v| v.id).collect();
@@ -8772,13 +8772,19 @@ impl HookEchoApp {
                 .into_iter()
                 .cloned()
                 .collect();
-            (if is_vector { ids } else { Vec::new() }, labels)
+            (if is_vector { ids } else { Vec::new() }, labels, vis)
         };
         // Drain finished fetches once (on the first pane) — they upload into the shared cache.
         // Eviction lives with the tile manager (it also owns `requested`/`uploaded`), and only
         // the first pane runs it so a multi-pane frame doesn't evict what a later pane needs.
         let drop_tiles = if first && is_raster {
             self.tiles.touch_visible(&visible)
+        } else {
+            Vec::new()
+        };
+        let drop_vector_tiles = if first {
+            self.vtiles.touch_visible(&visible_vector_tiles);
+            self.vtiles.take_evicted()
         } else {
             Vec::new()
         };
@@ -8847,6 +8853,7 @@ impl HookEchoApp {
             new_vector_tiles,
             visible_vector,
             clear_vector,
+            drop_vector_tiles,
         };
         ui.painter()
             .add(egui_wgpu::Callback::new_paint_callback(prect, cb));

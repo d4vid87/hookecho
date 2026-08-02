@@ -977,7 +977,7 @@ const DISK_CACHE_BYTES: u64 = if cfg!(target_os = "android") {
 /// writing into it, and a tile deleted out from under a read just gets re-fetched anyway. Chase
 /// packs live under the same root and are deliberately not spared — they are re-downloadable, and
 /// a pack the user still cares about is a pack they have been looking at recently.
-fn sweep_tile_cache(root: &std::path::Path) {
+pub(crate) fn sweep_tile_cache(root: &std::path::Path) {
     fn walk(
         dir: &std::path::Path,
         out: &mut Vec<(std::time::SystemTime, u64, std::path::PathBuf)>,

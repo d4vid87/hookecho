@@ -238,6 +238,7 @@ pub fn run(
         new_vector_tiles,
         visible_vector,
         clear_vector: false,
+        drop_vector_tiles: Vec::new(),
     };
     render_to_png(&rt, cb, out_path)
 }
@@ -285,6 +286,7 @@ pub fn run_multipane(site: &str, out_a: &str, out_b: &str) -> anyhow::Result<()>
             new_vector_tiles: Vec::new(),
             visible_vector: Vec::new(),
             clear_vector: false,
+            drop_vector_tiles: Vec::new(),
         }
     };
 
@@ -747,6 +749,7 @@ pub fn run_live(out_path: &str, site: &str, moment: Moment) -> anyhow::Result<()
         new_vector_tiles: Vec::new(),
         visible_vector: Vec::new(),
         clear_vector: false,
+        drop_vector_tiles: Vec::new(),
     };
     render_to_png(&rt, cb, out_path)
 }
@@ -826,6 +829,7 @@ pub fn run_placefile(path: &str, out_path: &str) -> anyhow::Result<()> {
         new_vector_tiles: Vec::new(),
         visible_vector: Vec::new(),
         clear_vector: false,
+        drop_vector_tiles: Vec::new(),
     };
     render_to_png(&rt, cb, out_path)
 }
@@ -881,6 +885,7 @@ pub fn run_overlay(out_path: &str) -> anyhow::Result<()> {
         new_vector_tiles,
         visible_vector,
         clear_vector: false,
+        drop_vector_tiles: Vec::new(),
     };
     render_to_png(&rt, cb, out_path)
 }
@@ -974,6 +979,7 @@ pub fn run_mrms(out_path: &str) -> anyhow::Result<()> {
         new_vector_tiles,
         visible_vector,
         clear_vector: false,
+        drop_vector_tiles: Vec::new(),
     };
     render_to_png(&rt, cb, out_path)
 }
@@ -1024,6 +1030,7 @@ pub fn run_lightning(out_path: &str) -> anyhow::Result<()> {
         new_vector_tiles,
         visible_vector,
         clear_vector: false,
+        drop_vector_tiles: Vec::new(),
     };
     render_to_png(&rt, cb, out_path)
 }
@@ -1090,6 +1097,7 @@ pub fn run_field(slug: &str, out_path: &str) -> anyhow::Result<()> {
         new_vector_tiles,
         visible_vector,
         clear_vector: false,
+        drop_vector_tiles: Vec::new(),
     };
     render_to_png(&rt, cb, out_path)
 }
@@ -1363,6 +1371,7 @@ pub fn run_l3grid(kind: &str, site: &str, out_path: &str) -> anyhow::Result<()> 
         new_vector_tiles,
         visible_vector,
         clear_vector: false,
+        drop_vector_tiles: Vec::new(),
     };
     render_to_png(&rt, cb, out_path)
 }
@@ -1431,6 +1440,7 @@ pub fn run_env(slug: &str, out_path: &str) -> anyhow::Result<()> {
         new_vector_tiles,
         visible_vector,
         clear_vector: false,
+        drop_vector_tiles: Vec::new(),
     };
     render_to_png(&rt, cb, out_path)
 }
@@ -1608,6 +1618,7 @@ pub fn run_hrrr_layer(
         new_vector_tiles,
         visible_vector,
         clear_vector: false,
+        drop_vector_tiles: Vec::new(),
     };
     render_to_png(&rt, cb, out_path)
 }
@@ -1639,6 +1650,7 @@ fn render_field_png(
         new_vector_tiles,
         visible_vector,
         clear_vector: false,
+        drop_vector_tiles: Vec::new(),
     };
     render_to_png(rt, cb, out_path)
 }

@@ -209,6 +209,8 @@ pub struct MapCallback {
     pub visible_vector: Vec<TileId>,
     /// Drop all cached vector tiles before uploading (style or tess-zoom changed).
     pub clear_vector: bool,
+    /// Individual vector tiles the manager evicted; freed before this frame's uploads.
+    pub drop_vector_tiles: Vec<TileId>,
 }
 
 #[repr(C)]
@@ -267,7 +269,9 @@ struct PaneGpu {
     tile_vbuf: wgpu::Buffer,
     radar_vbuf: wgpu::Buffer,
     radar: Option<RadarGpu>,
-    frame_visible: Vec<VisibleTile>,
+    /// Ids of the tiles this frame's quads draw, in quad order. Not the same as the visible list:
+    /// a missing tile is stood in for by resident children or an ancestor.
+    frame_visible: Vec<TileId>,
     frame_visible_vector: Vec<TileId>,
     frame_draw_radar: bool,
     frame_draw_overlay: bool,
@@ -586,6 +590,51 @@ impl RenderResources {
         })
     }
 
+    /// Quads to draw for one visible tile: normally itself, but if its texture hasn't arrived,
+    /// whatever resident neighbours in the pyramid cover the same ground.
+    ///
+    /// Children first (pinch-out: the level we came from is still resident and sharper), each
+    /// covering its quarter with the full texture. Otherwise the nearest resident ancestor, up to
+    /// three levels up, drawn once with its UVs cropped to the part this tile occupies. Without
+    /// this the whole basemap blanks every time the integer zoom level changes, even though the
+    /// pixels to show are sitting on the GPU.
+    #[allow(clippy::type_complexity)] // one call site; a struct here would be ceremony
+    fn tile_quads(&self, v: &VisibleTile) -> Vec<(TileId, [f32; 2], [f32; 2], [f32; 2], [f32; 2])> {
+        const FULL: ([f32; 2], [f32; 2]) = ([0.0, 0.0], [1.0, 1.0]);
+        if self.tiles.contains_key(&v.id) {
+            return vec![(v.id, v.world_min, v.world_max, FULL.0, FULL.1)];
+        }
+        let (z, x, y) = v.id;
+        let [x0, y0] = v.world_min;
+        let [x1, y1] = v.world_max;
+        let (mx, my) = ((x0 + x1) / 2.0, (y0 + y1) / 2.0);
+        let kids: Vec<_> = [(0u32, 0u32), (1, 0), (0, 1), (1, 1)]
+            .into_iter()
+            .filter_map(|(dx, dy)| {
+                let id = (z + 1, x * 2 + dx, y * 2 + dy);
+                self.tiles.contains_key(&id).then(|| {
+                    let (qx0, qx1) = if dx == 0 { (x0, mx) } else { (mx, x1) };
+                    let (qy0, qy1) = if dy == 0 { (y0, my) } else { (my, y1) };
+                    (id, [qx0, qy0], [qx1, qy1], FULL.0, FULL.1)
+                })
+            })
+            .collect();
+        if !kids.is_empty() {
+            return kids;
+        }
+        for up in 1..=3u8 {
+            if up > z {
+                break;
+            }
+            let id = (z - up, x >> up, y >> up);
+            if self.tiles.contains_key(&id) {
+                let (uv_min, uv_max) = ancestor_uv(x, y, up);
+                return vec![(id, v.world_min, v.world_max, uv_min, uv_max)];
+            }
+        }
+        Vec::new()
+    }
+
     fn upload_tile(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, t: &PendingTile) {
         let size = wgpu::Extent3d {
             width: t.width,
@@ -749,6 +798,9 @@ impl RenderResources {
         if cb.clear_vector {
             self.vector_tiles.clear();
         }
+        for id in &cb.drop_vector_tiles {
+            self.vector_tiles.remove(id);
+        }
         for t in &cb.new_vector_tiles {
             self.upload_vector_tile(device, t);
         }
@@ -787,45 +839,45 @@ impl RenderResources {
             .radar_upload
             .as_ref()
             .map(|r| self.build_radar(device, queue, r));
-        // Build the tile quad list against the shared tile cache before mutably borrowing the pane.
+        // Build the tile quad list against the shared tile cache before mutably borrowing the pane
+        // — a tile with no texture yet borrows one from the tiles around it (see `tile_quads`).
         let mut tverts: Vec<TileVertex> = Vec::new();
-        let mut visible: Vec<VisibleTile> = Vec::new();
+        let mut visible: Vec<TileId> = Vec::new();
         for v in &cb.visible {
-            if tverts.len() as u64 + 6 > MAX_TILE_VERTS {
-                break;
+            for (id, wmin, wmax, uvmin, uvmax) in self.tile_quads(v) {
+                if tverts.len() as u64 + 6 > MAX_TILE_VERTS {
+                    break;
+                }
+                let ([x0, y0], [x1, y1]) = (wmin, wmax);
+                let ([u0, t0], [u1, t1]) = (uvmin, uvmax);
+                tverts.extend_from_slice(&[
+                    TileVertex {
+                        world: [x0, y0],
+                        uv: [u0, t0],
+                    },
+                    TileVertex {
+                        world: [x1, y0],
+                        uv: [u1, t0],
+                    },
+                    TileVertex {
+                        world: [x1, y1],
+                        uv: [u1, t1],
+                    },
+                    TileVertex {
+                        world: [x0, y0],
+                        uv: [u0, t0],
+                    },
+                    TileVertex {
+                        world: [x1, y1],
+                        uv: [u1, t1],
+                    },
+                    TileVertex {
+                        world: [x0, y1],
+                        uv: [u0, t1],
+                    },
+                ]);
+                visible.push(id);
             }
-            if !self.tiles.contains_key(&v.id) {
-                continue;
-            }
-            let [x0, y0] = v.world_min;
-            let [x1, y1] = v.world_max;
-            tverts.extend_from_slice(&[
-                TileVertex {
-                    world: [x0, y0],
-                    uv: [0.0, 0.0],
-                },
-                TileVertex {
-                    world: [x1, y0],
-                    uv: [1.0, 0.0],
-                },
-                TileVertex {
-                    world: [x1, y1],
-                    uv: [1.0, 1.0],
-                },
-                TileVertex {
-                    world: [x0, y0],
-                    uv: [0.0, 0.0],
-                },
-                TileVertex {
-                    world: [x1, y1],
-                    uv: [1.0, 1.0],
-                },
-                TileVertex {
-                    world: [x0, y1],
-                    uv: [0.0, 1.0],
-                },
-            ]);
-            visible.push(*v);
         }
         let overlay_present = self.overlay.is_some();
 
@@ -1066,8 +1118,8 @@ impl RenderResources {
         pass.set_pipeline(&self.tile_pipeline);
         pass.set_bind_group(0, cam, &[]);
         pass.set_vertex_buffer(0, pane.tile_vbuf.slice(..));
-        for (i, v) in pane.frame_visible.iter().enumerate() {
-            if let Some(tile) = self.tiles.get(&v.id) {
+        for (i, id) in pane.frame_visible.iter().enumerate() {
+            if let Some(tile) = self.tiles.get(id) {
                 pass.set_bind_group(1, &tile.bind_group, &[]);
                 let base = (i * 6) as u32;
                 pass.draw(base..base + 6, 0..1);
@@ -1174,5 +1226,33 @@ impl egui_wgpu::CallbackTrait for MapCallback {
         crate::prof_scope!("render paint");
         let res: &RenderResources = resources.get().unwrap();
         res.record_pane(self.pane, pass);
+    }
+}
+
+/// Where tile `(x, y)` sits inside the ancestor `up` levels above it, in that ancestor's UV space.
+/// `up = 1` gives one of four quadrants, `up = 2` one of sixteen, and so on.
+fn ancestor_uv(x: u32, y: u32, up: u8) -> ([f32; 2], [f32; 2]) {
+    let n = (1u32 << up) as f32;
+    let fx = (x & ((1 << up) - 1)) as f32 / n;
+    let fy = (y & ((1 << up) - 1)) as f32 / n;
+    ([fx, fy], [fx + 1.0 / n, fy + 1.0 / n])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ancestor_uv;
+
+    #[test]
+    fn ancestor_uv_picks_the_right_quadrant() {
+        // Direct parent: (x, y) = (3, 2) is the odd column, even row -> right/top quadrant.
+        assert_eq!(ancestor_uv(3, 2, 1), ([0.5, 0.0], [1.0, 0.5]));
+        assert_eq!(ancestor_uv(2, 3, 1), ([0.0, 0.5], [0.5, 1.0]));
+        // Two levels up: sixteenths, and only the low bits matter.
+        assert_eq!(ancestor_uv(0, 0, 2), ([0.0, 0.0], [0.25, 0.25]));
+        assert_eq!(ancestor_uv(7, 5, 2), ([0.75, 0.25], [1.0, 0.5]));
+        // Three levels up: the whole ancestor is still covered exactly.
+        let (min, max) = ancestor_uv(7, 7, 3);
+        assert_eq!(min, [0.875, 0.875]);
+        assert_eq!(max, [1.0, 1.0]);
     }
 }
