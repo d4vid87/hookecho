@@ -8346,10 +8346,20 @@ impl HookEchoApp {
             // The mobile chrome floats over the map, and `multi_touch()` is raw input with no
             // notion of which layer the fingers are on — so a pinch on the bottom sheet used to
             // zoom the map underneath it. The chrome publishes what it covers; skip those rects.
-            // Explicit rects cover the always-on chrome; `is_pointer_over_area` covers every
-            // window and popup on top of it, which is what keeps a pinch on a Skew-T or a
-            // full-screen settings surface from also zooming the map behind it.
-            let occluded = ui.ctx().is_pointer_over_egui()
+            // Explicit rects cover the always-on chrome; the layer test covers every window and
+            // popup on top of it, which is what keeps a pinch on a Skew-T or a full-screen
+            // settings surface from also zooming the map behind it.
+            // `is_pointer_over_egui()` cannot be used here: it tests egui's single pointer
+            // position, which during a two-finger gesture is one arbitrary finger, and it treats
+            // the map's own background layer as "over egui" once the central panel has consumed
+            // the root ui's available rect — so it answered true over bare map and killed every
+            // pinch. Ask about the gesture's own center instead: any layer above the background
+            // there is real chrome.
+            let over_layer = ui
+                .ctx()
+                .layer_id_at(mt.center_pos)
+                .is_some_and(|l| l.order != egui::Order::Background);
+            let occluded = over_layer
                 || self
                     .mobile_occlusion
                     .iter()
