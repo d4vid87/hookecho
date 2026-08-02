@@ -170,6 +170,11 @@ pub struct Settings {
     /// Saved startup view (radar site + camera). `None` = open on `default_site`.
     #[serde(default)]
     pub start_view: Option<StartView>,
+    /// Where the app was looking when it last closed, written on exit only while no explicit
+    /// `start_view` is set. Kept apart from `start_view` so "save this view" stays a deliberate
+    /// choice you can clear, rather than something the first quit freezes forever.
+    #[serde(default)]
+    pub last_view: Option<StartView>,
     /// Google OAuth client id + secret for settings sync (see `docs/sync.md`). You create the
     /// client; there is no shipped default, so an open-source binary carries nobody's quota.
     #[serde(default)]
@@ -261,6 +266,11 @@ pub struct Settings {
     /// Persisted basemap style slug for startup (empty = pane default Dark).
     #[serde(default)]
     pub basemap: String,
+    /// Overlay toggles that were on when the app last ran, by name (see `OverlayToggle::slug`).
+    /// Names rather than the enum on purpose: a name this build doesn't know is skipped, where an
+    /// unknown enum variant would fail the parse and reset every other setting with it.
+    #[serde(default)]
+    pub overlays_on: Vec<String>,
     /// NOAA Weather Radio relays to listen to. Empty by default on purpose: NOAA runs no streams of
     /// its own, so every URL here is a third-party relay someone runs for their own county, and
     /// shipping a guessed list would mostly ship dead links. Add the one for your area.
@@ -539,6 +549,8 @@ impl Default for Settings {
             alert_volume: default_volume(),
             live_loop_frames: default_live_loop_frames(),
             basemap: String::new(),
+            overlays_on: Vec::new(),
+            last_view: None,
             nwr_streams: Vec::new(),
             mute_alerts: false,
             keybinds: Vec::new(),
@@ -768,6 +780,13 @@ mod tests {
             alert_volume: 0.7,
             live_loop_frames: 12,
             basemap: "carto-dark".to_string(),
+            overlays_on: vec!["Alerts".to_string(), "Wind".to_string()],
+            last_view: Some(StartView {
+                site: "KOUN".to_string(),
+                x: 0.2,
+                y: 0.4,
+                zoom: 7.5,
+            }),
             nwr_streams: vec![NwrStream {
                 name: "KEC55 Norman".into(),
                 url: "https://example.invalid/nwr.mp3".into(),
@@ -798,6 +817,17 @@ mod tests {
         let ref_path = s.palettes.get("REF").expect("REF palette path set");
         let text = std::fs::read_to_string(ref_path).expect("palette file written");
         assert!(text.contains("test palette"));
+    }
+
+    #[test]
+    fn an_unknown_overlay_name_does_not_take_the_file_down_with_it() {
+        // A file written by a newer build, carrying a layer this one has never heard of. The rest
+        // of the settings must survive: `Settings::load` falls back to defaults on a parse error,
+        // so a strict enum here would silently reset the user's whole configuration.
+        let json = r#"{"default_site":"KDMX","overlays_on":["Alerts","Teleportation"]}"#;
+        let s: Settings = serde_json::from_str(json).unwrap();
+        assert_eq!(s.default_site, "KDMX");
+        assert_eq!(s.overlays_on, vec!["Alerts", "Teleportation"]);
     }
 
     #[test]

@@ -860,6 +860,57 @@ pub(crate) enum OverlayToggle {
     LinkCameras,
 }
 
+impl OverlayToggle {
+    /// Every toggle, for the persistence sweep. A new variant belongs here too, or it silently
+    /// stops being remembered across restarts.
+    pub(crate) const ALL: [OverlayToggle; 32] = [
+        Self::AlertPanel,
+        Self::StormReports,
+        Self::Spotters,
+        Self::RadarSites,
+        Self::Metar,
+        Self::Webcams,
+        Self::Fires,
+        Self::Aqi,
+        Self::Stations,
+        Self::Dat,
+        Self::Gauges,
+        Self::Tropical,
+        Self::ProbSevere,
+        Self::Aviation,
+        Self::RangeRings,
+        Self::Sensors,
+        Self::Hodo,
+        Self::Cells,
+        Self::Tracks,
+        Self::ArrivalCones,
+        Self::Nowcast,
+        Self::Tds,
+        Self::Couplets,
+        Self::Alerts,
+        Self::Mds,
+        Self::Mping,
+        Self::Pireps,
+        Self::Recon,
+        Self::Fronts,
+        Self::GlmLightning,
+        Self::Wind,
+        Self::LinkCameras,
+    ];
+
+    /// Stable name used in the settings file. Persisted as a string, not as the enum: an unknown
+    /// name written by a newer build has to be skippable, and a failed `Settings` parse takes the
+    /// whole file down with it.
+    pub(crate) fn slug(self) -> String {
+        // The variant name, which is also the serde name — one list of names, not two.
+        format!("{self:?}")
+    }
+
+    pub(crate) fn from_slug(s: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|t| t.slug() == s)
+    }
+}
+
 /// A floating window the palette can open.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub(crate) enum AppWindow {
@@ -1810,8 +1861,10 @@ impl HookEchoApp {
         let (pf_icon_tx, pf_icon_rx) = std::sync::mpsc::channel();
         let http = reqwest::Client::new();
 
-        // Open on the saved startup view if set (and its site still resolves), else the default site.
-        let (start, camera) = match &settings.start_view {
+        // Open on the saved startup view if set (and its site still resolves), else where the app
+        // was last looking, else the default site.
+        let resume = settings.start_view.as_ref().or(settings.last_view.as_ref());
+        let (start, camera) = match resume {
             Some(sv) if wxdata::sites::site_by_id(&sv.site).is_some() => (
                 sv.site.clone(),
                 Camera {
@@ -2142,6 +2195,27 @@ impl HookEchoApp {
             vol3d_pending: None,
             max_texture_dim,
         };
+        // Restore the overlays that were on last time. Unknown names (an older build reading a
+        // newer file) are skipped rather than treated as an error.
+        let restore: Vec<OverlayToggle> = app
+            .settings
+            .overlays_on
+            .iter()
+            .filter_map(|s| OverlayToggle::from_slug(s))
+            .collect();
+        let needs_rebuild = restore.iter().any(|t| {
+            use OverlayToggle as T;
+            matches!(
+                t,
+                T::Tropical | T::ProbSevere | T::Aviation | T::Alerts | T::Mds | T::Fires
+            )
+        });
+        for t in restore {
+            *app.overlay_flag(t) = true;
+        }
+        if needs_rebuild {
+            app.rebuild_overlays();
+        }
         app.palettes.reload(&app.settings.palette_paths());
         app.apply_goto_env();
         app.drain_goto_file();
@@ -11645,6 +11719,22 @@ fn feature_in_box(f: &GeoFeature, bx: (f64, f64, f64, f64)) -> bool {
 impl eframe::App for HookEchoApp {
     /// Flush any settings change the one-second dirty-diff throttle hasn't picked up yet.
     fn on_exit(&mut self) {
+        // Remember where we were looking, so a relaunch picks up the map where it was left. Only
+        // while no explicit startup view is saved — that one is the user's choice, not ours.
+        // Written here rather than per-frame: Android's alert service reads this file concurrently.
+        #[cfg(not(target_os = "android"))]
+        if self.settings.start_view.is_none() {
+            log::debug!("remembering the last view for next launch");
+            let view = &self.views[self.active];
+            if let Some(site) = &view.site {
+                self.settings.last_view = Some(crate::settings::StartView {
+                    site: site.clone(),
+                    x: view.camera.center.0,
+                    y: view.camera.center.1,
+                    zoom: view.camera.zoom,
+                });
+            }
+        }
         if self.settings != self.saved {
             self.settings.save();
         }
@@ -12877,6 +12967,15 @@ impl eframe::App for HookEchoApp {
             .is_none_or(|t| t.elapsed() >= std::time::Duration::from_secs(1));
         if due {
             self.settings_checked = Some(Instant::now());
+            // Fold the live overlay toggles into the settings so the diff below persists them
+            // like any other change — no separate save path, no per-frame churn.
+            let on: Vec<String> = OverlayToggle::ALL
+                .into_iter()
+                // Camera linking is a session decision about the panes on screen, not a layer.
+                .filter(|t| *t != OverlayToggle::LinkCameras && *self.overlay_flag(*t))
+                .map(|t| t.slug())
+                .collect();
+            self.settings.overlays_on = on;
         }
         if due && self.settings != self.saved {
             // A palette-map change reloads the color tables (bumps gen -> LUT re-bake).
@@ -13100,6 +13199,19 @@ mod field_lut_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_overlay_toggle_survives_a_slug_round_trip() {
+        for t in OverlayToggle::ALL {
+            assert_eq!(OverlayToggle::from_slug(&t.slug()), Some(t), "{t:?}");
+        }
+        // ALL has to actually be all of them — a variant left out would silently stop persisting.
+        let mut slugs: Vec<String> = OverlayToggle::ALL.iter().map(|t| t.slug()).collect();
+        slugs.sort();
+        slugs.dedup();
+        assert_eq!(slugs.len(), OverlayToggle::ALL.len());
+        assert_eq!(OverlayToggle::from_slug("Teleportation"), None);
+    }
 
     #[test]
     fn goto_parses_every_form_it_arrives_in() {
