@@ -78,8 +78,10 @@ fn main() -> eframe::Result<()> {
             .and_then(|p| p.parse::<u16>().ok())
             .unwrap_or(8080);
         let bind = flag_value(&args, "--bind").unwrap_or("127.0.0.1");
+        // `--web-root DIR` also serves the browser build sitting in that directory.
+        let web_root = flag_value(&args, "--web-root").map(std::path::PathBuf::from);
         let spots = hookecho::status::spots(&settings::Settings::load(), None);
-        if let Err(e) = hookecho::serve::run(spots, bind, port) {
+        if let Err(e) = hookecho::serve::run(spots, bind, port, web_root) {
             eprintln!("serve failed: {e}");
             std::process::exit(1);
         }

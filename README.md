@@ -500,6 +500,25 @@ Remember the server has to be reachable from Home Assistant — that means
 `--bind 0.0.0.0` (or the container), and a network you're willing to expose your
 saved locations on.
 
+### In a browser
+
+The app also builds for wasm and runs on a canvas — the same `HookEchoApp`, not
+a cut-down viewer. Build it and serve it:
+
+```sh
+cargo install wasm-bindgen-cli   # once
+./scripts/web/build.sh
+cargo run --release -- --serve 8080 --web-root web
+```
+
+Then open <http://localhost:8080>. Radar, the vector basemap, alerts and point
+forecasts all work: the Level 2 buckets and `api.weather.gov` allow cross-origin
+requests. This is a **core viewer**, though, not parity. There is no filesystem,
+so settings are defaults each load and caches are memory-only; there is no live
+chunk stream, no audio or spoken warnings, no camera, plugin or GPS support, and
+any feed whose host refuses cross-origin requests simply doesn't load. Anything
+that needs those is on the desktop and Android builds.
+
 ### Extending it
 
 Placefiles work as they do everywhere else — URLs, icon sheets, a layer manager with per-file

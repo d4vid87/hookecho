@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no" />
+    <title>Hook Echo-WX</title>
+    <style>
+      html, body { margin: 0; height: 100%; background: #101014; overflow: hidden; }
+      canvas { display: block; width: 100%; height: 100%; }
+      #boot {
+        position: absolute; inset: 0; display: grid; place-content: center;
+        color: #8a8a95; font: 14px system-ui, sans-serif; text-align: center;
+      }
+    </style>
+  </head>
+  <body>
+    <canvas id="hookecho"></canvas>
+    <div id="boot">Loading Hook Echo-WX…</div>
+    <script type="module">
+      import init, { start } from "./dist/hookecho.js";
+      const boot = document.getElementById("boot");
+      try {
+        await init();
+        await start("hookecho");
+        boot.remove();
+      } catch (e) {
+        // Nearly always one of two things: a browser with neither WebGPU nor WebGL2, or the
+        // wasm being served with the wrong MIME type. Say which rather than showing a blank page.
+        boot.textContent = "Hook Echo-WX failed to start: " + e;
+        console.error(e);
+      }
+    </script>
+  </body>
+</html>

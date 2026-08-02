@@ -90,6 +90,36 @@ pub fn run_desktop() -> eframe::Result<()> {
     )
 }
 
+/// Web entry point, called from `web/index.html` with the id of a `<canvas>`.
+///
+/// Same `HookEchoApp` as every other platform — eframe's `WebRunner` takes the identical creation
+/// closure `run_native` does. What differs is what isn't there: no filesystem (so settings are
+/// defaults and caches live in memory), no live chunk stream, and any feed whose host refuses
+/// cross-origin requests simply doesn't load. The radar buckets and the NWS API do allow it,
+/// which is what makes this worth shipping.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen::prelude::wasm_bindgen]
+pub async fn start(canvas_id: String) -> Result<(), wasm_bindgen::JsValue> {
+    use wasm_bindgen::JsCast as _;
+    console_error_panic_hook::set_once();
+    // Browser console logging: the app logs through `log`, same as everywhere else.
+    let _ = console_log::init_with_level(log::Level::Info);
+
+    let canvas = web_sys::window()
+        .and_then(|w| w.document())
+        .and_then(|d| d.get_element_by_id(&canvas_id))
+        .and_then(|e| e.dyn_into::<web_sys::HtmlCanvasElement>().ok())
+        .ok_or_else(|| wasm_bindgen::JsValue::from_str("no such canvas"))?;
+
+    eframe::WebRunner::new()
+        .start(
+            canvas,
+            eframe::WebOptions::default(),
+            Box::new(|cc| Ok(Box::new(HookEchoApp::new(cc)))),
+        )
+        .await
+}
+
 /// Android entry point. The `android-native-activity` glue (via winit) calls this with the
 /// `AndroidApp` handle; we route storage to the app-private dir, wire logs to logcat, and hand the
 /// handle to eframe. `#[no_mangle]` so the generated NativeActivity glue can find it by symbol.

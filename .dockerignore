@@ -7,4 +7,6 @@ docs/shots/
 # A checked-in Python venv used by the Level 3 golden tests.
 crates/nexrad-level3/tests/venv/
 .git/
+# Browser bundle output; the container serves the API, not the web build.
+web/dist/
 # Note: vendor/ is NOT ignored — the workspace patches gribberish and nexrad-data from there.

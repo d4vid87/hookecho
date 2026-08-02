@@ -50,6 +50,28 @@ jobs:
         continue-on-error: true
         run: cargo clippy --workspace --all-targets
 
+  # Same idea for the browser build: catch a native-only dep (or an ungated std::thread/fs call)
+  # leaking into the wasm target. Library only — the binary is desktop-only by design.
+  wasm-check:
+    name: Web (wasm32)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust (+ wasm target)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      # getrandom 0.3 picks its browser backend from this cfg, not from a feature alone.
+      - name: Check
+        env:
+          RUSTFLAGS: --cfg getrandom_backend="wasm_js"
+        run: cargo check --target wasm32-unknown-unknown -p hookecho --lib
+
   # Cross-compile the Android cdylib so platform-gating rot (a desktop-only dep leaking into the
   # Android build) is caught on every PR without a device. Builds the .so only — no APK/Gradle.
   android-check:

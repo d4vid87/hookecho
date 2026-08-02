@@ -26,6 +26,8 @@ const SNAPSHOT_TTL: Duration = Duration::from_secs(300);
 
 struct Server {
     spots: Vec<Spot>,
+    /// Directory of static files to serve (the browser build), if this was started with one.
+    web_root: Option<std::path::PathBuf>,
     rt: tokio::runtime::Runtime,
     http: reqwest::Client,
     /// path (plus query, for the snapshot) -> when it was fetched and what it was.
@@ -35,10 +37,16 @@ struct Server {
 }
 
 /// Serve until killed. `bind` is an address like `127.0.0.1` or `0.0.0.0`.
-pub fn run(spots: Vec<Spot>, bind: &str, port: u16) -> anyhow::Result<()> {
+pub fn run(
+    spots: Vec<Spot>,
+    bind: &str,
+    port: u16,
+    web_root: Option<std::path::PathBuf>,
+) -> anyhow::Result<()> {
     let listener = TcpListener::bind((bind, port))?;
     let server = Arc::new(Server {
         spots,
+        web_root,
         // One runtime and one client for the process, not one per request like the headless
         // verifiers build — this one stays up.
         rt: tokio::runtime::Builder::new_multi_thread()
@@ -93,6 +101,7 @@ fn handle(server: &Server, mut stream: TcpStream) -> anyhow::Result<()> {
 
 fn route(server: &Server, path: &str, query: &str) -> (&'static str, &'static str, Vec<u8>) {
     match path {
+        "/" if server.web_root.is_some() => static_file(server, "/index.html"),
         "/" => ("200 OK", "text/html; charset=utf-8", index().into_bytes()),
         "/status.json" | "/alerts.json" | "/obs.json" => match cached_json(server, path) {
             Ok(body) => ("200 OK", "application/json", body),
@@ -102,11 +111,51 @@ fn route(server: &Server, path: &str, query: &str) -> (&'static str, &'static st
             Ok(png) => ("200 OK", "image/png", png),
             Err(e) => error_json(e),
         },
-        _ => (
-            "404 Not Found",
-            "application/json",
-            br#"{"error":"no such endpoint"}"#.to_vec(),
-        ),
+        _ if server.web_root.is_some() => static_file(server, path),
+        _ => not_found(),
+    }
+}
+
+fn not_found() -> (&'static str, &'static str, Vec<u8>) {
+    (
+        "404 Not Found",
+        "application/json",
+        br#"{"error":"no such endpoint"}"#.to_vec(),
+    )
+}
+
+/// Serve a file from `--web-root`. This is the trust boundary: a request path is attacker-chosen
+/// text, so anything containing `..` is refused outright rather than normalized and hoped about.
+fn static_file(server: &Server, path: &str) -> (&'static str, &'static str, Vec<u8>) {
+    let Some(root) = &server.web_root else {
+        return not_found();
+    };
+    let rel = path.trim_start_matches('/');
+    if rel.contains("..") || rel.starts_with('/') || rel.contains('\\') {
+        log::warn!("refused traversal attempt: {path}");
+        return not_found();
+    }
+    let file = root.join(rel);
+    match std::fs::read(&file) {
+        Ok(body) => ("200 OK", content_type(&file), body),
+        Err(_) => not_found(),
+    }
+}
+
+/// Extension to content type. `application/wasm` is the load-bearing one — browsers refuse to
+/// stream-compile a module served as anything else.
+fn content_type(path: &std::path::Path) -> &'static str {
+    match path.extension().and_then(|e| e.to_str()) {
+        Some("html") => "text/html; charset=utf-8",
+        Some("js") | Some("mjs") => "text/javascript; charset=utf-8",
+        Some("wasm") => "application/wasm",
+        Some("css") => "text/css; charset=utf-8",
+        Some("json") => "application/json",
+        Some("png") => "image/png",
+        Some("jpg") | Some("jpeg") => "image/jpeg",
+        Some("svg") => "image/svg+xml",
+        Some("ico") => "image/x-icon",
+        _ => "application/octet-stream",
     }
 }
 
@@ -238,6 +287,7 @@ mod tests {
         // A server with no spots: routing is independent of what it would report.
         let server = Server {
             spots: Vec::new(),
+            web_root: None,
             rt: tokio::runtime::Builder::new_current_thread()
                 .build()
                 .unwrap(),
@@ -252,5 +302,32 @@ mod tests {
 
         let (status, ..) = route(&server, "/", "");
         assert_eq!(status, "200 OK");
+    }
+
+    #[test]
+    fn static_serving_refuses_to_walk_out_of_the_web_root() {
+        let server = Server {
+            spots: Vec::new(),
+            web_root: Some(std::path::PathBuf::from("/var/empty")),
+            rt: tokio::runtime::Builder::new_current_thread()
+                .build()
+                .unwrap(),
+            http: reqwest::Client::new(),
+            cache: Mutex::new(HashMap::new()),
+            render: Mutex::new(()),
+        };
+        for path in [
+            "/../../etc/passwd",
+            "/dist/../../../etc/shadow",
+            "/..%2f..%2fetc/passwd",
+            "//etc/passwd",
+        ] {
+            let (status, ..) = route(&server, path, "");
+            assert_eq!(status, "404 Not Found", "{path} must not be served");
+        }
+        assert_eq!(
+            content_type(std::path::Path::new("a/b.wasm")),
+            "application/wasm"
+        );
     }
 }
