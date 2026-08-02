@@ -258,8 +258,26 @@ pub fn apply(ctx: &egui::Context, theme: Theme, system_dark: bool) {
 
     // Desktop runs denser than touch: the sidebar has to fit a product section, a category row,
     // a tree and three disclosures in 320 px, and a mouse doesn't need 26 px targets. Android
-    // keeps the touch-scale values above.
-    if !cfg!(target_os = "android") {
+    // gets the Material 3 type scale and a touch-sized interact height instead.
+    if cfg!(target_os = "android") {
+        use crate::ui::m3;
+        style.spacing.item_spacing = egui::vec2(m3::SP_2, m3::SP_2);
+        style.spacing.button_padding = egui::vec2(m3::SP_3, m3::SP_2);
+        // 44, not 48: `interact_size` is the *minimum* egui pads every widget to, and 48 there
+        // bloats inline rows. Real tap targets get `MIN_TARGET` explicitly.
+        style.spacing.interact_size.y = 44.0;
+        style.text_styles = [
+            (TextStyle::Heading, FontId::new(m3::T_TITLE, Proportional)),
+            (TextStyle::Body, FontId::new(m3::T_BODY, Proportional)),
+            (TextStyle::Button, FontId::new(m3::T_LABEL_LG, Proportional)),
+            (TextStyle::Small, FontId::new(m3::T_LABEL_SM, Proportional)),
+            (
+                TextStyle::Monospace,
+                FontId::new(m3::T_LABEL, egui::FontFamily::Monospace),
+            ),
+        ]
+        .into();
+    } else {
         style.spacing.item_spacing = egui::vec2(6.0, 4.0);
         style.spacing.button_padding = egui::vec2(8.0, 3.0);
         style.spacing.interact_size.y = 22.0;
