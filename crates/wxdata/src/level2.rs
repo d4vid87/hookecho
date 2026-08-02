@@ -179,13 +179,19 @@ pub async fn download_scan(id: Identifier) -> anyhow::Result<Scan> {
     let file = archive::download_file(id)
         .await
         .map_err(|e| anyhow::anyhow!("download_file: {e}"))?;
-    let file = if file.compressed() {
-        file.decompress()
-            .map_err(|e| anyhow::anyhow!("decompress: {e}"))?
-    } else {
-        file
-    };
-    let scan = file.scan().map_err(|e| anyhow::anyhow!("scan: {e}"))?;
+    // bzip2 decompression plus the message decode is tens of MB of pure CPU. On the async worker
+    // it blocks every other fetch sharing that thread for as long as it runs; the `parallel`
+    // feature of nexrad-data then spreads the decode itself across rayon.
+    let scan = tokio::task::spawn_blocking(move || {
+        let file = if file.compressed() {
+            file.decompress()
+                .map_err(|e| anyhow::anyhow!("decompress: {e}"))?
+        } else {
+            file
+        };
+        file.scan().map_err(|e| anyhow::anyhow!("scan: {e}"))
+    })
+    .await??;
     // Legacy (pre-2008) volumes carry no volume data block, so the decoder can't name the radar.
     // The volume's own filename can: "KTLX19910605_162126".
     Ok(match scan.site() {
