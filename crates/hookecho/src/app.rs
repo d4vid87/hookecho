@@ -8213,6 +8213,31 @@ impl HookEchoApp {
         }
     }
 
+    /// Debug builds only: frame time and tile-queue depth in the top-left corner. `dumpsys
+    /// gfxinfo` and logcat cover most of what this shows, but neither says which frames were slow
+    /// while a gesture was in progress.
+    ///
+    /// ponytail: an unsmoothed millisecond readout, no history graph. Add one if a single number
+    /// stops being enough to tell a stutter from a stall.
+    #[cfg(debug_assertions)]
+    fn frame_time_overlay(&mut self, ctx: &egui::Context) {
+        let dt = ctx.input(|i| i.unstable_dt) * 1000.0;
+        let text = format!("{dt:.1} ms  ({:.0} fps)", 1000.0 / dt.max(0.001));
+        egui::Area::new(egui::Id::new("frame_time_overlay"))
+            .anchor(egui::Align2::LEFT_TOP, egui::vec2(6.0, 6.0))
+            .order(egui::Order::Tooltip)
+            .interactable(false)
+            .show(ctx, |ui| {
+                ui.label(
+                    egui::RichText::new(text)
+                        .monospace()
+                        .size(11.0)
+                        .color(egui::Color32::from_rgb(120, 255, 120))
+                        .background_color(egui::Color32::from_black_alpha(160)),
+                );
+            });
+    }
+
     /// Fetch the two frames after the playhead into the scan cache, so playback isn't a serial
     /// download-per-frame. At most two are in flight, and an entry that never comes back (its
     /// site changed under it) ages out after a minute.
@@ -11992,6 +12017,8 @@ impl eframe::App for HookEchoApp {
         // `platform::activity`). A frame that follows a gap means the app just came back, so
         // force one refresh rather than making the user wait out the poll interval.
         self.frame_nr = self.frame_nr.wrapping_add(1);
+        #[cfg(debug_assertions)]
+        self.frame_time_overlay(ctx);
         let focused = ctx.input(|i| i.viewport().focused.unwrap_or(true));
         if crate::platform::activity::mark_frame(focused) {
             self.overlay_last_fetch = None;
