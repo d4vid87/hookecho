@@ -167,6 +167,8 @@ enum OverlayMsg {
     Metar(Vec<wxdata::metar::SurfaceOb>),
     /// FAA camera sites for the requested bbox.
     Webcams(Vec<wxdata::webcams::CamSite>),
+    /// Wildfire perimeters + incident points for the requested bbox.
+    Fires(Vec<GeoFeature>, Vec<wxdata::wfigs::FireIncident>),
     /// Live surface stations for the telemetry cards.
     Stations(Vec<wxdata::stations::StationOb>),
     /// The current PPEF electric-field table (ionospheric, mV/m).
@@ -260,6 +262,8 @@ enum OverlaySource {
     /// Camera sites within a lon/lat bbox `(min_lon, min_lat, max_lon, max_lat)`, plus the user's
     /// Windy API key — empty for FAA-only, which is the keyless default.
     Webcams(f64, f64, f64, f64, String),
+    /// Wildfire perimeters + incidents within a lon/lat bbox `(west, south, east, north)`.
+    Fires(f64, f64, f64, f64),
     /// Live stations in a lat/lon bbox, plus the view centre the keyed networks are asked around
     /// and the keys themselves (empty = that network stays off).
     Stations {
@@ -519,6 +523,23 @@ impl OverlaySource {
                     }
                 }
                 OverlayMsg::Webcams(sites)
+            }
+            OverlaySource::Fires(w, s, e, n) => {
+                // Two servers; either can be down without taking the other's layer with it.
+                let bbox = [w, s, e, n];
+                let perims = wxdata::wfigs::fetch_perimeters(http, bbox)
+                    .await
+                    .unwrap_or_else(|e| {
+                        log::warn!("wfigs perimeters: {e}");
+                        Vec::new()
+                    });
+                let incidents = wxdata::wfigs::fetch_incidents(http, bbox)
+                    .await
+                    .unwrap_or_else(|e| {
+                        log::warn!("wfigs incidents: {e}");
+                        Vec::new()
+                    });
+                OverlayMsg::Fires(perims, incidents)
             }
             OverlaySource::Stations {
                 bbox,
@@ -804,6 +825,7 @@ pub(crate) enum OverlayToggle {
     RadarSites,
     Metar,
     Webcams,
+    Fires,
     Stations,
     Dat,
     Gauges,
@@ -1504,6 +1526,13 @@ pub struct HookEchoApp {
     webcams: Vec<wxdata::webcams::CamSite>,
     webcam_bounds: Option<(f64, f64, f64, f64)>,
     webcam_last_fetch: Option<Instant>,
+    /// WFIGS wildfires: perimeters (tessellated with the other overlay polygons), incident points,
+    /// and the bbox/clock they were fetched for.
+    show_fires: bool,
+    fire_perims: Vec<GeoFeature>,
+    fire_incidents: Vec<wxdata::wfigs::FireIncident>,
+    fire_bounds: Option<(f64, f64, f64, f64)>,
+    fire_last_fetch: Option<Instant>,
     /// Live station cards: the toggle, the layer state, and the poll clocks behind it.
     show_stations: bool,
     stations: crate::stationlayer::Layer,
@@ -1965,6 +1994,11 @@ impl HookEchoApp {
             show_spotters: false,
             show_webcams: false,
             webcams: Vec::new(),
+            show_fires: false,
+            fire_perims: Vec::new(),
+            fire_incidents: Vec::new(),
+            fire_bounds: None,
+            fire_last_fetch: None,
             webcam_bounds: None,
             webcam_last_fetch: None,
             show_stations: false,
@@ -5063,6 +5097,7 @@ impl HookEchoApp {
             T::RadarSites => &mut self.show_radar_sites,
             T::Metar => &mut self.show_metar,
             T::Webcams => &mut self.show_webcams,
+            T::Fires => &mut self.show_fires,
             T::Stations => &mut self.show_stations,
             T::Dat => &mut self.show_dat,
             T::Gauges => &mut self.show_gauges,
@@ -5472,6 +5507,13 @@ impl HookEchoApp {
                 "Webcams (FAA + Windy)",
                 "Look at the sky through a real camera \u{2014} FAA airports, plus the Windy \
                  network worldwide with a key in Settings",
+                false,
+            ),
+            (
+                T::Fires,
+                "Severe",
+                "Wildfires (WFIGS)",
+                "Active fire perimeters and incident points from the interagency fire feed",
                 false,
             ),
             (
@@ -5886,7 +5928,7 @@ impl HookEchoApp {
                 use OverlayToggle as T;
                 if matches!(
                     t,
-                    T::Tropical | T::ProbSevere | T::Aviation | T::Alerts | T::Mds
+                    T::Tropical | T::ProbSevere | T::Aviation | T::Alerts | T::Mds | T::Fires
                 ) {
                     self.rebuild_overlays();
                 }
@@ -6169,6 +6211,11 @@ impl HookEchoApp {
                     self.pf_icon_tex.retain(|k, _| !k.starts_with("cam:"));
                     self.webcams = sites;
                 }
+                OverlayMsg::Fires(perims, incidents) => {
+                    self.fire_perims = perims;
+                    self.fire_incidents = incidents;
+                    self.overlay_gen += 1; // perimeters ride the tessellated overlay layer
+                }
                 OverlayMsg::Stations(obs) => self.stations.ingest(obs),
                 OverlayMsg::Ppef(p) => self.stations.ppef = Some(p),
                 OverlayMsg::DotCams(cams) => self.stations.cams = cams,
@@ -6449,6 +6496,30 @@ impl HookEchoApp {
             }
             self.mosaic_bounds = Some((min_lon, min_lat, max_lon, max_lat));
             self.spawn_overlay(ctx, OverlaySource::Mosaic(sites));
+        }
+    }
+
+    /// Pull wildfire perimeters/incidents for the view. Fires move on the scale of hours, so a
+    /// 15-minute clock is plenty; the bbox check is what keeps panning cheap.
+    fn sync_fires(&mut self, ctx: &egui::Context) {
+        if !self.show_fires {
+            return;
+        }
+        let (min_lon, min_lat, max_lon, max_lat) = self.view_bounds();
+        let stale = self
+            .fire_last_fetch
+            .is_none_or(|t| t.elapsed().as_secs() >= 900);
+        let (clon, clat) = ((min_lon + max_lon) * 0.5, (min_lat + max_lat) * 0.5);
+        let drifted = self.fire_bounds.is_none_or(|(lo0, la0, lo1, la1)| {
+            let (mlon, mlat) = ((lo0 + lo1) * 0.5, (la0 + la1) * 0.5);
+            let (hw, hh) = ((lo1 - lo0) * 0.25, (la1 - la0) * 0.25);
+            (clon - mlon).abs() > hw || (clat - mlat).abs() > hh
+        });
+        if stale || drifted {
+            let b = (min_lon, min_lat, max_lon, max_lat);
+            self.fire_last_fetch = Some(Instant::now());
+            self.fire_bounds = Some(b);
+            self.spawn_overlay(ctx, OverlaySource::Fires(b.0, b.1, b.2, b.3));
         }
     }
 
@@ -6999,6 +7070,9 @@ impl HookEchoApp {
         }
         if self.show_aviation {
             v.extend(self.aviation_features.iter().cloned());
+        }
+        if self.show_fires {
+            v.extend(self.fire_perims.iter().cloned());
         }
         self.overlays = v;
         self.overlay_gen = self.overlay_gen.wrapping_add(1);
@@ -8162,7 +8236,39 @@ impl HookEchoApp {
                             })
                             .flatten()
                             .cloned();
-                        if let Some(r) = report {
+                        // Fire incident points sit alongside the reports in the same hit test.
+                        let fire = self
+                            .show_fires
+                            .then(|| {
+                                self.fire_incidents.iter().find(|f| {
+                                    let w = crate::render::mercator::lonlat_to_world(f.lon, f.lat);
+                                    let (sx, sy) = cam.world_to_screen(w, vp);
+                                    let (dx, dy) =
+                                        (prect.left() + sx - pos.x, prect.top() + sy - pos.y);
+                                    dx * dx + dy * dy <= tap_r2(12.0)
+                                })
+                            })
+                            .flatten()
+                            .cloned();
+                        if let Some(f) = fire {
+                            self.cell_popup = None;
+                            self.warning_popup = None;
+                            self.detail = Some(Detail {
+                                title: format!("{} Fire", f.name),
+                                body: format!(
+                                    "{}\n{}",
+                                    f.acres
+                                        .map(|a| format!("{a:.0} acres"))
+                                        .unwrap_or_else(|| "size not reported".to_string()),
+                                    f.containment
+                                        .map(|c| format!("{c:.0}% contained"))
+                                        .unwrap_or_else(|| "containment not reported".to_string()),
+                                ),
+                                color: [235, 110, 40, 255],
+                                image: None,
+                                link: None,
+                            });
+                        } else if let Some(r) = report {
                             self.cell_popup = None;
                             self.warning_popup = None;
                             self.detail = Some(Detail {
@@ -8928,6 +9034,24 @@ impl HookEchoApp {
                     color,
                     egui::Stroke::new(1.0, egui::Color32::from_black_alpha(160)),
                 ));
+            }
+        }
+
+        // Wildfire incident points (the perimeters ride the tessellated overlay layer).
+        if self.show_fires {
+            for f in &self.fire_incidents {
+                let w = crate::render::mercator::lonlat_to_world(f.lon, f.lat);
+                let (sx, sy) = cam.world_to_screen(w, vp);
+                let p = egui::pos2(prect.left() + sx, prect.top() + sy);
+                if !prect.contains(p) {
+                    continue;
+                }
+                painter.circle(
+                    p,
+                    4.0,
+                    egui::Color32::from_rgb(235, 110, 40),
+                    egui::Stroke::new(1.0, egui::Color32::from_black_alpha(160)),
+                );
             }
         }
 
@@ -11393,6 +11517,7 @@ impl eframe::App for HookEchoApp {
         // Surface obs (METAR station plots).
         self.sync_metar(ctx);
         self.sync_webcams(ctx);
+        self.sync_fires(ctx);
         self.sync_stations(ctx);
         self.sync_dat(ctx);
         self.sync_mosaic(ctx);

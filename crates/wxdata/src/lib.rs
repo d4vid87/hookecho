@@ -47,6 +47,7 @@ pub mod tz;
 pub mod verify;
 pub mod volume3d;
 pub mod webcams;
+pub mod wfigs;
 pub mod wssi;
 pub mod xsection;
 
