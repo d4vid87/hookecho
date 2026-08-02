@@ -456,6 +456,8 @@ pub struct VectorTileManager {
     /// Ids the LRU pushed out, handed to the renderer to free.
     vevicted: Vec<TileId>,
     labels: HashMap<TileId, Vec<PlaceLabel>>,
+    /// Bumped on every change to `labels` (see [`Self::label_generation`]).
+    label_gen: u64,
     dark: bool,
     tess_zoom: i32,
     /// Candidate new tessellation zoom and when it was first seen — see [`Self::note_zoom`].
@@ -492,6 +494,7 @@ impl VectorTileManager {
             uploaded: LruCache::new(NonZeroUsize::new(VECTOR_TILE_CACHE).unwrap()),
             vevicted: Vec::new(),
             labels: HashMap::new(),
+            label_gen: 0,
             dark: true,
             tess_zoom: 7,
             zoom_settled: None,
@@ -517,6 +520,7 @@ impl VectorTileManager {
         self.requested.clear();
         self.uploaded.clear();
         self.labels.clear();
+        self.label_gen += 1;
         true
     }
 
@@ -548,6 +552,7 @@ impl VectorTileManager {
             self.requested.clear();
             self.uploaded.clear();
             self.labels.clear();
+            self.label_gen += 1;
             true
         } else {
             false
@@ -664,11 +669,13 @@ impl VectorTileManager {
                 Some((id, _)) => {
                     self.requested.remove(&id);
                     self.labels.remove(&id);
+                    self.label_gen += 1;
                     self.vevicted.push(id);
                 }
                 None => {}
             }
             self.labels.insert(f.id, f.labels);
+            self.label_gen += 1;
             ready.push(PendingVectorTile {
                 id: f.id,
                 vertices: f.vertices,
@@ -693,12 +700,18 @@ impl VectorTileManager {
             if let Some((id, _)) = self.uploaded.pop_lru() {
                 self.requested.remove(&id);
                 self.labels.remove(&id);
+                self.label_gen += 1;
                 self.vevicted.push(id);
             }
         }
         if self.uploaded.cap().get() != want {
             self.uploaded.resize(NonZeroUsize::new(want).unwrap());
         }
+    }
+
+    /// Bumped whenever the label set changes, so callers can cache derived views of it.
+    pub fn label_generation(&self) -> u64 {
+        self.label_gen
     }
 
     /// Labels for the given visible tile ids (for the egui text pass).

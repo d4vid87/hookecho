@@ -1331,7 +1331,13 @@ pub struct HookEchoApp {
     settings_checked: Option<Instant>,
     /// Frame counter, only used to invalidate within-frame memos.
     frame_nr: u64,
-    palette_cache: Option<(u64, Vec<PaletteEntry>)>,
+    palette_cache: Option<(u64, std::sync::Arc<[PaletteEntry]>)>,
+    /// Visible city/town labels, keyed by the visible tile ids and the label-set generation.
+    #[allow(clippy::type_complexity)]
+    vlabel_cache: Option<(
+        (Vec<crate::render::TileId>, u64),
+        Vec<crate::vector_tiles::PlaceLabel>,
+    )>,
     /// Last result of each per-volume detector, keyed by what it depends on (see `volume_key`).
     #[allow(clippy::type_complexity)]
     nowcast_cache: Option<(
@@ -1967,6 +1973,7 @@ impl HookEchoApp {
             settings_checked: None,
             frame_nr: 0,
             palette_cache: None,
+            vlabel_cache: None,
             nowcast_cache: None,
             tds_cache: None,
             couplet_cache: None,
@@ -5379,14 +5386,16 @@ impl HookEchoApp {
     /// frame (drawer, mobile sheets, legend, palette). Nothing can change it mid-frame — an
     /// action dispatched from one of those lists takes effect on the next one — so a per-frame
     /// memo is both free and honest.
-    pub(crate) fn palette_entries(&mut self) -> Vec<PaletteEntry> {
+    /// The command-palette action registry for this frame. Shared, not copied: the built list is
+    /// a few hundred owned Strings, and several call sites want it in the same frame.
+    pub(crate) fn palette_entries(&mut self) -> std::sync::Arc<[PaletteEntry]> {
         if let Some((frame, entries)) = &self.palette_cache {
             if *frame == self.frame_nr {
-                return entries.clone();
+                return std::sync::Arc::clone(entries);
             }
         }
-        let entries = self.palette_entries_build();
-        self.palette_cache = Some((self.frame_nr, entries.clone()));
+        let entries: std::sync::Arc<[PaletteEntry]> = self.palette_entries_build().into();
+        self.palette_cache = Some((self.frame_nr, std::sync::Arc::clone(&entries)));
         entries
     }
 
@@ -8856,12 +8865,24 @@ impl HookEchoApp {
             let vis = self.vtiles.visible(&cam, vp);
             self.vtiles.request_missing(&vis);
             let ids: Vec<crate::render::TileId> = vis.iter().map(|v| v.id).collect();
-            let labels: Vec<crate::vector_tiles::PlaceLabel> = self
-                .vtiles
-                .labels_for(ids.iter())
-                .into_iter()
-                .cloned()
-                .collect();
+            // Deep-copying every visible place name every frame (for every pane) showed up at the
+            // 4-10 fps the phone runs at. The set only changes when the visible tiles do, or when
+            // a tile's labels finish tessellating — both bump the key below.
+            let key = (ids.clone(), self.vtiles.label_generation());
+            if self.vlabel_cache.as_ref().is_none_or(|(k, _)| *k != key) {
+                let labels: Vec<crate::vector_tiles::PlaceLabel> = self
+                    .vtiles
+                    .labels_for(ids.iter())
+                    .into_iter()
+                    .cloned()
+                    .collect();
+                self.vlabel_cache = Some((key, labels));
+            }
+            let labels = self
+                .vlabel_cache
+                .as_ref()
+                .map(|(_, l)| l.clone())
+                .unwrap_or_default();
             (if is_vector { ids } else { Vec::new() }, labels, vis)
         };
         // Drain finished fetches once (on the first pane) — they upload into the shared cache.
@@ -12587,7 +12608,13 @@ impl eframe::App for HookEchoApp {
                 self.site_dialog = None;
             }
         }
-        let entries = self.palette_entries();
+        // Only the open settings window reads these; building the registry for a closed window
+        // was a few hundred String allocations every frame.
+        let entries = if self.settings_window.open {
+            self.palette_entries()
+        } else {
+            std::sync::Arc::from(Vec::new())
+        };
         let sync_view = ui::settings_window::SyncView {
             signed_in: self.sync_tokens.is_some(),
             status: &self.sync_status,
@@ -12619,14 +12646,18 @@ impl eframe::App for HookEchoApp {
             .show(ctx, &mut self.settings, &pf_status);
         // Names come from the action registry, so a layer reads the same here as in the layers
         // panel — the enum's Debug spelling ("Mrms") is not a label.
-        let names: std::collections::HashMap<crate::render::FieldLayer, String> = self
-            .palette_entries()
-            .into_iter()
-            .filter_map(|e| match e.action {
-                PaletteAction::ToggleField(l) => Some((l, e.label)),
-                _ => None,
-            })
-            .collect();
+        let names: std::collections::HashMap<crate::render::FieldLayer, String> =
+            if self.layer_window_open {
+                self.palette_entries()
+                    .iter()
+                    .filter_map(|e| match e.action {
+                        PaletteAction::ToggleField(l) => Some((l, e.label.clone())),
+                        _ => None,
+                    })
+                    .collect()
+            } else {
+                Default::default()
+            };
         let active_fields: Vec<(crate::render::FieldLayer, String)> =
             crate::render::FieldLayer::DRAW_ORDER
                 .into_iter()
