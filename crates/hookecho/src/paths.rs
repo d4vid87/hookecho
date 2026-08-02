@@ -21,7 +21,18 @@ fn root(kind: &str) -> Option<PathBuf> {
     if let Some(base) = BASE.get() {
         return Some(base.join(kind));
     }
+    // In a browser there is no filesystem. Every caller already treats `None` as "no cache and no
+    // saved settings", so the web build runs on defaults and keeps everything in memory.
+    //
+    // ponytail: no persistence on the web; `localStorage` for settings is the upgrade path.
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = kind;
+        return None;
+    }
+    #[cfg(not(target_arch = "wasm32"))]
     let pd = directories::ProjectDirs::from("", "", "hookecho")?;
+    #[cfg(not(target_arch = "wasm32"))]
     Some(match kind {
         "config" => pd.config_dir().to_path_buf(),
         "data" => pd.data_dir().to_path_buf(),

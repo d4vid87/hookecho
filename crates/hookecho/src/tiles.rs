@@ -11,6 +11,7 @@ use std::num::NonZeroUsize;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{Arc, Mutex};
+#[cfg(not(target_arch = "wasm32"))]
 use tokio::runtime::Handle;
 
 // Browser-prefixed so imagery hosts (e.g. Esri) that 403 bare library UAs still serve tiles,
@@ -985,6 +986,7 @@ pub(crate) fn pack_tile_ids(
 /// Download `jobs` into the disk tile cache with 4 fixed workers, reporting each tile's outcome
 /// on `tx` as `(ok, downloaded_bytes)` — `bytes == 0` means it was already cached (skipped). Stops
 /// early when `cancel` is set. // ponytail: 4 fixed workers pulling a shared queue, no semaphore crate.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn start_pack_download(
     rt: &Handle,
     jobs: Vec<PackJob>,

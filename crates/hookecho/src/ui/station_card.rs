@@ -76,7 +76,7 @@ pub struct Card {
     /// Live video. Desktop only — a phone gets the newest still instead, refreshed on the poll
     /// clock, because HLS needs an ffmpeg it cannot spawn and decoding video per open card is not
     /// what a handset's battery is for.
-    #[cfg(not(target_os = "android"))]
+    #[cfg(not(any(target_os = "android", target_arch = "wasm32")))]
     pub cam: Option<crate::cam::Stream>,
     /// The still-image texture key, for cameras that post frames instead of streaming.
     pub still_key: Option<String>,
@@ -95,7 +95,7 @@ impl Card {
             history: VecDeque::new(),
             cam_name: String::new(),
             cam_owner: String::new(),
-            #[cfg(not(target_os = "android"))]
+            #[cfg(not(any(target_os = "android", target_arch = "wasm32")))]
             cam: None,
             still_key: None,
             tex: None,
@@ -208,9 +208,9 @@ pub fn show(
 /// published for looking at, not for putting on a stream — the banner says so where a viewer
 /// will actually read it.
 fn camera_pane(ui: &mut egui::Ui, card: &mut Card) {
-    #[cfg(not(target_os = "android"))]
+    #[cfg(not(any(target_os = "android", target_arch = "wasm32")))]
     let status = card.cam.as_ref().map(|c| c.status());
-    #[cfg(target_os = "android")]
+    #[cfg(any(target_os = "android", target_arch = "wasm32"))]
     let status: Option<()> = None;
 
     if card.tex.is_none() && status.is_none() && card.still_key.is_none() {
@@ -258,7 +258,7 @@ fn camera_pane(ui: &mut egui::Ui, card: &mut Card) {
 
 /// On a phone the picture is the newest still, not video. Say so rather than letting a frame
 /// that updates once a minute read as a frozen stream.
-#[cfg(target_os = "android")]
+#[cfg(any(target_os = "android", target_arch = "wasm32"))]
 fn still_note(ui: &mut egui::Ui) {
     ui.label(
         RichText::new("Camera shows the newest still; live video is desktop-only")
@@ -267,11 +267,11 @@ fn still_note(ui: &mut egui::Ui) {
     );
 }
 
-#[cfg(not(target_os = "android"))]
+#[cfg(not(any(target_os = "android", target_arch = "wasm32")))]
 fn still_note(_ui: &mut egui::Ui) {}
 
 /// The line shown in place of a picture, in whatever terms that platform can honour.
-#[cfg(not(target_os = "android"))]
+#[cfg(not(any(target_os = "android", target_arch = "wasm32")))]
 fn camera_status_text(status: &Option<crate::cam::Status>) -> String {
     match status {
         Some(crate::cam::Status::NeedsFfmpeg) => {
@@ -285,7 +285,7 @@ fn camera_status_text(status: &Option<crate::cam::Status>) -> String {
     }
 }
 
-#[cfg(target_os = "android")]
+#[cfg(any(target_os = "android", target_arch = "wasm32"))]
 fn camera_status_text(_status: &Option<()>) -> String {
     "Waiting for a frame\u{2026}".to_string()
 }

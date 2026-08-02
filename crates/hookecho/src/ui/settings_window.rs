@@ -634,6 +634,7 @@ pub fn sound_picker(ui: &mut egui::Ui, settings: &mut Settings) {
                     .on_hover_text("Preview")
                     .clicked()
                 {
+                    #[cfg(not(target_arch = "wasm32"))]
                     crate::audio::play(&preview, volume);
                 }
                 ui.end_row();

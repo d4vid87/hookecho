@@ -160,18 +160,26 @@ optional = true
 
 [dependencies.reqwest]
 version = "0.13.1"
+optional = true
+default-features = false
+
+# hookecho patch: TLS is native-only. In a browser, reqwest goes through fetch() and the browser
+# owns the TLS stack — pulling rustls there would drag aws-lc-sys's C build into a wasm target,
+# which cannot work. `client.rs` already gates its use of these behind `not(wasm32)`.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies.reqwest]
+version = "0.13.1"
 features = ["rustls"]
 optional = true
 default-features = false
 
 # hookecho patch: preconfigured webpki TLS for the AWS client (see src/aws/client.rs).
-[dependencies.rustls]
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies.rustls]
 version = "0.23"
 default-features = false
 features = ["aws-lc-rs"]
 optional = true
 
-[dependencies.webpki-roots]
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies.webpki-roots]
 version = "1"
 optional = true
 

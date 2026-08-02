@@ -23,6 +23,7 @@ use std::num::NonZeroUsize;
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::Arc;
 use std::time::Instant;
+#[cfg(not(target_arch = "wasm32"))]
 use tokio::runtime::Runtime;
 use wxdata::alerts::{self};
 use wxdata::level2::{self, BinnedSweep, Identifier, Moment, Scan};
@@ -260,6 +261,7 @@ enum OverlaySource {
     Metar(f64, f64, f64, f64),
     /// Run an external-process plugin: `(key, command, args, context)`. The key is the synthetic
     /// `plugin:<name>` id it shares with the placefile pipeline it feeds.
+    #[cfg(not(target_arch = "wasm32"))]
     Plugin(String, String, Vec<String>, crate::plugins::Context),
     /// Camera sites within a lon/lat bbox `(min_lon, min_lat, max_lon, max_lat)`, plus the user's
     /// Windy API key — empty for FAA-only, which is the keyless default.
@@ -330,6 +332,7 @@ impl OverlaySource {
                 let pf = wxdata::placefile::fetch(http, &url).await?;
                 OverlayMsg::Placefile(url, pf)
             }
+            #[cfg(not(target_arch = "wasm32"))]
             OverlaySource::Plugin(key, command, args, pctx) => {
                 // A plugin failure is the user's own command misbehaving, so it has to reach the
                 // manager window rather than only the log — hence a message either way.
@@ -1333,6 +1336,7 @@ pub struct HookEchoApp {
     /// Active color tables (one per moment); reloaded when the palette settings change.
     palettes: Palettes,
     /// Live chunk stream for the active view: (view index, site, task handle).
+    #[cfg(not(target_arch = "wasm32"))]
     live_stream: Option<(usize, String, tokio::task::JoinHandle<()>)>,
     last_stream_attempt: Option<Instant>,
     /// Decoded-volume LRU keyed by AWS object name, so scrubbing back and forth on the
@@ -1647,6 +1651,7 @@ pub struct HookEchoApp {
     dotcam_bounds: Option<(f64, f64, f64, f64)>,
     /// NOAA Weather Radio: the running player (dropping it stops playback) and the relay picked
     /// in the drawer.
+    #[cfg(not(target_arch = "wasm32"))]
     nwr: Option<crate::nwr::Player>,
     nwr_pick: String,
     /// NWS damage surveys: the toggle, the last result, and the `(bbox, day)` it was fetched for
@@ -1833,10 +1838,15 @@ impl HookEchoApp {
         egui_phosphor::add_to_fonts(&mut fonts, egui_phosphor::Variant::Regular);
         cc.egui_ctx.set_fonts(fonts);
 
+        #[cfg(not(target_arch = "wasm32"))]
         let rt = tokio::runtime::Builder::new_multi_thread()
             .enable_all()
             .build()
             .expect("tokio runtime");
+        #[cfg(not(target_arch = "wasm32"))]
+        let spawner = crate::rt::Spawner::new(rt.handle().clone());
+        #[cfg(target_arch = "wasm32")]
+        let spawner = crate::rt::Spawner::new();
 
         let render_state = cc.wgpu_render_state.as_ref().expect("wgpu backend");
         // The GPU's 2D texture-size cap: desktop/Adreno do 16384, but many mobile GPUs cap at
@@ -1856,7 +1866,6 @@ impl HookEchoApp {
         }
 
         let settings = Settings::load();
-        let spawner = crate::rt::Spawner::new(rt.handle().clone());
         let tiles = TileManager::new(spawner.clone());
         let vtiles = crate::vector_tiles::VectorTileManager::new(spawner.clone());
         let (msg_tx, msg_rx) = std::sync::mpsc::channel();
@@ -1896,6 +1905,7 @@ impl HookEchoApp {
         let mut app = Self {
             vtiles,
             spawner,
+            #[cfg(not(target_arch = "wasm32"))]
             _rt: rt,
             tiles,
             saved: settings.clone(),
@@ -1929,6 +1939,7 @@ impl HookEchoApp {
             },
             settings_window: Default::default(),
             palettes: Palettes::default(),
+            #[cfg(not(target_arch = "wasm32"))]
             live_stream: None,
             last_stream_attempt: None,
             // DVR: retain a deep buffer of decoded volumes so instant replay serves recent frames
@@ -2130,6 +2141,7 @@ impl HookEchoApp {
             station_last_poll: None,
             ppef_last_fetch: None,
             dotcam_bounds: None,
+            #[cfg(not(target_arch = "wasm32"))]
             nwr: None,
             nwr_pick: String::new(),
             show_dat: false,
@@ -2588,12 +2600,15 @@ impl HookEchoApp {
                 .iter()
                 .find(|p| url == format!("plugin:{}", p.name))
             {
+                #[cfg(not(target_arch = "wasm32"))]
                 Some(p) => OverlaySource::Plugin(
                     url.clone(),
                     p.command.clone(),
                     p.args.clone(),
                     self.plugin_context(),
                 ),
+                #[cfg(target_arch = "wasm32")]
+                Some(_) => OverlaySource::Placefile(url),
                 None => OverlaySource::Placefile(url),
             };
             self.spawn_overlay(ctx, source);
@@ -2605,6 +2620,7 @@ impl HookEchoApp {
 
     /// What the active pane is showing, for a plugin to answer about. Archive-aware: scrubbing
     /// back gives the plugin the historic instant, not now.
+    #[cfg(not(target_arch = "wasm32"))]
     fn plugin_context(&self) -> crate::plugins::Context {
         let v = &self.views[self.active];
         let (min_lon, min_lat, max_lon, max_lat) = self.view_bounds();
@@ -2678,6 +2694,7 @@ impl HookEchoApp {
         if self.settings.mute_alerts {
             return;
         }
+        #[cfg(not(target_arch = "wasm32"))]
         crate::audio::play(sound, self.settings.alert_volume);
     }
 
@@ -4337,6 +4354,7 @@ impl HookEchoApp {
         let total = jobs.len() as u64;
         let (tx, rx) = std::sync::mpsc::channel();
         let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        #[cfg(not(target_arch = "wasm32"))]
         crate::tiles::start_pack_download(self._rt.handle(), jobs, cancel.clone(), tx);
         self.chasepack = Some(ChasePack {
             rx,
@@ -6985,6 +7003,14 @@ impl HookEchoApp {
 
     /// The weather-radio rows: pick a configured relay, play or stop it, and see honestly whether
     /// it is actually on the air. One stream at a time.
+    #[cfg(target_arch = "wasm32")]
+    fn nwr_rows(&mut self, ui: &mut egui::Ui) {
+        // The player decodes MP3 into a native audio device; the web build says so rather than
+        // showing a play button that can't do anything.
+        ui.weak("Weather radio playback is desktop and Android only.");
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
     fn nwr_rows(&mut self, ui: &mut egui::Ui) {
         if self.settings.nwr_streams.is_empty() {
             ui.weak("No relays yet — add one in Settings → Alerts.");
@@ -7631,6 +7657,7 @@ impl HookEchoApp {
             let idx = msg.view();
             // LiveEnded must be handled even after a site change (to drop the stream handle).
             if matches!(msg, DataMsg::LiveEnded { .. }) {
+                #[cfg(not(target_arch = "wasm32"))]
                 if let DataMsg::LiveEnded { view, .. } = msg {
                     if self
                         .live_stream
@@ -7744,6 +7771,11 @@ impl HookEchoApp {
 
     /// Start/stop the live chunk stream for the active view. One stream at a time (the active
     /// view); a healthy stream starves interval polling, a dead one lets polling take over.
+    /// The web build has no chunk streamer (see `wxdata::live`); it polls for whole volumes.
+    #[cfg(target_arch = "wasm32")]
+    fn manage_stream(&mut self, _ctx: &egui::Context) {}
+
+    #[cfg(not(target_arch = "wasm32"))]
     fn manage_stream(&mut self, ctx: &egui::Context) {
         let idx = self.active;
         let (want, site, base) = {
@@ -7789,6 +7821,7 @@ impl HookEchoApp {
     }
 
     /// Spawn the live chunk streamer for `site`, routing merged volumes back to `view_idx`.
+    #[cfg(not(target_arch = "wasm32"))]
     fn spawn_stream(
         &self,
         view_idx: usize,

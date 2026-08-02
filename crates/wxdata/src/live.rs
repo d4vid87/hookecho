@@ -39,6 +39,12 @@ pub struct Update {
 ///
 /// Returns `Ok(())` only if the iterator ends cleanly (it normally runs until aborted);
 /// any error returns so the caller can fall back to interval polling.
+/// Native only: this loop sleeps on a tokio timer between chunk polls. The web build reads the
+/// newest volume through the archive path instead.
+///
+// ponytail: no live chunk streaming in the browser; a `setTimeout`-backed sleep would be the
+// upgrade path if the web build ever wants sweep-by-sweep updates.
+#[cfg(not(target_arch = "wasm32"))]
 pub async fn stream<F>(
     site: String,
     base: Scan,

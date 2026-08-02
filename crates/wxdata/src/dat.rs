@@ -234,7 +234,7 @@ pub async fn fetch(
     start: chrono::DateTime<chrono::Utc>,
     end: chrono::DateTime<chrono::Utc>,
 ) -> anyhow::Result<(Vec<DamagePoint>, Vec<DamageTrack>)> {
-    let (pt_pages, ln_pages) = tokio::try_join!(
+    let (pt_pages, ln_pages) = futures_util::try_join!(
         fetch_layer(client, 0, bbox, start, end),
         fetch_layer(client, 1, bbox, start, end),
     )?;

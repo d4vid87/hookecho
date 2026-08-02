@@ -7,10 +7,12 @@
 
 pub mod app;
 pub mod astro;
+/// Alert sounds (native only — the web build has no audio device wired up yet).
+#[cfg(not(target_arch = "wasm32"))]
 pub mod audio;
 pub mod basemap_style;
 /// Live camera video (desktop only — Android cannot spawn an ffmpeg child).
-#[cfg(not(target_os = "android"))]
+#[cfg(not(any(target_os = "android", target_arch = "wasm32")))]
 pub mod cam;
 pub mod cloud;
 pub mod colormap;
@@ -20,14 +22,19 @@ pub mod events;
 pub mod fronts_draw;
 pub mod geo;
 pub mod gps;
+/// Off-screen rendering for the CLI verifiers and the server snapshot.
+#[cfg(not(target_arch = "wasm32"))]
 pub mod headless;
 pub mod hotkeys;
 pub mod icon;
 pub mod loopexport;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod nwr;
 pub mod overlay_build;
 pub mod paths;
 pub mod platform;
+/// External-process placefile plugins — a browser cannot spawn a process.
+#[cfg(not(target_arch = "wasm32"))]
 pub mod plugins;
 pub mod products;
 pub mod profiling;
@@ -37,13 +44,15 @@ pub mod render3d;
 /// Where background work goes: a tokio runtime natively, the page's event loop on the web.
 pub mod rt;
 /// The `--serve` HTTP endpoint (desktop only — Android has no headless mode to render from).
-#[cfg(not(target_os = "android"))]
+#[cfg(not(any(target_os = "android", target_arch = "wasm32")))]
 pub mod serve;
 pub mod settings;
 pub mod share;
 pub mod speech;
 /// Live station markers and their telemetry cards.
 pub mod stationlayer;
+/// The `--status` report; native only — it builds its own runtime.
+#[cfg(not(target_arch = "wasm32"))]
 pub mod status;
 pub mod theme;
 pub mod tiles;
@@ -59,7 +68,7 @@ pub use app::HookEchoApp;
 
 /// Launch the windowed desktop app (Windows/Linux/macOS). Called from `main.rs` after it has
 /// dispatched any `--headless-*` verifier.
-#[cfg(not(target_os = "android"))]
+#[cfg(not(any(target_os = "android", target_arch = "wasm32")))]
 pub fn run_desktop() -> eframe::Result<()> {
     let native_options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()

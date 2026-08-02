@@ -134,7 +134,7 @@ impl Layer {
         }
         let mut stills = Vec::new();
         for card in self.cards.iter_mut() {
-            #[cfg(not(target_os = "android"))]
+            #[cfg(not(any(target_os = "android", target_arch = "wasm32")))]
             if card.cam.is_some() {
                 continue;
             }
@@ -150,12 +150,13 @@ impl Layer {
             } else {
                 format!("{} · {}", cam.name, cam.place)
             };
-            #[cfg(not(target_os = "android"))]
+            #[cfg(not(any(target_os = "android", target_arch = "wasm32")))]
             if let Some(url) = &cam.stream_url {
                 card.cam = Some(crate::cam::Stream::start(url.clone(), spawner.handle()));
             }
             // No stream (and on a phone, never a stream): fall back to the newest still.
-            let streaming = cfg!(not(target_os = "android")) && cam.stream_url.is_some();
+            let streaming = cfg!(not(any(target_os = "android", target_arch = "wasm32")))
+                && cam.stream_url.is_some();
             if !streaming {
                 if let Some(url) = cam.image_url.clone() {
                     card.still_key = Some(url.clone());
@@ -232,7 +233,7 @@ impl Layer {
         #[allow(unused_mut)]
         let mut animating = false;
         for (i, card) in self.cards.iter_mut().enumerate() {
-            #[cfg(not(target_os = "android"))]
+            #[cfg(not(any(target_os = "android", target_arch = "wasm32")))]
             if let Some(stream) = &card.cam {
                 let seq = stream.seq();
                 if seq != card.last_seq {
