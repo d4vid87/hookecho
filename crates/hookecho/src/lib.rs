@@ -6,6 +6,7 @@
 //! [`paths`] at the app-private data dir.
 
 pub mod app;
+pub mod astro;
 pub mod audio;
 pub mod basemap_style;
 /// Live camera video (desktop only — Android cannot spawn an ffmpeg child).

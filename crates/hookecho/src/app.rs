@@ -8598,7 +8598,12 @@ impl HookEchoApp {
             .fields
             .iter()
             .filter(|(_, s)| s.show)
-            .map(|(k, _)| (*k, self.settings.field_opacity.get(k).copied().unwrap_or(1.0)))
+            .map(|(k, _)| {
+                (
+                    *k,
+                    self.settings.field_opacity.get(k).copied().unwrap_or(1.0),
+                )
+            })
             .collect();
 
         let cam = self.views[idx].camera;
@@ -12486,13 +12491,7 @@ impl eframe::App for HookEchoApp {
             let at = self.forecast_at.unwrap_or((0.0, 0.0));
             let tz = self.active_tz();
             let minute = self.minute_profile(at).map(|m| m.to_vec());
-            if !ui::forecast_window::show(
-                ctx,
-                &self.forecast_state,
-                at,
-                tz,
-                minute.as_deref(),
-            ) {
+            if !ui::forecast_window::show(ctx, &self.forecast_state, at, tz, minute.as_deref()) {
                 self.forecast_open = false;
             }
         }
