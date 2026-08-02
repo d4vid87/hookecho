@@ -137,15 +137,10 @@ pub async fn latest_identifier(site: &str) -> anyhow::Result<Identifier> {
 /// the radar writes it as it scans. A volume caught early enough can be missing the metadata
 /// record that carries its scan strategy, and the only cure is to fall back a volume.
 pub async fn latest_identifiers(site: &str, n: usize) -> anyhow::Result<Vec<Identifier>> {
-    use nexrad_data::aws::archive;
-
     let today = chrono::Utc::now().date_naive();
     let mut out: Vec<Identifier> = Vec::new();
     for day in [today, today.pred_opt().unwrap_or(today)] {
-        let mut ids = archive::list_files(site, &day)
-            .await
-            .map_err(|e| anyhow::anyhow!("list_files({site}, {day}): {e}"))?;
-        ids.sort_by_key(|id| id.date_time());
+        let mut ids = list_day(site, day).await?;
         while out.len() < n {
             match ids.pop() {
                 Some(id) => out.push(id),
@@ -164,11 +159,41 @@ pub async fn latest_identifiers(site: &str, n: usize) -> anyhow::Result<Vec<Iden
 
 /// List every volume for `site` on a specific UTC `date`, oldest first.
 pub async fn list_volumes(site: &str, date: chrono::NaiveDate) -> anyhow::Result<Vec<Identifier>> {
+    list_day(site, date).await
+}
+
+/// Recent day listings, so a site switch doesn't LIST the same S3 prefix two or three times over
+/// (the head poll and the timeline listing both want today's).
+///
+/// ponytail: a flat map with a short TTL and no eviction — a session touches a handful of
+/// site/day pairs. Bound it if that ever stops being true.
+type DayListCache =
+    std::collections::HashMap<(String, chrono::NaiveDate), (std::time::Instant, Vec<Identifier>)>;
+static DAY_LIST_CACHE: std::sync::OnceLock<std::sync::Mutex<DayListCache>> =
+    std::sync::OnceLock::new();
+
+/// Listing TTL. Volumes land every 4-6 minutes; 20 s is short enough that the head poll still
+/// sees a new one promptly and long enough to collapse the burst a site switch makes.
+const DAY_LIST_TTL: std::time::Duration = std::time::Duration::from_secs(20);
+
+async fn list_day(site: &str, date: chrono::NaiveDate) -> anyhow::Result<Vec<Identifier>> {
     use nexrad_data::aws::archive;
+    let key = (site.to_string(), date);
+    let cache = DAY_LIST_CACHE.get_or_init(Default::default);
+    if let Ok(map) = cache.lock() {
+        if let Some((at, ids)) = map.get(&key) {
+            if at.elapsed() < DAY_LIST_TTL {
+                return Ok(ids.clone());
+            }
+        }
+    }
     let mut ids = archive::list_files(site, &date)
         .await
         .map_err(|e| anyhow::anyhow!("list_files({site}, {date}): {e}"))?;
     ids.sort_by_key(|id| id.date_time());
+    if let Ok(mut map) = cache.lock() {
+        map.insert(key, (std::time::Instant::now(), ids.clone()));
+    }
     Ok(ids)
 }
 

@@ -186,7 +186,16 @@ pub async fn fetch_cells(http: &reqwest::Client, site: &str) -> Vec<Cell> {
     let mut storms: Vec<Cell> = Vec::new();
     let mut by_id: HashMap<String, usize> = HashMap::new();
 
-    if let Some((p, _)) = fetch_latest(http, &s3, "NST").await {
+    // All four products are independent S3 round trips; serially they were the bulk of the wait
+    // after a site switch.
+    let (nst, ss_txt, hi_txt, nmd) = tokio::join!(
+        fetch_latest(http, &s3, "NST"),
+        fetch_tgftp(http, &s3, "p62ss"),
+        fetch_tgftp(http, &s3, "p59hi"),
+        fetch_latest(http, &s3, "NMD"),
+    );
+
+    if let Some((p, _)) = nst {
         let (lat0, lon0) = (p.lat as f64, p.lon as f64);
         let table = p.tabular.clone().unwrap_or_default();
         let graphic = p.graphic.clone().unwrap_or_default();
@@ -237,7 +246,7 @@ pub async fn fetch_cells(http: &reqwest::Client, site: &str) -> Vec<Cell> {
         }
     }
 
-    if let Some(p) = fetch_tgftp(http, &s3, "p62ss").await {
+    if let Some(p) = ss_txt {
         for (id, ss) in parse_storm_structure(&p.raw_text.unwrap_or_default()) {
             if let Some(&i) = by_id.get(&id) {
                 storms[i].base_kft = ss.base;
@@ -251,7 +260,7 @@ pub async fn fetch_cells(http: &reqwest::Client, site: &str) -> Vec<Cell> {
         }
     }
 
-    if let Some(p) = fetch_tgftp(http, &s3, "p59hi").await {
+    if let Some(p) = hi_txt {
         for (id, h) in parse_hail(&p.raw_text.unwrap_or_default()) {
             if let Some(&i) = by_id.get(&id) {
                 storms[i].poh = h.poh;
@@ -262,7 +271,7 @@ pub async fn fetch_cells(http: &reqwest::Client, site: &str) -> Vec<Cell> {
     }
 
     let mut meso = Vec::new();
-    if let Some((p, _)) = fetch_latest(http, &s3, "NMD").await {
+    if let Some((p, _)) = nmd {
         let (lat0, lon0) = (p.lat as f64, p.lon as f64);
         for m in &p.meso {
             let (lon, lat) = offset_lonlat(lon0, lat0, m.x_km, m.y_km);
