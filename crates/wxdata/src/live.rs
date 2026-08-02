@@ -47,7 +47,7 @@ pub struct Update {
 #[cfg(not(target_arch = "wasm32"))]
 pub async fn stream<F>(
     site: String,
-    base: Scan,
+    base: Arc<Scan>,
     active: fn() -> bool,
     mut on_update: F,
 ) -> anyhow::Result<()>
@@ -68,25 +68,47 @@ where
     let latest_seq = joined.sequence();
     let volume = *joined.volume();
     let prefix = *joined.date_time_prefix();
-    // ponytail: sequential O(n) backfill downloads on start so the first frame is a full
-    // volume; gaps are tolerated (a missing chunk just omits its radials).
-    for seq in 2..latest_seq {
-        let id = ChunkIdentifier::new(
-            site.clone(),
-            volume,
-            prefix,
-            seq,
-            ChunkType::Intermediate,
-            None,
-        );
-        if let Ok((_, ch)) = download_chunk(&site, &id).await {
-            chunks.push(ch);
+    // Backfill the middle chunks so the first frame is a full volume. Up to ~53 of them, and
+    // serially that was the whole reason a live site took seconds to show anything; six at a time
+    // keeps the radio busy without opening a connection per chunk. Gaps are tolerated (a missing
+    // chunk just omits its radials), but order matters, so results are re-sorted by sequence.
+    let mut backfill: Vec<(usize, Chunk<'static>)> = Vec::new();
+    for window in (2..latest_seq).collect::<Vec<_>>().chunks(6) {
+        let mut set = tokio::task::JoinSet::new();
+        for &seq in window {
+            let site = site.clone();
+            set.spawn(async move {
+                let id = ChunkIdentifier::new(
+                    site.clone(),
+                    volume,
+                    prefix,
+                    seq,
+                    ChunkType::Intermediate,
+                    None,
+                );
+                download_chunk(&site, &id)
+                    .await
+                    .ok()
+                    .map(|(_, ch)| (seq, ch))
+            });
+        }
+        while let Some(res) = set.join_next().await {
+            if let Ok(Some(hit)) = res {
+                backfill.push(hit);
+            }
         }
     }
+    backfill.sort_by_key(|(seq, _)| *seq);
+    chunks.extend(backfill.into_iter().map(|(_, ch)| ch));
     chunks.push(init.latest_chunk.chunk);
 
-    let mut merged = Arc::new(base);
+    let mut merged = base;
+    // First emit assembles the whole backfilled volume; after that only the chunks since the last
+    // sweep boundary are re-assembled (plus the start chunk, which carries the VCP and site
+    // metadata assembly needs). Re-decoding every accumulated chunk at every boundary was O(n^2)
+    // over a volume, and the chunk count grows to ~55.
     emit(&it, &chunks, &mut merged, &mut on_update);
+    let mut window_start = chunks.len();
 
     loop {
         let wait = it
@@ -110,11 +132,20 @@ where
                 let ctype = dc.identifier.chunk_type();
                 if ctype == ChunkType::Start {
                     chunks.clear(); // volume rollover: start a fresh accumulator
+                    window_start = 0;
                 }
                 chunks.push(dc.chunk);
                 let sweep_done = it.chunk_metadata(seq).is_some_and(|m| m.is_last_in_sweep());
                 if sweep_done || ctype == ChunkType::End {
-                    emit(&it, &chunks, &mut merged, &mut on_update);
+                    let window: Vec<Chunk<'static>> = chunks
+                        .first()
+                        .filter(|_| window_start > 0)
+                        .into_iter()
+                        .chain(chunks[window_start..].iter())
+                        .cloned()
+                        .collect();
+                    emit(&it, &window, &mut merged, &mut on_update);
+                    window_start = chunks.len();
                 }
             }
             Ok(None) => { /* not available yet; loop and wait again */ }
@@ -131,7 +162,12 @@ fn emit<F: FnMut(Update)>(
     merged: &mut Arc<Scan>,
     on_update: &mut F,
 ) {
-    let partial = match assemble_volume(chunks.iter().cloned()) {
+    // Re-assembling every accumulated chunk at each sweep boundary is the heaviest CPU on this
+    // task; `block_in_place` moves it off the async worker so chunk polling and every other
+    // fetch on that thread keep running. (Requires the multi-threaded runtime, which is what the
+    // app and the headless harness both build.)
+    let assembled = tokio::task::block_in_place(|| assemble_volume(chunks.iter().cloned()));
+    let partial = match assembled {
         Ok(s) => s,
         Err(e) => {
             log::debug!("assemble skipped: {e}");

@@ -62,7 +62,10 @@ impl Camera {
     /// Zoom toward a screen point (cursor) so that world point stays under the cursor.
     pub fn zoom_at(&mut self, delta: f64, cursor_px: (f32, f32), viewport_px: (f32, f32)) {
         let before = self.screen_to_world(cursor_px, viewport_px);
-        self.zoom = (self.zoom + delta).clamp(2.0, 18.0);
+        // 20 rather than the tile providers' 18: `tile_cover` clamps the tile z on its own, so the
+        // last two levels overzoom the resident tiles instead of turning a spread-pinch into a
+        // silent no-op — which is what it felt like at the old ceiling.
+        self.zoom = (self.zoom + delta).clamp(2.0, 20.0);
         let after = self.screen_to_world(cursor_px, viewport_px);
         self.center.0 += before.0 - after.0;
         self.center.1 += before.1 - after.1;

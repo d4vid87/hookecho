@@ -227,28 +227,42 @@ pub async fn fetch_volume(
     let short = &meta.id[1..];
     let day = Utc::now().format("%Y_%m_%d").to_string();
 
+    // Six products, twelve round trips. Serially that was most of the wait for a TDWR site;
+    // they're independent, so fetch and decode them all at once.
+    let mut set = tokio::task::JoinSet::new();
+    for (n, (product, gate_len)) in PRODUCTS.iter().enumerate() {
+        let (http, prefix) = (http.clone(), format!("{short}_{product}_{day}"));
+        let (product, gate_len) = (*product, *gate_len);
+        set.spawn(async move {
+            let key = newest_key(&http, &prefix).await?;
+            let resp = http.get(format!("{BUCKET}/{key}")).send().await.ok()?;
+            let bytes = resp.bytes().await.ok()?;
+            let p = match nexrad_level3::decode(&bytes) {
+                Ok(p) => p,
+                Err(e) => {
+                    log::warn!("tdwr decode {key}: {e}");
+                    return None;
+                }
+            };
+            // Elevation numbers must be unique per sweep; reflectivity and velocity at one tilt
+            // stay separate sweeps, which the split-cut-aware binning already handles.
+            let sweep = sweep_from(&p, n as u8 + 1, gate_len, product.starts_with("TV"));
+            Some((n, sweep, key))
+        });
+    }
+    let mut found: Vec<(usize, Option<Sweep>, String)> = Vec::new();
+    while let Some(res) = set.join_next().await {
+        if let Ok(Some(hit)) = res {
+            found.push(hit);
+        }
+    }
+    // Keep the product order stable: sweeps are keyed by elevation number, and the caller's
+    // "did the volume change?" check compares the name of the newest key.
+    found.sort_by_key(|(n, _, _)| *n);
     let mut sweeps = Vec::new();
     let mut newest: Option<(String, DateTime<Utc>)> = None;
-    for (n, (product, gate_len)) in PRODUCTS.iter().enumerate() {
-        let Some(key) = newest_key(http, &format!("{short}_{product}_{day}")).await else {
-            continue;
-        };
-        let Ok(resp) = http.get(format!("{BUCKET}/{key}")).send().await else {
-            continue;
-        };
-        let Ok(bytes) = resp.bytes().await else {
-            continue;
-        };
-        let p = match nexrad_level3::decode(&bytes) {
-            Ok(p) => p,
-            Err(e) => {
-                log::warn!("tdwr decode {key}: {e}");
-                continue;
-            }
-        };
-        // Elevation numbers must be unique per sweep; reflectivity and velocity at one tilt stay
-        // separate sweeps, which the split-cut-aware binning already handles.
-        if let Some(s) = sweep_from(&p, n as u8 + 1, *gate_len, product.starts_with("TV")) {
+    for (_, sweep, key) in found {
+        if let Some(s) = sweep {
             sweeps.push(s);
         }
         if let Some(t) = key_time(&key) {

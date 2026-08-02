@@ -1110,6 +1110,13 @@ struct LoadedPlacefile {
 }
 
 /// A background fetch result routed back to a specific view.
+/// Loop frames a phone keeps decoded at once. Each volume is tens of MB; a longer loop than this
+/// pushes the process into the range Android kills.
+#[cfg(target_os = "android")]
+const ANDROID_LOOP_WINDOW: usize = 6;
+#[cfg(not(target_os = "android"))]
+const ANDROID_LOOP_WINDOW: usize = 6;
+
 enum DataMsg {
     Volume {
         view: usize,
@@ -1144,6 +1151,14 @@ enum DataMsg {
         view: usize,
         site: String,
     },
+    /// A loop frame fetched ahead of the playhead. Goes into the scan cache and nowhere else —
+    /// showing it would jump the display forward.
+    Prefetched {
+        view: usize,
+        site: String,
+        name: String,
+        scan: Scan,
+    },
     Error {
         view: usize,
         site: String,
@@ -1159,6 +1174,7 @@ impl DataMsg {
             | DataMsg::LiveEnded { view, .. }
             | DataMsg::Frames { view, .. }
             | DataMsg::UpToDate { view, .. }
+            | DataMsg::Prefetched { view, .. }
             | DataMsg::Error { view, .. } => *view,
         }
     }
@@ -1169,6 +1185,7 @@ impl DataMsg {
             | DataMsg::LiveEnded { site, .. }
             | DataMsg::Frames { site, .. }
             | DataMsg::UpToDate { site, .. }
+            | DataMsg::Prefetched { site, .. }
             | DataMsg::Error { site, .. } => site,
         }
     }
@@ -1321,7 +1338,13 @@ pub struct HookEchoApp {
     settings_checked: Option<Instant>,
     /// Frame counter, only used to invalidate within-frame memos.
     frame_nr: u64,
-    palette_cache: Option<(u64, Vec<PaletteEntry>)>,
+    palette_cache: Option<(u64, std::sync::Arc<[PaletteEntry]>)>,
+    /// Visible city/town labels, keyed by the visible tile ids and the label-set generation.
+    #[allow(clippy::type_complexity)]
+    vlabel_cache: Option<(
+        (Vec<crate::render::TileId>, u64),
+        Vec<crate::vector_tiles::PlaceLabel>,
+    )>,
     /// Last result of each per-volume detector, keyed by what it depends on (see `volume_key`).
     #[allow(clippy::type_complexity)]
     nowcast_cache: Option<(
@@ -1342,6 +1365,10 @@ pub struct HookEchoApp {
     /// Decoded-volume LRU keyed by AWS object name, so scrubbing back and forth on the
     /// timeline doesn't re-download. ~10 volumes; each ~a few MB.
     scan_cache: LruCache<String, Arc<Scan>>,
+    /// Loop frames being fetched ahead of the playhead, with when they were kicked off. A fetch
+    /// whose result never arrives (it failed, or the site changed under it) ages out rather than
+    /// blocking a retry — nothing here is ever waited on indefinitely.
+    prefetching: std::collections::HashMap<String, Instant>,
     // --- Overlays (severe-weather layers; geographic, shared across views) ---
     http: reqwest::Client,
     overlay_rx: Receiver<OverlayMsg>,
@@ -1632,6 +1659,10 @@ pub struct HookEchoApp {
     /// off the raw input, which has no idea egui drew a sheet over the map, so the pane input
     /// block checks the gesture center against these.
     mobile_occlusion: Vec<egui::Rect>,
+    /// When the last two-finger gesture ended. Lifting one finger of a pinch leaves the other
+    /// one down, which egui immediately reads as a click and a fresh drag — an interrogate popup
+    /// and a jump for what was only the end of a zoom. A short cooldown eats both.
+    last_gesture_end: Option<std::time::Instant>,
     /// Spotter Network positions + toggle + refresh clock (filtered to active site at draw).
     show_spotters: bool,
     /// FAA WeatherCams: the toggle, the sites in view, and the bbox//time they were fetched for.
@@ -1875,14 +1906,33 @@ impl HookEchoApp {
         }
 
         let settings = Settings::load();
-        let tiles = TileManager::new(spawner.clone());
-        let vtiles = crate::vector_tiles::VectorTileManager::new(spawner.clone());
+        // A decoded volume is tens of MB, so the phone's cache is sized to the loop window it can
+        // actually afford (see ANDROID_LOOP_WINDOW) plus the head and the frame in flight —
+        // enough that a loop stops re-downloading itself on every wrap, without the ~900 MB RSS
+        // that holding a full desktop-sized window cost.
+        let scan_cache_cap = if cfg!(target_os = "android") {
+            ANDROID_LOOP_WINDOW + 2
+        } else {
+            30
+        };
+        let mut tiles = TileManager::new(spawner.clone());
+        let mut vtiles = crate::vector_tiles::VectorTileManager::new(spawner.clone());
+        // Tile workers wake the UI the moment a tile is ready; without this a finished tile waits
+        // for the next repaint the app happens to want.
+        tiles.set_ctx(cc.egui_ctx.clone());
+        vtiles.set_ctx(cc.egui_ctx.clone());
         let (msg_tx, msg_rx) = std::sync::mpsc::channel();
         let (overlay_tx, overlay_rx) = std::sync::mpsc::channel();
         let (update_tx, update_rx) = std::sync::mpsc::channel();
         let (geocode_tx, geocode_rx) = std::sync::mpsc::channel();
         let (pf_icon_tx, pf_icon_rx) = std::sync::mpsc::channel();
-        let http = reqwest::Client::new();
+        // Every app-level fetch (alerts, overlays, placefiles, radar index) goes through this one.
+        // A hung request with no timeout leaves whatever it was loading stuck loading forever.
+        let http = reqwest::Client::builder()
+            .connect_timeout(std::time::Duration::from_secs(10))
+            .timeout(std::time::Duration::from_secs(30))
+            .build()
+            .unwrap_or_default();
 
         // Open on the saved startup view if set (and its site still resolves), else where the app
         // was last looking, else the default site.
@@ -1935,6 +1985,7 @@ impl HookEchoApp {
             settings_checked: None,
             frame_nr: 0,
             palette_cache: None,
+            vlabel_cache: None,
             nowcast_cache: None,
             tds_cache: None,
             couplet_cache: None,
@@ -1955,9 +2006,11 @@ impl HookEchoApp {
             // from RAM without re-downloading (~30 volumes ≈ 2.5 h at a 5-min cadence).
             // Phones can't hold a 2.5 h DVR buffer of decoded volumes — each is tens of MB and
             // Android kills the process long before the LRU fills.
-            scan_cache: LruCache::new(
-                NonZeroUsize::new(if cfg!(target_os = "android") { 6 } else { 30 }).unwrap(),
-            ),
+            // On Android the cap used to be 6 against a 10-frame loop window, so every wrap of the
+            // loop missed on every frame and re-downloaded the whole thing, forever. It has to
+            // hold the window plus the head and the frame being fetched.
+            prefetching: std::collections::HashMap::new(),
+            scan_cache: LruCache::new(NonZeroUsize::new(scan_cache_cap).unwrap()),
             http,
             overlay_rx,
             overlay_tx,
@@ -2134,6 +2187,7 @@ impl HookEchoApp {
             mobile_snap: Default::default(),
             mobile_sheet_drag: None,
             mobile_occlusion: Vec::new(),
+            last_gesture_end: None,
             show_spotters: false,
             show_webcams: false,
             webcams: Vec::new(),
@@ -2780,16 +2834,19 @@ impl HookEchoApp {
         }
         egui::Area::new(egui::Id::new("warning_banners"))
             .constrain_to(self.chrome_rect)
+            // Read-only banner that self-expires in 45 s. Interactable layers occlude the map's
+            // pinch test (`layer_id_at`), and a banner across the top of a phone screen is exactly
+            // where a two-finger gesture lands, so it must not take input.
+            .interactable(false)
             .anchor(
                 egui::Align2::CENTER_TOP,
                 egui::vec2(0.0, crate::ui::style::LANE_TOP_BANNER),
             )
             .show(ctx, |ui| {
-                let mut dismiss = false;
                 for (event, area, at) in &self.warning_banners {
                     // Fade out over the last two seconds instead of vanishing mid-read.
                     let a = ((45.0 - at.elapsed().as_secs_f32()) / 2.0).clamp(0.0, 1.0);
-                    let resp = egui::Frame::new()
+                    egui::Frame::new()
                         .fill(egui::Color32::from_rgb(150, 20, 20).gamma_multiply(a))
                         .stroke(egui::Stroke::new(
                             1.0,
@@ -2817,15 +2874,8 @@ impl HookEchoApp {
                                     }
                                 });
                             });
-                        })
-                        .response;
-                    if resp.interact(egui::Sense::click()).clicked() {
-                        dismiss = true;
-                    }
+                        });
                     ui.add_space(4.0);
-                }
-                if dismiss {
-                    self.warning_banners.clear();
                 }
             });
         // Fast enough for the fade-out; the banner is only up for 45 s.
@@ -5225,6 +5275,8 @@ impl HookEchoApp {
         };
         egui::Area::new(egui::Id::new("chase_hud"))
             .constrain_to(self.chrome_rect)
+            // Pure readout — never take input, or it kills pinch over its corner of the map.
+            .interactable(false)
             .anchor(egui::Align2::LEFT_BOTTOM, egui::vec2(14.0, dy))
             .show(ctx, |ui| {
                 let frame = mobile::glass(ui, 244).stroke(egui::Stroke::new(
@@ -5346,14 +5398,16 @@ impl HookEchoApp {
     /// frame (drawer, mobile sheets, legend, palette). Nothing can change it mid-frame — an
     /// action dispatched from one of those lists takes effect on the next one — so a per-frame
     /// memo is both free and honest.
-    pub(crate) fn palette_entries(&mut self) -> Vec<PaletteEntry> {
+    /// The command-palette action registry for this frame. Shared, not copied: the built list is
+    /// a few hundred owned Strings, and several call sites want it in the same frame.
+    pub(crate) fn palette_entries(&mut self) -> std::sync::Arc<[PaletteEntry]> {
         if let Some((frame, entries)) = &self.palette_cache {
             if *frame == self.frame_nr {
-                return entries.clone();
+                return std::sync::Arc::clone(entries);
             }
         }
-        let entries = self.palette_entries_build();
-        self.palette_cache = Some((self.frame_nr, entries.clone()));
+        let entries: std::sync::Arc<[PaletteEntry]> = self.palette_entries_build().into();
+        self.palette_cache = Some((self.frame_nr, std::sync::Arc::clone(&entries)));
         entries
     }
 
@@ -7283,6 +7337,9 @@ impl HookEchoApp {
                 egui::Align2::RIGHT_TOP,
                 egui::vec2(crate::ui::style::LANE_RIGHT_BADGE_X, y),
             )
+            // Only the following state carries a button; the notice is a read-only badge and must
+            // not occlude the map's pinch test.
+            .interactable(following)
             .show(ctx, |ui| {
                 let fill = if following {
                     egui::Color32::from_rgba_unmultiplied(40, 90, 150, 220)
@@ -7763,6 +7820,11 @@ impl HookEchoApp {
                     self.pane_shown.remove(&view);
                 }
                 DataMsg::UpToDate { view, .. } => self.views[view].loading = false,
+                DataMsg::Prefetched { name, scan, .. } => {
+                    self.prefetching.remove(&name);
+
+                    self.scan_cache.put(name, Arc::new(scan));
+                }
                 DataMsg::Error { view, err, .. } => {
                     let v = &mut self.views[view];
                     v.loading = false;
@@ -7804,9 +7866,10 @@ impl HookEchoApp {
             (
                 want,
                 v.site.clone(),
-                // The streamer needs its own mutable base to merge chunks into, so this is the
-                // one place a decoded volume is still deep-copied — once per stream start.
-                v.volume.as_ref().map(|vol| (*vol.scan).clone()),
+                // Shared with the pane: the streamer merges into a new Scan rather than mutating
+                // this one, so it only needs a refcount, not the tens of MB a deep copy cost on
+                // the UI thread at every stream start.
+                v.volume.as_ref().map(|vol| Arc::clone(&vol.scan)),
             )
         };
 
@@ -7838,7 +7901,7 @@ impl HookEchoApp {
         &self,
         view_idx: usize,
         site: String,
-        base: Scan,
+        base: Arc<Scan>,
         ctx: egui::Context,
     ) -> tokio::task::JoinHandle<()> {
         let tx = self.msg_tx.clone();
@@ -8041,8 +8104,33 @@ impl HookEchoApp {
         }
 
         // Advance playback (if playing) then reconcile the displayed volume with the timeline.
-        self.views[idx].timeline.live_window = self.settings.live_loop_frames.max(1);
-        self.views[idx].timeline.tick();
+        self.views[idx].timeline.live_window = if cfg!(target_os = "android") {
+            self.settings.live_loop_frames.clamp(1, ANDROID_LOOP_WINDOW)
+        } else {
+            self.settings.live_loop_frames.max(1)
+        };
+        // Hold the playhead while the next frame is still downloading. Advancing on the wall clock
+        // regardless meant playback skipped frames it hadn't got yet and the loop read as juddery;
+        // waiting reads as buffering, which is what it is. Only while there's a fetch to wait for,
+        // so a permanently-failed frame can't stall the loop.
+        let next_pending = {
+            let tl = &self.views[idx].timeline;
+            tl.playing
+                && tl
+                    .frames
+                    .get(tl.playhead + 1)
+                    .map(|id| id.name().to_string())
+                    .is_some_and(|n| {
+                        !self.scan_cache.contains(&n)
+                            && self.prefetching.get(&n).is_some_and(|at| {
+                                // Bounded: a fetch that never answers must not park the loop.
+                                at.elapsed() < std::time::Duration::from_secs(8)
+                            })
+                    })
+        };
+        if !next_pending {
+            self.views[idx].timeline.tick();
+        }
         // Playback paces itself rather than riding whatever the idle heartbeat happens to give
         // it: ask for a repaint exactly when the next frame is due.
         if let Some(dt) = self.views[idx].timeline.time_to_next_frame() {
@@ -8135,7 +8223,84 @@ impl HookEchoApp {
                         self.spawn_frame_fetch(idx, s, id, ctx.clone());
                     }
                 }
+                // Pull the next two frames in behind the playhead, on their own in-flight book
+                // so they never compete with the frame being shown or with the head poll. Without
+                // this, playback is a serial download per frame with the loop stalled between.
+                if self.views[idx].timeline.playing {
+                    self.prefetch_frames(idx, ctx);
+                }
             }
+        }
+    }
+
+    /// Debug builds only: frame time and tile-queue depth in the top-left corner. `dumpsys
+    /// gfxinfo` and logcat cover most of what this shows, but neither says which frames were slow
+    /// while a gesture was in progress.
+    ///
+    /// ponytail: an unsmoothed millisecond readout, no history graph. Add one if a single number
+    /// stops being enough to tell a stutter from a stall.
+    #[cfg(debug_assertions)]
+    fn frame_time_overlay(&mut self, ctx: &egui::Context) {
+        let (dt, pinching) = ctx.input(|i| (i.unstable_dt * 1000.0, i.multi_touch().is_some()));
+        let text = format!(
+            "{dt:.1} ms ({:.0} fps)  z{:.2}{}",
+            1000.0 / dt.max(0.001),
+            self.views[self.active].camera.zoom,
+            if pinching { "  pinch" } else { "" }
+        );
+        egui::Area::new(egui::Id::new("frame_time_overlay"))
+            .anchor(egui::Align2::LEFT_TOP, egui::vec2(6.0, 6.0))
+            .order(egui::Order::Tooltip)
+            .interactable(false)
+            .show(ctx, |ui| {
+                ui.label(
+                    egui::RichText::new(text)
+                        .monospace()
+                        .size(11.0)
+                        .color(egui::Color32::from_rgb(120, 255, 120))
+                        .background_color(egui::Color32::from_black_alpha(160)),
+                );
+            });
+    }
+
+    /// Fetch the two frames after the playhead into the scan cache, so playback isn't a serial
+    /// download-per-frame. At most two are in flight, and an entry that never comes back (its
+    /// site changed under it) ages out after a minute.
+    fn prefetch_frames(&mut self, idx: usize, ctx: &egui::Context) {
+        self.prefetching
+            .retain(|_, at| at.elapsed() < std::time::Duration::from_secs(15));
+        if self.prefetching.len() >= 2 {
+            return;
+        }
+        let Some(site) = self.views[idx].site.clone() else {
+            return;
+        };
+        let tl = &self.views[idx].timeline;
+        let next: Vec<Identifier> = (1..=2)
+            .filter_map(|d| tl.frames.get(tl.playhead + d))
+            .cloned()
+            .collect();
+        for id in next {
+            let name = id.name().to_string();
+            if self.scan_cache.contains(&name) || self.prefetching.contains_key(&name) {
+                continue;
+            }
+            self.prefetching.insert(name, Instant::now());
+            let tx = self.msg_tx.clone();
+            let (site, ctx) = (site.clone(), ctx.clone());
+            let view = idx;
+            self.spawner.spawn(async move {
+                let name = id.name().to_string();
+                if let Ok(scan) = level2::download_scan(id).await {
+                    let _ = tx.send(DataMsg::Prefetched {
+                        view,
+                        site,
+                        name,
+                        scan,
+                    });
+                    ctx.request_repaint();
+                }
+            });
         }
     }
 
@@ -8302,9 +8467,19 @@ impl HookEchoApp {
         // would ALSO register as a drag and fight the zoom — the gesture block below owns both
         // pan and zoom while two fingers are down.
         let gesture = ui.input(|i| i.multi_touch());
+        if gesture.is_some() {
+            self.last_gesture_end = Some(std::time::Instant::now());
+        }
+        // A finger still down after the other lifted is the tail of a pinch, not a new drag or a
+        // tap on the map. 150 ms is long enough to cover a normal two-finger lift and short
+        // enough to be invisible when you really did mean to tap.
+        let gesture_tail = self
+            .last_gesture_end
+            .is_some_and(|t| t.elapsed().as_millis() < 150);
+        let quiet = gesture.is_none() && !gesture_tail;
         // The draw tool takes the drag away from the pan, the same deal the measure tool makes
         // with the click: while it's armed, a drag draws. Disarm it (Esc / another tool) to pan.
-        if self.tool == MapTool::Draw && gesture.is_none() {
+        if self.tool == MapTool::Draw && quiet {
             if response.dragged() {
                 self.active = idx;
                 if let Some(pos) = response.interact_pointer_pos() {
@@ -8320,7 +8495,7 @@ impl HookEchoApp {
                     );
                 }
             }
-        } else if response.dragged() && gesture.is_none() {
+        } else if response.dragged() && quiet {
             self.active = idx;
             let d = response.drag_delta();
             self.views[idx].camera.pan_pixels(d.x, d.y);
@@ -8346,21 +8521,29 @@ impl HookEchoApp {
             // The mobile chrome floats over the map, and `multi_touch()` is raw input with no
             // notion of which layer the fingers are on — so a pinch on the bottom sheet used to
             // zoom the map underneath it. The chrome publishes what it covers; skip those rects.
-            // Explicit rects cover the always-on chrome; `is_pointer_over_area` covers every
-            // window and popup on top of it, which is what keeps a pinch on a Skew-T or a
-            // full-screen settings surface from also zooming the map behind it.
-            let occluded = ui.ctx().is_pointer_over_egui()
+            // Explicit rects cover the always-on chrome; the layer test covers every window and
+            // popup on top of it, which is what keeps a pinch on a Skew-T or a full-screen
+            // settings surface from also zooming the map behind it.
+            // `is_pointer_over_egui()` cannot be used here: it tests egui's single pointer
+            // position, which during a two-finger gesture is one arbitrary finger, and it treats
+            // the map's own background layer as "over egui" once the central panel has consumed
+            // the root ui's available rect — so it answered true over bare map and killed every
+            // pinch. Ask about the gesture's own center instead: any layer above the background
+            // there is real chrome.
+            let over_layer = ui
+                .ctx()
+                .layer_id_at(mt.center_pos)
+                .is_some_and(|l| l.order != egui::Order::Background);
+            let occluded = over_layer
                 || self
                     .mobile_occlusion
                     .iter()
                     .any(|r| r.contains(mt.center_pos));
             if prect.contains(mt.center_pos) && !occluded {
                 self.active = idx;
-                let t = mt.translation_delta;
-                if t != egui::Vec2::ZERO {
-                    self.views[idx].camera.pan_pixels(t.x, t.y);
-                    self.follow_cell = None; // a manual pan takes over the camera (pinch-zoom does not)
-                }
+                // Zoom first, then pan: the translation is in screen pixels, and applying it at
+                // the pre-zoom scale over-moves the map by the pinch's own scale factor — which is
+                // what made the anchor trail the fingers.
                 if (mt.zoom_delta - 1.0).abs() > f32::EPSILON {
                     let cursor = (
                         mt.center_pos.x - prect.left(),
@@ -8370,9 +8553,14 @@ impl HookEchoApp {
                         .camera
                         .zoom_at((mt.zoom_delta as f64).log2(), cursor, vp);
                 }
+                let t = mt.translation_delta;
+                if t != egui::Vec2::ZERO {
+                    self.views[idx].camera.pan_pixels(t.x, t.y);
+                    self.follow_cell = None; // a manual pan takes over the camera (pinch-zoom does not)
+                }
             }
         }
-        if response.clicked() {
+        if response.clicked() && quiet {
             self.active = idx;
             if let Some(pos) = response.interact_pointer_pos() {
                 let cam = self.views[idx].camera;
@@ -8702,12 +8890,17 @@ impl HookEchoApp {
         } else {
             1.0
         };
-        let raster_bias = ctx
-            .pixels_per_point()
-            .max(1.0)
-            .log2()
-            .round()
-            .clamp(0.0, bias_cap) as f64;
+        let raster_bias = if self.views[idx].basemap.tiles_are_512() {
+            // 512-px providers already carry the extra detail in the tile itself; biasing on top
+            // would fetch four of them per screen tile for nothing.
+            0.0
+        } else {
+            ctx.pixels_per_point()
+                .max(1.0)
+                .log2()
+                .round()
+                .clamp(0.0, bias_cap) as f64
+        };
         let visible = if is_raster {
             let vis = self.tiles.visible(&cam, vp, raster_bias);
             self.tiles.request_missing(&vis);
@@ -8718,23 +8911,41 @@ impl HookEchoApp {
         // Always run the vector-tile pipeline for its city/town labels — raster basemaps (satellite)
         // bake in faint labels that are hard to read, so we overlay crisp haloed ones. Only the
         // *geometry* is basemap-specific: vector basemaps draw it, raster keeps its own imagery.
-        let (visible_vector, vlabels) = {
+        let (visible_vector, vlabels, visible_vector_tiles) = {
             let vis = self.vtiles.visible(&cam, vp);
             self.vtiles.request_missing(&vis);
             let ids: Vec<crate::render::TileId> = vis.iter().map(|v| v.id).collect();
-            let labels: Vec<crate::vector_tiles::PlaceLabel> = self
-                .vtiles
-                .labels_for(ids.iter())
-                .into_iter()
-                .cloned()
-                .collect();
-            (if is_vector { ids } else { Vec::new() }, labels)
+            // Deep-copying every visible place name every frame (for every pane) showed up at the
+            // 4-10 fps the phone runs at. The set only changes when the visible tiles do, or when
+            // a tile's labels finish tessellating — both bump the key below.
+            let key = (ids.clone(), self.vtiles.label_generation());
+            if self.vlabel_cache.as_ref().is_none_or(|(k, _)| *k != key) {
+                let labels: Vec<crate::vector_tiles::PlaceLabel> = self
+                    .vtiles
+                    .labels_for(ids.iter())
+                    .into_iter()
+                    .cloned()
+                    .collect();
+                self.vlabel_cache = Some((key, labels));
+            }
+            let labels = self
+                .vlabel_cache
+                .as_ref()
+                .map(|(_, l)| l.clone())
+                .unwrap_or_default();
+            (if is_vector { ids } else { Vec::new() }, labels, vis)
         };
         // Drain finished fetches once (on the first pane) — they upload into the shared cache.
         // Eviction lives with the tile manager (it also owns `requested`/`uploaded`), and only
         // the first pane runs it so a multi-pane frame doesn't evict what a later pane needs.
         let drop_tiles = if first && is_raster {
             self.tiles.touch_visible(&visible)
+        } else {
+            Vec::new()
+        };
+        let drop_vector_tiles = if first {
+            self.vtiles.touch_visible(&visible_vector_tiles);
+            self.vtiles.take_evicted()
         } else {
             Vec::new()
         };
@@ -8803,6 +9014,7 @@ impl HookEchoApp {
             new_vector_tiles,
             visible_vector,
             clear_vector,
+            drop_vector_tiles,
         };
         ui.painter()
             .add(egui_wgpu::Callback::new_paint_callback(prect, cb));
@@ -11073,7 +11285,8 @@ impl HookEchoApp {
             return;
         }
         let accent = crate::theme::accent(self.settings.theme);
-        let mut done = false;
+        // Any real interaction — a click, or a touch gesture — means the cards have been read.
+        let done = ctx.input(|i| i.pointer.any_click() || i.multi_touch().is_some());
         // Mobile has its own chrome (dock + sheets) and its own gestures, so it gets its own
         // three callouts rather than pointing at pills that aren't there.
         let marks: &[(&str, egui::Align2, egui::Vec2, &str)] = if cfg!(target_os = "android") {
@@ -11125,6 +11338,10 @@ impl HookEchoApp {
                 .constrain_to(self.chrome_rect)
                 .anchor(align, offset)
                 .order(egui::Order::Foreground)
+                // The map card sits dead center on a phone, and an interactable layer there makes
+                // every pinch a no-op until it's dismissed. The cards take no input at all; any
+                // tap or gesture anywhere dismisses the whole set (below).
+                .interactable(false)
                 .show(ctx, |ui| {
                     style::glass(ui, 240)
                         .stroke(egui::Stroke::new(1.5, accent))
@@ -11135,9 +11352,11 @@ impl HookEchoApp {
                                     .size(style::FONT_BASE)
                                     .color(egui::Color32::from_gray(238)),
                             );
-                            if ui.small_button("Got it").clicked() {
-                                done = true;
-                            }
+                            ui.label(
+                                egui::RichText::new("Tap anywhere to dismiss")
+                                    .size(style::FONT_SM)
+                                    .color(accent),
+                            );
                         });
                 });
         }
@@ -11300,6 +11519,9 @@ impl HookEchoApp {
                 egui::Align2::CENTER_BOTTOM,
                 egui::vec2(0.0, crate::ui::style::LANE_BOTTOM_CHASE),
             )
+            // Self-expires after HOLD_SECS, so it needs no dismiss click — and an interactable
+            // layer over the map blanks pinch wherever it sits.
+            .interactable(false)
             .show(ctx, |ui| {
                 crate::ui::style::glass(ui, 246)
                     .stroke(egui::Stroke::new(
@@ -11307,17 +11529,11 @@ impl HookEchoApp {
                         egui::Color32::from_rgb(230, 100, 100).gamma_multiply(0.8),
                     ))
                     .show(ui, |ui| {
-                        if ui
-                            .label(
-                                egui::RichText::new(&msg)
-                                    .size(crate::ui::style::FONT_BASE)
-                                    .color(egui::Color32::from_rgb(240, 150, 150)),
-                            )
-                            .on_hover_text("Click to dismiss")
-                            .clicked()
-                        {
-                            self.error_chip = None;
-                        }
+                        ui.label(
+                            egui::RichText::new(&msg)
+                                .size(crate::ui::style::FONT_BASE)
+                                .color(egui::Color32::from_rgb(240, 150, 150)),
+                        );
                     });
             });
     }
@@ -11826,6 +12042,8 @@ impl eframe::App for HookEchoApp {
         // `platform::activity`). A frame that follows a gap means the app just came back, so
         // force one refresh rather than making the user wait out the poll interval.
         self.frame_nr = self.frame_nr.wrapping_add(1);
+        #[cfg(debug_assertions)]
+        self.frame_time_overlay(ctx);
         let focused = ctx.input(|i| i.viewport().focused.unwrap_or(true));
         if crate::platform::activity::mark_frame(focused) {
             self.overlay_last_fetch = None;
@@ -12442,7 +12660,13 @@ impl eframe::App for HookEchoApp {
                 self.site_dialog = None;
             }
         }
-        let entries = self.palette_entries();
+        // Only the open settings window reads these; building the registry for a closed window
+        // was a few hundred String allocations every frame.
+        let entries = if self.settings_window.open {
+            self.palette_entries()
+        } else {
+            std::sync::Arc::from(Vec::new())
+        };
         let sync_view = ui::settings_window::SyncView {
             signed_in: self.sync_tokens.is_some(),
             status: &self.sync_status,
@@ -12474,14 +12698,18 @@ impl eframe::App for HookEchoApp {
             .show(ctx, &mut self.settings, &pf_status);
         // Names come from the action registry, so a layer reads the same here as in the layers
         // panel — the enum's Debug spelling ("Mrms") is not a label.
-        let names: std::collections::HashMap<crate::render::FieldLayer, String> = self
-            .palette_entries()
-            .into_iter()
-            .filter_map(|e| match e.action {
-                PaletteAction::ToggleField(l) => Some((l, e.label)),
-                _ => None,
-            })
-            .collect();
+        let names: std::collections::HashMap<crate::render::FieldLayer, String> =
+            if self.layer_window_open {
+                self.palette_entries()
+                    .iter()
+                    .filter_map(|e| match e.action {
+                        PaletteAction::ToggleField(l) => Some((l, e.label.clone())),
+                        _ => None,
+                    })
+                    .collect()
+            } else {
+                Default::default()
+            };
         let active_fields: Vec<(crate::render::FieldLayer, String)> =
             crate::render::FieldLayer::DRAW_ORDER
                 .into_iter()

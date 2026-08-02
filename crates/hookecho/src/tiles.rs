@@ -312,6 +312,14 @@ impl BasemapStyle {
         }
     }
 
+    /// Whether this style's tiles are 512 px rather than 256. Mapbox and MapTiler both serve the
+    /// same tile grid at either size, so one 512 tile replaces the four 256 tiles a high-DPI
+    /// screen would otherwise fetch a level deeper — same pixels on screen, a quarter of the
+    /// requests. Callers use this to drop the retina zoom bias.
+    pub fn tiles_are_512(self) -> bool {
+        matches!(self.provider_kind(), Provider::Mapbox | Provider::MapTiler)
+    }
+
     /// Is this style selectable given which provider keys are set?
     pub fn available(self, mapbox_key: bool, maptiler_key: bool) -> bool {
         match self.provider_kind() {
@@ -334,8 +342,14 @@ impl BasemapStyle {
     }
 
     /// Per-style cache subdir so sources don't collide on disk. Keys never appear here.
-    fn provider(self) -> &'static str {
-        self.slug()
+    fn provider(self) -> String {
+        // 512-px tiles share the tile grid with the 256-px ones they replace, so a cache written
+        // before the switch would keep serving blurry 256s from the same paths. Separate dir.
+        if self.tiles_are_512() {
+            format!("{}-512", self.slug())
+        } else {
+            self.slug().to_string()
+        }
     }
 
     /// Mapbox style-id / MapTiler map-id used in the tile URL.
@@ -417,14 +431,14 @@ impl BasemapStyle {
             },
             Provider::Mapbox => (!mapbox_key.is_empty()).then(|| {
                 format!(
-                    "https://api.mapbox.com/styles/v1/mapbox/{}/tiles/256/{z}/{x}/{y}?access_token={mapbox_key}",
+                    "https://api.mapbox.com/styles/v1/mapbox/{}/tiles/512/{z}/{x}/{y}?access_token={mapbox_key}",
                     self.style_id()
                 )
             }),
             Provider::MapTiler => (!maptiler_key.is_empty()).then(|| {
                 let ext = if self == BasemapStyle::MapTilerSatellite { "jpg" } else { "png" };
                 format!(
-                    "https://api.maptiler.com/maps/{}/256/{z}/{x}/{y}.{ext}?key={maptiler_key}",
+                    "https://api.maptiler.com/maps/{}/{z}/{x}/{y}.{ext}?key={maptiler_key}",
                     self.style_id()
                 )
             }),
@@ -566,11 +580,30 @@ struct FetchedTile {
     height: u32,
 }
 
+/// A finished fetch, or the id of one that failed (so it can leave `requested` and be retried).
+type TileResult = Result<FetchedTile, TileId>;
+
+/// How many tile fetches may be in flight at once. A screenful is ~28 tiles, and firing all of
+/// them at a CDN at once means 28 TLS handshakes competing for the same radio: the first tile
+/// lands later than it would have with a queue behind it.
+const MAX_INFLIGHT: usize = 6;
+
+/// How long a failed tile is left alone before the next visibility pass retries it.
+const RETRY_AFTER: std::time::Duration = std::time::Duration::from_secs(5);
+
 pub struct TileManager {
     spawner: crate::rt::Spawner,
     client: reqwest::Client,
-    tx: Sender<FetchedTile>,
-    rx: Receiver<FetchedTile>,
+    tx: Sender<TileResult>,
+    rx: Receiver<TileResult>,
+    /// Repaint handle. Tile fetches finish on a worker thread; without this the frame that would
+    /// show them waits for whatever wakes egui next — on Android an idle heartbeat up to 250 ms
+    /// away, per tile.
+    ctx: Option<egui::Context>,
+    /// Fetches currently in flight, shared with the tasks so they can decrement on the way out.
+    inflight: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    /// Tiles whose fetch failed, and when. Retried after [`RETRY_AFTER`].
+    failed: std::collections::HashMap<TileId, std::time::Instant>,
     requested: HashSet<TileId>,
     /// Tiles believed to be live on the GPU, newest-touched first. This mirrors the renderer's
     /// tile map exactly: the CPU side decides what gets evicted and tells the renderer, so the
@@ -591,6 +624,10 @@ impl TileManager {
         let (tx, rx) = std::sync::mpsc::channel();
         let client = reqwest::Client::builder()
             .user_agent(USER_AGENT)
+            // Without these a request that never answers holds its slot forever: the tile stays in
+            // `requested`, so that square of map is permanently blank.
+            .connect_timeout(std::time::Duration::from_secs(10))
+            .timeout(std::time::Duration::from_secs(30))
             .build()
             .expect("build reqwest client");
         let cache_root = crate::paths::cache_dir().map(|d| d.join("tiles"));
@@ -602,6 +639,9 @@ impl TileManager {
             client,
             tx,
             rx,
+            ctx: None,
+            inflight: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            failed: std::collections::HashMap::new(),
             requested: HashSet::new(),
             uploaded: LruCache::new(NonZeroUsize::new(RASTER_TILE_CACHE).unwrap()),
             evicted: Vec::new(),
@@ -661,9 +701,21 @@ impl TileManager {
 
     /// Kick off fetches for any visible tiles not yet requested.
     pub fn request_missing(&mut self, visible: &[VisibleTile]) {
+        use std::sync::atomic::Ordering;
         for v in visible {
             if self.requested.contains(&v.id) {
                 continue;
+            }
+            if self
+                .failed
+                .get(&v.id)
+                .is_some_and(|t| t.elapsed() < RETRY_AFTER)
+            {
+                continue;
+            }
+            // Queue the rest for a later pass rather than dumping a whole screenful on the radio.
+            if self.inflight.load(Ordering::Relaxed) >= MAX_INFLIGHT {
+                break;
             }
             let (z, x, y) = v.id;
             let Some(mut url) = self
@@ -693,19 +745,34 @@ impl TileManager {
             });
             let client = self.client.clone();
             let tx = self.tx.clone();
+            let ctx = self.ctx.clone();
+            let inflight = self.inflight.clone();
+            let blocking = self.spawner.clone();
+            self.inflight.fetch_add(1, Ordering::Relaxed);
             self.spawner.spawn(async move {
-                if let Ok(bytes) = load_tile_bytes(&client, &url, path.as_deref()).await {
-                    if let Ok(img) = image::load_from_memory(&bytes) {
-                        let rgba = img.to_rgba8();
-                        let (w, h) = rgba.dimensions();
-                        let _ = tx.send(FetchedTile {
-                            id: (z, x, y),
-                            rgba: rgba.into_raw(),
-                            width: w,
-                            height: h,
+                let bytes = load_tile_bytes(&client, &url, path.as_deref()).await;
+                // PNG/JPEG decode is pure CPU and would otherwise run on the async worker, where
+                // it stalls every other fetch sharing that thread.
+                blocking.spawn_blocking(move || {
+                    let decoded = bytes
+                        .ok()
+                        .and_then(|b| image::load_from_memory(&b).ok())
+                        .map(|img| {
+                            let rgba = img.to_rgba8();
+                            let (w, h) = rgba.dimensions();
+                            FetchedTile {
+                                id: (z, x, y),
+                                rgba: rgba.into_raw(),
+                                width: w,
+                                height: h,
+                            }
                         });
+                    let _ = tx.send(decoded.ok_or((z, x, y)));
+                    inflight.fetch_sub(1, Ordering::Relaxed);
+                    if let Some(ctx) = ctx {
+                        ctx.request_repaint();
                     }
-                }
+                });
             });
         }
     }
@@ -760,16 +827,39 @@ impl TileManager {
     pub fn drain_ready(&mut self) -> Vec<PendingTile> {
         let mut ready = Vec::new();
         while let Ok(t) = self.rx.try_recv() {
-            if self.uploaded.put(t.id, ()).is_none() {
-                ready.push(PendingTile {
-                    id: t.id,
-                    rgba: t.rgba,
-                    width: t.width,
-                    height: t.height,
-                });
+            let t = match t {
+                Ok(t) => t,
+                Err(id) => {
+                    // Out of `requested` so the next visibility pass is the retry, and into
+                    // `failed` so that pass isn't the very next frame.
+                    self.requested.remove(&id);
+                    self.failed.insert(id, std::time::Instant::now());
+                    continue;
+                }
+            };
+            self.failed.remove(&t.id);
+            // `push` (not `put`) hands back whatever it evicted, so the renderer can free the
+            // texture instead of leaking it.
+            let evicted = self.uploaded.push(t.id, ());
+            if let Some((id, _)) = evicted.filter(|(id, _)| *id != t.id) {
+                self.requested.remove(&id);
+                self.evicted.push(id);
+            } else if evicted.is_some() {
+                continue; // already resident
             }
+            ready.push(PendingTile {
+                id: t.id,
+                rgba: t.rgba,
+                width: t.width,
+                height: t.height,
+            });
         }
         ready
+    }
+
+    /// Repaint handle for the fetch tasks — set once at startup.
+    pub fn set_ctx(&mut self, ctx: egui::Context) {
+        self.ctx = Some(ctx);
     }
 
     /// Mark this frame's tiles as most-recently-used and return anything that fell out of the
@@ -779,11 +869,19 @@ impl TileManager {
     pub fn touch_visible(&mut self, visible: &[VisibleTile]) -> Vec<TileId> {
         // Grow to fit a wide view: the cap is a resting size, not a per-frame limit.
         let want = RASTER_TILE_CACHE.max(visible.len() + 16);
-        if self.uploaded.cap().get() != want {
-            self.uploaded.resize(NonZeroUsize::new(want).unwrap());
-        }
         for v in visible {
             self.uploaded.promote(&v.id);
+        }
+        // Pop down to size FIRST: shrinking an `LruCache` evicts silently, and a silently evicted
+        // tile is a texture the renderer never hears about again.
+        while self.uploaded.len() > want {
+            if let Some((id, _)) = self.uploaded.pop_lru() {
+                self.requested.remove(&id);
+                self.evicted.push(id);
+            }
+        }
+        if self.uploaded.cap().get() != want {
+            self.uploaded.resize(NonZeroUsize::new(want).unwrap());
         }
         while self.uploaded.len() > want {
             if let Some((id, _)) = self.uploaded.pop_lru() {
@@ -879,7 +977,7 @@ const DISK_CACHE_BYTES: u64 = if cfg!(target_os = "android") {
 /// writing into it, and a tile deleted out from under a read just gets re-fetched anyway. Chase
 /// packs live under the same root and are deliberately not spared — they are re-downloadable, and
 /// a pack the user still cares about is a pack they have been looking at recently.
-fn sweep_tile_cache(root: &std::path::Path) {
+pub(crate) fn sweep_tile_cache(root: &std::path::Path) {
     fn walk(
         dir: &std::path::Path,
         out: &mut Vec<(std::time::SystemTime, u64, std::path::PathBuf)>,

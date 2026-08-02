@@ -10,6 +10,7 @@ use crate::basemap_style;
 use crate::render::mercator::Camera;
 use crate::render::{OverlayVertex, PendingVectorTile, TileId, VisibleTile};
 use crate::tiles::{load_tile_bytes, tile_cover};
+use lru::LruCache;
 use lyon::path::Path;
 use lyon::tessellation::{
     BuffersBuilder, FillOptions, FillRule, FillTessellator, FillVertex, StrokeOptions,
@@ -18,11 +19,15 @@ use lyon::tessellation::{
 use mvt_reader::feature::Value;
 use mvt_reader::Reader;
 use std::collections::{HashMap, HashSet};
+use std::num::NonZeroUsize;
 use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, Sender};
 
 const TILEJSON_URL: &str = "https://tiles.openfreemap.org/planet";
 const MAX_VECTOR_Z: u8 = 14;
+/// How many tessellated vector tiles to keep on the GPU. Vertex buffers are a few hundred KB
+/// each, so a phone gets a smaller resting set than a desktop.
+const VECTOR_TILE_CACHE: usize = if cfg!(target_os = "android") { 96 } else { 256 };
 const USER_AGENT: &str = "Mozilla/5.0 (compatible; hookecho/0.0; +github.com/d4vid87/hookecho)";
 
 // Fill layers in painter's-algorithm order (drawn after the background quad, before strokes).
@@ -442,11 +447,21 @@ pub struct VectorTileManager {
     client: reqwest::Client,
     tx: Sender<FetchedVector>,
     rx: Receiver<FetchedVector>,
+    /// Repaint handle, so a finished tile draws now instead of at the next idle heartbeat.
+    ctx: Option<egui::Context>,
     requested: HashSet<TileId>,
-    uploaded: HashSet<TileId>,
+    /// Tessellated tiles live on the GPU; this mirrors them so the oldest can be dropped. A
+    /// HashSet here meant a long pan grew vertex buffers until the style changed.
+    uploaded: LruCache<TileId, ()>,
+    /// Ids the LRU pushed out, handed to the renderer to free.
+    vevicted: Vec<TileId>,
     labels: HashMap<TileId, Vec<PlaceLabel>>,
+    /// Bumped on every change to `labels` (see [`Self::label_generation`]).
+    label_gen: u64,
     dark: bool,
     tess_zoom: i32,
+    /// Candidate new tessellation zoom and when it was first seen — see [`Self::note_zoom`].
+    zoom_settled: Option<(i32, std::time::Instant)>,
     cache_root: Option<PathBuf>,
     template: Option<String>,
     template_tx: Sender<Option<String>>,
@@ -460,25 +475,40 @@ impl VectorTileManager {
         let (template_tx, template_rx) = std::sync::mpsc::channel();
         let client = reqwest::Client::builder()
             .user_agent(USER_AGENT)
+            .connect_timeout(std::time::Duration::from_secs(10))
+            .timeout(std::time::Duration::from_secs(30))
             .build()
             .expect("build reqwest client");
         let cache_root = crate::paths::cache_dir().map(|d| d.join("vector"));
+        // The vector cache grew forever; the raster one has been swept at startup all along.
+        if let Some(root) = cache_root.clone() {
+            std::thread::spawn(move || crate::tiles::sweep_tile_cache(&root));
+        }
         Self {
             spawner,
             client,
             tx,
             rx,
+            ctx: None,
             requested: HashSet::new(),
-            uploaded: HashSet::new(),
+            uploaded: LruCache::new(NonZeroUsize::new(VECTOR_TILE_CACHE).unwrap()),
+            vevicted: Vec::new(),
             labels: HashMap::new(),
+            label_gen: 0,
             dark: true,
             tess_zoom: 7,
+            zoom_settled: None,
             cache_root,
             template: None,
             template_tx,
             template_rx,
             template_requested: false,
         }
+    }
+
+    /// Repaint handle for the fetch tasks — set once at startup.
+    pub fn set_ctx(&mut self, ctx: egui::Context) {
+        self.ctx = Some(ctx);
     }
 
     /// Switch dark/light. Returns true if changed (caller should clear the GPU vector cache).
@@ -490,6 +520,7 @@ impl VectorTileManager {
         self.requested.clear();
         self.uploaded.clear();
         self.labels.clear();
+        self.label_gen += 1;
         true
     }
 
@@ -498,14 +529,30 @@ impl VectorTileManager {
     pub fn note_zoom(&mut self, cam_zoom: f64) -> bool {
         let tz = cam_zoom.round() as i32;
         if tz == self.tess_zoom {
+            self.zoom_settled = None;
             return false;
         }
+        // Mid-pinch this fires at every integer step, and each one throws away the whole vector
+        // basemap and re-tessellates it — the worst possible moment. Wait for the zoom to hold
+        // still before acting on it.
+        let settled = *self
+            .zoom_settled
+            .get_or_insert_with(|| (tz, std::time::Instant::now()));
+        if settled.0 != tz {
+            self.zoom_settled = Some((tz, std::time::Instant::now()));
+            return false;
+        }
+        if settled.1.elapsed() < std::time::Duration::from_millis(700) {
+            return false;
+        }
+        self.zoom_settled = None;
         let overzoom = self.tess_zoom > MAX_VECTOR_Z as i32 || tz > MAX_VECTOR_Z as i32;
         self.tess_zoom = tz;
         if overzoom {
             self.requested.clear();
             self.uploaded.clear();
             self.labels.clear();
+            self.label_gen += 1;
             true
         } else {
             false
@@ -551,14 +598,23 @@ impl VectorTileManager {
             let client = self.client.clone();
             let tx = self.tx.clone();
             let id = v.id;
+            let ctx = self.ctx.clone();
+            let blocking = self.spawner.clone();
             self.spawner.spawn(async move {
                 if let Ok(bytes) = load_tile_bytes(&client, &url, path.as_deref()).await {
-                    let (vertices, indices, labels) = build_tile(&bytes, id, dark, tess_zoom);
-                    let _ = tx.send(FetchedVector {
-                        id,
-                        vertices,
-                        indices,
-                        labels,
+                    // gunzip + lyon tessellation is the heaviest CPU in the app after the volume
+                    // decode; running it on the async worker starves every other fetch.
+                    blocking.spawn_blocking(move || {
+                        let (vertices, indices, labels) = build_tile(&bytes, id, dark, tess_zoom);
+                        let _ = tx.send(FetchedVector {
+                            id,
+                            vertices,
+                            indices,
+                            labels,
+                        });
+                        if let Some(ctx) = ctx {
+                            ctx.request_repaint();
+                        }
                     });
                 }
             });
@@ -608,16 +664,54 @@ impl VectorTileManager {
     pub fn drain_ready(&mut self) -> Vec<PendingVectorTile> {
         let mut ready = Vec::new();
         while let Ok(f) = self.rx.try_recv() {
-            if self.uploaded.insert(f.id) {
-                self.labels.insert(f.id, f.labels);
-                ready.push(PendingVectorTile {
-                    id: f.id,
-                    vertices: f.vertices,
-                    indices: f.indices,
-                });
+            match self.uploaded.push(f.id, ()) {
+                Some((id, _)) if id == f.id => continue, // already resident
+                Some((id, _)) => {
+                    self.requested.remove(&id);
+                    self.labels.remove(&id);
+                    self.label_gen += 1;
+                    self.vevicted.push(id);
+                }
+                None => {}
             }
+            self.labels.insert(f.id, f.labels);
+            self.label_gen += 1;
+            ready.push(PendingVectorTile {
+                id: f.id,
+                vertices: f.vertices,
+                indices: f.indices,
+            });
         }
         ready
+    }
+
+    /// Vector tiles the LRU pushed out since the last call, for the renderer to free.
+    pub fn take_evicted(&mut self) -> Vec<TileId> {
+        std::mem::take(&mut self.vevicted)
+    }
+
+    /// Keep this frame's tiles at the front of the LRU so a wide view can't evict what it draws.
+    pub fn touch_visible(&mut self, visible: &[VisibleTile]) {
+        let want = VECTOR_TILE_CACHE.max(visible.len() + 8);
+        for v in visible {
+            self.uploaded.promote(&v.id);
+        }
+        while self.uploaded.len() > want {
+            if let Some((id, _)) = self.uploaded.pop_lru() {
+                self.requested.remove(&id);
+                self.labels.remove(&id);
+                self.label_gen += 1;
+                self.vevicted.push(id);
+            }
+        }
+        if self.uploaded.cap().get() != want {
+            self.uploaded.resize(NonZeroUsize::new(want).unwrap());
+        }
+    }
+
+    /// Bumped whenever the label set changes, so callers can cache derived views of it.
+    pub fn label_generation(&self) -> u64 {
+        self.label_gen
     }
 
     /// Labels for the given visible tile ids (for the egui text pass).

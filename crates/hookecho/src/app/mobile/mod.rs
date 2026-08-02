@@ -286,23 +286,32 @@ impl super::HookEchoApp {
 
         // Owned alert rows (decoupled from `&self`) so the Alerts drawer can list + fly to them.
         let bounds = self.view_bounds();
-        let malerts: Vec<MAlert> = {
+        // Only the open Alerts sheet needs the owned rows; the dock badge just needs the count and
+        // the top escalation, which cost nothing to compute. Building the full list every frame
+        // meant several String clones per alert in view at 4-10 fps.
+        let want_rows = self.mobile_sheet == MobileSheet::Alerts;
+        let (malerts, alert_count, max_esc): (Vec<MAlert>, usize, u8) = {
             let feats = self.active_alert_features();
-            crate::ui::alert_panel::rows_in_view(feats, bounds)
-                .into_iter()
-                .map(|r| MAlert {
-                    id: r.info.id.clone(),
-                    title: r.info.event.clone(),
-                    sub: r.info.area.clone(),
-                    color: Color32::from_rgb(r.color[0], r.color[1], r.color[2]),
-                    lon: r.center.0,
-                    lat: r.center.1,
-                    esc: r.esc,
-                })
-                .collect()
+            let rows = crate::ui::alert_panel::rows_in_view(feats, bounds);
+            let count = rows.len();
+            let max_esc = rows.iter().map(|r| r.esc).max().unwrap_or(0);
+            let owned = if want_rows {
+                rows.into_iter()
+                    .map(|r| MAlert {
+                        id: r.info.id.clone(),
+                        title: r.info.event.clone(),
+                        sub: r.info.area.clone(),
+                        color: Color32::from_rgb(r.color[0], r.color[1], r.color[2]),
+                        lon: r.center.0,
+                        lat: r.center.1,
+                        esc: r.esc,
+                    })
+                    .collect()
+            } else {
+                Vec::new()
+            };
+            (owned, count, max_esc)
         };
-        let alert_count = malerts.len();
-        let max_esc = malerts.iter().map(|a| a.esc).max().unwrap_or(0);
 
         // Read-only copies used by closures that also write back (avoids borrow conflicts).
         let site = self.views[active]

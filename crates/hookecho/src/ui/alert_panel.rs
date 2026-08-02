@@ -35,7 +35,8 @@ pub struct Row<'a> {
 /// deduped by alert id, sorted by severity then soonest expiry.
 pub fn rows_in_view(feats: &[GeoFeature], bounds: (f64, f64, f64, f64)) -> Vec<Row<'_>> {
     let (vx0, vy0, vx1, vy1) = bounds;
-    let mut seen = std::collections::HashSet::new();
+    // Borrowed ids: this runs every frame, and cloning each id was an allocation per alert.
+    let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
     let mut rows: Vec<Row> = Vec::new();
     for f in feats {
         let Some(a) = &f.alert else { continue };
@@ -45,7 +46,7 @@ pub fn rows_in_view(feats: &[GeoFeature], bounds: (f64, f64, f64, f64)) -> Vec<R
         if x1 < vx0 || x0 > vx1 || y1 < vy0 || y0 > vy1 {
             continue; // bbox disjoint from the view
         }
-        if !seen.insert(a.id.clone()) {
+        if !seen.insert(a.id.as_str()) {
             continue;
         }
         rows.push(Row {
