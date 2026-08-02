@@ -1,0 +1,10 @@
+# Build output — gigabytes, and useless to a container build.
+target/
+# The Android app; the container is a server, not a phone.
+android/
+# README screenshots and animations.
+docs/shots/
+# A checked-in Python venv used by the Level 3 golden tests.
+crates/nexrad-level3/tests/venv/
+.git/
+# Note: vendor/ is NOT ignored — the workspace patches gribberish and nexrad-data from there.

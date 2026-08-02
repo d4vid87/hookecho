@@ -463,6 +463,19 @@ hookecho --serve 9000 --bind 0.0.0.0
 JSON answers are cached for a minute and snapshots for five, so polling it every
 30 seconds costs the upstream services nothing extra.
 
+There's a container for it, if that's easier than a systemd unit:
+
+```sh
+docker build -t hookecho .
+docker run -d -p 127.0.0.1:8080:8080 \
+  -v ~/.config/hookecho:/root/.config/hookecho \
+  -v hookecho-cache:/root/.cache/hookecho hookecho
+```
+
+Mount your settings so it reports on your saved locations. The image is ~660 MB
+because it carries Mesa's lavapipe software Vulkan driver — that's what renders
+`/snapshot.png` with no GPU and no display attached.
+
 **It binds loopback unless you tell it otherwise.** This endpoint says where you
 live and what is warned there; `--bind 0.0.0.0` exposes that to everything on
 your network, and there is no authentication in front of it. Put it behind a
