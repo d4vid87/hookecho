@@ -1632,6 +1632,10 @@ pub struct HookEchoApp {
     /// off the raw input, which has no idea egui drew a sheet over the map, so the pane input
     /// block checks the gesture center against these.
     mobile_occlusion: Vec<egui::Rect>,
+    /// When the last two-finger gesture ended. Lifting one finger of a pinch leaves the other
+    /// one down, which egui immediately reads as a click and a fresh drag — an interrogate popup
+    /// and a jump for what was only the end of a zoom. A short cooldown eats both.
+    last_gesture_end: Option<std::time::Instant>,
     /// Spotter Network positions + toggle + refresh clock (filtered to active site at draw).
     show_spotters: bool,
     /// FAA WeatherCams: the toggle, the sites in view, and the bbox//time they were fetched for.
@@ -2134,6 +2138,7 @@ impl HookEchoApp {
             mobile_snap: Default::default(),
             mobile_sheet_drag: None,
             mobile_occlusion: Vec::new(),
+            last_gesture_end: None,
             show_spotters: false,
             show_webcams: false,
             webcams: Vec::new(),
@@ -2780,16 +2785,19 @@ impl HookEchoApp {
         }
         egui::Area::new(egui::Id::new("warning_banners"))
             .constrain_to(self.chrome_rect)
+            // Read-only banner that self-expires in 45 s. Interactable layers occlude the map's
+            // pinch test (`layer_id_at`), and a banner across the top of a phone screen is exactly
+            // where a two-finger gesture lands, so it must not take input.
+            .interactable(false)
             .anchor(
                 egui::Align2::CENTER_TOP,
                 egui::vec2(0.0, crate::ui::style::LANE_TOP_BANNER),
             )
             .show(ctx, |ui| {
-                let mut dismiss = false;
                 for (event, area, at) in &self.warning_banners {
                     // Fade out over the last two seconds instead of vanishing mid-read.
                     let a = ((45.0 - at.elapsed().as_secs_f32()) / 2.0).clamp(0.0, 1.0);
-                    let resp = egui::Frame::new()
+                    egui::Frame::new()
                         .fill(egui::Color32::from_rgb(150, 20, 20).gamma_multiply(a))
                         .stroke(egui::Stroke::new(
                             1.0,
@@ -2817,15 +2825,8 @@ impl HookEchoApp {
                                     }
                                 });
                             });
-                        })
-                        .response;
-                    if resp.interact(egui::Sense::click()).clicked() {
-                        dismiss = true;
-                    }
+                        });
                     ui.add_space(4.0);
-                }
-                if dismiss {
-                    self.warning_banners.clear();
                 }
             });
         // Fast enough for the fade-out; the banner is only up for 45 s.
@@ -5225,6 +5226,8 @@ impl HookEchoApp {
         };
         egui::Area::new(egui::Id::new("chase_hud"))
             .constrain_to(self.chrome_rect)
+            // Pure readout — never take input, or it kills pinch over its corner of the map.
+            .interactable(false)
             .anchor(egui::Align2::LEFT_BOTTOM, egui::vec2(14.0, dy))
             .show(ctx, |ui| {
                 let frame = mobile::glass(ui, 244).stroke(egui::Stroke::new(
@@ -7283,6 +7286,9 @@ impl HookEchoApp {
                 egui::Align2::RIGHT_TOP,
                 egui::vec2(crate::ui::style::LANE_RIGHT_BADGE_X, y),
             )
+            // Only the following state carries a button; the notice is a read-only badge and must
+            // not occlude the map's pinch test.
+            .interactable(following)
             .show(ctx, |ui| {
                 let fill = if following {
                     egui::Color32::from_rgba_unmultiplied(40, 90, 150, 220)
@@ -8302,9 +8308,19 @@ impl HookEchoApp {
         // would ALSO register as a drag and fight the zoom — the gesture block below owns both
         // pan and zoom while two fingers are down.
         let gesture = ui.input(|i| i.multi_touch());
+        if gesture.is_some() {
+            self.last_gesture_end = Some(std::time::Instant::now());
+        }
+        // A finger still down after the other lifted is the tail of a pinch, not a new drag or a
+        // tap on the map. 150 ms is long enough to cover a normal two-finger lift and short
+        // enough to be invisible when you really did mean to tap.
+        let gesture_tail = self
+            .last_gesture_end
+            .is_some_and(|t| t.elapsed().as_millis() < 150);
+        let quiet = gesture.is_none() && !gesture_tail;
         // The draw tool takes the drag away from the pan, the same deal the measure tool makes
         // with the click: while it's armed, a drag draws. Disarm it (Esc / another tool) to pan.
-        if self.tool == MapTool::Draw && gesture.is_none() {
+        if self.tool == MapTool::Draw && quiet {
             if response.dragged() {
                 self.active = idx;
                 if let Some(pos) = response.interact_pointer_pos() {
@@ -8320,7 +8336,7 @@ impl HookEchoApp {
                     );
                 }
             }
-        } else if response.dragged() && gesture.is_none() {
+        } else if response.dragged() && quiet {
             self.active = idx;
             let d = response.drag_delta();
             self.views[idx].camera.pan_pixels(d.x, d.y);
@@ -8366,11 +8382,9 @@ impl HookEchoApp {
                     .any(|r| r.contains(mt.center_pos));
             if prect.contains(mt.center_pos) && !occluded {
                 self.active = idx;
-                let t = mt.translation_delta;
-                if t != egui::Vec2::ZERO {
-                    self.views[idx].camera.pan_pixels(t.x, t.y);
-                    self.follow_cell = None; // a manual pan takes over the camera (pinch-zoom does not)
-                }
+                // Zoom first, then pan: the translation is in screen pixels, and applying it at
+                // the pre-zoom scale over-moves the map by the pinch's own scale factor — which is
+                // what made the anchor trail the fingers.
                 if (mt.zoom_delta - 1.0).abs() > f32::EPSILON {
                     let cursor = (
                         mt.center_pos.x - prect.left(),
@@ -8380,9 +8394,14 @@ impl HookEchoApp {
                         .camera
                         .zoom_at((mt.zoom_delta as f64).log2(), cursor, vp);
                 }
+                let t = mt.translation_delta;
+                if t != egui::Vec2::ZERO {
+                    self.views[idx].camera.pan_pixels(t.x, t.y);
+                    self.follow_cell = None; // a manual pan takes over the camera (pinch-zoom does not)
+                }
             }
         }
-        if response.clicked() {
+        if response.clicked() && quiet {
             self.active = idx;
             if let Some(pos) = response.interact_pointer_pos() {
                 let cam = self.views[idx].camera;
@@ -11083,7 +11102,8 @@ impl HookEchoApp {
             return;
         }
         let accent = crate::theme::accent(self.settings.theme);
-        let mut done = false;
+        // Any real interaction — a click, or a touch gesture — means the cards have been read.
+        let done = ctx.input(|i| i.pointer.any_click() || i.multi_touch().is_some());
         // Mobile has its own chrome (dock + sheets) and its own gestures, so it gets its own
         // three callouts rather than pointing at pills that aren't there.
         let marks: &[(&str, egui::Align2, egui::Vec2, &str)] = if cfg!(target_os = "android") {
@@ -11135,6 +11155,10 @@ impl HookEchoApp {
                 .constrain_to(self.chrome_rect)
                 .anchor(align, offset)
                 .order(egui::Order::Foreground)
+                // The map card sits dead center on a phone, and an interactable layer there makes
+                // every pinch a no-op until it's dismissed. The cards take no input at all; any
+                // tap or gesture anywhere dismisses the whole set (below).
+                .interactable(false)
                 .show(ctx, |ui| {
                     style::glass(ui, 240)
                         .stroke(egui::Stroke::new(1.5, accent))
@@ -11145,9 +11169,11 @@ impl HookEchoApp {
                                     .size(style::FONT_BASE)
                                     .color(egui::Color32::from_gray(238)),
                             );
-                            if ui.small_button("Got it").clicked() {
-                                done = true;
-                            }
+                            ui.label(
+                                egui::RichText::new("Tap anywhere to dismiss")
+                                    .size(style::FONT_SM)
+                                    .color(accent),
+                            );
                         });
                 });
         }
@@ -11310,6 +11336,9 @@ impl HookEchoApp {
                 egui::Align2::CENTER_BOTTOM,
                 egui::vec2(0.0, crate::ui::style::LANE_BOTTOM_CHASE),
             )
+            // Self-expires after HOLD_SECS, so it needs no dismiss click — and an interactable
+            // layer over the map blanks pinch wherever it sits.
+            .interactable(false)
             .show(ctx, |ui| {
                 crate::ui::style::glass(ui, 246)
                     .stroke(egui::Stroke::new(
@@ -11317,17 +11346,11 @@ impl HookEchoApp {
                         egui::Color32::from_rgb(230, 100, 100).gamma_multiply(0.8),
                     ))
                     .show(ui, |ui| {
-                        if ui
-                            .label(
-                                egui::RichText::new(&msg)
-                                    .size(crate::ui::style::FONT_BASE)
-                                    .color(egui::Color32::from_rgb(240, 150, 150)),
-                            )
-                            .on_hover_text("Click to dismiss")
-                            .clicked()
-                        {
-                            self.error_chip = None;
-                        }
+                        ui.label(
+                            egui::RichText::new(&msg)
+                                .size(crate::ui::style::FONT_BASE)
+                                .color(egui::Color32::from_rgb(240, 150, 150)),
+                        );
                     });
             });
     }
