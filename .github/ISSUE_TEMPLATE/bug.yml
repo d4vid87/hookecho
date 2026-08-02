@@ -1,0 +1,50 @@
+name: Bug report
+description: Something in the app is wrong, broken, or lying about the weather.
+labels: ["bug"]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what you got instead.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Output of `hookecho --version`.
+      placeholder: hookecho 0.5.0
+    validations:
+      required: true
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform
+      options:
+        - Linux (Wayland)
+        - Linux (X11)
+        - Windows
+        - macOS
+        - Android
+    validations:
+      required: true
+  - type: input
+    id: site
+    attributes:
+      label: Radar site and time
+      description: Which site, and roughly when — live or a scrubbed archive time.
+      placeholder: KTLX, 2026-05-20 20:30Z (archive)
+  - type: textarea
+    id: logs
+    attributes:
+      label: Log output
+      description: >
+        Run with `RUST_LOG=hookecho=debug,wxdata=debug` and paste the relevant
+        lines. On Android, `adb logcat -s hookecho`.
+      render: text
+  - type: textarea
+    id: extra
+    attributes:
+      label: Anything else
+      description: Screenshots, GPU, or a headless verifier command that reproduces it.

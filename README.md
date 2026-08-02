@@ -472,6 +472,11 @@ shell. See [docs/plugins.md](docs/plugins.md).
   local-parameter fixes; grep `hookecho patch:`).
 - `scripts/shots` — the screenshot harness that produced everything above.
 
+Also worth reading: [docs/DATA.md](docs/DATA.md) — every feed the app decodes,
+with its cadence, latency and whether it needs a key; [ROADMAP.md](ROADMAP.md) —
+what's next and what isn't planned; [CONTRIBUTING.md](CONTRIBUTING.md) — how the
+workspace fits together and what a patch has to clear.
+
 ## Verification
 
 Every data-backed feature has a headless CLI verifier (renders a PNG or prints a
@@ -507,4 +512,4 @@ which drives the real binary on a nested X display — see
 
 ## License
 
-MIT.
+MIT — see [LICENSE](LICENSE).

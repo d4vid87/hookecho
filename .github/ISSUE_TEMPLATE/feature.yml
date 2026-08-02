@@ -1,0 +1,38 @@
+name: Feature request
+description: A product, layer, or piece of behaviour the app should have.
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: need
+    attributes:
+      label: What you're trying to do
+      description: >
+        The situation, not the solution — "I can't tell whether the storm will
+        reach me before dark" says more than "add a countdown widget".
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you'd like it to do
+    validations:
+      required: true
+  - type: input
+    id: source
+    attributes:
+      label: Data source
+      description: >
+        If this needs a new feed, where does it come from, and does it need an
+        API key? Keyless sources are strongly preferred.
+      placeholder: https://…
+  - type: textarea
+    id: prior_art
+    attributes:
+      label: Prior art
+      description: Another app or site that does this well, if there is one.
+  - type: checkboxes
+    id: roadmap
+    attributes:
+      label: Checked the roadmap
+      options:
+        - label: I've read ROADMAP.md, including "Not planned".
