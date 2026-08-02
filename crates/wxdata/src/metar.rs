@@ -31,6 +31,10 @@ pub struct SurfaceOb {
     pub obs_time: Option<i64>,
     /// Flight category: VFR / MVFR / IFR / LIFR (empty if unreported).
     pub flt_cat: String,
+    /// Significant wave height (ft) — buoys only; airports never report it.
+    pub wvht_ft: Option<f32>,
+    /// Dominant wave period (s) — buoys only.
+    pub dpd_s: Option<f32>,
     pub raw: String,
 }
 
@@ -63,6 +67,9 @@ pub fn parse(json: &str) -> Vec<SurfaceOb> {
             elev_m: num(m, "elev").map(|s| s as f32),
             obs_time: m.get("obsTime").and_then(|v| v.as_i64()),
             flt_cat: str_of(m, "fltCat"),
+            // Waves are a buoy field; airports never report them.
+            wvht_ft: None,
+            dpd_s: None,
             raw: str_of(m, "rawOb"),
         });
     }

@@ -9725,6 +9725,20 @@ impl HookEchoApp {
                             egui::Color32::from_rgb(90, 220, 120),
                         );
                     }
+                    // Sea state, under the plot — buoys only, by construction.
+                    if let Some(h) = ob.wvht_ft {
+                        let period = ob
+                            .dpd_s
+                            .map(|s| format!(" {s:.0}s"))
+                            .unwrap_or_else(String::new);
+                        painter.text(
+                            p + egui::vec2(0.0, 9.0),
+                            egui::Align2::CENTER_TOP,
+                            format!("{h:.1}ft{period}"),
+                            egui::FontId::proportional(10.0),
+                            egui::Color32::from_rgb(120, 200, 230),
+                        );
+                    }
                 }
                 // Hover → the raw METAR text.
                 let hit = egui::Rect::from_center_size(p, egui::vec2(16.0, 16.0));

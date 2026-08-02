@@ -20,6 +20,8 @@ const COL_LON: usize = 2;
 const COL_WDIR: usize = 8;
 const COL_WSPD: usize = 9;
 const COL_GST: usize = 10;
+const COL_WVHT: usize = 11;
+const COL_DPD: usize = 12;
 const COL_PRES: usize = 15;
 const COL_ATMP: usize = 17;
 const COL_DEWP: usize = 19;
@@ -78,6 +80,9 @@ pub fn parse(text: &str) -> Vec<SurfaceOb> {
             elev_m: Some(0.0),
             obs_time,
             flt_cat: String::new(),
+            // Wave height is metres in the file; feet is what mariners and the forecasts use.
+            wvht_ft: num(&f, COL_WVHT).map(|m| m * 3.280_84),
+            dpd_s: num(&f, COL_DPD),
             raw: line.trim().to_string(),
         });
     }
@@ -146,6 +151,9 @@ mod tests {
         // The file's own precision is f32, so compare to it and not to an f64 literal.
         assert!((lake.lat - 42.674).abs() < 1e-4 && (lake.lon - -87.026).abs() < 1e-4);
         assert_eq!(lake.wdir_deg, Some(340.0));
+        // 1.5 m of sea, 4-second period.
+        assert!((lake.wvht_ft.unwrap() - 4.921_26).abs() < 1e-3);
+        assert_eq!(lake.dpd_s, Some(4.0));
         // 10 m/s is 19.4 kt — the station plot is in knots.
         assert!((lake.wspd_kt - 19.438_44).abs() < 1e-3);
         assert!((lake.wgst_kt.unwrap() - 23.326_13).abs() < 1e-3);
