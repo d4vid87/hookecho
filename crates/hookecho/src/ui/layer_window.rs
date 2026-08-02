@@ -8,14 +8,15 @@
 use crate::render::FieldLayer;
 use crate::settings::Settings;
 
-/// Show the window. `active` is the field layers currently painting (only those get a slider).
+/// Show the window. `active` is the field layers currently painting, with their display names
+/// (only those get a slider).
 /// Returns `true` if anything changed (the caller bumps the overlay generation so the tessellated
 /// geometry rebuilds).
 pub(crate) fn show(
     ctx: &egui::Context,
     open: &mut bool,
     settings: &mut Settings,
-    active: &[FieldLayer],
+    active: &[(FieldLayer, String)],
 ) -> bool {
     if !*open {
         return false;
@@ -28,10 +29,10 @@ pub(crate) fn show(
         .show(ctx, |ui| {
             if !active.is_empty() {
                 ui.label(egui::RichText::new("Field layers").strong());
-                for layer in active {
+                for (layer, name) in active {
                     let op = settings.field_opacity.entry(*layer).or_insert(1.0);
                     ui.horizontal(|ui| {
-                        ui.label(format!("{layer:?}"));
+                        ui.label(name);
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             changed |= ui
                                 .add(egui::Slider::new(op, 0.05..=1.0).show_value(false))

@@ -6314,7 +6314,10 @@ impl HookEchoApp {
                 OverlayMsg::Fires(perims, incidents) => {
                     self.fire_perims = perims;
                     self.fire_incidents = incidents;
-                    self.overlay_gen += 1; // perimeters ride the tessellated overlay layer
+                    // Perimeters ride the tessellated overlay layer, so the assembled feature
+                    // set has to be rebuilt — bumping the generation alone re-tessellates the
+                    // old list and the perimeters never appear.
+                    self.rebuild_overlays();
                 }
                 OverlayMsg::Stations(obs) => self.stations.ingest(obs),
                 OverlayMsg::Ppef(p) => self.stations.ppef = Some(p),
@@ -12266,10 +12269,25 @@ impl eframe::App for HookEchoApp {
             .collect();
         self.placefile_window
             .show(ctx, &mut self.settings, &pf_status);
-        let active_fields: Vec<crate::render::FieldLayer> = crate::render::FieldLayer::DRAW_ORDER
+        // Names come from the action registry, so a layer reads the same here as in the layers
+        // panel — the enum's Debug spelling ("Mrms") is not a label.
+        let names: std::collections::HashMap<crate::render::FieldLayer, String> = self
+            .palette_entries()
             .into_iter()
-            .filter(|l| self.fields.get(l).is_some_and(|s| s.show))
+            .filter_map(|e| match e.action {
+                PaletteAction::ToggleField(l) => Some((l, e.label)),
+                _ => None,
+            })
             .collect();
+        let active_fields: Vec<(crate::render::FieldLayer, String)> =
+            crate::render::FieldLayer::DRAW_ORDER
+                .into_iter()
+                .filter(|l| self.fields.get(l).is_some_and(|s| s.show))
+                .map(|l| {
+                    let name = names.get(&l).cloned().unwrap_or_else(|| format!("{l:?}"));
+                    (l, name)
+                })
+                .collect();
         if ui::layer_window::show(
             ctx,
             &mut self.layer_window_open,
