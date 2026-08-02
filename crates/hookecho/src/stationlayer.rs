@@ -100,7 +100,7 @@ impl Layer {
     pub fn open_card(
         &mut self,
         ob: StationOb,
-        rt: &tokio::runtime::Handle,
+        spawner: &crate::rt::Spawner,
         http: &reqwest::Client,
         ctx: &egui::Context,
     ) {
@@ -117,7 +117,7 @@ impl Layer {
         card.push(ob.clone(), e);
 
         self.cards.push(card);
-        self.pair_cameras(rt, http, ctx);
+        self.pair_cameras(spawner, http, ctx);
     }
 
     /// Give every camera-less card its nearest camera. Called when a card opens and again each
@@ -125,7 +125,7 @@ impl Layer {
     /// click, and a card opened in that window would otherwise stay blank until reopened.
     pub fn pair_cameras(
         &mut self,
-        rt: &tokio::runtime::Handle,
+        spawner: &crate::rt::Spawner,
         http: &reqwest::Client,
         ctx: &egui::Context,
     ) {
@@ -152,7 +152,7 @@ impl Layer {
             };
             #[cfg(not(target_os = "android"))]
             if let Some(url) = &cam.stream_url {
-                card.cam = Some(crate::cam::Stream::start(url.clone(), rt));
+                card.cam = Some(crate::cam::Stream::start(url.clone(), spawner.handle()));
             }
             // No stream (and on a phone, never a stream): fall back to the newest still.
             let streaming = cfg!(not(target_os = "android")) && cam.stream_url.is_some();
@@ -164,7 +164,7 @@ impl Layer {
             }
         }
         for url in stills {
-            self.fetch_still(url, http, rt, ctx);
+            self.fetch_still(url, http, spawner, ctx);
         }
     }
 
@@ -173,12 +173,12 @@ impl Layer {
         &mut self,
         url: String,
         http: &reqwest::Client,
-        rt: &tokio::runtime::Handle,
+        spawner: &crate::rt::Spawner,
         ctx: &egui::Context,
     ) {
         let (tx, _) = self.stills.get_or_insert_with(std::sync::mpsc::channel);
         let (tx, http, ctx) = (tx.clone(), http.clone(), ctx.clone());
-        rt.spawn(async move {
+        spawner.spawn(async move {
             match fetch_image(&http, &url).await {
                 Ok(img) => {
                     let _ = tx.send((url, img));
@@ -193,7 +193,7 @@ impl Layer {
     /// minute or so; without this the picture on the card is whatever it was when it opened.
     pub fn refresh_stills(
         &mut self,
-        rt: &tokio::runtime::Handle,
+        spawner: &crate::rt::Spawner,
         http: &reqwest::Client,
         ctx: &egui::Context,
     ) {
@@ -203,7 +203,7 @@ impl Layer {
             .filter_map(|c| c.still_key.clone())
             .collect();
         for url in urls {
-            self.fetch_still(url, http, rt, ctx);
+            self.fetch_still(url, http, spawner, ctx);
         }
     }
 

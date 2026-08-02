@@ -34,6 +34,8 @@ pub mod profiling;
 pub mod rain_arrival;
 pub mod render;
 pub mod render3d;
+/// Where background work goes: a tokio runtime natively, the page's event loop on the web.
+pub mod rt;
 /// The `--serve` HTTP endpoint (desktop only — Android has no headless mode to render from).
 #[cfg(not(target_os = "android"))]
 pub mod serve;

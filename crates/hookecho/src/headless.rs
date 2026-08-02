@@ -41,7 +41,7 @@ fn national_basemap(
         let style = crate::tiles::BasemapStyle::from_slug(&slug);
         if style.is_raster() {
             let settings = crate::settings::Settings::load();
-            let mut tm = TileManager::new(rt.handle().clone());
+            let mut tm = TileManager::new(crate::rt::Spawner::new(rt.handle().clone()));
             tm.set_style(style);
             let vis = tm.visible(camera, vp, 0.0);
             let tiles = rt.block_on(crate::tiles::fetch_visible(
@@ -171,7 +171,7 @@ pub fn run(
     let settings = crate::settings::Settings::load();
     let is_vector = matches!(basemap, BasemapStyle::Dark | BasemapStyle::Light);
     let (new_tiles, visible) = if basemap.is_raster() {
-        let mut tm = TileManager::new(rt.handle().clone());
+        let mut tm = TileManager::new(crate::rt::Spawner::new(rt.handle().clone()));
         tm.set_style(basemap); // so the zoom cap matches this source (GOES layers top out early)
         let vis = tm.visible(&camera, vp, 0.0);
         let tiles = rt.block_on(crate::tiles::fetch_visible(
@@ -1218,7 +1218,7 @@ pub fn run_chasepack(
     let dlon = radius_km / (111.0 * lat.to_radians().cos().abs().max(0.01));
     let (min_lon, min_lat, max_lon, max_lat) = (lon - dlon, lat - dlat, lon + dlon, lat + dlat);
     let z_lo = zmax.saturating_sub(4).max(2);
-    let mgr = TileManager::new(rt.handle().clone());
+    let mgr = TileManager::new(crate::rt::Spawner::new(rt.handle().clone()));
     let jobs = mgr.pack_jobs(style, min_lon, min_lat, max_lon, max_lat, z_lo, zmax);
     let total = jobs.len();
     if total == 0 {

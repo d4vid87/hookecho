@@ -20,7 +20,6 @@ use mvt_reader::Reader;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, Sender};
-use tokio::runtime::Handle;
 
 const TILEJSON_URL: &str = "https://tiles.openfreemap.org/planet";
 const MAX_VECTOR_Z: u8 = 14;
@@ -439,7 +438,7 @@ struct FetchedVector {
 
 /// Async vector-tile manager for the GUI (mirrors [`crate::tiles::TileManager`]).
 pub struct VectorTileManager {
-    rt: Handle,
+    spawner: crate::rt::Spawner,
     client: reqwest::Client,
     tx: Sender<FetchedVector>,
     rx: Receiver<FetchedVector>,
@@ -456,7 +455,7 @@ pub struct VectorTileManager {
 }
 
 impl VectorTileManager {
-    pub fn new(rt: Handle) -> Self {
+    pub fn new(spawner: crate::rt::Spawner) -> Self {
         let (tx, rx) = std::sync::mpsc::channel();
         let (template_tx, template_rx) = std::sync::mpsc::channel();
         let client = reqwest::Client::builder()
@@ -465,7 +464,7 @@ impl VectorTileManager {
             .expect("build reqwest client");
         let cache_root = crate::paths::cache_dir().map(|d| d.join("vector"));
         Self {
-            rt,
+            spawner,
             client,
             tx,
             rx,
@@ -530,7 +529,7 @@ impl VectorTileManager {
                 let client = self.client.clone();
                 let tx = self.template_tx.clone();
                 let dir = self.cache_root.clone();
-                self.rt.spawn(async move {
+                self.spawner.spawn(async move {
                     let t = fetch_tilejson(&client, dir.as_deref()).await;
                     let _ = tx.send(t);
                 });
@@ -552,7 +551,7 @@ impl VectorTileManager {
             let client = self.client.clone();
             let tx = self.tx.clone();
             let id = v.id;
-            self.rt.spawn(async move {
+            self.spawner.spawn(async move {
                 if let Ok(bytes) = load_tile_bytes(&client, &url, path.as_deref()).await {
                     let (vertices, indices, labels) = build_tile(&bytes, id, dark, tess_zoom);
                     let _ = tx.send(FetchedVector {

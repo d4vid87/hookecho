@@ -566,7 +566,7 @@ struct FetchedTile {
 }
 
 pub struct TileManager {
-    rt: Handle,
+    spawner: crate::rt::Spawner,
     client: reqwest::Client,
     tx: Sender<FetchedTile>,
     rx: Receiver<FetchedTile>,
@@ -586,7 +586,7 @@ pub struct TileManager {
 }
 
 impl TileManager {
-    pub fn new(rt: Handle) -> Self {
+    pub fn new(spawner: crate::rt::Spawner) -> Self {
         let (tx, rx) = std::sync::mpsc::channel();
         let client = reqwest::Client::builder()
             .user_agent(USER_AGENT)
@@ -597,7 +597,7 @@ impl TileManager {
             std::thread::spawn(move || sweep_tile_cache(&root));
         }
         Self {
-            rt,
+            spawner,
             client,
             tx,
             rx,
@@ -692,7 +692,7 @@ impl TileManager {
             });
             let client = self.client.clone();
             let tx = self.tx.clone();
-            self.rt.spawn(async move {
+            self.spawner.spawn(async move {
                 if let Ok(bytes) = load_tile_bytes(&client, &url, path.as_deref()).await {
                     if let Ok(img) = image::load_from_memory(&bytes) {
                         let rgba = img.to_rgba8();

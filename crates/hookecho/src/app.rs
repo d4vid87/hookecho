@@ -1287,7 +1287,11 @@ fn distinct_tilts(elevations: &[f32], want: usize) -> Vec<usize> {
 const CONTROL_BUTTONS: usize = 6;
 
 pub struct HookEchoApp {
+    /// The native runtime, kept alive for as long as the app is. Work is spawned through
+    /// `spawner`, which is the same thing natively and the browser's event loop on the web.
+    #[cfg(not(target_arch = "wasm32"))]
     _rt: Runtime,
+    spawner: crate::rt::Spawner,
     tiles: TileManager,
     vtiles: crate::vector_tiles::VectorTileManager,
     settings: Settings,
@@ -1852,8 +1856,9 @@ impl HookEchoApp {
         }
 
         let settings = Settings::load();
-        let tiles = TileManager::new(rt.handle().clone());
-        let vtiles = crate::vector_tiles::VectorTileManager::new(rt.handle().clone());
+        let spawner = crate::rt::Spawner::new(rt.handle().clone());
+        let tiles = TileManager::new(spawner.clone());
+        let vtiles = crate::vector_tiles::VectorTileManager::new(spawner.clone());
         let (msg_tx, msg_rx) = std::sync::mpsc::channel();
         let (overlay_tx, overlay_rx) = std::sync::mpsc::channel();
         let (update_tx, update_rx) = std::sync::mpsc::channel();
@@ -1890,6 +1895,7 @@ impl HookEchoApp {
 
         let mut app = Self {
             vtiles,
+            spawner,
             _rt: rt,
             tiles,
             saved: settings.clone(),
@@ -2367,7 +2373,7 @@ impl HookEchoApp {
         let tx = self.overlay_tx.clone();
         let cap = self.field_texture_cap();
         let ctx = ctx.clone();
-        self._rt.spawn_blocking(move || {
+        self.spawner.spawn_blocking(move || {
             let mut out: Vec<(FL, wxdata::mrms::MrmsField)> = Vec::new();
             if mask & !HAIL_BITS != 0 {
                 if let Some(d) = wxdata::derived::derive(&sweeps, &opts) {
@@ -2421,7 +2427,7 @@ impl HookEchoApp {
         let tx = self.overlay_tx.clone();
         let ctx = ctx.clone();
         let cap = self.field_texture_cap();
-        self._rt.spawn(async move {
+        self.spawner.spawn(async move {
             match source.fetch(&http).await {
                 Ok(msg) => {
                     // Max-pool oversized grids here, on the fetch task: MRMS rotation tracks and
@@ -2644,7 +2650,7 @@ impl HookEchoApp {
         let http = self.http.clone();
         let tx = self.update_tx.clone();
         let ctx2 = ctx.clone();
-        self._rt.spawn(async move {
+        self.spawner.spawn(async move {
             let url = "https://api.github.com/repos/d4vid87/hookecho/releases/latest";
             // GitHub rejects requests without a User-Agent.
             let tag = async {
@@ -3253,7 +3259,7 @@ impl HookEchoApp {
         let http = self.http.clone();
         let (title, body) = (title.to_string(), body.to_string());
         let priority = if urgent { "urgent" } else { "high" };
-        self._rt.spawn(async move {
+        self.spawner.spawn(async move {
             let res = http
                 .post(format!("https://ntfy.sh/{topic}"))
                 .header("Title", title)
@@ -3394,7 +3400,7 @@ impl HookEchoApp {
         let (tx, rx) = std::sync::mpsc::channel();
         self.sync_rx = Some(rx);
         self.sync_status = "Finishing sign-in…".into();
-        self._rt.spawn(async move {
+        self.spawner.spawn(async move {
             let msg = match crate::cloud::exchange(
                 &id,
                 &secret,
@@ -3450,7 +3456,7 @@ impl HookEchoApp {
         self.sync_rx = Some(rx);
         self.sync_checked = Some(std::time::Instant::now());
         self.sync_status = "Syncing…".into();
-        self._rt.spawn(async move {
+        self.spawner.spawn(async move {
             let mut tokens = tokens;
             let access = match crate::cloud::access_token(&id, &secret, &mut tokens).await {
                 Ok(a) => a,
@@ -3615,7 +3621,7 @@ impl HookEchoApp {
         // failures are logged rather than surfaced — a dead relay must not break chase mode.
         let tx = share.sender();
         let id = share.id.clone();
-        self._rt.spawn(async move {
+        self.spawner.spawn(async move {
             let client = reqwest::Client::new();
             let body = match serde_json::to_string(&me) {
                 Ok(b) => b,
@@ -3669,7 +3675,7 @@ impl HookEchoApp {
         let (tx, rx) = std::sync::mpsc::channel();
         self.forecast_rx = Some((key, rx));
         let http = self.http.clone();
-        self._rt.spawn(async move {
+        self.spawner.spawn(async move {
             let res = wxdata::forecast::fetch(&http, lat, lon)
                 .await
                 .map_err(|e| e.to_string());
@@ -3689,7 +3695,7 @@ impl HookEchoApp {
         let (tx, rx) = std::sync::mpsc::channel();
         self.forecast_obs_rx = Some((key, rx));
         let http = self.http.clone();
-        self._rt.spawn(async move {
+        self.spawner.spawn(async move {
             match wxdata::obs::fetch_nearest(&http, lat, lon).await {
                 Ok(s) => {
                     if let Some(o) = s.obs.first() {
@@ -3757,7 +3763,7 @@ impl HookEchoApp {
         let (tx, rx) = std::sync::mpsc::channel();
         self.verify_rx = Some(rx);
         let http = self.http.clone();
-        self._rt.spawn(async move {
+        self.spawner.spawn(async move {
             let res = wxdata::verify::fetch(&http, &wfo, start, end)
                 .await
                 .map_err(|e| e.to_string());
@@ -3772,7 +3778,7 @@ impl HookEchoApp {
         self.sounding_window.busy = true;
         self.sounding_window.sounding = None;
         let http = self.http.clone();
-        self._rt.spawn(async move {
+        self.spawner.spawn(async move {
             let res = wxdata::sounding::fetch(&http, lon, lat)
                 .await
                 .map_err(|e| e.to_string());
@@ -3807,7 +3813,7 @@ impl HookEchoApp {
         self.raob_rx = Some(rx);
         let http = self.http.clone();
         let cache = crate::paths::cache_dir();
-        self._rt.spawn(async move {
+        self.spawner.spawn(async move {
             let res = wxdata::raob::fetch(&http, station, when, cache)
                 .await
                 .map_err(|e| e.to_string());
@@ -4158,7 +4164,7 @@ impl HookEchoApp {
         self.climo_warn_rx = Some(rx);
         let http = self.http.clone();
         let edate = chrono::Utc::now().format("%Y-%m-%d").to_string();
-        self._rt.spawn(async move {
+        self.spawner.spawn(async move {
             let res =
                 wxdata::archive_warnings::fetch_point_events(&http, lon, lat, "1986-01-01", &edate)
                     .await
@@ -4179,7 +4185,7 @@ impl HookEchoApp {
         self.climo_rx = Some(rx);
         let http = self.http.clone();
         let cache = crate::paths::cache_dir().map(|d| d.join("torclimo_1950-2022.csv"));
-        self._rt.spawn(async move {
+        self.spawner.spawn(async move {
             let res = load_or_fetch_climo(&http, cache)
                 .await
                 .map_err(|e| e.to_string());
@@ -4230,7 +4236,7 @@ impl HookEchoApp {
         self.digest_rx = Some(rx);
         self.digest_window.busy = true;
         let http = self.http.clone();
-        self._rt.spawn(async move {
+        self.spawner.spawn(async move {
             let res = crate::digest::claude(&http, &key, &templated)
                 .await
                 .map_err(|e| e.to_string());
@@ -4740,7 +4746,7 @@ impl HookEchoApp {
             let http = self.http.clone();
             let tx = self.geocode_tx.clone();
             let ctx2 = ctx.clone();
-            self._rt.spawn(async move {
+            self.spawner.spawn(async move {
                 let _ = tx.send(wxdata::geocode::search(&http, &place).await);
                 ctx2.request_repaint();
             });
@@ -6590,7 +6596,7 @@ impl HookEchoApp {
         self.afd_busy = true;
         self.afd_error = None;
         let http = self.http.clone();
-        self._rt.spawn(async move {
+        self.spawner.spawn(async move {
             let res = wxdata::afd::fetch(&http, lat, lon)
                 .await
                 .map_err(|e| e.to_string());
@@ -6825,7 +6831,7 @@ impl HookEchoApp {
         {
             self.station_last_poll = Some(Instant::now());
             // Still-only cameras (every camera, on a phone) get a fresh frame on the same clock.
-            let (rt, http) = (self._rt.handle().clone(), self.http.clone());
+            let (rt, http) = (self.spawner.clone(), self.http.clone());
             self.stations.refresh_stills(&rt, &http, ctx);
             self.spawn_overlay(
                 ctx,
@@ -6952,7 +6958,7 @@ impl HookEchoApp {
         // Windy hands back the still's URL inline, so only the FAA needs a second round trip.
         let inline = cam.image_url.clone();
         let cam_id = cam.id;
-        self._rt.spawn(async move {
+        self.spawner.spawn(async move {
             let url = match inline {
                 Some(u) => Some(u),
                 None => match wxdata::webcams::latest_image(&http, cam_id).await {
@@ -7089,7 +7095,7 @@ impl HookEchoApp {
         let http = self.http.clone();
         let tx = self.pf_icon_tx.clone();
         let ctx2 = ctx.clone();
-        self._rt.spawn(async move {
+        self.spawner.spawn(async move {
             match fetch_icon_sheet(&http, &url).await {
                 Ok(image) => {
                     let _ = tx.send((key, image));
@@ -7480,7 +7486,7 @@ impl HookEchoApp {
             let http = self.http.clone();
             let tx = self.pf_icon_tx.clone();
             let ctx2 = ctx.clone();
-            self._rt.spawn(async move {
+            self.spawner.spawn(async move {
                 match fetch_icon_sheet(&http, &url).await {
                     Ok(image) => {
                         let _ = tx.send((url, image));
@@ -7531,7 +7537,7 @@ impl HookEchoApp {
             // Terminal radars have no Level 2 feed and no archive: one synthesized volume per
             // poll, from the newest Level 3 tilt products.
             let http = self.http.clone();
-            self._rt.spawn(async move {
+            self.spawner.spawn(async move {
                 let msg = match wxdata::tdwr::fetch_volume(&http, &site).await {
                     Ok((name, _, _)) if current_name.as_deref() == Some(name.as_str()) => {
                         DataMsg::UpToDate {
@@ -7557,7 +7563,7 @@ impl HookEchoApp {
             });
             return;
         }
-        self._rt.spawn(async move {
+        self.spawner.spawn(async move {
             // Ask for two: the newest volume is usually still uploading, and one caught before
             // its metadata record lands can't be decoded at all. Falling back one volume shows
             // ~5-minute-old data instead of nothing.
@@ -7791,6 +7797,7 @@ impl HookEchoApp {
         ctx: egui::Context,
     ) -> tokio::task::JoinHandle<()> {
         let tx = self.msg_tx.clone();
+        // The one spawn whose handle is kept: the live streamer is aborted on a site change.
         self._rt.spawn(async move {
             let end_site = site.clone();
             let cb_tx = tx.clone();
@@ -7979,7 +7986,7 @@ impl HookEchoApp {
                     let http = self.http.clone();
                     let tx = self.overlay_tx.clone();
                     let ctx2 = ctx.clone();
-                    self._rt.spawn(async move {
+                    self.spawner.spawn(async move {
                         let cells = level3::fetch_cells(&http, &site).await;
                         let _ = tx.send(OverlayMsg::Cells(site, cells));
                         ctx2.request_repaint();
@@ -8090,7 +8097,7 @@ impl HookEchoApp {
     /// Download a specific archive volume (a scrubbed timeline frame), routed to `view_idx`.
     fn spawn_frame_fetch(&self, view_idx: usize, site: String, id: Identifier, ctx: egui::Context) {
         let tx = self.msg_tx.clone();
-        self._rt.spawn(async move {
+        self.spawner.spawn(async move {
             let name = id.name().to_string();
             let time = id.date_time().unwrap_or_else(Utc::now);
             let msg = match level2::download_scan(id).await {
@@ -8121,7 +8128,7 @@ impl HookEchoApp {
         ctx: egui::Context,
     ) {
         let tx = self.msg_tx.clone();
-        self._rt.spawn(async move {
+        self.spawner.spawn(async move {
             match level2::list_volumes(&site, date).await {
                 Ok(frames) => {
                     let _ = tx.send(DataMsg::Frames {
@@ -8404,7 +8411,7 @@ impl HookEchoApp {
                 if let Some(ob) = station_hit {
                     self.cell_popup = None;
                     self.warning_popup = None;
-                    let (rt, http) = (self._rt.handle().clone(), self.http.clone());
+                    let (rt, http) = (self.spawner.clone(), self.http.clone());
                     self.stations.open_card(ob, &rt, &http, ctx);
                     return;
                 }
@@ -12006,7 +12013,7 @@ impl eframe::App for HookEchoApp {
             let busy = self.glm_polling.clone();
             let http = self.http.clone();
             let ctx2 = ctx.clone();
-            self._rt.spawn(async move {
+            self.spawner.spawn(async move {
                 // Decode outside the lock: holding it across an await would stall the painter.
                 let mut local = wxdata::glm::GlmFeed::new(15);
                 if let Some(last) = feed.lock().ok().and_then(|f| f.last_key().cloned()) {
@@ -12482,7 +12489,7 @@ impl eframe::App for HookEchoApp {
             let http = self.http.clone();
             let tx = self.geocode_tx.clone();
             let ctx2 = ctx.clone();
-            self._rt.spawn(async move {
+            self.spawner.spawn(async move {
                 let _ = tx.send(wxdata::geocode::search(&http, &query).await);
                 ctx2.request_repaint();
             });
@@ -12525,7 +12532,7 @@ impl eframe::App for HookEchoApp {
         // for the next frame itself rather than waiting for the idle heartbeat.
         {
             // A card opened before the camera catalog landed gets its camera as soon as it does.
-            let (rt, http) = (self._rt.handle().clone(), self.http.clone());
+            let (rt, http) = (self.spawner.clone(), self.http.clone());
             self.stations.pair_cameras(&rt, &http, ctx);
             let tz = self.active_tz();
             if self.stations.show_cards(ctx, tz) {
@@ -12899,7 +12906,7 @@ impl eframe::App for HookEchoApp {
                     let (tx, rx) = std::sync::mpsc::channel();
                     self.goes_times_rx = Some(rx);
                     let http = self.http.clone();
-                    self._rt.spawn(async move {
+                    self.spawner.spawn(async move {
                         let times =
                             crate::tiles::fetch_goes_times(&http, raster_style, 8, 48).await;
                         let _ = tx.send(times);
