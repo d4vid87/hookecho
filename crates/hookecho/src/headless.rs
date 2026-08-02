@@ -695,6 +695,7 @@ pub fn run_live(out_path: &str, site: &str, moment: Moment) -> anyhow::Result<()
             None => level2::download_latest_scan(site, day).await?,
         };
         println!("base volume: {} sweeps", base.sweeps().len());
+        let base = std::sync::Arc::new(base);
 
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
         let site_owned = site.to_string();

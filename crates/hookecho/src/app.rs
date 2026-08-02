@@ -7845,9 +7845,10 @@ impl HookEchoApp {
             (
                 want,
                 v.site.clone(),
-                // The streamer needs its own mutable base to merge chunks into, so this is the
-                // one place a decoded volume is still deep-copied — once per stream start.
-                v.volume.as_ref().map(|vol| (*vol.scan).clone()),
+                // Shared with the pane: the streamer merges into a new Scan rather than mutating
+                // this one, so it only needs a refcount, not the tens of MB a deep copy cost on
+                // the UI thread at every stream start.
+                v.volume.as_ref().map(|vol| Arc::clone(&vol.scan)),
             )
         };
 
@@ -7879,7 +7880,7 @@ impl HookEchoApp {
         &self,
         view_idx: usize,
         site: String,
-        base: Scan,
+        base: Arc<Scan>,
         ctx: egui::Context,
     ) -> tokio::task::JoinHandle<()> {
         let tx = self.msg_tx.clone();
