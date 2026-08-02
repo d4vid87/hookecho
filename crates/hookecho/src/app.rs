@@ -169,6 +169,8 @@ enum OverlayMsg {
     Webcams(Vec<wxdata::webcams::CamSite>),
     /// Wildfire perimeters + incident points for the requested bbox.
     Fires(Vec<GeoFeature>, Vec<wxdata::wfigs::FireIncident>),
+    /// AirNow AQI observations for the requested bbox.
+    Aqi(Vec<wxdata::airnow::AqiOb>),
     /// Live surface stations for the telemetry cards.
     Stations(Vec<wxdata::stations::StationOb>),
     /// The current PPEF electric-field table (ionospheric, mV/m).
@@ -264,6 +266,8 @@ enum OverlaySource {
     Webcams(f64, f64, f64, f64, String),
     /// Wildfire perimeters + incidents within a lon/lat bbox `(west, south, east, north)`.
     Fires(f64, f64, f64, f64),
+    /// AirNow AQI within a lon/lat bbox, plus the user's key (never fetched without one).
+    Aqi(f64, f64, f64, f64, String),
     /// Live stations in a lat/lon bbox, plus the view centre the keyed networks are asked around
     /// and the keys themselves (empty = that network stays off).
     Stations {
@@ -540,6 +544,9 @@ impl OverlaySource {
                         Vec::new()
                     });
                 OverlayMsg::Fires(perims, incidents)
+            }
+            OverlaySource::Aqi(w, s, e, n, key) => {
+                OverlayMsg::Aqi(wxdata::airnow::fetch_bbox(http, &key, [w, s, e, n]).await?)
             }
             OverlaySource::Stations {
                 bbox,
@@ -826,6 +833,7 @@ pub(crate) enum OverlayToggle {
     Metar,
     Webcams,
     Fires,
+    Aqi,
     Stations,
     Dat,
     Gauges,
@@ -1533,6 +1541,12 @@ pub struct HookEchoApp {
     fire_incidents: Vec<wxdata::wfigs::FireIncident>,
     fire_bounds: Option<(f64, f64, f64, f64)>,
     fire_last_fetch: Option<Instant>,
+    /// AirNow AQI dots: toggle, the obs in view, and the bbox/clock they were fetched for. Needs
+    /// a user key; without one the layer never fetches.
+    show_aqi: bool,
+    aqi: Vec<wxdata::airnow::AqiOb>,
+    aqi_bounds: Option<(f64, f64, f64, f64)>,
+    aqi_last_fetch: Option<Instant>,
     /// Live station cards: the toggle, the layer state, and the poll clocks behind it.
     show_stations: bool,
     stations: crate::stationlayer::Layer,
@@ -1999,6 +2013,10 @@ impl HookEchoApp {
             fire_incidents: Vec::new(),
             fire_bounds: None,
             fire_last_fetch: None,
+            show_aqi: false,
+            aqi: Vec::new(),
+            aqi_bounds: None,
+            aqi_last_fetch: None,
             webcam_bounds: None,
             webcam_last_fetch: None,
             show_stations: false,
@@ -5098,6 +5116,7 @@ impl HookEchoApp {
             T::Metar => &mut self.show_metar,
             T::Webcams => &mut self.show_webcams,
             T::Fires => &mut self.show_fires,
+            T::Aqi => &mut self.show_aqi,
             T::Stations => &mut self.show_stations,
             T::Dat => &mut self.show_dat,
             T::Gauges => &mut self.show_gauges,
@@ -5514,6 +5533,13 @@ impl HookEchoApp {
                 "Severe",
                 "Wildfires (WFIGS)",
                 "Active fire perimeters and incident points from the interagency fire feed",
+                false,
+            ),
+            (
+                T::Aqi,
+                "Obs",
+                "Air quality (AirNow)",
+                "EPA AQI at every monitor in view \u{2014} needs a free AirNow key in Settings",
                 false,
             ),
             (
@@ -6211,6 +6237,7 @@ impl HookEchoApp {
                     self.pf_icon_tex.retain(|k, _| !k.starts_with("cam:"));
                     self.webcams = sites;
                 }
+                OverlayMsg::Aqi(obs) => self.aqi = obs,
                 OverlayMsg::Fires(perims, incidents) => {
                     self.fire_perims = perims;
                     self.fire_incidents = incidents;
@@ -6496,6 +6523,33 @@ impl HookEchoApp {
             }
             self.mosaic_bounds = Some((min_lon, min_lat, max_lon, max_lat));
             self.spawn_overlay(ctx, OverlaySource::Mosaic(sites));
+        }
+    }
+
+    /// Pull AirNow AQI for the view. Monitors report hourly, so does this; without a key the
+    /// layer stays empty rather than firing requests that can only 401.
+    fn sync_aqi(&mut self, ctx: &egui::Context) {
+        if !self.show_aqi || self.settings.airnow_key.is_empty() {
+            return;
+        }
+        let (min_lon, min_lat, max_lon, max_lat) = self.view_bounds();
+        let stale = self
+            .aqi_last_fetch
+            .is_none_or(|t| t.elapsed().as_secs() >= 900);
+        let (clon, clat) = ((min_lon + max_lon) * 0.5, (min_lat + max_lat) * 0.5);
+        let drifted = self.aqi_bounds.is_none_or(|(lo0, la0, lo1, la1)| {
+            let (mlon, mlat) = ((lo0 + lo1) * 0.5, (la0 + la1) * 0.5);
+            let (hw, hh) = ((lo1 - lo0) * 0.25, (la1 - la0) * 0.25);
+            (clon - mlon).abs() > hw || (clat - mlat).abs() > hh
+        });
+        if stale || drifted {
+            let b = (min_lon, min_lat, max_lon, max_lat);
+            self.aqi_last_fetch = Some(Instant::now());
+            self.aqi_bounds = Some(b);
+            self.spawn_overlay(
+                ctx,
+                OverlaySource::Aqi(b.0, b.1, b.2, b.3, self.settings.airnow_key.clone()),
+            );
         }
     }
 
@@ -8250,7 +8304,31 @@ impl HookEchoApp {
                             })
                             .flatten()
                             .cloned();
-                        if let Some(f) = fire {
+                        let air = self
+                            .show_aqi
+                            .then(|| {
+                                self.aqi.iter().find(|o| {
+                                    let w = crate::render::mercator::lonlat_to_world(o.lon, o.lat);
+                                    let (sx, sy) = cam.world_to_screen(w, vp);
+                                    let (dx, dy) =
+                                        (prect.left() + sx - pos.x, prect.top() + sy - pos.y);
+                                    dx * dx + dy * dy <= tap_r2(12.0)
+                                })
+                            })
+                            .flatten()
+                            .cloned();
+                        if let Some(o) = air {
+                            self.cell_popup = None;
+                            self.warning_popup = None;
+                            let c = o.color();
+                            self.detail = Some(Detail {
+                                title: format!("AQI {} — {}", o.aqi, o.category_name()),
+                                body: format!("{}\n{}", o.site, o.param),
+                                color: [c[0], c[1], c[2], 255],
+                                image: None,
+                                link: None,
+                            });
+                        } else if let Some(f) = fire {
                             self.cell_popup = None;
                             self.warning_popup = None;
                             self.detail = Some(Detail {
@@ -9034,6 +9112,32 @@ impl HookEchoApp {
                     color,
                     egui::Stroke::new(1.0, egui::Color32::from_black_alpha(160)),
                 ));
+            }
+        }
+
+        // AirNow monitors: a dot in the EPA category color with the AQI beside it.
+        if self.show_aqi {
+            for o in &self.aqi {
+                let w = crate::render::mercator::lonlat_to_world(o.lon, o.lat);
+                let (sx, sy) = cam.world_to_screen(w, vp);
+                let p = egui::pos2(prect.left() + sx, prect.top() + sy);
+                if !prect.contains(p) {
+                    continue;
+                }
+                let c = o.color();
+                painter.circle(
+                    p,
+                    4.0,
+                    egui::Color32::from_rgb(c[0], c[1], c[2]),
+                    egui::Stroke::new(1.0, egui::Color32::from_black_alpha(160)),
+                );
+                painter.text(
+                    p + egui::vec2(6.0, 0.0),
+                    egui::Align2::LEFT_CENTER,
+                    o.aqi.to_string(),
+                    egui::FontId::proportional(11.0),
+                    egui::Color32::from_rgb(c[0], c[1], c[2]),
+                );
             }
         }
 
@@ -11518,6 +11622,7 @@ impl eframe::App for HookEchoApp {
         self.sync_metar(ctx);
         self.sync_webcams(ctx);
         self.sync_fires(ctx);
+        self.sync_aqi(ctx);
         self.sync_stations(ctx);
         self.sync_dat(ctx);
         self.sync_mosaic(ctx);

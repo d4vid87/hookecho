@@ -153,6 +153,9 @@ pub struct Settings {
     /// Weather Underground API key — adds nearby PWS stations to the live station cards.
     #[serde(default)]
     pub wu_key: String,
+    /// AirNow API key — turns on the AQI station layer. Held locally, same as the other keys.
+    #[serde(default)]
+    pub airnow_key: String,
     /// Per-field-layer opacity 0..1 (Layer Manager sliders). A missing entry means fully opaque.
     #[serde(default)]
     pub field_opacity: std::collections::HashMap<crate::render::FieldLayer, f32>,
@@ -504,6 +507,7 @@ impl Default for Settings {
             tempest_token: String::new(),
             wu_key: String::new(),
             field_opacity: Default::default(),
+            airnow_key: String::new(),
             windy_key: String::new(),
             field_mill_url: String::new(),
             start_view: None,
@@ -726,6 +730,7 @@ mod tests {
             tempest_token: String::new(),
             wu_key: String::new(),
             field_opacity: Default::default(),
+            airnow_key: String::new(),
             windy_key: String::new(),
             field_mill_url: String::new(),
             maptiler_key: "mt.test".to_string(),

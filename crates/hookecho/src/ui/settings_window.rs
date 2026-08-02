@@ -381,6 +381,12 @@ fn basemaps_tab(ui: &mut egui::Ui, settings: &mut Settings) {
     );
     ui.add_space(6.0);
     key_field(ui, "Windy API key", &mut settings.windy_key);
+    ui.add_space(12.0);
+    ui.separator();
+    ui.label("Air quality");
+    ui.weak("Optional. A free key from docs.airnowapi.org turns on the AirNow AQI layer.");
+    ui.add_space(6.0);
+    key_field(ui, "AirNow API key", &mut settings.airnow_key);
     ui.add_space(8.0);
     ui.label("Field mill URL (JSON, kV/m)");
     ui.text_edit_singleline(&mut settings.field_mill_url)
