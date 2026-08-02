@@ -126,12 +126,19 @@ nexrad-model = "1.0.0-rc.2"
 eframe = { version = "0.35", default-features = false, features = ["wayland", "x11"] }
 ksni = { version = "0.3", default-features = false, features = ["blocking", "async-io"] }
 
-# Android: eframe's NativeActivity backend + the winit android-activity glue (feature-unioned onto
+# Android: eframe's GameActivity backend + the winit android-activity glue (feature-unioned onto
 # the base eframe). `winit` is named directly so `android_main` can take the `AndroidApp` handle;
 # its version tracks the one eframe 0.35 pulls (winit 0.30), so the type matches eframe's field.
+#
+# GameActivity, not NativeActivity: NativeActivity's soft keyboard only delivers raw key events,
+# which on a modern IME means ASCII and nothing else — no autocorrect, no suggestion bar, no
+# composing region, no non-Latin input. GameActivity carries GameTextInput, which is the real
+# system IME. Both lines below MUST name the same backend: `android-activity` refuses to build
+# with two backend features enabled, so flipping only one of them is a compile error, not a
+# silent fallback.
 [target.'cfg(target_os = "android")'.dependencies]
-eframe = { version = "0.35", default-features = false, features = ["android-native-activity"] }
-winit = { version = "0.30", features = ["android-native-activity"] }
+eframe = { version = "0.35", default-features = false, features = ["android-game-activity"] }
+winit = { version = "0.30", features = ["android-game-activity"] }
 android_logger = "0.14"
 # System clipboard bridge (paste into egui text fields); the soft-keyboard calls go through
 # android-activity's built-in helpers instead.

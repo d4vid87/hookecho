@@ -1,14 +1,24 @@
 # Hook Echo-WX for Android
 
 The Android app is the **same Rust codebase** as the desktop build, compiled to a `cdylib`
-(`libhookecho.so`) and loaded by a `NativeActivity`. There is no Java/Kotlin — `android_main` in
-[`crates/hookecho/src/lib.rs`](../crates/hookecho/src/lib.rs) is the entry point.
+(`libhookecho.so`) and loaded by a `GameActivity` — `android_main` in
+[`crates/hookecho/src/lib.rs`](../crates/hookecho/src/lib.rs) is the entry point, and Rust draws
+every pixel. The Kotlin is deliberately thin: the activity itself (deep links + predictive back),
+the background alert service, and the home-screen widget.
+
+GameActivity rather than NativeActivity for one reason — GameTextInput is the real system IME.
+Its editor state is bridged into egui events by `platform::pump_ime`; nothing upstream does that
+for you. It also requires an AppCompat theme (`res/values/themes.xml`) or the activity throws on
+creation.
 
 - **Target:** `arm64-v8a`, minSdk 29 (Android 10), Vulkan.
 - **What differs from desktop:** storage routes to the app-private data dir
   ([`paths.rs`](../crates/hookecho/src/paths.rs)); native file dialogs are replaced by a fixed
   `exports/` folder ([`dialog.rs`](../crates/hookecho/src/dialog.rs)); the tray, gpsd GPS, and MP4
-  export (ffmpeg) are hidden; touch adds pinch-zoom and fatter tap targets; field grids decimate to
+  export (ffmpeg) are hidden; the UI is a Material 3 layout (map-first, one persistent bottom sheet with snap points, a docked
+  toolbar, full-screen surfaces instead of floating windows) rather than the desktop chrome —
+  see [`app/mobile/`](../crates/hookecho/src/app/mobile/) and the tokens in
+  [`ui/m3.rs`](../crates/hookecho/src/ui/m3.rs); field grids decimate to
   the device's real texture cap. Everything else — the radar/MRMS/HRRR pipelines and every data
   feature — is shared, unchanged.
 

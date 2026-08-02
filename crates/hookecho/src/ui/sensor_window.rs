@@ -14,7 +14,7 @@ pub fn show(
     tz: Option<wxdata::tz::Tz>,
 ) -> bool {
     let mut open = true;
-    crate::ui::fit_phone(ctx, egui::Window::new("Sensors"))
+    crate::ui::phone_surface(ctx, egui::Window::new("Sensors"))
         .open(&mut open)
         .default_size([340.0, 520.0])
         .show(ctx, |ui| match data {

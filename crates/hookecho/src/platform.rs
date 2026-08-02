@@ -56,6 +56,10 @@ pub fn apply_safe_area(_ctx: &egui::Context, _raw_input: &mut egui::RawInput) {}
 #[cfg(not(target_os = "android"))]
 pub fn show_soft_input(_show: bool) {}
 
+/// Translate the Android IME's editor state into egui input events (no-op off-Android).
+#[cfg(not(target_os = "android"))]
+pub fn pump_ime(_raw_input: &mut egui::RawInput) {}
+
 /// Read the system clipboard (Android JNI; desktop text fields already paste natively).
 #[cfg(not(target_os = "android"))]
 pub fn clipboard_text() -> Option<String> {
@@ -185,15 +189,29 @@ mod android {
         APP.get()
     }
 
-    /// Convert the activity's content rect (pixels, relative to the full window) into egui
-    /// safe-area insets (points). On gesture-nav phones the system bars are transparent
-    /// overlays, so the content rect legitimately reports full-screen — floor the top/bottom at
-    /// the standard status-bar / gesture-bar heights so the UI clears them anyway.
-    /// `// ponytail: real per-device insets need a JNI WindowInsets query — floors cover v1.`
+    /// Feed egui the real window insets, in points.
+    ///
+    /// The source of truth is `decorView.getRootWindowInsets()` masked to system bars, the
+    /// display cutout and the IME — that last one is what makes a focused text field rise above
+    /// the keyboard instead of hiding under it, and it is why the phone UI no longer has to pin
+    /// dialogs to the top of the screen.
+    ///
+    /// The content rect is the fallback, floored at the standard status-bar / gesture-bar heights
+    /// (on gesture-nav phones the bars are transparent overlays, so the content rect honestly
+    /// reports full-screen and the floors are all that keeps chrome off them).
     pub fn apply_safe_area(ctx: &egui::Context, raw_input: &mut egui::RawInput) {
         let Some(app) = APP.get() else { return };
-        let rect = app.content_rect();
         let ppp = ctx.pixels_per_point();
+        if let Some(i) = super::android_insets::window_insets() {
+            raw_input.safe_area_insets = Some(egui::SafeAreaInsets(egui::epaint::MarginF32 {
+                left: i[0] as f32 / ppp,
+                right: i[2] as f32 / ppp,
+                top: i[1] as f32 / ppp,
+                bottom: i[3] as f32 / ppp,
+            }));
+            return;
+        }
+        let rect = app.content_rect();
         let (mut left, mut right, mut top, mut bottom) = (0.0f32, 0.0f32, 0.0f32, 0.0f32);
         if rect.bottom > rect.top {
             if let Some(win) = app.native_window() {
@@ -219,15 +237,87 @@ mod android_ime {
     use jni::JNIEnv;
 
     /// Ask Android for the soft keyboard. `android-activity` does the JNI for this one.
+    ///
+    /// Showing also resets the GameTextInput buffer and our mirror of it, so the first keystroke
+    /// into a newly focused field doesn't replay whatever the last field contained.
     pub fn show_soft_input(show: bool) {
         let Some(app) = super::android::app() else {
             return;
         };
         if show {
+            reset_text_input(app);
             app.show_soft_input(true);
         } else {
             app.hide_soft_input(false);
+            reset_text_input(app);
         }
+    }
+
+    fn reset_text_input(app: &winit::platform::android::activity::AndroidApp) {
+        app.set_text_input_state(TextInputState {
+            text: String::new(),
+            selection: TextSpan { start: 0, end: 0 },
+            compose_region: None,
+        });
+        *MIRROR.lock().unwrap() = String::new();
+    }
+
+    use std::sync::Mutex;
+    use winit::platform::android::activity::input::{TextInputState, TextSpan};
+
+    /// Our copy of what GameTextInput last reported.
+    static MIRROR: Mutex<String> = Mutex::new(String::new());
+
+    /// Turn GameTextInput's buffer into egui input events.
+    ///
+    /// GameActivity replaces NativeActivity's raw ASCII key events with a real IME — autocorrect,
+    /// suggestions, composing regions, every language the phone has — but it reports the result as
+    /// *editor state*, not keystrokes, and neither winit nor egui reads that state. So the bridge
+    /// lives here: each frame, diff the IME's buffer against our mirror and synthesise the
+    /// backspaces and text insertions that get egui's focused field to the same string.
+    ///
+    /// ponytail: the diff assumes edits land at the end of the buffer (common prefix, then delete
+    /// the tail and retype it), which is exactly what typing, autocorrect and suggestion taps do
+    /// in the single-line fields this app has. A caret moved into the middle of a long string
+    /// retypes more than it strictly needs to — invisible unless the field is huge. Track the
+    /// reported selection instead if a multi-line field ever shows up.
+    pub fn pump_ime(raw_input: &mut egui::RawInput) {
+        let Some(app) = super::android::app() else {
+            return;
+        };
+        let text = app.text_input_state().text;
+        let mut mirror = MIRROR.lock().unwrap();
+        if text == *mirror {
+            return;
+        }
+        let old: Vec<char> = mirror.chars().collect();
+        let new: Vec<char> = text.chars().collect();
+        let prefix = old
+            .iter()
+            .zip(new.iter())
+            .take_while(|(a, b)| a == b)
+            .count();
+        for _ in prefix..old.len() {
+            raw_input.events.push(egui::Event::Key {
+                key: egui::Key::Backspace,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            });
+            raw_input.events.push(egui::Event::Key {
+                key: egui::Key::Backspace,
+                physical_key: None,
+                pressed: false,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            });
+        }
+        let inserted: String = new[prefix..].iter().collect();
+        if !inserted.is_empty() {
+            raw_input.events.push(egui::Event::Text(inserted));
+        }
+        *mirror = text;
     }
 
     /// Read the system clipboard as text: `ClipboardManager.getPrimaryClip()` →
@@ -348,6 +438,175 @@ mod android_alerts {
             let _ = env.exception_clear();
         }
         res.map(|_| ())
+    }
+}
+
+/// Predictive back (Android 13+ gesture, mandatory from 16).
+///
+/// Two directions cross the JNI boundary here — the first Kotlin→Rust call in the app:
+/// Rust pushes "I have something to dismiss" so the OS knows whether to animate its home-screen
+/// preview, and Kotlin calls back into `nativeOnBack` when the user actually completes the
+/// gesture while the app is consuming it.
+#[cfg(target_os = "android")]
+mod android_back {
+    use jni::objects::{JObject, JValue};
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    /// Set by `nativeOnBack`, drained by the UI thread on its next frame. The frame that reads it
+    /// runs the same `mobile_back` chain the old `BrowserBack` key event did.
+    static PENDING: AtomicBool = AtomicBool::new(false);
+    /// Last value pushed to Kotlin, so a steady state costs no JNI at all.
+    static PUSHED: AtomicBool = AtomicBool::new(false);
+
+    /// # Safety
+    /// Called by the JVM with a valid env/object pair; touches only an atomic.
+    #[unsafe(no_mangle)]
+    pub extern "system" fn Java_zip_batman_hookecho_MainActivity_nativeOnBack(
+        _env: jni::JNIEnv,
+        _this: JObject,
+    ) {
+        PENDING.store(true, Ordering::Relaxed);
+    }
+
+    pub fn take_back_pressed() -> bool {
+        PENDING.swap(false, Ordering::Relaxed)
+    }
+
+    /// Tell the activity whether the app will consume the next back gesture.
+    pub fn set_back_consumed(consumed: bool) {
+        if PUSHED.swap(consumed, Ordering::Relaxed) == consumed {
+            return;
+        }
+        match push(consumed) {
+            Ok(()) => log::debug!("predictive back: consumed={consumed}"),
+            Err(e) => log::warn!("predictive back state push failed: {e:?}"),
+        }
+    }
+
+    fn push(consumed: bool) -> jni::errors::Result<()> {
+        let Some(app) = super::android::app() else {
+            return Ok(());
+        };
+        let vm = unsafe { jni::JavaVM::from_raw(app.vm_as_ptr() as *mut jni::sys::JavaVM) }?;
+        let mut env = vm.attach_current_thread()?;
+        let activity = unsafe { JObject::from_raw(app.activity_as_ptr() as jni::sys::jobject) };
+        let res = env.call_method(
+            &activity,
+            "setBackConsumed",
+            "(Z)V",
+            &[JValue::Bool(consumed as u8)],
+        );
+        if res.is_err() {
+            let _ = env.exception_clear();
+        }
+        res.map(|_| ())
+    }
+}
+
+/// Whether a back press/gesture is waiting to be handled (Android only).
+#[cfg(not(target_os = "android"))]
+pub fn take_back_pressed() -> bool {
+    false
+}
+
+/// Tell Android whether the app will consume the next back gesture (no-op elsewhere).
+#[cfg(not(target_os = "android"))]
+pub fn set_back_consumed(_consumed: bool) {}
+
+/// `WindowInsets` glue for [`android::apply_safe_area`].
+///
+/// Answers in *pixels* as `[left, top, right, bottom]`, or `None` when the query fails (API 29,
+/// no attached window yet, a thrown exception) so the caller falls back to the content rect.
+#[cfg(target_os = "android")]
+mod android_insets {
+    use jni::objects::{JObject, JValue};
+    use jni::JNIEnv;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::Mutex;
+
+    /// Frames between refreshes.
+    ///
+    /// ponytail: polled, not pushed. Insets change on rotation, on a bar hiding, and when the
+    /// keyboard animates — the first two are rare and the third is a ~250ms animation, so 1-in-6
+    /// frames (~10Hz at 60fps) is imperceptible and costs a JNI round trip instead of an
+    /// OnApplyWindowInsetsListener plumbed back through Kotlin. Add the listener if the keyboard
+    /// animation ever visibly stutters the layout.
+    const REFRESH_FRAMES: u64 = 6;
+
+    static TICK: AtomicU64 = AtomicU64::new(0);
+    static CACHE: Mutex<Option<[i32; 4]>> = Mutex::new(None);
+
+    pub(super) fn window_insets() -> Option<[i32; 4]> {
+        let n = TICK.fetch_add(1, Ordering::Relaxed);
+        let mut cache = CACHE.lock().unwrap_or_else(|e| e.into_inner());
+        if n % REFRESH_FRAMES == 0 || cache.is_none() {
+            if let Some(v) = read() {
+                *cache = Some(v);
+            }
+        }
+        *cache
+    }
+
+    fn read() -> Option<[i32; 4]> {
+        let app = super::android::app()?;
+        let vm = unsafe { jni::JavaVM::from_raw(app.vm_as_ptr() as *mut jni::sys::JavaVM) }.ok()?;
+        let mut env = vm.attach_current_thread().ok()?;
+        let activity = unsafe { JObject::from_raw(app.activity_as_ptr() as jni::sys::jobject) };
+        match query(&mut env, &activity) {
+            Ok(v) => v,
+            Err(e) => {
+                log::warn!("window insets query failed, using content rect: {e:?}");
+                let _ = env.exception_clear();
+                None
+            }
+        }
+    }
+
+    /// `decorView.rootWindowInsets.getInsets(systemBars | displayCutout | ime)`.
+    ///
+    /// `getInsets` is API 30; on 29 the call throws `NoSuchMethodError`, which `read` turns into
+    /// the content-rect fallback.
+    fn query(env: &mut JNIEnv, activity: &JObject) -> jni::errors::Result<Option<[i32; 4]>> {
+        let window = env
+            .call_method(activity, "getWindow", "()Landroid/view/Window;", &[])?
+            .l()?;
+        let decor = env
+            .call_method(&window, "getDecorView", "()Landroid/view/View;", &[])?
+            .l()?;
+        let insets = env
+            .call_method(
+                &decor,
+                "getRootWindowInsets",
+                "()Landroid/view/WindowInsets;",
+                &[],
+            )?
+            .l()?;
+        if insets.is_null() {
+            return Ok(None);
+        }
+        let types = env.find_class("android/view/WindowInsets$Type")?;
+        let mut mask = 0i32;
+        for m in ["systemBars", "displayCutout", "ime"] {
+            mask |= env.call_static_method(&types, m, "()I", &[])?.i()?;
+        }
+        let got = env
+            .call_method(
+                &insets,
+                "getInsets",
+                "(I)Landroid/graphics/Insets;",
+                &[JValue::Int(mask)],
+            )?
+            .l()?;
+        if got.is_null() {
+            return Ok(None);
+        }
+        let f = |env: &mut JNIEnv, name: &str| env.get_field(&got, name, "I").and_then(|v| v.i());
+        Ok(Some([
+            f(env, "left")?,
+            f(env, "top")?,
+            f(env, "right")?,
+            f(env, "bottom")?,
+        ]))
     }
 }
 
@@ -694,7 +953,9 @@ mod android_tts {
 #[cfg(target_os = "android")]
 pub use android::{apply_safe_area, set_app};
 #[cfg(target_os = "android")]
-pub use android_ime::{clipboard_text, show_soft_input};
+pub use android_back::{set_back_consumed, take_back_pressed};
+#[cfg(target_os = "android")]
+pub use android_ime::{clipboard_text, pump_ime, show_soft_input};
 #[cfg(target_os = "android")]
 pub use android_location::start_location;
 #[cfg(target_os = "android")]

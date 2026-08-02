@@ -37,7 +37,7 @@ impl VerifyWindow {
             return act;
         }
         let mut open = self.open;
-        crate::ui::fit_phone(ctx, egui::Window::new("Warning Verification"))
+        crate::ui::phone_surface(ctx, egui::Window::new("Warning Verification"))
             .open(&mut open)
             .default_width(560.0)
             .default_height(460.0)

@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  GameActivity descends from AppCompatActivity, and AppCompat throws
+  ("You need to use a Theme.AppCompat theme") the moment the activity is created under anything
+  else. So this theme is not polish — it is a hard requirement of the GameActivity migration.
+
+  Everything else here makes the window get out of the renderer's way: no action bar, no window
+  background to overdraw the first frame, and transparent system bars so the map draws edge to
+  edge behind them. The Rust side insets its chrome off the real WindowInsets, so drawing under
+  the bars is correct rather than clipped.
+-->
+<resources>
+    <style name="Theme.HookEcho" parent="Theme.AppCompat.NoActionBar">
+        <item name="android:windowBackground">@android:color/black</item>
+        <item name="android:windowNoTitle">true</item>
+        <item name="android:windowFullscreen">false</item>
+        <item name="android:windowDrawsSystemBarBackgrounds">true</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <!-- Light glyphs in the system bars: the map underneath is dark far more often than not. -->
+        <item name="android:windowLightStatusBar">false</item>
+    </style>
+</resources>

@@ -26,7 +26,7 @@ pub fn show(
     now: Option<(&str, &wxdata::obs::Observation)>,
 ) -> bool {
     let mut open = true;
-    crate::ui::fit_phone(ctx, egui::Window::new("Forecast"))
+    crate::ui::phone_surface(ctx, egui::Window::new("Forecast"))
         .open(&mut open)
         .default_size([460.0, 460.0])
         .show(ctx, |ui| {

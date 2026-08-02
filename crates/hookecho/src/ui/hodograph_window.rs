@@ -29,7 +29,7 @@ pub fn show(
     tz: Option<wxdata::tz::Tz>,
 ) -> bool {
     let mut open = true;
-    crate::ui::fit_phone(ctx, egui::Window::new("VAD wind profile"))
+    crate::ui::phone_surface(ctx, egui::Window::new("VAD wind profile"))
         .open(&mut open)
         .default_size([420.0, 460.0])
         .show(ctx, |ui| {

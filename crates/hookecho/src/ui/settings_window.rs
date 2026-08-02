@@ -72,7 +72,7 @@ impl SettingsWindow {
         self.prev_open = self.open;
 
         let mut open = self.open;
-        crate::ui::fit_phone(ctx, egui::Window::new("Settings"))
+        crate::ui::phone_surface(ctx, egui::Window::new("Settings"))
             .open(&mut open)
             .default_size([460.0, 340.0])
             .show(ctx, |ui| {
@@ -90,7 +90,15 @@ impl SettingsWindow {
                         (Tab::Hotkeys, "Hotkeys"),
                         (Tab::Sync, "Sync"),
                     ] {
-                        ui.selectable_value(&mut self.tab, tab, label);
+                        // Chips on the phone: a `selectable_value` is a text-height target, and
+                        // seven of them wrapped across a 360pt screen is a game of darts.
+                        if cfg!(target_os = "android") {
+                            if crate::ui::m3::chip(ui, label, self.tab == tab).clicked() {
+                                self.tab = tab;
+                            }
+                        } else {
+                            ui.selectable_value(&mut self.tab, tab, label);
+                        }
                     }
                 });
                 ui.separator();

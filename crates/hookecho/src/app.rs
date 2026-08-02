@@ -1623,6 +1623,15 @@ pub struct HookEchoApp {
     mobile_sheet: mobile::MobileSheet,
     /// Android: hide all floating chrome to view the whole radar (toggled by the eye button).
     mobile_chrome_hidden: bool,
+    /// Android: how far open the persistent bottom sheet is.
+    mobile_snap: mobile::sheet::SheetSnap,
+    /// Android: the sheet's live height while a finger is dragging it (`None` = at/easing to a
+    /// snap).
+    mobile_sheet_drag: Option<f32>,
+    /// Android: rects the mobile chrome covers this frame. Two-finger gestures are read straight
+    /// off the raw input, which has no idea egui drew a sheet over the map, so the pane input
+    /// block checks the gesture center against these.
+    mobile_occlusion: Vec<egui::Rect>,
     /// Spotter Network positions + toggle + refresh clock (filtered to active site at draw).
     show_spotters: bool,
     /// FAA WeatherCams: the toggle, the sites in view, and the bbox//time they were fetched for.
@@ -2122,6 +2131,9 @@ impl HookEchoApp {
             pf_icon_tx,
             mobile_sheet: mobile::MobileSheet::None,
             mobile_chrome_hidden: false,
+            mobile_snap: Default::default(),
+            mobile_sheet_drag: None,
+            mobile_occlusion: Vec::new(),
             show_spotters: false,
             show_webcams: false,
             webcams: Vec::new(),
@@ -4070,7 +4082,7 @@ impl HookEchoApp {
             return;
         }
         let mut open = self.climo_open;
-        crate::ui::fit_phone(ctx, egui::Window::new("Tornado climatology"))
+        crate::ui::phone_surface(ctx, egui::Window::new("Tornado climatology"))
             .open(&mut open)
             .default_width(360.0)
             .show(ctx, |ui| {
@@ -8331,7 +8343,18 @@ impl HookEchoApp {
         // zoom level; anchor it at the gesture center so the pinched point stays put. Fires for
         // the pane the gesture centers over. No-op with no touch.
         if let Some(mt) = gesture {
-            if prect.contains(mt.center_pos) {
+            // The mobile chrome floats over the map, and `multi_touch()` is raw input with no
+            // notion of which layer the fingers are on — so a pinch on the bottom sheet used to
+            // zoom the map underneath it. The chrome publishes what it covers; skip those rects.
+            // Explicit rects cover the always-on chrome; `is_pointer_over_area` covers every
+            // window and popup on top of it, which is what keeps a pinch on a Skew-T or a
+            // full-screen settings surface from also zooming the map behind it.
+            let occluded = ui.ctx().is_pointer_over_egui()
+                || self
+                    .mobile_occlusion
+                    .iter()
+                    .any(|r| r.contains(mt.center_pos));
+            if prect.contains(mt.center_pos) && !occluded {
                 self.active = idx;
                 let t = mt.translation_delta;
                 if t != egui::Vec2::ZERO {
@@ -11783,6 +11806,9 @@ impl eframe::App for HookEchoApp {
     fn raw_input_hook(&mut self, ctx: &egui::Context, raw_input: &mut egui::RawInput) {
         // Android: feed the status-bar / gesture-bar insets so no UI draws under system chrome.
         crate::platform::apply_safe_area(ctx, raw_input);
+        // Android: GameActivity's IME reports edits as editor state, not keystrokes; turn that
+        // state into the text/backspace events egui's focused field expects.
+        crate::platform::pump_ime(raw_input);
         // Android: clipboard text fetched by the paste bar lands as a real egui Paste event, so
         // the focused text field inserts it exactly like Ctrl+V would.
         if let Some(text) = self.pending_paste.take() {
@@ -12333,8 +12359,11 @@ impl eframe::App for HookEchoApp {
 
         self.chrome_rect = root.available_rect_before_wrap();
 
-        // Chrome: touch-first on Android (top bar + dock + slide-up sheets), desktop otherwise
-        // (the floating map-first chrome below). Both funnel into the same `UiActions` handling.
+        // Chrome: touch-first on Android (top chips + bottom sheet + docked toolbar), desktop
+        // otherwise (the floating map-first chrome below). Both funnel into the same `UiActions`
+        // handling. The occlusion rects are rebuilt from scratch every frame; a stale rect would
+        // keep swallowing gestures over a sheet that closed.
+        self.mobile_occlusion.clear();
         let mut actions = ui::layer_options::UiActions::default();
         if cfg!(target_os = "android") && !self.obs_mode {
             actions = self.mobile_chrome(root, ctx);
@@ -12868,7 +12897,7 @@ impl eframe::App for HookEchoApp {
             if let Some(tex) = self.cappi_tex.clone() {
                 open = ui::cappi_window::show(ctx, &tex, &mut self.cappi_alt_km, 300.0);
             } else {
-                crate::ui::fit_phone(ctx, egui::Window::new("CAPPI slice"))
+                crate::ui::phone_surface(ctx, egui::Window::new("CAPPI slice"))
                     .open(&mut open)
                     .show(ctx, |ui| {
                         ui.weak("No volume loaded in the active pane.");
@@ -13027,8 +13056,8 @@ impl eframe::App for HookEchoApp {
         }
 
         // Android text input: summon/dismiss the soft keyboard as egui focus moves in/out of
-        // text fields, and float a Paste button (the system clipboard is unreachable from a
-        // NativeActivity keyboard otherwise — egui gets the text as a Paste event next frame).
+        // text fields, and float a Paste button (the system clipboard is unreachable from the
+        // soft keyboard otherwise — egui gets the text as a Paste event next frame).
         if cfg!(target_os = "android") {
             let wants = ctx.egui_wants_keyboard_input();
             if wants != self.ime_shown {

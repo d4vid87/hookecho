@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- The radar scope's night background: the icon's own disc color, and the splash behind it. -->
+    <color name="hookecho_navy">#0B1020</color>
+</resources>

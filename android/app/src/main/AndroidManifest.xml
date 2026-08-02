@@ -1,13 +1,16 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  NativeActivity app: Rust draws everything, and the only Kotlin is the background alert service
+  GameActivity app: Rust draws everything, and the only Kotlin is the background alert service
   plus the thin `MainActivity` that receives its notification taps (`android:hasCode="true"`).
   The activity loads
   libhookecho.so and calls its `android_main` (see the `android.app.lib_name` meta-data, which must
   match the crate/.so name). `configChanges` keeps rotation/resize in-process so egui just gets a
   resize event instead of an activity restart. `screenOrientation="sensor"` makes the app follow the
-  physical device orientation (portrait + both landscapes) — a fullscreen NativeActivity left
+  physical device orientation (portrait + both landscapes) — a fullscreen activity left
   UNSPECIFIED gets pinned to portrait by Samsung's launcher heuristics and never rotates.
+  `android:theme` is load-bearing: GameActivity descends from AppCompatActivity and refuses to
+  start under a non-AppCompat theme. `enableOnBackInvokedCallback` opts into predictive back —
+  see the OnBackPressedCallback in MainActivity and the JNI pair in platform.rs.
 -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
@@ -42,14 +45,16 @@
         android:allowBackup="true"
         android:hasCode="true"
         android:icon="@mipmap/ic_launcher"
-        android:label="Hook Echo-WX">
+        android:label="@string/app_name"
+        android:theme="@style/Theme.HookEcho"
+        android:enableOnBackInvokedCallback="true">
         <activity
             android:name=".MainActivity"
             android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboard|keyboardHidden|navigation|uiMode|density"
             android:screenOrientation="sensor"
             android:windowSoftInputMode="adjustResize"
             android:exported="true"
-            android:label="Hook Echo-WX">
+            android:label="@string/app_name">
             <meta-data
                 android:name="android.app.lib_name"
                 android:value="hookecho" />

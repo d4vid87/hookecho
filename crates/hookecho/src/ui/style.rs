@@ -8,7 +8,7 @@
 //! Two window idioms exist and both are fine:
 //! - **Floating chrome** — `egui::Area` + [`glass`], anchored to a `LANE_*` offset. Map-first, no
 //!   title bar, no drag. Everything in the always-on-screen layer uses this.
-//! - **Tool window** — `crate::ui::fit_phone(egui::Window::new(..))`, titled, draggable, closable.
+//! - **Tool window** — `crate::ui::phone_surface(egui::Window::new(..))`, titled, draggable, closable.
 //!   Everything summoned on demand (soundings, settings, palette editor) uses this.
 
 use egui::{vec2, Color32, Frame, Margin, RichText, Stroke};
