@@ -285,7 +285,13 @@ layer draws its own scale and units.
   build.
 - **METAR station plots** with US-convention wind barbs, flight-category colors
   and greedy decluttering — extended offshore and over the Great Lakes by the
-  **NDBC buoy network**, where the airport network simply has no stations.
+  **NDBC buoy network**, where the airport network simply has no stations. Buoys
+  also print their **wave height and dominant period**, which is the reason to
+  look at one.
+- **Wildfires**: active perimeters and incident points from the interagency
+  **WFIGS** feed, with acres and containment on tap.
+- **Air quality**: every **AirNow** monitor in view as an EPA-category dot with
+  its AQI (free key in Settings).
 - **TDWR terminal radars**: the FAA's airport radars, synthesized into volumes
   from their Level 3 tilt products, so all 44 of them behave like any other site.
 - **NHC tropical** storms with forecast cones and Saffir–Simpson-colored track
@@ -346,6 +352,16 @@ layer draws its own scale and units.
   speed — the Windy look, built from NOAA's own free GRIB grids rather than
   licensed, so it needs no key and works offline of any paid API. CONUS only,
   because HRRR is. Model output, not observation, and the layer says so.
+- **Minute-by-minute rain** for the spot you tapped: the next hour advected off
+  the current scan, above the hourly forecast — when it starts, when it stops.
+- **Share the view**: the palette copies a `hookecho://` link carrying the site,
+  place, zoom and (when you're scrubbed back) the time. Opens the app right
+  there — on Android, straight from the link.
+- **Android home-screen widget**: what's warned at your saved locations, tap to
+  open the map on it.
+- **Per-layer opacity** in the Layer Manager, for field layers as well as
+  placefiles, and the scrub bar now shades its forecast tail so a model hour
+  never reads as radar.
 - **Open this view in Windy** from the command palette when you want their
   models next to ours — same place, same zoom, matching overlay.
 - **Live station cards**: click a surface station and get a floating,

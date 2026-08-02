@@ -43,6 +43,7 @@ L_VILD="VIL density (derived)"
 L_MEHS="Max hail size (derived)"
 L_SNOW="Snowfall analysis"
 L_RECON="Recon flight track"
+L_FIRES="Wildfires (WFIGS)"
 L_MRMS="MRMS Mosaic"
 L_MOSAIC="Radar Mosaic"
 L_HRRR="HRRR future radar"
@@ -219,6 +220,15 @@ scene_winter() {
   palette "$L_SNOW"
   wait_settle 20 120
   snap winter
+}
+
+# Seasonal: an empty fire map in the wet season is an honest picture of nothing.
+scene_fires() {
+  launch "${LIVE_SITE:-KHNX},${LIVE_LON:--119.5},${LIVE_LAT:-37.5},6.4"
+  wait_settle 16
+  palette "$L_FIRES"
+  wait_settle 20 120
+  snap fires
 }
 
 # Seasonal: only shows anything while a hurricane hunter is flying.
@@ -437,7 +447,7 @@ check() {
 }
 
 ARCHIVE_SCENES=(reflectivity velocity alltilts xsection alerts products layers tropical verify derived)
-LIVE_SCENES=(wind stormtable forecast fronts hrrr mrms mosaic qpe glm tdwr winter recon)
+LIVE_SCENES=(wind stormtable forecast fronts hrrr mrms mosaic qpe glm tdwr winter recon fires)
 
 main() {
   mkdir -p "$WORK"
