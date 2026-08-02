@@ -140,7 +140,7 @@ fn opt(v: Option<f32>, unit: &str, decimals: usize) -> String {
 }
 
 /// 16-point compass label for a wind direction in degrees.
-fn compass(deg: f32) -> &'static str {
+pub(crate) fn compass(deg: f32) -> &'static str {
     const D: [&str; 16] = [
         "N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE", "S", "SSW", "SW", "WSW", "W", "WNW",
         "NW", "NNW",

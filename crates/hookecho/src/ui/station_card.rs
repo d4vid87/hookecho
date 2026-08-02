@@ -151,7 +151,7 @@ impl Card {
     }
 }
 
-fn c_to_f(c: f32) -> f32 {
+pub(crate) fn c_to_f(c: f32) -> f32 {
     c * 9.0 / 5.0 + 32.0
 }
 

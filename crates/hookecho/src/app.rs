@@ -1632,6 +1632,16 @@ pub struct HookEchoApp {
     )>,
     forecast_cache:
         std::collections::HashMap<(i32, i32), (Instant, wxdata::forecast::PointForecast)>,
+    /// Current conditions for the same tapped point, fetched beside the forecast and cached the
+    /// same way. Separate from the Obs overlay, which is radar-site-scoped and only live when that
+    /// overlay is on.
+    #[allow(clippy::type_complexity)]
+    forecast_obs_rx: Option<(
+        (i32, i32),
+        std::sync::mpsc::Receiver<(String, wxdata::obs::Observation)>,
+    )>,
+    forecast_obs_cache:
+        std::collections::HashMap<(i32, i32), (Instant, String, wxdata::obs::Observation)>,
     /// Rain-arrival alerting: per-point persistence/cooldown state, plus the current ETAs for the
     /// on-map chip.
     rain_detector: crate::rain_arrival::Detector,
@@ -2085,6 +2095,8 @@ impl HookEchoApp {
             forecast_state: ui::forecast_window::State::Loading,
             forecast_rx: None,
             forecast_cache: std::collections::HashMap::new(),
+            forecast_obs_rx: None,
+            forecast_obs_cache: std::collections::HashMap::new(),
             minute_profile: None,
             minute_key: None,
             rain_detector: Default::default(),
@@ -3572,6 +3584,7 @@ impl HookEchoApp {
         let key = ((lat * 20.0).round() as i32, (lon * 20.0).round() as i32);
         self.forecast_at = Some((lon, lat));
         self.forecast_open = true;
+        self.fetch_point_obs(key, lon, lat);
         if let Some((when, f)) = self.forecast_cache.get(&key) {
             if when.elapsed().as_secs() < 900 {
                 self.forecast_state = ui::forecast_window::State::Ready(Box::new(f.clone()));
@@ -3587,6 +3600,30 @@ impl HookEchoApp {
                 .await
                 .map_err(|e| e.to_string());
             let _ = tx.send(res);
+        });
+    }
+
+    /// Current conditions for the forecast point, on the same cache cell and TTL as the forecast.
+    /// A failure (offshore, no station, API down) simply sends nothing — the window drops the
+    /// "Now" line rather than showing an error for a decoration.
+    fn fetch_point_obs(&mut self, key: (i32, i32), lon: f64, lat: f64) {
+        if let Some((when, ..)) = self.forecast_obs_cache.get(&key) {
+            if when.elapsed().as_secs() < 900 {
+                return;
+            }
+        }
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.forecast_obs_rx = Some((key, rx));
+        let http = self.http.clone();
+        self._rt.spawn(async move {
+            match wxdata::obs::fetch_nearest(&http, lat, lon).await {
+                Ok(s) => {
+                    if let Some(o) = s.obs.first() {
+                        let _ = tx.send((s.station_id, o.clone()));
+                    }
+                }
+                Err(e) => log::debug!("point obs unavailable: {e}"),
+            }
         });
     }
 
@@ -12487,11 +12524,25 @@ impl eframe::App for HookEchoApp {
                 };
             }
         }
+        if let Some((key, rx)) = &self.forecast_obs_rx {
+            if let Ok((station, ob)) = rx.try_recv() {
+                let key = *key;
+                self.forecast_obs_rx = None;
+                self.forecast_obs_cache
+                    .insert(key, (Instant::now(), station, ob));
+            }
+        }
         if self.forecast_open {
             let at = self.forecast_at.unwrap_or((0.0, 0.0));
             let tz = self.active_tz();
             let minute = self.minute_profile(at).map(|m| m.to_vec());
-            if !ui::forecast_window::show(ctx, &self.forecast_state, at, tz, minute.as_deref()) {
+            let key = ((at.1 * 20.0).round() as i32, (at.0 * 20.0).round() as i32);
+            let now = self
+                .forecast_obs_cache
+                .get(&key)
+                .map(|(_, station, ob)| (station.as_str(), ob));
+            if !ui::forecast_window::show(ctx, &self.forecast_state, at, tz, minute.as_deref(), now)
+            {
                 self.forecast_open = false;
             }
         }

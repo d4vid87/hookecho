@@ -15,13 +15,15 @@ pub enum State {
 }
 
 /// Show the window. `minute` is the per-minute radar-advection profile over the point (dBZ per
-/// minute from now); `None` in archive or without a volume, which hides that section.
+/// minute from now); `None` in archive or without a volume, which hides that section. `now` is the
+/// nearest station's latest observation, if one arrived.
 pub fn show(
     ctx: &egui::Context,
     state: &State,
     at: (f64, f64),
     tz: Option<wxdata::tz::Tz>,
     minute: Option<&[Option<f32>]>,
+    now: Option<(&str, &wxdata::obs::Observation)>,
 ) -> bool {
     let mut open = true;
     crate::ui::fit_phone(ctx, egui::Window::new("Forecast"))
@@ -36,6 +38,10 @@ pub fn show(
                     }
                 }
             });
+            if let Some((station, o)) = now {
+                ui.label(conditions_line(o, station));
+            }
+            ui.weak(almanac_line(at, tz));
             ui.separator();
             if let Some(m) = minute {
                 minute_strip(ui, m);
@@ -236,9 +242,153 @@ fn hourly_strip(ui: &mut egui::Ui, hours: &[wxdata::forecast::Period], tz: Optio
     }
 }
 
+/// One-line current conditions, skipping whatever the station didn't report:
+/// `74°F · dew 62°F · 62% rh · SW 12 kt G18 · 29.92 inHg · KOKC`.
+fn conditions_line(o: &wxdata::obs::Observation, station: &str) -> String {
+    use crate::ui::station_card::c_to_f;
+    let mut parts: Vec<String> = Vec::new();
+    if let Some(t) = o.temp_c {
+        parts.push(format!("{:.0}°F", c_to_f(t)));
+    }
+    if let Some(d) = o.dewpoint_c {
+        parts.push(format!("dew {:.0}°F", c_to_f(d)));
+    }
+    if let Some(rh) = o.rh {
+        parts.push(format!("{rh:.0}% rh"));
+    }
+    if let Some(kmh) = o.wind_kmh {
+        let kt = kmh / 1.852;
+        let dir = o
+            .wind_dir_deg
+            .map(|d| format!("{} ", crate::ui::sensor_window::compass(d)))
+            .unwrap_or_default();
+        let gust = match o.gust_kmh {
+            Some(g) => format!(" G{:.0}", g / 1.852),
+            None => String::new(),
+        };
+        parts.push(if kt < 1.0 {
+            "calm".to_string()
+        } else {
+            format!("{dir}{kt:.0} kt{gust}")
+        });
+    }
+    // Sea-level pressure is what people read off a barometer; fall back to the station value.
+    if let Some(pa) = o.slp_pa.or(o.pressure_pa) {
+        parts.push(format!("{:.2} inHg", pa / 3386.389));
+    }
+    if !station.is_empty() {
+        parts.push(station.to_string());
+    }
+    parts.join(" · ")
+}
+
+/// `↑ 6:14 AM · ↓ 8:42 PM · Waxing gibbous`, or just the moon during polar day/night.
+fn almanac_line(at: (f64, f64), tz: Option<wxdata::tz::Tz>) -> String {
+    let now = Utc::now();
+    let date = match tz {
+        Some(tz) => now.with_timezone(&tz).date_naive(),
+        None => now.date_naive(),
+    };
+    let (moon, _) = crate::astro::moon_label(crate::astro::moon_phase(now));
+    match crate::astro::sun_times(at.1, at.0, date) {
+        Some((rise, set)) => {
+            format!("↑ {} · ↓ {} · {moon}", clock(rise, tz), clock(set, tz))
+        }
+        None => moon.to_string(),
+    }
+}
+
+fn clock(t: DateTime<Utc>, tz: Option<wxdata::tz::Tz>) -> String {
+    match tz {
+        Some(tz) => t.with_timezone(&tz).format("%-I:%M %p").to_string(),
+        None => t.format("%H:%MZ").to_string(),
+    }
+}
+
 fn short_hour(t: DateTime<Utc>, tz: Option<wxdata::tz::Tz>) -> String {
     match tz {
         Some(tz) => t.with_timezone(&tz).format("%-I%p").to_string(),
         None => t.format("%HZ").to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use wxdata::obs::Observation;
+
+    fn blank() -> Observation {
+        Observation {
+            time: None,
+            temp_c: None,
+            dewpoint_c: None,
+            rh: None,
+            wind_kmh: None,
+            gust_kmh: None,
+            wind_dir_deg: None,
+            pressure_pa: None,
+            slp_pa: None,
+        }
+    }
+
+    #[test]
+    fn full_observation_reads_like_a_metar() {
+        let o = Observation {
+            temp_c: Some(23.3),
+            dewpoint_c: Some(16.7),
+            rh: Some(66.0),
+            wind_kmh: Some(22.2),
+            gust_kmh: Some(33.3),
+            wind_dir_deg: Some(225.0),
+            slp_pa: Some(101_320.0),
+            ..blank()
+        };
+        assert_eq!(
+            conditions_line(&o, "KOKC"),
+            "74°F · dew 62°F · 66% rh · SW 12 kt G18 · 29.92 inHg · KOKC"
+        );
+    }
+
+    #[test]
+    fn missing_fields_are_dropped_not_blanked() {
+        let o = Observation {
+            temp_c: Some(10.0),
+            ..blank()
+        };
+        assert_eq!(conditions_line(&o, "KXYZ"), "50°F · KXYZ");
+        assert_eq!(conditions_line(&blank(), ""), "");
+    }
+
+    #[test]
+    fn wind_without_gust_or_direction() {
+        let o = Observation {
+            wind_kmh: Some(18.5),
+            ..blank()
+        };
+        assert_eq!(conditions_line(&o, ""), "10 kt");
+        let calm = Observation {
+            wind_kmh: Some(0.0),
+            wind_dir_deg: Some(0.0),
+            ..blank()
+        };
+        assert_eq!(conditions_line(&calm, ""), "calm");
+    }
+
+    #[test]
+    fn station_pressure_backfills_sea_level() {
+        let o = Observation {
+            pressure_pa: Some(96_000.0),
+            ..blank()
+        };
+        assert_eq!(conditions_line(&o, ""), "28.35 inHg");
+    }
+
+    #[test]
+    fn almanac_line_has_both_events_in_the_tropics() {
+        let s = almanac_line((-97.5, 35.5), None);
+        assert!(s.contains('↑') && s.contains('↓'), "got {s}");
+        // Polar latitudes lose the sun but keep the moon.
+        let polar = almanac_line((15.0, 89.0), None);
+        assert!(!polar.contains('↑'), "got {polar}");
     }
 }
