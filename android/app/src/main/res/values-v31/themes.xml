@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Android 12+ draws a splash screen for every cold start whether you configure one or not; left
+  alone it uses the launcher icon on a system background, which flashed white before our very dark
+  map. These attributes make it the app's own navy with the app's own mark.
+
+  ponytail: API 31+ only. Pre-31 phones get the platform default (a plain window background, which
+  themes.xml already sets to black) rather than the androidx splashscreen backport — one more
+  library to make ~2 seconds of one screen match on old devices.
+-->
+<resources>
+    <style name="Theme.HookEcho" parent="Theme.AppCompat.NoActionBar">
+        <item name="android:windowBackground">@color/hookecho_navy</item>
+        <item name="android:windowNoTitle">true</item>
+        <item name="android:windowDrawsSystemBarBackgrounds">true</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:windowSplashScreenBackground">@color/hookecho_navy</item>
+        <item name="android:windowSplashScreenAnimatedIcon">@mipmap/ic_launcher_foreground</item>
+    </style>
+</resources>

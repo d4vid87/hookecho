@@ -1,5 +1,6 @@
 package zip.batman.hookecho
 
+import androidx.activity.OnBackPressedCallback
 import com.google.androidgamesdk.GameActivity
 import android.content.Intent
 import android.os.Bundle
@@ -14,10 +15,33 @@ import java.io.File
  * cold and there is nothing on the other end to talk to yet.
  */
 class MainActivity : GameActivity() {
+    /**
+     * Predictive back. The callback is *disabled* by default, which is the whole point: with
+     * nothing open in the app, Android owns the gesture and can draw its live preview of the home
+     * screen as the user drags. The Rust side enables it (via [setBackConsumed]) exactly while it
+     * has something to dismiss — a sheet, a full-screen surface — and then `handleOnBackPressed`
+     * hands the press to `mobile_back`.
+     *
+     * KEYCODE_BACK stops being delivered as a key event on Android 16, so this is also how back
+     * keeps working at all once the app targets it.
+     */
+    private val backCallback = object : OnBackPressedCallback(false) {
+        override fun handleOnBackPressed() = nativeOnBack()
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         writeGoto(intent)
         super.onCreate(savedInstanceState)
+        onBackPressedDispatcher.addCallback(this, backCallback)
     }
+
+    /** Called from Rust when what back would do changes. */
+    @Suppress("unused")
+    fun setBackConsumed(consumed: Boolean) {
+        runOnUiThread { backCallback.isEnabled = consumed }
+    }
+
+    private external fun nativeOnBack()
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)

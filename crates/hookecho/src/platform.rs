@@ -441,6 +441,78 @@ mod android_alerts {
     }
 }
 
+/// Predictive back (Android 13+ gesture, mandatory from 16).
+///
+/// Two directions cross the JNI boundary here — the first Kotlin→Rust call in the app:
+/// Rust pushes "I have something to dismiss" so the OS knows whether to animate its home-screen
+/// preview, and Kotlin calls back into `nativeOnBack` when the user actually completes the
+/// gesture while the app is consuming it.
+#[cfg(target_os = "android")]
+mod android_back {
+    use jni::objects::{JObject, JValue};
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    /// Set by `nativeOnBack`, drained by the UI thread on its next frame. The frame that reads it
+    /// runs the same `mobile_back` chain the old `BrowserBack` key event did.
+    static PENDING: AtomicBool = AtomicBool::new(false);
+    /// Last value pushed to Kotlin, so a steady state costs no JNI at all.
+    static PUSHED: AtomicBool = AtomicBool::new(false);
+
+    /// # Safety
+    /// Called by the JVM with a valid env/object pair; touches only an atomic.
+    #[unsafe(no_mangle)]
+    pub extern "system" fn Java_zip_batman_hookecho_MainActivity_nativeOnBack(
+        _env: jni::JNIEnv,
+        _this: JObject,
+    ) {
+        PENDING.store(true, Ordering::Relaxed);
+    }
+
+    pub fn take_back_pressed() -> bool {
+        PENDING.swap(false, Ordering::Relaxed)
+    }
+
+    /// Tell the activity whether the app will consume the next back gesture.
+    pub fn set_back_consumed(consumed: bool) {
+        if PUSHED.swap(consumed, Ordering::Relaxed) == consumed {
+            return;
+        }
+        match push(consumed) {
+            Ok(()) => log::debug!("predictive back: consumed={consumed}"),
+            Err(e) => log::warn!("predictive back state push failed: {e:?}"),
+        }
+    }
+
+    fn push(consumed: bool) -> jni::errors::Result<()> {
+        let Some(app) = super::android::app() else {
+            return Ok(());
+        };
+        let vm = unsafe { jni::JavaVM::from_raw(app.vm_as_ptr() as *mut jni::sys::JavaVM) }?;
+        let mut env = vm.attach_current_thread()?;
+        let activity = unsafe { JObject::from_raw(app.activity_as_ptr() as jni::sys::jobject) };
+        let res = env.call_method(
+            &activity,
+            "setBackConsumed",
+            "(Z)V",
+            &[JValue::Bool(consumed as u8)],
+        );
+        if res.is_err() {
+            let _ = env.exception_clear();
+        }
+        res.map(|_| ())
+    }
+}
+
+/// Whether a back press/gesture is waiting to be handled (Android only).
+#[cfg(not(target_os = "android"))]
+pub fn take_back_pressed() -> bool {
+    false
+}
+
+/// Tell Android whether the app will consume the next back gesture (no-op elsewhere).
+#[cfg(not(target_os = "android"))]
+pub fn set_back_consumed(_consumed: bool) {}
+
 /// `WindowInsets` glue for [`android::apply_safe_area`].
 ///
 /// Answers in *pixels* as `[left, top, right, bottom]`, or `None` when the query fails (API 29,
@@ -880,6 +952,8 @@ mod android_tts {
 
 #[cfg(target_os = "android")]
 pub use android::{apply_safe_area, set_app};
+#[cfg(target_os = "android")]
+pub use android_back::{set_back_consumed, take_back_pressed};
 #[cfg(target_os = "android")]
 pub use android_ime::{clipboard_text, pump_ime, show_soft_input};
 #[cfg(target_os = "android")]

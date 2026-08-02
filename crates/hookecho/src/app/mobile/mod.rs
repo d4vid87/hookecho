@@ -152,6 +152,39 @@ impl super::HookEchoApp {
     /// the UI actions the shared code processes.
     /// What Android's back button dismisses, innermost first. Returns without doing anything when
     /// nothing is open, which lets the OS handle it (leave the app).
+    /// Whether back would dismiss something in-app rather than leaving the app.
+    fn mobile_has_dismissable(&self) -> bool {
+        self.marker_popup.is_some()
+            || self.detail.is_some()
+            || self.warning_popup.is_some()
+            || self.cell_popup.is_some()
+            || self.xsection.is_some()
+            || self.site_dialog.is_some()
+            || self.sounding_window.open
+            || self.show_hodo
+            || self.show_cappi
+            || self.show_3d
+            || self.show_sensors
+            || self.climo_open
+            || self.afd_open
+            || self.digest_window.open
+            || self.verify_window.open
+            || self.event_window.open
+            || self.marker_window.open
+            || self.placefile_window.open
+            || self.palette_editor.open
+            || self.layer_window_open
+            || self.show_cheatsheet
+            || self.about_open
+            || self.wizard.open
+            || self.cells_window.open
+            || self.forecast_open
+            || self.settings_window.open
+            || self.mobile_sheet != MobileSheet::None
+            || self.mobile_snap.collapsed().is_some()
+            || self.mobile_chrome_hidden
+    }
+
     fn mobile_back(&mut self) {
         // Full-screen surfaces first, then the modal sheet, then the persistent sheet's snaps,
         // and only then nothing (which lets Android leave the app). Every surface the phone can
@@ -209,12 +242,17 @@ impl super::HookEchoApp {
 
     pub(crate) fn mobile_chrome(&mut self, _root: &mut egui::Ui, ctx: &egui::Context) -> UiActions {
         let mut actions = UiActions::default();
-        // Android's back button arrives as `BrowserBack`. Without this every sheet and drawer was
-        // a one-way door — back did nothing and the only exit was the ✕, which a sheet's own
-        // content covers on a small screen.
-        if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::BrowserBack)) {
+        // Back arrives two ways: as a `BrowserBack` key event (the legacy path, which Android 16
+        // stops delivering) and from the predictive-back callback in MainActivity. Either one
+        // runs the same dismissal chain.
+        if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::BrowserBack))
+            || crate::platform::take_back_pressed()
+        {
             self.mobile_back();
         }
+        // Tell Android whether we would consume the next gesture. With nothing open the callback
+        // is disabled and the OS gets to draw its live home-screen preview as the user drags.
+        crate::platform::set_back_consumed(self.mobile_has_dismissable());
         let active = self.active;
         let content = ctx.content_rect();
         let vr = ctx.viewport_rect();
