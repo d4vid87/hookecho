@@ -8741,12 +8741,17 @@ impl HookEchoApp {
         } else {
             1.0
         };
-        let raster_bias = ctx
-            .pixels_per_point()
-            .max(1.0)
-            .log2()
-            .round()
-            .clamp(0.0, bias_cap) as f64;
+        let raster_bias = if self.views[idx].basemap.tiles_are_512() {
+            // 512-px providers already carry the extra detail in the tile itself; biasing on top
+            // would fetch four of them per screen tile for nothing.
+            0.0
+        } else {
+            ctx.pixels_per_point()
+                .max(1.0)
+                .log2()
+                .round()
+                .clamp(0.0, bias_cap) as f64
+        };
         let visible = if is_raster {
             let vis = self.tiles.visible(&cam, vp, raster_bias);
             self.tiles.request_missing(&vis);

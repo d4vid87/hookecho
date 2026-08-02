@@ -312,6 +312,14 @@ impl BasemapStyle {
         }
     }
 
+    /// Whether this style's tiles are 512 px rather than 256. Mapbox and MapTiler both serve the
+    /// same tile grid at either size, so one 512 tile replaces the four 256 tiles a high-DPI
+    /// screen would otherwise fetch a level deeper — same pixels on screen, a quarter of the
+    /// requests. Callers use this to drop the retina zoom bias.
+    pub fn tiles_are_512(self) -> bool {
+        matches!(self.provider_kind(), Provider::Mapbox | Provider::MapTiler)
+    }
+
     /// Is this style selectable given which provider keys are set?
     pub fn available(self, mapbox_key: bool, maptiler_key: bool) -> bool {
         match self.provider_kind() {
@@ -334,8 +342,14 @@ impl BasemapStyle {
     }
 
     /// Per-style cache subdir so sources don't collide on disk. Keys never appear here.
-    fn provider(self) -> &'static str {
-        self.slug()
+    fn provider(self) -> String {
+        // 512-px tiles share the tile grid with the 256-px ones they replace, so a cache written
+        // before the switch would keep serving blurry 256s from the same paths. Separate dir.
+        if self.tiles_are_512() {
+            format!("{}-512", self.slug())
+        } else {
+            self.slug().to_string()
+        }
     }
 
     /// Mapbox style-id / MapTiler map-id used in the tile URL.
@@ -417,14 +431,14 @@ impl BasemapStyle {
             },
             Provider::Mapbox => (!mapbox_key.is_empty()).then(|| {
                 format!(
-                    "https://api.mapbox.com/styles/v1/mapbox/{}/tiles/256/{z}/{x}/{y}?access_token={mapbox_key}",
+                    "https://api.mapbox.com/styles/v1/mapbox/{}/tiles/512/{z}/{x}/{y}?access_token={mapbox_key}",
                     self.style_id()
                 )
             }),
             Provider::MapTiler => (!maptiler_key.is_empty()).then(|| {
                 let ext = if self == BasemapStyle::MapTilerSatellite { "jpg" } else { "png" };
                 format!(
-                    "https://api.maptiler.com/maps/{}/256/{z}/{x}/{y}.{ext}?key={maptiler_key}",
+                    "https://api.maptiler.com/maps/{}/{z}/{x}/{y}.{ext}?key={maptiler_key}",
                     self.style_id()
                 )
             }),
