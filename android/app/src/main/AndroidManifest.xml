@@ -57,6 +57,14 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+            <!-- Shared view links: hookecho://goto/SITE,lon,lat,zoom[,RFC3339]. The URL lands in
+                 the same goto.txt the notification taps write. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="hookecho" />
+            </intent-filter>
         </activity>
 
         <service

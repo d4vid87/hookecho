@@ -24,8 +24,12 @@ class MainActivity : NativeActivity() {
         writeGoto(intent)
     }
 
+    /** A notification tap carries the target as an extra; a tapped `hookecho://goto/…` link
+     *  carries it in the intent data. Both end up as the same string in the same file. */
     private fun writeGoto(intent: Intent?) {
-        val goto = intent?.getStringExtra(EXTRA_GOTO) ?: return
+        val goto = intent?.getStringExtra(EXTRA_GOTO)
+            ?: intent?.data?.takeIf { it.scheme == "hookecho" }?.toString()
+            ?: return
         runCatching { File(filesDir, "goto.txt").writeText(goto) }
     }
 

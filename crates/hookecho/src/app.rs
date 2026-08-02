@@ -907,6 +907,8 @@ pub(crate) enum PaletteAction {
     GoLive,
     /// Hand the current view off to windy.com in the browser.
     OpenInWindy,
+    /// Copy a `hookecho://goto/…` link to this view (site, center, zoom, archive time).
+    CopyViewLink,
 }
 
 /// A placefile label/marker the egui painter draws over the map.
@@ -1157,6 +1159,41 @@ struct ChasePack {
 fn windy_url(overlay: &str, lon: f64, lat: f64, zoom: f64) -> String {
     let z = zoom.round().clamp(3.0, 18.0) as u32;
     format!("https://www.windy.com/?{overlay},{lat:.3},{lon:.3},{z}")
+}
+
+/// URL scheme for a shared view. One parser serves all three ways a view arrives: the
+/// `HOOKECHO_GOTO` env var, the `goto.txt` the Android notification tap writes (which uses the
+/// site-less `,lon,lat,zoom` form), and a tapped `hookecho://goto/…` link.
+const GOTO_SCHEME: &str = "hookecho://goto/";
+
+/// Parse `[hookecho://goto/]SITE,lon,lat,zoom[,RFC3339]`. The site may be empty.
+#[allow(clippy::type_complexity)]
+fn parse_goto(v: &str) -> Option<(String, f64, f64, f64, Option<DateTime<Utc>>)> {
+    let v = v.trim().strip_prefix(GOTO_SCHEME).unwrap_or(v.trim());
+    let p: Vec<&str> = v.split(',').map(str::trim).collect();
+    let (Some(site), Some(Ok(lon)), Some(Ok(lat)), Some(Ok(zoom))) = (
+        p.first(),
+        p.get(1).map(|s| s.parse()),
+        p.get(2).map(|s| s.parse()),
+        p.get(3).map(|s| s.parse()),
+    ) else {
+        return None;
+    };
+    let time = p.get(4).filter(|s| !s.is_empty()).and_then(|s| {
+        chrono::DateTime::parse_from_rfc3339(s)
+            .map(|t| t.with_timezone(&Utc))
+            .map_err(|e| log::warn!("goto: bad time {s:?}: {e}"))
+            .ok()
+    });
+    Some((site.to_string(), lon, lat, zoom, time))
+}
+
+/// The shareable link for a view.
+fn goto_link(site: &str, lon: f64, lat: f64, zoom: f64, time: Option<DateTime<Utc>>) -> String {
+    let t = time
+        .map(|t| format!(",{}", t.to_rfc3339()))
+        .unwrap_or_default();
+    format!("{GOTO_SCHEME}{site},{lon:.4},{lat:.4},{zoom:.1}{t}")
 }
 
 /// How a lightning flash looks at `age_secs`: bright white-hot when it just happened, fading to a
@@ -2128,25 +2165,13 @@ impl HookEchoApp {
         self.apply_goto(v.trim());
     }
 
-    /// `SITE,lon,lat,zoom[,RFC3339]`.
+    /// `SITE,lon,lat,zoom[,RFC3339]`, with or without the `hookecho://goto/` prefix.
     fn apply_goto(&mut self, v: &str) {
-        let p: Vec<&str> = v.split(',').map(str::trim).collect();
-        let (Some(site), Some(Ok(lon)), Some(Ok(lat)), Some(Ok(zoom))) = (
-            p.first(),
-            p.get(1).map(|s| s.parse()),
-            p.get(2).map(|s| s.parse()),
-            p.get(3).map(|s| s.parse()),
-        ) else {
+        let Some((site, lon, lat, zoom, time)) = parse_goto(v) else {
             log::warn!("HOOKECHO_GOTO: want SITE,lon,lat,zoom[,RFC3339], got {v:?}");
             return;
         };
-        let time = p.get(4).filter(|s| !s.is_empty()).and_then(|s| {
-            chrono::DateTime::parse_from_rfc3339(s)
-                .map(|t| t.with_timezone(&chrono::Utc))
-                .map_err(|e| log::warn!("HOOKECHO_GOTO: bad time {s:?}: {e}"))
-                .ok()
-        });
-        self.goto_view(site, lon, lat, zoom, time);
+        self.goto_view(&site, lon, lat, zoom, time);
     }
 
     /// Volume poll cadence, doubled on a metered link. A phone on mobile data pulls a multi-MB
@@ -5709,6 +5734,14 @@ impl HookEchoApp {
             None,
         );
         push(
+            "Copy link to this view",
+            "Reference",
+            "A hookecho:// link to this site, place, zoom and time \u{2014} opens the app here",
+            true,
+            PaletteAction::CopyViewLink,
+            None,
+        );
+        push(
             "Mute audio alerts",
             "Alerts",
             "Silence every chime and spoken warning without changing your sound choices",
@@ -6011,6 +6044,26 @@ impl HookEchoApp {
             PaletteAction::Reload => self.trigger_reload(ctx),
             PaletteAction::InstantReplay => self.instant_replay(),
             PaletteAction::GoLive => self.views[self.active].timeline.go_head(),
+            PaletteAction::CopyViewLink => {
+                let v = &self.views[self.active];
+                let c = v.camera.center;
+                let (lon, lat) = crate::render::mercator::world_to_lonlat(c.0, c.1);
+                // A live view shares as live; a scrubbed one carries its timestamp, so the link
+                // lands on the frame the sender was looking at.
+                let time = (!v.timeline.following)
+                    .then(|| v.timeline.current().and_then(|id| id.date_time()))
+                    .flatten();
+                let link = goto_link(
+                    v.site.as_deref().unwrap_or(""),
+                    lon,
+                    lat,
+                    v.camera.zoom,
+                    time,
+                );
+                ctx.copy_text(link.clone());
+                self.warning_banners
+                    .push(("Link copied".to_string(), link, Instant::now()));
+            }
             PaletteAction::OpenInWindy => {
                 let v = &self.views[self.active];
                 let c = v.camera.center;
@@ -12977,6 +13030,36 @@ mod field_lut_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn goto_parses_every_form_it_arrives_in() {
+        let (site, lon, lat, zoom, time) = parse_goto("KTLX,-97.3,35.3,9").unwrap();
+        assert_eq!((site.as_str(), lon, lat, zoom), ("KTLX", -97.3, 35.3, 9.0));
+        assert!(time.is_none());
+        // The URL form is the same string behind a scheme.
+        assert_eq!(
+            parse_goto("hookecho://goto/KTLX,-97.3,35.3,9").unwrap().0,
+            "KTLX"
+        );
+        // AlertService writes a site-less notification link; that must keep working.
+        let (site, ..) = parse_goto(",-97.3,35.3,9").unwrap();
+        assert_eq!(site, "");
+        // Archive links carry a time.
+        let (.., time) = parse_goto("KTLX,-97.3,35.3,9,2013-05-20T20:00:00Z").unwrap();
+        assert_eq!(time.unwrap().to_rfc3339(), "2013-05-20T20:00:00+00:00");
+        assert!(parse_goto("").is_none());
+        assert!(parse_goto("garbage").is_none());
+    }
+
+    #[test]
+    fn goto_link_round_trips() {
+        let link = goto_link("KFWS", -97.3031, 32.5731, 8.5, None);
+        assert!(link.starts_with("hookecho://goto/KFWS,"), "{link}");
+        let (site, lon, lat, zoom, _) = parse_goto(&link).unwrap();
+        assert_eq!(site, "KFWS");
+        assert!((lon - -97.3031).abs() < 1e-4 && (lat - 32.5731).abs() < 1e-4);
+        assert_eq!(zoom, 8.5);
+    }
 
     /// The draw tool must append into the stroke in flight and start a new one per drag, and Undo
     /// must drop exactly one stroke — the whole contract of a scribble layer.
