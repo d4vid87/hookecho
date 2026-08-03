@@ -622,13 +622,10 @@ pub struct TileManager {
 impl TileManager {
     pub fn new(spawner: crate::rt::Spawner) -> Self {
         let (tx, rx) = std::sync::mpsc::channel();
-        let client = reqwest::Client::builder()
-            .user_agent(USER_AGENT)
-            // Without these a request that never answers holds its slot forever: the tile stays in
-            // `requested`, so that square of map is permanently blank.
-            .connect_timeout(std::time::Duration::from_secs(10))
-            .timeout(std::time::Duration::from_secs(30))
-            .build()
+        let client = crate::platform::http_timeouts(
+            reqwest::Client::builder().user_agent(USER_AGENT),
+        )
+        .build()
             .expect("build reqwest client");
         let cache_root = crate::paths::cache_dir().map(|d| d.join("tiles"));
         if let Some(root) = cache_root.clone() {

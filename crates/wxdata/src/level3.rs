@@ -188,7 +188,7 @@ pub async fn fetch_cells(http: &reqwest::Client, site: &str) -> Vec<Cell> {
 
     // All four products are independent S3 round trips; serially they were the bulk of the wait
     // after a site switch.
-    let (nst, ss_txt, hi_txt, nmd) = tokio::join!(
+    let (nst, ss_txt, hi_txt, nmd) = futures_util::join!(
         fetch_latest(http, &s3, "NST"),
         fetch_tgftp(http, &s3, "p62ss"),
         fetch_tgftp(http, &s3, "p59hi"),

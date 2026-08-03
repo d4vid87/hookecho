@@ -1928,9 +1928,7 @@ impl HookEchoApp {
         let (pf_icon_tx, pf_icon_rx) = std::sync::mpsc::channel();
         // Every app-level fetch (alerts, overlays, placefiles, radar index) goes through this one.
         // A hung request with no timeout leaves whatever it was loading stuck loading forever.
-        let http = reqwest::Client::builder()
-            .connect_timeout(std::time::Duration::from_secs(10))
-            .timeout(std::time::Duration::from_secs(30))
+        let http = crate::platform::http_timeouts(reqwest::Client::builder())
             .build()
             .unwrap_or_default();
 

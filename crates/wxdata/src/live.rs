@@ -9,11 +9,15 @@
 //! All merged state lives on this task; the UI thread only ever receives a finished `Scan`.
 
 use crate::level2::{elevation_angles, Scan};
+// The streaming half of the API is native-only: `stream` is what drives it, and there is no
+// tokio (nor a second thread to run it on) in the web build.
+#[cfg(not(target_arch = "wasm32"))]
 use nexrad_data::aws::realtime::{
     assemble_volume, download_chunk, Chunk, ChunkIdentifier, ChunkIterator, ChunkType,
 };
 use nexrad_model::data::Sweep;
 use std::sync::Arc;
+#[cfg(not(target_arch = "wasm32"))]
 use std::time::Duration;
 
 /// A merged live volume ready to display.
@@ -156,6 +160,7 @@ where
 
 /// Assemble `chunks`, merge into `merged`, and emit if anything changed. Assembly failure
 /// (e.g. a still-incomplete volume) is skipped; the next sweep boundary self-heals.
+#[cfg(not(target_arch = "wasm32"))]
 fn emit<F: FnMut(Update)>(
     it: &ChunkIterator,
     chunks: &[Chunk<'static>],
@@ -166,7 +171,7 @@ fn emit<F: FnMut(Update)>(
     // task; `block_in_place` moves it off the async worker so chunk polling and every other
     // fetch on that thread keep running. (Requires the multi-threaded runtime, which is what the
     // app and the headless harness both build.)
-    let assembled = tokio::task::block_in_place(|| assemble_volume(chunks.iter().cloned()));
+    let assembled = crate::task::in_place(|| assemble_volume(chunks.iter().cloned()));
     let partial = match assembled {
         Ok(s) => s,
         Err(e) => {

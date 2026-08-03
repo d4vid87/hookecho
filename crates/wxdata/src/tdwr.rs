@@ -229,11 +229,11 @@ pub async fn fetch_volume(
 
     // Six products, twelve round trips. Serially that was most of the wait for a TDWR site;
     // they're independent, so fetch and decode them all at once.
-    let mut set = tokio::task::JoinSet::new();
+    let mut jobs = Vec::new();
     for (n, (product, gate_len)) in PRODUCTS.iter().enumerate() {
         let (http, prefix) = (http.clone(), format!("{short}_{product}_{day}"));
         let (product, gate_len) = (*product, *gate_len);
-        set.spawn(async move {
+        jobs.push(async move {
             let key = newest_key(&http, &prefix).await?;
             let resp = http.get(format!("{BUCKET}/{key}")).send().await.ok()?;
             let bytes = resp.bytes().await.ok()?;
@@ -250,12 +250,13 @@ pub async fn fetch_volume(
             Some((n, sweep, key))
         });
     }
-    let mut found: Vec<(usize, Option<Sweep>, String)> = Vec::new();
-    while let Some(res) = set.join_next().await {
-        if let Ok(Some(hit)) = res {
-            found.push(hit);
-        }
-    }
+    // `join_all` and not a JoinSet: these are twelve round trips with a small decode each, so the
+    // concurrency that matters is the IO, and this way the web build compiles the same code.
+    let mut found: Vec<(usize, Option<Sweep>, String)> = futures_util::future::join_all(jobs)
+        .await
+        .into_iter()
+        .flatten()
+        .collect();
     // Keep the product order stable: sweeps are keyed by elevation number, and the caller's
     // "did the volume change?" check compares the name of the newest key.
     found.sort_by_key(|(n, _, _)| *n);
