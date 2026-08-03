@@ -207,7 +207,7 @@ pub async fn download_scan(id: Identifier) -> anyhow::Result<Scan> {
     // bzip2 decompression plus the message decode is tens of MB of pure CPU. On the async worker
     // it blocks every other fetch sharing that thread for as long as it runs; the `parallel`
     // feature of nexrad-data then spreads the decode itself across rayon.
-    let scan = tokio::task::spawn_blocking(move || {
+    let scan = crate::task::blocking(move || {
         let file = if file.compressed() {
             file.decompress()
                 .map_err(|e| anyhow::anyhow!("decompress: {e}"))?

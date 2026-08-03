@@ -41,6 +41,7 @@ pub mod sounding;
 pub mod spc;
 pub mod spotters;
 pub mod stations;
+pub mod task;
 pub mod tds;
 pub mod tdwr;
 pub mod torclimo;

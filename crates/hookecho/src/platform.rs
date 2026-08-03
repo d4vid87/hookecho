@@ -960,3 +960,16 @@ pub use android_ime::{clipboard_text, pump_ime, show_soft_input};
 pub use android_location::start_location;
 #[cfg(target_os = "android")]
 pub use android_tts::speak;
+
+/// Timeouts for an HTTP client, where the platform has them.
+///
+/// A hung request with no timeout holds its slot forever: whatever it was loading stays loading,
+/// and a tile that never answers leaves that square of map permanently blank. reqwest's web
+/// backend exposes neither knob — fetch owns the request there — so on wasm this is a no-op.
+pub fn http_timeouts(b: reqwest::ClientBuilder) -> reqwest::ClientBuilder {
+    #[cfg(not(target_arch = "wasm32"))]
+    let b = b
+        .timeout(std::time::Duration::from_secs(30))
+        .connect_timeout(std::time::Duration::from_secs(10));
+    b
+}
