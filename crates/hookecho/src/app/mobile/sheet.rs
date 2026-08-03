@@ -115,6 +115,12 @@ impl crate::app::HookEchoApp {
         egui::Area::new(Id::new("m_sheet"))
             .order(egui::Order::Middle)
             .fixed_pos(rect.min)
+            // The body always lays out at full height and is clipped to the current snap, so the
+            // Area's own bounds are taller than the sheet you can see. egui constrains an Area to
+            // the screen by shifting it UP, which parked an invisible input-eating layer over the
+            // middle of the map: `layer_id_at` saw the sheet where the map was, so pinch (and taps)
+            // there went nowhere. Constrain to the sheet instead: bounds now match the visible rect.
+            .constrain_to(rect)
             .show(ctx, |ui| {
                 // Claim the whole sheet rect up front. An Area's interactive region is its
                 // content's bounding box, so a sheet that painted itself and then laid out a
