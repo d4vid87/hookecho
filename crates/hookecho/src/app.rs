@@ -1745,6 +1745,9 @@ pub struct HookEchoApp {
     /// Rain-arrival alerting: per-point persistence/cooldown state, plus the current ETAs for the
     /// on-map chip.
     rain_detector: crate::rain_arrival::Detector,
+    /// Volume the rain check last ran against, so it runs per scan (what the detector's
+    /// persistence and cooldown are written for) instead of per frame.
+    rain_key: Option<(usize, String, usize)>,
     rain_eta: Vec<(String, f32)>,
     /// Minute-by-minute rain over the forecast point, and the (volume, point, motion) key it was
     /// computed for — the walk samples the whole sweep, so it runs once per volume, not per frame.
@@ -2235,6 +2238,7 @@ impl HookEchoApp {
             minute_profile: None,
             minute_key: None,
             rain_detector: Default::default(),
+            rain_key: None,
             rain_eta: Vec::new(),
             show_fronts: false,
             fronts: None,
@@ -2752,6 +2756,22 @@ impl HookEchoApp {
         });
     }
 
+    /// Show a warning banner, or refresh the matching one already on screen — a repeated event
+    /// bumps its clock instead of stacking a duplicate card over the radar.
+    fn banner(&mut self, event: String, area: String) {
+        // ponytail: linear scan; the lane holds a handful of cards at most.
+        if let Some(b) = self
+            .warning_banners
+            .iter_mut()
+            .find(|(e, _, _)| *e == event)
+        {
+            b.1 = area;
+            b.2 = Instant::now();
+        } else {
+            self.warning_banners.push((event, area, Instant::now()));
+        }
+    }
+
     /// Every alert sound goes through here, so one mute switch covers all of them (and any that
     /// get added later) instead of a guard per call site.
     fn play_alert(&self, sound: &crate::settings::AlertSound) {
@@ -2963,7 +2983,7 @@ impl HookEchoApp {
                         crate::speech::speak(&format!("{} for {}{}", a.event, area, until));
                     }
                 }
-                self.warning_banners.push((label, area, Instant::now()));
+                self.banner(label, area);
                 alerted = true;
             }
         }
@@ -2995,32 +3015,32 @@ impl HookEchoApp {
         const DENSITY_MIN: f32 = 0.05; // strikes/km²/min — any recent CG activity nearby
         const COOLDOWN: std::time::Duration = std::time::Duration::from_secs(600);
         let mut fired = false;
-        for m in &self.settings.markers {
-            if field.max_within_km(m.lon, m.lat, RADIUS_KM) < DENSITY_MIN {
-                continue;
-            }
+        // Names first: the alert calls below need `&mut self`.
+        let near: Vec<String> = self
+            .settings
+            .markers
+            .iter()
+            .filter(|m| field.max_within_km(m.lon, m.lat, RADIUS_KM) >= DENSITY_MIN)
+            .map(|m| m.name.clone())
+            .collect();
+        for name in near {
             let recent = self
                 .lightning_alerted
-                .get(&m.name)
+                .get(&name)
                 .is_some_and(|t| t.elapsed() < COOLDOWN);
             if recent {
                 continue;
             }
-            self.lightning_alerted
-                .insert(m.name.clone(), Instant::now());
+            self.lightning_alerted.insert(name.clone(), Instant::now());
             self.push_ntfy(
-                &format!("⚡ Lightning near {}", m.name),
-                &format!(
-                    "Cloud-to-ground strikes within {RADIUS_KM:.0} km of {}",
-                    m.name
-                ),
+                &format!("⚡ Lightning near {name}"),
+                &format!("Cloud-to-ground strikes within {RADIUS_KM:.0} km of {name}"),
                 false,
             );
-            self.warning_banners.push((
-                format!("⚡ Lightning near {}", m.name),
+            self.banner(
+                format!("⚡ Lightning near {name}"),
                 format!("within {RADIUS_KM:.0} km"),
-                Instant::now(),
-            ));
+            );
             fired = true;
         }
         if fired && self.settings.alert_sound {
@@ -3084,6 +3104,13 @@ impl HookEchoApp {
         if !self.views[idx].timeline.following {
             return;
         }
+        // Once per volume, like compute_tds/compute_couplets: called per frame, the detector's
+        // "2 consecutive scans" persistence collapses to ~33 ms and its 30-minute cooldown gets
+        // re-armed by any momentary ETA gap, which is what stacks duplicate banners.
+        let key = self.volume_key(idx);
+        if self.rain_key.as_ref() == Some(&key) {
+            return;
+        }
         // Watched points: every saved marker, plus where you are if chase mode knows.
         let mut points: Vec<(String, [f64; 2])> = self
             .settings
@@ -3109,6 +3136,8 @@ impl HookEchoApp {
         else {
             return;
         };
+        // Only now — a failed decode should retry next frame, not skip the volume.
+        self.rain_key = Some(key);
         let sample = refl_sampler(&sweep);
 
         let mut fired = false;
@@ -3130,11 +3159,10 @@ impl HookEchoApp {
                     &format!("About {min:.0} minutes out"),
                     false,
                 );
-                self.warning_banners.push((
+                self.banner(
                     format!("\u{1f327} Rain reaching {name}"),
                     format!("~{min:.0} min"),
-                    Instant::now(),
-                ));
+                );
                 fired = true;
             }
         }
@@ -4019,11 +4047,10 @@ impl HookEchoApp {
             print!("\x07");
             use std::io::Write;
             let _ = std::io::stdout().flush();
-            self.warning_banners.push((
+            self.banner(
                 "⚠ TDS detected".to_string(),
                 format!("{} debris signature(s) — possible tornado", hits.len()),
-                Instant::now(),
-            ));
+            );
             self.push_ntfy(
                 "⚠ Tornado Debris Signature",
                 "Low CC + high reflectivity detected on radar",
@@ -4075,11 +4102,10 @@ impl HookEchoApp {
                 [h.lon, h.lat],
             );
             let where_ = format!("{:.0} km {} of {site}", km, cardinal(bearing));
-            self.warning_banners.push((
+            self.banner(
                 "⟳ Rotation detected".to_string(),
                 format!("{kt:.0} kt couplet — {where_}"),
-                Instant::now(),
-            ));
+            );
             self.push_ntfy(
                 "⟳ Rotation couplet",
                 &format!("{kt:.0} kt rotational velocity — {where_}"),
@@ -6262,8 +6288,7 @@ impl HookEchoApp {
                     time,
                 );
                 ctx.copy_text(link.clone());
-                self.warning_banners
-                    .push(("Link copied".to_string(), link, Instant::now()));
+                self.banner("Link copied".to_string(), link);
             }
             PaletteAction::OpenInWindy => {
                 let v = &self.views[self.active];
