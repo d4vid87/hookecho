@@ -1146,6 +1146,21 @@ pub fn run_field(slug: &str, out_path: &str) -> anyhow::Result<()> {
     render_to_png(&rt, cb, out_path)
 }
 
+/// Nearest-cell value at a lat/lon, for the spot checks the headless renderers print.
+fn spot(f: &wxdata::mrms::MrmsField, lon: f64, lat: f64) -> Option<f32> {
+    if f.nx < 2 || f.ny < 2 {
+        return None;
+    }
+    let dx = (f.lon_east - f.lon_west) / (f.nx - 1) as f64;
+    let dy = (f.lat_north - f.lat_south) / (f.ny - 1) as f64;
+    let col = ((lon - f.lon_west) / dx).round() as isize;
+    let row = ((f.lat_north - lat) / dy).round() as isize;
+    if col < 0 || row < 0 || col as usize >= f.nx || row as usize >= f.ny {
+        return None;
+    }
+    Some(f.values[row as usize * f.nx + col as usize])
+}
+
 /// Render one global-model field. `--headless-global <gfs|ecmwf> <slug> <out.png>`, with the
 /// camera from `HOOKECHO_CAM` — which is how the dateline gets checked (a global grid that hasn't
 /// been wrapped to −180..180 draws one quad across the entire map).
@@ -1175,8 +1190,9 @@ pub fn run_global(model: &str, slug: &str, out_path: &str) -> anyhow::Result<()>
     })?;
     let field = fc.field;
     let finite = field.values.iter().filter(|v| v.is_finite()).count();
+    let mean = field.values.iter().filter(|v| v.is_finite()).sum::<f32>() / finite.max(1) as f32;
     println!(
-        "{} {slug}: {}x{} lon {:.2}..{:.2} lat {:.2}..{:.2} finite {finite} valid {}",
+        "{} {slug}: {}x{} lon {:.2}..{:.2} lat {:.2}..{:.2} finite {finite} mean {mean:.2} valid {}",
         model.label(),
         field.nx,
         field.ny,
@@ -1186,6 +1202,11 @@ pub fn run_global(model: &str, slug: &str, out_path: &str) -> anyhow::Result<()>
         field.lat_north,
         fc.run
     );
+    // Spot values at three well-separated points: a shifted or flipped grid has the right mean
+    // and the wrong map, and only a named location catches that.
+    for (lon, lat) in [(-97.0, 38.0), (0.0, 51.5), (140.0, -35.0)] {
+        println!("  at {lon:.0},{lat:.0}: {:?}", spot(&field, lon, lat));
+    }
     anyhow::ensure!(finite > 0, "global field decoded to nothing");
     anyhow::ensure!(
         field.lon_west >= -180.5 && field.lon_east <= 180.5,
@@ -1210,6 +1231,118 @@ pub fn run_global(model: &str, slug: &str, out_path: &str) -> anyhow::Result<()>
         draw_overlay: false,
         field_uploads: vec![(layer, upload)],
         field_draws: vec![(layer, 1.0)],
+        clear_tiles: false,
+        drop_tiles: Vec::new(),
+        new_vector_tiles,
+        visible_vector,
+        clear_vector: false,
+        drop_vector_tiles: Vec::new(),
+        wind_upload: None,
+        wind: None,
+    };
+    render_to_png(&rt, cb, out_path)
+}
+
+/// Render the model-difference layer. `--headless-diff <field-slug> <out.png>` — the same two
+/// fetches and the same subtract the app does, so the layer is checkable without a window.
+pub fn run_diff(slug: &str, out_path: &str) -> anyhow::Result<()> {
+    use crate::fielddiff::DiffField;
+    use crate::render::FieldLayer as FL;
+    use wxdata::global::{GlobalField, GlobalModel};
+    let field = DiffField::ALL
+        .into_iter()
+        .find(|f| f.slug() == slug)
+        .ok_or_else(|| anyhow::anyhow!("unknown difference field '{slug}'"))?;
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?;
+    let (a, b, label_a, label_b) = rt.block_on(async {
+        let client = reqwest::Client::new();
+        match field {
+            DiffField::Global(kind) => {
+                let g: GlobalField = kind.into();
+                let gfs = wxdata::global::fetch(&client, GlobalModel::Gfs, g, 0).await?;
+                let ecmwf = wxdata::global::fetch(&client, GlobalModel::Ecmwf, g, 0).await?;
+                let (va, vb) = (gfs.valid().to_string(), ecmwf.valid().to_string());
+                anyhow::Ok((gfs.field, ecmwf.field, va, vb))
+            }
+            DiffField::Cape | DiffField::Srh => {
+                let (var, level, min_valid) = match field {
+                    DiffField::Srh => ("HLCY", "3000-0 m above ground", f64::NEG_INFINITY),
+                    _ => ("CAPE", "surface", 0.0),
+                };
+                let hrrr = wxdata::hrrr::fetch_field(
+                    &client,
+                    wxdata::hrrr::Model::Hrrr,
+                    var,
+                    level,
+                    0,
+                    min_valid,
+                )
+                .await?;
+                let rap = wxdata::hrrr::fetch_field(
+                    &client,
+                    wxdata::hrrr::Model::Rap,
+                    var,
+                    level,
+                    0,
+                    min_valid,
+                )
+                .await?;
+                let (va, vb) = (hrrr.run.to_string(), rap.run.to_string());
+                anyhow::Ok((hrrr.field, rap.field, va, vb))
+            }
+        }
+    })?;
+    let (na, nb) = field.pair();
+    let d = crate::fielddiff::diff(&a, &b)
+        .ok_or_else(|| anyhow::anyhow!("the two models cover nothing in common"))?;
+    let mut finite: Vec<f32> = d.values.iter().copied().filter(|v| v.is_finite()).collect();
+    finite.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    // Percentiles, not just the extremes: two reduction schemes always disagree wildly over high
+    // terrain, and the tails say nothing about whether the field is right.
+    let (lo, hi) = (
+        finite.first().copied().unwrap_or(f32::NAN),
+        finite.last().copied().unwrap_or(f32::NAN),
+    );
+    let pct = |q: f64| finite[((finite.len() - 1) as f64 * q) as usize];
+    println!(
+        "{na} ({label_a}) − {nb} ({label_b}) {slug}: {}x{} of {} finite, \
+         spread {:.2}..{:.2}, middle 90% {:.2}..{:.2}, median {:.2} {}",
+        d.nx,
+        d.ny,
+        finite.len(),
+        lo * field.input_scale(),
+        hi * field.input_scale(),
+        pct(0.05) * field.input_scale(),
+        pct(0.95) * field.input_scale(),
+        pct(0.50) * field.input_scale(),
+        field.units()
+    );
+    anyhow::ensure!(!finite.is_empty(), "the difference decoded to nothing");
+
+    let (range, deadband) = field.range();
+    let scale = field.input_scale();
+    let upload = crate::app::field_index_upload(
+        &d,
+        |v| crate::fielddiff::diff_index(v * scale, range),
+        crate::fielddiff::diverging_lut(range, deadband),
+    );
+    let camera = cam_or_env(-97.0, 38.0, 4.0);
+    let (new_tiles, visible, new_vector_tiles, visible_vector) = national_basemap(&rt, &camera);
+    let (center, scale) = camera.world_to_clip_uniform((size() as f32, size() as f32));
+    let cb = MapCallback {
+        pane: 0,
+        camera_center: center,
+        camera_scale: scale,
+        new_tiles,
+        visible,
+        radar_upload: None,
+        draw_radar: false,
+        overlay_upload: None,
+        draw_overlay: false,
+        field_uploads: vec![(FL::ModelDiff, upload)],
+        field_draws: vec![(FL::ModelDiff, 1.0)],
         clear_tiles: false,
         drop_tiles: Vec::new(),
         new_vector_tiles,

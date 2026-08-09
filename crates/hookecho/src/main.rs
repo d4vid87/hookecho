@@ -195,6 +195,21 @@ fn main() -> eframe::Result<()> {
         return Ok(());
     }
 
+    // Model difference: `hookecho --headless-diff <field-slug> [out.png]`.
+    if let Some(pos) = args.iter().position(|a| a == "--headless-diff") {
+        let slug = args.get(pos + 1).map(String::as_str).unwrap_or("mslp");
+        let out = args
+            .get(pos + 2)
+            .filter(|a| !a.starts_with("--"))
+            .map(String::as_str)
+            .unwrap_or("diff.png");
+        if let Err(e) = headless::run_diff(slug, out) {
+            eprintln!("headless difference render failed: {e}");
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
+
     // Tropical verify: `hookecho --headless-tropical`.
     if args.iter().any(|a| a == "--headless-tropical") {
         if let Err(e) = headless::run_tropical() {

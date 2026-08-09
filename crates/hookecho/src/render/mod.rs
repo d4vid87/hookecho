@@ -103,6 +103,8 @@ pub enum FieldLayer {
     GlobalWind10m,
     /// Global model precipitable water / total precipitation.
     GlobalPrecip,
+    /// One model minus another — which field, and therefore which pair, is `app.diff_field`.
+    ModelDiff,
 }
 
 impl FieldLayer {
@@ -124,11 +126,12 @@ impl FieldLayer {
                 | FieldLayer::GlobalTemp2m
                 | FieldLayer::GlobalWind10m
                 | FieldLayer::GlobalPrecip
+                | FieldLayer::ModelDiff
         )
     }
 
     /// Fixed bottom-to-top paint order within each band.
-    pub const DRAW_ORDER: [FieldLayer; 31] = [
+    pub const DRAW_ORDER: [FieldLayer; 32] = [
         // Below-radar context band (bottom to top). The global models sit at the very bottom:
         // they are the synoptic backdrop everything else is drawn against.
         FieldLayer::GlobalMslp,
@@ -136,6 +139,7 @@ impl FieldLayer {
         FieldLayer::GlobalTemp2m,
         FieldLayer::GlobalWind10m,
         FieldLayer::GlobalPrecip,
+        FieldLayer::ModelDiff,
         FieldLayer::Mrms,
         FieldLayer::Mosaic,
         FieldLayer::Hrrr,
@@ -200,6 +204,7 @@ impl FieldLayer {
             FieldLayer::GlobalTemp2m => "global-temp2m",
             FieldLayer::GlobalWind10m => "global-wind10m",
             FieldLayer::GlobalPrecip => "global-precip",
+            FieldLayer::ModelDiff => "model-diff",
         }
     }
 

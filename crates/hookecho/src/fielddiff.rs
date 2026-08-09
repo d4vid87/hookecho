@@ -10,7 +10,133 @@
 //! draw detail that is not there. GFS and ECMWF already share one lattice, so that pair does not
 //! resample at all.
 
+use wxdata::global::GlobalField;
 use wxdata::mrms::MrmsField;
+
+/// What the difference layer is differencing, and therefore which two models it asks for.
+///
+/// ponytail: a fixed pair per field rather than two free model pickers. These are the two
+/// comparisons forecasters actually make — global against global for the synoptic pattern, and
+/// the two convection-scale models against each other — and each extra picker is a way to ask
+/// for a pair that has no shared valid time.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+pub enum DiffField {
+    /// GFS − ECMWF, on the shared 0.3° lattice.
+    Global(GlobalFieldKind),
+    /// HRRR − RAP surface CAPE.
+    Cape,
+    /// HRRR − RAP storm-relative helicity.
+    Srh,
+}
+
+/// `GlobalField` again, because that one is not `Hash`/`Serialize` and this is used as a settings
+/// value and a map key. Converts both ways.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+pub enum GlobalFieldKind {
+    Mslp,
+    Height500,
+    Temp2m,
+    Wind10m,
+    Precip,
+}
+
+impl From<GlobalFieldKind> for GlobalField {
+    fn from(k: GlobalFieldKind) -> GlobalField {
+        match k {
+            GlobalFieldKind::Mslp => GlobalField::Mslp,
+            GlobalFieldKind::Height500 => GlobalField::Height500,
+            GlobalFieldKind::Temp2m => GlobalField::Temp2m,
+            GlobalFieldKind::Wind10m => GlobalField::Wind10m,
+            GlobalFieldKind::Precip => GlobalField::Precip,
+        }
+    }
+}
+
+impl Default for DiffField {
+    fn default() -> Self {
+        DiffField::Global(GlobalFieldKind::Mslp)
+    }
+}
+
+impl DiffField {
+    /// ponytail: no moisture row. GFS publishes precipitable water and ECMWF publishes total
+    /// precipitation — subtracting them is subtracting two different quantities, and a plausible
+    /// looking map of nonsense is worse than no map. Add it when both sides read the same
+    /// variable.
+    pub const ALL: [DiffField; 6] = [
+        DiffField::Global(GlobalFieldKind::Mslp),
+        DiffField::Global(GlobalFieldKind::Height500),
+        DiffField::Global(GlobalFieldKind::Temp2m),
+        DiffField::Global(GlobalFieldKind::Wind10m),
+        DiffField::Cape,
+        DiffField::Srh,
+    ];
+
+    /// Native units → display units, the same conversion the single-model ramps apply. Grids
+    /// arrive as the model published them: pressure in Pa, height in m, wind in m/s.
+    pub fn input_scale(self) -> f32 {
+        match self {
+            DiffField::Global(GlobalFieldKind::Mslp) => 0.01,      // Pa → hPa
+            DiffField::Global(GlobalFieldKind::Height500) => 0.1,  // m → dam
+            DiffField::Global(GlobalFieldKind::Wind10m) => 1.943_844, // m/s → kt
+            // A difference of two Kelvin fields is already a difference in °C.
+            _ => 1.0,
+        }
+    }
+
+    /// Which two models, in the order they are subtracted.
+    pub fn pair(self) -> (&'static str, &'static str) {
+        match self {
+            DiffField::Global(_) => ("GFS", "ECMWF"),
+            DiffField::Cape | DiffField::Srh => ("HRRR", "RAP"),
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            DiffField::Global(k) => GlobalField::from(k).label(),
+            DiffField::Cape => "Surface CAPE",
+            DiffField::Srh => "Storm-relative helicity",
+        }
+    }
+
+    pub fn slug(self) -> &'static str {
+        match self {
+            DiffField::Global(k) => GlobalField::from(k).slug(),
+            DiffField::Cape => "cape",
+            DiffField::Srh => "srh",
+        }
+    }
+
+    /// Full-scale difference and the deadband inside which the two models count as agreeing, in
+    /// the field's own units. Both are eyeballed from what a meaningful spread looks like — an
+    /// 8 hPa MSLP split is a different low, a 200 J/kg CAPE split is noise.
+    pub fn range(self) -> (f32, f32) {
+        match self {
+            DiffField::Global(GlobalFieldKind::Mslp) => (8.0, 0.5),
+            DiffField::Global(GlobalFieldKind::Height500) => (12.0, 1.0),
+            DiffField::Global(GlobalFieldKind::Temp2m) => (6.0, 0.5),
+            DiffField::Global(GlobalFieldKind::Wind10m) => (20.0, 2.0),
+            DiffField::Global(GlobalFieldKind::Precip) => (20.0, 1.0),
+            DiffField::Cape => (1500.0, 200.0),
+            DiffField::Srh => (150.0, 25.0),
+        }
+    }
+
+    /// Units, for the legend and the hover text.
+    pub fn units(self) -> &'static str {
+        match self {
+            DiffField::Global(GlobalFieldKind::Mslp) => "hPa",
+            DiffField::Global(GlobalFieldKind::Height500) => "dam",
+            DiffField::Global(GlobalFieldKind::Temp2m) => "°C",
+            DiffField::Global(GlobalFieldKind::Wind10m) => "kt",
+            DiffField::Global(GlobalFieldKind::Precip) => "mm",
+
+            DiffField::Cape => "J/kg",
+            DiffField::Srh => "m²/s²",
+        }
+    }
+}
 
 /// `a - b`, on the coarser of the two lattices, over the part of the world both cover.
 ///

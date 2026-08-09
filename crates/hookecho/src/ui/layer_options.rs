@@ -68,6 +68,9 @@ pub(crate) fn show(
     // Global models: which one, and how far into its run.
     global_model: &mut wxdata::global::GlobalModel,
     global_fcst_hour: &mut u16,
+    // Model difference: which field, and the two valid times the last fetch actually compared.
+    diff_field: &mut crate::fielddiff::DiffField,
+    diff_valid: Option<&(String, String)>,
     // Lightning: NLDN averaging window, and whether GLM also polls GOES-West.
     lightning_minutes: &mut u16,
     show_glm: bool,
@@ -114,6 +117,31 @@ pub(crate) fn show(
                 .on_hover_text("Three-hourly out to five days, from the newest complete cycle")
                 .changed();
         });
+    }
+
+    if fields.get(&FL::ModelDiff).is_some_and(|s| s.show) {
+        let (a, b) = diff_field.pair();
+        ui.horizontal_wrapped(|ui| {
+            ui.label("Difference:");
+            for f in crate::fielddiff::DiffField::ALL {
+                changed |= ui.selectable_value(diff_field, f, f.label()).changed();
+            }
+        });
+        ui.weak(format!(
+            "{a} minus {b}, in {}. Red = {a} higher, blue = {b} higher; where they agree, nothing is drawn.",
+            diff_field.units()
+        ));
+        match diff_valid {
+            // The two models rarely share a cycle, and a difference between two instants is only
+            // honest if it says which two.
+            Some((va, vb)) if va != vb => {
+                ui.weak(format!("⚠ {a} valid {va}, {b} valid {vb} — not the same time."));
+            }
+            Some((va, _)) => {
+                ui.weak(format!("Both valid {va}."));
+            }
+            None => {}
+        }
     }
 
     if fields.get(&FL::Lightning).is_some_and(|s| s.show) {

@@ -168,6 +168,8 @@ enum OverlayMsg {
     Placefile(String, wxdata::placefile::Placefile),
     /// The latest grid for a national field layer (mosaic, rotation, MESH, AzShear, lightning).
     Field(crate::render::FieldLayer, wxdata::mrms::MrmsField),
+    /// A model-difference grid plus the two valid times it compared, for the layer's own row.
+    ModelDiff(wxdata::mrms::MrmsField, (String, String)),
     /// `(0 °C, −20 °C)` level heights above sea level, in metres, at the active radar.
     FreezingLevels(f64, f64),
     /// Local storm reports: live trailing window (`None`) or an archive bucket (feature CC).
@@ -275,6 +277,9 @@ enum OverlaySource {
         wxdata::global::GlobalField,
         u16,
     ),
+    /// One model's field minus another's, at a forecast hour. Which two models is implied by the
+    /// field (see `fielddiff::DiffField::pair`).
+    ModelDiff(crate::fielddiff::DiffField, u16),
     /// Gridded L3 product (DVL/EET) for a site, projected to a lat/lon field (feature X).
     L3Grid(crate::render::FieldLayer, String),
     /// Melting-level and −20 °C heights at `(lon, lat)`, for the derived hail grids.
@@ -383,6 +388,50 @@ impl OverlaySource {
             OverlaySource::Global(layer, model, field, fh) => {
                 let fc = wxdata::global::fetch(http, model, field, fh).await?;
                 OverlayMsg::Field(layer, fc.field)
+            }
+            OverlaySource::ModelDiff(field, fh) => {
+                use crate::fielddiff::DiffField;
+                use wxdata::global::{GlobalModel, GlobalField};
+                let (a, b, valid) = match field {
+                    DiffField::Global(kind) => {
+                        let g: GlobalField = kind.into();
+                        // Both cycles at once: they are independent services, and the layer is
+                        // useless until both answer anyway.
+                        let (gfs, ecmwf) = futures_util::future::try_join(
+                            wxdata::global::fetch(http, GlobalModel::Gfs, g, fh),
+                            wxdata::global::fetch(http, GlobalModel::Ecmwf, g, fh),
+                        )
+                        .await?;
+                        let valid = (
+                            gfs.valid().format("%d %H:%MZ").to_string(),
+                            ecmwf.valid().format("%d %H:%MZ").to_string(),
+                        );
+                        (gfs.field, ecmwf.field, valid)
+                    }
+                    DiffField::Cape | DiffField::Srh => {
+                        let (var, level, min_valid) = match field {
+                            DiffField::Srh => ("HLCY", "3000-0 m above ground", f64::NEG_INFINITY),
+                            _ => ("CAPE", "surface", 0.0),
+                        };
+                        let (hrrr, rap) = futures_util::future::try_join(
+                            wxdata::hrrr::fetch_field(
+                                http, wxdata::hrrr::Model::Hrrr, var, level, 0, min_valid,
+                            ),
+                            wxdata::hrrr::fetch_field(
+                                http, wxdata::hrrr::Model::Rap, var, level, 0, min_valid,
+                            ),
+                        )
+                        .await?;
+                        let valid = (
+                            hrrr.run.format("%d %H:%MZ").to_string(),
+                            rap.run.format("%d %H:%MZ").to_string(),
+                        );
+                        (hrrr.field, rap.field, valid)
+                    }
+                };
+                let d = crate::fielddiff::diff(&a, &b)
+                    .ok_or_else(|| anyhow::anyhow!("the two models cover nothing in common"))?;
+                OverlayMsg::ModelDiff(d, valid)
             }
             OverlaySource::StormReports(bucket) => {
                 // Archive bucket: the 6 h of reports ending at the bucket's close; live: last 6 h.
@@ -1148,7 +1197,9 @@ fn field_refresh_secs(layer: crate::render::FieldLayer) -> u64 {
         | FL::GlobalHeight500
         | FL::GlobalTemp2m
         | FL::GlobalWind10m
-        | FL::GlobalPrecip => 1800,
+        | FL::GlobalPrecip
+        // Two global cycles behind it, so the same half hour.
+        | FL::ModelDiff => 1800,
         FL::Smoke => 900,
         // The 24-h hail-swath accumulation moves slowly.
         FL::HailSwath => 300,
@@ -1551,6 +1602,12 @@ pub struct HookEchoApp {
     /// The (model, hour) each global layer was last fetched for, so a change refetches at once.
     global_layer_key:
         std::collections::HashMap<crate::render::FieldLayer, (wxdata::global::GlobalModel, u16)>,
+    /// What the difference layer differences, and the two valid times its last fetch compared —
+    /// the pair rarely shares a cycle, and a difference between two instants has to say so.
+    diff_field: crate::fielddiff::DiffField,
+    diff_valid: Option<(String, String)>,
+    /// The field the difference layer was last fetched for, so a change refetches at once.
+    diff_key: Option<(crate::fielddiff::DiffField, u16)>,
     /// Where the open sounding was taken, so a forecast-hour change can refetch the same point.
     sounding_at: Option<(f64, f64)>,
     /// Vertices clicked so far with the watch-zone tool, `[lon, lat]`. Empty when not drawing.
@@ -2265,6 +2322,9 @@ impl HookEchoApp {
             global_model: wxdata::global::GlobalModel::default(),
             global_fcst_hour: 0,
             global_layer_key: std::collections::HashMap::new(),
+            diff_field: crate::fielddiff::DiffField::default(),
+            diff_valid: None,
+            diff_key: None,
             sounding_at: None,
             zone_pts: Vec::new(),
             zone_naming: None,
@@ -5312,6 +5372,8 @@ impl HookEchoApp {
                                     l3_site.as_deref(),
                                     &mut self.global_model,
                                     &mut self.global_fcst_hour,
+                                    &mut self.diff_field,
+                                    self.diff_valid.as_ref(),
                                     &mut self.settings.lightning_minutes,
                                     self.show_glm,
                                     &mut self.settings.glm_goes_west,
@@ -6214,6 +6276,13 @@ impl HookEchoApp {
                 false,
             ),
             (
+                FL::ModelDiff,
+                "Models",
+                "Model difference",
+                "Where two models disagree \u{2014} pick the field in layer options",
+                false,
+            ),
+            (
                 FL::Hrrr,
                 "Models",
                 "HRRR future radar",
@@ -7100,6 +7169,20 @@ impl HookEchoApp {
                     if let Some(s) = self.fields.get_mut(&layer) {
                         s.pending = Some(upload);
                     }
+                }
+                OverlayMsg::ModelDiff(field, valid) => {
+                    let layer = crate::render::FieldLayer::ModelDiff;
+                    let (range, deadband) = self.diff_field.range();
+                    let scale = self.diff_field.input_scale();
+                    let upload = field_index_upload(
+                        &field,
+                        |v| crate::fielddiff::diff_index(v * scale, range),
+                        crate::fielddiff::diverging_lut(range, deadband),
+                    );
+                    if let Some(s) = self.fields.get_mut(&layer) {
+                        s.pending = Some(upload);
+                    }
+                    self.diff_valid = Some(valid);
                 }
                 OverlayMsg::StormReports(bucket, reports) => match bucket {
                     None => self.storm_reports = reports,
@@ -12648,7 +12731,7 @@ fn mrms_upload(f: &wxdata::mrms::MrmsField, table: &ColorTable) -> crate::render
 
 /// Build a field-layer GPU upload from a grid: `map` turns each cell value into a LUT index
 /// (0 = transparent, 2..=255 = data), `lut` is the 256-entry RGBA color table.
-fn field_index_upload(
+pub(crate) fn field_index_upload(
     f: &wxdata::mrms::MrmsField,
     map: impl Fn(f32) -> u8,
     lut: Vec<u8>,
@@ -13191,6 +13274,7 @@ impl eframe::App for HookEchoApp {
                     | FL::HailPosh
                     | FL::Snowfall
                     | FL::SnowAnalysis
+                    | FL::ModelDiff
             ) {
                 continue;
             }
@@ -13236,7 +13320,8 @@ impl eframe::App for HookEchoApp {
                     | FL::GlobalHeight500
                     | FL::GlobalTemp2m
                     | FL::GlobalWind10m
-                    | FL::GlobalPrecip => unreachable!(),
+                    | FL::GlobalPrecip
+                    | FL::ModelDiff => unreachable!(),
                 };
                 self.spawn_overlay(ctx, OverlaySource::Field(layer, product));
             }
@@ -13282,6 +13367,25 @@ impl eframe::App for HookEchoApp {
                 }
                 self.global_layer_key.insert(layer, (model, fh));
                 self.spawn_overlay(ctx, OverlaySource::Global(layer, model, gfield, fh));
+            }
+        }
+        // Model difference: same cadence as a global layer, and the same refetch-on-change rule.
+        {
+            let layer = FL::ModelDiff;
+            let fh = self.global_fcst_hour;
+            let on = self.fields.get(&layer).is_some_and(|s| s.show);
+            let stale = on
+                && self.fields.get(&layer).is_some_and(|s| {
+                    s.last_fetch
+                        .is_none_or(|t| t.elapsed().as_secs() >= field_refresh_secs(layer))
+                });
+            let changed = on && self.diff_key != Some((self.diff_field, fh));
+            if stale || changed {
+                if let Some(s) = self.fields.get_mut(&layer) {
+                    s.last_fetch = Some(Instant::now());
+                }
+                self.diff_key = Some((self.diff_field, fh));
+                self.spawn_overlay(ctx, OverlaySource::ModelDiff(self.diff_field, fh));
             }
         }
         // HRRR rotation tracks + smoke: same forecast-hour scrub as future radar, own cadences.

@@ -586,7 +586,7 @@ pub fn ramp_for(layer: FieldLayer) -> Option<&'static FieldRamp> {
         FL::GlobalWind10m => &GLOBAL_WIND_10M,
         FL::GlobalPrecip => &GLOBAL_PRECIP,
         FL::Hca => &HCA,
-        FL::Mrms | FL::Mosaic | FL::Hrrr | FL::Lightning => return None,
+        FL::Mrms | FL::Mosaic | FL::Hrrr | FL::Lightning | FL::ModelDiff => return None,
     })
 }
 
@@ -596,11 +596,14 @@ mod tests {
 
     /// Layers colored outside this table. A new `FieldLayer` must join the table or this list —
     /// forgetting both silently ships a layer with no legend.
-    const NO_RAMP: [FieldLayer; 4] = [
+    const NO_RAMP: [FieldLayer; 5] = [
         FieldLayer::Mrms,
         FieldLayer::Mosaic,
         FieldLayer::Hrrr,
         FieldLayer::Lightning,
+        // The difference layer's ramp is symmetric about zero and rebuilt whenever the field
+        // changes, so it is baked in `fielddiff`, not tabulated here.
+        FieldLayer::ModelDiff,
     ];
 
     #[test]
