@@ -246,9 +246,9 @@ layer draws its own scale and units.
   product.
 - NOAA **ProbSevere** per-storm severe/tornado/hail/wind probabilities.
 - Cross-sections in any moment, a CAPPI altitude slicer, and a 3D volume view.
-- **Copy CSV** on the cell table, the cross-section, the verification report and
-  the sounding — indices and profile both — so the numbers can leave the app and
-  be checked somewhere else.
+- **Copy CSV or save it to a file** from the cell table, the cross-section, the
+  verification report, the sounding — indices and profile both — and the tornado
+  climatology, so the numbers can leave the app and be checked somewhere else.
 
 ### Environment and forecast
 
@@ -266,6 +266,15 @@ layer draws its own scale and units.
   accumulated while the app runs, since the radar only publishes the latest.
 - HRRR future radar (0–18 h), forecast rotation tracks, near-surface wildfire
   smoke, and 0–45 minute optical-flow extrapolation of the radar you're watching.
+- A **model difference layer**: GFS minus ECMWF (MSLP, 500 hPa height, 2 m
+  temperature, 10 m wind) and HRRR minus RAP (surface CAPE, storm-relative
+  helicity), on one map. Where the two models agree it draws nothing, so what
+  you see is the disagreement — and the layer names both valid times, because
+  the two feeds rarely share a cycle.
+- **Effective-layer** bulk shear, SRH and STP as gridded fields, solved per
+  column on the HRRR's 25 hPa pressure ladder up to 100 hPa — deep enough that a
+  buoyant parcel has an equilibrium level to be measured against, which is what
+  the depth-dependent parameters need to exist at all.
 - SPC Day 1–3 categorical outlooks plus Day-1 probabilistic tornado/wind/hail
   grids with the significant-severe hatch, and the WFO's **Area Forecast
   Discussion** in-app.

@@ -6,7 +6,7 @@
 class Hookecho < Formula
   desc "Advanced NEXRAD weather radar viewer"
   homepage "https://github.com/d4vid87/hookecho"
-  url "https://github.com/d4vid87/hookecho/archive/refs/tags/v0.7.0.tar.gz"
+  url "https://github.com/d4vid87/hookecho/archive/refs/tags/v0.8.0.tar.gz"
   # Filled in at tag time: `brew fetch --build-from-source hookecho` prints the checksum.
   sha256 :no_check
   license "MIT"

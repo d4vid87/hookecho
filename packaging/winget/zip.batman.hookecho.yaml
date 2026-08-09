@@ -8,7 +8,7 @@
 #   sha256sum dist/Hook_Echo-WX-setup-x86_64.exe
 # and paste the result into the installer manifest below.
 PackageIdentifier: zip.batman.hookecho
-PackageVersion: 0.7.0
+PackageVersion: 0.8.0
 DefaultLocale: en-US
 ManifestType: version
 ManifestVersion: 1.6.0

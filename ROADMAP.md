@@ -17,24 +17,23 @@ upgrade path out of it (`grep -rn "ponytail:" crates/`).
 
 ## Next
 
-- A model comparison / difference view (GFS against ECMWF, or a run against its
-  predecessor). Field layers are app-global today and panes carry only radar
-  state, so this is an architecture change before it is a feature.
 - A packed-RGBA fallback for GPU wind on devices that cannot render to float
   textures — the CPU path already covers them, so this is only worth doing if
   one shows up that needs the speed.
-- A headless-browser smoke test in CI. `cargo check` cannot see a runtime panic,
-  which is how the web build shipped one.
-- Native-level severe profiles: the composites are solved from ten mandatory
-  levels, where SPC blends observations into a full-resolution analysis.
+- Blending surface observations into the effective-layer analysis, which is the
+  remaining difference from SPC's mesoanalysis now that the vertical resolution
+  is there.
 
 ## Later
 
-- Per-pane thresholds and field layers, saved with the workspace.
+- Per-pane thresholds and field layers, saved with the workspace. The difference
+  layer would rather be two panes than one subtraction, but field layers are
+  app-global, so that waits on this.
+- A valid-time alignment for the difference layer: it labels the two cycles
+  today rather than interpolating either onto the other's instant.
+- A hover readout and a diverging legend for the difference layer.
 - Colormaps and stroke widths that respond to the high-contrast theme, not just
   the chrome.
-- Fetching the effective-layer parameters above 200 hPa, so an uncapped plains
-  parcel has an equilibrium level to measure against.
 
 ## Not planned
 
@@ -69,6 +68,12 @@ Already shipped, and sometimes mistaken for gaps:
 - **A radar snapshot as a file** (`--snapshot … --every`) for conky and
   wallpaper scripts, with size and zoom on `/snapshot.png` too.
 - **True lunar ephemeris** (Meeus), in place of the mean synodic month.
+- **A model difference layer** — GFS against ECMWF, HRRR against RAP — drawing
+  nothing where the two agree.
+- **Effective-layer parameters on the full pressure ladder**, up to 100 hPa, so
+  the depth-dependent ones exist on the days they describe.
+- **A headless-browser smoke test in CI**, which is the check `cargo check`
+  structurally cannot perform.
 - Animated HRRR wind, the multi-day forecast, fourteen themes including Light,
   interactive vector basemaps, offline chase packs, future radar, archive back
   to 1991, placefiles with a layer manager, settings sync, and a Home Assistant
