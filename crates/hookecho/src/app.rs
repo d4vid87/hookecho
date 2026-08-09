@@ -753,10 +753,20 @@ pub(crate) enum ContourKind {
     Scp,
     /// Energy-Helicity Index, 0-1 km.
     Ehi,
+    /// 700–500 hPa lapse rate (°C/km).
+    Lapse700500,
+    /// 850–500 hPa lapse rate (°C/km).
+    Lapse850500,
+    /// Effective bulk wind difference (kt).
+    EffShear,
+    /// Effective storm-relative helicity (m²/s²).
+    EffSrh,
+    /// STP in its effective-layer form — the one SPC mesoanalysis draws.
+    StpEff,
 }
 
 impl ContourKind {
-    pub(crate) const ALL: [ContourKind; 9] = [
+    pub(crate) const ALL: [ContourKind; 14] = [
         ContourKind::Off,
         ContourKind::Mslp,
         ContourKind::T2m,
@@ -766,6 +776,11 @@ impl ContourKind {
         ContourKind::Stp,
         ContourKind::Scp,
         ContourKind::Ehi,
+        ContourKind::Lapse700500,
+        ContourKind::Lapse850500,
+        ContourKind::EffShear,
+        ContourKind::EffSrh,
+        ContourKind::StpEff,
     ];
 
     /// The composite parameters, which combine several GRIB fields instead of drawing one.
@@ -775,6 +790,11 @@ impl ContourKind {
             ContourKind::Stp => S::Stp,
             ContourKind::Scp => S::Scp,
             ContourKind::Ehi => S::Ehi,
+            ContourKind::Lapse700500 => S::Lapse700500,
+            ContourKind::Lapse850500 => S::Lapse850500,
+            ContourKind::EffShear => S::EffShear,
+            ContourKind::EffSrh => S::EffSrh,
+            ContourKind::StpEff => S::StpEff,
             _ => return None,
         })
     }
@@ -782,8 +802,12 @@ impl ContourKind {
     /// Contour interval in display units (composites only; single fields carry theirs in `params`).
     pub(crate) fn severe_interval(self) -> f32 {
         match self {
-            ContourKind::Stp => 0.5,
+            ContourKind::Stp | ContourKind::StpEff => 0.5,
             ContourKind::Scp => 2.0,
+            // °C/km: 0.5 resolves the 7-8 °C/km band steep-lapse-rate plumes live in.
+            ContourKind::Lapse700500 | ContourKind::Lapse850500 => 0.5,
+            ContourKind::EffShear => 10.0, // kt
+            ContourKind::EffSrh => 100.0,  // m²/s²
             _ => 1.0,
         }
     }
@@ -799,6 +823,11 @@ impl ContourKind {
             ContourKind::Stp => "STP (fixed)",
             ContourKind::Scp => "SCP",
             ContourKind::Ehi => "EHI 0-1 km",
+            ContourKind::Lapse700500 => "700-500 lapse",
+            ContourKind::Lapse850500 => "850-500 lapse",
+            ContourKind::EffShear => "Eff. bulk shear",
+            ContourKind::EffSrh => "Eff. SRH",
+            ContourKind::StpEff => "STP (effective)",
         }
     }
 
@@ -813,6 +842,11 @@ impl ContourKind {
             "stp" => ContourKind::Stp,
             "scp" => ContourKind::Scp,
             "ehi" => ContourKind::Ehi,
+            "lapse700" => ContourKind::Lapse700500,
+            "lapse850" => ContourKind::Lapse850500,
+            "ebwd" => ContourKind::EffShear,
+            "esrh" => ContourKind::EffSrh,
+            "stpeff" => ContourKind::StpEff,
             _ => return None,
         })
     }
@@ -827,7 +861,14 @@ impl ContourKind {
             ContourKind::Cape => Some(("CAPE", "surface", 500.0)),       // J/kg
             ContourKind::Srh => Some(("HLCY", "3000-0 m above ground", 100.0)), // m²/s²
             // Composites are built from several fields — see `severe()` / `severe_interval()`.
-            ContourKind::Stp | ContourKind::Scp | ContourKind::Ehi => None,
+            ContourKind::Stp
+            | ContourKind::Scp
+            | ContourKind::Ehi
+            | ContourKind::Lapse700500
+            | ContourKind::Lapse850500
+            | ContourKind::EffShear
+            | ContourKind::EffSrh
+            | ContourKind::StpEff => None,
         }
     }
 
@@ -850,6 +891,11 @@ impl ContourKind {
             ContourKind::Stp => egui::Color32::from_rgb(230, 60, 90),
             ContourKind::Scp => egui::Color32::from_rgb(250, 120, 50),
             ContourKind::Ehi => egui::Color32::from_rgb(150, 110, 235),
+            ContourKind::Lapse700500 => egui::Color32::from_rgb(240, 200, 90),
+            ContourKind::Lapse850500 => egui::Color32::from_rgb(210, 170, 70),
+            ContourKind::EffShear => egui::Color32::from_rgb(120, 190, 250),
+            ContourKind::EffSrh => egui::Color32::from_rgb(200, 130, 240),
+            ContourKind::StpEff => egui::Color32::from_rgb(250, 70, 110),
             ContourKind::Off => egui::Color32::WHITE,
         }
     }

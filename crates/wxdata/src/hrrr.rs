@@ -24,6 +24,9 @@ pub enum Model {
     #[default]
     Hrrr,
     Rap,
+    /// HRRR's pressure-level file. Not offered as a user-facing source — it exists for the
+    /// effective-layer parameters, which need real columns.
+    HrrrPressure,
 }
 
 impl Model {
@@ -32,6 +35,11 @@ impl Model {
         match self {
             Model::Hrrr => {
                 format!("{BUCKET}/hrrr.{date}/conus/hrrr.t{cycle_hour:02}z.wrfsfcf{fh:02}.grib2")
+            }
+            // The pressure-level file: full mandatory levels with dewpoint and with U and V as
+            // separate messages, which the surface file and RAP's awp130 both lack.
+            Model::HrrrPressure => {
+                format!("{BUCKET}/hrrr.{date}/conus/hrrr.t{cycle_hour:02}z.wrfprsf{fh:02}.grib2")
             }
             // awp130 is the 13 km CONUS pressure/surface product — the one with CAPE and helicity.
             Model::Rap => {
@@ -45,7 +53,7 @@ impl Model {
     /// HRRR is ~3 km, RAP ~13 km.
     fn res_deg(self) -> f64 {
         match self {
-            Model::Hrrr => 0.04,
+            Model::Hrrr | Model::HrrrPressure => 0.04,
             Model::Rap => 0.15,
         }
     }
@@ -53,6 +61,7 @@ impl Model {
     pub fn label(self) -> &'static str {
         match self {
             Model::Hrrr => "HRRR",
+            Model::HrrrPressure => "HRRR pressure",
             Model::Rap => "RAP",
         }
     }

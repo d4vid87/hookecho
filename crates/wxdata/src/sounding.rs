@@ -136,8 +136,15 @@ impl Sounding {
     /// Full surface-based parcel: CAPE, CIN, and the LCL/LFC/EL heights, plus the parcel's own
     /// temperature at each level so the Skew-T can draw the trace the numbers came from.
     pub fn parcel(&self) -> Option<Parcel> {
-        let sfc = self.levels.first()?;
-        if self.levels.len() < 3 {
+        self.parcel_from(0)
+    }
+
+    /// The same lift, starting from level `i` instead of the surface. This is what an effective
+    /// inflow layer is made of: a parcel from each candidate level, kept when it has enough CAPE
+    /// and little enough CIN.
+    pub fn parcel_from(&self, i: usize) -> Option<Parcel> {
+        let sfc = self.levels.get(i)?;
+        if self.levels.len() - i < 3 {
             return None;
         }
         let tk = sfc.temp_c + 273.15;
@@ -161,7 +168,7 @@ impl Sounding {
         // holds a parcel down.
         let (mut cape, mut cin) = (0.0, 0.0);
         let (mut lfc_m, mut el_m) = (None, None);
-        for (i, w) in self.levels.windows(2).enumerate() {
+        for (k, w) in self.levels[i..].windows(2).enumerate() {
             let (lo, hi) = (&w[0], &w[1]);
             let b_lo = parcel_k(lo.pressure_hpa) - (lo.temp_c + 273.15);
             let b_hi = parcel_k(hi.pressure_hpa) - (hi.temp_c + 273.15);
@@ -171,7 +178,7 @@ impl Sounding {
                 cin += RD * (b_lo.min(0.0) + b_hi.min(0.0)) / 2.0 * dlnp;
             }
             // Buoyancy crossings, linearly interpolated in height across the layer.
-            let (h_lo, h_hi) = (heights[i], heights[i + 1]);
+            let (h_lo, h_hi) = (heights[i + k], heights[i + k + 1]);
             if b_lo <= 0.0 && b_hi > 0.0 {
                 let k = (-b_lo / (b_hi - b_lo)).clamp(0.0, 1.0);
                 lfc_m.get_or_insert(h_lo + (h_hi - h_lo) * k);

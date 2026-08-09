@@ -19,6 +19,35 @@ pub enum SevereKind {
     Scp,
     /// Energy-Helicity Index, 0–1 km.
     Ehi,
+    /// Mid-level lapse rate, 700–500 hPa (°C/km).
+    Lapse700500,
+    /// Steep-lapse-rate proxy over a deeper layer, 850–500 hPa (°C/km).
+    Lapse850500,
+    /// Effective bulk wind difference (kt): effective inflow base to 50% of the MU parcel's EL.
+    EffShear,
+    /// Effective storm-relative helicity (m²/s²) over the effective inflow layer.
+    EffSrh,
+    /// Significant Tornado Parameter in its effective-layer form.
+    StpEff,
+}
+
+impl SevereKind {
+    /// Kinds built from pressure-level columns rather than surface fields.
+    fn is_effective(self) -> bool {
+        matches!(
+            self,
+            SevereKind::EffShear | SevereKind::EffSrh | SevereKind::StpEff
+        )
+    }
+}
+
+/// Lapse rate (°C/km) between two levels given their temperatures (°C) and heights (m).
+pub fn lapse_rate(t_lo: f64, z_lo: f64, t_hi: f64, z_hi: f64) -> f64 {
+    let dz_km = (z_hi - z_lo) / 1000.0;
+    if dz_km.abs() < 1e-6 {
+        return f64::NAN;
+    }
+    (t_lo - t_hi) / dz_km
 }
 
 /// Shear term shared by STP and SCP: zero below 10 m/s, capped at 1.0 above 20 m/s.
@@ -64,6 +93,12 @@ pub async fn fetch_grid(
         !(model == hrrr::Model::Rap && kind == SevereKind::Stp),
         "STP needs an LCL height the RAP analysis doesn't publish — use the HRRR source"
     );
+    if let SevereKind::Lapse700500 | SevereKind::Lapse850500 = kind {
+        return fetch_lapse_grid(http, model, kind).await;
+    }
+    if kind.is_effective() {
+        return fetch_effective_grid(http, model, kind).await;
+    }
     // (var, level, min_valid). Helicity and shear components must keep their negatives, so their
     // drop threshold is -inf; CAPE below zero is meaningless.
     let srh_level = match kind {
@@ -115,7 +150,8 @@ pub async fn fetch_grid(
                             (fields[4].values[i] as f64 - fields[5].values[i] as f64).max(0.0);
                         stp(cape, srh, shear, lcl_agl)
                     }
-                    SevereKind::Ehi => unreachable!(),
+                    // Handled above, before any surface field was fetched.
+                    _ => unreachable!("{kind:?} takes its own path"),
                 }
             }
         };
@@ -141,6 +177,296 @@ pub async fn fetch_grid(
     })
 }
 
+/// Mid-level lapse rates: two temperatures and two heights from one cycle, differenced per cell.
+async fn fetch_lapse_grid(
+    http: &reqwest::Client,
+    model: hrrr::Model,
+    kind: SevereKind,
+) -> anyhow::Result<HrrrForecast> {
+    let lo_mb = if kind == SevereKind::Lapse850500 {
+        "850 mb"
+    } else {
+        "700 mb"
+    };
+    let specs: Vec<(&str, &str, f64)> = vec![
+        ("TMP", lo_mb, f64::NEG_INFINITY),
+        ("HGT", lo_mb, f64::NEG_INFINITY),
+        ("TMP", "500 mb", f64::NEG_INFINITY),
+        ("HGT", "500 mb", f64::NEG_INFINITY),
+    ];
+    let (run, fields) = hrrr::fetch_fields_one_run(http, model, 0, &specs).await?;
+    let f0 = &fields[0];
+    for f in &fields[1..] {
+        anyhow::ensure!(
+            f.nx == f0.nx && f.ny == f0.ny,
+            "{} lapse-rate grids disagree",
+            model.label()
+        );
+    }
+    let mut values = vec![f32::NAN; f0.values.len()];
+    for (i, out) in values.iter_mut().enumerate() {
+        // GRIB TMP is Kelvin; a difference of two temperatures needs no conversion.
+        let v = lapse_rate(
+            fields[0].values[i] as f64,
+            fields[1].values[i] as f64,
+            fields[2].values[i] as f64,
+            fields[3].values[i] as f64,
+        );
+        if v.is_finite() {
+            *out = v as f32;
+        }
+    }
+    Ok(as_forecast(f0, values, run))
+}
+
+/// Pressure levels the effective-layer parameters are built from. Mandatory levels only — the
+/// native-level profile would be four times the byte ranges for a layer this coarse anyway.
+const EFF_LEVELS_HPA: [u32; 7] = [1000, 925, 850, 700, 600, 500, 400];
+
+/// Effective-inflow-layer parameters: EBWD, ESRH and effective-layer STP.
+///
+/// Thirty-five range fetches from one cycle (five variables at seven levels), then a per-cell
+/// column solve. SPC does this on the native RAP levels with mesoanalysis-blended observations;
+/// this is the mandatory-level approximation of the same recipe.
+///
+/// ponytail: seven levels, and the inflow search lifts a parcel from each of them. Native-level
+/// profiles are the upgrade if the values drift from SPC's.
+async fn fetch_effective_grid(
+    http: &reqwest::Client,
+    _model: hrrr::Model,
+    kind: SevereKind,
+) -> anyhow::Result<HrrrForecast> {
+    // HRRR's pressure file regardless of the picked source. The surface file carries only a
+    // handful of pressure levels, and RAP's awp130 packs U and V as two submessages of one GRIB
+    // record — a byte range for either decodes to U, so RAP winds here would be silently wrong.
+    let model = hrrr::Model::HrrrPressure;
+
+    let mut specs: Vec<(String, String, f64)> = Vec::new();
+    for hpa in EFF_LEVELS_HPA {
+        for var in ["TMP", "DPT", "HGT", "UGRD", "VGRD"] {
+            specs.push((var.to_string(), format!("{hpa} mb"), f64::NEG_INFINITY));
+        }
+    }
+    let borrowed: Vec<(&str, &str, f64)> = specs
+        .iter()
+        .map(|(v, l, m)| (v.as_str(), l.as_str(), *m))
+        .collect();
+    let (run, fields) = hrrr::fetch_fields_one_run(http, model, 0, &borrowed).await?;
+    let f0 = &fields[0];
+    for f in &fields[1..] {
+        anyhow::ensure!(
+            f.nx == f0.nx && f.ny == f0.ny,
+            "{} effective-layer grids disagree",
+            model.label()
+        );
+    }
+
+    let n = f0.values.len();
+    let column_value = |i: usize| -> f32 {
+        {
+            // One column: mandatory levels, surface-first, dropping any level with a gap in it.
+            let mut levels = Vec::with_capacity(EFF_LEVELS_HPA.len());
+            let mut heights = Vec::with_capacity(EFF_LEVELS_HPA.len());
+            for (k, hpa) in EFF_LEVELS_HPA.iter().enumerate() {
+                let b = k * 5;
+                let (t, d_k, z, u, v) = (
+                    fields[b].values[i] as f64,
+                    fields[b + 1].values[i] as f64,
+                    fields[b + 2].values[i] as f64,
+                    fields[b + 3].values[i] as f64,
+                    fields[b + 4].values[i] as f64,
+                );
+                if !(t.is_finite()
+                    && d_k.is_finite()
+                    && z.is_finite()
+                    && u.is_finite()
+                    && v.is_finite())
+                {
+                    continue;
+                }
+                levels.push(crate::sounding::SoundingLevel {
+                    pressure_hpa: *hpa as f64,
+                    temp_c: t - 273.15,
+                    dewpt_c: d_k - 273.15,
+                    u_ms: u,
+                    v_ms: v,
+                });
+                heights.push(z);
+            }
+            if levels.len() < 4 {
+                return f32::NAN;
+            }
+            let column = crate::sounding::Sounding {
+                lon: 0.0,
+                lat: 0.0,
+                run,
+                fh: 0,
+                levels,
+            };
+            match effective_value(&column, &heights, kind) {
+                Some(v) if v.is_finite() => v as f32,
+                _ => f32::NAN,
+            }
+        }
+    };
+    // A column solve per cell, over 1.4M cells: worth every thread on native. wasm has none.
+    #[cfg(not(target_arch = "wasm32"))]
+    let values: Vec<f32> = {
+        use rayon::prelude::*;
+        (0..n).into_par_iter().map(column_value).collect()
+    };
+    #[cfg(target_arch = "wasm32")]
+    let values: Vec<f32> = (0..n).map(column_value).collect();
+
+    Ok(as_forecast(f0, values, run))
+}
+
+/// One column's effective-layer answer. Returns `None` when there is no effective inflow layer,
+/// which is the honest result for a capped or dry column.
+fn effective_value(
+    column: &crate::sounding::Sounding,
+    heights_m: &[f64],
+    kind: SevereKind,
+) -> Option<f64> {
+    // Effective inflow layer (Thompson et al. 2007): the contiguous run of levels whose parcels
+    // have at least 100 J/kg of CAPE and no worse than −250 J/kg of CIN.
+    let mut base = None;
+    let mut top = None;
+    for i in 0..column.levels.len() {
+        let ok = column
+            .parcel_from(i)
+            .is_some_and(|p| p.cape >= 100.0 && p.cin >= -250.0);
+        if ok {
+            base.get_or_insert(i);
+            top = Some(i);
+        } else if base.is_some() {
+            break;
+        }
+    }
+    let (base, top) = (base?, top?);
+    let base_z = heights_m[base];
+
+    // Most-unstable parcel over the inflow layer, for the EL that caps the shear layer.
+    let mu = (base..=top)
+        .filter_map(|i| column.parcel_from(i).map(|p| (i, p)))
+        .max_by(|a, b| a.1.cape.total_cmp(&b.1.cape))?;
+    let el_z = mu.1.el_m.map(|el| heights_m[mu.0] + el);
+
+    // Wind at a height, interpolated between the mandatory levels we have.
+    let wind_at = |z: f64| -> Option<(f64, f64)> {
+        let i = heights_m.iter().position(|&h| h >= z)?;
+        if i == 0 {
+            let l = column.levels.first()?;
+            return Some((l.u_ms, l.v_ms));
+        }
+        let k =
+            ((z - heights_m[i - 1]) / (heights_m[i] - heights_m[i - 1]).max(1e-6)).clamp(0.0, 1.0);
+        let (a, b) = (&column.levels[i - 1], &column.levels[i]);
+        Some((
+            a.u_ms + (b.u_ms - a.u_ms) * k,
+            a.v_ms + (b.v_ms - a.v_ms) * k,
+        ))
+    };
+
+    match kind {
+        SevereKind::EffShear => {
+            // Base of the inflow layer to half the MU parcel's equilibrium level.
+            let depth_top = el_z.map(|el| base_z + (el - base_z) * 0.5)?;
+            let (u0, v0) = wind_at(base_z)?;
+            let (u1, v1) = wind_at(depth_top)?;
+            Some((u1 - u0).hypot(v1 - v0) * 1.943_844) // m/s → kt
+        }
+        SevereKind::EffSrh => effective_srh(column, heights_m, base_z, heights_m[top]),
+        SevereKind::StpEff => {
+            let esrh = effective_srh(column, heights_m, base_z, heights_m[top])?;
+            let depth_top = el_z.map(|el| base_z + (el - base_z) * 0.5)?;
+            let (u0, v0) = wind_at(base_z)?;
+            let (u1, v1) = wind_at(depth_top)?;
+            let ebwd = (u1 - u0).hypot(v1 - v0);
+            let mu_cape = mu.1.cape;
+            let mu_cin = mu.1.cin;
+            // Effective-layer STP (Thompson et al. 2012): MLCAPE, ESRH, EBWD, MLLCL and MLCIN
+            // terms, each clipped the way SPC clips them.
+            let cape_term = mu_cape / 1500.0;
+            let lcl = mu.1.lcl_m;
+            let lcl_term = if lcl < 1000.0 {
+                1.0
+            } else if lcl > 2000.0 {
+                0.0
+            } else {
+                (2000.0 - lcl) / 1000.0
+            };
+            let esrh_term = esrh / 150.0;
+            let shear_term = (ebwd / 20.0).clamp(0.0, 1.5);
+            let shear_term = if ebwd < 12.5 { 0.0 } else { shear_term };
+            let cin_term = if mu_cin > -50.0 {
+                1.0
+            } else {
+                (200.0 + mu_cin) / 150.0
+            }
+            .clamp(0.0, 1.0);
+            Some((cape_term * lcl_term * esrh_term * shear_term * cin_term).max(0.0))
+        }
+        _ => None,
+    }
+}
+
+/// Storm-relative helicity over `[base_z, top_z]` against the column's Bunkers right mover.
+fn effective_srh(
+    column: &crate::sounding::Sounding,
+    heights_m: &[f64],
+    base_z: f64,
+    top_z: f64,
+) -> Option<f64> {
+    let (cu, cv) = column.bunkers_rm()?;
+    let wind_at = |z: f64| -> Option<(f64, f64)> {
+        let i = heights_m.iter().position(|&h| h >= z)?;
+        if i == 0 {
+            let l = column.levels.first()?;
+            return Some((l.u_ms, l.v_ms));
+        }
+        let k =
+            ((z - heights_m[i - 1]) / (heights_m[i] - heights_m[i - 1]).max(1e-6)).clamp(0.0, 1.0);
+        let (a, b) = (&column.levels[i - 1], &column.levels[i]);
+        Some((
+            a.u_ms + (b.u_ms - a.u_ms) * k,
+            a.v_ms + (b.v_ms - a.v_ms) * k,
+        ))
+    };
+    let step = 250.0;
+    let mut total = 0.0;
+    let mut z = base_z;
+    while z + step <= top_z + 1e-6 {
+        let (u0, v0) = wind_at(z)?;
+        let (u1, v1) = wind_at(z + step)?;
+        total += (u1 - cu) * (v0 - cv) - (u0 - cu) * (v1 - cv);
+        z += step;
+    }
+    Some(total)
+}
+
+/// Wrap a computed value grid in the geometry of the field it came from.
+fn as_forecast(
+    like: &MrmsField,
+    values: Vec<f32>,
+    run: chrono::DateTime<chrono::Utc>,
+) -> HrrrForecast {
+    HrrrForecast {
+        field: MrmsField {
+            values,
+            nx: like.nx,
+            ny: like.ny,
+            lon_west: like.lon_west,
+            lon_east: like.lon_east,
+            lat_north: like.lat_north,
+            lat_south: like.lat_south,
+            time: like.time,
+        },
+        run,
+        fcst_hour: 0,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -151,6 +477,16 @@ mod tests {
         assert!((stp(1500.0, 150.0, 20.0, 1000.0) - 1.0).abs() < 1e-9);
         assert!((scp(1000.0, 50.0, 20.0) - 1.0).abs() < 1e-9);
         assert!((ehi1(1600.0, 100.0) - 1.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn lapse_rate_is_degrees_per_km() {
+        // 15 °C over 3 km = 5 °C/km, and the sign follows "cools with height".
+        assert!((lapse_rate(288.0, 1000.0, 273.0, 4000.0) - 5.0).abs() < 1e-9);
+        // An inversion reads negative.
+        assert!(lapse_rate(273.0, 1000.0, 283.0, 2000.0) < 0.0);
+        // A zero-depth layer has no lapse rate to report.
+        assert!(lapse_rate(288.0, 1000.0, 273.0, 1000.0).is_nan());
     }
 
     #[test]
