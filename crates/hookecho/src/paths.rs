@@ -59,6 +59,13 @@ pub fn goto_file() -> Option<PathBuf> {
     BASE.get().map(|b| b.join("goto.txt"))
 }
 
+/// Where the activity drops a file the user picked through the Storage Access Framework, in the
+/// same handover shape as [`goto_file`]: the picker result arrives in Kotlin, and the app may not
+/// be resumed to receive it.
+pub fn import_file() -> Option<PathBuf> {
+    BASE.get().map(|b| b.join("import.txt"))
+}
+
 /// Cache root (tiles, vector tiles, climatology CSV).
 pub fn cache_dir() -> Option<PathBuf> {
     root("cache")

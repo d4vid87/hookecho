@@ -156,9 +156,10 @@ pub fn marker_grid(ui: &mut egui::Ui, markers: &mut Vec<Marker>, icon_tex: &Icon
                         );
                     }
                     if ui.button("Browse…").clicked() {
-                        if let Some(name) = pick_and_store_icon() {
-                            m.icon = Some(name);
-                        }
+                        crate::dialog::request_open(
+                            crate::dialog::ImportKind::MarkerIcon,
+                            i.to_string(),
+                        );
                     }
                     if m.icon.is_some() && ui.button("✖icon").on_hover_text("Clear icon").clicked()
                     {
@@ -181,12 +182,11 @@ pub fn marker_grid(ui: &mut egui::Ui, markers: &mut Vec<Marker>, icon_tex: &Icon
     }
 }
 
-/// Prompt for a PNG, copy it into the marker-icons dir, and return the stored filename.
-fn pick_and_store_icon() -> Option<String> {
-    let src = crate::dialog::open_path("PNG", &["png"])?;
+/// Copy a picked PNG into the marker-icons dir and return the stored filename.
+pub(crate) fn store_icon(src: &std::path::Path) -> Option<String> {
     let name = src.file_name()?.to_string_lossy().into_owned();
     let dir = Settings::marker_icons_dir()?;
-    if let Err(e) = std::fs::copy(&src, dir.join(&name)) {
+    if let Err(e) = std::fs::copy(src, dir.join(&name)) {
         log::warn!("marker icon copy failed ({name}): {e}");
         return None;
     }

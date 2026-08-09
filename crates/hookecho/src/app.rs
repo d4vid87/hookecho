@@ -11972,10 +11972,49 @@ impl HookEchoApp {
     /// Import a settings bundle (rfd open dialog). The next-frame dirty-diff reloads palettes
     /// and persists, and the UI (theme, layers, markers…) updates live from the new settings.
     fn import_settings_bundle(&mut self) {
-        let Some(path) = crate::dialog::open_path("JSON", &["json"]) else {
-            return;
-        };
-        match std::fs::read_to_string(&path)
+        crate::dialog::request_open(crate::dialog::ImportKind::SettingsBundle, "");
+    }
+
+    /// Route a picked file to whatever asked for it.
+    fn apply_import(&mut self, import: crate::dialog::Import) {
+        use crate::dialog::ImportKind as K;
+        match import.kind {
+            K::SettingsBundle => self.apply_settings_bundle(&import.path),
+            K::Palette if import.tag == crate::ui::palette_editor::EDITOR_TAG => {
+                self.palette_editor.pending_import = Some(import.path);
+            }
+            K::Palette => {
+                // Setting the override triggers the next-frame dirty-diff palette reload.
+                self.settings.palettes.insert(
+                    import.tag,
+                    import.path.to_string_lossy().into_owned(),
+                );
+            }
+            K::MarkerIcon => {
+                let idx = import.tag.parse::<usize>().ok();
+                match (idx.and_then(|i| self.settings.markers.get_mut(i)), crate::ui::marker_window::store_icon(&import.path)) {
+                    (Some(m), Some(name)) => m.icon = Some(name),
+                    _ => log::warn!("marker icon import went nowhere (marker {})", import.tag),
+                }
+            }
+            K::AlertSound => {
+                let file = import.path.to_string_lossy().into_owned();
+                let sound = crate::settings::AlertSound::Custom(file);
+                match import.tag.as_str() {
+                    "Warning" => self.settings.warn_sound = sound,
+                    "Emergency" => self.settings.emergency_sound = sound,
+                    "TDS" => self.settings.tds_sound = sound,
+                    "Rotation" => self.settings.rotation_sound = sound,
+                    "Lightning" => self.settings.lightning_sound = sound,
+                    other => log::warn!("no alert sound row named '{other}'"),
+                }
+            }
+        }
+    }
+
+    /// Apply a settings bundle the user picked.
+    fn apply_settings_bundle(&mut self, path: &std::path::Path) {
+        match std::fs::read_to_string(path)
             .map_err(|e| e.to_string())
             .and_then(|s| crate::settings::Settings::import_bundle(&s))
         {
@@ -12911,6 +12950,12 @@ impl eframe::App for HookEchoApp {
             // A resume is also how a notification tap arrives: the activity wrote the target
             // before handing us back the surface.
             self.drain_goto_file();
+        }
+        // A file the user picked, from any of the import buttons. Routed here rather than at the
+        // button, because on Android the picker is an activity result that lands long after the
+        // click — through the same file handover a notification tap uses.
+        if let Some(import) = crate::dialog::take_result() {
+            self.apply_import(import);
         }
 
         // Android paste: re-focus the text field that lost focus to the Paste-button tap, before

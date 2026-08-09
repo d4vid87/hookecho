@@ -404,11 +404,9 @@ impl SettingsWindow {
                         });
 
                     if ui.button("Browse…").clicked() {
-                        if let Some(path) = crate::dialog::open_path("GRLevelX palette", &["pal"]) {
-                            settings
-                                .palettes
-                                .insert(key.to_string(), path.to_string_lossy().into_owned());
-                        }
+                        // Tagged with the moment key: the picker answers later (always, on
+                        // Android), and by then nothing else remembers which row asked.
+                        crate::dialog::request_open(crate::dialog::ImportKind::Palette, key);
                     }
                     ui.end_row();
 
@@ -746,11 +744,10 @@ pub fn sound_picker(ui: &mut egui::Ui, settings: &mut Settings) {
                         }
                         let is_custom = matches!(sound, AlertSound::Custom(_));
                         if ui.selectable_label(is_custom, "Custom…").clicked() {
-                            if let Some(path) =
-                                crate::dialog::open_path("audio", &["wav", "mp3", "ogg", "flac"])
-                            {
-                                *sound = AlertSound::Custom(path.to_string_lossy().into_owned());
-                            }
+                            crate::dialog::request_open(
+                                crate::dialog::ImportKind::AlertSound,
+                                label,
+                            );
                         }
                     });
                 let preview = sound.clone();

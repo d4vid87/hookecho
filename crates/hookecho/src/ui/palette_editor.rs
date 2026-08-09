@@ -13,7 +13,15 @@ pub struct PaletteEditor {
     /// Working copy; rebuilt from the active table when the moment changes.
     table: Option<ColorTable>,
     loaded_for: Option<usize>,
+    /// A `.pal` the user picked, waiting to become the working copy. The picker answers a frame
+    /// or more later — on Android, after a whole activity round trip — so the file arrives here
+    /// through the app rather than as a return value.
+    pub pending_import: Option<std::path::PathBuf>,
 }
+
+/// Tag for the editor's own import, so a `.pal` picked here becomes the working copy instead of
+/// overriding a moment's saved palette.
+pub(crate) const EDITOR_TAG: &str = "\u{1}editor";
 
 impl PaletteEditor {
     /// `active` is the currently-baked table for the chosen moment (edit starting point).
@@ -31,6 +39,13 @@ impl PaletteEditor {
         if self.loaded_for != Some(self.moment_idx) {
             self.table = Some(active.table(moment).clone());
             self.loaded_for = Some(self.moment_idx);
+        }
+        // A `.pal` the user picked since the last frame becomes the working copy.
+        if let Some(path) = self.pending_import.take() {
+            if let Some(t) = read_pal(&path) {
+                self.table = Some(t);
+                self.loaded_for = Some(self.moment_idx);
+            }
         }
 
         let mut open = self.open;
@@ -131,9 +146,10 @@ impl PaletteEditor {
                         save_and_apply(table, moment, settings);
                     }
                     if ui.button("Import .pal…").clicked() {
-                        if let Some(t) = import_pal() {
-                            *table = t;
-                        }
+                        crate::dialog::request_open(
+                            crate::dialog::ImportKind::Palette,
+                            EDITOR_TAG,
+                        );
                     }
                     if ui.button("Export .pal…").clicked() {
                         export_pal(table);
@@ -196,9 +212,9 @@ fn save_and_apply(table: &ColorTable, moment: Moment, settings: &mut Settings) {
     );
 }
 
-fn import_pal() -> Option<ColorTable> {
-    let path = crate::dialog::open_path("GRLevelX palette", &["pal"])?;
-    match std::fs::read_to_string(&path)
+/// Parse a picked `.pal` into a table, or complain in the log and change nothing.
+pub(crate) fn read_pal(path: &std::path::Path) -> Option<ColorTable> {
+    match std::fs::read_to_string(path)
         .ok()
         .and_then(|t| crate::colormap::parse_pal(&t).ok())
     {
