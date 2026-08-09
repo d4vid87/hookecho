@@ -81,7 +81,9 @@ pub async fn fetch(
     client: &reqwest::Client,
     window: Option<(&str, &str)>,
 ) -> anyhow::Result<Vec<StormReport>> {
-    let mut req = client.get(LSR_URL).header("User-Agent", USER_AGENT);
+    let mut req = client
+        .get(crate::net::fetch_url(LSR_URL))
+        .header("User-Agent", USER_AGENT);
     req = match window {
         Some((sts, ets)) => req.query(&[("sts", sts), ("ets", ets)]),
         None => req.query(&[("hours", "6")]),

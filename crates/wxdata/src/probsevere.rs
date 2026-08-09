@@ -14,7 +14,7 @@ const PROBSEVERE_DIR: &str = "https://mrms.ncep.noaa.gov/data/ProbSevere/PROBSEV
 pub async fn fetch_probsevere(client: &reqwest::Client) -> anyhow::Result<Vec<GeoFeature>> {
     // The directory index lists timestamped files; the last one is newest.
     let index = client
-        .get(PROBSEVERE_DIR)
+        .get(crate::net::fetch_url(PROBSEVERE_DIR))
         .header("User-Agent", crate::alerts::USER_AGENT)
         .send()
         .await?
@@ -24,7 +24,7 @@ pub async fn fetch_probsevere(client: &reqwest::Client) -> anyhow::Result<Vec<Ge
     let file = latest_file(&index)
         .ok_or_else(|| anyhow::anyhow!("no ProbSevere file in directory index"))?;
     let body = client
-        .get(format!("{PROBSEVERE_DIR}{file}"))
+        .get(crate::net::fetch_url(&format!("{PROBSEVERE_DIR}{file}")))
         .header("User-Agent", crate::alerts::USER_AGENT)
         .send()
         .await?

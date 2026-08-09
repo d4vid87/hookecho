@@ -655,13 +655,13 @@ async fn fetch_latest(
     for day in [today, today.pred_opt().unwrap_or(today)] {
         let prefix = format!("{site}_{product}_{}", day.format("%Y_%m_%d"));
         let url = format!("{BUCKET}/?list-type=2&prefix={prefix}");
-        let Ok(resp) = http.get(&url).send().await else {
+        let Ok(resp) = http.get(crate::net::fetch_url(&url)).send().await else {
             continue;
         };
         let Ok(xml) = resp.text().await else { continue };
         if let Some(key) = last_key(&xml) {
             let obj_url = format!("{BUCKET}/{key}");
-            if let Ok(resp) = http.get(&obj_url).send().await {
+            if let Ok(resp) = http.get(crate::net::fetch_url(&obj_url)).send().await {
                 if let Ok(bytes) = resp.bytes().await {
                     match decode(&bytes) {
                         Ok(p) => return Some((p, key_time(&key))),
@@ -802,7 +802,7 @@ pub async fn fetch_hhc(http: &reqwest::Client, site: &str) -> Option<crate::mrms
 async fn fetch_tgftp(http: &reqwest::Client, site: &str, ds: &str) -> Option<Level3Product> {
     let url = format!("{TGFTP}/DS.{ds}/SI.k{}/sn.last", site.to_lowercase());
     let bytes = http
-        .get(&url)
+        .get(crate::net::fetch_url(&url))
         .header("User-Agent", crate::alerts::USER_AGENT)
         .send()
         .await

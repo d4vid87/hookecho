@@ -118,7 +118,7 @@ pub async fn fetch_bbox(
         now.format("%Y-%m-%dT%H"),
     );
     let body = client
-        .get(&url)
+        .get(crate::net::fetch_url(&url))
         .header("User-Agent", USER_AGENT)
         .send()
         .await?

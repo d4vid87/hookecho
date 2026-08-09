@@ -447,19 +447,36 @@ fn regrid(
     res_deg: f64,
     min_valid: f64,
 ) -> anyhow::Result<MrmsField> {
-    let mut lonmin = f64::MAX;
-    let mut lonmax = f64::MIN;
-    let mut latmin = f64::MAX;
-    let mut latmax = f64::MIN;
-    for k in 0..data.len() {
+    // Extent pass. min/max are associative, so the parallel reduce lands on the same bits as the
+    // serial fold. The 1799x1059 native HRRR grid is ~1.9 M points.
+    let init = (f64::MAX, f64::MIN, f64::MAX, f64::MIN);
+    let step = |acc: (f64, f64, f64, f64), k: usize| {
         if !lats[k].is_finite() || !lons[k].is_finite() {
-            continue;
+            return acc;
         }
-        lonmin = lonmin.min(lons[k]);
-        lonmax = lonmax.max(lons[k]);
-        latmin = latmin.min(lats[k]);
-        latmax = latmax.max(lats[k]);
-    }
+        (
+            acc.0.min(lons[k]),
+            acc.1.max(lons[k]),
+            acc.2.min(lats[k]),
+            acc.3.max(lats[k]),
+        )
+    };
+    let join = |a: (f64, f64, f64, f64), b: (f64, f64, f64, f64)| {
+        (a.0.min(b.0), a.1.max(b.1), a.2.min(b.2), a.3.max(b.3))
+    };
+    #[cfg(not(target_arch = "wasm32"))]
+    let (lonmin, lonmax, latmin, latmax) = {
+        use rayon::prelude::*;
+        (0..data.len())
+            .into_par_iter()
+            .fold(|| init, step)
+            .reduce(|| init, join)
+    };
+    #[cfg(target_arch = "wasm32")]
+    let (lonmin, lonmax, latmin, latmax) = {
+        let _ = join;
+        (0..data.len()).fold(init, step)
+    };
     anyhow::ensure!(
         lonmax > lonmin && latmax > latmin,
         "hrrr grid has no finite extent"
@@ -468,20 +485,33 @@ fn regrid(
     let nx = (((lonmax - lonmin) / res_deg).ceil() as usize).max(1);
     let ny = (((latmax - latmin) / res_deg).ceil() as usize).max(1);
     let mut values = vec![f32::NAN; nx * ny];
-    for k in 0..data.len() {
+    // Two phases: the per-sample cell index (the divisions, the expensive part) computes in
+    // parallel, then a serial max-scatter. The scatter can't be split by output row without
+    // rescanning the whole input per band, and max-per-cell is order-independent, so this is
+    // bit-for-bit the serial result either way.
+    let cell_of = |k: usize| -> Option<(usize, f32)> {
         let v = data[k];
         if !v.is_finite() || v < min_valid || !lats[k].is_finite() || !lons[k].is_finite() {
-            continue;
+            return None;
         }
         let gx = (((lons[k] - lonmin) / res_deg) as usize).min(nx - 1);
         // Row 0 is the northernmost latitude (matches MrmsField convention).
         let gy = (((latmax - lats[k]) / res_deg) as usize).min(ny - 1);
-        let cell = &mut values[gy * nx + gx];
-        *cell = if cell.is_nan() {
-            v as f32
-        } else {
-            cell.max(v as f32)
-        };
+        Some((gy * nx + gx, v as f32))
+    };
+    #[cfg(not(target_arch = "wasm32"))]
+    let cells: Vec<(usize, f32)> = {
+        use rayon::prelude::*;
+        (0..data.len())
+            .into_par_iter()
+            .filter_map(cell_of)
+            .collect()
+    };
+    #[cfg(target_arch = "wasm32")]
+    let cells: Vec<(usize, f32)> = (0..data.len()).filter_map(cell_of).collect();
+    for (idx, v) in cells {
+        let cell = &mut values[idx];
+        *cell = if cell.is_nan() { v } else { cell.max(v) };
     }
 
     Ok(MrmsField {

@@ -32,3 +32,15 @@ pub fn in_place<T>(f: impl FnOnce() -> T) -> T {
 pub fn in_place<T>(f: impl FnOnce() -> T) -> T {
     f()
 }
+
+/// Yield for `d`.
+#[cfg(not(target_arch = "wasm32"))]
+pub async fn sleep(d: std::time::Duration) {
+    tokio::time::sleep(d).await;
+}
+
+/// wasm: the page's `setTimeout`, which is the only timer there is.
+#[cfg(target_arch = "wasm32")]
+pub async fn sleep(d: std::time::Duration) {
+    gloo_timers::future::TimeoutFuture::new(d.as_millis() as u32).await;
+}

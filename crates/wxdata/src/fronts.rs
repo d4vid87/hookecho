@@ -226,7 +226,9 @@ fn parse_valid(tok: &str) -> Option<DateTime<Utc>> {
 /// Fetch the newest coded surface analysis.
 pub async fn fetch(http: &reqwest::Client) -> anyhow::Result<SurfaceAnalysis> {
     let list = http
-        .get(format!("{API}/products/types/COD/locations/SUS"))
+        .get(crate::net::fetch_url(&format!(
+            "{API}/products/types/COD/locations/SUS"
+        )))
         .header("User-Agent", USER_AGENT)
         .header("Accept", "application/ld+json")
         .send()
@@ -241,7 +243,7 @@ pub async fn fetch(http: &reqwest::Client) -> anyhow::Result<SurfaceAnalysis> {
         .ok_or_else(|| anyhow::anyhow!("no coded surface analysis available"))?;
 
     let body = http
-        .get(format!("{API}/products/{id}"))
+        .get(crate::net::fetch_url(&format!("{API}/products/{id}")))
         .header("User-Agent", USER_AGENT)
         .header("Accept", "application/ld+json")
         .send()

@@ -130,7 +130,7 @@ pub async fn fetch(http: &reqwest::Client, key: &str, minutes: i64) -> anyhow::R
     anyhow::ensure!(!key.is_empty(), "no mPING key");
     let since = (Utc::now() - Duration::minutes(minutes)).format("%Y-%m-%d %H:%M:%S");
     let body = http
-        .get(API)
+        .get(crate::net::fetch_url(API))
         .query(&[
             ("category", "Rain/Snow"),
             ("obtime_gte", &since.to_string()),

@@ -218,7 +218,7 @@ pub async fn fetch_bbox(
     // value its map uses for a regional view and it does not affect which sites come back.
     let bounds = format!("{min_lat},{min_lon}|{max_lat},{max_lon}");
     let body = client
-        .get(format!("{API}/sites"))
+        .get(crate::net::fetch_url(&format!("{API}/sites")))
         .query(&[("zoom", "10"), ("bounds", bounds.as_str())])
         .header("User-Agent", USER_AGENT)
         .header("Referer", REFERER)
@@ -248,7 +248,7 @@ pub async fn fetch_windy_bbox(
     anyhow::ensure!(!key.is_empty(), "no Windy API key");
     let bbox = format!("{max_lat},{max_lon},{min_lat},{min_lon}");
     let body = client
-        .get(WINDY_API)
+        .get(crate::net::fetch_url(WINDY_API))
         .query(&[
             ("bbox", bbox.as_str()),
             ("include", "images,location,urls"),
@@ -273,7 +273,9 @@ pub async fn latest_image(
     camera_id: u64,
 ) -> anyhow::Result<Option<String>> {
     let body = client
-        .get(format!("{API}/cameras/{camera_id}/images/last/1"))
+        .get(crate::net::fetch_url(&format!(
+            "{API}/cameras/{camera_id}/images/last/1"
+        )))
         .header("User-Agent", USER_AGENT)
         .header("Referer", REFERER)
         .header("Accept", "application/json")

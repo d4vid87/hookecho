@@ -68,10 +68,10 @@ pub async fn fetch(client: &reqwest::Client, day: u8) -> anyhow::Result<Vec<GeoF
     let day = day.clamp(1, 5);
     // Layer ids are Day 1..5 in order from zero, and unlike the WSSI service they have not moved.
     let body = client
-        .get(format!(
+        .get(crate::net::fetch_url(&format!(
             "{SERVICE}/{}/query?where=1%3D1&outFields=outlook,valid_time&f=geojson",
             day - 1
-        ))
+        )))
         .header("User-Agent", USER_AGENT)
         .send()
         .await?

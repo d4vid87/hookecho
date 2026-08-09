@@ -51,7 +51,7 @@ pub fn product_text(json: &str) -> Option<(String, String)> {
 
 async fn get(client: &reqwest::Client, url: &str) -> anyhow::Result<String> {
     Ok(client
-        .get(url)
+        .get(crate::net::fetch_url(url))
         .header("User-Agent", USER_AGENT)
         .header("Accept", "application/ld+json")
         .send()

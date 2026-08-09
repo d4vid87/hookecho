@@ -95,7 +95,7 @@ pub async fn fetch_bbox(
 ) -> anyhow::Result<Vec<SurfaceOb>> {
     let bbox = format!("{lat0},{lon0},{lat1},{lon1}");
     let body = client
-        .get(METAR_URL)
+        .get(crate::net::fetch_url(METAR_URL))
         .query(&[("bbox", bbox.as_str()), ("format", "json")])
         .header("User-Agent", USER_AGENT)
         .send()

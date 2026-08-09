@@ -66,7 +66,7 @@ pub fn parse(json: &str) -> anyhow::Result<Vec<GeoFeature>> {
 /// Fetch all current SIGMETs/AIRMETs as overlay features.
 pub async fn fetch_airsigmet(client: &reqwest::Client) -> anyhow::Result<Vec<GeoFeature>> {
     let body = client
-        .get(AIRSIGMET_URL)
+        .get(crate::net::fetch_url(AIRSIGMET_URL))
         .query(&[("format", "geojson")])
         .header("User-Agent", USER_AGENT)
         .send()
@@ -166,7 +166,7 @@ pub async fn fetch_pireps(
 ) -> anyhow::Result<Vec<Pirep>> {
     let bbox = format!("{lat0},{lon0},{lat1},{lon1}");
     let body = client
-        .get(PIREP_URL)
+        .get(crate::net::fetch_url(PIREP_URL))
         .query(&[
             ("bbox", bbox.as_str()),
             ("format", "json"),

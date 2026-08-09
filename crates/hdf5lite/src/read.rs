@@ -100,11 +100,25 @@ pub(crate) fn superblock_root(d: &[u8]) -> Result<u64> {
     let mut c = Cur::new(d, 8, "superblock");
     let version = c.u8()?;
     if version < 2 {
-        // v0/v1 put the root group in a symbol-table entry and index groups with B-tree v1 —
-        // a different code path end to end. netCDF-4 hasn't written those in years.
-        return Err(Error::Unsupported(format!(
-            "superblock version {version} (only 2 and 3 are read)"
-        )));
+        // v0/v1 keep the root group in a symbol-table entry at a fixed spot near the front of the
+        // file. netCDF-4 stopped writing these, but the European radar tools (ODIM_H5 via plain
+        // libhdf5 defaults) still do, so the address is worth digging out.
+        c.skip(4)?; // free-space version, root symbol-table version, reserved, shared-message version
+        let offset_size = c.u8()? as usize;
+        let _length_size = c.u8()?;
+        c.skip(1)?; // reserved
+        if offset_size != 8 {
+            return Err(Error::Unsupported(format!(
+                "{offset_size}-byte file offsets"
+            )));
+        }
+        c.skip(2 + 2 + 4)?; // group leaf/internal node K, file consistency flags
+        if version == 1 {
+            c.skip(4)?; // indexed storage internal node K, plus its padding
+        }
+        c.skip(8 * 4)?; // base address, free-space info, end of file, driver info
+        c.skip(8)?; // the root entry's link name offset — the root has no name
+        return c.u64();
     }
     let offset_size = c.u8()? as usize;
     let _length_size = c.u8()?;
@@ -119,6 +133,57 @@ pub(crate) fn superblock_root(d: &[u8]) -> Result<u64> {
     let _eof = c.u64()?;
     let root = c.u64()?;
     Ok(root)
+}
+
+/// Copy one decoded chunk into the dataset buffer, row by row.
+///
+/// GLM is one-dimensional, where this is a single memcpy; ODIM_H5 sweeps are `nrays × nbins`, so
+/// the chunk's rows land at a stride. The innermost chunk dimension is contiguous in both buffers,
+/// and everything outside it is walked as an odometer over the chunk's origin.
+fn place_chunk(
+    out: &mut [u8],
+    src: &[u8],
+    elem: usize,
+    dset_dims: &[u64],
+    chunk_dims: &[u32],
+    origin: &[u64],
+) {
+    let rank = dset_dims.len();
+    if rank == 0 || chunk_dims.len() != rank || origin.len() < rank {
+        return;
+    }
+    // Row-major strides in elements, innermost last.
+    let mut stride = vec![1usize; rank];
+    for k in (0..rank.saturating_sub(1)).rev() {
+        stride[k] = stride[k + 1] * dset_dims[k + 1] as usize;
+    }
+    let run = chunk_dims[rank - 1] as usize;
+    let rows: usize = chunk_dims[..rank - 1].iter().map(|&n| n as usize).product();
+    for r in 0..rows {
+        let mut rem = r;
+        let mut dst = origin[rank - 1] as usize;
+        let mut inside = true;
+        for k in (0..rank - 1).rev() {
+            let c = rem % chunk_dims[k] as usize;
+            rem /= chunk_dims[k] as usize;
+            let i = origin[k] as usize + c;
+            // Chunks are allowed to overhang the dataset's extent; those rows are padding.
+            if i >= dset_dims[k] as usize {
+                inside = false;
+                break;
+            }
+            dst += i * stride[k];
+        }
+        if !inside {
+            continue;
+        }
+        let (dst, src_at) = (dst * elem, r * run * elem);
+        if dst >= out.len() || src_at >= src.len() {
+            continue;
+        }
+        let n = (run * elem).min(out.len() - dst).min(src.len() - src_at);
+        out[dst..dst + n].copy_from_slice(&src[src_at..src_at + n]);
+    }
 }
 
 /// Gather a dataset's on-disk bytes, decompressing and reassembling chunks as needed.
@@ -163,14 +228,7 @@ pub(crate) fn raw_bytes(d: &[u8], ds: &Dataset) -> Result<Vec<u8>> {
                 }
                 let raw = &d[chunk.addr as usize..end];
                 let decoded = ds.filters.decode(raw, chunk_elems * elem, elem)?;
-                // Only 1-D datasets appear in GLM; the offset vector's first element is the
-                // element index of the chunk's start.
-                let start = chunk.offset.first().copied().unwrap_or(0) as usize * elem;
-                if start >= out.len() {
-                    continue; // a chunk past the current dimension extent
-                }
-                let n = decoded.len().min(out.len() - start);
-                out[start..start + n].copy_from_slice(&decoded[..n]);
+                place_chunk(&mut out, &decoded, elem, &ds.dims, dims, &chunk.offset);
             }
             Ok(out)
         }

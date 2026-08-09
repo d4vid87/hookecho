@@ -91,7 +91,7 @@ pub enum PlaceKind {
 /// Fetch and parse a placefile from `url`.
 pub async fn fetch(http: &reqwest::Client, url: &str) -> anyhow::Result<Placefile> {
     let text = http
-        .get(url)
+        .get(crate::net::fetch_url(url))
         .send()
         .await?
         .error_for_status()?

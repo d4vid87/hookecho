@@ -28,7 +28,7 @@ pub struct Spotter {
 /// Fetch and parse the current Spotter Network positions.
 pub async fn fetch_spotters(client: &reqwest::Client) -> anyhow::Result<Vec<Spotter>> {
     let body = client
-        .get(SPOTTERS_URL)
+        .get(crate::net::fetch_url(SPOTTERS_URL))
         .header("User-Agent", crate::alerts::USER_AGENT)
         .send()
         .await?

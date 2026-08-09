@@ -46,7 +46,7 @@ pub async fn fetch(http: &reqwest::Client, hours: u16) -> anyhow::Result<MrmsFie
     // Eight issues is two days: enough to ride out a late posting, short enough that an
     // out-of-season request gives up quickly instead of crawling the archive.
     for url in candidate_urls(hours, Utc::now(), 8) {
-        let Ok(resp) = http.get(&url).send().await else {
+        let Ok(resp) = http.get(crate::net::fetch_url(&url)).send().await else {
             continue;
         };
         if !resp.status().is_success() {

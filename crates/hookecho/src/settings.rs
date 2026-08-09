@@ -559,6 +559,8 @@ impl Default for Settings {
 }
 
 impl Settings {
+    /// Where settings.json lives. Web has no filesystem — it persists to `localStorage` instead.
+    #[cfg(not(target_arch = "wasm32"))]
     fn path() -> Option<PathBuf> {
         crate::paths::config_dir().map(|d| d.join("settings.json"))
     }
@@ -590,17 +592,26 @@ impl Settings {
         })
     }
 
-    /// Load from disk, falling back to defaults on any error (missing file, parse failure).
+    /// The saved settings JSON, or `None` if there is none to read.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn read_saved() -> Option<String> {
+        std::fs::read_to_string(Self::path()?).ok()
+    }
+
+    /// Web: the same JSON, out of `localStorage` (no filesystem to read).
+    #[cfg(target_arch = "wasm32")]
+    fn read_saved() -> Option<String> {
+        local_storage()?.get_item(WEB_KEY).ok()?
+    }
+
+    /// Load saved settings, falling back to defaults on any error (nothing saved, parse failure).
     pub fn load() -> Self {
-        let Some(path) = Self::path() else {
-            return Self::default();
-        };
-        let mut loaded = match std::fs::read_to_string(&path) {
-            Ok(s) => serde_json::from_str(&s).unwrap_or_else(|e| {
+        let mut loaded = match Self::read_saved() {
+            Some(s) => serde_json::from_str(&s).unwrap_or_else(|e| {
                 log::warn!("settings parse failed ({e}); using defaults");
                 Self::default()
             }),
-            Err(_) => Self::default(),
+            None => Self::default(),
         };
         // One-shot repair: early Android builds persisted ui_scale 1.3 as the default, which
         // multiplied on top of display density and left a ~277-pt-wide canvas. A saved exact 1.3
@@ -650,21 +661,47 @@ impl Settings {
         Ok(settings)
     }
 
-    /// Write to disk, logging (not failing) on error.
-    pub fn save(&self) {
+    /// Persist `json`: a settings.json on native, a `localStorage` entry on the web.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn write_saved(json: &str) {
         let Some(path) = Self::path() else { return };
         if let Some(parent) = path.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
+        if let Err(e) = atomic_write(&path, json.as_bytes()) {
+            log::warn!("settings save failed: {e}");
+        }
+    }
+
+    /// Web: one `localStorage` key holding the same JSON. Quota/private-mode failures are logged.
+    ///
+    // ponytail: settings only. Caches and palette files stay in memory on the web; IndexedDB is the
+    // upgrade path if offline-web ever becomes real.
+    #[cfg(target_arch = "wasm32")]
+    fn write_saved(json: &str) {
+        let Some(store) = local_storage() else { return };
+        if let Err(e) = store.set_item(WEB_KEY, json) {
+            log::warn!("settings save failed: {e:?}");
+        }
+    }
+
+    /// Write out, logging (not failing) on error.
+    pub fn save(&self) {
         match serde_json::to_string_pretty(self) {
-            Ok(json) => {
-                if let Err(e) = atomic_write(&path, json.as_bytes()) {
-                    log::warn!("settings save failed: {e}");
-                }
-            }
+            Ok(json) => Self::write_saved(&json),
             Err(e) => log::warn!("settings serialize failed: {e}"),
         }
     }
+}
+
+/// `localStorage` key holding the serialized [`Settings`] on the web.
+#[cfg(target_arch = "wasm32")]
+const WEB_KEY: &str = "hookecho-settings";
+
+/// The page's `localStorage`, or `None` where the browser denies it (private mode, no window).
+#[cfg(target_arch = "wasm32")]
+fn local_storage() -> Option<web_sys::Storage> {
+    web_sys::window()?.local_storage().ok()?
 }
 
 /// Write via a sibling temp file + rename. A crash mid-write must never tear a config file:

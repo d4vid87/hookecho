@@ -2,7 +2,9 @@
 //!
 //! The goldens in `tests/data/*.golden.json` come from h5py (see `gen_golden.py`), so these tests
 //! prove agreement with the reference implementation rather than self-consistency. Two real GOES-19
-//! GLM granules from different hours are committed alongside them.
+//! GLM granules from different hours are committed alongside them, plus one ODIM_H5 radar volume
+//! (see `data/README.md`) that exercises the entirely different set of on-disk structures libhdf5
+//! writes by default.
 
 use serde_json::Value;
 use std::path::PathBuf;
@@ -123,6 +125,76 @@ fn packed_integers_carry_their_scale_and_offset() {
     assert!(ds.scale_factor.is_some(), "scale_factor not read");
     assert!(ds.add_offset.is_some(), "add_offset not read");
     assert!(ds.fill_value.is_some(), "_FillValue not read");
+}
+
+/// The ODIM volume: superblock v0, object header v1, symbol-table groups, nested paths, and
+/// metadata that is mostly strings. None of that overlaps with the netCDF-4 path above.
+#[test]
+fn the_odim_volume_matches_h5py_structure_and_all() {
+    let dir = data_dir();
+    let bytes = std::fs::read(dir.join("bewid.h5")).expect("bewid.h5");
+    let golden: Value =
+        serde_json::from_slice(&std::fs::read(dir.join("bewid.golden.json")).expect("golden"))
+            .expect("parse golden");
+    let f = hdf5lite::File::open(bytes).expect("open");
+
+    let want: Vec<&str> = golden["names"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap())
+        .collect();
+    assert_eq!(f.names(), want, "root group listing");
+
+    for (path, kids) in golden["children"].as_object().unwrap() {
+        let want: Vec<String> = kids
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap().to_string())
+            .collect();
+        assert_eq!(&f.children(path).expect(path), &want, "{path}: children");
+    }
+
+    // Every attribute h5py sees on every group, string and numeric alike — this is where all of
+    // ODIM's metadata lives, so a group whose attributes go missing is a silent data loss.
+    for (path, want) in golden["attrs"].as_object().unwrap() {
+        let got = f.attributes(path).unwrap_or_else(|e| panic!("{path}: {e}"));
+        for (k, w) in want.as_object().unwrap() {
+            let g = got.get(k).unwrap_or_else(|| panic!("{path}/{k}: missing"));
+            match w.as_f64() {
+                Some(w) => assert!(
+                    g.as_f64().is_some_and(|g| close(g, w)),
+                    "{path}/{k}: got {g:?} want {w}"
+                ),
+                None => assert_eq!(
+                    g.as_str(),
+                    w.as_str(),
+                    "{path}/{k}: string attribute differs"
+                ),
+            }
+        }
+        assert_eq!(got.len(), want.as_object().unwrap().len(), "{path}: extras");
+    }
+
+    for (path, want) in golden["datasets"].as_object().unwrap() {
+        let got = f.read_f64(path).unwrap_or_else(|e| panic!("{path}: {e}"));
+        assert_eq!(got.len(), want["len"].as_u64().unwrap() as usize, "{path}");
+        for (i, w) in want["first"].as_array().unwrap().iter().enumerate() {
+            assert!(close(got[i], w.as_f64().unwrap()), "{path}[{i}]");
+        }
+        let tail = want["last"].as_array().unwrap();
+        for (k, w) in tail.iter().enumerate() {
+            let i = got.len() - tail.len() + k;
+            assert!(close(got[i], w.as_f64().unwrap()), "{path}[{i}]");
+        }
+        // The sum is what catches a chunk landing at the wrong row stride.
+        let sum: f64 = got.iter().sum();
+        assert!(
+            close(sum, want["sum"].as_f64().unwrap()),
+            "{path}: sum got {sum}"
+        );
+    }
 }
 
 #[test]

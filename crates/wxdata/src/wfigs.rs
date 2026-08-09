@@ -100,7 +100,7 @@ pub fn parse_incidents(json: &str) -> anyhow::Result<Vec<FireIncident>> {
 
 async fn get(client: &reqwest::Client, url: String) -> anyhow::Result<String> {
     Ok(client
-        .get(&url)
+        .get(crate::net::fetch_url(&url))
         .header("User-Agent", USER_AGENT)
         .send()
         .await?

@@ -861,12 +861,25 @@ pub(crate) enum OverlayToggle {
     GlmLightning,
     Wind,
     LinkCameras,
+    /// Beam-vs-terrain blockage shading for the displayed tilt (chase mode).
+    Blockage,
+}
+
+/// What a computed blockage raster was built for. Any change here (site, tilt, or a pan/zoom past
+/// the quantization) makes the resident raster stale.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct BlockageKey {
+    site: String,
+    /// Tilt elevation in millidegrees (an integer so the key can be compared).
+    tilt_mdeg: i32,
+    /// The world-space rect, in units of 1e-7 world (~2 m at the equator).
+    world: [i64; 4],
 }
 
 impl OverlayToggle {
     /// Every toggle, for the persistence sweep. A new variant belongs here too, or it silently
     /// stops being remembered across restarts.
-    pub(crate) const ALL: [OverlayToggle; 32] = [
+    pub(crate) const ALL: [OverlayToggle; 33] = [
         Self::AlertPanel,
         Self::StormReports,
         Self::Spotters,
@@ -899,6 +912,7 @@ impl OverlayToggle {
         Self::GlmLightning,
         Self::Wind,
         Self::LinkCameras,
+        Self::Blockage,
     ];
 
     /// Stable name used in the settings file. Persisted as a string, not as the enum: an unknown
@@ -1617,6 +1631,15 @@ pub struct HookEchoApp {
     show_range_rings: bool,
     /// Draw all NEXRAD radar sites on the map; clicking one switches the pane to that radar.
     show_radar_sites: bool,
+    /// Beam-vs-terrain blockage shading: the resident raster, what it was built for, and the
+    /// world rect it covers. Built off-thread (it fetches DEM tiles), so it arrives on a channel.
+    show_blockage: bool,
+    blockage_tex: Option<(BlockageKey, egui::TextureHandle, [f64; 4])>,
+    /// Key of the build in flight, and when it started — one at a time, and never more often than
+    /// every 600 ms, so a continuous pan doesn't queue a raster per frame.
+    blockage_pending: Option<(BlockageKey, Instant)>,
+    blockage_rx: Receiver<(BlockageKey, [f64; 4], egui::ColorImage)>,
+    blockage_tx: Sender<(BlockageKey, [f64; 4], egui::ColorImage)>,
     /// Layers panel (floating, searchable layer picker): open flag + its search text.
     /// Viewport minus the docked bars, refreshed each frame — floating `Area`s constrain to this
     /// instead of `content_rect`, which egui measures before panels take their bite.
@@ -1929,6 +1952,7 @@ impl HookEchoApp {
         let (update_tx, update_rx) = std::sync::mpsc::channel();
         let (geocode_tx, geocode_rx) = std::sync::mpsc::channel();
         let (pf_icon_tx, pf_icon_rx) = std::sync::mpsc::channel();
+        let (blockage_tx, blockage_rx) = std::sync::mpsc::channel();
         // Every app-level fetch (alerts, overlays, placefiles, radar index) goes through this one.
         // A hung request with no timeout leaves whatever it was loading stuck loading forever.
         let http = crate::platform::http_timeouts(reqwest::Client::builder())
@@ -2168,6 +2192,11 @@ impl HookEchoApp {
             afd_rx: None,
             show_range_rings: false,
             show_radar_sites: true,
+            show_blockage: false,
+            blockage_tex: None,
+            blockage_pending: None,
+            blockage_rx,
+            blockage_tx,
             // Map-first by default on both platforms: the floating chrome covers the common paths,
             // and the full toolbox is one "Advanced" tap away.
             chrome_rect: egui::Rect::EVERYTHING,
@@ -2379,6 +2408,67 @@ impl HookEchoApp {
         // The pane's remembered union, not this instant's volume: a half-arrived live volume
         // carries fewer moments than the radar sends, and the rows must not blink.
         self.views[self.active].moments()
+    }
+
+    /// Keep the beam-blockage raster in step with the camera, the site, and the displayed tilt.
+    ///
+    /// Building one fetches DEM tiles, so it runs as a task and lands on `blockage_rx`. The old
+    /// raster keeps painting (stretched to its own world rect) until the new one arrives, which is
+    /// what makes a pan look continuous instead of blinking.
+    fn update_blockage(&mut self, ctx: &egui::Context) {
+        while let Ok((key, world, image)) = self.blockage_rx.try_recv() {
+            let tex = ctx.load_texture("blockage", image, egui::TextureOptions::LINEAR);
+            self.blockage_tex = Some((key, tex, world));
+            self.blockage_pending = None;
+        }
+        if !self.show_blockage {
+            self.blockage_tex = None;
+            self.blockage_pending = None;
+            return;
+        }
+        let view = &self.views[self.active];
+        let (Some(site), Some(vol)) = (
+            view.site.as_deref().and_then(wxdata::sites::site_by_id),
+            view.volume.as_ref(),
+        ) else {
+            return;
+        };
+        let Some(tilt_deg) = vol.elevations.get(view.tilt).copied() else {
+            return;
+        };
+        let cam = &view.camera;
+        let vp = self.last_viewport;
+        let (wx0, wy0) = cam.screen_to_world((0.0, 0.0), vp);
+        let (wx1, wy1) = cam.screen_to_world((vp.0, vp.1), vp);
+        let world = [wx0, wy0, wx1, wy1];
+        let key = BlockageKey {
+            site: site.id.to_string(),
+            tilt_mdeg: (tilt_deg * 1000.0) as i32,
+            world: world.map(|w| (w * 1e7) as i64),
+        };
+        if self.blockage_tex.as_ref().is_some_and(|(k, ..)| *k == key)
+            || self.blockage_pending.as_ref().is_some_and(|(k, at)| {
+                *k == key || at.elapsed() < std::time::Duration::from_millis(600)
+            })
+        {
+            return;
+        }
+        let beam = crate::elevation::BeamSite {
+            lon: site.longitude as f64,
+            lat: site.latitude as f64,
+            // The site registry is the elevation source; `elevation::TOWER_M` adds the antenna.
+            ground_m: site.elevation_meters as f64,
+            tilt_deg: tilt_deg as f64,
+        };
+        self.blockage_pending = Some((key.clone(), Instant::now()));
+        let http = self.http.clone();
+        let tx = self.blockage_tx.clone();
+        let ctx = ctx.clone();
+        self.spawner.spawn(async move {
+            let image = crate::elevation::blockage_image(&http, beam, world).await;
+            let _ = tx.send((key, world, image));
+            ctx.request_repaint();
+        });
     }
 
     /// Recompute the locally derived products (VIL, VIL density, echo tops) when the active pane's
@@ -2778,7 +2868,6 @@ impl HookEchoApp {
         if self.settings.mute_alerts {
             return;
         }
-        #[cfg(not(target_arch = "wasm32"))]
         crate::audio::play(sound, self.settings.alert_volume);
     }
 
@@ -4434,6 +4523,10 @@ impl HookEchoApp {
         } else {
             Vec::new()
         };
+        // The DEM rides along with every pack, whatever the basemap: offline chase mode wants the
+        // blockage overlay as much as it wants the map under it.
+        let mut jobs = jobs;
+        jobs.extend(self.tiles.dem_pack_jobs(min_lon, min_lat, max_lon, max_lat));
         if jobs.is_empty() {
             return;
         }
@@ -5411,6 +5504,7 @@ impl HookEchoApp {
             T::Pireps => &mut self.show_pireps,
             T::Recon => &mut self.show_recon,
             T::LinkCameras => &mut self.link_cameras,
+            T::Blockage => &mut self.show_blockage,
         }
     }
 
@@ -5889,6 +5983,13 @@ impl HookEchoApp {
                 "Obs",
                 "Aviation (SIGMET/AIRMET)",
                 "Hazard areas for pilots: turbulence, icing, low ceilings",
+                false,
+            ),
+            (
+                T::Blockage,
+                "Reference",
+                "Beam blockage (terrain)",
+                "Shade where terrain cuts into this tilt's beam \u{2014} the radar's blind spots",
                 false,
             ),
             (
@@ -10455,6 +10556,26 @@ impl HookEchoApp {
             }
         }
 
+        // Beam-vs-terrain blockage shading, under the reference annotations. The raster covers a
+        // world-space rect, which maps linearly to screen, so it is one stretched image — and while
+        // a rebuild is in flight the previous rect keeps it registered to the ground.
+        if self.show_blockage {
+            if let Some((_, tex, world)) = &self.blockage_tex {
+                let a = cam.world_to_screen((world[0], world[1]), vp);
+                let b = cam.world_to_screen((world[2], world[3]), vp);
+                let rect = egui::Rect::from_two_pos(
+                    egui::pos2(prect.left() + a.0, prect.top() + a.1),
+                    egui::pos2(prect.left() + b.0, prect.top() + b.1),
+                );
+                painter.image(
+                    tex.id(),
+                    rect,
+                    egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+                    egui::Color32::WHITE,
+                );
+            }
+        }
+
         // Range rings + azimuth spokes around this pane's site (feature HH).
         if self.show_range_rings {
             if let Some(site) = view.site.as_deref().and_then(wxdata::sites::site_by_id) {
@@ -12424,6 +12545,8 @@ impl eframe::App for HookEchoApp {
         }
         // Locally derived products: no fetch, just a recompute when the volume or threshold moves.
         self.recompute_derived(ctx);
+        // Beam-blockage raster: rebuilt when the camera, site, or tilt moves (DEM tiles are cached).
+        self.update_blockage(ctx);
         // Gridded L3 products (DVL/EET): per-site, refetch on the L3 cadence or a site change.
         let l3_site = self.views[self.active].site.clone();
         let site_changed = self.l3grid_site != l3_site;

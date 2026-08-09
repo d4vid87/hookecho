@@ -153,7 +153,7 @@ pub fn parse_caltrans(json: &str, agency: &str) -> Vec<DotCam> {
 /// Fetch one agency feed.
 pub async fn fetch_source(client: &reqwest::Client, s: &Source) -> anyhow::Result<Vec<DotCam>> {
     let body = client
-        .get(s.url)
+        .get(crate::net::fetch_url(s.url))
         .header("User-Agent", USER_AGENT)
         .send()
         .await?

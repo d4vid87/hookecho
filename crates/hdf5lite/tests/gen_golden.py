@@ -40,6 +40,44 @@ def summarize(a):
     }
 
 
+def attrs_of(g):
+    """Attributes as plain JSON — bytes and numpy scalars flattened the way hdf5lite reports them."""
+    out = {}
+    for k, v in g.attrs.items():
+        v = np.asarray(v).ravel()[0]
+        if isinstance(v, bytes):
+            out[k] = v.decode("utf-8", "replace").rstrip("\0 ")
+        elif isinstance(v, str):
+            out[k] = v
+        else:
+            out[k] = float(v)
+    return out
+
+
+for h5 in sorted(HERE.glob("*.h5")):
+    # ODIM_H5: what matters is the nested paths, the group attributes the metadata lives in, and
+    # that the sweep's byte array comes out of the old-style chunked layout intact.
+    with h5py.File(h5, "r") as f:
+        out = {"names": sorted(f.keys()), "attrs": {}, "datasets": {}}
+        paths = [""] + [
+            p
+            for top in sorted(f.keys())
+            for p in ([top] if not isinstance(f[top], h5py.Group) else [top, *(
+                f"{top}/{sub}" for sub in sorted(f[top].keys())
+            )])
+        ]
+        paths += ["dataset1/data1/what"]
+        for p in paths:
+            g = f[p] if p else f
+            if g.attrs:
+                out["attrs"][p] = attrs_of(g)
+        out["children"] = {p: sorted(f[p].keys()) for p in ["dataset1", "dataset1/data1"]}
+        for p in ["dataset1/data1/data", "dataset5/data1/data"]:
+            out["datasets"][p] = summarize(np.asarray(f[p][()], dtype="float64"))
+    (HERE / (h5.stem + ".golden.json")).write_text(json.dumps(out, indent=1))
+    print("wrote", h5.stem + ".golden.json")
+
+
 for nc in sorted(HERE.glob("*.nc")):
     with h5py.File(nc, "r") as f:
         out = {"names": sorted(f.keys()), "datasets": {}}

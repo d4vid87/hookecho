@@ -1835,7 +1835,7 @@ pub fn run_3d(site: &str, out_path: &str) -> anyhow::Result<()> {
         },
     );
 
-    let rgba = read_target(&device, &queue, &target);
+    let rgba = read_target(&device, &queue, &target, SIZE);
     image::save_buffer(out_path, &rgba, SIZE, SIZE, image::ColorType::Rgba8)?;
     // Echo pixels = those differing from the uniform sRGB background clear (~48,48,63).
     let echo = rgba
@@ -2072,7 +2072,9 @@ fn init_gpu(
     let instance = wgpu::Instance::default();
     let adapter = rt.block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
         power_preference: wgpu::PowerPreference::HighPerformance,
-        force_fallback_adapter: false,
+        // `HOOKECHO_GPU_FALLBACK=1` forces the software adapter (lavapipe in CI) so the
+        // golden-image test compares the same rasterizer everywhere.
+        force_fallback_adapter: std::env::var("HOOKECHO_GPU_FALLBACK").is_ok(),
         compatible_surface: None,
     }))?;
     let (device, queue) =
@@ -2080,15 +2082,20 @@ fn init_gpu(
     Ok((device, queue, adapter))
 }
 
-/// Read a `SIZE×SIZE` RGBA render target back to a tightly-packed byte vec.
-fn read_target(device: &wgpu::Device, queue: &wgpu::Queue, target: &wgpu::Texture) -> Vec<u8> {
+/// Read a `size×size` RGBA render target back to a tightly-packed byte vec.
+fn read_target(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    target: &wgpu::Texture,
+    size: u32,
+) -> Vec<u8> {
     let bytes_per_pixel = 4u32;
-    let unpadded = SIZE * bytes_per_pixel;
+    let unpadded = size * bytes_per_pixel;
     let align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
     let padded = unpadded.div_ceil(align) * align;
     let buffer = device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("readback"),
-        size: (padded * SIZE) as u64,
+        size: (padded * size) as u64,
         usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
         mapped_at_creation: false,
     });
@@ -2106,12 +2113,12 @@ fn read_target(device: &wgpu::Device, queue: &wgpu::Queue, target: &wgpu::Textur
             layout: wgpu::TexelCopyBufferLayout {
                 offset: 0,
                 bytes_per_row: Some(padded),
-                rows_per_image: Some(SIZE),
+                rows_per_image: Some(size),
             },
         },
         wgpu::Extent3d {
-            width: SIZE,
-            height: SIZE,
+            width: size,
+            height: size,
             depth_or_array_layers: 1,
         },
     );
@@ -2124,8 +2131,8 @@ fn read_target(device: &wgpu::Device, queue: &wgpu::Queue, target: &wgpu::Textur
     let _ = device.poll(wgpu::PollType::wait_indefinitely());
     let _ = rx.recv();
     let mapped = slice.get_mapped_range();
-    let mut rgba = Vec::with_capacity((unpadded * SIZE) as usize);
-    for row in 0..SIZE {
+    let mut rgba = Vec::with_capacity((unpadded * size) as usize);
+    for row in 0..size {
         let start = (row * padded) as usize;
         rgba.extend_from_slice(&mapped[start..start + unpadded as usize]);
     }
@@ -2134,12 +2141,12 @@ fn read_target(device: &wgpu::Device, queue: &wgpu::Queue, target: &wgpu::Textur
     rgba
 }
 
-fn new_target(device: &wgpu::Device, format: wgpu::TextureFormat) -> wgpu::Texture {
+fn new_target(device: &wgpu::Device, format: wgpu::TextureFormat, size: u32) -> wgpu::Texture {
     device.create_texture(&wgpu::TextureDescriptor {
         label: Some("headless_target"),
         size: wgpu::Extent3d {
-            width: SIZE,
-            height: SIZE,
+            width: size,
+            height: size,
             depth_or_array_layers: 1,
         },
         mip_level_count: 1,
@@ -2158,7 +2165,7 @@ fn draw_and_read(
     res: &RenderResources,
     pane: u32,
 ) -> Vec<u8> {
-    let target = new_target(device, wgpu::TextureFormat::Rgba8UnormSrgb);
+    let target = new_target(device, wgpu::TextureFormat::Rgba8UnormSrgb, SIZE);
     let view = target.create_view(&wgpu::TextureViewDescriptor::default());
     res.draw_pane(
         device,
@@ -2172,7 +2179,7 @@ fn draw_and_read(
             a: 1.0,
         },
     );
-    read_target(device, queue, &target)
+    read_target(device, queue, &target, SIZE)
 }
 
 fn save_rgba(rgba: &[u8], out_path: &str) -> anyhow::Result<()> {
@@ -2276,4 +2283,160 @@ fn render_to_png(
     image::save_buffer(out_path, &rgba, SIZE, SIZE, image::ColorType::Rgba8)?;
     println!("wrote {out_path}");
     Ok(())
+}
+
+// ponytail: one golden scene; per-moment/per-palette goldens if renderer churn starts
+// eating bisects.
+#[cfg(test)]
+mod golden_tests {
+    use super::*;
+    use wxdata::level2::BinnedSweep;
+
+    /// Small so the checked-in golden stays tens of KB.
+    const GOLDEN_SIZE: u32 = 200;
+    const GOLDEN: &str = "tests/golden/snapshot_base.png";
+
+    /// A deterministic synthetic sweep: a 90° wedge plus three range rings.
+    fn synthetic_sweep() -> BinnedSweep {
+        let (az_bins, gate_count) = (360usize, 200usize);
+        let mut data = vec![0u8; az_bins * gate_count];
+        for az in 0..az_bins {
+            for g in 0..gate_count {
+                // Raw 0/1 are "no data"; 2..=255 map across value_min..value_max.
+                let v = if (45..135).contains(&az) {
+                    // Wedge: ramp outward so the colormap is exercised end to end.
+                    2 + (g * 253 / gate_count) as u8
+                } else if g % 50 < 3 {
+                    120
+                } else {
+                    0
+                };
+                data[az * gate_count + g] = v;
+            }
+        }
+        BinnedSweep {
+            moment: Moment::Reflectivity,
+            az_bins,
+            gate_count,
+            data,
+            first_gate_km: 2.125,
+            gate_interval_km: 0.25,
+            radar_lat: 35.0,
+            radar_lon: -97.0,
+            elevation_deg: 0.5,
+            value_min: -32.0,
+            value_max: 95.0,
+        }
+    }
+
+    /// Golden-image test for the radar render pipeline. Run with
+    /// `HOOKECHO_GPU_FALLBACK=1 cargo test -p hookecho -- --ignored gpu` so the
+    /// software (lavapipe) adapter is used — the golden is authored under lavapipe.
+    #[test]
+    #[ignore = "gpu"]
+    fn gpu_golden_radar_snapshot() {
+        let sweep = synthetic_sweep();
+        let table = crate::colormap::default_table(Moment::Reflectivity).clone();
+        let camera = Camera::at_lonlat(sweep.radar_lon as f64, sweep.radar_lat as f64, 8.5);
+        let (center, scale) =
+            camera.world_to_clip_uniform((GOLDEN_SIZE as f32, GOLDEN_SIZE as f32));
+        let cb = MapCallback {
+            pane: 0,
+            camera_center: center,
+            camera_scale: scale,
+            new_tiles: Vec::new(),
+            visible: Vec::new(),
+            radar_upload: Some(crate::app::to_upload(&sweep, &table, None, false, None)),
+            draw_radar: true,
+            overlay_upload: None,
+            draw_overlay: false,
+            field_uploads: Vec::new(),
+            field_draws: Vec::new(),
+            clear_tiles: false,
+            drop_tiles: Vec::new(),
+            new_vector_tiles: Vec::new(),
+            visible_vector: Vec::new(),
+            clear_vector: false,
+            drop_vector_tiles: Vec::new(),
+        };
+
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let (device, queue, adapter) = init_gpu(&rt).expect("no wgpu adapter");
+        println!("adapter: {}", adapter.get_info().name);
+        let format = wgpu::TextureFormat::Rgba8UnormSrgb;
+        let mut res = RenderResources::new(&device, format);
+        let target = new_target(&device, format, GOLDEN_SIZE);
+        let view = target.create_view(&wgpu::TextureViewDescriptor::default());
+        res.render_once(
+            &device,
+            &queue,
+            &view,
+            &cb,
+            wgpu::Color {
+                r: 0.05,
+                g: 0.05,
+                b: 0.08,
+                a: 1.0,
+            },
+        );
+        let actual = read_target(&device, &queue, &target, GOLDEN_SIZE);
+
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let golden = dir.join(GOLDEN);
+        let dump = dir.join("../../target/snapshot_base_actual.png");
+        let write_actual = || {
+            if let Some(p) = dump.parent() {
+                let _ = std::fs::create_dir_all(p);
+            }
+            image::save_buffer(
+                &dump,
+                &actual,
+                GOLDEN_SIZE,
+                GOLDEN_SIZE,
+                image::ColorType::Rgba8,
+            )
+            .expect("write actual png");
+        };
+
+        if !golden.exists() {
+            write_actual();
+            println!(
+                "SKIP: golden {} missing — wrote actual to {}. Generate it under lavapipe \
+                 (mesa-vulkan-drivers + HOOKECHO_GPU_FALLBACK=1) and check it in.",
+                golden.display(),
+                dump.display()
+            );
+            return;
+        }
+
+        let expected = image::open(&golden).expect("decode golden").to_rgba8();
+        assert_eq!(
+            (expected.width(), expected.height()),
+            (GOLDEN_SIZE, GOLDEN_SIZE),
+            "golden has the wrong dimensions"
+        );
+        // Per-channel delta ≤ 8, failing pixels ≤ 0.5% — absorbs driver rounding without
+        // letting a real render regression through.
+        let bad = expected
+            .as_raw()
+            .chunks_exact(4)
+            .zip(actual.chunks_exact(4))
+            .filter(|(e, a)| {
+                e.iter()
+                    .zip(a.iter())
+                    .any(|(x, y)| (*x as i16 - *y as i16).abs() > 8)
+            })
+            .count();
+        let total = (GOLDEN_SIZE * GOLDEN_SIZE) as usize;
+        if bad * 200 > total {
+            write_actual();
+            panic!(
+                "golden mismatch: {bad}/{total} pixels off (> 0.5%); actual written to {}",
+                dump.display()
+            );
+        }
+    }
 }

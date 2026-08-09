@@ -72,6 +72,42 @@ jobs:
           RUSTFLAGS: --cfg getrandom_backend="wasm_js"
         run: cargo check --target wasm32-unknown-unknown -p hookecho --lib
 
+  # Golden-image test for the wgpu radar pipeline. Runs on the software rasterizer
+  # (mesa lavapipe) via HOOKECHO_GPU_FALLBACK=1 so the render is deterministic across
+  # machines — the checked-in golden is authored under lavapipe too. If the golden is
+  # ever missing, the test skips and writes the actual PNG; grab it from the artifact
+  # below and check it in as crates/hookecho/tests/golden/snapshot_base.png.
+  gpu-golden:
+    name: GPU golden (lavapipe)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y mesa-vulkan-drivers libasound2-dev libudev-dev \
+            libxkbcommon-dev libwayland-dev libxcb1-dev libgtk-3-dev
+
+      - name: Golden test
+        env:
+          HOOKECHO_GPU_FALLBACK: "1"
+        run: cargo test -p hookecho -- --ignored gpu --nocapture
+
+      - name: Upload actual render
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gpu-golden-actual
+          path: target/*.png
+          if-no-files-found: ignore
+
   # Cross-compile the Android cdylib so platform-gating rot (a desktop-only dep leaking into the
   # Android build) is caught on every PR without a device. Builds the .so only — no APK/Gradle.
   android-check:

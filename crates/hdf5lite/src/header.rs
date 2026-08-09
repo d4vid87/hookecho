@@ -1,7 +1,7 @@
 //! Object headers and the messages inside them: dataspace, datatype, layout, filters, attributes.
 
 use crate::read::Cur;
-use crate::{Error, Result};
+use crate::{Error, Result, Value};
 
 /// How a dataset's bytes are stored.
 #[derive(Debug, Clone)]
@@ -176,6 +176,10 @@ impl Dataset {
 }
 
 /// Object header message types we act on. Everything else is skipped by its recorded length.
+/// Points at the fractal heap holding a group's links.
+pub(crate) const MSG_LINK_INFO: u8 = 2;
+/// Names the B-tree and local heap of an old-style (symbol-table) group.
+pub(crate) const MSG_SYMBOL_TABLE: u8 = 17;
 const MSG_DATASPACE: u8 = 1;
 const MSG_DATATYPE: u8 = 3;
 const MSG_FILL: u8 = 5;
@@ -187,13 +191,78 @@ const MSG_CONTINUATION: u8 = 16;
 const MSG_ATTRIBUTE_INFO: u8 = 21;
 
 /// One message located inside an object header.
-struct Msg {
-    kind: u8,
-    start: usize,
+pub(crate) struct Msg {
+    pub kind: u8,
+    pub start: usize,
 }
 
-/// Walk an object header (following continuation blocks) and collect its messages.
-fn messages(d: &[u8], addr: u64) -> Result<Vec<Msg>> {
+/// Walk an object header and collect its messages, whichever of the two header formats it uses.
+///
+/// Version 1 headers carry no signature — the first byte is the version — so the `OHDR` magic is
+/// what tells the two apart.
+pub(crate) fn messages(d: &[u8], addr: u64) -> Result<Vec<Msg>> {
+    let at = addr as usize;
+    match d.get(at..at + 4) {
+        Some(b"OHDR") => messages_v2(d, addr),
+        Some(_) if d[at] == 1 => messages_v1(d, addr),
+        Some(b) => Err(Error::BadSignature {
+            what: "object header",
+            found: [b[0], b[1], b[2], b[3]],
+        }),
+        None => Err(Error::Truncated {
+            what: "object header",
+            need: at + 4,
+            have: d.len(),
+        }),
+    }
+}
+
+/// Version-1 object headers: a fixed twelve-byte prologue padded to eight, then messages with a
+/// two-byte type and no per-message signature. Continuation blocks are bare message runs.
+fn messages_v1(d: &[u8], addr: u64) -> Result<Vec<Msg>> {
+    let mut c = Cur::new(d, addr as usize, "object header v1");
+    c.skip(2)?; // version, reserved
+    let _count = c.u16()?;
+    let _refs = c.u32()?;
+    let body = c.u32()? as usize;
+    c.skip(4)?; // padding that aligns the first message on eight bytes
+    let mut out = Vec::new();
+    let mut queue = vec![(c.p, c.p.saturating_add(body))];
+    let mut guard = 0;
+    while let Some((mut p, end)) = queue.pop() {
+        guard += 1;
+        if guard > 64 {
+            return Err(Error::Unsupported(
+                "object header with >64 continuations".into(),
+            ));
+        }
+        while p + 8 <= end.min(d.len()) {
+            let mut m = Cur::new(d, p, "header message");
+            let kind = m.u16()? as u8;
+            let size = m.u16()? as usize;
+            let _flags = m.u8()?;
+            m.skip(3)?; // reserved
+            let start = m.p;
+            if start + size > d.len() {
+                break;
+            }
+            if kind == MSG_CONTINUATION {
+                let mut cc = Cur::new(d, start, "continuation");
+                let caddr = cc.u64()? as usize;
+                let clen = cc.u64()? as usize;
+                queue.push((caddr, caddr.saturating_add(clen)));
+            } else if kind != 0 {
+                // Type 0 is NIL — space freed by an edit, holding nothing.
+                out.push(Msg { kind, start });
+            }
+            p = start + size;
+        }
+    }
+    Ok(out)
+}
+
+/// Walk a version-2 object header (following continuation blocks) and collect its messages.
+fn messages_v2(d: &[u8], addr: u64) -> Result<Vec<Msg>> {
     let mut out = Vec::new();
     let mut queue = vec![(addr, None::<u64>)];
     let mut guard = 0;
@@ -277,7 +346,6 @@ pub(crate) fn parse_dataset(d: &[u8], addr: u64) -> Result<Dataset> {
     let mut scale_factor = None;
     let mut add_offset = None;
     let mut fill_attr = None;
-    let mut attrs: Vec<(String, Option<f64>)> = Vec::new();
 
     for m in &msgs {
         match m.kind {
@@ -286,22 +354,12 @@ pub(crate) fn parse_dataset(d: &[u8], addr: u64) -> Result<Dataset> {
             MSG_LAYOUT => layout = Some(parse_layout(d, m.start)?),
             MSG_FILTER => filters = parse_filters(d, m.start)?,
             MSG_FILL => fill_value = parse_fill(d, m.start).ok().flatten(),
-            MSG_ATTRIBUTE => {
-                if let Ok((name, value, _)) = parse_attribute(d, m.start) {
-                    attrs.push((name, value));
-                }
-            }
-            // Datasets with more than a handful of attributes move them into a fractal heap.
-            MSG_ATTRIBUTE_INFO => {
-                if let Ok(heap) = attribute_info_heap(d, m.start) {
-                    attrs.extend(crate::heap::dense_attributes(d, heap));
-                }
-            }
             _ => {}
         }
     }
 
-    for (name, value) in attrs {
+    for (name, value) in object_attributes(d, addr)? {
+        let value = value.and_then(|v| v.as_f64());
         match name.as_str() {
             "scale_factor" => scale_factor = value,
             "add_offset" => add_offset = value,
@@ -476,7 +534,7 @@ fn parse_filters(d: &[u8], at: usize) -> Result<Filters> {
 
 /// Parse an attribute message: its name, its first value (when numeric), and the offset just past
 /// it — dense attributes are stored end to end and the caller needs to know where the next begins.
-pub(crate) fn parse_attribute(d: &[u8], at: usize) -> Result<(String, Option<f64>, usize)> {
+pub(crate) fn parse_attribute(d: &[u8], at: usize) -> Result<(String, Option<Value>, usize)> {
     let mut c = Cur::new(d, at, "attribute");
     let version = c.u8()?;
     let (name_len, space_len, type_len, name_pad, other_pad);
@@ -526,21 +584,100 @@ pub(crate) fn parse_attribute(d: &[u8], at: usize) -> Result<(String, Option<f64
     let data_at = c.p;
     // Anything we can't read as a number (strings, compounds) is still a valid attribute — we
     // just have no use for its value, but we DO need its length to find the next one.
-    let dt = parse_datatype(d, type_at).ok();
     let count = parse_dataspace(d, space_at)
         .map(|dims| dims.iter().map(|&n| n as usize).product::<usize>().max(1))
         .unwrap_or(1);
     // Advance by the on-disk element width whatever the class is — string attributes
-    // (`standard_name`, `units`) sit between the numeric ones, and mis-measuring them desyncs the
-    // whole dense-attribute walk.
+    // (`standard_name`, `units`, ODIM's `quantity`) sit between the numeric ones, and mis-measuring
+    // them desyncs the whole dense-attribute walk.
     let raw_sz = datatype_size(d, type_at).unwrap_or(0);
-    let sz = dt.map(|t| t.size_of()).unwrap_or(0);
     let end = data_at + count.saturating_mul(raw_sz);
-    let value = match dt {
-        Some(t) if sz > 0 && data_at + sz <= d.len() => Some(t.read(&d[data_at..data_at + sz])),
+    Ok((name, attr_value(d, type_at, data_at), end))
+}
+
+/// Read an attribute's first element as whatever it is: a number, or a string.
+///
+/// ODIM metadata is half strings — `quantity`, `date`, `time`, `source` — and a reader that only
+/// spoke numbers would have to guess the scan time. Returns `None` for classes with no obvious
+/// scalar reading (compounds, arrays); the attribute still exists, we just have no value for it.
+fn attr_value(d: &[u8], type_at: usize, data_at: usize) -> Option<Value> {
+    let mut c = Cur::new(d, type_at, "attribute datatype");
+    let class = c.u8().ok()? & 0x0f;
+    let flags0 = c.u8().ok()?;
+    c.skip(2).ok()?;
+    let size = c.u32().ok()? as usize;
+    match class {
+        0 | 1 => {
+            let t = parse_datatype(d, type_at).ok()?;
+            let n = t.size_of();
+            Some(Value::Num(t.read(d.get(data_at..data_at + n)?)))
+        }
+        // A fixed-length string sits inline, NUL- or space-padded to its declared width.
+        3 => Some(Value::Str(trim_str(d.get(data_at..data_at + size)?))),
+        // A variable-length type whose sub-class is 1 (string): the datum is a pointer into the
+        // file's global heap, and the bytes live in the collection it names.
+        9 if flags0 & 0x0f == 1 => global_heap_string(d, data_at).map(Value::Str),
         _ => None,
-    };
-    Ok((name, value, end))
+    }
+}
+
+fn trim_str(b: &[u8]) -> String {
+    String::from_utf8_lossy(b)
+        .trim_end_matches(['\0', ' '])
+        .to_string()
+}
+
+/// Follow a variable-length string datum — length, collection address, object index — into the
+/// global heap collection that holds its bytes.
+fn global_heap_string(d: &[u8], at: usize) -> Option<String> {
+    let mut c = Cur::new(d, at, "vlen string");
+    let len = c.u32().ok()? as usize;
+    let collection = c.u64().ok()? as usize;
+    let index = c.u32().ok()?;
+    let mut c = Cur::new(d, collection, "global heap");
+    c.sig(b"GCOL", "global heap").ok()?;
+    c.skip(4).ok()?; // version, reserved
+    let end = collection
+        .saturating_add(c.u64().ok()? as usize)
+        .min(d.len());
+    while c.p + 16 <= end {
+        let idx = c.u16().ok()?;
+        c.skip(6).ok()?; // reference count, reserved
+        let obj_size = c.u64().ok()? as usize;
+        // Index 0 is the collection's free space, and it always comes last.
+        if idx == 0 {
+            return None;
+        }
+        let data = c.p;
+        if u32::from(idx) == index {
+            return Some(trim_str(d.get(data..data + len.min(obj_size))?));
+        }
+        c.p = data.checked_add(obj_size.next_multiple_of(8))?;
+    }
+    None
+}
+
+/// Every attribute on an object, group or dataset alike. ODIM keeps its whole metadata model in
+/// group attributes (`what`, `where`, `how`), so groups need this as much as datasets do.
+pub(crate) fn object_attributes(d: &[u8], addr: u64) -> Result<Vec<(String, Option<Value>)>> {
+    let mut out: Vec<(String, Option<Value>)> = Vec::new();
+    for m in messages(d, addr)? {
+        match m.kind {
+            MSG_ATTRIBUTE => {
+                if let Ok((name, value, _)) = parse_attribute(d, m.start) {
+                    out.push((name, value));
+                }
+            }
+            // Objects with more than a handful of attributes move them into a fractal heap.
+            MSG_ATTRIBUTE_INFO => {
+                if let Ok(heap) = attribute_info_heap(d, m.start) {
+                    out.extend(crate::heap::dense_attributes(d, heap));
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(out)
 }
 
 /// Read the Attribute Info message and return the fractal heap holding the dense attributes.

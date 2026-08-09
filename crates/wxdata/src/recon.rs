@@ -139,7 +139,7 @@ pub async fn fetch(http: &reqwest::Client, max_age_hours: i64) -> anyhow::Result
     let mut out = Vec::new();
     for name in BULLETINS {
         let Ok(resp) = http
-            .get(format!("{BASE}/{name}"))
+            .get(crate::net::fetch_url(&format!("{BASE}/{name}")))
             .header("User-Agent", crate::alerts::USER_AGENT)
             .send()
             .await

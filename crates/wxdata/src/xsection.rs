@@ -9,7 +9,7 @@ use crate::level2::BinnedSweep;
 
 const R_EARTH_KM: f64 = 6371.0;
 /// Standard-atmosphere effective earth radius (4/3 earth) for beam propagation.
-const R_EFF_KM: f64 = R_EARTH_KM * 4.0 / 3.0;
+pub const R_EFF_KM: f64 = R_EARTH_KM * 4.0 / 3.0;
 
 /// A reconstructed vertical cross-section. `dbz` is row-major `rows × cols`; row 0 is the top of
 /// the panel (highest altitude), column 0 is endpoint A. `None` = no beam coverage.
@@ -28,7 +28,7 @@ impl CrossSection {
 }
 
 /// 4/3-earth beam height (km) at slant range `slant_km` and elevation `elev_deg`.
-pub(crate) fn beam_height_km(slant_km: f64, elev_deg: f64) -> f64 {
+pub fn beam_height_km(slant_km: f64, elev_deg: f64) -> f64 {
     let e = elev_deg.to_radians();
     (slant_km * slant_km + R_EFF_KM * R_EFF_KM + 2.0 * slant_km * R_EFF_KM * e.sin()).sqrt()
         - R_EFF_KM

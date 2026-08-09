@@ -86,7 +86,7 @@ pub async fn fetch_active_opts(
     surge: bool,
 ) -> anyhow::Result<TropicalData> {
     let cs = client
-        .get(CURRENT_STORMS)
+        .get(crate::net::fetch_url(CURRENT_STORMS))
         .header("User-Agent", USER_AGENT)
         .send()
         .await?
@@ -105,7 +105,7 @@ pub async fn fetch_active_opts(
 
     // Discover the per-bin layer ids by name prefix (ids drift; names are stable).
     let layers_json = client
-        .get(format!("{MAPSERVER}/layers?f=json"))
+        .get(crate::net::fetch_url(&format!("{MAPSERVER}/layers?f=json")))
         .header("User-Agent", USER_AGENT)
         .send()
         .await?
@@ -262,7 +262,7 @@ fn surge_color(label: &str) -> [u8; 3] {
 pub async fn fetch_surge(client: &reqwest::Client) -> anyhow::Result<Vec<GeoFeature>> {
     let url = format!("{SURGE_SERVICE}/2/query?where=1%3D1&outFields=name,snippet&f=geojson");
     let body = client
-        .get(&url)
+        .get(crate::net::fetch_url(&url))
         .header("User-Agent", USER_AGENT)
         .send()
         .await?
@@ -309,7 +309,7 @@ fn body_geojson(json: &str) -> anyhow::Result<GeoJson> {
 async fn query_layer(client: &reqwest::Client, id: u64) -> anyhow::Result<GeoJson> {
     let url = format!("{MAPSERVER}/{id}/query?where=1%3D1&outFields=*&f=geojson");
     let body = client
-        .get(&url)
+        .get(crate::net::fetch_url(&url))
         .header("User-Agent", USER_AGENT)
         .send()
         .await?

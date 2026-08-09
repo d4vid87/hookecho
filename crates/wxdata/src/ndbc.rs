@@ -109,7 +109,7 @@ pub async fn fetch_bbox(
         Some(v) => v,
         None => {
             let text = http
-                .get(LATEST)
+                .get(crate::net::fetch_url(LATEST))
                 .header("User-Agent", crate::alerts::USER_AGENT)
                 .send()
                 .await?

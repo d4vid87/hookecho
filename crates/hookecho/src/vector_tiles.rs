@@ -473,11 +473,10 @@ impl VectorTileManager {
     pub fn new(spawner: crate::rt::Spawner) -> Self {
         let (tx, rx) = std::sync::mpsc::channel();
         let (template_tx, template_rx) = std::sync::mpsc::channel();
-        let client = crate::platform::http_timeouts(
-            reqwest::Client::builder().user_agent(USER_AGENT),
-        )
-        .build()
-            .expect("build reqwest client");
+        let client =
+            crate::platform::http_timeouts(reqwest::Client::builder().user_agent(USER_AGENT))
+                .build()
+                .expect("build reqwest client");
         let cache_root = crate::paths::cache_dir().map(|d| d.join("vector"));
         // The vector cache grew forever; the raster one has been swept at startup all along.
         if let Some(root) = cache_root.clone() {

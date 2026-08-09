@@ -13,7 +13,9 @@ pub async fn search(client: &reqwest::Client, query: &str) -> Result<(String, f6
         return Err("Enter an address or place".into());
     }
     let body = client
-        .get("https://nominatim.openstreetmap.org/search")
+        .get(crate::net::fetch_url(
+            "https://nominatim.openstreetmap.org/search",
+        ))
         .query(&[("q", q), ("format", "json"), ("limit", "1")])
         .header("User-Agent", crate::alerts::USER_AGENT)
         .header("Accept", "application/json")

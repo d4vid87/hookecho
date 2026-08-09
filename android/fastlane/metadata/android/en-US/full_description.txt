@@ -1,0 +1,23 @@
+Hook Echo-WX is a full-fidelity weather radar viewer for storm chasers, spotters and
+weather nerds — the same Rust engine as the desktop build, drawing every pixel on the GPU.
+
+It reads the real data, not a rendered picture of it: NEXRAD Level 2 super-resolution
+volumes and Level 3 products straight from NOAA's open archives, plus TDWR terminal radars.
+
+Features:
+
+* Level 2 and Level 3 NEXRAD, all 160+ WSR-88D sites, plus 44 TDWR sites
+* Every elevation tilt, all-tilts view, and vertical cross-sections
+* Reflectivity, velocity, correlation coefficient, differential reflectivity, spectrum width
+* Derived fields: VIL, VIL density, echo tops and Witt hail probability
+* Storm cell tracking with a sortable storm table
+* MRMS national mosaic and QPE, HRRR model fields, GOES GLM satellite lightning
+* NWS watches, warnings and advisories, with spoken warning readout
+* Winter suite: snowfall accumulation, NOHRSC snow depth, WSSI, mPING reports
+* Tropical: wind radii, storm surge, recon HDOBs
+* Observations: surface fronts, PIREPs, NDBC buoys, WPC excessive rainfall outlook
+* Archive playback back to June 1991, with an animation timeline
+* Chase mode: follow your own position, share views by link
+* Optional background alerting for saved locations, and a home-screen alert widget
+
+No account, no telemetry, no ads. All data comes from public NOAA/NWS feeds.

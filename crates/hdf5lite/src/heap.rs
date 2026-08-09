@@ -1,4 +1,12 @@
-//! Group links, which in these files live in a fractal heap.
+//! Group links, in both of the shapes HDF5 stores them.
+//!
+//! A group written by a modern library keeps its links in a fractal heap; one written the old way
+//! (which is still what libhdf5 does by default, and so what the European ODIM_H5 radar tools
+//! emit) keeps them in a version-1 B-tree of symbol-table nodes with the names in a local heap.
+//! Both end at the same place — a name and an object-header address — so [`links`] hides the
+//! difference and everything above it works on either.
+//!
+//! The fractal-heap side has a shortcut worth explaining:
 //!
 //! A fractal heap normally needs its companion version-2 B-tree to enumerate: the B-tree records
 //! hold heap IDs that encode each object's offset and length. That's a lot of machinery to find
@@ -15,67 +23,123 @@ use crate::read::Cur;
 use crate::{Error, Result};
 use std::collections::HashMap;
 
-/// Read the root group's links: name to object-header address.
-pub(crate) fn root_links(d: &[u8], root_hdr: u64) -> Result<HashMap<String, u64>> {
-    let heap = link_info_heap(d, root_hdr)?;
-    let Some(heap_addr) = heap else {
-        return Err(Error::Unsupported(
-            "group without a fractal heap (symbol-table group?)".into(),
-        ));
-    };
+/// Read a group's links: name to object-header address. An empty map means an empty group, which
+/// ODIM files are full of — `where` and `how` hold attributes and no children at all.
+pub(crate) fn links(d: &[u8], group_hdr: u64) -> Result<HashMap<String, u64>> {
     let mut out = HashMap::new();
-    for block in direct_blocks(d, heap_addr)? {
-        walk_links(d, block.0, block.1, &mut out);
-    }
-    if out.is_empty() {
-        return Err(Error::Unsupported("group heap yielded no links".into()));
+    for m in crate::header::messages(d, group_hdr)? {
+        match m.kind {
+            crate::header::MSG_LINK_INFO => {
+                let mut c = Cur::new(d, m.start, "link info");
+                let _v = c.u8()?;
+                let flags = c.u8()?;
+                if flags & 0x01 != 0 {
+                    c.skip(8)?; // maximum creation index
+                }
+                let heap = c.u64()?;
+                if heap == u64::MAX {
+                    continue;
+                }
+                for (start, end) in direct_blocks(d, heap)? {
+                    walk_links(d, start, end, &mut out);
+                }
+            }
+            crate::header::MSG_SYMBOL_TABLE => {
+                let mut c = Cur::new(d, m.start, "symbol table message");
+                let btree = c.u64()?;
+                let local_heap = c.u64()?;
+                symbol_table_links(d, btree, local_heap, &mut out)?;
+            }
+            _ => {}
+        }
     }
     Ok(out)
 }
 
-/// Find the Link Info message in the root object header and return its fractal-heap address.
-fn link_info_heap(d: &[u8], addr: u64) -> Result<Option<u64>> {
-    let mut c = Cur::new(d, addr as usize, "root object header");
-    c.sig(b"OHDR", "object header")?;
-    let version = c.u8()?;
-    if version != 2 {
-        return Err(Error::Unsupported(format!(
-            "object header version {version}"
-        )));
+/// Walk the version-1 B-tree of an old-style group. Its leaves are symbol-table nodes; the keys
+/// are name offsets we never need, because every node repeats the offset per entry.
+fn symbol_table_links(
+    d: &[u8],
+    btree: u64,
+    local_heap: u64,
+    out: &mut HashMap<String, u64>,
+) -> Result<()> {
+    if btree == u64::MAX {
+        return Ok(());
     }
-    let flags = c.u8()?;
-    if flags & 0x20 != 0 {
-        c.skip(16)?;
-    }
-    if flags & 0x10 != 0 {
-        c.skip(4)?;
-    }
-    let size_len = 1usize << (flags & 0x03);
-    let chunk = c.uint(size_len)? as usize;
-    let creation_order = flags & 0x04 != 0;
-    let end = c.p + chunk;
-    while c.p + 4 < end.min(d.len()) {
-        let kind = c.u8()?;
-        let size = c.u16()? as usize;
-        let _f = c.u8()?;
-        if creation_order {
-            c.skip(2)?;
+    let names = local_heap_data(d, local_heap)?;
+    let mut stack = vec![btree];
+    let mut guard = 0;
+    while let Some(addr) = stack.pop() {
+        if addr == u64::MAX {
+            continue;
         }
-        let start = c.p;
-        // Message type 2 is Link Info.
-        if kind == 2 {
-            let mut m = Cur::new(d, start, "link info");
-            let _v = m.u8()?;
-            let lflags = m.u8()?;
-            if lflags & 0x01 != 0 {
-                m.skip(8)?; // maximum creation index
+        guard += 1;
+        if guard > 4096 {
+            return Err(Error::Unsupported("group B-tree with >4096 nodes".into()));
+        }
+        let mut c = Cur::new(d, addr as usize, "group B-tree node");
+        c.sig(b"TREE", "B-tree")?;
+        let node_type = c.u8()?;
+        if node_type != 0 {
+            return Err(Error::Unsupported(format!(
+                "group B-tree node type {node_type}"
+            )));
+        }
+        let level = c.u8()?;
+        let entries = c.u16()? as usize;
+        c.skip(8 * 2)?; // left and right sibling addresses
+        for _ in 0..entries {
+            let _key = c.u64()?; // offset into the local heap of the entry's first name
+            let child = c.u64()?;
+            if level == 0 {
+                symbol_table_node(d, child, names, out)?;
+            } else {
+                stack.push(child);
             }
-            let heap = m.u64()?;
-            return Ok((heap != u64::MAX).then_some(heap));
         }
-        c.p = start + size;
     }
-    Ok(None)
+    Ok(())
+}
+
+/// One symbol-table node: a run of forty-byte entries, each a name offset and a header address.
+fn symbol_table_node(
+    d: &[u8],
+    addr: u64,
+    names: usize,
+    out: &mut HashMap<String, u64>,
+) -> Result<()> {
+    let mut c = Cur::new(d, addr as usize, "symbol table node");
+    c.sig(b"SNOD", "symbol table node")?;
+    c.skip(2)?; // version, reserved
+    let count = c.u16()? as usize;
+    for _ in 0..count {
+        let name_at = names + c.u64()? as usize;
+        let header = c.u64()?;
+        c.skip(4 + 4 + 16)?; // cache type, reserved, scratch pad
+        out.insert(heap_string(d, name_at), header);
+    }
+    Ok(())
+}
+
+/// The file offset where a local heap's name bytes begin.
+fn local_heap_data(d: &[u8], addr: u64) -> Result<usize> {
+    let mut c = Cur::new(d, addr as usize, "local heap");
+    c.sig(b"HEAP", "local heap")?;
+    let version = c.u8()?;
+    if version != 0 {
+        return Err(Error::Unsupported(format!("local heap version {version}")));
+    }
+    c.skip(3)?; // reserved
+    c.skip(8 * 2)?; // data segment size, offset of the free list head
+    Ok(c.u64()? as usize)
+}
+
+/// A NUL-terminated name out of a local heap.
+fn heap_string(d: &[u8], at: usize) -> String {
+    let tail = d.get(at..).unwrap_or(&[]);
+    let n = tail.iter().position(|&b| b == 0).unwrap_or(tail.len());
+    String::from_utf8_lossy(&tail[..n]).to_string()
 }
 
 /// A direct block's object area: `(start, end)` byte offsets in the file.
@@ -238,7 +302,7 @@ fn parse_link(d: &[u8], at: usize, end: usize) -> Result<(String, u64, usize)> {
 /// Walk a dense attribute heap the same way we walk group links: direct blocks, messages laid end
 /// to end. Failures are silent — a missing `scale_factor` degrades to unscaled data, which the
 /// golden tests would catch, whereas refusing to open the file would lose everything.
-pub(crate) fn dense_attributes(d: &[u8], heap_addr: u64) -> Vec<(String, Option<f64>)> {
+pub(crate) fn dense_attributes(d: &[u8], heap_addr: u64) -> Vec<(String, Option<crate::Value>)> {
     let mut out = Vec::new();
     let Ok(blocks) = direct_blocks(d, heap_addr) else {
         return out;
@@ -256,7 +320,9 @@ pub(crate) fn dense_attributes(d: &[u8], heap_addr: u64) -> Vec<(String, Option<
                     if next > p
                         && next <= end
                         && plausible_name(&name)
-                        && !out.iter().any(|(n, _): &(String, Option<f64>)| *n == name) =>
+                        && !out
+                            .iter()
+                            .any(|(n, _): &(String, Option<crate::Value>)| *n == name) =>
                 {
                     out.push((name, value));
                     p = next;

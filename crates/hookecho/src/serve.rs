@@ -16,6 +16,7 @@ use crate::status::{self, Spot};
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
 use std::net::{TcpListener, TcpStream};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -100,6 +101,14 @@ fn handle(server: &Server, mut stream: TcpStream) -> anyhow::Result<()> {
 }
 
 fn route(server: &Server, path: &str, query: &str) -> (&'static str, &'static str, Vec<u8>) {
+    count(match path {
+        "/" => "index",
+        "/status.json" | "/alerts.json" | "/obs.json" => "json",
+        "/snapshot.png" => "snapshot",
+        "/metrics" => "metrics",
+        _ if path.starts_with("/proxy/") => "proxy",
+        _ => "other",
+    });
     match path {
         "/" if server.web_root.is_some() => static_file(server, "/index.html"),
         "/" => ("200 OK", "text/html; charset=utf-8", index().into_bytes()),
@@ -111,6 +120,12 @@ fn route(server: &Server, path: &str, query: &str) -> (&'static str, &'static st
             Ok(png) => ("200 OK", "image/png", png),
             Err(e) => error_json(e),
         },
+        "/metrics" => (
+            "200 OK",
+            "text/plain; version=0.0.4; charset=utf-8",
+            metrics(server).into_bytes(),
+        ),
+        _ if path.starts_with("/proxy/") => proxy(server, path, query),
         _ if server.web_root.is_some() => static_file(server, path),
         _ => not_found(),
     }
@@ -267,6 +282,245 @@ fn snapshot(server: &Server, query: &str) -> anyhow::Result<Vec<u8>> {
     Ok(png)
 }
 
+/// The route labels `/metrics` reports, in counter order.
+const ROUTES: [&str; 6] = ["index", "json", "snapshot", "metrics", "proxy", "other"];
+/// One counter per label in [`ROUTES`], bumped on every request in [`route`].
+///
+// ponytail: flat process-lifetime counters, no histograms or per-status buckets; the ceiling is
+// "how busy is this box", and a real client-latency question wants the prometheus crate anyway.
+static REQUESTS: [AtomicU64; ROUTES.len()] = [const { AtomicU64::new(0) }; ROUTES.len()];
+
+fn count(label: &str) {
+    if let Some(i) = ROUTES.iter().position(|r| *r == label) {
+        REQUESTS[i].fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+/// A Prometheus label value, escaped. **Trust boundary**: spot names are whatever the user typed
+/// into the marker dialog, and a stray quote or newline there would otherwise forge label pairs —
+/// or whole metric lines — in the scrape. Backslash first, so it does not double-escape the
+/// escapes added after it.
+fn escape_label(s: &str) -> String {
+    s.replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('\n', "\\n")
+}
+
+/// The text exposition format, hand-rolled.
+///
+/// Counters come from [`REQUESTS`]; the gauges are derived on scrape from the same status report
+/// `/status.json` serves, so a scrape costs at most one round of feed requests per [`JSON_TTL`]
+/// and usually costs nothing.
+///
+// ponytail: the report is read back out of the JSON cache as `serde_json::Value` rather than
+// caching the typed `Vec<SpotStatus>` alongside it — one parse of a few KB per scrape. Cache the
+// struct if the gauge set ever grows past a handful of fields.
+fn metrics(server: &Server) -> String {
+    let mut out = String::new();
+    out.push_str("# HELP hookecho_http_requests_total Requests served, by route.\n");
+    out.push_str("# TYPE hookecho_http_requests_total counter\n");
+    for (label, n) in ROUTES.iter().zip(&REQUESTS) {
+        let n = n.load(Ordering::Relaxed);
+        let label = escape_label(label);
+        out.push_str(&format!(
+            "hookecho_http_requests_total{{route=\"{label}\"}} {n}\n"
+        ));
+    }
+
+    let Ok(body) = cached_json(server, "/status.json") else {
+        // A feed being down is not a reason to fail the scrape — the counters above still answer.
+        return out;
+    };
+    let age = server
+        .cache
+        .lock()
+        .unwrap()
+        .get("/status.json")
+        .map(|(when, _)| when.elapsed().as_secs_f64())
+        .unwrap_or(0.0);
+    let Ok(report) = serde_json::from_slice::<Vec<serde_json::Value>>(&body) else {
+        return out;
+    };
+
+    out.push_str("# HELP hookecho_spot_temp_c Current temperature at a saved location.\n");
+    out.push_str("# TYPE hookecho_spot_temp_c gauge\n");
+    for spot in &report {
+        let (Some(name), Some(f)) = (
+            spot.get("name").and_then(|v| v.as_str()),
+            spot.get("temp_f").and_then(|v| v.as_f64()),
+        ) else {
+            continue;
+        };
+        let c = (f - 32.0) * 5.0 / 9.0;
+        out.push_str(&format!(
+            "hookecho_spot_temp_c{{spot=\"{}\"}} {c:.2}\n",
+            escape_label(name)
+        ));
+    }
+
+    out.push_str("# HELP hookecho_spot_alerts Active NWS alerts within a location's radius.\n");
+    out.push_str("# TYPE hookecho_spot_alerts gauge\n");
+    for spot in &report {
+        let (Some(name), Some(alerts)) = (
+            spot.get("name").and_then(|v| v.as_str()),
+            spot.get("alerts").and_then(|v| v.as_array()),
+        ) else {
+            continue;
+        };
+        out.push_str(&format!(
+            "hookecho_spot_alerts{{spot=\"{}\"}} {}\n",
+            escape_label(name),
+            alerts.len()
+        ));
+    }
+
+    out.push_str("# HELP hookecho_data_age_seconds How stale the reported conditions are.\n");
+    out.push_str("# TYPE hookecho_data_age_seconds gauge\n");
+    out.push_str(&format!("hookecho_data_age_seconds {age:.1}\n"));
+    out
+}
+
+/// Hosts the CORS proxy will fetch from, exact match only.
+///
+/// The browser build cannot read most of these directly — NOAA's buckets and the NWS API send no
+/// `Access-Control-Allow-Origin` — so the page asks its own origin instead. Compiled in rather
+/// than configured: this is the whole security model, and a runtime knob would be one typo away
+/// from an open relay.
+///
+// ponytail: hand-maintained list, so a new feed host means a new entry here; a
+// `--proxy-host` flag is the upgrade path if third-party placefiles ever need proxying.
+const ALLOWED_HOSTS: &[&str] = &[
+    // NEXRAD / TDWR archives and the live chunk stream.
+    "unidata-nexrad-level2.s3.amazonaws.com",
+    "unidata-nexrad-level2-chunks.s3.amazonaws.com",
+    "unidata-nexrad-level3.s3.amazonaws.com",
+    // Gridded and satellite feeds.
+    "noaa-mrms-pds.s3.amazonaws.com",
+    "noaa-hrrr-bdp-pds.s3.amazonaws.com",
+    "noaa-rap-pds.s3.amazonaws.com",
+    "noaa-goes19.s3.amazonaws.com",
+    "mrms.ncep.noaa.gov",
+    "www.nohrsc.noaa.gov",
+    // NWS and friends.
+    "api.weather.gov",
+    "tgftp.nws.noaa.gov",
+    "mapservices.weather.noaa.gov",
+    "www.spc.noaa.gov",
+    "www.nhc.noaa.gov",
+    "www.ndbc.noaa.gov",
+    "api.water.noaa.gov",
+    "aviationweather.gov",
+    "services.dat.noaa.gov",
+    "apps.dat.noaa.gov",
+    "mesonet.agron.iastate.edu",
+    "weather.uwyo.edu",
+    "mping.ou.edu",
+    "www.spotternetwork.org",
+    "api.open-meteo.com",
+    "gibs.earthdata.nasa.gov",
+    // Basemap and imagery tiles.
+    "api.mapbox.com",
+    "api.maptiler.com",
+    "basemaps.cartocdn.com",
+    "basemap.nationalmap.gov",
+    "server.arcgisonline.com",
+    "services3.arcgis.com",
+    "tiles.openfreemap.org",
+    "tile.openstreetmap.org",
+    "a.tile.openstreetmap.fr",
+    "a.tile-cyclosm.openstreetmap.fr",
+    "a.tile.opentopomap.org",
+    // Cameras.
+    "weathercams.faa.gov",
+    "images.wcams-static.faa.gov",
+    "cwwp2.dot.ca.gov",
+];
+
+/// Nothing bigger than this comes back through the proxy. An archive volume is a few MB; this is
+/// generous for every feed on the list and still bounds a hostile or broken upstream.
+const PROXY_MAX_BYTES: usize = 64 * 1024 * 1024;
+
+/// `GET /proxy/{host}/{rest}` → `https://{host}/{rest}`, for the browser build.
+///
+/// The trust boundary, in four rules: the host must be in [`ALLOWED_HOSTS`] exactly, only GET is
+/// ever issued upstream (this server never speaks another method), no client header reaches the
+/// upstream, and the response is capped and stripped down to a known content type. Same-origin by
+/// construction, so no CORS header of our own is needed.
+fn proxy(server: &Server, path: &str, query: &str) -> (&'static str, &'static str, Vec<u8>) {
+    let forbidden = |why: &str| -> (&'static str, &'static str, Vec<u8>) {
+        log::warn!("proxy refused {path}: {why}");
+        (
+            "403 Forbidden",
+            "application/json",
+            br#"{"error":"host not proxyable"}"#.to_vec(),
+        )
+    };
+    let Some((host, rest)) = path["/proxy/".len()..].split_once('/') else {
+        return forbidden("no path after host");
+    };
+    if !ALLOWED_HOSTS.contains(&host) {
+        return forbidden("host not in allowlist");
+    }
+    let url = if query.is_empty() {
+        format!("https://{host}/{rest}")
+    } else {
+        format!("https://{host}/{rest}?{query}")
+    };
+    match server.rt.block_on(fetch_capped(&server.http, &url)) {
+        Ok((ctype, body)) => ("200 OK", ctype, body),
+        Err(e) => {
+            log::warn!("proxy fetch of {url} failed: {e}");
+            (
+                "502 Bad Gateway",
+                "application/json",
+                br#"{"error":"upstream fetch failed"}"#.to_vec(),
+            )
+        }
+    }
+}
+
+/// One upstream GET, no inherited headers, stopped at [`PROXY_MAX_BYTES`] mid-stream rather than
+/// after the fact.
+async fn fetch_capped(
+    http: &reqwest::Client,
+    url: &str,
+) -> anyhow::Result<(&'static str, Vec<u8>)> {
+    let mut resp = http.get(url).send().await?.error_for_status()?;
+    let ctype = proxy_content_type(
+        resp.headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or(""),
+    );
+    let mut body = Vec::new();
+    while let Some(chunk) = resp.chunk().await? {
+        if body.len() + chunk.len() > PROXY_MAX_BYTES {
+            anyhow::bail!("response over {PROXY_MAX_BYTES} bytes");
+        }
+        body.extend_from_slice(&chunk);
+    }
+    Ok((ctype, body))
+}
+
+/// An upstream `Content-Type` mapped onto one of ours. The upstream header is remote text going
+/// into our response headers, so it is matched against a fixed set rather than copied — a copied
+/// `\r\n` would let an upstream write headers of its own.
+fn proxy_content_type(upstream: &str) -> &'static str {
+    match upstream.split(';').next().unwrap_or("").trim() {
+        "application/json" | "application/geo+json" => "application/json",
+        "application/xml" | "text/xml" => "application/xml",
+        "text/plain" => "text/plain; charset=utf-8",
+        // HTML is deliberately downgraded: proxied bytes are served from our own origin, and no
+        // feed on the list needs a page that a browser will execute.
+        "text/html" => "text/plain; charset=utf-8",
+        "image/png" => "image/png",
+        "image/jpeg" => "image/jpeg",
+        "image/webp" => "image/webp",
+        "application/x-protobuf" | "application/vnd.mapbox-vector-tile" => "application/x-protobuf",
+        _ => "application/octet-stream",
+    }
+}
+
 fn index() -> String {
     "<!doctype html><meta charset=utf-8><title>Hook Echo-WX</title>\
      <h1>Hook Echo-WX</h1><ul>\
@@ -274,6 +528,7 @@ fn index() -> String {
      <li><a href=\"/alerts.json\">/alerts.json</a> — alerts only</li>\
      <li><a href=\"/obs.json\">/obs.json</a> — conditions only</li>\
      <li><a href=\"/snapshot.png?site=KTLX\">/snapshot.png?site=KTLX&amp;product=REF</a> — radar render</li>\
+     <li><a href=\"/metrics\">/metrics</a> — Prometheus scrape</li>\
      </ul>"
         .to_string()
 }
@@ -329,5 +584,58 @@ mod tests {
             content_type(std::path::Path::new("a/b.wasm")),
             "application/wasm"
         );
+    }
+
+    #[test]
+    fn proxy_refuses_hosts_that_are_not_on_the_list() {
+        let server = Server {
+            spots: Vec::new(),
+            web_root: None,
+            rt: tokio::runtime::Builder::new_current_thread()
+                .build()
+                .unwrap(),
+            http: reqwest::Client::new(),
+            cache: Mutex::new(HashMap::new()),
+            render: Mutex::new(()),
+        };
+        for path in [
+            "/proxy/evil.example.com/x",
+            // Suffix and prefix games against a host that *is* allowed: match is exact.
+            "/proxy/api.weather.gov.evil.example.com/alerts",
+            "/proxy/evil.example.com#api.weather.gov/alerts",
+            "/proxy/api.weather.gov",
+        ] {
+            let (status, ..) = route(&server, path, "");
+            assert_eq!(status, "403 Forbidden", "{path} must not be proxied");
+        }
+    }
+
+    #[test]
+    fn label_values_cannot_forge_metric_lines() {
+        assert_eq!(escape_label("Home"), "Home");
+        assert_eq!(
+            escape_label("a\"} 1\nhookecho_spot_alerts{spot=\"b"),
+            "a\\\"} 1\\nhookecho_spot_alerts{spot=\\\"b"
+        );
+        // Backslash first, or the escapes below it get escaped twice.
+        assert_eq!(escape_label(r#"c:\tmp"#), r"c:\\tmp");
+    }
+
+    #[test]
+    fn requests_are_counted_by_route() {
+        let server = Server {
+            spots: Vec::new(),
+            web_root: None,
+            rt: tokio::runtime::Builder::new_current_thread()
+                .build()
+                .unwrap(),
+            http: reqwest::Client::new(),
+            cache: Mutex::new(HashMap::new()),
+            render: Mutex::new(()),
+        };
+        let i = ROUTES.iter().position(|r| *r == "index").unwrap();
+        let before = REQUESTS[i].load(Ordering::Relaxed);
+        route(&server, "/", "");
+        assert_eq!(REQUESTS[i].load(Ordering::Relaxed), before + 1);
     }
 }

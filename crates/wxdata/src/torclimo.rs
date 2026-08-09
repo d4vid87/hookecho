@@ -23,7 +23,7 @@ pub struct TornadoTrack {
 /// Fetch the full tornado-track database (~7.6 MB CSV, tens of thousands of rows).
 pub async fn fetch_tracks(client: &reqwest::Client) -> anyhow::Result<Vec<TornadoTrack>> {
     let body = client
-        .get(TRACKS_URL)
+        .get(crate::net::fetch_url(TRACKS_URL))
         .header("User-Agent", crate::alerts::USER_AGENT)
         .send()
         .await?

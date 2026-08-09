@@ -222,7 +222,7 @@ pub async fn fetch_outlook_kind(
 ) -> anyhow::Result<Vec<GeoFeature>> {
     let url = format!("{OUTLOOK_BASE}/day{day}otlk_{}.lyr.geojson", kind.slug());
     let body = client
-        .get(&url)
+        .get(crate::net::fetch_url(&url))
         .header("User-Agent", USER_AGENT)
         .send()
         .await?
@@ -237,7 +237,7 @@ pub async fn fetch_mesoscale_discussions(
     client: &reqwest::Client,
 ) -> anyhow::Result<Vec<GeoFeature>> {
     let body = client
-        .get(MD_URL)
+        .get(crate::net::fetch_url(MD_URL))
         .header("User-Agent", USER_AGENT)
         .send()
         .await?

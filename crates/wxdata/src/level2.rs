@@ -372,25 +372,52 @@ pub fn bin_sweep_opts(
         2 + (t * 253.0) as u8
     };
 
+    // Bucket the radials by azimuth bin first so each bin's output row can be filled
+    // independently. Radials stay in scan order within a bin, so overlapping radials still
+    // overwrite in the same order the single serial pass used — identical output.
+    // ponytail: cache-miss fill now N-cores faster, but it still runs on the UI thread; async
+    // fill via task::blocking is the upgrade path if hitches persist.
+    let mut by_bin: Vec<Vec<&_>> = vec![Vec::new(); AZ_BINS];
+    for radial in radials {
+        let Some(m) = moment.select(radial) else {
+            continue;
+        };
+        // Skip radials with mismatched geometry (rare split-cut edge).
+        if m.gate_count() as usize != gate_count {
+            continue;
+        }
+        let az = radial.azimuth_angle_degrees().rem_euclid(360.0);
+        let bin = ((az / 360.0 * AZ_BINS as f32) as usize) % AZ_BINS;
+        by_bin[bin].push(radial);
+    }
+
     let mut data = vec![0u8; AZ_BINS * gate_count];
     if dealias && moment == Moment::Velocity {
         // Gather the raw velocity field (m/s) into the az×gate grid, unfold it region-based,
         // then normalize. Below-threshold/range-folded gates stay None → code 0.
         let mut vel = vec![None; AZ_BINS * gate_count];
-        for radial in radials {
-            let Some(m) = moment.select(radial) else {
-                continue;
-            };
-            if m.gate_count() as usize != gate_count {
-                continue;
-            }
-            let az = radial.azimuth_angle_degrees().rem_euclid(360.0);
-            let bin = ((az / 360.0 * AZ_BINS as f32) as usize) % AZ_BINS;
-            for (g, value) in m.iter().enumerate().take(gate_count) {
-                if let MomentValue::Value(v) = value {
-                    vel[bin * gate_count + g] = Some(v);
+        let gather_row = |bin: usize, row: &mut [Option<f32>]| {
+            for radial in &by_bin[bin] {
+                let Some(m) = moment.select(radial) else {
+                    continue;
+                };
+                for (g, value) in m.iter().enumerate().take(gate_count) {
+                    if let MomentValue::Value(v) = value {
+                        row[g] = Some(v);
+                    }
                 }
             }
+        };
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            use rayon::prelude::*;
+            vel.par_chunks_mut(gate_count)
+                .enumerate()
+                .for_each(|(bin, row)| gather_row(bin, row));
+        }
+        #[cfg(target_arch = "wasm32")]
+        for (bin, row) in vel.chunks_mut(gate_count).enumerate() {
+            gather_row(bin, row);
         }
         let nyq = crate::dealias::estimate_nyquist(&vel);
         let unfolded = crate::dealias::dealias(&vel, AZ_BINS, gate_count, nyq);
@@ -400,23 +427,30 @@ pub fn bin_sweep_opts(
             }
         }
     } else {
-        for radial in radials {
-            let Some(m) = moment.select(radial) else {
-                continue;
-            };
-            if m.gate_count() as usize != gate_count {
-                continue; // skip radials with mismatched geometry (rare split-cut edge)
-            }
-            let az = radial.azimuth_angle_degrees().rem_euclid(360.0);
-            let bin = ((az / 360.0 * AZ_BINS as f32) as usize) % AZ_BINS;
-            let row = &mut data[bin * gate_count..(bin + 1) * gate_count];
-            for (g, value) in m.iter().enumerate().take(gate_count) {
-                row[g] = match value {
-                    MomentValue::BelowThreshold => 0,
-                    MomentValue::RangeFolded => 1,
-                    MomentValue::Value(v) => normalize(v),
+        let fill_row = |bin: usize, row: &mut [u8]| {
+            for radial in &by_bin[bin] {
+                let Some(m) = moment.select(radial) else {
+                    continue;
                 };
+                for (g, value) in m.iter().enumerate().take(gate_count) {
+                    row[g] = match value {
+                        MomentValue::BelowThreshold => 0,
+                        MomentValue::RangeFolded => 1,
+                        MomentValue::Value(v) => normalize(v),
+                    };
+                }
             }
+        };
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            use rayon::prelude::*;
+            data.par_chunks_mut(gate_count)
+                .enumerate()
+                .for_each(|(bin, row)| fill_row(bin, row));
+        }
+        #[cfg(target_arch = "wasm32")]
+        for (bin, row) in data.chunks_mut(gate_count).enumerate() {
+            fill_row(bin, row);
         }
     }
 

@@ -157,7 +157,7 @@ pub async fn fetch(http: &reqwest::Client, lat: f64, lon: f64) -> anyhow::Result
 wind_speed_10m_max,wind_direction_10m_dominant&forecast_days=7"
     );
     let body = http
-        .get(&url)
+        .get(crate::net::fetch_url(&url))
         .send()
         .await?
         .error_for_status()?

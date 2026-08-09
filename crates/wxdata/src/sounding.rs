@@ -260,7 +260,7 @@ async fn fetch_run(
         run.hour()
     );
     let idx = http
-        .get(format!("{base}.idx"))
+        .get(crate::net::fetch_url(&format!("{base}.idx")))
         .header("User-Agent", USER_AGENT)
         .send()
         .await?
@@ -330,7 +330,7 @@ async fn sample_message(
         None => format!("bytes={start}-"),
     };
     let bytes = http
-        .get(base)
+        .get(crate::net::fetch_url(base))
         .header("User-Agent", USER_AGENT)
         .header("Range", range)
         .send()

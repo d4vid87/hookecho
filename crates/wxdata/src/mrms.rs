@@ -160,8 +160,10 @@ impl MrmsField {
         let nx = self.nx.div_ceil(factor);
         let ny = self.ny.div_ceil(factor);
         let mut values = vec![f32::NAN; nx * ny];
-        for oy in 0..ny {
-            for ox in 0..nx {
+        // One output row per task: rows are disjoint slices of `values`, so the result is
+        // identical to the serial scan.
+        let pool_row = |oy: usize, row: &mut [f32]| {
+            for (ox, out) in row.iter_mut().enumerate() {
                 let mut best = f32::NAN;
                 for dy in 0..factor {
                     let sy = oy * factor + dy;
@@ -179,8 +181,20 @@ impl MrmsField {
                         }
                     }
                 }
-                values[oy * nx + ox] = best;
+                *out = best;
             }
+        };
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            use rayon::prelude::*;
+            values
+                .par_chunks_mut(nx)
+                .enumerate()
+                .for_each(|(oy, row)| pool_row(oy, row));
+        }
+        #[cfg(target_arch = "wasm32")]
+        for (oy, row) in values.chunks_mut(nx).enumerate() {
+            pool_row(oy, row);
         }
         MrmsField {
             values,
@@ -280,11 +294,16 @@ pub(crate) fn decode_grib2(raw: &[u8]) -> anyhow::Result<MrmsField> {
     let (lat1, lon1) = dm.metadata.projector.latlng_end();
 
     // MRMS encodes missing as -999 and no-coverage as -99; treat anything very negative as NaN.
-    let values: Vec<f32> = dm
-        .data
-        .iter()
-        .map(|&v| if v < -90.0 { f32::NAN } else { v as f32 })
-        .collect();
+    let mask = |&v: &f64| if v < -90.0 { f32::NAN } else { v as f32 };
+    // 7000x3500 elements on the CONUS mosaics — worth the split. `map` is order-preserving in
+    // rayon, so the output is identical to the serial version.
+    #[cfg(not(target_arch = "wasm32"))]
+    let values: Vec<f32> = {
+        use rayon::prelude::*;
+        dm.data.par_iter().map(mask).collect()
+    };
+    #[cfg(target_arch = "wasm32")]
+    let values: Vec<f32> = dm.data.iter().map(mask).collect();
     anyhow::ensure!(
         values.len() == nx * ny,
         "grid size {}x{} != {} values",

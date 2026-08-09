@@ -128,7 +128,14 @@ const PRODUCTS: [(&str, u16); 6] = [
 /// Newest S3 key under `prefix`, or `None` when the listing is empty or unreachable.
 async fn newest_key(http: &reqwest::Client, prefix: &str) -> Option<String> {
     let url = format!("{BUCKET}/?list-type=2&prefix={prefix}");
-    let xml = http.get(&url).send().await.ok()?.text().await.ok()?;
+    let xml = http
+        .get(crate::net::fetch_url(&url))
+        .send()
+        .await
+        .ok()?
+        .text()
+        .await
+        .ok()?;
     // Keys sort by their embedded timestamp, so the last one listed is the newest.
     let (i, _) = xml.rmatch_indices("<Key>").next()?;
     let rest = &xml[i + 5..];
@@ -235,7 +242,11 @@ pub async fn fetch_volume(
         let (product, gate_len) = (*product, *gate_len);
         jobs.push(async move {
             let key = newest_key(&http, &prefix).await?;
-            let resp = http.get(format!("{BUCKET}/{key}")).send().await.ok()?;
+            let resp = http
+                .get(crate::net::fetch_url(&format!("{BUCKET}/{key}")))
+                .send()
+                .await
+                .ok()?;
             let bytes = resp.bytes().await.ok()?;
             let p = match nexrad_level3::decode(&bytes) {
                 Ok(p) => p,

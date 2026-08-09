@@ -70,7 +70,7 @@ fn layer_id(service_json: &str, name: &str) -> Option<u32> {
 pub async fn fetch(client: &reqwest::Client, day: u8) -> anyhow::Result<Vec<GeoFeature>> {
     let day = day.clamp(1, 3);
     let meta = client
-        .get(format!("{SERVICE}?f=json"))
+        .get(crate::net::fetch_url(&format!("{SERVICE}?f=json")))
         .header("User-Agent", USER_AGENT)
         .send()
         .await?
@@ -80,9 +80,9 @@ pub async fn fetch(client: &reqwest::Client, day: u8) -> anyhow::Result<Vec<GeoF
     let want = format!("Overall_Impact_Day_{day}");
     let id = layer_id(&meta, &want).ok_or_else(|| anyhow::anyhow!("no WSSI layer named {want}"))?;
     let body = client
-        .get(format!(
+        .get(crate::net::fetch_url(&format!(
             "{SERVICE}/{id}/query?where=1%3D1&outFields=impact,valid_time&f=geojson"
-        ))
+        )))
         .header("User-Agent", USER_AGENT)
         .send()
         .await?

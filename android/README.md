@@ -43,11 +43,50 @@ optimised; `build.sh debug` builds an opt-level-0 `.so` with symbols for native 
 hunts, and `build.sh signed` produces a release-signed APK. `FEATURES=profiling
 android/build.sh` enables the puffin server (see `crates/hookecho/src/profiling.rs`).
 
+Gradle comes from the committed wrapper (`android/gradlew`), so the Gradle version is identical
+locally and in CI. `versionCode`/`versionName` are derived from the workspace `Cargo.toml`
+(0.5.0 → `50000`/`0.5.0`) — bump the crate version, not the Gradle file.
+
+## F-Droid
+
+The app qualifies: no proprietary dependencies, no Google Play Services, no telemetry. Store
+listing text and screenshots live in
+[`fastlane/metadata/android/en-US/`](fastlane/metadata/android/en-US/).
+
+The recipe in `fdroiddata` (F-Droid's repo, not this one) needs a `sudo`/`prebuild` pair that
+produces `libhookecho.so` before Gradle runs — verbatim:
+
+```yaml
+    sudo:
+      - curl -sSf https://sh.rustup.rs -o /tmp/rustup.sh
+      - sh /tmp/rustup.sh -y --default-toolchain 1.96.1 --profile minimal
+      - . $HOME/.cargo/env
+      - rustup target add aarch64-linux-android
+      - cargo install cargo-ndk --version 4.1.2 --locked
+    prebuild:
+      - . $HOME/.cargo/env
+      - cargo ndk -t arm64-v8a -o app/src/main/jniLibs --manifest-path ../Cargo.toml build --release --lib -p hookecho
+    ndk: r26d
+    subdir: app
+    gradle:
+      - yes
+```
+
+Notes for the MR: the toolchain is pinned (`1.96.1`, matching CI) and `cargo-ndk` is version-pinned
+for reproducibility (`Cargo.lock` is *not* committed — expect this to be the review round-trip;
+`cargo generate-lockfile` in `prebuild` or committing the lockfile are the two answers); the `.so` lands in `app/src/main/jniLibs/` and
+a Gradle `preBuild` hook deletes anything in that directory that is not `libhookecho.so`.
+
 ## First run
 
-The setup wizard opens (home radar, theme, alerting). Background alerting is **not** a goal on
-Android — the OS starves backgrounded processes; phone alerts come from the existing ntfy.sh push
-(set an ntfy topic in Settings and install the ntfy app).
+The setup wizard opens (home radar, theme, alerting).
+
+Background alerting is opt-in from Settings. When it is on, a foreground service polls
+`api.weather.gov` for your saved markers (60 s while something is warned, 5 min otherwise) and a
+15-minute WorkManager job (`AlertWorker`) runs the same poll as a safety net — it survives process
+death, and `BootReceiver` re-arms it after a reboot. Deep-Doze worst case is therefore ~15 minutes;
+the app does not ask for a battery-optimization exemption or exact alarms. ntfy.sh push (set a
+topic in Settings) still works and is the option that does not cost a permanent notification.
 
 ## Status
 

@@ -191,7 +191,7 @@ async fn fetch_layer(
     for page in 0..MAX_PAGES {
         let offset = (page * PAGE).to_string();
         let body = client
-            .get(format!("{SERVER}/{layer}/query"))
+            .get(crate::net::fetch_url(&format!("{SERVER}/{layer}/query")))
             .query(&[
                 ("where", where_clause.as_str()),
                 ("geometry", envelope.as_str()),

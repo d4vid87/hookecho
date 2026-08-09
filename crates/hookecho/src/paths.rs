@@ -21,10 +21,12 @@ fn root(kind: &str) -> Option<PathBuf> {
     if let Some(base) = BASE.get() {
         return Some(base.join(kind));
     }
-    // In a browser there is no filesystem. Every caller already treats `None` as "no cache and no
-    // saved settings", so the web build runs on defaults and keeps everything in memory.
+    // In a browser there is no filesystem. Every caller already treats `None` as "no cache", so
+    // the web build keeps everything in memory. Settings are the exception: they persist through
+    // `localStorage` instead, entirely inside `settings.rs` (nothing here returns a path for it).
     //
-    // ponytail: no persistence on the web; `localStorage` for settings is the upgrade path.
+    // ponytail: caches stay in memory on the web; IndexedDB/OPFS is the upgrade path if
+    // offline-web ever becomes real.
     #[cfg(target_arch = "wasm32")]
     {
         let _ = kind;

@@ -31,6 +31,10 @@ chrono-tz = "0.10"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 tokio.workspace = true
+# Already in the lockfile via nexrad-data's `parallel` feature — no new weight. Used on the
+# verified hot loops only (MRMS decode/decimate, HRRR regrid, L2 sweep binning). Not on wasm:
+# there are no threads there.
+rayon = "1.12"
 # `jpeg` pulls openjpeg-sys (a vendored C JPEG2000 codec). MRMS and HRRR don't need it — they are
 # PNG / simple / complex packing — but the RAP analysis files are JPEG2000 (section 5 template 40),
 # so the mesoanalysis source doesn't decode without it. Cost measured before adding it back:
@@ -42,3 +46,8 @@ gribberish = { version = "1.5.0", default-features = false, features = ["png", "
 # JPEG2000-packed; MRMS and HRRR are PNG/simple/complex packing and decode unchanged.
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 gribberish = { version = "1.5.0", default-features = false, features = ["png"] }
+# Already in the lockfile under eframe/wgpu — `net.rs` needs only the page origin, to point feed
+# fetches at the same-origin CORS proxy.
+web-sys = { version = "0.3", features = ["Window", "Location"] }
+# The browser's only timer. `task::sleep` needs one, and there is no tokio here.
+gloo-timers = { version = "0.3", features = ["futures"] }

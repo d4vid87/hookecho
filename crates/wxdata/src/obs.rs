@@ -78,7 +78,7 @@ pub async fn fetch_nearest(
     let get = |url: String| {
         let http = http.clone();
         async move {
-            http.get(&url)
+            http.get(crate::net::fetch_url(&url))
                 .header("User-Agent", USER_AGENT)
                 .header("Accept", "application/geo+json")
                 .send()

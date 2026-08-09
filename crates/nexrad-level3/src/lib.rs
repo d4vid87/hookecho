@@ -27,6 +27,7 @@ type Result<T> = std::result::Result<T, Error>;
 
 /// A tracked storm cell (symbology packet 15, "Storm ID").
 #[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
 pub struct StormCell {
     /// Two-character cell id, e.g. "A2".
     pub id: String,
@@ -37,6 +38,7 @@ pub struct StormCell {
 
 /// A hail symbol (symbology packet 19, "HDA").
 #[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
 pub struct Hail {
     pub x_km: f32,
     pub y_km: f32,
@@ -49,6 +51,7 @@ pub struct Hail {
 
 /// A mesocyclone / MDA point feature (symbology packet 20).
 #[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
 pub struct Meso {
     pub x_km: f32,
     pub y_km: f32,
@@ -57,6 +60,7 @@ pub struct Meso {
 
 /// One radial of a Digital Radial Data Array (packet 16): an angular wedge of range-bin levels.
 #[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
 pub struct Radial {
     /// Start azimuth (degrees, meteorological — 0 = north, clockwise).
     pub start_deg: f32,
@@ -69,6 +73,7 @@ pub struct Radial {
 /// A Digital Radial Data Array (packet code 16): a polar grid of `u8` data levels, decoded to
 /// physical units through the product's threshold table (DVL, EET, etc.).
 #[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
 pub struct RadialArray {
     /// Range index of the first bin (bins before this are off the near edge).
     pub first_bin: u16,
@@ -79,6 +84,7 @@ pub struct RadialArray {
 
 /// A decoded Level 3 product.
 #[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
 pub struct Level3Product {
     /// Product code (58 = Storm Tracking, 59 = Hail Index, 141 = Mesocyclone, …).
     pub code: i16,

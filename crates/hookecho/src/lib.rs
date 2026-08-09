@@ -7,8 +7,6 @@
 
 pub mod app;
 pub mod astro;
-/// Alert sounds (native only — the web build has no audio device wired up yet).
-#[cfg(not(target_arch = "wasm32"))]
 pub mod audio;
 pub mod basemap_style;
 /// Live camera video (desktop only — Android cannot spawn an ffmpeg child).
@@ -18,6 +16,8 @@ pub mod cloud;
 pub mod colormap;
 pub mod dialog;
 pub mod digest;
+/// Terrain heights (DEM) and the beam-vs-terrain blockage raster.
+pub mod elevation;
 pub mod events;
 pub mod fronts_draw;
 pub mod geo;

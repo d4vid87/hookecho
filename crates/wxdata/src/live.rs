@@ -9,15 +9,11 @@
 //! All merged state lives on this task; the UI thread only ever receives a finished `Scan`.
 
 use crate::level2::{elevation_angles, Scan};
-// The streaming half of the API is native-only: `stream` is what drives it, and there is no
-// tokio (nor a second thread to run it on) in the web build.
-#[cfg(not(target_arch = "wasm32"))]
 use nexrad_data::aws::realtime::{
     assemble_volume, download_chunk, Chunk, ChunkIdentifier, ChunkIterator, ChunkType,
 };
 use nexrad_model::data::Sweep;
 use std::sync::Arc;
-#[cfg(not(target_arch = "wasm32"))]
 use std::time::Duration;
 
 /// A merged live volume ready to display.
@@ -43,12 +39,9 @@ pub struct Update {
 ///
 /// Returns `Ok(())` only if the iterator ends cleanly (it normally runs until aborted);
 /// any error returns so the caller can fall back to interval polling.
-/// Native only: this loop sleeps on a tokio timer between chunk polls. The web build reads the
-/// newest volume through the archive path instead.
 ///
-// ponytail: no live chunk streaming in the browser; a `setTimeout`-backed sleep would be the
-// upgrade path if the web build ever wants sweep-by-sweep updates.
-#[cfg(not(target_arch = "wasm32"))]
+/// Runs on the web too: the waits go through [`crate::task::sleep`] (a `setTimeout` there) and the
+/// backfill through `futures_util`, so nothing in here reaches for tokio directly.
 pub async fn stream<F>(
     site: String,
     base: Arc<Scan>,
@@ -76,12 +69,13 @@ where
     // serially that was the whole reason a live site took seconds to show anything; six at a time
     // keeps the radio busy without opening a connection per chunk. Gaps are tolerated (a missing
     // chunk just omits its radials), but order matters, so results are re-sorted by sequence.
+    // `join_all` rather than a tokio `JoinSet`: these are pure I/O waits, so one task driving six
+    // of them is the same wall clock, and it is the only shape the single-threaded web build has.
     let mut backfill: Vec<(usize, Chunk<'static>)> = Vec::new();
     for window in (2..latest_seq).collect::<Vec<_>>().chunks(6) {
-        let mut set = tokio::task::JoinSet::new();
-        for &seq in window {
+        let gets = window.iter().map(|&seq| {
             let site = site.clone();
-            set.spawn(async move {
+            async move {
                 let id = ChunkIdentifier::new(
                     site.clone(),
                     volume,
@@ -94,13 +88,14 @@ where
                     .await
                     .ok()
                     .map(|(_, ch)| (seq, ch))
-            });
-        }
-        while let Some(res) = set.join_next().await {
-            if let Ok(Some(hit)) = res {
-                backfill.push(hit);
             }
-        }
+        });
+        backfill.extend(
+            futures_util::future::join_all(gets)
+                .await
+                .into_iter()
+                .flatten(),
+        );
     }
     backfill.sort_by_key(|(seq, _)| *seq);
     chunks.extend(backfill.into_iter().map(|(_, ch)| ch));
@@ -120,7 +115,7 @@ where
             .and_then(|d| d.to_std().ok())
             .unwrap_or(Duration::from_secs(2))
             .clamp(Duration::from_secs(1), Duration::from_secs(15));
-        tokio::time::sleep(wait).await;
+        crate::task::sleep(wait).await;
 
         if !active() {
             // Backgrounded: end the stream rather than idle in it. Idling would keep a timer
@@ -160,7 +155,6 @@ where
 
 /// Assemble `chunks`, merge into `merged`, and emit if anything changed. Assembly failure
 /// (e.g. a still-incomplete volume) is skipped; the next sweep boundary self-heals.
-#[cfg(not(target_arch = "wasm32"))]
 fn emit<F: FnMut(Update)>(
     it: &ChunkIterator,
     chunks: &[Chunk<'static>],

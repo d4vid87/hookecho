@@ -34,6 +34,10 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <!-- Keeps the CPU up for the duration of one poll pass (not the sleep between them). -->
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <!-- Re-arms the WorkManager poll after a reboot; see BootReceiver. -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
     <!-- The wgpu backend is Vulkan; require Vulkan 1.1 (0x00400003). -->
     <uses-feature
@@ -82,6 +86,15 @@
             <meta-data
                 android:name="android.appwidget.provider"
                 android:resource="@xml/widget_alerts_info" />
+        </receiver>
+
+        <!-- Boot: enqueue the worker only. Android 15 refuses a dataSync FGS from here. -->
+        <receiver
+            android:name=".BootReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+            </intent-filter>
         </receiver>
 
         <service

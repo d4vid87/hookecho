@@ -199,7 +199,7 @@ pub async fn fetch(
     end: DateTime<Utc>,
 ) -> anyhow::Result<Verification> {
     let body = client
-        .get(API)
+        .get(crate::net::fetch_url(API))
         .query(&[
             ("wfo", wfo),
             ("phenomena", "TO"),

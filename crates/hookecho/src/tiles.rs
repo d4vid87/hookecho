@@ -622,11 +622,10 @@ pub struct TileManager {
 impl TileManager {
     pub fn new(spawner: crate::rt::Spawner) -> Self {
         let (tx, rx) = std::sync::mpsc::channel();
-        let client = crate::platform::http_timeouts(
-            reqwest::Client::builder().user_agent(USER_AGENT),
-        )
-        .build()
-            .expect("build reqwest client");
+        let client =
+            crate::platform::http_timeouts(reqwest::Client::builder().user_agent(USER_AGENT))
+                .build()
+                .expect("build reqwest client");
         let cache_root = crate::paths::cache_dir().map(|d| d.join("tiles"));
         if let Some(root) = cache_root.clone() {
             std::thread::spawn(move || sweep_tile_cache(&root));
@@ -816,6 +815,32 @@ impl TileManager {
             .filter_map(|(z, x, y)| {
                 let url = style.url(z, x, y, &self.mapbox_key, &self.maptiler_key)?;
                 Some((url, dir.join(format!("{z}/{x}/{y}"))))
+            })
+            .collect()
+    }
+
+    /// Elevation-tile jobs for the same bbox, so a chase pack carries the DEM the beam-blockage
+    /// overlay needs when the radio is off. One fixed zoom ([`crate::elevation::DEM_ZOOM`]), so
+    /// this adds tens of tiles, not thousands — and it is independent of the basemap style, which
+    /// is why it is its own call rather than a branch inside [`Self::pack_jobs`].
+    pub fn dem_pack_jobs(
+        &self,
+        min_lon: f64,
+        min_lat: f64,
+        max_lon: f64,
+        max_lat: f64,
+    ) -> Vec<PackJob> {
+        use crate::elevation::DEM_ZOOM;
+        let Some(root) = self.cache_root.as_ref() else {
+            return Vec::new();
+        };
+        pack_tile_ids(min_lon, min_lat, max_lon, max_lat, DEM_ZOOM, DEM_ZOOM)
+            .into_iter()
+            .map(|(_, x, y)| {
+                (
+                    crate::elevation::tile_url(x, y),
+                    crate::elevation::tile_path(root, x, y),
+                )
             })
             .collect()
     }

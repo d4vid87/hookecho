@@ -93,7 +93,7 @@ pub async fn fetch(http: &reqwest::Client, lat: f64, lon: f64) -> anyhow::Result
     let get = |url: String| {
         let http = http.clone();
         async move {
-            http.get(&url)
+            http.get(crate::net::fetch_url(&url))
                 .header("User-Agent", USER_AGENT)
                 .header("Accept", "application/geo+json")
                 .send()

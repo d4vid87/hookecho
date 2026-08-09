@@ -1,0 +1,263 @@
+{
+ "names": [
+  "dataset1",
+  "dataset2",
+  "dataset3",
+  "dataset4",
+  "dataset5",
+  "how",
+  "what",
+  "where"
+ ],
+ "attrs": {
+  "": {
+   "Conventions": "ODIM_H5/V2_1"
+  },
+  "dataset1/how": {
+   "CSR": 15.0,
+   "Dclutter": "Doppler 7 (null), Log. speckle rem.: 1, Dop. speckle rem:1",
+   "LOG": 2.0,
+   "NI": 7.98,
+   "SQI": 0.5,
+   "Vsamples": 66.0,
+   "highprf": 600.0,
+   "lowprf": 0.0,
+   "polarization": "H",
+   "pulsewidth": 0.83,
+   "rpm": 3.0,
+   "task": "rmi_scan1.sca",
+   "timesampling": 33.0
+  },
+  "dataset1/what": {
+   "enddate": "20130429",
+   "endtime": "043020",
+   "product": "SCAN",
+   "startdate": "20130429",
+   "starttime": "043000"
+  },
+  "dataset1/where": {
+   "a1gate": 0.0,
+   "elangle": 0.3,
+   "nbins": 960.0,
+   "nrays": 360.0,
+   "range": 240.0,
+   "rscale": 250.0,
+   "rstart": 0.0
+  },
+  "dataset2/how": {
+   "CSR": 15.0,
+   "Dclutter": "Doppler 7 (null), Log. speckle rem.: 1, Dop. speckle rem:1",
+   "LOG": 2.0,
+   "NI": 7.98,
+   "SQI": 0.5,
+   "Vsamples": 66.0,
+   "highprf": 600.0,
+   "lowprf": 0.0,
+   "polarization": "H",
+   "pulsewidth": 0.83,
+   "rpm": 3.0,
+   "task": "rmi_scan1.sca",
+   "timesampling": 33.0
+  },
+  "dataset2/what": {
+   "enddate": "20130429",
+   "endtime": "043040",
+   "product": "SCAN",
+   "startdate": "20130429",
+   "starttime": "043020"
+  },
+  "dataset2/where": {
+   "a1gate": 0.0,
+   "elangle": 0.9,
+   "nbins": 960.0,
+   "nrays": 360.0,
+   "range": 240.0,
+   "rscale": 250.0,
+   "rstart": 0.0
+  },
+  "dataset3/how": {
+   "CSR": 15.0,
+   "Dclutter": "Doppler 7 (null), Log. speckle rem.: 1, Dop. speckle rem:1",
+   "LOG": 2.0,
+   "NI": 7.98,
+   "SQI": 0.5,
+   "Vsamples": 66.0,
+   "highprf": 600.0,
+   "lowprf": 0.0,
+   "polarization": "H",
+   "pulsewidth": 0.83,
+   "rpm": 3.0,
+   "task": "rmi_scan1.sca",
+   "timesampling": 33.0
+  },
+  "dataset3/what": {
+   "enddate": "20130429",
+   "endtime": "043100",
+   "product": "SCAN",
+   "startdate": "20130429",
+   "starttime": "043040"
+  },
+  "dataset3/where": {
+   "a1gate": 0.0,
+   "elangle": 1.8,
+   "nbins": 960.0,
+   "nrays": 360.0,
+   "range": 240.0,
+   "rscale": 250.0,
+   "rstart": 0.0
+  },
+  "dataset4/how": {
+   "CSR": 15.0,
+   "Dclutter": "Doppler 7 (null), Log. speckle rem.: 1, Dop. speckle rem:1",
+   "LOG": 2.0,
+   "NI": 7.98,
+   "SQI": 0.5,
+   "Vsamples": 66.0,
+   "highprf": 600.0,
+   "lowprf": 0.0,
+   "polarization": "H",
+   "pulsewidth": 0.83,
+   "rpm": 3.0,
+   "task": "rmi_scan1.sca",
+   "timesampling": 33.0
+  },
+  "dataset4/what": {
+   "enddate": "20130429",
+   "endtime": "043120",
+   "product": "SCAN",
+   "startdate": "20130429",
+   "starttime": "043100"
+  },
+  "dataset4/where": {
+   "a1gate": 0.0,
+   "elangle": 3.3,
+   "nbins": 960.0,
+   "nrays": 360.0,
+   "range": 240.0,
+   "rscale": 250.0,
+   "rstart": 0.0
+  },
+  "dataset5/how": {
+   "CSR": 15.0,
+   "Dclutter": "Doppler 7 (null), Log. speckle rem.: 1, Dop. speckle rem:1",
+   "LOG": 2.0,
+   "NI": 7.98,
+   "SQI": 0.5,
+   "Vsamples": 66.0,
+   "highprf": 600.0,
+   "lowprf": 0.0,
+   "polarization": "H",
+   "pulsewidth": 0.83,
+   "rpm": 3.0,
+   "task": "rmi_scan1.sca",
+   "timesampling": 33.0
+  },
+  "dataset5/what": {
+   "enddate": "20130429",
+   "endtime": "043140",
+   "product": "SCAN",
+   "startdate": "20130429",
+   "starttime": "043120"
+  },
+  "dataset5/where": {
+   "a1gate": 0.0,
+   "elangle": 6.0,
+   "nbins": 960.0,
+   "nrays": 360.0,
+   "range": 240.0,
+   "rscale": 250.0,
+   "rstart": 0.0
+  },
+  "how": {
+   "beamwidth": 1.0,
+   "endepochs": 1367209984.0,
+   "simulated": 0.0,
+   "software": "RAINBOW",
+   "startepochs": 1367209856.0,
+   "sw_version": "3.2",
+   "system": "GEMA500",
+   "task": "scan1",
+   "wavelength": 0.05
+  },
+  "what": {
+   "date": "20130429",
+   "object": "PVOL",
+   "source": "WMO:06477,RAD:BX41,PLC:Wideumont,NOD:bewid,ORG:,CTY:605,CMT:rmi_scan1.sca",
+   "time": "043000",
+   "version": "H5rad 2.1"
+  },
+  "where": {
+   "height": 592.0,
+   "lat": 49.914299,
+   "lon": 5.5056
+  },
+  "dataset1/data1/what": {
+   "gain": 0.5,
+   "nodata": 255.0,
+   "offset": -32.0,
+   "quantity": "DBZH",
+   "undetect": 0.0
+  }
+ },
+ "datasets": {
+  "dataset1/data1/data": {
+   "len": 345600,
+   "first": [
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0
+   ],
+   "last": [
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0
+   ],
+   "n_finite": 345600,
+   "min": 0.0,
+   "max": 203.0,
+   "sum": 2712538.0
+  },
+  "dataset5/data1/data": {
+   "len": 345600,
+   "first": [
+    0.0,
+    54.0,
+    75.0,
+    55.0,
+    40.0
+   ],
+   "last": [
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0
+   ],
+   "n_finite": 345600,
+   "min": 0.0,
+   "max": 157.0,
+   "sum": 420161.0
+  }
+ },
+ "children": {
+  "dataset1": [
+   "data1",
+   "how",
+   "what",
+   "where"
+  ],
+  "dataset1/data1": [
+   "data",
+   "quality1",
+   "quality2",
+   "quality3",
+   "quality4",
+   "quality5",
+   "what"
+  ]
+ }
+}

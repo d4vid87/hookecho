@@ -856,7 +856,7 @@ pub async fn fetch(
         Some(t) => t,
         None => {
             let body = client
-                .get(URL)
+                .get(crate::net::fetch_url(URL))
                 .query(&[
                     ("datetime", launch.format("%Y-%m-%d %H:00:00").to_string()),
                     ("id", station.id.to_string()),

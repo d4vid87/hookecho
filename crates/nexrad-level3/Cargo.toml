@@ -6,10 +6,16 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[features]
+# Off by default: only the FFI bridge (crates/hookecho-ffi) needs the decoded product to be
+# serializable, and the in-tree Rust consumers read the structs directly.
+serde = ["dep:serde"]
+
 [dependencies]
 thiserror.workspace = true
 flate2.workspace = true
 bzip2 = "0.6"
+serde = { workspace = true, optional = true }
 
 [dev-dependencies]
 serde = { workspace = true }

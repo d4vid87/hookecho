@@ -1,0 +1,15 @@
+[package]
+name = "hookecho-ffi"
+description = "C ABI bridge to the Hook Echo decoders — decode in, JSON out"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+# `cdylib` for dlopen/ctypes consumers, `staticlib` for linking into a C or C++ binary.
+crate-type = ["cdylib", "staticlib"]
+
+[dependencies]
+nexrad-level3 = { path = "../nexrad-level3", features = ["serde"] }
+serde_json.workspace = true

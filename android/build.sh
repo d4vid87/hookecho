@@ -29,16 +29,8 @@ cargo ndk "${NDK_FLAGS[@]}"
 
 echo "== gradle: assembling APK =="
 cd android
+# The wrapper is committed, so the Gradle version is pinned and identical here and in CI.
 GRADLE="${GRADLE:-./gradlew}"
-if ! command -v "$GRADLE" >/dev/null 2>&1; then
-    GRADLE="gradle"  # a system Gradle...
-    # ...or the one a previous wrapper run already downloaded, which is the usual case on a dev
-    # box that has built this once but has no gradle on PATH.
-    if ! command -v "$GRADLE" >/dev/null 2>&1; then
-        GRADLE=$(ls -1 "$HOME"/.gradle/wrapper/dists/gradle-*-bin/*/gradle-*/bin/gradle 2>/dev/null | tail -1)
-        [ -n "$GRADLE" ] || { echo "no gradle found (install one, or add the wrapper)" >&2; exit 1; }
-    fi
-fi
 if [ "$BUILD_TYPE" = "signed" ]; then
     "$GRADLE" assembleRelease
     APK="app/build/outputs/apk/release/app-release.apk"
