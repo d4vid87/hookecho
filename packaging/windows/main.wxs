@@ -23,6 +23,17 @@
           <Component Id="MainExe" Guid="6f9ffb55-9e00-435b-a116-9f88413aa820" Win64="yes">
             <File Id="HookechoExe" Source="$(var.ExePath)" KeyPath="yes" />
           </Component>
+          <!-- Shared hookecho:// links open the app, the way they already do on Android. -->
+          <Component Id="UrlScheme" Guid="3a1d6c47-58f1-4c6a-9c0e-7d2e5b8a41d3" Win64="yes">
+            <RegistryKey Root="HKLM" Key="Software\Classes\hookecho">
+              <RegistryValue Type="string" Value="URL:Hook Echo-WX" KeyPath="yes" />
+              <RegistryValue Name="URL Protocol" Type="string" Value="" />
+            </RegistryKey>
+            <RegistryValue Root="HKLM" Key="Software\Classes\hookecho\DefaultIcon"
+                           Type="string" Value="[INSTALLFOLDER]hookecho.exe,0" />
+            <RegistryValue Root="HKLM" Key="Software\Classes\hookecho\shell\open\command"
+                           Type="string" Value="&quot;[INSTALLFOLDER]hookecho.exe&quot; &quot;%1&quot;" />
+          </Component>
         </Directory>
       </Directory>
       <Directory Id="ProgramMenuFolder">
@@ -40,6 +51,7 @@
 
     <Feature Id="Main" Level="1">
       <ComponentRef Id="MainExe" />
+      <ComponentRef Id="UrlScheme" />
       <ComponentRef Id="StartMenuShortcut" />
     </Feature>
   </Product>

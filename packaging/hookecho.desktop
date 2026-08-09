@@ -2,9 +2,10 @@
 Type=Application
 Name=Hook Echo-WX
 Comment=Advanced NEXRAD weather radar viewer
-Exec=hookecho
+Exec=hookecho %u
 Icon=hookecho
 Terminal=false
 Categories=Science;Geoscience;Education;
 Keywords=weather;radar;nexrad;storm;forecast;
+MimeType=x-scheme-handler/hookecho;
 StartupWMClass=hookecho

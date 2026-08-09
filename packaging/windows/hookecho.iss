@@ -25,6 +25,13 @@ Source: "{#ExeDir}\hookecho.exe"; DestDir: "{app}"; Flags: ignoreversion
 Name: "{group}\Hook Echo-WX"; Filename: "{app}\hookecho.exe"
 Name: "{autodesktop}\Hook Echo-WX"; Filename: "{app}\hookecho.exe"; Tasks: desktopicon
 
+[Registry]
+; Shared hookecho:// links open the app, the way they already do on Android.
+Root: HKLM; Subkey: "Software\Classes\hookecho"; ValueType: string; ValueName: ""; ValueData: "URL:Hook Echo-WX"; Flags: uninsdeletekey
+Root: HKLM; Subkey: "Software\Classes\hookecho"; ValueType: string; ValueName: "URL Protocol"; ValueData: ""
+Root: HKLM; Subkey: "Software\Classes\hookecho\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: "{app}\hookecho.exe,0"
+Root: HKLM; Subkey: "Software\Classes\hookecho\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\hookecho.exe"" ""%1"""
+
 [Tasks]
 Name: "desktopicon"; Description: "Create a &desktop shortcut"; Flags: unchecked
 

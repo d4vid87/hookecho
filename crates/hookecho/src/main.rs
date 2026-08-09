@@ -818,6 +818,18 @@ fn main() -> eframe::Result<()> {
         return Ok(());
     }
 
+    // A `hookecho://goto/…` link handed over by the desktop (the .desktop MimeType on Linux, the
+    // URL Protocol registry key on Windows) arrives as an argument. The app already knows how to
+    // read one out of the environment — Android's notification tap uses the same path — so this
+    // is a handover, not a second parser.
+    //
+    // ponytail: a link opens a second instance. A single-instance socket is the fix if that
+    // becomes annoying rather than theoretical.
+    if let Some(link) = args.iter().find(|a| a.starts_with("hookecho://")) {
+        log::info!("opening link {link}");
+        std::env::set_var("HOOKECHO_GOTO", link);
+    }
+
     hookecho::run_desktop()
 }
 
