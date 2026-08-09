@@ -8,8 +8,13 @@ use futures_util::StreamExt;
 
 const BUCKET: &str = "https://noaa-hrrr-bdp-pds.s3.amazonaws.com";
 
-/// Mandatory pressure levels (hPa), surface-up. Kept small so a click is ~40 range fetches.
-const LEVELS_HPA: &[u32] = &[1000, 925, 850, 700, 600, 500, 400, 300, 250, 200];
+/// Mandatory pressure levels (hPa), surface-up. Kept small so a click is ~48 range fetches. The
+/// top two are above the tropopause on purpose: an uncapped plains parcel is still buoyant at
+/// 200 hPa, and without an equilibrium level the effective-layer shear and STP have nothing to
+/// measure against and come back absent.
+const LEVELS_HPA: &[u32] = &[
+    1000, 925, 850, 700, 600, 500, 400, 300, 250, 200, 150, 100,
+];
 
 /// One level of the sounding.
 #[derive(Debug, Clone, Copy)]
@@ -614,6 +619,8 @@ mod tests {
                 mk(300.0, -32.0, -45.0, 27.0, 17.0),
                 mk(250.0, -42.0, -55.0, 28.0, 16.0),
                 mk(200.0, -52.0, -60.0, 29.0, 15.0),
+                mk(150.0, -58.0, -66.0, 30.0, 14.0),
+                mk(100.0, -55.0, -68.0, 31.0, 13.0),
             ],
         }
     }
@@ -673,9 +680,11 @@ mod tests {
             "veering profile → positive effective SRH: {:.0}",
             eff.esrh
         );
-        // This parcel is still buoyant at 200 hPa, the top of the mandatory-level set, so the
-        // EL-dependent fields are honestly absent rather than extrapolated.
-        assert!(eff.ebwd_kt.is_none() && eff.stp_eff.is_none());
+        // The profile now reaches the stratosphere, so the parcel has an equilibrium level and
+        // the EL-dependent fields are solvable rather than honestly absent.
+        let ebwd = eff.ebwd_kt.expect("effective bulk shear");
+        assert!((10.0..90.0).contains(&ebwd), "EBWD: {ebwd:.0} kt");
+        assert!(eff.stp_eff.expect("effective STP") > 0.0);
     }
 
     #[test]
@@ -685,8 +694,7 @@ mod tests {
         let (top, bottom) = csv.split_once("\n\n").expect("two blocks");
         assert!(top.starts_with("index,value\n"));
         assert!(top.lines().any(|l| l.starts_with("stp,")));
-        // Absent effective fields are an empty cell, not a zero.
-        assert!(top.lines().any(|l| l == "ebwd_kt,"));
+        assert!(top.lines().any(|l| l.starts_with("ebwd_kt,") && l != "ebwd_kt,"));
         let mut rows = bottom.lines();
         assert_eq!(rows.next().unwrap(), "pressure_hpa,height_m,temp_c,dewpt_c,u_ms,v_ms");
         assert_eq!(rows.next().unwrap(), "1000,0,30.0,22.0,0.0,8.0");
