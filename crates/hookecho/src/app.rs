@@ -1471,9 +1471,13 @@ pub struct HookEchoApp {
     settings_window: ui::settings_window::SettingsWindow,
     /// Active color tables (one per moment); reloaded when the palette settings change.
     palettes: Palettes,
-    /// Live chunk stream for the active view: (view index, site, task handle).
-    #[cfg(not(target_arch = "wasm32"))]
-    live_stream: Option<(usize, String, tokio::task::JoinHandle<()>)>,
+    /// Live chunk stream for the active view: (view index, site, the generation it was spawned
+    /// at). Cancellation is a counter bump rather than a task abort, because the browser has no
+    /// abort — `spawn_local` hands back nothing to hold. The stream reads the counter before
+    /// every chunk fetch and ends itself when it no longer recognizes its own generation.
+    live_stream: Option<(usize, String, u64)>,
+    /// Bumped to cancel whatever stream is running. Shared with the spawned task.
+    live_gen: Arc<std::sync::atomic::AtomicU64>,
     last_stream_attempt: Option<Instant>,
     /// Decoded-volume LRU keyed by AWS object name, so scrubbing back and forth on the
     /// timeline doesn't re-download. ~10 volumes; each ~a few MB.
@@ -2188,8 +2192,8 @@ impl HookEchoApp {
             },
             settings_window: Default::default(),
             palettes: Palettes::default(),
-            #[cfg(not(target_arch = "wasm32"))]
             live_stream: None,
+            live_gen: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             last_stream_attempt: None,
             // DVR: retain a deep buffer of decoded volumes so instant replay serves recent frames
             // from RAM without re-downloading (~30 volumes ≈ 2.5 h at a 5-min cadence).
@@ -8341,7 +8345,6 @@ impl HookEchoApp {
             let idx = msg.view();
             // LiveEnded must be handled even after a site change (to drop the stream handle).
             if matches!(msg, DataMsg::LiveEnded { .. }) {
-                #[cfg(not(target_arch = "wasm32"))]
                 if let DataMsg::LiveEnded { view, .. } = msg {
                     if self
                         .live_stream
@@ -8460,11 +8463,8 @@ impl HookEchoApp {
 
     /// Start/stop the live chunk stream for the active view. One stream at a time (the active
     /// view); a healthy stream starves interval polling, a dead one lets polling take over.
-    /// The web build has no chunk streamer (see `wxdata::live`); it polls for whole volumes.
-    #[cfg(target_arch = "wasm32")]
-    fn manage_stream(&mut self, _ctx: &egui::Context) {}
-
-    #[cfg(not(target_arch = "wasm32"))]
+    /// Runs on the web too: the chunk objects are on a bucket that allows cross-origin reads, and
+    /// the streamer's waits and backfill were already written without tokio.
     fn manage_stream(&mut self, ctx: &egui::Context) {
         let idx = self.active;
         let (want, site, base) = {
@@ -8489,9 +8489,13 @@ impl HookEchoApp {
         };
 
         // Abort an existing stream if it no longer matches the active view/site or isn't wanted.
-        if let Some((sv, ss, handle)) = &self.live_stream {
+        if let Some((sv, ss, _)) = &self.live_stream {
             if !want || *sv != idx || Some(ss.as_str()) != site.as_deref() {
-                handle.abort();
+                // ponytail: the cancelled stream notices at its next wake, so on a fast site
+                // switch two streams overlap for up to the 15 s wait clamp. Both merge into
+                // their own volumes and only the live one is displayed, so the cost is one
+                // wasted chunk fetch. An abort channel if that ever shows up on a phone bill.
+                self.live_gen.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 self.live_stream = None;
             }
         }
@@ -8504,29 +8508,36 @@ impl HookEchoApp {
                 self.last_stream_attempt = Some(Instant::now());
                 let site = site.unwrap();
                 let base = base.unwrap();
-                let handle = self.spawn_stream(idx, site.clone(), base, ctx.clone());
-                self.live_stream = Some((idx, site, handle));
+                let gen = self.live_gen.load(std::sync::atomic::Ordering::Relaxed);
+                self.spawn_stream(idx, site.clone(), base, ctx.clone(), gen);
+                self.live_stream = Some((idx, site, gen));
             }
         }
     }
 
     /// Spawn the live chunk streamer for `site`, routing merged volumes back to `view_idx`.
-    #[cfg(not(target_arch = "wasm32"))]
+    ///
+    /// `gen` is the generation this stream belongs to; it ends itself once the app has moved on.
     fn spawn_stream(
         &self,
         view_idx: usize,
         site: String,
         base: Arc<Scan>,
         ctx: egui::Context,
-    ) -> tokio::task::JoinHandle<()> {
+        gen: u64,
+    ) {
         let tx = self.msg_tx.clone();
-        // The one spawn whose handle is kept: the live streamer is aborted on a site change.
-        self._rt.spawn(async move {
+        let live_gen = Arc::clone(&self.live_gen);
+        let active = move || {
+            live_gen.load(std::sync::atomic::Ordering::Relaxed) == gen
+                && crate::platform::activity::is_active()
+        };
+        self.spawner.spawn(async move {
             let end_site = site.clone();
             let cb_tx = tx.clone();
             let cb_ctx = ctx.clone();
             let cb_site = site.clone();
-            let res = live::stream(site, base, crate::platform::activity::is_active, move |u| {
+            let res = live::stream(site, base, active, move |u| {
                 let _ = cb_tx.send(DataMsg::Live {
                     view: view_idx,
                     site: cb_site.clone(),
@@ -8546,7 +8557,7 @@ impl HookEchoApp {
                 site: end_site,
             });
             ctx.request_repaint();
-        })
+        });
     }
 
     fn apply_action(&mut self, action: BindableAction, ctx: &egui::Context) {

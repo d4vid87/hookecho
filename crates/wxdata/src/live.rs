@@ -34,8 +34,10 @@ pub struct Update {
 ///
 /// `active` is polled before each chunk fetch; returning false ends the stream cleanly, so a
 /// backgrounded phone stops pulling chunks over mobile data and stops holding a timer awake (the
-/// app passes its foreground gate and restarts the stream on resume). Keeping it a plain `fn`
-/// pointer keeps this crate free of any windowing or platform dependency.
+/// app passes its foreground gate and restarts the stream on resume), and so a caller with no way
+/// to abort a spawned task can still stop one. A closure rather than a `fn` pointer for that
+/// second reason: the caller needs to capture the generation counter it cancels with. This crate
+/// still knows nothing about windowing or platforms.
 ///
 /// Returns `Ok(())` only if the iterator ends cleanly (it normally runs until aborted);
 /// any error returns so the caller can fall back to interval polling.
@@ -45,7 +47,7 @@ pub struct Update {
 pub async fn stream<F>(
     site: String,
     base: Arc<Scan>,
-    active: fn() -> bool,
+    active: impl Fn() -> bool,
     mut on_update: F,
 ) -> anyhow::Result<()>
 where
