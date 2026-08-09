@@ -169,6 +169,69 @@ pub fn hit_all(features: &[GeoFeature], lon: f64, lat: f64) -> Vec<&GeoFeature> 
     hits
 }
 
+/// Do two `[lon, lat]` rings overlap at all — crossing edges, or one wholly inside the other?
+///
+/// This is what "a warning touches my zone" means: a polygon that merely clips a corner of the
+/// zone counts, and so does a warning big enough to swallow it whole.
+///
+/// ponytail: brute-force O(n·m) segment pairs behind a bbox reject. Warning polygons run to a few
+/// dozen vertices and user zones to a handful, so the pair count is trivial; a sweep line is the
+/// upgrade if either ever grows.
+pub fn rings_intersect(a: &[[f64; 2]], b: &[[f64; 2]]) -> bool {
+    if a.len() < 3 || b.len() < 3 {
+        return false;
+    }
+    let bbox = |r: &[[f64; 2]]| {
+        r.iter().fold(
+            (f64::MAX, f64::MAX, f64::MIN, f64::MIN),
+            |(x0, y0, x1, y1), p| (x0.min(p[0]), y0.min(p[1]), x1.max(p[0]), y1.max(p[1])),
+        )
+    };
+    let (ax0, ay0, ax1, ay1) = bbox(a);
+    let (bx0, by0, bx1, by1) = bbox(b);
+    if ax1 < bx0 || bx1 < ax0 || ay1 < by0 || by1 < ay0 {
+        return false;
+    }
+    // Containment either way (no edge crosses when one ring is wholly inside the other).
+    if point_in_ring(b, a[0][0], a[0][1]) || point_in_ring(a, b[0][0], b[0][1]) {
+        return true;
+    }
+    // Any pair of edges crossing. Rings are treated as closed, so the last→first edge counts.
+    for i in 0..a.len() {
+        let (p1, p2) = (a[i], a[(i + 1) % a.len()]);
+        for j in 0..b.len() {
+            let (q1, q2) = (b[j], b[(j + 1) % b.len()]);
+            if segments_cross(p1, p2, q1, q2) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Sign of the cross product of `(b-a) × (c-a)`: >0 left turn, <0 right turn, 0 collinear.
+fn orient(a: [f64; 2], b: [f64; 2], c: [f64; 2]) -> f64 {
+    (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])
+}
+
+/// Do segments `p1p2` and `q1q2` properly cross or touch?
+fn segments_cross(p1: [f64; 2], p2: [f64; 2], q1: [f64; 2], q2: [f64; 2]) -> bool {
+    let (d1, d2) = (orient(q1, q2, p1), orient(q1, q2, p2));
+    let (d3, d4) = (orient(p1, p2, q1), orient(p1, p2, q2));
+    if ((d1 > 0.0) != (d2 > 0.0)) && ((d3 > 0.0) != (d4 > 0.0)) {
+        return true;
+    }
+    // Collinear touching: an endpoint sitting on the other segment still counts as a touch.
+    let on = |a: [f64; 2], b: [f64; 2], c: [f64; 2]| {
+        orient(a, b, c) == 0.0
+            && c[0] >= a[0].min(b[0])
+            && c[0] <= a[0].max(b[0])
+            && c[1] >= a[1].min(b[1])
+            && c[1] <= a[1].max(b[1])
+    };
+    on(q1, q2, p1) || on(q1, q2, p2) || on(p1, p2, q1) || on(p1, p2, q2)
+}
+
 /// Even-odd point-in-polygon test on a `[lon, lat]` ring.
 fn point_in_ring(ring: &[[f64; 2]], lon: f64, lat: f64) -> bool {
     let mut inside = false;
@@ -311,5 +374,30 @@ mod tests {
         })
         .unwrap();
         assert_eq!(count, 1);
+    }
+
+    /// Unit square, and squares placed relative to it.
+    fn sq(x: f64, y: f64, w: f64) -> Vec<[f64; 2]> {
+        vec![[x, y], [x + w, y], [x + w, y + w], [x, y + w]]
+    }
+
+    #[test]
+    fn rings_intersect_covers_the_four_cases() {
+        let base = sq(0.0, 0.0, 1.0);
+        // Disjoint, and far enough that the bbox alone rejects it.
+        assert!(!rings_intersect(&base, &sq(5.0, 5.0, 1.0)));
+        // Overlapping bboxes but still disjoint (diagonal neighbours sharing only a corner point
+        // count as touching, so step clear of it).
+        assert!(!rings_intersect(&base, &sq(1.1, 1.1, 1.0)));
+        // Wholly contained, either way round.
+        let small = sq(0.25, 0.25, 0.25);
+        assert!(rings_intersect(&base, &small));
+        assert!(rings_intersect(&small, &base));
+        // Edges crossing.
+        assert!(rings_intersect(&base, &sq(0.5, 0.5, 1.0)));
+        // Shared edge: a warning whose boundary runs along the zone's still touches it.
+        assert!(rings_intersect(&base, &sq(1.0, 0.0, 1.0)));
+        // Degenerate rings are never a match.
+        assert!(!rings_intersect(&base, &[[0.5, 0.5], [0.6, 0.6]]));
     }
 }

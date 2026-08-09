@@ -237,6 +237,10 @@ pub struct Settings {
     /// Matrix access token. User secret, as above.
     #[serde(default)]
     pub matrix_token: String,
+    /// User-drawn zones that alert when an NWS warning polygon intersects them. The Android
+    /// background service reads this file too, so the name is load-bearing across the boundary.
+    #[serde(default)]
+    pub alert_polygons: Vec<AlertPolygon>,
     /// External-process plugins that emit placefiles (desktop only). Off by default and empty:
     /// each entry is a command the user chose to run.
     #[serde(default)]
@@ -443,6 +447,17 @@ fn default_opacity() -> f32 {
     1.0
 }
 
+/// A user-drawn watch zone: a closed ring of `[lon, lat]` that raises an alert whenever an NWS
+/// warning polygon touches it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AlertPolygon {
+    pub name: String,
+    /// Outer ring only, `[lon, lat]`.
+    // ponytail: no holes, and editing is delete-and-redraw. A vertex editor is a lot of UI for a
+    // shape that takes four clicks to redraw.
+    pub ring: Vec<[f64; 2]>,
+}
+
 pub fn default_lightning_minutes() -> u16 {
     5
 }
@@ -585,6 +600,7 @@ impl Default for Settings {
             matrix_room: String::new(),
             matrix_token: String::new(),
             background_alerts: false,
+            alert_polygons: Vec::new(),
             plugins: Vec::new(),
             close_to_tray: false,
             bookmarks: Vec::new(),
@@ -856,6 +872,7 @@ mod tests {
             matrix_room: String::new(),
             matrix_token: String::new(),
             background_alerts: false,
+            alert_polygons: Vec::new(),
             plugins: Vec::new(),
             close_to_tray: true,
             bookmarks: vec![Bookmark {

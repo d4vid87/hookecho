@@ -34,6 +34,21 @@ use wxdata::overlay::{self, GeoFeature};
 /// Frames to let a stepped archive volume load before grabbing it for the loop GIF.
 const LOOP_SETTLE_FRAMES: u8 = 12;
 
+/// Even-odd point-in-ring test on a `[lon, lat]` ring — the click test for watch zones.
+fn point_in_ring_ll(ring: &[[f64; 2]], lon: f64, lat: f64) -> bool {
+    wxdata::overlay::rings_intersect(
+        ring,
+        // A tiny square around the click: reuses the one geometry primitive rather than adding a
+        // second point-in-polygon implementation here.
+        &[
+            [lon - 1e-6, lat - 1e-6],
+            [lon + 1e-6, lat - 1e-6],
+            [lon + 1e-6, lat + 1e-6],
+            [lon - 1e-6, lat + 1e-6],
+        ],
+    )
+}
+
 /// The first `http(s)://` URL in a free-text line, if there is one. Spotter reports and chase
 /// partners paste stream links into their status text; this is how we find them.
 fn first_url(text: &str) -> Option<String> {
@@ -717,6 +732,8 @@ pub(crate) enum MapTool {
     Climatology,
     /// Freehand annotation: drag to draw a line on the map (session-only).
     Draw,
+    /// Click out a watch zone vertex by vertex; double-click (or Enter) closes and names it.
+    AlertZone,
 }
 
 /// HRRR model field drawn as contour lines over the radar (surface `f00`). SB-CAPE / 0-3 km SRH
@@ -1455,6 +1472,12 @@ pub struct HookEchoApp {
     // ponytail: index identity — markers have no id, and their names aren't unique ("Marker 3"
     // comes back after a delete). A bounds check closes the popup if the list shrinks under it.
     marker_popup: Option<usize>,
+    /// Vertices clicked so far with the watch-zone tool, `[lon, lat]`. Empty when not drawing.
+    zone_pts: Vec<[f64; 2]>,
+    /// A finished ring waiting for the user to name it.
+    zone_naming: Option<(Vec<[f64; 2]>, String)>,
+    /// Which of `settings.alert_polygons` the tapped-zone popup is editing.
+    zone_popup: Option<usize>,
     /// A spotter dot tapped this frame, opened after the radar pane's borrows end.
     pending_spotter: Option<wxdata::spotters::Spotter>,
     /// The one open live-video window, if any (a marker's or a chase partner's stream).
@@ -2098,6 +2121,9 @@ impl HookEchoApp {
             detail: None,
             cell_popup: None,
             marker_popup: None,
+            zone_pts: Vec::new(),
+            zone_naming: None,
+            zone_popup: None,
             pending_spotter: None,
             video_player: None,
             cells_window: Default::default(),
@@ -3049,6 +3075,25 @@ impl HookEchoApp {
                             .cmp(&a.home)
                             .then(ka.partial_cmp(kb).unwrap_or(std::cmp::Ordering::Equal))
                     });
+                // A drawn watch zone the warning polygon touches. Independent of the markers: a
+                // zone is an area you care about, not a point with a radius around it.
+                let zone = self.settings.alert_polygons.iter().find(|z| {
+                    f.rings
+                        .first()
+                        .is_some_and(|outer| wxdata::overlay::rings_intersect(outer, &z.ring))
+                });
+                if let Some(z) = zone {
+                    self.notify_alert(
+                        &format!("⚠ {} — {}", a.event, z.name),
+                        if a.headline.is_empty() {
+                            &a.area
+                        } else {
+                            &a.headline
+                        },
+                        urgent,
+                    );
+                }
+                let zone_name = zone.map(|z| z.name.clone());
                 let (label, area) = match hit {
                     Some((m, km)) => {
                         // Watched location covered → push to the phone (opt-in ntfy topic).
@@ -3068,6 +3113,12 @@ impl HookEchoApp {
                         };
                         (format!("⚠ {}", a.event), where_)
                     }
+                    // A zone hit banners on its own terms, wherever the radar happens to be
+                    // pointed — that is the whole point of drawing one.
+                    None if zone_name.is_some() => (
+                        format!("⚠ {}", a.event),
+                        format!("touches {}", zone_name.expect("checked Some")),
+                    ),
                     None => {
                         // No watched location: banner only if it's near the selected radar.
                         if site_box.is_none_or(|bx| !feature_in_box(f, bx)) {
@@ -6323,6 +6374,12 @@ impl HookEchoApp {
                 false,
             ),
             (
+                MapTool::AlertZone,
+                "Tool: Watch zone",
+                "Draw an area that alerts when a warning polygon touches it",
+                false,
+            ),
+            (
                 MapTool::Draw,
                 "Tool: Draw",
                 "Scribble on the map — circle the storm you're talking about",
@@ -8776,6 +8833,18 @@ impl HookEchoApp {
             .last_gesture_end
             .is_some_and(|t| t.elapsed().as_millis() < 150);
         let quiet = gesture.is_none() && !gesture_tail;
+        // Watch-zone tool: a double-click (or Enter) closes the ring being clicked out.
+        if self.tool == MapTool::AlertZone
+            && self.zone_pts.len() >= 3
+            && (response.double_clicked() || ui.input(|i| i.key_pressed(egui::Key::Enter)))
+        {
+            let mut ring = std::mem::take(&mut self.zone_pts);
+            // The two clicks of the closing double-click each dropped a vertex on the same spot.
+            ring.dedup_by(|a, b| (a[0] - b[0]).abs() < 1e-9 && (a[1] - b[1]).abs() < 1e-9);
+            let n = self.settings.alert_polygons.len() + 1;
+            self.zone_naming = Some((ring, format!("Zone {n}")));
+            self.tool = MapTool::Interrogate;
+        }
         // The draw tool takes the drag away from the pan, the same deal the measure tool makes
         // with the click: while it's armed, a drag draws. Disarm it (Esc / another tool) to pan.
         if self.tool == MapTool::Draw && quiet {
@@ -8903,6 +8972,17 @@ impl HookEchoApp {
                             .map(|p| (p.name.clone(), p.video_url.trim().to_string()))
                     })
                     .flatten();
+                // A watch zone under the click, when nothing more specific is there.
+                let zone_hit = (marker_hit.is_none()
+                    && peer_hit.is_none()
+                    && self.tool == MapTool::Interrogate)
+                    .then(|| {
+                        self.settings
+                            .alert_polygons
+                            .iter()
+                            .position(|z| point_in_ring_ll(&z.ring, lon, lat))
+                    })
+                    .flatten();
                 // Interrogate + a click on a radar-site ring switches radars (storm features win,
                 // handled inside try_pick_site). Consumes the click so no popup opens underneath.
                 let picked_site = marker_hit.is_none()
@@ -8987,6 +9067,10 @@ impl HookEchoApp {
                         self.cell_popup = None;
                         self.watch_stream(name, url);
                     }
+                    _ if zone_hit.is_some() => {
+                        self.zone_popup = zone_hit;
+                        self.cell_popup = None;
+                    }
                     _ if picked_site => {}
                     _ if cam_site.is_some() => {
                         self.cell_popup = None;
@@ -9036,6 +9120,7 @@ impl HookEchoApp {
                     MapTool::Climatology => self.query_climatology(lon, lat),
                     // Drawing happens on drag, not on click; a bare click leaves no mark.
                     MapTool::Draw => {}
+                    MapTool::AlertZone => self.zone_pts.push([lon, lat]),
                     MapTool::Interrogate => {
                         // Storm reports sit on top: a click near a report dot opens its detail.
                         let report = self
@@ -11013,6 +11098,51 @@ impl HookEchoApp {
             painter.add(egui::Shape::line(pts, egui::Stroke::new(2.5, st.color)));
         }
 
+        // Saved watch zones, plus the one being clicked out right now.
+        {
+            let screen = |ll: [f64; 2]| {
+                let w = crate::render::mercator::lonlat_to_world(ll[0], ll[1]);
+                let (sx, sy) = cam.world_to_screen(w, vp);
+                egui::pos2(prect.left() + sx, prect.top() + sy)
+            };
+            let zone_col = egui::Color32::from_rgb(120, 200, 255);
+            for z in &self.settings.alert_polygons {
+                if z.ring.len() < 3 {
+                    continue;
+                }
+                let pts: Vec<egui::Pos2> = z.ring.iter().map(|&p| screen(p)).collect();
+                painter.add(egui::Shape::convex_polygon(
+                    pts.clone(),
+                    egui::Color32::from_rgba_unmultiplied(120, 200, 255, 26),
+                    egui::Stroke::new(1.5, zone_col),
+                ));
+                if let Some(first) = pts.first() {
+                    painter.text(
+                        *first + egui::vec2(4.0, -4.0),
+                        egui::Align2::LEFT_BOTTOM,
+                        &z.name,
+                        egui::FontId::proportional(11.0),
+                        zone_col,
+                    );
+                }
+            }
+            if !self.zone_pts.is_empty() {
+                let pts: Vec<egui::Pos2> = self.zone_pts.iter().map(|&p| screen(p)).collect();
+                for p in &pts {
+                    painter.circle_filled(*p, 3.0, zone_col);
+                }
+                if pts.len() >= 2 {
+                    // Closing edge dashed in, so the shape being made is obvious before it is.
+                    let mut loop_pts = pts.clone();
+                    loop_pts.push(pts[0]);
+                    painter.add(egui::Shape::line(
+                        loop_pts,
+                        egui::Stroke::new(1.5, zone_col),
+                    ));
+                }
+            }
+        }
+
         // Measure tool.
         if !self.measure.is_empty() {
             let col = egui::Color32::from_rgb(255, 210, 80);
@@ -11787,6 +11917,11 @@ impl HookEchoApp {
             MapTool::Chase => (ph::CROSSHAIR, "Chase", "click your location"),
             MapTool::Climatology => (ph::TORNADO, "Climatology", "click a point"),
             MapTool::Draw => (ph::PENCIL_SIMPLE, "Draw", "drag to scribble"),
+            MapTool::AlertZone => (
+                ph::POLYGON,
+                "Watch zone",
+                "click each corner · double-click to close",
+            ),
             MapTool::Interrogate => ("", "", ""),
         };
         // Nothing armed, nothing to say. The chip used to be a permanent readout of the cursor's
@@ -13450,6 +13585,74 @@ impl eframe::App for HookEchoApp {
                         self.marker_popup = None;
                     }
                 }
+            }
+        }
+        if let Some(i) = self.zone_popup {
+            match self.settings.alert_polygons.get_mut(i) {
+                None => self.zone_popup = None,
+                Some(z) => {
+                    let mut open = true;
+                    let mut remove = false;
+                    egui::Window::new("Watch zone")
+                        .open(&mut open)
+                        .resizable(false)
+                        .vscroll(false)
+                        .default_width(240.0)
+                        .show(ctx, |ui| {
+                            ui.add(
+                                egui::TextEdit::singleline(&mut z.name)
+                                    .hint_text("Name")
+                                    .desired_width(ui.available_width()),
+                            );
+                            ui.weak(format!("{} corners", z.ring.len()));
+                            // ponytail: no vertex editing — redrawing a four-click shape is
+                            // faster than any handle-dragging UI would be to build.
+                            remove = ui.button("✖ Remove").clicked();
+                        });
+                    if remove {
+                        self.settings.alert_polygons.remove(i);
+                        self.zone_popup = None;
+                        self.settings.save();
+                    } else if !open {
+                        self.zone_popup = None;
+                        self.settings.save();
+                    }
+                }
+            }
+        }
+        if self.zone_naming.is_some() {
+            let mut save = false;
+            let mut cancel = false;
+            if let Some((ring, name)) = &mut self.zone_naming {
+                egui::Window::new("Name this watch zone")
+                    .collapsible(false)
+                    .resizable(false)
+                    .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+                    .show(ctx, |ui| {
+                        ui.weak(format!("{} corners", ring.len()));
+                        let edit = ui.add(
+                            egui::TextEdit::singleline(name)
+                                .hint_text("Home area")
+                                .desired_width(220.0),
+                        );
+                        edit.request_focus();
+                        ui.weak("Alerts fire when a warning polygon touches this area.");
+                        ui.horizontal(|ui| {
+                            save = ui.button("Save").clicked()
+                                || ui.input(|i| i.key_pressed(egui::Key::Enter));
+                            cancel = ui.button("Cancel").clicked();
+                        });
+                    });
+            }
+            if save {
+                if let Some((ring, name)) = self.zone_naming.take() {
+                    self.settings
+                        .alert_polygons
+                        .push(crate::settings::AlertPolygon { name, ring });
+                    self.settings.save();
+                }
+            } else if cancel {
+                self.zone_naming = None;
             }
         }
         if let Some(sp) = self.pending_spotter.take() {
