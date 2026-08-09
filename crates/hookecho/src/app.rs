@@ -6560,7 +6560,7 @@ impl HookEchoApp {
             "Save workspace",
             "Reference",
             "Remember this pane layout \u{2014} sites, products, tilts, overlays \u{2014} to restore later",
-            false,
+            true,
             PaletteAction::SaveWorkspace,
             None,
         );
@@ -6569,7 +6569,7 @@ impl HookEchoApp {
                 &format!("Workspace: {}", ws.name),
                 "Reference",
                 "Restore this saved pane layout",
-                false,
+                true,
                 PaletteAction::ApplyWorkspace(i),
                 None,
             );
