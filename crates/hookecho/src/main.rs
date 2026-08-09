@@ -88,11 +88,18 @@ fn main() -> eframe::Result<()> {
         return Ok(());
     }
 
-    // Logo export: `hookecho --headless-icon <out.png>` (PNG inspection, not a desktop capture).
+    // Logo export: `hookecho --headless-icon <out.png> [SIZE]` (PNG inspection, not a desktop
+    // capture). The logo is drawn procedurally, so any size is exact rather than resampled —
+    // which is what the hicolor theme wants, one file per size.
     if let Some(pos) = args.iter().position(|a| a == "--headless-icon") {
         let out = args.get(pos + 1).map(String::as_str).unwrap_or("icon.png");
-        let px = icon::rgba(256);
-        if let Err(e) = image::save_buffer(out, &px, 256, 256, image::ColorType::Rgba8) {
+        let size = args
+            .get(pos + 2)
+            .and_then(|v| v.parse::<u32>().ok())
+            .unwrap_or(256)
+            .clamp(16, 1024);
+        let px = icon::rgba(size as usize);
+        if let Err(e) = image::save_buffer(out, &px, size, size, image::ColorType::Rgba8) {
             eprintln!("icon export failed: {e}");
             std::process::exit(1);
         }

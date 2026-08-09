@@ -32,12 +32,20 @@ cp "$ROOT/packaging/hookecho.desktop" "$APPDIR/hookecho.desktop"
 mkdir -p "$APPDIR/usr/share/applications"
 cp "$ROOT/packaging/hookecho.desktop" "$APPDIR/usr/share/applications/hookecho.desktop"
 
-# Icon: our procedural logo (256x256), rendered by the binary we just built. Both the top-level
-# icon (required by appimagetool) and the hicolor theme path.
-echo "==> rendering icon"
-"$APPDIR/usr/bin/hookecho" --headless-icon "$APPDIR/hookecho.png"
-mkdir -p "$APPDIR/usr/share/icons/hicolor/256x256/apps"
-cp "$APPDIR/hookecho.png" "$APPDIR/usr/share/icons/hicolor/256x256/apps/hookecho.png"
+# Icon: our procedural logo, rendered by the binary we just built. Every hicolor size is drawn at
+# its own resolution rather than resampled from one — the logo is vector arithmetic, so a 48 px
+# icon costs the same as scaling one and looks like it was meant.
+echo "==> rendering icons"
+"$APPDIR/usr/bin/hookecho" --headless-icon "$APPDIR/hookecho.png" 256
+for px in 48 64 128 256 512; do
+  dir="$APPDIR/usr/share/icons/hicolor/${px}x${px}/apps"
+  mkdir -p "$dir"
+  "$APPDIR/usr/bin/hookecho" --headless-icon "$dir/hookecho.png" "$px"
+done
+
+# AppStream metadata, so software centres have something to show.
+mkdir -p "$APPDIR/usr/share/metainfo"
+cp "$ROOT/packaging/zip.batman.hookecho.metainfo.xml" "$APPDIR/usr/share/metainfo/"
 
 # AppRun -> the binary.
 ln -sf usr/bin/hookecho "$APPDIR/AppRun"
