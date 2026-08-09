@@ -293,6 +293,10 @@ pub struct MapCallback {
     pub clear_vector: bool,
     /// Individual vector tiles the manager evicted; freed before this frame's uploads.
     pub drop_vector_tiles: Vec<TileId>,
+    /// A wind field to (re)upload for the GPU particle layer, with its mercator world bbox.
+    pub wind_upload: Option<Box<crate::wind_gpu::WindGrid>>,
+    /// Advance and draw the GPU wind particles this frame.
+    pub wind: Option<crate::wind_gpu::Frame>,
 }
 
 #[repr(C)]
@@ -383,6 +387,9 @@ pub struct RenderResources {
     field_draws: Vec<FieldLayer>,
     // One entry per live pane.
     panes: HashMap<u32, PaneGpu>,
+    /// GPU wind particles, built on first use. `None` when the CPU path is in charge.
+    wind: Option<crate::wind_gpu::WindGpu>,
+    target_format: wgpu::TextureFormat,
 }
 
 impl RenderResources {
@@ -625,6 +632,8 @@ impl RenderResources {
             fields: HashMap::new(),
             field_draws: Vec::new(),
             panes: HashMap::new(),
+            wind: None,
+            target_format,
         }
     }
 
@@ -872,6 +881,31 @@ impl RenderResources {
     /// Upload camera/tiles/radar for `cb` and stage its pane's draw list. Shared caches (tiles,
     /// vector tiles, overlay) update once; per-pane state (camera, radar, tile quads) is keyed
     /// by `cb.pane`. Shared by the egui callback and the headless renderer.
+    /// Advance the GPU wind particles for this pane, building the layer on first use. Separate
+    /// from `upload_frame` because it needs an encoder of its own — the advection is a render
+    /// pass, and egui's `prepare` is the one place a callback may record one.
+    fn step_wind(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        cb: &MapCallback,
+    ) {
+        if cb.wind.is_none() && cb.wind_upload.is_none() {
+            return;
+        }
+        let format = self.target_format;
+        let wind = self
+            .wind
+            .get_or_insert_with(|| crate::wind_gpu::WindGpu::new(device, queue, format));
+        if let Some(up) = &cb.wind_upload {
+            wind.upload_grid(queue, up);
+        }
+        if let Some(frame) = &cb.wind {
+            wind.step(device, queue, encoder, cb.pane, frame);
+        }
+    }
+
     fn upload_frame(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, cb: &MapCallback) {
         // --- Shared caches ---
         if cb.clear_tiles {
@@ -1220,6 +1254,12 @@ impl RenderResources {
         }
         // Field layers over the radar (rotation/hail/shear/lightning signals).
         self.draw_fields(cam, pass, false);
+        // Wind particles under the overlay, not over it: the CPU path paints in egui's own layer,
+        // which is above everything, and a warning polygon disappearing under a particle trail
+        // was the one complaint that layer ever attracted.
+        if let Some(wind) = &self.wind {
+            wind.draw(id, pass);
+        }
         if pane.frame_draw_overlay {
             if let Some(overlay) = &self.overlay {
                 pass.set_pipeline(&self.overlay_pipeline);
@@ -1296,6 +1336,7 @@ impl egui_wgpu::CallbackTrait for MapCallback {
         crate::prof_scope!("render prepare");
         let res: &mut RenderResources = resources.get_mut().unwrap();
         res.upload_frame(device, queue, self);
+        res.step_wind(device, queue, _encoder, self);
         Vec::new()
     }
 

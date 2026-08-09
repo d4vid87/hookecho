@@ -41,13 +41,13 @@ const TRAIL: usize = 12;
 /// Direction is unaffected by the change: web mercator's scale factor is isotropic, so the
 /// `cos(lat)` that converts m/s to world units cancels out of the normalised heading and only
 /// ever set the magnitude — which is now set here instead.
-const PX_PER_SEC_PER_MS: f64 = 16.0;
+pub(crate) const PX_PER_SEC_PER_MS: f64 = 16.0;
 
 /// Longest single step, in pixels, so a hitch or a jet core cannot fling a particle across the
 /// pane. At low zoom this is several grid cells, which makes the trajectory coarse where the
 /// whole country is on screen and nobody is tracing a parcel; at the zooms where the flow is
 /// being read at all, a step is a small fraction of a cell and forward Euler is plenty.
-const MAX_STEP_PX: f64 = 20.0;
+pub(crate) const MAX_STEP_PX: f64 = 20.0;
 
 /// Particles per pixel of pane area, and the range to clamp the result into. Deriving the count
 /// from area rather than fixing it means a four-pane layout costs about what one pane does.

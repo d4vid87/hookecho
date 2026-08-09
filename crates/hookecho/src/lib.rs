@@ -53,6 +53,7 @@ pub mod share;
 pub mod speech;
 /// Live station markers and their telemetry cards.
 pub mod stationlayer;
+pub mod wind_gpu;
 /// Cache sizes and the buttons that clear them; needs a filesystem, so not on the web.
 #[cfg(not(target_arch = "wasm32"))]
 pub mod storage;

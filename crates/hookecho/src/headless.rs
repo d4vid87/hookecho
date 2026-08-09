@@ -266,6 +266,8 @@ pub fn run(
         visible_vector,
         clear_vector: false,
         drop_vector_tiles: Vec::new(),
+        wind_upload: None,
+        wind: None,
     };
     render_to_png(&rt, cb, out_path)
 }
@@ -314,6 +316,8 @@ pub fn run_multipane(site: &str, out_a: &str, out_b: &str) -> anyhow::Result<()>
             visible_vector: Vec::new(),
             clear_vector: false,
             drop_vector_tiles: Vec::new(),
+            wind_upload: None,
+            wind: None,
         }
     };
 
@@ -778,6 +782,8 @@ pub fn run_live(out_path: &str, site: &str, moment: Moment) -> anyhow::Result<()
         visible_vector: Vec::new(),
         clear_vector: false,
         drop_vector_tiles: Vec::new(),
+        wind_upload: None,
+        wind: None,
     };
     render_to_png(&rt, cb, out_path)
 }
@@ -858,6 +864,8 @@ pub fn run_placefile(path: &str, out_path: &str) -> anyhow::Result<()> {
         visible_vector: Vec::new(),
         clear_vector: false,
         drop_vector_tiles: Vec::new(),
+        wind_upload: None,
+        wind: None,
     };
     render_to_png(&rt, cb, out_path)
 }
@@ -914,6 +922,8 @@ pub fn run_overlay(out_path: &str) -> anyhow::Result<()> {
         visible_vector,
         clear_vector: false,
         drop_vector_tiles: Vec::new(),
+        wind_upload: None,
+        wind: None,
     };
     render_to_png(&rt, cb, out_path)
 }
@@ -1008,6 +1018,8 @@ pub fn run_mrms(out_path: &str) -> anyhow::Result<()> {
         visible_vector,
         clear_vector: false,
         drop_vector_tiles: Vec::new(),
+        wind_upload: None,
+        wind: None,
     };
     render_to_png(&rt, cb, out_path)
 }
@@ -1059,6 +1071,8 @@ pub fn run_lightning(out_path: &str) -> anyhow::Result<()> {
         visible_vector,
         clear_vector: false,
         drop_vector_tiles: Vec::new(),
+        wind_upload: None,
+        wind: None,
     };
     render_to_png(&rt, cb, out_path)
 }
@@ -1126,6 +1140,8 @@ pub fn run_field(slug: &str, out_path: &str) -> anyhow::Result<()> {
         visible_vector,
         clear_vector: false,
         drop_vector_tiles: Vec::new(),
+        wind_upload: None,
+        wind: None,
     };
     render_to_png(&rt, cb, out_path)
 }
@@ -1200,6 +1216,8 @@ pub fn run_global(model: &str, slug: &str, out_path: &str) -> anyhow::Result<()>
         visible_vector,
         clear_vector: false,
         drop_vector_tiles: Vec::new(),
+        wind_upload: None,
+        wind: None,
     };
     render_to_png(&rt, cb, out_path)
 }
@@ -1474,6 +1492,8 @@ pub fn run_l3grid(kind: &str, site: &str, out_path: &str) -> anyhow::Result<()> 
         visible_vector,
         clear_vector: false,
         drop_vector_tiles: Vec::new(),
+        wind_upload: None,
+        wind: None,
     };
     render_to_png(&rt, cb, out_path)
 }
@@ -1543,6 +1563,8 @@ pub fn run_env(slug: &str, out_path: &str) -> anyhow::Result<()> {
         visible_vector,
         clear_vector: false,
         drop_vector_tiles: Vec::new(),
+        wind_upload: None,
+        wind: None,
     };
     render_to_png(&rt, cb, out_path)
 }
@@ -1721,6 +1743,8 @@ pub fn run_hrrr_layer(
         visible_vector,
         clear_vector: false,
         drop_vector_tiles: Vec::new(),
+        wind_upload: None,
+        wind: None,
     };
     render_to_png(&rt, cb, out_path)
 }
@@ -1753,6 +1777,8 @@ fn render_field_png(
         visible_vector,
         clear_vector: false,
         drop_vector_tiles: Vec::new(),
+        wind_upload: None,
+        wind: None,
     };
     render_to_png(rt, cb, out_path)
 }
@@ -2474,6 +2500,8 @@ mod golden_tests {
             visible_vector: Vec::new(),
             clear_vector: false,
             drop_vector_tiles: Vec::new(),
+            wind_upload: None,
+            wind: None,
         };
 
         let rt = tokio::runtime::Builder::new_multi_thread()

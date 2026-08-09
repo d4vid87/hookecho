@@ -1914,6 +1914,12 @@ pub struct HookEchoApp {
     wind: Option<crate::wind_draw::WindField>,
     wind_level: wxdata::hrrr::WindLevel,
     wind_particles: std::collections::HashMap<usize, crate::wind_draw::Particles>,
+    /// Whether the particles are advected on the GPU. `HOOKECHO_CPU_WIND=1` forces the CPU mesh,
+    /// which is also what runs if the GPU layer ever fails to build.
+    wind_on_gpu: bool,
+    /// The wind field the GPU copy was uploaded from, so a frame that has not changed is not
+    /// re-warped and re-uploaded.
+    wind_uploaded: Option<(chrono::DateTime<chrono::Utc>, u8, wxdata::hrrr::WindLevel)>,
     /// What the current grids are of, so a level or forecast-hour change refetches at once.
     wind_fetched: Option<(wxdata::hrrr::WindLevel, u8)>,
     wind_last_fetch: Option<Instant>,
@@ -2470,6 +2476,8 @@ impl HookEchoApp {
             wind: None,
             wind_level: wxdata::hrrr::WindLevel::Surface,
             wind_particles: std::collections::HashMap::new(),
+            wind_on_gpu: std::env::var("HOOKECHO_CPU_WIND").is_err(),
+            wind_uploaded: None,
             wind_fetched: None,
             wind_last_fetch: None,
             wind_inflight: None,
@@ -9680,6 +9688,7 @@ impl HookEchoApp {
 
         let cam = self.views[idx].camera;
         let (center, scale) = cam.world_to_clip_uniform(vp);
+        let (wind_upload, wind) = self.wind_gpu_frame(idx, &cam, vp);
         let cb = MapCallback {
             pane: idx as u32,
             camera_center: center,
@@ -9702,6 +9711,8 @@ impl HookEchoApp {
             visible_vector,
             clear_vector,
             drop_vector_tiles,
+            wind_upload,
+            wind,
         };
         ui.painter()
             .add(egui_wgpu::Callback::new_paint_callback(prect, cb));
@@ -9867,26 +9878,11 @@ impl HookEchoApp {
             }
         }
 
-        // Animated wind particles.
-        //
-        // Painter shapes land ABOVE the radar and there is no cheap way under it — `record_pane`
-        // finishes the whole `MapCallback` before this runs, so getting beneath would need a new
-        // GPU draw slot. Thin lines and a low alpha instead, halved again over a reflectivity
-        // product; Windy layers over its own radar exactly this way.
-        if self.show_wind {
-            // Past zoom 12 the 0.04 degree regrid goes visibly piecewise-linear, so fade out
-            // rather than present interpolation artifacts as if they were eddies.
-            let zoom_fade = (13.0 - cam.zoom).clamp(0.0, 1.0) as f32;
-            let v = &self.views[idx];
-            let over_radar = v.show_radar
-                && matches!(v.moment, wxdata::level2::Moment::Reflectivity)
-                && v.volume.is_some();
-            // Scrubbed to a past frame, while these grids are for the current hour: the two layers
-            // now disagree about what time it is. Dim rather than lie confidently — the same
-            // treatment the HRRR field layers already get.
-            let off_live = !v.timeline.following;
-            let alpha =
-                zoom_fade * if over_radar { 0.7 } else { 1.0 } * if off_live { 0.4 } else { 1.0 };
+        // Animated wind particles, when they are being drawn on the CPU. The GPU path draws
+        // inside the map callback instead (see `wind_gpu_frame`), which is also what puts it
+        // under the warning polygons rather than over them.
+        if self.show_wind && !self.wind_on_gpu {
+            let alpha = self.wind_alpha(idx, cam.zoom);
             // Split borrow: the grids and the per-pane particle sets are disjoint fields, and the
             // advection needs both at once.
             let Self {
@@ -11571,6 +11567,78 @@ impl HookEchoApp {
         // Four heights of one storm only reads if all four look at the same place.
         self.link_cameras = true;
         self.pane_shown.clear();
+    }
+
+    /// How visible the wind layer should be in this pane: faded out past the zoom where the
+    /// 0.04-degree regrid goes visibly piecewise-linear, dimmed over reflectivity so the radar
+    /// stays readable, and dimmed again when the pane is scrubbed to a time these grids are not
+    /// valid for.
+    fn wind_alpha(&self, idx: usize, zoom: f64) -> f32 {
+        let zoom_fade = (13.0 - zoom).clamp(0.0, 1.0) as f32;
+        let v = &self.views[idx];
+        let over_radar = v.show_radar
+            && matches!(v.moment, wxdata::level2::Moment::Reflectivity)
+            && v.volume.is_some();
+        let off_live = !v.timeline.following;
+        zoom_fade * if over_radar { 0.7 } else { 1.0 } * if off_live { 0.4 } else { 1.0 }
+    }
+
+    /// What the GPU wind layer needs this frame: the field to upload if it changed, and the
+    /// per-frame camera and timing. `None` when the layer is off, faded out, or on the CPU.
+    fn wind_gpu_frame(
+        &mut self,
+        idx: usize,
+        cam: &Camera,
+        vp: (f32, f32),
+    ) -> (
+        Option<Box<crate::wind_gpu::WindGrid>>,
+        Option<crate::wind_gpu::Frame>,
+    ) {
+        let alpha = self.wind_alpha(idx, cam.zoom);
+        if !self.show_wind || !self.wind_on_gpu || alpha <= 0.01 {
+            return (None, None);
+        }
+        let Some(field) = self.wind.as_ref() else {
+            return (None, None);
+        };
+        // The grid's own bbox in mercator world units — the particles live in it, so it is also
+        // the space their positions are stored in.
+        let (west, north) =
+            crate::render::mercator::lonlat_to_world(field.u.lon_west, field.u.lat_north);
+        let (east, south) =
+            crate::render::mercator::lonlat_to_world(field.u.lon_east, field.u.lat_south);
+        let bbox_min = [west as f32, north as f32];
+        let bbox_max = [east as f32, south as f32];
+
+        // Warp the lon/lat grid onto the mercator-uniform texture the shader samples. Once per
+        // new field, on the frame it arrives — not per frame, and not on the GPU, where it would
+        // cost a dependent texture fetch in the hot path.
+        let key = (field.run, field.fcst_hour, field.level);
+        let upload = (self.wind_uploaded != Some(key)).then(|| {
+            self.wind_uploaded = Some(key);
+            Box::new(crate::wind_gpu::WindGrid {
+                rgba: crate::wind_gpu::warp_field(field, bbox_min, bbox_max),
+                bbox_min,
+                bbox_max,
+            })
+        });
+
+        let (center, scale) = cam.world_to_clip_uniform(vp);
+        (
+            upload,
+            Some(crate::wind_gpu::Frame {
+                bbox_min,
+                bbox_max,
+                center,
+                scale,
+                dt: self.wind_dt,
+                // Pixels per world unit is the camera's own scale factor; the particle step is
+                // calibrated in pixels, so the shader needs its inverse.
+                world_per_px: (1.0 / (256.0 * 2f64.powf(cam.zoom))) as f32,
+                opacity: alpha,
+                viewport: (vp.0 as u32, vp.1 as u32),
+            }),
+        )
     }
 
     /// Snapshot the current arrangement. Auto-named: naming things is a peacetime activity.
