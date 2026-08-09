@@ -246,6 +246,9 @@ layer draws its own scale and units.
   product.
 - NOAA **ProbSevere** per-storm severe/tornado/hail/wind probabilities.
 - Cross-sections in any moment, a CAPPI altitude slicer, and a 3D volume view.
+- **Copy CSV** on the cell table, the cross-section, the verification report and
+  the sounding — indices and profile both — so the numbers can leave the app and
+  be checked somewhere else.
 
 ### Environment and forecast
 
@@ -323,6 +326,25 @@ layer draws its own scale and units.
 - A curated library of historic events, plus your own bookmarks.
 - An in-RAM decode buffer with one-touch instant replay (`R`), and
   screenshot / GIF / MP4 loop export.
+
+### Workspaces
+
+A pane layout is a dozen clicks to rebuild — two sites, their products and
+tilts, the overlays and field layers that go with them — and it is the same
+dozen clicks every time. Save the arrangement from the command palette and
+restore it in one.
+
+Three are there on first run: **Chase** (reflectivity beside storm-relative
+velocity, cameras locked), **National overview** (the MRMS mosaic under the
+warnings), and **Analysis** (one storm at four heights). They adopt whichever
+radar is on screen, and deleting them is final.
+
+### What is on your disk
+
+Everything the app downloads is cached and every cache is trimmed to a cap at
+startup. Settings → Storage shows each one's size against that cap, with a
+button to clear it and a button to open it. Nothing there is irreplaceable —
+clearing a cache costs the next fetch and nothing else.
 
 ### Across your machines
 
@@ -492,10 +514,21 @@ hookecho --serve 9000 --bind 0.0.0.0
 | `/status.json` | conditions and nearby alerts for every saved location |
 | `/alerts.json` | alerts only |
 | `/obs.json` | conditions only |
-| `/snapshot.png?site=KTLX` | a 1000×1000 radar render — `&product=VEL`, `&basemap=none` |
+| `/snapshot.png?site=KTLX` | a radar render — `&product=VEL`, `&basemap=none`, `&size=512` (256–2048), `&zoom=6.5` |
 
 JSON answers are cached for a minute and snapshots for five, so polling it every
 30 seconds costs the upstream services nothing extra.
+
+For a desktop widget rather than a server, `--snapshot` writes the same render
+straight to a file:
+
+```sh
+hookecho --snapshot ~/.cache/radar.png KTLX --size 480 --zoom 7 --every 120
+```
+
+It renders, renames the finished file into place (so a widget polling on its own
+clock never catches a half-written PNG), and repeats. Point conky, `feh
+--reload`, or a wallpaper script at the file.
 
 There's a container for it, if that's easier than a systemd unit:
 
@@ -550,12 +583,14 @@ cargo run --release -- --serve 8080 --web-root web
 
 Then open <http://localhost:8080>. Radar, the vector basemap, alerts and point
 forecasts all work: the Level 2 buckets and `api.weather.gov` allow cross-origin
-requests. Settings persist to `localStorage`, and alert sounds and spoken
-warnings play through the browser's own audio and `speechSynthesis`. This is a
-**core viewer**, though, not parity. There is no filesystem, so caches are
-memory-only; there is no live chunk stream, no camera, plugin or GPS support,
-and any feed whose host refuses cross-origin requests simply doesn't load.
-Anything that needs those is on the desktop and Android builds.
+requests. **Live chunk streaming works too**, so a browser tab updates sweep by
+sweep during a scan rather than waiting out the whole volume. Settings persist to
+`localStorage`, and alert sounds and spoken warnings play through the browser's
+own audio and `speechSynthesis`. This is a **core viewer**, though, not parity.
+There is no filesystem, so caches are memory-only and imports and exports are
+out; there is no camera, plugin or GPS support; and any feed whose host refuses
+cross-origin requests simply doesn't load. Anything that needs those is on the
+desktop and Android builds.
 
 ### Extending it
 
@@ -565,6 +600,47 @@ runs your command on a cadence, hands it the current site, view box, product and
 screen** (so it works during an archive replay too), and draws what comes back. No SDK, no build
 step, no language requirement — the shipped examples are a Python script and twenty lines of
 shell. See [docs/plugins.md](docs/plugins.md).
+
+### Deep links
+
+`hookecho://goto/…` opens the app at a place and, optionally, a time. The
+desktop registers the scheme on install (Linux `.desktop`, Windows registry,
+macOS bundle); on Android a notification tap uses the same path.
+
+```
+hookecho://goto/KTLX                                   # a radar site
+hookecho://goto/KTLX,-97.28,35.33,9                    # site, lon, lat, zoom
+hookecho://goto/,-97.28,35.33,9                        # no site: just the view
+hookecho://goto/KTLX,-97.28,35.33,9,2013-05-20T20:00:00Z   # and an instant
+```
+
+The timestamp is RFC 3339 and puts the timeline where it was, so a link can
+point at a moment in the archive rather than at "now".
+
+## Keyboard
+
+Every action in the command palette is bindable, and the defaults are listed in
+Settings → Hotkeys. `?` opens the cheat sheet over whatever is on screen. The
+ones worth knowing before you look:
+
+| Key | What it does |
+| --- | --- |
+| `←` `→` | step one frame |
+| `R` | instant replay from the in-RAM buffer |
+| `Page Up` / `Page Down` | tilt up / down |
+| `1`–`6` | products: reflectivity, velocity, spectrum width, ZDR, PHI, CC |
+| `Ctrl+K` | command palette |
+| `L` | the drawer |
+| `A` | the alert panel |
+| `Z` | cycle the basemap |
+| `M` | mute |
+| `F3` | change site |
+| `?` | cheat sheet |
+
+The whole interface is reachable from the keyboard, and the widget tree is
+published to screen readers (AT-SPI on Linux, UI Automation on Windows). There
+is a **High contrast** theme in Settings → General for low vision and for
+reading the screen in direct sun.
 
 ## Repository layout
 
