@@ -1,0 +1,23 @@
+name: Digest
+
+# Monday mention-and-metrics roundup into Discord, so replies happen while the threads are still
+# live. ponytail: GitHub pauses crons on a repo with 60 days of no activity — the manual dispatch
+# is the fallback, and a paused cron on a dormant repo is not a problem worth state to solve.
+on:
+  schedule:
+    - cron: "0 14 * * 1"
+  workflow_dispatch:
+
+jobs:
+  digest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Collect and post
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+        run: node scripts/announce/digest.mjs
