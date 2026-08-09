@@ -680,7 +680,9 @@ reading the screen in direct sun.
 Also worth reading: [docs/DATA.md](docs/DATA.md) — every feed the app decodes,
 with its cadence, latency and whether it needs a key; [ROADMAP.md](ROADMAP.md) —
 what's next and what isn't planned; [CONTRIBUTING.md](CONTRIBUTING.md) — how the
-workspace fits together and what a patch has to clear.
+workspace fits together and what a patch has to clear;
+[CHANGELOG.md](CHANGELOG.md) — what changed per release;
+[docs/promotion.md](docs/promotion.md) — how a release is cut and announced.
 
 ## Verification
 
