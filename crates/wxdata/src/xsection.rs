@@ -25,6 +25,30 @@ impl CrossSection {
     pub fn at(&self, col: usize, row: usize) -> Option<f32> {
         self.dbz.get(row * self.cols + col).copied().flatten()
     }
+
+    /// The slice as a CSV grid: a header of distances (km) along the cut, then one row per height,
+    /// top down, the same order the picture is drawn in. Empty cells are gaps in beam coverage,
+    /// not zero reflectivity.
+    pub fn to_csv(&self) -> String {
+        let mut s = String::from("height_km");
+        for c in 0..self.cols {
+            let km = self.length_km * c as f64 / (self.cols - 1).max(1) as f64;
+            s.push_str(&format!(",{km:.2}"));
+        }
+        s.push('\n');
+        for r in 0..self.rows {
+            let h = self.max_height_km * (1.0 - r as f32 / (self.rows - 1).max(1) as f32);
+            s.push_str(&format!("{h:.2}"));
+            for c in 0..self.cols {
+                match self.at(c, r) {
+                    Some(v) => s.push_str(&format!(",{v:.1}")),
+                    None => s.push(','),
+                }
+            }
+            s.push('\n');
+        }
+        s
+    }
 }
 
 /// 4/3-earth beam height (km) at slant range `slant_km` and elevation `elev_deg`.
@@ -154,6 +178,23 @@ pub(crate) fn sample_profile(samples: &[(f64, f32)], hr: f64) -> Option<f32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn csv_grid_matches_the_slice() {
+        let xs = CrossSection {
+            cols: 2,
+            rows: 3,
+            max_height_km: 12.0,
+            length_km: 40.0,
+            dbz: vec![None, Some(5.0), None, None, Some(50.0), None],
+        };
+        let csv = xs.to_csv();
+        let lines: Vec<&str> = csv.lines().collect();
+        assert_eq!(lines[0], "height_km,0.00,40.00");
+        assert_eq!(lines[1], "12.00,,5.0", "row 0 is the top of the panel");
+        assert_eq!(lines[2], "6.00,,");
+        assert_eq!(lines[3], "0.00,50.0,");
+    }
 
     #[test]
     fn beam_rises_with_range_and_elevation() {

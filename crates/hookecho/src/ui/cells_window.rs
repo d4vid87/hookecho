@@ -89,6 +89,37 @@ pub fn sorted_indices(cells: &[Cell], sort: SortCol, desc: bool) -> Vec<usize> {
     idx
 }
 
+/// The table as CSV, in `order` — what's on screen, in the order it's on screen. Unknowns are
+/// empty fields rather than the em dash the table draws, so a spreadsheet reads them as blanks.
+pub fn to_csv(cells: &[Cell], order: &[usize]) -> String {
+    fn c<T: std::fmt::Display>(v: Option<T>) -> String {
+        v.map(|x| x.to_string()).unwrap_or_default()
+    }
+    let mut s = String::from(
+        "id,azimuth_deg,range_nm,movement_deg,movement_kt,max_dbz,top_kft,vil,poh,posh,hail_in,tvs,meso\n",
+    );
+    for &i in order {
+        let x = &cells[i];
+        s.push_str(&format!(
+            "{},{},{},{},{},{},{},{},{},{},{},{},{}\n",
+            x.title,
+            c(x.az_deg),
+            c(x.range_nm),
+            c(x.mvt_deg),
+            c(x.mvt_kt),
+            c(x.max_dbz),
+            c(x.top_kft),
+            c(x.vil),
+            c(x.poh),
+            c(x.posh),
+            c(x.hail_in),
+            u8::from(x.tvs.is_some()),
+            u8::from(x.meso.is_some()),
+        ));
+    }
+    s
+}
+
 fn num<T: std::fmt::Display>(v: Option<T>) -> String {
     v.map(|x| x.to_string()).unwrap_or_else(|| "—".into())
 }
@@ -145,6 +176,13 @@ pub fn show(
                         .color(accent),
                 );
                 ui.weak("· click a row to fly there");
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    // Clipboard, not a file dialog: this works the same on desktop, Android and
+                    // the web, and the next stop is a spreadsheet either way.
+                    if ui.button("Copy CSV").on_hover_text("Every row, current sort").clicked() {
+                        ui.ctx().copy_text(to_csv(cells, &order));
+                    }
+                });
             });
             ui.separator();
 
@@ -317,6 +355,17 @@ mod tests {
         ];
         let order = sorted_indices(&cells, SortCol::Hail, true);
         assert_eq!(order, vec![2, 0, 1], "biggest hail first, unknown last");
+    }
+
+    #[test]
+    fn csv_follows_the_table() {
+        let cells = [cell("A", Some(0.5), Some(60.0)), cell("B", None, None)];
+        let order = sorted_indices(&cells, SortCol::Hail, true);
+        let csv = to_csv(&cells, &order);
+        let lines: Vec<&str> = csv.lines().collect();
+        assert!(lines[0].starts_with("id,azimuth_deg"), "header first");
+        assert!(lines[1].starts_with("A,"), "sorted order, not input order");
+        assert_eq!(lines[2], "B,,,,,,,,,,,0,0", "unknowns are empty fields");
     }
 
     #[test]

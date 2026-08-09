@@ -57,6 +57,15 @@ pub fn show(
                         changed = true;
                     }
                 }
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui
+                        .button("Copy CSV")
+                        .on_hover_text("The sampled grid, top row first")
+                        .clicked()
+                    {
+                        ui.ctx().copy_text(xs.to_csv());
+                    }
+                });
             });
             ui.separator();
             // Draw the panel stretched to a readable size (distance wide, height tall).

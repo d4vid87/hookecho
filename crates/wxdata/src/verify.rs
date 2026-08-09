@@ -77,6 +77,73 @@ pub struct Verification {
     pub reports: Vec<Report>,
 }
 
+impl Verification {
+    /// The whole run as CSV: the skill line, then every warning, then every report. Three
+    /// differently-shaped tables in one file, separated by blank lines — a spreadsheet imports it
+    /// as three blocks, which is how people read it anyway.
+    pub fn to_csv(&self) -> String {
+        fn o<T: std::fmt::Display>(v: Option<T>) -> String {
+            v.map(|x| x.to_string()).unwrap_or_default()
+        }
+        let s = &self.stats;
+        let mut out = format!(
+            "wfo,start,end,pod,far,csi,avg_lead_min,max_lead_min,events_total,events_verified,\
+             reports_total,warned_reports,unwarned_reports,avg_size_km2\n\
+             {},{},{},{:.4},{:.4},{:.4},{:.1},{},{},{},{},{},{},{:.1}\n\n",
+            self.wfo,
+            self.start.to_rfc3339(),
+            self.end.to_rfc3339(),
+            s.pod,
+            s.far,
+            s.csi,
+            s.avg_lead_min,
+            s.max_lead_min,
+            s.events_total,
+            s.events_verified,
+            s.reports_total,
+            s.warned_reports,
+            s.unwarned_reports,
+            s.avg_size_km2,
+        );
+        out.push_str(
+            "wfo,phenomena,eventid,issue,expire,verified,lead_min,area_km2,lon,lat,counties\n",
+        );
+        for w in &self.warnings {
+            out.push_str(&format!(
+                "{},{},{},{},{},{},{},{:.1},{:.4},{:.4},{}\n",
+                w.wfo,
+                w.phenomena,
+                w.eventid,
+                w.issue.to_rfc3339(),
+                w.expire.to_rfc3339(),
+                u8::from(w.verified),
+                o(w.lead_min),
+                w.area_km2,
+                w.lon,
+                w.lat,
+                // Semicolons, so the county list survives a comma-separated file unquoted.
+                w.counties.join(";"),
+            ));
+        }
+        out.push_str("\nvalid,kind,city,county,magnitude,warned,lead_min,lon,lat\n");
+        for r in &self.reports {
+            out.push_str(&format!(
+                "{},{},{},{},{},{},{},{:.4},{:.4}\n",
+                r.valid.to_rfc3339(),
+                r.kind,
+                r.city.replace(',', " "),
+                r.county.replace(',', " "),
+                o(r.magnitude),
+                u8::from(r.warned),
+                o(r.lead_min),
+                r.lon,
+                r.lat,
+            ));
+        }
+        out
+    }
+}
+
 fn f(v: &serde_json::Value, k: &str) -> f64 {
     v.get(k).and_then(|x| x.as_f64()).unwrap_or(0.0)
 }
@@ -264,6 +331,24 @@ mod tests {
         assert_eq!(tor.counties.len(), 2);
         assert_eq!(v.reports.len(), 1);
         assert!(!v.reports[0].warned, "an unwarned report is the miss");
+    }
+
+    #[test]
+    fn csv_has_all_three_blocks() {
+        let start = DateTime::parse_from_rfc3339("2013-05-20T00:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let v = parse(COW, "OUN", start, start + chrono::Duration::days(1)).unwrap();
+        let csv = v.to_csv();
+        let blocks: Vec<&str> = csv.split("\n\n").collect();
+        assert_eq!(blocks.len(), 3, "stats, warnings, reports");
+        assert!(blocks[0].contains("OUN,2013-05-20T00:00:00+00:00"));
+        assert!(blocks[1].contains("OUN,TO,24,"), "the verified tornado warning");
+        assert!(
+            blocks[1].contains("Cleveland OK;Oklahoma OK"),
+            "counties keep out of the comma columns"
+        );
+        assert!(blocks[2].contains("TORNADO,2 NW PRAGUE,LINCOLN,,0,,"));
     }
 
     #[test]
