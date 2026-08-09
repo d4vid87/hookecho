@@ -20,6 +20,7 @@ pub mod digest;
 /// Terrain heights (DEM) and the beam-vs-terrain blockage raster.
 pub mod elevation;
 pub mod events;
+pub mod fielddiff;
 pub mod fronts_draw;
 pub mod geo;
 pub mod gps;
