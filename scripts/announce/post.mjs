@@ -274,10 +274,27 @@ if (dryRun) {
   process.exit(0);
 }
 
-await postBluesky(texts.bluesky);
-await postMastodon(texts.mastodon);
-await postX(texts.x);
-await postDiscord(texts.discord);
+// One channel refusing is not a failed announcement — X in particular answers 402 the moment its
+// pay-per-use credits run out, and that must not take the other channels or the drafts with it.
+// The run still fails at the end so the refusal is visible rather than buried in a green log.
+const failed = [];
+for (const [name, post, text] of [
+  ["bluesky", postBluesky, texts.bluesky],
+  ["mastodon", postMastodon, texts.mastodon],
+  ["x", postX, texts.x],
+  ["discord", postDiscord, texts.discord],
+]) {
+  try {
+    await post(text);
+  } catch (e) {
+    failed.push(name);
+    console.error(`::warning::${name}: ${e.message}`);
+  }
+}
+if (failed.length) {
+  console.error(`::error::channels that refused: ${failed.join(", ")}`);
+  process.exitCode = 1;
+}
 
 // The signature is the one piece here that fails silently-but-authentically if it is subtly wrong,
 // so it is checked against RFC 5849 §3.1's own worked example.

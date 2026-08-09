@@ -63,7 +63,7 @@ jobs:
       # The Reddit and HN drafts ride along on the release, so they are one click away when the
       # launch waves in docs/promotion.md say to post them.
       - name: Attach the drafts to the release
-        if: ${{ inputs.dry_run != true }}
+        if: ${{ always() && inputs.dry_run != true }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ inputs.tag || github.ref_name }}
