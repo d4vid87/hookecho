@@ -7,6 +7,11 @@ upgrade path out of it (`grep -rn "ponytail:" crates/`).
 
 ## Now
 
+- **Saved workspaces** — a pane layout (sites, products, tilts, overlays) saved
+  and restored from the command palette.
+- **Disk caches that survive a restart** — archived radar volumes, zone
+  geometry, and the last alert fetch, so a scrub back through an event is a file
+  read and a restart mid-outbreak doesn't re-announce what's already on screen.
 - **Web build (WASM)** — the viewer in a browser: radar, basemap, alerts and
   forecasts. Feeds that block cross-origin requests degrade rather than break,
   and native-only subsystems (audio, GPS, plugins, camera video) are compiled
@@ -25,13 +30,15 @@ upgrade path out of it (`grep -rn "ponytail:" crates/`).
   ceiling and says explicitly that the upgrade is *not* a compute shader.
 - A radar snapshot as a desktop widget / conky-style output, reusing the same
   off-screen render the server's `/snapshot.png` uses.
-- Register the `hookecho://` URL scheme on desktop, so shared links open the app
-  the way they already do on Android.
 - Placefile `Image:` support: it is parsed and skipped today, waiting on a real
   file in the wild to use as a fixture.
 
 ## Later
 
+- Accessibility: a screen-reader tree (accesskit), a high-contrast theme, and
+  keyboard-only navigation documented as a first-class path.
+- Flatpak, Snap, Homebrew and winget manifests, so installing is a package
+  manager line rather than a download.
 - True lunar ephemeris (Meeus) in place of the mean synodic phase, which is
   currently good to about half a day.
 - Full effective-layer severe composite parameters, matching SPC mesoanalysis
