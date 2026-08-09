@@ -220,18 +220,34 @@ async fn fetch_lapse_grid(
     Ok(as_forecast(f0, values, run))
 }
 
-/// Pressure levels the effective-layer parameters are built from. Mandatory levels only — the
-/// native-level profile would be four times the byte ranges for a layer this coarse anyway.
-const EFF_LEVELS_HPA: [u32; 7] = [1000, 925, 850, 700, 600, 500, 400];
+/// Pressure levels the effective-layer parameters are built from: the HRRR pressure file's own
+/// 25 hPa ladder through the inflow layer and the mid-levels, thinning to 50 hPa above 500 hPa
+/// where the profile is smooth, and running to 100 hPa so a buoyant parcel has an equilibrium
+/// level to be measured against.
+///
+/// Seven mandatory levels used to be the whole set, which put the top of the profile at 400 hPa —
+/// under the EL of any parcel worth computing EBWD for, so the depth-dependent parameters came
+/// back empty exactly when they mattered. This is what SPC's recipe assumes it has.
+const EFF_LEVELS_HPA: [u32; 29] = [
+    1000, 975, 950, 925, 900, 875, 850, 825, 800, 775, 750, 725, 700, 675, 650, 625, 600, 575, 550,
+    525, 500, 450, 400, 350, 300, 250, 200, 150, 100,
+];
+
+/// Longest side of the grid the effective-layer solve runs on. 29 levels × 5 variables at full
+/// HRRR resolution is most of a gigabyte of transient f32; at this cap it is tens of megabytes,
+/// and the effective-layer parameters are a mesoanalysis product — SPC's own is drawn on a 40 km
+/// grid, coarser than this.
+///
+/// ponytail: one cap for all three parameters. Raise it if the layer ever looks blocky against a
+/// storm-scale feature, and watch the memory when you do.
+const EFF_GRID_CAP: usize = 600;
 
 /// Effective-inflow-layer parameters: EBWD, ESRH and effective-layer STP.
 ///
-/// Thirty-five range fetches from one cycle (five variables at seven levels), then a per-cell
-/// column solve. SPC does this on the native RAP levels with mesoanalysis-blended observations;
-/// this is the mandatory-level approximation of the same recipe.
-///
-/// ponytail: seven levels, and the inflow search lifts a parcel from each of them. Native-level
-/// profiles are the upgrade if the values drift from SPC's.
+/// A hundred and forty-five range fetches from one cycle (five variables at 29 levels), each
+/// subsampled to [`EFF_GRID_CAP`] as it lands, then a per-cell column solve. SPC does this on the
+/// native model levels with mesoanalysis-blended observations; this is the same recipe on the
+/// pressure-level ladder the HRRR publishes, which is the part that was missing.
 async fn fetch_effective_grid(
     http: &reqwest::Client,
     _model: hrrr::Model,
@@ -252,7 +268,8 @@ async fn fetch_effective_grid(
         .iter()
         .map(|(v, l, m)| (v.as_str(), l.as_str(), *m))
         .collect();
-    let (run, fields) = hrrr::fetch_fields_one_run(http, model, 0, &borrowed).await?;
+    let (run, fields) =
+        hrrr::fetch_fields_one_run_capped(http, model, 0, &borrowed, Some(EFF_GRID_CAP)).await?;
     let f0 = &fields[0];
     for f in &fields[1..] {
         anyhow::ensure!(
@@ -339,10 +356,9 @@ pub struct EffectiveIndices {
 /// Effective-layer parameters for a profile, or `None` when it has no effective inflow layer —
 /// the honest answer for a capped or dry column, and the same one the grid gives.
 ///
-/// `// ponytail:` the depth-limited fields go `None` rather than guessing an EL above the
-/// profile's top level. A 200 hPa top is where the mandatory-level fetch stops, so an
-/// uncapped plains parcel really does run off the end of the data; extend `LEVELS_HPA` if the
-/// missing EBWD starts mattering more than the extra range requests cost.
+/// The depth-limited fields go `None` rather than guessing an EL above the profile's top level.
+/// Since the clicked sounding reaches 100 hPa, a parcel that runs off the end of the data is a
+/// genuinely extraordinary one rather than an ordinary uncapped plains parcel.
 pub fn effective_indices(s: &crate::sounding::Sounding) -> Option<EffectiveIndices> {
     let heights = s.heights_m();
     Some(EffectiveIndices {

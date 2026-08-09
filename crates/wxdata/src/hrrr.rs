@@ -147,6 +147,21 @@ pub async fn fetch_fields_one_run(
     fcst_hour: u8,
     specs: &[(&str, &str, f64)],
 ) -> anyhow::Result<(DateTime<Utc>, Vec<MrmsField>)> {
+    fetch_fields_one_run_capped(http, model, fcst_hour, specs, None).await
+}
+
+/// [`fetch_fields_one_run`] with an optional grid cap: each field is subsampled to at most
+/// `max_dim` cells on its longest side *as it arrives*, so a deep stack of levels never has to be
+/// resident at full resolution. A hundred-odd full HRRR grids is most of a gigabyte; the same
+/// stack at 500 cells wide is tens of megabytes, and the parameters that need a deep stack are
+/// smooth enough to be worth far less resolution than they cost.
+pub async fn fetch_fields_one_run_capped(
+    http: &reqwest::Client,
+    model: Model,
+    fcst_hour: u8,
+    specs: &[(&str, &str, f64)],
+    max_dim: Option<usize>,
+) -> anyhow::Result<(DateTime<Utc>, Vec<MrmsField>)> {
     let fh = fcst_hour.min(18);
     // Owned up front: the concurrent stream below must not borrow `specs` across an await, or
     // the whole future stops being `Send` and the app can't spawn it.
@@ -167,7 +182,13 @@ pub async fn fetch_fields_one_run(
         let results: Vec<_> = futures_util::stream::iter(owned_specs.clone().into_iter().map(
             |(var, level, mv): (String, String, f64)| {
                 let http = http.clone();
-                async move { fetch_run_field(&http, model, run, fh, &var, &level, mv).await }
+                async move {
+                    let f = fetch_run_field(&http, model, run, fh, &var, &level, mv).await?;
+                    Ok(match max_dim {
+                        Some(cap) => f.subsampled(cap),
+                        None => f,
+                    })
+                }
             },
         ))
         .buffered(HRRR_CONCURRENCY)

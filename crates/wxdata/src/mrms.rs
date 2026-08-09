@@ -163,6 +163,41 @@ impl MrmsField {
     /// Max-pool the grid down so both dimensions are `<= max_dim` (GPU texture limits). Some MRMS
     /// products (rotation tracks, AzShear) are 14000×7000 — larger than the 8192 texture cap.
     /// Max-pooling keeps the strongest signal in each block (right for shear/reflectivity).
+    /// Every `n`-th cell, so the result is the largest grid no wider or taller than `max_dim`.
+    ///
+    /// Unlike [`decimated`](Self::decimated), which max-pools, this keeps whole grid points. A
+    /// profile has to stay a profile: the max dewpoint of a block, over the max wind of the same
+    /// block, is a column that exists nowhere.
+    pub fn subsampled(&self, max_dim: usize) -> MrmsField {
+        let factor = self.nx.max(self.ny).div_ceil(max_dim).max(1);
+        if factor <= 1 {
+            return self.clone();
+        }
+        let nx = self.nx.div_ceil(factor);
+        let ny = self.ny.div_ceil(factor);
+        let mut values = Vec::with_capacity(nx * ny);
+        for oy in 0..ny {
+            for ox in 0..nx {
+                values.push(self.values[(oy * factor) * self.nx + ox * factor]);
+            }
+        }
+        MrmsField {
+            values,
+            nx,
+            ny,
+            // The kept cells span the same corners minus whatever the last step overshoots.
+            lon_west: self.lon_west,
+            lon_east: self.lon_west
+                + (nx - 1) as f64 * (self.lon_east - self.lon_west) / (self.nx - 1).max(1) as f64
+                    * factor as f64,
+            lat_north: self.lat_north,
+            lat_south: self.lat_north
+                - (ny - 1) as f64 * (self.lat_north - self.lat_south) / (self.ny - 1).max(1) as f64
+                    * factor as f64,
+            time: self.time,
+        }
+    }
+
     pub fn decimated(self, max_dim: usize) -> MrmsField {
         let factor = self.nx.max(self.ny).div_ceil(max_dim);
         if factor <= 1 {
