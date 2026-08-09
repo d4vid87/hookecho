@@ -248,10 +248,35 @@ type ZonePolys = Vec<Vec<Vec<[f64; 2]>>>;
 
 /// Process-lifetime cache of resolved zone geometries (rings), keyed by zone URL. Zone polygons
 /// are effectively static, so one fetch per zone per run is plenty.
-/// `// ponytail: in-memory only; a disk cache would survive restarts if it ever matters.`
 static ZONE_CACHE: std::sync::OnceLock<
     std::sync::Mutex<std::collections::HashMap<String, ZonePolys>>,
 > = std::sync::OnceLock::new();
+
+/// Where resolved zone geometry is kept between runs. A county's shape does not change, so the
+/// first heat advisory of the summer pays for the whole season. Set once at startup; unset (web,
+/// headless) leaves the cache memory-only.
+static ZONE_CACHE_DIR: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
+
+/// Point the zone geometry cache at a directory on disk. Later calls are ignored.
+pub fn set_zone_cache_dir(dir: std::path::PathBuf) {
+    let _ = ZONE_CACHE_DIR.set(dir);
+}
+
+/// Disk path for a zone URL: the trailing id (`.../zones/forecast/OKZ025` -> `OKZ025.json`), with
+/// anything that isn't alphanumeric dropped so a malformed URL can't escape the directory.
+fn zone_cache_file(url: &str) -> Option<std::path::PathBuf> {
+    let dir = ZONE_CACHE_DIR.get()?;
+    let id: String = url
+        .rsplit('/')
+        .find(|s| !s.is_empty())?
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric())
+        .collect();
+    if id.is_empty() {
+        return None;
+    }
+    Some(dir.join("zones").join(format!("{id}.json")))
+}
 
 /// Cap on zone geometries fetched per refresh, so a nationwide burst of zone-only advisories
 /// can't fan out into thousands of requests.
@@ -261,6 +286,20 @@ const MAX_ZONE_FETCHES: usize = 250;
 async fn fetch_zone_geometry(client: &reqwest::Client, url: &str) -> Vec<Vec<Vec<[f64; 2]>>> {
     let cache = ZONE_CACHE.get_or_init(Default::default);
     if let Some(hit) = cache.lock().unwrap().get(url).cloned() {
+        return hit;
+    }
+    let file = zone_cache_file(url);
+    let rings = |body: &str| {
+        let mut out: ZonePolys = Vec::new();
+        for_each_feature(body, |geom, _| out.extend(polygons_of(geom))).ok()?;
+        Some(out)
+    };
+    if let Some(hit) = file
+        .as_ref()
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .and_then(|b| rings(&b))
+    {
+        cache.lock().unwrap().insert(url.to_string(), hit.clone());
         return hit;
     }
     let polys = async {
@@ -276,8 +315,13 @@ async fn fetch_zone_geometry(client: &reqwest::Client, url: &str) -> Vec<Vec<Vec
             .text()
             .await
             .ok()?;
-        let mut out = Vec::new();
-        for_each_feature(&body, |geom, _| out.extend(polygons_of(geom))).ok()?;
+        let out = rings(&body)?;
+        if let Some(p) = &file {
+            if let Some(dir) = p.parent() {
+                let _ = std::fs::create_dir_all(dir);
+            }
+            let _ = std::fs::write(p, &body);
+        }
         Some(out)
     }
     .await

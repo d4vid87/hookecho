@@ -5,6 +5,7 @@
 //! `eframe::NativeOptions`, Android hands eframe the `AndroidApp` from the activity glue and points
 //! [`paths`] at the app-private data dir.
 
+pub mod alert_snapshot;
 pub mod app;
 pub mod astro;
 pub mod audio;

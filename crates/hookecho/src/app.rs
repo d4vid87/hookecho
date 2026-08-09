@@ -2061,6 +2061,18 @@ impl HookEchoApp {
         } else {
             30
         };
+        // The alert overlay from the last run, minus anything that has expired since. Also seeds
+        // the known-warning ids, so a restart during an event doesn't re-banner and re-speak
+        // every warning already on the map.
+        let seeded_alerts = crate::alert_snapshot::load();
+        let known_warning_ids: std::collections::HashSet<String> = seeded_alerts
+            .iter()
+            .filter_map(|f| f.alert.as_ref().map(|a| a.id.clone()))
+            .collect();
+        // Zone geometry (county and forecast-zone shapes) never changes, so it outlives the run.
+        if let Some(dir) = crate::paths::cache_dir() {
+            wxdata::alerts::set_zone_cache_dir(dir);
+        }
         // Archived volumes are kept on disk forever within a cap; same startup sweep the tile
         // caches get, for the same reason (mid-session deletion would race the fetch tasks).
         if let Some(root) = crate::paths::cache_dir().map(|d| d.join("volumes")) {
@@ -2174,7 +2186,9 @@ impl HookEchoApp {
             overlay_rx,
             overlay_tx,
             filters: OverlayFilters::default(),
-            alert_features: Vec::new(),
+            // Seeded from the last run so a restart mid-outbreak draws the warnings that are
+            // already on the ground, and doesn't re-banner them as new (see `alert_snapshot`).
+            alert_features: seeded_alerts,
             arch_warns: LruCache::new(NonZeroUsize::new(50).unwrap()),
             arch_warn_inflight: None,
             arch_warn_shown: None,
@@ -2434,7 +2448,7 @@ impl HookEchoApp {
             obs_tour: false,
             obs_tour_last: None,
             obs_tour_idx: 0,
-            known_warning_ids: std::collections::HashSet::new(),
+            known_warning_ids,
             warnings_seeded: false,
             lightning_alerted: std::collections::HashMap::new(),
             tds_active: false,
@@ -6906,6 +6920,7 @@ impl HookEchoApp {
             match msg {
                 OverlayMsg::Alerts(f) => {
                     self.detect_new_warnings(&f);
+                    crate::alert_snapshot::save(&f);
                     self.alert_features = f;
                 }
                 OverlayMsg::Mds(f) => self.md_features = f,

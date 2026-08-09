@@ -6,7 +6,7 @@
 use geojson::{GeoJson, GeometryValue};
 
 /// What kind of feature this is; also its click-priority tier.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum FeatureKind {
     Warning,
     Watch,
@@ -44,7 +44,7 @@ impl FeatureKind {
 /// Warned-storm motion parsed from the alert's `eventMotionDescription`.
 /// Direction is stored *as issued* — the FROM bearing; the heading a storm travels toward is
 /// `(deg + 180) % 360`, flipped at draw/ETA time.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct StormMotion {
     /// FROM direction in degrees (meteorological, as issued).
     pub deg: f32,
@@ -56,7 +56,7 @@ pub struct StormMotion {
 
 /// Structured NWS alert metadata for the warning window (parsed from the alert `parameters`).
 /// `None` on non-alert features (SPC outlooks, mesoscale discussions).
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct AlertInfo {
     /// Stable alert id — used to dedupe the one-GeoFeature-per-MultiPolygon-part case.
     pub id: String,
@@ -78,7 +78,7 @@ pub struct AlertInfo {
 }
 
 /// One renderable, clickable overlay polygon.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct GeoFeature {
     /// Rings in `[lon, lat]`; ring 0 is the outer boundary, any others are holes.
     pub rings: Vec<Vec<[f64; 2]>>,
