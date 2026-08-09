@@ -46,10 +46,26 @@ jobs:
           name: Hook_Echo-WX-x86_64.AppImage
           path: dist/Hook_Echo-WX-x86_64.AppImage
 
+      # The tag's own CHANGELOG section becomes the release body. Empty means the section is
+      # missing, which is worth failing the release over — a release with no notes is the state
+      # this repo shipped eight versions in.
+      - name: Extract release notes
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          awk -v v="$VERSION" '
+            $0 ~ "^## " v " " { want = 1; next }
+            want && /^## / { exit }
+            want { print }
+          ' CHANGELOG.md > notes.md
+          test -s notes.md || { echo "::error::no CHANGELOG.md section for $VERSION"; exit 1; }
+          cat notes.md
+
       - name: Attach to release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
+          body_path: notes.md
           files: dist/Hook_Echo-WX-x86_64.AppImage
 
       # Every push to main refreshes a rolling "latest" prerelease, so the Releases page always
