@@ -2089,6 +2089,19 @@ impl HookEchoApp {
                 )
             });
         }
+        // The small caches had no sweep at all: zone geometry and archived RAOB soundings grew
+        // for the life of the install. They are small enough that the cap is a tripwire.
+        if let Some(dir) = crate::paths::cache_dir() {
+            std::thread::spawn(move || {
+                for (sub, label) in [("zones", "zone cache"), ("raob", "RAOB cache")] {
+                    crate::tiles::sweep_cache_dir(
+                        &dir.join(sub),
+                        label,
+                        crate::tiles::SMALL_CACHE_BYTES,
+                    );
+                }
+            });
+        }
         let mut tiles = TileManager::new(spawner.clone());
         let mut vtiles = crate::vector_tiles::VectorTileManager::new(spawner.clone());
         // Tile workers wake the UI the moment a tile is ready; without this a finished tile waits

@@ -1055,6 +1055,11 @@ pub(crate) const VOLUME_CACHE_BYTES: u64 = if cfg!(target_os = "android") {
     2 * 1024 * 1024 * 1024
 };
 
+/// Largest the small caches — zone geometry, RAOB soundings, server snapshots — may get between
+/// them. Each is a few MB in normal use; the cap is a tripwire for a cache that has started
+/// growing without bound, not a budget anyone is meant to run into.
+pub(crate) const SMALL_CACHE_BYTES: u64 = 50 * 1024 * 1024;
+
 /// A chase-pack download job: the tile URL and the disk path to cache it at.
 pub type PackJob = (String, std::path::PathBuf);
 
