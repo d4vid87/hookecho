@@ -169,7 +169,7 @@ pub async fn list_volumes(site: &str, date: chrono::NaiveDate) -> anyhow::Result
 /// ponytail: a flat map with a short TTL and no eviction — a session touches a handful of
 /// site/day pairs. Bound it if that ever stops being true.
 type DayListCache =
-    std::collections::HashMap<(String, chrono::NaiveDate), (std::time::Instant, Vec<Identifier>)>;
+    std::collections::HashMap<(String, chrono::NaiveDate), (crate::clock::Instant, Vec<Identifier>)>;
 static DAY_LIST_CACHE: std::sync::OnceLock<std::sync::Mutex<DayListCache>> =
     std::sync::OnceLock::new();
 
@@ -193,7 +193,7 @@ async fn list_day(site: &str, date: chrono::NaiveDate) -> anyhow::Result<Vec<Ide
         .map_err(|e| anyhow::anyhow!("list_files({site}, {date}): {e}"))?;
     ids.sort_by_key(|id| id.date_time());
     if let Ok(mut map) = cache.lock() {
-        map.insert(key, (std::time::Instant::now(), ids.clone()));
+        map.insert(key, (crate::clock::Instant::now(), ids.clone()));
     }
     Ok(ids)
 }

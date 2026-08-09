@@ -465,7 +465,7 @@ pub struct VectorTileManager {
     dark: bool,
     tess_zoom: i32,
     /// Candidate new tessellation zoom and when it was first seen — see [`Self::note_zoom`].
-    zoom_settled: Option<(i32, std::time::Instant)>,
+    zoom_settled: Option<(i32, wxdata::clock::Instant)>,
     cache_root: Option<PathBuf>,
     template: Option<String>,
     template_tx: Sender<Option<String>>,
@@ -539,9 +539,9 @@ impl VectorTileManager {
         // still before acting on it.
         let settled = *self
             .zoom_settled
-            .get_or_insert_with(|| (tz, std::time::Instant::now()));
+            .get_or_insert_with(|| (tz, wxdata::clock::Instant::now()));
         if settled.0 != tz {
-            self.zoom_settled = Some((tz, std::time::Instant::now()));
+            self.zoom_settled = Some((tz, wxdata::clock::Instant::now()));
             return false;
         }
         if settled.1.elapsed() < std::time::Duration::from_millis(700) {

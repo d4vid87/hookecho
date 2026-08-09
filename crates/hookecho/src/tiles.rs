@@ -603,7 +603,7 @@ pub struct TileManager {
     /// Fetches currently in flight, shared with the tasks so they can decrement on the way out.
     inflight: std::sync::Arc<std::sync::atomic::AtomicUsize>,
     /// Tiles whose fetch failed, and when. Retried after [`RETRY_AFTER`].
-    failed: std::collections::HashMap<TileId, std::time::Instant>,
+    failed: std::collections::HashMap<TileId, wxdata::clock::Instant>,
     requested: HashSet<TileId>,
     /// Tiles believed to be live on the GPU, newest-touched first. This mirrors the renderer's
     /// tile map exactly: the CPU side decides what gets evicted and tells the renderer, so the
@@ -855,7 +855,7 @@ impl TileManager {
                     // Out of `requested` so the next visibility pass is the retry, and into
                     // `failed` so that pass isn't the very next frame.
                     self.requested.remove(&id);
-                    self.failed.insert(id, std::time::Instant::now());
+                    self.failed.insert(id, wxdata::clock::Instant::now());
                     continue;
                 }
             };

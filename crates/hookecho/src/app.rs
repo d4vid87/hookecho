@@ -22,7 +22,7 @@ use lru::LruCache;
 use std::num::NonZeroUsize;
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::Arc;
-use std::time::Instant;
+use wxdata::clock::Instant;
 #[cfg(not(target_arch = "wasm32"))]
 use tokio::runtime::Runtime;
 use wxdata::alerts::{self};
@@ -1646,13 +1646,13 @@ pub struct HookEchoApp {
     sync_login: Option<crate::cloud::Pending>,
     sync_status: String,
     sync_rx: Option<std::sync::mpsc::Receiver<SyncMsg>>,
-    sync_checked: Option<std::time::Instant>,
+    sync_checked: Option<wxdata::clock::Instant>,
     /// Position sharing (LAN broadcast + optional relay), started on first use.
     share: Option<crate::share::Share>,
     /// Everyone else's last known position, keyed by their device id.
     peers: std::collections::HashMap<String, crate::share::Peer>,
     /// When we last put our own fix on the wire (both transports share the cadence).
-    share_sent: Option<std::time::Instant>,
+    share_sent: Option<wxdata::clock::Instant>,
     /// GOES satellite frame times (for the sub-hourly scrub), the style they were fetched for,
     /// and the selected index (`None` = latest).
     goes_times: Vec<chrono::DateTime<chrono::Utc>>,
@@ -1803,7 +1803,7 @@ pub struct HookEchoApp {
     /// When the last two-finger gesture ended. Lifting one finger of a pinch leaves the other
     /// one down, which egui immediately reads as a click and a fresh drag — an interrogate popup
     /// and a jump for what was only the end of a zoom. A short cooldown eats both.
-    last_gesture_end: Option<std::time::Instant>,
+    last_gesture_end: Option<wxdata::clock::Instant>,
     /// Spotter Network positions + toggle + refresh clock (filtered to active site at draw).
     show_spotters: bool,
     /// FAA WeatherCams: the toggle, the sites in view, and the bbox//time they were fetched for.
@@ -3976,7 +3976,7 @@ impl HookEchoApp {
         );
         let (tx, rx) = std::sync::mpsc::channel();
         self.sync_rx = Some(rx);
-        self.sync_checked = Some(std::time::Instant::now());
+        self.sync_checked = Some(wxdata::clock::Instant::now());
         self.sync_status = "Syncing…".into();
         self.spawner.spawn(async move {
             let mut tokens = tokens;
@@ -4127,7 +4127,7 @@ impl HookEchoApp {
         let Some((lon, lat)) = self.chase_pos.filter(|_| due) else {
             return;
         };
-        self.share_sent = Some(std::time::Instant::now());
+        self.share_sent = Some(wxdata::clock::Instant::now());
         let name = if self.settings.share_name.is_empty() {
             "me"
         } else {
@@ -9070,7 +9070,7 @@ impl HookEchoApp {
         // pan and zoom while two fingers are down.
         let gesture = ui.input(|i| i.multi_touch());
         if gesture.is_some() {
-            self.last_gesture_end = Some(std::time::Instant::now());
+            self.last_gesture_end = Some(wxdata::clock::Instant::now());
         }
         // A finger still down after the other lifted is the tail of a pinch, not a new drag or a
         // tap on the map. 150 ms is long enough to cover a normal two-finger lift and short

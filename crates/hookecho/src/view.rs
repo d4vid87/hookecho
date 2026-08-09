@@ -7,7 +7,7 @@ use chrono::{DateTime, Utc};
 use lru::LruCache;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
-use std::time::Instant;
+use wxdata::clock::Instant;
 use wxdata::level2::{self, BinnedSweep, Moment, Scan};
 
 /// How many binned sweeps one volume keeps. A sweep is ~1.3 MB, and the working set while

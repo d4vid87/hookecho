@@ -6,7 +6,7 @@
 //! volume (via an LRU cache + background download); this type is pure playback bookkeeping.
 
 use chrono::{DateTime, NaiveDate, Utc};
-use std::time::Instant;
+use wxdata::clock::Instant;
 use wxdata::level2::Identifier;
 
 pub struct Timeline {

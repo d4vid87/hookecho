@@ -120,8 +120,8 @@ impl Default for Particles {
             p: Vec::new(),
             // `// ponytail:` a four-line xorshift, not the `rand` crate, for jittering particles.
             // Seeded off the clock: nothing here is security-sensitive or needs reproducibility.
-            rng: std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
+            rng: wxdata::clock::SystemTime::now()
+                .duration_since(wxdata::clock::UNIX_EPOCH)
                 .map(|d| d.subsec_nanos() as u64 | 1)
                 .unwrap_or(0x2545_F491_4F6C_DD1D),
             vp: (0.0, 0.0),

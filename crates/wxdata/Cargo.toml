@@ -51,3 +51,5 @@ gribberish = { version = "1.5.0", default-features = false, features = ["png"] }
 web-sys = { version = "0.3", features = ["Window", "Location"] }
 # The browser's only timer. `task::sleep` needs one, and there is no tokio here.
 gloo-timers = { version = "0.3", features = ["futures"] }
+# Already in the lockfile under eframe. Backs `clock::Instant`: the standard library's panics here.
+web-time = "1"

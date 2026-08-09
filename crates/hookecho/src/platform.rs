@@ -17,7 +17,7 @@
 pub mod activity {
     use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
     use std::sync::OnceLock;
-    use std::time::Instant;
+    use wxdata::clock::Instant;
 
     /// A frame older than this means the surface is gone, whatever the last focus event said.
     const STALE_MS: u64 = 3_000;
@@ -889,12 +889,12 @@ mod android_tts {
     /// practice; the retry window is generous because a dropped tornado warning is the bad
     /// outcome, not a slow one.
     pub fn speak(text: &str) -> Result<(), String> {
-        let deadline = std::time::Instant::now() + Duration::from_secs(6);
+        let deadline = wxdata::clock::Instant::now() + Duration::from_secs(6);
         loop {
             match try_speak(text) {
                 Ok(true) => return Ok(()),
                 Ok(false) => {
-                    if std::time::Instant::now() >= deadline {
+                    if wxdata::clock::Instant::now() >= deadline {
                         return Err("TTS engine never became ready".into());
                     }
                     std::thread::sleep(Duration::from_millis(250));
