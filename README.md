@@ -11,14 +11,15 @@ with `wgpu` + `egui`. Deep per-site Level 2 / Level 3 analysis plus national
 situational awareness, forecast environment overlays, and warning intelligence —
 on Windows, Linux, and Android.
 
+### **[Try it in your browser →](https://hookecho.pages.dev/)**
+
+The whole app as wasm, on live data, with nothing to install.
+
 ![Moore, Oklahoma, 20 May 2013 — KTLX 0.5° reflectivity, replayed from the archive](docs/shots/hero.gif)
 
 <sub>**KTLX 0.5° reflectivity — Moore, Oklahoma, 20 May 2013.** Replayed from the
 public archive inside the app, one scan every few seconds, with the tornado
 warning that was in force at the time.</sub>
-
-**[Try it in your browser →](https://hookecho.pages.dev/)** — the whole app as
-wasm, live data, nothing to install.
 
 ![HRRR 10 m wind drawn as drifting particles across the CONUS](docs/shots/wind.gif)
 
