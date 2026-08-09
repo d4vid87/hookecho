@@ -237,6 +237,14 @@ pub struct Settings {
     /// Matrix access token. User secret, as above.
     #[serde(default)]
     pub matrix_token: String,
+    /// Fetch terrain at z12 (~40 m/px) instead of z10. Sixteen times the tiles, so it is off by
+    /// default and meant for chase packs you download deliberately.
+    #[serde(default)]
+    pub pack_hires_dem: bool,
+    /// Include vector street tiles in a chase pack even when the active basemap is raster. Streets
+    /// are what a chase pack is for; the raster imagery alone leaves you without road names.
+    #[serde(default = "default_true")]
+    pub pack_include_vector: bool,
     /// User-drawn zones that alert when an NWS warning polygon intersects them. The Android
     /// background service reads this file too, so the name is load-bearing across the boundary.
     #[serde(default)]
@@ -600,6 +608,8 @@ impl Default for Settings {
             matrix_room: String::new(),
             matrix_token: String::new(),
             background_alerts: false,
+            pack_hires_dem: false,
+            pack_include_vector: true,
             alert_polygons: Vec::new(),
             plugins: Vec::new(),
             close_to_tray: false,
@@ -872,6 +882,8 @@ mod tests {
             matrix_room: String::new(),
             matrix_token: String::new(),
             background_alerts: false,
+            pack_hires_dem: false,
+            pack_include_vector: true,
             alert_polygons: Vec::new(),
             plugins: Vec::new(),
             close_to_tray: true,

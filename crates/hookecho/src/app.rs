@@ -2049,6 +2049,8 @@ impl HookEchoApp {
         }
 
         let settings = Settings::load();
+        // Sample terrain at the resolution this user packs at, so a hi-res pack is actually read.
+        crate::elevation::set_hires(settings.pack_hires_dem);
         // A decoded volume is tens of MB, so the phone's cache is sized to the loop window it can
         // actually afford (see ANDROID_LOOP_WINDOW) plus the head and the frame in flight —
         // enough that a loop stops re-downloading itself on every wrap, without the ~900 MB RSS
@@ -2064,6 +2066,9 @@ impl HookEchoApp {
         // for the next repaint the app happens to want.
         tiles.set_ctx(cc.egui_ctx.clone());
         vtiles.set_ctx(cc.egui_ctx.clone());
+        // One small JSON fetch up front: a chase pack can ask for street tiles while a raster
+        // basemap is showing, and without the template `pack_jobs` would return nothing.
+        vtiles.ensure_template();
         let (msg_tx, msg_rx) = std::sync::mpsc::channel();
         let (overlay_tx, overlay_rx) = std::sync::mpsc::channel();
         let (update_tx, update_rx) = std::sync::mpsc::channel();
@@ -4785,7 +4790,28 @@ impl HookEchoApp {
         let (z_lo, z_hi) = self.chasepack_zoom();
         let tiles = if packable {
             let (min_lon, min_lat, max_lon, max_lat) = self.view_bounds();
-            crate::tiles::pack_tile_count(min_lon, min_lat, max_lon, max_lat, z_lo, z_hi)
+            let mut n =
+                crate::tiles::pack_tile_count(min_lon, min_lat, max_lon, max_lat, z_lo, z_hi);
+            // The extras the pack quietly adds, so the estimate matches what downloads: terrain
+            // at whichever DEM zoom is set, and streets beside raster imagery.
+            let dem_z = if self.settings.pack_hires_dem {
+                crate::elevation::DEM_ZOOM_HIRES
+            } else {
+                crate::elevation::DEM_ZOOM
+            };
+            n += crate::tiles::pack_tile_count(min_lon, min_lat, max_lon, max_lat, dem_z, dem_z);
+            if style.is_raster() && self.settings.pack_include_vector {
+                let vz_hi = z_hi.min(self.vtiles.max_pack_z());
+                n += crate::tiles::pack_tile_count(
+                    min_lon,
+                    min_lat,
+                    max_lon,
+                    max_lat,
+                    z_lo.min(vz_hi),
+                    vz_hi,
+                );
+            }
+            n
         } else {
             0
         };
@@ -4814,7 +4840,10 @@ impl HookEchoApp {
         let style = self.views[self.active].basemap;
         let (z_lo, z_hi) = self.chasepack_zoom();
         let (min_lon, min_lat, max_lon, max_lat) = self.view_bounds();
-        let jobs = if style.is_raster() {
+        // The DEM resolution is a per-session choice; make sure the pack fetches what the sampler
+        // will later read.
+        crate::elevation::set_hires(self.settings.pack_hires_dem);
+        let mut jobs = if style.is_raster() {
             self.tiles
                 .pack_jobs(style, min_lon, min_lat, max_lon, max_lat, z_lo, z_hi)
         } else if matches!(style, BasemapStyle::Dark | BasemapStyle::Light) {
@@ -4823,9 +4852,19 @@ impl HookEchoApp {
         } else {
             Vec::new()
         };
+        // Streets alongside the imagery: a raster pack used to be either/or, which left an
+        // offline chaser with satellite pictures and no road names. Vector tiles cap at their own
+        // max zoom, so this asks for what exists rather than the raster range.
+        if style.is_raster() && self.settings.pack_include_vector {
+            let vz_hi = z_hi.min(self.vtiles.max_pack_z());
+            let vz_lo = z_lo.min(vz_hi);
+            jobs.extend(
+                self.vtiles
+                    .pack_jobs(min_lon, min_lat, max_lon, max_lat, vz_lo, vz_hi),
+            );
+        }
         // The DEM rides along with every pack, whatever the basemap: offline chase mode wants the
         // blockage overlay as much as it wants the map under it.
-        let mut jobs = jobs;
         jobs.extend(self.tiles.dem_pack_jobs(min_lon, min_lat, max_lon, max_lat));
         if jobs.is_empty() {
             return;
@@ -5008,6 +5047,15 @@ impl HookEchoApp {
                     "Offline pack: {} tiles ≈ {:.0} MB (z{}–{}, current view)",
                     chasepack.tiles, chasepack.mb, chasepack.z_lo, chasepack.z_hi
                 ));
+                ui.checkbox(&mut settings.pack_include_vector, "Include streets")
+                    .on_hover_text(
+                        "Pack vector street tiles beside raster imagery, so road names still \
+                         render offline",
+                    );
+                ui.checkbox(&mut settings.pack_hires_dem, "High-detail terrain")
+                    .on_hover_text(
+                        "z12 terrain (~40 m/px) instead of z10 — sixteen times the tiles",
+                    );
                 let too_big = chasepack.mb > 2000.0;
                 if ui
                     .add_enabled(!too_big, egui::Button::new("⬇ Download offline pack"))

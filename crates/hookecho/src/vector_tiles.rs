@@ -568,21 +568,31 @@ impl VectorTileManager {
     }
 
     /// Kick off tilejson + tile fetches for anything visible and not yet requested.
-    pub fn request_missing(&mut self, visible: &[VisibleTile]) {
+    /// Start the TileJSON fetch if it hasn't run, and take its result if it has.
+    ///
+    /// Called on every vector frame, and once at startup — a chase pack can ask for vector tiles
+    /// while a raster basemap is showing, and without the template `pack_jobs` would quietly
+    /// return nothing.
+    pub fn ensure_template(&mut self) {
         while let Ok(t) = self.template_rx.try_recv() {
             self.template = t;
         }
+        if self.template.is_some() || self.template_requested {
+            return;
+        }
+        self.template_requested = true;
+        let client = self.client.clone();
+        let tx = self.template_tx.clone();
+        let dir = self.cache_root.clone();
+        self.spawner.spawn(async move {
+            let t = fetch_tilejson(&client, dir.as_deref()).await;
+            let _ = tx.send(t);
+        });
+    }
+
+    pub fn request_missing(&mut self, visible: &[VisibleTile]) {
+        self.ensure_template();
         let Some(template) = self.template.clone() else {
-            if !self.template_requested {
-                self.template_requested = true;
-                let client = self.client.clone();
-                let tx = self.template_tx.clone();
-                let dir = self.cache_root.clone();
-                self.spawner.spawn(async move {
-                    let t = fetch_tilejson(&client, dir.as_deref()).await;
-                    let _ = tx.send(t);
-                });
-            }
             return;
         };
         let dark = self.dark;

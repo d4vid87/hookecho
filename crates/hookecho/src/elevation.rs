@@ -13,9 +13,31 @@ use lru::LruCache;
 use std::num::NonZeroUsize;
 use std::sync::{Arc, Mutex, OnceLock};
 
-/// The one DEM zoom level we fetch. z10 is ~150 m/px at mid-latitudes — finer than the beam is
-/// wide, and coarse enough that a chase-pack bbox is a few dozen tiles.
+/// Default DEM zoom. z10 is ~150 m/px at mid-latitudes — finer than the beam is wide, and coarse
+/// enough that a chase-pack bbox is a few dozen tiles.
 pub const DEM_ZOOM: u8 = 10;
+
+/// z12 is ~40 m/px: sixteen times the tiles for terrain you can read a draw in. Offered for chase
+/// packs, where the download is deliberate and the detail is the point.
+pub const DEM_ZOOM_HIRES: u8 = 12;
+
+/// The zoom this session actually fetches and samples. Set once from settings at startup.
+static ZOOM: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(DEM_ZOOM);
+
+/// The DEM zoom in force.
+pub fn zoom() -> u8 {
+    ZOOM.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Choose the DEM resolution. Clears the decoded-tile cache, whose keys are zoom-specific.
+pub fn set_hires(on: bool) {
+    let z = if on { DEM_ZOOM_HIRES } else { DEM_ZOOM };
+    if ZOOM.swap(z, std::sync::atomic::Ordering::Relaxed) != z {
+        if let Ok(mut c) = cache().lock() {
+            c.clear();
+        }
+    }
+}
 
 /// Cache subfolder (and chase-pack folder) for DEM tiles, alongside the basemap providers'.
 pub const DEM_PROVIDER: &str = "terrarium";
@@ -42,7 +64,8 @@ pub fn decode_height(rgb: [u8; 3]) -> f32 {
 }
 
 pub fn tile_url(x: u32, y: u32) -> String {
-    format!("https://s3.amazonaws.com/elevation-tiles-prod/{DEM_PROVIDER}/{DEM_ZOOM}/{x}/{y}.png")
+    let z = zoom();
+    format!("https://s3.amazonaws.com/elevation-tiles-prod/{DEM_PROVIDER}/{z}/{x}/{y}.png")
 }
 
 /// Disk path a DEM tile caches at. Mirrors the basemap layout (`<root>/<provider>/default/z/x/y`)
@@ -50,7 +73,7 @@ pub fn tile_url(x: u32, y: u32) -> String {
 pub fn tile_path(root: &std::path::Path, x: u32, y: u32) -> std::path::PathBuf {
     root.join(DEM_PROVIDER)
         .join("default")
-        .join(format!("{DEM_ZOOM}/{x}/{y}"))
+        .join(format!("{}/{x}/{y}", zoom()))
 }
 
 /// Slippy tile and in-tile pixel for a lon/lat at [`DEM_ZOOM`], or `None` outside the Mercator
@@ -59,7 +82,7 @@ fn tile_of(lon: f64, lat: f64) -> Option<(u32, u32, usize, usize)> {
     if !(-85.05..=85.05).contains(&lat) || !lon.is_finite() {
         return None;
     }
-    let n = (1u32 << DEM_ZOOM) as f64;
+    let n = (1u32 << zoom()) as f64;
     let fx = (lon + 180.0) / 360.0 * n;
     let s = lat.to_radians().tan().asinh(); // ln(tan+sec), spelled the stable way
     let fy = (1.0 - s / std::f64::consts::PI) / 2.0 * n;
@@ -71,7 +94,7 @@ fn tile_of(lon: f64, lat: f64) -> Option<(u32, u32, usize, usize)> {
     let px = ((fx - tx) * 256.0) as usize;
     let py = ((fy - ty) * 256.0) as usize;
     Some((
-        (tx as i64).rem_euclid(1i64 << DEM_ZOOM) as u32,
+        (tx as i64).rem_euclid(1i64 << zoom()) as u32,
         ty as u32,
         px.min(255),
         py.min(255),
@@ -283,9 +306,30 @@ mod tests {
     }
 
     #[test]
+    fn hires_switches_both_url_and_cache_path() {
+        let root = std::path::Path::new("/tmp/hookecho-test");
+        set_hires(false);
+        assert_eq!(zoom(), DEM_ZOOM);
+        assert!(tile_url(3, 4).contains("/10/3/4.png"));
+        assert!(tile_path(root, 3, 4).ends_with("10/3/4"));
+        set_hires(true);
+        assert_eq!(zoom(), DEM_ZOOM_HIRES);
+        assert!(tile_url(3, 4).contains("/12/3/4.png"));
+        assert!(tile_path(root, 3, 4).ends_with("12/3/4"));
+        // A hi-res pack must not be read as if it were z10, so the two live in separate folders.
+        set_hires(false);
+        assert_ne!(tile_path(root, 3, 4), {
+            set_hires(true);
+            let p = tile_path(root, 3, 4);
+            set_hires(false);
+            p
+        });
+    }
+
+    #[test]
     fn tile_of_lands_in_range() {
         let (x, y, px, py) = tile_of(-97.28, 35.33).unwrap();
-        assert!(x < 1 << DEM_ZOOM && y < 1 << DEM_ZOOM);
+        assert!(x < 1 << zoom() && y < 1 << zoom());
         assert!(px < 256 && py < 256);
         // Antimeridian wraps rather than panicking; poles are outside the Mercator band.
         assert!(tile_of(180.0, 0.0).is_some());

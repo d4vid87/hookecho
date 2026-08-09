@@ -830,11 +830,11 @@ impl TileManager {
         max_lon: f64,
         max_lat: f64,
     ) -> Vec<PackJob> {
-        use crate::elevation::DEM_ZOOM;
+        let z = crate::elevation::zoom();
         let Some(root) = self.cache_root.as_ref() else {
             return Vec::new();
         };
-        pack_tile_ids(min_lon, min_lat, max_lon, max_lat, DEM_ZOOM, DEM_ZOOM)
+        pack_tile_ids(min_lon, min_lat, max_lon, max_lat, z, z)
             .into_iter()
             .map(|(_, x, y)| {
                 (
