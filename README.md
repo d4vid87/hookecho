@@ -536,11 +536,12 @@ cargo run --release -- --serve 8080 --web-root web
 
 Then open <http://localhost:8080>. Radar, the vector basemap, alerts and point
 forecasts all work: the Level 2 buckets and `api.weather.gov` allow cross-origin
-requests. This is a **core viewer**, though, not parity. There is no filesystem,
-so settings are defaults each load and caches are memory-only; there is no live
-chunk stream, no audio or spoken warnings, no camera, plugin or GPS support, and
-any feed whose host refuses cross-origin requests simply doesn't load. Anything
-that needs those is on the desktop and Android builds.
+requests. Settings persist to `localStorage`, and alert sounds and spoken
+warnings play through the browser's own audio and `speechSynthesis`. This is a
+**core viewer**, though, not parity. There is no filesystem, so caches are
+memory-only; there is no live chunk stream, no camera, plugin or GPS support,
+and any feed whose host refuses cross-origin requests simply doesn't load.
+Anything that needs those is on the desktop and Android builds.
 
 ### Extending it
 

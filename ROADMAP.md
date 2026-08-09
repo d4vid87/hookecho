@@ -19,8 +19,8 @@ upgrade path out of it (`grep -rn "ponytail:" crates/`).
 ## Next
 
 - Publish the Docker image to a registry rather than asking people to build it.
-- Persist settings in the browser build (`localStorage`), and audio, speech and
-  live polling on the web where the platform allows it.
+- Live polling on the web where the platform allows it. Settings, audio and
+  spoken warnings already work there.
 - GPU-side wind particle advection. The current layer rebuilds a CPU mesh each
   frame because that also works on WebGL2 — the note in `wind_draw.rs` marks the
   ceiling and says explicitly that the upgrade is *not* a compute shader.
