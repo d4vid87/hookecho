@@ -11583,6 +11583,12 @@ impl HookEchoApp {
             active: self.active,
             link_cameras: self.link_cameras,
             overlays_on,
+            fields_on: self
+                .fields
+                .iter()
+                .filter(|(_, st)| st.show)
+                .map(|(l, _)| l.slug().to_string())
+                .collect(),
         }
     }
 
@@ -11604,6 +11610,11 @@ impl HookEchoApp {
                 continue;
             }
             *self.overlay_flag(t) = ws.overlays_on.iter().any(|s| *s == t.slug());
+        }
+        // Same rule for the national field layers: an unknown slug is a layer this build
+        // doesn't have, which is a thing to skip rather than an error.
+        for (layer, st) in self.fields.iter_mut() {
+            st.show = ws.fields_on.iter().any(|s| s == layer.slug());
         }
         self.rebuild_overlays();
         self.pane_shown.clear();

@@ -164,6 +164,67 @@ impl FieldLayer {
         FieldLayer::AzShear,
         FieldLayer::Lightning,
     ];
+
+    /// Stable name for saved files — a workspace records which layers were on by slug, so a file
+    /// written by a newer build names a layer this one skips rather than failing to load.
+    pub fn slug(self) -> &'static str {
+        match self {
+            FieldLayer::Mrms => "mrms",
+            FieldLayer::Hrrr => "hrrr",
+            FieldLayer::Rotation => "rotation",
+            FieldLayer::Mesh => "mesh",
+            FieldLayer::AzShear => "azshear",
+            FieldLayer::Lightning => "lightning",
+            FieldLayer::Qpe1h => "qpe1h",
+            FieldLayer::Qpe24h => "qpe24h",
+            FieldLayer::Cape => "cape",
+            FieldLayer::Srh => "srh",
+            FieldLayer::PrecipType => "preciptype",
+            FieldLayer::FlashFlood => "flashflood",
+            FieldLayer::Vil => "vil",
+            FieldLayer::EchoTops => "echotops",
+            FieldLayer::HailSwath => "hailswath",
+            FieldLayer::Hca => "hca",
+            FieldLayer::UpdraftHelicity => "updrafthelicity",
+            FieldLayer::Smoke => "smoke",
+            FieldLayer::Mosaic => "mosaic",
+            FieldLayer::VilLocal => "vil-local",
+            FieldLayer::VilDensity => "vil-density",
+            FieldLayer::EtopLocal => "etop-local",
+            FieldLayer::HailMehs => "hail-mehs",
+            FieldLayer::HailPosh => "hail-posh",
+            FieldLayer::Snowfall => "snowfall",
+            FieldLayer::SnowAnalysis => "snow-analysis",
+            FieldLayer::GlobalMslp => "global-mslp",
+            FieldLayer::GlobalHeight500 => "global-height500",
+            FieldLayer::GlobalTemp2m => "global-temp2m",
+            FieldLayer::GlobalWind10m => "global-wind10m",
+            FieldLayer::GlobalPrecip => "global-precip",
+        }
+    }
+
+    /// The inverse of [`slug`](Self::slug), or `None` for a name this build doesn't have.
+    pub fn from_slug(s: &str) -> Option<FieldLayer> {
+        Self::DRAW_ORDER.into_iter().find(|f| f.slug() == s)
+    }
+}
+
+#[cfg(test)]
+mod field_slug_tests {
+    use super::FieldLayer;
+
+    #[test]
+    fn every_layer_has_a_slug_that_parses_back() {
+        for l in FieldLayer::DRAW_ORDER {
+            assert_eq!(FieldLayer::from_slug(l.slug()), Some(l), "{}", l.slug());
+        }
+        let mut slugs: Vec<&str> = FieldLayer::DRAW_ORDER.iter().map(|l| l.slug()).collect();
+        slugs.sort_unstable();
+        let n = slugs.len();
+        slugs.dedup();
+        assert_eq!(slugs.len(), n, "two layers share a slug");
+        assert_eq!(FieldLayer::from_slug("not-a-layer"), None);
+    }
 }
 
 /// A national MRMS mosaic to upload: an R8 index grid + LUT, warped plate-carrée→mercator.

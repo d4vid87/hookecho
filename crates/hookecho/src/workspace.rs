@@ -27,6 +27,10 @@ pub struct Workspace {
     /// unknown one from a newer build is skipped rather than fatal.
     #[serde(default)]
     pub overlays_on: Vec<String>,
+    /// National field layers that were on, by slug. Same forward-compatibility rule as the
+    /// overlays; `default` so a workspace written before this field existed still loads.
+    #[serde(default)]
+    pub fields_on: Vec<String>,
 }
 
 /// One pane's state. Camera as lon/lat/zoom, basemap as its slug: both survive a file written by
@@ -122,6 +126,7 @@ mod tests {
             active: 0,
             link_cameras: true,
             overlays_on: vec!["Alerts".into(), "Cells".into()],
+            fields_on: vec!["mrms".into()],
         };
         let json = serde_json::to_string(&ws).unwrap();
         assert_eq!(serde_json::from_str::<Workspace>(&json).unwrap(), ws);
