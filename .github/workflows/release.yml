@@ -158,6 +158,109 @@ jobs:
             dist/Hook_Echo-WX-x86_64.msi
             dist/Hook_Echo-WX-setup-x86_64.exe
 
+  macos:
+    name: macOS app (experimental)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build
+        run: cargo build --release -p hookecho
+
+      # An app bundle by hand rather than cargo-bundle: it is a directory, a plist and an icon,
+      # and a build-time dependency to write three files is not a trade worth making.
+      - name: Assemble HookEcho.app
+        run: |
+          set -euo pipefail
+          VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+          APP=dist/HookEcho.app
+          mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
+          cp target/release/hookecho "$APP/Contents/MacOS/hookecho"
+
+          # Icons at every size the iconset wants, each drawn rather than resampled.
+          ICONSET=dist/hookecho.iconset
+          mkdir -p "$ICONSET"
+          for px in 16 32 128 256 512; do
+            ./target/release/hookecho --headless-icon "$ICONSET/icon_${px}x${px}.png" "$px"
+            ./target/release/hookecho --headless-icon "$ICONSET/icon_${px}x${px}@2x.png" "$((px * 2))"
+          done
+          iconutil -c icns "$ICONSET" -o "$APP/Contents/Resources/hookecho.icns"
+
+          cat > "$APP/Contents/Info.plist" <<PLIST
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>CFBundleName</key><string>Hook Echo-WX</string>
+            <key>CFBundleDisplayName</key><string>Hook Echo-WX</string>
+            <key>CFBundleIdentifier</key><string>zip.batman.hookecho</string>
+            <key>CFBundleVersion</key><string>$VERSION</string>
+            <key>CFBundleShortVersionString</key><string>$VERSION</string>
+            <key>CFBundleExecutable</key><string>hookecho</string>
+            <key>CFBundleIconFile</key><string>hookecho</string>
+            <key>CFBundlePackageType</key><string>APPL</string>
+            <key>NSHighResolutionCapable</key><true/>
+            <key>LSMinimumSystemVersion</key><string>11.0</string>
+            <key>CFBundleURLTypes</key>
+            <array>
+              <dict>
+                <key>CFBundleURLName</key><string>Hook Echo-WX deep link</string>
+                <key>CFBundleURLSchemes</key><array><string>hookecho</string></array>
+              </dict>
+            </array>
+          </dict>
+          </plist>
+          PLIST
+          # The heredoc above is indented for readability; strip it back to a valid plist.
+          sed -i '' 's/^          //' "$APP/Contents/Info.plist"
+          plutil -lint "$APP/Contents/Info.plist"
+
+      # Ad-hoc signature: there is no Apple Developer account behind this build, so Gatekeeper
+      # will still ask. Signing at all is what keeps the bundle launchable on Apple silicon.
+      - name: Sign and zip
+        run: |
+          set -euo pipefail
+          codesign --force --deep --sign - dist/HookEcho.app
+          codesign -dv dist/HookEcho.app
+          ditto -c -k --keepParent dist/HookEcho.app dist/Hook_Echo-WX-macos.zip
+
+      - name: Smoke-test
+        run: |
+          ./dist/HookEcho.app/Contents/MacOS/hookecho --version
+          ./dist/HookEcho.app/Contents/MacOS/hookecho --headless-icon /tmp/icon.png 64
+          test -s /tmp/icon.png
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Hook_Echo-WX-macos
+          path: dist/Hook_Echo-WX-macos.zip
+
+      - name: Attach to release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/Hook_Echo-WX-macos.zip
+
+      - name: Update rolling release
+        if: github.ref == 'refs/heads/main'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest
+          name: Latest build (main)
+          prerelease: false
+          make_latest: true
+          body: |
+            Rolling build of `main` — rebuilt and re-published on every push, so this
+            is always the newest code. Older releases are kept as drafts.
+          files: dist/Hook_Echo-WX-macos.zip
+
   android:
     name: Android APK (arm64-v8a)
     runs-on: ubuntu-latest

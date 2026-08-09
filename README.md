@@ -3,7 +3,7 @@
 [![CI](https://github.com/d4vid87/hookecho/actions/workflows/ci.yml/badge.svg)](https://github.com/d4vid87/hookecho/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/d4vid87/hookecho?sort=semver)](../../releases)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](#license)
-![Platforms](https://img.shields.io/badge/platforms-Windows%20%7C%20Linux%20%7C%20Android-lightgrey)
+![Platforms](https://img.shields.io/badge/platforms-Windows%20%7C%20Linux%20%7C%20Android%20%7C%20Web%20%7C%20macOS%20(experimental)-lightgrey)
 
 Advanced NEXRAD weather radar viewer — an open-source homage to
 [supercell-wx](https://github.com/dpaulat/supercell-wx), built from scratch in Rust
@@ -34,13 +34,24 @@ built from NOAA's free GRIB grids, so it needs no API key.</sub>
   [Releases](../../releases) (`adb install -r …`, or open it on-device with
   "install unknown apps" enabled). The same Rust app as desktop,
   with a Material 3 phone UI — see [`android/README.md`](android/README.md).
+- **macOS** (experimental): `Hook_Echo-WX-macos.zip` from
+  [Releases](../../releases). The build is made and smoke-tested in CI but has
+  never been run on real Apple hardware, and it is ad-hoc signed, so Gatekeeper
+  will ask before it opens. Homebrew users can build it instead:
+  `brew install --HEAD d4vid87/hookecho/hookecho` (formula in
+  [`packaging/homebrew`](packaging/homebrew)).
+- **Package managers**: manifests for
+  [Flatpak](packaging/flatpak), [Snap](snap/snapcraft.yaml),
+  [Homebrew](packaging/homebrew) and [winget](packaging/winget) live in the
+  repo. None are published to their stores yet — building from these files
+  works today; a `flatpak install hookecho` does not.
 - **From source**: `cargo run --release` (needs a Rust toolchain; on Linux also
   ALSA/Wayland/GTK dev headers — see `.github/workflows/ci.yml`). Android builds
   via `android/build.sh` (NDK + `cargo-ndk`).
 
 Versioned `v*` releases are the stable channel. Every push to `main` also
 refreshes a [`latest`](../../releases/tag/latest) rolling prerelease carrying the
-same five artifacts, if you want the newest work without waiting for a tag.
+same artifacts, if you want the newest work without waiting for a tag.
 
 First launch opens a setup wizard: pick your home radar site, a theme (13 built
 in), and how warnings should reach you (chime and/or [ntfy.sh](https://ntfy.sh)
