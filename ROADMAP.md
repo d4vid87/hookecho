@@ -18,7 +18,6 @@ upgrade path out of it (`grep -rn "ponytail:" crates/`).
 
 ## Next
 
-- Publish the Docker image to a registry rather than asking people to build it.
 - Live polling on the web where the platform allows it. Settings, audio and
   spoken warnings already work there.
 - GPU-side wind particle advection. The current layer rebuilds a CPU mesh each
@@ -28,20 +27,13 @@ upgrade path out of it (`grep -rn "ponytail:" crates/`).
   off-screen render the server's `/snapshot.png` uses.
 - Register the `hookecho://` URL scheme on desktop, so shared links open the app
   the way they already do on Android.
-- Paging for the WFIGS wildfire feed — today the request is capped, and the
-  largest fires simply come first.
 - Placefile `Image:` support: it is parsed and skipped today, waiting on a real
   file in the wild to use as a fixture.
 
 ## Later
 
-- A nearest-N station picker for surface conditions instead of the single
-  closest station, for when the closest one is stale.
-- Per-marker point-scoped alert queries, so an advisory at the edge of a wide
-  zone resolves for every saved location rather than for the radar site.
 - True lunar ephemeris (Meeus) in place of the mean synodic phase, which is
   currently good to about half a day.
-- A disk cache for alerts that survives restarts.
 - Full effective-layer severe composite parameters, matching SPC mesoanalysis
   rather than the fixed-layer forms used now.
 - Real per-device inset queries on Android instead of the conservative floors.

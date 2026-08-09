@@ -489,11 +489,14 @@ JSON answers are cached for a minute and snapshots for five, so polling it every
 There's a container for it, if that's easier than a systemd unit:
 
 ```sh
-docker build -t hookecho .
 docker run -d -p 127.0.0.1:8080:8080 \
   -v ~/.config/hookecho:/root/.config/hookecho \
-  -v hookecho-cache:/root/.cache/hookecho hookecho
+  -v hookecho-cache:/root/.cache/hookecho \
+  ghcr.io/d4vid87/hookecho:latest
 ```
+
+`:latest` is rebuilt from `main` on every push; released versions are tagged
+(`:0.6.0`). `docker build -t hookecho .` still works if you'd rather build it.
 
 Mount your settings so it reports on your saved locations. The image is ~660 MB
 because it carries Mesa's lavapipe software Vulkan driver — that's what renders

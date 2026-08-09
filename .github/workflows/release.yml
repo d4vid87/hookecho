@@ -257,6 +257,44 @@ jobs:
             is always the newest code. Older releases are kept as drafts.
           files: Hook_Echo-WX-arm64-v8a.apk
 
+  # The image people actually run the server from. Built on every push to main so `:latest`
+  # tracks the rolling release, and tagged with the version on a `v*` push.
+  docker:
+    name: Container image (ghcr.io)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to ghcr.io
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Lowercased because the registry rejects capitals in a repository name, and GitHub
+      # usernames may have them.
+      - name: Build
+        id: build
+        run: |
+          image="ghcr.io/$(echo '${{ github.repository }}' | tr 'A-Z' 'a-z')"
+          docker build -t "$image:latest" .
+          case "${{ github.ref }}" in
+            refs/tags/v*) docker tag "$image:latest" "$image:${GITHUB_REF#refs/tags/v}";;
+          esac
+          echo "image=$image" >> "$GITHUB_OUTPUT"
+
+      # A container that can't start is worse than no container; find out here, not in someone's
+      # compose file.
+      - name: Smoke-test the image
+        run: docker run --rm --entrypoint hookecho ${{ steps.build.outputs.image }}:latest --version
+
+      - name: Push
+        run: docker push --all-tags ${{ steps.build.outputs.image }}
+
   # Only the current build should be public. Everything else gets demoted to a draft:
   # still on the Releases page for anyone with push access, assets intact, but invisible
   # (and undownloadable) to the public. Deleting would lose the binaries; drafts don't.
