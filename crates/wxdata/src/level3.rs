@@ -50,7 +50,8 @@ pub struct Cell {
     // Current position (from the STORM POSITION/FORECAST table).
     pub az_deg: Option<f32>,
     pub range_nm: Option<f32>,
-    // Movement.
+    // Movement. `mvt_deg` is the bearing the cell is moving TOWARD (0 = north, clockwise);
+    // the P58 tabular table gives direction-from, so the parser flips it once.
     pub mvt_deg: Option<f32>,
     pub mvt_kt: Option<f32>,
     // Intensity & structure.
@@ -430,6 +431,12 @@ fn parse_position_forecast(tabular: &str) -> HashMap<String, PosFcst> {
         let Field::Pair(mvt_deg, mvt_kt) = fields[1] else {
             continue;
         };
+        // P58 encodes MOVEMENT as direction-FROM (meteorological convention, like a wind):
+        // a cell moving due east is listed as 270°. Everything downstream (arrival cones,
+        // chase HUD, rain-arrival, follow prediction) treats mvt_deg as the bearing the cell
+        // moves TOWARD, so flip it here once. Verified against real products — e.g. O7 in
+        // the test table below moves ~022° while the raw table says 202°.
+        let mvt_deg = (mvt_deg + 180.0).rem_euclid(360.0);
         let mut fcst = Vec::new();
         for (slot, min) in [15u16, 30, 45, 60].iter().enumerate() {
             if let Field::Pair(a, r) = fields[2 + slot] {
@@ -913,13 +920,17 @@ P  ID     AZRAN     MOVEMENT    15 MIN    30 MIN    45 MIN    60 MIN    FCST/MEA
         let o7 = m.get("O7").expect("O7");
         assert_eq!(o7.az, 294.0);
         assert_eq!(o7.range, 83.0);
-        assert_eq!(o7.mvt_deg, 202.0);
+        // Raw table says 202° = direction-FROM; the parser stores the heading TOWARD (022°).
+        assert_eq!(o7.mvt_deg, 22.0);
         assert_eq!(o7.mvt_kt, 15.0);
         assert_eq!(o7.fcst.len(), 4);
         assert_eq!(o7.fcst[0], (15, 297.0, 83.0));
         assert_eq!(o7.fcst[3], (60, 304.0, 85.0));
         assert_eq!(o7.fcst_err, 0.5);
         assert_eq!(o7.mean_err, 0.6);
+        // Same flip for the other moving cells: 317° → 137°, 30° → 210°.
+        assert_eq!(m.get("E5").unwrap().mvt_deg, 137.0);
+        assert_eq!(m.get("M4").unwrap().mvt_deg, 210.0);
         // E5 has two NO DATA forecast slots.
         assert_eq!(m.get("E5").unwrap().fcst.len(), 2);
         // M4 has only the 15-min slot.
