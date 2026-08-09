@@ -588,8 +588,7 @@ mod tests {
         );
 
         // Seed every particle at the middle of the domain so the step is unambiguous.
-        let seed: Vec<u8> = std::iter::repeat([128u8, 0, 128, 0])
-            .take((SIDE * SIDE) as usize)
+        let seed: Vec<u8> = std::iter::repeat_n([128u8, 0, 128, 0], (SIDE * SIDE) as usize)
             .flatten()
             .collect();
         for tex in &gpu.pos {
