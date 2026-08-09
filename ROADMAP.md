@@ -7,44 +7,34 @@ upgrade path out of it (`grep -rn "ponytail:" crates/`).
 
 ## Now
 
-- **Saved workspaces** — a pane layout (sites, products, tilts, overlays) saved
-  and restored from the command palette.
-- **Disk caches that survive a restart** — archived radar volumes, zone
-  geometry, and the last alert fetch, so a scrub back through an event is a file
-  read and a restart mid-outbreak doesn't re-announce what's already on screen.
-- **Web build (WASM)** — the viewer in a browser: radar, basemap, alerts and
-  forecasts. Feeds that block cross-origin requests degrade rather than break,
-  and native-only subsystems (audio, GPS, plugins, camera video) are compiled
-  out.
-- **HTTP server mode (`--serve`)** and a **Docker image**, so a machine on the
-  shelf can answer questions about the weather without a display attached.
-- **Home Assistant integration** — a custom component polling the server, with
-  per-location sensors, an alert binary sensor and a radar camera.
+- **macOS**, as an experiment. CI builds and smoke-tests an app bundle, but
+  nobody has run it on real hardware, and it is ad-hoc signed.
+- **Store submissions.** The Flatpak, Snap, Homebrew and winget manifests are in
+  the repo and build; none of them is published, which is an account and a
+  review queue away rather than a code change.
+- **Placefile `Image:` support**: parsed and skipped today, waiting on a real
+  file in the wild to use as a fixture.
 
 ## Next
 
-- Live polling on the web where the platform allows it. Settings, audio and
-  spoken warnings already work there.
-- GPU-side wind particle advection. The current layer rebuilds a CPU mesh each
-  frame because that also works on WebGL2 — the note in `wind_draw.rs` marks the
-  ceiling and says explicitly that the upgrade is *not* a compute shader.
-- A radar snapshot as a desktop widget / conky-style output, reusing the same
-  off-screen render the server's `/snapshot.png` uses.
-- Placefile `Image:` support: it is parsed and skipped today, waiting on a real
-  file in the wild to use as a fixture.
+- A model comparison / difference view (GFS against ECMWF, or a run against its
+  predecessor). Field layers are app-global today and panes carry only radar
+  state, so this is an architecture change before it is a feature.
+- A packed-RGBA fallback for GPU wind on devices that cannot render to float
+  textures — the CPU path already covers them, so this is only worth doing if
+  one shows up that needs the speed.
+- A headless-browser smoke test in CI. `cargo check` cannot see a runtime panic,
+  which is how the web build shipped one.
+- Native-level severe profiles: the composites are solved from ten mandatory
+  levels, where SPC blends observations into a full-resolution analysis.
 
 ## Later
 
-- Accessibility: a screen-reader tree (accesskit), a high-contrast theme, and
-  keyboard-only navigation documented as a first-class path.
-- Flatpak, Snap, Homebrew and winget manifests, so installing is a package
-  manager line rather than a download.
-- True lunar ephemeris (Meeus) in place of the mean synodic phase, which is
-  currently good to about half a day.
-- Effective-layer severe parameters on the clicked sounding. The gridded layers
-  already solve a column per cell; the sounding panel still shows the
-  fixed-layer forms, so the two disagree in method.
-- Android settings import through the Storage Access Framework.
+- Per-pane thresholds and field layers, saved with the workspace.
+- Colormaps and stroke widths that respond to the high-contrast theme, not just
+  the chrome.
+- Fetching the effective-layer parameters above 200 hPa, so an uncapped plains
+  parcel has an equilibrium level to measure against.
 
 ## Not planned
 
@@ -59,8 +49,27 @@ upgrade path out of it (`grep -rn "ponytail:" crates/`).
   from your machine; sync goes through your own Google Drive folder, and
   position sharing through your own relay if you set one.
 
-Already shipped, and sometimes mistaken for gaps: gridded effective-layer STP,
-ESRH and EBWD, real per-device inset queries on Android, animated HRRR wind particles,
-the multi-day forecast, thirteen themes including Light, interactive vector
-basemaps, offline chase packs, future radar, archive back to 1991, placefiles
-with a layer manager, and settings sync.
+Already shipped, and sometimes mistaken for gaps:
+
+- **The whole app in a browser**, live chunk streaming included, so a web tab
+  updates sweep by sweep during a scan.
+- **GPU wind particles** — advected in a fragment shader, ping-ponging two
+  textures, with the CPU mesh still there as the fallback
+  (`HOOKECHO_CPU_WIND=1`).
+- **Saved workspaces**, three of them shipped, remembering panes, overlays and
+  field layers.
+- **Disk caches** for volumes, zones, soundings and snapshots, all capped and
+  swept, with a Storage tab that shows and clears them.
+- **Effective-layer severe parameters** on both the grid and the clicked
+  sounding, and CSV export of the sounding and its indices.
+- **Accessibility**: a screen-reader tree (accesskit), a high-contrast theme,
+  and the keyboard defaults written down.
+- **Android**: real per-device inset queries, and file import through the
+  Storage Access Framework.
+- **A radar snapshot as a file** (`--snapshot … --every`) for conky and
+  wallpaper scripts, with size and zoom on `/snapshot.png` too.
+- **True lunar ephemeris** (Meeus), in place of the mean synodic month.
+- Animated HRRR wind, the multi-day forecast, fourteen themes including Light,
+  interactive vector basemaps, offline chase packs, future radar, archive back
+  to 1991, placefiles with a layer manager, settings sync, and a Home Assistant
+  integration.

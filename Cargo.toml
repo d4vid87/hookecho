@@ -27,7 +27,7 @@ codegen-units = 1
 strip = true
 
 [workspace.package]
-version = "0.6.0"
+version = "0.7.0"
 edition = "2021"
 license = "MIT"
 repository = "https://github.com/d4vid87/hookecho"

@@ -540,7 +540,7 @@ docker run -d -p 127.0.0.1:8080:8080 \
 ```
 
 `:latest` is rebuilt from `main` on every push; released versions are tagged
-(`:0.6.0`). `docker build -t hookecho .` still works if you'd rather build it.
+(`:0.7.0`). `docker build -t hookecho .` still works if you'd rather build it.
 
 Mount your settings so it reports on your saved locations. The image is ~660 MB
 because it carries Mesa's lavapipe software Vulkan driver — that's what renders
