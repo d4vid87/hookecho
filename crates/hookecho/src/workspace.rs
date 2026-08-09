@@ -27,6 +27,11 @@ pub struct Workspace {
     /// unknown one from a newer build is skipped rather than fatal.
     #[serde(default)]
     pub overlays_on: Vec<String>,
+    /// Fill panes that have no site from whatever site is on screen when the workspace is
+    /// applied. Set on the starter workspaces, which describe an arrangement rather than a place:
+    /// "two panes of the same radar" has to mean *your* radar, not one shipped in a default file.
+    #[serde(default)]
+    pub adopt_site: bool,
     /// National field layers that were on, by slug. Same forward-compatibility rule as the
     /// overlays; `default` so a workspace written before this field existed still loads.
     #[serde(default)]
@@ -79,6 +84,81 @@ impl PaneSnap {
     }
 }
 
+/// Pane at a site-less default camera: the starters describe arrangements, and `adopt_site`
+/// fills the site in when one is applied.
+fn pane(moment: wxdata::level2::Moment, tilt: usize, srv: bool) -> PaneSnap {
+    PaneSnap {
+        site: None,
+        moment,
+        tilt,
+        srv,
+        basemap: "dark".into(),
+        // Centered on the southern plains at a single-radar zoom; overwritten the moment the
+        // pane adopts a site and recenters on it.
+        lon: -97.5,
+        lat: 35.5,
+        zoom: 7.5,
+    }
+}
+
+/// The three arrangements worth having before you have built any of your own. Seeded once, on
+/// first run; deleting them is final (see `Settings::seeded_workspaces`).
+pub fn starters() -> Vec<Workspace> {
+    use wxdata::level2::Moment;
+    vec![
+        Workspace {
+            name: "Chase".into(),
+            // Reflectivity beside storm-relative velocity, same radar, cameras locked: the
+            // couplet and the hook in one glance.
+            panes: vec![
+                pane(Moment::Reflectivity, 0, false),
+                pane(Moment::Velocity, 0, true),
+            ],
+            active: 0,
+            link_cameras: true,
+            overlays_on: vec![
+                "Alerts".into(),
+                "Cells".into(),
+                "Spotters".into(),
+                "StormReports".into(),
+                "Tds".into(),
+            ],
+            adopt_site: true,
+            fields_on: Vec::new(),
+        },
+        Workspace {
+            name: "National overview".into(),
+            // One pane, no site, the MRMS mosaic under the warnings — what is happening anywhere.
+            panes: vec![PaneSnap {
+                site: None,
+                moment: Moment::Reflectivity,
+                tilt: 0,
+                srv: false,
+                basemap: "dark".into(),
+                lon: -97.0,
+                lat: 38.5,
+                zoom: 4.0,
+            }],
+            active: 0,
+            link_cameras: false,
+            overlays_on: vec!["Alerts".into(), "StormReports".into(), "Fronts".into()],
+            adopt_site: false,
+            fields_on: vec!["mrms".into()],
+        },
+        Workspace {
+            name: "Analysis".into(),
+            // The same storm at four heights: how a couplet leans with height, which is the
+            // layout people rebuild by hand every time.
+            panes: (0..4).map(|t| pane(Moment::Reflectivity, t, false)).collect(),
+            active: 0,
+            link_cameras: true,
+            overlays_on: vec!["Alerts".into(), "Cells".into(), "RangeRings".into()],
+            adopt_site: true,
+            fields_on: Vec::new(),
+        },
+    ]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -126,9 +206,39 @@ mod tests {
             active: 0,
             link_cameras: true,
             overlays_on: vec!["Alerts".into(), "Cells".into()],
+            adopt_site: false,
             fields_on: vec!["mrms".into()],
         };
         let json = serde_json::to_string(&ws).unwrap();
         assert_eq!(serde_json::from_str::<Workspace>(&json).unwrap(), ws);
+    }
+
+    #[test]
+    fn old_workspace_files_still_load() {
+        // Written before `fields_on` and `adopt_site` existed.
+        let json = r#"{"name":"old","panes":[],"active":0,"link_cameras":false,
+            "overlays_on":["Alerts"]}"#;
+        let ws: Workspace = serde_json::from_str(json).unwrap();
+        assert!(ws.fields_on.is_empty() && !ws.adopt_site);
+    }
+
+    #[test]
+    fn every_starter_names_things_this_build_has() {
+        for ws in starters() {
+            assert!(!ws.panes.is_empty(), "{} has no panes", ws.name);
+            assert!(ws.active < ws.panes.len());
+            for slug in &ws.fields_on {
+                assert!(
+                    crate::render::FieldLayer::from_slug(slug).is_some(),
+                    "{}: unknown field layer {slug}",
+                    ws.name
+                );
+            }
+            for p in &ws.panes {
+                // `from_slug` falls back to Dark on an unknown name, so compare round trips.
+                let style = crate::tiles::BasemapStyle::from_slug(&p.basemap);
+                assert_eq!(style.slug(), p.basemap, "{}: bad basemap", ws.name);
+            }
+        }
     }
 }

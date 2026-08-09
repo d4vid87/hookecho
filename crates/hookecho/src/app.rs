@@ -2058,7 +2058,14 @@ impl HookEchoApp {
                 ));
         }
 
-        let settings = Settings::load();
+        let mut settings = Settings::load();
+        // Three arrangements worth having before you have built any of your own. Once only: the
+        // flag is what makes deleting them stick.
+        if settings.workspaces.is_empty() && !settings.seeded_workspaces {
+            settings.workspaces = crate::workspace::starters();
+            settings.seeded_workspaces = true;
+            settings.save();
+        }
         // Sample terrain at the resolution this user packs at, so a hi-res pack is actually read.
         crate::elevation::set_hires(settings.pack_hires_dem);
         // A decoded volume is tens of MB, so the phone's cache is sized to the loop window it can
@@ -11583,6 +11590,9 @@ impl HookEchoApp {
             active: self.active,
             link_cameras: self.link_cameras,
             overlays_on,
+            // A workspace you saved records the sites you had open; only the shipped starters
+            // adopt whatever is on screen.
+            adopt_site: false,
             fields_on: self
                 .fields
                 .iter()
@@ -11598,9 +11608,21 @@ impl HookEchoApp {
         if ws.panes.is_empty() {
             return;
         }
+        let adopted = ws
+            .adopt_site
+            .then(|| self.views[self.active].site.clone())
+            .flatten();
         self.set_pane_count(ws.panes.len());
         for (v, snap) in self.views.iter_mut().zip(&ws.panes) {
             snap.apply(v);
+            if v.site.is_none() {
+                if let Some(site) = &adopted {
+                    v.site = Some(site.clone());
+                    // The starter's camera is a placeholder over the plains; let the site
+                    // recenter this pane the way a fresh one does.
+                    v.camera_placed = false;
+                }
+            }
         }
         self.active = ws.active.min(self.views.len() - 1);
         self.link_cameras = ws.link_cameras;

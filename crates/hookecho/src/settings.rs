@@ -323,6 +323,11 @@ pub struct Settings {
     /// from `presets`, which is the starred-radar-site list.
     #[serde(default)]
     pub workspaces: Vec<crate::workspace::Workspace>,
+    /// Whether the starter workspaces have been offered. Seeding on "the list is empty" alone
+    /// would resurrect them every time someone deleted the last one, which is the opposite of
+    /// what deleting the last one means.
+    #[serde(default)]
+    pub seeded_workspaces: bool,
     /// NOAA Weather Radio relays to listen to. Empty by default on purpose: NOAA runs no streams of
     /// its own, so every URL here is a third-party relay someone runs for their own county, and
     /// shipping a guessed list would mostly ship dead links. Add the one for your area.
@@ -638,6 +643,7 @@ impl Default for Settings {
             basemap: String::new(),
             overlays_on: Vec::new(),
             workspaces: Vec::new(),
+            seeded_workspaces: false,
             last_view: None,
             nwr_streams: Vec::new(),
             mute_alerts: false,
@@ -830,6 +836,7 @@ mod tests {
     fn roundtrips() {
         let s = Settings {
             workspaces: Vec::new(),
+            seeded_workspaces: false,
             smooth_radar: false,
             hide_sidebar: false,
             hide_toolbar: false,
