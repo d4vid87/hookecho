@@ -36,7 +36,11 @@ puffin_http = { version = "0.17", optional = true }
 # backend choice to us: wgpu's own default turns on every backend for every platform (dx12 and
 # metal get compiled into the Linux and Android builds and never run). We union in exactly the
 # backends each target can use, further down.
-eframe = { version = "0.35", default-features = false, features = ["default_fonts", "wgpu_no_default_features"] }
+#
+# `accesskit` forwards to egui-winit and publishes the widget tree over the platform's
+# accessibility API — AT-SPI on Linux, UI Automation on Windows. Without it a screen reader sees
+# one opaque canvas, because that is all an egui window is at the OS level.
+eframe = { version = "0.35", default-features = false, features = ["accesskit", "default_fonts", "wgpu_no_default_features"] }
 # `serde` gives Key/Modifiers/KeyboardShortcut their Serialize/Deserialize impls, which is what
 # lets user keybinds live in settings.json.
 egui = { version = "0.35", features = ["serde"] }
