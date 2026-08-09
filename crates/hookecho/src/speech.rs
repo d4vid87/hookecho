@@ -5,6 +5,7 @@
 //! logged and dropped — a machine with no speech engine is a normal machine, not a broken one.
 
 /// Speak `text` aloud, if the platform can. Returns immediately.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn speak(text: &str) {
     let text = text.to_string();
     std::thread::spawn(move || {
@@ -14,7 +15,33 @@ pub fn speak(text: &str) {
     });
 }
 
-#[cfg(not(target_os = "android"))]
+/// The browser speaks asynchronously on its own, so there is no thread to spawn — and no thread to
+/// spawn with, since wasm32 has no `std::thread`.
+#[cfg(target_arch = "wasm32")]
+pub fn speak(text: &str) {
+    if let Err(e) = imp::speak_blocking(text) {
+        log::warn!("speech failed: {e}");
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+mod imp {
+    /// `speechSynthesis` is in every browser we build for, so the web arm needs no engine of its
+    /// own. A browser with speech disabled throws, which lands in the same warn-and-drop path as a
+    /// desktop with no espeak.
+    pub fn speak_blocking(text: &str) -> Result<(), String> {
+        let synth = web_sys::window()
+            .ok_or("no window")?
+            .speech_synthesis()
+            .map_err(|_| "no speechSynthesis")?;
+        let utter = web_sys::SpeechSynthesisUtterance::new_with_text(text)
+            .map_err(|_| "utterance failed")?;
+        synth.speak(&utter);
+        Ok(())
+    }
+}
+
+#[cfg(not(any(target_os = "android", target_arch = "wasm32")))]
 mod imp {
     use std::process::{Command, Stdio};
 

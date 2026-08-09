@@ -90,7 +90,7 @@ getrandom = { version = "0.3", features = ["wasm_js"] }
 # app's own logs in the devtools console, which is the only debugger a wasm build has.
 console_error_panic_hook = "0.1"
 console_log = "1"
-web-sys = { version = "0.3", features = ["Document", "Window", "HtmlCanvasElement", "Storage", "HtmlAudioElement"] }
+web-sys = { version = "0.3", features = ["Document", "Window", "HtmlCanvasElement", "Storage", "HtmlAudioElement", "SpeechSynthesis", "SpeechSynthesisUtterance"] }
 
 # Native file dialogs — desktop only. rfd has no Android backend, and Android replaces it with a
 # fixed exports dir + Storage-Access-Framework (deferred); see `dialog.rs`.
