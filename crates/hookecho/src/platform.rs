@@ -173,7 +173,7 @@ pub fn is_metered() -> bool {
 }
 
 #[cfg(target_os = "android")]
-mod android {
+pub(crate) mod android {
     use std::sync::OnceLock;
     use winit::platform::android::activity::AndroidApp;
 
@@ -184,8 +184,9 @@ mod android {
         let _ = APP.set(app);
     }
 
-    /// The stashed activity handle (for the sibling IME/clipboard module).
-    pub(super) fn app() -> Option<&'static AndroidApp> {
+    /// The stashed activity handle — for the sibling IME/clipboard module, and for `dialog`,
+    /// which calls into the activity to open the system file picker.
+    pub(crate) fn app() -> Option<&'static AndroidApp> {
         APP.get()
     }
 
