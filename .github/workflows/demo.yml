@@ -1,0 +1,64 @@
+name: Demo
+
+# The public browser demo, rebuilt from main on every push. It is the primary link in every
+# announcement, so it tracks the rolling `latest` build rather than the last tag.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    name: Cloudflare Pages
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # The proxy allowlist exists twice — in the native server and in the Pages Worker — and a
+      # feed added to one and not the other is a demo that silently stops drawing something.
+      - name: Check the proxy allowlist has not drifted
+        run: |
+          hosts() { awk '/^(const ALLOWED_HOSTS)/,/^\];?$/' "$1" | grep -oE '"[a-z0-9.-]+\.[a-z]+"' | sort; }
+          diff <(hosts crates/hookecho/src/serve.rs) <(hosts web/_worker.js) || {
+            echo "::error::ALLOWED_HOSTS differs between serve.rs and web/_worker.js"
+            exit 1
+          }
+
+      - name: Install Rust (+ wasm target)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install wasm-bindgen-cli
+        run: cargo install wasm-bindgen-cli --locked
+
+      - name: Build the bundle
+        run: scripts/web/build.sh
+
+      # `web/` is the deploy directory: index.html, dist/ and _worker.js, which Pages picks up as
+      # advanced mode and puts in front of every request.
+      # ponytail: Pages hard-fails on files over 25 MiB; the wasm is 12.6 MB today.
+      - name: Deploy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: npx --yes wrangler@3 pages deploy web --project-name=hookecho --branch=main
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install puppeteer
+        run: npm install --no-save puppeteer@23
+
+      # The same boot check CI runs against a local server, now against the deployed origin.
+      - name: Smoke-test the deployed demo
+        run: node scripts/web/smoke.mjs https://hookecho.pages.dev/
+
+      - name: Check the proxy answers and refuses
+        run: |
+          curl -sf "https://hookecho.pages.dev/proxy/api.weather.gov/alerts/active/count" >/dev/null
+          test "$(curl -s -o /dev/null -w '%{http_code}' https://hookecho.pages.dev/proxy/evil.example/x)" = 403

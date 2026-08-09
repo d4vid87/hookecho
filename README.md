@@ -17,6 +17,9 @@ on Windows, Linux, and Android.
 public archive inside the app, one scan every few seconds, with the tornado
 warning that was in force at the time.</sub>
 
+**[Try it in your browser →](https://hookecho.pages.dev/)** — the whole app as
+wasm, live data, nothing to install.
+
 ![HRRR 10 m wind drawn as drifting particles across the CONUS](docs/shots/wind.gif)
 
 <sub>**Animated wind.** HRRR 10 m wind as drifting particles coloured by speed —
@@ -580,6 +583,9 @@ Remember the server has to be reachable from Home Assistant — that means
 saved locations on.
 
 ### In a browser
+
+A hosted build of `main` runs at **<https://hookecho.pages.dev/>** if you only
+want to look at it.
 
 The app also builds for wasm and runs on a canvas — the same `HookEchoApp`, not
 a cut-down viewer. Build it and serve it:
