@@ -1065,6 +1065,11 @@ pub(crate) enum PaletteAction {
     OpenInWindy,
     /// Copy a `hookecho://goto/…` link to this view (site, center, zoom, archive time).
     CopyViewLink,
+    /// Snapshot the current pane layout as a new workspace.
+    SaveWorkspace,
+    /// Restore the saved workspace at this index (an index, not the workspace itself, so the enum
+    /// stays `Copy` and the palette rows stay cheap).
+    ApplyWorkspace(usize),
 }
 
 /// A placefile label/marker the egui painter draws over the map.
@@ -6492,6 +6497,24 @@ impl HookEchoApp {
             None,
         );
         push(
+            "Save workspace",
+            "Reference",
+            "Remember this pane layout \u{2014} sites, products, tilts, overlays \u{2014} to restore later",
+            false,
+            PaletteAction::SaveWorkspace,
+            None,
+        );
+        for (i, ws) in self.settings.workspaces.iter().enumerate() {
+            push(
+                &format!("Workspace: {}", ws.name),
+                "Reference",
+                "Restore this saved pane layout",
+                false,
+                PaletteAction::ApplyWorkspace(i),
+                None,
+            );
+        }
+        push(
             "Mute audio alerts",
             "Alerts",
             "Silence every chime and spoken warning without changing your sound choices",
@@ -6824,6 +6847,24 @@ impl HookEchoApp {
                 );
                 ctx.copy_text(link.clone());
                 self.banner("Link copied".to_string(), link);
+            }
+            PaletteAction::SaveWorkspace => {
+                let ws = self.capture_workspace();
+                let name = ws.name.clone();
+                self.settings.workspaces.push(ws);
+                self.settings.save();
+                // ponytail: auto-named, renamed in Settings. A naming dialog mid-storm is the
+                // last thing anyone wants.
+                self.toast(
+                    ToastKind::Success,
+                    format!("Saved \u{2014} rename \"{name}\" in Settings"),
+                );
+            }
+            PaletteAction::ApplyWorkspace(i) => {
+                if let Some(ws) = self.settings.workspaces.get(i).cloned() {
+                    self.apply_workspace(&ws);
+                    self.toast(ToastKind::Info, format!("Workspace: {}", ws.name));
+                }
             }
             PaletteAction::OpenInWindy => {
                 let v = &self.views[self.active];
@@ -11494,6 +11535,49 @@ impl HookEchoApp {
         }
         // Four heights of one storm only reads if all four look at the same place.
         self.link_cameras = true;
+        self.pane_shown.clear();
+    }
+
+    /// Snapshot the current arrangement. Auto-named: naming things is a peacetime activity.
+    fn capture_workspace(&mut self) -> crate::workspace::Workspace {
+        let overlays_on: Vec<String> = OverlayToggle::ALL
+            .into_iter()
+            .filter(|t| *t != OverlayToggle::LinkCameras && *self.overlay_flag(*t))
+            .map(|t| t.slug())
+            .collect();
+        crate::workspace::Workspace {
+            name: format!("Workspace {}", self.settings.workspaces.len() + 1),
+            panes: self
+                .views
+                .iter()
+                .map(crate::workspace::PaneSnap::capture)
+                .collect(),
+            active: self.active,
+            link_cameras: self.link_cameras,
+            overlays_on,
+        }
+    }
+
+    /// Restore a saved arrangement. Panes come back empty of data and fill through the normal
+    /// poll, exactly as a freshly split pane does.
+    fn apply_workspace(&mut self, ws: &crate::workspace::Workspace) {
+        if ws.panes.is_empty() {
+            return;
+        }
+        self.set_pane_count(ws.panes.len());
+        for (v, snap) in self.views.iter_mut().zip(&ws.panes) {
+            snap.apply(v);
+        }
+        self.active = ws.active.min(self.views.len() - 1);
+        self.link_cameras = ws.link_cameras;
+        // Overlay names this build doesn't know are skipped, same as the settings restore.
+        for t in OverlayToggle::ALL {
+            if t == OverlayToggle::LinkCameras {
+                continue;
+            }
+            *self.overlay_flag(t) = ws.overlays_on.iter().any(|s| *s == t.slug());
+        }
+        self.rebuild_overlays();
         self.pane_shown.clear();
     }
 

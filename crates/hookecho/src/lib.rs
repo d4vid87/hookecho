@@ -64,6 +64,7 @@ pub mod tray;
 pub mod ui;
 pub mod vector_tiles;
 pub mod view;
+pub mod workspace;
 pub mod wind_draw;
 
 pub use app::HookEchoApp;

@@ -316,6 +316,10 @@ pub struct Settings {
     /// unknown enum variant would fail the parse and reset every other setting with it.
     #[serde(default)]
     pub overlays_on: Vec<String>,
+    /// Saved pane layouts (see `crate::workspace`), applied from the command palette. Distinct
+    /// from `presets`, which is the starred-radar-site list.
+    #[serde(default)]
+    pub workspaces: Vec<crate::workspace::Workspace>,
     /// NOAA Weather Radio relays to listen to. Empty by default on purpose: NOAA runs no streams of
     /// its own, so every URL here is a third-party relay someone runs for their own county, and
     /// shipping a guessed list would mostly ship dead links. Add the one for your area.
@@ -630,6 +634,7 @@ impl Default for Settings {
             live_loop_frames: default_live_loop_frames(),
             basemap: String::new(),
             overlays_on: Vec::new(),
+            workspaces: Vec::new(),
             last_view: None,
             nwr_streams: Vec::new(),
             mute_alerts: false,
@@ -821,6 +826,7 @@ mod tests {
     #[test]
     fn roundtrips() {
         let s = Settings {
+            workspaces: Vec::new(),
             smooth_radar: false,
             hide_sidebar: false,
             hide_toolbar: false,

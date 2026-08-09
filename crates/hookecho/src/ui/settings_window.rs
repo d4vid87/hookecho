@@ -573,6 +573,32 @@ fn general_tab(ui: &mut egui::Ui, settings: &mut Settings) {
 
     ui.add_space(8.0);
     ui.separator();
+    ui.strong("Workspaces");
+    if settings.workspaces.is_empty() {
+        ui.weak("None yet \u{2014} arrange your panes, then run \"Save workspace\" from Ctrl+K.");
+    } else {
+        ui.weak("Restore one from Ctrl+K. Renaming here is what the command is called.");
+    }
+    let mut remove = None;
+    for (i, ws) in settings.workspaces.iter_mut().enumerate() {
+        ui.horizontal(|ui| {
+            ui.add(egui::TextEdit::singleline(&mut ws.name).desired_width(220.0));
+            ui.weak(format!(
+                "{} pane{}",
+                ws.panes.len(),
+                if ws.panes.len() == 1 { "" } else { "s" }
+            ));
+            if ui.button("Delete").clicked() {
+                remove = Some(i);
+            }
+        });
+    }
+    if let Some(i) = remove {
+        settings.workspaces.remove(i);
+    }
+
+    ui.add_space(8.0);
+    ui.separator();
     ui.strong("AI");
     ui.horizontal(|ui| {
         ui.label("Anthropic key:");
