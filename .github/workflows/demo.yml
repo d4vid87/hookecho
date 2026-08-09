@@ -54,6 +54,18 @@ jobs:
       - name: Install puppeteer
         run: npm install --no-save puppeteer@23
 
+      # A fresh deployment answers 522 for the wasm for a few seconds before the asset is live,
+      # which the smoke test would otherwise read as a broken build.
+      - name: Wait for the bundle to be served
+        run: |
+          for _ in $(seq 1 20); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' https://hookecho.pages.dev/dist/hookecho_bg.wasm)
+            [ "$code" = 200 ] && exit 0
+            sleep 10
+          done
+          echo "::error::wasm never became available (last status $code)"
+          exit 1
+
       # The same boot check CI runs against a local server, now against the deployed origin.
       - name: Smoke-test the deployed demo
         run: node scripts/web/smoke.mjs https://hookecho.pages.dev/

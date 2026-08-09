@@ -132,8 +132,11 @@ export default {
     const target = `https://${host}/${rest.slice(slash + 1)}${url.search}`;
     let upstream;
     try {
-      // No client header is forwarded — this is a fresh request, not a rewrite of theirs.
+      // No client header is forwarded — this is a fresh request, not a rewrite of theirs. The one
+      // header set here is the User-Agent the app identifies itself with everywhere else
+      // (wxdata::alerts::USER_AGENT); api.weather.gov refuses a request without one.
       upstream = await fetch(target, {
+        headers: { "user-agent": "hookecho (github.com/d4vid87/hookecho, davidmay87@gmail.com)" },
         cf: { cacheTtl: LIVE_HOSTS.has(host) ? 15 : 300, cacheEverything: true },
       });
     } catch (e) {
