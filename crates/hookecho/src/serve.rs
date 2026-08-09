@@ -225,8 +225,7 @@ fn cached_json(server: &Server, path: &str) -> anyhow::Result<Vec<u8>> {
 
 /// A radar PNG through the same off-screen renderer the `--headless` verifier uses.
 ///
-// ponytail: one render at a time, fixed 1000x1000, site and product only; add tilt/palette params
-// when someone asks for them.
+// ponytail: one render at a time; tilt and palette are still fixed. Add them when someone asks.
 fn snapshot(server: &Server, query: &str) -> anyhow::Result<Vec<u8>> {
     let site = crate::cloud::param(query, "site").unwrap_or_else(|| "KTLX".to_string());
     let product = crate::cloud::param(query, "product").unwrap_or_else(|| "REF".to_string());
@@ -241,7 +240,17 @@ fn snapshot(server: &Server, query: &str) -> anyhow::Result<Vec<u8>> {
         &crate::cloud::param(query, "basemap").unwrap_or_else(|| "dark".to_string()),
     );
 
-    let key = format!("/snapshot.png?{site}&{product}&{}", basemap.slug());
+    // A dashboard wants a tile it can fit, and a widget wants its own framing; both are one
+    // parameter each on a render that was already happening.
+    let size: Option<u32> = crate::cloud::param(query, "size").and_then(|v| v.parse().ok());
+    let zoom: Option<f64> = crate::cloud::param(query, "zoom").and_then(|v| v.parse().ok());
+    let px = size.unwrap_or(1000).clamp(256, 2048);
+    let zoom_tag = zoom.map_or_else(|| "auto".to_string(), |z| format!("{z:.2}"));
+
+    let key = format!(
+        "/snapshot.png?{site}&{product}&{}&{px}&{zoom_tag}",
+        basemap.slug()
+    );
     if let Some(hit) = server
         .cache
         .lock()
@@ -254,11 +263,20 @@ fn snapshot(server: &Server, query: &str) -> anyhow::Result<Vec<u8>> {
 
     let dir = crate::paths::cache_dir().ok_or_else(|| anyhow::anyhow!("no cache directory"))?;
     std::fs::create_dir_all(&dir)?;
-    let out = dir.join(format!("snapshot-{site}-{product}.png"));
+    // Everything the memory key distinguishes has to be in the filename too: the basemap used to
+    // be missing from it, so two styles of the same site raced over one file on disk.
+    let dir = dir.join("snapshots");
+    std::fs::create_dir_all(&dir)?;
+    let out = dir.join(format!(
+        "snapshot-{site}-{product}-{}-{px}-{zoom_tag}.png",
+        basemap.slug()
+    ));
     {
         // The headless renderer builds its own runtime, so it can only be called from a plain
         // thread — which this is, one connection per thread.
         let _one_at_a_time = server.render.lock().unwrap();
+        // Global knobs on the renderer, set under the same lock that serializes the render.
+        crate::headless::set_output(Some(px), zoom);
         crate::headless::run(
             out.to_string_lossy().as_ref(),
             &site,

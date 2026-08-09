@@ -9,17 +9,44 @@ use crate::render::{mercator::Camera, MapCallback, OverlayUpload, RenderResource
 use crate::tiles::{BasemapStyle, TileManager};
 use wxdata::level2::{self, Moment};
 
-const SIZE: u32 = 1000;
+/// Output edge length in pixels, and the zoom override, if either was asked for.
+///
+/// Process-global rather than threaded through the dozen render entry points, because every
+/// caller of those is already serialized: the CLI renders once and exits, and the server holds a
+/// render mutex for the whole call. Set it inside that lock or not at all.
+static SIZE_PX: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(1000);
+/// The zoom override as `f64` bits, or `u64::MAX` for "no override" — no float is that pattern.
+static ZOOM_OVERRIDE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(u64::MAX);
+
+/// Edge length of the rendered PNG. Square: every camera the harness builds is square, and a
+/// non-square viewport would need the world-to-clip uniform to carry an aspect ratio it doesn't.
+fn size() -> u32 {
+    SIZE_PX.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Ask for a different output size (256..=2048 px) and/or zoom for the renders that follow.
+/// `None` leaves that knob where it was.
+pub fn set_output(px: Option<u32>, zoom: Option<f64>) {
+    if let Some(px) = px {
+        SIZE_PX.store(px.clamp(256, 2048), std::sync::atomic::Ordering::Relaxed);
+    }
+    if let Some(z) = zoom {
+        ZOOM_OVERRIDE.store(z.clamp(1.0, 14.0).to_bits(), std::sync::atomic::Ordering::Relaxed);
+    }
+}
 
 /// `HOOKECHO_CAM=lon,lat,zoom` overrides any headless camera — framing knob for screenshots.
+/// An explicit `--zoom`/`?zoom=` beats both, since it was typed for this render.
 fn cam_or_env(lon: f64, lat: f64, zoom: f64) -> Camera {
+    let asked = ZOOM_OVERRIDE.load(std::sync::atomic::Ordering::Relaxed);
+    let asked = (asked != u64::MAX).then(|| f64::from_bits(asked));
     if let Ok(v) = std::env::var("HOOKECHO_CAM") {
         let p: Vec<f64> = v.split(',').filter_map(|s| s.trim().parse().ok()).collect();
         if p.len() == 3 {
-            return Camera::at_lonlat(p[0], p[1], p[2]);
+            return Camera::at_lonlat(p[0], p[1], asked.unwrap_or(p[2]));
         }
     }
-    Camera::at_lonlat(lon, lat, zoom)
+    Camera::at_lonlat(lon, lat, asked.unwrap_or(zoom))
 }
 
 /// Basemap for the national-layer renders, so field mosaics sit over a real map instead of
@@ -35,7 +62,7 @@ fn national_basemap(
     Vec<crate::render::PendingVectorTile>,
     Vec<crate::render::TileId>,
 ) {
-    let vp = (SIZE as f32, SIZE as f32);
+    let vp = (size() as f32, size() as f32);
     let client = reqwest::Client::new();
     if let Ok(slug) = std::env::var("HOOKECHO_BASEMAP") {
         let style = crate::tiles::BasemapStyle::from_slug(&slug);
@@ -159,9 +186,9 @@ pub fn run(
     );
 
     let camera = cam_or_env(sweep.radar_lon as f64, sweep.radar_lat as f64, 7.0);
-    let (center, scale) = camera.world_to_clip_uniform((SIZE as f32, SIZE as f32));
+    let (center, scale) = camera.world_to_clip_uniform((size() as f32, size() as f32));
 
-    let vp = (SIZE as f32, SIZE as f32);
+    let vp = (size() as f32, size() as f32);
     let client = reqwest::Client::builder()
         .user_agent("Mozilla/5.0 (compatible; hookecho/0.0; +github.com/d4vid87/hookecho)")
         .build()?;
@@ -262,7 +289,7 @@ pub fn run_multipane(site: &str, out_a: &str, out_b: &str) -> anyhow::Result<()>
         anyhow::bail!("no volume for {site}")
     })?;
     let table = crate::colormap::default_table(Moment::Reflectivity).clone();
-    let vp = (SIZE as f32, SIZE as f32);
+    let vp = (size() as f32, size() as f32);
 
     // Pane 0 centered on the radar; pane 1 offset well to the east (different camera).
     let cam_a = Camera::at_lonlat(sweep.radar_lon as f64, sweep.radar_lat as f64, 7.0);
@@ -731,7 +758,7 @@ pub fn run_live(out_path: &str, site: &str, moment: Moment) -> anyhow::Result<()
         site, sweep.elevation_deg, sweep.gate_count, sweep.az_bins
     );
     let camera = Camera::at_lonlat(sweep.radar_lon as f64, sweep.radar_lat as f64, 7.0);
-    let (center, scale) = camera.world_to_clip_uniform((SIZE as f32, SIZE as f32));
+    let (center, scale) = camera.world_to_clip_uniform((size() as f32, size() as f32));
     let table = crate::colormap::default_table(moment).clone();
     let cb = MapCallback {
         pane: 0,
@@ -809,7 +836,7 @@ pub fn run_placefile(path: &str, out_path: &str) -> anyhow::Result<()> {
         geom.indices.len()
     );
 
-    let (center, scale) = camera.world_to_clip_uniform((SIZE as f32, SIZE as f32));
+    let (center, scale) = camera.world_to_clip_uniform((size() as f32, size() as f32));
     let cb = MapCallback {
         pane: 0,
         camera_center: center,
@@ -865,7 +892,7 @@ pub fn run_overlay(out_path: &str) -> anyhow::Result<()> {
         geom.indices.len()
     );
 
-    let (center, scale) = camera.world_to_clip_uniform((SIZE as f32, SIZE as f32));
+    let (center, scale) = camera.world_to_clip_uniform((size() as f32, size() as f32));
     let cb = MapCallback {
         pane: 0,
         camera_center: center,
@@ -962,7 +989,7 @@ pub fn run_mrms(out_path: &str) -> anyhow::Result<()> {
 
     let camera = cam_or_env(-97.0, 38.0, 4.0);
     let (new_tiles, visible, new_vector_tiles, visible_vector) = national_basemap(&rt, &camera);
-    let (center, scale) = camera.world_to_clip_uniform((SIZE as f32, SIZE as f32));
+    let (center, scale) = camera.world_to_clip_uniform((size() as f32, size() as f32));
     let cb = MapCallback {
         pane: 0,
         camera_center: center,
@@ -1013,7 +1040,7 @@ pub fn run_lightning(out_path: &str) -> anyhow::Result<()> {
     let upload = crate::app::lightning_upload(&field);
     let camera = cam_or_env(-97.0, 38.0, 4.0);
     let (new_tiles, visible, new_vector_tiles, visible_vector) = national_basemap(&rt, &camera);
-    let (center, scale) = camera.world_to_clip_uniform((SIZE as f32, SIZE as f32));
+    let (center, scale) = camera.world_to_clip_uniform((size() as f32, size() as f32));
     let cb = MapCallback {
         pane: 0,
         camera_center: center,
@@ -1080,7 +1107,7 @@ pub fn run_field(slug: &str, out_path: &str) -> anyhow::Result<()> {
     let upload = crate::app::field_upload_indexed(layer, &field);
     let camera = cam_or_env(-97.0, 38.0, 4.0);
     let (new_tiles, visible, new_vector_tiles, visible_vector) = national_basemap(&rt, &camera);
-    let (center, scale) = camera.world_to_clip_uniform((SIZE as f32, SIZE as f32));
+    let (center, scale) = camera.world_to_clip_uniform((size() as f32, size() as f32));
     let cb = MapCallback {
         pane: 0,
         camera_center: center,
@@ -1154,7 +1181,7 @@ pub fn run_global(model: &str, slug: &str, out_path: &str) -> anyhow::Result<()>
     let upload = crate::app::field_upload_indexed(layer, &field);
     let camera = cam_or_env(0.0, 20.0, 2.0);
     let (new_tiles, visible, new_vector_tiles, visible_vector) = national_basemap(&rt, &camera);
-    let (center, scale) = camera.world_to_clip_uniform((SIZE as f32, SIZE as f32));
+    let (center, scale) = camera.world_to_clip_uniform((size() as f32, size() as f32));
     let cb = MapCallback {
         pane: 0,
         camera_center: center,
@@ -1428,7 +1455,7 @@ pub fn run_l3grid(kind: &str, site: &str, out_path: &str) -> anyhow::Result<()> 
     let upload = crate::app::field_upload_indexed(layer, &field);
     let camera = cam_or_env(clon, clat, 7.0);
     let (new_tiles, visible, new_vector_tiles, visible_vector) = national_basemap(&rt, &camera);
-    let (center, scale) = camera.world_to_clip_uniform((SIZE as f32, SIZE as f32));
+    let (center, scale) = camera.world_to_clip_uniform((size() as f32, size() as f32));
     let cb = MapCallback {
         pane: 0,
         camera_center: center,
@@ -1497,7 +1524,7 @@ pub fn run_env(slug: &str, out_path: &str) -> anyhow::Result<()> {
     let upload = crate::app::field_upload_indexed(layer, f);
     let camera = cam_or_env(-97.0, 38.0, 4.0);
     let (new_tiles, visible, new_vector_tiles, visible_vector) = national_basemap(&rt, &camera);
-    let (center, scale) = camera.world_to_clip_uniform((SIZE as f32, SIZE as f32));
+    let (center, scale) = camera.world_to_clip_uniform((size() as f32, size() as f32));
     let cb = MapCallback {
         pane: 0,
         camera_center: center,
@@ -1675,7 +1702,7 @@ pub fn run_hrrr_layer(
     };
     let camera = cam_or_env(-97.0, 38.0, 4.0);
     let (new_tiles, visible, new_vector_tiles, visible_vector) = national_basemap(&rt, &camera);
-    let (center, scale) = camera.world_to_clip_uniform((SIZE as f32, SIZE as f32));
+    let (center, scale) = camera.world_to_clip_uniform((size() as f32, size() as f32));
     let cb = MapCallback {
         pane: 0,
         camera_center: center,
@@ -1707,7 +1734,7 @@ fn render_field_png(
 ) -> anyhow::Result<()> {
     let camera = cam_or_env(-97.0, 38.0, 4.0);
     let (new_tiles, visible, new_vector_tiles, visible_vector) = national_basemap(rt, &camera);
-    let (center, scale) = camera.world_to_clip_uniform((SIZE as f32, SIZE as f32));
+    let (center, scale) = camera.world_to_clip_uniform((size() as f32, size() as f32));
     let cb = MapCallback {
         pane: 0,
         camera_center: center,
@@ -1892,8 +1919,8 @@ pub fn run_3d(site: &str, out_path: &str, threshold_dbz: Option<f32>) -> anyhow:
     let target = device.create_texture(&wgpu::TextureDescriptor {
         label: Some("headless_3d_target"),
         size: wgpu::Extent3d {
-            width: SIZE,
-            height: SIZE,
+            width: size(),
+            height: size(),
             depth_or_array_layers: 1,
         },
         mip_level_count: 1,
@@ -1918,8 +1945,8 @@ pub fn run_3d(site: &str, out_path: &str, threshold_dbz: Option<f32>) -> anyhow:
         },
     );
 
-    let rgba = read_target(&device, &queue, &target, SIZE);
-    image::save_buffer(out_path, &rgba, SIZE, SIZE, image::ColorType::Rgba8)?;
+    let rgba = read_target(&device, &queue, &target, size());
+    image::save_buffer(out_path, &rgba, size(), size(), image::ColorType::Rgba8)?;
     // Echo pixels = those differing from the uniform sRGB background clear (~48,48,63).
     let echo = rgba
         .chunks_exact(4)
@@ -2254,7 +2281,7 @@ fn draw_and_read(
     res: &RenderResources,
     pane: u32,
 ) -> Vec<u8> {
-    let target = new_target(device, wgpu::TextureFormat::Rgba8UnormSrgb, SIZE);
+    let target = new_target(device, wgpu::TextureFormat::Rgba8UnormSrgb, size());
     let view = target.create_view(&wgpu::TextureViewDescriptor::default());
     res.draw_pane(
         device,
@@ -2268,11 +2295,11 @@ fn draw_and_read(
             a: 1.0,
         },
     );
-    read_target(device, queue, &target, SIZE)
+    read_target(device, queue, &target, size())
 }
 
 fn save_rgba(rgba: &[u8], out_path: &str) -> anyhow::Result<()> {
-    image::save_buffer(out_path, rgba, SIZE, SIZE, image::ColorType::Rgba8)?;
+    image::save_buffer(out_path, rgba, size(), size(), image::ColorType::Rgba8)?;
     println!("wrote {out_path}");
     Ok(())
 }
@@ -2292,8 +2319,8 @@ fn render_to_png(
     let target = device.create_texture(&wgpu::TextureDescriptor {
         label: Some("headless_target"),
         size: wgpu::Extent3d {
-            width: SIZE,
-            height: SIZE,
+            width: size(),
+            height: size(),
             depth_or_array_layers: 1,
         },
         mip_level_count: 1,
@@ -2318,12 +2345,12 @@ fn render_to_png(
     );
 
     let bytes_per_pixel = 4u32;
-    let unpadded = SIZE * bytes_per_pixel;
+    let unpadded = size() * bytes_per_pixel;
     let align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
     let padded = unpadded.div_ceil(align) * align;
     let buffer = device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("readback"),
-        size: (padded * SIZE) as u64,
+        size: (padded * size()) as u64,
         usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
         mapped_at_creation: false,
     });
@@ -2341,12 +2368,12 @@ fn render_to_png(
             layout: wgpu::TexelCopyBufferLayout {
                 offset: 0,
                 bytes_per_row: Some(padded),
-                rows_per_image: Some(SIZE),
+                rows_per_image: Some(size()),
             },
         },
         wgpu::Extent3d {
-            width: SIZE,
-            height: SIZE,
+            width: size(),
+            height: size(),
             depth_or_array_layers: 1,
         },
     );
@@ -2361,15 +2388,15 @@ fn render_to_png(
     rx.recv()??;
 
     let mapped = slice.get_mapped_range();
-    let mut rgba = Vec::with_capacity((unpadded * SIZE) as usize);
-    for row in 0..SIZE {
+    let mut rgba = Vec::with_capacity((unpadded * size()) as usize);
+    for row in 0..size() {
         let start = (row * padded) as usize;
         rgba.extend_from_slice(&mapped[start..start + unpadded as usize]);
     }
     drop(mapped);
     buffer.unmap();
 
-    image::save_buffer(out_path, &rgba, SIZE, SIZE, image::ColorType::Rgba8)?;
+    image::save_buffer(out_path, &rgba, size(), size(), image::ColorType::Rgba8)?;
     println!("wrote {out_path}");
     Ok(())
 }

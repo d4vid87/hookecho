@@ -2097,7 +2097,11 @@ impl HookEchoApp {
         // for the life of the install. They are small enough that the cap is a tripwire.
         if let Some(dir) = crate::paths::cache_dir() {
             std::thread::spawn(move || {
-                for (sub, label) in [("zones", "zone cache"), ("raob", "RAOB cache")] {
+                for (sub, label) in [
+                    ("zones", "zone cache"),
+                    ("raob", "RAOB cache"),
+                    ("snapshots", "snapshot cache"),
+                ] {
                     crate::tiles::sweep_cache_dir(
                         &dir.join(sub),
                         label,
