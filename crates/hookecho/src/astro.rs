@@ -2,8 +2,8 @@
 //! (how much daylight is left, and how much moon there is once it's gone).
 //!
 //! Pure math, no network and no ephemeris tables: the NOAA sunrise equation for solar events and
-//! the mean synodic month for the moon. Both are good to a few minutes, which is all the forecast
-//! window prints.
+//! the leading terms of the Meeus lunar series for the moon. Both are good to a few minutes,
+//! which is all the forecast window prints.
 
 use chrono::{DateTime, NaiveDate, TimeZone, Utc};
 
@@ -57,17 +57,29 @@ fn jd_to_utc(jd: f64) -> Option<DateTime<Utc>> {
     Utc.timestamp_opt(secs.round() as i64, 0).single()
 }
 
-/// Reference new moon: 2000-01-06 18:14 UTC.
-const NEW_MOON_EPOCH: i64 = 947_182_440;
-/// Mean synodic month, in days.
-const SYNODIC_DAYS: f64 = 29.530_588;
-
 /// Moon phase as a fraction of the synodic cycle: 0.0 = new, 0.25 = first quarter, 0.5 = full.
 ///
-// ponytail: mean synodic phase, ±~0.6 day vs true; Meeus series if anyone files a bug.
+/// The mean synodic month this used to divide by drifts up to about half a day either side of the
+/// true phase, because the moon's orbit is eccentric and the sun tugs on it. These are the largest
+/// terms of the phase-angle series in Meeus, *Astronomical Algorithms* ch. 49 — the moon's own
+/// anomaly first, then the sun's, then evection and variation. Truncated there, it is good to a
+/// few minutes of arc, which is far past what an eight-bucket label can show.
 pub fn moon_phase(t: DateTime<Utc>) -> f64 {
-    let days = (t.timestamp() - NEW_MOON_EPOCH) as f64 / 86_400.0;
-    (days / SYNODIC_DAYS).rem_euclid(1.0)
+    let jd = t.timestamp() as f64 / 86_400.0 + JD_UNIX_EPOCH;
+    let tc = (jd - JD_J2000) / 36_525.0; // Julian centuries since J2000.0
+
+    // Mean elongation of the moon from the sun, and the two mean anomalies the corrections ride on.
+    let d = (297.850_2 + 445_267.111_5 * tc).to_radians();
+    let m = (357.529_1 + 35_999.050_3 * tc).to_radians();
+    let mp = (134.963_4 + 477_198.867_6 * tc).to_radians();
+
+    // Elongation corrected to the true one: 180° minus the phase angle of Meeus (49.4).
+    let elong = d.to_degrees() + 6.289 * mp.sin() - 2.100 * m.sin()
+        + 1.274 * (2.0 * d - mp).sin()
+        + 0.658 * (2.0 * d).sin()
+        + 0.214 * (2.0 * mp).sin()
+        + 0.110 * d.sin();
+    (elong / 360.0).rem_euclid(1.0)
 }
 
 /// Name and glyph for a phase fraction from [`moon_phase`], in the usual eight buckets.
@@ -168,7 +180,8 @@ mod tests {
         // New moon 2024-01-11 11:57 UTC.
         let t = Utc.with_ymd_and_hms(2024, 1, 11, 11, 57, 0).unwrap();
         let p = moon_phase(t);
-        assert!(!(0.05..=0.95).contains(&p), "expected ~new, got {p}");
+        // Within an hour of exact new: 1 h is 0.0014 of a synodic month.
+        assert!(!(0.002..=0.998).contains(&p), "expected ~new, got {p}");
         assert_eq!(moon_label(p).0, "New moon");
     }
 
@@ -177,7 +190,7 @@ mod tests {
         // Full moon 2024-01-25 17:54 UTC.
         let t = Utc.with_ymd_and_hms(2024, 1, 25, 17, 54, 0).unwrap();
         let p = moon_phase(t);
-        assert!((p - 0.5).abs() < 0.05, "expected ~full, got {p}");
+        assert!((p - 0.5).abs() < 0.002, "expected ~full, got {p}");
         assert_eq!(moon_label(p).0, "Full moon");
     }
 
