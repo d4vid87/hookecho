@@ -10,10 +10,12 @@ use crate::overlay::{for_each_feature, polygons_of, FeatureKind, GeoFeature};
 const PERIMETERS: &str = "https://services3.arcgis.com/T4QMspbfLg3qTGWY/arcgis/rest/services/WFIGS_Interagency_Perimeters_Current/FeatureServer/0/query";
 const INCIDENTS: &str = "https://services3.arcgis.com/T4QMspbfLg3qTGWY/arcgis/rest/services/WFIGS_Incident_Locations_Current/FeatureServer/0/query";
 
-/// How many features one bbox query may return. A busy fire season in the West can exceed this;
-// ponytail: no paging — the cap keeps the request bounded, and the biggest fires come first
-// because the query sorts by size.
+/// How many features one page may return.
 const LIMIT: usize = 400;
+
+/// Page ceiling, so a query that somehow never stops truncating can't loop forever. Eight pages of
+/// perimeters is already more geometry than a view usefully draws.
+const MAX_PAGES: usize = 8;
 
 /// One active fire incident (the point feed, not the perimeter).
 #[derive(Debug, Clone, PartialEq)]
@@ -109,16 +111,44 @@ async fn get(client: &reqwest::Client, url: String) -> anyhow::Result<String> {
         .await?)
 }
 
+/// Pull every page of `base` + `bbox`, following ArcGIS's `exceededTransferLimit` the same way the
+/// damage-survey feed does. Sorting by size still puts the big fires on page one, so a run that
+/// hits `MAX_PAGES` degrades to the old behaviour instead of dropping the interesting features.
+async fn pages(
+    client: &reqwest::Client,
+    base: &str,
+    bbox: [f64; 4],
+) -> anyhow::Result<Vec<String>> {
+    let mut out = Vec::new();
+    for page in 0..MAX_PAGES {
+        let url = format!(
+            "{base}{}&resultOffset={}",
+            bbox_query(bbox),
+            page * LIMIT
+        );
+        let body = get(client, url).await?;
+        let more = crate::dat::exceeded_limit(&body);
+        out.push(body);
+        if !more {
+            break;
+        }
+    }
+    Ok(out)
+}
+
 /// Fetch current fire perimeters intersecting `bbox` (`[west, south, east, north]`).
 pub async fn fetch_perimeters(
     client: &reqwest::Client,
     bbox: [f64; 4],
 ) -> anyhow::Result<Vec<GeoFeature>> {
-    let url = format!(
-        "{PERIMETERS}?where=1%3D1&outFields=poly_IncidentName,attr_IncidentName,poly_GISAcres,attr_IncidentSize,attr_PercentContained&orderByFields=poly_GISAcres%20DESC{}",
-        bbox_query(bbox)
+    let base = format!(
+        "{PERIMETERS}?where=1%3D1&outFields=poly_IncidentName,attr_IncidentName,poly_GISAcres,attr_IncidentSize,attr_PercentContained&orderByFields=poly_GISAcres%20DESC"
     );
-    parse_perimeters(&get(client, url).await?)
+    let mut out = Vec::new();
+    for body in pages(client, &base, bbox).await? {
+        out.extend(parse_perimeters(&body)?);
+    }
+    Ok(out)
 }
 
 /// Fetch wildfire incidents intersecting `bbox` that haven't been declared out.
@@ -127,11 +157,14 @@ pub async fn fetch_incidents(
     bbox: [f64; 4],
 ) -> anyhow::Result<Vec<FireIncident>> {
     let where_clause = "IncidentTypeCategory%3D%27WF%27%20AND%20FireOutDateTime%20IS%20NULL";
-    let url = format!(
-        "{INCIDENTS}?where={where_clause}&outFields=IncidentName,IncidentSize,PercentContained&orderByFields=IncidentSize%20DESC{}",
-        bbox_query(bbox)
+    let base = format!(
+        "{INCIDENTS}?where={where_clause}&outFields=IncidentName,IncidentSize,PercentContained&orderByFields=IncidentSize%20DESC"
     );
-    parse_incidents(&get(client, url).await?)
+    let mut out = Vec::new();
+    for body in pages(client, &base, bbox).await? {
+        out.extend(parse_incidents(&body)?);
+    }
+    Ok(out)
 }
 
 #[cfg(test)]

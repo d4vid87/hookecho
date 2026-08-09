@@ -220,7 +220,7 @@ async fn fetch_layer(
 }
 
 /// Whether a GeoJSON page was truncated by the server's record cap.
-fn exceeded_limit(body: &str) -> bool {
+pub(crate) fn exceeded_limit(body: &str) -> bool {
     serde_json::from_str::<serde_json::Value>(body)
         .ok()
         .and_then(|v| v.get("properties")?.get("exceededTransferLimit")?.as_bool())
