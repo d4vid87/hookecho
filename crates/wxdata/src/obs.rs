@@ -67,9 +67,42 @@ pub fn parse_observations(json: &str) -> anyhow::Result<Vec<Observation>> {
     Ok(out)
 }
 
-/// Fetch the nearest station's ~24h observation series for `(lat, lon)`.
+/// The first `n` stations from a `/stations` FeatureCollection, nearest first (the API already
+/// returns them in that order), as `(id, name)`. Split out so the picking is testable offline.
+fn station_ids(json: &str, n: usize) -> anyhow::Result<Vec<(String, String)>> {
+    let v: serde_json::Value = serde_json::from_str(json)?;
+    let feats = v
+        .get("features")
+        .and_then(|f| f.as_array())
+        .ok_or_else(|| anyhow::anyhow!("no nearby station"))?;
+    let out: Vec<(String, String)> = feats
+        .iter()
+        .filter_map(|f| {
+            let p = f.get("properties")?;
+            let id = p.get("stationIdentifier")?.as_str()?.to_string();
+            let name = p.get("name").and_then(|v| v.as_str()).unwrap_or("");
+            Some((id, name.to_string()))
+        })
+        .take(n)
+        .collect();
+    if out.is_empty() {
+        anyhow::bail!("no nearby station");
+    }
+    Ok(out)
+}
+
+/// How stale the closest station's newest observation may be before we walk to the next one.
+/// Most ASOS sites report hourly, so two hours means "this station has actually gone quiet".
+const STALE: chrono::Duration = chrono::Duration::hours(2);
+
+/// How many stations to try before settling for the freshest of them.
+const TRY_STATIONS: usize = 3;
+
+/// Fetch a nearby station's ~24h observation series for `(lat, lon)`.
 ///
-/// `// ponytail: first station only; a nearest-N picker can follow if the closest is stale.`
+/// The closest station is the right answer until it goes offline, which small airfields do
+/// routinely. Walk the nearest few and take the first with recent data; if all of them are stale,
+/// return the freshest one seen rather than nothing.
 pub async fn fetch_nearest(
     http: &reqwest::Client,
     lat: f64,
@@ -99,28 +132,39 @@ pub async fn fetch_nearest(
         .to_string();
 
     let stations = get(stations_url).await?;
-    let sv: serde_json::Value = serde_json::from_str(&stations)?;
-    let first = sv
-        .pointer("/features/0/properties")
-        .ok_or_else(|| anyhow::anyhow!("no nearby station"))?;
-    let station_id = first
-        .get("stationIdentifier")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| anyhow::anyhow!("station has no id"))?
-        .to_string();
-    let name = first
-        .get("name")
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .to_string();
+    let candidates = station_ids(&stations, TRY_STATIONS)?;
 
-    let obs_json = get(format!("{API}/stations/{station_id}/observations?limit=72")).await?;
-    let obs = parse_observations(&obs_json)?;
-    Ok(StationObs {
-        station_id,
-        name,
-        obs,
-    })
+    let cutoff = chrono::Utc::now() - STALE;
+    let mut best: Option<StationObs> = None;
+    let mut last_err = None;
+    for (station_id, name) in candidates {
+        let obs_json = match get(format!("{API}/stations/{station_id}/observations?limit=72")).await
+        {
+            Ok(j) => j,
+            Err(e) => {
+                last_err = Some(e);
+                continue;
+            }
+        };
+        let obs = parse_observations(&obs_json)?;
+        let newest = obs.first().and_then(|o| o.time);
+        let candidate = StationObs {
+            station_id,
+            name,
+            obs,
+        };
+        if newest.is_some_and(|t| t >= cutoff) {
+            return Ok(candidate);
+        }
+        let better = best
+            .as_ref()
+            .and_then(|b| b.obs.first().and_then(|o| o.time))
+            .is_none_or(|b| newest.is_some_and(|t| t > b));
+        if better || best.is_none() {
+            best = Some(candidate);
+        }
+    }
+    best.ok_or_else(|| last_err.unwrap_or_else(|| anyhow::anyhow!("no nearby station")))
 }
 
 #[cfg(test)]
@@ -149,5 +193,20 @@ mod tests {
         assert_eq!(o[0].wind_dir_deg, Some(110.0));
         assert_eq!(o[0].pressure_pa, Some(101730.0));
         assert!(o[0].time.is_some());
+    }
+
+    #[test]
+    fn takes_the_nearest_few_stations_in_order() {
+        let json = r#"{"type":"FeatureCollection","features":[
+            {"properties":{"stationIdentifier":"KOUN","name":"Norman"}},
+            {"properties":{"name":"no id here"}},
+            {"properties":{"stationIdentifier":"KOKC","name":"Oklahoma City"}},
+            {"properties":{"stationIdentifier":"KPWA","name":"Wiley Post"}},
+            {"properties":{"stationIdentifier":"KTIK","name":"Tinker"}}]}"#;
+        let s = station_ids(json, TRY_STATIONS).unwrap();
+        assert_eq!(s.len(), 3, "nearest three, id-less entries skipped");
+        assert_eq!(s[0].0, "KOUN");
+        assert_eq!(s[2].0, "KPWA");
+        assert!(station_ids(r#"{"features":[]}"#, 3).is_err());
     }
 }
