@@ -305,8 +305,13 @@ mod tests {
         assert!(wall > grazing);
     }
 
+    /// The DEM zoom is process-global, and cargo runs tests in parallel — the tests that flip it
+    /// and the tests that read it have to take turns or they read each other's zoom.
+    static ZOOM_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     #[test]
     fn hires_switches_both_url_and_cache_path() {
+        let _g = ZOOM_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let root = std::path::Path::new("/tmp/hookecho-test");
         set_hires(false);
         assert_eq!(zoom(), DEM_ZOOM);
@@ -328,6 +333,7 @@ mod tests {
 
     #[test]
     fn tile_of_lands_in_range() {
+        let _g = ZOOM_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let (x, y, px, py) = tile_of(-97.28, 35.33).unwrap();
         assert!(x < 1 << zoom() && y < 1 << zoom());
         assert!(px < 256 && py < 256);

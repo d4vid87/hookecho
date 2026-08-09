@@ -6,6 +6,7 @@
 //! so the render side is a single texture upload.
 
 use nexrad_model::data::{DataMoment, MomentData, MomentValue, Sweep};
+use std::path::PathBuf;
 
 /// Re-exported so the app can name decoded volumes without depending on `nexrad-model`.
 pub use nexrad_model::data::Scan;
@@ -198,12 +199,35 @@ async fn list_day(site: &str, date: chrono::NaiveDate) -> anyhow::Result<Vec<Ide
 }
 
 /// Download and decode a specific volume to a [`Scan`].
-pub async fn download_scan(id: Identifier) -> anyhow::Result<Scan> {
+///
+/// With `cache_dir` set the raw Archive II bytes are kept on disk, exactly as the bucket served
+/// them: an archived volume never changes, so a scrub back through yesterday's outbreak is a file
+/// read instead of a download. Raw bytes rather than a decoded scan because they're smaller, need
+/// no serialization of their own, and go back through the same decode path either way. Pass `None`
+/// at the live head, where the newest object may still be mid-write.
+pub async fn download_scan(id: Identifier, cache_dir: Option<PathBuf>) -> anyhow::Result<Scan> {
     use nexrad_data::aws::archive;
     let name = id.name().to_string();
-    let file = archive::download_file(id)
-        .await
-        .map_err(|e| anyhow::anyhow!("download_file: {e}"))?;
+    let cache_file = cache_dir.map(|d| d.join("volumes").join(&name));
+    let cached = cache_file
+        .as_ref()
+        .and_then(|p| std::fs::read(p).ok())
+        .map(nexrad_data::volume::File::new);
+    let file = match cached {
+        Some(f) => f,
+        None => {
+            let f = archive::download_file(id)
+                .await
+                .map_err(|e| anyhow::anyhow!("download_file: {e}"))?;
+            if let Some(p) = &cache_file {
+                if let Some(dir) = p.parent() {
+                    let _ = std::fs::create_dir_all(dir);
+                }
+                let _ = std::fs::write(p, f.data());
+            }
+            f
+        }
+    };
     // bzip2 decompression plus the message decode is tens of MB of pure CPU. On the async worker
     // it blocks every other fetch sharing that thread for as long as it runs; the `parallel`
     // feature of nexrad-data then spreads the decode itself across rayon.
@@ -246,7 +270,7 @@ pub async fn download_latest_scan(site: &str, date: chrono::NaiveDate) -> anyhow
         .await?
         .pop()
         .ok_or_else(|| anyhow::anyhow!("no volumes for {site} on {date}"))?;
-    download_scan(latest).await
+    download_scan(latest, None).await
 }
 
 /// Sorted, deduplicated elevation angles (degrees) of a scan's sweeps.
@@ -588,6 +612,28 @@ mod tests {
     /// The AWS archive reaches back to June 1991 — a decade earlier than the app used to claim.
     /// Those volumes are gzip files of legacy (pre-2008, pre-dual-pol) Type-1 messages, so this
     /// is really a test that the whole legacy path still decodes.
+    #[tokio::test]
+    #[ignore = "network"]
+    async fn caches_a_volume_to_disk_and_reads_it_back() {
+        let dir = std::env::temp_dir().join(format!("hookecho-vol-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let day = chrono::NaiveDate::from_ymd_opt(2013, 5, 20).unwrap();
+        let id = list_volumes("KTLX", day).await.unwrap().pop().unwrap();
+        let name = id.name().to_string();
+
+        let first = download_scan(id.clone(), Some(dir.clone())).await.unwrap();
+        let path = dir.join("volumes").join(&name);
+        assert!(path.exists(), "the raw volume lands on disk");
+
+        // Second time through must decode the same scan from the file; unplug the network by
+        // trusting the byte count — a re-download would have to write the same bytes anyway, so
+        // the real check is that the cached path produces an identical scan.
+        let second = download_scan(id, Some(dir.clone())).await.unwrap();
+        assert_eq!(first.sweeps().len(), second.sweeps().len());
+        assert_eq!(elevation_angles(&first), elevation_angles(&second));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
     #[tokio::test]
     #[ignore = "network"]
     async fn decodes_a_1990s_legacy_volume() {

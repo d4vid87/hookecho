@@ -2061,6 +2061,17 @@ impl HookEchoApp {
         } else {
             30
         };
+        // Archived volumes are kept on disk forever within a cap; same startup sweep the tile
+        // caches get, for the same reason (mid-session deletion would race the fetch tasks).
+        if let Some(root) = crate::paths::cache_dir().map(|d| d.join("volumes")) {
+            std::thread::spawn(move || {
+                crate::tiles::sweep_cache_dir(
+                    &root,
+                    "volume cache",
+                    crate::tiles::VOLUME_CACHE_BYTES,
+                )
+            });
+        }
         let mut tiles = TileManager::new(spawner.clone());
         let mut vtiles = crate::vector_tiles::VectorTileManager::new(spawner.clone());
         // Tile workers wake the UI the moment a tile is ready; without this a finished tile waits
@@ -8208,7 +8219,9 @@ impl HookEchoApp {
                         }
                     } else {
                         let time = id.date_time().unwrap_or_else(Utc::now);
-                        let fetched = match level2::download_scan(id).await {
+                        // No cache at the live head: the newest object can still be uploading, and a
+                        // half-written volume is not something to keep.
+                        let fetched = match level2::download_scan(id, None).await {
                             Ok(scan) => Ok((name.clone(), time, scan)),
                             Err(e) => match prev {
                                 // Only worth retrying when there IS an older volume and we're not
@@ -8219,7 +8232,7 @@ impl HookEchoApp {
                                     log::debug!(
                                         "newest volume unusable ({e}); falling back to {pname}"
                                     );
-                                    level2::download_scan(p)
+                                    level2::download_scan(p, None)
                                         .await
                                         .map(|scan| (pname, ptime, scan))
                                         .map_err(|_| e)
@@ -8824,7 +8837,7 @@ impl HookEchoApp {
             let view = idx;
             self.spawner.spawn(async move {
                 let name = id.name().to_string();
-                if let Ok(scan) = level2::download_scan(id).await {
+                if let Ok(scan) = level2::download_scan(id, crate::paths::cache_dir()).await {
                     let _ = tx.send(DataMsg::Prefetched {
                         view,
                         site,
@@ -8843,7 +8856,7 @@ impl HookEchoApp {
         self.spawner.spawn(async move {
             let name = id.name().to_string();
             let time = id.date_time().unwrap_or_else(Utc::now);
-            let msg = match level2::download_scan(id).await {
+            let msg = match level2::download_scan(id, crate::paths::cache_dir()).await {
                 Ok(scan) => DataMsg::Volume {
                     view: view_idx,
                     site,

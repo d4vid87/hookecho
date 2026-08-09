@@ -130,7 +130,7 @@ pub fn run(
                 None => frames.into_iter().next_back().unwrap(),
             };
             eprintln!("archive frame: {}", id.name());
-            let scan = level2::download_scan(id).await?;
+            let scan = level2::download_scan(id, None).await?;
             return level2::bin_scan_opts(&scan, moment, tilt, dealias);
         }
 
@@ -691,7 +691,7 @@ pub fn run_live(out_path: &str, site: &str, moment: Moment) -> anyhow::Result<()
         let mut ids = level2::list_volumes(site, day).await?;
         let seed = ids.pop().and_then(|_| ids.pop()).or_else(|| ids.pop());
         let base = match seed {
-            Some(id) => level2::download_scan(id).await?,
+            Some(id) => level2::download_scan(id, None).await?,
             None => level2::download_latest_scan(site, day).await?,
         };
         println!("base volume: {} sweeps", base.sweeps().len());

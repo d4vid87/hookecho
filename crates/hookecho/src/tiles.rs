@@ -994,12 +994,17 @@ const DISK_CACHE_BYTES: u64 = if cfg!(target_os = "android") {
 };
 
 /// Trim the on-disk tile cache to [`DISK_CACHE_BYTES`], oldest-touched first.
+pub(crate) fn sweep_tile_cache(root: &std::path::Path) {
+    sweep_cache_dir(root, "tile cache", DISK_CACHE_BYTES);
+}
+
+/// Trim `root` to `cap` bytes, deleting oldest-touched files first.
 ///
 /// Runs once at startup on its own thread: a cache sweep mid-session would race the fetch tasks
-/// writing into it, and a tile deleted out from under a read just gets re-fetched anyway. Chase
-/// packs live under the same root and are deliberately not spared — they are re-downloadable, and
+/// writing into it, and a file deleted out from under a read just gets re-fetched anyway. Chase
+/// packs live under the tile root and are deliberately not spared — they are re-downloadable, and
 /// a pack the user still cares about is a pack they have been looking at recently.
-pub(crate) fn sweep_tile_cache(root: &std::path::Path) {
+pub(crate) fn sweep_cache_dir(root: &std::path::Path, label: &str, cap: u64) {
     fn walk(
         dir: &std::path::Path,
         out: &mut Vec<(std::time::SystemTime, u64, std::path::PathBuf)>,
@@ -1020,13 +1025,13 @@ pub(crate) fn sweep_tile_cache(root: &std::path::Path) {
     let mut files = Vec::new();
     walk(root, &mut files);
     let total: u64 = files.iter().map(|(_, n, _)| *n).sum();
-    if total <= DISK_CACHE_BYTES {
+    if total <= cap {
         return;
     }
     files.sort_by_key(|(t, _, _)| *t); // oldest first
     let mut freed = 0u64;
     for (_, n, path) in files {
-        if total - freed <= DISK_CACHE_BYTES {
+        if total - freed <= cap {
             break;
         }
         if std::fs::remove_file(&path).is_ok() {
@@ -1034,11 +1039,21 @@ pub(crate) fn sweep_tile_cache(root: &std::path::Path) {
         }
     }
     log::info!(
-        "tile cache: {:.0} MB over cap, freed {:.0} MB",
-        (total - DISK_CACHE_BYTES) as f64 / 1e6,
+        "{label}: {:.0} MB over cap, freed {:.0} MB",
+        (total - cap) as f64 / 1e6,
         freed as f64 / 1e6
     );
 }
+
+/// Largest the on-disk volume cache may get. An Archive II volume is 3-8 MB, so the desktop cap
+/// holds a few hundred — an afternoon of scrubbing one event — and the phone cap a couple of dozen.
+///
+/// ponytail: a constant, not a setting. Expose a slider if anyone runs out of disk.
+pub(crate) const VOLUME_CACHE_BYTES: u64 = if cfg!(target_os = "android") {
+    300 * 1024 * 1024
+} else {
+    2 * 1024 * 1024 * 1024
+};
 
 /// A chase-pack download job: the tile URL and the disk path to cache it at.
 pub type PackJob = (String, std::path::PathBuf);
@@ -1166,6 +1181,25 @@ mod tests {
             pack_tile_ids(-99.0, 34.0, -96.0, 36.0, 7, 9).len() as u64,
             pack_tile_count(-99.0, 34.0, -96.0, 36.0, 7, 9)
         );
+    }
+
+    #[test]
+    fn sweep_trims_oldest_first() {
+        let root = std::env::temp_dir().join(format!("hookecho-sweep-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("sub")).unwrap();
+        // Three 1 KB files written in order, one nested, so the walk has to recurse. Filesystem
+        // mtime resolution is finer than the write loop, so "a" really is the oldest.
+        let files = [root.join("a"), root.join("sub/b"), root.join("c")];
+        for p in &files {
+            std::fs::write(p, vec![0u8; 1024]).unwrap();
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        // Cap of 2 KB has to evict exactly one file, and it must be the oldest.
+        sweep_cache_dir(&root, "test", 2048);
+        assert!(!files[0].exists(), "oldest goes first");
+        assert!(files[1].exists() && files[2].exists(), "the rest stay");
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]
