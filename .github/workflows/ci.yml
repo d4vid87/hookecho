@@ -72,6 +72,44 @@ jobs:
           RUSTFLAGS: --cfg getrandom_backend="wasm_js"
         run: cargo check --target wasm32-unknown-unknown -p hookecho --lib
 
+  # And the part `cargo check` structurally cannot see: whether the thing runs. A wasm build can
+  # compile clean and panic on its first frame (0.6.0 shipped exactly that), so this builds the
+  # real bundle, serves it, and opens it in headless Chrome.
+  web-smoke:
+    name: Web smoke (headless Chrome)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust (+ wasm target)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install wasm-bindgen-cli
+        run: cargo install wasm-bindgen-cli --locked
+
+      - name: Build the bundle
+        run: scripts/web/build.sh
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install puppeteer
+        run: npm install --no-save puppeteer@23
+
+      # `python3 -m http.server` serves .wasm as application/wasm, which is what the streaming
+      # instantiate in the bundle needs.
+      - name: Serve and open
+        run: |
+          python3 -m http.server 8080 --directory web &
+          for _ in $(seq 1 30); do curl -sf http://127.0.0.1:8080/ >/dev/null && break; sleep 1; done
+          node scripts/web/smoke.mjs http://127.0.0.1:8080/
+
   # Golden-image test for the wgpu radar pipeline. Runs on the software rasterizer
   # (mesa lavapipe) via HOOKECHO_GPU_FALLBACK=1 so the render is deterministic across
   # machines — the checked-in golden is authored under lavapipe too. If the golden is
