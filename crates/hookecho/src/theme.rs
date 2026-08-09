@@ -193,6 +193,23 @@ fn palette(theme: Theme, system_dark: bool) -> Palette {
             text: c(0x0d2440),
             accent: c(0x0077ff),
         },
+        // High contrast — black, white and one saturated yellow, for low vision and for direct
+        // sunlight, which is the same problem from a different direction.
+        //
+        // `// ponytail:` the chrome only. Radar colormaps, alert polygon fills and stroke widths
+        // are unchanged, because a reflectivity ramp that is legible and still means what NWS
+        // means by it is its own piece of work. Revisit when someone who needs it says so.
+        Theme::HighContrast => Palette {
+            is_dark: true,
+            bg: c(0x000000),
+            extreme: c(0x000000),
+            faint: c(0x101010),
+            stroke: c(0xffffff),
+            widget: c(0x1a1a1a),
+            widget_hover: c(0x333333),
+            text: c(0xffffff),
+            accent: c(0xffe600),
+        },
     }
 }
 
