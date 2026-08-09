@@ -29,6 +29,10 @@ pub struct Peer {
     pub lat: f64,
     /// Unix seconds when the fix was taken.
     pub ts: i64,
+    /// Optional live-stream URL this chaser is broadcasting (empty = none). Old peers that
+    /// predate the field simply send nothing.
+    #[serde(default)]
+    pub video_url: String,
 }
 
 pub fn now() -> i64 {
@@ -75,14 +79,16 @@ impl Share {
         self.tx.clone()
     }
 
-    /// Our own fix, stamped with this session's id.
-    pub fn me(&self, name: &str, lon: f64, lat: f64) -> Peer {
+    /// Our own fix, stamped with this session's id. `video_url` is the stream the user chose to
+    /// publish alongside their dot (empty = none).
+    pub fn me(&self, name: &str, lon: f64, lat: f64, video_url: &str) -> Peer {
         Peer {
             id: self.id.clone(),
             name: name.to_string(),
             lon,
             lat,
             ts: now(),
+            video_url: video_url.to_string(),
         }
     }
 
@@ -175,6 +181,7 @@ mod tests {
             lon: -97.5,
             lat: 35.4,
             ts,
+            video_url: String::new(),
         }
     }
 

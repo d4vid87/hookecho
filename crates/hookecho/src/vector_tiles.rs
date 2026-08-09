@@ -252,6 +252,10 @@ pub fn build_tile(
                 continue;
             }
             let cls = prop(&f.properties, key);
+            // County lines only once they're readable; at CONUS zooms they're visual noise.
+            if *layer == "boundary" && cls == "6" && z < 7 {
+                continue;
+            }
             let Some((c, wpx)) = basemap_style::stroke(dark, layer, &cls) else {
                 continue;
             };

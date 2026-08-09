@@ -443,6 +443,7 @@ mod tests {
             lon: 2.0,
             icon: None,
             alert_radius_mi: 20.0,
+            video_url: String::new(),
             home: true,
         });
         let s = spots(&settings, Some("35.3,-97.5"));
@@ -462,6 +463,7 @@ mod tests {
                 lon: 2.0,
                 icon: None,
                 alert_radius_mi: 30.0,
+                video_url: String::new(),
                 home: false,
             },
             crate::settings::Marker {
@@ -470,6 +472,7 @@ mod tests {
                 lon: 4.0,
                 icon: None,
                 alert_radius_mi: 20.0,
+                video_url: String::new(),
                 home: true,
             },
         ];

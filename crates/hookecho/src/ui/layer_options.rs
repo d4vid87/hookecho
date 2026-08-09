@@ -65,6 +65,13 @@ pub(crate) fn show(
     tropical_wind_kt: &mut Option<u8>,
     tropical_surge: &mut bool,
     l3grid_site: Option<&str>,
+    // Lightning: NLDN averaging window, and whether GLM also polls GOES-West.
+    lightning_minutes: &mut u16,
+    show_glm: bool,
+    glm_goes_west: &mut bool,
+    // Spotter Network dots: on-state, and how far from the radar to draw them (0 = whole feed).
+    show_spotters: bool,
+    spotter_range_km: &mut f64,
     // One line about the live composite: contributing sites and the age of its oldest scan, or
     // why there isn't one. Radars scan on their own schedules, so a composite is always a little
     // ragged in time and the honest thing is to show by how much.
@@ -73,6 +80,39 @@ pub(crate) fn show(
 ) {
     use crate::render::FieldLayer as FL;
     let mut changed = false;
+
+    if fields.get(&FL::Lightning).is_some_and(|s| s.show) {
+        ui.horizontal(|ui| {
+            ui.label("CG density window:");
+            for m in [1u16, 5, 15, 30] {
+                changed |= ui
+                    .selectable_value(lightning_minutes, m, format!("{m}m"))
+                    .changed();
+            }
+        });
+        ui.weak("NLDN = cloud-to-ground only; GLM = total lightning (optical, in-cloud included).");
+    }
+
+    if show_glm {
+        changed |= ui
+            .checkbox(glm_goes_west, "Include GOES-West")
+            .on_hover_text("Adds GOES-18 so the Pacific and the west coast are covered too")
+            .changed();
+    }
+
+    if show_spotters {
+        ui.horizontal(|ui| {
+            ui.label("Spotters within:");
+            ui.add(
+                egui::DragValue::new(spotter_range_km)
+                    .range(0.0..=5000.0)
+                    .speed(10.0)
+                    .max_decimals(0)
+                    .suffix(" km"),
+            )
+            .on_hover_text("Distance from the active radar. 0 draws the whole national feed.");
+        });
+    }
 
     // SPC outlook: a four-way day selector whose own "Off" is the off-state, so it can't wear the
     // registry's ON/OFF pill. It lives here rather than in the layer list.

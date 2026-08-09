@@ -85,6 +85,7 @@ pub fn show(
                             lon: 0.0,
                             icon: None,
                             alert_radius_mi: crate::settings::default_alert_radius_mi(),
+                            video_url: String::new(),
                             home: false,
                         });
                     }

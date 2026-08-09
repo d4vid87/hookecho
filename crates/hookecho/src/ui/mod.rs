@@ -77,6 +77,7 @@ pub mod sounding_window;
 pub mod station_card;
 pub mod style;
 pub mod verify_window;
+pub mod video_window;
 pub mod volume3d_window;
 pub mod warning_window;
 pub mod wizard;

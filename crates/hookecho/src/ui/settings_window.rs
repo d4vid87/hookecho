@@ -663,6 +663,45 @@ fn alerts_tab(ui: &mut egui::Ui, settings: &mut Settings) {
     ui.weak("When a warning covers a saved location marker, a push is sent to ntfy.sh/<topic>.");
     ui.weak("Subscribe to the same topic in the ntfy app on your phone. Leave blank to disable.");
 
+    ui.add_space(8.0);
+    ui.separator();
+    ui.strong("Chat webhooks");
+    ui.horizontal(|ui| {
+        ui.label("Discord:");
+        ui.add(
+            egui::TextEdit::singleline(&mut settings.discord_webhook)
+                .hint_text("https://discord.com/api/webhooks/…"),
+        );
+    });
+    ui.horizontal(|ui| {
+        ui.label("Slack:");
+        ui.add(
+            egui::TextEdit::singleline(&mut settings.slack_webhook)
+                .hint_text("https://hooks.slack.com/services/…"),
+        );
+    });
+    ui.horizontal(|ui| {
+        ui.label("Matrix server:");
+        ui.add(
+            egui::TextEdit::singleline(&mut settings.matrix_homeserver)
+                .hint_text("https://matrix.org"),
+        );
+    });
+    ui.horizontal(|ui| {
+        ui.label("Matrix room:");
+        ui.add(egui::TextEdit::singleline(&mut settings.matrix_room).hint_text("!room:matrix.org"));
+    });
+    ui.horizontal(|ui| {
+        ui.label("Matrix token:");
+        ui.add(
+            egui::TextEdit::singleline(&mut settings.matrix_token)
+                .password(true)
+                .hint_text("access token"),
+        );
+    });
+    ui.weak("Every alert that goes to ntfy also posts here. Blank fields are off.");
+    ui.weak("These URLs and the token are secrets — they stay in your settings file.");
+
     if cfg!(target_os = "android") {
         ui.add_space(8.0);
         ui.separator();

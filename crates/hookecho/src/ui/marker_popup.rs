@@ -14,6 +14,8 @@ pub struct MarkerPopupResult {
     pub remove: bool,
     /// Open the full Location Markers manager (icons, coordinates, the whole list).
     pub manage: bool,
+    /// Play (or open) this marker's `video_url`.
+    pub watch: bool,
 }
 
 /// Show the popup for `m`, editing its name in place.
@@ -47,6 +49,14 @@ pub fn show(ctx: &egui::Context, m: &mut Marker) -> MarkerPopupResult {
                 }
                 if ui.button("All markers…").clicked() {
                     r.manage = true;
+                }
+                if !m.video_url.trim().is_empty()
+                    && ui
+                        .button("▶ Watch")
+                        .on_hover_text(m.video_url.clone())
+                        .clicked()
+                {
+                    r.watch = true;
                 }
             });
         });

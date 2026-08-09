@@ -28,6 +28,7 @@ pub mod headless;
 pub mod hotkeys;
 pub mod icon;
 pub mod loopexport;
+pub mod notify;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod nwr;
 pub mod overlay_build;

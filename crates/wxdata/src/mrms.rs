@@ -13,6 +13,17 @@ const BUCKET: &str = "https://noaa-mrms-pds.s3.amazonaws.com";
 pub const REFLECTIVITY: &str = "CONUS/MergedReflectivityQCComposite_00.50";
 /// Cloud-to-ground lightning strike density, 5-minute average (strikes/km²/min).
 pub const LIGHTNING: &str = "CONUS/NLDN_CG_005min_AvgDensity_00.00";
+
+/// NLDN cloud-to-ground strike-density product for an averaging window in minutes
+/// (1/5/15/30 published; anything else falls back to 5).
+pub fn lightning_density(minutes: u16) -> &'static str {
+    match minutes {
+        1 => "CONUS/NLDN_CG_001min_AvgDensity_00.00",
+        15 => "CONUS/NLDN_CG_015min_AvgDensity_00.00",
+        30 => "CONUS/NLDN_CG_030min_AvgDensity_00.00",
+        _ => LIGHTNING,
+    }
+}
 /// Max Estimated Size of Hail (mm).
 pub const MESH: &str = "CONUS/MESH_00.50";
 /// 24-hour running max of MESH (mm) — hail swaths / damage tracks.

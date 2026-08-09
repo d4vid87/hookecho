@@ -68,13 +68,15 @@ pub fn fill(dark: bool, layer: &str, class: &str) -> Option<[u8; 4]> {
 
 /// Stroke color + pixel width for a line feature, or `None` to skip it.
 pub fn stroke(dark: bool, layer: &str, class: &str) -> Option<([u8; 4], f32)> {
-    let (motorway, primary, secondary, minor, rail, water, admin2, admin4) = if dark {
+    let (motorway, primary, secondary, minor, rail, water, admin2, admin4, county) = if dark {
         (
             0x3d4450, 0x353c47, 0x2c323b, 0x23282f, 0x2a2f36, 0x24333f, 0x5a6470, 0x3a424c,
+            0x2f353d,
         )
     } else {
         (
             0xf6d3a0, 0xf9dfb0, 0xe9e3d5, 0xdedacf, 0xcdc9c0, 0xa9c4d6, 0x9aa0a8, 0xc4c0b8,
+            0xd2cec6,
         )
     };
     let (c, w) = match layer {
@@ -92,6 +94,9 @@ pub fn stroke(dark: bool, layer: &str, class: &str) -> Option<([u8; 4], f32)> {
         "boundary" => match class {
             "2" => (admin2, 1.2),
             "3" | "4" => (admin4, 0.8),
+            // Counties: hairline, and only drawn once the caller is zoomed in enough
+            // (see the zoom gate in vector_tiles.rs) or they smear the CONUS view.
+            "6" => (county, 0.5),
             _ => return None,
         },
         _ => return None,
@@ -117,6 +122,7 @@ mod tests {
             assert!(stroke(dark, "waterway", "").is_some());
             assert!(stroke(dark, "boundary", "2").is_some());
             assert!(stroke(dark, "boundary", "4").is_some());
+            assert!(stroke(dark, "boundary", "6").is_some());
         }
         // Unstyled -> skipped.
         assert!(fill(true, "building", "").is_none());

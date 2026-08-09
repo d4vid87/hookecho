@@ -10,8 +10,11 @@
 use chrono::{DateTime, TimeZone, Utc};
 use std::collections::VecDeque;
 
-/// GOES-East. GOES-19 took over the slot from GOES-16 in 2025; GOES-18 is West.
-const BUCKET: &str = "https://noaa-goes19.s3.amazonaws.com";
+/// GOES-East. GOES-19 took over the slot from GOES-16 in 2025.
+pub const EAST: &str = "https://noaa-goes19.s3.amazonaws.com";
+/// GOES-West (GOES-18) — the Pacific, the west coast and the Rockies, which East sees at a very
+/// oblique angle or not at all.
+pub const WEST: &str = "https://noaa-goes18.s3.amazonaws.com";
 const PRODUCT: &str = "GLM-L2-LCFA";
 
 /// Seconds between the netCDF epoch (2000-01-01 12:00 UTC) and the Unix epoch.
@@ -81,7 +84,7 @@ pub fn decode(bytes: Vec<u8>) -> anyhow::Result<Vec<Flash>> {
 }
 
 /// List the granule keys for the hour containing `t`, oldest first.
-async fn list_hour(http: &reqwest::Client, t: DateTime<Utc>) -> Vec<String> {
+async fn list_hour(http: &reqwest::Client, bucket: &str, t: DateTime<Utc>) -> Vec<String> {
     use chrono::Datelike;
     let prefix = format!(
         "{PRODUCT}/{:04}/{:03}/{:02}/",
@@ -89,7 +92,7 @@ async fn list_hour(http: &reqwest::Client, t: DateTime<Utc>) -> Vec<String> {
         t.ordinal(),
         t.format("%H")
     );
-    let url = format!("{BUCKET}/?list-type=2&prefix={prefix}&max-keys=1000");
+    let url = format!("{bucket}/?list-type=2&prefix={prefix}&max-keys=1000");
     let Ok(resp) = http.get(crate::net::fetch_url(&url)).send().await else {
         return Vec::new();
     };
@@ -114,33 +117,43 @@ async fn list_hour(http: &reqwest::Client, t: DateTime<Utc>) -> Vec<String> {
 /// where a storm is, and everything ever received is too dense.
 pub struct GlmFeed {
     flashes: VecDeque<Flash>,
-    /// Newest key already ingested, so a poll only fetches what it hasn't seen.
-    last_key: Option<String>,
+    /// Newest key already ingested per satellite bucket, so a poll only fetches what it hasn't
+    /// seen. Keyed by bucket because East and West publish independent granule streams.
+    last_keys: std::collections::BTreeMap<String, String>,
+    /// Which satellites to poll. East alone by default; adding West costs a second listing per
+    /// cycle and buys the Pacific and the west coast.
+    buckets: Vec<&'static str>,
     window: chrono::Duration,
 }
 
 impl GlmFeed {
-    /// A feed keeping `window_minutes` of flashes.
+    /// A feed keeping `window_minutes` of flashes from GOES-East.
     pub fn new(window_minutes: i64) -> GlmFeed {
         GlmFeed {
             flashes: VecDeque::new(),
-            last_key: None,
+            last_keys: Default::default(),
+            buckets: vec![EAST],
             window: chrono::Duration::minutes(window_minutes),
         }
+    }
+
+    /// Also poll GOES-West (or stop doing so).
+    pub fn set_west(&mut self, on: bool) {
+        self.buckets = if on { vec![EAST, WEST] } else { vec![EAST] };
     }
 
     pub fn flashes(&self) -> &VecDeque<Flash> {
         &self.flashes
     }
 
-    /// The newest granule key already ingested.
-    pub fn last_key(&self) -> Option<&String> {
-        self.last_key.as_ref()
+    /// The newest granule key already ingested, per satellite bucket.
+    pub fn last_keys(&self) -> &std::collections::BTreeMap<String, String> {
+        &self.last_keys
     }
 
-    /// Resume from a key another feed left off at.
-    pub fn set_last_key(&mut self, key: String) {
-        self.last_key = Some(key);
+    /// Resume from the keys another feed left off at.
+    pub fn set_last_keys(&mut self, keys: std::collections::BTreeMap<String, String>) {
+        self.last_keys = keys;
     }
 
     /// Fold a feed polled elsewhere into this one.
@@ -149,9 +162,7 @@ impl GlmFeed {
     /// happens in a throwaway feed and the result is merged back under the lock — the merge itself
     /// has to be cheap, so it's an extend and a re-sort rather than a re-poll.
     pub fn absorb(&mut self, other: GlmFeed) {
-        if other.last_key.is_some() {
-            self.last_key = other.last_key;
-        }
+        self.last_keys.extend(other.last_keys);
         self.flashes.extend(other.flashes);
         self.flashes
             .make_contiguous()
@@ -178,14 +189,34 @@ impl GlmFeed {
     /// anyone opened the layer for.
     pub async fn poll(&mut self, http: &reqwest::Client) -> anyhow::Result<usize> {
         let now = Utc::now();
-        let mut keys = list_hour(http, now).await;
+        let mut added = 0;
+        for bucket in self.buckets.clone() {
+            added += self.poll_bucket(http, bucket, now).await?;
+        }
+        // Granules can arrive slightly out of order; keeping the deque sorted is what lets
+        // `expire` just pop from the front.
+        self.flashes
+            .make_contiguous()
+            .sort_by_key(|f| f.time.timestamp_millis());
+        self.expire(now);
+        Ok(added)
+    }
+
+    /// One satellite's share of a poll.
+    async fn poll_bucket(
+        &mut self,
+        http: &reqwest::Client,
+        bucket: &'static str,
+        now: DateTime<Utc>,
+    ) -> anyhow::Result<usize> {
+        let mut keys = list_hour(http, bucket, now).await;
         // Near the top of the hour the newest granules are still in the previous hour's prefix.
         if keys.len() < 4 {
-            let mut prev = list_hour(http, now - chrono::Duration::hours(1)).await;
+            let mut prev = list_hour(http, bucket, now - chrono::Duration::hours(1)).await;
             prev.extend(keys);
             keys = prev;
         }
-        let fresh: Vec<String> = match &self.last_key {
+        let fresh: Vec<String> = match self.last_keys.get(bucket) {
             Some(last) => keys.into_iter().filter(|k| k > last).collect(),
             None => keys.into_iter().rev().take(6).rev().collect(),
         };
@@ -195,7 +226,7 @@ impl GlmFeed {
         let mut added = 0;
         // A burst of granules after a pause shouldn't stall the app; take the newest handful.
         for key in fresh.iter().rev().take(10).rev() {
-            let url = format!("{BUCKET}/{key}");
+            let url = format!("{bucket}/{key}");
             let bytes = match http.get(crate::net::fetch_url(&url)).send().await {
                 Ok(r) => match r.error_for_status() {
                     Ok(r) => r.bytes().await?,
@@ -216,14 +247,8 @@ impl GlmFeed {
                 }
                 Err(e) => log::debug!("glm decode {key}: {e}"),
             }
-            self.last_key = Some(key.clone());
+            self.last_keys.insert(bucket.to_string(), key.clone());
         }
-        // Granules can arrive slightly out of order; keeping the deque sorted is what lets
-        // `expire` just pop from the front.
-        self.flashes
-            .make_contiguous()
-            .sort_by_key(|f| f.time.timestamp_millis());
-        self.expire(now);
         Ok(added)
     }
 }

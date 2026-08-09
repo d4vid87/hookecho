@@ -509,6 +509,11 @@ impl super::HookEchoApp {
                     &mut self.tropical_wind_kt,
                     &mut self.tropical_surge,
                     l3_site.as_deref(),
+                    &mut self.settings.lightning_minutes,
+                    self.show_glm,
+                    &mut self.settings.glm_goes_west,
+                    self.show_spotters,
+                    &mut self.settings.spotter_range_km,
                     Some(mosaic.as_str()),
                     actions,
                 );

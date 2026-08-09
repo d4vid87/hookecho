@@ -195,6 +195,23 @@ pub struct Settings {
     /// (`POST` a peer, `GET` the list). Empty = LAN only. You host it; it sees your position.
     #[serde(default)]
     pub share_relay: String,
+    /// A live-stream URL broadcast alongside your shared position, so chase partners can watch
+    /// your feed from your dot. Empty = share position only.
+    #[serde(default)]
+    pub share_video_url: String,
+    /// Averaging window for the MRMS cloud-to-ground strike-density layer, in minutes
+    /// (1/5/15/30). Short windows show where lightning is right now; long ones show the storm's
+    /// track.
+    #[serde(default = "default_lightning_minutes")]
+    pub lightning_minutes: u16,
+    /// Also poll GOES-West (GOES-18) for GLM lightning, not only GOES-East. Costs one extra S3
+    /// listing per 20-second cycle and covers the Pacific and the west coast.
+    #[serde(default)]
+    pub glm_goes_west: bool,
+    /// How far from the active radar to draw Spotter Network dots, in km. 0 = no limit (the whole
+    /// CONUS feed). Default 230 km, roughly the radar's own useful range.
+    #[serde(default = "default_spotter_range_km")]
+    pub spotter_range_km: f64,
     /// Play an audible chime when a new NWS warning appears.
     #[serde(default = "default_true")]
     pub alert_sound: bool,
@@ -204,6 +221,22 @@ pub struct Settings {
     /// ntfy.sh topic for push notifications when a warning covers a saved location (empty = off).
     #[serde(default)]
     pub ntfy_topic: String,
+    /// Discord incoming-webhook URL for alert delivery (empty = off). A user secret: it lives in
+    /// settings.json only and is never committed.
+    #[serde(default)]
+    pub discord_webhook: String,
+    /// Slack incoming-webhook URL for alert delivery (empty = off). User secret, as above.
+    #[serde(default)]
+    pub slack_webhook: String,
+    /// Matrix homeserver base URL, e.g. `https://matrix.org` (empty = off).
+    #[serde(default)]
+    pub matrix_homeserver: String,
+    /// Matrix room ID to post alerts into, e.g. `!abc:matrix.org`.
+    #[serde(default)]
+    pub matrix_room: String,
+    /// Matrix access token. User secret, as above.
+    #[serde(default)]
+    pub matrix_token: String,
     /// External-process plugins that emit placefiles (desktop only). Off by default and empty:
     /// each entry is a command the user chose to run.
     #[serde(default)]
@@ -410,6 +443,14 @@ fn default_opacity() -> f32 {
     1.0
 }
 
+pub fn default_lightning_minutes() -> u16 {
+    5
+}
+
+pub fn default_spotter_range_km() -> f64 {
+    230.0
+}
+
 /// A named location marker at a geographic point.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Marker {
@@ -424,6 +465,10 @@ pub struct Marker {
     /// covers it. A warning three counties wide still matters when its edge is down the road.
     #[serde(default = "default_alert_radius_mi")]
     pub alert_radius_mi: f64,
+    /// Optional live-video URL for this place (a yard camera, a chase stream). Direct HLS/MJPEG
+    /// plays in-app; anything else opens in the browser.
+    #[serde(default)]
+    pub video_url: String,
     /// The one marker that is home: drawn with a ring, and the place alerts speak of by default.
     /// At most one marker has this set (the marker editor enforces it).
     #[serde(default)]
@@ -527,9 +572,18 @@ impl Default for Settings {
             share_position: false,
             share_name: String::new(),
             share_relay: String::new(),
+            share_video_url: String::new(),
+            lightning_minutes: default_lightning_minutes(),
+            glm_goes_west: false,
+            spotter_range_km: default_spotter_range_km(),
             alert_sound: true,
             smooth_radar: true,
             ntfy_topic: String::new(),
+            discord_webhook: String::new(),
+            slack_webhook: String::new(),
+            matrix_homeserver: String::new(),
+            matrix_room: String::new(),
+            matrix_token: String::new(),
             background_alerts: false,
             plugins: Vec::new(),
             close_to_tray: false,
@@ -761,6 +815,7 @@ mod tests {
             share_position: true,
             share_name: "chaser".to_string(),
             share_relay: String::new(),
+            share_video_url: String::new(),
             placefiles: vec![PlacefileConfig {
                 url: "http://x/p.txt".to_string(),
                 enabled: true,
@@ -772,6 +827,7 @@ mod tests {
                 lon: -97.5,
                 icon: Some("home.png".to_string()),
                 alert_radius_mi: 20.0,
+                video_url: String::new(),
                 home: true,
             }],
             dealias_velocity: true,
@@ -789,8 +845,16 @@ mod tests {
                 y: 0.4,
                 zoom: 8.0,
             }),
+            lightning_minutes: default_lightning_minutes(),
+            glm_goes_west: false,
+            spotter_range_km: default_spotter_range_km(),
             alert_sound: false,
             ntfy_topic: "hookecho-test".to_string(),
+            discord_webhook: String::new(),
+            slack_webhook: String::new(),
+            matrix_homeserver: String::new(),
+            matrix_room: String::new(),
+            matrix_token: String::new(),
             background_alerts: false,
             plugins: Vec::new(),
             close_to_tray: true,
@@ -889,6 +953,7 @@ mod tests {
                 lon: -97.0,
                 icon: None,
                 alert_radius_mi: crate::settings::default_alert_radius_mi(),
+                video_url: String::new(),
                 home: false,
             }],
             background_alerts: true,

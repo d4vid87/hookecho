@@ -79,6 +79,7 @@ impl MarkerWindow {
                         lon: 0.0,
                         icon: None,
                         alert_radius_mi: crate::settings::default_alert_radius_mi(),
+                            video_url: String::new(),
                         home: false,
                     });
                 }
@@ -94,7 +95,7 @@ pub fn marker_grid(ui: &mut egui::Ui, markers: &mut Vec<Marker>, icon_tex: &Icon
     let mut remove: Option<usize> = None;
     let mut make_home: Option<usize> = None;
     egui::Grid::new("markers_grid")
-        .num_columns(7)
+        .num_columns(8)
         .spacing([8.0, 6.0])
         .show(ui, |ui| {
             ui.strong("Home")
@@ -104,6 +105,8 @@ pub fn marker_grid(ui: &mut egui::Ui, markers: &mut Vec<Marker>, icon_tex: &Icon
             ui.strong("Lon");
             ui.strong("Watch")
                 .on_hover_text("Alert when a warning comes within this many miles");
+            ui.strong("Video")
+                .on_hover_text("Live stream URL for this place (HLS/MJPEG plays in-app)");
             ui.strong("Icon");
             ui.end_row();
             for (i, m) in markers.iter_mut().enumerate() {
@@ -132,6 +135,11 @@ pub fn marker_grid(ui: &mut egui::Ui, markers: &mut Vec<Marker>, icon_tex: &Icon
                         .suffix(" mi"),
                 )
                 .on_hover_text("0 = only alert when the warning polygon actually covers this spot");
+                ui.add(
+                    egui::TextEdit::singleline(&mut m.video_url)
+                        .desired_width(160.0)
+                        .hint_text("stream URL"),
+                );
                 ui.horizontal(|ui| {
                     // Thumbnail of the current icon, if its texture is loaded.
                     if let Some(tex) = m

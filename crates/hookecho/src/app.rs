@@ -34,6 +34,14 @@ use wxdata::overlay::{self, GeoFeature};
 /// Frames to let a stepped archive volume load before grabbing it for the loop GIF.
 const LOOP_SETTLE_FRAMES: u8 = 12;
 
+/// The first `http(s)://` URL in a free-text line, if there is one. Spotter reports and chase
+/// partners paste stream links into their status text; this is how we find them.
+fn first_url(text: &str) -> Option<String> {
+    text.split_whitespace()
+        .find(|w| w.starts_with("http://") || w.starts_with("https://"))
+        .map(|w| w.trim_end_matches(['.', ',', ')', '"', '\'']).to_string())
+}
+
 /// Squared screen-space hit radius (px²) for a tap/click target of nominal `px` radius. Android
 /// finger taps need a fatter target than a mouse cursor, so targets grow ~1.8× there; desktop is
 /// unchanged.
@@ -1442,6 +1450,11 @@ pub struct HookEchoApp {
     // ponytail: index identity — markers have no id, and their names aren't unique ("Marker 3"
     // comes back after a delete). A bounds check closes the popup if the list shrinks under it.
     marker_popup: Option<usize>,
+    /// A spotter dot tapped this frame, opened after the radar pane's borrows end.
+    pending_spotter: Option<wxdata::spotters::Spotter>,
+    /// The one open live-video window, if any (a marker's or a chase partner's stream).
+    // ponytail: one at a time; a Vec of players when someone wants a wall of streams.
+    video_player: Option<ui::video_window::VideoPlayer>,
     cells_window: ui::cells_window::CellsWindow,
     /// Warning verification lab and its in-flight query.
     verify_window: ui::verify_window::VerifyWindow,
@@ -2075,6 +2088,8 @@ impl HookEchoApp {
             detail: None,
             cell_popup: None,
             marker_popup: None,
+            pending_spotter: None,
+            video_player: None,
             cells_window: Default::default(),
             verify_window: Default::default(),
             verify_rx: None,
@@ -3026,7 +3041,7 @@ impl HookEchoApp {
                 let (label, area) = match hit {
                     Some((m, km)) => {
                         // Watched location covered → push to the phone (opt-in ntfy topic).
-                        self.push_ntfy(
+                        self.notify_alert(
                             &format!("⚠ {} — {}", a.event, m.name),
                             if a.headline.is_empty() {
                                 &a.area
@@ -3121,7 +3136,7 @@ impl HookEchoApp {
                 continue;
             }
             self.lightning_alerted.insert(name.clone(), Instant::now());
-            self.push_ntfy(
+            self.notify_alert(
                 &format!("⚡ Lightning near {name}"),
                 &format!("Cloud-to-ground strikes within {RADIUS_KM:.0} km of {name}"),
                 false,
@@ -3243,7 +3258,7 @@ impl HookEchoApp {
                 self.rain_eta.push((name.clone(), min));
             }
             if let Verdict::Fire(min) = self.rain_detector.update(name, eta) {
-                self.push_ntfy(
+                self.notify_alert(
                     &format!("\u{1f327} Rain reaching {name}"),
                     &format!("About {min:.0} minutes out"),
                     false,
@@ -3443,29 +3458,131 @@ impl HookEchoApp {
         self.xsection = Some(xs);
     }
 
-    /// POST a high-priority push notification to the user's ntfy.sh topic (no-op if unset).
-    /// Best-effort on the shared tokio runtime; failures are logged, never fatal.
-    fn push_ntfy(&self, title: &str, body: &str, urgent: bool) {
-        let topic = self.settings.ntfy_topic.trim().to_string();
-        if topic.is_empty() {
+    /// Detail card for a tapped Spotter Network dot. Their report text sometimes carries a
+    /// stream link; when it does, the card offers it as a link (which is also the Watch path).
+    fn open_spotter(&mut self, sp: &wxdata::spotters::Spotter) {
+        let body = format!(
+            "{}\n{}",
+            crate::timefmt::fmt_date_clock(sp.time, self.active_tz()),
+            sp.status
+        );
+        let link = first_url(&sp.status).map(|u| ("▶ Watch stream".to_string(), u));
+        self.cell_popup = None;
+        self.detail = Some(Detail {
+            title: sp.name.clone(),
+            body,
+            color: [0, 200, 80, 255],
+            image: None,
+            link,
+        });
+    }
+
+    /// Open a stream URL: direct HLS/MJPEG plays in the in-app player, everything else (YouTube,
+    /// Twitch, a station's watch page) goes to the system browser.
+    // ponytail: no yt-dlp sidecar — the browser already plays those better than we would.
+    fn watch_stream(&mut self, title: String, url: String) {
+        if url.is_empty() {
             return;
         }
+        if ui::video_window::playable_in_app(&url) {
+            self.video_player = Some(ui::video_window::VideoPlayer::start(
+                title,
+                url,
+                &self.spawner,
+            ));
+        } else if let Err(e) = crate::platform::open_url(&url) {
+            log::warn!("open stream URL failed: {e}");
+        }
+    }
+
+    /// Deliver an alert to every configured channel: ntfy.sh push plus Discord / Slack / Matrix
+    /// webhooks. Each is a no-op when its settings field is blank.
+    /// Best-effort on the shared tokio runtime; failures are logged, never fatal.
+    // ponytail: fire-and-forget, no retry; add a bounded retry queue if users report drops.
+    fn notify_alert(&self, title: &str, body: &str, urgent: bool) {
         let http = self.http.clone();
         let (title, body) = (title.to_string(), body.to_string());
-        let priority = if urgent { "urgent" } else { "high" };
-        self.spawner.spawn(async move {
-            let res = http
-                .post(format!("https://ntfy.sh/{topic}"))
-                .header("Title", title)
-                .header("Priority", priority)
-                .header("Tags", "warning,cloud_with_lightning")
-                .body(body)
-                .send()
-                .await;
-            if let Err(e) = res {
-                log::warn!("ntfy push failed: {e}");
-            }
-        });
+
+        let topic = self.settings.ntfy_topic.trim().to_string();
+        if !topic.is_empty() {
+            let (http, title, body) = (http.clone(), title.clone(), body.clone());
+            let priority = if urgent { "urgent" } else { "high" };
+            self.spawner.spawn(async move {
+                let res = http
+                    .post(format!("https://ntfy.sh/{topic}"))
+                    .header("Title", title)
+                    .header("Priority", priority)
+                    .header("Tags", "warning,cloud_with_lightning")
+                    .body(body)
+                    .send()
+                    .await;
+                if let Err(e) = res {
+                    log::warn!("ntfy push failed: {e}");
+                }
+            });
+        }
+
+        // Chat webhooks: same shape (POST JSON), so one closure covers Discord and Slack.
+        let mut posts: Vec<(&'static str, String, String, Option<String>)> = Vec::new();
+        let discord = self.settings.discord_webhook.trim();
+        if !discord.is_empty() {
+            posts.push((
+                "discord",
+                discord.to_string(),
+                crate::notify::discord_body(&title, &body),
+                None,
+            ));
+        }
+        let slack = self.settings.slack_webhook.trim();
+        if !slack.is_empty() {
+            posts.push((
+                "slack",
+                slack.to_string(),
+                crate::notify::slack_body(&title, &body),
+                None,
+            ));
+        }
+        for (what, url, payload, _) in posts {
+            let http = http.clone();
+            self.spawner.spawn(async move {
+                let res = http
+                    .post(url)
+                    .header("Content-Type", "application/json")
+                    .body(payload)
+                    .send()
+                    .await;
+                if let Err(e) = res {
+                    log::warn!("{what} webhook failed: {e}");
+                }
+            });
+        }
+
+        // Matrix wants an authenticated PUT with a transaction id.
+        let (hs, room, token) = (
+            self.settings.matrix_homeserver.trim().to_string(),
+            self.settings.matrix_room.trim().to_string(),
+            self.settings.matrix_token.trim().to_string(),
+        );
+        if !hs.is_empty() && !room.is_empty() && !token.is_empty() {
+            let txn = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis())
+                .unwrap_or(0);
+            let url = crate::notify::matrix_url(&hs, &room, txn);
+            let payload = crate::notify::matrix_body(&title, &body);
+            self.spawner.spawn(async move {
+                let res = http
+                    .put(url)
+                    .bearer_auth(token)
+                    .header("Content-Type", "application/json")
+                    .body(payload)
+                    .send()
+                    .await;
+                if let Err(e) = res {
+                    log::warn!("matrix webhook failed: {e}");
+                }
+            });
+        }
     }
 
     /// Sub-hourly GOES scrub bar: shown when the active basemap is a GOES layer and its frame
@@ -3805,7 +3922,7 @@ impl HookEchoApp {
         } else {
             &self.settings.share_name
         };
-        let me = share.me(name, lon, lat);
+        let me = share.me(name, lon, lat, &self.settings.share_video_url);
         share.broadcast(&me);
         let relay = self.settings.share_relay.clone();
         if relay.is_empty() {
@@ -4140,7 +4257,7 @@ impl HookEchoApp {
                 "⚠ TDS detected".to_string(),
                 format!("{} debris signature(s) — possible tornado", hits.len()),
             );
-            self.push_ntfy(
+            self.notify_alert(
                 "⚠ Tornado Debris Signature",
                 "Low CC + high reflectivity detected on radar",
                 true,
@@ -4195,7 +4312,7 @@ impl HookEchoApp {
                 "⟳ Rotation detected".to_string(),
                 format!("{kt:.0} kt couplet — {where_}"),
             );
-            self.push_ntfy(
+            self.notify_alert(
                 "⟳ Rotation couplet",
                 &format!("{kt:.0} kt rotational velocity — {where_}"),
                 true,
@@ -4867,6 +4984,11 @@ impl HookEchoApp {
                                     &mut self.tropical_wind_kt,
                                     &mut self.tropical_surge,
                                     l3_site.as_deref(),
+                                    &mut self.settings.lightning_minutes,
+                                    self.show_glm,
+                                    &mut self.settings.glm_goes_west,
+                                    self.show_spotters,
+                                    &mut self.settings.spotter_range_km,
                                     Some(mosaic.as_str()),
                                     &mut opts,
                                 );
@@ -5625,8 +5747,9 @@ impl HookEchoApp {
             (
                 FL::Lightning,
                 "National",
-                "Lightning density",
-                "How much lightning is striking, and where",
+                "Lightning density (CG)",
+                "Ground strikes only: NLDN cloud-to-ground density, averaged over a window you \
+                 pick. Pair it with satellite lightning (GLM) to see total vs cloud-to-ground.",
                 true,
             ),
             (
@@ -6010,7 +6133,8 @@ impl HookEchoApp {
                 T::GlmLightning,
                 "Severe",
                 "Satellite lightning (GLM)",
-                "Individual flashes from the GOES lightning mapper, fading as they age",
+                "Total lightning (optical) — every flash the GOES mapper sees, in-cloud included, \
+                 fading as it ages. The CG density layer is the ground-strike half.",
                 true,
             ),
             (
@@ -8712,6 +8836,22 @@ impl HookEchoApp {
                             .map(|(i, _)| i)
                     })
                     .flatten();
+                // A chase partner's dot, if they published a stream with their position.
+                let peer_hit = (marker_hit.is_none() && self.tool == MapTool::Interrogate)
+                    .then(|| {
+                        self.peers
+                            .values()
+                            .filter(|p| !p.video_url.trim().is_empty())
+                            .find(|p| {
+                                let w = crate::render::mercator::lonlat_to_world(p.lon, p.lat);
+                                let (sx, sy) = cam.world_to_screen(w, vp);
+                                let (dx, dy) =
+                                    (prect.left() + sx - pos.x, prect.top() + sy - pos.y);
+                                dx * dx + dy * dy <= tap_r2(12.0)
+                            })
+                            .map(|p| (p.name.clone(), p.video_url.trim().to_string()))
+                    })
+                    .flatten();
                 // Interrogate + a click on a radar-site ring switches radars (storm features win,
                 // handled inside try_pick_site). Consumes the click so no popup opens underneath.
                 let picked_site = marker_hit.is_none()
@@ -8791,6 +8931,11 @@ impl HookEchoApp {
                         self.cell_popup = None;
                         self.detail = None;
                     }
+                    _ if peer_hit.is_some() => {
+                        let (name, url) = peer_hit.expect("checked Some");
+                        self.cell_popup = None;
+                        self.watch_stream(name, url);
+                    }
                     _ if picked_site => {}
                     _ if cam_site.is_some() => {
                         self.cell_popup = None;
@@ -8818,6 +8963,7 @@ impl HookEchoApp {
                             lon,
                             icon: None,
                             alert_radius_mi: crate::settings::default_alert_radius_mi(),
+                            video_url: String::new(),
                             home: false,
                         });
                     }
@@ -10034,16 +10180,26 @@ impl HookEchoApp {
             {
                 let now = Utc::now();
                 let show_labels = cam.zoom >= 9.0;
-                // 230 km is at most ~2.1° of latitude and, at CONUS latitudes, under 3° of
-                // longitude — a cheap box rejects almost every spotter before the haversine runs.
-                let (max_dlon, max_dlat) = (3.0, 2.1);
+                // The range limit is at most `range/110` degrees of latitude and, at CONUS
+                // latitudes, ~1.4x that in longitude — a cheap box rejects almost every spotter
+                // before the haversine runs. 0 means the user asked for the whole feed.
+                let range_km = self.settings.spotter_range_km.max(0.0);
+                let (max_dlat, max_dlon) = if range_km <= 0.0 {
+                    (f64::INFINITY, f64::INFINITY)
+                } else {
+                    let dlat = range_km / 110.0;
+                    (dlat, dlat * 1.45)
+                };
+                let mut spotter_click: Option<wxdata::spotters::Spotter> = None;
                 for sp in &self.spotters {
                     if (sp.lon - site_pos[0]).abs() > max_dlon
                         || (sp.lat - site_pos[1]).abs() > max_dlat
                     {
                         continue;
                     }
-                    if crate::geo::great_circle(site_pos, [sp.lon, sp.lat]).0 > 230.0 {
+                    if range_km > 0.0
+                        && crate::geo::great_circle(site_pos, [sp.lon, sp.lat]).0 > range_km
+                    {
                         continue;
                     }
                     let w = crate::render::mercator::lonlat_to_world(sp.lon, sp.lat);
@@ -10093,7 +10249,16 @@ impl HookEchoApp {
                         );
                         response.clone().show_tooltip_text(hover);
                     }
+                    if response.clicked()
+                        && response
+                            .interact_pointer_pos()
+                            .is_some_and(|hp| hit.contains(hp))
+                    {
+                        spotter_click = Some(sp.clone());
+                    }
                 }
+                // Deferred: the surrounding pane borrow is still live here.
+                self.pending_spotter = spotter_click;
             }
         }
 
@@ -10730,6 +10895,7 @@ impl HookEchoApp {
             lon,
             lat,
             ts: crate::share::now(),
+            video_url: self.settings.share_video_url.clone(),
         });
         for (p, is_me) in me
             .iter()
@@ -11102,6 +11268,18 @@ impl HookEchoApp {
                     .on_hover_text(
                         "HTTP endpoint you host: POST a position, GET the list. Leave empty for \
                          same-network sharing only. The endpoint sees your live position.",
+                    );
+                });
+                ui.horizontal(|ui| {
+                    ui.label("Stream");
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.settings.share_video_url)
+                            .hint_text("https://… (optional)")
+                            .desired_width(180.0),
+                    )
+                    .on_hover_text(
+                        "A live-video URL published with your dot, so partners can click it and \
+                         watch. Direct HLS/MJPEG plays in-app; YouTube and Twitch open a browser.",
                     );
                 });
                 match self.peers.len() {
@@ -12354,7 +12532,9 @@ impl eframe::App for HookEchoApp {
                 }
                 let product = match layer {
                     FL::Mrms => wxdata::mrms::REFLECTIVITY.to_string(),
-                    FL::Lightning => wxdata::mrms::LIGHTNING.to_string(),
+                    FL::Lightning => {
+                        wxdata::mrms::lightning_density(self.settings.lightning_minutes).to_string()
+                    }
                     FL::Mesh => wxdata::mrms::MESH.to_string(),
                     FL::AzShear => wxdata::mrms::AZSHEAR.to_string(),
                     FL::Rotation => wxdata::mrms::rotation_track(self.rotation_minutes).to_string(),
@@ -12431,14 +12611,16 @@ impl eframe::App for HookEchoApp {
             self.glm_polling
                 .store(true, std::sync::atomic::Ordering::Relaxed);
             let feed = self.glm.clone();
+            let west = self.settings.glm_goes_west;
             let busy = self.glm_polling.clone();
             let http = self.http.clone();
             let ctx2 = ctx.clone();
             self.spawner.spawn(async move {
                 // Decode outside the lock: holding it across an await would stall the painter.
                 let mut local = wxdata::glm::GlmFeed::new(15);
-                if let Some(last) = feed.lock().ok().and_then(|f| f.last_key().cloned()) {
-                    local.set_last_key(last);
+                local.set_west(west);
+                if let Ok(f) = feed.lock() {
+                    local.set_last_keys(f.last_keys().clone());
                 }
                 let added = local.poll(&http).await.unwrap_or(0);
                 if let Ok(mut f) = feed.lock() {
@@ -12903,6 +13085,7 @@ impl eframe::App for HookEchoApp {
                         lon,
                         icon: None,
                         alert_radius_mi: crate::settings::default_alert_radius_mi(),
+                        video_url: String::new(),
                         home: false,
                     });
                     self.settings.save();
@@ -13200,8 +13383,14 @@ impl eframe::App for HookEchoApp {
                 None => self.marker_popup = None,
                 Some(m) => {
                     let r = ui::marker_popup::show(ctx, m);
+                    let watch = r
+                        .watch
+                        .then(|| (m.name.clone(), m.video_url.trim().to_string()));
                     if r.manage {
                         self.marker_window.open = true;
+                    }
+                    if let Some((name, url)) = watch {
+                        self.watch_stream(name, url);
                     }
                     if r.remove {
                         self.settings.markers.remove(i);
@@ -13210,6 +13399,14 @@ impl eframe::App for HookEchoApp {
                         self.marker_popup = None;
                     }
                 }
+            }
+        }
+        if let Some(sp) = self.pending_spotter.take() {
+            self.open_spotter(&sp);
+        }
+        if let Some(p) = &mut self.video_player {
+            if !p.show(ctx) {
+                self.video_player = None; // dropping the player stops the download
             }
         }
         self.follow_badge(ctx);
