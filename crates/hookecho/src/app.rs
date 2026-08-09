@@ -236,8 +236,9 @@ enum OverlayMsg {
 /// One overlay data source to fetch.
 #[derive(Clone)]
 enum OverlaySource {
-    /// NWS alerts; the `Option<(lat, lon)>` scopes zone-only alert resolution to the active radar.
-    Alerts(Option<(f64, f64)>),
+    /// NWS alerts; the `(lat, lon)` list scopes zone-only alert resolution to the active radar and
+    /// every saved marker.
+    Alerts(Vec<(f64, f64)>),
     Mds,
     /// Winter Storm Severity Index for a day (1-3).
     Wssi(u8),
@@ -339,8 +340,8 @@ enum OverlaySource {
 impl OverlaySource {
     async fn fetch(self, http: &reqwest::Client) -> anyhow::Result<OverlayMsg> {
         Ok(match self {
-            OverlaySource::Alerts(near) => {
-                OverlayMsg::Alerts(alerts::fetch_active(http, near).await?)
+            OverlaySource::Alerts(points) => {
+                OverlayMsg::Alerts(alerts::fetch_active(http, &points).await?)
             }
             OverlaySource::Mds => {
                 OverlayMsg::Mds(wxdata::spc::fetch_mesoscale_discussions(http).await?)
@@ -2759,14 +2760,18 @@ impl HookEchoApp {
 
     fn fetch_overlays(&mut self, ctx: &egui::Context) {
         self.overlay_last_fetch = Some(Instant::now());
-        // Scope zone-only alert resolution (heat, advisories) to the active radar so the site's own
-        // alerts always resolve — see `alerts::fetch_active`.
-        let near = self.views[self.active]
+        // Scope zone-only alert resolution (heat, advisories) to the active radar and to every
+        // saved marker, so an advisory at the far edge of a wide zone resolves for the places
+        // people actually care about, not just the radar — see `alerts::fetch_active`.
+        let mut points: Vec<(f64, f64)> = self.views[self.active]
             .site
             .as_deref()
             .and_then(wxdata::sites::site_by_id)
-            .map(|s| (s.latitude as f64, s.longitude as f64));
-        self.spawn_overlay(ctx, OverlaySource::Alerts(near));
+            .map(|s| (s.latitude as f64, s.longitude as f64))
+            .into_iter()
+            .collect();
+        points.extend(self.settings.markers.iter().map(|m| (m.lat, m.lon)));
+        self.spawn_overlay(ctx, OverlaySource::Alerts(points));
         self.spawn_overlay(ctx, OverlaySource::Mds);
         if (1..=3).contains(&self.filters.wssi_day) {
             self.spawn_overlay(ctx, OverlaySource::Wssi(self.filters.wssi_day));

@@ -356,20 +356,23 @@ async fn get_alerts(client: &reqwest::Client, url: &str) -> anyhow::Result<Strin
         .await?)
 }
 
+/// How many `?point=` queries one refresh may make. Each is a round trip plus its zone
+/// resolutions, and past a handful of saved locations the nationwide pass is the cheaper answer.
+const MAX_POINTS: usize = 8;
+
 /// Fetch active NWS alerts as overlay features. Inline-polygon alerts (tornado, severe, flash
 /// flood) come from the nationwide feed so they render anywhere the map is panned. Zone-only alerts
 /// (heat, advisories, marine — no inline polygon, just UGC zones) are resolved to their zone
-/// geometry; with `near = Some((lat, lon))` (the active radar) they're scoped to `?point=` so the
-/// site's own heat warning / advisory always resolves — the nationwide feed carries ~1800 zone URLs
-/// and the local one sits far past any sane per-refresh cap. Without a site (headless) it falls back
-/// to a capped nationwide zone pass.
+/// geometry; each `(lat, lon)` in `points` — the active radar, plus the user's saved markers — gets
+/// a `?point=` query so its own heat warning / advisory always resolves. The nationwide feed
+/// carries ~1800 zone URLs, far past any sane per-refresh cap, so an empty `points` (headless)
+/// falls back to a capped nationwide zone pass.
 ///
-/// `// ponytail: point-scoped zone alerts cover the radar location, not every in-view county —
-/// matches the app's site-centric alert scoping; widen to a state/bbox query if edge-of-range
-/// advisories ever matter.`
+/// `// ponytail: capped at MAX_POINTS queries; a state or bbox query if someone saves more
+/// locations than that and misses advisories at the ones past the cap.`
 pub async fn fetch_active(
     client: &reqwest::Client,
-    near: Option<(f64, f64)>,
+    points: &[(f64, f64)],
 ) -> anyhow::Result<Vec<GeoFeature>> {
     let body = get_alerts(client, ALERTS_URL).await?;
     let mut feats = parse_alerts(&body)?;
@@ -377,25 +380,21 @@ pub async fn fetch_active(
         .iter()
         .filter_map(|f| f.alert.as_ref().map(|a| a.id.clone()))
         .collect();
-    match near {
-        Some((lat, lon)) => {
-            let url = format!("{ALERTS_URL}?point={lat:.4},{lon:.4}");
-            match get_alerts(client, &url).await {
-                Ok(point_body) => {
-                    feats.extend(resolve_zone_alerts(client, &point_body, 400, &mut seen).await);
-                }
-                // A point query can 400 (e.g. a marine site just off the coast) — fall back so the
-                // user still gets the feed-top zone alerts rather than none.
-                Err(e) => {
-                    log::warn!("scoped alert fetch failed ({e}); using nationwide zone pass");
-                    feats.extend(
-                        resolve_zone_alerts(client, &body, MAX_ZONE_FETCHES, &mut seen).await,
-                    );
-                }
+    if points.is_empty() {
+        feats.extend(resolve_zone_alerts(client, &body, MAX_ZONE_FETCHES, &mut seen).await);
+    }
+    for (lat, lon) in points.iter().take(MAX_POINTS) {
+        let url = format!("{ALERTS_URL}?point={lat:.4},{lon:.4}");
+        match get_alerts(client, &url).await {
+            Ok(point_body) => {
+                feats.extend(resolve_zone_alerts(client, &point_body, 400, &mut seen).await);
             }
-        }
-        None => {
-            feats.extend(resolve_zone_alerts(client, &body, MAX_ZONE_FETCHES, &mut seen).await);
+            // A point query can 400 (e.g. a marine site just off the coast) — fall back so the
+            // user still gets the feed-top zone alerts rather than none.
+            Err(e) => {
+                log::warn!("scoped alert fetch failed ({e}); using nationwide zone pass");
+                feats.extend(resolve_zone_alerts(client, &body, MAX_ZONE_FETCHES, &mut seen).await);
+            }
         }
     }
     Ok(feats)
@@ -504,7 +503,7 @@ mod tests {
     #[ignore = "network"]
     async fn fetches_live_alerts() {
         let client = reqwest::Client::new();
-        let feats = fetch_active(&client, Some((32.57, -97.30))).await.unwrap();
+        let feats = fetch_active(&client, &[(32.57, -97.30)]).await.unwrap();
         eprintln!("fetched {} alert polygons", feats.len());
     }
 }

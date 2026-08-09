@@ -596,7 +596,7 @@ pub fn run_alerts() -> anyhow::Result<()> {
         .build()?;
     let feats = rt.block_on(async {
         let http = reqwest::Client::new();
-        wxdata::alerts::fetch_active(&http, None).await
+        wxdata::alerts::fetch_active(&http, &[]).await
     })?;
     // Dedupe by alert id (MultiPolygon alerts emit one feature per part).
     let mut seen = std::collections::HashSet::new();
@@ -843,7 +843,7 @@ pub fn run_overlay(out_path: &str) -> anyhow::Result<()> {
 
     let (alerts, outlook) = rt.block_on(async {
         let client = reqwest::Client::new();
-        let alerts = wxdata::alerts::fetch_active(&client, None)
+        let alerts = wxdata::alerts::fetch_active(&client, &[])
             .await
             .unwrap_or_default();
         let outlook = wxdata::spc::fetch_outlook(&client, 1)

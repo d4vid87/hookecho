@@ -112,13 +112,12 @@ fn parse_point(s: &str) -> Option<(f64, f64)> {
 
 /// Fetch conditions and alerts for every spot.
 ///
-/// The nationwide alert feed is pulled once and distance-filtered per spot rather than queried per
-/// marker — the whole point of this mode is one quick round of requests.
-///
-// ponytail: nationwide zone pass is capped; per-marker `?point=` queries if edge-of-range
-// advisories matter.
+/// The nationwide feed is pulled once and distance-filtered per spot, and each spot also gets a
+/// `?point=` query so its zone-only advisories resolve — the nationwide zone pass is capped and
+/// would otherwise miss them.
 pub async fn collect(http: &reqwest::Client, spots: &[Spot]) -> anyhow::Result<Vec<SpotStatus>> {
-    let feats = wxdata::alerts::fetch_active(http, None).await?;
+    let points: Vec<(f64, f64)> = spots.iter().map(|s| (s.lat, s.lon)).collect();
+    let feats = wxdata::alerts::fetch_active(http, &points).await?;
     let mut out = Vec::with_capacity(spots.len());
     for spot in spots {
         let mut alerts: Vec<AlertBrief> = Vec::new();
