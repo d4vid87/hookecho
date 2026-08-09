@@ -61,20 +61,19 @@ fn shear_term(shear6_ms: f64) -> f64 {
     }
 }
 
-/// Significant Tornado Parameter (fixed layer). Constants must match
-/// [`crate::sounding::Sounding::indices`] — the point sounding and the grid have to agree.
+/// Significant Tornado Parameter (fixed layer). Shared with the point sounding, which calls this
+/// rather than keeping a second copy of the constants.
 pub fn stp(sbcape: f64, srh1: f64, shear6_ms: f64, lcl_agl_m: f64) -> f64 {
     let lcl_term = ((2000.0 - lcl_agl_m) / 1000.0).clamp(0.0, 1.0);
     (sbcape / 1500.0) * (srh1.max(0.0) / 150.0) * shear_term(shear6_ms) * lcl_term
 }
 
-/// Supercell Composite Parameter. Constants must match [`crate::sounding::Sounding::indices`].
+/// Supercell Composite Parameter, shared with the point sounding.
 pub fn scp(sbcape: f64, srh3: f64, shear6_ms: f64) -> f64 {
     (sbcape / 1000.0) * (srh3.max(0.0) / 50.0) * shear_term(shear6_ms)
 }
 
-/// Energy-Helicity Index over 0–1 km. Constants must match
-/// [`crate::sounding::Sounding::indices`].
+/// Energy-Helicity Index over 0–1 km, shared with the point sounding.
 pub fn ehi1(sbcape: f64, srh1: f64) -> f64 {
     sbcape * srh1 / 160_000.0
 }

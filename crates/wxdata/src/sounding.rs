@@ -270,16 +270,11 @@ impl Sounding {
         let srh3 = self.srh(3000.0)?;
         let shear6_kt = self.bulk_shear_kt()?;
         let shear6_ms = shear6_kt / 1.943_844;
-        // Shear term: zero below 10 m/s, capped at 1.0 above 20 m/s (Thompson et al. 2004).
-        let shear_term = if shear6_ms < 10.0 {
-            0.0
-        } else {
-            (shear6_ms / 20.0).min(1.0)
-        };
-        let scp = (sbcape / 1000.0) * (srh3.max(0.0) / 50.0) * shear_term;
-        let lcl_term = ((2000.0 - lcl_m) / 1000.0).clamp(0.0, 1.0);
-        let stp = (sbcape / 1500.0) * (srh1.max(0.0) / 150.0) * shear_term * lcl_term;
-        let ehi1 = sbcape * srh1 / 160_000.0;
+        // The same functions the gridded layers use. The point and the grid used to carry two
+        // copies of these constants and a comment asking the next reader to keep them in step.
+        let scp = crate::severe::scp(sbcape, srh3, shear6_ms);
+        let stp = crate::severe::stp(sbcape, srh1, shear6_ms, lcl_m);
+        let ehi1 = crate::severe::ehi1(sbcape, srh1);
         Some(Indices {
             sbcape,
             lcl_m,
