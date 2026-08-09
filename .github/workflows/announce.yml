@@ -24,15 +24,16 @@ jobs:
   announce:
     runs-on: ubuntu-latest
     steps:
+      # On a tag push this is the tag itself; a manual dispatch takes the default branch, so a
+      # rehearsal works for a version that has not been tagged yet.
       - uses: actions/checkout@v4
-        with:
-          ref: ${{ inputs.tag || github.ref }}
 
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
 
       - name: Wait for the release to exist
+        if: ${{ inputs.dry_run != true }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ inputs.tag || github.ref_name }}
