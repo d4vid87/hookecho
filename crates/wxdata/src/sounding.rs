@@ -58,9 +58,10 @@ impl Sounding {
     }
 }
 
-/// Severe-weather composite indices derived from the profile (feature FF). All are the
-/// *fixed-layer* published forms, computed from the 10 mandatory levels — coarse but honestly
-/// labeled; a mesoanalysis-grade effective-layer version needs a denser profile.
+/// Severe-weather composite indices derived from the profile (feature FF). These are the
+/// *fixed-layer* published forms, computed from the 10 mandatory levels. The effective-layer
+/// forms live beside them in [`crate::severe::effective_indices`], solved off the same profile —
+/// still coarse at 10 levels, but the same method the gridded layers use.
 #[derive(Debug, Clone, Copy)]
 pub struct Indices {
     /// Surface-based CAPE (J/kg).
@@ -602,6 +603,46 @@ mod tests {
             ix.shear6_kt
         );
         assert!(ix.scp > 0.0 && ix.stp > 0.0 && ix.ehi1 > 0.0);
+    }
+
+    #[test]
+    fn supercell_profile_has_an_effective_inflow_layer() {
+        let s = supercell_profile();
+        let eff = crate::severe::effective_indices(&s).expect("effective layer");
+        assert!(
+            eff.esrh > 0.0,
+            "veering profile → positive effective SRH: {:.0}",
+            eff.esrh
+        );
+        // This parcel is still buoyant at 200 hPa, the top of the mandatory-level set, so the
+        // EL-dependent fields are honestly absent rather than extrapolated.
+        assert!(eff.ebwd_kt.is_none() && eff.stp_eff.is_none());
+    }
+
+    #[test]
+    fn stable_profile_has_no_effective_layer() {
+        // No parcel clears 100 J/kg, so there is no inflow layer to solve over.
+        let mk = |p, t, td| SoundingLevel {
+            pressure_hpa: p,
+            temp_c: t,
+            dewpt_c: td,
+            u_ms: 5.0,
+            v_ms: 0.0,
+        };
+        let s = Sounding {
+            lon: 0.0,
+            lat: 0.0,
+            run: Utc::now(),
+            fh: 0,
+            levels: vec![
+                mk(1000.0, 5.0, -10.0),
+                mk(925.0, 8.0, -12.0),
+                mk(850.0, 10.0, -15.0),
+                mk(700.0, 4.0, -20.0),
+                mk(500.0, -8.0, -30.0),
+            ],
+        };
+        assert!(crate::severe::effective_indices(&s).is_none());
     }
 
     #[test]

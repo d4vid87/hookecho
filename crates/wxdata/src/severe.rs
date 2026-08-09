@@ -322,6 +322,36 @@ async fn fetch_effective_grid(
     Ok(as_forecast(f0, values, run))
 }
 
+/// Effective-layer parameters for one clicked sounding — the same solve the gridded layers run
+/// per cell, so the panel and the map now answer with one method instead of two.
+#[derive(Debug, Clone, Copy)]
+pub struct EffectiveIndices {
+    /// Effective storm-relative helicity (m²/s²).
+    pub esrh: f64,
+    /// Effective bulk wind difference (kt), inflow base to half the MU parcel's EL. `None` when
+    /// the parcel is still buoyant at the top of the profile, so there is no EL to halve.
+    pub ebwd_kt: Option<f64>,
+    /// Effective-layer significant tornado parameter. `None` for the same reason as `ebwd_kt`,
+    /// which it depends on.
+    pub stp_eff: Option<f64>,
+}
+
+/// Effective-layer parameters for a profile, or `None` when it has no effective inflow layer —
+/// the honest answer for a capped or dry column, and the same one the grid gives.
+///
+/// `// ponytail:` the depth-limited fields go `None` rather than guessing an EL above the
+/// profile's top level. A 200 hPa top is where the mandatory-level fetch stops, so an
+/// uncapped plains parcel really does run off the end of the data; extend `LEVELS_HPA` if the
+/// missing EBWD starts mattering more than the extra range requests cost.
+pub fn effective_indices(s: &crate::sounding::Sounding) -> Option<EffectiveIndices> {
+    let heights = s.heights_m();
+    Some(EffectiveIndices {
+        esrh: effective_value(s, &heights, SevereKind::EffSrh)?,
+        ebwd_kt: effective_value(s, &heights, SevereKind::EffShear),
+        stp_eff: effective_value(s, &heights, SevereKind::StpEff),
+    })
+}
+
 /// One column's effective-layer answer. Returns `None` when there is no effective inflow layer,
 /// which is the honest result for a capped or dry column.
 fn effective_value(

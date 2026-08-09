@@ -112,7 +112,7 @@ impl SoundingWindow {
                         Some(m) => format!("{m:.0} m"),
                         None => "—".to_string(),
                     };
-                    let cards = [
+                    let mut cards = vec![
                         ("SBCAPE", format!("{:.0} J/kg", ix.sbcape)),
                         (
                             "SBCIN",
@@ -132,6 +132,19 @@ impl SoundingWindow {
                         ("STP", format!("{:.1}", ix.stp)),
                         ("EHI 0–1", format!("{:.1}", ix.ehi1)),
                     ];
+                    // Effective-layer forms — the same solve the gridded severe layers run per
+                    // cell, so the panel and the map now agree in method. Absent when the column
+                    // has no effective inflow layer, which is the honest answer for a capped one.
+                    let eff = wxdata::severe::effective_indices(s);
+                    if let Some(e) = eff {
+                        let opt = |v: Option<f64>, p: usize| match v {
+                            Some(x) => format!("{x:.*}", p),
+                            None => "—".to_string(),
+                        };
+                        cards.push(("ESRH", format!("{:.0}", e.esrh)));
+                        cards.push(("EBWD", opt(e.ebwd_kt, 0)));
+                        cards.push(("STP (eff)", opt(e.stp_eff, 1)));
+                    }
                     // Chunked by hand rather than `horizontal_wrapped`: a `Frame` with `set_width`
                     // — which is what `stat_card` is — doesn't participate in egui's wrapping, so
                     // all seven stayed on one 900 pt line and dragged the whole window off both
@@ -144,7 +157,11 @@ impl SoundingWindow {
                             }
                         });
                     }
-                    ui.weak("Fixed-layer forms from 10 mandatory levels — coarser than SPC mesoanalysis.");
+                    ui.weak(if eff.is_some() {
+                        "Fixed- and effective-layer forms from 10 mandatory levels — coarser than SPC mesoanalysis."
+                    } else {
+                        "Fixed-layer forms from 10 mandatory levels — no effective inflow layer in this column."
+                    });
                 }
                 // Observed ascent: a line about where it came from, and the toggle.
                 // Wrapped, not a plain `horizontal`: this row is long ("Fort Worth, TX (72249)
