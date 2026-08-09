@@ -93,6 +93,16 @@ pub enum FieldLayer {
     Snowfall,
     /// NOHRSC observed snowfall analysis over the last 6/24/48/72 hours.
     SnowAnalysis,
+    /// Global model mean sea-level pressure (GFS or ECMWF — see `settings.global_model`).
+    GlobalMslp,
+    /// Global model 500 hPa geopotential height.
+    GlobalHeight500,
+    /// Global model 2 m temperature.
+    GlobalTemp2m,
+    /// Global model 10 m wind speed.
+    GlobalWind10m,
+    /// Global model precipitable water / total precipitation.
+    GlobalPrecip,
 }
 
 impl FieldLayer {
@@ -109,12 +119,23 @@ impl FieldLayer {
                 | FieldLayer::Smoke
                 | FieldLayer::Snowfall
                 | FieldLayer::SnowAnalysis
+                | FieldLayer::GlobalMslp
+                | FieldLayer::GlobalHeight500
+                | FieldLayer::GlobalTemp2m
+                | FieldLayer::GlobalWind10m
+                | FieldLayer::GlobalPrecip
         )
     }
 
     /// Fixed bottom-to-top paint order within each band.
-    pub const DRAW_ORDER: [FieldLayer; 26] = [
-        // Below-radar context band (bottom to top).
+    pub const DRAW_ORDER: [FieldLayer; 31] = [
+        // Below-radar context band (bottom to top). The global models sit at the very bottom:
+        // they are the synoptic backdrop everything else is drawn against.
+        FieldLayer::GlobalMslp,
+        FieldLayer::GlobalHeight500,
+        FieldLayer::GlobalTemp2m,
+        FieldLayer::GlobalWind10m,
+        FieldLayer::GlobalPrecip,
         FieldLayer::Mrms,
         FieldLayer::Mosaic,
         FieldLayer::Hrrr,

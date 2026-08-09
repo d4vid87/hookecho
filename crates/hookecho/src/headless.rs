@@ -1103,6 +1103,80 @@ pub fn run_field(slug: &str, out_path: &str) -> anyhow::Result<()> {
     render_to_png(&rt, cb, out_path)
 }
 
+/// Render one global-model field. `--headless-global <gfs|ecmwf> <slug> <out.png>`, with the
+/// camera from `HOOKECHO_CAM` — which is how the dateline gets checked (a global grid that hasn't
+/// been wrapped to −180..180 draws one quad across the entire map).
+pub fn run_global(model: &str, slug: &str, out_path: &str) -> anyhow::Result<()> {
+    use crate::render::FieldLayer as FL;
+    use wxdata::global::{GlobalField, GlobalModel};
+    let model = match model {
+        "ecmwf" => GlobalModel::Ecmwf,
+        "gfs" => GlobalModel::Gfs,
+        other => anyhow::bail!("unknown global model '{other}' (gfs|ecmwf)"),
+    };
+    let gfield = GlobalField::from_slug(slug)
+        .ok_or_else(|| anyhow::anyhow!("unknown global field '{slug}'"))?;
+    let layer = match gfield {
+        GlobalField::Mslp => FL::GlobalMslp,
+        GlobalField::Height500 => FL::GlobalHeight500,
+        GlobalField::Temp2m => FL::GlobalTemp2m,
+        GlobalField::Wind10m => FL::GlobalWind10m,
+        GlobalField::Precip => FL::GlobalPrecip,
+    };
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?;
+    let fc = rt.block_on(async {
+        let client = reqwest::Client::new();
+        wxdata::global::fetch(&client, model, gfield, 0).await
+    })?;
+    let field = fc.field;
+    let finite = field.values.iter().filter(|v| v.is_finite()).count();
+    println!(
+        "{} {slug}: {}x{} lon {:.2}..{:.2} lat {:.2}..{:.2} finite {finite} valid {}",
+        model.label(),
+        field.nx,
+        field.ny,
+        field.lon_west,
+        field.lon_east,
+        field.lat_south,
+        field.lat_north,
+        fc.run
+    );
+    anyhow::ensure!(finite > 0, "global field decoded to nothing");
+    anyhow::ensure!(
+        field.lon_west >= -180.5 && field.lon_east <= 180.5,
+        "global grid was not wrapped into -180..180 ({}..{})",
+        field.lon_west,
+        field.lon_east
+    );
+
+    let upload = crate::app::field_upload_indexed(layer, &field);
+    let camera = cam_or_env(0.0, 20.0, 2.0);
+    let (new_tiles, visible, new_vector_tiles, visible_vector) = national_basemap(&rt, &camera);
+    let (center, scale) = camera.world_to_clip_uniform((SIZE as f32, SIZE as f32));
+    let cb = MapCallback {
+        pane: 0,
+        camera_center: center,
+        camera_scale: scale,
+        new_tiles,
+        visible,
+        radar_upload: None,
+        draw_radar: false,
+        overlay_upload: None,
+        draw_overlay: false,
+        field_uploads: vec![(layer, upload)],
+        field_draws: vec![(layer, 1.0)],
+        clear_tiles: false,
+        drop_tiles: Vec::new(),
+        new_vector_tiles,
+        visible_vector,
+        clear_vector: false,
+        drop_vector_tiles: Vec::new(),
+    };
+    render_to_png(&rt, cb, out_path)
+}
+
 /// Fetch + print the active NHC tropical cyclones (feature V). Exits 0 with a note when none.
 pub fn run_tropical() -> anyhow::Result<()> {
     let rt = tokio::runtime::Builder::new_multi_thread()

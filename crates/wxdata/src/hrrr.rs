@@ -370,7 +370,7 @@ async fn fetch_run_field(
 
     // The .idx sidecar lists each message's start byte; find the one for this var+level.
     let idx = http
-        .get(format!("{base}.idx"))
+        .get(crate::net::fetch_url(&format!("{base}.idx")))
         .header("User-Agent", USER_AGENT)
         .send()
         .await?
@@ -385,7 +385,7 @@ async fn fetch_run_field(
         None => format!("bytes={start}-"),
     };
     let bytes = http
-        .get(&base)
+        .get(crate::net::fetch_url(&base))
         .header("User-Agent", USER_AGENT)
         .header("Range", range)
         .send()
@@ -448,7 +448,7 @@ fn decode_regrid(raw: &[u8], model: Model, min_valid: f64) -> anyhow::Result<Mrm
 /// Pure + fixture-testable. Non-finite or below-`min_valid` samples are ignored.
 /// `// ponytail: max-per-cell — for SRH this keeps the strongest (most positive) value per cell;`
 /// `// negative (anticyclonic) SRH is retained only where no positive sample shares the cell.`
-fn regrid(
+pub(crate) fn regrid(
     lats: &[f64],
     lons: &[f64],
     data: &[f64],
@@ -458,14 +458,17 @@ fn regrid(
 ) -> anyhow::Result<MrmsField> {
     // Extent pass. min/max are associative, so the parallel reduce lands on the same bits as the
     // serial fold. The 1799x1059 native HRRR grid is ~1.9 M points.
+    // Global grids are published on 0..360 longitudes. Wrapping here rather than at each caller
+    // means one quad never straddles the antimeridian, which the map shader has no way to draw.
+    let wrap = |lon: f64| if lon > 180.0 { lon - 360.0 } else { lon };
     let init = (f64::MAX, f64::MIN, f64::MAX, f64::MIN);
     let step = |acc: (f64, f64, f64, f64), k: usize| {
         if !lats[k].is_finite() || !lons[k].is_finite() {
             return acc;
         }
         (
-            acc.0.min(lons[k]),
-            acc.1.max(lons[k]),
+            acc.0.min(wrap(lons[k])),
+            acc.1.max(wrap(lons[k])),
             acc.2.min(lats[k]),
             acc.3.max(lats[k]),
         )
@@ -503,7 +506,7 @@ fn regrid(
         if !v.is_finite() || v < min_valid || !lats[k].is_finite() || !lons[k].is_finite() {
             return None;
         }
-        let gx = (((lons[k] - lonmin) / res_deg) as usize).min(nx - 1);
+        let gx = (((wrap(lons[k]) - lonmin) / res_deg) as usize).min(nx - 1);
         // Row 0 is the northernmost latitude (matches MrmsField convention).
         let gy = (((latmax - lats[k]) / res_deg) as usize).min(ny - 1);
         Some((gy * nx + gx, v as f32))

@@ -267,6 +267,13 @@ enum OverlaySource {
     Env(crate::render::FieldLayer, wxdata::hrrr::Model, bool, u8),
     /// HRRR-backed field layer (rotation tracks, smoke) at a forecast hour.
     HrrrLayer(crate::render::FieldLayer, u8),
+    /// A global-model field (GFS or ECMWF) at a forecast hour.
+    Global(
+        crate::render::FieldLayer,
+        wxdata::global::GlobalModel,
+        wxdata::global::GlobalField,
+        u16,
+    ),
     /// Gridded L3 product (DVL/EET) for a site, projected to a lat/lon field (feature X).
     L3Grid(crate::render::FieldLayer, String),
     /// Melting-level and −20 °C heights at `(lon, lat)`, for the derived hail grids.
@@ -371,6 +378,10 @@ impl OverlaySource {
             }
             OverlaySource::Field(layer, product) => {
                 OverlayMsg::Field(layer, wxdata::mrms::fetch_latest(http, &product).await?)
+            }
+            OverlaySource::Global(layer, model, field, fh) => {
+                let fc = wxdata::global::fetch(http, model, field, fh).await?;
+                OverlayMsg::Field(layer, fc.field)
             }
             OverlaySource::StormReports(bucket) => {
                 // Archive bucket: the 6 h of reports ending at the bucket's close; live: last 6 h.
@@ -1126,6 +1137,12 @@ fn field_refresh_secs(layer: crate::render::FieldLayer) -> u64 {
         FL::Snowfall => 600,
         // The analysis is reissued four times a day; half an hour is plenty.
         FL::SnowAnalysis => 1800,
+        // Global cycles are six hours apart and take hours to post. Half an hour is generous.
+        FL::GlobalMslp
+        | FL::GlobalHeight500
+        | FL::GlobalTemp2m
+        | FL::GlobalWind10m
+        | FL::GlobalPrecip => 1800,
         FL::Smoke => 900,
         // The 24-h hail-swath accumulation moves slowly.
         FL::HailSwath => 300,
@@ -1518,6 +1535,12 @@ pub struct HookEchoApp {
     // ponytail: index identity — markers have no id, and their names aren't unique ("Marker 3"
     // comes back after a delete). A bounds check closes the popup if the list shrinks under it.
     marker_popup: Option<usize>,
+    /// Which global model the global layers read, and how far into its run.
+    global_model: wxdata::global::GlobalModel,
+    global_fcst_hour: u16,
+    /// The (model, hour) each global layer was last fetched for, so a change refetches at once.
+    global_layer_key:
+        std::collections::HashMap<crate::render::FieldLayer, (wxdata::global::GlobalModel, u16)>,
     /// Where the open sounding was taken, so a forecast-hour change can refetch the same point.
     sounding_at: Option<(f64, f64)>,
     /// Vertices clicked so far with the watch-zone tool, `[lon, lat]`. Empty when not drawing.
@@ -2169,6 +2192,9 @@ impl HookEchoApp {
             detail: None,
             cell_popup: None,
             marker_popup: None,
+            global_model: wxdata::global::GlobalModel::default(),
+            global_fcst_hour: 0,
+            global_layer_key: std::collections::HashMap::new(),
             sounding_at: None,
             zone_pts: Vec::new(),
             zone_naming: None,
@@ -5141,6 +5167,8 @@ impl HookEchoApp {
                                     &mut self.tropical_wind_kt,
                                     &mut self.tropical_surge,
                                     l3_site.as_deref(),
+                                    &mut self.global_model,
+                                    &mut self.global_fcst_hour,
                                     &mut self.settings.lightning_minutes,
                                     self.show_glm,
                                     &mut self.settings.glm_goes_west,
@@ -6005,6 +6033,41 @@ impl HookEchoApp {
                 "Radar",
                 "Severe hail probability (derived)",
                 "Odds this storm is producing hail an inch or larger (live only)",
+                false,
+            ),
+            (
+                FL::GlobalMslp,
+                "Models",
+                "Global MSLP",
+                "Surface pressure worldwide — GFS or ECMWF, your pick in Layer options",
+                false,
+            ),
+            (
+                FL::GlobalHeight500,
+                "Models",
+                "Global 500 hPa height",
+                "The steering flow: where the troughs and ridges are, worldwide",
+                false,
+            ),
+            (
+                FL::GlobalTemp2m,
+                "Models",
+                "Global 2 m temp",
+                "Surface temperature worldwide",
+                false,
+            ),
+            (
+                FL::GlobalWind10m,
+                "Models",
+                "Global 10 m wind",
+                "Surface wind worldwide",
+                false,
+            ),
+            (
+                FL::GlobalPrecip,
+                "Models",
+                "Global moisture",
+                "Precipitable water (GFS) or total precipitation (ECMWF)",
                 false,
             ),
             (
@@ -12805,7 +12868,12 @@ impl eframe::App for HookEchoApp {
                     | FL::HailMehs
                     | FL::HailPosh
                     | FL::Snowfall
-                    | FL::SnowAnalysis => unreachable!(),
+                    | FL::SnowAnalysis
+                    | FL::GlobalMslp
+                    | FL::GlobalHeight500
+                    | FL::GlobalTemp2m
+                    | FL::GlobalWind10m
+                    | FL::GlobalPrecip => unreachable!(),
                 };
                 self.spawn_overlay(ctx, OverlaySource::Field(layer, product));
             }
@@ -12825,6 +12893,32 @@ impl eframe::App for HookEchoApp {
                     ctx,
                     OverlaySource::Env(layer, self.env_model, self.env_cape_ml, self.env_srh_km),
                 );
+            }
+        }
+        // Global models: whichever source and forecast hour the user picked.
+        for (layer, gfield) in [
+            (FL::GlobalMslp, wxdata::global::GlobalField::Mslp),
+            (FL::GlobalHeight500, wxdata::global::GlobalField::Height500),
+            (FL::GlobalTemp2m, wxdata::global::GlobalField::Temp2m),
+            (FL::GlobalWind10m, wxdata::global::GlobalField::Wind10m),
+            (FL::GlobalPrecip, wxdata::global::GlobalField::Precip),
+        ] {
+            let fh = self.global_fcst_hour;
+            let model = self.global_model;
+            let on = self.fields.get(&layer).is_some_and(|s| s.show);
+            let stale = on
+                && self.fields.get(&layer).is_some_and(|s| {
+                    s.last_fetch
+                        .is_none_or(|t| t.elapsed().as_secs() >= field_refresh_secs(layer))
+                });
+            // Changing the source or the hour has to refetch now, not on the next slow cadence.
+            let changed = on && self.global_layer_key.get(&layer) != Some(&(model, fh));
+            if stale || changed {
+                if let Some(s) = self.fields.get_mut(&layer) {
+                    s.last_fetch = Some(Instant::now());
+                }
+                self.global_layer_key.insert(layer, (model, fh));
+                self.spawn_overlay(ctx, OverlaySource::Global(layer, model, gfield, fh));
             }
         }
         // HRRR rotation tracks + smoke: same forecast-hour scrub as future radar, own cadences.

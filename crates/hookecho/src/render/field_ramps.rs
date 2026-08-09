@@ -304,6 +304,105 @@ static POSH: FieldRamp = ramp!(
     ]
 );
 
+/// Global-model mean sea-level pressure. The band is wide because this is a whole-planet field:
+/// a deep low and a summer ridge have to share one scale.
+static GLOBAL_MSLP: FieldRamp = FieldRamp {
+    input_scale: 0.01, // Pa → hPa
+    ..ramp!(
+        "MSLP",
+        "hPa",
+        960.0,
+        1040.0,
+        RampScale::Linear,
+        170,
+        &[
+            (0.0, [150, 60, 200]),
+            (0.35, [60, 120, 220]),
+            (0.5, [230, 230, 230]),
+            (0.7, [240, 170, 60]),
+            (1.0, [200, 60, 60]),
+        ]
+    )
+};
+
+/// 500 hPa geopotential height — the steering flow, in decametres the way charts label it.
+static GLOBAL_HEIGHT_500: FieldRamp = FieldRamp {
+    input_scale: 0.1, // m → dam
+    ..ramp!(
+        "500 hPa height",
+        "dam",
+        492.0,
+        600.0,
+        RampScale::Linear,
+        170,
+        &[
+            (0.0, [120, 60, 190]),
+            (0.3, [60, 110, 220]),
+            (0.55, [90, 200, 160]),
+            (0.8, [240, 200, 70]),
+            (1.0, [220, 70, 50]),
+        ]
+    )
+};
+
+/// Global 2 m temperature, in the units most of the planet reads.
+static GLOBAL_TEMP_2M: FieldRamp = FieldRamp {
+    // Kelvin → °C is an offset, not a scale, so the ramp is expressed in Kelvin and labelled °C
+    // by the legend's own offset handling would be a lie — keep it in Kelvin-derived °C here.
+    input_scale: 1.0,
+    ..ramp!(
+        "2 m temp",
+        "K",
+        233.0,
+        318.0,
+        RampScale::Linear,
+        170,
+        &[
+            (0.0, [80, 40, 160]),
+            (0.25, [60, 140, 220]),
+            (0.5, [230, 230, 210]),
+            (0.75, [240, 160, 50]),
+            (1.0, [190, 40, 40]),
+        ]
+    )
+};
+
+/// Global 10 m wind speed (the U component's magnitude band, which is what the layer draws).
+static GLOBAL_WIND_10M: FieldRamp = FieldRamp {
+    input_scale: 1.943_844, // m/s → kt
+    ..ramp!(
+        "10 m wind",
+        "kt",
+        5.0,
+        80.0,
+        RampScale::Abs,
+        170,
+        &[
+            (0.0, [70, 130, 180]),
+            (0.4, [90, 200, 140]),
+            (0.7, [240, 200, 60]),
+            (1.0, [220, 60, 60]),
+        ]
+    )
+};
+
+/// Global moisture: GFS publishes precipitable water, ECMWF total precipitation. Both are
+/// millimetres of water and both answer "how wet is this air mass".
+static GLOBAL_PRECIP: FieldRamp = ramp!(
+    "Precipitable water",
+    "mm",
+    1.0,
+    70.0,
+    RampScale::Log,
+    170,
+    &[
+        (0.0, [60, 80, 120]),
+        (0.4, [70, 170, 190]),
+        (0.7, [90, 210, 110]),
+        (1.0, [240, 230, 90]),
+    ]
+);
+
 /// Forecast snowfall accumulation. The model reports metres; nobody talks in metres of snow.
 static SNOWFALL: FieldRamp = FieldRamp {
     input_scale: 39.370_08, // m → in
@@ -481,6 +580,11 @@ pub fn ramp_for(layer: FieldLayer) -> Option<&'static FieldRamp> {
         FL::Smoke => &SMOKE,
         FL::Snowfall => &SNOWFALL,
         FL::SnowAnalysis => &SNOW_ANALYSIS,
+        FL::GlobalMslp => &GLOBAL_MSLP,
+        FL::GlobalHeight500 => &GLOBAL_HEIGHT_500,
+        FL::GlobalTemp2m => &GLOBAL_TEMP_2M,
+        FL::GlobalWind10m => &GLOBAL_WIND_10M,
+        FL::GlobalPrecip => &GLOBAL_PRECIP,
         FL::Hca => &HCA,
         FL::Mrms | FL::Mosaic | FL::Hrrr | FL::Lightning => return None,
     })

@@ -172,6 +172,22 @@ fn main() -> eframe::Result<()> {
         return Ok(());
     }
 
+    // Global model verify: `hookecho --headless-global <gfs|ecmwf> <slug> <out.png>`.
+    if let Some(pos) = args.iter().position(|a| a == "--headless-global") {
+        let model = args.get(pos + 1).map(String::as_str).unwrap_or("gfs");
+        let slug = args.get(pos + 2).map(String::as_str).unwrap_or("mslp");
+        let out = args
+            .get(pos + 3)
+            .filter(|a| !a.starts_with("--"))
+            .map(String::as_str)
+            .unwrap_or("global.png");
+        if let Err(e) = headless::run_global(model, slug, out) {
+            eprintln!("headless global render failed: {e}");
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
+
     // Tropical verify: `hookecho --headless-tropical`.
     if args.iter().any(|a| a == "--headless-tropical") {
         if let Err(e) = headless::run_tropical() {

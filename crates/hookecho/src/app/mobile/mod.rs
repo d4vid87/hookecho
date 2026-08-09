@@ -509,6 +509,8 @@ impl super::HookEchoApp {
                     &mut self.tropical_wind_kt,
                     &mut self.tropical_surge,
                     l3_site.as_deref(),
+                    &mut self.global_model,
+                    &mut self.global_fcst_hour,
                     &mut self.settings.lightning_minutes,
                     self.show_glm,
                     &mut self.settings.glm_goes_west,

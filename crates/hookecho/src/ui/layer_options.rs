@@ -65,6 +65,9 @@ pub(crate) fn show(
     tropical_wind_kt: &mut Option<u8>,
     tropical_surge: &mut bool,
     l3grid_site: Option<&str>,
+    // Global models: which one, and how far into its run.
+    global_model: &mut wxdata::global::GlobalModel,
+    global_fcst_hour: &mut u16,
     // Lightning: NLDN averaging window, and whether GLM also polls GOES-West.
     lightning_minutes: &mut u16,
     show_glm: bool,
@@ -80,6 +83,38 @@ pub(crate) fn show(
 ) {
     use crate::render::FieldLayer as FL;
     let mut changed = false;
+
+    let global_on = [
+        FL::GlobalMslp,
+        FL::GlobalHeight500,
+        FL::GlobalTemp2m,
+        FL::GlobalWind10m,
+        FL::GlobalPrecip,
+    ]
+    .iter()
+    .any(|l| fields.get(l).is_some_and(|s| s.show));
+    if global_on {
+        ui.horizontal(|ui| {
+            ui.label("Global model:");
+            for m in [
+                wxdata::global::GlobalModel::Gfs,
+                wxdata::global::GlobalModel::Ecmwf,
+            ] {
+                changed |= ui.selectable_value(global_model, m, m.label()).changed();
+            }
+        });
+        ui.horizontal(|ui| {
+            ui.label("Forecast hour:");
+            changed |= ui
+                .add(
+                    egui::Slider::new(global_fcst_hour, 0..=120)
+                        .step_by(3.0)
+                        .suffix(" h"),
+                )
+                .on_hover_text("Three-hourly out to five days, from the newest complete cycle")
+                .changed();
+        });
+    }
 
     if fields.get(&FL::Lightning).is_some_and(|s| s.show) {
         ui.horizontal(|ui| {
