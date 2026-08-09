@@ -1,0 +1,69 @@
+name: Announce
+
+# Fires on the tag push, NOT on `release: published` — release.yml creates the release with the
+# default GITHUB_TOKEN, and GitHub suppresses workflow triggers from that token's events, so a
+# release trigger here would never run at all. Instead: wait for release.yml to create the release,
+# then post.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Tag to announce
+        required: true
+      dry_run:
+        description: Print the payloads instead of posting
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+jobs:
+  announce:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Wait for the release to exist
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          for _ in $(seq 1 60); do
+            gh release view "$TAG" >/dev/null 2>&1 && exit 0
+            sleep 30
+          done
+          echo "::error::release $TAG never appeared (30 min)"
+          exit 1
+
+      - name: Post
+        env:
+          BSKY_HANDLE: ${{ secrets.BSKY_HANDLE }}
+          BSKY_APP_PASSWORD: ${{ secrets.BSKY_APP_PASSWORD }}
+          MASTODON_URL: ${{ secrets.MASTODON_URL }}
+          MASTODON_TOKEN: ${{ secrets.MASTODON_TOKEN }}
+          X_API_KEY: ${{ secrets.X_API_KEY }}
+          X_API_SECRET: ${{ secrets.X_API_SECRET }}
+          X_ACCESS_TOKEN: ${{ secrets.X_ACCESS_TOKEN }}
+          X_ACCESS_SECRET: ${{ secrets.X_ACCESS_SECRET }}
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          node scripts/announce/post.mjs "$TAG" ${{ inputs.dry_run == true && '--dry-run' || '' }}
+
+      # The Reddit and HN drafts ride along on the release, so they are one click away when the
+      # launch waves in docs/promotion.md say to post them.
+      - name: Attach the drafts to the release
+        if: ${{ inputs.dry_run != true }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ inputs.tag || github.ref_name }}
+        run: gh release upload "$TAG" announce-drafts.md --clobber

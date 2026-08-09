@@ -15,3 +15,4 @@ packaging/appimagetool-*.AppImage
 /android/build/
 /android/app/build/
 /android/local.properties
+announce-drafts.md
