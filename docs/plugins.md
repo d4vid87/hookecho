@@ -2,7 +2,7 @@
 
 A plugin is any program that prints a [placefile](https://www.grlevelx.com/manuals/gis/files_places.htm)
 on stdout. That's the whole interface: no library to link, no SDK, no build step, and no language
-requirement — the two examples in `plugins/` are a Python script and twenty lines of shell.
+requirement — the examples in `plugins/` are two Python scripts and twenty lines of shell.
 
 Add one in **Placefile Manager → Plugins**: a name, and the command to run. The app runs it on
 your chosen cadence and draws whatever it prints, through exactly the same pipeline network
@@ -63,5 +63,8 @@ a sandbox: a hostile plugin is not contained. Don't add a plugin you wouldn't ru
 
 - [`plugins/metar_flightcat.py`](../plugins/metar_flightcat.py) — colours every airport in view by
   flight category from live METARs, using `Object:` so the symbols stay the same size at any zoom.
+- [`plugins/lsr_reports.py`](../plugins/lsr_reports.py) — plots the local storm reports (hail,
+  wind, tornadoes) for the six hours ending at the instant on screen, so scrubbing back through
+  an event shows the reports as they came in.
 - [`plugins/chase_gps.sh`](../plugins/chase_gps.sh) — draws your own GPS track from a CSV log, with
   a `Triangles:` arrowhead at the head of the trail.
