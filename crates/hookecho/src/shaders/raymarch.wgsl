@@ -10,6 +10,12 @@ struct Uniforms {
     box_min: vec4<f32>,
     box_max: vec4<f32>,
     dims: vec4<f32>, // nx, ny, nz, step_count
+    // x: minimum reflectivity index to draw (isolates cores); y,z,w: spare.
+    ctl: vec4<f32>,
+    // Slab bounds as fractions of the full box, so slicing narrows what is marched without
+    // changing how a world position maps to a voxel.
+    clip_min: vec4<f32>,
+    clip_max: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
@@ -38,10 +44,13 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let ro = u.cam_pos.xyz;
     let rd = normalize(far - ro);
 
-    // Slab intersection with the volume box.
+    // Slab intersection with the (possibly sliced) volume box.
+    let full_span = u.box_max.xyz - u.box_min.xyz;
+    let cmin = u.box_min.xyz + u.clip_min.xyz * full_span;
+    let cmax = u.box_min.xyz + u.clip_max.xyz * full_span;
     let inv = 1.0 / rd;
-    let t0s = (u.box_min.xyz - ro) * inv;
-    let t1s = (u.box_max.xyz - ro) * inv;
+    let t0s = (cmin - ro) * inv;
+    let t1s = (cmax - ro) * inv;
     let tsmall = min(t0s, t1s);
     let tbig = max(t0s, t1s);
     let tmin = max(max(tsmall.x, tsmall.y), max(tsmall.z, 0.0));
@@ -51,8 +60,12 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     }
 
     let steps = i32(u.dims.w);
-    let span = u.box_max.xyz - u.box_min.xyz;
+    // Voxel lookup always uses the full box: slicing must not restretch the texture.
+    let span = full_span;
     let dims = vec3<f32>(u.dims.x, u.dims.y, u.dims.z);
+    // Below the threshold a voxel is treated as empty, so raising it carves the weak echo away
+    // and leaves the cores standing on their own.
+    let floor_idx = u32(max(u.ctl.x, 2.0));
     var max_idx: u32 = 0u;
     for (var s = 0; s < steps; s = s + 1) {
         let t = tmin + (tmax - tmin) * (f32(s) + 0.5) / f32(steps);
@@ -60,16 +73,18 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
         let uvw = (pos - u.box_min.xyz) / span;
         let voxel = vec3<i32>(clamp(uvw * dims, vec3<f32>(0.0), dims - 1.0));
         let idx = textureLoad(vol, voxel, 0).r;
-        if (idx > max_idx) {
+        if (idx >= floor_idx && idx > max_idx) {
             max_idx = idx;
         }
     }
 
-    if (max_idx < 2u) {
+    if (max_idx < floor_idx) {
         discard;
     }
     let color = textureLoad(lut, vec2<i32>(i32(max_idx), 0), 0);
-    // Opacity ramps with intensity so weak echo is see-through and cores read solid.
-    let alpha = clamp((f32(max_idx) - 2.0) / 253.0 * 1.6 + 0.15, 0.0, 1.0);
+    // Opacity ramps from the threshold, not from zero: with a 45 dBZ floor the surviving cores
+    // read solid instead of uniformly hazy.
+    let head = max(255.0 - f32(floor_idx), 1.0);
+    let alpha = clamp((f32(max_idx) - f32(floor_idx)) / head * 1.6 + 0.15, 0.0, 1.0);
     return vec4<f32>(color.rgb * alpha, alpha);
 }

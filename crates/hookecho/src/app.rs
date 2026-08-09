@@ -42,6 +42,11 @@ fn first_url(text: &str) -> Option<String> {
         .map(|w| w.trim_end_matches(['.', ',', ')', '"', '\'']).to_string())
 }
 
+/// 3D volume grid size: `VOL3D_N` cells across each horizontal axis, `VOL3D_NZ` up. Big enough to
+/// resolve a hail core, small enough to resample in about a second.
+const VOL3D_N: usize = 192;
+const VOL3D_NZ: usize = 48;
+
 /// Squared screen-space hit radius (px²) for a tap/click target of nominal `px` radius. Android
 /// finger taps need a fatter target than a mouse cursor, so targets grow ~1.8× there; desktop is
 /// unchanged.
@@ -1852,9 +1857,14 @@ pub struct HookEchoApp {
     /// 3D raymarch view: open flag, orbit camera (az/el degrees + distance), and a pending
     /// volume upload (taken by the first paint after a rebuild).
     show_3d: bool,
-    vol3d_az: f32,
-    vol3d_el: f32,
-    vol3d_dist: f32,
+    vol3d: ui::volume3d_window::Volume3dState,
+    /// Which volume the built grid belongs to, so reopening the window doesn't rebuild it.
+    vol3d_key: Option<(String, usize)>,
+    /// In-flight build (the resample runs off the UI thread).
+    #[allow(clippy::type_complexity)]
+    vol3d_rx: Option<std::sync::mpsc::Receiver<(crate::render3d::Volume3dUpload, (f32, f32))>>,
+    /// The built volume's dBZ span, which the window's threshold slider works in.
+    vol3d_range: (f32, f32),
     vol3d_pending: Option<crate::render3d::Volume3dUpload>,
     /// GPU 2D texture-size cap (device limit), used to clamp field-grid decimation on mobile GPUs.
     max_texture_dim: u32,
@@ -2319,9 +2329,10 @@ impl HookEchoApp {
             xsection_tex: None,
             marker_icon_tex: Default::default(),
             show_3d: false,
-            vol3d_az: 30.0,
-            vol3d_el: 25.0,
-            vol3d_dist: 3.0,
+            vol3d: Default::default(),
+            vol3d_key: None,
+            vol3d_rx: None,
+            vol3d_range: (-30.0, 80.0),
             vol3d_pending: None,
             max_texture_dim,
         };
@@ -3301,31 +3312,65 @@ impl HookEchoApp {
 
     /// Build the 3D reflectivity volume from the active pane and open the raymarch window.
     fn build_volume3d(&mut self) {
-        const N: usize = 192;
-        const NZ: usize = 48;
+        self.show_3d = true;
         let Some(vol) = self.views[self.active].volume.as_mut() else {
             return;
         };
+        // Rebuild once per volume, not once per open: resampling 192x192x48 is a second of CPU.
+        let key = (vol.name.clone(), VOL3D_N);
+        if self.vol3d_key.as_ref() == Some(&key) || self.vol3d_rx.is_some() {
+            return;
+        }
         let sweeps = vol.reflectivity_tilts();
         if sweeps.is_empty() {
             return;
         }
-        let Some(v3) = wxdata::volume3d::build(&sweeps, N, NZ, 150.0, 18.0) else {
-            return;
-        };
-        let lut = crate::colormap::bake_lut(
-            self.palettes.table(Moment::Reflectivity),
-            (v3.value_min, v3.value_max),
-            None,
-        )
-        .to_vec();
-        self.vol3d_pending = Some(crate::render3d::Volume3dUpload {
-            data: v3.data,
-            n: v3.n as u32,
-            nz: v3.nz as u32,
-            lut,
+        self.vol3d_key = Some(key);
+        let table = self.palettes.table(Moment::Reflectivity).clone();
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.vol3d_rx = Some(rx);
+        self.spawner.spawn(async move {
+            // Off the UI thread: this is pure CPU on tens of MB and would drop a second of frames.
+            let built = wxdata::task::blocking(move || {
+                let v3 = wxdata::volume3d::build(&sweeps, VOL3D_N, VOL3D_NZ, 150.0, 18.0)?;
+                let lut =
+                    crate::colormap::bake_lut(&table, (v3.value_min, v3.value_max), None).to_vec();
+                Some((
+                    crate::render3d::Volume3dUpload {
+                        data: v3.data,
+                        n: v3.n as u32,
+                        nz: v3.nz as u32,
+                        lut,
+                    },
+                    (v3.value_min, v3.value_max),
+                ))
+            })
+            .await
+            .ok()
+            .flatten();
+            if let Some(b) = built {
+                let _ = tx.send(b);
+            }
         });
-        self.show_3d = true;
+    }
+
+    /// Take a finished 3D volume, if the worker has one.
+    fn drain_volume3d(&mut self, ctx: &egui::Context) {
+        let Some(rx) = &self.vol3d_rx else { return };
+        match rx.try_recv() {
+            Ok((upload, range)) => {
+                self.vol3d_pending = Some(upload);
+                self.vol3d_range = range;
+                self.vol3d_rx = None;
+                ctx.request_repaint();
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => {}
+            // The worker gave up (no sweeps survived the resample); allow another attempt.
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                self.vol3d_rx = None;
+                self.vol3d_key = None;
+            }
+        }
     }
 
     /// Re-slice the active pane's cached volume into a CAPPI at `cappi_alt_km` when the key
@@ -6380,6 +6425,12 @@ impl HookEchoApp {
             ),
             (W::Wizard, "Setup wizard…", "Re-run first-time setup", false),
         ] {
+            // The raymarch samples a `texture_3d<u32>`, which WebGL2 does not guarantee; on wasm
+            // the entry would open a black window.
+            // ponytail: revisit when the web build is webgpu-only.
+            if cfg!(target_arch = "wasm32") && w == W::Volume3d {
+                continue;
+            }
             let on = None;
             push(
                 label,
@@ -13449,16 +13500,16 @@ impl eframe::App for HookEchoApp {
             }
         }
         if self.show_3d {
+            self.drain_volume3d(ctx);
             let mut open = true;
             ui::volume3d_window::show(
                 ctx,
                 &mut open,
-                &mut self.vol3d_az,
-                &mut self.vol3d_el,
-                &mut self.vol3d_dist,
+                &mut self.vol3d,
                 &mut self.vol3d_pending,
-                192,
-                48,
+                VOL3D_N as u32,
+                VOL3D_NZ as u32,
+                self.vol3d_range,
             );
             self.show_3d = open;
         }

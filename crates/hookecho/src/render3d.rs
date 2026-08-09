@@ -12,6 +12,9 @@ pub struct Uniforms {
     box_min: [f32; 4],
     box_max: [f32; 4],
     dims: [f32; 4], // nx, ny, nz, step_count
+    ctl: [f32; 4],  // minimum reflectivity index to draw; rest spare
+    clip_min: [f32; 4],
+    clip_max: [f32; 4],
 }
 
 /// A new volume grid to upload: `data` is `n×n×nz` R8 indices, `lut` a 256-entry RGBA table.
@@ -26,7 +29,27 @@ pub struct Volume3dUpload {
 const BOX_MIN: Vec3 = Vec3::new(-1.0, -1.0, 0.0);
 const BOX_MAX: Vec3 = Vec3::new(1.0, 1.0, 0.5);
 
+/// What the viewer is looking at, beyond the camera: the reflectivity floor and the slab the
+/// raymarch is confined to. Defaults draw the whole volume, which is the old behaviour.
+#[derive(Clone, Copy, Debug)]
+pub struct View3d {
+    /// Minimum volume index (2..=255) a voxel must reach to be drawn. 2 = everything.
+    pub threshold_idx: f32,
+    /// Slab bounds as fractions of the box, `[x0, x1, y0, y1, z0, z1]`.
+    pub clip: [f32; 6],
+}
+
+impl Default for View3d {
+    fn default() -> Self {
+        Self {
+            threshold_idx: 2.0,
+            clip: [0.0, 1.0, 0.0, 1.0, 0.0, 1.0],
+        }
+    }
+}
+
 /// Orbit-camera uniforms: azimuth/elevation in degrees, `dist` from the box center, view `aspect`.
+#[allow(clippy::too_many_arguments)]
 pub fn orbit_uniform(
     az_deg: f32,
     el_deg: f32,
@@ -35,6 +58,7 @@ pub fn orbit_uniform(
     n: u32,
     nz: u32,
     steps: u32,
+    v3: View3d,
 ) -> Uniforms {
     let center = (BOX_MIN + BOX_MAX) * 0.5;
     let (az, el) = (az_deg.to_radians(), el_deg.to_radians());
@@ -49,7 +73,18 @@ pub fn orbit_uniform(
         box_min: [BOX_MIN.x, BOX_MIN.y, BOX_MIN.z, 0.0],
         box_max: [BOX_MAX.x, BOX_MAX.y, BOX_MAX.z, 0.0],
         dims: [n as f32, n as f32, nz as f32, steps as f32],
+        ctl: [v3.threshold_idx, 0.0, 0.0, 0.0],
+        clip_min: [v3.clip[0], v3.clip[2], v3.clip[4], 0.0],
+        clip_max: [v3.clip[1], v3.clip[3], v3.clip[5], 0.0],
     }
+}
+
+/// Convert a dBZ threshold into the volume's 2..=255 index space. `range` is the volume's
+/// `(value_min, value_max)`; the mapping mirrors `volume3d::build`.
+pub fn threshold_index(dbz: f32, range: (f32, f32)) -> f32 {
+    let (lo, hi) = range;
+    let span = (hi - lo).max(f32::EPSILON);
+    (2.0 + ((dbz - lo) / span) * 253.0).clamp(2.0, 255.0)
 }
 
 struct Gpu {

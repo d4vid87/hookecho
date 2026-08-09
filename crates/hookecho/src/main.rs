@@ -438,7 +438,7 @@ fn main() -> eframe::Result<()> {
         return Ok(());
     }
 
-    // 3D raymarch verify: `hookecho --headless-3d [SITE] <out.png>`.
+    // 3D raymarch verify: `hookecho --headless-3d [SITE] <out.png> [--threshold DBZ]`.
     if let Some(pos) = args.iter().position(|a| a == "--headless-3d") {
         let site = args
             .get(pos + 1)
@@ -450,7 +450,12 @@ fn main() -> eframe::Result<()> {
             .filter(|a| !a.starts_with("--"))
             .map(String::as_str)
             .unwrap_or("volume3d.png");
-        if let Err(e) = headless::run_3d(site, out) {
+        let threshold = args
+            .iter()
+            .position(|a| a == "--threshold")
+            .and_then(|i| args.get(i + 1))
+            .and_then(|v| v.parse::<f32>().ok());
+        if let Err(e) = headless::run_3d(site, out, threshold) {
             eprintln!("headless 3d render failed: {e}");
             std::process::exit(1);
         }

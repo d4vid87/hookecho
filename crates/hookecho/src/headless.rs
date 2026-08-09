@@ -1758,7 +1758,7 @@ pub fn run_cappi(site: &str, alt_km: f32, out_path: &str) -> anyhow::Result<()> 
     Ok(())
 }
 
-pub fn run_3d(site: &str, out_path: &str) -> anyhow::Result<()> {
+pub fn run_3d(site: &str, out_path: &str, threshold_dbz: Option<f32>) -> anyhow::Result<()> {
     const N: usize = 192;
     const NZ: usize = 48;
     let rt = tokio::runtime::Builder::new_multi_thread()
@@ -1793,14 +1793,23 @@ pub fn run_3d(site: &str, out_path: &str) -> anyhow::Result<()> {
     );
 
     let table = crate::colormap::default_table(Moment::Reflectivity);
-    let lut = crate::colormap::bake_lut(table, (v3.value_min, v3.value_max), None).to_vec();
+    let (v3_min, v3_max) = (v3.value_min, v3.value_max);
+    let lut = crate::colormap::bake_lut(table, (v3_min, v3_max), None).to_vec();
     let upload = crate::render3d::Volume3dUpload {
         data: v3.data,
         n: v3.n as u32,
         nz: v3.nz as u32,
         lut,
     };
-    let uniform = crate::render3d::orbit_uniform(30.0, 25.0, 3.0, 1.0, N as u32, NZ as u32, 256);
+    let view = crate::render3d::View3d {
+        threshold_idx: match threshold_dbz {
+            Some(dbz) => crate::render3d::threshold_index(dbz, (v3_min, v3_max)),
+            None => 2.0,
+        },
+        ..Default::default()
+    };
+    let uniform =
+        crate::render3d::orbit_uniform(30.0, 25.0, 3.0, 1.0, N as u32, NZ as u32, 256, view);
 
     let (device, queue, adapter) = init_gpu(&rt)?;
     println!("adapter: {}", adapter.get_info().name);
@@ -1845,6 +1854,12 @@ pub fn run_3d(site: &str, out_path: &str) -> anyhow::Result<()> {
         })
         .count();
     println!("wrote {out_path}  ({echo} echo pixels over background)");
+    // With no threshold set, an empty image means a broken pipeline rather than a quiet day: the
+    // volume above already reported filled voxels. With one set, empty is a legitimate answer —
+    // there may simply be no 45 dBZ core out there.
+    if echo == 0 && threshold_dbz.is_none() {
+        anyhow::bail!("raymarch produced no echo pixels");
+    }
     Ok(())
 }
 
