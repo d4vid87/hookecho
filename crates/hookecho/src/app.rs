@@ -1472,6 +1472,8 @@ pub struct HookEchoApp {
     // ponytail: index identity — markers have no id, and their names aren't unique ("Marker 3"
     // comes back after a delete). A bounds check closes the popup if the list shrinks under it.
     marker_popup: Option<usize>,
+    /// Where the open sounding was taken, so a forecast-hour change can refetch the same point.
+    sounding_at: Option<(f64, f64)>,
     /// Vertices clicked so far with the watch-zone tool, `[lon, lat]`. Empty when not drawing.
     zone_pts: Vec<[f64; 2]>,
     /// A finished ring waiting for the user to name it.
@@ -2121,6 +2123,7 @@ impl HookEchoApp {
             detail: None,
             cell_popup: None,
             marker_popup: None,
+            sounding_at: None,
             zone_pts: Vec::new(),
             zone_naming: None,
             zone_popup: None,
@@ -4179,6 +4182,19 @@ impl HookEchoApp {
     }
 
     fn fetch_sounding(&mut self, lon: f64, lat: f64) {
+        self.sounding_window.fh = 0;
+        self.sounding_at = Some((lon, lat));
+        self.refetch_sounding();
+        self.fetch_raob(lon, lat);
+    }
+
+    /// Re-pull the sounding at the remembered point for the window's current forecast hour. The
+    /// observed ascent is left alone — a radiosonde has no forecast hours.
+    fn refetch_sounding(&mut self) {
+        let Some((lon, lat)) = self.sounding_at else {
+            return;
+        };
+        let fh = self.sounding_window.fh;
         let (tx, rx) = std::sync::mpsc::channel();
         self.sounding_rx = Some(rx);
         self.sounding_window.open = true;
@@ -4186,12 +4202,11 @@ impl HookEchoApp {
         self.sounding_window.sounding = None;
         let http = self.http.clone();
         self.spawner.spawn(async move {
-            let res = wxdata::sounding::fetch(&http, lon, lat)
+            let res = wxdata::sounding::fetch_at(&http, lon, lat, fh)
                 .await
                 .map_err(|e| e.to_string());
             let _ = tx.send(res);
         });
-        self.fetch_raob(lon, lat);
     }
 
     /// The observed ascent to draw beside the model profile: the nearest radiosonde station, at
@@ -13390,6 +13405,9 @@ impl eframe::App for HookEchoApp {
             }
         }
         self.sounding_window.show(ctx, self.active_tz());
+        if std::mem::take(&mut self.sounding_window.refetch) {
+            self.refetch_sounding();
+        }
         // Warning verification lab: drain the query, then draw and act on its clicks.
         if let Some(rx) = &self.verify_rx {
             if let Ok(res) = rx.try_recv() {

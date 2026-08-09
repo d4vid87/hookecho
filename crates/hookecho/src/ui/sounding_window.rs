@@ -21,6 +21,10 @@ pub struct SoundingWindow {
     /// Why there's no observed profile — no station in range, or the balloon didn't fly.
     pub observed_error: Option<String>,
     pub show_observed: bool,
+    /// Forecast hour the user has dialled up; a change asks the app for a new profile.
+    pub fh: u8,
+    /// Set for one frame when `fh` changed, so the app refetches.
+    pub refetch: bool,
 }
 
 impl Default for SoundingWindow {
@@ -36,6 +40,8 @@ impl Default for SoundingWindow {
             // On by default: an observed profile is the more trustworthy of the two, and hiding it
             // behind a toggle nobody finds would waste the fetch.
             show_observed: true,
+            fh: 0,
+            refetch: false,
         }
     }
 }
@@ -68,6 +74,31 @@ impl SoundingWindow {
                 ui.horizontal_wrapped(|ui| {
                     ui.strong(format!("{:.2}, {:.2}", s.lat, s.lon));
                     ui.separator();
+                    // Forecast hour: same run, later in it. The valid time is what the chaser
+                    // actually cares about, so it is the label.
+                    if ui
+                        .add_enabled(self.fh > 0, egui::Button::new("◀"))
+                        .clicked()
+                    {
+                        self.fh = self.fh.saturating_sub(1);
+                        self.refetch = true;
+                    }
+                    ui.strong(format!("f{:02}", s.fh));
+                    if ui
+                        .add_enabled(self.fh < 48, egui::Button::new("▶"))
+                        .clicked()
+                    {
+                        self.fh += 1;
+                        self.refetch = true;
+                    }
+                    ui.weak(format!(
+                        "valid {}",
+                        crate::timefmt::fmt_date_clock(
+                            s.run + chrono::Duration::hours(s.fh as i64),
+                            tz
+                        )
+                    ));
+                    ui.separator();
                     ui.weak(format!("run {}", crate::timefmt::fmt_date_clock(s.run, tz)));
                     if let Some(sh) = s.bulk_shear_kt() {
                         ui.separator();
@@ -76,9 +107,25 @@ impl SoundingWindow {
                 });
                 // Fixed-layer composite indices (feature FF): the numbers a chaser scans first.
                 if let Some(ix) = s.indices() {
+                    let parcel = s.parcel();
+                    let level = |v: Option<f64>| match v {
+                        Some(m) => format!("{m:.0} m"),
+                        None => "—".to_string(),
+                    };
                     let cards = [
                         ("SBCAPE", format!("{:.0} J/kg", ix.sbcape)),
+                        (
+                            "SBCIN",
+                            parcel
+                                .as_ref()
+                                .map_or("—".to_string(), |p| format!("{:.0} J/kg", p.cin)),
+                        ),
                         ("LCL", format!("{:.0} m", ix.lcl_m)),
+                        (
+                            "LFC",
+                            level(parcel.as_ref().and_then(|p| p.lfc_m)),
+                        ),
+                        ("EL", level(parcel.as_ref().and_then(|p| p.el_m))),
                         ("SRH 0–1", format!("{:.0}", ix.srh1)),
                         ("SRH 0–3", format!("{:.0}", ix.srh3)),
                         ("SCP", format!("{:.1}", ix.scp)),
@@ -213,6 +260,38 @@ fn skewt(ui: &mut egui::Ui, s: &Sounding, observed: Option<&Sounding>) {
     }
     trace(s, green, false, &|l| l.dewpt_c);
     trace(s, red, false, &|l| l.temp_c);
+    // The lifted parcel, and the CAPE it encloses: the shaded area *is* the number on the card.
+    if let Some(parcel) = s.parcel() {
+        let pts: Vec<egui::Pos2> = s
+            .levels
+            .iter()
+            .zip(&parcel.trace_c)
+            .filter(|(l, _)| l.pressure_hpa >= 195.0)
+            .map(|(l, &t)| egui::pos2(x_of(t, l.pressure_hpa), y_of(l.pressure_hpa)))
+            .collect();
+        let env: Vec<egui::Pos2> = s
+            .levels
+            .iter()
+            .filter(|l| l.pressure_hpa >= 195.0)
+            .map(|l| egui::pos2(x_of(l.temp_c, l.pressure_hpa), y_of(l.pressure_hpa)))
+            .collect();
+        // Positive-area shading, one quad per layer where the parcel is warmer than the air.
+        for i in 1..pts.len().min(env.len()) {
+            if pts[i - 1].x > env[i - 1].x && pts[i].x > env[i].x {
+                p.add(egui::Shape::convex_polygon(
+                    vec![env[i - 1], pts[i - 1], pts[i], env[i]],
+                    egui::Color32::from_rgba_unmultiplied(240, 90, 90, 34),
+                    egui::Stroke::NONE,
+                ));
+            }
+        }
+        if pts.len() >= 2 {
+            p.add(egui::Shape::line(
+                pts,
+                egui::Stroke::new(1.2, egui::Color32::from_rgb(250, 200, 120)),
+            ));
+        }
+    }
     p.text(
         rect.center_top() + egui::vec2(0.0, 10.0),
         egui::Align2::CENTER_TOP,

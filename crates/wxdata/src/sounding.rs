@@ -4,6 +4,7 @@
 
 use crate::alerts::USER_AGENT;
 use chrono::{DateTime, Datelike, Timelike, Utc};
+use futures_util::StreamExt;
 
 const BUCKET: &str = "https://noaa-hrrr-bdp-pds.s3.amazonaws.com";
 
@@ -20,11 +21,29 @@ pub struct SoundingLevel {
     pub v_ms: f64,
 }
 
+/// A lifted surface parcel: the energy numbers, the three level heights, and the trace itself.
+#[derive(Debug, Clone)]
+pub struct Parcel {
+    /// J/kg, positive.
+    pub cape: f64,
+    /// J/kg, negative (or zero) — the cap the parcel has to break through.
+    pub cin: f64,
+    pub lcl_m: f64,
+    /// `None` when the parcel is never buoyant.
+    pub lfc_m: Option<f64>,
+    /// `None` when the parcel is still buoyant at the top of the profile.
+    pub el_m: Option<f64>,
+    /// Parcel temperature (°C) at each of the sounding's levels, in the same order.
+    pub trace_c: Vec<f64>,
+}
+
 /// A vertical profile at a point.
 pub struct Sounding {
     pub lon: f64,
     pub lat: f64,
     pub run: DateTime<Utc>,
+    /// Forecast hour this profile is valid at (0 = the analysis).
+    pub fh: u8,
     /// Levels ordered surface (highest pressure) first.
     pub levels: Vec<SoundingLevel>,
 }
@@ -110,6 +129,13 @@ impl Sounding {
 
     /// Surface-based CAPE (J/kg) and LCL height (m AGL) via a stepped pseudoadiabatic parcel.
     pub fn sb_parcel(&self) -> Option<(f64, f64)> {
+        let p = self.parcel()?;
+        Some((p.cape, p.lcl_m))
+    }
+
+    /// Full surface-based parcel: CAPE, CIN, and the LCL/LFC/EL heights, plus the parcel's own
+    /// temperature at each level so the Skew-T can draw the trace the numbers came from.
+    pub fn parcel(&self) -> Option<Parcel> {
         let sfc = self.levels.first()?;
         if self.levels.len() < 3 {
             return None;
@@ -129,17 +155,49 @@ impl Sounding {
                 moist_ascent_k(p_lcl, t_lcl, p)
             }
         };
-        // Trapezoidal CAPE over positive-buoyancy layers: Rd Σ (Tp−Te) Δln p.
-        let mut cape = 0.0;
-        for w in self.levels.windows(2) {
+        let heights = self.heights_m();
+        // Trapezoidal CAPE over positive-buoyancy layers: Rd Σ (Tp−Te) Δln p. CIN is the same sum
+        // over the negative ones, but only up to the LFC — negative area above the EL is not what
+        // holds a parcel down.
+        let (mut cape, mut cin) = (0.0, 0.0);
+        let (mut lfc_m, mut el_m) = (None, None);
+        for (i, w) in self.levels.windows(2).enumerate() {
             let (lo, hi) = (&w[0], &w[1]);
             let b_lo = parcel_k(lo.pressure_hpa) - (lo.temp_c + 273.15);
             let b_hi = parcel_k(hi.pressure_hpa) - (hi.temp_c + 273.15);
             let dlnp = (lo.pressure_hpa / hi.pressure_hpa).ln();
-            let seg = RD * (b_lo.max(0.0) + b_hi.max(0.0)) / 2.0 * dlnp;
-            cape += seg;
+            cape += RD * (b_lo.max(0.0) + b_hi.max(0.0)) / 2.0 * dlnp;
+            if lfc_m.is_none() {
+                cin += RD * (b_lo.min(0.0) + b_hi.min(0.0)) / 2.0 * dlnp;
+            }
+            // Buoyancy crossings, linearly interpolated in height across the layer.
+            let (h_lo, h_hi) = (heights[i], heights[i + 1]);
+            if b_lo <= 0.0 && b_hi > 0.0 {
+                let k = (-b_lo / (b_hi - b_lo)).clamp(0.0, 1.0);
+                lfc_m.get_or_insert(h_lo + (h_hi - h_lo) * k);
+            }
+            if b_lo > 0.0 && b_hi <= 0.0 && lfc_m.is_some() {
+                let k = (b_lo / (b_lo - b_hi)).clamp(0.0, 1.0);
+                el_m = Some(h_lo + (h_hi - h_lo) * k);
+            }
         }
-        Some((cape, lcl_m))
+        // A parcel buoyant right off the surface has its LFC there.
+        if lfc_m.is_none() && cape > 0.0 {
+            lfc_m = Some(0.0);
+        }
+        let trace_c = self
+            .levels
+            .iter()
+            .map(|l| parcel_k(l.pressure_hpa) - 273.15)
+            .collect();
+        Some(Parcel {
+            cape,
+            cin,
+            lcl_m,
+            lfc_m,
+            el_m,
+            trace_c,
+        })
     }
 
     /// Wind (u, v) linearly interpolated to height `z_m` AGL.
@@ -228,8 +286,25 @@ impl Sounding {
     }
 }
 
+/// How many of the 40 range requests are in flight at once. The same trade the gridded HRRR
+/// fetch makes: enough to hide latency, not enough to look like a scraper.
+const SOUNDING_CONCURRENCY: usize = 8;
+
 /// Fetch a sounding at `(lon, lat)` from the most recent HRRR pressure-level analysis (f00).
 pub async fn fetch(http: &reqwest::Client, lon: f64, lat: f64) -> anyhow::Result<Sounding> {
+    fetch_at(http, lon, lat, 0).await
+}
+
+/// Fetch a sounding valid `fh` hours into the most recent usable HRRR run.
+///
+/// HRRR runs out to 48 hours on the 00/06/12/18Z cycles and 18 hours otherwise, so the hour is
+/// clamped to what the chosen run actually published.
+pub async fn fetch_at(
+    http: &reqwest::Client,
+    lon: f64,
+    lat: f64,
+    fh: u8,
+) -> anyhow::Result<Sounding> {
     let now = Utc::now();
     let mut last_err = None;
     for back in 1..=6 {
@@ -240,7 +315,8 @@ pub async fn fetch(http: &reqwest::Client, lon: f64, lat: f64) -> anyhow::Result
             .unwrap()
             .with_nanosecond(0)
             .unwrap();
-        match fetch_run(http, run, lon, lat).await {
+        let max_fh = if run.hour().is_multiple_of(6) { 48 } else { 18 };
+        match fetch_run(http, run, lon, lat, fh.min(max_fh)).await {
             Ok(s) => return Ok(s),
             Err(e) => last_err = Some(e),
         }
@@ -253,10 +329,11 @@ async fn fetch_run(
     run: DateTime<Utc>,
     lon: f64,
     lat: f64,
+    fh: u8,
 ) -> anyhow::Result<Sounding> {
     let date = format!("{:04}{:02}{:02}", run.year(), run.month(), run.day());
     let base = format!(
-        "{BUCKET}/hrrr.{date}/conus/hrrr.t{:02}z.wrfprsf00.grib2",
+        "{BUCKET}/hrrr.{date}/conus/hrrr.t{:02}z.wrfprsf{fh:02}.grib2",
         run.hour()
     );
     let idx = http
@@ -268,29 +345,43 @@ async fn fetch_run(
         .text()
         .await?;
 
-    // Fetch all (var, level) messages concurrently, then sample each at the point.
-    let mut jobs = Vec::new();
+    // Fetch all (var, level) messages, several at a time. Awaiting them one by one made these
+    // forty range requests serial in everything but name — a click cost forty round trips.
+    // Slot index rather than the variable name: a `&'static str` in the job tuple makes the
+    // stream's closure higher-ranked over a lifetime and the whole future stops being `Send`.
+    const VARS: [&str; 4] = ["TMP", "DPT", "UGRD", "VGRD"];
+    let mut jobs: Vec<(u32, usize, u64, Option<u64>)> = Vec::new();
     for &hpa in LEVELS_HPA {
         let level = format!("{hpa} mb");
-        for var in ["TMP", "DPT", "UGRD", "VGRD"] {
-            if let Some((start, end)) = message_range(&idx, var, &level) {
-                jobs.push((hpa, var, sample_message(http, &base, start, end, lon, lat)));
+        for (i, var) in VARS.iter().enumerate() {
+            if let Some((start, end)) = crate::hrrr::field_byte_range(&idx, var, &level) {
+                jobs.push((hpa, i, start, end));
             }
         }
     }
-    // Resolve.
+    // `base` is cloned per job rather than borrowed: a borrow here makes the whole future
+    // higher-ranked over the borrow's lifetime, which the app's `spawn` can't prove is `Send`.
+    let results: Vec<_> =
+        futures_util::stream::iter(jobs.into_iter().map(|(hpa, slot, start, end)| {
+            let (base, http) = (base.clone(), http.clone());
+            async move {
+                (
+                    hpa,
+                    slot,
+                    sample_message(&http, &base, start, end, lon, lat)
+                        .await
+                        .ok(),
+                )
+            }
+        }))
+        .buffered(SOUNDING_CONCURRENCY)
+        .collect()
+        .await;
+
     let mut by_level: std::collections::BTreeMap<u32, [Option<f64>; 4]> =
         std::collections::BTreeMap::new();
-    for (hpa, var, fut) in jobs {
-        let val = fut.await.ok();
-        let slot = by_level.entry(hpa).or_insert([None; 4]);
-        let i = match var {
-            "TMP" => 0,
-            "DPT" => 1,
-            "UGRD" => 2,
-            _ => 3,
-        };
-        slot[i] = val;
+    for (hpa, slot, val) in results {
+        by_level.entry(hpa).or_insert([None; 4])[slot] = val;
     }
 
     // Assemble complete levels (surface-first = highest pressure first).
@@ -311,6 +402,7 @@ async fn fetch_run(
         lon,
         lat,
         run,
+        fh,
         levels,
     })
 }
@@ -338,10 +430,15 @@ async fn sample_message(
         .error_for_status()?
         .bytes()
         .await?;
-    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        sample_nearest(&bytes, lon, lat)
-    }))
-    .unwrap_or_else(|_| anyhow::bail!("grib decode panicked"))
+    // Off the async worker: each of these decodes a full HRRR level and scans ~1.9M grid points,
+    // so leaving them here made forty concurrent fetches finish one decode at a time.
+    crate::task::blocking(move || {
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            sample_nearest(&bytes, lon, lat)
+        }))
+        .unwrap_or_else(|_| anyhow::bail!("grib decode panicked"))
+    })
+    .await?
 }
 
 fn sample_nearest(raw: &[u8], lon: f64, lat: f64) -> anyhow::Result<f64> {
@@ -371,43 +468,35 @@ fn sample_nearest(raw: &[u8], lon: f64, lat: f64) -> anyhow::Result<f64> {
     best.ok_or_else(|| anyhow::anyhow!("no finite grid point"))
 }
 
-/// Find the `[start, end)` byte range of the message for `var` at `level` (e.g. "500 mb") in a
-/// GRIB2 `.idx`. `end` is `None` when it is the last message.
-fn message_range(idx: &str, var: &str, level: &str) -> Option<(u64, Option<u64>)> {
-    let lines: Vec<&str> = idx.lines().collect();
-    for (i, line) in lines.iter().enumerate() {
-        let f: Vec<&str> = line.split(':').collect();
-        if f.len() < 5 {
-            continue;
-        }
-        if f[3] == var && f[4] == level {
-            let start: u64 = f[1].parse().ok()?;
-            let end = lines
-                .get(i + 1)
-                .and_then(|n| n.split(':').nth(1))
-                .and_then(|s| s.parse().ok());
-            return Some((start, end));
-        }
-    }
-    None
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn idx_finds_var_at_level() {
+        use crate::hrrr::field_byte_range as range;
         let idx = "1:0:d=2026:TMP:500 mb:anl:\n\
                    2:1000:d=2026:DPT:500 mb:anl:\n\
                    3:2500:d=2026:UGRD:500 mb:anl:\n";
-        assert_eq!(message_range(idx, "TMP", "500 mb"), Some((0, Some(1000))));
+        assert_eq!(range(idx, "TMP", "500 mb"), Some((0, Some(1000))));
+        assert_eq!(range(idx, "DPT", "500 mb"), Some((1000, Some(2500))));
+        assert_eq!(range(idx, "UGRD", "500 mb"), Some((2500, None)));
+        assert_eq!(range(idx, "TMP", "850 mb"), None);
+    }
+
+    /// RAP's idx lists sibling fields sharing one offset. The old local parser took the very next
+    /// line's offset and built an empty range; the shared one skips to the next distinct offset.
+    #[test]
+    fn idx_skips_submessage_siblings() {
+        use crate::hrrr::field_byte_range as range;
+        let idx = "1:0:d=2026:TMP:500 mb:anl:\n\
+                   2:1000:d=2026:VUCSH:0-6000 m above ground:anl:\n\
+                   3:1000:d=2026:VVCSH:0-6000 m above ground:anl:\n\
+                   4:4000:d=2026:UGRD:500 mb:anl:\n";
         assert_eq!(
-            message_range(idx, "DPT", "500 mb"),
-            Some((1000, Some(2500)))
+            range(idx, "VUCSH", "0-6000 m above ground"),
+            Some((1000, Some(4000)))
         );
-        assert_eq!(message_range(idx, "UGRD", "500 mb"), Some((2500, None)));
-        assert_eq!(message_range(idx, "TMP", "850 mb"), None);
     }
 
     #[test]
@@ -416,6 +505,7 @@ mod tests {
             lon: -97.0,
             lat: 35.0,
             run: Utc::now(),
+            fh: 0,
             levels: vec![
                 SoundingLevel {
                     pressure_hpa: 1000.0,
@@ -451,6 +541,7 @@ mod tests {
             lon: -97.0,
             lat: 35.0,
             run: Utc::now(),
+            fh: 0,
             levels: vec![
                 mk(1000.0, 30.0, 22.0, 0.0, 8.0),
                 mk(925.0, 24.0, 19.0, 6.0, 12.0),
@@ -525,6 +616,7 @@ mod tests {
             lon: 0.0,
             lat: 0.0,
             run: Utc::now(),
+            fh: 0,
             levels: vec![
                 mk(1000.0, -5.0, -20.0),
                 mk(850.0, 5.0, -15.0),
@@ -533,5 +625,47 @@ mod tests {
         };
         let (cape, _) = s.sb_parcel().unwrap();
         assert!(cape < 10.0, "inversion profile CAPE ~0, got {cape:.1}");
+    }
+
+    #[test]
+    fn parcel_reports_cin_lfc_and_el() {
+        // A capped profile: warm, moist surface under a sharp inversion, then a cold mid-level.
+        let lv = |p: f64, t: f64, d: f64| SoundingLevel {
+            pressure_hpa: p,
+            temp_c: t,
+            dewpt_c: d,
+            u_ms: 0.0,
+            v_ms: 0.0,
+        };
+        let s = Sounding {
+            lon: 0.0,
+            lat: 0.0,
+            run: Utc::now(),
+            fh: 0,
+            levels: vec![
+                lv(1000.0, 30.0, 22.0),
+                lv(925.0, 26.0, 18.0),
+                lv(850.0, 22.0, 10.0),
+                lv(700.0, 6.0, -5.0),
+                lv(500.0, -14.0, -25.0),
+                lv(300.0, -46.0, -60.0),
+                lv(200.0, -54.0, -70.0),
+            ],
+        };
+        let p = s.parcel().expect("profile is long enough");
+        assert!(p.cape > 0.0, "cape {}", p.cape);
+        assert!(p.cin <= 0.0, "cin {}", p.cin);
+        assert!(p.lcl_m > 0.0 && p.lcl_m < 4000.0, "lcl {}", p.lcl_m);
+        // The trace has one temperature per level, and the parcel cools with height.
+        assert_eq!(p.trace_c.len(), s.levels.len());
+        assert!(p.trace_c[0] > *p.trace_c.last().unwrap());
+        // LFC, when it exists, is at or above the LCL is not guaranteed by geometry alone, but it
+        // must sit inside the profile.
+        if let Some(lfc) = p.lfc_m {
+            assert!((0.0..20000.0).contains(&lfc), "lfc {lfc}");
+        }
+        // sb_parcel still answers what it always did.
+        let (cape, lcl) = s.sb_parcel().unwrap();
+        assert_eq!((cape, lcl), (p.cape, p.lcl_m));
     }
 }

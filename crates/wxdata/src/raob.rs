@@ -897,6 +897,8 @@ pub async fn fetch(
         levels.len()
     );
     Ok(Sounding {
+        // An observed ascent is not a forecast; f00 is the honest label.
+        fh: 0,
         lon: station.lon,
         lat: station.lat,
         run: launch,

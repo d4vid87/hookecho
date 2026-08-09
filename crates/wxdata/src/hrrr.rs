@@ -394,7 +394,7 @@ async fn fetch_run_field(
 
 /// Find the `[start, end)` byte range of the message matching `var` (field 3) and `level`
 /// (field 4) in a GRIB2 `.idx`. `end` is `None` when it's the last message (read to EOF).
-fn field_byte_range(idx: &str, var: &str, level: &str) -> Option<(u64, Option<u64>)> {
+pub(crate) fn field_byte_range(idx: &str, var: &str, level: &str) -> Option<(u64, Option<u64>)> {
     let lines: Vec<&str> = idx.lines().collect();
     for (i, line) in lines.iter().enumerate() {
         let f: Vec<&str> = line.split(':').collect();
