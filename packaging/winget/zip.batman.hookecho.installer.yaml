@@ -1,0 +1,18 @@
+PackageIdentifier: zip.batman.hookecho
+PackageVersion: 0.7.0
+InstallerType: inno
+Scope: user
+InstallModes:
+  - interactive
+  - silent
+UpgradeBehavior: install
+# `hookecho://` deep links, the same scheme the Inno installer registers.
+ProtocolHandlers:
+  - hookecho
+Installers:
+  - Architecture: x64
+    InstallerUrl: https://github.com/d4vid87/hookecho/releases/download/v0.7.0/Hook_Echo-WX-setup-x86_64.exe
+    # Filled in at tag time from `sha256sum` of the uploaded Hook_Echo-WX-setup-x86_64.exe.
+    InstallerSha256: 0000000000000000000000000000000000000000000000000000000000000000
+ManifestType: installer
+ManifestVersion: 1.6.0

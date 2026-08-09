@@ -1,0 +1,14 @@
+# winget manifest (version file).
+#
+# Three files make a winget submission: the version manifest, the locale manifest and the
+# installer manifest. They live here so a release is a copy into a fork of microsoft/winget-pkgs
+# with the URL and hash filled in, rather than three files written from memory each time.
+#
+# At tag time:
+#   sha256sum dist/Hook_Echo-WX-setup-x86_64.exe
+# and paste the result into the installer manifest below.
+PackageIdentifier: zip.batman.hookecho
+PackageVersion: 0.7.0
+DefaultLocale: en-US
+ManifestType: version
+ManifestVersion: 1.6.0

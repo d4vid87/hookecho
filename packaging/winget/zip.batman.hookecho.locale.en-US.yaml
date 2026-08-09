@@ -1,0 +1,24 @@
+PackageIdentifier: zip.batman.hookecho
+PackageVersion: 0.7.0
+PackageLocale: en-US
+Publisher: d4vid87
+PublisherUrl: https://github.com/d4vid87
+PackageName: Hook Echo-WX
+PackageUrl: https://github.com/d4vid87/hookecho
+License: MIT
+LicenseUrl: https://github.com/d4vid87/hookecho/blob/main/LICENSE
+ShortDescription: Advanced NEXRAD weather radar viewer
+Description: |-
+  A desktop radar viewer that talks straight to the public NEXRAD, MRMS, HRRR and NWS feeds from
+  your own machine: no account, no hosted service, no telemetry. Level 2 volumes at every tilt
+  with dual-polarization products, the national MRMS mosaic and its severe layers, warnings and
+  surface observations over an interactive basemap, Skew-T soundings, archive playback to 1991,
+  and offline chase packs.
+Tags:
+  - weather
+  - radar
+  - nexrad
+  - storm
+  - forecast
+ManifestType: defaultLocale
+ManifestVersion: 1.6.0

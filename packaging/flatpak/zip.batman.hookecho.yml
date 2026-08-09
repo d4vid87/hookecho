@@ -1,0 +1,63 @@
+# Flatpak manifest.
+#
+# Built from source, not from the AppImage: Flathub rejects repackaged binaries, and the AppImage
+# leans on the host's Wayland/X11 and portal sockets anyway — which is exactly what the sandbox
+# gives it back through the finish-args below.
+#
+# The cargo sources file is generated, not hand-written; a Flatpak build has no network, so every
+# crate has to be listed as a source. Regenerate it after any Cargo.lock change with:
+#
+#   python3 flatpak-cargo-generator.py Cargo.lock -o packaging/flatpak/cargo-sources.json
+#
+# (from https://github.com/flatpak/flatpak-builder-tools/tree/master/cargo)
+app-id: zip.batman.hookecho
+runtime: org.freedesktop.Platform
+runtime-version: '24.08'
+sdk: org.freedesktop.Sdk
+sdk-extensions:
+  - org.freedesktop.Sdk.Extension.rust-stable
+command: hookecho
+
+build-options:
+  append-path: /usr/lib/sdk/rust-stable/bin
+  env:
+    CARGO_HOME: /run/build/hookecho/cargo
+
+finish-args:
+  # A radar viewer with no network is a picture of nothing.
+  - --share=network
+  - --share=ipc
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --device=dri
+  # Alert sounds and spoken warnings.
+  - --socket=pulseaudio
+  # The tray icon (StatusNotifier) and the screen-lock inhibitor while chasing.
+  - --talk-name=org.kde.StatusNotifierWatcher
+  - --talk-name=org.freedesktop.Notifications
+  # Imports and exports go through the portal, so no filesystem access is granted here. gpsd is a
+  # TCP client, which --share=network already covers.
+
+modules:
+  - name: hookecho
+    buildsystem: simple
+    build-options:
+      env:
+        # Offline: the sources below are the whole dependency set.
+        CARGO_NET_OFFLINE: 'true'
+    build-commands:
+      - cargo --offline build --release -p hookecho
+      - install -Dm755 target/release/hookecho /app/bin/hookecho
+      - install -Dm644 packaging/hookecho.desktop /app/share/applications/zip.batman.hookecho.desktop
+      - install -Dm644 packaging/zip.batman.hookecho.metainfo.xml
+        /app/share/metainfo/zip.batman.hookecho.metainfo.xml
+      # Icons are drawn by the binary that was just built, one per size.
+      - for px in 48 64 128 256 512; do
+        mkdir -p /app/share/icons/hicolor/${px}x${px}/apps;
+        /app/bin/hookecho --headless-icon
+        /app/share/icons/hicolor/${px}x${px}/apps/zip.batman.hookecho.png ${px};
+        done
+    sources:
+      - type: dir
+        path: ../..
+      - cargo-sources.json

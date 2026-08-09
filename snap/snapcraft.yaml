@@ -1,0 +1,58 @@
+# Snap package.
+#
+# Strict confinement: the plugs below are the whole of what the app touches. `home` is there for
+# imports and exports (chase packs, settings bundles, screenshots) — everything else the app does
+# is network and a window.
+name: hookecho
+adopt-info: hookecho
+summary: Advanced NEXRAD weather radar viewer
+description: |
+  A desktop radar viewer that talks straight to the public NEXRAD, MRMS, HRRR and NWS feeds from
+  your own machine: no account, no hosted service, no telemetry.
+
+  Level 2 volumes at every tilt with dual-polarization products, storm-relative velocity and
+  dealiasing; the national MRMS mosaic, rotation tracks, hail and flash-flood layers; warnings,
+  storm reports, spotters and surface observations over an interactive basemap; Skew-T soundings
+  with severe composite parameters; archive playback to 1991; and offline chase packs.
+
+base: core22
+confinement: strict
+grade: stable
+license: MIT
+
+apps:
+  hookecho:
+    command: bin/hookecho
+    desktop: usr/share/applications/hookecho.desktop
+    extensions: [gnome]
+    plugs:
+      # gpsd is a TCP client, so `network` covers the GPS path too.
+      - network
+      - opengl
+      - audio-playback
+      - home
+
+parts:
+  hookecho:
+    plugin: rust
+    source: .
+    rust-path: [crates/hookecho]
+    build-packages:
+      - libasound2-dev
+      - pkg-config
+    stage-packages:
+      - libasound2
+    override-pull: |
+      craftctl default
+      craftctl set version="$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)"
+    override-build: |
+      craftctl default
+      install -Dm644 packaging/hookecho.desktop \
+        "$CRAFT_PART_INSTALL/usr/share/applications/hookecho.desktop"
+      install -Dm644 packaging/zip.batman.hookecho.metainfo.xml \
+        "$CRAFT_PART_INSTALL/usr/share/metainfo/zip.batman.hookecho.metainfo.xml"
+      for px in 48 64 128 256 512; do
+        d="$CRAFT_PART_INSTALL/usr/share/icons/hicolor/${px}x${px}/apps"
+        mkdir -p "$d"
+        "$CRAFT_PART_INSTALL/bin/hookecho" --headless-icon "$d/hookecho.png" "$px"
+      done
