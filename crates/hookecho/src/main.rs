@@ -818,6 +818,58 @@ fn main() -> eframe::Result<()> {
         return Ok(());
     }
 
+    // Desktop-widget mode: `hookecho --snapshot out.png [SITE] [--size N] [--zoom Z]
+    // [--every SECS]`. The same off-screen render `--headless` and the server's `/snapshot.png`
+    // use, written where conky, a desktop wallpaper script or `feh --reload` can pick it up.
+    if let Some(pos) = args.iter().position(|a| a == "--snapshot") {
+        let out = args
+            .get(pos + 1)
+            .map(String::as_str)
+            .unwrap_or("hookecho.png");
+        let site = args
+            .get(pos + 2)
+            .filter(|a| !a.starts_with("--"))
+            .map(String::as_str)
+            .unwrap_or("KTLX");
+        let moment = flag_value(&args, "--moment")
+            .and_then(Moment::from_code)
+            .unwrap_or(Moment::Reflectivity);
+        let basemap = match flag_value(&args, "--basemap") {
+            Some("sat") => tiles::BasemapStyle::Satellite,
+            Some(s) => tiles::BasemapStyle::from_slug(s),
+            None => tiles::BasemapStyle::Dark,
+        };
+        headless::set_output(
+            flag_value(&args, "--size").and_then(|v| v.parse().ok()),
+            flag_value(&args, "--zoom").and_then(|v| v.parse().ok()),
+        );
+        let every = flag_value(&args, "--every").and_then(|v| v.parse::<u64>().ok());
+        loop {
+            // Render to a sibling temp file and rename over the target: a widget polling the file
+            // on its own clock must never catch a half-written PNG, and rename is atomic. The
+            // `.png` stays on the end because the encoder picks its format from the extension.
+            let tmp = format!("{out}.tmp.png");
+            match headless::run(
+                &tmp, site, moment, 0, true, None, None, None, None, basemap, false,
+            )
+            .and_then(|_| std::fs::rename(&tmp, out).map_err(Into::into))
+            {
+                Ok(()) => println!("wrote {out}"),
+                Err(e) => {
+                    eprintln!("snapshot failed: {e}");
+                    let _ = std::fs::remove_file(&tmp);
+                    // A one-shot render reports the failure; a loop keeps going, because the
+                    // usual cause is a feed being briefly unreachable.
+                    if every.is_none() {
+                        std::process::exit(1);
+                    }
+                }
+            }
+            let Some(secs) = every else { return Ok(()) };
+            std::thread::sleep(std::time::Duration::from_secs(secs.max(10)));
+        }
+    }
+
     // A `hookecho://goto/…` link handed over by the desktop (the .desktop MimeType on Linux, the
     // URL Protocol registry key on Windows) arrives as an argument. The app already knows how to
     // read one out of the environment — Android's notification tap uses the same path — so this
