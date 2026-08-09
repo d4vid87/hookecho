@@ -987,7 +987,7 @@ const RASTER_TILE_CACHE: usize = if cfg!(target_os = "android") {
 
 /// Largest the on-disk tile cache may get. It grows by ~20 KB a tile and nothing ever removed
 /// anything, so a few long sessions of panning could quietly fill a phone.
-const DISK_CACHE_BYTES: u64 = if cfg!(target_os = "android") {
+pub(crate) const DISK_CACHE_BYTES: u64 = if cfg!(target_os = "android") {
     150 * 1024 * 1024
 } else {
     500 * 1024 * 1024

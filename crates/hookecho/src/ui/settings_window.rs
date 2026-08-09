@@ -1,4 +1,4 @@
-//! Settings window: General, Palettes, Units, Basemaps, Alerts, Hotkeys, Sync.
+//! Settings window: General, Palettes, Units, Basemaps, Alerts, Hotkeys, Sync, Storage.
 
 use crate::app::PaletteEntry;
 use crate::colormap::Palettes;
@@ -16,6 +16,8 @@ enum Tab {
     Alerts,
     Hotkeys,
     Sync,
+    #[cfg(not(target_arch = "wasm32"))]
+    Storage,
 }
 
 /// What the app knows about the sync session, handed in so this window stays state-free.
@@ -49,6 +51,12 @@ pub struct SettingsWindow {
     rebinding: Option<BindableAction>,
     hotkey_query: String,
     stolen: Option<String>,
+    /// Cache sizes, measured once on a background thread when the tab opens — a walk of a full
+    /// tile cache is tens of thousands of `stat` calls and has no business on the UI thread.
+    #[cfg(not(target_arch = "wasm32"))]
+    storage: Option<std::sync::mpsc::Receiver<Vec<crate::storage::Entry>>>,
+    #[cfg(not(target_arch = "wasm32"))]
+    storage_rows: Option<Vec<crate::storage::Entry>>,
     /// True while a keypress is being captured — the app stands its global hotkey table down so
     /// binding `A` doesn't also toggle the alert panel.
     pub capturing: bool,
@@ -68,6 +76,10 @@ impl SettingsWindow {
         let mut action = None;
         if self.open && !self.prev_open {
             self.scanned = false; // rescan the folder each time the window opens
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                self.storage_rows = None; // and re-measure the caches, which move between visits
+            }
         }
         self.prev_open = self.open;
 
@@ -89,6 +101,8 @@ impl SettingsWindow {
                         (Tab::Alerts, "Alerts"),
                         (Tab::Hotkeys, "Hotkeys"),
                         (Tab::Sync, "Sync"),
+                        #[cfg(not(target_arch = "wasm32"))]
+                        (Tab::Storage, "Storage"),
                     ] {
                         // Chips on the phone: a `selectable_value` is a text-height target, and
                         // seven of them wrapped across a 360pt screen is a game of darts.
@@ -110,6 +124,8 @@ impl SettingsWindow {
                     Tab::Alerts => alerts_tab(ui, settings),
                     Tab::Hotkeys => self.hotkeys_tab(ui, settings, entries),
                     Tab::Sync => action = sync_tab(ui, settings, &sync),
+                    #[cfg(not(target_arch = "wasm32"))]
+                    Tab::Storage => self.storage_tab(ui),
                 }
             });
         self.capturing = self.rebinding.is_some() && open;
@@ -118,6 +134,81 @@ impl SettingsWindow {
         }
         self.open = open;
         action
+    }
+
+    /// What the app has written to disk, and the buttons that take it back.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn storage_tab(&mut self, ui: &mut egui::Ui) {
+        // Kick off one measurement per tab visit; the walk lands over a channel a frame or two
+        // later, and the rows stay put until Refresh or a Clear asks for a fresh one.
+        if self.storage.is_none() && self.storage_rows.is_none() {
+            let (tx, rx) = std::sync::mpsc::channel();
+            std::thread::spawn(move || {
+                let _ = tx.send(crate::storage::report());
+            });
+            self.storage = Some(rx);
+        }
+        if let Some(rx) = &self.storage {
+            if let Ok(rows) = rx.try_recv() {
+                self.storage_rows = Some(rows);
+                self.storage = None;
+            }
+        }
+
+        let Some(rows) = &self.storage_rows else {
+            ui.horizontal(|ui| {
+                ui.spinner();
+                ui.weak("Measuring…");
+            });
+            ui.ctx().request_repaint();
+            return;
+        };
+
+        let total: u64 = rows.iter().map(|r| r.bytes).sum();
+        let mut recheck = false;
+        ui.horizontal(|ui| {
+            ui.strong(format!("{} in caches", crate::storage::human(total)));
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                recheck |= ui.button("Refresh").clicked();
+            });
+        });
+        ui.weak("Everything here is re-downloadable. Clearing costs the next fetch, nothing else.");
+        ui.separator();
+
+        egui::ScrollArea::vertical().show(ui, |ui| {
+            for row in rows {
+                ui.horizontal(|ui| {
+                    ui.label(row.label);
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        // Only the capped directories get a Clear: the loose-files row is a
+                        // mixture of things with different owners (the alert snapshot is read at
+                        // startup), and deleting it wholesale is not a button's decision.
+                        if row.cap.is_some() {
+                            if ui.button("Clear").clicked() {
+                                if let Err(e) = crate::storage::clear(&row.path) {
+                                    log::warn!("clearing {}: {e}", row.path.display());
+                                }
+                                recheck = true;
+                            }
+                            if ui.button("Open").clicked() {
+                                let _ = crate::platform::open_url(&row.path.to_string_lossy());
+                            }
+                        }
+                        match row.cap {
+                            Some(cap) => ui.weak(format!(
+                                "{} of {}",
+                                crate::storage::human(row.bytes),
+                                crate::storage::human(cap)
+                            )),
+                            None => ui.weak(crate::storage::human(row.bytes)),
+                        };
+                    });
+                });
+            }
+        });
+        if recheck {
+            self.storage_rows = None;
+        }
     }
 
     /// Rebindable keyboard shortcuts. Rows come from the binding table itself, so anything the
