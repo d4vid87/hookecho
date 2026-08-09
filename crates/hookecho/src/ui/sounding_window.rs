@@ -104,6 +104,15 @@ impl SoundingWindow {
                         ui.separator();
                         ui.label(format!("0–6 km shear ≈ {sh:.0} kt"));
                     }
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui
+                            .button("Copy CSV")
+                            .on_hover_text("The indices, then the profile they came from")
+                            .clicked()
+                        {
+                            ui.ctx().copy_text(s.to_csv());
+                        }
+                    });
                 });
                 // Fixed-layer composite indices (feature FF): the numbers a chaser scans first.
                 if let Some(ix) = s.indices() {

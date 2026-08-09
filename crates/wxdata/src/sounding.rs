@@ -289,6 +289,65 @@ impl Sounding {
     }
 }
 
+impl Sounding {
+    /// The profile as CSV: the derived indices first, then a blank line, then one row per level.
+    /// Two blocks in one file because that is what the numbers are — a summary and the profile it
+    /// came from — and a spreadsheet opens it either way.
+    pub fn to_csv(&self) -> String {
+        let mut s = String::from("index,value\n");
+        let mut put = |name: &str, v: String| {
+            s.push_str(&format!("{name},{v}\n"));
+        };
+        if let Some(ix) = self.indices() {
+            let p = self.parcel();
+            put("sbcape_jkg", format!("{:.0}", ix.sbcape));
+            if let Some(p) = p.as_ref() {
+                put("sbcin_jkg", format!("{:.0}", p.cin));
+            }
+            put("lcl_m", format!("{:.0}", ix.lcl_m));
+            for (name, v) in [
+                ("lfc_m", p.as_ref().and_then(|p| p.lfc_m)),
+                ("el_m", p.as_ref().and_then(|p| p.el_m)),
+            ] {
+                put(name, v.map_or(String::new(), |v| format!("{v:.0}")));
+            }
+            put("srh_0_1_m2s2", format!("{:.0}", ix.srh1));
+            put("srh_0_3_m2s2", format!("{:.0}", ix.srh3));
+            put("shear_0_6_kt", format!("{:.0}", ix.shear6_kt));
+            put("scp", format!("{:.2}", ix.scp));
+            put("stp", format!("{:.2}", ix.stp));
+            put("ehi_0_1", format!("{:.2}", ix.ehi1));
+        }
+        // Empty where the column has no effective inflow layer, or no equilibrium level to
+        // measure the shear layer against — the same absence the panel shows as an em dash.
+        let eff = crate::severe::effective_indices(self);
+        put(
+            "esrh_m2s2",
+            eff.map_or(String::new(), |e| format!("{:.0}", e.esrh)),
+        );
+        put(
+            "ebwd_kt",
+            eff.and_then(|e| e.ebwd_kt)
+                .map_or(String::new(), |v| format!("{v:.0}")),
+        );
+        put(
+            "stp_effective",
+            eff.and_then(|e| e.stp_eff)
+                .map_or(String::new(), |v| format!("{v:.2}")),
+        );
+
+        s.push_str("\npressure_hpa,height_m,temp_c,dewpt_c,u_ms,v_ms\n");
+        let heights = self.heights_m();
+        for (i, l) in self.levels.iter().enumerate() {
+            s.push_str(&format!(
+                "{:.0},{:.0},{:.1},{:.1},{:.1},{:.1}\n",
+                l.pressure_hpa, heights[i], l.temp_c, l.dewpt_c, l.u_ms, l.v_ms
+            ));
+        }
+        s
+    }
+}
+
 /// How many of the 40 range requests are in flight at once. The same trade the gridded HRRR
 /// fetch makes: enough to hide latency, not enough to look like a scraper.
 const SOUNDING_CONCURRENCY: usize = 8;
@@ -617,6 +676,21 @@ mod tests {
         // This parcel is still buoyant at 200 hPa, the top of the mandatory-level set, so the
         // EL-dependent fields are honestly absent rather than extrapolated.
         assert!(eff.ebwd_kt.is_none() && eff.stp_eff.is_none());
+    }
+
+    #[test]
+    fn csv_carries_the_indices_and_the_profile() {
+        let s = supercell_profile();
+        let csv = s.to_csv();
+        let (top, bottom) = csv.split_once("\n\n").expect("two blocks");
+        assert!(top.starts_with("index,value\n"));
+        assert!(top.lines().any(|l| l.starts_with("stp,")));
+        // Absent effective fields are an empty cell, not a zero.
+        assert!(top.lines().any(|l| l == "ebwd_kt,"));
+        let mut rows = bottom.lines();
+        assert_eq!(rows.next().unwrap(), "pressure_hpa,height_m,temp_c,dewpt_c,u_ms,v_ms");
+        assert_eq!(rows.next().unwrap(), "1000,0,30.0,22.0,0.0,8.0");
+        assert_eq!(rows.count(), s.levels.len() - 1);
     }
 
     #[test]
