@@ -58,13 +58,12 @@ pub fn show(
                     }
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui
-                        .button("Copy CSV")
-                        .on_hover_text("The sampled grid, top row first")
-                        .clicked()
-                    {
-                        ui.ctx().copy_text(xs.to_csv());
-                    }
+                    crate::ui::csv_buttons(
+                        ui,
+                        "xsection.csv",
+                        "The sampled grid, top row first",
+                        || xs.to_csv(),
+                    );
                 });
             });
             ui.separator();

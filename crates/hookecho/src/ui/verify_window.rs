@@ -178,13 +178,9 @@ fn stats_row(ui: &mut egui::Ui, v: &Verification) {
             "Mean minutes between a warning going out and the first report that verified it",
         );
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if ui
-                .button("Copy CSV")
-                .on_hover_text("Stats, warnings and reports")
-                .clicked()
-            {
-                ui.ctx().copy_text(v.to_csv());
-            }
+            crate::ui::csv_buttons(ui, "verify.csv", "Stats, warnings and reports", || {
+                v.to_csv()
+            });
         });
     });
     ui.weak(format!(

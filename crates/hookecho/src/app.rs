@@ -4639,7 +4639,31 @@ impl HookEchoApp {
                         format!("Load failed: {e}"),
                     );
                 } else {
-                    ui.strong(format!("{} tornadoes on record", self.climo_hits.len()));
+                    ui.horizontal(|ui| {
+                        ui.strong(format!("{} tornadoes on record", self.climo_hits.len()));
+                        ui.with_layout(
+                            egui::Layout::right_to_left(egui::Align::Center),
+                            |ui| {
+                                let hits = &self.climo_hits;
+                                crate::ui::csv_buttons(
+                                    ui,
+                                    "tornadoes.csv",
+                                    "Every tornado on record here, not just the first 50",
+                                    || {
+                                        let mut s =
+                                            String::from("year,mag,start_lat,start_lon,end_lat,end_lon\n");
+                                        for t in hits {
+                                            s.push_str(&format!(
+                                                "{},{},{:.4},{:.4},{:.4},{:.4}\n",
+                                                t.year, t.mag, t.slat, t.slon, t.elat, t.elon
+                                            ));
+                                        }
+                                        s
+                                    },
+                                );
+                            },
+                        );
+                    });
                     let hist = wxdata::torclimo::mag_histogram(&self.climo_hits);
                     ui.horizontal_wrapped(|ui| {
                         for (i, label) in ["EF0", "EF1", "EF2", "EF3", "EF4", "EF5", "Unk"]

@@ -47,6 +47,29 @@ pub(crate) fn phone_surface<'a>(ctx: &egui::Context, w: egui::Window<'a>) -> egu
     }
 }
 
+/// The "Copy CSV" / "Save CSV…" pair every table window ends up wanting. `csv` is only called
+/// when a button is clicked, so building the text stays off the per-frame path.
+///
+/// ponytail: no file dialog on the web — there is no filesystem behind `save_path` there, and the
+/// clipboard already covers that platform.
+pub(crate) fn csv_buttons(
+    ui: &mut egui::Ui,
+    default_name: &str,
+    hover: &str,
+    csv: impl Fn() -> String,
+) {
+    if !cfg!(target_arch = "wasm32") && ui.button("Save CSV…").on_hover_text(hover).clicked() {
+        if let Some(path) = crate::dialog::save_path(default_name, "csv") {
+            if let Err(e) = std::fs::write(&path, csv()) {
+                log::warn!("CSV export failed: {e}");
+            }
+        }
+    }
+    if ui.button("Copy CSV").on_hover_text(hover).clicked() {
+        ui.ctx().copy_text(csv());
+    }
+}
+
 pub mod about_window;
 pub mod afd_window;
 pub mod alert_panel;

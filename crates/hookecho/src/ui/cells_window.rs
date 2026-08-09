@@ -177,11 +177,9 @@ pub fn show(
                 );
                 ui.weak("· click a row to fly there");
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    // Clipboard, not a file dialog: this works the same on desktop, Android and
-                    // the web, and the next stop is a spreadsheet either way.
-                    if ui.button("Copy CSV").on_hover_text("Every row, current sort").clicked() {
-                        ui.ctx().copy_text(to_csv(cells, &order));
-                    }
+                    crate::ui::csv_buttons(ui, "cells.csv", "Every row, current sort", || {
+                        to_csv(cells, &order)
+                    });
                 });
             });
             ui.separator();
