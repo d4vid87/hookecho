@@ -41,9 +41,9 @@ upgrade path out of it (`grep -rn "ponytail:" crates/`).
   manager line rather than a download.
 - True lunar ephemeris (Meeus) in place of the mean synodic phase, which is
   currently good to about half a day.
-- Full effective-layer severe composite parameters, matching SPC mesoanalysis
-  rather than the fixed-layer forms used now.
-- Real per-device inset queries on Android instead of the conservative floors.
+- Effective-layer severe parameters on the clicked sounding. The gridded layers
+  already solve a column per cell; the sounding panel still shows the
+  fixed-layer forms, so the two disagree in method.
 - Android settings import through the Storage Access Framework.
 
 ## Not planned
@@ -59,7 +59,8 @@ upgrade path out of it (`grep -rn "ponytail:" crates/`).
   from your machine; sync goes through your own Google Drive folder, and
   position sharing through your own relay if you set one.
 
-Already shipped, and sometimes mistaken for gaps: animated HRRR wind particles,
+Already shipped, and sometimes mistaken for gaps: gridded effective-layer STP,
+ESRH and EBWD, real per-device inset queries on Android, animated HRRR wind particles,
 the multi-day forecast, thirteen themes including Light, interactive vector
 basemaps, offline chase packs, future radar, archive back to 1991, placefiles
 with a layer manager, and settings sync.

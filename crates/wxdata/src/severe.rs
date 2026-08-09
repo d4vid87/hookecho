@@ -4,8 +4,10 @@
 //! clicked point (see [`crate::sounding::Sounding::indices`]). Here the same fixed-layer forms are
 //! evaluated cell-by-cell over the whole HRRR analysis grid so they can be drawn as contours.
 //!
-//! Fixed-layer (not effective-layer) formulations, per Thompson et al. 2004 — coarser than SPC
-//! mesoanalysis, which uses effective-inflow layers and mesoanalysis-blended observations.
+//! Two formulations live here. The fixed-layer forms (Thompson et al. 2004) are the cheap ones,
+//! evaluated from surface fields alone. The effective-layer forms (Thompson et al. 2007, 2012)
+//! solve a column per cell to find the effective inflow layer first, and are what SPC
+//! mesoanalysis plots — still coarser than SPC, which blends observations into its analysis.
 
 use crate::hrrr::{self, HrrrForecast};
 use crate::mrms::MrmsField;
