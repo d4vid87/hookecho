@@ -87,8 +87,10 @@ warned for.
 
 ## Make it yours
 
-- **Color tables**: Settings → Palettes imports GRLevelX `.pal` files, per
-  product, and exports what you've built.
+- **Color tables**: Settings → Palettes imports GRLevelX `.pal` and `.pal3`
+  files, per product, and exports what you've built. A v3 table loads as the
+  part v2 shares — its colors and stops — so anything v3-only is ignored rather
+  than refused.
 - **Themes**: 13 built in.
 - **Keyboard**: every binding is remappable in Settings.
 - **Workspaces**: save a pane arrangement (sites, products, tilts, overlays) and

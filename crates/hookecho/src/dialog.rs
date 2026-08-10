@@ -54,7 +54,7 @@ impl ImportKind {
     fn extensions(self) -> &'static [&'static str] {
         match self {
             ImportKind::SettingsBundle => &["json"],
-            ImportKind::Palette => &["pal"],
+            ImportKind::Palette => &["pal", "pal3"],
             ImportKind::MarkerIcon => &["png"],
             ImportKind::AlertSound => &["wav", "mp3", "ogg", "flac"],
         }
