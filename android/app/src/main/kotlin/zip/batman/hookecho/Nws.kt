@@ -19,19 +19,100 @@ object Nws {
     const val TIER_EMERGENCY = 3
     private const val USER_AGENT = "hookecho (github.com/d4vid87/hookecho)"
 
-    data class Watch(val name: String, val lat: Double, val lon: Double)
+    /**
+     * A watched place: [lat]/[lon] is where a notification flies the camera, [samples] is every
+     * point asked about. A marker with a watch radius contributes its rim as well as its centre,
+     * and a drawn zone contributes its vertices, so a warning that stops down the road is still
+     * a warning here.
+     */
+    data class Watch(
+        val name: String,
+        val lat: Double,
+        val lon: Double,
+        val samples: List<DoubleArray>,
+    )
 
     data class Alert(val id: String, val event: String, val headline: String, val tier: Int)
 
-    /** Saved markers from settings.json — the same file the Rust app reads and writes. */
+    /** Rim points around a marker, so `?point=` sees a warning that only reaches the radius. */
+    private const val RIM_POINTS = 6
+
+    /** Vertices sampled per drawn zone, evenly spaced around its ring. */
+    private const val ZONE_POINTS = 8
+
+    /** Ceiling on `?point=` requests per pass; api.weather.gov is not ours to hammer. */
+    private const val SAMPLE_CAP = 40
+
+    /**
+     * Saved markers and drawn zones from settings.json — the same file the Rust app reads and
+     * writes (`markers[].name/lat/lon/alert_radius_mi`, `alert_polygons[].name/ring`).
+     *
+     * ponytail: sampled points, not geometry. `?point=` resolves zone-only alerts (geometry null)
+     * server-side, which polygon math in Kotlin would have to re-implement; the ceiling is a small
+     * warning threading between two samples. Real polygon intersection is the upgrade path.
+     */
     fun watched(filesDir: File): List<Watch> {
         val f = File(filesDir, "config/settings.json")
         if (!f.exists()) return emptyList()
-        val markers = JSONObject(f.readText()).optJSONArray("markers") ?: return emptyList()
-        return (0 until markers.length()).mapNotNull { i ->
-            val m = markers.optJSONObject(i) ?: return@mapNotNull null
-            Watch(m.optString("name", "Saved location"), m.optDouble("lat"), m.optDouble("lon"))
-        }.filter { it.lat.isFinite() && it.lon.isFinite() }
+        val root = JSONObject(f.readText())
+        val out = ArrayList<Watch>()
+
+        val markers = root.optJSONArray("markers")
+        for (i in 0 until (markers?.length() ?: 0)) {
+            val m = markers?.optJSONObject(i) ?: continue
+            val lat = m.optDouble("lat")
+            val lon = m.optDouble("lon")
+            if (!lat.isFinite() || !lon.isFinite()) continue
+            val radiusMi = m.optDouble("alert_radius_mi", 0.0).let { if (it.isFinite()) it else 0.0 }
+            val samples = ArrayList<DoubleArray>()
+            samples.add(doubleArrayOf(lat, lon))
+            if (radiusMi > 0.0) {
+                for (k in 0 until RIM_POINTS) samples.add(offset(lat, lon, radiusMi, k * 360.0 / RIM_POINTS))
+            }
+            out.add(Watch(m.optString("name", "Saved location"), lat, lon, samples))
+        }
+
+        val zones = root.optJSONArray("alert_polygons")
+        for (i in 0 until (zones?.length() ?: 0)) {
+            val z = zones?.optJSONObject(i) ?: continue
+            val ring = z.optJSONArray("ring") ?: continue
+            val pts = (0 until ring.length()).mapNotNull { k ->
+                val p = ring.optJSONArray(k) ?: return@mapNotNull null
+                val lon = p.optDouble(0)
+                val lat = p.optDouble(1)
+                if (lat.isFinite() && lon.isFinite()) doubleArrayOf(lat, lon) else null
+            }
+            if (pts.isEmpty()) continue
+            val lat = pts.sumOf { it[0] } / pts.size
+            val lon = pts.sumOf { it[1] } / pts.size
+            val step = maxOf(1, pts.size / ZONE_POINTS)
+            val samples = ArrayList<DoubleArray>()
+            samples.add(doubleArrayOf(lat, lon))
+            for (k in pts.indices step step) samples.add(pts[k])
+            out.add(Watch(z.optString("name", "Watch zone"), lat, lon, samples))
+        }
+
+        // Trim from the back so early markers keep their rim rather than every place losing it.
+        var budget = SAMPLE_CAP
+        return out.map { w ->
+            val take = w.samples.take(maxOf(1, minOf(w.samples.size, budget)))
+            budget -= take.size
+            w.copy(samples = take)
+        }
+    }
+
+    /** Destination point `distMi` from (`lat`,`lon`) on `bearingDeg`, spherical earth. */
+    private fun offset(lat: Double, lon: Double, distMi: Double, bearingDeg: Double): DoubleArray {
+        val ang = distMi / 3958.8
+        val br = Math.toRadians(bearingDeg)
+        val la = Math.toRadians(lat)
+        val lo = Math.toRadians(lon)
+        val la2 = Math.asin(Math.sin(la) * Math.cos(ang) + Math.cos(la) * Math.sin(ang) * Math.cos(br))
+        val lo2 = lo + Math.atan2(
+            Math.sin(br) * Math.sin(ang) * Math.cos(la),
+            Math.cos(ang) - Math.sin(la) * Math.sin(la2),
+        )
+        return doubleArrayOf(Math.toDegrees(la2), Math.toDegrees(lo2))
     }
 
     fun alertsAt(lat: Double, lon: Double): List<Alert> {

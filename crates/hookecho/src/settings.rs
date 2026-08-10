@@ -258,8 +258,9 @@ pub struct Settings {
     pub plugins: Vec<PluginConfig>,
     /// Android only: run a foreground service that watches `markers` for NWS alerts and posts a
     /// notification, so warnings arrive with the app closed. Opt-in — it costs a permanent
-    /// notification and some battery. The Kotlin service reads `markers` and this flag straight
-    /// out of settings.json, so both names are load-bearing across the language boundary.
+    /// notification and some battery. The switch itself reaches Kotlin over JNI
+    /// (`platform::set_background_alerts`), not through this file; what the service reads here is
+    /// `markers` and `alert_polygons`, so those names are load-bearing across the boundary.
     #[serde(default)]
     pub background_alerts: bool,
     /// Keep running in the background (hide to tray) instead of quitting when the window closes.
@@ -1001,6 +1002,10 @@ mod tests {
                 video_url: String::new(),
                 home: false,
             }],
+            alert_polygons: vec![AlertPolygon {
+                name: "Farm".to_string(),
+                ring: vec![[-97.0, 35.0], [-96.9, 35.0], [-96.9, 35.1]],
+            }],
             background_alerts: true,
             ..Settings::default()
         })
@@ -1008,11 +1013,23 @@ mod tests {
         let v: serde_json::Value = serde_json::from_str(&json).unwrap();
         assert_eq!(v["background_alerts"], serde_json::json!(true));
         let m = &v["markers"][0];
-        for key in ["name", "lat", "lon"] {
+        for key in ["name", "lat", "lon", "alert_radius_mi"] {
             assert!(
                 m.get(key).is_some(),
                 "AlertService.kt reads markers[].{key}"
             );
         }
+        let z = &v["alert_polygons"][0];
+        for key in ["name", "ring"] {
+            assert!(
+                z.get(key).is_some(),
+                "AlertService.kt reads alert_polygons[].{key}"
+            );
+        }
+        assert_eq!(
+            z["ring"][0][0],
+            serde_json::json!(-97.0),
+            "Nws.kt reads ring vertices as [lon, lat]"
+        );
     }
 }
