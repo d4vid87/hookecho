@@ -37,6 +37,7 @@ L_XSECTION="Tool: Cross-section"
 L_FORECAST="Tool: Point forecast"
 L_STORMTABLE="Storm attributes…"
 L_VERIFY="Warning verification…"
+L_TOUR="Take the tour…"
 L_FRONTS="Surface fronts (H/L)"
 L_GLM="Satellite lightning (GLM)"
 L_VILD="VIL density (derived)"
@@ -65,7 +66,7 @@ preflight() {
   # "4 panes" is built by format!("{n} pane{}"), so it never appears literally in the source.
   grep -qF '{n} pane' "$REPO/crates/hookecho/src/app.rs" \
     || die "palette label '$L_PANES' is not in app.rs any more — update shoot.sh"
-  for l in "$L_ALLTILTS" "$L_LINKCAM" "$L_WIND" "$L_SITES" "$L_XSECTION" "$L_FORECAST" "$L_STORMTABLE" "$L_FRONTS" "$L_GLM" \
+  for l in "$L_TOUR" "$L_ALLTILTS" "$L_LINKCAM" "$L_WIND" "$L_SITES" "$L_XSECTION" "$L_FORECAST" "$L_STORMTABLE" "$L_FRONTS" "$L_GLM" \
            "$L_MRMS" "$L_MOSAIC" "$L_QPE" "$L_HRRR" "$L_VERIFY" \
            "$L_VILD" "$L_MEHS" "$L_SNOW" "$L_RECON"; do
     grep -qF "$l" "$REPO/crates/hookecho/src/app.rs" \
@@ -284,6 +285,24 @@ scene_alerts() {
   launch "$TUSCALOOSA"; wait_settle 16; key 1; sleep 1
   key a; sleep 2
   snap alerts
+}
+
+# --- onboarding -------------------------------------------------------------------------------
+
+scene_wizard() {
+  # A profile with setup_done cleared is the whole trick: the app opens the wizard itself.
+  launch "$TUSCALOOSA" '{"setup_done": false}'
+  wait_settle 12
+  snap wizard
+}
+
+scene_tour() {
+  # The tour spotlights live chrome, so it needs a loaded map under it — stop 1 points at the
+  # timeline, which does not exist until there are frames.
+  launch "$TUSCALOOSA"; wait_settle 16; key 1; sleep 1
+  palette "$L_TOUR"
+  sleep 1.5
+  snap tour
 }
 
 scene_products() {

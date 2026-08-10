@@ -60,10 +60,12 @@ Versioned `v*` releases are the stable channel. Every push to `main` also
 refreshes a [`latest`](../../releases/tag/latest) rolling prerelease carrying the
 same artifacts, if you want the newest work without waiting for a tag.
 
-First launch opens a setup wizard: pick your home radar site, a theme (13 built
+First launch opens a four-card setup: home radar site, map and theme (13 built
 in), and how warnings should reach you (chime and/or [ntfy.sh](https://ntfy.sh)
-push to your phone). After that, three one-time callouts point at the controls
-you'll actually use. Re-run the wizard anytime from the sidebar's **App → Setup wizard**.
+push to your phone). The last card offers a 60-second tour — four stops
+spotlighted on the live map, two of which you finish by doing the thing rather
+than reading about it. Neither is forced, and both re-run from the sidebar's
+**App** section, `Ctrl+K`, or **Settings → General**.
 
 ## The interface
 

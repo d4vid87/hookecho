@@ -79,7 +79,9 @@ a Gradle `preBuild` hook deletes anything in that directory that is not `libhook
 
 ## First run
 
-The setup wizard opens (home radar, theme, alerting).
+A four-card setup opens (home radar, map and theme, alerting and saved places), ending with an
+optional 60-second tour of the sheet, the dock and the timeline. Both re-run from **Layers → App**
+and **Settings → General**.
 
 Background alerting is opt-in from Settings. When it is on, a foreground service polls
 `api.weather.gov` for your saved markers (60 s while something is warned, 5 min otherwise) and a
