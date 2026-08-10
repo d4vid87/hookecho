@@ -118,9 +118,16 @@ pub fn show(
                 st.az -= d.x * 0.4;
                 st.el = (st.el + d.y * 0.3).clamp(2.0, 88.0);
             }
-            let scroll = ctx.input(|i| i.smooth_scroll_delta.y);
-            if scroll != 0.0 && resp.hovered() {
-                st.dist = (st.dist - scroll * 0.003).clamp(1.3, 6.0);
+            // Wheel dollies the orbit camera; a trackpad pinch arrives as `zoom_delta` instead
+            // (scale factor, >1 is fingers apart = closer) and has to move `dist` the other way.
+            let (scroll, zoom) = ctx.input(|i| (i.smooth_scroll_delta.y, i.zoom_delta()));
+            if resp.hovered() {
+                if scroll != 0.0 {
+                    st.dist = (st.dist - scroll * 0.003).clamp(1.3, 6.0);
+                }
+                if (zoom - 1.0).abs() > f32::EPSILON {
+                    st.dist = (st.dist / zoom).clamp(1.3, 6.0);
+                }
             }
             let aspect = rect.width() / rect.height().max(1.0);
             // The threshold is a uniform, not a re-upload: dragging the slider never rebuilds the

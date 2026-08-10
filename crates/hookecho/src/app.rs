@@ -9380,16 +9380,33 @@ impl HookEchoApp {
             self.views[idx].camera.pan_pixels(d.x, d.y);
             self.follow_cell = None; // a manual pan takes over the camera
         }
-        let scroll = ui.input(|i| i.smooth_scroll_delta.y);
-        if scroll.abs() > 0.0 {
-            if let Some(pos) = response.hover_pos() {
-                if prect.contains(pos) {
-                    self.active = idx;
-                    let cursor = (pos.x - prect.left(), pos.y - prect.top());
-                    self.views[idx]
-                        .camera
-                        .zoom_at(scroll as f64 * 0.005, cursor, vp);
-                }
+        // Wheel, trackpad, and pinch all land here. `zoom_delta` is a scale factor carrying the
+        // macOS/precision-touchpad pinch gesture (and ctrl+wheel, which egui folds into the same
+        // signal and subtracts from the scroll delta, so the two never double-apply). Horizontal
+        // scroll pans: on a trackpad a two-finger swipe is the obvious way to move the map, and on
+        // a mouse it is a tilt wheel nobody was using.
+        let (zoom, scroll) = ui.input(|i| (i.zoom_delta(), i.smooth_scroll_delta));
+        if let Some(pos) = response.hover_pos().filter(|p| prect.contains(*p)) {
+            let cursor = (pos.x - prect.left(), pos.y - prect.top());
+            // `zoom_delta()` reports a live touchscreen pinch too, which the gesture block below
+            // already owns (and it is the one that knows about the mobile chrome) — skip it here
+            // or a phone pinch zooms twice.
+            if gesture.is_none() && (zoom - 1.0).abs() > f32::EPSILON {
+                self.active = idx;
+                self.views[idx]
+                    .camera
+                    .zoom_at((zoom as f64).log2(), cursor, vp);
+            }
+            if scroll.y.abs() > 0.0 {
+                self.active = idx;
+                self.views[idx]
+                    .camera
+                    .zoom_at(scroll.y as f64 * 0.005, cursor, vp);
+            }
+            if scroll.x.abs() > 0.0 {
+                self.active = idx;
+                self.views[idx].camera.pan_pixels(scroll.x, 0.0);
+                self.follow_cell = None; // a manual pan takes over the camera
             }
         }
         // Two-finger gesture (touchscreens): pan by the gesture's translation, and zoom by the
