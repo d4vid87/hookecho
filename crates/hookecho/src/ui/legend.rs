@@ -212,6 +212,68 @@ pub fn draw_field(
     }
 }
 
+/// The difference layer's key: the same diverging LUT the grid was colored with, drawn across
+/// ±range so the reader can tell a cool cell from a warm one and read the size of the split. The
+/// transparent middle is the deadband — where the two models agree and the layer draws nothing —
+/// so the card shows through there exactly as the map does.
+pub fn draw_diff(
+    painter: &egui::Painter,
+    map_rect: Rect,
+    field: crate::fielddiff::DiffField,
+    y_offset: f32,
+) -> f32 {
+    let font = FontId::proportional(10.0);
+    let origin = map_rect.left_top() + Vec2::new(INSET, INSET + y_offset);
+    let panel = Rect::from_min_size(origin, Vec2::new(BAR_W + PAD_X * 2.0, BAR_H + 16.0 + 14.0));
+    let bar = Rect::from_min_size(panel.min + Vec2::new(PAD_X, 16.0), Vec2::new(BAR_W, BAR_H));
+    card(painter, panel);
+
+    let (range, deadband) = field.range();
+    let lut = crate::fielddiff::diverging_lut(range, deadband);
+    // One column per pixel of bar, sampled through the same value→index→color path as the grid.
+    let cols = bar.width().round().max(1.0) as usize;
+    for i in 0..cols {
+        let v = ((i as f32 / (cols - 1).max(1) as f32) * 2.0 - 1.0) * range;
+        let k = crate::fielddiff::diff_index(v, range) as usize * 4;
+        let c = Color32::from_rgba_unmultiplied(lut[k], lut[k + 1], lut[k + 2], lut[k + 3]);
+        let x = bar.left() + i as f32;
+        painter.rect_filled(
+            Rect::from_min_max(egui::pos2(x, bar.top()), egui::pos2(x + 1.0, bar.bottom())),
+            0.0,
+            c,
+        );
+    }
+    painter.rect_stroke(
+        bar,
+        0.0,
+        Stroke::new(1.0, Color32::from_gray(90)),
+        egui::StrokeKind::Inside,
+    );
+
+    let (a, b) = field.pair();
+    for (text, align, x) in [
+        (format!("-{range:.0}"), Align2::LEFT_TOP, bar.left()),
+        ("0 (\u{2248})".to_string(), Align2::CENTER_TOP, bar.center().x),
+        (format!("+{range:.0}"), Align2::RIGHT_TOP, bar.right()),
+    ] {
+        painter.text(
+            egui::pos2(x, bar.bottom() + 2.0),
+            align,
+            text,
+            font.clone(),
+            Color32::from_gray(225),
+        );
+    }
+    painter.text(
+        panel.left_top() + Vec2::new(PAD_X, 3.0),
+        Align2::LEFT_TOP,
+        format!("{} {a}\u{2212}{b} ({})", field.label(), field.units()),
+        font,
+        Color32::WHITE,
+    );
+    panel.height() + 6.0
+}
+
 /// The same key, for a ramp that isn't a [`crate::render::FieldLayer`] — the wind particles carry
 /// their scale rather than uploading a grid, but they still owe the reader a legend.
 pub fn draw_ramp(

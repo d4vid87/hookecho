@@ -137,6 +137,23 @@ jobs:
             /DExeDir=${{ github.workspace }}\target\release `
             /Odist packaging\windows\hookecho.iss
 
+      # The store manifests name a version and hash the artifacts we just built. Stamping them
+      # here means the winget PR, the Homebrew tap push and the AUR push all start from files that
+      # already match the release, instead of from hand-copied checksums. They are submission
+      # inputs, so they ride out as an artifact rather than being committed back to main.
+      - name: Stamp the store manifests
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        run: |
+          scripts/release/stamp-manifests.sh "${GITHUB_REF_NAME#v}" dist/Hook_Echo-WX-setup-x86_64.exe
+
+      - name: Upload the store manifests
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: actions/upload-artifact@v4
+        with:
+          name: store-manifests
+          path: packaging/
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
@@ -251,6 +268,20 @@ jobs:
           ./dist/HookEcho.app/Contents/MacOS/hookecho --version
           ./dist/HookEcho.app/Contents/MacOS/hookecho --headless-icon /tmp/icon.png 64
           test -s /tmp/icon.png
+
+      # The icon smoke proves the binary starts; this proves it renders — wgpu comes up on Metal,
+      # a live volume is fetched and drawn off-screen, and the PNG reads back. It is the closest
+      # thing to running the app that exists without Apple hardware to run it on.
+      # `--basemap none` keeps the test off the tile servers; the size floor catches a valid PNG
+      # of nothing. continue-on-error until it has been seen green: a red step nobody can debug
+      # locally would block every release instead of reporting on one.
+      - name: Render smoke
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          ./dist/HookEcho.app/Contents/MacOS/hookecho --snapshot /tmp/smoke.png KTLX \
+            --basemap none --size 256
+          test "$(stat -f%z /tmp/smoke.png)" -ge 5000
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
