@@ -172,11 +172,14 @@ impl Tour {
             .map(|r| r.expand(6.0).intersect(screen));
         // Dim everything but the hole. Four rects rather than a mask because a painter has no
         // clip stack worth fighting, and four rects is four lines.
-        let p = ctx.layer_painter(egui::LayerId::new(
+        let mut p = ctx.layer_painter(egui::LayerId::new(
             egui::Order::Foreground,
             egui::Id::new("tour_dim"),
         ));
-        let dim = egui::Color32::from_black_alpha(140);
+        // A layer painter is clipped to `available_rect` — what's left after the docked panels —
+        // so without this the sidebar and the legend never dim.
+        p.set_clip_rect(screen);
+        let dim = egui::Color32::from_black_alpha(160);
         match hole {
             Some(h) => {
                 let (l, r, t, b) = (h.left(), h.right(), h.top(), h.bottom());
