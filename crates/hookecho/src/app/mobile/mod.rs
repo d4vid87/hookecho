@@ -427,6 +427,52 @@ impl super::HookEchoApp {
         actions
     }
 
+    /// The basemap picker, as chips.
+    ///
+    /// The only way to change the map underneath the radar used to be the palette's "Cycle
+    /// basemap" row, which advances one step through forty styles and closes the sheet as it goes
+    /// — reaching satellite imagery from dark vector was nine round trips through the menu. These
+    /// set the style directly and leave the sheet open, so trying two is two taps.
+    fn basemap_chips(&mut self, ui: &mut egui::Ui) {
+        use crate::tiles::BasemapStyle;
+        let (mb, mt) = (
+            !self.settings.mapbox_key.is_empty(),
+            !self.settings.maptiler_key.is_empty(),
+        );
+        let cur = self.views[self.active].basemap;
+        let mut pick = None;
+        ui.label(egui::RichText::new("Basemap").size(crate::ui::m3::T_LABEL_LG));
+        ui.horizontal_wrapped(|ui| {
+            for s in BasemapStyle::COMMON {
+                if s.available(mb, mt)
+                    && crate::ui::m3::chip(ui, s.short_label(), s == cur).clicked()
+                {
+                    pick = Some(s);
+                }
+            }
+        });
+        // Everything COMMON leaves out — the other GOES products, the provider styles a key
+        // unlocks — behind one disclosure rather than in the chip row.
+        egui::CollapsingHeader::new("All basemaps")
+            .id_salt("m_basemap_all")
+            .default_open(!BasemapStyle::COMMON.contains(&cur))
+            .show(ui, |ui| {
+                ui.horizontal_wrapped(|ui| {
+                    for s in BasemapStyle::ALL {
+                        if BasemapStyle::COMMON.contains(&s) || !s.available(mb, mt) {
+                            continue;
+                        }
+                        if crate::ui::m3::chip(ui, s.label(), s == cur).clicked() {
+                            pick = Some(s);
+                        }
+                    }
+                });
+            });
+        if let Some(s) = pick {
+            self.set_basemap(s);
+        }
+    }
+
     /// The main menu, as a modal bottom sheet: the shared layer registry up top, the expert
     /// controls behind "Advanced", app rows below. Same content the desktop drawer shows — one
     /// list, not a phone copy of it that drifts.
@@ -449,6 +495,8 @@ impl super::HookEchoApp {
                     }
                 }
             });
+            ui.add_space(crate::ui::m3::SP_2);
+            self.basemap_chips(ui);
             ui.add_space(crate::ui::m3::SP_2);
             let entries = self.palette_entries();
             let mut query = std::mem::take(&mut self.mobile_drawer_query);

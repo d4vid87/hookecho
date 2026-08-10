@@ -129,6 +129,34 @@ impl BasemapStyle {
         BasemapStyle::MapTilerDatavizDark,
     ];
 
+    /// The handful worth a one-tap chip on a phone: two vector styles, three ways of seeing the
+    /// ground, roads, terrain, live satellite, and nothing at all. Everything else in [`Self::ALL`]
+    /// is a variation on one of these and lives behind the picker's "All basemaps".
+    pub const COMMON: [BasemapStyle; 8] = [
+        BasemapStyle::Dark,
+        BasemapStyle::Light,
+        BasemapStyle::Satellite,
+        BasemapStyle::EsriImagery,
+        BasemapStyle::OsmStandard,
+        BasemapStyle::OpenTopoMap,
+        BasemapStyle::GoesEast,
+        BasemapStyle::None,
+    ];
+
+    /// A chip-sized name. [`Self::label`] is the full one — "GOES-East (GeoColor)" wraps a phone
+    /// chip onto two lines and pushes the row off the sheet.
+    pub fn short_label(self) -> &'static str {
+        match self {
+            BasemapStyle::Satellite => "USGS",
+            BasemapStyle::EsriImagery => "Satellite",
+            BasemapStyle::OsmStandard => "Streets",
+            BasemapStyle::OpenTopoMap => "Topo",
+            BasemapStyle::GoesEast => "GOES-East",
+            BasemapStyle::GoesWest => "GOES-West",
+            _ => self.label(),
+        }
+    }
+
     pub fn label(self) -> &'static str {
         match self {
             BasemapStyle::Dark => "Dark",

@@ -6948,8 +6948,8 @@ impl HookEchoApp {
                     !self.settings.mapbox_key.is_empty(),
                     !self.settings.maptiler_key.is_empty(),
                 );
-                let v = &mut self.views[self.active];
-                v.basemap = v.basemap.next(mb, mt);
+                let next = self.views[self.active].basemap.next(mb, mt);
+                self.set_basemap(next);
             }
             PaletteAction::ToggleMute => self.apply_action(BindableAction::ToggleMute, ctx),
             PaletteAction::ToggleToolbar => {
@@ -12074,6 +12074,19 @@ impl HookEchoApp {
             if ui.button("Exit").clicked() {
                 ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
             }
+        }
+    }
+
+    /// Put `style` under the active pane and remember it.
+    ///
+    /// Remembering is the point: the basemap used to live only on the view, so a style picked
+    /// during a chase was gone at the next launch, which read `settings.basemap` and found
+    /// whatever the setup wizard wrote months earlier.
+    pub(crate) fn set_basemap(&mut self, style: crate::tiles::BasemapStyle) {
+        self.views[self.active].basemap = style;
+        if self.settings.basemap != style.slug() {
+            self.settings.basemap = style.slug().to_string();
+            self.settings.save();
         }
     }
 
