@@ -28,6 +28,9 @@ place name. You do not need to learn where anything lives.
 5. The **LIVE** badge on the bottom bar means you're on the newest scan. Anything
    that moves you off it turns it off; click it to snap back.
 
+Moving the map: drag to pan, scroll to zoom. On a trackpad, pinch to zoom and
+swipe sideways to pan; on a touchscreen, two fingers do both.
+
 **Is it rotating?** Velocity, 0.5°, look for tight inbound (green) next to
 outbound (red) over a few gates. Then turn on **storm-relative velocity** in
 Layer options — it subtracts the storm's own motion, so rotation stops hiding
@@ -51,7 +54,8 @@ one action in `Ctrl+K` ("four products" / "four tilts").
 **Cross-section**: click two points on the map and get the storm in profile —
 core, overhang, and how high the echo goes. Any product.
 
-**3D**: the volume as an orbitable raymarch. Drag to orbit, scroll to zoom, set
+**3D**: the volume as an orbitable raymarch. Drag to orbit, scroll or pinch to
+zoom, set
 a dBZ floor ("Only above" → *Hail core*) so cores stand alone. Drop **Quality**
 to Low on a phone or an integrated GPU; it only changes sampling, not the data.
 
