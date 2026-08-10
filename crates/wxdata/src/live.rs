@@ -117,9 +117,9 @@ where
             .and_then(|d| d.to_std().ok())
             .unwrap_or(Duration::from_secs(2))
             .clamp(Duration::from_secs(1), Duration::from_secs(15));
-        crate::task::sleep(wait).await;
-
-        if !active() {
+        // Sliced, not one long sleep: a cancelled stream that only notices at the end of a
+        // fifteen-second wait keeps pulling chunks for a site the user already left.
+        if !crate::task::sleep_while(wait, &active).await {
             // Backgrounded: end the stream rather than idle in it. Idling would keep a timer
             // (and this task) alive across the whole background period; the caller restarts the
             // stream when the app comes back, which is what it already does after any other
@@ -137,7 +137,9 @@ where
                 }
                 chunks.push(dc.chunk);
                 let sweep_done = it.chunk_metadata(seq).is_some_and(|m| m.is_last_in_sweep());
-                if sweep_done || ctype == ChunkType::End {
+                // The fetch itself can outlast the cancellation: a sweep assembled for a site the
+                // caller has already left is a stale frame handed to a live view.
+                if (sweep_done || ctype == ChunkType::End) && active() {
                     let window: Vec<Chunk<'static>> = chunks
                         .first()
                         .filter(|_| window_start > 0)

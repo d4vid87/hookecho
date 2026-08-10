@@ -8731,10 +8731,9 @@ impl HookEchoApp {
         // Abort an existing stream if it no longer matches the active view/site or isn't wanted.
         if let Some((sv, ss, _)) = &self.live_stream {
             if !want || *sv != idx || Some(ss.as_str()) != site.as_deref() {
-                // ponytail: the cancelled stream notices at its next wake, so on a fast site
-                // switch two streams overlap for up to the 15 s wait clamp. Both merge into
-                // their own volumes and only the live one is displayed, so the cost is one
-                // wasted chunk fetch. An abort channel if that ever shows up on a phone bill.
+                // ponytail: the cancelled stream notices within a second (its wait is sliced),
+                // so a fast site switch overlaps two streams for about that long and at most
+                // one in-flight chunk fetch. An abort channel if even that shows up.
                 self.live_gen
                     .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 self.live_stream = None;
