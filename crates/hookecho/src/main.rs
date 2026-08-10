@@ -896,15 +896,103 @@ fn main() -> eframe::Result<()> {
     // URL Protocol registry key on Windows) arrives as an argument. The app already knows how to
     // read one out of the environment — Android's notification tap uses the same path — so this
     // is a handover, not a second parser.
-    //
-    // ponytail: a link opens a second instance. A single-instance socket is the fix if that
-    // becomes annoying rather than theoretical.
     if let Some(link) = args.iter().find(|a| a.starts_with("hookecho://")) {
+        // An already-running instance is what the user means by "open this link": a second
+        // window with its own caches, streams and GPU context is not. Hand it over and leave.
+        if hand_link_to_running_instance(link) {
+            log::info!("handed {link} to the running instance");
+            return Ok(());
+        }
         log::info!("opening link {link}");
         std::env::set_var("HOOKECHO_GOTO", link);
     }
+    single_instance::listen();
 
     hookecho::run_desktop()
+}
+
+/// Write `link` into the drop box the running instance polls, if there is one.
+///
+/// Returns whether it was handed over; false means this process is the instance.
+#[cfg(not(target_os = "android"))]
+fn hand_link_to_running_instance(link: &str) -> bool {
+    if !single_instance::another_is_running() {
+        return false;
+    }
+    let Some(path) = hookecho::paths::goto_file() else {
+        return false;
+    };
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    std::fs::write(&path, link).is_ok()
+}
+
+/// Whether another Hook Echo owns this machine's session, over a bound loopback port.
+///
+/// A bound socket is its own liveness proof — no stale pid file to reason about — and the
+/// greeting keeps an unrelated listener on the port from swallowing links.
+///
+/// ponytail: a fixed port and a plain greeting, no payload over the wire (the link goes through
+/// the same `goto.txt` drop box Android already uses). If the port is taken by something else,
+/// the link opens a second instance, which is exactly today's behavior.
+#[cfg(not(target_os = "android"))]
+mod single_instance {
+    use std::io::{Read, Write};
+    use std::net::{Ipv4Addr, TcpListener, TcpStream, SocketAddrV4};
+    use std::time::Duration;
+
+    /// Registered-user range, and nothing else known claims it.
+    const PORT: u16 = 47_913;
+    const GREETING: &[u8] = b"hookecho\n";
+
+    pub fn another_is_running() -> bool {
+        probe(PORT)
+    }
+
+    fn probe(port: u16) -> bool {
+        let addr = SocketAddrV4::new(Ipv4Addr::LOCALHOST, port);
+        let Ok(mut sock) = TcpStream::connect_timeout(&addr.into(), Duration::from_millis(300))
+        else {
+            return false;
+        };
+        let _ = sock.set_read_timeout(Some(Duration::from_millis(300)));
+        let mut buf = [0u8; GREETING.len()];
+        sock.read_exact(&mut buf).is_ok() && buf == GREETING
+    }
+
+    /// Answer future launches. Silently does nothing if the port is unavailable — the app runs
+    /// fine without this, it just stops being the one instance.
+    pub fn listen() {
+        listen_on(PORT);
+    }
+
+    /// Returns the port actually bound, so a test can use an ephemeral one.
+    fn listen_on(port: u16) -> Option<u16> {
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, port)).ok()?;
+        let bound = listener.local_addr().ok()?.port();
+        std::thread::spawn(move || {
+            for stream in listener.incoming().flatten() {
+                let mut stream = stream;
+                let _ = stream.write_all(GREETING);
+            }
+        });
+        Some(bound)
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn the_greeting_is_what_identifies_us() {
+            // Nothing listening: not us, and not a hang either.
+            assert!(!probe(1));
+
+            let port = listen_on(0).expect("bind an ephemeral port");
+            assert!(probe(port), "a listening instance answers");
+        }
+    }
 }
 
 /// Write a multi-resolution Windows `.ico` of the app logo (16/32/48/256 px, the sizes Explorer,
