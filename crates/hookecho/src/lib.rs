@@ -74,11 +74,34 @@ pub mod wind_draw;
 
 pub use app::HookEchoApp;
 
+/// Ask the device for no more texture than the adapter admits to having.
+///
+/// egui-wgpu's default device descriptor requests `max_texture_dimension_2d: 8192` unconditionally
+/// so a depth buffer can cover a 4k display. On an adapter that reports less — Firefox on Linux
+/// hands out a WebGL2 context capped at 2048 — `request_device` refuses the whole descriptor and
+/// the app never starts (issue #17). Nothing here needs 8192: the one place the cap matters
+/// (`app.rs`, field-grid decimation) reads it back off the created device.
+///
+/// Applies everywhere rather than on web only, because a desktop GLES fallback fails the same way.
+fn cap_texture_limit_to_adapter(options: &mut egui_wgpu::WgpuConfiguration) {
+    let egui_wgpu::WgpuSetup::CreateNew(setup) = &mut options.wgpu_setup else {
+        return;
+    };
+    let base = std::sync::Arc::clone(&setup.device_descriptor);
+    setup.device_descriptor = std::sync::Arc::new(move |adapter| {
+        let mut desc = base(adapter);
+        let cap = adapter.limits().max_texture_dimension_2d;
+        desc.required_limits.max_texture_dimension_2d =
+            desc.required_limits.max_texture_dimension_2d.min(cap);
+        desc
+    });
+}
+
 /// Launch the windowed desktop app (Windows/Linux/macOS). Called from `main.rs` after it has
 /// dispatched any `--headless-*` verifier.
 #[cfg(not(any(target_os = "android", target_arch = "wasm32")))]
 pub fn run_desktop() -> eframe::Result<()> {
-    let native_options = eframe::NativeOptions {
+    let mut native_options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1280.0, 800.0])
             // The floating chrome has fixed-width cards; below this they stack on top of the map
@@ -91,6 +114,7 @@ pub fn run_desktop() -> eframe::Result<()> {
         renderer: eframe::Renderer::Wgpu,
         ..Default::default()
     };
+    cap_texture_limit_to_adapter(&mut native_options.wgpu_options);
     eframe::run_native(
         "Hook Echo-WX",
         native_options,
@@ -119,10 +143,13 @@ pub async fn start(canvas_id: String) -> Result<(), wasm_bindgen::JsValue> {
         .and_then(|e| e.dyn_into::<web_sys::HtmlCanvasElement>().ok())
         .ok_or_else(|| wasm_bindgen::JsValue::from_str("no such canvas"))?;
 
+    let mut web_options = eframe::WebOptions::default();
+    cap_texture_limit_to_adapter(&mut web_options.wgpu_options);
+
     eframe::WebRunner::new()
         .start(
             canvas,
-            eframe::WebOptions::default(),
+            web_options,
             Box::new(|cc| Ok(Box::new(HookEchoApp::new(cc)))),
         )
         .await
@@ -147,11 +174,12 @@ fn android_main(app: winit::platform::android::activity::AndroidApp) {
     // The UI queries this handle for system-bar insets each frame.
     platform::set_app(app.clone());
 
-    let native_options = eframe::NativeOptions {
+    let mut native_options = eframe::NativeOptions {
         android_app: Some(app),
         renderer: eframe::Renderer::Wgpu,
         ..Default::default()
     };
+    cap_texture_limit_to_adapter(&mut native_options.wgpu_options);
     if let Err(e) = eframe::run_native(
         "Hook Echo-WX",
         native_options,
