@@ -8744,10 +8744,9 @@ impl HookEchoApp {
             let due = self
                 .last_stream_attempt
                 .is_none_or(|t| t.elapsed().as_secs() >= 60);
-            if due {
+            // `want` already implies both, but the two are computed a screen away from here.
+            if let (true, Some(site), Some(base)) = (due, site, base) {
                 self.last_stream_attempt = Some(Instant::now());
-                let site = site.unwrap();
-                let base = base.unwrap();
                 let gen = self.live_gen.load(std::sync::atomic::Ordering::Relaxed);
                 self.spawn_stream(idx, site.clone(), base, ctx.clone(), gen);
                 self.live_stream = Some((idx, site, gen));
@@ -9245,7 +9244,11 @@ impl HookEchoApp {
         // The pane's product list is the union over every volume from this site, so a single frame
         // in a loop can lack the selected moment (a legacy volume, a split cut that hasn't arrived).
         // Draw what this volume does have rather than blanking the radar for that frame.
-        let have = self.views[data].volume.as_ref().unwrap().moments;
+        // Caller resolved `data` to a view that has a volume; a "wait" is the honest answer if
+        // that stops being true rather than taking the frame down.
+        let Some(have) = self.views[data].volume.as_ref().map(|v| v.moments) else {
+            return (None, true);
+        };
         let moment = if have[moment.index()] {
             moment
         } else {
@@ -9259,7 +9262,9 @@ impl HookEchoApp {
         } else {
             None
         };
-        let name = self.views[data].volume.as_ref().unwrap().name.clone();
+        let Some(name) = self.views[data].volume.as_ref().map(|v| v.name.clone()) else {
+            return (None, true);
+        };
         let uv_key = storm_uv.map(|(e, n)| (e.to_bits(), n.to_bits()));
         // Dealiasing only applies to Doppler velocity, and only where it is actually folded:
         // a TDWR's Level 3 velocity is already unfolded before it leaves the radar.
@@ -9284,7 +9289,9 @@ impl HookEchoApp {
         }
         let table = self.palettes.table(moment);
         let upload = {
-            let vol = self.views[data].volume.as_mut().unwrap();
+            let Some(vol) = self.views[data].volume.as_mut() else {
+                return (None, true);
+            };
             // No tilts yet (a volume that has only just started arriving) is a "wait", not a
             // failure: erroring here put "tilt 0 out of range" on the map once per volume.
             if vol.elevations.is_empty() {
