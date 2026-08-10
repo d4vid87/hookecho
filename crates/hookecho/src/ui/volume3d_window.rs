@@ -14,7 +14,13 @@ pub struct Volume3dState {
     pub threshold_dbz: f32,
     /// Slab bounds as fractions of the box, `[x0, x1, y0, y1, z0, z1]`.
     pub clip: [f32; 6],
+    /// Raymarch samples per pixel. The cost of the window is almost entirely this number, so it
+    /// is the one knob worth exposing on a phone or an integrated GPU.
+    pub steps: u32,
 }
+
+/// The three quality rungs, coarsest first. 256 is what the window shipped with.
+const STEP_PRESETS: [(&str, u32); 3] = [("Low", 96), ("Medium", 160), ("High", 256)];
 
 impl Default for Volume3dState {
     fn default() -> Self {
@@ -25,6 +31,9 @@ impl Default for Volume3dState {
             // The volume's own floor: nothing hidden until the user asks.
             threshold_dbz: f32::NEG_INFINITY,
             clip: [0.0, 1.0, 0.0, 1.0, 0.0, 1.0],
+            // ponytail: a phone is the one place the full march reliably misses frame budget, so
+            // pick by platform rather than benchmarking the GPU.
+            steps: if cfg!(target_os = "android") { 96 } else { 256 },
         }
     }
 }
@@ -85,6 +94,13 @@ pub fn show(
                     }
                 }
             });
+            ui.horizontal(|ui| {
+                ui.label("Quality");
+                for (label, steps) in STEP_PRESETS {
+                    ui.selectable_value(&mut st.steps, steps, label)
+                        .on_hover_text(format!("{steps} samples per pixel"));
+                }
+            });
             egui::CollapsingHeader::new("Slice")
                 .default_open(false)
                 .show(ui, |ui| {
@@ -117,7 +133,7 @@ pub fn show(
                 },
                 clip: st.clip,
             };
-            let uniform = orbit_uniform(st.az, st.el, st.dist, aspect, n, nz, 256, view);
+            let uniform = orbit_uniform(st.az, st.el, st.dist, aspect, n, nz, st.steps, view);
             // On the window's first frame egui may hand us a zero-area rect (auto-size pass);
             // the paint callback would be culled and the one-shot upload lost, leaving the view
             // black until reopened. Hold the upload until the rect is real.
@@ -134,6 +150,13 @@ pub fn show(
 #[cfg(test)]
 mod tests {
     use crate::render3d::threshold_index;
+
+    #[test]
+    fn the_default_quality_is_one_of_the_presets() {
+        // Otherwise no button reads as selected and the row looks broken on first open.
+        let d = super::Volume3dState::default();
+        assert!(super::STEP_PRESETS.iter().any(|&(_, s)| s == d.steps));
+    }
 
     #[test]
     fn dbz_maps_into_the_volume_index_range() {

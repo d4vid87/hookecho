@@ -26,6 +26,34 @@
     </p>
   </description>
 
+  <developer id="zip.batman">
+    <name>David May</name>
+  </developer>
+
+  <!--
+    Flathub requires at least one screenshot, fetched over https at build time — so these point at
+    the same images the README uses, served raw from the tag rather than from `main`, which would
+    let a later commit change what a published listing shows.
+  -->
+  <screenshots>
+    <screenshot type="default">
+      <image>https://raw.githubusercontent.com/d4vid87/hookecho/v0.8.0/docs/shots/alltilts.jpg</image>
+      <caption>Level 2 reflectivity at every tilt, over an interactive basemap</caption>
+    </screenshot>
+    <screenshot>
+      <image>https://raw.githubusercontent.com/d4vid87/hookecho/v0.8.0/docs/shots/mosaic.jpg</image>
+      <caption>The national MRMS mosaic</caption>
+    </screenshot>
+    <screenshot>
+      <image>https://raw.githubusercontent.com/d4vid87/hookecho/v0.8.0/docs/shots/alerts.jpg</image>
+      <caption>Warnings, storm reports and spotters</caption>
+    </screenshot>
+    <screenshot>
+      <image>https://raw.githubusercontent.com/d4vid87/hookecho/v0.8.0/docs/shots/hrrr.jpg</image>
+      <caption>HRRR model fields and severe composite parameters</caption>
+    </screenshot>
+  </screenshots>
+
   <launchable type="desktop-id">hookecho.desktop</launchable>
   <url type="homepage">https://github.com/d4vid87/hookecho</url>
   <url type="bugtracker">https://github.com/d4vid87/hookecho/issues</url>

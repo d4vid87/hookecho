@@ -43,12 +43,15 @@ built from NOAA's free GRIB grids, so it needs no API key.</sub>
   never been run on real Apple hardware, and it is ad-hoc signed, so Gatekeeper
   will ask before it opens. Homebrew users can build it instead:
   `brew install --HEAD d4vid87/hookecho/hookecho` (formula in
-  [`packaging/homebrew`](packaging/homebrew)).
+  [`packaging/homebrew`](packaging/homebrew)). **macOS testers wanted** — there
+  is no Apple hardware behind this project, so an
+  [issue](../../issues) saying what did or did not work is the only way this
+  build stops being experimental.
 - **Package managers**: manifests for
   [Flatpak](packaging/flatpak), [Snap](snap/snapcraft.yaml),
-  [Homebrew](packaging/homebrew) and [winget](packaging/winget) live in the
-  repo. None are published to their stores yet — building from these files
-  works today; a `flatpak install hookecho` does not.
+  [Homebrew](packaging/homebrew), [winget](packaging/winget) and the
+  [AUR](packaging/aur) live in the repo. None are published to their stores
+  yet — building from these files works today; a `flatpak install hookecho` does not.
 - **From source**: `cargo run --release` (needs a Rust toolchain; on Linux also
   ALSA/Wayland/GTK dev headers — see `.github/workflows/ci.yml`). Android builds
   via `android/build.sh` (NDK + `cargo-ndk`).
@@ -628,10 +631,24 @@ hookecho://goto/KTLX                                   # a radar site
 hookecho://goto/KTLX,-97.28,35.33,9                    # site, lon, lat, zoom
 hookecho://goto/,-97.28,35.33,9                        # no site: just the view
 hookecho://goto/KTLX,-97.28,35.33,9,2013-05-20T20:00:00Z   # and an instant
+hookecho://goto/KTLX,-97.28,35.33,9,VEL,1              # and a product and tilt
 ```
 
 The timestamp is RFC 3339 and puts the timeline where it was, so a link can
-point at a moment in the archive rather than at "now".
+point at a moment in the archive rather than at "now". The trailing fields are
+recognized by shape, not position: a timestamp, a product code (`VEL`, `ZDR`,
+`CC`, …) and a tilt index can appear in any order, and any you leave out keep
+whatever the person opening the link already had.
+
+The browser build takes the same thing in the URL fragment, which never leaves
+the client — no server sees where you are looking:
+
+```
+https://hookecho.pages.dev/#goto=KTLX,-97.28,35.33,9,VEL
+```
+
+"Copy link to this view" in the command palette writes the right form for
+whichever build you are running.
 
 ## Keyboard
 
@@ -678,9 +695,12 @@ reading the screen in direct sun.
   local-parameter fixes; grep `hookecho patch:`).
 - `scripts/shots` — the screenshot harness that produced everything above.
 
-Also worth reading: [docs/DATA.md](docs/DATA.md) — every feed the app decodes,
-with its cadence, latency and whether it needs a key; [ROADMAP.md](ROADMAP.md) —
-what's next and what isn't planned; [CONTRIBUTING.md](CONTRIBUTING.md) — how the
+Also worth reading: [docs/GUIDE.md](docs/GUIDE.md) — the task-by-task user
+guide, "how do I actually do this"; [docs/DATA.md](docs/DATA.md) — every feed the
+app decodes, with its cadence, latency and whether it needs a key;
+[ROADMAP.md](ROADMAP.md) — what's next and what isn't planned;
+[ARCHITECTURE.md](ARCHITECTURE.md) — how the code is shaped;
+[CONTRIBUTING.md](CONTRIBUTING.md) — how the
 workspace fits together and what a patch has to clear;
 [CHANGELOG.md](CHANGELOG.md) — what changed per release;
 [docs/promotion.md](docs/promotion.md) — how a release is cut and announced.

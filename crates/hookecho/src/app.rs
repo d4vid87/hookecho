@@ -22,10 +22,10 @@ use lru::LruCache;
 use std::num::NonZeroUsize;
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::Arc;
-use wxdata::clock::Instant;
 #[cfg(not(target_arch = "wasm32"))]
 use tokio::runtime::Runtime;
 use wxdata::alerts::{self};
+use wxdata::clock::Instant;
 use wxdata::level2::{self, BinnedSweep, Identifier, Moment, Scan};
 use wxdata::level3::{self, Cell, CellKind};
 use wxdata::live;
@@ -391,7 +391,7 @@ impl OverlaySource {
             }
             OverlaySource::ModelDiff(field, fh) => {
                 use crate::fielddiff::DiffField;
-                use wxdata::global::{GlobalModel, GlobalField};
+                use wxdata::global::{GlobalField, GlobalModel};
                 let (a, b, valid) = match field {
                     DiffField::Global(kind) => {
                         let g: GlobalField = kind.into();
@@ -415,10 +415,20 @@ impl OverlaySource {
                         };
                         let (hrrr, rap) = futures_util::future::try_join(
                             wxdata::hrrr::fetch_field(
-                                http, wxdata::hrrr::Model::Hrrr, var, level, 0, min_valid,
+                                http,
+                                wxdata::hrrr::Model::Hrrr,
+                                var,
+                                level,
+                                0,
+                                min_valid,
                             ),
                             wxdata::hrrr::fetch_field(
-                                http, wxdata::hrrr::Model::Rap, var, level, 0, min_valid,
+                                http,
+                                wxdata::hrrr::Model::Rap,
+                                var,
+                                level,
+                                0,
+                                min_valid,
                             ),
                         )
                         .await?;
@@ -1401,34 +1411,106 @@ fn windy_url(overlay: &str, lon: f64, lat: f64, zoom: f64) -> String {
 /// site-less `,lon,lat,zoom` form), and a tapped `hookecho://goto/…` link.
 const GOTO_SCHEME: &str = "hookecho://goto/";
 
-/// Parse `[hookecho://goto/]SITE,lon,lat,zoom[,RFC3339]`. The site may be empty.
-#[allow(clippy::type_complexity)]
-fn parse_goto(v: &str) -> Option<(String, f64, f64, f64, Option<DateTime<Utc>>)> {
-    let v = v.trim().strip_prefix(GOTO_SCHEME).unwrap_or(v.trim());
-    let p: Vec<&str> = v.split(',').map(str::trim).collect();
-    let (Some(site), Some(Ok(lon)), Some(Ok(lat)), Some(Ok(zoom))) = (
-        p.first(),
-        p.get(1).map(|s| s.parse()),
-        p.get(2).map(|s| s.parse()),
-        p.get(3).map(|s| s.parse()),
-    ) else {
-        return None;
-    };
-    let time = p.get(4).filter(|s| !s.is_empty()).and_then(|s| {
-        chrono::DateTime::parse_from_rfc3339(s)
-            .map(|t| t.with_timezone(&Utc))
-            .map_err(|e| log::warn!("goto: bad time {s:?}: {e}"))
-            .ok()
-    });
-    Some((site.to_string(), lon, lat, zoom, time))
+/// A parsed deep link. `moment`/`tilt` stay `None` unless the link named them, so a link that
+/// only says where to look leaves the product the viewer already had.
+struct Goto {
+    site: String,
+    lon: f64,
+    lat: f64,
+    zoom: f64,
+    time: Option<DateTime<Utc>>,
+    moment: Option<Moment>,
+    tilt: Option<usize>,
 }
 
-/// The shareable link for a view.
-fn goto_link(site: &str, lon: f64, lat: f64, zoom: f64, time: Option<DateTime<Utc>>) -> String {
+/// Parse `[hookecho://goto/]SITE[,lon,lat,zoom][,extra…]`, where each extra is an RFC3339 time, a
+/// moment code (`VEL`) or a tilt index — sniffed by shape, so their order does not matter. A bare
+/// `SITE` flies to the site itself; the site may be empty when lon/lat are given.
+fn parse_goto(v: &str) -> Option<Goto> {
+    let v = v.trim().strip_prefix(GOTO_SCHEME).unwrap_or(v.trim());
+    let p: Vec<&str> = v.split(',').map(str::trim).collect();
+    let mut g = if p.len() == 1 {
+        let s = wxdata::sites::site_by_id(p[0])?;
+        // Same zoom a cold start picks for the default site.
+        Goto {
+            site: p[0].to_ascii_uppercase(),
+            lon: s.longitude as f64,
+            lat: s.latitude as f64,
+            zoom: 8.0,
+            time: None,
+            moment: None,
+            tilt: None,
+        }
+    } else {
+        let (Some(site), Some(Ok(lon)), Some(Ok(lat)), Some(Ok(zoom))) = (
+            p.first(),
+            p.get(1).map(|s| s.parse()),
+            p.get(2).map(|s| s.parse()),
+            p.get(3).map(|s| s.parse()),
+        ) else {
+            return None;
+        };
+        Goto {
+            site: site.to_string(),
+            lon,
+            lat,
+            zoom,
+            time: None,
+            moment: None,
+            tilt: None,
+        }
+    };
+    for s in p.iter().skip(4).filter(|s| !s.is_empty()) {
+        if let Ok(t) = chrono::DateTime::parse_from_rfc3339(s) {
+            g.time = Some(t.with_timezone(&Utc));
+        } else if let Some(m) = Moment::from_code(s) {
+            g.moment = Some(m);
+        } else if let Ok(i) = s.parse::<usize>() {
+            g.tilt = Some(i);
+        } else {
+            log::warn!("goto: ignoring unrecognized field {s:?}");
+        }
+    }
+    Some(g)
+}
+
+/// The shareable link for a view. Native gets the `hookecho://` scheme the OS has registered; the
+/// browser build gets its own origin with the state in the fragment, which never leaves the client
+/// — no server, cache or worker ever sees where someone is looking.
+fn goto_link(
+    site: &str,
+    lon: f64,
+    lat: f64,
+    zoom: f64,
+    time: Option<DateTime<Utc>>,
+    moment: Moment,
+    tilt: usize,
+) -> String {
     let t = time
         .map(|t| format!(",{}", t.to_rfc3339()))
         .unwrap_or_default();
-    format!("{GOTO_SCHEME}{site},{lon:.4},{lat:.4},{zoom:.1}{t}")
+    let m = if moment != Moment::Reflectivity {
+        format!(",{}", moment.short_name())
+    } else {
+        String::new()
+    };
+    let z = if tilt != 0 {
+        format!(",{tilt}")
+    } else {
+        String::new()
+    };
+    let body = format!("{site},{lon:.4},{lat:.4},{zoom:.1}{t}{m}{z}");
+    #[cfg(target_arch = "wasm32")]
+    {
+        let origin = web_sys::window()
+            .and_then(|w| w.location().origin().ok())
+            .unwrap_or_default();
+        format!("{origin}/#goto={body}")
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        format!("{GOTO_SCHEME}{body}")
+    }
 }
 
 /// How a lightning flash looks at `age_secs`: bright white-hot when it just happened, fading to a
@@ -1606,6 +1688,12 @@ pub struct HookEchoApp {
     /// the pair rarely shares a cycle, and a difference between two instants has to say so.
     diff_field: crate::fielddiff::DiffField,
     diff_valid: Option<(String, String)>,
+    /// When `goto.txt` was last looked for. Android only — see the poll in `update`.
+    #[cfg(target_os = "android")]
+    goto_poll: Option<Instant>,
+    /// The last difference grid, kept on the CPU after upload so the cursor can read a number off
+    /// it. A diverging color says "the models disagree here"; only a value says by how much.
+    diff_grid: Option<wxdata::mrms::MrmsField>,
     /// The field the difference layer was last fetched for, so a change refetches at once.
     diff_key: Option<(crate::fielddiff::DiffField, u16)>,
     /// Where the open sounding was taken, so a forecast-hour change can refetch the same point.
@@ -2324,6 +2412,9 @@ impl HookEchoApp {
             global_layer_key: std::collections::HashMap::new(),
             diff_field: crate::fielddiff::DiffField::default(),
             diff_valid: None,
+            diff_grid: None,
+            #[cfg(target_os = "android")]
+            goto_poll: None,
             diff_key: None,
             sounding_at: None,
             zone_pts: Vec::new(),
@@ -2593,6 +2684,8 @@ impl HookEchoApp {
         app.palettes.reload(&app.settings.palette_paths());
         app.apply_goto_env();
         app.drain_goto_file();
+        #[cfg(target_arch = "wasm32")]
+        app.apply_goto_hash();
         crate::platform::set_background_alerts(app.settings.background_alerts);
         app.fetch_overlays(&cc.egui_ctx.clone());
         app
@@ -2625,13 +2718,33 @@ impl HookEchoApp {
         self.apply_goto(v.trim());
     }
 
-    /// `SITE,lon,lat,zoom[,RFC3339]`, with or without the `hookecho://goto/` prefix.
+    /// `SITE[,lon,lat,zoom][,extra…]`, with or without the `hookecho://goto/` prefix.
     fn apply_goto(&mut self, v: &str) {
-        let Some((site, lon, lat, zoom, time)) = parse_goto(v) else {
-            log::warn!("HOOKECHO_GOTO: want SITE,lon,lat,zoom[,RFC3339], got {v:?}");
+        let Some(g) = parse_goto(v) else {
+            log::warn!("HOOKECHO_GOTO: want SITE[,lon,lat,zoom[,RFC3339|product|tilt]], got {v:?}");
             return;
         };
-        self.goto_view(&site, lon, lat, zoom, time);
+        self.goto_view(&g.site, g.lon, g.lat, g.zoom, g.time);
+        let view = &mut self.views[self.active];
+        if let Some(m) = g.moment {
+            view.moment = m;
+        }
+        if let Some(t) = g.tilt {
+            view.tilt = t;
+        }
+    }
+
+    /// The browser's own deep link: `https://…/#goto=KTLX,-97.3,35.3,9`. Read once at boot — a
+    /// fragment change afterwards is someone editing the URL bar, not a share being opened.
+    /// ponytail: no percent-decoding; fragments carry `,` and `:` verbatim.
+    #[cfg(target_arch = "wasm32")]
+    fn apply_goto_hash(&mut self) {
+        let Some(h) = web_sys::window().and_then(|w| w.location().hash().ok()) else {
+            return;
+        };
+        if let Some(v) = h.strip_prefix("#goto=") {
+            self.apply_goto(v);
+        }
     }
 
     /// Volume poll cadence, doubled on a metered link. A phone on mobile data pulls a multi-MB
@@ -4701,28 +4814,26 @@ impl HookEchoApp {
                 } else {
                     ui.horizontal(|ui| {
                         ui.strong(format!("{} tornadoes on record", self.climo_hits.len()));
-                        ui.with_layout(
-                            egui::Layout::right_to_left(egui::Align::Center),
-                            |ui| {
-                                let hits = &self.climo_hits;
-                                crate::ui::csv_buttons(
-                                    ui,
-                                    "tornadoes.csv",
-                                    "Every tornado on record here, not just the first 50",
-                                    || {
-                                        let mut s =
-                                            String::from("year,mag,start_lat,start_lon,end_lat,end_lon\n");
-                                        for t in hits {
-                                            s.push_str(&format!(
-                                                "{},{},{:.4},{:.4},{:.4},{:.4}\n",
-                                                t.year, t.mag, t.slat, t.slon, t.elat, t.elon
-                                            ));
-                                        }
-                                        s
-                                    },
-                                );
-                            },
-                        );
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            let hits = &self.climo_hits;
+                            crate::ui::csv_buttons(
+                                ui,
+                                "tornadoes.csv",
+                                "Every tornado on record here, not just the first 50",
+                                || {
+                                    let mut s = String::from(
+                                        "year,mag,start_lat,start_lon,end_lat,end_lon\n",
+                                    );
+                                    for t in hits {
+                                        s.push_str(&format!(
+                                            "{},{},{:.4},{:.4},{:.4},{:.4}\n",
+                                            t.year, t.mag, t.slat, t.slon, t.elat, t.elon
+                                        ));
+                                    }
+                                    s
+                                },
+                            );
+                        });
                     });
                     let hist = wxdata::torclimo::mag_histogram(&self.climo_hits);
                     ui.horizontal_wrapped(|ui| {
@@ -6620,7 +6731,7 @@ impl HookEchoApp {
         push(
             "Copy link to this view",
             "Reference",
-            "A hookecho:// link to this site, place, zoom and time \u{2014} opens the app here",
+            "A link to this site, place, zoom, time and product \u{2014} opens Hook Echo here",
             true,
             PaletteAction::CopyViewLink,
             None,
@@ -6943,8 +7054,8 @@ impl HookEchoApp {
                     !self.settings.mapbox_key.is_empty(),
                     !self.settings.maptiler_key.is_empty(),
                 );
-                let v = &mut self.views[self.active];
-                v.basemap = v.basemap.next(mb, mt);
+                let next = self.views[self.active].basemap.next(mb, mt);
+                self.set_basemap(next);
             }
             PaletteAction::ToggleMute => self.apply_action(BindableAction::ToggleMute, ctx),
             PaletteAction::ToggleToolbar => {
@@ -6973,6 +7084,8 @@ impl HookEchoApp {
                     lat,
                     v.camera.zoom,
                     time,
+                    v.moment,
+                    v.tilt,
                 );
                 ctx.copy_text(link.clone());
                 self.banner("Link copied".to_string(), link);
@@ -7183,6 +7296,7 @@ impl HookEchoApp {
                         s.pending = Some(upload);
                     }
                     self.diff_valid = Some(valid);
+                    self.diff_grid = Some(field);
                 }
                 OverlayMsg::StormReports(bucket, reports) => match bucket {
                     None => self.storm_reports = reports,
@@ -8621,7 +8735,8 @@ impl HookEchoApp {
                 // switch two streams overlap for up to the 15 s wait clamp. Both merge into
                 // their own volumes and only the live one is displayed, so the cost is one
                 // wasted chunk fetch. An abort channel if that ever shows up on a phone bill.
-                self.live_gen.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                self.live_gen
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 self.live_stream = None;
             }
         }
@@ -11241,6 +11356,29 @@ impl HookEchoApp {
             }
         }
 
+        // The difference layer reads as "they disagree here" and nothing more without a number,
+        // so the cursor samples the grid it was drawn from.
+        if self
+            .fields
+            .get(&crate::render::FieldLayer::ModelDiff)
+            .is_some_and(|s| s.show)
+        {
+            if let (Some(grid), Some(hp)) = (self.diff_grid.as_ref(), response.hover_pos()) {
+                let w = cam.screen_to_world((hp.x - prect.left(), hp.y - prect.top()), vp);
+                let (lon, lat) = crate::render::mercator::world_to_lonlat(w.0, w.1);
+                if let Some(v) = grid.sample_bilinear(lon, lat) {
+                    let f = self.diff_field;
+                    let v = v * f.input_scale();
+                    let (a, b) = f.pair();
+                    response.clone().show_tooltip_text(format!(
+                        "{}: {v:+.1} {} ({a} \u{2212} {b})",
+                        f.label(),
+                        f.units()
+                    ));
+                }
+            }
+        }
+
         // Beam-vs-terrain blockage shading, under the reference annotations. The raster covers a
         // world-space rect, which maps linearly to screen, so it is one stretched image — and while
         // a rebuild is in flight the previous rect keeps it registered to the ground.
@@ -11635,7 +11773,11 @@ impl HookEchoApp {
                 .rev()
                 .find(|l| self.fields.get(l).is_some_and(|s| s.show))
             {
-                y += ui::legend::draw_field(&painter, prect, *top, y);
+                y += if *top == crate::render::FieldLayer::ModelDiff {
+                    ui::legend::draw_diff(&painter, prect, self.diff_field, y)
+                } else {
+                    ui::legend::draw_field(&painter, prect, *top, y)
+                };
             }
             // Wind particles carry their own scale — it isn't a FieldLayer, so it needs its own
             // call rather than a slot in DRAW_ORDER.
@@ -12072,6 +12214,19 @@ impl HookEchoApp {
         }
     }
 
+    /// Put `style` under the active pane and remember it.
+    ///
+    /// Remembering is the point: the basemap used to live only on the view, so a style picked
+    /// during a chase was gone at the next launch, which read `settings.basemap` and found
+    /// whatever the setup wizard wrote months earlier.
+    pub(crate) fn set_basemap(&mut self, style: crate::tiles::BasemapStyle) {
+        self.views[self.active].basemap = style;
+        if self.settings.basemap != style.slug() {
+            self.settings.basemap = style.slug().to_string();
+            self.settings.save();
+        }
+    }
+
     /// Deep-link the active pane to a site + camera, and (for archive) seek the timeline to
     /// `time`. Passing `time = None` leaves the pane live at the head.
     pub(crate) fn goto_view(
@@ -12160,14 +12315,16 @@ impl HookEchoApp {
             }
             K::Palette => {
                 // Setting the override triggers the next-frame dirty-diff palette reload.
-                self.settings.palettes.insert(
-                    import.tag,
-                    import.path.to_string_lossy().into_owned(),
-                );
+                self.settings
+                    .palettes
+                    .insert(import.tag, import.path.to_string_lossy().into_owned());
             }
             K::MarkerIcon => {
                 let idx = import.tag.parse::<usize>().ok();
-                match (idx.and_then(|i| self.settings.markers.get_mut(i)), crate::ui::marker_window::store_icon(&import.path)) {
+                match (
+                    idx.and_then(|i| self.settings.markers.get_mut(i)),
+                    crate::ui::marker_window::store_icon(&import.path),
+                ) {
                     (Some(m), Some(name)) => m.icon = Some(name),
                     _ => log::warn!("marker icon import went nowhere (marker {})", import.tag),
                 }
@@ -13124,6 +13281,18 @@ impl eframe::App for HookEchoApp {
             }
             // A resume is also how a notification tap arrives: the activity wrote the target
             // before handing us back the surface.
+            self.drain_goto_file();
+        }
+        // A deep link that arrives while the app is already on screen never produces a resume, so
+        // the drain above would never see it — the activity is reused (`launchMode="singleTask"`)
+        // and only `onNewIntent` fires. ponytail: a one-second stat of a path that usually does
+        // not exist, rather than a JNI callback into the event loop.
+        #[cfg(target_os = "android")]
+        if self
+            .goto_poll
+            .is_none_or(|t| t.elapsed() >= std::time::Duration::from_secs(1))
+        {
+            self.goto_poll = Some(Instant::now());
             self.drain_goto_file();
         }
         // A file the user picked, from any of the import buttons. Routed here rather than at the
@@ -14734,32 +14903,58 @@ mod tests {
 
     #[test]
     fn goto_parses_every_form_it_arrives_in() {
-        let (site, lon, lat, zoom, time) = parse_goto("KTLX,-97.3,35.3,9").unwrap();
-        assert_eq!((site.as_str(), lon, lat, zoom), ("KTLX", -97.3, 35.3, 9.0));
-        assert!(time.is_none());
+        let g = parse_goto("KTLX,-97.3,35.3,9").unwrap();
+        assert_eq!(
+            (g.site.as_str(), g.lon, g.lat, g.zoom),
+            ("KTLX", -97.3, 35.3, 9.0)
+        );
+        assert!(g.time.is_none() && g.moment.is_none() && g.tilt.is_none());
         // The URL form is the same string behind a scheme.
         assert_eq!(
-            parse_goto("hookecho://goto/KTLX,-97.3,35.3,9").unwrap().0,
+            parse_goto("hookecho://goto/KTLX,-97.3,35.3,9")
+                .unwrap()
+                .site,
             "KTLX"
         );
         // AlertService writes a site-less notification link; that must keep working.
-        let (site, ..) = parse_goto(",-97.3,35.3,9").unwrap();
-        assert_eq!(site, "");
+        assert_eq!(parse_goto(",-97.3,35.3,9").unwrap().site, "");
         // Archive links carry a time.
-        let (.., time) = parse_goto("KTLX,-97.3,35.3,9,2013-05-20T20:00:00Z").unwrap();
-        assert_eq!(time.unwrap().to_rfc3339(), "2013-05-20T20:00:00+00:00");
+        let g = parse_goto("KTLX,-97.3,35.3,9,2013-05-20T20:00:00Z").unwrap();
+        assert_eq!(g.time.unwrap().to_rfc3339(), "2013-05-20T20:00:00+00:00");
+        // A bare site resolves from the registry.
+        let g = parse_goto("ktlx").unwrap();
+        assert_eq!(g.site, "KTLX");
+        assert!(g.lon < -97.0 && g.lat > 35.0 && g.zoom == 8.0);
+        // Product and tilt are sniffed by shape, in either order.
+        for v in ["KTLX,-97.3,35.3,9,VEL,2", "KTLX,-97.3,35.3,9,2,VEL"] {
+            let g = parse_goto(v).unwrap();
+            assert_eq!((g.moment, g.tilt), (Some(Moment::Velocity), Some(2)), "{v}");
+        }
         assert!(parse_goto("").is_none());
         assert!(parse_goto("garbage").is_none());
     }
 
     #[test]
     fn goto_link_round_trips() {
-        let link = goto_link("KFWS", -97.3031, 32.5731, 8.5, None);
+        let link = goto_link(
+            "KFWS",
+            -97.3031,
+            32.5731,
+            8.5,
+            None,
+            Moment::Reflectivity,
+            0,
+        );
         assert!(link.starts_with("hookecho://goto/KFWS,"), "{link}");
-        let (site, lon, lat, zoom, _) = parse_goto(&link).unwrap();
-        assert_eq!(site, "KFWS");
-        assert!((lon - -97.3031).abs() < 1e-4 && (lat - 32.5731).abs() < 1e-4);
-        assert_eq!(zoom, 8.5);
+        let g = parse_goto(&link).unwrap();
+        assert_eq!(g.site, "KFWS");
+        assert!((g.lon - -97.3031).abs() < 1e-4 && (g.lat - 32.5731).abs() < 1e-4);
+        assert_eq!(g.zoom, 8.5);
+        // Reflectivity at the base tilt is the default, so it stays out of the link.
+        assert!(!link.contains("dBZ"), "{link}");
+        let link = goto_link("KFWS", -97.3, 32.5, 8.5, None, Moment::Velocity, 3);
+        let g = parse_goto(&link).unwrap();
+        assert_eq!((g.moment, g.tilt), (Some(Moment::Velocity), Some(3)));
     }
 
     /// The draw tool must append into the stroke in flight and start a new one per drag, and Undo
