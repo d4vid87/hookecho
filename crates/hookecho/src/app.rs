@@ -10726,6 +10726,7 @@ impl HookEchoApp {
         // boundary reads off the map before any card is open. Clicking one opens its card.
         if self.show_stations {
             let show_labels = cam.zoom >= 8.0;
+            let temp_unit = self.settings.temp_unit;
             for ob in &self.stations.obs {
                 let w = crate::render::mercator::lonlat_to_world(ob.lon, ob.lat);
                 let (sx, sy) = cam.world_to_screen(w, vp);
@@ -10756,7 +10757,7 @@ impl HookEchoApp {
                 }
                 if show_labels {
                     let label = match ob.temp_c {
-                        Some(t) => format!("{:.0}F", t * 9.0 / 5.0 + 32.0),
+                        Some(t) => format!("{:.0}{}", temp_unit.from_c(t), temp_unit.label()),
                         None => ob.id.clone(),
                     };
                     let (off, align) = if metar {
@@ -11119,6 +11120,7 @@ impl HookEchoApp {
                     .partial_cmp(&a.wspd_kt)
                     .unwrap_or(std::cmp::Ordering::Equal)
             });
+            let temp_unit = self.settings.temp_unit;
             let mut placed: Vec<egui::Rect> = Vec::new();
             for ob in obs {
                 let w = crate::render::mercator::lonlat_to_world(ob.lon, ob.lat);
@@ -11156,7 +11158,7 @@ impl HookEchoApp {
                         painter.text(
                             p + egui::vec2(-6.0, -6.0),
                             egui::Align2::RIGHT_BOTTOM,
-                            format!("{:.0}", t * 9.0 / 5.0 + 32.0),
+                            format!("{:.0}", temp_unit.from_c(t)),
                             f.clone(),
                             egui::Color32::from_rgb(240, 90, 90),
                         );
@@ -11165,7 +11167,7 @@ impl HookEchoApp {
                         painter.text(
                             p + egui::vec2(-6.0, 6.0),
                             egui::Align2::RIGHT_TOP,
-                            format!("{:.0}", d * 9.0 / 5.0 + 32.0),
+                            format!("{:.0}", temp_unit.from_c(d)),
                             f,
                             egui::Color32::from_rgb(90, 220, 120),
                         );
@@ -11192,7 +11194,8 @@ impl HookEchoApp {
                 }
             }
         }
-        // ponytail: °F hardcoded (US station-plot convention); wire to the Units setting if asked.
+        // ponytail: the station plots follow the Units setting; the gridded contour labels
+        // (K → °F, `field_ramps`) still do not, and want the same treatment when asked.
 
         // River flood gauges (NWPS): category-colored inverted-triangle droplet + stage tooltip.
         // ponytail: hover tooltip carries name/stage/forecast; skipped a click→Detail popup — the

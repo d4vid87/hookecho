@@ -131,6 +131,9 @@ pub struct Settings {
     pub palettes: BTreeMap<String, String>,
     /// Velocity/spectrum-width display unit (internal data stays m/s).
     pub velocity_unit: VelocityUnit,
+    /// Temperature display unit for the surface station plots (internal data stays Celsius).
+    #[serde(default)]
+    pub temp_unit: TempUnit,
     /// Whether radar timestamps read in the site's local time or in UTC.
     #[serde(default)]
     pub time_display: TimeDisplay,
@@ -537,6 +540,34 @@ impl TimeDisplay {
     }
 }
 
+/// Display unit for temperature. Observations arrive in Celsius; US surface plots read in
+/// Fahrenheit, which is why that is the default here and not the one on the wire.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum TempUnit {
+    #[default]
+    Fahrenheit,
+    Celsius,
+}
+
+impl TempUnit {
+    pub const ALL: [TempUnit; 2] = [TempUnit::Fahrenheit, TempUnit::Celsius];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            TempUnit::Fahrenheit => "°F",
+            TempUnit::Celsius => "°C",
+        }
+    }
+
+    /// Convert an observation's Celsius into this unit.
+    pub fn from_c(self, c: f32) -> f32 {
+        match self {
+            TempUnit::Fahrenheit => c * 9.0 / 5.0 + 32.0,
+            TempUnit::Celsius => c,
+        }
+    }
+}
+
 /// Display unit for velocity products. GRLevelX defaults to knots; internal math is m/s.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum VelocityUnit {
@@ -585,6 +616,7 @@ impl Default for Settings {
             presets: Vec::new(),
             palettes: BTreeMap::new(),
             velocity_unit: VelocityUnit::default(),
+            temp_unit: TempUnit::default(),
             time_display: TimeDisplay::default(),
             // 1.0 everywhere: this multiplies the native scale factor, and Android's display
             // density already sizes widgets for touch — an extra 1.3 shrank the S24's logical
@@ -850,6 +882,7 @@ mod tests {
             presets: vec!["KTLX".to_string(), "KOUN".to_string()],
             palettes: BTreeMap::from([("REF".to_string(), "/tmp/foo.pal".to_string())]),
             velocity_unit: VelocityUnit::Mph,
+            temp_unit: TempUnit::Celsius,
             time_display: TimeDisplay::Utc,
             ui_scale: 1.2,
             sync_client_id: String::new(),
@@ -975,6 +1008,13 @@ mod tests {
         let s: Settings = serde_json::from_str(json).unwrap();
         assert_eq!(s.default_site, "KDMX");
         assert_eq!(s.overlays_on, vec!["Alerts", "Teleportation"]);
+    }
+
+    #[test]
+    fn temp_unit_converts_from_celsius() {
+        assert_eq!(TempUnit::Celsius.from_c(21.0), 21.0);
+        assert!((TempUnit::Fahrenheit.from_c(0.0) - 32.0).abs() < 1e-4);
+        assert!((TempUnit::Fahrenheit.from_c(-40.0) + 40.0).abs() < 1e-4);
     }
 
     #[test]

@@ -431,6 +431,16 @@ fn units_tab(ui: &mut egui::Ui, settings: &mut Settings) {
         });
         ui.end_row();
 
+        ui.label("Temperature");
+        ui.horizontal(|ui| {
+            for u in crate::settings::TempUnit::ALL {
+                ui.selectable_value(&mut settings.temp_unit, u, u.label());
+            }
+        })
+        .response
+        .on_hover_text("Surface station plots (observations arrive in Celsius)");
+        ui.end_row();
+
         ui.label("Time display");
         ui.horizontal(|ui| {
             for d in TimeDisplay::ALL {
