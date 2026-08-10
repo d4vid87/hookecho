@@ -9,9 +9,10 @@ upgrade path out of it (`grep -rn "ponytail:" crates/`).
 
 - **macOS**, as an experiment. CI builds and smoke-tests an app bundle, but
   nobody has run it on real hardware, and it is ad-hoc signed.
-- **Store submissions.** The Flatpak, Snap, Homebrew and winget manifests are in
-  the repo and build; none of them is published, which is an account and a
-  review queue away rather than a code change.
+- **Store submissions.** The Flatpak, Snap, Homebrew, AUR and winget manifests
+  are in the repo and build; none of them is published, which is an account and
+  a review queue away rather than a code change. The order and the per-store
+  steps are in [packaging/SUBMITTING.md](packaging/SUBMITTING.md).
 - **Placefile `Image:` support**: parsed and skipped today, waiting on a real
   file in the wild to use as a fixture.
 
