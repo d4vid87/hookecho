@@ -71,7 +71,7 @@ pub fn show(
                     egui::ScrollArea::vertical()
                         .max_height(220.0)
                         .show(ui, |ui| {
-                            crate::ui::marker_window::marker_grid(
+                            let _ = crate::ui::marker_window::marker_grid(
                                 ui,
                                 &mut settings.markers,
                                 icon_tex,

@@ -248,13 +248,13 @@ pub fn parse(text: &str) -> Placefile {
                         break;
                     }
                     if l.is_empty() {
-                        if !rings.last().unwrap().is_empty() {
+                        if rings.last().is_none_or(|r| !r.is_empty()) {
                             rings.push(Vec::new());
                         }
                         continue;
                     }
-                    if let Some(c) = parse_coord(l) {
-                        rings.last_mut().unwrap().push(c);
+                    if let (Some(c), Some(ring)) = (parse_coord(l), rings.last_mut()) {
+                        ring.push(c);
                     }
                 }
                 rings.retain(|r| r.len() >= 3);
@@ -425,6 +425,16 @@ pub fn parse(text: &str) -> Placefile {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A blank line before any coordinate, and a ring too short to be a polygon: the parser has
+    /// to survive both without producing an item.
+    #[test]
+    fn a_polygon_with_no_usable_ring_is_dropped() {
+        let pf = parse(
+            "Color: 255 0 0\nPolygon:\n\n 35.0, -97.0\n 35.1, -97.0\nEnd:\n",
+        );
+        assert!(pf.items.is_empty(), "two points is not a polygon");
+    }
 
     #[test]
     fn parses_common_statements() {

@@ -73,7 +73,9 @@ pub fn dealias(
             labels[i] = region;
             stack.push((az, g));
             while let Some((caz, cg)) = stack.pop() {
-                let cv = vel[idx(caz, cg)].unwrap();
+                // A labelled cell always has a velocity (that is what labelling means); skip
+                // rather than assert it, so a future labelling change degrades instead of panics.
+                let Some(cv) = vel[idx(caz, cg)] else { continue };
                 for (naz, ng) in neighbors(caz, cg) {
                     let ni = idx(naz, ng);
                     let Some(nv) = vel[ni] else { continue };
@@ -100,8 +102,8 @@ pub fn dealias(
             if ra == NONE {
                 continue;
             }
+            let Some(va) = vel[i] else { continue };
             sizes[ra] += 1;
-            let va = vel[i].unwrap();
             // Only scan the +az and +gate neighbors to record each boundary once.
             for (naz, ng) in [((az + 1) % az_bins, g), (az, g + 1)] {
                 if ng >= gate_count {
@@ -112,7 +114,7 @@ pub fn dealias(
                 if rb == NONE || rb == ra {
                     continue;
                 }
-                let vb = vel[ni].unwrap();
+                let Some(vb) = vel[ni] else { continue };
                 edges[ra].push((rb, va, vb));
                 edges[rb].push((ra, vb, va));
             }
@@ -122,7 +124,9 @@ pub fn dealias(
     // --- 3. Greedy BFS unfold from the largest region (anchor = 0 folds). ---
     let mut unfold = vec![0i32; region_count];
     let mut solved = vec![false; region_count];
-    let anchor = (0..region_count).max_by_key(|&r| sizes[r]).unwrap();
+    let Some(anchor) = (0..region_count).max_by_key(|&r| sizes[r]) else {
+        return vel.to_vec();
+    };
     solved[anchor] = true;
     let mut queue = std::collections::VecDeque::new();
     for &(nb, _, _) in &edges[anchor] {
@@ -202,6 +206,18 @@ mod tests {
             let err = err.min(2.0 * nyq - err);
             assert!(err < 0.5, "gate expected ~{t}, got {got}");
         }
+    }
+
+    // The region walk assumes a labelled gate has a velocity. These are the two fields where
+    // that assumption is nearest the edge — no data at all, and exactly one gate of it.
+    #[test]
+    fn degenerate_fields_come_back_unchanged() {
+        let empty: Vec<Option<f32>> = vec![None; 12];
+        assert_eq!(dealias(&empty, 3, 4, 25.0), empty);
+
+        let mut one = vec![None; 12];
+        one[5] = Some(7.0);
+        assert_eq!(dealias(&one, 3, 4, 25.0), one);
     }
 
     #[test]

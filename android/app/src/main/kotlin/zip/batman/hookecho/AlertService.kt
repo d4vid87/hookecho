@@ -127,9 +127,11 @@ class AlertService : Service() {
             val before = seen.size
             runCatching {
                 for (m in Nws.watched(context.filesDir)) {
-                    for (a in Nws.alertsAt(m.lat, m.lon)) {
-                        if (a.tier >= Nws.TIER_WARNING) hot = true
-                        if (seen.add(a.id)) notify(context, m, a)
+                    for (p in m.samples) {
+                        for (a in Nws.alertsAt(p[0], p[1])) {
+                            if (a.tier >= Nws.TIER_WARNING) hot = true
+                            if (seen.add(a.id)) notify(context, m, a)
+                        }
                     }
                 }
             }.onFailure { /* offline or NWS hiccup: try again next pass */ }

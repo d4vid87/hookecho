@@ -44,3 +44,48 @@ pub async fn sleep(d: std::time::Duration) {
 pub async fn sleep(d: std::time::Duration) {
     gloo_timers::future::TimeoutFuture::new(d.as_millis() as u32).await;
 }
+
+/// Yield for `d`, but give up early once `active` goes false.
+///
+/// Returns whether the wait ran to completion. Sleeping the whole interval in one go left a
+/// cancelled live stream alive for up to its poll interval; slicing it costs one predicate call a
+/// second and is the same on both targets, since neither has a cancellable timer worth the
+/// plumbing.
+pub async fn sleep_while(d: std::time::Duration, active: impl Fn() -> bool) -> bool {
+    let slice = std::time::Duration::from_secs(1);
+    let mut left = d;
+    while !left.is_zero() {
+        if !active() {
+            return false;
+        }
+        let step = left.min(slice);
+        sleep(step).await;
+        left -= step;
+    }
+    active()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::time::Duration;
+
+    #[tokio::test(start_paused = true)]
+    async fn sleep_while_gives_up_within_a_slice() {
+        let calls = AtomicUsize::new(0);
+        // False from the second check on: a long wait must end after roughly one slice, not
+        // after the whole interval.
+        let done = sleep_while(Duration::from_secs(15), || {
+            calls.fetch_add(1, Ordering::Relaxed) == 0
+        })
+        .await;
+        assert!(!done, "an inactive wait reports that it did not finish");
+        assert_eq!(calls.load(Ordering::Relaxed), 2, "one slice, then give up");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn sleep_while_runs_the_whole_wait_when_active() {
+        assert!(sleep_while(Duration::from_secs(3), || true).await);
+    }
+}

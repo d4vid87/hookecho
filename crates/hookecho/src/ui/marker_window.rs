@@ -21,6 +21,9 @@ pub struct MarkerWindow {
     pub searching: bool,
     /// Last search outcome, shown under the box ("Added …" or an error).
     pub status: Option<String>,
+    /// Marker index removed this frame. The app's map popup indexes into the same list, so a
+    /// delete above it leaves it describing somebody else's marker.
+    pub removed: Option<usize>,
 }
 
 impl MarkerWindow {
@@ -35,6 +38,7 @@ impl MarkerWindow {
     ) -> Option<String> {
         let mut open = self.open;
         let mut go: Option<String> = None;
+        self.removed = None;
         crate::ui::phone_surface(ctx, egui::Window::new("Location Markers"))
             .open(&mut open)
             .default_size([520.0, 360.0])
@@ -69,7 +73,7 @@ impl MarkerWindow {
                      Ctrl+K ▸ \"Tool: Drop marker\". Tap a marker on the map to rename or remove it.",
                 );
                 ui.add_space(4.0);
-                marker_grid(ui, &mut settings.markers, icon_tex);
+                self.removed = marker_grid(ui, &mut settings.markers, icon_tex).or(self.removed);
                 ui.add_space(6.0);
                 if ui.button("➕ Add blank marker").clicked() {
                     let n = settings.markers.len() + 1;
@@ -91,7 +95,13 @@ impl MarkerWindow {
 
 /// Editable marker table (home/name/lat/lon/watch radius/icon). Shared by the manager window and
 /// the wizard.
-pub fn marker_grid(ui: &mut egui::Ui, markers: &mut Vec<Marker>, icon_tex: &IconTextures) {
+/// Returns the index that was removed this frame, if any: a popup open on a later marker is
+/// pointing at the wrong one afterwards, and the caller is the only place that knows.
+pub fn marker_grid(
+    ui: &mut egui::Ui,
+    markers: &mut Vec<Marker>,
+    icon_tex: &IconTextures,
+) -> Option<usize> {
     let mut remove: Option<usize> = None;
     let mut make_home: Option<usize> = None;
     egui::Grid::new("markers_grid")
@@ -180,6 +190,7 @@ pub fn marker_grid(ui: &mut egui::Ui, markers: &mut Vec<Marker>, icon_tex: &Icon
             m.home = j == i;
         }
     }
+    remove
 }
 
 /// Copy a picked PNG into the marker-icons dir and return the stored filename.

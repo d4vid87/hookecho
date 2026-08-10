@@ -449,13 +449,11 @@ impl BasemapStyle {
                     "https://a.tile-cyclosm.openstreetmap.fr/cyclosm/{z}/{x}/{y}.png"
                 )),
                 // NASA GIBS WMTS (web mercator), latest GOES imagery. GIBS uses `{z}/{y}/{x}`.
-                _ if self.goes_layer().is_some() => {
-                    let (layer, level) = self.goes_layer().unwrap();
-                    Some(format!(
+                _ => self.goes_layer().map(|(layer, level)| {
+                    format!(
                         "https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/{layer}/default/default/GoogleMapsCompatible_Level{level}/{z}/{y}/{x}.png"
-                    ))
-                }
-                _ => None,
+                    )
+                }),
             },
             Provider::Mapbox => (!mapbox_key.is_empty()).then(|| {
                 format!(

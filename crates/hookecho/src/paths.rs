@@ -53,10 +53,14 @@ pub fn data_dir() -> Option<PathBuf> {
 }
 
 /// Deep-link drop box: the Android alert service's notification tap writes `SITE,lon,lat,zoom`
-/// here (see `MainActivity.kt`) and the app consumes it at startup and on resume. `None` on
-/// desktop, where the env var does the same job.
+/// here (see `MainActivity.kt`) and the app consumes it at startup and on resume. On desktop a
+/// second launch carrying a `hookecho://` link writes the same file for the running instance
+/// (see `main.rs`), so the handover shape is one thing on both platforms.
 pub fn goto_file() -> Option<PathBuf> {
-    BASE.get().map(|b| b.join("goto.txt"))
+    match BASE.get() {
+        Some(b) => Some(b.join("goto.txt")),
+        None => cache_dir().map(|c| c.join("goto.txt")),
+    }
 }
 
 /// Where the activity drops a file the user picked through the Storage Access Framework, in the

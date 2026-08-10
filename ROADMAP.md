@@ -9,31 +9,47 @@ upgrade path out of it (`grep -rn "ponytail:" crates/`).
 
 - **macOS**, as an experiment. CI builds and smoke-tests an app bundle, but
   nobody has run it on real hardware, and it is ad-hoc signed.
-- **Store submissions.** The Flatpak, Snap, Homebrew and winget manifests are in
-  the repo and build; none of them is published, which is an account and a
-  review queue away rather than a code change.
+- **Store submissions.** The Flatpak, Snap, Homebrew, AUR and winget manifests
+  are in the repo and build; none of them is published, which is an account and
+  a review queue away rather than a code change. The order and the per-store
+  steps are in [packaging/SUBMITTING.md](packaging/SUBMITTING.md).
 - **Placefile `Image:` support**: parsed and skipped today, waiting on a real
   file in the wild to use as a fixture.
 
 ## Next
 
-- A packed-RGBA fallback for GPU wind on devices that cannot render to float
-  textures — the CPU path already covers them, so this is only worth doing if
-  one shows up that needs the speed.
+- **GOES satellite imagery** — ABI Level 2 CMIP from the `noaa-goes19`/`-18`
+  buckets, CONUS to start, three bands (visible, clean IR, mid-level water
+  vapor), animated on the timeline the radar already uses. The GIBS basemap
+  layer shows the latest image; this is the archive and the loop.
 - Blending surface observations into the effective-layer analysis, which is the
   remaining difference from SPC's mesoanalysis now that the vertical resolution
   is there.
-
-## Later
-
 - Per-pane thresholds and field layers, saved with the workspace. The difference
   layer would rather be two panes than one subtraction, but field layers are
   app-global, so that waits on this.
+
+## Later
+
+Restocked from `grep -rn "ponytail:" crates/` — 88 of them at the moment, each
+naming its own upgrade path.
+
 - A valid-time alignment for the difference layer: it labels the two cycles
   today rather than interpolating either onto the other's instant.
-- A hover readout and a diverging legend for the difference layer.
 - Colormaps and stroke widths that respond to the high-contrast theme, not just
-  the chrome.
+  the chrome (`theme.rs`).
+- Web persistence: caches live in memory in the browser, so a reload refetches
+  everything. IndexedDB or OPFS is the upgrade (`paths.rs`).
+- A tablet layout for Android — the phone chrome is what a tablet gets today
+  (`ui/m3.rs`).
+- Background alerts that test real polygon intersection instead of sampling
+  points around a marker's radius (`Nws.kt`).
+- Placefile `Image:`, which needs a georeferenced textured quad — and a real
+  file in the wild to pin the corner syntax.
+- Snap positions for the mobile sheets; they dismiss on a drag today but have no
+  half-open state.
+- Temperature units for the gridded contour labels, which still do their own
+  K → °F while the station plots follow the Units setting.
 
 ## Not planned
 
@@ -54,7 +70,8 @@ Already shipped, and sometimes mistaken for gaps:
   updates sweep by sweep during a scan.
 - **GPU wind particles** — advected in a fragment shader, ping-ponging two
   textures, with the CPU mesh still there as the fallback
-  (`HOOKECHO_CPU_WIND=1`).
+  (`HOOKECHO_CPU_WIND=1`). Positions are packed into RGBA already, so a device
+  without float render targets is not the blocker it is sometimes taken for.
 - **Saved workspaces**, three of them shipped, remembering panes, overlays and
   field layers.
 - **Disk caches** for volumes, zones, soundings and snapshots, all capped and
@@ -69,7 +86,7 @@ Already shipped, and sometimes mistaken for gaps:
   wallpaper scripts, with size and zoom on `/snapshot.png` too.
 - **True lunar ephemeris** (Meeus), in place of the mean synodic month.
 - **A model difference layer** — GFS against ECMWF, HRRR against RAP — drawing
-  nothing where the two agree.
+  nothing where the two agree, with a hover readout and a diverging legend.
 - **Effective-layer parameters on the full pressure ladder**, up to 100 hPa, so
   the depth-dependent ones exist on the days they describe.
 - **A headless-browser smoke test in CI**, which is the check `cargo check`

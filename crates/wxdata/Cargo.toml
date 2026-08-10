@@ -53,3 +53,7 @@ web-sys = { version = "0.3", features = ["Window", "Location"] }
 gloo-timers = { version = "0.3", features = ["futures"] }
 # Already in the lockfile under eframe. Backs `clock::Instant`: the standard library's panics here.
 web-time = "1"
+
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+# `start_paused` only, so a test of a fifteen-second wait takes no wall clock.
+tokio = { version = "1", features = ["test-util"] }

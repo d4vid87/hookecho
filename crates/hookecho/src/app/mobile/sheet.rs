@@ -434,9 +434,11 @@ pub(crate) const LIVE_TINT: Color32 = OMEGA_ORANGE;
 ///
 /// Returns the rect it covers, for gesture occlusion.
 ///
-/// ponytail: fixed at the "expanded" height rather than draggable. These sheets are lists you
-/// came to read, not a summary you peek at — give them a snap ladder when one of them grows a
-/// map-adjacent preview worth half-opening.
+/// Drag the handle down to dismiss: past a quarter of the sheet's height it closes, otherwise it
+/// springs back. The body keeps its own scroll drag, so only the handle and title strip move it.
+///
+/// ponytail: dismiss only, no snap ladder — these sheets are lists you came to read, not a
+/// summary you peek at. Half-open states when one of them grows a map-adjacent preview.
 pub(crate) fn modal_sheet<R>(
     ctx: &egui::Context,
     content: Rect,
@@ -446,7 +448,14 @@ pub(crate) fn modal_sheet<R>(
     add: impl FnOnce(&mut egui::Ui) -> R,
 ) -> Rect {
     let h = content.height() * 0.88;
-    let rect = Rect::from_min_max(pos2(content.left(), content.bottom() - h), content.max);
+    // Drag offset lives in egui's temp memory: it is per-sheet transient UI state with no
+    // business in the app struct, and it dying with the sheet is the wanted behavior.
+    let drag_id = Id::new((id, "drag_y"));
+    let drag_y: f32 = ctx.memory(|m| m.data.get_temp(drag_id).unwrap_or(0.0));
+    let rect = Rect::from_min_max(
+        pos2(content.left(), content.bottom() - h + drag_y),
+        pos2(content.right(), content.bottom() + drag_y),
+    );
 
     // Scrim first, in its own layer under the sheet.
     egui::Area::new(Id::new(format!("{id}_scrim")))
@@ -489,8 +498,20 @@ pub(crate) fn modal_sheet<R>(
                 egui::UiBuilder::new().max_rect(rect.shrink2(vec2(m3::SP_4, 0.0))),
                 |ui| {
                     ui.set_width(rect.width() - m3::SP_4 * 2.0);
-                    if m3::drag_handle(ui).clicked() {
+                    let handle = m3::drag_handle(ui);
+                    if handle.clicked() {
                         *close = true;
+                    }
+                    if handle.dragged() {
+                        let dy = (drag_y + handle.drag_delta().y).max(0.0);
+                        ctx.memory_mut(|m| m.data.insert_temp(drag_id, dy));
+                    }
+                    if handle.drag_stopped() {
+                        // A quarter of the way down is a dismiss; anything less springs back.
+                        if drag_y > h * 0.25 {
+                            *close = true;
+                        }
+                        ctx.memory_mut(|m| m.data.insert_temp(drag_id, 0.0f32));
                     }
                     ui.horizontal(|ui| {
                         ui.set_height(m3::MIN_TARGET);

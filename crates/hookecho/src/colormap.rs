@@ -243,7 +243,9 @@ pub fn parse_pal(text: &str) -> anyhow::Result<ColorTable> {
     }
 
     if stops.is_empty() {
-        anyhow::bail!("no color stops in .pal");
+        anyhow::bail!(
+            "no color stops: this file has no Color/SolidColor lines the .pal parser recognizes"
+        );
     }
     // Apply Scale/Offset, then sort ascending (files are often authored high-to-low).
     if scale == 0.0 {
@@ -316,18 +318,13 @@ impl Palettes {
         for (i, moment) in Moment::ALL.into_iter().enumerate() {
             let (table, err) = match &paths[i] {
                 None => (default_table(moment).clone(), None),
+                // `.pal3` goes through the same parser: v3 is v2 plus directives this one
+                // already ignores, so a v3 table loads as its common subset rather than not at
+                // all. A file that shares nothing with v2 falls out as "no color stops".
                 Some(path) => match std::fs::read_to_string(path)
                     .map_err(|e| e.to_string())
-                    .and_then(|s| {
-                        if path
-                            .extension()
-                            .is_some_and(|e| e.eq_ignore_ascii_case("pal3"))
-                        {
-                            Err(".pal3 (GRLevelX v3) not supported".to_string())
-                        } else {
-                            parse_pal(&s).map_err(|e| e.to_string())
-                        }
-                    }) {
+                    .and_then(|s| parse_pal(&s).map_err(|e| e.to_string()))
+                {
                     Ok(t) => (t, None),
                     Err(e) => (default_table(moment).clone(), Some(e)),
                 },
@@ -351,6 +348,41 @@ mod tests {
         }
         // And the LazyLock array builds without panicking.
         assert_eq!(default_table(Moment::Reflectivity).stops.len(), 9);
+    }
+
+    /// A v3-flavoured table: v3-only directives the parser does not know, around ordinary
+    /// `Color:` stops. Loading it as its common subset is the whole feature.
+    #[test]
+    fn a_pal3_table_loads_as_its_common_subset() {
+        let src = "\
+Product: BR
+Units: dBZ
+ColorTableVersion: 3
+Scale: 1.0
+Offset: 0.0
+Step: 5
+Blend: true
+Color: 5 100 100 100
+Color: 40 255 255 0
+SolidColorRange: 60 70 255 0 0
+";
+        let dir = std::env::temp_dir().join("hookecho-pal3-test");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("v3.pal3");
+        std::fs::write(&path, src).unwrap();
+
+        let mut p = Palettes::default();
+        let mut paths: [Option<std::path::PathBuf>; 6] = Default::default();
+        paths[Moment::Reflectivity.index()] = Some(path.clone());
+        p.reload(&paths);
+
+        assert_eq!(
+            p.errors[Moment::Reflectivity.index()],
+            None,
+            ".pal3 must load, not be rejected on its extension"
+        );
+        assert_eq!(p.table(Moment::Reflectivity).stops.len(), 2);
+        let _ = std::fs::remove_file(path);
     }
 
     #[test]

@@ -338,9 +338,13 @@ impl SettingsWindow {
             if let Ok(entries) = std::fs::read_dir(&dir) {
                 for e in entries.flatten() {
                     let p = e.path();
-                    if p.extension().is_some_and(|x| x.eq_ignore_ascii_case("pal")) {
-                        if let Some(stem) = p.file_stem().and_then(|s| s.to_str()) {
-                            self.pal_stems.push(stem.to_string());
+                    // File names, not stems: `.pal` and `.pal3` both load, and two tables can
+                    // share a stem.
+                    if p.extension()
+                        .is_some_and(|x| x.eq_ignore_ascii_case("pal") || x.eq_ignore_ascii_case("pal3"))
+                    {
+                        if let Some(name) = p.file_name().and_then(|s| s.to_str()) {
+                            self.pal_stems.push(name.to_string());
                         }
                     }
                 }
@@ -377,7 +381,7 @@ impl SettingsWindow {
                     let current = settings.palettes.get(key).cloned();
                     let current_stem = current
                         .as_deref()
-                        .and_then(|p| std::path::Path::new(p).file_stem().and_then(|s| s.to_str()))
+                        .and_then(|p| std::path::Path::new(p).file_name().and_then(|s| s.to_str()))
                         .map(str::to_string);
                     let selected_text = current_stem
                         .clone()
@@ -393,7 +397,7 @@ impl SettingsWindow {
                                 let is_sel = current_stem.as_deref() == Some(stem.as_str());
                                 if ui.selectable_label(is_sel, stem).clicked() {
                                     if let Some(d) = &dir {
-                                        let path = d.join(format!("{stem}.pal"));
+                                        let path = d.join(stem);
                                         settings.palettes.insert(
                                             key.to_string(),
                                             path.to_string_lossy().into_owned(),
@@ -429,6 +433,16 @@ fn units_tab(ui: &mut egui::Ui, settings: &mut Settings) {
                 ui.selectable_value(&mut settings.velocity_unit, u, u.label());
             }
         });
+        ui.end_row();
+
+        ui.label("Temperature");
+        ui.horizontal(|ui| {
+            for u in crate::settings::TempUnit::ALL {
+                ui.selectable_value(&mut settings.temp_unit, u, u.label());
+            }
+        })
+        .response
+        .on_hover_text("Surface station plots (observations arrive in Celsius)");
         ui.end_row();
 
         ui.label("Time display");

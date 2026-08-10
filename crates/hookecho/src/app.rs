@@ -606,7 +606,7 @@ impl OverlaySource {
                 // METARs down with it.
                 match wxdata::ndbc::fetch_bbox(http, lat0, lon0, lat1, lon1).await {
                     Ok(buoys) => obs.extend(buoys),
-                    Err(e) => log::warn!("ndbc buoys: {e}"),
+                    Err(e) => note_feed_error("Buoy observations", e),
                 }
                 OverlayMsg::Metar(obs)
             }
@@ -616,7 +616,10 @@ impl OverlaySource {
                 let mut sites =
                     wxdata::webcams::fetch_bbox(http, min_lon, min_lat, max_lon, max_lat)
                         .await
-                        .unwrap_or_default();
+                        .unwrap_or_else(|e| {
+                            note_feed_error("FAA webcams", e);
+                            Vec::new()
+                        });
                 if !windy_key.is_empty() {
                     // A bad or throttled key must not take the FAA cameras down with it.
                     match wxdata::webcams::fetch_windy_bbox(
@@ -625,7 +628,7 @@ impl OverlaySource {
                     .await
                     {
                         Ok(w) => sites.extend(w),
-                        Err(e) => log::warn!("windy webcams: {e}"),
+                        Err(e) => note_feed_error("Windy webcams", e),
                     }
                 }
                 OverlayMsg::Webcams(sites)
@@ -1164,6 +1167,29 @@ pub(crate) enum ToastKind {
     Error,
 }
 
+/// Auxiliary-feed failures waiting to be told to the user.
+///
+/// A global rather than a channel: these happen in half a dozen spawned tasks across three
+/// different message enums, and none of them owns a sender. The app drains it once a frame.
+///
+/// ponytail: unbounded and process-wide, which is fine for something drained every frame and
+/// gated to one toast per feed. A sender per task is the upgrade if it ever needs ordering
+/// against the other messages.
+static FEED_ERRORS: std::sync::Mutex<Vec<(&'static str, String)>> =
+    std::sync::Mutex::new(Vec::new());
+
+/// Log an auxiliary feed's failure and queue it for the user.
+///
+/// "Auxiliary" means a feed whose failure leaves the rest of its layer standing — buoys inside
+/// the station plot, Windy inside the webcams. Those used to fail into the log alone, which is
+/// indistinguishable from the feed simply having nothing to show.
+pub(crate) fn note_feed_error(feed: &'static str, err: impl std::fmt::Display) {
+    log::warn!("{feed}: {err}");
+    if let Ok(mut q) = FEED_ERRORS.lock() {
+        q.push((feed, err.to_string()));
+    }
+}
+
 /// A short-lived note about something the user just did.
 pub(crate) struct Toast {
     pub text: String,
@@ -1688,8 +1714,7 @@ pub struct HookEchoApp {
     /// the pair rarely shares a cycle, and a difference between two instants has to say so.
     diff_field: crate::fielddiff::DiffField,
     diff_valid: Option<(String, String)>,
-    /// When `goto.txt` was last looked for. Android only — see the poll in `update`.
-    #[cfg(target_os = "android")]
+    /// When `goto.txt` was last looked for — see the poll in `update`.
     goto_poll: Option<Instant>,
     /// The last difference grid, kept on the CPU after upload so the cursor can read a number off
     /// it. A diverging color says "the models disagree here"; only a value says by how much.
@@ -2100,6 +2125,8 @@ pub struct HookEchoApp {
     /// Transient results of things the user just did (export saved, encode failed). The third
     /// lane, distinct from the warning banners (weather) and the error chip (radar feed).
     toasts: Vec<Toast>,
+    /// Auxiliary feeds already reported to the user; see [`HookEchoApp::drain_feed_errors`].
+    feed_errors_told: std::collections::HashSet<&'static str>,
     /// Right-dock active-alerts panel toggle.
     show_alert_panel: bool,
     /// Cross-section tool: clicked endpoints `[lon,lat]` (max 2), the built section + its texture.
@@ -2259,6 +2286,7 @@ impl HookEchoApp {
                     ("zones", "zone cache"),
                     ("raob", "RAOB cache"),
                     ("snapshots", "snapshot cache"),
+                    ("pficons", "placefile icon cache"),
                 ] {
                     crate::tiles::sweep_cache_dir(
                         &dir.join(sub),
@@ -2413,7 +2441,6 @@ impl HookEchoApp {
             diff_field: crate::fielddiff::DiffField::default(),
             diff_valid: None,
             diff_grid: None,
-            #[cfg(target_os = "android")]
             goto_poll: None,
             diff_key: None,
             sounding_at: None,
@@ -2647,6 +2674,7 @@ impl HookEchoApp {
             rot_active: false,
             warning_banners: Vec::new(),
             toasts: Vec::new(),
+            feed_errors_told: std::collections::HashSet::new(),
             show_alert_panel: false,
             xsection_pts: Vec::new(),
             xsection: None,
@@ -2982,7 +3010,7 @@ impl HookEchoApp {
                     let _ = tx.send(msg);
                     ctx.request_repaint();
                 }
-                Err(e) => log::warn!("overlay fetch failed: {e}"),
+                Err(e) => note_feed_error("Overlay", e),
             }
         });
     }
@@ -3245,6 +3273,22 @@ impl HookEchoApp {
             return;
         }
         crate::audio::play(sound, self.settings.alert_volume);
+    }
+
+    /// Surface auxiliary-feed failures queued by [`note_feed_error`], once per feed per session.
+    ///
+    /// Once, deliberately: a feed that is down stays down, and a toast every refresh would be the
+    /// nag this app does not do. The log keeps every occurrence.
+    fn drain_feed_errors(&mut self) {
+        let queued: Vec<(&'static str, String)> = match FEED_ERRORS.lock() {
+            Ok(mut q) => std::mem::take(&mut *q),
+            Err(_) => return,
+        };
+        for (feed, err) in queued {
+            if self.feed_errors_told.insert(feed) {
+                self.toast(ToastKind::Error, format!("{feed} unavailable — {err}"));
+            }
+        }
     }
 
     /// Say something happened. Operation results used to reach the user only through the log.
@@ -8444,7 +8488,7 @@ impl HookEchoApp {
                         let _ = tx.send((url, image));
                         ctx2.request_repaint();
                     }
-                    Err(e) => log::warn!("icon sheet {url} failed: {e}"),
+                    Err(e) => note_feed_error("Placefile icons", format!("{url}: {e}")),
                 }
             });
         }
@@ -8581,6 +8625,7 @@ impl HookEchoApp {
     }
 
     fn poll_messages(&mut self) {
+        self.drain_feed_errors();
         while let Ok(msg) = self.msg_rx.try_recv() {
             let idx = msg.view();
             // LiveEnded must be handled even after a site change (to drop the stream handle).
@@ -8731,10 +8776,9 @@ impl HookEchoApp {
         // Abort an existing stream if it no longer matches the active view/site or isn't wanted.
         if let Some((sv, ss, _)) = &self.live_stream {
             if !want || *sv != idx || Some(ss.as_str()) != site.as_deref() {
-                // ponytail: the cancelled stream notices at its next wake, so on a fast site
-                // switch two streams overlap for up to the 15 s wait clamp. Both merge into
-                // their own volumes and only the live one is displayed, so the cost is one
-                // wasted chunk fetch. An abort channel if that ever shows up on a phone bill.
+                // ponytail: the cancelled stream notices within a second (its wait is sliced),
+                // so a fast site switch overlaps two streams for about that long and at most
+                // one in-flight chunk fetch. An abort channel if even that shows up.
                 self.live_gen
                     .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 self.live_stream = None;
@@ -8745,10 +8789,9 @@ impl HookEchoApp {
             let due = self
                 .last_stream_attempt
                 .is_none_or(|t| t.elapsed().as_secs() >= 60);
-            if due {
+            // `want` already implies both, but the two are computed a screen away from here.
+            if let (true, Some(site), Some(base)) = (due, site, base) {
                 self.last_stream_attempt = Some(Instant::now());
-                let site = site.unwrap();
-                let base = base.unwrap();
                 let gen = self.live_gen.load(std::sync::atomic::Ordering::Relaxed);
                 self.spawn_stream(idx, site.clone(), base, ctx.clone(), gen);
                 self.live_stream = Some((idx, site, gen));
@@ -9216,7 +9259,7 @@ impl HookEchoApp {
                     });
                     ctx.request_repaint();
                 }
-                Err(e) => log::warn!("list frames {site} {date}: {e}"),
+                Err(e) => note_feed_error("Archive frame list", format!("{site} {date}: {e}")),
             }
         });
     }
@@ -9246,7 +9289,11 @@ impl HookEchoApp {
         // The pane's product list is the union over every volume from this site, so a single frame
         // in a loop can lack the selected moment (a legacy volume, a split cut that hasn't arrived).
         // Draw what this volume does have rather than blanking the radar for that frame.
-        let have = self.views[data].volume.as_ref().unwrap().moments;
+        // Caller resolved `data` to a view that has a volume; a "wait" is the honest answer if
+        // that stops being true rather than taking the frame down.
+        let Some(have) = self.views[data].volume.as_ref().map(|v| v.moments) else {
+            return (None, true);
+        };
         let moment = if have[moment.index()] {
             moment
         } else {
@@ -9260,7 +9307,9 @@ impl HookEchoApp {
         } else {
             None
         };
-        let name = self.views[data].volume.as_ref().unwrap().name.clone();
+        let Some(name) = self.views[data].volume.as_ref().map(|v| v.name.clone()) else {
+            return (None, true);
+        };
         let uv_key = storm_uv.map(|(e, n)| (e.to_bits(), n.to_bits()));
         // Dealiasing only applies to Doppler velocity, and only where it is actually folded:
         // a TDWR's Level 3 velocity is already unfolded before it leaves the radar.
@@ -9285,7 +9334,9 @@ impl HookEchoApp {
         }
         let table = self.palettes.table(moment);
         let upload = {
-            let vol = self.views[data].volume.as_mut().unwrap();
+            let Some(vol) = self.views[data].volume.as_mut() else {
+                return (None, true);
+            };
             // No tilts yet (a volume that has only just started arriving) is a "wait", not a
             // failure: erroring here put "tilt 0 out of range" on the map once per volume.
             if vol.elevations.is_empty() {
@@ -10674,6 +10725,7 @@ impl HookEchoApp {
         // boundary reads off the map before any card is open. Clicking one opens its card.
         if self.show_stations {
             let show_labels = cam.zoom >= 8.0;
+            let temp_unit = self.settings.temp_unit;
             for ob in &self.stations.obs {
                 let w = crate::render::mercator::lonlat_to_world(ob.lon, ob.lat);
                 let (sx, sy) = cam.world_to_screen(w, vp);
@@ -10704,7 +10756,7 @@ impl HookEchoApp {
                 }
                 if show_labels {
                     let label = match ob.temp_c {
-                        Some(t) => format!("{:.0}F", t * 9.0 / 5.0 + 32.0),
+                        Some(t) => format!("{:.0}{}", temp_unit.from_c(t), temp_unit.label()),
                         None => ob.id.clone(),
                     };
                     let (off, align) = if metar {
@@ -11067,6 +11119,7 @@ impl HookEchoApp {
                     .partial_cmp(&a.wspd_kt)
                     .unwrap_or(std::cmp::Ordering::Equal)
             });
+            let temp_unit = self.settings.temp_unit;
             let mut placed: Vec<egui::Rect> = Vec::new();
             for ob in obs {
                 let w = crate::render::mercator::lonlat_to_world(ob.lon, ob.lat);
@@ -11104,7 +11157,7 @@ impl HookEchoApp {
                         painter.text(
                             p + egui::vec2(-6.0, -6.0),
                             egui::Align2::RIGHT_BOTTOM,
-                            format!("{:.0}", t * 9.0 / 5.0 + 32.0),
+                            format!("{:.0}", temp_unit.from_c(t)),
                             f.clone(),
                             egui::Color32::from_rgb(240, 90, 90),
                         );
@@ -11113,7 +11166,7 @@ impl HookEchoApp {
                         painter.text(
                             p + egui::vec2(-6.0, 6.0),
                             egui::Align2::RIGHT_TOP,
-                            format!("{:.0}", d * 9.0 / 5.0 + 32.0),
+                            format!("{:.0}", temp_unit.from_c(d)),
                             f,
                             egui::Color32::from_rgb(90, 220, 120),
                         );
@@ -11140,7 +11193,8 @@ impl HookEchoApp {
                 }
             }
         }
-        // ponytail: °F hardcoded (US station-plot convention); wire to the Units setting if asked.
+        // ponytail: the station plots follow the Units setting; the gridded contour labels
+        // (K → °F, `field_ramps`) still do not, and want the same treatment when asked.
 
         // River flood gauges (NWPS): category-colored inverted-triangle droplet + stage tooltip.
         // ponytail: hover tooltip carries name/stage/forecast; skipped a click→Detail popup — the
@@ -12742,15 +12796,16 @@ impl HookEchoApp {
             return;
         }
         ctx.request_repaint_after(std::time::Duration::from_millis(500));
-        egui::Area::new(egui::Id::new("error_chip"))
+        let chip = egui::Area::new(egui::Id::new("error_chip"))
             .constrain_to(self.chrome_rect)
             .anchor(
                 egui::Align2::CENTER_BOTTOM,
                 egui::vec2(0.0, crate::ui::style::LANE_BOTTOM_CHASE),
             )
-            // Self-expires after HOLD_SECS, so it needs no dismiss click — and an interactable
-            // layer over the map blanks pinch wherever it sits.
-            .interactable(false)
+            // Interactable so the message can be read and copied: six seconds is not long enough
+            // to transcribe a URL out of a failure. The chip is small and sits in the bottom lane,
+            // so what it costs the map underneath is that strip.
+            .interactable(true)
             .show(ctx, |ui| {
                 crate::ui::style::glass(ui, 246)
                     .stroke(egui::Stroke::new(
@@ -12758,13 +12813,27 @@ impl HookEchoApp {
                         egui::Color32::from_rgb(230, 100, 100).gamma_multiply(0.8),
                     ))
                     .show(ui, |ui| {
-                        ui.label(
-                            egui::RichText::new(&msg)
-                                .size(crate::ui::style::FONT_BASE)
-                                .color(egui::Color32::from_rgb(240, 150, 150)),
-                        );
-                    });
+                        ui.add(
+                            egui::Label::new(
+                                egui::RichText::new(&msg)
+                                    .size(crate::ui::style::FONT_BASE)
+                                    .color(egui::Color32::from_rgb(240, 150, 150)),
+                            )
+                            .sense(egui::Sense::click()),
+                        )
+                        .on_hover_text("Click to copy")
+                    })
             });
+        let resp = &chip.inner.inner;
+        if resp.hovered() {
+            // Hold while it is being read.
+            self.error_chip = Some((msg.clone(), now));
+        }
+        if resp.clicked() {
+            ctx.copy_text(msg);
+            self.toast(ToastKind::Success, "Error copied");
+            self.error_chip = None;
+        }
     }
 }
 
@@ -13114,18 +13183,54 @@ fn draw_sprite(
     painter.add(egui::Shape::mesh(mesh));
 }
 
+/// Where a placefile's icon sheet is kept between runs, if this platform has a disk.
+///
+/// Named by a hash of the URL: sheets come from arbitrary hosts and their paths are not safe to
+/// use as filenames.
+fn icon_sheet_cache_path(url: &str) -> Option<std::path::PathBuf> {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    url.hash(&mut h);
+    Some(
+        crate::paths::cache_dir()?
+            .join("pficons")
+            .join(format!("{:016x}", h.finish())),
+    )
+}
+
 /// Download and decode a placefile icon sheet (PNG/GIF) into an egui image.
 async fn fetch_icon_sheet(http: &reqwest::Client, url: &str) -> anyhow::Result<egui::ColorImage> {
-    // Generic web hosts, so use the browser-ish UA the tile fetches already send.
-    let bytes = http
-        .get(url)
-        .header("User-Agent", crate::tiles::USER_AGENT)
-        .send()
-        .await?
-        .error_for_status()?
-        .bytes()
-        .await?;
-    let img = image::load_from_memory(&bytes)?.to_rgba8();
+    // Read-through disk cache, same shape as the basemap tiles: an icon sheet is a few KB of PNG
+    // that never changes, and re-fetching every placefile's sheet at every startup is the kind of
+    // traffic somebody else's web host notices. A corrupt file simply fails to decode and is
+    // refetched. Nothing on the web, where `cache_dir()` is None.
+    let cached = icon_sheet_cache_path(url);
+    let hit = cached
+        .as_ref()
+        .and_then(|p| std::fs::read(p).ok())
+        .and_then(|b| image::load_from_memory(&b).ok());
+    let img = match hit {
+        Some(img) => img.to_rgba8(),
+        None => {
+            // Generic web hosts, so use the browser-ish UA the tile fetches already send.
+            let bytes = http
+                .get(url)
+                .header("User-Agent", crate::tiles::USER_AGENT)
+                .send()
+                .await?
+                .error_for_status()?
+                .bytes()
+                .await?;
+            let img = image::load_from_memory(&bytes)?.to_rgba8();
+            if let Some(path) = &cached {
+                if let Some(dir) = path.parent() {
+                    let _ = std::fs::create_dir_all(dir);
+                }
+                let _ = std::fs::write(path, &bytes);
+            }
+            img
+        }
+    };
     let (w, h) = img.dimensions();
     Ok(egui::ColorImage::from_rgba_unmultiplied(
         [w as usize, h as usize],
@@ -13284,10 +13389,10 @@ impl eframe::App for HookEchoApp {
             self.drain_goto_file();
         }
         // A deep link that arrives while the app is already on screen never produces a resume, so
-        // the drain above would never see it — the activity is reused (`launchMode="singleTask"`)
-        // and only `onNewIntent` fires. ponytail: a one-second stat of a path that usually does
-        // not exist, rather than a JNI callback into the event loop.
-        #[cfg(target_os = "android")]
+        // the drain above would never see it — on Android the activity is reused
+        // (`launchMode="singleTask"`) and only `onNewIntent` fires; on desktop the second process
+        // hands its link over and exits. ponytail: a one-second stat of a path that usually does
+        // not exist, rather than a callback into the event loop.
         if self
             .goto_poll
             .is_none_or(|t| t.elapsed() >= std::time::Duration::from_secs(1))
@@ -14076,10 +14181,19 @@ impl eframe::App for HookEchoApp {
                 Err(e) => self.marker_window.status = Some(e),
             }
         }
-        if let Some(query) = self
+        let query = self
             .marker_window
-            .show(ctx, &mut self.settings, &self.marker_icon_tex)
-        {
+            .show(ctx, &mut self.settings, &self.marker_icon_tex);
+        // The map popup indexes into the same list: a delete above it leaves it describing the
+        // wrong marker, which is the one way this UI can lie about which place you are editing.
+        if let (Some(gone), Some(open)) = (self.marker_window.removed, self.marker_popup) {
+            self.marker_popup = match gone.cmp(&open) {
+                std::cmp::Ordering::Less => Some(open - 1),
+                std::cmp::Ordering::Equal => None,
+                std::cmp::Ordering::Greater => Some(open),
+            };
+        }
+        if let Some(query) = query {
             self.marker_window.searching = true;
             self.marker_window.status = Some("Searching…".into());
             let http = self.http.clone();
@@ -14886,6 +15000,20 @@ mod field_lut_tests {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn icon_sheet_cache_paths_are_per_url_and_filename_safe() {
+        let Some(a) = super::icon_sheet_cache_path("https://example.com/a/icons.png") else {
+            return; // no disk on this platform: nothing to name
+        };
+        let b = super::icon_sheet_cache_path("https://example.com/b/icons.png").unwrap();
+        assert_ne!(a, b, "two sheets must not share a file");
+        let name = a.file_name().unwrap().to_str().unwrap();
+        assert!(
+            name.chars().all(|c| c.is_ascii_hexdigit()),
+            "a URL is not a filename: got {name}"
+        );
+    }
     use super::*;
 
     #[test]
