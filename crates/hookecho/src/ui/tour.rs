@@ -164,7 +164,9 @@ impl Tour {
             return;
         }
         let step = self.step.min(TITLES.len() - 1);
-        let screen = ctx.content_rect();
+        // Dim the whole window: `content_rect` stops at the docked panels, which left the sidebar
+        // and the legend at full brightness and the spotlight looking like a stray shadow.
+        let screen = ctx.viewport_rect();
         let hole = self
             .anchor(anchors)
             .map(|r| r.expand(6.0).intersect(screen));
@@ -212,13 +214,13 @@ impl Tour {
                 egui::Align2::CENTER_BOTTOM,
                 egui::pos2(h.center().x, h.top() - 12.0),
             ),
-            None => (egui::Align2::CENTER_CENTER, screen.center()),
+            None => (egui::Align2::CENTER_CENTER, ctx.content_rect().center()),
         };
         let body = self.body(sig);
         let mut act = None;
         egui::Area::new(egui::Id::new("tour_card"))
             .order(egui::Order::Foreground)
-            .constrain_to(screen)
+            .constrain_to(ctx.content_rect())
             .pivot(pivot)
             .fixed_pos(pos)
             .show(ctx, |ui| {
