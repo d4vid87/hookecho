@@ -52,8 +52,13 @@
         android:label="@string/app_name"
         android:theme="@style/Theme.HookEcho"
         android:enableOnBackInvokedCallback="true">
+        <!-- singleTask, not the default: `android_main` runs once per process, so a second activity
+             instance (a deep link, or relaunching after back) leaves the Rust event loop attached to
+             the activity that is gone — the app freezes on its last frame or sits on the splash
+             screen forever. One instance means every later launch arrives through onNewIntent. -->
         <activity
             android:name=".MainActivity"
+            android:launchMode="singleTask"
             android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboard|keyboardHidden|navigation|uiMode|density"
             android:screenOrientation="sensor"
             android:windowSoftInputMode="adjustResize"

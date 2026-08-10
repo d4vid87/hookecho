@@ -1606,6 +1606,9 @@ pub struct HookEchoApp {
     /// the pair rarely shares a cycle, and a difference between two instants has to say so.
     diff_field: crate::fielddiff::DiffField,
     diff_valid: Option<(String, String)>,
+    /// When `goto.txt` was last looked for. Android only — see the poll in `update`.
+    #[cfg(target_os = "android")]
+    goto_poll: Option<Instant>,
     /// The field the difference layer was last fetched for, so a change refetches at once.
     diff_key: Option<(crate::fielddiff::DiffField, u16)>,
     /// Where the open sounding was taken, so a forecast-hour change can refetch the same point.
@@ -2324,6 +2327,8 @@ impl HookEchoApp {
             global_layer_key: std::collections::HashMap::new(),
             diff_field: crate::fielddiff::DiffField::default(),
             diff_valid: None,
+            #[cfg(target_os = "android")]
+            goto_poll: None,
             diff_key: None,
             sounding_at: None,
             zone_pts: Vec::new(),
@@ -13124,6 +13129,18 @@ impl eframe::App for HookEchoApp {
             }
             // A resume is also how a notification tap arrives: the activity wrote the target
             // before handing us back the surface.
+            self.drain_goto_file();
+        }
+        // A deep link that arrives while the app is already on screen never produces a resume, so
+        // the drain above would never see it — the activity is reused (`launchMode="singleTask"`)
+        // and only `onNewIntent` fires. ponytail: a one-second stat of a path that usually does
+        // not exist, rather than a JNI callback into the event loop.
+        #[cfg(target_os = "android")]
+        if self
+            .goto_poll
+            .is_none_or(|t| t.elapsed() >= std::time::Duration::from_secs(1))
+        {
+            self.goto_poll = Some(Instant::now());
             self.drain_goto_file();
         }
         // A file the user picked, from any of the import buttons. Routed here rather than at the
