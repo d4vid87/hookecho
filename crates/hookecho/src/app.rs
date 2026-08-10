@@ -606,7 +606,7 @@ impl OverlaySource {
                 // METARs down with it.
                 match wxdata::ndbc::fetch_bbox(http, lat0, lon0, lat1, lon1).await {
                     Ok(buoys) => obs.extend(buoys),
-                    Err(e) => log::warn!("ndbc buoys: {e}"),
+                    Err(e) => note_feed_error("Buoy observations", e),
                 }
                 OverlayMsg::Metar(obs)
             }
@@ -616,7 +616,10 @@ impl OverlaySource {
                 let mut sites =
                     wxdata::webcams::fetch_bbox(http, min_lon, min_lat, max_lon, max_lat)
                         .await
-                        .unwrap_or_default();
+                        .unwrap_or_else(|e| {
+                            note_feed_error("FAA webcams", e);
+                            Vec::new()
+                        });
                 if !windy_key.is_empty() {
                     // A bad or throttled key must not take the FAA cameras down with it.
                     match wxdata::webcams::fetch_windy_bbox(
@@ -625,7 +628,7 @@ impl OverlaySource {
                     .await
                     {
                         Ok(w) => sites.extend(w),
-                        Err(e) => log::warn!("windy webcams: {e}"),
+                        Err(e) => note_feed_error("Windy webcams", e),
                     }
                 }
                 OverlayMsg::Webcams(sites)
@@ -1162,6 +1165,29 @@ pub(crate) enum ToastKind {
     Info,
     Success,
     Error,
+}
+
+/// Auxiliary-feed failures waiting to be told to the user.
+///
+/// A global rather than a channel: these happen in half a dozen spawned tasks across three
+/// different message enums, and none of them owns a sender. The app drains it once a frame.
+///
+/// ponytail: unbounded and process-wide, which is fine for something drained every frame and
+/// gated to one toast per feed. A sender per task is the upgrade if it ever needs ordering
+/// against the other messages.
+static FEED_ERRORS: std::sync::Mutex<Vec<(&'static str, String)>> =
+    std::sync::Mutex::new(Vec::new());
+
+/// Log an auxiliary feed's failure and queue it for the user.
+///
+/// "Auxiliary" means a feed whose failure leaves the rest of its layer standing — buoys inside
+/// the station plot, Windy inside the webcams. Those used to fail into the log alone, which is
+/// indistinguishable from the feed simply having nothing to show.
+pub(crate) fn note_feed_error(feed: &'static str, err: impl std::fmt::Display) {
+    log::warn!("{feed}: {err}");
+    if let Ok(mut q) = FEED_ERRORS.lock() {
+        q.push((feed, err.to_string()));
+    }
 }
 
 /// A short-lived note about something the user just did.
@@ -2100,6 +2126,8 @@ pub struct HookEchoApp {
     /// Transient results of things the user just did (export saved, encode failed). The third
     /// lane, distinct from the warning banners (weather) and the error chip (radar feed).
     toasts: Vec<Toast>,
+    /// Auxiliary feeds already reported to the user; see [`HookEchoApp::drain_feed_errors`].
+    feed_errors_told: std::collections::HashSet<&'static str>,
     /// Right-dock active-alerts panel toggle.
     show_alert_panel: bool,
     /// Cross-section tool: clicked endpoints `[lon,lat]` (max 2), the built section + its texture.
@@ -2647,6 +2675,7 @@ impl HookEchoApp {
             rot_active: false,
             warning_banners: Vec::new(),
             toasts: Vec::new(),
+            feed_errors_told: std::collections::HashSet::new(),
             show_alert_panel: false,
             xsection_pts: Vec::new(),
             xsection: None,
@@ -2982,7 +3011,7 @@ impl HookEchoApp {
                     let _ = tx.send(msg);
                     ctx.request_repaint();
                 }
-                Err(e) => log::warn!("overlay fetch failed: {e}"),
+                Err(e) => note_feed_error("Overlay", e),
             }
         });
     }
@@ -3245,6 +3274,22 @@ impl HookEchoApp {
             return;
         }
         crate::audio::play(sound, self.settings.alert_volume);
+    }
+
+    /// Surface auxiliary-feed failures queued by [`note_feed_error`], once per feed per session.
+    ///
+    /// Once, deliberately: a feed that is down stays down, and a toast every refresh would be the
+    /// nag this app does not do. The log keeps every occurrence.
+    fn drain_feed_errors(&mut self) {
+        let queued: Vec<(&'static str, String)> = match FEED_ERRORS.lock() {
+            Ok(mut q) => std::mem::take(&mut *q),
+            Err(_) => return,
+        };
+        for (feed, err) in queued {
+            if self.feed_errors_told.insert(feed) {
+                self.toast(ToastKind::Error, format!("{feed} unavailable — {err}"));
+            }
+        }
     }
 
     /// Say something happened. Operation results used to reach the user only through the log.
@@ -8444,7 +8489,7 @@ impl HookEchoApp {
                         let _ = tx.send((url, image));
                         ctx2.request_repaint();
                     }
-                    Err(e) => log::warn!("icon sheet {url} failed: {e}"),
+                    Err(e) => note_feed_error("Placefile icons", format!("{url}: {e}")),
                 }
             });
         }
@@ -8581,6 +8626,7 @@ impl HookEchoApp {
     }
 
     fn poll_messages(&mut self) {
+        self.drain_feed_errors();
         while let Ok(msg) = self.msg_rx.try_recv() {
             let idx = msg.view();
             // LiveEnded must be handled even after a site change (to drop the stream handle).
@@ -9214,7 +9260,7 @@ impl HookEchoApp {
                     });
                     ctx.request_repaint();
                 }
-                Err(e) => log::warn!("list frames {site} {date}: {e}"),
+                Err(e) => note_feed_error("Archive frame list", format!("{site} {date}: {e}")),
             }
         });
     }
@@ -12748,15 +12794,16 @@ impl HookEchoApp {
             return;
         }
         ctx.request_repaint_after(std::time::Duration::from_millis(500));
-        egui::Area::new(egui::Id::new("error_chip"))
+        let chip = egui::Area::new(egui::Id::new("error_chip"))
             .constrain_to(self.chrome_rect)
             .anchor(
                 egui::Align2::CENTER_BOTTOM,
                 egui::vec2(0.0, crate::ui::style::LANE_BOTTOM_CHASE),
             )
-            // Self-expires after HOLD_SECS, so it needs no dismiss click — and an interactable
-            // layer over the map blanks pinch wherever it sits.
-            .interactable(false)
+            // Interactable so the message can be read and copied: six seconds is not long enough
+            // to transcribe a URL out of a failure. The chip is small and sits in the bottom lane,
+            // so what it costs the map underneath is that strip.
+            .interactable(true)
             .show(ctx, |ui| {
                 crate::ui::style::glass(ui, 246)
                     .stroke(egui::Stroke::new(
@@ -12764,13 +12811,27 @@ impl HookEchoApp {
                         egui::Color32::from_rgb(230, 100, 100).gamma_multiply(0.8),
                     ))
                     .show(ui, |ui| {
-                        ui.label(
-                            egui::RichText::new(&msg)
-                                .size(crate::ui::style::FONT_BASE)
-                                .color(egui::Color32::from_rgb(240, 150, 150)),
-                        );
-                    });
+                        ui.add(
+                            egui::Label::new(
+                                egui::RichText::new(&msg)
+                                    .size(crate::ui::style::FONT_BASE)
+                                    .color(egui::Color32::from_rgb(240, 150, 150)),
+                            )
+                            .sense(egui::Sense::click()),
+                        )
+                        .on_hover_text("Click to copy")
+                    })
             });
+        let resp = &chip.inner.inner;
+        if resp.hovered() {
+            // Hold while it is being read.
+            self.error_chip = Some((msg.clone(), now));
+        }
+        if resp.clicked() {
+            ctx.copy_text(msg);
+            self.toast(ToastKind::Success, "Error copied");
+            self.error_chip = None;
+        }
     }
 }
 
