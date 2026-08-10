@@ -153,11 +153,15 @@ fn stitch(segs: Vec<[(f64, f64); 2]>) -> Vec<Vec<(f64, f64)>> {
         used[start] = true;
         let mut line = vec![segs[start][0], segs[start][1]];
         // Grow the tail, then the head.
-        while let Some((si, next)) = next_at(key(*line.last().unwrap()), &used, &adj) {
+        while let Some((si, next)) =
+            line.last().and_then(|&p| next_at(key(p), &used, &adj))
+        {
             used[si] = true;
             line.push(next);
         }
-        while let Some((si, prev)) = next_at(key(*line.first().unwrap()), &used, &adj) {
+        while let Some((si, prev)) =
+            line.first().and_then(|&p| next_at(key(p), &used, &adj))
+        {
             used[si] = true;
             line.insert(0, prev);
         }
@@ -169,6 +173,11 @@ fn stitch(segs: Vec<[(f64, f64); 2]>) -> Vec<Vec<(f64, f64)>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stitching_nothing_yields_nothing() {
+        assert!(stitch(Vec::new()).is_empty());
+    }
 
     fn field(nx: usize, ny: usize, vals: Vec<f32>) -> MrmsField {
         MrmsField {
