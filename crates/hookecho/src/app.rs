@@ -2286,6 +2286,7 @@ impl HookEchoApp {
                     ("zones", "zone cache"),
                     ("raob", "RAOB cache"),
                     ("snapshots", "snapshot cache"),
+                    ("pficons", "placefile icon cache"),
                 ] {
                     crate::tiles::sweep_cache_dir(
                         &dir.join(sub),
@@ -13182,18 +13183,54 @@ fn draw_sprite(
     painter.add(egui::Shape::mesh(mesh));
 }
 
+/// Where a placefile's icon sheet is kept between runs, if this platform has a disk.
+///
+/// Named by a hash of the URL: sheets come from arbitrary hosts and their paths are not safe to
+/// use as filenames.
+fn icon_sheet_cache_path(url: &str) -> Option<std::path::PathBuf> {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    url.hash(&mut h);
+    Some(
+        crate::paths::cache_dir()?
+            .join("pficons")
+            .join(format!("{:016x}", h.finish())),
+    )
+}
+
 /// Download and decode a placefile icon sheet (PNG/GIF) into an egui image.
 async fn fetch_icon_sheet(http: &reqwest::Client, url: &str) -> anyhow::Result<egui::ColorImage> {
-    // Generic web hosts, so use the browser-ish UA the tile fetches already send.
-    let bytes = http
-        .get(url)
-        .header("User-Agent", crate::tiles::USER_AGENT)
-        .send()
-        .await?
-        .error_for_status()?
-        .bytes()
-        .await?;
-    let img = image::load_from_memory(&bytes)?.to_rgba8();
+    // Read-through disk cache, same shape as the basemap tiles: an icon sheet is a few KB of PNG
+    // that never changes, and re-fetching every placefile's sheet at every startup is the kind of
+    // traffic somebody else's web host notices. A corrupt file simply fails to decode and is
+    // refetched. Nothing on the web, where `cache_dir()` is None.
+    let cached = icon_sheet_cache_path(url);
+    let hit = cached
+        .as_ref()
+        .and_then(|p| std::fs::read(p).ok())
+        .and_then(|b| image::load_from_memory(&b).ok());
+    let img = match hit {
+        Some(img) => img.to_rgba8(),
+        None => {
+            // Generic web hosts, so use the browser-ish UA the tile fetches already send.
+            let bytes = http
+                .get(url)
+                .header("User-Agent", crate::tiles::USER_AGENT)
+                .send()
+                .await?
+                .error_for_status()?
+                .bytes()
+                .await?;
+            let img = image::load_from_memory(&bytes)?.to_rgba8();
+            if let Some(path) = &cached {
+                if let Some(dir) = path.parent() {
+                    let _ = std::fs::create_dir_all(dir);
+                }
+                let _ = std::fs::write(path, &bytes);
+            }
+            img
+        }
+    };
     let (w, h) = img.dimensions();
     Ok(egui::ColorImage::from_rgba_unmultiplied(
         [w as usize, h as usize],
@@ -14963,6 +15000,20 @@ mod field_lut_tests {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn icon_sheet_cache_paths_are_per_url_and_filename_safe() {
+        let Some(a) = super::icon_sheet_cache_path("https://example.com/a/icons.png") else {
+            return; // no disk on this platform: nothing to name
+        };
+        let b = super::icon_sheet_cache_path("https://example.com/b/icons.png").unwrap();
+        assert_ne!(a, b, "two sheets must not share a file");
+        let name = a.file_name().unwrap().to_str().unwrap();
+        assert!(
+            name.chars().all(|c| c.is_ascii_hexdigit()),
+            "a URL is not a filename: got {name}"
+        );
+    }
     use super::*;
 
     #[test]
