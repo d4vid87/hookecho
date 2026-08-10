@@ -14018,7 +14018,7 @@ impl eframe::App for HookEchoApp {
 
         // First-run setup wizard.
         let active = self.active;
-        if let Some(site) = ui::wizard::show(
+        if let Some(fin) = ui::wizard::show(
             ctx,
             &mut self.wizard,
             &mut self.settings,
@@ -14028,11 +14028,15 @@ impl eframe::App for HookEchoApp {
             self.settings.setup_done = true;
             self.settings.save();
             let v = &mut self.views[self.active];
-            v.site = Some(site.clone());
-            ui::site_dialog::center_on_site(&mut v.camera, &site);
+            v.site = Some(fin.site.clone());
+            ui::site_dialog::center_on_site(&mut v.camera, &fin.site);
+            if fin.take_tour {
+                self.tour.start();
+            }
         }
         if !self.wizard.open && !self.settings.setup_done {
-            // Dismissed without finishing: don't nag every frame, but keep for next launch.
+            // Dismissed without finishing. Setup is optional and re-runnable from three places,
+            // so take the ✕ at its word rather than reopening this on every launch.
             self.settings.setup_done = true;
             self.settings.save();
         }

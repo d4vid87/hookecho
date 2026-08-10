@@ -1,11 +1,24 @@
-//! First-run setup wizard: walks through radar site, map/API keys, theme, sounds, saved
-//! locations, and alerts. Shown once (gated on `Settings::setup_done`), re-runnable from Help.
+//! First-run setup: four cards — home radar site, map and look, alerts and places, and the
+//! hand-off. Shown once (gated on `Settings::setup_done`), re-runnable from the sidebar's App
+//! section, the command palette, and Settings → General.
+//!
+//! It used to be ten pages, two of which were walls of text describing controls the app no longer
+//! has. Teaching the chrome is the tour's job now ([`crate::ui::tour`]); this is only the
+//! configuration you cannot guess for someone, and the last card offers the tour.
 
 use crate::settings::{Settings, Theme};
 use crate::tiles::BasemapStyle;
 use crate::ui::marker_window::IconTextures;
 
-const LAST_STEP: usize = 9;
+/// Card titles, and the one source of truth for how many cards there are.
+const TITLES: [&str; 4] = ["Welcome", "Map & look", "Alerts & places", "Ready"];
+
+/// What the last card hands back.
+pub struct Finish {
+    /// The chosen home site, to load and fly to.
+    pub site: String,
+    pub take_tour: bool,
+}
 
 #[derive(Default)]
 pub struct Wizard {
@@ -22,16 +35,21 @@ impl Wizard {
     }
 }
 
-/// Show the wizard. Returns `Some(site)` when finished (the chosen home site to load); the caller
-/// marks `setup_done`, saves settings, and jumps the view there. `basemap` is the active pane's
-/// style (updated live as the user picks); `icon_tex` renders marker-icon thumbnails.
+fn heading(ui: &mut egui::Ui, step: usize) {
+    ui.strong(format!("{} ({}/{})", TITLES[step], step + 1, TITLES.len()));
+    ui.add_space(6.0);
+}
+
+/// Show the wizard. Returns `Some` when finished; the caller marks `setup_done`, saves settings,
+/// jumps the view to the site, and starts the tour if it was asked for. `basemap` is the active
+/// pane's style (updated live as the user picks); `icon_tex` renders marker-icon thumbnails.
 pub fn show(
     ctx: &egui::Context,
     wiz: &mut Wizard,
     settings: &mut Settings,
     basemap: &mut BasemapStyle,
     icon_tex: &IconTextures,
-) -> Option<String> {
+) -> Option<Finish> {
     if !wiz.open {
         return None;
     }
@@ -46,53 +64,17 @@ pub fn show(
             // Full width on desktop; on a phone, whatever fits (phone_surface caps the window).
             ui.set_width(420.0_f32.min(ctx.content_rect().width() - 40.0));
             match wiz.step {
-                0 => page_welcome(ui),
-                1 => page_site(ui, wiz, settings),
-                2 => page_map(ui, settings, basemap),
-                3 => page_theme(ui, settings),
-                4 => page_alerts(ui, settings),
-                5 => {
-                    ui.strong("Sounds (6/10)");
-                    ui.small(
-                        "Pick a sound per alert kind, set the volume, and preview with \u{25b6}.",
-                    );
-                    ui.add_space(6.0);
-                    crate::ui::settings_window::sound_picker(ui, settings);
-                }
-                6 => {
-                    ui.strong("Saved locations (7/10)");
-                    ui.small(
-                        "Add places you care about \u{2014} warning alerts, lightning and \
-                         rain-arrival alerts all watch them. Later you can search a place and \
-                         save it, or drop one with the Drop marker tool. Tap any marker on the \
-                         map to rename or remove it.",
-                    );
-                    ui.add_space(6.0);
-                    egui::ScrollArea::vertical()
-                        .max_height(220.0)
-                        .show(ui, |ui| {
-                            let _ = crate::ui::marker_window::marker_grid(
-                                ui,
-                                &mut settings.markers,
-                                icon_tex,
-                            );
-                        });
-                    if ui.button("\u{2795} Add location").clicked() {
-                        let n = settings.markers.len() + 1;
-                        settings.markers.push(crate::settings::Marker {
-                            name: format!("Location {n}"),
-                            lat: 0.0,
-                            lon: 0.0,
-                            icon: None,
-                            alert_radius_mi: crate::settings::default_alert_radius_mi(),
-                            video_url: String::new(),
-                            home: false,
+                0 => card_site(ui, wiz, settings),
+                1 => card_map(ui, settings, basemap),
+                2 => card_alerts(ui, settings, icon_tex),
+                _ => {
+                    if let Some(take_tour) = card_done(ui, settings, *basemap) {
+                        finished = Some(Finish {
+                            site: settings.default_site.clone(),
+                            take_tour,
                         });
                     }
                 }
-                7 => page_products(ui),
-                8 => page_tools(ui),
-                _ => page_done(ui, settings, *basemap),
             }
             ui.add_space(8.0);
             ui.separator();
@@ -101,12 +83,9 @@ pub fn show(
                     wiz.step -= 1;
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if wiz.step < LAST_STEP {
-                        if ui.button("Next").clicked() {
-                            wiz.step += 1;
-                        }
-                    } else if ui.button("Finish").clicked() {
-                        finished = Some(settings.default_site.clone());
+                    // The last card's own two buttons are the finish; there is no Next past it.
+                    if wiz.step + 1 < TITLES.len() && ui.button("Next").clicked() {
+                        wiz.step += 1;
                     }
                 });
             });
@@ -117,125 +96,12 @@ pub fn show(
     finished
 }
 
-/// What each product shows, in the words the app uses everywhere else.
-fn page_products(ui: &mut egui::Ui) {
-    ui.strong("The radar products (8/10)");
-    ui.add_space(6.0);
-    ui.small(
-        "Switch with the pill at the bottom-left, or the number keys. Tilt is on the same pill \
-         \u{2014} how high above the ground the beam is looking.",
+fn card_site(ui: &mut egui::Ui, wiz: &mut Wizard, settings: &mut Settings) {
+    heading(ui, 0);
+    ui.label(
+        "Under a minute of setup, and everything here can be changed later in Settings.\n\nStart \
+         with your home radar \u{2014} the one you'll open to.",
     );
-    ui.add_space(6.0);
-    for p in &crate::products::PRODUCTS {
-        ui.horizontal(|ui| {
-            ui.add_sized(
-                [22.0, 16.0],
-                egui::Label::new(
-                    egui::RichText::new(p.hotkey.to_string())
-                        .small()
-                        .color(egui::Color32::from_gray(140)),
-                )
-                .selectable(false),
-            );
-            ui.vertical(|ui| {
-                ui.label(egui::RichText::new(p.name).strong());
-                ui.small(p.blurb);
-            });
-        });
-        ui.add_space(3.0);
-    }
-    ui.add_space(2.0);
-    ui.small(
-        "\u{201c}Compare 4 tilts\u{201d} (Ctrl+K) opens the same product at four heights at once.",
-    );
-}
-
-/// The rest of the toolbox, one line each — the point is to know these exist.
-fn page_tools(ui: &mut egui::Ui) {
-    ui.strong("What else is in here (9/10)");
-    ui.add_space(6.0);
-    ui.small(
-        "Everything below is one search away: open the menu (top-left) and type, or press Ctrl+K.",
-    );
-    ui.add_space(6.0);
-    let group = |ui: &mut egui::Ui, title: &str, rows: &[(&str, &str)]| {
-        ui.label(
-            egui::RichText::new(title)
-                .strong()
-                .color(egui::Color32::from_rgb(110, 170, 240)),
-        );
-        for (name, what) in rows {
-            ui.horizontal_wrapped(|ui| {
-                ui.label(egui::RichText::new(*name).strong());
-                ui.small(format!("\u{2014} {what}"));
-            });
-        }
-        ui.add_space(5.0);
-    };
-    group(
-        ui,
-        "Looking ahead",
-        &[
-            (
-                "Future radar",
-                "the forecast radar picture, on the timeline's tail",
-            ),
-            (
-                "Future rotation tracks",
-                "where storms are forecast to rotate",
-            ),
-            (
-                "Point forecast",
-                "tap anywhere for that spot's 7-day and hourly",
-            ),
-            ("Surface fronts", "the national weather map, fronts and H/L"),
-        ],
-    );
-    group(
-        ui,
-        "When storms are up",
-        &[
-            (
-                "Storm attributes",
-                "every tracked storm in one sortable table",
-            ),
-            ("Alerts panel", "warnings in view, worst first"),
-            ("Cross-sections", "slice a storm vertically, in any product"),
-            (
-                "Rain arrival",
-                "how many minutes until rain reaches your places",
-            ),
-        ],
-    );
-    group(
-        ui,
-        "Looking back",
-        &[
-            ("Timeline", "scrub back through any date since June 1991"),
-            ("Event library", "jump straight to a famous storm"),
-            ("Instant replay", "re-play the scans already in memory (R)"),
-        ],
-    );
-}
-
-fn page_welcome(ui: &mut egui::Ui) {
-    ui.strong("Welcome (1/10)");
-    ui.add_space(6.0);
-    ui.label("This quick setup configures your radar, map, theme, sounds, and saved locations. It takes under a minute — everything here can be changed later in Settings.");
-    ui.add_space(6.0);
-    ui.label("Afterwards the whole app is one map with a few floating controls:");
-    ui.add_space(2.0);
-    ui.small("• The bar along the bottom is the timeline — play, scrub, and jump back to live.");
-    ui.small("• Bottom-left names the product you're looking at; tap it to switch.");
-    ui.small("• The menu button (top-left) opens everything: layers, tools, radar site, settings.");
-    ui.small("• The bell (top-right) shows active alerts; its number is how many.");
-    ui.small("• Search the menu for a place or any action — on desktop, Ctrl+K opens it straight.");
-    ui.add_space(4.0);
-    ui.small("Press Next to begin.");
-}
-
-fn page_site(ui: &mut egui::Ui, wiz: &mut Wizard, settings: &mut Settings) {
-    ui.strong("Home radar site (2/10)");
     ui.add_space(6.0);
     ui.add(egui::TextEdit::singleline(&mut wiz.filter).hint_text("Search by ID, city, or state…"));
     let needle = wiz.filter.to_ascii_uppercase();
@@ -250,7 +116,7 @@ fn page_site(ui: &mut egui::Ui, wiz: &mut Wizard, settings: &mut Settings) {
                 {
                     continue;
                 }
-                let label = format!("{}  —  {}, {}", s.id, s.city, s.state);
+                let label = format!("{}  \u{2014}  {}, {}", s.id, s.city, s.state);
                 if ui
                     .selectable_label(settings.default_site == s.id, label)
                     .clicked()
@@ -261,9 +127,12 @@ fn page_site(ui: &mut egui::Ui, wiz: &mut Wizard, settings: &mut Settings) {
         });
 }
 
-fn page_map(ui: &mut egui::Ui, settings: &mut Settings, basemap: &mut BasemapStyle) {
-    ui.strong("Map & API keys (3/10)");
-    ui.small("Optional keys unlock premium basemaps. Free keys: mapbox.com and maptiler.com. Plenty of basemaps work with no key at all.");
+fn card_map(ui: &mut egui::Ui, settings: &mut Settings, basemap: &mut BasemapStyle) {
+    heading(ui, 1);
+    ui.small(
+        "Plenty of basemaps work with no key at all. Free keys from mapbox.com and maptiler.com \
+         unlock the premium ones; they stay on this machine.",
+    );
     ui.add_space(6.0);
     // Same widget as the Settings > Basemaps tab: responsive width plus the Android Paste button
     // (a soft keyboard cannot reach the system clipboard on a NativeActivity).
@@ -289,13 +158,10 @@ fn page_map(ui: &mut egui::Ui, settings: &mut Settings, basemap: &mut BasemapSty
                 }
             });
     });
-}
-
-fn page_theme(ui: &mut egui::Ui, settings: &mut Settings) {
-    ui.strong("Look and feel (4/10)");
-    ui.add_space(6.0);
+    ui.add_space(8.0);
+    ui.label("Theme");
     egui::ScrollArea::vertical()
-        .max_height(220.0)
+        .max_height(180.0)
         .show(ui, |ui| {
             for t in Theme::ALL {
                 ui.horizontal(|ui| {
@@ -310,9 +176,8 @@ fn page_theme(ui: &mut egui::Ui, settings: &mut Settings) {
         });
 }
 
-fn page_alerts(ui: &mut egui::Ui, settings: &mut Settings) {
-    ui.strong("Alerts (5/10)");
-    ui.add_space(6.0);
+fn card_alerts(ui: &mut egui::Ui, settings: &mut Settings, icon_tex: &IconTextures) {
+    heading(ui, 2);
     ui.checkbox(
         &mut settings.alert_sound,
         "Play a sound when a new warning appears",
@@ -325,12 +190,51 @@ fn page_alerts(ui: &mut egui::Ui, settings: &mut Settings) {
         ui.label("ntfy.sh topic:");
         ui.text_edit_singleline(&mut settings.ntfy_topic);
     });
-    ui.small("Optional: push notifications to your phone when a warning covers a saved location. Leave empty to skip.");
+    ui.small("Optional: push to your phone when a warning covers a saved location.");
+    // Collapsed: a sound per alert kind is a preference, not a decision anyone has to make in
+    // their first minute.
+    egui::CollapsingHeader::new("Alert sounds")
+        .default_open(false)
+        .show(ui, |ui| {
+            crate::ui::settings_window::sound_picker(ui, settings);
+        });
+
+    ui.add_space(8.0);
+    ui.separator();
+    ui.strong("Saved locations");
+    ui.small(
+        "Places the alerts watch \u{2014} warnings, lightning and rain arrival. Later you can \
+         search a place and save it, or drop one with the Drop marker tool.",
+    );
+    ui.add_space(6.0);
+    egui::ScrollArea::vertical()
+        .max_height(180.0)
+        .show(ui, |ui| {
+            crate::ui::marker_window::marker_grid(ui, &mut settings.markers, icon_tex);
+        });
+    if ui.button("\u{2795} Add location").clicked() {
+        let n = settings.markers.len() + 1;
+        // Seed at the home radar rather than at (0, 0) in the Gulf of Guinea, staggered so a
+        // second one is visibly its own marker. Drag or edit from there.
+        let (lat, lon) = wxdata::sites::site_by_id(&settings.default_site)
+            .map(|s| (s.latitude as f64, s.longitude as f64))
+            .unwrap_or((0.0, 0.0));
+        let offset = 0.05 * n as f64;
+        settings.markers.push(crate::settings::Marker {
+            name: format!("Location {n}"),
+            lat: lat + offset,
+            lon: lon + offset,
+            icon: None,
+            alert_radius_mi: crate::settings::default_alert_radius_mi(),
+            video_url: String::new(),
+            home: false,
+        });
+    }
 }
 
-fn page_done(ui: &mut egui::Ui, settings: &Settings, basemap: BasemapStyle) {
-    ui.strong("All set (10/10)");
-    ui.add_space(6.0);
+/// The hand-off. `Some(take_tour)` once the user picks one of the two ways out.
+fn card_done(ui: &mut egui::Ui, settings: &Settings, basemap: BasemapStyle) -> Option<bool> {
+    heading(ui, 3);
     ui.label(format!("Home radar: {}", settings.default_site));
     ui.label(format!("Theme: {}", settings.theme.label()));
     ui.label(format!("Basemap: {}", basemap.label()));
@@ -339,9 +243,51 @@ fn page_done(ui: &mut egui::Ui, settings: &Settings, basemap: BasemapStyle) {
         "Alert sound: {}",
         if settings.alert_sound { "on" } else { "off" }
     ));
-    ui.add_space(4.0);
+    ui.add_space(8.0);
     ui.small(
-        "Press Finish to jump to your home radar. Re-run this anytime from the sidebar's App \
-         section, and press Ctrl+K whenever you're looking for something.",
+        "The tour is four stops on the live map \u{2014} the timeline, the products, where \
+         everything else lives, and how to read a storm.",
     );
+    ui.add_space(6.0);
+    let mut out = None;
+    ui.horizontal(|ui| {
+        if ui.button("Take the 60-second tour").clicked() {
+            out = Some(true);
+        }
+        if ui.button("Explore on my own").clicked() {
+            out = Some(false);
+        }
+    });
+    ui.add_space(4.0);
+    ui.small(if cfg!(target_os = "android") {
+        "Both are re-runnable later from Layers \u{2192} App, and from Settings \u{2192} General."
+    } else {
+        "Both are re-runnable later from the sidebar's App section, Ctrl+K, and Settings \
+         \u{2192} General."
+    });
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_last_card_is_the_finish() {
+        // `show` offers Next while `step + 1 < len`, so the last index has to be the summary —
+        // otherwise the wizard has no way out but its ✕.
+        assert_eq!(TITLES.len(), 4);
+        assert_eq!(TITLES[TITLES.len() - 1], "Ready");
+    }
+
+    #[test]
+    fn start_resets_to_the_first_card() {
+        let mut w = Wizard {
+            open: false,
+            step: 3,
+            filter: "KTLX".into(),
+        };
+        w.start();
+        assert!(w.open && w.step == 0 && w.filter.is_empty());
+    }
 }

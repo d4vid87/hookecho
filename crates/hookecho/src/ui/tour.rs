@@ -45,21 +45,12 @@ const TITLES: [&str; 4] = [
     "What's out there",
 ]; // len = the "(n/4)" denominator
 
+#[derive(Default)]
 pub struct Tour {
     pub open: bool,
     step: usize,
     /// Signals as they were when the current step opened.
     base: Option<Signals>,
-}
-
-impl Default for Tour {
-    fn default() -> Self {
-        Self {
-            open: false,
-            step: 0,
-            base: None,
-        }
-    }
 }
 
 impl Tour {
