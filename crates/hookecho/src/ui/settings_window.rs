@@ -57,6 +57,9 @@ pub struct SettingsWindow {
     storage: Option<std::sync::mpsc::Receiver<Vec<crate::storage::Entry>>>,
     #[cfg(not(target_arch = "wasm32"))]
     storage_rows: Option<Vec<crate::storage::Entry>>,
+    /// Set by the General tab's two buttons; the app drains them after `show`.
+    pub run_wizard: bool,
+    pub run_tour: bool,
     /// True while a keypress is being captured — the app stands its global hotkey table down so
     /// binding `A` doesn't also toggle the alert panel.
     pub capturing: bool,
@@ -117,7 +120,9 @@ impl SettingsWindow {
                 });
                 ui.separator();
                 match self.tab {
-                    Tab::General => general_tab(ui, settings),
+                    Tab::General => {
+                        general_tab(ui, settings, &mut self.run_wizard, &mut self.run_tour)
+                    }
                     Tab::Palettes => self.palettes_tab(ui, settings, palettes),
                     Tab::Units => units_tab(ui, settings),
                     Tab::Basemaps => basemaps_tab(ui, settings),
@@ -612,7 +617,12 @@ fn sync_tab(ui: &mut egui::Ui, settings: &mut Settings, sync: &SyncView) -> Opti
     action
 }
 
-fn general_tab(ui: &mut egui::Ui, settings: &mut Settings) {
+fn general_tab(
+    ui: &mut egui::Ui,
+    settings: &mut Settings,
+    run_wizard: &mut bool,
+    run_tour: &mut bool,
+) {
     egui::Grid::new("general_grid")
         .num_columns(2)
         .spacing([12.0, 8.0])
@@ -662,6 +672,26 @@ fn general_tab(ui: &mut egui::Ui, settings: &mut Settings) {
     if !valid && !settings.default_site.is_empty() {
         ui.colored_label(egui::Color32::YELLOW, "⚠ unknown site id");
     }
+
+    ui.add_space(8.0);
+    ui.separator();
+    ui.strong("Getting started");
+    ui.horizontal(|ui| {
+        if ui
+            .button("Setup wizard\u{2026}")
+            .on_hover_text("Re-run first-time setup")
+            .clicked()
+        {
+            *run_wizard = true;
+        }
+        if ui
+            .button("Take the tour\u{2026}")
+            .on_hover_text("A 60-second walk through the app's controls")
+            .clicked()
+        {
+            *run_tour = true;
+        }
+    });
 
     ui.add_space(8.0);
     ui.separator();

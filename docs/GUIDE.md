@@ -7,8 +7,10 @@ parts that need a filesystem or GPS.
 
 ## Getting oriented
 
-First launch runs the setup wizard: home radar site, theme, how warnings reach
-you. After that the whole app is four regions — **left sidebar** (site, product,
+First launch runs a four-card setup: home radar site, map and theme, how
+warnings reach you. Its last card offers a 60-second tour of the live map; take
+it or skip it, and re-run either from the sidebar's **App** section, `Ctrl+K`,
+or **Settings → General**. After that the whole app is four regions — **left sidebar** (site, product,
 tilt, every layer, window, tool and setting), **bottom bar** (the timeline),
 **right edge** (the color scale for what you're looking at), and the map.
 

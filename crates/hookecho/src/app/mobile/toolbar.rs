@@ -113,6 +113,12 @@ impl crate::app::HookEchoApp {
                 });
             }
         });
+        // Tour spotlights: the dock is five even slots, Layers first and Alerts last.
+        let slot = rect.width() / 5.0;
+        let slot_rect =
+            |i: f32| Rect::from_min_size(rect.min + vec2(slot * i, 0.0), vec2(slot, rect.height()));
+        self.tour_anchors.menu = Some(slot_rect(0.0));
+        self.tour_anchors.alerts = Some(slot_rect(4.0));
     }
 
     /// The slim chip row along the top edge: site + VCP on the left, the armed-tool status in the

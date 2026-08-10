@@ -291,9 +291,6 @@ pub struct Settings {
     /// First-run setup wizard completed (or dismissed). `false` shows it at startup.
     #[serde(default)]
     pub setup_done: bool,
-    /// The one-time callouts pointing at the floating chrome have been dismissed.
-    #[serde(default)]
-    pub coach_done: bool,
     /// Sound played when a new NWS warning appears (gated by `alert_sound`).
     #[serde(default)]
     pub warn_sound: AlertSound,
@@ -665,7 +662,6 @@ impl Default for Settings {
             rain_alerts: false,
             rain_sound: AlertSound::default(),
             setup_done: false,
-            coach_done: false,
             warn_sound: AlertSound::default(),
             tds_sound: AlertSound::default(),
             rotation_sound: default_rotation_sound(),
@@ -866,6 +862,14 @@ mod tests {
     }
 
     #[test]
+    fn a_settings_file_from_the_coach_mark_era_still_loads() {
+        // `coach_done` went away with the coach marks; every installed settings.json still has it.
+        let s: Settings =
+            serde_json::from_str(r#"{"coach_done": true, "setup_done": true}"#).unwrap();
+        assert!(s.setup_done);
+    }
+
+    #[test]
     fn roundtrips() {
         let s = Settings {
             workspaces: Vec::new(),
@@ -951,7 +955,6 @@ mod tests {
             rain_alerts: true,
             rain_sound: AlertSound::Ding,
             setup_done: true,
-            coach_done: true,
             warn_sound: AlertSound::Siren,
             tds_sound: AlertSound::Custom("/tmp/tds.wav".to_string()),
             rotation_sound: AlertSound::Siren,

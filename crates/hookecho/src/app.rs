@@ -1097,6 +1097,8 @@ pub(crate) enum AppWindow {
     Climatology,
     LayerManager,
     Wizard,
+    /// The spotlight tour of the live chrome.
+    Tour,
     About,
 }
 
@@ -1627,6 +1629,9 @@ pub struct HookEchoApp {
     couplet_cache: Option<((usize, String, usize), Vec<wxdata::rotation::CoupletHit>)>,
     site_dialog: Option<ui::site_dialog::SiteDialog>,
     wizard: ui::wizard::Wizard,
+    /// The optional spotlight tour, and where the chrome drew the things it points at this frame.
+    tour: ui::tour::Tour,
+    tour_anchors: ui::tour::TourAnchors,
     settings_window: ui::settings_window::SettingsWindow,
     /// Active color tables (one per moment); reloaded when the palette settings change.
     palettes: Palettes,
@@ -2380,6 +2385,8 @@ impl HookEchoApp {
                 }
                 w
             },
+            tour: Default::default(),
+            tour_anchors: Default::default(),
             settings_window: Default::default(),
             palettes: Palettes::default(),
             live_stream: None,
@@ -5438,7 +5445,9 @@ impl HookEchoApp {
         let mosaic = self.mosaic_status();
         let mut etop_dbz = self.settings.etop_dbz;
         let mut hide = false;
-        egui::Panel::left("sidebar")
+        // Tour spotlights, recorded from inside the panel (no `self` reachable in there).
+        let mut alerts_rect = None;
+        let sidebar_rect = egui::Panel::left("sidebar")
             .exact_size(264.0)
             .show(root, |ui| {
                 // Title on the same line as the tabs: the name is branding, not a section, and
@@ -5461,7 +5470,9 @@ impl HookEchoApp {
                     } else {
                         format!("Alerts ({alert_count})")
                     };
-                    if ui.selectable_label(alerts_tab, label).clicked() {
+                    let alerts_hit = ui.selectable_label(alerts_tab, label);
+                    alerts_rect = Some(alerts_hit.rect);
+                    if alerts_hit.clicked() {
                         alerts_tab = true;
                     }
                     // Collapse, on the row it collapses. The floating button that brings the
@@ -5576,7 +5587,11 @@ impl HookEchoApp {
                 egui::CollapsingHeader::new("App")
                     .default_open(false)
                     .show(ui, |ui| self.app_rows(ui));
-            });
+            })
+            .response
+            .rect;
+        self.tour_anchors.menu = Some(sidebar_rect);
+        self.tour_anchors.alerts = alerts_rect;
         self.show_alert_panel = alerts_tab;
         self.settings.mute_alerts = muted;
         if hide {
@@ -5656,6 +5671,8 @@ impl HookEchoApp {
         let dvr = self.dvr_depth();
         // Edited through a local so the pill closure keeps its single `&mut self.views` borrow.
         let mut loop_frames = self.settings.live_loop_frames;
+        // Where the scrubber lands, for the tour's spotlight (same reason: no `self` in there).
+        let mut scrub_rect = None;
         egui::Panel::bottom("timeline_bar")
             .exact_size(44.0)
             .show(root, |ui| {
@@ -5792,6 +5809,7 @@ impl HookEchoApp {
                         [slider_w, 20.0],
                         egui::Slider::new(&mut ph_idx, 0..=last).show_value(false),
                     );
+                    scrub_rect = Some(resp.rect);
                     if resp.changed() {
                         t.playhead = ph_idx;
                         t.playing = false;
@@ -5859,6 +5877,7 @@ impl HookEchoApp {
                 });
             });
         self.settings.live_loop_frames = loop_frames;
+        self.tour_anchors.timeline = scrub_rect;
         if go_head {
             self.views[self.active].timeline.go_head();
         }
@@ -5903,49 +5922,56 @@ impl HookEchoApp {
         let mut thr = self.views[self.active].thresholds[mi];
         let (vmin, vmax) = moment.value_range();
         let (unit_factor, unit_label) = display_units(moment, &self.settings);
-        ui.horizontal(|ui| {
-            if ui
-                .button(format!("{}  {site}", egui_phosphor::regular::BROADCAST))
-                .on_hover_text("Choose the radar site")
-                .clicked()
-            {
-                actions.open_site_dialog = true;
-            }
-            ui.label(
-                egui::RichText::new(crate::products::name(moment, srv))
-                    .size(style::FONT_BASE)
-                    .strong(),
-            );
-        });
+        let head_rect = ui
+            .horizontal(|ui| {
+                if ui
+                    .button(format!("{}  {site}", egui_phosphor::regular::BROADCAST))
+                    .on_hover_text("Choose the radar site")
+                    .clicked()
+                {
+                    actions.open_site_dialog = true;
+                }
+                ui.label(
+                    egui::RichText::new(crate::products::name(moment, srv))
+                        .size(style::FONT_BASE)
+                        .strong(),
+                );
+            })
+            .response
+            .rect;
         // Always one line, always present: a wrapping row reflowed between 9- and 14-tilt VCPs and
         // vanished entirely between volumes, which slid the whole layer tree below it up and down.
         // A fixed-height horizontal scroll keeps the sidebar still and scrolls the extra tilts.
-        ui.scope(|ui| {
-            ui.set_height(TILT_ROW_H);
-            egui::ScrollArea::horizontal()
-                .id_salt("tilt_row")
-                .show(ui, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label(
-                            egui::RichText::new("Tilt")
-                                .size(style::FONT_SM)
-                                .color(egui::Color32::from_gray(150)),
-                        )
-                        .on_hover_text("How high above the ground the beam is looking");
-                        if elevations.is_empty() {
-                            ui.weak("\u{2014}");
-                        }
-                        for (i, angle) in elevations.iter().enumerate() {
-                            if ui
-                                .selectable_label(i == tilt, format!("{angle:.1}\u{b0}"))
-                                .clicked()
-                            {
-                                pick_tilt = Some(i);
+        let tilt_rect = ui
+            .scope(|ui| {
+                ui.set_height(TILT_ROW_H);
+                egui::ScrollArea::horizontal()
+                    .id_salt("tilt_row")
+                    .show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            ui.label(
+                                egui::RichText::new("Tilt")
+                                    .size(style::FONT_SM)
+                                    .color(egui::Color32::from_gray(150)),
+                            )
+                            .on_hover_text("How high above the ground the beam is looking");
+                            if elevations.is_empty() {
+                                ui.weak("\u{2014}");
                             }
-                        }
+                            for (i, angle) in elevations.iter().enumerate() {
+                                if ui
+                                    .selectable_label(i == tilt, format!("{angle:.1}\u{b0}"))
+                                    .clicked()
+                                {
+                                    pick_tilt = Some(i);
+                                }
+                            }
+                        });
                     });
-                });
-        });
+            })
+            .response
+            .rect;
+        self.tour_anchors.product = Some(head_rect.union(tilt_rect));
         egui::CollapsingHeader::new("Product options")
             .default_open(false)
             .show(ui, |ui| {
@@ -6990,6 +7016,12 @@ impl HookEchoApp {
                 false,
             ),
             (W::Wizard, "Setup wizard…", "Re-run first-time setup", false),
+            (
+                W::Tour,
+                "Take the tour…",
+                "A 60-second walk through the app's controls",
+                false,
+            ),
         ] {
             // The raymarch samples a `texture_3d<u32>`, which WebGL2 does not guarantee; on wasm
             // the entry would open a black window.
@@ -7211,6 +7243,7 @@ impl HookEchoApp {
                 }
                 W::LayerManager => self.layer_window_open = true,
                 W::Wizard => self.wizard.start(),
+                W::Tour => self.tour.start(),
                 W::About => {
                     self.about_open = true;
                     self.check_for_update(ctx);
@@ -12279,6 +12312,9 @@ impl HookEchoApp {
             if ui.button("Setup wizard…").clicked() {
                 self.wizard.start();
             }
+            if ui.button("Take the tour…").clicked() {
+                self.tour.start();
+            }
             if ui.button("Exit").clicked() {
                 ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
             }
@@ -12566,97 +12602,6 @@ impl HookEchoApp {
                 }
                 ShotDest::Loop => self.record_loop_frame(&image),
             }
-        }
-    }
-
-    /// One-time callouts pointing at the three floating surfaces a newcomer has to find: the
-    /// search pill, the Layers button, and the timeline.
-    ///
-    /// Existing users see these once too — the chrome is new to them as well, which is the point.
-    /// ponytail: three hardcoded callouts, no tour framework; a real tour can come if the set grows.
-    fn coach_marks(&mut self, ctx: &egui::Context) {
-        use crate::ui::style;
-        if !self.settings.setup_done || self.settings.coach_done || self.wizard.open {
-            return;
-        }
-        let accent = crate::theme::accent(self.settings.theme);
-        // Any real interaction — a click, or a touch gesture — means the cards have been read.
-        let done = ctx.input(|i| i.pointer.any_click() || i.multi_touch().is_some());
-        // Mobile has its own chrome (dock + sheets) and its own gestures, so it gets its own
-        // three callouts rather than pointing at pills that aren't there.
-        let marks: &[(&str, egui::Align2, egui::Vec2, &str)] = if cfg!(target_os = "android") {
-            &[
-                (
-                    "coach_m_dock",
-                    egui::Align2::CENTER_BOTTOM,
-                    egui::vec2(0.0, -110.0),
-                    "Everything lives down here: play the loop, pick layers and products, change radar site.",
-                ),
-                (
-                    "coach_m_map",
-                    egui::Align2::CENTER_CENTER,
-                    egui::vec2(0.0, -60.0),
-                    "Pinch to zoom, drag to pan. Long-press anywhere on the map for what's there — alerts, storms, distance.",
-                ),
-                (
-                    "coach_m_time",
-                    egui::Align2::CENTER_BOTTOM,
-                    egui::vec2(0.0, -240.0),
-                    "This row is the timeline: tap the frame count to scrub back through the storm, or jump to live.",
-                ),
-            ]
-        } else {
-            &[
-            (
-                "coach_sidebar",
-                egui::Align2::LEFT_TOP,
-                egui::vec2(340.0, 60.0),
-                "Everything lives in this sidebar: every product, layer and tool, each with a plain-English description. Ctrl+K jumps to its search.",
-            ),
-            (
-                "coach_product",
-                egui::Align2::LEFT_BOTTOM,
-                egui::vec2(340.0, -60.0),
-                "The current product, its tilt, and its expert knobs live at the top of the sidebar.",
-            ),
-            (
-                "coach_timeline",
-                egui::Align2::CENTER_BOTTOM,
-                egui::vec2(0.0, -14.0),
-                "This is the timeline — play the loop, scrub back through the storm, jump to live.",
-            ),
-            ]
-        };
-        for (id, align, offset, text) in marks {
-            let (id, align, offset, text) = (*id, *align, *offset, *text);
-            egui::Area::new(egui::Id::new(id))
-                .constrain_to(self.chrome_rect)
-                .anchor(align, offset)
-                .order(egui::Order::Foreground)
-                // The map card sits dead center on a phone, and an interactable layer there makes
-                // every pinch a no-op until it's dismissed. The cards take no input at all; any
-                // tap or gesture anywhere dismisses the whole set (below).
-                .interactable(false)
-                .show(ctx, |ui| {
-                    style::glass(ui, 240)
-                        .stroke(egui::Stroke::new(1.5, accent))
-                        .show(ui, |ui| {
-                            ui.set_max_width(300.0);
-                            ui.label(
-                                egui::RichText::new(text)
-                                    .size(style::FONT_BASE)
-                                    .color(egui::Color32::from_gray(238)),
-                            );
-                            ui.label(
-                                egui::RichText::new("Tap anywhere to dismiss")
-                                    .size(style::FONT_SM)
-                                    .color(accent),
-                            );
-                        });
-                });
-        }
-        if done {
-            self.settings.coach_done = true;
         }
     }
 
@@ -13991,6 +13936,9 @@ impl eframe::App for HookEchoApp {
                 .show(root, |_| {});
         }
 
+        // The tour highlights real chrome, so the rects have to come from this frame's draw.
+        self.tour_anchors = Default::default();
+
         // Docked desktop chrome. Declared before every floating Area so those constrain to what's
         // left of the viewport (`self.chrome_rect`) instead of covering the bars.
         if !cfg!(target_os = "android") && !self.obs_mode {
@@ -14012,7 +13960,6 @@ impl eframe::App for HookEchoApp {
         let mut actions = ui::layer_options::UiActions::default();
         if cfg!(target_os = "android") && !self.obs_mode {
             actions = self.mobile_chrome(root, ctx);
-            self.coach_marks(ctx);
         }
         self.apply_ui_actions(actions, ctx);
 
@@ -14022,7 +13969,22 @@ impl eframe::App for HookEchoApp {
             self.sidebar_button(ctx);
             self.info_chip(ctx);
             self.error_chip(ctx);
-            self.coach_marks(ctx);
+        }
+
+        // The spotlight tour, over the chrome it points at. Paused under the wizard and the
+        // cheat sheet — all three draw on `Order::Foreground` and would fight for it.
+        if self.tour.open && !self.wizard.open && !self.show_cheatsheet {
+            let v = &self.views[self.active];
+            let sig = ui::tour::Signals {
+                moment: v.moment,
+                srv: v.srv,
+                playhead: v.timeline.playhead,
+                following: v.timeline.following,
+            };
+            let accent = crate::theme::accent(self.settings.theme);
+            self.tour.advance_if_done(sig);
+            let anchors = self.tour_anchors;
+            self.tour.show(ctx, &anchors, sig, accent);
         }
 
         // One quiet check per session, once the app has settled — so a stale build tells you so
@@ -14056,7 +14018,7 @@ impl eframe::App for HookEchoApp {
 
         // First-run setup wizard.
         let active = self.active;
-        if let Some(site) = ui::wizard::show(
+        if let Some(fin) = ui::wizard::show(
             ctx,
             &mut self.wizard,
             &mut self.settings,
@@ -14066,11 +14028,15 @@ impl eframe::App for HookEchoApp {
             self.settings.setup_done = true;
             self.settings.save();
             let v = &mut self.views[self.active];
-            v.site = Some(site.clone());
-            ui::site_dialog::center_on_site(&mut v.camera, &site);
+            v.site = Some(fin.site.clone());
+            ui::site_dialog::center_on_site(&mut v.camera, &fin.site);
+            if fin.take_tour {
+                self.tour.start();
+            }
         }
         if !self.wizard.open && !self.settings.setup_done {
-            // Dismissed without finishing: don't nag every frame, but keep for next launch.
+            // Dismissed without finishing. Setup is optional and re-runnable from three places,
+            // so take the ✕ at its word rather than reopening this on every launch.
             self.settings.setup_done = true;
             self.settings.save();
         }
@@ -14104,6 +14070,12 @@ impl eframe::App for HookEchoApp {
             self.settings_window
                 .show(ctx, &mut self.settings, &self.palettes, sync_view, &entries);
         self.capture_key = self.settings_window.capturing;
+        if std::mem::take(&mut self.settings_window.run_wizard) {
+            self.wizard.start();
+        }
+        if std::mem::take(&mut self.settings_window.run_tour) {
+            self.tour.start();
+        }
         match sync_action {
             Some(ui::settings_window::SyncAction::SignIn) => self.sync_sign_in(),
             Some(ui::settings_window::SyncAction::SignOut) => self.sync_sign_out(),
