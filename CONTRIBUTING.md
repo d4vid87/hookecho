@@ -17,6 +17,17 @@ clear before it lands.
 Rule of thumb: if it fetches or decodes, it belongs in `wxdata`; if it draws or
 holds UI state, it belongs in `hookecho`.
 
+[ARCHITECTURE.md](ARCHITECTURE.md) goes a level deeper: the frame loop, where
+state lives, the render layers, and the sharp edges worth knowing before you
+change one.
+
+## Issues
+
+Bug reports and feature requests get a first reply within about a week. There is
+one maintainer and no company behind this, so an issue that sits is unread, not
+rejected — a nudge on the thread is welcome. Issues tagged `good first issue`
+are ones with a known shape and no hidden context; take one without asking.
+
 ## The gate
 
 Every commit is expected to pass:
