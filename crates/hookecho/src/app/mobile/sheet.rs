@@ -101,6 +101,11 @@ impl crate::app::HookEchoApp {
                 ),
             )
         } else {
+            // The tour's first two stops point at the scrubber and the product chips, which only
+            // exist once the sheet is off Peek. Open it for them rather than spotlighting nothing.
+            if self.tour.wants_sheet() && self.mobile_snap == SheetSnap::Peek {
+                self.mobile_snap = SheetSnap::Half;
+            }
             let target = self.mobile_snap.height(content);
             // While a drag is live the finger owns the height; otherwise it eases to the snap.
             let h = match self.mobile_sheet_drag {
@@ -281,10 +286,9 @@ impl crate::app::HookEchoApp {
             let slider = egui::Slider::new(&mut idx, 0.0..=(info.nframes - 1) as f32)
                 .show_value(false)
                 .handle_shape(egui::style::HandleShape::Circle);
-            if ui
-                .add_sized([ui.available_width(), m3::MIN_TARGET], slider)
-                .changed()
-            {
+            let scrub = ui.add_sized([ui.available_width(), m3::MIN_TARGET], slider);
+            self.tour_anchors.timeline = Some(scrub.rect);
+            if scrub.changed() {
                 let t = &mut self.views[active].timeline;
                 t.playhead = idx.round() as usize;
                 t.following = false;
@@ -323,7 +327,7 @@ impl crate::app::HookEchoApp {
             (Moment::DifferentialReflectivity, false, "ZDR"),
             (Moment::DifferentialPhase, false, "KDP"),
         ];
-        ui.horizontal_wrapped(|ui| {
+        let chips = ui.horizontal_wrapped(|ui| {
             for (m, want_srv, label) in rows {
                 let selected = info.moment == m && (m != Moment::Velocity || info.srv == want_srv);
                 if m3::chip(ui, label, selected).clicked() {
@@ -334,6 +338,7 @@ impl crate::app::HookEchoApp {
                 }
             }
         });
+        self.tour_anchors.product = Some(chips.response.rect);
         // ---- Tilt ----
         if info.n_tilt > 1 {
             ui.add_space(m3::SP_2);

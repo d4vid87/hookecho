@@ -99,6 +99,8 @@ pub mod sounding_window;
 /// Live station telemetry cards.
 pub mod station_card;
 pub mod style;
+/// The optional spotlight tour of the live chrome.
+pub mod tour;
 pub mod verify_window;
 pub mod video_window;
 pub mod volume3d_window;

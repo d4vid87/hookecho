@@ -177,6 +177,7 @@ impl super::HookEchoApp {
             || self.show_cheatsheet
             || self.about_open
             || self.wizard.open
+            || self.tour.open
             || self.cells_window.open
             || self.forecast_open
             || self.settings_window.open
@@ -226,6 +227,7 @@ impl super::HookEchoApp {
             self.show_cheatsheet,
             self.about_open,
             self.wizard.open,
+            self.tour.open,
             self.cells_window.open,
             self.forecast_open,
             self.settings_window.open,
