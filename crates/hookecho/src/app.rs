@@ -14143,10 +14143,19 @@ impl eframe::App for HookEchoApp {
                 Err(e) => self.marker_window.status = Some(e),
             }
         }
-        if let Some(query) = self
+        let query = self
             .marker_window
-            .show(ctx, &mut self.settings, &self.marker_icon_tex)
-        {
+            .show(ctx, &mut self.settings, &self.marker_icon_tex);
+        // The map popup indexes into the same list: a delete above it leaves it describing the
+        // wrong marker, which is the one way this UI can lie about which place you are editing.
+        if let (Some(gone), Some(open)) = (self.marker_window.removed, self.marker_popup) {
+            self.marker_popup = match gone.cmp(&open) {
+                std::cmp::Ordering::Less => Some(open - 1),
+                std::cmp::Ordering::Equal => None,
+                std::cmp::Ordering::Greater => Some(open),
+            };
+        }
+        if let Some(query) = query {
             self.marker_window.searching = true;
             self.marker_window.status = Some("Searching…".into());
             let http = self.http.clone();
