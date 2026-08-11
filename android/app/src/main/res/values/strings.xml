@@ -1,4 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Hook Echo-WX</string>
+    <string name="widget_radar_image_desc">Last radar view drawn by the app</string>
 </resources>

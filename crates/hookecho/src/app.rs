@@ -1285,6 +1285,8 @@ enum ShotDest {
     Loop,
     /// Pushed to the user's ntfy topic as an attachment, captioned with this title.
     Push(String),
+    /// Written silently for the Android home-screen widget to pick up.
+    Widget(std::path::PathBuf),
 }
 
 /// In-progress loop export (GIF or MP4): steps the active timeline, grabbing one screenshot per
@@ -1842,6 +1844,8 @@ pub struct HookEchoApp {
     /// Keep the GOES frame on the active pane's radar clock rather than on a hand-picked frame.
     goes_follow_radar: bool,
     goes_times_rx: Option<std::sync::mpsc::Receiver<Vec<chrono::DateTime<chrono::Utc>>>>,
+    /// When the Android widget snapshot was last written.
+    widget_shot_at: Option<Instant>,
     /// A warning that wants a radar picture pushed after it (see `settings.ntfy_snapshot`).
     snapshot_push: Option<String>,
     /// Per-location cooldown for the rotation-near-a-watched-place alert.
@@ -2527,6 +2531,7 @@ impl HookEchoApp {
             goes_time_idx: None,
             goes_follow_radar: true,
             goes_times_rx: None,
+            widget_shot_at: None,
             snapshot_push: None,
             rotation_alerted: std::collections::HashMap::new(),
             last_chime: None,
@@ -12324,6 +12329,14 @@ impl HookEchoApp {
                 ui.checkbox(&mut v.show_radar, "Radar");
                 ui.checkbox(&mut v.show_legend, "Legend");
             }
+            if cfg!(target_os = "android")
+                && ui
+                    .button("\u{1f5d6} Picture-in-picture")
+                    .on_hover_text("Shrink to a floating window with the loop still playing")
+                    .clicked()
+            {
+                crate::platform::enter_pip();
+            }
             if ui
                 .checkbox(&mut self.obs_mode, "Streamer / OBS mode (F8)")
                 .on_hover_text(
@@ -12768,6 +12781,62 @@ impl HookEchoApp {
         }
     }
 
+    /// Write the widget's picture, downscaled, and tell the widget about it.
+    ///
+    /// Downscaled because `RemoteViews.setImageViewBitmap` sends the bitmap over a Binder
+    /// transaction, and a phone-screen-sized bitmap is comfortably past the ~1 MB limit — the
+    /// widget would throw rather than draw. A home-screen tile is a few hundred pixels wide.
+    fn save_widget_snapshot(&self, path: &std::path::Path, image: &egui::ColorImage) {
+        const MAX_W: u32 = 640;
+        let (w, h) = (image.size[0] as u32, image.size[1] as u32);
+        if w == 0 || h == 0 {
+            return;
+        }
+        let mut rgba = Vec::with_capacity((w * h * 4) as usize);
+        for px in &image.pixels {
+            rgba.extend_from_slice(&[px.r(), px.g(), px.b(), px.a()]);
+        }
+        let Some(buf) = image::RgbaImage::from_raw(w, h, rgba) else {
+            return;
+        };
+        let small = if w > MAX_W {
+            let nh = (h as f32 * MAX_W as f32 / w as f32).round().max(1.0) as u32;
+            image::imageops::resize(&buf, MAX_W, nh, image::imageops::FilterType::Triangle)
+        } else {
+            buf
+        };
+        // Silent: nobody asked for this one, so a toast would be the app talking to itself. A
+        // failed write costs the widget one stale caption.
+        match small.save(path) {
+            Ok(()) => crate::platform::refresh_radar_widget(),
+            Err(e) => log::warn!("widget snapshot failed: {e}"),
+        }
+    }
+
+    /// Keep the Android home-screen widget's picture fresh while the app is on screen.
+    ///
+    /// Every few minutes, not every scan: the widget's own clock cannot beat 30 minutes anyway,
+    /// and a full-resolution PNG per volume is a write nobody asked for. Nothing runs off Android.
+    fn drive_widget_snapshot(&mut self, ctx: &egui::Context) {
+        const EVERY: std::time::Duration = std::time::Duration::from_secs(300);
+        if !cfg!(target_os = "android")
+            || self.screenshot_pending.is_some()
+            || self.share_card.is_some()
+            || self.views[self.active].volume.is_none()
+        {
+            return;
+        }
+        if self.widget_shot_at.is_some_and(|t| t.elapsed() < EVERY) {
+            return;
+        }
+        let Some(path) = crate::paths::widget_snapshot() else {
+            return;
+        };
+        self.widget_shot_at = Some(Instant::now());
+        self.screenshot_pending = Some(ShotDest::Widget(path));
+        ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::UserData::default()));
+    }
+
     /// A warning asked for a radar picture: take one, as long as nothing else is mid-capture.
     ///
     /// Deliberately the live view rather than a headless render — it is the picture the user is
@@ -12947,6 +13016,7 @@ impl HookEchoApp {
                 }
                 ShotDest::Loop => self.record_loop_frame(&image),
                 ShotDest::Push(title) => self.push_snapshot(title, &image),
+                ShotDest::Widget(path) => self.save_widget_snapshot(&path, &image),
             }
         }
     }
@@ -13793,6 +13863,7 @@ impl eframe::App for HookEchoApp {
         }
 
         self.drive_snapshot_push(ctx);
+        self.drive_widget_snapshot(ctx);
         self.save_pending_screenshot(ctx);
         self.load_marker_icons(ctx);
         self.drive_loop_export(ctx);
@@ -14306,7 +14377,10 @@ impl eframe::App for HookEchoApp {
 
         // Docked desktop chrome. Declared before every floating Area so those constrain to what's
         // left of the viewport (`self.chrome_rect`) instead of covering the bars.
-        if !cfg!(target_os = "android") && !self.obs_mode {
+        // Picture-in-picture counts as chrome-free for the same reason OBS mode does: at that
+        // size the panels are the whole window, and nothing in a PiP window takes touches anyway.
+        let bare = self.obs_mode || crate::platform::in_pip();
+        if !cfg!(target_os = "android") && !bare {
             if !self.settings.hide_sidebar {
                 self.sidebar(root, ctx);
             }
@@ -14323,14 +14397,14 @@ impl eframe::App for HookEchoApp {
         // keep swallowing gestures over a sheet that closed.
         self.mobile_occlusion.clear();
         let mut actions = ui::layer_options::UiActions::default();
-        if cfg!(target_os = "android") && !self.obs_mode {
+        if cfg!(target_os = "android") && !bare {
             actions = self.mobile_chrome(root, ctx);
         }
         self.apply_ui_actions(actions, ctx);
 
         // Floating map-first chrome (desktop): a hamburger, an alert bell, the two bottom pills.
         // Everything else is one drawer behind the hamburger.
-        if !cfg!(target_os = "android") && !self.obs_mode {
+        if !cfg!(target_os = "android") && !bare {
             self.sidebar_button(ctx);
             self.info_chip(ctx);
             self.error_chip(ctx);

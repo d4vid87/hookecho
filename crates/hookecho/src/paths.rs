@@ -70,6 +70,12 @@ pub fn import_file() -> Option<PathBuf> {
     BASE.get().map(|b| b.join("import.txt"))
 }
 
+/// Where the app writes the picture the home-screen radar widget shows (Android only). Sits at
+/// the files-dir root, which is what `Context.filesDir` resolves to on the Kotlin side.
+pub fn widget_snapshot() -> Option<PathBuf> {
+    BASE.get().map(|b| b.join("widget-radar.png"))
+}
+
 /// Cache root (tiles, vector tiles, climatology CSV).
 pub fn cache_dir() -> Option<PathBuf> {
     root("cache")

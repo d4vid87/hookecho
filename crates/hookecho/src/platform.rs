@@ -504,6 +504,99 @@ mod android_back {
     }
 }
 
+/// Picture-in-picture: shrink the app into a floating window with the loop still playing.
+///
+/// Two directions again, same shape as predictive back: Rust asks the activity to enter PiP, and
+/// the activity calls back when the mode changes so the UI can drop its chrome — at PiP size a
+/// sidebar and a timeline leave no map, and nothing in a PiP window is touchable anyway.
+#[cfg(target_os = "android")]
+mod android_pip {
+    use jni::objects::JObject;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    static IN_PIP: AtomicBool = AtomicBool::new(false);
+
+    /// # Safety
+    /// Called by the JVM with a valid env/object pair; touches only an atomic.
+    #[unsafe(no_mangle)]
+    pub extern "system" fn Java_zip_batman_hookecho_MainActivity_nativeOnPipChanged(
+        _env: jni::JNIEnv,
+        _this: JObject,
+        in_pip: jni::sys::jboolean,
+    ) {
+        IN_PIP.store(in_pip != 0, Ordering::Relaxed);
+    }
+
+    pub fn in_pip() -> bool {
+        IN_PIP.load(Ordering::Relaxed)
+    }
+
+    /// Tell the home-screen radar widget a new picture is on disk.
+    pub fn refresh_radar_widget() {
+        if let Err(e) = refresh() {
+            log::warn!("radar widget refresh failed: {e:?}");
+        }
+    }
+
+    fn refresh() -> jni::errors::Result<()> {
+        use jni::objects::{JClass, JValue};
+        let Some(app) = super::android::app() else {
+            return Ok(());
+        };
+        let vm = unsafe { jni::JavaVM::from_raw(app.vm_as_ptr() as *mut jni::sys::JavaVM) }?;
+        let mut env = vm.attach_current_thread()?;
+        let activity = unsafe { JObject::from_raw(app.activity_as_ptr() as jni::sys::jobject) };
+        let class = env.find_class("zip/batman/hookecho/RadarWidget")?;
+        let class = JClass::from(class);
+        let res = env.call_static_method(
+            &class,
+            "refresh",
+            "(Landroid/content/Context;)V",
+            &[JValue::Object(&activity)],
+        );
+        if res.is_err() {
+            let _ = env.exception_clear();
+        }
+        res.map(|_| ())
+    }
+
+    /// Ask the activity for PiP. Failures are logged and otherwise ignored: a device without the
+    /// feature simply stays as it was.
+    pub fn enter_pip() {
+        if let Err(e) = call() {
+            log::warn!("picture-in-picture request failed: {e:?}");
+        }
+    }
+
+    fn call() -> jni::errors::Result<()> {
+        let Some(app) = super::android::app() else {
+            return Ok(());
+        };
+        let vm = unsafe { jni::JavaVM::from_raw(app.vm_as_ptr() as *mut jni::sys::JavaVM) }?;
+        let mut env = vm.attach_current_thread()?;
+        let activity = unsafe { JObject::from_raw(app.activity_as_ptr() as jni::sys::jobject) };
+        let res = env.call_method(&activity, "enterPip", "()V", &[]);
+        if res.is_err() {
+            let _ = env.exception_clear();
+        }
+        res.map(|_| ())
+    }
+}
+
+/// Whether the app is currently in a picture-in-picture window (Android only).
+#[cfg(not(target_os = "android"))]
+pub fn in_pip() -> bool {
+    false
+}
+
+/// Shrink into a picture-in-picture window (no-op off Android).
+#[cfg(not(target_os = "android"))]
+pub fn enter_pip() {}
+
+/// Nudge the Android home-screen radar widget after a new snapshot (no-op elsewhere).
+#[cfg(not(target_os = "android"))]
+pub fn refresh_radar_widget() {}
+
 /// Whether a back press/gesture is waiting to be handled (Android only).
 #[cfg(not(target_os = "android"))]
 pub fn take_back_pressed() -> bool {
@@ -959,6 +1052,8 @@ pub use android_back::{set_back_consumed, take_back_pressed};
 pub use android_ime::{clipboard_text, pump_ime, show_soft_input};
 #[cfg(target_os = "android")]
 pub use android_location::start_location;
+#[cfg(target_os = "android")]
+pub use android_pip::{enter_pip, in_pip, refresh_radar_widget};
 #[cfg(target_os = "android")]
 pub use android_tts::speak;
 

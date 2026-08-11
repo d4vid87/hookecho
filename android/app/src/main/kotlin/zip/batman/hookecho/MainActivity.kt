@@ -80,6 +80,35 @@ class MainActivity : GameActivity() {
         File(filesDir, "import.txt").writeText("$pendingImport\t${dest.absolutePath}")
     }
 
+    /**
+     * Called from Rust: shrink the app into a picture-in-picture window so the loop keeps playing
+     * over whatever the user does next. No-op on a device that does not support PiP.
+     */
+    @Suppress("unused")
+    fun enterPip() {
+        runOnUiThread {
+            if (!packageManager.hasSystemFeature(android.content.pm.PackageManager.FEATURE_PICTURE_IN_PICTURE)) {
+                return@runOnUiThread
+            }
+            runCatching {
+                enterPictureInPictureMode(
+                    android.app.PictureInPictureParams.Builder()
+                        .setAspectRatio(android.util.Rational(4, 3))
+                        .build()
+                )
+            }
+        }
+    }
+
+    /**
+     * The Rust side hides its chrome in PiP — at that size a sidebar and a timeline leave no map
+     * at all, and none of it is touchable through a PiP window anyway.
+     */
+    override fun onPictureInPictureModeChanged(inPip: Boolean, config: android.content.res.Configuration) {
+        super.onPictureInPictureModeChanged(inPip, config)
+        nativeOnPipChanged(inPip)
+    }
+
     /** Called from Rust when what back would do changes. */
     @Suppress("unused")
     fun setBackConsumed(consumed: Boolean) {
@@ -87,6 +116,8 @@ class MainActivity : GameActivity() {
     }
 
     private external fun nativeOnBack()
+
+    private external fun nativeOnPipChanged(inPip: Boolean)
 
     /**
      * Back out of the app and the process has to go with it.
