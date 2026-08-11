@@ -354,6 +354,11 @@ pub struct Settings {
     /// Enhanced Echo Tops product; raise it to track the core rather than the anvil.
     #[serde(default = "default_etop_dbz")]
     pub etop_dbz: f32,
+    /// Caption saved and copied images with site, product, valid time and source. On by default:
+    /// a radar picture that leaves the app without those four things cannot be checked by whoever
+    /// receives it.
+    #[serde(default = "default_true")]
+    pub share_card: bool,
     /// Hide the docked sidebar on the left (desktop). A floating button on the map's top-left
     /// brings it back, as does the drawer hotkey.
     #[serde(default)]
@@ -606,6 +611,7 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             default_site: "KTLX".to_string(),
+            share_card: true,
             hide_sidebar: false,
             hide_toolbar: false,
             layer_order: Vec::new(),
@@ -882,6 +888,7 @@ mod tests {
             workspaces: Vec::new(),
             seeded_workspaces: false,
             smooth_radar: false,
+            share_card: true,
             hide_sidebar: false,
             hide_toolbar: false,
             layer_order: Vec::new(),

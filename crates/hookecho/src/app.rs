@@ -1840,6 +1840,9 @@ pub struct HookEchoApp {
     goes_times_rx: Option<std::sync::mpsc::Receiver<Vec<chrono::DateTime<chrono::Utc>>>>,
     /// Where a requested screenshot should go once the image event arrives.
     screenshot_pending: Option<ShotDest>,
+    /// A capture waiting on the share-card footer to be on screen: the destination, and how many
+    /// more frames to draw the footer before asking for the image (see `share_card_footer`).
+    share_card: Option<(ShotDest, u8)>,
     loop_export: Option<LoopExport>,
     /// When true, all panes share the active pane's camera.
     link_cameras: bool,
@@ -2514,6 +2517,7 @@ impl HookEchoApp {
             goes_time_idx: None,
             goes_times_rx: None,
             screenshot_pending: None,
+            share_card: None,
             loop_export: None,
             link_cameras: false,
             cells_site: None,
@@ -12248,20 +12252,17 @@ impl HookEchoApp {
             ui.label(egui::RichText::new("Capture").strong());
             if ui.button("Save screenshot…").clicked() {
                 if let Some(path) = crate::dialog::save_path("hookecho.png", "png") {
-                    self.screenshot_pending = Some(ShotDest::File(path));
-                    ui.ctx()
-                        .send_viewport_cmd(egui::ViewportCommand::Screenshot(
-                            egui::UserData::default(),
-                        ));
+                    self.request_capture(ui.ctx(), ShotDest::File(path));
                 }
             }
             if ui.button("Copy view to clipboard").clicked() {
-                self.screenshot_pending = Some(ShotDest::Clipboard);
-                ui.ctx()
-                    .send_viewport_cmd(
-                        egui::ViewportCommand::Screenshot(egui::UserData::default()),
-                    );
+                self.request_capture(ui.ctx(), ShotDest::Clipboard);
             }
+            ui.checkbox(&mut self.settings.share_card, "Caption shared images")
+                .on_hover_text(
+                    "Stamp the site, product, valid time and source onto saved and copied \
+                     images, so a screenshot still says what it is once it leaves here",
+                );
             if ui
                 .add_enabled(
                     self.loop_export.is_none(),
@@ -12560,6 +12561,86 @@ impl HookEchoApp {
                 }
             }
         }
+    }
+
+    /// Ask the viewport for an image, `dest` decides where it lands.
+    ///
+    /// With the share card on, the request waits two frames while [`share_card_footer`] draws the
+    /// caption band, so the capture contains it.
+    ///
+    /// ponytail: the caption is drawn by egui into the frame rather than composited into the
+    /// pixels afterwards — text layout, fonts and the theme are already solved here, and
+    /// compositing them onto a raw RGBA buffer is a rasterizer we would have to grow.
+    fn request_capture(&mut self, ctx: &egui::Context, dest: ShotDest) {
+        if self.settings.share_card {
+            // Two frames: one to lay the band out, one to be sure it is on screen when the
+            // viewport grabs the image.
+            self.share_card = Some((dest, 2));
+            ctx.request_repaint();
+        } else {
+            self.screenshot_pending = Some(dest);
+            ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::UserData::default()));
+        }
+    }
+
+    /// The share card: a caption band across the bottom of the map naming what the picture shows,
+    /// drawn only on the frames a capture is waiting for. A radar screenshot with no site, product
+    /// or time on it is a pretty picture; this is the difference between that and a report.
+    fn share_card_footer(&mut self, ctx: &egui::Context) {
+        let Some((_, frames)) = &mut self.share_card else {
+            return;
+        };
+        *frames -= 1;
+        let fire = *frames == 0;
+
+        let v = &self.views[self.active];
+        let site = v.site.clone().unwrap_or_else(|| "no site".to_string());
+        let product = crate::products::info(v.moment).name.to_string();
+        let time = v
+            .volume
+            .as_ref()
+            .map(|vol| crate::timefmt::fmt_date_clock(vol.time, self.active_tz()))
+            .unwrap_or_default();
+        let accent = crate::theme::accent(self.settings.theme);
+        egui::Area::new(egui::Id::new("share_card"))
+            .order(egui::Order::Foreground)
+            .constrain_to(self.chrome_rect)
+            .anchor(egui::Align2::CENTER_BOTTOM, egui::vec2(0.0, -10.0))
+            .show(ctx, |ui| {
+                crate::ui::style::glass(ui, 245).show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(
+                            egui::RichText::new(&site)
+                                .size(crate::ui::style::FONT_BASE)
+                                .strong()
+                                .color(accent),
+                        );
+                        let mut line = product;
+                        if !time.is_empty() {
+                            line.push_str(" · ");
+                            line.push_str(&time);
+                        }
+                        ui.label(
+                            egui::RichText::new(line)
+                                .size(crate::ui::style::FONT_BASE)
+                                .color(egui::Color32::from_gray(238)),
+                        );
+                        ui.label(
+                            egui::RichText::new("Hook Echo-WX · data: NOAA/NWS")
+                                .size(crate::ui::style::FONT_SM)
+                                .color(egui::Color32::from_gray(160)),
+                        );
+                    });
+                });
+            });
+
+        if fire {
+            // The band is on screen: take the picture, and keep the caption for this one frame.
+            let (dest, _) = self.share_card.take().expect("checked above");
+            self.screenshot_pending = Some(dest);
+            ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::UserData::default()));
+        }
+        ctx.request_repaint();
     }
 
     /// If a screenshot was requested, save the delivered image event to the pending path.
@@ -13970,6 +14051,9 @@ impl eframe::App for HookEchoApp {
             self.info_chip(ctx);
             self.error_chip(ctx);
         }
+
+        // Over everything, and only while a capture is pending.
+        self.share_card_footer(ctx);
 
         // The spotlight tour, over the chrome it points at. Paused under the wizard and the
         // cheat sheet — all three draw on `Order::Foreground` and would fight for it.
