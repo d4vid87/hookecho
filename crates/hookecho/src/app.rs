@@ -1227,6 +1227,11 @@ pub(crate) struct PaletteEntry {
     pub key: Option<String>,
 }
 
+/// GLM flash-extent density grid: cell size in degrees (~5 km), and how far back it counts.
+/// Both fixed — they are legibility choices, not tuning knobs.
+const GLM_FED_CELL_DEG: f64 = 0.05;
+const GLM_FED_WINDOW_MIN: i64 = 15;
+
 /// Refresh cadence (seconds) for a national field layer's product.
 fn field_refresh_secs(layer: crate::render::FieldLayer) -> u64 {
     use crate::render::FieldLayer as FL;
@@ -1257,6 +1262,8 @@ fn field_refresh_secs(layer: crate::render::FieldLayer) -> u64 {
         FL::Cape | FL::Srh => 900,
         // Derived products cost no network: they recompute when the volume does, not on a clock.
         FL::VilLocal | FL::VilDensity | FL::EtopLocal | FL::HailMehs | FL::HailPosh => 60,
+        // Gridded from the GLM feed the app already polls every 20 s; regridding is local work.
+        FL::GlmFed => 60,
     }
 }
 
@@ -5751,6 +5758,8 @@ impl HookEchoApp {
                         egui::CollapsingHeader::new("Layer options")
                             .default_open(false)
                             .show(ui, |ui| {
+                                let glm_options = self.show_glm
+                                    || self.fields.get(&crate::render::FieldLayer::GlmFed).is_some_and(|s| s.show);
                                 crate::ui::layer_options::show(
                                     ui,
                                     &mut self.filters,
@@ -5774,7 +5783,7 @@ impl HookEchoApp {
                                     &mut self.diff_field,
                                     self.diff_valid.as_ref(),
                                     &mut self.settings.lightning_minutes,
-                                    self.show_glm,
+                                    glm_options,
                                     &mut self.settings.glm_goes_west,
                                     self.show_spotters,
                                     &mut self.settings.spotter_range_km,
@@ -6617,6 +6626,13 @@ impl HookEchoApp {
                 "National",
                 "Hydrometeor class (L3)",
                 "What the radar thinks it's seeing: rain, hail, debris",
+                false,
+            ),
+            (
+                FL::GlmFed,
+                "National",
+                "Flash density (GLM)",
+                "Where the satellite flashes are densest \u{2014} the total-lightning field                  behind the individual dots, and where a lightning jump shows up first.",
                 false,
             ),
             (
@@ -14052,6 +14068,7 @@ impl eframe::App for HookEchoApp {
                     | FL::Snowfall
                     | FL::SnowAnalysis
                     | FL::ModelDiff
+                    | FL::GlmFed
             ) {
                 continue;
             }
@@ -14098,7 +14115,8 @@ impl eframe::App for HookEchoApp {
                     | FL::GlobalTemp2m
                     | FL::GlobalWind10m
                     | FL::GlobalPrecip
-                    | FL::ModelDiff => unreachable!(),
+                    | FL::ModelDiff
+                    | FL::GlmFed => unreachable!(),
                 };
                 self.spawn_overlay(ctx, OverlaySource::Field(layer, product));
             }
@@ -14186,7 +14204,8 @@ impl eframe::App for HookEchoApp {
         }
         // GOES lightning: granules land every 20 s, so poll about that often. One in flight at a
         // time — a slow fetch must not queue up behind itself.
-        if self.show_glm
+        let glm_fed_on = self.fields.get(&FL::GlmFed).is_some_and(|s| s.show);
+        if (self.show_glm || glm_fed_on)
             && self
                 .glm_last_poll
                 .is_none_or(|t| t.elapsed().as_secs() >= 20)
@@ -14216,6 +14235,34 @@ impl eframe::App for HookEchoApp {
                 }
                 busy.store(false, std::sync::atomic::Ordering::Relaxed);
             });
+        }
+
+        // GLM flash-extent density: the same flashes the dots come from, gridded. Cheap enough
+        // (one pass over a few thousand points) to do inline on the field-layer cadence rather
+        // than spawning for it.
+        if glm_fed_on
+            && self.fields.get(&FL::GlmFed).is_some_and(|s| {
+                s.last_fetch
+                    .is_none_or(|t| t.elapsed().as_secs() >= field_refresh_secs(FL::GlmFed))
+            })
+        {
+            if let Some(s) = self.fields.get_mut(&FL::GlmFed) {
+                s.last_fetch = Some(Instant::now());
+            }
+            let field = self.glm.lock().ok().and_then(|f| {
+                wxdata::glm::flash_density(
+                    f.flashes(),
+                    GLM_FED_CELL_DEG,
+                    chrono::Duration::minutes(GLM_FED_WINDOW_MIN),
+                    Utc::now(),
+                )
+            });
+            if let Some(field) = field {
+                let cap = self.field_texture_cap();
+                let _ = self
+                    .overlay_tx
+                    .send(OverlayMsg::Field(FL::GlmFed, field.decimated(cap)));
+            }
         }
 
         // Wind particles. HRRR posts hourly, so this gets its own 15-minute clock rather than

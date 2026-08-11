@@ -253,6 +253,114 @@ impl GlmFeed {
     }
 }
 
+/// Grid the recent flashes into flash-extent density: how many flashes fell in each cell over the
+/// last `window`.
+///
+/// Individual flash dots answer "is it electrified"; density answers "where is it electrified
+/// *most*", which is the part that tracks an updraft and the part a jump shows up in. The result
+/// is a plate-carrée [`mrms::MrmsField`], so the existing warp/draw path renders it with no new
+/// pipeline — empty cells stay `NaN` and draw as nothing, per that type's convention.
+///
+/// `None` when no flash falls inside the window.
+// ponytail: fixed cell size and window, no user knob. Both are legible-at-a-glance choices, not
+// tuning parameters; add settings if anyone actually wants a different one.
+pub fn flash_density(
+    flashes: &VecDeque<Flash>,
+    cell_deg: f64,
+    window: chrono::Duration,
+    now: DateTime<Utc>,
+) -> Option<crate::mrms::MrmsField> {
+    let cutoff = now - window;
+    let recent: Vec<&Flash> = flashes.iter().filter(|f| f.time >= cutoff).collect();
+    let first = recent.first()?;
+
+    // Snap the bounds to the cell lattice so a cell covers the same ground from frame to frame —
+    // otherwise the whole grid slides half a cell every time the extremes change.
+    let snap = |v: f64| (v / cell_deg).floor() * cell_deg;
+    let (mut w, mut e, mut s, mut n) = (first.lon, first.lon, first.lat, first.lat);
+    for f in &recent {
+        w = w.min(f.lon);
+        e = e.max(f.lon);
+        s = s.min(f.lat);
+        n = n.max(f.lat);
+    }
+    let (lon_west, lat_south) = (snap(w), snap(s));
+    let nx = (((e - lon_west) / cell_deg).floor() as usize) + 1;
+    let ny = (((n - lat_south) / cell_deg).floor() as usize) + 1;
+    let (lon_east, lat_north) = (
+        lon_west + nx as f64 * cell_deg,
+        lat_south + ny as f64 * cell_deg,
+    );
+
+    let mut values = vec![f32::NAN; nx * ny];
+    for f in &recent {
+        let ix = ((f.lon - lon_west) / cell_deg).floor() as usize;
+        // Row 0 is the northernmost latitude, matching MRMS.
+        let iy = ((lat_north - f.lat) / cell_deg).floor() as usize;
+        let (ix, iy) = (ix.min(nx - 1), iy.min(ny - 1));
+        let cell = &mut values[iy * nx + ix];
+        *cell = if cell.is_nan() { 1.0 } else { *cell + 1.0 };
+    }
+
+    Some(crate::mrms::MrmsField {
+        values,
+        nx,
+        ny,
+        lon_west,
+        lon_east,
+        lat_north,
+        lat_south,
+        time: now,
+    })
+}
+
+#[cfg(test)]
+mod density_tests {
+    use super::*;
+
+    fn at(lon: f64, lat: f64, min_ago: i64) -> Flash {
+        Flash {
+            lon,
+            lat,
+            energy: 1.0,
+            time: Utc::now() - chrono::Duration::minutes(min_ago),
+        }
+    }
+
+    #[test]
+    fn flashes_in_one_cell_stack_and_stale_ones_drop_out() {
+        let flashes: VecDeque<Flash> = [
+            at(-97.01, 35.01, 1),
+            at(-97.02, 35.02, 2),
+            at(-97.03, 35.03, 3),
+            at(-97.01, 35.01, 60), // outside the window
+        ]
+        .into_iter()
+        .collect();
+        let f = flash_density(&flashes, 0.05, chrono::Duration::minutes(15), Utc::now()).unwrap();
+        let total: f32 = f.values.iter().filter(|v| !v.is_nan()).sum();
+        assert_eq!(total, 3.0);
+        assert_eq!(f.values.iter().filter(|v| **v == 3.0).count(), 1);
+    }
+
+    #[test]
+    fn separate_cells_stay_separate() {
+        let flashes: VecDeque<Flash> = [at(-97.0, 35.0, 1), at(-96.5, 35.4, 1)]
+            .into_iter()
+            .collect();
+        let f = flash_density(&flashes, 0.05, chrono::Duration::minutes(15), Utc::now()).unwrap();
+        assert_eq!(f.values.iter().filter(|v| **v == 1.0).count(), 2);
+        assert!(f.lon_west <= -97.0 && f.lon_east >= -96.5);
+        assert!(f.lat_south <= 35.0 && f.lat_north >= 35.4);
+    }
+
+    #[test]
+    fn nothing_recent_is_no_grid() {
+        let flashes: VecDeque<Flash> = [at(-97.0, 35.0, 90)].into_iter().collect();
+        assert!(flash_density(&flashes, 0.05, chrono::Duration::minutes(15), Utc::now()).is_none());
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
