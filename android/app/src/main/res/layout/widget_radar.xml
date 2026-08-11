@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The radar widget is one picture and one line of text: the last view the app drew, and how
+     old it is. RemoteViews cannot host the renderer, so freshness has to be stated rather than
+     assumed. -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/widget_radar_root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:background="#CC101418">
+
+    <ImageView
+        android:id="@+id/widget_radar_image"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:scaleType="centerCrop"
+        android:contentDescription="@string/widget_radar_image_desc" />
+
+    <TextView
+        android:id="@+id/widget_radar_text"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:padding="6dp"
+        android:textColor="#FFFFFF"
+        android:textSize="12sp" />
+</LinearLayout>

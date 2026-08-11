@@ -59,8 +59,9 @@
         <activity
             android:name=".MainActivity"
             android:launchMode="singleTask"
-            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboard|keyboardHidden|navigation|uiMode|density"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboard|keyboardHidden|navigation|uiMode|density|smallestScreenSize"
             android:screenOrientation="sensor"
+            android:supportsPictureInPicture="true"
             android:windowSoftInputMode="adjustResize"
             android:exported="true"
             android:label="@string/app_name">
@@ -92,6 +93,31 @@
                 android:name="android.appwidget.provider"
                 android:resource="@xml/widget_alerts_info" />
         </receiver>
+
+        <!-- Home-screen widget: the last radar view the app drew, with its age. No network of
+             its own — the app writes the picture, this shows it. -->
+        <receiver
+            android:name=".RadarWidget"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/widget_radar_info" />
+        </receiver>
+
+        <!-- Quick-settings tile: two swipes to the map. -->
+        <service
+            android:name=".RadarTile"
+            android:exported="true"
+            android:icon="@mipmap/ic_launcher_monochrome"
+            android:label="@string/app_name"
+            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE" />
+            </intent-filter>
+        </service>
 
         <!-- Boot: enqueue the worker only. Android 15 refuses a dataSync FGS from here. -->
         <receiver
