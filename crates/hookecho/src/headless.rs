@@ -1438,7 +1438,18 @@ pub fn run_metar(site: &str) -> anyhow::Result<()> {
         let client = reqwest::Client::new();
         wxdata::metar::fetch_bbox(&client, lat - 2.5, lon - 2.5, lat + 2.5, lon + 2.5).await
     })?;
-    println!("{site}: {} surface obs within ±2.5°", obs.len());
+    let tafs = rt.block_on(async {
+        let client = reqwest::Client::new();
+        wxdata::metar::fetch_tafs(&client, lat - 2.5, lon - 2.5, lat + 2.5, lon + 2.5).await
+    })?;
+    println!(
+        "{site}: {} surface obs, {} terminal forecasts within ±2.5°",
+        obs.len(),
+        tafs.len()
+    );
+    if let Some((icao, taf)) = tafs.iter().next() {
+        println!("  TAF {icao}: {taf}");
+    }
     for ob in obs.iter().take(3) {
         println!(
             "  {:<5} {:>6.2},{:>7.2}  {}kt @ {}  T {} Td {}  [{}]",
