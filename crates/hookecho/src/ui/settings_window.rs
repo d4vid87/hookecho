@@ -836,6 +836,13 @@ fn alerts_tab(ui: &mut egui::Ui, settings: &mut Settings) {
     ui.add_space(8.0);
     ui.separator();
     ui.strong("When to interrupt");
+    ui.add_enabled_ui(!cfg!(target_os = "android"), |ui| {
+        ui.checkbox(&mut settings.desktop_notify, "Post alerts to the desktop")
+            .on_hover_text(
+                "Use the system notification centre, so an alert arrives with the window \
+                 behind something else",
+            );
+    });
     ui.checkbox(&mut settings.alert_follow_gps, "Alert where I am, too")
         .on_hover_text(
             "While a GPS fix is coming in, your own position joins the saved locations the \

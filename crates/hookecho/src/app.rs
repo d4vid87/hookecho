@@ -4089,6 +4089,10 @@ impl HookEchoApp {
         let http = self.http.clone();
         let (title, body) = (title.to_string(), body.to_string());
 
+        if self.settings.desktop_notify {
+            crate::notify::desktop(&title, &body);
+        }
+
         let topic = self.settings.ntfy_topic.trim().to_string();
         if !topic.is_empty() {
             let (http, title, body) = (http.clone(), title.clone(), body.clone());

@@ -294,6 +294,10 @@ pub struct Settings {
     /// First-run setup wizard completed (or dismissed). `false` shows it at startup.
     #[serde(default)]
     pub setup_done: bool,
+    /// Post alerts to the desktop's own notification centre, so they arrive with the window
+    /// behind something else. Ignored on Android (the alert service posts its own) and the web.
+    #[serde(default)]
+    pub desktop_notify: bool,
     /// Record a breadcrumb track of the session's GPS fixes, exportable as GPX. Off by default:
     /// where you drove is yours, and nothing records it unless you say so. The track lives in
     /// memory only until you save it.
@@ -717,6 +721,7 @@ impl Default for Settings {
             rain_alerts: false,
             rain_sound: AlertSound::default(),
             setup_done: false,
+            desktop_notify: false,
             chase_log: false,
             ntfy_snapshot: false,
             alert_follow_gps: false,
@@ -1044,6 +1049,7 @@ mod tests {
             rain_alerts: true,
             rain_sound: AlertSound::Ding,
             setup_done: true,
+            desktop_notify: false,
             chase_log: false,
             ntfy_snapshot: false,
             alert_follow_gps: false,

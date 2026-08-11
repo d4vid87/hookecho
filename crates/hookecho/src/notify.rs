@@ -93,3 +93,25 @@ mod tests {
         );
     }
 }
+
+/// Post a notification to the OS notification centre (desktop only).
+///
+/// The in-app banner only exists while the window is on screen; this is the one that reaches
+/// someone who alt-tabbed away, and it is what the tray-based background alerting was missing.
+/// Best effort — a desktop with no notification daemon logs and carries on.
+#[cfg(not(any(target_os = "android", target_arch = "wasm32")))]
+pub fn desktop(title: &str, body: &str) {
+    use notify_rust::Notification;
+    let res = Notification::new()
+        .summary(title)
+        .body(body)
+        .appname("Hook Echo-WX")
+        .show();
+    if let Err(e) = res {
+        log::warn!("desktop notification failed: {e}");
+    }
+}
+
+/// No-op on Android (the alert service posts its own) and on the web.
+#[cfg(any(target_os = "android", target_arch = "wasm32"))]
+pub fn desktop(_title: &str, _body: &str) {}
