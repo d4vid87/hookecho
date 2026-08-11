@@ -12394,14 +12394,6 @@ impl HookEchoApp {
                 ui.checkbox(&mut v.show_radar, "Radar");
                 ui.checkbox(&mut v.show_legend, "Legend");
             }
-            if cfg!(target_os = "android")
-                && ui
-                    .button("\u{1f5d6} Picture-in-picture")
-                    .on_hover_text("Shrink to a floating window with the loop still playing")
-                    .clicked()
-            {
-                crate::platform::enter_pip();
-            }
             if ui
                 .checkbox(&mut self.obs_mode, "Streamer / OBS mode (F8)")
                 .on_hover_text(
@@ -12891,10 +12883,12 @@ impl HookEchoApp {
     /// Write the widget's picture, downscaled, and tell the widget about it.
     ///
     /// Downscaled because `RemoteViews.setImageViewBitmap` sends the bitmap over a Binder
-    /// transaction, and a phone-screen-sized bitmap is comfortably past the ~1 MB limit — the
-    /// widget would throw rather than draw. A home-screen tile is a few hundred pixels wide.
+    /// transaction with a ~1 MB ceiling, and the decoded bitmap is 4 bytes a pixel — so the budget
+    /// is in *pixels*, not width. 150k of them is ~600 KB decoded, and more than a home-screen
+    /// tile can show anyway. (A full-screen 1440x3120 grab is 18 MB decoded: the widget would
+    /// throw rather than draw.)
     fn save_widget_snapshot(&self, path: &std::path::Path, image: &egui::ColorImage) {
-        const MAX_W: u32 = 640;
+        const MAX_PIXELS: f32 = 150_000.0;
         let (w, h) = (image.size[0] as u32, image.size[1] as u32);
         if w == 0 || h == 0 {
             return;
@@ -12906,9 +12900,13 @@ impl HookEchoApp {
         let Some(buf) = image::RgbaImage::from_raw(w, h, rgba) else {
             return;
         };
-        let small = if w > MAX_W {
-            let nh = (h as f32 * MAX_W as f32 / w as f32).round().max(1.0) as u32;
-            image::imageops::resize(&buf, MAX_W, nh, image::imageops::FilterType::Triangle)
+        let scale = (MAX_PIXELS / (w as f32 * h as f32)).sqrt();
+        let small = if scale < 1.0 {
+            let (nw, nh) = (
+                ((w as f32 * scale).round() as u32).max(1),
+                ((h as f32 * scale).round() as u32).max(1),
+            );
+            image::imageops::resize(&buf, nw, nh, image::imageops::FilterType::Triangle)
         } else {
             buf
         };
@@ -14484,9 +14482,7 @@ impl eframe::App for HookEchoApp {
 
         // Docked desktop chrome. Declared before every floating Area so those constrain to what's
         // left of the viewport (`self.chrome_rect`) instead of covering the bars.
-        // Picture-in-picture counts as chrome-free for the same reason OBS mode does: at that
-        // size the panels are the whole window, and nothing in a PiP window takes touches anyway.
-        let bare = self.obs_mode || crate::platform::in_pip();
+        let bare = self.obs_mode;
         if !cfg!(target_os = "android") && !bare {
             if !self.settings.hide_sidebar {
                 self.sidebar(root, ctx);
