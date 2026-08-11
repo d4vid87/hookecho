@@ -179,9 +179,11 @@ pub(crate) fn show(
 
     // SPC outlook: a four-way day selector whose own "Off" is the off-state, so it can't wear the
     // registry's ON/OFF pill. It lives here rather than in the layer list.
-    ui.horizontal(|ui| {
+    // Days 4–8 are SPC's experimental severe probability, one layer per day; the row wraps
+    // rather than growing a second control for "which kind of day this is".
+    ui.horizontal_wrapped(|ui| {
         ui.label("SPC Outlook:");
-        for day in 0u8..=3 {
+        for day in 0u8..=8 {
             let label = if day == 0 {
                 "Off".to_string()
             } else {

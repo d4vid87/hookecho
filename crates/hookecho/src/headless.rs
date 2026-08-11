@@ -1396,6 +1396,36 @@ pub fn run_tropical() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Fetch + print every SPC outlook day, so a change to the Day 1-3 or the Day 4-8 URL forms
+/// fails here rather than as an empty map: `hookecho --headless-outlooks`.
+pub fn run_outlooks() -> anyhow::Result<()> {
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?;
+    let client = reqwest::Client::new();
+    for day in 1u8..=8 {
+        let feats = rt.block_on(wxdata::spc::fetch_outlook(&client, day));
+        match feats {
+            Ok(f) => {
+                let labels: Vec<&str> = f.iter().map(|x| x.title.as_str()).take(4).collect();
+                println!(
+                    "day {day}: {} polygon(s) {}",
+                    f.len(),
+                    if labels.is_empty() {
+                        "(nothing outlooked)".to_string()
+                    } else {
+                        format!("— {}", labels.join(", "))
+                    }
+                );
+            }
+            // A day with no product yet is a 404, which is data rather than a bug; anything else
+            // is worth the non-zero exit.
+            Err(e) => println!("day {day}: {e}"),
+        }
+    }
+    Ok(())
+}
+
 /// Fetch + print surface obs (METAR) near a site (feature U).
 pub fn run_metar(site: &str) -> anyhow::Result<()> {
     let s =
@@ -1408,7 +1438,18 @@ pub fn run_metar(site: &str) -> anyhow::Result<()> {
         let client = reqwest::Client::new();
         wxdata::metar::fetch_bbox(&client, lat - 2.5, lon - 2.5, lat + 2.5, lon + 2.5).await
     })?;
-    println!("{site}: {} surface obs within ±2.5°", obs.len());
+    let tafs = rt.block_on(async {
+        let client = reqwest::Client::new();
+        wxdata::metar::fetch_tafs(&client, lat - 2.5, lon - 2.5, lat + 2.5, lon + 2.5).await
+    })?;
+    println!(
+        "{site}: {} surface obs, {} terminal forecasts within ±2.5°",
+        obs.len(),
+        tafs.len()
+    );
+    if let Some((icao, taf)) = tafs.iter().next() {
+        println!("  TAF {icao}: {taf}");
+    }
     for ob in obs.iter().take(3) {
         println!(
             "  {:<5} {:>6.2},{:>7.2}  {}kt @ {}  T {} Td {}  [{}]",

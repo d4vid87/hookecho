@@ -1,4 +1,5 @@
-//! SPC convective products: Day 1–3 categorical outlooks and Mesoscale Discussions.
+//! SPC convective products: Day 1–3 outlooks, the Day 4–8 severe probabilities, and Mesoscale
+//! Discussions.
 //!
 //! Outlooks come as static GeoJSON that already carries per-feature `fill`/`stroke` colors
 //! and a risk `LABEL2`; MDs come from the NWS map service as GeoJSON. Both decode into the
@@ -8,6 +9,10 @@ use crate::alerts::USER_AGENT;
 use crate::overlay::{for_each_feature, polygons_of, FeatureKind, GeoFeature};
 
 const OUTLOOK_BASE: &str = "https://www.spc.noaa.gov/products/outlook";
+/// Days 4-8 live under the experimental products path and are one probabilistic layer per day
+/// (no hazard split, no categorical risk — that far out SPC forecasts a single severe
+/// probability, or says predictability is too low and means it).
+const OUTLOOK_EXPER_BASE: &str = "https://www.spc.noaa.gov/products/exper/day4-8";
 const MD_URL: &str = "https://mapservices.weather.noaa.gov/vector/rest/services/outlooks/spc_mesoscale_discussion/MapServer/0/query?where=1%3D1&outFields=*&f=geojson";
 
 /// Fill color for a categorical risk label, when the GeoJSON doesn't supply one.
@@ -209,18 +214,23 @@ pub fn parse_md(json: &str) -> anyhow::Result<Vec<GeoFeature>> {
     Ok(out)
 }
 
-/// Fetch the categorical outlook for `day` (1–3).
+/// Fetch the categorical outlook for `day` (1–3), or the severe probability for a Day 4–8.
 pub async fn fetch_outlook(client: &reqwest::Client, day: u8) -> anyhow::Result<Vec<GeoFeature>> {
     fetch_outlook_kind(client, day, OutlookKind::Categorical).await
 }
 
-/// Fetch an outlook for `day` and hazard `kind` (probabilistic layers are Day-1 only).
+/// Fetch an outlook for `day` and hazard `kind`. Probabilistic hazard layers are Day-1 only;
+/// Days 4–8 ignore `kind` and fetch the single experimental probability layer.
 pub async fn fetch_outlook_kind(
     client: &reqwest::Client,
     day: u8,
     kind: OutlookKind,
 ) -> anyhow::Result<Vec<GeoFeature>> {
-    let url = format!("{OUTLOOK_BASE}/day{day}otlk_{}.lyr.geojson", kind.slug());
+    let url = if day >= 4 {
+        format!("{OUTLOOK_EXPER_BASE}/day{day}prob.lyr.geojson")
+    } else {
+        format!("{OUTLOOK_BASE}/day{day}otlk_{}.lyr.geojson", kind.slug())
+    };
     let body = client
         .get(crate::net::fetch_url(&url))
         .header("User-Agent", USER_AGENT)

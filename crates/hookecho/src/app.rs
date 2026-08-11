@@ -195,7 +195,10 @@ enum OverlayMsg {
     /// Archived storm-based warnings for a 5-min UTC bucket (feature W).
     ArchiveWarnings(i64, Vec<GeoFeature>),
     /// Surface observations (METAR station plots) for the requested bbox (feature U).
-    Metar(Vec<wxdata::metar::SurfaceOb>),
+    Metar(
+        Vec<wxdata::metar::SurfaceOb>,
+        std::collections::HashMap<String, String>,
+    ),
     /// FAA camera sites for the requested bbox.
     Webcams(Vec<wxdata::webcams::CamSite>),
     /// Wildfire perimeters + incident points for the requested bbox.
@@ -608,7 +611,16 @@ impl OverlaySource {
                     Ok(buoys) => obs.extend(buoys),
                     Err(e) => note_feed_error("Buoy observations", e),
                 }
-                OverlayMsg::Metar(obs)
+                // Terminal forecasts for the same box, riding along with the obs they belong
+                // beside. A TAF outage costs the tooltips their forecast line, nothing more.
+                let tafs = match wxdata::metar::fetch_tafs(http, lat0, lon0, lat1, lon1).await {
+                    Ok(t) => t,
+                    Err(e) => {
+                        note_feed_error("Terminal forecasts (TAF)", e);
+                        Default::default()
+                    }
+                };
+                OverlayMsg::Metar(obs, tafs)
             }
             OverlaySource::Webcams(min_lon, min_lat, max_lon, max_lat, windy_key) => {
                 // Both networks, merged: the FAA is keyless but US-only, Windy covers the rest of
@@ -1672,7 +1684,8 @@ pub struct HookEchoApp {
     arch_lsr: LruCache<i64, Vec<wxdata::spc::StormReport>>,
     arch_lsr_inflight: Option<i64>,
     arch_lsr_shown: Option<i64>,
-    outlook_features: [Vec<GeoFeature>; 3],
+    /// One slot per SPC outlook day, 1..=8 (Days 4–8 are the experimental probability layer).
+    outlook_features: [Vec<GeoFeature>; 8],
     md_features: Vec<GeoFeature>,
     /// Winter Storm Severity Index polygons for the selected day.
     wssi_features: Vec<GeoFeature>,
@@ -1892,6 +1905,8 @@ pub struct HookEchoApp {
     /// Surface obs (METAR station plots, feature U): toggle, current obs, fetch clock + bbox.
     show_metar: bool,
     metars: Vec<wxdata::metar::SurfaceOb>,
+    /// Raw TAF text by ICAO, for the station tooltips (empty where a station files none).
+    tafs: std::collections::HashMap<String, String>,
     metar_last_fetch: Option<Instant>,
     /// The `(lat0, lon0, lat1, lon1)` bbox the current `metars` were fetched for.
     metar_bounds: Option<(f64, f64, f64, f64)>,
@@ -2433,7 +2448,7 @@ impl HookEchoApp {
             arch_lsr: LruCache::new(NonZeroUsize::new(50).unwrap()),
             arch_lsr_inflight: None,
             arch_lsr_shown: None,
-            outlook_features: [Vec::new(), Vec::new(), Vec::new()],
+            outlook_features: std::array::from_fn(|_| Vec::new()),
             md_features: Vec::new(),
             wssi_features: Vec::new(),
             ero_features: Vec::new(),
@@ -2559,6 +2574,7 @@ impl HookEchoApp {
             freezing_last_fetch: None,
             show_metar: false,
             metars: Vec::new(),
+            tafs: Default::default(),
             metar_last_fetch: None,
             metar_bounds: None,
             show_gauges: false,
@@ -3080,7 +3096,7 @@ impl HookEchoApp {
             self.spawn_overlay(ctx, OverlaySource::Ero(self.filters.ero_day));
         }
         // Only fetch the SPC outlook the user has selected (off = day 0 fetches nothing).
-        if (1..=3).contains(&self.filters.outlook_day) {
+        if (1..=8).contains(&self.filters.outlook_day) {
             self.spawn_overlay(
                 ctx,
                 OverlaySource::Outlook(self.filters.outlook_day, self.outlook_kind_for_day()),
@@ -5461,7 +5477,7 @@ impl HookEchoApp {
         if actions.overlays_changed {
             // Selecting an outlook day/kind that hasn't been fetched yet pulls it on demand.
             let day = self.filters.outlook_day;
-            if (1..=3).contains(&day) && self.outlook_features[(day - 1) as usize].is_empty() {
+            if (1..=8).contains(&day) && self.outlook_features[(day - 1) as usize].is_empty() {
                 self.spawn_overlay(
                     ctx,
                     OverlaySource::Outlook(day, self.outlook_kind_for_day()),
@@ -7656,7 +7672,10 @@ impl HookEchoApp {
                         self.arch_warn_inflight = None;
                     }
                 }
-                OverlayMsg::Metar(obs) => self.metars = obs,
+                OverlayMsg::Metar(obs, tafs) => {
+                    self.metars = obs;
+                    self.tafs = tafs;
+                }
                 OverlayMsg::Webcams(sites) => {
                     // Drop the cached stills with the list they belonged to. Windy's free-tier
                     // image URLs expire after ten minutes, and a kept texture would otherwise
@@ -8528,7 +8547,7 @@ impl HookEchoApp {
     /// Reassemble the displayed overlay set from the fetched sources and current filters.
     fn rebuild_overlays(&mut self) {
         let mut v = Vec::new();
-        if (1..=3).contains(&self.filters.outlook_day) {
+        if (1..=8).contains(&self.filters.outlook_day) {
             v.extend(
                 self.outlook_features[(self.filters.outlook_day - 1) as usize]
                     .iter()
@@ -11458,7 +11477,13 @@ impl HookEchoApp {
                 // Hover → the raw METAR text.
                 let hit = egui::Rect::from_center_size(p, egui::vec2(16.0, 16.0));
                 if response.hover_pos().is_some_and(|hp| hit.contains(hp)) && !ob.raw.is_empty() {
-                    response.clone().show_tooltip_text(&ob.raw);
+                    // Observation first, then the terminal forecast where the station files one:
+                    // what it is doing, then what it is expected to do.
+                    let text = match self.tafs.get(&ob.icao) {
+                        Some(taf) => format!("{}\n\n{taf}", ob.raw),
+                        None => ob.raw.clone(),
+                    };
+                    response.clone().show_tooltip_text(text);
                 }
             }
         }

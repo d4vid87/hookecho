@@ -8,6 +8,7 @@
 use crate::alerts::USER_AGENT;
 
 const METAR_URL: &str = "https://aviationweather.gov/api/data/metar";
+const TAF_URL: &str = "https://aviationweather.gov/api/data/taf";
 
 /// One surface observation (station plot).
 #[derive(Debug, Clone, PartialEq)]
@@ -108,6 +109,54 @@ pub async fn fetch_bbox(
     Ok(obs)
 }
 
+/// Fetch the current TAFs over the same bbox as [`fetch_bbox`], as `ICAO -> raw TAF text`.
+///
+/// Raw text, not the decoded `fcsts` array: a TAF is written to be read as a TAF, and every pilot
+/// and chaser who wants one can already read it. Decoding it into rows would be a second forecast
+/// renderer for no extra information.
+pub async fn fetch_tafs(
+    client: &reqwest::Client,
+    lat0: f64,
+    lon0: f64,
+    lat1: f64,
+    lon1: f64,
+) -> anyhow::Result<std::collections::HashMap<String, String>> {
+    let bbox = format!("{lat0},{lon0},{lat1},{lon1}");
+    let body = client
+        .get(crate::net::fetch_url(TAF_URL))
+        .query(&[("bbox", bbox.as_str()), ("format", "json")])
+        .header("User-Agent", USER_AGENT)
+        .send()
+        .await?
+        .error_for_status()?
+        .text()
+        .await?;
+    Ok(parse_tafs(&body))
+}
+
+/// Parse the TAF JSON array into `ICAO -> raw text`. Tolerant, like [`parse`]: an entry missing
+/// either field is skipped rather than failing the batch.
+pub fn parse_tafs(json: &str) -> std::collections::HashMap<String, String> {
+    let mut out = std::collections::HashMap::new();
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(json) else {
+        return out;
+    };
+    for t in v.as_array().map(Vec::as_slice).unwrap_or(&[]) {
+        let icao = str_of(t, "icaoId");
+        let raw = str_of(t, "rawTAF");
+        if icao.is_empty() || raw.is_empty() {
+            continue;
+        }
+        // Several bulletins can share a station; `mostRecent` marks the one to keep, and where it
+        // is absent the later entry is the newer one.
+        let recent = t.get("mostRecent").and_then(|m| m.as_i64()).unwrap_or(1);
+        if recent != 0 || !out.contains_key(&icao) {
+            out.insert(icao, raw);
+        }
+    }
+    out
+}
+
 /// Generate wind-barb segments in a unit frame: origin at the station, shaft along +Y. US
 /// convention — pennant/flag = 50 kt, full barb = 10 kt, half barb = 5 kt, rounded to nearest 5.
 /// Calm (< 2.5 kt) returns no segments (the caller draws a hollow calm ring instead).
@@ -153,6 +202,22 @@ pub fn barb_segments(wspd_kt: f32) -> Vec<([f32; 2], [f32; 2])> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn taf_parse_keeps_the_most_recent_bulletin() {
+        let json = r#"[
+            {"icaoId":"KOKC","rawTAF":"TAF KOKC 101120Z old","mostRecent":0},
+            {"icaoId":"KOKC","rawTAF":"TAF KOKC 102320Z new","mostRecent":1},
+            {"icaoId":"KTIK","rawTAF":"TAF KTIK 110100Z ..."},
+            {"icaoId":"KBAD"},
+            {"rawTAF":"TAF ... no station"}
+        ]"#;
+        let tafs = parse_tafs(json);
+        assert_eq!(tafs.len(), 2, "entries missing a field are skipped");
+        assert!(tafs["KOKC"].contains("new"), "superseded bulletin won");
+        assert!(tafs.contains_key("KTIK"));
+        assert!(parse_tafs("not json").is_empty());
+    }
 
     #[test]
     fn parses_vrb_wind_and_missing_temp() {
