@@ -124,6 +124,13 @@ impl<'a> Iterator for SectionIterator<'a> {
         let section_len = section_length(self.data, self.offset)?;
         let section_num = section_number(self.data, self.offset)?;
 
+        // hookecho patch: a zero-length section leaves `self.offset` where it was, so the
+        // iterator spins forever on a malformed message (found by fuzz/fuzz_targets/
+        // grib_decode.rs — a 23-byte input never returned). Nothing valid declares length 0.
+        if section_len == 0 {
+            return None;
+        }
+
         if (self.offset + section_len) >= self.data.len() {
             return None;
         }

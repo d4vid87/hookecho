@@ -1,0 +1,12 @@
+; Hook Echo default differential phase color table (GRLevelX .pal v2)
+Product: PHI
+Units: deg
+Step: 60
+RF: 128 128 128
+SolidColor: 0 40 0 80
+SolidColor: 60 0 0 230
+SolidColor: 120 0 200 200
+SolidColor: 180 0 200 0
+SolidColor: 240 230 230 0
+SolidColor: 300 230 120 0
+SolidColor: 360 230 0 0

@@ -52,7 +52,9 @@ fn field(s: &str) -> Option<&str> {
 /// `2833N` / `09423W` → signed degrees. Degrees are all but the last two digits; the last two
 /// are whole minutes.
 fn coord(s: &str) -> Option<f64> {
-    let (num, hemi) = s.split_at(s.len().checked_sub(1)?);
+    // Split at the last *character*, not the last byte: corrupted text can end in a multi-byte
+    // character, and splitting inside one panics (found by fuzz/fuzz_targets/hdob_parse.rs).
+    let (num, hemi) = s.split_at(s.char_indices().next_back()?.0);
     let deg: f64 = num.get(..num.len().checked_sub(2)?)?.parse().ok()?;
     let min: f64 = num.get(num.len() - 2..)?.parse().ok()?;
     let v = deg + min / 60.0;
@@ -107,8 +109,14 @@ pub fn parse_hdob(text: &str) -> Vec<HdobOb> {
         };
         // Pressure drops its leading 1 above 1000 mb, so a small value means a high pressure.
         let press_mb = tenths(f[3]).map(|p| if p < 100.0 { p + 1000.0 } else { p });
+        // `get` rather than a slice: the six characters are digits in every real bulletin, but a
+        // corrupted fetch can put a multi-byte character here and slicing across it panics
+        // (found by fuzz/fuzz_targets/hdob_parse.rs).
         let (wdir_deg, wspd_kt) = match field(f[8]).filter(|w| w.len() == 6) {
-            Some(w) => (w[..3].parse::<f32>().ok(), w[3..].parse::<f32>().ok()),
+            Some(w) => match (w.get(..3), w.get(3..)) {
+                (Some(d), Some(s)) => (d.parse::<f32>().ok(), s.parse::<f32>().ok()),
+                _ => (None, None),
+            },
             None => (None, None),
         };
         out.push(HdobOb {
@@ -161,6 +169,29 @@ pub async fn fetch(http: &reqwest::Client, max_age_hours: i64) -> anyhow::Result
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A wind group with a multi-byte character in it used to panic on a byte slice across the
+    /// character boundary (found by fuzzing). Corrupted text is a thing to skip, not to die on.
+    #[test]
+    fn a_mangled_wind_group_is_skipped_not_fatal() {
+        let text = "AF307 WXWXA 260730143955307    HDOB 14 20260730\n\
+                    165030 2833N 09423W 3926 07809 0492 -155 -199 \u{fffd}\u{fffd}015 015\n";
+        let obs = parse_hdob(text);
+        assert_eq!(obs.len(), 1);
+        assert!(obs[0].wdir_deg.is_none());
+    }
+
+    /// Same story one field over: a coordinate ending in a multi-byte character.
+    #[test]
+    fn a_mangled_coordinate_is_skipped_not_fatal() {
+        let text = "AF307 WXWXA 260730143955307    HDOB 14 20260730\n\
+                    165030 2833\u{fffd} 09423W 3926 07809 0492 -155 -199 069015 015\n";
+        // Unknown hemisphere reads as north/east, same as any other unexpected letter — the
+        // point is that it comes back rather than taking the process down.
+        let obs = parse_hdob(text);
+        assert_eq!(obs.len(), 1);
+        assert!(obs[0].lat > 0.0);
+    }
 
     const BULLETIN: &str = "\
 URNT15 KNHC 301700

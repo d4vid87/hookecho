@@ -1,0 +1,19 @@
+; Hook Echo built-in — colorblind-safe velocity (blue/orange diverging)
+;
+; Inbound blue, outbound orange: the one diverging pair that survives every common form of
+; color vision deficiency (red/green diverging tables do not). Zero is a neutral gray so the
+; couplet still reads as a sign flip. Authored in knots like the default table.
+product: BV
+units: KTS
+step: 20
+scale: 1.9426
+
+color: -120 8 48 107
+color: -80 33 113 181
+color: -40 107 174 214
+color: -10 200 214 224
+color: 0 150 150 150
+color: 10 254 224 182
+color: 40 241 105 19
+color: 80 166 54 3
+color: 120 127 39 4

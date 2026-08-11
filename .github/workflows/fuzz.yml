@@ -1,0 +1,58 @@
+name: Fuzz
+
+# Nightly, never on a PR. cargo-fuzz needs a nightly toolchain and each target wants minutes to be
+# worth anything; blocking a PR on a probabilistic search would only teach people to ignore it.
+on:
+  schedule:
+    - cron: "37 6 * * *"
+  workflow_dispatch:
+
+jobs:
+  fuzz:
+    name: ${{ matrix.target }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - level2_decode
+          - level3_decode
+          - placefile_parse
+          - hdob_parse
+          - pal_parse
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install nightly Rust
+        uses: dtolnay/rust-toolchain@nightly
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: fuzz
+
+      # pal_parse pulls the app crate, which links the same Linux deps CI installs.
+      - name: Install Linux deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libasound2-dev libudev-dev libxkbcommon-dev \
+            libwayland-dev libxcb1-dev libgtk-3-dev
+
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz --locked
+
+      - name: Fuzz ${{ matrix.target }}
+        working-directory: fuzz
+        run: |
+          mkdir -p corpus/${{ matrix.target }}
+          cp -n seeds/${{ matrix.target }}/* corpus/${{ matrix.target }}/ 2>/dev/null || true
+          cargo +nightly fuzz run ${{ matrix.target }} -- -max_total_time=120
+
+      # The reproducer is the whole value of a failed run; without it the log says only that
+      # something crashed.
+      - name: Upload the crashing input
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-artifacts-${{ matrix.target }}
+          path: fuzz/artifacts/

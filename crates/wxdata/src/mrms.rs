@@ -331,7 +331,25 @@ fn gunzip(bytes: &[u8]) -> anyhow::Result<Vec<u8>> {
 ///
 /// Shared with [`crate::nohrsc`]: NOHRSC's snowfall analysis is the same plate-carrée single
 /// message with the same very-negative missing convention, so it decodes the same way.
-pub(crate) fn decode_grib2(raw: &[u8]) -> anyhow::Result<MrmsField> {
+// `pub` for the fuzz target only (fuzz/fuzz_targets/grib_decode.rs), which calls it without the
+// production `catch_unwind` — hidden from the docs because it is not part of the API.
+#[doc(hidden)]
+pub fn decode_grib2(raw: &[u8]) -> anyhow::Result<MrmsField> {
+    // Section 0 is 16 bytes: "GRIB", two reserved, discipline, edition, then the total message
+    // length. A length that disagrees with what we hold means the message is truncated or forged,
+    // and the decoder grinds through the whole claimed length looking for sections that are not
+    // there — a 28-byte input took minutes (fuzz/fuzz_targets/grib_decode.rs).
+    const SECTION_0_LEN: u64 = 16;
+    if raw.len() < SECTION_0_LEN as usize || !raw.starts_with(b"GRIB") {
+        anyhow::bail!("not a GRIB2 message");
+    }
+    let declared = u64::from_be_bytes(raw[8..16].try_into().unwrap_or_default());
+    if declared < SECTION_0_LEN || declared > raw.len() as u64 {
+        anyhow::bail!(
+            "GRIB2 message claims {declared} bytes; {} are present",
+            raw.len()
+        );
+    }
     let msg = read_message(raw, 0).ok_or_else(|| anyhow::anyhow!("no GRIB2 message"))?;
     let time = msg.forecast_date().unwrap_or_else(|_| chrono::Utc::now());
     let dm = DataMessage::try_from(&msg).map_err(|e| anyhow::anyhow!("grib decode: {e:?}"))?;
@@ -390,6 +408,19 @@ fn last_key(xml: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A message that declares more bytes than it carries used to send the decoder scanning for
+    /// sections that were never there — minutes of CPU on 28 bytes (found by fuzzing).
+    #[test]
+    fn a_grib_message_that_lies_about_its_length_is_refused_immediately() {
+        let mut raw = b"GRIB\0\0\0\x02".to_vec();
+        raw.extend_from_slice(&1_000_000u64.to_be_bytes());
+        raw.extend_from_slice(&[0u8; 8]);
+        assert!(decode_grib2(&raw).is_err());
+        // Neither is a buffer too short to hold section 0, or one that isn't GRIB at all.
+        assert!(decode_grib2(b"GRIB").is_err());
+        assert!(decode_grib2(&[0u8; 64]).is_err());
+    }
 
     #[test]
     fn wrap_and_last_key() {

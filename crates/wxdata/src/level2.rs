@@ -209,6 +209,14 @@ pub fn decode_volume(data: Vec<u8>) -> anyhow::Result<Scan> {
 /// bzip2 decompression plus the message decode is tens of MB of pure CPU — callers on an async
 /// worker must run this on a blocking thread, or it stalls every other fetch sharing that thread.
 fn decode_file(file: nexrad_data::volume::File) -> anyhow::Result<Scan> {
+    // Anything shorter than the 24-byte Archive II volume header is not a volume. The decoder
+    // slices past the header unconditionally and panics on a short buffer (found by
+    // fuzz/fuzz_targets/level2_decode.rs), and the live head really does serve half-written
+    // objects — so this is a guard on real input, not a fuzz-only nicety.
+    const VOLUME_HEADER_LEN: usize = 24;
+    if file.data().len() < VOLUME_HEADER_LEN {
+        anyhow::bail!("volume is {} bytes, too short to be one", file.data().len());
+    }
     let file = if file.compressed() {
         file.decompress()
             .map_err(|e| anyhow::anyhow!("decompress: {e}"))?
@@ -508,6 +516,16 @@ pub fn bin_sweep_opts(
 mod tests {
     use super::*;
     use nexrad_model::data::{MomentData, Radial};
+
+    /// The live head serves half-written objects, and anything shorter than the 24-byte volume
+    /// header used to panic inside the decoder rather than come back as an error (found by
+    /// fuzzing).
+    #[test]
+    fn a_volume_too_short_to_be_one_is_an_error_not_a_panic() {
+        assert!(decode_volume(Vec::new()).is_err());
+        assert!(decode_volume(vec![0u8; 23]).is_err());
+        assert!(decode_volume(b"AR2V0006.".to_vec()).is_err());
+    }
 
     // Build a one-radial sweep with a known reflectivity ramp and confirm binning
     // places it in the right azimuth row and normalizes values as documented.
