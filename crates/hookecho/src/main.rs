@@ -403,6 +403,30 @@ fn main() -> eframe::Result<()> {
                         );
                     }
                 }
+                // The gridded half: the same flashes as the flash-density field layer sees.
+                match wxdata::glm::flash_density(
+                    f,
+                    0.05,
+                    chrono::Duration::minutes(15),
+                    chrono::Utc::now(),
+                ) {
+                    Some(g) => {
+                        let mut cells: Vec<f32> =
+                            g.values.iter().copied().filter(|v| !v.is_nan()).collect();
+                        cells.sort_by(|a, b| b.total_cmp(a));
+                        println!(
+                            "  density {}x{} cells, {} lit, max {}",
+                            g.nx,
+                            g.ny,
+                            cells.len(),
+                            cells.first().copied().unwrap_or(0.0)
+                        );
+                        let top: Vec<String> =
+                            cells.iter().take(5).map(|v| format!("{v:.0}")).collect();
+                        println!("  busiest cells: {}", top.join(", "));
+                    }
+                    None => println!("  density: no flashes in the window"),
+                }
             }
             Err(e) => {
                 eprintln!("headless glm failed: {e}");

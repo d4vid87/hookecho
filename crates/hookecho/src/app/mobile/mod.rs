@@ -541,6 +541,8 @@ impl super::HookEchoApp {
                 let l3_site = self.l3grid_site.clone();
                 let tz = self.active_tz();
                 let mosaic = self.mosaic_status();
+                let glm_options = self.show_glm
+                    || self.fields.get(&crate::render::FieldLayer::GlmFed).is_some_and(|s| s.show);
                 crate::ui::layer_options::show(
                     ui,
                     &mut self.filters,
@@ -564,7 +566,7 @@ impl super::HookEchoApp {
                     &mut self.diff_field,
                     self.diff_valid.as_ref(),
                     &mut self.settings.lightning_minutes,
-                    self.show_glm,
+                    glm_options,
                     &mut self.settings.glm_goes_west,
                     self.show_spotters,
                     &mut self.settings.spotter_range_km,

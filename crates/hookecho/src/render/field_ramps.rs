@@ -288,6 +288,25 @@ static VIL_DENSITY: FieldRamp = ramp!(
     ]
 );
 
+/// GLM flash-extent density: flashes per cell over the last 15 minutes. One flash is worth
+/// showing (it is the first one), and a vigorous updraft runs into the tens, so the scale is
+/// short and warms fast.
+static GLM_FED: FieldRamp = ramp!(
+    "Flash density",
+    "flashes/15 min",
+    1.0,
+    30.0,
+    RampScale::Linear,
+    220,
+    &[
+        (0.0, [60, 60, 160]),
+        (0.35, [90, 180, 230]),
+        (0.6, [240, 230, 60]),
+        (0.8, [240, 140, 40]),
+        (1.0, [255, 60, 60]),
+    ]
+);
+
 /// Probability of severe hail. 50% is Witt's warning threshold, so the scale turns warm there.
 static POSH: FieldRamp = ramp!(
     "Severe hail probability",
@@ -586,6 +605,7 @@ pub fn ramp_for(layer: FieldLayer) -> Option<&'static FieldRamp> {
         FL::GlobalWind10m => &GLOBAL_WIND_10M,
         FL::GlobalPrecip => &GLOBAL_PRECIP,
         FL::Hca => &HCA,
+        FL::GlmFed => &GLM_FED,
         FL::Mrms | FL::Mosaic | FL::Hrrr | FL::Lightning | FL::ModelDiff => return None,
     })
 }

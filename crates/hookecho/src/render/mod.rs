@@ -103,6 +103,8 @@ pub enum FieldLayer {
     GlobalWind10m,
     /// Global model precipitable water / total precipitation.
     GlobalPrecip,
+    /// GLM flash-extent density — the recent satellite flashes gridded into a density field.
+    GlmFed,
     /// One model minus another — which field, and therefore which pair, is `app.diff_field`.
     ModelDiff,
 }
@@ -131,7 +133,7 @@ impl FieldLayer {
     }
 
     /// Fixed bottom-to-top paint order within each band.
-    pub const DRAW_ORDER: [FieldLayer; 32] = [
+    pub const DRAW_ORDER: [FieldLayer; 33] = [
         // Below-radar context band (bottom to top). The global models sit at the very bottom:
         // they are the synoptic backdrop everything else is drawn against.
         FieldLayer::GlobalMslp,
@@ -167,6 +169,7 @@ impl FieldLayer {
         FieldLayer::Mesh,
         FieldLayer::AzShear,
         FieldLayer::Lightning,
+        FieldLayer::GlmFed,
     ];
 
     /// Stable name for saved files — a workspace records which layers were on by slug, so a file
@@ -205,6 +208,7 @@ impl FieldLayer {
             FieldLayer::GlobalWind10m => "global-wind10m",
             FieldLayer::GlobalPrecip => "global-precip",
             FieldLayer::ModelDiff => "model-diff",
+            FieldLayer::GlmFed => "glm-fed",
         }
     }
 
