@@ -152,6 +152,9 @@ pub fn show(
     w: &mut CellsWindow,
     ctx: &egui::Context,
     cells: &[Cell],
+    // Cell ids with a ZDR column detected near them — an updraft the storm table cannot see on
+    // its own, badged next to the rotation flags it already carries.
+    zdr_cells: &std::collections::HashSet<String>,
     accent: egui::Color32,
 ) -> Option<String> {
     if !w.open {
@@ -307,6 +310,18 @@ pub fn show(
                                                 .small()
                                                 .strong()
                                                 .color(egui::Color32::from_rgb(235, 70, 70)),
+                                        );
+                                    }
+                                    if zdr_cells.contains(&c.id) {
+                                        ui.label(
+                                            RichText::new("Z\u{25b2}")
+                                                .small()
+                                                .strong()
+                                                .color(egui::Color32::from_rgb(120, 230, 160)),
+                                        )
+                                        .on_hover_text(
+                                            "A ZDR column reaches above the freezing level here \
+                                             \u{2014} the updraft is deep",
                                         );
                                     }
                                     if c.meso.is_some() {

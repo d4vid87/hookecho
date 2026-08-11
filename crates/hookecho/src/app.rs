@@ -121,6 +121,10 @@ pub struct OverlayFilters {
     pub show_tds: bool,
     /// Flag velocity rotation couplets (client-side gate-to-gate azimuthal shear).
     pub show_couplets: bool,
+    /// Flag three-body scatter spikes (hail spikes) off the lowest tilt.
+    pub show_tbss: bool,
+    /// Flag ZDR columns — rain lofted above the freezing level, an updraft proxy.
+    pub show_zdr_columns: bool,
 }
 
 impl Default for OverlayFilters {
@@ -141,6 +145,8 @@ impl Default for OverlayFilters {
             nowcast_lead_min: 15,
             show_tds: false,
             show_couplets: false,
+            show_tbss: false,
+            show_zdr_columns: false,
         }
     }
 }
@@ -1014,6 +1020,8 @@ pub(crate) enum OverlayToggle {
     Nowcast,
     Tds,
     Couplets,
+    Tbss,
+    ZdrColumns,
     Alerts,
     Mds,
     Mping,
@@ -1043,7 +1051,7 @@ pub(crate) struct BlockageKey {
 impl OverlayToggle {
     /// Every toggle, for the persistence sweep. A new variant belongs here too, or it silently
     /// stops being remembered across restarts.
-    pub(crate) const ALL: [OverlayToggle; 34] = [
+    pub(crate) const ALL: [OverlayToggle; 36] = [
         Self::AlertPanel,
         Self::StormReports,
         Self::Spotters,
@@ -1067,6 +1075,8 @@ impl OverlayToggle {
         Self::Nowcast,
         Self::Tds,
         Self::Couplets,
+        Self::Tbss,
+        Self::ZdrColumns,
         Self::Alerts,
         Self::Mds,
         Self::Mping,
@@ -1276,6 +1286,14 @@ fn field_refresh_secs(layer: crate::render::FieldLayer) -> u64 {
         FL::GlmFed => 60,
     }
 }
+
+/// The ZDR-column cache: the volume it was computed for, its columns, and the bright band the
+/// same pass found.
+type ZdrCache = (
+    (usize, String, usize),
+    Vec<wxdata::dualpol::ZdrColumnHit>,
+    Option<wxdata::dualpol::BrightBand>,
+);
 
 /// Per-field-layer UI + fetch state (toggle, pending upload, refresh clock).
 #[derive(Default)]
@@ -1659,6 +1677,11 @@ pub struct HookEchoApp {
         Vec<(f64, f64, egui::Color32)>,
     )>,
     tds_cache: Option<((usize, String, usize), Vec<wxdata::tds::TdsHit>)>,
+    /// Same shape as `tds_cache`, for the hail-spike detector.
+    tbss_cache: Option<((usize, String, usize), Vec<wxdata::dualpol::TbssHit>)>,
+    /// ZDR columns, plus the bright band read off the same volume's CC — both cost a full pass
+    /// over every tilt, so they share one cache and are computed together.
+    zdr_cache: Option<ZdrCache>,
     couplet_cache: Option<((usize, String, usize), Vec<wxdata::rotation::CoupletHit>)>,
     site_dialog: Option<ui::site_dialog::SiteDialog>,
     wizard: ui::wizard::Wizard,
@@ -2438,6 +2461,8 @@ impl HookEchoApp {
             vlabel_cache: None,
             nowcast_cache: None,
             tds_cache: None,
+            tbss_cache: None,
+            zdr_cache: None,
             couplet_cache: None,
             site_dialog: None,
             wizard: {
@@ -4910,6 +4935,82 @@ impl HookEchoApp {
         out
     }
 
+    /// Hail spikes (TBSS) for the active pane's lowest tilt, cached per volume like the TDS
+    /// detector. Display-only: a spike is context about hail, not a reason to make noise.
+    fn compute_tbss(&mut self, idx: usize) -> Vec<wxdata::dualpol::TbssHit> {
+        let key = self.volume_key(idx);
+        if let Some((k, v)) = &self.tbss_cache {
+            if *k == key {
+                return v.clone();
+            }
+        }
+        let z = self.views[idx]
+            .volume
+            .as_mut()
+            .and_then(|v| v.binned(Moment::Reflectivity, 0, false).ok())
+            .cloned();
+        let cc = self.views[idx]
+            .volume
+            .as_mut()
+            .and_then(|v| v.binned(Moment::CorrelationCoefficient, 0, false).ok())
+            .cloned();
+        let out = match (z, cc) {
+            (Some(z), Some(cc)) => wxdata::dualpol::tbss(&z, &cc, 60.0, 20.0, 0.8, 4.0, 150.0),
+            _ => Vec::new(),
+        };
+        self.tbss_cache = Some((key, out.clone()));
+        out
+    }
+
+    /// ZDR columns and the bright band, both from a full pass over the active pane's tilts.
+    ///
+    /// The freezing level comes from the same model analysis the hail grids use, so this needs a
+    /// live pane with that fetch already done; without it there is nothing to be "above" and the
+    /// answer is empty.
+    fn compute_zdr_columns(
+        &mut self,
+        idx: usize,
+        ctx: &egui::Context,
+    ) -> Vec<wxdata::dualpol::ZdrColumnHit> {
+        let key = self.volume_key(idx);
+        if let Some((k, v, _)) = &self.zdr_cache {
+            if *k == key {
+                return v.clone();
+            }
+        }
+        // Model heights are above sea level; beam heights are above the radar.
+        let site = self.views[idx].site.clone();
+        let radar_km = site
+            .as_deref()
+            .and_then(wxdata::sites::site_by_id)
+            .map_or(0.0, |s| s.elevation_meters as f64 / 1000.0);
+        let h0_km = match (&self.freezing, &site) {
+            (Some((s, h0, _)), Some(cur)) if s == cur => *h0 / 1000.0 - radar_km,
+            _ => {
+                self.fetch_freezing_levels(ctx);
+                return Vec::new();
+            }
+        };
+        let Some(vol) = self.views[idx].volume.as_mut() else {
+            return Vec::new();
+        };
+        let zdr = vol.moment_tilts(Moment::DifferentialReflectivity);
+        let z = vol.moment_tilts(Moment::Reflectivity);
+        let cc = vol.moment_tilts(Moment::CorrelationCoefficient);
+        let hits = wxdata::dualpol::zdr_columns(&zdr, &z, h0_km, 1.0, 1.0, 40.0, 100.0);
+        // The mid tilts are the ones that cut the melting layer at a range where the beam is
+        // still narrow enough to mean something.
+        let mid = |v: &[wxdata::level2::BinnedSweep]| -> Vec<wxdata::level2::BinnedSweep> {
+            v.iter()
+                .filter(|s| (2.0..=10.0).contains(&s.elevation_deg))
+                .cloned()
+                .collect()
+        };
+        let bb = wxdata::dualpol::bright_band(&mid(&cc), &mid(&z), 6.0);
+        self.zdr_cache = Some((key, hits.clone(), bb));
+        hits
+    }
+
     /// Auto TDS detection for the active pane's lowest tilt: bin reflectivity + CC and flag debris
     /// signatures (low CC in high Z). Fires a chime + banner on the rising edge of a new detection.
     fn compute_tds(&mut self, idx: usize) -> Vec<wxdata::tds::TdsHit> {
@@ -6461,6 +6562,8 @@ impl HookEchoApp {
             T::ArrivalCones => &mut self.filters.show_arrival_cones,
             T::Nowcast => &mut self.filters.show_nowcast,
             T::Tds => &mut self.filters.show_tds,
+            T::Tbss => &mut self.filters.show_tbss,
+            T::ZdrColumns => &mut self.filters.show_zdr_columns,
             T::Couplets => &mut self.filters.show_couplets,
             T::Alerts => &mut self.filters.show_alerts,
             T::Mds => &mut self.filters.show_mds,
@@ -6837,6 +6940,22 @@ impl HookEchoApp {
                 "Rotation couplets",
                 "Flag tight rotation that could produce a tornado",
                 true,
+            ),
+            (
+                T::Tbss,
+                "Severe",
+                "Hail spikes (TBSS)",
+                "Flag three-body scatter spikes \u{2014} near-proof of large hail in the core \
+                 they point away from",
+                false,
+            ),
+            (
+                T::ZdrColumns,
+                "Severe",
+                "ZDR columns",
+                "Flag rain carried above the freezing level \u{2014} an updraft proxy that \
+                 deepens before a storm intensifies",
+                false,
             ),
             (
                 T::Tds,
@@ -10476,6 +10595,16 @@ impl HookEchoApp {
         } else {
             Vec::new()
         };
+        let tbss_hits = if self.filters.show_tbss && idx == self.active {
+            self.compute_tbss(idx)
+        } else {
+            Vec::new()
+        };
+        let zdr_hits = if self.filters.show_zdr_columns && idx == self.active {
+            self.compute_zdr_columns(idx, ctx)
+        } else {
+            Vec::new()
+        };
         let couplets = if self.filters.show_couplets && idx == self.active {
             self.compute_couplets(idx)
         } else {
@@ -10873,6 +11002,78 @@ impl HookEchoApp {
                     egui::FontId::proportional(11.0),
                     m,
                 );
+            }
+
+            // Hail spikes: a hollow triangle at the core the spike points away from. Yellow, not
+            // magenta — this is a hail flag, and nothing here should read like a debris signature.
+            for h in &tbss_hits {
+                let p = to_screen(h.lon, h.lat);
+                if !prect.contains(p) {
+                    continue;
+                }
+                let col = egui::Color32::from_rgb(250, 210, 60);
+                let s = 7.0;
+                painter.add(egui::Shape::closed_line(
+                    vec![
+                        p + egui::vec2(0.0, -s),
+                        p + egui::vec2(s, s),
+                        p + egui::vec2(-s, s),
+                    ],
+                    egui::Stroke::new(2.0, col),
+                ));
+                painter.text(
+                    p + egui::vec2(0.0, -s - 2.0),
+                    egui::Align2::CENTER_BOTTOM,
+                    format!("TBSS {:.0} dBZ", h.core_dbz),
+                    egui::FontId::proportional(11.0),
+                    col,
+                );
+            }
+
+            // ZDR columns: an upward arrow with the depth above the freezing level.
+            for h in &zdr_hits {
+                let p = to_screen(h.lon, h.lat);
+                if !prect.contains(p) {
+                    continue;
+                }
+                let col = egui::Color32::from_rgb(120, 230, 160);
+                let s = 8.0;
+                painter.line_segment(
+                    [p + egui::vec2(0.0, s), p + egui::vec2(0.0, -s)],
+                    egui::Stroke::new(2.0, col),
+                );
+                painter.add(egui::Shape::convex_polygon(
+                    vec![
+                        p + egui::vec2(0.0, -s - 4.0),
+                        p + egui::vec2(-4.0, -s + 1.0),
+                        p + egui::vec2(4.0, -s + 1.0),
+                    ],
+                    col,
+                    egui::Stroke::NONE,
+                ));
+                painter.text(
+                    p + egui::vec2(6.0, 0.0),
+                    egui::Align2::LEFT_CENTER,
+                    format!("ZDR +{:.1} km", h.depth_km),
+                    egui::FontId::proportional(11.0),
+                    col,
+                );
+            }
+
+            // Where the melting layer is, read off the same volume's CC. One line, because the
+            // number is the whole product: it tells you which "heavy rain" is a bright band.
+            if self.filters.show_zdr_columns && idx == self.active {
+                if let Some((_, _, Some(bb))) = &self.zdr_cache {
+                    let text = format!("melting layer ~{:.1} km (bright band)", bb.height_km);
+                    let font = egui::FontId::proportional(12.0);
+                    painter.text(
+                        egui::pos2(prect.left() + 8.0, prect.bottom() - 8.0),
+                        egui::Align2::LEFT_BOTTOM,
+                        text,
+                        font,
+                        egui::Color32::from_rgb(160, 200, 230),
+                    );
+                }
             }
 
             // Rotation couplets: a ring at each cluster — solid red at strong-TVS strength
@@ -15172,10 +15373,28 @@ impl eframe::App for HookEchoApp {
         } else {
             &self.storm_cells
         };
+        // A cell within 15 km of a ZDR column owns it — the column marks the updraft, and the
+        // updraft belongs to the storm the table is already listing.
+        let zdr_cells: std::collections::HashSet<String> = match &self.zdr_cache {
+            Some((_, hits, _)) if self.filters.show_zdr_columns => cells
+                .iter()
+                .filter(|c| {
+                    hits.iter().any(|h| {
+                        // Small distances: a flat-earth step is plenty and needs no helper.
+                        let dy = (h.lat - c.lat) * 111.0;
+                        let dx = (h.lon - c.lon) * 111.0 * c.lat.to_radians().cos();
+                        (dx * dx + dy * dy).sqrt() <= 15.0
+                    })
+                })
+                .map(|c| c.id.clone())
+                .collect(),
+            _ => std::collections::HashSet::new(),
+        };
         if let Some(id) = ui::cells_window::show(
             &mut self.cells_window,
             ctx,
             cells,
+            &zdr_cells,
             crate::theme::accent(self.settings.theme),
         ) {
             if let Some(c) = self

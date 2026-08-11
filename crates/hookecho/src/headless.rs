@@ -516,6 +516,75 @@ pub fn run_tds(site: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Dual-pol signature verify: download the latest volume and run all three of the
+/// [`wxdata::dualpol`] detectors on it — three-body scatter spikes at the lowest tilt, ZDR columns
+/// through every tilt, and the CC bright band. `h0_km` is the freezing level above radar level;
+/// there is no model fetch here, so it is a CLI argument.
+pub fn run_dualpol(site: &str, h0_km: f64) -> anyhow::Result<()> {
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?;
+    let (z0, cc0, zdr_tilts, z_tilts, cc_tilts) = rt.block_on(async {
+        let scan = level2::download_latest_scan(site, chrono::Utc::now().date_naive()).await?;
+        let n = level2::elevation_angles(&scan).len();
+        let z0 = level2::bin_scan(&scan, Moment::Reflectivity, 0)?;
+        let cc0 = level2::bin_scan(&scan, Moment::CorrelationCoefficient, 0)?;
+        let take = |m: Moment| -> Vec<wxdata::level2::BinnedSweep> {
+            (0..n).filter_map(|t| level2::bin_scan(&scan, m, t).ok()).collect()
+        };
+        anyhow::Ok((
+            z0,
+            cc0,
+            take(Moment::DifferentialReflectivity),
+            take(Moment::Reflectivity),
+            take(Moment::CorrelationCoefficient),
+        ))
+    })?;
+    println!(
+        "{site}: {} ZDR tilts, {} Z tilts, {} CC tilts; freezing level {h0_km:.1} km ARL",
+        zdr_tilts.len(),
+        z_tilts.len(),
+        cc_tilts.len()
+    );
+
+    let spikes = wxdata::dualpol::tbss(&z0, &cc0, 60.0, 20.0, 0.8, 4.0, 150.0);
+    println!("TBSS (hail spikes) at {:.2}deg: {}", z0.elevation_deg, spikes.len());
+    for h in spikes.iter().take(8) {
+        println!(
+            "  {:.3},{:.3}  core {:.0} dBZ  spike {:.1} km  min CC {:.2}",
+            h.lat, h.lon, h.core_dbz, h.len_km, h.min_cc
+        );
+    }
+
+    let columns = wxdata::dualpol::zdr_columns(&zdr_tilts, &z_tilts, h0_km, 1.0, 1.0, 40.0, 100.0);
+    println!("ZDR columns (>1 dB, >=1 km above the freezing level): {}", columns.len());
+    for h in columns.iter().take(8) {
+        println!(
+            "  {:.3},{:.3}  depth {:.1} km  top {:.1} km  max {:.1} dB",
+            h.lat, h.lon, h.depth_km, h.top_km, h.max_zdr
+        );
+    }
+
+    // The low tilts see the band only at long range, where the beam is too wide to say anything.
+    let mid: Vec<wxdata::level2::BinnedSweep> = cc_tilts
+        .into_iter()
+        .filter(|s| (2.0..=10.0).contains(&s.elevation_deg))
+        .collect();
+    let mid_z: Vec<wxdata::level2::BinnedSweep> = z_tilts
+        .iter()
+        .filter(|s| (2.0..=10.0).contains(&s.elevation_deg))
+        .cloned()
+        .collect();
+    match wxdata::dualpol::bright_band(&mid, &mid_z, 6.0) {
+        Some(bb) => println!(
+            "bright band: {:.2} km ARL, mean CC {:.2}, {} gates",
+            bb.height_km, bb.mean_cc, bb.samples
+        ),
+        None => println!("bright band: none found (no melting layer in view, or clean CC)"),
+    }
+    Ok(())
+}
+
 /// Rotation verify: download the latest volume, bin the dealiased velocity at the lowest tilt,
 /// run the couplet detector, and print any hits. Proves the detection pipeline on real data.
 pub fn run_rotation(site: &str) -> anyhow::Result<()> {

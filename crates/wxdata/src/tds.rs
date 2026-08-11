@@ -24,7 +24,7 @@ pub struct TdsHit {
 
 /// Decode a binned `u8` gate index back to its physical value, or `None` for below-threshold /
 /// range-folded gates (indices 0/1).
-fn decode(sweep: &BinnedSweep, idx: u8) -> Option<f32> {
+pub(crate) fn decode(sweep: &BinnedSweep, idx: u8) -> Option<f32> {
     if idx < 2 {
         return None;
     }
@@ -33,7 +33,7 @@ fn decode(sweep: &BinnedSweep, idx: u8) -> Option<f32> {
 }
 
 /// Great-circle destination point (used to place a gate at its azimuth/range).
-fn dest(lon: f64, lat: f64, bearing_deg: f64, dist_km: f64) -> (f64, f64) {
+pub(crate) fn dest(lon: f64, lat: f64, bearing_deg: f64, dist_km: f64) -> (f64, f64) {
     let r = 6371.0;
     let ad = dist_km / r;
     let (br, la1, lo1) = (bearing_deg.to_radians(), lat.to_radians(), lon.to_radians());
