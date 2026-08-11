@@ -282,6 +282,41 @@ static BUILTINS: LazyLock<[ColorTable; 6]> = LazyLock::new(|| {
         .map(|(name, src)| parse_pal(src).unwrap_or_else(|e| panic!("built-in {name}.pal: {e}")))
 });
 
+/// Extra built-in tables a moment can be switched to without a file on disk, keyed by the name
+/// that appears after `builtin:` in `settings.palettes` (see [`resolve_builtin`]).
+///
+/// ponytail: the alternates are `.pal` text like every other table, so they cost one array entry
+/// and no new code path — no `enum PaletteSource`, no migration.
+const ALT_SRC: [(&str, usize, &str); 2] = [
+    (
+        "Colorblind-safe (viridis)",
+        0, // Moment::Reflectivity
+        include_str!("../data/colortables/REF-CVD.pal"),
+    ),
+    (
+        "Colorblind-safe (blue/orange)",
+        1, // Moment::Velocity
+        include_str!("../data/colortables/VEL-CVD.pal"),
+    ),
+];
+
+/// The `settings.palettes` value that selects built-in alternate `name`.
+pub const BUILTIN_PREFIX: &str = "builtin:";
+
+/// Names of the built-in alternates offered for `moment`, in menu order.
+pub fn alt_names(moment: Moment) -> impl Iterator<Item = &'static str> {
+    ALT_SRC
+        .iter()
+        .filter(move |(_, idx, _)| *idx == moment.index())
+        .map(|(name, _, _)| *name)
+}
+
+/// Parse the built-in alternate `name`, or `None` if there is no such alternate.
+fn resolve_builtin(name: &str) -> Option<ColorTable> {
+    let (_, _, src) = ALT_SRC.iter().find(|(n, _, _)| *n == name)?;
+    parse_pal(src).ok()
+}
+
 /// The built-in default table for `moment`.
 pub fn default_table(moment: Moment) -> &'static ColorTable {
     &BUILTINS[moment.index()]
@@ -321,6 +356,18 @@ impl Palettes {
                 // `.pal3` goes through the same parser: v3 is v2 plus directives this one
                 // already ignores, so a v3 table loads as its common subset rather than not at
                 // all. A file that shares nothing with v2 falls out as "no color stops".
+                // A `builtin:` token names a compiled-in alternate rather than a file. An
+                // unknown name falls through to the default with an error, same as a bad file.
+                Some(path) if path.to_string_lossy().starts_with(BUILTIN_PREFIX) => {
+                    let name = path.to_string_lossy()[BUILTIN_PREFIX.len()..].to_string();
+                    match resolve_builtin(&name) {
+                        Some(t) => (t, None),
+                        None => (
+                            default_table(moment).clone(),
+                            Some(format!("unknown built-in palette {name:?}")),
+                        ),
+                    }
+                }
                 Some(path) => match std::fs::read_to_string(path)
                     .map_err(|e| e.to_string())
                     .and_then(|s| parse_pal(&s).map_err(|e| e.to_string()))
@@ -348,6 +395,36 @@ mod tests {
         }
         // And the LazyLock array builds without panicking.
         assert_eq!(default_table(Moment::Reflectivity).stops.len(), 9);
+    }
+
+    #[test]
+    fn builtin_alternates_parse_and_load() {
+        // The hardcoded moment indices in ALT_SRC have to match Moment::index().
+        assert_eq!(Moment::Reflectivity.index(), 0);
+        assert_eq!(Moment::Velocity.index(), 1);
+        assert_eq!(alt_names(Moment::Reflectivity).count(), 1);
+        assert_eq!(alt_names(Moment::SpectrumWidth).count(), 0);
+
+        let mut p = Palettes::default();
+        let mut paths: [Option<std::path::PathBuf>; 6] = Default::default();
+        let name = alt_names(Moment::Reflectivity).next().unwrap();
+        paths[0] = Some(format!("{BUILTIN_PREFIX}{name}").into());
+        paths[1] = Some(format!("{BUILTIN_PREFIX}nope").into());
+        p.reload(&paths);
+        assert_eq!(p.errors[0], None);
+        assert_ne!(
+            p.table(Moment::Reflectivity),
+            default_table(Moment::Reflectivity)
+        );
+        // Viridis is monotone in brightness — that is the whole point of the table.
+        let lum = |v: f32| {
+            let c = p.table(Moment::Reflectivity).sample(v).unwrap();
+            c[0] as u32 + c[1] as u32 + c[2] as u32
+        };
+        assert!(lum(20.0) < lum(40.0) && lum(40.0) < lum(60.0));
+        // An unknown name keeps the default and says so rather than blanking the moment.
+        assert!(p.errors[1].is_some());
+        assert_eq!(p.table(Moment::Velocity), default_table(Moment::Velocity));
     }
 
     /// A v3-flavoured table: v3-only directives the parser does not know, around ordinary

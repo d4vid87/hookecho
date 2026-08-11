@@ -26,11 +26,12 @@ pub enum Theme {
     Redline,
     Glacier,
     HighContrast,
+    Oled,
 }
 
 impl Theme {
     /// All themes in menu order.
-    pub const ALL: [Theme; 14] = [
+    pub const ALL: [Theme; 15] = [
         Theme::Dark,
         Theme::Light,
         Theme::System,
@@ -45,6 +46,7 @@ impl Theme {
         Theme::Redline,
         Theme::Glacier,
         Theme::HighContrast,
+        Theme::Oled,
     ];
 
     pub fn label(self) -> &'static str {
@@ -63,6 +65,7 @@ impl Theme {
             Theme::Redline => "Redline",
             Theme::Glacier => "Glacier",
             Theme::HighContrast => "High contrast",
+            Theme::Oled => "OLED black",
         }
     }
 }
@@ -291,6 +294,13 @@ pub struct Settings {
     /// First-run setup wizard completed (or dismissed). `false` shows it at startup.
     #[serde(default)]
     pub setup_done: bool,
+    /// Chime when a new radar volume lands on the live pane in view.
+    #[serde(default)]
+    pub scan_chime: bool,
+    /// Sound for the new-scan chime. Ding by default — a scan every four minutes should be a tap
+    /// on the shoulder, not a warning tone.
+    #[serde(default = "default_scan_sound")]
+    pub scan_sound: AlertSound,
     /// Sound played when a new NWS warning appears (gated by `alert_sound`).
     #[serde(default)]
     pub warn_sound: AlertSound,
@@ -351,6 +361,11 @@ pub struct Settings {
     /// Enhanced Echo Tops product; raise it to track the core rather than the anvil.
     #[serde(default = "default_etop_dbz")]
     pub etop_dbz: f32,
+    /// Caption saved and copied images with site, product, valid time and source. On by default:
+    /// a radar picture that leaves the app without those four things cannot be checked by whoever
+    /// receives it.
+    #[serde(default = "default_true")]
+    pub share_card: bool,
     /// Hide the docked sidebar on the left (desktop). A floating button on the map's top-left
     /// brings it back, as does the drawer hotkey.
     #[serde(default)]
@@ -389,6 +404,10 @@ pub struct Bookmark {
     /// UTC time to seek to (Unix seconds); `None` = live/head.
     #[serde(default)]
     pub time_secs: Option<i64>,
+}
+
+fn default_scan_sound() -> AlertSound {
+    AlertSound::Ding
 }
 
 fn default_true() -> bool {
@@ -603,6 +622,7 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             default_site: "KTLX".to_string(),
+            share_card: true,
             hide_sidebar: false,
             hide_toolbar: false,
             layer_order: Vec::new(),
@@ -662,6 +682,8 @@ impl Default for Settings {
             rain_alerts: false,
             rain_sound: AlertSound::default(),
             setup_done: false,
+            scan_chime: false,
+            scan_sound: default_scan_sound(),
             warn_sound: AlertSound::default(),
             tds_sound: AlertSound::default(),
             rotation_sound: default_rotation_sound(),
@@ -751,6 +773,10 @@ impl Settings {
     pub fn export_bundle(&self) -> Result<String, String> {
         let mut palette_files = BTreeMap::new();
         for (moment, path) in &self.palettes {
+            // A built-in alternate is compiled in on the other machine too — nothing to inline.
+            if path.starts_with(crate::colormap::BUILTIN_PREFIX) {
+                continue;
+            }
             match std::fs::read_to_string(path) {
                 Ok(text) => {
                     palette_files.insert(moment.clone(), text);
@@ -875,6 +901,7 @@ mod tests {
             workspaces: Vec::new(),
             seeded_workspaces: false,
             smooth_radar: false,
+            share_card: true,
             hide_sidebar: false,
             hide_toolbar: false,
             layer_order: Vec::new(),
@@ -955,6 +982,8 @@ mod tests {
             rain_alerts: true,
             rain_sound: AlertSound::Ding,
             setup_done: true,
+            scan_chime: false,
+            scan_sound: AlertSound::Ding,
             warn_sound: AlertSound::Siren,
             tds_sound: AlertSound::Custom("/tmp/tds.wav".to_string()),
             rotation_sound: AlertSound::Siren,

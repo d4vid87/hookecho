@@ -435,7 +435,7 @@ clearing a cache costs the next fetch and nothing else.
   newest still instead, refreshed on the poll clock (a phone can't spawn ffmpeg,
   and a video decoder per open card is not what its battery is for).
 - Multi-pane layouts, placefiles with icon sheets and a layer manager, a sensor
-  dashboard, range rings, 13 themes, and tray-based background alerting.
+  dashboard, range rings, 15 themes, and tray-based background alerting.
 
 ### On your phone
 
@@ -675,7 +675,11 @@ ones worth knowing before you look:
 The whole interface is reachable from the keyboard, and the widget tree is
 published to screen readers (AT-SPI on Linux, UI Automation on Windows). There
 is a **High contrast** theme in Settings → General for low vision and for
-reading the screen in direct sun.
+reading the screen in direct sun, an **OLED black** theme for night use, and
+colorblind-safe reflectivity and velocity color tables in Settings → Palettes
+(a viridis ramp whose brightness rises with dBZ, and a blue/orange diverging
+velocity table — red/green diverging tables do not survive protan or deutan
+vision).
 
 ## Repository layout
 

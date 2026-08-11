@@ -210,6 +210,21 @@ fn palette(theme: Theme, system_dark: bool) -> Palette {
             text: c(0xffffff),
             accent: c(0xffe600),
         },
+        // OLED black — Dark's chrome over a true-black background. On an OLED panel a #000000
+        // pixel is an off pixel: less battery on a phone at 3am, and no backlight glow around
+        // the map at night. Unlike High contrast this keeps the normal accent and stroke, so it
+        // is the everyday dark theme rather than an accessibility mode.
+        Theme::Oled => Palette {
+            is_dark: true,
+            bg: c(0x000000),
+            extreme: c(0x000000),
+            faint: c(0x0b0d10),
+            stroke: c(0x23272f),
+            widget: c(0x121418),
+            widget_hover: c(0x1c1f25),
+            text: c(0xc8d0da),
+            accent: ACCENT,
+        },
     }
 }
 

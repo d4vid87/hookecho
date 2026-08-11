@@ -1838,8 +1838,13 @@ pub struct HookEchoApp {
     goes_times_style: Option<crate::tiles::BasemapStyle>,
     goes_time_idx: Option<usize>,
     goes_times_rx: Option<std::sync::mpsc::Receiver<Vec<chrono::DateTime<chrono::Utc>>>>,
+    /// Volume start time of the last new-scan chime (see `scan_chime`).
+    last_chime: Option<chrono::DateTime<Utc>>,
     /// Where a requested screenshot should go once the image event arrives.
     screenshot_pending: Option<ShotDest>,
+    /// A capture waiting on the share-card footer to be on screen: the destination, and how many
+    /// more frames to draw the footer before asking for the image (see `share_card_footer`).
+    share_card: Option<(ShotDest, u8)>,
     loop_export: Option<LoopExport>,
     /// When true, all panes share the active pane's camera.
     link_cameras: bool,
@@ -2513,7 +2518,9 @@ impl HookEchoApp {
             goes_times_style: None,
             goes_time_idx: None,
             goes_times_rx: None,
+            last_chime: None,
             screenshot_pending: None,
+            share_card: None,
             loop_export: None,
             link_cameras: false,
             cells_site: None,
@@ -3270,6 +3277,42 @@ impl HookEchoApp {
             b.2 = Instant::now();
         } else {
             self.warning_banners.push((event, area, Instant::now()));
+        }
+    }
+
+    /// Height of pane `idx`'s beam centre above the radar, in feet, over the point `ll`
+    /// (`[lon, lat]`). `None` when the pane has no site or no loaded tilt.
+    ///
+    /// Ground range is close enough to slant range for the shallow tilts this is read at, and the
+    /// 4/3-earth model is the same one the cross-section draws with
+    /// ([`wxdata::xsection::beam_height_km`]), so the two agree.
+    fn beam_height_ft(&self, idx: usize, ll: [f64; 2]) -> Option<f64> {
+        let v = &self.views[idx];
+        let site = wxdata::sites::site_by_id(v.site.as_deref()?)?;
+        let elev = *v.volume.as_ref()?.elevations.get(v.tilt)? as f64;
+        let (km, _) = crate::geo::great_circle([site.longitude as f64, site.latitude as f64], ll);
+        Some(wxdata::xsection::beam_height_km(km, elev) * 3280.84)
+    }
+
+    /// Chime when a new volume lands on the live pane you are watching — the "look up" cue for
+    /// someone doing something else while a storm is on.
+    ///
+    /// Only the active pane, only while following the head, and only for a volume newer than the
+    /// last one chimed for: a scrub, a backfilled frame, or the same volume growing another chunk
+    /// is not a new scan. The first volume after a site switch or a cold start is swallowed, since
+    /// that one is the user's own doing.
+    fn scan_chime(&mut self, view: usize, time: chrono::DateTime<Utc>) {
+        if !self.settings.scan_chime || view != self.active || !self.views[view].timeline.following
+        {
+            return;
+        }
+        let first = self.last_chime.is_none();
+        if self.last_chime.is_some_and(|t| t >= time) {
+            return;
+        }
+        self.last_chime = Some(time);
+        if !first {
+            self.play_alert(&self.settings.scan_sound.clone());
         }
     }
 
@@ -8719,6 +8762,7 @@ impl HookEchoApp {
                     v.clamp_tilt();
                     v.clamp_moment();
                     self.pane_shown.remove(&view);
+                    self.scan_chime(view, time);
                 }
                 DataMsg::Frames {
                     view,
@@ -8754,6 +8798,7 @@ impl HookEchoApp {
                     // fallback: if the stream dies, interval polling resumes on schedule.
                     v.last_poll = Some(Instant::now());
                     self.pane_shown.remove(&view);
+                    self.scan_chime(view, time);
                 }
                 DataMsg::UpToDate { view, .. } => self.views[view].loading = false,
                 DataMsg::Prefetched { name, scan, .. } => {
@@ -11785,7 +11830,13 @@ impl HookEchoApp {
                 painter.line_segment([a, b], egui::Stroke::new(2.0, col));
                 let (km, brg) = crate::geo::great_circle(self.measure[0], self.measure[1]);
                 let mi = km * 0.621_371; // statute miles
-                let txt = format!("{mi:.1} mi  @ {brg:.0}°");
+                let mut txt = format!("{mi:.1} mi  @ {brg:.0}°");
+                // How high the beam is over the far end of the line. The number that decides
+                // whether "there's nothing on radar there" means the storm is weak or means the
+                // scan is looking over its head, and until now it lived only in the cross-section.
+                if let Some(h) = self.beam_height_ft(idx, self.measure[1]) {
+                    txt.push_str(&format!("  ·  beam {h:.0} ft"));
+                }
                 let mid = a + (b - a) * 0.5;
                 painter.text(
                     mid + egui::vec2(0.0, -10.0),
@@ -12248,20 +12299,17 @@ impl HookEchoApp {
             ui.label(egui::RichText::new("Capture").strong());
             if ui.button("Save screenshot…").clicked() {
                 if let Some(path) = crate::dialog::save_path("hookecho.png", "png") {
-                    self.screenshot_pending = Some(ShotDest::File(path));
-                    ui.ctx()
-                        .send_viewport_cmd(egui::ViewportCommand::Screenshot(
-                            egui::UserData::default(),
-                        ));
+                    self.request_capture(ui.ctx(), ShotDest::File(path));
                 }
             }
             if ui.button("Copy view to clipboard").clicked() {
-                self.screenshot_pending = Some(ShotDest::Clipboard);
-                ui.ctx()
-                    .send_viewport_cmd(
-                        egui::ViewportCommand::Screenshot(egui::UserData::default()),
-                    );
+                self.request_capture(ui.ctx(), ShotDest::Clipboard);
             }
+            ui.checkbox(&mut self.settings.share_card, "Caption shared images")
+                .on_hover_text(
+                    "Stamp the site, product, valid time and source onto saved and copied \
+                     images, so a screenshot still says what it is once it leaves here",
+                );
             if ui
                 .add_enabled(
                     self.loop_export.is_none(),
@@ -12440,6 +12488,7 @@ impl HookEchoApp {
                 let file = import.path.to_string_lossy().into_owned();
                 let sound = crate::settings::AlertSound::Custom(file);
                 match import.tag.as_str() {
+                    "New scan" => self.settings.scan_sound = sound,
                     "Warning" => self.settings.warn_sound = sound,
                     "Emergency" => self.settings.emergency_sound = sound,
                     "TDS" => self.settings.tds_sound = sound,
@@ -12560,6 +12609,86 @@ impl HookEchoApp {
                 }
             }
         }
+    }
+
+    /// Ask the viewport for an image, `dest` decides where it lands.
+    ///
+    /// With the share card on, the request waits two frames while [`share_card_footer`] draws the
+    /// caption band, so the capture contains it.
+    ///
+    /// ponytail: the caption is drawn by egui into the frame rather than composited into the
+    /// pixels afterwards — text layout, fonts and the theme are already solved here, and
+    /// compositing them onto a raw RGBA buffer is a rasterizer we would have to grow.
+    fn request_capture(&mut self, ctx: &egui::Context, dest: ShotDest) {
+        if self.settings.share_card {
+            // Two frames: one to lay the band out, one to be sure it is on screen when the
+            // viewport grabs the image.
+            self.share_card = Some((dest, 2));
+            ctx.request_repaint();
+        } else {
+            self.screenshot_pending = Some(dest);
+            ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::UserData::default()));
+        }
+    }
+
+    /// The share card: a caption band across the bottom of the map naming what the picture shows,
+    /// drawn only on the frames a capture is waiting for. A radar screenshot with no site, product
+    /// or time on it is a pretty picture; this is the difference between that and a report.
+    fn share_card_footer(&mut self, ctx: &egui::Context) {
+        let Some((_, frames)) = &mut self.share_card else {
+            return;
+        };
+        *frames -= 1;
+        let fire = *frames == 0;
+
+        let v = &self.views[self.active];
+        let site = v.site.clone().unwrap_or_else(|| "no site".to_string());
+        let product = crate::products::info(v.moment).name.to_string();
+        let time = v
+            .volume
+            .as_ref()
+            .map(|vol| crate::timefmt::fmt_date_clock(vol.time, self.active_tz()))
+            .unwrap_or_default();
+        let accent = crate::theme::accent(self.settings.theme);
+        egui::Area::new(egui::Id::new("share_card"))
+            .order(egui::Order::Foreground)
+            .constrain_to(self.chrome_rect)
+            .anchor(egui::Align2::CENTER_BOTTOM, egui::vec2(0.0, -10.0))
+            .show(ctx, |ui| {
+                crate::ui::style::glass(ui, 245).show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(
+                            egui::RichText::new(&site)
+                                .size(crate::ui::style::FONT_BASE)
+                                .strong()
+                                .color(accent),
+                        );
+                        let mut line = product;
+                        if !time.is_empty() {
+                            line.push_str(" · ");
+                            line.push_str(&time);
+                        }
+                        ui.label(
+                            egui::RichText::new(line)
+                                .size(crate::ui::style::FONT_BASE)
+                                .color(egui::Color32::from_gray(238)),
+                        );
+                        ui.label(
+                            egui::RichText::new("Hook Echo-WX · data: NOAA/NWS")
+                                .size(crate::ui::style::FONT_SM)
+                                .color(egui::Color32::from_gray(160)),
+                        );
+                    });
+                });
+            });
+
+        if fire {
+            // The band is on screen: take the picture, and keep the caption for this one frame.
+            let (dest, _) = self.share_card.take().expect("checked above");
+            self.screenshot_pending = Some(dest);
+            ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::UserData::default()));
+        }
+        ctx.request_repaint();
     }
 
     /// If a screenshot was requested, save the delivered image event to the pending path.
@@ -13970,6 +14099,9 @@ impl eframe::App for HookEchoApp {
             self.info_chip(ctx);
             self.error_chip(ctx);
         }
+
+        // Over everything, and only while a capture is pending.
+        self.share_card_footer(ctx);
 
         // The spotlight tour, over the chrome it points at. Paused under the wizard and the
         // cheat sheet — all three draw on `Order::Foreground` and would fight for it.

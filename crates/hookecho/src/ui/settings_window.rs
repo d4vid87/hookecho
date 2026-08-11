@@ -384,12 +384,20 @@ impl SettingsWindow {
                     ui.label(key);
 
                     let current = settings.palettes.get(key).cloned();
+                    // A `builtin:` value names a compiled-in alternate, not a file, so it has no
+                    // stem — show the alternate's own name.
+                    let builtin = current
+                        .as_deref()
+                        .and_then(|v| v.strip_prefix(crate::colormap::BUILTIN_PREFIX))
+                        .map(str::to_string);
                     let current_stem = current
                         .as_deref()
+                        .filter(|_| builtin.is_none())
                         .and_then(|p| std::path::Path::new(p).file_name().and_then(|s| s.to_str()))
                         .map(str::to_string);
-                    let selected_text = current_stem
+                    let selected_text = builtin
                         .clone()
+                        .or_else(|| current_stem.clone())
                         .unwrap_or_else(|| "Default".to_string());
 
                     egui::ComboBox::from_id_salt(("pal_combo", key))
@@ -397,6 +405,15 @@ impl SettingsWindow {
                         .show_ui(ui, |ui| {
                             if ui.selectable_label(current.is_none(), "Default").clicked() {
                                 settings.palettes.remove(key);
+                            }
+                            for name in crate::colormap::alt_names(moment) {
+                                let is_sel = builtin.as_deref() == Some(name);
+                                if ui.selectable_label(is_sel, name).clicked() {
+                                    settings.palettes.insert(
+                                        key.to_string(),
+                                        format!("{}{name}", crate::colormap::BUILTIN_PREFIX),
+                                    );
+                                }
                             }
                             for stem in &self.pal_stems {
                                 let is_sel = current_stem.as_deref() == Some(stem.as_str());
@@ -754,6 +771,10 @@ pub fn sound_picker(ui: &mut egui::Ui, settings: &mut Settings) {
         .on_hover_text("Silences chimes and spoken warnings without changing the choices below");
     ui.checkbox(&mut settings.alert_sound, "Play a sound on alerts")
         .on_hover_text("Master switch for the warning / TDS / lightning alert sounds");
+    ui.checkbox(&mut settings.scan_chime, "Chime on every new scan")
+        .on_hover_text(
+            "A tap on the shoulder when a new volume lands on the live pane you're watching",
+        );
     ui.horizontal(|ui| {
         ui.label("Volume");
         ui.add(egui::Slider::new(&mut settings.alert_volume, 0.0..=1.0).step_by(0.05));
@@ -762,7 +783,8 @@ pub fn sound_picker(ui: &mut egui::Ui, settings: &mut Settings) {
 
     // One row per alert kind: sound combo (+ Custom… file picker) and a ▶ preview.
     type SoundRow = (&'static str, fn(&mut Settings) -> &mut AlertSound);
-    let rows: [SoundRow; 5] = [
+    let rows: [SoundRow; 6] = [
+        ("New scan", |s| &mut s.scan_sound),
         ("Warning", |s| &mut s.warn_sound),
         ("Emergency", |s| &mut s.emergency_sound),
         ("TDS", |s| &mut s.tds_sound),
