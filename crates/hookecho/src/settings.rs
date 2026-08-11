@@ -294,6 +294,11 @@ pub struct Settings {
     /// First-run setup wizard completed (or dismissed). `false` shows it at startup.
     #[serde(default)]
     pub setup_done: bool,
+    /// Watch wherever you are, not only the places you saved: while a GPS fix is coming in it
+    /// joins the marker list for the proximity alerts (lightning, rotation), under the name
+    /// "my location". Nothing is written to the saved markers and nothing is shared.
+    #[serde(default)]
+    pub alert_follow_gps: bool,
     /// Quiet hours: between `quiet_start_hour` and `quiet_end_hour` (local, 24h), alert sounds
     /// and pushes are held back. Escalated warnings — Tornado Emergency, PDS, destructive — go
     /// through anyway: the whole point of the tier is that it is worth waking up for.
@@ -703,6 +708,7 @@ impl Default for Settings {
             rain_alerts: false,
             rain_sound: AlertSound::default(),
             setup_done: false,
+            alert_follow_gps: false,
             quiet_hours: false,
             quiet_start_hour: default_quiet_start(),
             quiet_end_hour: default_quiet_end(),
@@ -1027,6 +1033,7 @@ mod tests {
             rain_alerts: true,
             rain_sound: AlertSound::Ding,
             setup_done: true,
+            alert_follow_gps: false,
             quiet_hours: false,
             quiet_start_hour: 22,
             quiet_end_hour: 7,

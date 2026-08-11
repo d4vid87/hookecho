@@ -1838,6 +1838,8 @@ pub struct HookEchoApp {
     goes_times_style: Option<crate::tiles::BasemapStyle>,
     goes_time_idx: Option<usize>,
     goes_times_rx: Option<std::sync::mpsc::Receiver<Vec<chrono::DateTime<chrono::Utc>>>>,
+    /// Per-location cooldown for the rotation-near-a-watched-place alert.
+    rotation_alerted: std::collections::HashMap<String, Instant>,
     /// Volume start time of the last new-scan chime (see `scan_chime`).
     last_chime: Option<chrono::DateTime<Utc>>,
     /// Where a requested screenshot should go once the image event arrives.
@@ -2518,6 +2520,7 @@ impl HookEchoApp {
             goes_times_style: None,
             goes_time_idx: None,
             goes_times_rx: None,
+            rotation_alerted: std::collections::HashMap::new(),
             last_chime: None,
             screenshot_pending: None,
             share_card: None,
@@ -3335,6 +3338,31 @@ impl HookEchoApp {
         crate::audio::play(sound, self.settings.alert_volume);
     }
 
+    /// Everywhere the proximity alerts watch: the saved markers, plus your own live position when
+    /// "alert where I am" is on and there is a fix. Returns `(name, lon, lat, radius_mi)`.
+    ///
+    /// The GPS entry is deliberately not a real marker — a marker that moves would drag its way
+    /// through the saved list, and it must vanish the moment the fix or the setting does.
+    fn watched_points(&self) -> Vec<(String, f64, f64, f64)> {
+        let mut out: Vec<(String, f64, f64, f64)> = self
+            .settings
+            .markers
+            .iter()
+            .map(|m| (m.name.clone(), m.lon, m.lat, m.alert_radius_mi))
+            .collect();
+        if self.settings.alert_follow_gps {
+            if let Some((lon, lat)) = self.chase_pos {
+                out.push((
+                    "my location".to_string(),
+                    lon,
+                    lat,
+                    crate::settings::default_alert_radius_mi(),
+                ));
+            }
+        }
+        out
+    }
+
     /// Is the local clock inside the user's quiet-hours window?
     fn in_quiet_hours(&self) -> bool {
         use chrono::Timelike;
@@ -3624,11 +3652,10 @@ impl HookEchoApp {
         let mut fired = false;
         // Names first: the alert calls below need `&mut self`.
         let near: Vec<String> = self
-            .settings
-            .markers
-            .iter()
-            .filter(|m| field.max_within_km(m.lon, m.lat, RADIUS_KM) >= DENSITY_MIN)
-            .map(|m| m.name.clone())
+            .watched_points()
+            .into_iter()
+            .filter(|(_, lon, lat, _)| field.max_within_km(*lon, *lat, RADIUS_KM) >= DENSITY_MIN)
+            .map(|(name, ..)| name)
             .collect();
         for name in near {
             let recent = self
@@ -4878,7 +4905,63 @@ impl HookEchoApp {
             }
         }
         self.rot_active = now_active;
+        self.rotation_near_you(&hits);
         hits
+    }
+
+    /// "There is rotation near a place you care about" — the detection above fires once for the
+    /// whole radar, which tells you a couplet exists somewhere in a 150 km circle. This one names
+    /// the place and the distance, and it re-fires as a storm works down a line, so it is the
+    /// alert worth pushing to a phone.
+    ///
+    /// Same shape as the lightning alarm: a per-location cooldown, so a couplet that persists over
+    /// six volumes is one alert, not six.
+    fn rotation_near_you(&mut self, hits: &[wxdata::rotation::CoupletHit]) {
+        const COOLDOWN: std::time::Duration = std::time::Duration::from_secs(600);
+        if hits.is_empty() {
+            return;
+        }
+        // Strongest couplet within each watched radius, if any.
+        let near: Vec<(String, f64, f32)> = self
+            .watched_points()
+            .into_iter()
+            .filter_map(|(name, lon, lat, radius_mi)| {
+                let radius_km = radius_mi * crate::geo::KM_PER_MILE;
+                hits.iter()
+                    .filter_map(|h| {
+                        let (km, _) = crate::geo::great_circle([lon, lat], [h.lon, h.lat]);
+                        (km <= radius_km).then_some((km, h.vrot_ms))
+                    })
+                    .min_by(|a, b| a.0.total_cmp(&b.0))
+                    .map(|(km, vrot)| (name, km, vrot))
+            })
+            .collect();
+        let mut fired = false;
+        for (name, km, vrot_ms) in near {
+            if self
+                .rotation_alerted
+                .get(&name)
+                .is_some_and(|t| t.elapsed() < COOLDOWN)
+            {
+                continue;
+            }
+            self.rotation_alerted.insert(name.clone(), Instant::now());
+            let kt = vrot_ms as f64 * 1.943_844;
+            let mi = km / crate::geo::KM_PER_MILE;
+            self.banner(
+                format!("\u{21bb} Rotation near {name}"),
+                format!("{kt:.0} kt couplet, {mi:.0} mi away"),
+            );
+            self.notify_alert(
+                &format!("\u{21bb} Rotation near {name}"),
+                &format!("{kt:.0} kt rotational velocity, {mi:.0} mi from {name}"),
+                true,
+            );
+            fired = true;
+        }
+        if fired && self.settings.alert_sound {
+            self.play_alert_urgent(&self.settings.rotation_sound.clone());
+        }
     }
 
     /// DVR instant replay: jump the active timeline to the earliest frame still buffered in the

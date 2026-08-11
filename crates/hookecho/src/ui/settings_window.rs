@@ -836,6 +836,11 @@ fn alerts_tab(ui: &mut egui::Ui, settings: &mut Settings) {
     ui.add_space(8.0);
     ui.separator();
     ui.strong("When to interrupt");
+    ui.checkbox(&mut settings.alert_follow_gps, "Alert where I am, too")
+        .on_hover_text(
+            "While a GPS fix is coming in, your own position joins the saved locations the \
+             lightning and rotation alerts watch. Nothing is saved or shared.",
+        );
     ui.horizontal(|ui| {
         ui.checkbox(&mut settings.quiet_hours, "Quiet hours");
         ui.add_enabled_ui(settings.quiet_hours, |ui| {
