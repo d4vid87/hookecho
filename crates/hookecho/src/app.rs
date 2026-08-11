@@ -1839,6 +1839,8 @@ pub struct HookEchoApp {
     goes_times: Vec<chrono::DateTime<chrono::Utc>>,
     goes_times_style: Option<crate::tiles::BasemapStyle>,
     goes_time_idx: Option<usize>,
+    /// Keep the GOES frame on the active pane's radar clock rather than on a hand-picked frame.
+    goes_follow_radar: bool,
     goes_times_rx: Option<std::sync::mpsc::Receiver<Vec<chrono::DateTime<chrono::Utc>>>>,
     /// A warning that wants a radar picture pushed after it (see `settings.ntfy_snapshot`).
     snapshot_push: Option<String>,
@@ -2523,6 +2525,7 @@ impl HookEchoApp {
             goes_times: Vec::new(),
             goes_times_style: None,
             goes_time_idx: None,
+            goes_follow_radar: true,
             goes_times_rx: None,
             snapshot_push: None,
             rotation_alerted: std::collections::HashMap::new(),
@@ -4172,6 +4175,14 @@ impl HookEchoApp {
         if !active_is_goes || self.goes_times.is_empty() {
             return;
         }
+        // While following, the readout is whichever frame the radar clock picked.
+        let followed = self.goes_follow_radar.then(|| {
+            self.views[self.active]
+                .volume
+                .as_ref()
+                .map(|v| v.time)
+                .and_then(|t| nearest_goes(&self.goes_times, t))
+        });
         egui::Area::new(egui::Id::new("goes_time_bar"))
             .constrain_to(self.chrome_rect)
             .anchor(egui::Align2::CENTER_BOTTOM, egui::vec2(0.0, -34.0))
@@ -4180,8 +4191,26 @@ impl HookEchoApp {
                     ui.horizontal(|ui| {
                         let n = self.goes_times.len();
                         // Effective index (None = latest = n-1).
-                        let cur = self.goes_time_idx.unwrap_or(n - 1);
+                        let cur = match followed.flatten() {
+                            Some(t) => self
+                                .goes_times
+                                .iter()
+                                .position(|x| *x == t)
+                                .unwrap_or(n - 1),
+                            None => self.goes_time_idx.unwrap_or(n - 1),
+                        };
                         ui.label("🛰 GOES:");
+                        if ui
+                            .selectable_label(self.goes_follow_radar, "⟲ radar time")
+                            .on_hover_text(
+                                "Keep the satellite on the radar's clock — scrub the timeline \
+                                 and the imagery follows",
+                            )
+                            .clicked()
+                        {
+                            self.goes_follow_radar = !self.goes_follow_radar;
+                            self.goes_time_idx = None;
+                        }
                         if ui
                             .add_enabled(
                                 cur > 0,
@@ -4189,6 +4218,7 @@ impl HookEchoApp {
                             )
                             .clicked()
                         {
+                            self.goes_follow_radar = false;
                             self.goes_time_idx = Some(cur.saturating_sub(1));
                         }
                         let label = crate::timefmt::fmt_clock(
@@ -4204,13 +4234,18 @@ impl HookEchoApp {
                             )
                             .clicked()
                         {
+                            self.goes_follow_radar = false;
                             let ni = cur + 1;
                             self.goes_time_idx = if ni >= n - 1 { None } else { Some(ni) };
                         }
                         if ui
-                            .add_enabled(self.goes_time_idx.is_some(), egui::Button::new("Latest"))
+                            .add_enabled(
+                                self.goes_time_idx.is_some() || self.goes_follow_radar,
+                                egui::Button::new("Latest"),
+                            )
                             .clicked()
                         {
+                            self.goes_follow_radar = false;
                             self.goes_time_idx = None;
                         }
                     });
@@ -13569,6 +13604,24 @@ pub(crate) fn display_units(moment: Moment, settings: &Settings) -> (f32, &'stat
 }
 
 /// A coarse "N ago" string for volume age.
+/// The GOES frame closest to `t`, or `None` when the nearest one is too far off to be the same
+/// weather (or there are no frames yet).
+///
+/// GIBS geostationary layers are 10-minute imagery; half an hour of tolerance covers a gap in the
+/// index or a radar volume from a slow VCP without ever pairing a scan with imagery from another
+/// part of the day. `None` means "leave it on the latest", which is the pre-existing behaviour.
+fn nearest_goes(
+    times: &[chrono::DateTime<chrono::Utc>],
+    t: chrono::DateTime<chrono::Utc>,
+) -> Option<chrono::DateTime<chrono::Utc>> {
+    const TOLERANCE_MIN: i64 = 30;
+    times
+        .iter()
+        .copied()
+        .min_by_key(|x| (*x - t).num_seconds().abs())
+        .filter(|x| (*x - t).num_minutes().abs() <= TOLERANCE_MIN)
+}
+
 /// Compass point for a bearing in degrees from north (used in alarm text).
 fn cardinal(bearing_deg: f64) -> &'static str {
     const POINTS: [&str; 8] = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"];
@@ -15011,9 +15064,19 @@ impl eframe::App for HookEchoApp {
                         let _ = tx.send(times);
                     });
                 }
-                let selected = self
-                    .goes_time_idx
-                    .and_then(|i| self.goes_times.get(i).copied());
+                // Following the radar is the default: scrubbing back through an event should
+                // take the satellite back with it, which is the whole reason to look at both.
+                // Stepping the GOES arrows by hand drops out of it.
+                let selected = if self.goes_follow_radar {
+                    self.views[self.active.min(n - 1)]
+                        .volume
+                        .as_ref()
+                        .map(|v| v.time)
+                        .and_then(|t| nearest_goes(&self.goes_times, t))
+                } else {
+                    self.goes_time_idx
+                        .and_then(|i| self.goes_times.get(i).copied())
+                };
                 clear_tiles |= self.tiles.set_goes_time(selected);
             } else if self.goes_times_style.is_some() {
                 self.goes_times_style = None;
@@ -15304,6 +15367,20 @@ mod field_lut_tests {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn goes_frame_follows_the_radar_clock() {
+        use chrono::{TimeZone, Utc};
+        let t = |m: u32| Utc.with_ymd_and_hms(2026, 5, 1, 20, m, 0).unwrap();
+        let times = [t(0), t(10), t(20), t(30)];
+        // Nearest wins, ties included.
+        assert_eq!(super::nearest_goes(&times, t(21)), Some(t(20)));
+        assert_eq!(super::nearest_goes(&times, t(26)), Some(t(30)));
+        // Past the tolerance, stay on the latest instead of showing the wrong hour.
+        let far = Utc.with_ymd_and_hms(2026, 5, 1, 22, 0, 0).unwrap();
+        assert_eq!(super::nearest_goes(&times, far), None);
+        assert_eq!(super::nearest_goes(&[], t(0)), None);
+    }
 
     #[test]
     fn icon_sheet_cache_paths_are_per_url_and_filename_safe() {
