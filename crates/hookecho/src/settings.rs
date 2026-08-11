@@ -26,11 +26,12 @@ pub enum Theme {
     Redline,
     Glacier,
     HighContrast,
+    Oled,
 }
 
 impl Theme {
     /// All themes in menu order.
-    pub const ALL: [Theme; 14] = [
+    pub const ALL: [Theme; 15] = [
         Theme::Dark,
         Theme::Light,
         Theme::System,
@@ -45,6 +46,7 @@ impl Theme {
         Theme::Redline,
         Theme::Glacier,
         Theme::HighContrast,
+        Theme::Oled,
     ];
 
     pub fn label(self) -> &'static str {
@@ -63,6 +65,7 @@ impl Theme {
             Theme::Redline => "Redline",
             Theme::Glacier => "Glacier",
             Theme::HighContrast => "High contrast",
+            Theme::Oled => "OLED black",
         }
     }
 }
