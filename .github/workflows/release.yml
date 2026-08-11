@@ -40,11 +40,28 @@ jobs:
             --headless-icon /tmp/icon.png
           test -s /tmp/icon.png
 
+      # The .deb is built on the same runner: it wants the same glibc floor, the same release
+      # binary, and `$auto` resolves its dependencies against whatever libs this image carries.
+      - name: Install cargo-deb
+        run: cargo install cargo-deb --locked --version ^3.7
+
+      - name: Build .deb
+        run: |
+          bash packaging/build-deb.sh
+          cp target/debian/*.deb dist/
+          dpkg -c dist/*.deb
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: Hook_Echo-WX-x86_64.AppImage
           path: dist/Hook_Echo-WX-x86_64.AppImage
+
+      - name: Upload .deb artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: hookecho-deb
+          path: dist/*.deb
 
       # The tag's own CHANGELOG section becomes the release body. Empty means the section is
       # missing, which is worth failing the release over — a release with no notes is the state
@@ -66,7 +83,9 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           body_path: notes.md
-          files: dist/Hook_Echo-WX-x86_64.AppImage
+          files: |
+            dist/Hook_Echo-WX-x86_64.AppImage
+            dist/*.deb
 
       # Every push to main refreshes a rolling "latest" prerelease, so the Releases page always
       # carries current builds. Before this, artifacts only ever reached Releases on a tag push,
@@ -82,7 +101,9 @@ jobs:
           body: |
             Rolling build of `main` — rebuilt and re-published on every push, so this
             is always the newest code. Older releases are kept as drafts.
-          files: dist/Hook_Echo-WX-x86_64.AppImage
+          files: |
+            dist/Hook_Echo-WX-x86_64.AppImage
+            dist/*.deb
 
   windows:
     name: Windows zip

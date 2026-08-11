@@ -150,3 +150,26 @@ android_logger = "0.14"
 # System clipboard bridge (paste into egui text fields); the soft-keyboard calls go through
 # android-activity's built-in helpers instead.
 jni = "0.21"
+
+# Debian package (`cargo deb -p hookecho`). Same payload as the AppImage — binary, desktop entry,
+# AppStream metainfo, icon — but installed into the system so the distro's own menu, icon cache and
+# updater handle it. The icon is rendered by the built binary (`--headless-icon`) into
+# `target/deb-assets/`, so no PNG is committed; `packaging/build-deb.sh` does that first.
+[package.metadata.deb]
+maintainer = "d4vid87 <davidmay87@gmail.com>"
+copyright = "2026, Hook Echo-WX contributors"
+license-file = ["../../LICENSE", "0"]
+extended-description = """\
+Hook Echo-WX renders NEXRAD Level II and Level III radar with dual-pol moments, \
+storm-relative velocity, derived products, warnings, satellite and lightning — \
+locally, with no account and no central server."""
+section = "science"
+priority = "optional"
+depends = "$auto"
+assets = [
+    ["../../target/release/hookecho", "usr/bin/", "755"],
+    ["../../packaging/hookecho.desktop", "usr/share/applications/", "644"],
+    ["../../packaging/zip.batman.hookecho.metainfo.xml", "usr/share/metainfo/", "644"],
+    ["../../target/deb-assets/hookecho-256.png", "usr/share/icons/hicolor/256x256/apps/hookecho.png", "644"],
+    ["../../target/deb-assets/hookecho-128.png", "usr/share/icons/hicolor/128x128/apps/hookecho.png", "644"],
+]

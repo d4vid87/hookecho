@@ -29,7 +29,9 @@ built from NOAA's free GRIB grids, so it needs no API key.</sub>
 ## Install
 
 - **Linux**: download `Hook_Echo-WX-x86_64.AppImage` from
-  [Releases](../../releases), `chmod +x`, run.
+  [Releases](../../releases), `chmod +x`, run. Debian/Ubuntu users can install
+  `hookecho_<version>_amd64.deb` from the same place
+  (`sudo apt install ./hookecho_*.deb`) to get the menu entry and icon.
 - **Windows**: grab the installer from [Releases](../../releases) —
   `Hook_Echo-WX-setup-x86_64.exe` (setup wizard) or `Hook_Echo-WX-x86_64.msi`
   (MSI, for scripted/enterprise installs). A portable
