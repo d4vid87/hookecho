@@ -1,0 +1,18 @@
+; Hook Echo built-in — colorblind-safe reflectivity (viridis)
+;
+; Perceptually uniform and readable under protan/deutan/tritan vision: brightness rises
+; monotonically with dBZ, so the ramp still reads as "stronger" even with no hue channel at
+; all. Colors are the standard viridis control points, sampled evenly over 10..75 dBZ.
+product: BR
+units: dBZ
+step: 10
+
+color: 10 68 1 84
+color: 18 71 45 123
+color: 26 59 82 139
+color: 34 44 114 142
+color: 42 33 145 140
+color: 50 94 201 98
+color: 58 181 222 43
+color: 66 253 231 37
+color: 75 255 255 255

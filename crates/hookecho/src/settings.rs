@@ -751,6 +751,10 @@ impl Settings {
     pub fn export_bundle(&self) -> Result<String, String> {
         let mut palette_files = BTreeMap::new();
         for (moment, path) in &self.palettes {
+            // A built-in alternate is compiled in on the other machine too — nothing to inline.
+            if path.starts_with(crate::colormap::BUILTIN_PREFIX) {
+                continue;
+            }
             match std::fs::read_to_string(path) {
                 Ok(text) => {
                     palette_files.insert(moment.clone(), text);

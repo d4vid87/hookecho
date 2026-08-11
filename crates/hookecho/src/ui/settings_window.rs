@@ -384,12 +384,20 @@ impl SettingsWindow {
                     ui.label(key);
 
                     let current = settings.palettes.get(key).cloned();
+                    // A `builtin:` value names a compiled-in alternate, not a file, so it has no
+                    // stem — show the alternate's own name.
+                    let builtin = current
+                        .as_deref()
+                        .and_then(|v| v.strip_prefix(crate::colormap::BUILTIN_PREFIX))
+                        .map(str::to_string);
                     let current_stem = current
                         .as_deref()
+                        .filter(|_| builtin.is_none())
                         .and_then(|p| std::path::Path::new(p).file_name().and_then(|s| s.to_str()))
                         .map(str::to_string);
-                    let selected_text = current_stem
+                    let selected_text = builtin
                         .clone()
+                        .or_else(|| current_stem.clone())
                         .unwrap_or_else(|| "Default".to_string());
 
                     egui::ComboBox::from_id_salt(("pal_combo", key))
@@ -397,6 +405,15 @@ impl SettingsWindow {
                         .show_ui(ui, |ui| {
                             if ui.selectable_label(current.is_none(), "Default").clicked() {
                                 settings.palettes.remove(key);
+                            }
+                            for name in crate::colormap::alt_names(moment) {
+                                let is_sel = builtin.as_deref() == Some(name);
+                                if ui.selectable_label(is_sel, name).clicked() {
+                                    settings.palettes.insert(
+                                        key.to_string(),
+                                        format!("{}{name}", crate::colormap::BUILTIN_PREFIX),
+                                    );
+                                }
                             }
                             for stem in &self.pal_stems {
                                 let is_sel = current_stem.as_deref() == Some(stem.as_str());
