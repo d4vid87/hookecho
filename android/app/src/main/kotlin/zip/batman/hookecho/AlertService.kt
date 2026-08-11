@@ -125,12 +125,19 @@ class AlertService : Service() {
         fun pollOnce(context: Context, seen: LinkedHashSet<String>): Boolean {
             var hot = false
             val before = seen.size
+            // Quiet hours silences everything below the emergency tier. The alert is still
+            // recorded as seen, so it does not re-fire the moment the window ends.
+            val quiet = Nws.inQuietHours(
+                context.filesDir,
+                java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY),
+            )
             runCatching {
                 for (m in Nws.watched(context.filesDir)) {
                     for (p in m.samples) {
                         for (a in Nws.alertsAt(p[0], p[1])) {
                             if (a.tier >= Nws.TIER_WARNING) hot = true
-                            if (seen.add(a.id)) notify(context, m, a)
+                            val loud = !quiet || a.tier >= Nws.TIER_EMERGENCY
+                            if (seen.add(a.id) && loud) notify(context, m, a)
                         }
                     }
                 }

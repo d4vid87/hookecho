@@ -3319,10 +3319,26 @@ impl HookEchoApp {
     /// Every alert sound goes through here, so one mute switch covers all of them (and any that
     /// get added later) instead of a guard per call site.
     fn play_alert(&self, sound: &crate::settings::AlertSound) {
+        if self.settings.mute_alerts || self.in_quiet_hours() {
+            return;
+        }
+        crate::audio::play(sound, self.settings.alert_volume);
+    }
+
+    /// A sound quiet hours does not silence: the escalated warning tiers and the two detections
+    /// that mean a tornado may be on the ground. `mute_alerts` still wins — that switch is the
+    /// user saying so about right now, where quiet hours is a standing preference.
+    fn play_alert_urgent(&self, sound: &crate::settings::AlertSound) {
         if self.settings.mute_alerts {
             return;
         }
         crate::audio::play(sound, self.settings.alert_volume);
+    }
+
+    /// Is the local clock inside the user's quiet-hours window?
+    fn in_quiet_hours(&self) -> bool {
+        use chrono::Timelike;
+        self.settings.in_quiet_hours(chrono::Local::now().hour())
     }
 
     /// Surface auxiliary-feed failures queued by [`note_feed_error`], once per feed per session.
@@ -3477,6 +3493,9 @@ impl HookEchoApp {
             if self.known_warning_ids.insert(a.id.clone()) && self.warnings_seeded {
                 let esc = wxdata::alerts::escalation(a);
                 let urgent = esc >= 2;
+                // Severity floor: below the tier the user set, the warning still banners and
+                // still joins the alert list — it just doesn't push, speak or make noise.
+                let notify_ok = esc >= self.settings.alert_min_escalation;
                 // A watched location always alerts + pushes: inside the polygon, or within that
                 // marker's radius of it. Home first, then the closest — a warning that clips two
                 // saved places should name the one you sleep in.
@@ -3500,7 +3519,7 @@ impl HookEchoApp {
                         .first()
                         .is_some_and(|outer| wxdata::overlay::rings_intersect(outer, &z.ring))
                 });
-                if let Some(z) = zone {
+                if let (Some(z), true) = (zone, notify_ok) {
                     self.notify_alert(
                         &format!("⚠ {} — {}", a.event, z.name),
                         if a.headline.is_empty() {
@@ -3515,15 +3534,17 @@ impl HookEchoApp {
                 let (label, area) = match hit {
                     Some((m, km)) => {
                         // Watched location covered → push to the phone (opt-in ntfy topic).
-                        self.notify_alert(
-                            &format!("⚠ {} — {}", a.event, m.name),
-                            if a.headline.is_empty() {
-                                &a.area
-                            } else {
-                                &a.headline
-                            },
-                            urgent,
-                        );
+                        if notify_ok {
+                            self.notify_alert(
+                                &format!("⚠ {} — {}", a.event, m.name),
+                                if a.headline.is_empty() {
+                                    &a.area
+                                } else {
+                                    &a.headline
+                                },
+                                urgent,
+                            );
+                        }
                         let where_ = if km <= 0.05 {
                             format!("covers {}", m.name)
                         } else {
@@ -3545,10 +3566,12 @@ impl HookEchoApp {
                         (a.event.clone(), a.area.clone())
                     }
                 };
-                max_esc = max_esc.max(esc);
+                if notify_ok {
+                    max_esc = max_esc.max(esc);
+                }
                 // Read it out before the banner text is moved into the queue: chasing is an
                 // eyes-on-the-road activity, and a warning you have to read is one you read late.
-                if self.settings.speak_warnings {
+                if self.settings.speak_warnings && notify_ok {
                     let until = a
                         .expires
                         .map(|t| {
@@ -3568,7 +3591,7 @@ impl HookEchoApp {
                     }
                 }
                 self.banner(label, area);
-                alerted = true;
+                alerted |= notify_ok;
             }
         }
         self.warnings_seeded = true;
@@ -3578,12 +3601,12 @@ impl HookEchoApp {
             let _ = std::io::stdout().flush();
             if self.settings.alert_sound {
                 // Escalated (Tornado Emergency / PDS / destructive) warnings use the emergency sound.
-                let sound = if max_esc >= 2 {
-                    &self.settings.emergency_sound
+                if max_esc >= 2 {
+                    // Escalated (Tornado Emergency / PDS / destructive): past quiet hours too.
+                    self.play_alert_urgent(&self.settings.emergency_sound.clone());
                 } else {
-                    &self.settings.warn_sound
-                };
-                self.play_alert(sound);
+                    self.play_alert(&self.settings.warn_sound.clone());
+                }
             }
         }
     }
@@ -4014,6 +4037,13 @@ impl HookEchoApp {
     /// Best-effort on the shared tokio runtime; failures are logged, never fatal.
     // ponytail: fire-and-forget, no retry; add a bounded retry queue if users report drops.
     fn notify_alert(&self, title: &str, body: &str, urgent: bool) {
+        // Quiet hours hold everything back except the escalated tier, which is the one worth
+        // waking up for. Banners and the alert list are untouched — this gates what leaves the
+        // machine and what makes noise, not what the app knows.
+        if !urgent && self.in_quiet_hours() {
+            log::debug!("quiet hours: holding push {title:?}");
+            return;
+        }
         let http = self.http.clone();
         let (title, body) = (title.to_string(), body.to_string());
 
@@ -4789,7 +4819,7 @@ impl HookEchoApp {
                 true,
             );
             if self.settings.alert_sound {
-                self.play_alert(&self.settings.tds_sound.clone());
+                self.play_alert_urgent(&self.settings.tds_sound.clone());
             }
         }
         self.tds_active = now_active;
@@ -4844,7 +4874,7 @@ impl HookEchoApp {
                 true,
             );
             if self.settings.alert_sound {
-                self.play_alert(&self.settings.rotation_sound.clone());
+                self.play_alert_urgent(&self.settings.rotation_sound.clone());
             }
         }
         self.rot_active = now_active;
