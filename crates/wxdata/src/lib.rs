@@ -10,6 +10,7 @@ pub mod contour;
 pub mod dat;
 pub mod dealias;
 pub mod derived;
+pub mod dualpol;
 pub mod dotcams;
 pub mod efield;
 pub mod ero;
