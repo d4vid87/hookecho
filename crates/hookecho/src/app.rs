@@ -1867,6 +1867,15 @@ pub struct HookEchoApp {
     rotation_alerted: std::collections::HashMap<String, Instant>,
     /// Volume start time of the last new-scan chime (see `scan_chime`).
     last_chime: Option<chrono::DateTime<Utc>>,
+    /// Pushes held back by quiet hours, replayed as one summary when the window ends.
+    ///
+    /// A `Mutex` because `notify_alert` takes `&self` (ten call sites); a lock beats threading
+    /// `&mut` through all of them.
+    // ponytail: not persisted — a quiet window that spans a restart loses its catch-up. Persist
+    // alongside the chase log if anyone misses it.
+    quiet_queue: std::sync::Mutex<Vec<(String, String)>>,
+    /// Whether the last frame was inside quiet hours, so the end of the window is an edge.
+    was_quiet: bool,
     /// Where a requested screenshot should go once the image event arrives.
     screenshot_pending: Option<ShotDest>,
     /// A capture waiting on the share-card footer to be on screen: the destination, and how many
@@ -2553,6 +2562,8 @@ impl HookEchoApp {
             snapshot_push: None,
             rotation_alerted: std::collections::HashMap::new(),
             last_chime: None,
+            quiet_queue: std::sync::Mutex::new(Vec::new()),
+            was_quiet: false,
             screenshot_pending: None,
             share_card: None,
             loop_export: None,
@@ -4105,6 +4116,11 @@ impl HookEchoApp {
         // machine and what makes noise, not what the app knows.
         if !urgent && self.in_quiet_hours() {
             log::debug!("quiet hours: holding push {title:?}");
+            if let Ok(mut q) = self.quiet_queue.lock() {
+                if q.len() < QUIET_QUEUE_MAX {
+                    q.push((title.to_string(), body.to_string()));
+                }
+            }
             return;
         }
         let http = self.http.clone();
@@ -14184,6 +14200,21 @@ impl eframe::App for HookEchoApp {
                 self.spawn_overlay(ctx, OverlaySource::HrrrLayer(layer, fh));
             }
         }
+        // Quiet hours just ended: replay what it held back as one push, so waking up to a silent
+        // night does not mean waking up to no idea what happened during it.
+        let now_quiet = self.in_quiet_hours();
+        if self.was_quiet && !now_quiet {
+            let held = match self.quiet_queue.lock() {
+                Ok(mut q) => std::mem::take(&mut *q),
+                Err(_) => Vec::new(),
+            };
+            if !held.is_empty() {
+                let (title, body) = quiet_summary(&held);
+                self.notify_alert(&title, &body, false);
+            }
+        }
+        self.was_quiet = now_quiet;
+
         // GOES lightning: granules land every 20 s, so poll about that often. One in flight at a
         // time — a slow fetch must not queue up behind itself.
         if self.show_glm
@@ -15368,6 +15399,65 @@ impl eframe::App for HookEchoApp {
             100
         };
         ctx.request_repaint_after(std::time::Duration::from_millis(idle));
+    }
+}
+
+/// How many held-back pushes the quiet-hours queue keeps. A long quiet window over a big outbreak
+/// can queue hundreds; the summary only names a handful anyway.
+const QUIET_QUEUE_MAX: usize = 50;
+
+/// Fold the pushes quiet hours held back into one catch-up notification: `(title, body)`.
+///
+/// Named headlines are capped so the body stays inside what a phone push will show; the rest are
+/// counted.
+fn quiet_summary(held: &[(String, String)]) -> (String, String) {
+    const NAMED: usize = 4;
+    let title = if held.len() == 1 {
+        "1 alert while you were away".to_string()
+    } else {
+        format!("{} alerts while you were away", held.len())
+    };
+    let mut body: String = held
+        .iter()
+        .take(NAMED)
+        .map(|(t, _)| t.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    if held.len() > NAMED {
+        body.push_str(&format!("\n(+{} more)", held.len() - NAMED));
+    }
+    (title, body)
+}
+
+#[cfg(test)]
+mod quiet_summary_tests {
+    use super::quiet_summary;
+
+    fn held(n: usize) -> Vec<(String, String)> {
+        (0..n)
+            .map(|i| (format!("alert {i}"), "body".to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn one_alert_reads_singular() {
+        let (title, body) = quiet_summary(&held(1));
+        assert_eq!(title, "1 alert while you were away");
+        assert_eq!(body, "alert 0");
+    }
+
+    #[test]
+    fn many_alerts_name_a_few_and_count_the_rest() {
+        let (title, body) = quiet_summary(&held(9));
+        assert_eq!(title, "9 alerts while you were away");
+        assert!(body.starts_with("alert 0\nalert 1\nalert 2\nalert 3\n"));
+        assert!(body.ends_with("(+5 more)"));
+    }
+
+    #[test]
+    fn exactly_the_named_count_has_no_tail() {
+        let (_, body) = quiet_summary(&held(4));
+        assert!(!body.contains("more"));
     }
 }
 
