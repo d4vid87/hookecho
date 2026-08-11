@@ -63,6 +63,15 @@ pub fn goto_file() -> Option<PathBuf> {
     }
 }
 
+/// Where the last panic's report is written, next to the settings so it survives a restart and
+/// works the same on Android (see [`crate::crash`]).
+pub fn crash_file() -> Option<PathBuf> {
+    match BASE.get() {
+        Some(b) => Some(b.join("last-panic.txt")),
+        None => config_dir().map(|c| c.join("last-panic.txt")),
+    }
+}
+
 /// Where the activity drops a file the user picked through the Storage Access Framework, in the
 /// same handover shape as [`goto_file`]: the picker result arrives in Kotlin, and the app may not
 /// be resumed to receive it.

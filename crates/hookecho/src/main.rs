@@ -35,6 +35,9 @@ fn main() -> eframe::Result<()> {
     }
 
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
+    // A panic on the desktop goes to a terminal nobody launched the app from; leave a report the
+    // next start can offer back instead.
+    hookecho::crash::install_hook();
 
     let args: Vec<String> = std::env::args().collect();
 

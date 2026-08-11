@@ -1926,6 +1926,8 @@ pub struct HookEchoApp {
     link_cameras: bool,
     /// The always-on-top mini-loop window is open (desktop only; see `mini_loop_viewport`).
     mini_loop: bool,
+    /// The report left by a previous run that panicked, shown once until dismissed.
+    crash_report: Option<String>,
     /// National gridded field layers (MRMS mosaic, rotation, MESH, AzShear, lightning), each with
     /// its own toggle + pending GPU upload + refresh throttle. Keyed by [`crate::render::FieldLayer`].
     fields: std::collections::HashMap<crate::render::FieldLayer, FieldState>,
@@ -2613,6 +2615,10 @@ impl HookEchoApp {
             loop_export: None,
             link_cameras: false,
             mini_loop: false,
+            #[cfg(not(target_arch = "wasm32"))]
+            crash_report: crate::crash::take_report(),
+            #[cfg(target_arch = "wasm32")]
+            crash_report: None,
             cells_site: None,
             cell_trends: std::collections::HashMap::new(),
             fields: crate::render::FieldLayer::DRAW_ORDER
@@ -9800,6 +9806,52 @@ impl HookEchoApp {
         }
     }
 
+    /// Offer back the report from a run that panicked. Once, with a Copy button — the point is
+    /// that a crash the user can only describe as "it closed" becomes something they can paste
+    /// into an issue.
+    fn crash_report_window(&mut self, ctx: &egui::Context) {
+        let Some(report) = self.crash_report.clone() else {
+            return;
+        };
+        let mut open = true;
+        let mut dismiss = false;
+        egui::Window::new("Hook Echo-WX closed unexpectedly last time")
+            .open(&mut open)
+            .collapsible(false)
+            .default_size([560.0, 320.0])
+            .show(ctx, |ui| {
+                ui.label("Here is what it left behind. Nothing in it identifies you.");
+                ui.add_space(4.0);
+                egui::ScrollArea::vertical()
+                    .max_height(220.0)
+                    .show(ui, |ui| {
+                        ui.add(
+                            egui::TextEdit::multiline(&mut report.as_str())
+                                .font(egui::TextStyle::Monospace)
+                                .desired_width(f32::INFINITY),
+                        );
+                    });
+                ui.add_space(4.0);
+                ui.horizontal(|ui| {
+                    if ui.button("Copy report").clicked() {
+                        ui.ctx().copy_text(report.clone());
+                    }
+                    if ui.button("Dismiss").clicked() {
+                        dismiss = true;
+                    }
+                    ui.hyperlink_to(
+                        "Open an issue",
+                        "https://github.com/d4vid87/hookecho/issues/new",
+                    );
+                });
+            });
+        if dismiss || !open {
+            #[cfg(not(target_arch = "wasm32"))]
+            crate::crash::dismiss();
+            self.crash_report = None;
+        }
+    }
+
     /// The always-on-top mini loop: a small undecorated window showing the active pane, so the
     /// radar stays visible over whatever else is on screen.
     ///
@@ -15786,6 +15838,8 @@ impl eframe::App for HookEchoApp {
 
         #[cfg(not(any(target_os = "android", target_arch = "wasm32")))]
         self.mini_loop_viewport(ctx);
+
+        self.crash_report_window(ctx);
 
         // Idle heartbeat so clocks (volume age, countdowns) tick without input. Data arrivals and
         // animations (pulse, banners) request faster repaints on their own. Slower on Android to
