@@ -604,6 +604,17 @@ fn main() -> eframe::Result<()> {
         return Ok(());
     }
 
+    // Dual-pol signature verify: `hookecho --headless-dualpol [SITE] [H0_KM]`.
+    if let Some(pos) = args.iter().position(|a| a == "--headless-dualpol") {
+        let site = args.get(pos + 1).map(String::as_str).unwrap_or("KTLX");
+        let h0 = args.get(pos + 2).and_then(|s| s.parse().ok()).unwrap_or(4.0);
+        if let Err(e) = headless::run_dualpol(site, h0) {
+            eprintln!("headless dualpol failed: {e}");
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
+
     // Rotation verify: `hookecho --headless-rotation [SITE]`.
     if let Some(pos) = args.iter().position(|a| a == "--headless-rotation") {
         let site = args.get(pos + 1).map(String::as_str).unwrap_or("KTLX");

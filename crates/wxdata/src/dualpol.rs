@@ -319,18 +319,37 @@ pub fn zdr_columns(
 // ponytail: display-only. The hail algorithm still takes its freezing level from the model rather
 // than from this — an estimator this new gets watched against real events before anything is
 // computed from it.
-pub fn bright_band(cc_tilts: &[BinnedSweep], max_height_km: f64) -> Option<BrightBand> {
+pub fn bright_band(
+    cc_tilts: &[BinnedSweep],
+    z_tilts: &[BinnedSweep],
+    max_height_km: f64,
+) -> Option<BrightBand> {
     const BIN_KM: f64 = 0.25;
     const MIN_SAMPLES: usize = 200;
+    /// Ground clutter and the radome sit in the first few km and depolarize just like melting
+    /// snow does; nothing that close is evidence of a melting layer.
+    const MIN_RANGE_KM: f64 = 20.0;
+    /// A melting layer below this is either clutter or a beam so low it is scraping the ground.
+    const MIN_HEIGHT_KM: f64 = 0.5;
     let nbins = (max_height_km / BIN_KM).ceil() as usize;
     let mut counts = vec![0usize; nbins];
     let mut sums = vec![0f64; nbins];
+
+    const Z_MIN_DBZ: f32 = 20.0;
+    const Z_MAX_DBZ: f32 = 45.0;
 
     for s in cc_tilts {
         if s.moment != Moment::CorrelationCoefficient || s.gate_count == 0 {
             continue;
         }
         let e = s.elevation_deg as f64;
+        // The reflectivity sweep from the same cut, so "is there rain here" is answerable.
+        let Some(z) = z_tilts
+            .iter()
+            .find(|t| (t.elevation_deg - s.elevation_deg).abs() < 0.15)
+        else {
+            continue;
+        };
         for az in 0..s.az_bins {
             for gate in 0..s.gate_count {
                 let Some(v) = decode(s, s.data[az * s.gate_count + gate]) else {
@@ -340,8 +359,22 @@ pub fn bright_band(cc_tilts: &[BinnedSweep], max_height_km: f64) -> Option<Brigh
                     continue;
                 }
                 let slant = (s.first_gate_km + gate as f32 * s.gate_interval_km) as f64;
+                if slant < MIN_RANGE_KM {
+                    continue;
+                }
                 let h = crate::xsection::beam_height_km(slant, e);
-                if h < 0.0 || h >= max_height_km {
+                if h < MIN_HEIGHT_KM || h >= max_height_km {
+                    continue;
+                }
+                // Same range in the reflectivity sweep, through its own gate spacing.
+                let zi = ((slant as f32 - z.first_gate_km) / z.gate_interval_km).round() as i64;
+                if zi < 0 || zi as usize >= z.gate_count {
+                    continue;
+                }
+                let Some(zv) = decode(z, z.data[az * z.gate_count + zi as usize]) else {
+                    continue;
+                };
+                if !(Z_MIN_DBZ..=Z_MAX_DBZ).contains(&zv) {
                     continue;
                 }
                 let b = (h / BIN_KM) as usize;
@@ -521,7 +554,15 @@ mod tests {
             0..0,
         );
         s.elevation_deg = 4.0;
-        let bb = bright_band(&[s], 6.0).expect("melting layer");
+        let mut z = sweep(
+            Moment::Reflectivity,
+            idx(Moment::Reflectivity, 30.0),
+            idx(Moment::Reflectivity, 30.0),
+            0..0,
+            0..0,
+        );
+        z.elevation_deg = 4.0;
+        let bb = bright_band(&[s], &[z], 6.0).expect("melting layer");
         assert!(bb.height_km > 0.0 && bb.height_km < 6.0);
         assert!((bb.mean_cc - 0.93).abs() < 0.02);
         assert!(bb.samples >= 200);
@@ -537,6 +578,14 @@ mod tests {
             0..0,
         );
         s.elevation_deg = 4.0;
-        assert!(bright_band(&[s], 6.0).is_none());
+        let mut z = sweep(
+            Moment::Reflectivity,
+            idx(Moment::Reflectivity, 30.0),
+            idx(Moment::Reflectivity, 30.0),
+            0..0,
+            0..0,
+        );
+        z.elevation_deg = 4.0;
+        assert!(bright_band(&[s], &[z], 6.0).is_none());
     }
 }
