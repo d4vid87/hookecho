@@ -875,6 +875,13 @@ fn alerts_tab(ui: &mut egui::Ui, settings: &mut Settings) {
     });
     ui.weak("When a warning covers a saved location marker, a push is sent to ntfy.sh/<topic>.");
     ui.weak("Subscribe to the same topic in the ntfy app on your phone. Leave blank to disable.");
+    ui.add_enabled_ui(!cfg!(target_os = "android"), |ui| {
+        ui.checkbox(&mut settings.ntfy_snapshot, "Attach a picture of the radar")
+            .on_hover_text(
+                "Pushes the view you're looking at alongside the warning. Desktop only — the \
+                 phone's background alert service has nothing to render from.",
+            );
+    });
 
     ui.add_space(8.0);
     ui.separator();

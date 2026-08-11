@@ -294,6 +294,10 @@ pub struct Settings {
     /// First-run setup wizard completed (or dismissed). `false` shows it at startup.
     #[serde(default)]
     pub setup_done: bool,
+    /// Attach a picture of the radar to the ntfy push when a warning fires. Desktop only: the
+    /// Android background service has no GPU surface to render from, and says so in the UI.
+    #[serde(default)]
+    pub ntfy_snapshot: bool,
     /// Watch wherever you are, not only the places you saved: while a GPS fix is coming in it
     /// joins the marker list for the proximity alerts (lightning, rotation), under the name
     /// "my location". Nothing is written to the saved markers and nothing is shared.
@@ -708,6 +712,7 @@ impl Default for Settings {
             rain_alerts: false,
             rain_sound: AlertSound::default(),
             setup_done: false,
+            ntfy_snapshot: false,
             alert_follow_gps: false,
             quiet_hours: false,
             quiet_start_hour: default_quiet_start(),
@@ -1033,6 +1038,7 @@ mod tests {
             rain_alerts: true,
             rain_sound: AlertSound::Ding,
             setup_done: true,
+            ntfy_snapshot: false,
             alert_follow_gps: false,
             quiet_hours: false,
             quiet_start_hour: 22,

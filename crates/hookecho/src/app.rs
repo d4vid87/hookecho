@@ -1283,6 +1283,8 @@ enum ShotDest {
     File(std::path::PathBuf),
     Clipboard,
     Loop,
+    /// Pushed to the user's ntfy topic as an attachment, captioned with this title.
+    Push(String),
 }
 
 /// In-progress loop export (GIF or MP4): steps the active timeline, grabbing one screenshot per
@@ -1838,6 +1840,8 @@ pub struct HookEchoApp {
     goes_times_style: Option<crate::tiles::BasemapStyle>,
     goes_time_idx: Option<usize>,
     goes_times_rx: Option<std::sync::mpsc::Receiver<Vec<chrono::DateTime<chrono::Utc>>>>,
+    /// A warning that wants a radar picture pushed after it (see `settings.ntfy_snapshot`).
+    snapshot_push: Option<String>,
     /// Per-location cooldown for the rotation-near-a-watched-place alert.
     rotation_alerted: std::collections::HashMap<String, Instant>,
     /// Volume start time of the last new-scan chime (see `scan_chime`).
@@ -2520,6 +2524,7 @@ impl HookEchoApp {
             goes_times_style: None,
             goes_time_idx: None,
             goes_times_rx: None,
+            snapshot_push: None,
             rotation_alerted: std::collections::HashMap::new(),
             last_chime: None,
             screenshot_pending: None,
@@ -3617,6 +3622,10 @@ impl HookEchoApp {
                     if !self.settings.mute_alerts {
                         crate::speech::speak(&format!("{} for {}{}", a.event, area, until));
                     }
+                }
+                if notify_ok && self.settings.ntfy_snapshot {
+                    // Newest wins: one picture per pass, of whatever last warned.
+                    self.snapshot_push = Some(format!("{label} — {area}"));
                 }
                 self.banner(label, area);
                 alerted |= notify_ok;
@@ -12724,6 +12733,65 @@ impl HookEchoApp {
         }
     }
 
+    /// A warning asked for a radar picture: take one, as long as nothing else is mid-capture.
+    ///
+    /// Deliberately the live view rather than a headless render — it is the picture the user is
+    /// looking at, product, overlays, zoom and all, and it costs one frame instead of a second
+    /// render path. Skipped on Android, where the alert path runs in a service with no surface.
+    fn drive_snapshot_push(&mut self, ctx: &egui::Context) {
+        if self.snapshot_push.is_none()
+            || self.screenshot_pending.is_some()
+            || self.share_card.is_some()
+            || cfg!(target_os = "android")
+        {
+            return;
+        }
+        let title = self.snapshot_push.take().expect("checked above");
+        self.request_capture(ctx, ShotDest::Push(title));
+    }
+
+    /// PUT a captured frame to the user's ntfy topic as an attachment.
+    fn push_snapshot(&self, title: String, image: &egui::ColorImage) {
+        let topic = self.settings.ntfy_topic.trim().to_string();
+        if topic.is_empty() {
+            return;
+        }
+        let (w, h) = (image.size[0] as u32, image.size[1] as u32);
+        let mut rgba = Vec::with_capacity((w * h * 4) as usize);
+        for px in &image.pixels {
+            rgba.extend_from_slice(&[px.r(), px.g(), px.b(), px.a()]);
+        }
+        let mut png = std::io::Cursor::new(Vec::new());
+        if let Err(e) = image::write_buffer_with_format(
+            &mut png,
+            &rgba,
+            w,
+            h,
+            image::ColorType::Rgba8,
+            image::ImageFormat::Png,
+        ) {
+            log::warn!("alert snapshot encode failed: {e}");
+            return;
+        }
+        let body = png.into_inner();
+        // ntfy caps attachments (a few MB on the public server); a screen-sized PNG is well under,
+        // but say so in the log rather than wondering why nothing arrived.
+        log::debug!("pushing alert snapshot: {} KiB", body.len() / 1024);
+        let http = self.http.clone();
+        self.spawner.spawn(async move {
+            let res = http
+                .put(format!("https://ntfy.sh/{topic}"))
+                .header("Title", title)
+                .header("Filename", "radar.png")
+                .body(body)
+                .send()
+                .await;
+            if let Err(e) = res {
+                log::warn!("ntfy snapshot push failed: {e}");
+            }
+        });
+    }
+
     /// Ask the viewport for an image, `dest` decides where it lands.
     ///
     /// With the share card on, the request waits two frames while [`share_card_footer`] draws the
@@ -12843,6 +12911,7 @@ impl HookEchoApp {
                     self.toast(ToastKind::Success, "View copied to clipboard");
                 }
                 ShotDest::Loop => self.record_loop_frame(&image),
+                ShotDest::Push(title) => self.push_snapshot(title, &image),
             }
         }
     }
@@ -13670,6 +13739,7 @@ impl eframe::App for HookEchoApp {
             self.ui_scale_applied = z;
         }
 
+        self.drive_snapshot_push(ctx);
         self.save_pending_screenshot(ctx);
         self.load_marker_icons(ctx);
         self.drive_loop_export(ctx);
