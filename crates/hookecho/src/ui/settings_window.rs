@@ -771,6 +771,10 @@ pub fn sound_picker(ui: &mut egui::Ui, settings: &mut Settings) {
         .on_hover_text("Silences chimes and spoken warnings without changing the choices below");
     ui.checkbox(&mut settings.alert_sound, "Play a sound on alerts")
         .on_hover_text("Master switch for the warning / TDS / lightning alert sounds");
+    ui.checkbox(&mut settings.scan_chime, "Chime on every new scan")
+        .on_hover_text(
+            "A tap on the shoulder when a new volume lands on the live pane you're watching",
+        );
     ui.horizontal(|ui| {
         ui.label("Volume");
         ui.add(egui::Slider::new(&mut settings.alert_volume, 0.0..=1.0).step_by(0.05));
@@ -779,7 +783,8 @@ pub fn sound_picker(ui: &mut egui::Ui, settings: &mut Settings) {
 
     // One row per alert kind: sound combo (+ Custom… file picker) and a ▶ preview.
     type SoundRow = (&'static str, fn(&mut Settings) -> &mut AlertSound);
-    let rows: [SoundRow; 5] = [
+    let rows: [SoundRow; 6] = [
+        ("New scan", |s| &mut s.scan_sound),
         ("Warning", |s| &mut s.warn_sound),
         ("Emergency", |s| &mut s.emergency_sound),
         ("TDS", |s| &mut s.tds_sound),

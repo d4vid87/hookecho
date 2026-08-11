@@ -1838,6 +1838,8 @@ pub struct HookEchoApp {
     goes_times_style: Option<crate::tiles::BasemapStyle>,
     goes_time_idx: Option<usize>,
     goes_times_rx: Option<std::sync::mpsc::Receiver<Vec<chrono::DateTime<chrono::Utc>>>>,
+    /// Volume start time of the last new-scan chime (see `scan_chime`).
+    last_chime: Option<chrono::DateTime<Utc>>,
     /// Where a requested screenshot should go once the image event arrives.
     screenshot_pending: Option<ShotDest>,
     /// A capture waiting on the share-card footer to be on screen: the destination, and how many
@@ -2516,6 +2518,7 @@ impl HookEchoApp {
             goes_times_style: None,
             goes_time_idx: None,
             goes_times_rx: None,
+            last_chime: None,
             screenshot_pending: None,
             share_card: None,
             loop_export: None,
@@ -3274,6 +3277,28 @@ impl HookEchoApp {
             b.2 = Instant::now();
         } else {
             self.warning_banners.push((event, area, Instant::now()));
+        }
+    }
+
+    /// Chime when a new volume lands on the live pane you are watching — the "look up" cue for
+    /// someone doing something else while a storm is on.
+    ///
+    /// Only the active pane, only while following the head, and only for a volume newer than the
+    /// last one chimed for: a scrub, a backfilled frame, or the same volume growing another chunk
+    /// is not a new scan. The first volume after a site switch or a cold start is swallowed, since
+    /// that one is the user's own doing.
+    fn scan_chime(&mut self, view: usize, time: chrono::DateTime<Utc>) {
+        if !self.settings.scan_chime || view != self.active || !self.views[view].timeline.following
+        {
+            return;
+        }
+        let first = self.last_chime.is_none();
+        if self.last_chime.is_some_and(|t| t >= time) {
+            return;
+        }
+        self.last_chime = Some(time);
+        if !first {
+            self.play_alert(&self.settings.scan_sound.clone());
         }
     }
 
@@ -8723,6 +8748,7 @@ impl HookEchoApp {
                     v.clamp_tilt();
                     v.clamp_moment();
                     self.pane_shown.remove(&view);
+                    self.scan_chime(view, time);
                 }
                 DataMsg::Frames {
                     view,
@@ -8758,6 +8784,7 @@ impl HookEchoApp {
                     // fallback: if the stream dies, interval polling resumes on schedule.
                     v.last_poll = Some(Instant::now());
                     self.pane_shown.remove(&view);
+                    self.scan_chime(view, time);
                 }
                 DataMsg::UpToDate { view, .. } => self.views[view].loading = false,
                 DataMsg::Prefetched { name, scan, .. } => {
@@ -12441,6 +12468,7 @@ impl HookEchoApp {
                 let file = import.path.to_string_lossy().into_owned();
                 let sound = crate::settings::AlertSound::Custom(file);
                 match import.tag.as_str() {
+                    "New scan" => self.settings.scan_sound = sound,
                     "Warning" => self.settings.warn_sound = sound,
                     "Emergency" => self.settings.emergency_sound = sound,
                     "TDS" => self.settings.tds_sound = sound,

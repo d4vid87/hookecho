@@ -294,6 +294,13 @@ pub struct Settings {
     /// First-run setup wizard completed (or dismissed). `false` shows it at startup.
     #[serde(default)]
     pub setup_done: bool,
+    /// Chime when a new radar volume lands on the live pane in view.
+    #[serde(default)]
+    pub scan_chime: bool,
+    /// Sound for the new-scan chime. Ding by default — a scan every four minutes should be a tap
+    /// on the shoulder, not a warning tone.
+    #[serde(default = "default_scan_sound")]
+    pub scan_sound: AlertSound,
     /// Sound played when a new NWS warning appears (gated by `alert_sound`).
     #[serde(default)]
     pub warn_sound: AlertSound,
@@ -397,6 +404,10 @@ pub struct Bookmark {
     /// UTC time to seek to (Unix seconds); `None` = live/head.
     #[serde(default)]
     pub time_secs: Option<i64>,
+}
+
+fn default_scan_sound() -> AlertSound {
+    AlertSound::Ding
 }
 
 fn default_true() -> bool {
@@ -671,6 +682,8 @@ impl Default for Settings {
             rain_alerts: false,
             rain_sound: AlertSound::default(),
             setup_done: false,
+            scan_chime: false,
+            scan_sound: default_scan_sound(),
             warn_sound: AlertSound::default(),
             tds_sound: AlertSound::default(),
             rotation_sound: default_rotation_sound(),
@@ -969,6 +982,8 @@ mod tests {
             rain_alerts: true,
             rain_sound: AlertSound::Ding,
             setup_done: true,
+            scan_chime: false,
+            scan_sound: AlertSound::Ding,
             warn_sound: AlertSound::Siren,
             tds_sound: AlertSound::Custom("/tmp/tds.wav".to_string()),
             rotation_sound: AlertSound::Siren,
