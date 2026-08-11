@@ -57,3 +57,12 @@ web-time = "1"
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 # `start_paused` only, so a test of a fifteen-second wait takes no wall clock.
 tokio = { version = "1", features = ["test-util"] }
+
+# Benchmarks for the volume-processing hot paths (`benches/hot_paths.rs`). `default-features =
+# false` drops criterion's plotting stack — the numbers are read from the terminal here.
+[dev-dependencies]
+criterion = { version = "0.5", default-features = false }
+
+[[bench]]
+name = "hot_paths"
+harness = false

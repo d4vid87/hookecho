@@ -198,6 +198,26 @@ async fn list_day(site: &str, date: chrono::NaiveDate) -> anyhow::Result<Vec<Ide
     Ok(ids)
 }
 
+/// Decode raw Archive II bytes to a [`Scan`], decompressing first if they are bzip2-packed.
+///
+/// The one decode path: the download, the on-disk cache and the fuzz target all come through here,
+/// so a volume that decodes in one place decodes the same way in the others.
+pub fn decode_volume(data: Vec<u8>) -> anyhow::Result<Scan> {
+    decode_file(nexrad_data::volume::File::new(data))
+}
+
+/// bzip2 decompression plus the message decode is tens of MB of pure CPU — callers on an async
+/// worker must run this on a blocking thread, or it stalls every other fetch sharing that thread.
+fn decode_file(file: nexrad_data::volume::File) -> anyhow::Result<Scan> {
+    let file = if file.compressed() {
+        file.decompress()
+            .map_err(|e| anyhow::anyhow!("decompress: {e}"))?
+    } else {
+        file
+    };
+    file.scan().map_err(|e| anyhow::anyhow!("scan: {e}"))
+}
+
 /// Download and decode a specific volume to a [`Scan`].
 ///
 /// With `cache_dir` set the raw Archive II bytes are kept on disk, exactly as the bucket served
@@ -231,16 +251,7 @@ pub async fn download_scan(id: Identifier, cache_dir: Option<PathBuf>) -> anyhow
     // bzip2 decompression plus the message decode is tens of MB of pure CPU. On the async worker
     // it blocks every other fetch sharing that thread for as long as it runs; the `parallel`
     // feature of nexrad-data then spreads the decode itself across rayon.
-    let scan = crate::task::blocking(move || {
-        let file = if file.compressed() {
-            file.decompress()
-                .map_err(|e| anyhow::anyhow!("decompress: {e}"))?
-        } else {
-            file
-        };
-        file.scan().map_err(|e| anyhow::anyhow!("scan: {e}"))
-    })
-    .await??;
+    let scan = crate::task::blocking(move || decode_file(file)).await??;
     // Legacy (pre-2008) volumes carry no volume data block, so the decoder can't name the radar.
     // The volume's own filename can: "KTLX19910605_162126".
     Ok(match scan.site() {
