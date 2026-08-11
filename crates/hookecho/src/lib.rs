@@ -13,6 +13,7 @@ pub mod basemap_style;
 /// Live camera video (desktop only — Android cannot spawn an ffmpeg child).
 #[cfg(not(any(target_os = "android", target_arch = "wasm32")))]
 pub mod cam;
+pub mod chaselog;
 pub mod cloud;
 pub mod colormap;
 pub mod dialog;

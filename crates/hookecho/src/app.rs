@@ -1801,6 +1801,8 @@ pub struct HookEchoApp {
     /// Chase mode: follow a position, auto-switching the active pane to the nearest radar.
     chase_mode: bool,
     chase_pos: Option<(f64, f64)>,
+    /// Breadcrumb track of this session's fixes (see `settings.chase_log`).
+    chase_track: crate::chaselog::Track,
     /// Tornado climatology: the loaded SPC track database (lazy), a pending async load, the last
     /// query result + its center, a window-open flag, and a query queued while the CSV loads.
     climo_tracks: Option<std::sync::Arc<Vec<wxdata::torclimo::TornadoTrack>>>,
@@ -2501,6 +2503,7 @@ impl HookEchoApp {
             raob_rx: None,
             chase_mode: false,
             chase_pos: None,
+            chase_track: crate::chaselog::Track::default(),
             climo_tracks: None,
             climo_rx: None,
             climo_hits: Vec::new(),
@@ -4262,8 +4265,13 @@ impl HookEchoApp {
             while let Ok(pos) = rx.try_recv() {
                 latest = Some(pos);
             }
-            if let Some(pos) = latest {
-                self.chase_pos = Some(pos);
+            if let Some((lon, lat)) = latest {
+                self.chase_pos = Some((lon, lat));
+                // The chase log records every fix the app receives, whether or not follow-me is
+                // driving the camera: the track is what you did, not what the map did.
+                if self.settings.chase_log {
+                    self.chase_track.push(lon, lat, crate::share::now());
+                }
             }
         }
         if !self.chase_mode {
@@ -11971,6 +11979,34 @@ impl HookEchoApp {
             }
         }
 
+        // Chase breadcrumbs: where this session has been, under everything else on the map.
+        if self.settings.chase_log && self.chase_track.points.len() > 1 {
+            let col = egui::Color32::from_rgb(255, 170, 60);
+            let pts: Vec<egui::Pos2> = self
+                .chase_track
+                .points
+                .iter()
+                .map(|f| {
+                    let w = crate::render::mercator::lonlat_to_world(f.lon, f.lat);
+                    let (sx, sy) = cam.world_to_screen(w, vp);
+                    egui::pos2(prect.left() + sx, prect.top() + sy)
+                })
+                .collect();
+            painter.add(egui::Shape::line(pts.clone(), egui::Stroke::new(2.0, col)));
+            for (idx, label) in &self.chase_track.waypoints {
+                if let Some(p) = pts.get(*idx) {
+                    painter.circle_filled(*p, 4.0, col);
+                    painter.text(
+                        *p + egui::vec2(6.0, 0.0),
+                        egui::Align2::LEFT_CENTER,
+                        label,
+                        egui::FontId::proportional(11.0),
+                        col,
+                    );
+                }
+            }
+        }
+
         // Measure tool.
         if !self.measure.is_empty() {
             let col = egui::Color32::from_rgb(255, 210, 80);
@@ -12362,6 +12398,48 @@ impl HookEchoApp {
                     Some(s) => ui.weak(format!("nearest radar: {s}")),
                     None => ui.weak("pick a location with Tool: Set chase location"),
                 };
+            }
+            ui.checkbox(&mut self.settings.chase_log, "Log the chase")
+                .on_hover_text(
+                    "Record a breadcrumb track of your GPS fixes, to draw on the map and save \
+                     as GPX. In memory until you save it; nothing is uploaded.",
+                );
+            if self.settings.chase_log && !self.chase_track.points.is_empty() {
+                ui.weak(format!(
+                    "{} points · {:.0} mi",
+                    self.chase_track.points.len(),
+                    self.chase_track.miles()
+                ));
+                ui.horizontal(|ui| {
+                    if ui
+                        .button("\u{1f4cd} Mark")
+                        .on_hover_text("Name this spot in the track (saved into the GPX)")
+                        .clicked()
+                    {
+                        let n = self.chase_track.waypoints.len() + 1;
+                        self.chase_track.mark(format!("Mark {n}"));
+                    }
+                    if !cfg!(target_arch = "wasm32") && ui.button("Save GPX…").clicked() {
+                        if let Some(path) = crate::dialog::save_path("chase.gpx", "gpx") {
+                            match std::fs::write(&path, self.chase_track.to_gpx()) {
+                                Ok(()) => {
+                                    let msg = format!("Saved {}", path.display());
+                                    self.toast(ToastKind::Success, msg);
+                                }
+                                Err(e) => {
+                                    self.toast(ToastKind::Error, format!("GPX save failed: {e}"))
+                                }
+                            }
+                        }
+                    }
+                    if ui
+                        .button("Clear")
+                        .on_hover_text("Forget the track so far")
+                        .clicked()
+                    {
+                        self.chase_track.clear();
+                    }
+                });
             }
             // Desktop streams from a local gpsd; Android polls the system LocationManager
             // over JNI (see platform.rs). Both feed the same `gps_rx` channel.
