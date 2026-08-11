@@ -1023,6 +1023,8 @@ pub(crate) enum OverlayToggle {
     GlmLightning,
     Wind,
     LinkCameras,
+    /// The always-on-top mini-loop window (desktop only).
+    MiniLoop,
     /// Beam-vs-terrain blockage shading for the displayed tilt (chase mode).
     Blockage,
 }
@@ -1041,7 +1043,7 @@ pub(crate) struct BlockageKey {
 impl OverlayToggle {
     /// Every toggle, for the persistence sweep. A new variant belongs here too, or it silently
     /// stops being remembered across restarts.
-    pub(crate) const ALL: [OverlayToggle; 33] = [
+    pub(crate) const ALL: [OverlayToggle; 34] = [
         Self::AlertPanel,
         Self::StormReports,
         Self::Spotters,
@@ -1074,8 +1076,16 @@ impl OverlayToggle {
         Self::GlmLightning,
         Self::Wind,
         Self::LinkCameras,
+        Self::MiniLoop,
         Self::Blockage,
     ];
+
+    /// Toggles that describe this session's window arrangement rather than a layer: camera
+    /// linking is about the panes on screen right now, and the mini loop is a window. Neither is
+    /// persisted or captured into a workspace.
+    pub(crate) fn session_only(self) -> bool {
+        matches!(self, Self::LinkCameras | Self::MiniLoop)
+    }
 
     /// Stable name used in the settings file. Persisted as a string, not as the enum: an unknown
     /// name written by a newer build has to be skippable, and a failed `Settings` parse takes the
@@ -1884,6 +1894,8 @@ pub struct HookEchoApp {
     loop_export: Option<LoopExport>,
     /// When true, all panes share the active pane's camera.
     link_cameras: bool,
+    /// The always-on-top mini-loop window is open (desktop only; see `mini_loop_viewport`).
+    mini_loop: bool,
     /// National gridded field layers (MRMS mosaic, rotation, MESH, AzShear, lightning), each with
     /// its own toggle + pending GPU upload + refresh throttle. Keyed by [`crate::render::FieldLayer`].
     fields: std::collections::HashMap<crate::render::FieldLayer, FieldState>,
@@ -2568,6 +2580,7 @@ impl HookEchoApp {
             share_card: None,
             loop_export: None,
             link_cameras: false,
+            mini_loop: false,
             cells_site: None,
             cell_trends: std::collections::HashMap::new(),
             fields: crate::render::FieldLayer::DRAW_ORDER
@@ -6446,6 +6459,7 @@ impl HookEchoApp {
             T::Pireps => &mut self.show_pireps,
             T::Recon => &mut self.show_recon,
             T::LinkCameras => &mut self.link_cameras,
+            T::MiniLoop => &mut self.mini_loop,
             T::Blockage => &mut self.show_blockage,
         }
     }
@@ -7018,6 +7032,13 @@ impl HookEchoApp {
                 "Reference",
                 "Link pane cameras",
                 "Pan and zoom every pane together",
+                false,
+            ),
+            (
+                T::MiniLoop,
+                "Reference",
+                "Mini loop window",
+                "A small always-on-top window showing the active pane",
                 false,
             ),
         ] {
@@ -9641,6 +9662,115 @@ impl HookEchoApp {
                 self.views[idx].error = Some(e.to_string());
                 (None, false)
             }
+        }
+    }
+
+    /// The always-on-top mini loop: a small undecorated window showing the active pane, so the
+    /// radar stays visible over whatever else is on screen.
+    ///
+    /// An *immediate* viewport, not a deferred one: deferred viewports run their closure on the
+    /// egui side and demand `'static + Send + Sync`, which `HookEchoApp` is not (wgpu handles,
+    /// `Rc`s in the tile caches). Immediate renders inline on this thread, which is exactly what
+    /// reusing [`Self::render_pane`] needs.
+    // ponytail: shares the active pane's camera, so panning in the mini loop pans the main window
+    // too. Give it its own MapView if that turns out to be the point of it. Not persisted either:
+    // it is a window, not a layer (see `OverlayToggle::session_only`).
+    #[cfg(not(any(target_os = "android", target_arch = "wasm32")))]
+    fn mini_loop_viewport(&mut self, ctx: &egui::Context) {
+        if !self.mini_loop {
+            return;
+        }
+        let idx = self.active.min(self.views.len() - 1);
+        let style = self.views[idx].basemap;
+        let is_vector = matches!(
+            style,
+            crate::tiles::BasemapStyle::Dark | crate::tiles::BasemapStyle::Light
+        );
+        let is_raster = style.is_raster();
+        let caption = {
+            let v = &self.views[idx];
+            let time = v
+                .volume
+                .as_ref()
+                .map_or_else(|| "—".to_string(), |vol| vol.time.format("%H:%MZ").to_string());
+            format!(
+                "{} {} {time}",
+                v.site.as_deref().unwrap_or("—"),
+                v.moment.short_name()
+            )
+        };
+        let builder = egui::ViewportBuilder::default()
+            .with_title("Hook Echo-WX — mini loop")
+            .with_inner_size([340.0, 260.0])
+            .with_decorations(false)
+            // ponytail: GNOME's Wayland compositor ignores this by policy; X11 and KDE honour it.
+            .with_always_on_top();
+        let mut close = false;
+        ctx.show_viewport_immediate(
+            egui::ViewportId::from_hash_of("mini-loop"),
+            builder,
+            |ctx, _class| {
+                egui::CentralPanel::default()
+                    .frame(egui::Frame::NONE)
+                    .show(ctx, |ui| {
+                        let full = ui.max_rect();
+                        // Undecorated, so we draw our own caption strip: label, drag handle, close.
+                        let (bar, prect) = (
+                            egui::Rect::from_min_max(
+                                full.min,
+                                egui::pos2(full.max.x, full.min.y + 18.0),
+                            ),
+                            egui::Rect::from_min_max(
+                                egui::pos2(full.min.x, full.min.y + 18.0),
+                                full.max,
+                            ),
+                        );
+                        ui.painter()
+                            .rect_filled(bar, 0.0, egui::Color32::from_gray(24));
+                        let handle = ui.interact(
+                            bar,
+                            egui::Id::new("mini-loop-bar"),
+                            egui::Sense::click_and_drag(),
+                        );
+                        if handle.drag_started() {
+                            ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
+                        }
+                        ui.painter().text(
+                            bar.left_center() + egui::vec2(6.0, 0.0),
+                            egui::Align2::LEFT_CENTER,
+                            &caption,
+                            egui::FontId::proportional(11.0),
+                            egui::Color32::from_gray(190),
+                        );
+                        let x = egui::Rect::from_center_size(
+                            bar.right_center() - egui::vec2(10.0, 0.0),
+                            egui::vec2(16.0, 16.0),
+                        );
+                        if ui
+                            .interact(x, egui::Id::new("mini-loop-close"), egui::Sense::click())
+                            .clicked()
+                        {
+                            close = true;
+                        }
+                        ui.painter().text(
+                            x.center(),
+                            egui::Align2::CENTER_CENTER,
+                            "✕",
+                            egui::FontId::proportional(11.0),
+                            egui::Color32::from_gray(190),
+                        );
+                        let vctx = ui.ctx().clone();
+                        self.render_pane(
+                            ui, &vctx, idx, prect, is_vector, is_raster, false, false, false, &[],
+                        );
+                    });
+                if ctx.input(|i| i.viewport().close_requested()) {
+                    close = true;
+                }
+            },
+        );
+        if close {
+            self.mini_loop = false;
         }
     }
 
@@ -12292,7 +12422,7 @@ impl HookEchoApp {
     fn capture_workspace(&mut self) -> crate::workspace::Workspace {
         let overlays_on: Vec<String> = OverlayToggle::ALL
             .into_iter()
-            .filter(|t| *t != OverlayToggle::LinkCameras && *self.overlay_flag(*t))
+            .filter(|t| !t.session_only() && *self.overlay_flag(*t))
             .map(|t| t.slug())
             .collect();
         crate::workspace::Workspace {
@@ -12343,7 +12473,7 @@ impl HookEchoApp {
         self.link_cameras = ws.link_cameras;
         // Overlay names this build doesn't know are skipped, same as the settings restore.
         for t in OverlayToggle::ALL {
-            if t == OverlayToggle::LinkCameras {
+            if t.session_only() {
                 continue;
             }
             *self.overlay_flag(t) = ws.overlays_on.iter().any(|s| *s == t.slug());
@@ -15349,7 +15479,7 @@ impl eframe::App for HookEchoApp {
             let on: Vec<String> = OverlayToggle::ALL
                 .into_iter()
                 // Camera linking is a session decision about the panes on screen, not a layer.
-                .filter(|t| *t != OverlayToggle::LinkCameras && *self.overlay_flag(*t))
+                .filter(|t| !t.session_only() && *self.overlay_flag(*t))
                 .map(|t| t.slug())
                 .collect();
             self.settings.overlays_on = on;
@@ -15387,6 +15517,9 @@ impl eframe::App for HookEchoApp {
                     });
             }
         }
+
+        #[cfg(not(any(target_os = "android", target_arch = "wasm32")))]
+        self.mini_loop_viewport(ctx);
 
         // Idle heartbeat so clocks (volume age, countdowns) tick without input. Data arrivals and
         // animations (pulse, banners) request faster repaints on their own. Slower on Android to
