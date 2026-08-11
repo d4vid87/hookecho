@@ -1670,7 +1670,8 @@ pub struct HookEchoApp {
     arch_lsr: LruCache<i64, Vec<wxdata::spc::StormReport>>,
     arch_lsr_inflight: Option<i64>,
     arch_lsr_shown: Option<i64>,
-    outlook_features: [Vec<GeoFeature>; 3],
+    /// One slot per SPC outlook day, 1..=8 (Days 4–8 are the experimental probability layer).
+    outlook_features: [Vec<GeoFeature>; 8],
     md_features: Vec<GeoFeature>,
     /// Winter Storm Severity Index polygons for the selected day.
     wssi_features: Vec<GeoFeature>,
@@ -2427,7 +2428,7 @@ impl HookEchoApp {
             arch_lsr: LruCache::new(NonZeroUsize::new(50).unwrap()),
             arch_lsr_inflight: None,
             arch_lsr_shown: None,
-            outlook_features: [Vec::new(), Vec::new(), Vec::new()],
+            outlook_features: std::array::from_fn(|_| Vec::new()),
             md_features: Vec::new(),
             wssi_features: Vec::new(),
             ero_features: Vec::new(),
@@ -3072,7 +3073,7 @@ impl HookEchoApp {
             self.spawn_overlay(ctx, OverlaySource::Ero(self.filters.ero_day));
         }
         // Only fetch the SPC outlook the user has selected (off = day 0 fetches nothing).
-        if (1..=3).contains(&self.filters.outlook_day) {
+        if (1..=8).contains(&self.filters.outlook_day) {
             self.spawn_overlay(
                 ctx,
                 OverlaySource::Outlook(self.filters.outlook_day, self.outlook_kind_for_day()),
@@ -5444,7 +5445,7 @@ impl HookEchoApp {
         if actions.overlays_changed {
             // Selecting an outlook day/kind that hasn't been fetched yet pulls it on demand.
             let day = self.filters.outlook_day;
-            if (1..=3).contains(&day) && self.outlook_features[(day - 1) as usize].is_empty() {
+            if (1..=8).contains(&day) && self.outlook_features[(day - 1) as usize].is_empty() {
                 self.spawn_overlay(
                     ctx,
                     OverlaySource::Outlook(day, self.outlook_kind_for_day()),
@@ -8511,7 +8512,7 @@ impl HookEchoApp {
     /// Reassemble the displayed overlay set from the fetched sources and current filters.
     fn rebuild_overlays(&mut self) {
         let mut v = Vec::new();
-        if (1..=3).contains(&self.filters.outlook_day) {
+        if (1..=8).contains(&self.filters.outlook_day) {
             v.extend(
                 self.outlook_features[(self.filters.outlook_day - 1) as usize]
                     .iter()

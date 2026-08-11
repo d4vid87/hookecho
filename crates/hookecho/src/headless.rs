@@ -1396,6 +1396,36 @@ pub fn run_tropical() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Fetch + print every SPC outlook day, so a change to the Day 1-3 or the Day 4-8 URL forms
+/// fails here rather than as an empty map: `hookecho --headless-outlooks`.
+pub fn run_outlooks() -> anyhow::Result<()> {
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?;
+    let client = reqwest::Client::new();
+    for day in 1u8..=8 {
+        let feats = rt.block_on(wxdata::spc::fetch_outlook(&client, day));
+        match feats {
+            Ok(f) => {
+                let labels: Vec<&str> = f.iter().map(|x| x.title.as_str()).take(4).collect();
+                println!(
+                    "day {day}: {} polygon(s) {}",
+                    f.len(),
+                    if labels.is_empty() {
+                        "(nothing outlooked)".to_string()
+                    } else {
+                        format!("— {}", labels.join(", "))
+                    }
+                );
+            }
+            // A day with no product yet is a 404, which is data rather than a bug; anything else
+            // is worth the non-zero exit.
+            Err(e) => println!("day {day}: {e}"),
+        }
+    }
+    Ok(())
+}
+
 /// Fetch + print surface obs (METAR) near a site (feature U).
 pub fn run_metar(site: &str) -> anyhow::Result<()> {
     let s =

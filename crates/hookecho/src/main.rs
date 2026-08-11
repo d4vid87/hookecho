@@ -219,6 +219,15 @@ fn main() -> eframe::Result<()> {
         return Ok(());
     }
 
+    // SPC outlook verify (all eight days): `hookecho --headless-outlooks`.
+    if args.iter().any(|a| a == "--headless-outlooks") {
+        if let Err(e) = headless::run_outlooks() {
+            eprintln!("headless outlooks failed: {e}");
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
+
     // Surface-obs verify: `hookecho --headless-metar [SITE]`.
     if let Some(pos) = args.iter().position(|a| a == "--headless-metar") {
         let site = args
