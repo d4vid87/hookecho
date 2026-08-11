@@ -294,6 +294,28 @@ pub struct Settings {
     /// First-run setup wizard completed (or dismissed). `false` shows it at startup.
     #[serde(default)]
     pub setup_done: bool,
+    /// Attach a picture of the radar to the ntfy push when a warning fires. Desktop only: the
+    /// Android background service has no GPU surface to render from, and says so in the UI.
+    #[serde(default)]
+    pub ntfy_snapshot: bool,
+    /// Watch wherever you are, not only the places you saved: while a GPS fix is coming in it
+    /// joins the marker list for the proximity alerts (lightning, rotation), under the name
+    /// "my location". Nothing is written to the saved markers and nothing is shared.
+    #[serde(default)]
+    pub alert_follow_gps: bool,
+    /// Quiet hours: between `quiet_start_hour` and `quiet_end_hour` (local, 24h), alert sounds
+    /// and pushes are held back. Escalated warnings — Tornado Emergency, PDS, destructive — go
+    /// through anyway: the whole point of the tier is that it is worth waking up for.
+    #[serde(default)]
+    pub quiet_hours: bool,
+    #[serde(default = "default_quiet_start")]
+    pub quiet_start_hour: u32,
+    #[serde(default = "default_quiet_end")]
+    pub quiet_end_hour: u32,
+    /// Lowest NWS escalation tier (see `wxdata::alerts::escalation`) allowed to push and sound.
+    /// 0 lets everything through, which is the default.
+    #[serde(default)]
+    pub alert_min_escalation: u8,
     /// Chime when a new radar volume lands on the live pane in view.
     #[serde(default)]
     pub scan_chime: bool,
@@ -404,6 +426,14 @@ pub struct Bookmark {
     /// UTC time to seek to (Unix seconds); `None` = live/head.
     #[serde(default)]
     pub time_secs: Option<i64>,
+}
+
+fn default_quiet_start() -> u32 {
+    22
+}
+
+fn default_quiet_end() -> u32 {
+    7
 }
 
 fn default_scan_sound() -> AlertSound {
@@ -682,6 +712,12 @@ impl Default for Settings {
             rain_alerts: false,
             rain_sound: AlertSound::default(),
             setup_done: false,
+            ntfy_snapshot: false,
+            alert_follow_gps: false,
+            quiet_hours: false,
+            quiet_start_hour: default_quiet_start(),
+            quiet_end_hour: default_quiet_end(),
+            alert_min_escalation: 0,
             scan_chime: false,
             scan_sound: default_scan_sound(),
             warn_sound: AlertSound::default(),
@@ -735,6 +771,26 @@ impl Settings {
             }
             p.map(PathBuf::from)
         })
+    }
+
+    /// Is local `hour` inside the quiet-hours window? Handles the ordinary case of a window that
+    /// crosses midnight (22 → 7). Start == end means "no window", not "all day" — a 24-hour mute
+    /// is what `mute_alerts` is for, and reading it the other way would silence someone by
+    /// accident.
+    pub fn in_quiet_hours(&self, hour: u32) -> bool {
+        if !self.quiet_hours {
+            return false;
+        }
+        let (s, e, h) = (
+            self.quiet_start_hour % 24,
+            self.quiet_end_hour % 24,
+            hour % 24,
+        );
+        match s.cmp(&e) {
+            std::cmp::Ordering::Equal => false,
+            std::cmp::Ordering::Less => (s..e).contains(&h),
+            std::cmp::Ordering::Greater => h >= s || h < e,
+        }
     }
 
     /// The saved settings JSON, or `None` if there is none to read.
@@ -982,6 +1038,12 @@ mod tests {
             rain_alerts: true,
             rain_sound: AlertSound::Ding,
             setup_done: true,
+            ntfy_snapshot: false,
+            alert_follow_gps: false,
+            quiet_hours: false,
+            quiet_start_hour: 22,
+            quiet_end_hour: 7,
+            alert_min_escalation: 0,
             scan_chime: false,
             scan_sound: AlertSound::Ding,
             warn_sound: AlertSound::Siren,
@@ -1014,6 +1076,31 @@ mod tests {
         let json = serde_json::to_string(&s).unwrap();
         let back: Settings = serde_json::from_str(&json).unwrap();
         assert_eq!(s, back);
+    }
+
+    #[test]
+    fn quiet_hours_window_wraps_midnight() {
+        let mut s = Settings {
+            quiet_hours: true,
+            quiet_start_hour: 22,
+            quiet_end_hour: 7,
+            ..Settings::default()
+        };
+        assert!(s.in_quiet_hours(23) && s.in_quiet_hours(0) && s.in_quiet_hours(6));
+        assert!(!s.in_quiet_hours(7), "the end hour is already awake");
+        assert!(!s.in_quiet_hours(21) && !s.in_quiet_hours(12));
+        // A window inside one day.
+        s.quiet_start_hour = 9;
+        s.quiet_end_hour = 17;
+        assert!(s.in_quiet_hours(9) && s.in_quiet_hours(16) && !s.in_quiet_hours(17));
+        // Equal bounds is no window, not all day.
+        s.quiet_end_hour = 9;
+        assert!(!s.in_quiet_hours(9) && !s.in_quiet_hours(3));
+        // And off is off.
+        s.quiet_hours = false;
+        s.quiet_start_hour = 0;
+        s.quiet_end_hour = 23;
+        assert!(!s.in_quiet_hours(5));
     }
 
     #[test]

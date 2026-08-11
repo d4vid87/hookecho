@@ -835,6 +835,39 @@ fn alerts_tab(ui: &mut egui::Ui, settings: &mut Settings) {
 
     ui.add_space(8.0);
     ui.separator();
+    ui.strong("When to interrupt");
+    ui.checkbox(&mut settings.alert_follow_gps, "Alert where I am, too")
+        .on_hover_text(
+            "While a GPS fix is coming in, your own position joins the saved locations the \
+             lightning and rotation alerts watch. Nothing is saved or shared.",
+        );
+    ui.horizontal(|ui| {
+        ui.checkbox(&mut settings.quiet_hours, "Quiet hours");
+        ui.add_enabled_ui(settings.quiet_hours, |ui| {
+            ui.add(egui::DragValue::new(&mut settings.quiet_start_hour).range(0..=23));
+            ui.label("to");
+            ui.add(egui::DragValue::new(&mut settings.quiet_end_hour).range(0..=23));
+            ui.weak("local");
+        });
+    });
+    ui.weak(
+        "Holds sounds and pushes between those hours. Tornado Emergency, PDS and destructive \
+         warnings still come through — that tier is what quiet hours is for.",
+    );
+    ui.horizontal(|ui| {
+        ui.label("Push and sound only for:");
+        for (tier, label) in [
+            (0u8, "Every warning"),
+            (1, "Considerable and up"),
+            (2, "Escalated only"),
+        ] {
+            ui.selectable_value(&mut settings.alert_min_escalation, tier, label);
+        }
+    });
+    ui.weak("Quieter warnings still banner and still show in the alert list.");
+
+    ui.add_space(8.0);
+    ui.separator();
     ui.strong("Push notifications (ntfy.sh)");
     ui.horizontal(|ui| {
         ui.label("Topic:");
@@ -842,6 +875,13 @@ fn alerts_tab(ui: &mut egui::Ui, settings: &mut Settings) {
     });
     ui.weak("When a warning covers a saved location marker, a push is sent to ntfy.sh/<topic>.");
     ui.weak("Subscribe to the same topic in the ntfy app on your phone. Leave blank to disable.");
+    ui.add_enabled_ui(!cfg!(target_os = "android"), |ui| {
+        ui.checkbox(&mut settings.ntfy_snapshot, "Attach a picture of the radar")
+            .on_hover_text(
+                "Pushes the view you're looking at alongside the warning. Desktop only — the \
+                 phone's background alert service has nothing to render from.",
+            );
+    });
 
     ui.add_space(8.0);
     ui.separator();

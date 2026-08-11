@@ -34,6 +34,29 @@ object Nws {
 
     data class Alert(val id: String, val event: String, val headline: String, val tier: Int)
 
+    /**
+     * Is the phone inside the user's quiet-hours window? Same `settings.json` fields, and the
+     * same reading as the desktop: start == end is no window rather than all day, and a window
+     * whose end is before its start wraps midnight.
+     *
+     * The escalated tier is not filtered here — callers let it through regardless, which is the
+     * point of the tier.
+     */
+    fun inQuietHours(filesDir: File, hour: Int): Boolean {
+        val f = File(filesDir, "config/settings.json")
+        if (!f.exists()) return false
+        val root = runCatching { JSONObject(f.readText()) }.getOrNull() ?: return false
+        if (!root.optBoolean("quiet_hours", false)) return false
+        val s = Math.floorMod(root.optInt("quiet_start_hour", 22), 24)
+        val e = Math.floorMod(root.optInt("quiet_end_hour", 7), 24)
+        val h = Math.floorMod(hour, 24)
+        return when {
+            s == e -> false
+            s < e -> h in s until e
+            else -> h >= s || h < e
+        }
+    }
+
     /** Rim points around a marker, so `?point=` sees a warning that only reaches the radius. */
     private const val RIM_POINTS = 6
 
