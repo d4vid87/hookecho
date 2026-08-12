@@ -1019,9 +1019,40 @@ pub(crate) const DISK_CACHE_BYTES: u64 = if cfg!(target_os = "android") {
     500 * 1024 * 1024
 };
 
-/// Trim the on-disk tile cache to [`DISK_CACHE_BYTES`], oldest-touched first.
+/// Trim the on-disk tile cache to [`tile_cache_bytes`], oldest-touched first.
 pub(crate) fn sweep_tile_cache(root: &std::path::Path) {
-    sweep_cache_dir(root, "tile cache", DISK_CACHE_BYTES);
+    sweep_cache_dir(root, "tile cache", tile_cache_bytes());
+}
+
+/// User overrides for the two disk caps, in bytes; 0 means "use the platform default".
+///
+/// Globals because the sweeps run from three places that construct before — and without — the
+/// settings: the raster and vector tile managers, and the startup volume sweep. One `set` at
+/// startup beats threading a cap through every constructor.
+static TILE_CAP: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static VOLUME_CAP: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Apply the user's cap settings (in MB, 0 = platform default). Call once, before the managers.
+pub(crate) fn set_cache_caps(tile_mb: u32, volume_mb: u32) {
+    use std::sync::atomic::Ordering::Relaxed;
+    TILE_CAP.store(u64::from(tile_mb) * 1024 * 1024, Relaxed);
+    VOLUME_CAP.store(u64::from(volume_mb) * 1024 * 1024, Relaxed);
+}
+
+/// Cap for each on-disk tile cache (raster and vector are swept separately, to this same figure).
+pub(crate) fn tile_cache_bytes() -> u64 {
+    match TILE_CAP.load(std::sync::atomic::Ordering::Relaxed) {
+        0 => DISK_CACHE_BYTES,
+        n => n,
+    }
+}
+
+/// Cap for the on-disk radar-volume cache.
+pub(crate) fn volume_cache_bytes() -> u64 {
+    match VOLUME_CAP.load(std::sync::atomic::Ordering::Relaxed) {
+        0 => VOLUME_CACHE_BYTES,
+        n => n,
+    }
 }
 
 /// Trim `root` to `cap` bytes, deleting oldest-touched files first.
@@ -1071,10 +1102,9 @@ pub(crate) fn sweep_cache_dir(root: &std::path::Path, label: &str, cap: u64) {
     );
 }
 
-/// Largest the on-disk volume cache may get. An Archive II volume is 3-8 MB, so the desktop cap
+/// Default cap for the on-disk volume cache. An Archive II volume is 3-8 MB, so the desktop cap
 /// holds a few hundred — an afternoon of scrubbing one event — and the phone cap a couple of dozen.
-///
-/// ponytail: a constant, not a setting. Expose a slider if anyone runs out of disk.
+/// The Storage tab can override it; see [`volume_cache_bytes`].
 pub(crate) const VOLUME_CACHE_BYTES: u64 = if cfg!(target_os = "android") {
     300 * 1024 * 1024
 } else {
@@ -1196,6 +1226,17 @@ pub fn start_pack_download(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cache_caps_fall_back_to_the_platform_default_at_zero() {
+        assert_eq!(tile_cache_bytes(), DISK_CACHE_BYTES);
+        assert_eq!(volume_cache_bytes(), VOLUME_CACHE_BYTES);
+        set_cache_caps(64, 128);
+        assert_eq!(tile_cache_bytes(), 64 * 1024 * 1024);
+        assert_eq!(volume_cache_bytes(), 128 * 1024 * 1024);
+        set_cache_caps(0, 0);
+        assert_eq!(tile_cache_bytes(), DISK_CACHE_BYTES);
+    }
 
     #[test]
     fn pack_tile_count_covers_expected() {

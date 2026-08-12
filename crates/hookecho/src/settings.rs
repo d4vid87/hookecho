@@ -410,6 +410,52 @@ pub struct Settings {
     /// and a renamed action just falls back to its default place.
     #[serde(default)]
     pub layer_order: Vec<String>,
+    /// Thresholds the signature detectors fire at (see [`DetectorTuning`]).
+    #[serde(default)]
+    pub detectors: DetectorTuning,
+    /// Pushes quiet hours held back, kept across a restart so the catch-up summary still arrives
+    /// when the window ends. Device-local (see `cloud::DEVICE_LOCAL`): they are owed to whoever
+    /// is at this machine.
+    #[serde(default)]
+    pub quiet_pending: Vec<(String, String)>,
+    /// Cap for the on-disk radar-volume cache, in MB. 0 = the platform default (2 GB desktop,
+    /// 300 MB Android). Applied by the startup sweep, so a change takes effect next launch.
+    #[serde(default)]
+    pub volume_cache_mb: u32,
+    /// Cap for each on-disk map-tile cache (raster and vector), in MB. 0 = platform default.
+    #[serde(default)]
+    pub tile_disk_cache_mb: u32,
+}
+
+/// Where the dual-pol signature detectors and the GLM flash-extent grid draw their lines.
+///
+/// Every one of these was a constant, which is fine until you point the app at a radar whose
+/// calibration or season disagrees: a ZDR floor that is right in May over Oklahoma is noise in
+/// December over Buffalo. The defaults are the values the detectors shipped with.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DetectorTuning {
+    /// Reflectivity (dBZ) a core must reach before a hail spike behind it is looked for.
+    pub tbss_core_dbz: f32,
+    /// Differential reflectivity (dB) a gate must reach to count toward a ZDR column.
+    pub zdr_min_db: f32,
+    /// How far a column must extend above the freezing level (km) to be reported.
+    pub zdr_min_depth_km: f64,
+    /// GLM flash-extent density grid cell size, in degrees (~5 km at the default).
+    pub glm_fed_cell_deg: f64,
+    /// How far back the flash-extent density grid counts, in minutes.
+    pub glm_fed_window_min: i64,
+}
+
+impl Default for DetectorTuning {
+    fn default() -> Self {
+        Self {
+            tbss_core_dbz: 60.0,
+            zdr_min_db: 1.0,
+            zdr_min_depth_km: 1.0,
+            glm_fed_cell_deg: 0.05,
+            glm_fed_window_min: 15,
+        }
+    }
 }
 
 impl Settings {
@@ -661,6 +707,10 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             default_site: "KTLX".to_string(),
+            detectors: DetectorTuning::default(),
+            quiet_pending: Vec::new(),
+            volume_cache_mb: 0,
+            tile_disk_cache_mb: 0,
             share_card: true,
             hide_sidebar: false,
             hide_toolbar: false,
@@ -937,6 +987,30 @@ mod tests {
     use super::*;
 
     #[test]
+    fn quiet_pending_round_trips_and_defaults_empty() {
+        let old: Settings = serde_json::from_str(r#"{"default_site":"KTLX"}"#).unwrap();
+        assert!(old.quiet_pending.is_empty());
+        let mut s = Settings::default();
+        s.quiet_pending
+            .push(("Severe Thunderstorm Warning".into(), "Cleveland Co.".into()));
+        let back: Settings = serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
+        assert_eq!(back.quiet_pending, s.quiet_pending);
+    }
+
+    #[test]
+    fn detector_tuning_survives_a_settings_file_that_predates_it() {
+        // Settings written before the knobs existed must load with the shipped thresholds.
+        let old: Settings = serde_json::from_str(r#"{"default_site":"KTLX"}"#).unwrap();
+        assert_eq!(old.detectors, DetectorTuning::default());
+        assert_eq!(old.detectors.tbss_core_dbz, 60.0);
+
+        let mut s = Settings::default();
+        s.detectors.zdr_min_db = 2.5;
+        let back: Settings = serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
+        assert_eq!(back.detectors.zdr_min_db, 2.5);
+    }
+
+    #[test]
     fn field_opacity_roundtrips_and_defaults() {
         let mut s = Settings::default();
         assert!(s.field_opacity.is_empty(), "no entry = fully opaque");
@@ -965,6 +1039,10 @@ mod tests {
     #[test]
     fn roundtrips() {
         let s = Settings {
+            detectors: DetectorTuning::default(),
+            quiet_pending: Vec::new(),
+            volume_cache_mb: 0,
+            tile_disk_cache_mb: 0,
             workspaces: Vec::new(),
             seeded_workspaces: false,
             smooth_radar: false,

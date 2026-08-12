@@ -1247,11 +1247,6 @@ pub(crate) struct PaletteEntry {
     pub key: Option<String>,
 }
 
-/// GLM flash-extent density grid: cell size in degrees (~5 km), and how far back it counts.
-/// Both fixed — they are legibility choices, not tuning knobs.
-const GLM_FED_CELL_DEG: f64 = 0.05;
-const GLM_FED_WINDOW_MIN: i64 = 15;
-
 /// Refresh cadence (seconds) for a national field layer's product.
 fn field_refresh_secs(layer: crate::render::FieldLayer) -> u64 {
     use crate::render::FieldLayer as FL;
@@ -1289,8 +1284,12 @@ fn field_refresh_secs(layer: crate::render::FieldLayer) -> u64 {
 
 /// The ZDR-column cache: the volume it was computed for, its columns, and the bright band the
 /// same pass found.
+/// A volume key with the detector thresholds folded in, so moving a slider recomputes instead of
+/// handing back the answer to the previous question.
+type TunedKey = ((usize, String, usize), u64);
+
 type ZdrCache = (
-    (usize, String, usize),
+    TunedKey,
     Vec<wxdata::dualpol::ZdrColumnHit>,
     Option<wxdata::dualpol::BrightBand>,
 );
@@ -1507,9 +1506,14 @@ struct Goto {
 /// `SITE` flies to the site itself; the site may be empty when lon/lat are given.
 fn parse_goto(v: &str) -> Option<Goto> {
     let v = v.trim().strip_prefix(GOTO_SCHEME).unwrap_or(v.trim());
-    let p: Vec<&str> = v.split(',').map(str::trim).collect();
+    // Chat clients and mail readers hand the link back percent-encoded, commas and the time's
+    // colons included, so decode the whole thing before splitting. No field here can legitimately
+    // hold a comma, which is what makes decoding first the safe direction. Anything that isn't a
+    // valid escape survives as typed, so a stray `%` doesn't lose the link.
+    let decoded = percent_encoding::percent_decode_str(v).decode_utf8_lossy();
+    let p: Vec<String> = decoded.split(',').map(|s| s.trim().to_string()).collect();
     let mut g = if p.len() == 1 {
-        let s = wxdata::sites::site_by_id(p[0])?;
+        let s = wxdata::sites::site_by_id(&p[0])?;
         // Same zoom a cold start picks for the default site.
         Goto {
             site: p[0].to_ascii_uppercase(),
@@ -1678,7 +1682,7 @@ pub struct HookEchoApp {
     )>,
     tds_cache: Option<((usize, String, usize), Vec<wxdata::tds::TdsHit>)>,
     /// Same shape as `tds_cache`, for the hail-spike detector.
-    tbss_cache: Option<((usize, String, usize), Vec<wxdata::dualpol::TbssHit>)>,
+    tbss_cache: Option<(TunedKey, Vec<wxdata::dualpol::TbssHit>)>,
     /// ZDR columns, plus the bright band read off the same volume's CC — both cost a full pass
     /// over every tilt, so they share one cache and are computed together.
     zdr_cache: Option<ZdrCache>,
@@ -1911,8 +1915,8 @@ pub struct HookEchoApp {
     ///
     /// A `Mutex` because `notify_alert` takes `&self` (ten call sites); a lock beats threading
     /// `&mut` through all of them.
-    // ponytail: not persisted — a quiet window that spans a restart loses its catch-up. Persist
-    // alongside the chase log if anyone misses it.
+    /// Held across a restart through `Settings::quiet_pending`, written on exit: a quiet window
+    /// that spans a relaunch still owes its catch-up.
     quiet_queue: std::sync::Mutex<Vec<(String, String)>>,
     /// Whether the last frame was inside quiet hours, so the end of the window is an edge.
     was_quiet: bool,
@@ -2359,6 +2363,10 @@ impl HookEchoApp {
         if let Some(dir) = crate::paths::cache_dir() {
             wxdata::alerts::set_zone_cache_dir(dir);
         }
+        // Whatever the last run's quiet hours were still holding when it closed.
+        let quiet_pending = settings.quiet_pending.clone();
+        // The user's cap overrides, before anything that sweeps or reports against them.
+        crate::tiles::set_cache_caps(settings.tile_disk_cache_mb, settings.volume_cache_mb);
         // Archived volumes are kept on disk forever within a cap; same startup sweep the tile
         // caches get, for the same reason (mid-session deletion would race the fetch tasks).
         if let Some(root) = crate::paths::cache_dir().map(|d| d.join("volumes")) {
@@ -2366,7 +2374,7 @@ impl HookEchoApp {
                 crate::tiles::sweep_cache_dir(
                     &root,
                     "volume cache",
-                    crate::tiles::VOLUME_CACHE_BYTES,
+                    crate::tiles::volume_cache_bytes(),
                 )
             });
         }
@@ -2608,7 +2616,7 @@ impl HookEchoApp {
             snapshot_push: None,
             rotation_alerted: std::collections::HashMap::new(),
             last_chime: None,
-            quiet_queue: std::sync::Mutex::new(Vec::new()),
+            quiet_queue: std::sync::Mutex::new(quiet_pending),
             was_quiet: false,
             screenshot_pending: None,
             share_card: None,
@@ -2875,7 +2883,8 @@ impl HookEchoApp {
 
     /// The browser's own deep link: `https://…/#goto=KTLX,-97.3,35.3,9`. Read once at boot — a
     /// fragment change afterwards is someone editing the URL bar, not a share being opened.
-    /// ponytail: no percent-decoding; fragments carry `,` and `:` verbatim.
+    /// Percent-escapes are decoded by `parse_goto`, so a fragment that came back from a chat
+    /// client with its commas and colons escaped still opens.
     #[cfg(target_arch = "wasm32")]
     fn apply_goto_hash(&mut self) {
         let Some(h) = web_sys::window().and_then(|w| w.location().hash().ok()) else {
@@ -4895,6 +4904,18 @@ impl HookEchoApp {
         )
     }
 
+    /// [`Self::volume_key`] plus a fingerprint of the detector thresholds, for the caches whose
+    /// answer changes when the user moves a slider.
+    fn tuned_key(&self, idx: usize) -> TunedKey {
+        use std::hash::{Hash, Hasher};
+        let d = &self.settings.detectors;
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        d.tbss_core_dbz.to_bits().hash(&mut h);
+        d.zdr_min_db.to_bits().hash(&mut h);
+        d.zdr_min_depth_km.to_bits().hash(&mut h);
+        (self.volume_key(idx), h.finish())
+    }
+
     fn compute_nowcast_uncached(&mut self, idx: usize) -> Vec<(f64, f64, egui::Color32)> {
         let Some((dir, kt)) = self.scit_mean_motion() else {
             return Vec::new();
@@ -4944,7 +4965,8 @@ impl HookEchoApp {
     /// Hail spikes (TBSS) for the active pane's lowest tilt, cached per volume like the TDS
     /// detector. Display-only: a spike is context about hail, not a reason to make noise.
     fn compute_tbss(&mut self, idx: usize) -> Vec<wxdata::dualpol::TbssHit> {
-        let key = self.volume_key(idx);
+        let key = self.tuned_key(idx);
+        let core_dbz = self.settings.detectors.tbss_core_dbz;
         if let Some((k, v)) = &self.tbss_cache {
             if *k == key {
                 return v.clone();
@@ -4961,7 +4983,9 @@ impl HookEchoApp {
             .and_then(|v| v.binned(Moment::CorrelationCoefficient, 0, false).ok())
             .cloned();
         let out = match (z, cc) {
-            (Some(z), Some(cc)) => wxdata::dualpol::tbss(&z, &cc, 60.0, 20.0, 0.8, 4.0, 150.0),
+            (Some(z), Some(cc)) => {
+                wxdata::dualpol::tbss(&z, &cc, core_dbz, 20.0, 0.8, 4.0, 150.0)
+            }
             _ => Vec::new(),
         };
         self.tbss_cache = Some((key, out.clone()));
@@ -4978,7 +5002,11 @@ impl HookEchoApp {
         idx: usize,
         ctx: &egui::Context,
     ) -> Vec<wxdata::dualpol::ZdrColumnHit> {
-        let key = self.volume_key(idx);
+        let key = self.tuned_key(idx);
+        let (min_zdr, min_depth) = (
+            self.settings.detectors.zdr_min_db,
+            self.settings.detectors.zdr_min_depth_km,
+        );
         if let Some((k, v, _)) = &self.zdr_cache {
             if *k == key {
                 return v.clone();
@@ -5003,7 +5031,7 @@ impl HookEchoApp {
         let zdr = vol.moment_tilts(Moment::DifferentialReflectivity);
         let z = vol.moment_tilts(Moment::Reflectivity);
         let cc = vol.moment_tilts(Moment::CorrelationCoefficient);
-        let hits = wxdata::dualpol::zdr_columns(&zdr, &z, h0_km, 1.0, 1.0, 40.0, 100.0);
+        let hits = wxdata::dualpol::zdr_columns(&zdr, &z, h0_km, min_zdr, min_depth, 40.0, 100.0);
         // The mid tilts are the ones that cut the melting layer at a range where the beam is
         // still narrow enough to mean something.
         let mid = |v: &[wxdata::level2::BinnedSweep]| -> Vec<wxdata::level2::BinnedSweep> {
@@ -5923,6 +5951,7 @@ impl HookEchoApp {
                                     &mut self.settings.glm_goes_west,
                                     self.show_spotters,
                                     &mut self.settings.spotter_range_km,
+                                    &mut self.settings.detectors,
                                     Some(mosaic.as_str()),
                                     &mut opts,
                                 );
@@ -14264,6 +14293,12 @@ impl eframe::App for HookEchoApp {
                 });
             }
         }
+        // Anything quiet hours is still holding: it is owed to the user when the window ends, and
+        // that can be after a restart.
+        self.settings.quiet_pending = match self.quiet_queue.lock() {
+            Ok(q) => q.clone(),
+            Err(_) => Vec::new(),
+        };
         if self.settings != self.saved {
             self.settings.save();
         }
@@ -14666,8 +14701,8 @@ impl eframe::App for HookEchoApp {
             let field = self.glm.lock().ok().and_then(|f| {
                 wxdata::glm::flash_density(
                     f.flashes(),
-                    GLM_FED_CELL_DEG,
-                    chrono::Duration::minutes(GLM_FED_WINDOW_MIN),
+                    self.settings.detectors.glm_fed_cell_deg,
+                    chrono::Duration::minutes(self.settings.detectors.glm_fed_window_min),
                     Utc::now(),
                 )
             });
@@ -16161,6 +16196,18 @@ mod tests {
         }
         assert!(parse_goto("").is_none());
         assert!(parse_goto("garbage").is_none());
+    }
+
+    #[test]
+    fn goto_survives_a_percent_encoded_round_trip() {
+        // What a chat client hands back after eating the link.
+        let g = parse_goto("KTLX%2C-97.3%2C35.3%2C9%2C2013-05-20T20%3A00%3A00Z").unwrap();
+        assert_eq!(g.site, "KTLX");
+        assert_eq!(g.zoom, 9.0);
+        assert_eq!(g.time.unwrap().to_rfc3339(), "2013-05-20T20:00:00+00:00");
+        // Encoded spaces around the fields, and a stray `%` that is not an escape at all.
+        assert_eq!(parse_goto("%20ktlx%20").unwrap().site, "KTLX");
+        assert!(parse_goto("%GG").is_none());
     }
 
     #[test]

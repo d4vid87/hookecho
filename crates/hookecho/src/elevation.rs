@@ -78,7 +78,7 @@ pub fn tile_path(root: &std::path::Path, x: u32, y: u32) -> std::path::PathBuf {
 
 /// Slippy tile and in-tile pixel for a lon/lat at [`DEM_ZOOM`], or `None` outside the Mercator
 /// latitude band.
-fn tile_of(lon: f64, lat: f64) -> Option<(u32, u32, usize, usize)> {
+fn tile_of(lon: f64, lat: f64) -> Option<(u32, u32, f64, f64)> {
     if !(-85.05..=85.05).contains(&lat) || !lon.is_finite() {
         return None;
     }
@@ -90,22 +90,40 @@ fn tile_of(lon: f64, lat: f64) -> Option<(u32, u32, usize, usize)> {
         return None;
     }
     let (tx, ty) = (fx.floor(), fy.floor());
-    // ponytail: nearest pixel, no bilinear. Add bilinear if banding shows on shallow slopes.
-    let px = ((fx - tx) * 256.0) as usize;
-    let py = ((fy - ty) * 256.0) as usize;
+    // Pixel coordinates kept fractional: the caller interpolates between the four neighbours.
+    let px = ((fx - tx) * 256.0).clamp(0.0, 255.0);
+    let py = ((fy - ty) * 256.0).clamp(0.0, 255.0);
     Some((
         (tx as i64).rem_euclid(1i64 << zoom()) as u32,
         ty as u32,
-        px.min(255),
-        py.min(255),
+        px,
+        py,
     ))
+}
+
+/// Bilinear height at fractional pixel `(px, py)` in a 256x256 Terrarium tile.
+///
+/// A DEM pixel at z10 is ~150 m across, and taking the nearest one quantized every beam-blockage
+/// profile into terraces that were an artifact of the sampling, not the terrain.
+///
+/// ponytail: neighbours are clamped to this tile, so the outermost half-pixel of a tile edge is
+/// nearest-neighbour. Blend across tiles only if a seam ever shows.
+fn bilinear(heights: &[f32], px: f64, py: f64) -> f32 {
+    let (x0, y0) = (px.floor(), py.floor());
+    let (fx, fy) = ((px - x0) as f32, (py - y0) as f32);
+    let (x0, y0) = (x0 as usize, y0 as usize);
+    let (x1, y1) = ((x0 + 1).min(255), (y0 + 1).min(255));
+    let at = |x: usize, y: usize| heights[y * 256 + x];
+    let top = at(x0, y0) * (1.0 - fx) + at(x1, y0) * fx;
+    let bottom = at(x0, y1) * (1.0 - fx) + at(x1, y1) * fx;
+    top * (1.0 - fy) + bottom * fy
 }
 
 /// Terrain height above sea level (metres) at `(lat, lon)`, or `None` if the covering DEM tile is
 /// unavailable (offline and not packed, or ocean-edge).
 pub async fn elevation_m(client: &reqwest::Client, lat: f64, lon: f64) -> Option<f32> {
     let (tx, ty, px, py) = tile_of(lon, lat)?;
-    let sample = |t: &Option<Arc<Vec<f32>>>| t.as_ref().map(|v| v[py * 256 + px]);
+    let sample = |t: &Option<Arc<Vec<f32>>>| t.as_ref().map(|v| bilinear(v, px, py));
     // Guard dropped before the await below — a fetch must not hold the whole cache.
     if let Some(hit) = cache()
         .lock()
@@ -332,11 +350,23 @@ mod tests {
     }
 
     #[test]
+    fn bilinear_reads_between_the_pixels() {
+        // A tile whose height is its column index: the midpoint between two pixels is their mean,
+        // and a whole-pixel coordinate still reads that pixel exactly.
+        let heights: Vec<f32> = (0..256 * 256).map(|i| (i % 256) as f32).collect();
+        assert_eq!(bilinear(&heights, 10.0, 4.0), 10.0);
+        assert_eq!(bilinear(&heights, 10.5, 4.0), 10.5);
+        assert_eq!(bilinear(&heights, 10.25, 200.0), 10.25);
+        // The last half-pixel clamps to the edge rather than reading off the end.
+        assert_eq!(bilinear(&heights, 255.5, 255.5), 255.0);
+    }
+
+    #[test]
     fn tile_of_lands_in_range() {
         let _g = ZOOM_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let (x, y, px, py) = tile_of(-97.28, 35.33).unwrap();
         assert!(x < 1 << zoom() && y < 1 << zoom());
-        assert!(px < 256 && py < 256);
+        assert!((0.0..=255.0).contains(&px) && (0.0..=255.0).contains(&py));
         // Antimeridian wraps rather than panicking; poles are outside the Mercator band.
         assert!(tile_of(180.0, 0.0).is_some());
         assert!(tile_of(0.0, 89.0).is_none());
