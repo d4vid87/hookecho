@@ -1506,9 +1506,14 @@ struct Goto {
 /// `SITE` flies to the site itself; the site may be empty when lon/lat are given.
 fn parse_goto(v: &str) -> Option<Goto> {
     let v = v.trim().strip_prefix(GOTO_SCHEME).unwrap_or(v.trim());
-    let p: Vec<&str> = v.split(',').map(str::trim).collect();
+    // Chat clients and mail readers hand the link back percent-encoded, commas and the time's
+    // colons included, so decode the whole thing before splitting. No field here can legitimately
+    // hold a comma, which is what makes decoding first the safe direction. Anything that isn't a
+    // valid escape survives as typed, so a stray `%` doesn't lose the link.
+    let decoded = percent_encoding::percent_decode_str(v).decode_utf8_lossy();
+    let p: Vec<String> = decoded.split(',').map(|s| s.trim().to_string()).collect();
     let mut g = if p.len() == 1 {
-        let s = wxdata::sites::site_by_id(p[0])?;
+        let s = wxdata::sites::site_by_id(&p[0])?;
         // Same zoom a cold start picks for the default site.
         Goto {
             site: p[0].to_ascii_uppercase(),
@@ -2876,7 +2881,8 @@ impl HookEchoApp {
 
     /// The browser's own deep link: `https://…/#goto=KTLX,-97.3,35.3,9`. Read once at boot — a
     /// fragment change afterwards is someone editing the URL bar, not a share being opened.
-    /// ponytail: no percent-decoding; fragments carry `,` and `:` verbatim.
+    /// Percent-escapes are decoded by `parse_goto`, so a fragment that came back from a chat
+    /// client with its commas and colons escaped still opens.
     #[cfg(target_arch = "wasm32")]
     fn apply_goto_hash(&mut self) {
         let Some(h) = web_sys::window().and_then(|w| w.location().hash().ok()) else {
@@ -16182,6 +16188,18 @@ mod tests {
         }
         assert!(parse_goto("").is_none());
         assert!(parse_goto("garbage").is_none());
+    }
+
+    #[test]
+    fn goto_survives_a_percent_encoded_round_trip() {
+        // What a chat client hands back after eating the link.
+        let g = parse_goto("KTLX%2C-97.3%2C35.3%2C9%2C2013-05-20T20%3A00%3A00Z").unwrap();
+        assert_eq!(g.site, "KTLX");
+        assert_eq!(g.zoom, 9.0);
+        assert_eq!(g.time.unwrap().to_rfc3339(), "2013-05-20T20:00:00+00:00");
+        // Encoded spaces around the fields, and a stray `%` that is not an escape at all.
+        assert_eq!(parse_goto("%20ktlx%20").unwrap().site, "KTLX");
+        assert!(parse_goto("%GG").is_none());
     }
 
     #[test]
