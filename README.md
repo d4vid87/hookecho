@@ -594,8 +594,14 @@ there's a custom component in [`custom_components/hookecho`](custom_components/h
 point it at a machine running `--serve` and you get, per saved location, a
 device carrying temperature, dewpoint, humidity, wind, gust and pressure
 sensors, an **alert count** sensor and an **alert active** binary sensor
-(attributes: event, expiry, distance, escalation tier), plus one **radar
+(attributes: event, expiry, distance, escalation tier), a **nearest storm**
+sensor giving the distance to the closest cell the radar is tracking
+(attributes: cell id, bearing, max dBZ, hail size, TVS), plus one **radar
 camera** entity showing the live snapshot.
+
+The nearest-storm sensor is the one to automate on: it answers "is a storm
+coming" minutes before anybody issues a warning, and goes unavailable — never
+zero — when nothing is being tracked.
 
 Install via HACS as a custom repository, or copy the `custom_components/hookecho`
 directory into your Home Assistant `config/custom_components/` and restart. Then
@@ -604,7 +610,7 @@ which is the server's own cache window.
 
 Remember the server has to be reachable from Home Assistant — that means
 `--bind 0.0.0.0` (or the container), and a network you're willing to expose your
-saved locations on.
+saved locations on. Set `serve_token` if that network is not one you control.
 
 ### In a browser
 
