@@ -1284,6 +1284,19 @@ fn field_refresh_secs(layer: crate::render::FieldLayer) -> u64 {
 
 /// The ZDR-column cache: the volume it was computed for, its columns, and the bright band the
 /// same pass found.
+/// A place the proximity alerts watch: a saved marker, or wherever the GPS says you are.
+struct WatchedPoint {
+    /// The marker's stable id; cooldowns key on this, never on the name.
+    id: String,
+    name: String,
+    lon: f64,
+    lat: f64,
+    radius_mi: f64,
+}
+
+/// Cooldown key for the follow-GPS pseudo-marker, which has no entry in the settings.
+const GPS_POINT_ID: &str = "gps";
+
 /// A volume key with the detector thresholds folded in, so moving a slider recomputes instead of
 /// handing back the answer to the previous question.
 type TunedKey = ((usize, String, usize), u64);
@@ -3446,21 +3459,28 @@ impl HookEchoApp {
     ///
     /// The GPS entry is deliberately not a real marker — a marker that moves would drag its way
     /// through the saved list, and it must vanish the moment the fix or the setting does.
-    fn watched_points(&self) -> Vec<(String, f64, f64, f64)> {
-        let mut out: Vec<(String, f64, f64, f64)> = self
+    fn watched_points(&self) -> Vec<WatchedPoint> {
+        let mut out: Vec<WatchedPoint> = self
             .settings
             .markers
             .iter()
-            .map(|m| (m.name.clone(), m.lon, m.lat, m.alert_radius_mi))
+            .map(|m| WatchedPoint {
+                id: m.id.clone(),
+                name: m.name.clone(),
+                lon: m.lon,
+                lat: m.lat,
+                radius_mi: m.alert_radius_mi,
+            })
             .collect();
         if self.settings.alert_follow_gps {
             if let Some((lon, lat)) = self.chase_pos {
-                out.push((
-                    "my location".to_string(),
+                out.push(WatchedPoint {
+                    id: GPS_POINT_ID.to_string(),
+                    name: "my location".to_string(),
                     lon,
                     lat,
-                    crate::settings::default_alert_radius_mi(),
-                ));
+                    radius_mi: crate::settings::default_alert_radius_mi(),
+                });
             }
         }
         out
@@ -3757,22 +3777,22 @@ impl HookEchoApp {
         const DENSITY_MIN: f32 = 0.05; // strikes/km²/min — any recent CG activity nearby
         const COOLDOWN: std::time::Duration = std::time::Duration::from_secs(600);
         let mut fired = false;
-        // Names first: the alert calls below need `&mut self`.
-        let near: Vec<String> = self
+        // Collected first: the alert calls below need `&mut self`.
+        let near: Vec<(String, String)> = self
             .watched_points()
             .into_iter()
-            .filter(|(_, lon, lat, _)| field.max_within_km(*lon, *lat, RADIUS_KM) >= DENSITY_MIN)
-            .map(|(name, ..)| name)
+            .filter(|p| field.max_within_km(p.lon, p.lat, RADIUS_KM) >= DENSITY_MIN)
+            .map(|p| (p.id, p.name))
             .collect();
-        for name in near {
+        for (id, name) in near {
             let recent = self
                 .lightning_alerted
-                .get(&name)
+                .get(&id)
                 .is_some_and(|t| t.elapsed() < COOLDOWN);
             if recent {
                 continue;
             }
-            self.lightning_alerted.insert(name.clone(), Instant::now());
+            self.lightning_alerted.insert(id, Instant::now());
             self.notify_alert(
                 &format!("⚡ Lightning near {name}"),
                 &format!("Cloud-to-ground strikes within {RADIUS_KM:.0} km of {name}"),
@@ -3852,21 +3872,26 @@ impl HookEchoApp {
         if self.rain_key.as_ref() == Some(&key) {
             return;
         }
-        // Watched points: every saved marker, plus where you are if chase mode knows.
-        let mut points: Vec<(String, [f64; 2])> = self
+        // Watched points: every saved marker, plus where you are if chase mode knows. Tracked by
+        // id — the detector's per-place persistence must not follow a rename or a reused name.
+        let mut points: Vec<(String, String, [f64; 2])> = self
             .settings
             .markers
             .iter()
-            .map(|m| (m.name.clone(), [m.lon, m.lat]))
+            .map(|m| (m.id.clone(), m.name.clone(), [m.lon, m.lat]))
             .collect();
         if let Some((lon, lat)) = self.chase_pos {
-            points.push(("your location".to_string(), [lon, lat]));
+            points.push((
+                GPS_POINT_ID.to_string(),
+                "your location".to_string(),
+                [lon, lat],
+            ));
         }
         if points.is_empty() {
             return;
         }
-        let names: Vec<String> = points.iter().map(|(n, _)| n.clone()).collect();
-        self.rain_detector.retain(&names);
+        let ids: Vec<String> = points.iter().map(|(id, ..)| id.clone()).collect();
+        self.rain_detector.retain(&ids);
 
         let tilt = self.views[idx].tilt;
         let Some(sweep) = self.views[idx]
@@ -3883,7 +3908,7 @@ impl HookEchoApp {
 
         let mut fired = false;
         self.rain_eta.clear();
-        for (name, at) in &points {
+        for (id, name, at) in &points {
             let eta = upstream_eta(
                 &sample,
                 *at,
@@ -3894,7 +3919,7 @@ impl HookEchoApp {
             if let Some(min) = eta {
                 self.rain_eta.push((name.clone(), min));
             }
-            if let Verdict::Fire(min) = self.rain_detector.update(name, eta) {
+            if let Verdict::Fire(min) = self.rain_detector.update(id, eta) {
                 self.notify_alert(
                     &format!("\u{1f327} Rain reaching {name}"),
                     &format!("About {min:.0} minutes out"),
@@ -5170,30 +5195,30 @@ impl HookEchoApp {
             return;
         }
         // Strongest couplet within each watched radius, if any.
-        let near: Vec<(String, f64, f32)> = self
+        let near: Vec<(String, String, f64, f32)> = self
             .watched_points()
             .into_iter()
-            .filter_map(|(name, lon, lat, radius_mi)| {
-                let radius_km = radius_mi * crate::geo::KM_PER_MILE;
+            .filter_map(|p| {
+                let radius_km = p.radius_mi * crate::geo::KM_PER_MILE;
                 hits.iter()
                     .filter_map(|h| {
-                        let (km, _) = crate::geo::great_circle([lon, lat], [h.lon, h.lat]);
+                        let (km, _) = crate::geo::great_circle([p.lon, p.lat], [h.lon, h.lat]);
                         (km <= radius_km).then_some((km, h.vrot_ms))
                     })
                     .min_by(|a, b| a.0.total_cmp(&b.0))
-                    .map(|(km, vrot)| (name, km, vrot))
+                    .map(|(km, vrot)| (p.id, p.name, km, vrot))
             })
             .collect();
         let mut fired = false;
-        for (name, km, vrot_ms) in near {
+        for (id, name, km, vrot_ms) in near {
             if self
                 .rotation_alerted
-                .get(&name)
+                .get(&id)
                 .is_some_and(|t| t.elapsed() < COOLDOWN)
             {
                 continue;
             }
-            self.rotation_alerted.insert(name.clone(), Instant::now());
+            self.rotation_alerted.insert(id, Instant::now());
             let kt = vrot_ms as f64 * 1.943_844;
             let mi = km / crate::geo::KM_PER_MILE;
             self.banner(
@@ -10305,6 +10330,7 @@ impl HookEchoApp {
                     MapTool::Marker => {
                         let n = self.settings.markers.len() + 1;
                         self.settings.markers.push(crate::settings::Marker {
+                            id: crate::settings::new_marker_id(),
                             name: format!("Marker {n}"),
                             lat,
                             lon,
@@ -15192,6 +15218,7 @@ impl eframe::App for HookEchoApp {
             match res {
                 Ok((name, lat, lon)) => {
                     self.settings.markers.push(crate::settings::Marker {
+                        id: crate::settings::new_marker_id(),
                         name: name.clone(),
                         lat,
                         lon,
