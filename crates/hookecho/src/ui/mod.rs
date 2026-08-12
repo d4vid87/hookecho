@@ -81,6 +81,7 @@ pub mod detail_window;
 pub mod digest_window;
 pub mod event_window;
 pub mod forecast_window;
+pub mod glossary;
 pub mod hodograph_window;
 pub mod layer_options;
 pub mod layer_window;

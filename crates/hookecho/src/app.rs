@@ -1124,6 +1124,8 @@ pub(crate) enum AppWindow {
     Cappi,
     Volume3d,
     StormTable,
+    /// What the signatures on the map are called.
+    Glossary,
     /// Warning verification lab (IEM Cow): how the office's warnings scored on an event day.
     Verify,
     Climatology,
@@ -1814,6 +1816,7 @@ pub struct HookEchoApp {
     // ponytail: one at a time; a Vec of players when someone wants a wall of streams.
     video_player: Option<ui::video_window::VideoPlayer>,
     cells_window: ui::cells_window::CellsWindow,
+    glossary: ui::glossary::Glossary,
     /// Warning verification lab and its in-flight query.
     verify_window: ui::verify_window::VerifyWindow,
     verify_rx: Option<std::sync::mpsc::Receiver<Result<wxdata::verify::Verification, String>>>,
@@ -2570,6 +2573,7 @@ impl HookEchoApp {
             pending_spotter: None,
             video_player: None,
             cells_window: Default::default(),
+            glossary: Default::default(),
             verify_window: Default::default(),
             verify_rx: None,
             xsection_moment: Moment::Reflectivity,
@@ -7462,6 +7466,12 @@ impl HookEchoApp {
                 true,
             ),
             (
+                W::Glossary,
+                "Glossary\u{2026}",
+                "What a TDS, a hail spike or a ZDR column actually is",
+                false,
+            ),
+            (
                 W::Verify,
                 "Warning verification…",
                 "Score an office's warnings against what actually happened",
@@ -7705,6 +7715,7 @@ impl HookEchoApp {
                     self.cappi_key = None; // force a re-slice on open
                 }
                 W::StormTable => self.cells_window.toggle(),
+                W::Glossary => self.glossary.toggle(),
                 W::Verify => self.open_verify(),
                 W::Volume3d => self.build_volume3d(),
                 W::Climatology => {
@@ -10013,7 +10024,7 @@ impl HookEchoApp {
                         let mine = self
                             .mini_cam
                             .take()
-                            .unwrap_or_else(|| self.views[idx].camera.clone());
+                            .unwrap_or(self.views[idx].camera);
                         let pane_cam = std::mem::replace(&mut self.views[idx].camera, mine);
                         self.render_pane(
                             ui, &vctx, idx, prect, is_vector, is_raster, false, false, false, &[],
@@ -15548,6 +15559,7 @@ impl eframe::App for HookEchoApp {
                 .collect(),
             _ => std::collections::HashSet::new(),
         };
+        ui::glossary::show(&mut self.glossary, ctx);
         if let Some(id) = ui::cells_window::show(
             &mut self.cells_window,
             ctx,
