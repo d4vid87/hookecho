@@ -1943,6 +1943,9 @@ pub struct HookEchoApp {
     link_cameras: bool,
     /// The always-on-top mini-loop window is open (desktop only; see `mini_loop_viewport`).
     mini_loop: bool,
+    /// The mini loop's own camera while it is open; `None` until it borrows the pane's.
+    #[cfg(not(any(target_os = "android", target_arch = "wasm32")))]
+    mini_cam: Option<crate::render::mercator::Camera>,
     /// The report left by a previous run that panicked, shown once until dismissed.
     crash_report: Option<String>,
     /// National gridded field layers (MRMS mosaic, rotation, MESH, AzShear, lightning), each with
@@ -2636,6 +2639,8 @@ impl HookEchoApp {
             loop_export: None,
             link_cameras: false,
             mini_loop: false,
+            #[cfg(not(any(target_os = "android", target_arch = "wasm32")))]
+            mini_cam: None,
             #[cfg(not(target_arch = "wasm32"))]
             crash_report: crate::crash::take_report(),
             #[cfg(target_arch = "wasm32")]
@@ -9913,9 +9918,10 @@ impl HookEchoApp {
     /// egui side and demand `'static + Send + Sync`, which `HookEchoApp` is not (wgpu handles,
     /// `Rc`s in the tile caches). Immediate renders inline on this thread, which is exactly what
     /// reusing [`Self::render_pane`] needs.
-    // ponytail: shares the active pane's camera, so panning in the mini loop pans the main window
-    // too. Give it its own MapView if that turns out to be the point of it. Not persisted either:
-    // it is a window, not a layer (see `OverlayToggle::session_only`).
+    /// The loop keeps its own camera, cloned from the active pane when the window opens and
+    /// swapped in for the duration of the render — panning the little window is how you look
+    /// somewhere else while the main map stays where it was.
+    // ponytail: not persisted; it is a window, not a layer (see `OverlayToggle::session_only`).
     #[cfg(not(any(target_os = "android", target_arch = "wasm32")))]
     fn mini_loop_viewport(&mut self, ctx: &egui::Context) {
         if !self.mini_loop {
@@ -10001,9 +10007,19 @@ impl HookEchoApp {
                             egui::Color32::from_gray(190),
                         );
                         let vctx = ui.ctx().clone();
+                        // Swap this window's camera in around the render, and take back whatever
+                        // the pointer did to it. Nothing returns early in between, so the pane
+                        // always gets its own camera back.
+                        let mine = self
+                            .mini_cam
+                            .take()
+                            .unwrap_or_else(|| self.views[idx].camera.clone());
+                        let pane_cam = std::mem::replace(&mut self.views[idx].camera, mine);
                         self.render_pane(
                             ui, &vctx, idx, prect, is_vector, is_raster, false, false, false, &[],
                         );
+                        self.mini_cam =
+                            Some(std::mem::replace(&mut self.views[idx].camera, pane_cam));
                     });
                 if ctx.input(|i| i.viewport().close_requested()) {
                     close = true;
@@ -10012,6 +10028,9 @@ impl HookEchoApp {
         );
         if close {
             self.mini_loop = false;
+            // Reopening should frame what the main map is looking at now, not where the loop was
+            // pointed an hour ago.
+            self.mini_cam = None;
         }
     }
 
