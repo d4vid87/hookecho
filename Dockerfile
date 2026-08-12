@@ -33,5 +33,6 @@ VOLUME ["/root/.config/hookecho", "/root/.cache/hookecho"]
 EXPOSE 8080
 
 # 0.0.0.0 inside the container is the whole point of the container; publish the port deliberately
-# (`-p 127.0.0.1:8080:8080` to keep it on the host's loopback).
+# (`-p 127.0.0.1:8080:8080` to keep it on the host's loopback). Publishing it anywhere else wants
+# a token: set `serve_token` in the mounted settings.json, or add `--serve-token <secret>` here.
 ENTRYPOINT ["hookecho", "--serve", "8080", "--bind", "0.0.0.0"]

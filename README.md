@@ -541,6 +541,20 @@ hookecho --serve 9000 --bind 0.0.0.0
 JSON answers are cached for a minute and snapshots for five, so polling it every
 30 seconds costs the upstream services nothing extra.
 
+The server binds loopback and answers anyone who asks. Putting it on a network
+(`--bind 0.0.0.0`, or a container port that isn't `127.0.0.1:`) means publishing
+where you live, so set a token first — `serve_token` in settings.json, or
+`--serve-token` on the command line, which wins:
+
+```sh
+curl -H 'Authorization: Bearer hunter2' http://boxname:8080/status.json
+curl 'http://boxname:8080/snapshot.png?site=KTLX&token=hunter2'
+```
+
+Every route is behind it, `/metrics` and the CORS proxy included. The
+`?token=` form is there for dashboards that can only fetch a URL and have no
+place to put a header.
+
 For a desktop widget rather than a server, `--snapshot` writes the same render
 straight to a file:
 

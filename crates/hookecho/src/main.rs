@@ -83,8 +83,14 @@ fn main() -> eframe::Result<()> {
         let bind = flag_value(&args, "--bind").unwrap_or("127.0.0.1");
         // `--web-root DIR` also serves the browser build sitting in that directory.
         let web_root = flag_value(&args, "--web-root").map(std::path::PathBuf::from);
-        let spots = hookecho::status::spots(&settings::Settings::load(), None);
-        if let Err(e) = hookecho::serve::run(spots, bind, port, web_root) {
+        let saved = settings::Settings::load();
+        // `--serve-token` wins over the setting, so a container can pass one in without editing
+        // the settings file it mounted read-only.
+        let token = flag_value(&args, "--serve-token")
+            .map(str::to_string)
+            .unwrap_or_else(|| saved.serve_token.clone());
+        let spots = hookecho::status::spots(&saved, None);
+        if let Err(e) = hookecho::serve::run(spots, bind, port, web_root, token) {
             eprintln!("serve failed: {e}");
             std::process::exit(1);
         }

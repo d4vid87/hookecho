@@ -27,6 +27,9 @@ const SNAPSHOT_TTL: Duration = Duration::from_secs(300);
 
 struct Server {
     spots: Vec<Spot>,
+    /// Bearer token every request must carry, or empty for the open behaviour. A user secret:
+    /// it lives in settings.json (or the flag) and is never committed.
+    token: String,
     /// Directory of static files to serve (the browser build), if this was started with one.
     web_root: Option<std::path::PathBuf>,
     rt: tokio::runtime::Runtime,
@@ -43,11 +46,13 @@ pub fn run(
     bind: &str,
     port: u16,
     web_root: Option<std::path::PathBuf>,
+    token: String,
 ) -> anyhow::Result<()> {
     let _ = STARTED.set(Instant::now());
     let listener = TcpListener::bind((bind, port))?;
     let server = Arc::new(Server {
         spots,
+        token,
         web_root,
         // One runtime and one client for the process, not one per request like the headless
         // verifiers build — this one stays up.
@@ -60,7 +65,11 @@ pub fn run(
     });
     log::info!("serving on http://{bind}:{port}");
     if bind == "0.0.0.0" {
-        log::warn!("bound to all interfaces — anyone on this network can read your locations");
+        if server.token.is_empty() {
+            log::warn!("bound to all interfaces — anyone on this network can read your locations");
+        } else {
+            log::info!("bound to all interfaces, bearer token required");
+        }
     }
     for stream in listener.incoming() {
         match stream {
@@ -79,8 +88,9 @@ pub fn run(
 }
 
 fn handle(server: &Server, mut stream: TcpStream) -> anyhow::Result<()> {
+    let mut reader = BufReader::new(stream.try_clone()?);
     let mut line = String::new();
-    BufReader::new(stream.try_clone()?).read_line(&mut line)?;
+    reader.read_line(&mut line)?;
     // "GET /status.json?x=1 HTTP/1.1"
     let target = line.split_whitespace().nth(1).unwrap_or("/");
     let (path, query) = match target.split_once('?') {
@@ -88,7 +98,41 @@ fn handle(server: &Server, mut stream: TcpStream) -> anyhow::Result<()> {
         None => (target, ""),
     };
 
-    let (status, ctype, body) = route(server, path, query);
+    // The headers were ignored until there was a token to read out of them. Bounded: a client
+    // that never sends the blank line, or sends a header wall, is hung up on rather than humoured.
+    let mut authorized = server.token.is_empty();
+    if !authorized {
+        let supplied = query_token(query);
+        for _ in 0..64 {
+            let mut h = String::new();
+            if reader.read_line(&mut h)? == 0 || h.trim().is_empty() {
+                break;
+            }
+            if let Some((name, value)) = h.split_once(':') {
+                if name.trim().eq_ignore_ascii_case("authorization") {
+                    if let Some(bearer) = value.trim().strip_prefix("Bearer ") {
+                        authorized |= constant_time_eq(bearer.trim(), &server.token);
+                    }
+                }
+            }
+        }
+        // A dashboard that can only put things in a URL (a picture element, a widget) has no
+        // header to set, so `?token=` is accepted too — on loopback, and for a token the user
+        // chose to hand out.
+        if let Some(t) = supplied {
+            authorized |= constant_time_eq(&t, &server.token);
+        }
+    }
+    let (status, ctype, body) = if authorized {
+        route(server, path, query)
+    } else {
+        count("denied");
+        (
+            "401 Unauthorized",
+            "application/json",
+            br#"{"error":"missing or bad bearer token"}"#.to_vec(),
+        )
+    };
     stream.write_all(
         format!(
             "HTTP/1.1 {status}\r\nContent-Type: {ctype}\r\nContent-Length: {}\r\n\
@@ -139,6 +183,20 @@ fn route(server: &Server, path: &str, query: &str) -> (&'static str, &'static st
         _ if server.web_root.is_some() => static_file(server, path),
         _ => not_found(),
     }
+}
+
+/// The `token=` query parameter, if the request carried one.
+fn query_token(query: &str) -> Option<String> {
+    crate::cloud::param(query, "token")
+}
+
+/// Compare without leaking where the two differ through timing. Length is not a secret here (the
+/// user chose it), but the content is.
+fn constant_time_eq(a: &str, b: &str) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    a.bytes().zip(b.bytes()).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
 }
 
 fn not_found() -> (&'static str, &'static str, Vec<u8>) {
@@ -417,8 +475,8 @@ fn snapshot(server: &Server, query: &str) -> anyhow::Result<Vec<u8>> {
 }
 
 /// The route labels `/metrics` reports, in counter order.
-const ROUTES: [&str; 7] = [
-    "index", "json", "cells", "snapshot", "metrics", "proxy", "other",
+const ROUTES: [&str; 8] = [
+    "index", "json", "cells", "snapshot", "metrics", "proxy", "denied", "other",
 ];
 /// One counter per label in [`ROUTES`], bumped on every request in [`route`].
 ///
@@ -677,9 +735,24 @@ mod tests {
     use super::*;
 
     #[test]
+    fn the_token_check_is_exact_and_length_safe() {
+        assert!(constant_time_eq("hunter2", "hunter2"));
+        assert!(!constant_time_eq("hunter2", "hunter3"));
+        assert!(!constant_time_eq("hunter2", "hunter22"));
+        assert!(!constant_time_eq("", "x"));
+        // An empty configured token means the server is open; that decision is made before this
+        // is ever called, but two empties must not compare unequal.
+        assert!(constant_time_eq("", ""));
+        // A dashboard's `?token=` form.
+        assert_eq!(query_token("site=KTLX&token=abc"), Some("abc".to_string()));
+        assert_eq!(query_token("site=KTLX"), None);
+    }
+
+    #[test]
     fn unknown_paths_404() {
         // A server with no spots: routing is independent of what it would report.
         let server = Server {
+            token: String::new(),
             spots: Vec::new(),
             web_root: None,
             rt: tokio::runtime::Builder::new_current_thread()
@@ -701,6 +774,7 @@ mod tests {
     #[test]
     fn static_serving_refuses_to_walk_out_of_the_web_root() {
         let server = Server {
+            token: String::new(),
             spots: Vec::new(),
             web_root: Some(std::path::PathBuf::from("/var/empty")),
             rt: tokio::runtime::Builder::new_current_thread()
@@ -728,6 +802,7 @@ mod tests {
     #[test]
     fn proxy_refuses_hosts_that_are_not_on_the_list() {
         let server = Server {
+            token: String::new(),
             spots: Vec::new(),
             web_root: None,
             rt: tokio::runtime::Builder::new_current_thread()
@@ -763,6 +838,7 @@ mod tests {
     #[test]
     fn requests_are_counted_by_route() {
         let server = Server {
+            token: String::new(),
             spots: Vec::new(),
             web_root: None,
             rt: tokio::runtime::Builder::new_current_thread()

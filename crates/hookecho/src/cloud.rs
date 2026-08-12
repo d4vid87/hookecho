@@ -25,7 +25,7 @@ const REMOTE_NAME: &str = "settings.json";
 
 /// Settings fields that belong to *this* machine and must survive a sync from another one.
 /// Everything else — markers, placefiles, palettes, theme, API keys — is shared.
-pub const DEVICE_LOCAL: [&str; 5] = [
+pub const DEVICE_LOCAL: [&str; 6] = [
     "ui_scale",
     "share_name",
     "background_alerts",
@@ -33,6 +33,9 @@ pub const DEVICE_LOCAL: [&str; 5] = [
     // Pushes this machine held back during quiet hours. They are owed to whoever is sitting at
     // this device, and would arrive as somebody else's stale summary if they travelled.
     "quiet_pending",
+    // This machine's server credential. Copying it to a laptop would mean two boxes sharing one
+    // token, and one of them changing it locks the other out.
+    "serve_token",
 ];
 
 /// What Google gave us. Stored beside settings.json but never inside it: these are credentials,
