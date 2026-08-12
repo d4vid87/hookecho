@@ -1915,8 +1915,8 @@ pub struct HookEchoApp {
     ///
     /// A `Mutex` because `notify_alert` takes `&self` (ten call sites); a lock beats threading
     /// `&mut` through all of them.
-    // ponytail: not persisted — a quiet window that spans a restart loses its catch-up. Persist
-    // alongside the chase log if anyone misses it.
+    /// Held across a restart through `Settings::quiet_pending`, written on exit: a quiet window
+    /// that spans a relaunch still owes its catch-up.
     quiet_queue: std::sync::Mutex<Vec<(String, String)>>,
     /// Whether the last frame was inside quiet hours, so the end of the window is an edge.
     was_quiet: bool,
@@ -2363,6 +2363,8 @@ impl HookEchoApp {
         if let Some(dir) = crate::paths::cache_dir() {
             wxdata::alerts::set_zone_cache_dir(dir);
         }
+        // Whatever the last run's quiet hours were still holding when it closed.
+        let quiet_pending = settings.quiet_pending.clone();
         // The user's cap overrides, before anything that sweeps or reports against them.
         crate::tiles::set_cache_caps(settings.tile_disk_cache_mb, settings.volume_cache_mb);
         // Archived volumes are kept on disk forever within a cap; same startup sweep the tile
@@ -2614,7 +2616,7 @@ impl HookEchoApp {
             snapshot_push: None,
             rotation_alerted: std::collections::HashMap::new(),
             last_chime: None,
-            quiet_queue: std::sync::Mutex::new(Vec::new()),
+            quiet_queue: std::sync::Mutex::new(quiet_pending),
             was_quiet: false,
             screenshot_pending: None,
             share_card: None,
@@ -14291,6 +14293,12 @@ impl eframe::App for HookEchoApp {
                 });
             }
         }
+        // Anything quiet hours is still holding: it is owed to the user when the window ends, and
+        // that can be after a restart.
+        self.settings.quiet_pending = match self.quiet_queue.lock() {
+            Ok(q) => q.clone(),
+            Err(_) => Vec::new(),
+        };
         if self.settings != self.saved {
             self.settings.save();
         }

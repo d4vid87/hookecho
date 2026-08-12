@@ -413,6 +413,11 @@ pub struct Settings {
     /// Thresholds the signature detectors fire at (see [`DetectorTuning`]).
     #[serde(default)]
     pub detectors: DetectorTuning,
+    /// Pushes quiet hours held back, kept across a restart so the catch-up summary still arrives
+    /// when the window ends. Device-local (see `cloud::DEVICE_LOCAL`): they are owed to whoever
+    /// is at this machine.
+    #[serde(default)]
+    pub quiet_pending: Vec<(String, String)>,
     /// Cap for the on-disk radar-volume cache, in MB. 0 = the platform default (2 GB desktop,
     /// 300 MB Android). Applied by the startup sweep, so a change takes effect next launch.
     #[serde(default)]
@@ -703,6 +708,7 @@ impl Default for Settings {
         Self {
             default_site: "KTLX".to_string(),
             detectors: DetectorTuning::default(),
+            quiet_pending: Vec::new(),
             volume_cache_mb: 0,
             tile_disk_cache_mb: 0,
             share_card: true,
@@ -981,6 +987,17 @@ mod tests {
     use super::*;
 
     #[test]
+    fn quiet_pending_round_trips_and_defaults_empty() {
+        let old: Settings = serde_json::from_str(r#"{"default_site":"KTLX"}"#).unwrap();
+        assert!(old.quiet_pending.is_empty());
+        let mut s = Settings::default();
+        s.quiet_pending
+            .push(("Severe Thunderstorm Warning".into(), "Cleveland Co.".into()));
+        let back: Settings = serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
+        assert_eq!(back.quiet_pending, s.quiet_pending);
+    }
+
+    #[test]
     fn detector_tuning_survives_a_settings_file_that_predates_it() {
         // Settings written before the knobs existed must load with the shipped thresholds.
         let old: Settings = serde_json::from_str(r#"{"default_site":"KTLX"}"#).unwrap();
@@ -1023,6 +1040,7 @@ mod tests {
     fn roundtrips() {
         let s = Settings {
             detectors: DetectorTuning::default(),
+            quiet_pending: Vec::new(),
             volume_cache_mb: 0,
             tile_disk_cache_mb: 0,
             workspaces: Vec::new(),

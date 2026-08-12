@@ -25,7 +25,15 @@ const REMOTE_NAME: &str = "settings.json";
 
 /// Settings fields that belong to *this* machine and must survive a sync from another one.
 /// Everything else — markers, placefiles, palettes, theme, API keys — is shared.
-pub const DEVICE_LOCAL: [&str; 4] = ["ui_scale", "share_name", "background_alerts", "share_relay"];
+pub const DEVICE_LOCAL: [&str; 5] = [
+    "ui_scale",
+    "share_name",
+    "background_alerts",
+    "share_relay",
+    // Pushes this machine held back during quiet hours. They are owed to whoever is sitting at
+    // this device, and would arrive as somebody else's stale summary if they travelled.
+    "quiet_pending",
+];
 
 /// What Google gave us. Stored beside settings.json but never inside it: these are credentials,
 /// and the whole point of the settings blob is that it travels.
@@ -579,6 +587,9 @@ mod tests {
 
     #[test]
     fn shareable_strips_device_local_fields() {
+        // Held-back pushes belong to the machine that held them, not to the next device to sync.
+        let s = shareable(&json!({"quiet_pending": [["Tornado Warning", "…"]]}));
+        assert!(s.get("quiet_pending").is_none());
         let s = shareable(&json!({"ui_scale": 1.5, "mapbox_key": "pk.x"}));
         assert!(s.get("ui_scale").is_none());
         assert_eq!(s["mapbox_key"], "pk.x"); // keys do sync — the user asked for that
