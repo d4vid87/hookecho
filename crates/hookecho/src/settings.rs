@@ -258,6 +258,10 @@ pub struct Settings {
     /// background service reads this file too, so the name is load-bearing across the boundary.
     #[serde(default)]
     pub alert_polygons: Vec<AlertPolygon>,
+    /// User-written alert rules (see [`AlertRule`]). Empty by default: the five built-in alerts
+    /// are what the app fires on until somebody says otherwise.
+    #[serde(default)]
+    pub alert_rules: Vec<AlertRule>,
     /// External-process plugins that emit placefiles (desktop only). Off by default and empty:
     /// each entry is a command the user chose to run.
     #[serde(default)]
@@ -588,6 +592,148 @@ pub struct AlertPolygon {
     pub ring: Vec<[f64; 2]>,
 }
 
+/// What a rule watches for. The scan signatures are the ones the app already computes per
+/// volume; the rest ride on feeds it already polls.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum RuleTrigger {
+    /// Tornado debris signature.
+    Tds,
+    /// Three-body scatter spike (hail).
+    Tbss,
+    /// A ZDR column above the freezing level.
+    ZdrColumn,
+    /// A velocity couplet; the threshold is minimum Vrot in knots.
+    Rotation,
+    /// NOAA ProbSevere; the threshold is the minimum Severe percentage.
+    ProbSevere,
+    /// GLM flash-extent density; the threshold is minimum flashes per cell per window.
+    GlmFed,
+    /// An NWS warning whose event name contains this text, case-insensitively. Empty matches
+    /// every warning.
+    Warning { event_contains: String },
+}
+
+impl RuleTrigger {
+    /// Every trigger, with the defaults a fresh rule starts on — menu order.
+    pub const ALL: [RuleTrigger; 7] = [
+        RuleTrigger::Tds,
+        RuleTrigger::Tbss,
+        RuleTrigger::ZdrColumn,
+        RuleTrigger::Rotation,
+        RuleTrigger::ProbSevere,
+        RuleTrigger::GlmFed,
+        RuleTrigger::Warning {
+            event_contains: String::new(),
+        },
+    ];
+
+    pub fn label(&self) -> &'static str {
+        match self {
+            RuleTrigger::Tds => "Debris signature (TDS)",
+            RuleTrigger::Tbss => "Hail spike (TBSS)",
+            RuleTrigger::ZdrColumn => "ZDR column",
+            RuleTrigger::Rotation => "Rotation",
+            RuleTrigger::ProbSevere => "ProbSevere",
+            RuleTrigger::GlmFed => "Lightning density",
+            RuleTrigger::Warning { .. } => "NWS warning",
+        }
+    }
+
+    /// What the threshold means for this trigger, and its default — `None` where the trigger is
+    /// its own answer (a debris signature does not come in degrees).
+    pub fn threshold_hint(&self) -> Option<(&'static str, f64)> {
+        match self {
+            RuleTrigger::Rotation => Some(("kt Vrot", 40.0)),
+            RuleTrigger::ProbSevere => Some(("% severe", 50.0)),
+            RuleTrigger::GlmFed => Some(("flashes", 20.0)),
+            _ => None,
+        }
+    }
+
+    /// Whether this trigger is answered by a per-volume scan of the active pane's radar, as
+    /// opposed to a national feed. Scan triggers are what the headless verifier can replay.
+    pub fn is_scan(&self) -> bool {
+        matches!(
+            self,
+            RuleTrigger::Tds | RuleTrigger::Tbss | RuleTrigger::ZdrColumn | RuleTrigger::Rotation
+        )
+    }
+}
+
+/// Where a rule is allowed to fire.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub enum RulePlace {
+    /// Anywhere the active radar can see. Loud by design — worth pairing with a cooldown.
+    #[default]
+    Anywhere,
+    /// Within a marker's own `alert_radius_mi`. Keyed by [`Marker::id`], so renaming the marker
+    /// does not silently detach the rule.
+    Marker { id: String },
+    /// Touching a drawn watch zone, by [`AlertPolygon::name`].
+    Zone { name: String },
+}
+
+/// One user rule: "if this signature shows up there, tell me".
+///
+/// The five built-in alerts are fixed — they fire on what somebody else decided was worth
+/// waking up for. This is the same machinery pointed at the user's own question.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AlertRule {
+    /// Stable id; the cooldown map keys on it, so renaming a rule does not re-arm it.
+    pub id: String,
+    /// What the user calls it. Empty falls back to the trigger's label.
+    #[serde(default)]
+    pub name: String,
+    pub trigger: RuleTrigger,
+    /// Trigger-dependent minimum (see [`RuleTrigger::threshold_hint`]); ignored where the
+    /// trigger takes none.
+    #[serde(default)]
+    pub threshold: Option<f64>,
+    #[serde(default)]
+    pub place: RulePlace,
+    /// Push past quiet hours. Off by default: the user decides what is worth waking up for, and
+    /// the default answer is "not this".
+    #[serde(default)]
+    pub urgent: bool,
+    /// Minutes before the same rule may fire for the same place again.
+    #[serde(default = "default_rule_cooldown")]
+    pub cooldown_min: u16,
+    /// Rules are created switched off, and armed deliberately.
+    #[serde(default)]
+    pub enabled: bool,
+}
+
+/// Ten minutes, matching the built-in proximity alerts' own cooldown.
+pub fn default_rule_cooldown() -> u16 {
+    10
+}
+
+impl AlertRule {
+    /// A fresh, disabled rule.
+    pub fn new(trigger: RuleTrigger) -> Self {
+        let threshold = trigger.threshold_hint().map(|(_, d)| d);
+        Self {
+            id: new_marker_id(),
+            name: String::new(),
+            trigger,
+            threshold,
+            place: RulePlace::Anywhere,
+            urgent: false,
+            cooldown_min: default_rule_cooldown(),
+            enabled: false,
+        }
+    }
+
+    /// What to call it in a notification.
+    pub fn title(&self) -> String {
+        if self.name.trim().is_empty() {
+            self.trigger.label().to_string()
+        } else {
+            self.name.clone()
+        }
+    }
+}
+
 pub fn default_lightning_minutes() -> u16 {
     5
 }
@@ -732,6 +878,7 @@ impl Default for Settings {
         Self {
             default_site: "KTLX".to_string(),
             detectors: DetectorTuning::default(),
+            alert_rules: Vec::new(),
             serve_token: String::new(),
             quiet_pending: Vec::new(),
             volume_cache_mb: 0,
@@ -1021,6 +1168,25 @@ mod tests {
     use super::*;
 
     #[test]
+    fn rules_are_absent_from_old_settings_and_start_disabled() {
+        let old: Settings = serde_json::from_str(r#"{"default_site":"KTLX"}"#).unwrap();
+        assert!(old.alert_rules.is_empty());
+
+        let r = AlertRule::new(RuleTrigger::Rotation);
+        assert!(!r.enabled, "a new rule must not start armed");
+        assert_eq!(r.cooldown_min, 10);
+        assert_eq!(r.threshold, Some(40.0));
+        assert_eq!(r.title(), "Rotation");
+
+        let mut s = Settings::default();
+        s.alert_rules.push(r.clone());
+        let back: Settings = serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
+        assert_eq!(back.alert_rules, vec![r]);
+        // A trigger with no numeric meaning gets no threshold to be confused by.
+        assert_eq!(AlertRule::new(RuleTrigger::Tds).threshold, None);
+    }
+
+    #[test]
     fn markers_get_distinct_ids_and_old_files_still_load() {
         // A settings file from before ids existed.
         let old: Settings = serde_json::from_str(
@@ -1091,6 +1257,7 @@ mod tests {
     fn roundtrips() {
         let s = Settings {
             detectors: DetectorTuning::default(),
+            alert_rules: Vec::new(),
             serve_token: String::new(),
             quiet_pending: Vec::new(),
             volume_cache_mb: 0,
