@@ -648,6 +648,16 @@ fn main() -> eframe::Result<()> {
         return Ok(());
     }
 
+    // Rule verify: `hookecho --headless-rules [SITE]` — would the user's own rules fire?
+    if let Some(pos) = args.iter().position(|a| a == "--headless-rules") {
+        let site = args.get(pos + 1).map(String::as_str).unwrap_or("KTLX");
+        if let Err(e) = headless::run_rules(site) {
+            eprintln!("headless rules failed: {e}");
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
+
     // Rotation verify: `hookecho --headless-rotation [SITE]`.
     if let Some(pos) = args.iter().position(|a| a == "--headless-rotation") {
         let site = args.get(pos + 1).map(String::as_str).unwrap_or("KTLX");

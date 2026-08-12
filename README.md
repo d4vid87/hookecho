@@ -758,6 +758,7 @@ cargo run --release -- --headless-indices -97.5 35.3
 cargo run --release -- --headless-glm                       # GOES satellite lightning
 cargo run --release -- --headless-fronts                    # WPC surface analysis
 cargo run --release -- --headless-hrrr uh 3 uh.png          # refc|uh|smoke
+cargo run --release -- --headless-rules KTLX                # would your alert rules fire?
 ```
 
 ```sh

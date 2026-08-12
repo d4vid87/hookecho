@@ -93,6 +93,7 @@ pub mod marker_popup;
 pub mod marker_window;
 pub mod palette_editor;
 pub mod placefile_window;
+pub mod rules_window;
 pub mod sensor_window;
 pub mod settings_window;
 pub mod site_dialog;

@@ -851,6 +851,8 @@ mod tests {
         let i = ROUTES.iter().position(|r| *r == "index").unwrap();
         let before = REQUESTS[i].load(Ordering::Relaxed);
         route(&server, "/", "");
-        assert_eq!(REQUESTS[i].load(Ordering::Relaxed), before + 1);
+        // Counters are process-wide and the test threads share them, so this asserts movement
+        // rather than an exact delta — another test routing "/" must not fail this one.
+        assert!(REQUESTS[i].load(Ordering::Relaxed) > before);
     }
 }
