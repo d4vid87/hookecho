@@ -44,6 +44,7 @@ pub fn run(
     port: u16,
     web_root: Option<std::path::PathBuf>,
 ) -> anyhow::Result<()> {
+    let _ = STARTED.set(Instant::now());
     let listener = TcpListener::bind((bind, port))?;
     let server = Arc::new(Server {
         spots,
@@ -103,7 +104,8 @@ fn handle(server: &Server, mut stream: TcpStream) -> anyhow::Result<()> {
 fn route(server: &Server, path: &str, query: &str) -> (&'static str, &'static str, Vec<u8>) {
     count(match path {
         "/" => "index",
-        "/status.json" | "/alerts.json" | "/obs.json" => "json",
+        "/status.json" | "/alerts.json" | "/obs.json" | "/health.json" => "json",
+        "/cells.json" => "cells",
         "/snapshot.png" => "snapshot",
         "/metrics" => "metrics",
         _ if path.starts_with("/proxy/") => "proxy",
@@ -113,6 +115,14 @@ fn route(server: &Server, path: &str, query: &str) -> (&'static str, &'static st
         "/" if server.web_root.is_some() => static_file(server, "/index.html"),
         "/" => ("200 OK", "text/html; charset=utf-8", index().into_bytes()),
         "/status.json" | "/alerts.json" | "/obs.json" => match cached_json(server, path) {
+            Ok(body) => ("200 OK", "application/json", body),
+            Err(e) => error_json(e),
+        },
+        "/cells.json" => match cells_json(server, query) {
+            Ok(body) => ("200 OK", "application/json", body),
+            Err(e) => error_json(e),
+        },
+        "/health.json" => match health_json(server) {
             Ok(body) => ("200 OK", "application/json", body),
             Err(e) => error_json(e),
         },
@@ -223,9 +233,109 @@ fn cached_json(server: &Server, path: &str) -> anyhow::Result<Vec<u8>> {
     Ok(body)
 }
 
+/// `GET /cells.json?site=KTLX` — every SCIT storm cell the radar's own algorithms are tracking.
+///
+/// The same four Level 3 products the storm-attributes table reads, in the same fields, plus the
+/// position and forecast track a map needs. What `/status.json` cannot answer: it speaks for
+/// saved locations, and "what storms exist near this radar" is a different question.
+fn cells_json(server: &Server, query: &str) -> anyhow::Result<Vec<u8>> {
+    let site = crate::cloud::param(query, "site").unwrap_or_else(|| "KTLX".to_string());
+    if !site.chars().all(|c| c.is_ascii_alphanumeric()) {
+        anyhow::bail!("bad site");
+    }
+    let site = site.to_ascii_uppercase();
+    let key = format!("/cells.json?{site}");
+    if let Some(hit) = server
+        .cache
+        .lock()
+        .unwrap()
+        .get(&key)
+        .filter(|(when, _)| when.elapsed() < JSON_TTL)
+    {
+        return Ok(hit.1.clone());
+    }
+    let cells = server
+        .rt
+        .block_on(wxdata::level3::fetch_cells(&server.http, &site));
+    let body = serde_json::to_vec(&serde_json::json!({
+        "site": site,
+        "cells": cells.iter().map(cell_json).collect::<Vec<_>>(),
+    }))?;
+    server
+        .cache
+        .lock()
+        .unwrap()
+        .insert(key, (Instant::now(), body.clone()));
+    Ok(body)
+}
+
+/// One cell on the wire. Hand-written rather than derived: the wire format is a promise to
+/// whatever is polling this, and it should not move because a struct field was renamed.
+fn cell_json(c: &wxdata::level3::Cell) -> serde_json::Value {
+    serde_json::json!({
+        "id": c.title,
+        "lon": c.lon,
+        "lat": c.lat,
+        "azimuth_deg": c.az_deg,
+        "range_nm": c.range_nm,
+        "movement_deg": c.mvt_deg,
+        "movement_kt": c.mvt_kt,
+        "max_dbz": c.max_dbz,
+        "top_kft": c.top_kft,
+        "vil": c.vil,
+        "poh": c.poh,
+        "posh": c.posh,
+        "hail_in": c.hail_in,
+        "tvs": c.tvs,
+        "meso": c.meso,
+        "track": c.track.iter().map(|t| serde_json::json!({
+            "minutes": t.minutes,
+            "lon": t.lon,
+            "lat": t.lat,
+        })).collect::<Vec<_>>(),
+    })
+}
+
+/// `GET /health.json` — is this instance actually answering with fresh data?
+///
+/// A container that is up but has not reached a feed in an hour looks exactly like a healthy one
+/// from the outside, which is the failure worth catching. Ages are in seconds; `null` means that
+/// answer has never been built in this process.
+fn health_json(server: &Server) -> anyhow::Result<Vec<u8>> {
+    let age = |path: &str| -> Option<f64> {
+        server
+            .cache
+            .lock()
+            .unwrap()
+            .get(path)
+            .map(|(when, _)| when.elapsed().as_secs_f64())
+    };
+    // Ask for a status build if nothing has yet, so a fresh container reports on real feeds
+    // rather than on never having tried.
+    let feeds_ok = cached_json(server, "/status.json").is_ok();
+    let body = serde_json::to_vec(&serde_json::json!({
+        "version": env!("CARGO_PKG_VERSION"),
+        "uptime_secs": STARTED.get().map(|t| t.elapsed().as_secs()),
+        "spots": server.spots.len(),
+        "feeds_ok": feeds_ok,
+        "status_age_secs": age("/status.json"),
+        "snapshot_cached": server
+            .cache
+            .lock()
+            .unwrap()
+            .keys()
+            .filter(|k| k.starts_with("/snapshot.png"))
+            .count(),
+    }))?;
+    Ok(body)
+}
+
+/// When this process started serving, for `/health.json`.
+static STARTED: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
+
 /// A radar PNG through the same off-screen renderer the `--headless` verifier uses.
 ///
-// ponytail: one render at a time; tilt and palette are still fixed. Add them when someone asks.
+// ponytail: one render at a time; the palette is still fixed. Add it when someone asks.
 fn snapshot(server: &Server, query: &str) -> anyhow::Result<Vec<u8>> {
     let site = crate::cloud::param(query, "site").unwrap_or_else(|| "KTLX".to_string());
     let product = crate::cloud::param(query, "product").unwrap_or_else(|| "REF".to_string());
@@ -246,9 +356,15 @@ fn snapshot(server: &Server, query: &str) -> anyhow::Result<Vec<u8>> {
     let zoom: Option<f64> = crate::cloud::param(query, "zoom").and_then(|v| v.parse().ok());
     let px = size.unwrap_or(1000).clamp(256, 2048);
     let zoom_tag = zoom.map_or_else(|| "auto".to_string(), |z| format!("{z:.2}"));
+    // Elevation index, not degrees: the same number the app's tilt picker uses. A volume has at
+    // most a couple of dozen sweeps, and asking past the end is a missing render, not a crash.
+    let tilt: usize = crate::cloud::param(query, "tilt")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0)
+        .min(30);
 
     let key = format!(
-        "/snapshot.png?{site}&{product}&{}&{px}&{zoom_tag}",
+        "/snapshot.png?{site}&{product}&{}&{px}&{zoom_tag}&{tilt}",
         basemap.slug()
     );
     if let Some(hit) = server
@@ -268,7 +384,7 @@ fn snapshot(server: &Server, query: &str) -> anyhow::Result<Vec<u8>> {
     let dir = dir.join("snapshots");
     std::fs::create_dir_all(&dir)?;
     let out = dir.join(format!(
-        "snapshot-{site}-{product}-{}-{px}-{zoom_tag}.png",
+        "snapshot-{site}-{product}-{}-{px}-{zoom_tag}-{tilt}.png",
         basemap.slug()
     ));
     {
@@ -281,7 +397,7 @@ fn snapshot(server: &Server, query: &str) -> anyhow::Result<Vec<u8>> {
             out.to_string_lossy().as_ref(),
             &site,
             moment,
-            0,
+            tilt,
             true,
             None,
             None,
@@ -301,7 +417,9 @@ fn snapshot(server: &Server, query: &str) -> anyhow::Result<Vec<u8>> {
 }
 
 /// The route labels `/metrics` reports, in counter order.
-const ROUTES: [&str; 6] = ["index", "json", "snapshot", "metrics", "proxy", "other"];
+const ROUTES: [&str; 7] = [
+    "index", "json", "cells", "snapshot", "metrics", "proxy", "other",
+];
 /// One counter per label in [`ROUTES`], bumped on every request in [`route`].
 ///
 // ponytail: flat process-lifetime counters, no histograms or per-status buckets; the ceiling is

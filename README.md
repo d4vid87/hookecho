@@ -534,7 +534,9 @@ hookecho --serve 9000 --bind 0.0.0.0
 | `/status.json` | conditions and nearby alerts for every saved location |
 | `/alerts.json` | alerts only |
 | `/obs.json` | conditions only |
-| `/snapshot.png?site=KTLX` | a radar render — `&product=VEL`, `&basemap=none`, `&size=512` (256–2048), `&zoom=6.5` |
+| `/cells.json?site=KTLX` | every storm cell the radar's algorithms track — hail size, tops, VIL, TVS, forecast track |
+| `/health.json` | version, uptime and how stale the answers are, for a container health check |
+| `/snapshot.png?site=KTLX` | a radar render — `&product=VEL`, `&basemap=none`, `&size=512` (256–2048), `&zoom=6.5`, `&tilt=1` |
 
 JSON answers are cached for a minute and snapshots for five, so polling it every
 30 seconds costs the upstream services nothing extra.
