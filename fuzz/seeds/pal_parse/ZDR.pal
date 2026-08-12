@@ -1,0 +1,12 @@
+; Hook Echo default differential reflectivity color table (GRLevelX .pal v2)
+Product: ZDR
+Units: dB
+Step: 2
+RF: 128 128 128
+SolidColor: -7.9 60 60 60
+SolidColor: -2 0 0 200
+SolidColor: 0 0 200 200
+SolidColor: 1 0 200 0
+SolidColor: 2 230 230 0
+SolidColor: 4 230 120 0
+SolidColor: 6 230 0 0

@@ -1,0 +1,58 @@
+[package]
+name = "hookecho-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+wxdata = { path = "../crates/wxdata" }
+nexrad-level3 = { path = "../crates/nexrad-level3" }
+hookecho = { path = "../crates/hookecho" }
+
+# CRITICAL: an excluded crate is its own workspace root, so it does NOT inherit the root
+# manifest's `[patch.crates-io]`. Without this duplicate, the GRIB target would fuzz upstream
+# gribberish instead of the vendored fork the app actually runs — i.e. the wrong code.
+[patch.crates-io]
+gribberish = { path = "../vendor/gribberish" }
+nexrad-data = { path = "../vendor/nexrad-data" }
+
+# Fuzzing wants the optimizer on and debug assertions kept; overflow checks stay on so an
+# arithmetic bug is a finding rather than a wrap.
+[profile.release]
+debug = 1
+debug-assertions = true
+overflow-checks = true
+
+[[bin]]
+name = "level2_decode"
+path = "fuzz_targets/level2_decode.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "level3_decode"
+path = "fuzz_targets/level3_decode.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "placefile_parse"
+path = "fuzz_targets/placefile_parse.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "hdob_parse"
+path = "fuzz_targets/hdob_parse.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "pal_parse"
+path = "fuzz_targets/pal_parse.rs"
+test = false
+doc = false

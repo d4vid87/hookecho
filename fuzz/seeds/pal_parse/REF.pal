@@ -1,0 +1,15 @@
+; Hook Echo default reflectivity color table — FOXweather (user-supplied .pal)
+product: BR
+units: dBZ
+step: 5
+
+
+color: 10 50 230 165 0 80 20
+solidcolor: 35 255 255 0
+solidcolor: 40 225 175 0
+solidcolor: 45 255 0 0
+solidcolor: 50 200 0 0
+solidcolor: 55 180 0 180
+solidcolor: 60 240 100 240
+solidcolor: 65 255 255 255
+solidcolor: 70 175 175 175

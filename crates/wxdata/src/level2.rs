@@ -198,6 +198,34 @@ async fn list_day(site: &str, date: chrono::NaiveDate) -> anyhow::Result<Vec<Ide
     Ok(ids)
 }
 
+/// Decode raw Archive II bytes to a [`Scan`], decompressing first if they are bzip2-packed.
+///
+/// The one decode path: the download, the on-disk cache and the fuzz target all come through here,
+/// so a volume that decodes in one place decodes the same way in the others.
+pub fn decode_volume(data: Vec<u8>) -> anyhow::Result<Scan> {
+    decode_file(nexrad_data::volume::File::new(data))
+}
+
+/// bzip2 decompression plus the message decode is tens of MB of pure CPU — callers on an async
+/// worker must run this on a blocking thread, or it stalls every other fetch sharing that thread.
+fn decode_file(file: nexrad_data::volume::File) -> anyhow::Result<Scan> {
+    // Anything shorter than the 24-byte Archive II volume header is not a volume. The decoder
+    // slices past the header unconditionally and panics on a short buffer (found by
+    // fuzz/fuzz_targets/level2_decode.rs), and the live head really does serve half-written
+    // objects — so this is a guard on real input, not a fuzz-only nicety.
+    const VOLUME_HEADER_LEN: usize = 24;
+    if file.data().len() < VOLUME_HEADER_LEN {
+        anyhow::bail!("volume is {} bytes, too short to be one", file.data().len());
+    }
+    let file = if file.compressed() {
+        file.decompress()
+            .map_err(|e| anyhow::anyhow!("decompress: {e}"))?
+    } else {
+        file
+    };
+    file.scan().map_err(|e| anyhow::anyhow!("scan: {e}"))
+}
+
 /// Download and decode a specific volume to a [`Scan`].
 ///
 /// With `cache_dir` set the raw Archive II bytes are kept on disk, exactly as the bucket served
@@ -231,16 +259,7 @@ pub async fn download_scan(id: Identifier, cache_dir: Option<PathBuf>) -> anyhow
     // bzip2 decompression plus the message decode is tens of MB of pure CPU. On the async worker
     // it blocks every other fetch sharing that thread for as long as it runs; the `parallel`
     // feature of nexrad-data then spreads the decode itself across rayon.
-    let scan = crate::task::blocking(move || {
-        let file = if file.compressed() {
-            file.decompress()
-                .map_err(|e| anyhow::anyhow!("decompress: {e}"))?
-        } else {
-            file
-        };
-        file.scan().map_err(|e| anyhow::anyhow!("scan: {e}"))
-    })
-    .await??;
+    let scan = crate::task::blocking(move || decode_file(file)).await??;
     // Legacy (pre-2008) volumes carry no volume data block, so the decoder can't name the radar.
     // The volume's own filename can: "KTLX19910605_162126".
     Ok(match scan.site() {
@@ -497,6 +516,16 @@ pub fn bin_sweep_opts(
 mod tests {
     use super::*;
     use nexrad_model::data::{MomentData, Radial};
+
+    /// The live head serves half-written objects, and anything shorter than the 24-byte volume
+    /// header used to panic inside the decoder rather than come back as an error (found by
+    /// fuzzing).
+    #[test]
+    fn a_volume_too_short_to_be_one_is_an_error_not_a_panic() {
+        assert!(decode_volume(Vec::new()).is_err());
+        assert!(decode_volume(vec![0u8; 23]).is_err());
+        assert!(decode_volume(b"AR2V0006.".to_vec()).is_err());
+    }
 
     // Build a one-radial sweep with a known reflectivity ramp and confirm binning
     // places it in the right azimuth row and normalizes values as documented.

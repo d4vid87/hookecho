@@ -16,6 +16,8 @@ pub mod cam;
 pub mod chaselog;
 pub mod cloud;
 pub mod colormap;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod crash;
 pub mod dialog;
 pub mod digest;
 /// Terrain heights (DEM) and the beam-vs-terrain blockage raster.
@@ -165,13 +167,14 @@ fn android_main(app: winit::platform::android::activity::AndroidApp) {
     android_logger::init_once(
         android_logger::Config::default().with_max_level(log::LevelFilter::Info),
     );
-    // Rust panics otherwise die silently on Android (stderr goes nowhere) — route them to logcat.
-    std::panic::set_hook(Box::new(|info| log::error!("panic: {info}")));
-
-    // Settings, caches, and exports live under the activity's private internal data dir.
+    // Settings, caches, and exports live under the activity's private internal data dir. This
+    // comes before the panic hook, which writes its report in there.
     if let Some(path) = app.internal_data_path() {
         paths::set_base(path);
     }
+    // Rust panics otherwise die silently on Android (stderr goes nowhere) — route them to logcat,
+    // and leave a report the next start can show.
+    crash::install_hook();
     // The UI queries this handle for system-bar insets each frame.
     platform::set_app(app.clone());
 

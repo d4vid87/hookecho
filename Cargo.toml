@@ -2,6 +2,9 @@
 resolver = "2"
 members = [
     "crates/hdf5lite","crates/nexrad-level3", "crates/wxdata", "crates/hookecho", "crates/hookecho-ffi"]
+# The fuzz targets need a nightly toolchain and their own profile; they are built by
+# `cargo +nightly fuzz run`, never by `cargo test --workspace`.
+exclude = ["fuzz"]
 
 # Vendored gribberish 1.5.0 with a one-line fix to its 8-bit PNG unpack (upstream always read a
 # u16, overrunning MRMS rotation-track / AzShear grids). See vendor/gribberish/src/templates/

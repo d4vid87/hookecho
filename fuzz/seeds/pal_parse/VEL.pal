@@ -1,0 +1,18 @@
+; Hook Echo default velocity color table — ALPHA-Velo (Almany Designs, user-supplied .pal)
+;
+; Almany Designs velocity color table
+;
+
+product: BV
+units: KTS
+step: 10 
+scale: 1.9426
+
+color: -120 0 0 155
+color: -50 0 255 255
+color: -10 0 102 0
+color: 0 128 128 128 
+color: 10 96 13 23
+color: 30 200 0 0
+color: 60 255 255 0
+color: 120 120 60 0

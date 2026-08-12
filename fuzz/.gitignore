@@ -1,0 +1,6 @@
+# libFuzzer's working corpus and crash reproducers are run output, not source. The starting
+# inputs live in `seeds/`.
+target/
+corpus/
+artifacts/
+coverage/
