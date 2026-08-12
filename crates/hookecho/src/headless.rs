@@ -585,6 +585,121 @@ pub fn run_dualpol(site: &str, h0_km: f64) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Rule verify: run the user's own alert rules against the latest volume and say, for each one,
+/// whether it would fire and why not if it wouldn't.
+///
+/// A rule that never goes off is indistinguishable from a rule that is wrong, and waiting for
+/// real weather to find out is a bad way to learn that a threshold was set too high. This replays
+/// the scan triggers against a live scan and prints the verdict.
+///
+/// ponytail: scan triggers only. ProbSevere and lightning density need their national feeds
+/// polling, which is the app's job, not a one-shot verifier's.
+pub fn run_rules(site: &str) -> anyhow::Result<()> {
+    use crate::rules::Detection;
+    use crate::settings::RuleTrigger as T;
+
+    let settings = crate::settings::Settings::load();
+    let rules: Vec<&crate::settings::AlertRule> = settings.alert_rules.iter().collect();
+    if rules.is_empty() {
+        println!("no rules configured (Ctrl+K ▸ \"Alert rules…\")");
+        return Ok(());
+    }
+
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?;
+    let (z, cc, vel, zdr_tilts, z_tilts) = rt.block_on(async {
+        let scan = level2::download_latest_scan(site, chrono::Utc::now().date_naive()).await?;
+        let n = level2::elevation_angles(&scan).len();
+        let take = |m: Moment| -> Vec<wxdata::level2::BinnedSweep> {
+            (0..n)
+                .filter_map(|t| level2::bin_scan(&scan, m, t).ok())
+                .collect()
+        };
+        anyhow::Ok((
+            level2::bin_scan(&scan, Moment::Reflectivity, 0)?,
+            level2::bin_scan(&scan, Moment::CorrelationCoefficient, 0)?,
+            level2::bin_scan_opts(&scan, Moment::Velocity, 0, true)?,
+            take(Moment::DifferentialReflectivity),
+            take(Moment::Reflectivity),
+        ))
+    })?;
+    println!("{site}: {} tilts, lowest {:.2}°", z_tilts.len(), z.elevation_deg);
+
+    let d = &settings.detectors;
+    let tds = wxdata::tds::detect(&z, &cc, 0.80, 40.0, 150.0, 4);
+    let tbss = wxdata::dualpol::tbss(&z, &cc, d.tbss_core_dbz, 20.0, 0.8, 4.0, 150.0);
+    // No model freezing level out here; 4 km ARL is the usual warm-season figure and the same
+    // default `--headless-dualpol` takes.
+    let zdr = wxdata::dualpol::zdr_columns(
+        &zdr_tilts,
+        &z_tilts,
+        4.0,
+        d.zdr_min_db,
+        d.zdr_min_depth_km,
+        40.0,
+        100.0,
+    );
+    // Same thresholds the app's own couplet layer uses, so the verdict matches the app.
+    let couplets = wxdata::rotation::detect(&vel, 25.0, 15.0, 150.0, 3);
+    println!(
+        "detections: {} TDS, {} TBSS, {} ZDR columns, {} couplets",
+        tds.len(),
+        tbss.len(),
+        zdr.len(),
+        couplets.len()
+    );
+
+    for rule in rules {
+        let label = format!("{} [{}]", rule.title(), rule.trigger.label());
+        if !rule.enabled {
+            println!("  {label}: disabled");
+            continue;
+        }
+        if !rule.trigger.is_scan() {
+            println!("  {label}: needs a live feed — not replayable here");
+            continue;
+        }
+        if !crate::rules::place_exists(&rule.place, &settings) {
+            println!("  {label}: its place no longer exists — can never fire");
+            continue;
+        }
+        let hits: Vec<Detection> = match rule.trigger {
+            T::Tds => tds.iter().map(|h| Detection::at(h.lon, h.lat)).collect(),
+            T::Tbss => tbss.iter().map(|h| Detection::at(h.lon, h.lat)).collect(),
+            T::ZdrColumn => zdr.iter().map(|h| Detection::at(h.lon, h.lat)).collect(),
+            _ => couplets
+                .iter()
+                .map(|h| Detection::with_strength(h.lon, h.lat, h.vrot_ms as f64 * 1.943_844))
+                .collect(),
+        };
+        let place = crate::rules::place_label(&rule.place, &settings);
+        match hits
+            .iter()
+            .find(|h| crate::rules::matches(rule, h, &settings))
+        {
+            Some(h) => {
+                let strength = h
+                    .strength
+                    .map(|v| format!(" ({v:.0})"))
+                    .unwrap_or_default();
+                println!(
+                    "  {label}: FIRES at {:.3},{:.3}{strength} — {place}",
+                    h.lat, h.lon
+                );
+            }
+            // Say which of the two reasons it was: nothing detected at all, or nothing that got
+            // past the threshold and the place.
+            None if hits.is_empty() => println!("  {label}: quiet (nothing detected)"),
+            None => println!(
+                "  {label}: quiet ({} detections, none past the threshold at {place})",
+                hits.len()
+            ),
+        }
+    }
+    Ok(())
+}
+
 /// Rotation verify: download the latest volume, bin the dealiased velocity at the lowest tilt,
 /// run the couplet detector, and print any hits. Proves the detection pipeline on real data.
 pub fn run_rotation(site: &str) -> anyhow::Result<()> {
