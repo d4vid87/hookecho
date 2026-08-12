@@ -11473,6 +11473,20 @@ impl HookEchoApp {
         if self.show_webcams {
             let show_labels = cam.zoom >= 8.0;
             let col = egui::Color32::from_rgb(110, 180, 240);
+            // A camera under a tornado or severe-thunderstorm warning is the one worth opening,
+            // and it looks exactly like the other forty until you click them all. Ring it.
+            // Polygons the alert layer already holds; no extra fetch and no extra geometry.
+            let threat: Vec<&GeoFeature> = self
+                .alert_features
+                .iter()
+                .filter(|f| {
+                    f.kind == overlay::FeatureKind::Warning
+                        && f.alert.as_ref().is_some_and(|a| {
+                            let e = a.event.to_ascii_lowercase();
+                            e.contains("tornado") || e.contains("severe thunderstorm")
+                        })
+                })
+                .collect();
             for site in &self.webcams {
                 let w = crate::render::mercator::lonlat_to_world(site.lon, site.lat);
                 let (sx, sy) = cam.world_to_screen(w, vp);
@@ -11486,6 +11500,17 @@ impl HookEchoApp {
                     4.0,
                     egui::Stroke::new(1.0, egui::Color32::from_black_alpha(170)),
                 );
+                // `distance_km` is 0 inside the polygon, which is the test we want here.
+                if threat
+                    .iter()
+                    .any(|f| f.distance_km(site.lon, site.lat) == 0.0)
+                {
+                    painter.circle_stroke(
+                        p,
+                        7.0,
+                        egui::Stroke::new(1.5, egui::Color32::from_rgb(255, 120, 60)),
+                    );
+                }
                 if show_labels {
                     painter.text(
                         p + egui::vec2(6.0, -5.0),
