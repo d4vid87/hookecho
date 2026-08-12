@@ -49,6 +49,25 @@ pub struct SpotStatus {
     pub wind_dir: Option<String>,
     pub pressure_in: Option<f32>,
     pub alerts: Vec<AlertBrief>,
+    /// The closest storm cell the nearest radar's algorithms are tracking, if there is one.
+    /// Absent — not zero — when nothing is being tracked: "no storms" and "the feed is down"
+    /// must not both read as a distance of nought.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub nearest_cell: Option<CellBrief>,
+}
+
+/// A storm cell, as much of it as a dashboard needs.
+#[derive(Debug, Clone, Serialize)]
+pub struct CellBrief {
+    /// SCIT id, e.g. "O7".
+    pub id: String,
+    pub distance_km: f64,
+    /// Bearing from the spot to the cell, degrees clockwise from north.
+    pub bearing_deg: f64,
+    pub max_dbz: Option<f32>,
+    pub hail_in: Option<f32>,
+    /// Present when the radar flagged a tornadic vortex signature on this cell.
+    pub tvs: Option<String>,
 }
 
 /// How to print the report.
@@ -119,6 +138,9 @@ pub async fn collect(http: &reqwest::Client, spots: &[Spot]) -> anyhow::Result<V
     let points: Vec<(f64, f64)> = spots.iter().map(|s| (s.lat, s.lon)).collect();
     let feats = wxdata::alerts::fetch_active(http, &points).await?;
     let mut out = Vec::with_capacity(spots.len());
+    // One Level 3 fetch per radar, however many spots that radar covers.
+    let mut cells: std::collections::HashMap<String, Vec<wxdata::level3::Cell>> =
+        std::collections::HashMap::new();
     for spot in spots {
         let mut alerts: Vec<AlertBrief> = Vec::new();
         let mut seen = std::collections::HashSet::new();
@@ -136,9 +158,50 @@ pub async fn collect(http: &reqwest::Client, spots: &[Spot]) -> anyhow::Result<V
                 .cmp(&a.escalation)
                 .then(a.distance_km.total_cmp(&b.distance_km))
         });
-        out.push(status_for(spot, observation(http, spot).await, alerts));
+        let cell = nearest_cell(http, spot, &mut cells).await;
+        out.push(status_for(
+            spot,
+            observation(http, spot).await,
+            alerts,
+            cell,
+        ));
     }
     Ok(out)
+}
+
+/// The closest tracked storm to `spot`, from the radar that covers it.
+///
+/// Cells are fetched per radar, not per spot, and memoized in `by_site` for this pass: three
+/// markers in one county share one set of Level 3 round trips. A radar with nothing to say — or a
+/// feed that is down — yields `None` rather than a zero.
+async fn nearest_cell(
+    http: &reqwest::Client,
+    spot: &Spot,
+    by_site: &mut std::collections::HashMap<String, Vec<wxdata::level3::Cell>>,
+) -> Option<CellBrief> {
+    let site = crate::geo::nearest_site_id(spot.lon, spot.lat)?;
+    if !by_site.contains_key(&site) {
+        let cells = wxdata::level3::fetch_cells(http, &site).await;
+        by_site.insert(site.clone(), cells);
+    }
+    by_site
+        .get(&site)?
+        .iter()
+        // Standalone detections carry no cell id; they are not a storm to point at.
+        .filter(|c| !c.title.is_empty())
+        .map(|c| {
+            let (km, bearing) = crate::geo::great_circle([spot.lon, spot.lat], [c.lon, c.lat]);
+            (km, bearing, c)
+        })
+        .min_by(|a, b| a.0.total_cmp(&b.0))
+        .map(|(km, bearing, c)| CellBrief {
+            id: c.title.clone(),
+            distance_km: km,
+            bearing_deg: bearing,
+            max_dbz: c.max_dbz,
+            hail_in: c.hail_in,
+            tvs: c.tvs.clone(),
+        })
 }
 
 /// The nearest station's latest observation, or `None` when there isn't one (offshore, OCONUS,
@@ -173,6 +236,7 @@ fn status_for(
     spot: &Spot,
     ob: Option<(String, wxdata::obs::Observation)>,
     alerts: Vec<AlertBrief>,
+    nearest_cell: Option<CellBrief>,
 ) -> SpotStatus {
     let (station, o) = match ob {
         Some((id, o)) => (Some(id), Some(o)),
@@ -198,6 +262,7 @@ fn status_for(
             .and_then(|o| o.slp_pa.or(o.pressure_pa))
             .map(|pa| pa / 3386.389),
         alerts,
+        nearest_cell,
     }
 }
 
@@ -361,8 +426,9 @@ mod tests {
                 &spot("Home", true),
                 Some(("KOKC".into(), ob())),
                 vec![warning()],
+                None,
             ),
-            status_for(&spot("Cabin", false), None, vec![]),
+            status_for(&spot("Cabin", false), None, vec![], None),
         ];
         let text = human(&report);
         assert_eq!(
@@ -374,11 +440,12 @@ mod tests {
     #[test]
     fn line_reports_home_even_when_it_is_not_first() {
         let report = vec![
-            status_for(&spot("Cabin", false), None, vec![]),
+            status_for(&spot("Cabin", false), None, vec![], None),
             status_for(
                 &spot("Home", true),
                 Some(("KOKC".into(), ob())),
                 vec![warning()],
+                None,
             ),
         ];
         assert_eq!(
@@ -393,6 +460,7 @@ mod tests {
             &spot("Home", true),
             Some(("KOKC".into(), ob())),
             vec![],
+            None,
         )];
         assert_eq!(line(&report), "74°F 62%rh SW 12kt");
         assert!(line(&[]).is_empty());
@@ -404,6 +472,7 @@ mod tests {
             &spot("Home", true),
             Some(("KOKC".into(), ob())),
             vec![warning()],
+            None,
         )];
         let v: serde_json::Value =
             serde_json::from_str(&serde_json::to_string(&report).unwrap()).unwrap();
@@ -415,9 +484,29 @@ mod tests {
         assert_eq!(v[0]["alerts"][0]["event"], "Tornado Warning");
         assert_eq!(v[0]["alerts"][0]["escalation"], 2);
         // A station that reported nothing serializes as null, not as a zero.
-        let empty = status_for(&spot("Cabin", false), None, vec![]);
+        let empty = status_for(&spot("Cabin", false), None, vec![], None);
         let v = serde_json::to_value(&empty).unwrap();
         assert!(v["temp_f"].is_null() && v["station"].is_null());
+        // No tracked storms: the key is absent, so a consumer says "unavailable" rather than
+        // reading a distance of zero as "on top of you".
+        assert!(v.get("nearest_cell").is_none());
+        let stormy = status_for(
+            &spot("Home", true),
+            None,
+            vec![],
+            Some(CellBrief {
+                id: "O7".into(),
+                distance_km: 12.5,
+                bearing_deg: 220.0,
+                max_dbz: Some(62.0),
+                hail_in: Some(1.75),
+                tvs: None,
+            }),
+        );
+        let v = serde_json::to_value(&stormy).unwrap();
+        assert_eq!(v["nearest_cell"]["id"], "O7");
+        assert_eq!(v["nearest_cell"]["distance_km"], 12.5);
+        assert_eq!(v["nearest_cell"]["hail_in"], 1.75);
     }
 
     #[test]
@@ -429,7 +518,7 @@ mod tests {
         let mut sparse = sparse;
         sparse.rh = None;
         sparse.wind_kmh = None;
-        let s = status_for(&spot("Home", true), Some(("KXYZ".into(), sparse)), vec![]);
+        let s = status_for(&spot("Home", true), Some(("KXYZ".into(), sparse)), vec![], None);
         assert_eq!(conditions(&s), "50°F");
     }
 

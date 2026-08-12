@@ -7,5 +7,5 @@
   "iot_class": "local_polling",
   "issue_tracker": "https://github.com/d4vid87/hookecho/issues",
   "requirements": [],
-  "version": "0.5.0"
+  "version": "0.6.0"
 }

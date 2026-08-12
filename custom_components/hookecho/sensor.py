@@ -12,6 +12,13 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from . import HookEchoCoordinator
 from .const import (
     DOMAIN,
+    KEY_CELL_BEARING,
+    KEY_CELL_DISTANCE,
+    KEY_CELL_HAIL,
+    KEY_CELL_ID,
+    KEY_CELL_MAX_DBZ,
+    KEY_CELL_TVS,
+    KEY_NEAREST_CELL,
     KEY_ALERT_DISTANCE,
     KEY_ALERT_ESCALATION,
     KEY_ALERT_EVENT,
@@ -32,6 +39,7 @@ async def async_setup_entry(
             HookEchoMeasurement(coordinator, spot, *m) for m in MEASUREMENTS
         ]
         entities.append(HookEchoAlertCount(coordinator, spot))
+        entities.append(HookEchoNearestStorm(coordinator, spot))
     async_add_entities(entities)
 
 
@@ -122,4 +130,48 @@ class HookEchoAlertCount(HookEchoEntity, SensorEntity):
             "until": worst.get(KEY_ALERT_UNTIL),
             "distance_km": worst.get(KEY_ALERT_DISTANCE),
             "escalation": worst.get(KEY_ALERT_ESCALATION),
+        }
+
+
+class HookEchoNearestStorm(HookEchoEntity, SensorEntity):
+    """How far away the closest tracked storm cell is, and what the radar says about it.
+
+    An alert count answers "has an office issued something". This answers "is there a
+    storm coming", which is the automation people actually want — close the awning at
+    fifteen kilometres, not when a warning is finally drawn.
+    """
+
+    _attr_name = "nearest storm"
+    _attr_icon = "mdi:weather-lightning-rainy"
+    _attr_native_unit_of_measurement = "km"
+    _attr_device_class = "distance"
+    _attr_state_class = "measurement"
+
+    def __init__(self, coordinator: HookEchoCoordinator, spot: str) -> None:
+        super().__init__(coordinator, spot)
+        self._attr_unique_id = f"hookecho_{spot}_nearest_storm"
+
+    @property
+    def _cell(self) -> dict:
+        return self.spot.get(KEY_NEAREST_CELL) or {}
+
+    @property
+    def available(self) -> bool:
+        # Nothing tracked, or the Level 3 feed is down: unavailable. Reporting 0 km would
+        # read as a storm directly overhead, which is the one wrong answer here.
+        return super().available and bool(self._cell)
+
+    @property
+    def native_value(self) -> float | None:
+        return self._cell.get(KEY_CELL_DISTANCE)
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        cell = self._cell
+        return {
+            "cell": cell.get(KEY_CELL_ID),
+            "bearing_deg": cell.get(KEY_CELL_BEARING),
+            "max_dbz": cell.get(KEY_CELL_MAX_DBZ),
+            "hail_in": cell.get(KEY_CELL_HAIL),
+            "tvs": cell.get(KEY_CELL_TVS),
         }

@@ -413,6 +413,11 @@ pub struct Settings {
     /// Thresholds the signature detectors fire at (see [`DetectorTuning`]).
     #[serde(default)]
     pub detectors: DetectorTuning,
+    /// Bearer token `--serve` requires on every request; empty leaves the server open, which is
+    /// what loopback-only has always been. A user secret: settings.json only, never committed,
+    /// and device-local so it does not travel to machines that are not this server.
+    #[serde(default)]
+    pub serve_token: String,
     /// Pushes quiet hours held back, kept across a restart so the catch-up summary still arrives
     /// when the window ends. Device-local (see `cloud::DEVICE_LOCAL`): they are owed to whoever
     /// is at this machine.
@@ -727,6 +732,7 @@ impl Default for Settings {
         Self {
             default_site: "KTLX".to_string(),
             detectors: DetectorTuning::default(),
+            serve_token: String::new(),
             quiet_pending: Vec::new(),
             volume_cache_mb: 0,
             tile_disk_cache_mb: 0,
@@ -1085,6 +1091,7 @@ mod tests {
     fn roundtrips() {
         let s = Settings {
             detectors: DetectorTuning::default(),
+            serve_token: String::new(),
             quiet_pending: Vec::new(),
             volume_cache_mb: 0,
             tile_disk_cache_mb: 0,

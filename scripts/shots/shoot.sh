@@ -462,7 +462,7 @@ check() {
   grep -q '"mapbox_key": ""' "$REPO/scripts/shots/settings.template.json" \
     || { echo "LEAK: settings.template.json has a non-empty mapbox_key"; fail=1; }
   # Secrets that must never reach the committed template: absent or empty, nothing else.
-  for k in discord_webhook slack_webhook matrix_token; do
+  for k in discord_webhook slack_webhook matrix_token serve_token; do
     v="$(jq -r --arg k "$k" '.[$k] // ""' "$REPO/scripts/shots/settings.template.json")"
     [ -z "$v" ] || { echo "LEAK: settings.template.json has a non-empty $k"; fail=1; }
   done

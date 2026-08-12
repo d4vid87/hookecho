@@ -534,10 +534,26 @@ hookecho --serve 9000 --bind 0.0.0.0
 | `/status.json` | conditions and nearby alerts for every saved location |
 | `/alerts.json` | alerts only |
 | `/obs.json` | conditions only |
-| `/snapshot.png?site=KTLX` | a radar render — `&product=VEL`, `&basemap=none`, `&size=512` (256–2048), `&zoom=6.5` |
+| `/cells.json?site=KTLX` | every storm cell the radar's algorithms track — hail size, tops, VIL, TVS, forecast track |
+| `/health.json` | version, uptime and how stale the answers are, for a container health check |
+| `/snapshot.png?site=KTLX` | a radar render — `&product=VEL`, `&basemap=none`, `&size=512` (256–2048), `&zoom=6.5`, `&tilt=1` |
 
 JSON answers are cached for a minute and snapshots for five, so polling it every
 30 seconds costs the upstream services nothing extra.
+
+The server binds loopback and answers anyone who asks. Putting it on a network
+(`--bind 0.0.0.0`, or a container port that isn't `127.0.0.1:`) means publishing
+where you live, so set a token first — `serve_token` in settings.json, or
+`--serve-token` on the command line, which wins:
+
+```sh
+curl -H 'Authorization: Bearer hunter2' http://boxname:8080/status.json
+curl 'http://boxname:8080/snapshot.png?site=KTLX&token=hunter2'
+```
+
+Every route is behind it, `/metrics` and the CORS proxy included. The
+`?token=` form is there for dashboards that can only fetch a URL and have no
+place to put a header.
 
 For a desktop widget rather than a server, `--snapshot` writes the same render
 straight to a file:
@@ -578,8 +594,14 @@ there's a custom component in [`custom_components/hookecho`](custom_components/h
 point it at a machine running `--serve` and you get, per saved location, a
 device carrying temperature, dewpoint, humidity, wind, gust and pressure
 sensors, an **alert count** sensor and an **alert active** binary sensor
-(attributes: event, expiry, distance, escalation tier), plus one **radar
+(attributes: event, expiry, distance, escalation tier), a **nearest storm**
+sensor giving the distance to the closest cell the radar is tracking
+(attributes: cell id, bearing, max dBZ, hail size, TVS), plus one **radar
 camera** entity showing the live snapshot.
+
+The nearest-storm sensor is the one to automate on: it answers "is a storm
+coming" minutes before anybody issues a warning, and goes unavailable — never
+zero — when nothing is being tracked.
 
 Install via HACS as a custom repository, or copy the `custom_components/hookecho`
 directory into your Home Assistant `config/custom_components/` and restart. Then
@@ -588,7 +610,7 @@ which is the server's own cache window.
 
 Remember the server has to be reachable from Home Assistant — that means
 `--bind 0.0.0.0` (or the container), and a network you're willing to expose your
-saved locations on.
+saved locations on. Set `serve_token` if that network is not one you control.
 
 ### In a browser
 

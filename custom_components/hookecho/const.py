@@ -25,6 +25,14 @@ KEY_ALERT_UNTIL = "until"
 KEY_ALERT_DISTANCE = "distance_km"
 KEY_ALERT_ESCALATION = "escalation"
 
+KEY_NEAREST_CELL = "nearest_cell"
+KEY_CELL_ID = "id"
+KEY_CELL_DISTANCE = "distance_km"
+KEY_CELL_BEARING = "bearing_deg"
+KEY_CELL_MAX_DBZ = "max_dbz"
+KEY_CELL_HAIL = "hail_in"
+KEY_CELL_TVS = "tvs"
+
 # (json key, sensor key, name suffix, unit, device class, state class)
 MEASUREMENTS = [
     ("temp_f", "temperature", "temperature", "°F", "temperature", "measurement"),
