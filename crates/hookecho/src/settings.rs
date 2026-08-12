@@ -413,6 +413,13 @@ pub struct Settings {
     /// Thresholds the signature detectors fire at (see [`DetectorTuning`]).
     #[serde(default)]
     pub detectors: DetectorTuning,
+    /// Cap for the on-disk radar-volume cache, in MB. 0 = the platform default (2 GB desktop,
+    /// 300 MB Android). Applied by the startup sweep, so a change takes effect next launch.
+    #[serde(default)]
+    pub volume_cache_mb: u32,
+    /// Cap for each on-disk map-tile cache (raster and vector), in MB. 0 = platform default.
+    #[serde(default)]
+    pub tile_disk_cache_mb: u32,
 }
 
 /// Where the dual-pol signature detectors and the GLM flash-extent grid draw their lines.
@@ -696,6 +703,8 @@ impl Default for Settings {
         Self {
             default_site: "KTLX".to_string(),
             detectors: DetectorTuning::default(),
+            volume_cache_mb: 0,
+            tile_disk_cache_mb: 0,
             share_card: true,
             hide_sidebar: false,
             hide_toolbar: false,
@@ -1014,6 +1023,8 @@ mod tests {
     fn roundtrips() {
         let s = Settings {
             detectors: DetectorTuning::default(),
+            volume_cache_mb: 0,
+            tile_disk_cache_mb: 0,
             workspaces: Vec::new(),
             seeded_workspaces: false,
             smooth_radar: false,

@@ -39,12 +39,12 @@ pub fn report() -> Vec<Entry> {
     let Some(root) = crate::paths::cache_dir() else {
         return Vec::new();
     };
-    let tiles = crate::tiles::DISK_CACHE_BYTES;
+    let tiles = crate::tiles::tile_cache_bytes();
     let small = crate::tiles::SMALL_CACHE_BYTES;
     [
         ("Map tiles", "tiles", Some(tiles)),
         ("Vector tiles", "vector", Some(tiles)),
-        ("Radar volumes", "volumes", Some(crate::tiles::VOLUME_CACHE_BYTES)),
+        ("Radar volumes", "volumes", Some(crate::tiles::volume_cache_bytes())),
         ("Zone geometry", "zones", Some(small)),
         ("Soundings (RAOB)", "raob", Some(small)),
         ("Server snapshots", "snapshots", Some(small)),

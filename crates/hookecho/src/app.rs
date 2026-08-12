@@ -2358,6 +2358,8 @@ impl HookEchoApp {
         if let Some(dir) = crate::paths::cache_dir() {
             wxdata::alerts::set_zone_cache_dir(dir);
         }
+        // The user's cap overrides, before anything that sweeps or reports against them.
+        crate::tiles::set_cache_caps(settings.tile_disk_cache_mb, settings.volume_cache_mb);
         // Archived volumes are kept on disk forever within a cap; same startup sweep the tile
         // caches get, for the same reason (mid-session deletion would race the fetch tasks).
         if let Some(root) = crate::paths::cache_dir().map(|d| d.join("volumes")) {
@@ -2365,7 +2367,7 @@ impl HookEchoApp {
                 crate::tiles::sweep_cache_dir(
                     &root,
                     "volume cache",
-                    crate::tiles::VOLUME_CACHE_BYTES,
+                    crate::tiles::volume_cache_bytes(),
                 )
             });
         }

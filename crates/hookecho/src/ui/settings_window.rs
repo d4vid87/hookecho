@@ -130,7 +130,7 @@ impl SettingsWindow {
                     Tab::Hotkeys => self.hotkeys_tab(ui, settings, entries),
                     Tab::Sync => action = sync_tab(ui, settings, &sync),
                     #[cfg(not(target_arch = "wasm32"))]
-                    Tab::Storage => self.storage_tab(ui),
+                    Tab::Storage => self.storage_tab(ui, settings),
                 }
             });
         self.capturing = self.rebinding.is_some() && open;
@@ -143,7 +143,7 @@ impl SettingsWindow {
 
     /// What the app has written to disk, and the buttons that take it back.
     #[cfg(not(target_arch = "wasm32"))]
-    fn storage_tab(&mut self, ui: &mut egui::Ui) {
+    fn storage_tab(&mut self, ui: &mut egui::Ui, settings: &mut Settings) {
         // Kick off one measurement per tab visit; the walk lands over a channel a frame or two
         // later, and the rows stay put until Refresh or a Clear asks for a fresh one.
         if self.storage.is_none() && self.storage_rows.is_none() {
@@ -214,6 +214,38 @@ impl SettingsWindow {
         if recheck {
             self.storage_rows = None;
         }
+
+        // The caps themselves. The sweep runs at startup (deleting mid-session would race the
+        // fetch tasks writing into the same directories), so a change lands on the next launch.
+        ui.separator();
+        ui.label(egui::RichText::new("Limits").small().strong());
+        for (label, mb, hint) in [
+            (
+                "Radar volumes",
+                &mut settings.volume_cache_mb,
+                "0 uses the platform default: 2 GB on the desktop, 300 MB on Android.",
+            ),
+            (
+                "Map tiles (each cache)",
+                &mut settings.tile_disk_cache_mb,
+                "Applies to the raster and vector tile caches separately. 0 = platform default.",
+            ),
+        ] {
+            ui.horizontal(|ui| {
+                ui.label(label);
+                ui.add(
+                    egui::DragValue::new(mb)
+                        .range(0..=64_000)
+                        .speed(50.0)
+                        .suffix(" MB"),
+                )
+                .on_hover_text(hint);
+                if *mb == 0 {
+                    ui.weak("default");
+                }
+            });
+        }
+        ui.weak("New limits apply at the next start.");
     }
 
     /// Rebindable keyboard shortcuts. Rows come from the binding table itself, so anything the
