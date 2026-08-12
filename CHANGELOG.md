@@ -6,6 +6,43 @@ so **write the section before pushing the tag**, or the release job fails.
 
 The rolling `latest` release tracks `main` and is not listed here.
 
+## 0.9.0 - 2026-08-11
+
+- Three dual-pol signatures the app never computed: three-body scatter spikes
+  (near-proof of large hail), ZDR columns (an updraft proxy that deepens before
+  a storm intensifies), and the melting-layer bright band. Off by default, and
+  none of them makes a sound — the only detection that alarms is still the one
+  that means debris is in the air.
+- Satellite lightning gains a density field: where the GLM flashes are thickest
+  over the last 15 minutes, which is where a lightning jump shows up first.
+- Colorblind-safe reflectivity and velocity palettes ship built in, alongside an
+  OLED theme, a caption on share cards, a new-scan chime, and beam height on the
+  Measure tool.
+- Alerting learns restraint and reach: quiet hours with a severity floor,
+  rotation near a place you watch, alerting on your own live position, and a
+  radar snapshot attached to the push. Pushes held back by quiet hours now come
+  back as one summary when the window ends, instead of vanishing.
+- The GOES frame follows the radar's clock, so scrubbing back through an event
+  takes the satellite with it.
+- SPC Day 4-8 outlooks and TAFs on station tooltips.
+- A chase breadcrumb log with GPX export, and desktop notifications.
+- Android: a home-screen radar widget and a quick-settings tile.
+- A small always-on-top mini-loop window on the desktop, and a Debian package
+  next to the AppImage so the menu entry, icon and updater are the system's job.
+- A crash the app can explain: a panic now leaves a report, and the next start
+  offers it back with a Copy button. Nothing in it identifies you.
+- Fuzzing the decoders that eat outside bytes found four real bugs — a panic on
+  a half-written volume from the live head, two hangs on malformed GRIB2, and a
+  parser that died on a mangled hurricane-hunter bulletin. All fixed, all now
+  regression-tested, with the fuzz job running nightly.
+- First run is four cards and an optional spotlight tour on the real interface,
+  down from ten pages of wizard.
+- Trackpad pinch zooms and horizontal scroll pans; `hookecho://` links reach an
+  already-running instance and carry product and tilt; placefile icon sheets
+  cache on disk; a temperature unit the station plots honor.
+- Errors you can read, copy and actually see, and a sweep of the unwraps behind
+  decoded and user-supplied data.
+
 ## 0.8.0 - 2026-08-09
 
 - A model difference layer: GFS−ECMWF and HRRR−RAP, resampled onto a common grid

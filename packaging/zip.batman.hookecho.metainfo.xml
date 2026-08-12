@@ -37,19 +37,19 @@
   -->
   <screenshots>
     <screenshot type="default">
-      <image>https://raw.githubusercontent.com/d4vid87/hookecho/v0.8.0/docs/shots/alltilts.jpg</image>
+      <image>https://raw.githubusercontent.com/d4vid87/hookecho/v0.9.0/docs/shots/alltilts.jpg</image>
       <caption>Level 2 reflectivity at every tilt, over an interactive basemap</caption>
     </screenshot>
     <screenshot>
-      <image>https://raw.githubusercontent.com/d4vid87/hookecho/v0.8.0/docs/shots/mosaic.jpg</image>
+      <image>https://raw.githubusercontent.com/d4vid87/hookecho/v0.9.0/docs/shots/mosaic.jpg</image>
       <caption>The national MRMS mosaic</caption>
     </screenshot>
     <screenshot>
-      <image>https://raw.githubusercontent.com/d4vid87/hookecho/v0.8.0/docs/shots/alerts.jpg</image>
+      <image>https://raw.githubusercontent.com/d4vid87/hookecho/v0.9.0/docs/shots/alerts.jpg</image>
       <caption>Warnings, storm reports and spotters</caption>
     </screenshot>
     <screenshot>
-      <image>https://raw.githubusercontent.com/d4vid87/hookecho/v0.8.0/docs/shots/hrrr.jpg</image>
+      <image>https://raw.githubusercontent.com/d4vid87/hookecho/v0.9.0/docs/shots/hrrr.jpg</image>
       <caption>HRRR model fields and severe composite parameters</caption>
     </screenshot>
   </screenshots>
@@ -79,6 +79,7 @@
   <content_rating type="oars-1.1"/>
 
   <releases>
+    <release version="0.9.0" date="2026-08-11"/>
     <release version="0.8.0" date="2026-08-09"/>
     <release version="0.7.0" date="2026-08-09"/>
   </releases>
