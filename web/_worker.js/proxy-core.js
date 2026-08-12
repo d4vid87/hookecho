@@ -1,4 +1,4 @@
-// The CORS proxy the browser build needs, as a Cloudflare Pages Worker.
+// The CORS proxy the browser build needs, host-agnostic.
 //
 // The wasm build rewrites every feed URL to `{origin}/proxy/{host}/{path}` (crates/wxdata/src/
 // net.rs), because NOAA's buckets and the NWS API send no `Access-Control-Allow-Origin`. A static
@@ -7,10 +7,14 @@
 // allowlist exactly, only GET is issued upstream, no client header is forwarded, and the response
 // is capped and stripped down to a known content type.
 //
+// Two deployments import this: web/_worker.js/index.js (Cloudflare Pages) and
+// netlify/edge-functions/proxy.js (Netlify, Deno). They differ only in how they ask their own CDN
+// to cache — the allowlist and the checks live here once, so they cannot drift apart.
+//
 // The ALLOWED_HOSTS list below is checked against serve.rs by .github/workflows/demo.yml — the two
 // must stay identical, and the deploy fails if they drift.
 
-const ALLOWED_HOSTS = [
+export const ALLOWED_HOSTS = [
   // NEXRAD / TDWR archives and the live chunk stream.
   "unidata-nexrad-level2.s3.amazonaws.com",
   "unidata-nexrad-level2-chunks.s3.amazonaws.com",
@@ -60,17 +64,23 @@ const ALLOWED_HOSTS = [
   "cwwp2.dot.ca.gov",
 ];
 
-const MAX_BYTES = 64 * 1024 * 1024;
+export const MAX_BYTES = 64 * 1024 * 1024;
 
-// Live feeds go stale in seconds; everything else can sit in Cloudflare's cache for five minutes,
+// Live feeds go stale in seconds; everything else can sit in the CDN cache for five minutes,
 // which is what keeps a front-page demo off NOAA's rate limits.
 // ponytail: two classes, not a per-host map — add one if a specific feed complains.
-const LIVE_HOSTS = new Set([
+export const LIVE_HOSTS = new Set([
   "unidata-nexrad-level2-chunks.s3.amazonaws.com",
   "api.weather.gov",
 ]);
 
-function contentType(upstream) {
+export const cacheSeconds = (host) => (LIVE_HOSTS.has(host) ? 15 : 300);
+
+// The User-Agent the app identifies itself with everywhere else (wxdata::alerts::USER_AGENT);
+// api.weather.gov refuses a request without one.
+export const USER_AGENT = "hookecho (github.com/d4vid87/hookecho, davidmay87@gmail.com)";
+
+export function contentType(upstream) {
   switch ((upstream.split(";")[0] || "").trim()) {
     case "application/json":
     case "application/geo+json":
@@ -103,6 +113,12 @@ const refused = (why) =>
     headers: { "content-type": "application/json" },
   });
 
+const badGateway = () =>
+  new Response(JSON.stringify({ error: "upstream fetch failed" }), {
+    status: 502,
+    headers: { "content-type": "application/json" },
+  });
+
 // Stop a hostile or broken upstream mid-stream rather than after buffering it.
 function capped(body) {
   let seen = 0;
@@ -117,46 +133,37 @@ function capped(body) {
   );
 }
 
-export default {
-  async fetch(request, env) {
-    const url = new URL(request.url);
-    if (!url.pathname.startsWith("/proxy/")) return env.ASSETS.fetch(request);
+/// Handle one `/proxy/{host}/{path}` request. `fetchInit(host)` lets a platform add its own cache
+/// hints to the upstream call, `extraHeaders(host)` the same for the response we send back.
+export async function handleProxy(request, { fetchInit = () => ({}), extraHeaders = () => ({}) } = {}) {
+  const url = new URL(request.url);
+  const rest = url.pathname.slice("/proxy/".length);
+  const slash = rest.indexOf("/");
+  if (slash < 0) return refused("no path after host");
+  const host = rest.slice(0, slash);
+  if (!ALLOWED_HOSTS.includes(host)) return refused("host not in allowlist");
+  if (request.method !== "GET") return refused("GET only");
 
-    const rest = url.pathname.slice("/proxy/".length);
-    const slash = rest.indexOf("/");
-    if (slash < 0) return refused("no path after host");
-    const host = rest.slice(0, slash);
-    if (!ALLOWED_HOSTS.includes(host)) return refused("host not in allowlist");
-    if (request.method !== "GET") return refused("GET only");
-
-    const target = `https://${host}/${rest.slice(slash + 1)}${url.search}`;
-    let upstream;
-    try {
-      // No client header is forwarded — this is a fresh request, not a rewrite of theirs. The one
-      // header set here is the User-Agent the app identifies itself with everywhere else
-      // (wxdata::alerts::USER_AGENT); api.weather.gov refuses a request without one.
-      upstream = await fetch(target, {
-        headers: { "user-agent": "hookecho (github.com/d4vid87/hookecho, davidmay87@gmail.com)" },
-        cf: { cacheTtl: LIVE_HOSTS.has(host) ? 15 : 300, cacheEverything: true },
-      });
-    } catch (e) {
-      return new Response(JSON.stringify({ error: "upstream fetch failed" }), {
-        status: 502,
-        headers: { "content-type": "application/json" },
-      });
-    }
-    if (!upstream.ok) {
-      return new Response(JSON.stringify({ error: "upstream fetch failed" }), {
-        status: 502,
-        headers: { "content-type": "application/json" },
-      });
-    }
-
-    const length = Number(upstream.headers.get("content-length") || 0);
-    if (length > MAX_BYTES) return refused("response over cap");
-
-    return new Response(upstream.body ? capped(upstream.body) : null, {
-      headers: { "content-type": contentType(upstream.headers.get("content-type") || "") },
+  const target = `https://${host}/${rest.slice(slash + 1)}${url.search}`;
+  let upstream;
+  try {
+    // No client header is forwarded — this is a fresh request, not a rewrite of theirs.
+    upstream = await fetch(target, {
+      headers: { "user-agent": USER_AGENT },
+      ...fetchInit(host),
     });
-  },
-};
+  } catch {
+    return badGateway();
+  }
+  if (!upstream.ok) return badGateway();
+
+  const length = Number(upstream.headers.get("content-length") || 0);
+  if (length > MAX_BYTES) return refused("response over cap");
+
+  return new Response(upstream.body ? capped(upstream.body) : null, {
+    headers: {
+      "content-type": contentType(upstream.headers.get("content-type") || ""),
+      ...extraHeaders(host),
+    },
+  });
+}

@@ -637,6 +637,34 @@ out; there is no camera, plugin or GPS support; and any feed whose host refuses
 cross-origin requests simply doesn't load. Anything that needs those is on the
 desktop and Android builds.
 
+#### Hosting it yourself
+
+The bundle is static files plus one CORS proxy — the feeds NOAA serves without
+`Access-Control-Allow-Origin` need an origin of your own in front of them, or the
+page loads and draws nothing. The proxy's rules (exact-match allowlist, GET only,
+64 MB cap, narrowed content types) live once in `web/_worker.js/proxy-core.js`;
+each host is a few lines of wiring around it.
+
+**Cloudflare Pages** — `web/_worker.js/`, deployed by
+`.github/workflows/demo.yml`. That's what `hookecho.pages.dev` is.
+
+**Netlify** — `netlify.toml` plus the edge function in `netlify/edge-functions/`.
+Either connect the repo (Netlify runs `scripts/netlify-build.sh`, ~5 minutes cold
+because it compiles `wasm-bindgen-cli`), or build once and push the result:
+
+```sh
+./scripts/web/build.sh
+npx netlify-cli deploy --dir web --prod
+```
+
+Set `NETLIFY_AUTH_TOKEN` and `NETLIFY_SITE_ID` as repository secrets and the demo
+workflow deploys there too, alongside Pages; leave them unset and that step is
+skipped. Both tokens are secrets — never committed.
+
+Any other host works the same way if it can run one small function on
+`/proxy/*`. A purely static host cannot: without the proxy the app opens, and
+then sits empty.
+
 ### Extending it
 
 Placefiles work as they do everywhere else — URLs, icon sheets, a layer manager with per-file
