@@ -221,6 +221,7 @@ fn card_alerts(ui: &mut egui::Ui, settings: &mut Settings, icon_tex: &IconTextur
             .unwrap_or((0.0, 0.0));
         let offset = 0.05 * n as f64;
         settings.markers.push(crate::settings::Marker {
+            id: crate::settings::new_marker_id(),
             name: format!("Location {n}"),
             lat: lat + offset,
             lon: lon + offset,

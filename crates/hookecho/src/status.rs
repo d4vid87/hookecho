@@ -437,6 +437,7 @@ mod tests {
     fn explicit_point_beats_markers() {
         let mut settings = crate::settings::Settings::default();
         settings.markers.push(crate::settings::Marker {
+                id: crate::settings::new_marker_id(),
             name: "Home".into(),
             lat: 1.0,
             lon: 2.0,
@@ -457,6 +458,7 @@ mod tests {
         let mut settings = crate::settings::Settings::default();
         settings.markers = vec![
             crate::settings::Marker {
+                id: crate::settings::new_marker_id(),
                 name: "Cabin".into(),
                 lat: 1.0,
                 lon: 2.0,
@@ -466,6 +468,7 @@ mod tests {
                 home: false,
             },
             crate::settings::Marker {
+                id: crate::settings::new_marker_id(),
                 name: "Home".into(),
                 lat: 3.0,
                 lon: 4.0,

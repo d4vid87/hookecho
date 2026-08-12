@@ -78,6 +78,7 @@ impl MarkerWindow {
                 if ui.button("➕ Add blank marker").clicked() {
                     let n = settings.markers.len() + 1;
                     settings.markers.push(Marker {
+                        id: crate::settings::new_marker_id(),
                         name: format!("Marker {n}"),
                         lat: 0.0,
                         lon: 0.0,

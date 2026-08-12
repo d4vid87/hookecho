@@ -594,6 +594,12 @@ pub fn default_spotter_range_km() -> f64 {
 /// A named location marker at a geographic point.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Marker {
+    /// Stable identity, independent of the name. Names are the display field and are not unique
+    /// — "Marker 3" comes back after a delete — so anything that remembers a marker between
+    /// frames (alert cooldowns, most of all) keys on this instead. Empty in files written before
+    /// ids existed; [`Settings::load`] fills those in once.
+    #[serde(default)]
+    pub id: String,
     pub name: String,
     pub lat: f64,
     pub lon: f64,
@@ -613,6 +619,19 @@ pub struct Marker {
     /// At most one marker has this set (the marker editor enforces it).
     #[serde(default)]
     pub home: bool,
+}
+
+/// A fresh marker id: 8 hex characters from the system's randomness, which is plenty for a list
+/// a person types by hand.
+pub fn new_marker_id() -> String {
+    let mut b = [0u8; 4];
+    // A duplicate id would only collapse two markers' alert cooldowns; falling back to a
+    // time-based id beats refusing to make the marker.
+    if getrandom::fill(&mut b).is_err() {
+        let t = chrono::Utc::now().timestamp_subsec_nanos();
+        b = t.to_le_bytes();
+    }
+    b.iter().map(|x| format!("{x:02x}")).collect()
 }
 
 /// Default watch radius for a marker, in miles.
@@ -881,6 +900,15 @@ impl Settings {
         if cfg!(target_os = "android") && (loaded.ui_scale - 1.3).abs() < 0.001 {
             loaded.ui_scale = 1.0;
         }
+        // Markers saved before ids existed get one now, and keep it: written straight back so the
+        // Android alert service reads the same identities this process does.
+        let filled = loaded.markers.iter().any(|m| m.id.is_empty());
+        for m in loaded.markers.iter_mut().filter(|m| m.id.is_empty()) {
+            m.id = new_marker_id();
+        }
+        if filled {
+            loaded.save();
+        }
         loaded
     }
 
@@ -987,6 +1015,23 @@ mod tests {
     use super::*;
 
     #[test]
+    fn markers_get_distinct_ids_and_old_files_still_load() {
+        // A settings file from before ids existed.
+        let old: Settings = serde_json::from_str(
+            r#"{"markers":[{"name":"Home","lat":35.3,"lon":-97.3},
+                           {"name":"Home","lat":36.1,"lon":-96.9}]}"#,
+        )
+        .unwrap();
+        assert_eq!(old.markers.len(), 2);
+        assert!(old.markers.iter().all(|m| m.id.is_empty()));
+        // Two places can share a name; ids are what tell them apart.
+        let ids: Vec<String> = (0..64).map(|_| new_marker_id()).collect();
+        assert!(ids.iter().all(|id| id.len() == 8));
+        let unique: std::collections::HashSet<&String> = ids.iter().collect();
+        assert_eq!(unique.len(), ids.len());
+    }
+
+    #[test]
     fn quiet_pending_round_trips_and_defaults_empty() {
         let old: Settings = serde_json::from_str(r#"{"default_site":"KTLX"}"#).unwrap();
         assert!(old.quiet_pending.is_empty());
@@ -1074,6 +1119,7 @@ mod tests {
                 opacity: 1.0,
             }],
             markers: vec![Marker {
+                id: new_marker_id(),
                 name: "Home".to_string(),
                 lat: 35.3,
                 lon: -97.5,
@@ -1244,6 +1290,7 @@ mod tests {
     fn kotlin_alert_service_field_names_survive() {
         let json = serde_json::to_string(&Settings {
             markers: vec![Marker {
+                id: new_marker_id(),
                 name: "Home".to_string(),
                 lat: 35.0,
                 lon: -97.0,
