@@ -1247,11 +1247,6 @@ pub(crate) struct PaletteEntry {
     pub key: Option<String>,
 }
 
-/// GLM flash-extent density grid: cell size in degrees (~5 km), and how far back it counts.
-/// Both fixed — they are legibility choices, not tuning knobs.
-const GLM_FED_CELL_DEG: f64 = 0.05;
-const GLM_FED_WINDOW_MIN: i64 = 15;
-
 /// Refresh cadence (seconds) for a national field layer's product.
 fn field_refresh_secs(layer: crate::render::FieldLayer) -> u64 {
     use crate::render::FieldLayer as FL;
@@ -1289,8 +1284,12 @@ fn field_refresh_secs(layer: crate::render::FieldLayer) -> u64 {
 
 /// The ZDR-column cache: the volume it was computed for, its columns, and the bright band the
 /// same pass found.
+/// A volume key with the detector thresholds folded in, so moving a slider recomputes instead of
+/// handing back the answer to the previous question.
+type TunedKey = ((usize, String, usize), u64);
+
 type ZdrCache = (
-    (usize, String, usize),
+    TunedKey,
     Vec<wxdata::dualpol::ZdrColumnHit>,
     Option<wxdata::dualpol::BrightBand>,
 );
@@ -1678,7 +1677,7 @@ pub struct HookEchoApp {
     )>,
     tds_cache: Option<((usize, String, usize), Vec<wxdata::tds::TdsHit>)>,
     /// Same shape as `tds_cache`, for the hail-spike detector.
-    tbss_cache: Option<((usize, String, usize), Vec<wxdata::dualpol::TbssHit>)>,
+    tbss_cache: Option<(TunedKey, Vec<wxdata::dualpol::TbssHit>)>,
     /// ZDR columns, plus the bright band read off the same volume's CC — both cost a full pass
     /// over every tilt, so they share one cache and are computed together.
     zdr_cache: Option<ZdrCache>,
@@ -4895,6 +4894,18 @@ impl HookEchoApp {
         )
     }
 
+    /// [`Self::volume_key`] plus a fingerprint of the detector thresholds, for the caches whose
+    /// answer changes when the user moves a slider.
+    fn tuned_key(&self, idx: usize) -> TunedKey {
+        use std::hash::{Hash, Hasher};
+        let d = &self.settings.detectors;
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        d.tbss_core_dbz.to_bits().hash(&mut h);
+        d.zdr_min_db.to_bits().hash(&mut h);
+        d.zdr_min_depth_km.to_bits().hash(&mut h);
+        (self.volume_key(idx), h.finish())
+    }
+
     fn compute_nowcast_uncached(&mut self, idx: usize) -> Vec<(f64, f64, egui::Color32)> {
         let Some((dir, kt)) = self.scit_mean_motion() else {
             return Vec::new();
@@ -4944,7 +4955,8 @@ impl HookEchoApp {
     /// Hail spikes (TBSS) for the active pane's lowest tilt, cached per volume like the TDS
     /// detector. Display-only: a spike is context about hail, not a reason to make noise.
     fn compute_tbss(&mut self, idx: usize) -> Vec<wxdata::dualpol::TbssHit> {
-        let key = self.volume_key(idx);
+        let key = self.tuned_key(idx);
+        let core_dbz = self.settings.detectors.tbss_core_dbz;
         if let Some((k, v)) = &self.tbss_cache {
             if *k == key {
                 return v.clone();
@@ -4961,7 +4973,9 @@ impl HookEchoApp {
             .and_then(|v| v.binned(Moment::CorrelationCoefficient, 0, false).ok())
             .cloned();
         let out = match (z, cc) {
-            (Some(z), Some(cc)) => wxdata::dualpol::tbss(&z, &cc, 60.0, 20.0, 0.8, 4.0, 150.0),
+            (Some(z), Some(cc)) => {
+                wxdata::dualpol::tbss(&z, &cc, core_dbz, 20.0, 0.8, 4.0, 150.0)
+            }
             _ => Vec::new(),
         };
         self.tbss_cache = Some((key, out.clone()));
@@ -4978,7 +4992,11 @@ impl HookEchoApp {
         idx: usize,
         ctx: &egui::Context,
     ) -> Vec<wxdata::dualpol::ZdrColumnHit> {
-        let key = self.volume_key(idx);
+        let key = self.tuned_key(idx);
+        let (min_zdr, min_depth) = (
+            self.settings.detectors.zdr_min_db,
+            self.settings.detectors.zdr_min_depth_km,
+        );
         if let Some((k, v, _)) = &self.zdr_cache {
             if *k == key {
                 return v.clone();
@@ -5003,7 +5021,7 @@ impl HookEchoApp {
         let zdr = vol.moment_tilts(Moment::DifferentialReflectivity);
         let z = vol.moment_tilts(Moment::Reflectivity);
         let cc = vol.moment_tilts(Moment::CorrelationCoefficient);
-        let hits = wxdata::dualpol::zdr_columns(&zdr, &z, h0_km, 1.0, 1.0, 40.0, 100.0);
+        let hits = wxdata::dualpol::zdr_columns(&zdr, &z, h0_km, min_zdr, min_depth, 40.0, 100.0);
         // The mid tilts are the ones that cut the melting layer at a range where the beam is
         // still narrow enough to mean something.
         let mid = |v: &[wxdata::level2::BinnedSweep]| -> Vec<wxdata::level2::BinnedSweep> {
@@ -5923,6 +5941,7 @@ impl HookEchoApp {
                                     &mut self.settings.glm_goes_west,
                                     self.show_spotters,
                                     &mut self.settings.spotter_range_km,
+                                    &mut self.settings.detectors,
                                     Some(mosaic.as_str()),
                                     &mut opts,
                                 );
@@ -14666,8 +14685,8 @@ impl eframe::App for HookEchoApp {
             let field = self.glm.lock().ok().and_then(|f| {
                 wxdata::glm::flash_density(
                     f.flashes(),
-                    GLM_FED_CELL_DEG,
-                    chrono::Duration::minutes(GLM_FED_WINDOW_MIN),
+                    self.settings.detectors.glm_fed_cell_deg,
+                    chrono::Duration::minutes(self.settings.detectors.glm_fed_window_min),
                     Utc::now(),
                 )
             });

@@ -410,6 +410,40 @@ pub struct Settings {
     /// and a renamed action just falls back to its default place.
     #[serde(default)]
     pub layer_order: Vec<String>,
+    /// Thresholds the signature detectors fire at (see [`DetectorTuning`]).
+    #[serde(default)]
+    pub detectors: DetectorTuning,
+}
+
+/// Where the dual-pol signature detectors and the GLM flash-extent grid draw their lines.
+///
+/// Every one of these was a constant, which is fine until you point the app at a radar whose
+/// calibration or season disagrees: a ZDR floor that is right in May over Oklahoma is noise in
+/// December over Buffalo. The defaults are the values the detectors shipped with.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DetectorTuning {
+    /// Reflectivity (dBZ) a core must reach before a hail spike behind it is looked for.
+    pub tbss_core_dbz: f32,
+    /// Differential reflectivity (dB) a gate must reach to count toward a ZDR column.
+    pub zdr_min_db: f32,
+    /// How far a column must extend above the freezing level (km) to be reported.
+    pub zdr_min_depth_km: f64,
+    /// GLM flash-extent density grid cell size, in degrees (~5 km at the default).
+    pub glm_fed_cell_deg: f64,
+    /// How far back the flash-extent density grid counts, in minutes.
+    pub glm_fed_window_min: i64,
+}
+
+impl Default for DetectorTuning {
+    fn default() -> Self {
+        Self {
+            tbss_core_dbz: 60.0,
+            zdr_min_db: 1.0,
+            zdr_min_depth_km: 1.0,
+            glm_fed_cell_deg: 0.05,
+            glm_fed_window_min: 15,
+        }
+    }
 }
 
 impl Settings {
@@ -661,6 +695,7 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             default_site: "KTLX".to_string(),
+            detectors: DetectorTuning::default(),
             share_card: true,
             hide_sidebar: false,
             hide_toolbar: false,
@@ -937,6 +972,19 @@ mod tests {
     use super::*;
 
     #[test]
+    fn detector_tuning_survives_a_settings_file_that_predates_it() {
+        // Settings written before the knobs existed must load with the shipped thresholds.
+        let old: Settings = serde_json::from_str(r#"{"default_site":"KTLX"}"#).unwrap();
+        assert_eq!(old.detectors, DetectorTuning::default());
+        assert_eq!(old.detectors.tbss_core_dbz, 60.0);
+
+        let mut s = Settings::default();
+        s.detectors.zdr_min_db = 2.5;
+        let back: Settings = serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
+        assert_eq!(back.detectors.zdr_min_db, 2.5);
+    }
+
+    #[test]
     fn field_opacity_roundtrips_and_defaults() {
         let mut s = Settings::default();
         assert!(s.field_opacity.is_empty(), "no entry = fully opaque");
@@ -965,6 +1013,7 @@ mod tests {
     #[test]
     fn roundtrips() {
         let s = Settings {
+            detectors: DetectorTuning::default(),
             workspaces: Vec::new(),
             seeded_workspaces: false,
             smooth_radar: false,

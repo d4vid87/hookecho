@@ -78,6 +78,8 @@ pub(crate) fn show(
     // Spotter Network dots: on-state, and how far from the radar to draw them (0 = whole feed).
     show_spotters: bool,
     spotter_range_km: &mut f64,
+    // Where the signature detectors draw their lines; only rendered for the ones that are on.
+    detectors: &mut crate::settings::DetectorTuning,
     // One line about the live composite: contributing sites and the age of its oldest scan, or
     // why there isn't one. Radars scan on their own schedules, so a composite is always a little
     // ragged in time and the honest thing is to show by how much.
@@ -442,6 +444,52 @@ pub(crate) fn show(
                 .on_hover_text("Reflectivity that counts as the storm top (18.5 = NWS EET)")
                 .changed();
         });
+    }
+
+    // Detector thresholds. Each block only appears with its own detector on, and the defaults are
+    // what the detectors shipped with — the reset button is there because a slider you can't get
+    // back from is worse than no slider.
+    if filters.show_tbss {
+        header(ui, "Hail spike (TBSS)");
+        ui.add(
+            egui::Slider::new(&mut detectors.tbss_core_dbz, 50.0..=70.0)
+                .text("Core")
+                .suffix(" dBZ"),
+        )
+        .on_hover_text("How strong the core must be before a spike behind it is looked for");
+    }
+    if filters.show_zdr_columns {
+        header(ui, "ZDR columns");
+        ui.add(
+            egui::Slider::new(&mut detectors.zdr_min_db, 0.5..=3.0)
+                .text("Minimum ZDR")
+                .suffix(" dB"),
+        );
+        ui.add(
+            egui::Slider::new(&mut detectors.zdr_min_depth_km, 0.5..=3.0)
+                .text("Depth above freezing")
+                .suffix(" km"),
+        );
+    }
+    if show_glm {
+        header(ui, "Flash-extent density");
+        ui.add(
+            egui::Slider::new(&mut detectors.glm_fed_cell_deg, 0.02..=0.2)
+                .text("Cell size")
+                .suffix("°"),
+        )
+        .on_hover_text("Grid resolution: 0.05° is about 5 km");
+        ui.add(
+            egui::Slider::new(&mut detectors.glm_fed_window_min, 5..=30)
+                .text("Window")
+                .suffix(" min"),
+        );
+        ui.weak("Takes effect on the next flash-density refresh.");
+    }
+    if (filters.show_tbss || filters.show_zdr_columns || show_glm)
+        && ui.button("Reset detector thresholds").clicked()
+    {
+        *detectors = crate::settings::DetectorTuning::default();
     }
 
     if [FL::Vil, FL::EchoTops, FL::Hca]

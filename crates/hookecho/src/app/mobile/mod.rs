@@ -570,6 +570,7 @@ impl super::HookEchoApp {
                     &mut self.settings.glm_goes_west,
                     self.show_spotters,
                     &mut self.settings.spotter_range_km,
+                    &mut self.settings.detectors,
                     Some(mosaic.as_str()),
                     actions,
                 );
