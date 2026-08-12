@@ -2178,6 +2178,14 @@ pub struct HookEchoApp {
     /// Volume the rain check last ran against, so it runs per scan (what the detector's
     /// persistence and cooldown are written for) instead of per frame.
     rain_key: Option<(usize, String, usize)>,
+    /// When the flash-extent grid was last built. Its own clock, because a rule can want the
+    /// grid while the layer that used to own the cadence is off.
+    glm_fed_last: Option<Instant>,
+    /// Same per-volume guard for the user's scan rules: evaluated once per volume, not per frame.
+    rules_key: Option<(usize, String, usize)>,
+    /// When each rule last fired, keyed `"{rule id}:{place}"` — a rule watching two places gets
+    /// to speak about both.
+    rules_fired: std::collections::HashMap<String, Instant>,
     rain_eta: Vec<(String, f32)>,
     /// Minute-by-minute rain over the forecast point, and the (volume, point, motion) key it was
     /// computed for — the walk samples the whole sweep, so it runs once per volume, not per frame.
@@ -2783,6 +2791,9 @@ impl HookEchoApp {
             minute_key: None,
             rain_detector: Default::default(),
             rain_key: None,
+            glm_fed_last: None,
+            rules_key: None,
+            rules_fired: std::collections::HashMap::new(),
             rain_eta: Vec::new(),
             show_fronts: false,
             fronts: None,
@@ -3659,29 +3670,37 @@ impl HookEchoApp {
                 // A watched location always alerts + pushes: inside the polygon, or within that
                 // marker's radius of it. Home first, then the closest — a warning that clips two
                 // saved places should name the one you sleep in.
-                let hit = self
+                // Owned, not borrowed: the rule pass below needs `&mut self` while this is
+                // still in hand.
+                let hit: Option<(String, f64)> = self
                     .settings
                     .markers
                     .iter()
                     .filter_map(|m| {
                         let km = f.distance_km(m.lon, m.lat);
-                        (km <= m.alert_radius_mi * crate::geo::KM_PER_MILE).then_some((m, km))
+                        (km <= m.alert_radius_mi * crate::geo::KM_PER_MILE)
+                            .then(|| (m.name.clone(), m.home, km))
                     })
-                    .min_by(|(a, ka), (b, kb)| {
-                        b.home
-                            .cmp(&a.home)
+                    .min_by(|(_, ha, ka), (_, hb, kb)| {
+                        hb.cmp(ha)
                             .then(ka.partial_cmp(kb).unwrap_or(std::cmp::Ordering::Equal))
-                    });
+                    })
+                    .map(|(name, _, km)| (name, km));
                 // A drawn watch zone the warning polygon touches. Independent of the markers: a
                 // zone is an area you care about, not a point with a radius around it.
-                let zone = self.settings.alert_polygons.iter().find(|z| {
-                    f.rings
-                        .first()
-                        .is_some_and(|outer| wxdata::overlay::rings_intersect(outer, &z.ring))
-                });
-                if let (Some(z), true) = (zone, notify_ok) {
+                let zone: Option<String> = self
+                    .settings
+                    .alert_polygons
+                    .iter()
+                    .find(|z| {
+                        f.rings
+                            .first()
+                            .is_some_and(|outer| wxdata::overlay::rings_intersect(outer, &z.ring))
+                    })
+                    .map(|z| z.name.clone());
+                if let (Some(z), true) = (zone.as_deref(), notify_ok) {
                     self.notify_alert(
-                        &format!("⚠ {} — {}", a.event, z.name),
+                        &format!("⚠ {} — {z}", a.event),
                         if a.headline.is_empty() {
                             &a.area
                         } else {
@@ -3690,13 +3709,51 @@ impl HookEchoApp {
                         urgent,
                     );
                 }
-                let zone_name = zone.map(|z| z.name.clone());
+                // User rules that watch warnings. The id-dedupe above is their cooldown: a
+                // warning is announced once, however long it stands.
+                for rule in self.settings.alert_rules.clone() {
+                    if !rule.enabled || !crate::rules::warning_matches(&rule, &a.event) {
+                        continue;
+                    }
+                    // Anywhere: the warning polygon is somewhere on this radar. A place: the
+                    // polygon has to reach it, using the same distance the built-in alert uses.
+                    let reaches = match &rule.place {
+                        crate::settings::RulePlace::Anywhere => true,
+                        crate::settings::RulePlace::Marker { id } => self
+                            .settings
+                            .markers
+                            .iter()
+                            .find(|m| &m.id == id)
+                            .is_some_and(|m| {
+                                f.distance_km(m.lon, m.lat)
+                                    <= m.alert_radius_mi * crate::geo::KM_PER_MILE
+                            }),
+                        crate::settings::RulePlace::Zone { name } => self
+                            .settings
+                            .alert_polygons
+                            .iter()
+                            .find(|z| &z.name == name)
+                            .is_some_and(|z| {
+                                f.rings.first().is_some_and(|outer| {
+                                    wxdata::overlay::rings_intersect(outer, &z.ring)
+                                })
+                            }),
+                    };
+                    if reaches {
+                        let place = crate::rules::place_label(&rule.place, &self.settings);
+                        let title = format!("\u{25c9} {}", rule.title());
+                        let body = format!("{} at {place}", a.event);
+                        self.notify_alert(&title, &body, rule.urgent);
+                        self.banner(title, body);
+                    }
+                }
+                let zone_name = zone;
                 let (label, area) = match hit {
-                    Some((m, km)) => {
+                    Some((name, km)) => {
                         // Watched location covered → push to the phone (opt-in ntfy topic).
                         if notify_ok {
                             self.notify_alert(
-                                &format!("⚠ {} — {}", a.event, m.name),
+                                &format!("⚠ {} — {}", a.event, name),
                                 if a.headline.is_empty() {
                                     &a.area
                                 } else {
@@ -3706,9 +3763,9 @@ impl HookEchoApp {
                             );
                         }
                         let where_ = if km <= 0.05 {
-                            format!("covers {}", m.name)
+                            format!("covers {name}")
                         } else {
-                            format!("{:.0} mi from {}", km / crate::geo::KM_PER_MILE, m.name)
+                            format!("{:.0} mi from {name}", km / crate::geo::KM_PER_MILE)
                         };
                         (format!("⚠ {}", a.event), where_)
                     }
@@ -3773,6 +3830,185 @@ impl HookEchoApp {
                 }
             }
         }
+    }
+
+    /// Run the user's scan rules over one volume's detections.
+    ///
+    /// Once per volume, not per frame: the same reason `check_rain_arrival` keys on the volume.
+    /// Called with every scan detector's hits already computed — including detectors whose layer
+    /// is off, which is what makes a rule independent of what happens to be drawn.
+    fn evaluate_scan_rules(
+        &mut self,
+        idx: usize,
+        tds: &[wxdata::tds::TdsHit],
+        tbss: &[wxdata::dualpol::TbssHit],
+        zdr: &[wxdata::dualpol::ZdrColumnHit],
+        couplets: &[wxdata::rotation::CoupletHit],
+    ) {
+        use crate::rules::Detection;
+        use crate::settings::RuleTrigger as T;
+        if self.settings.alert_rules.iter().all(|r| !r.enabled) {
+            return;
+        }
+        let key = self.volume_key(idx);
+        if self.rules_key.as_ref() == Some(&key) {
+            return;
+        }
+        self.rules_key = Some(key);
+        // Strengths in the units the rule is written in: knots for rotation, and nothing for the
+        // signatures that are their own answer.
+        let hits = |t: &T| -> Vec<Detection> {
+            match t {
+                T::Tds => tds.iter().map(|h| Detection::at(h.lon, h.lat)).collect(),
+                T::Tbss => tbss.iter().map(|h| Detection::at(h.lon, h.lat)).collect(),
+                T::ZdrColumn => zdr.iter().map(|h| Detection::at(h.lon, h.lat)).collect(),
+                T::Rotation => couplets
+                    .iter()
+                    .map(|h| Detection::with_strength(h.lon, h.lat, h.vrot_ms as f64 * 1.943_844))
+                    .collect(),
+                _ => Vec::new(),
+            }
+        };
+        for rule in self.settings.alert_rules.clone() {
+            if !rule.enabled || !rule.trigger.is_scan() {
+                continue;
+            }
+            // The closest qualifying detection is the one worth naming.
+            let hit = hits(&rule.trigger)
+                .into_iter()
+                .filter(|h| crate::rules::matches(&rule, h, &self.settings))
+                .min_by(|a, b| {
+                    let d = |h: &Detection| self.distance_from_radar_km(idx, h.lon, h.lat);
+                    d(a).total_cmp(&d(b))
+                });
+            let Some(hit) = hit else { continue };
+            self.fire_rule(&rule, &hit);
+        }
+    }
+
+    /// Run the lightning-density rules over a freshly built flash-extent grid.
+    ///
+    /// The grid's own cell is the detection: a cell whose flash count clears the rule's threshold
+    /// is somewhere worth knowing about. Cooldowns are per rule and place, as everywhere else.
+    fn evaluate_grid_rules(&mut self, field: &wxdata::mrms::MrmsField) {
+        use crate::rules::Detection;
+        let rules: Vec<crate::settings::AlertRule> = self
+            .settings
+            .alert_rules
+            .iter()
+            .filter(|r| r.enabled && r.trigger == crate::settings::RuleTrigger::GlmFed)
+            .cloned()
+            .collect();
+        if rules.is_empty() || field.nx == 0 || field.ny == 0 {
+            return;
+        }
+        let (dx, dy) = (
+            (field.lon_east - field.lon_west) / field.nx as f64,
+            (field.lat_north - field.lat_south) / field.ny as f64,
+        );
+        for rule in rules {
+            // The busiest qualifying cell — a rule about lightning wants the worst of it.
+            let best = field
+                .values
+                .iter()
+                .enumerate()
+                .filter(|(_, v)| v.is_finite() && **v > 0.0)
+                .map(|(i, v)| {
+                    let (x, y) = (i % field.nx, i / field.nx);
+                    Detection::with_strength(
+                        field.lon_west + (x as f64 + 0.5) * dx,
+                        field.lat_north - (y as f64 + 0.5) * dy,
+                        *v as f64,
+                    )
+                })
+                .filter(|h| crate::rules::matches(&rule, h, &self.settings))
+                .max_by(|a, b| {
+                    a.strength
+                        .unwrap_or(0.0)
+                        .total_cmp(&b.strength.unwrap_or(0.0))
+                });
+            if let Some(hit) = best {
+                self.fire_rule(&rule, &hit);
+            }
+        }
+    }
+
+    /// Run the ProbSevere rules over the freshly fetched storm probabilities.
+    fn evaluate_probsevere_rules(&mut self, feats: &[GeoFeature]) {
+        use crate::rules::Detection;
+        let rules: Vec<crate::settings::AlertRule> = self
+            .settings
+            .alert_rules
+            .iter()
+            .filter(|r| r.enabled && r.trigger == crate::settings::RuleTrigger::ProbSevere)
+            .cloned()
+            .collect();
+        if rules.is_empty() {
+            return;
+        }
+        // One detection per storm: its centroid, carrying the Severe percentage.
+        let storms: Vec<Detection> = feats
+            .iter()
+            .filter_map(|f| {
+                let pct = crate::rules::probsevere_percent(&f.detail)?;
+                let ring = f.rings.first()?;
+                let n = ring.len().max(1) as f64;
+                let (lon, lat) = ring.iter().fold((0.0, 0.0), |(x, y), p| (x + p[0], y + p[1]));
+                Some(Detection::with_strength(lon / n, lat / n, pct))
+            })
+            .collect();
+        for rule in rules {
+            let worst = storms
+                .iter()
+                .filter(|h| crate::rules::matches(&rule, h, &self.settings))
+                .max_by(|a, b| {
+                    a.strength
+                        .unwrap_or(0.0)
+                        .total_cmp(&b.strength.unwrap_or(0.0))
+                })
+                .copied();
+            if let Some(hit) = worst {
+                self.fire_rule(&rule, &hit);
+            }
+        }
+    }
+
+    /// Kilometres from the pane's radar to a point — how "closest detection" is judged.
+    fn distance_from_radar_km(&self, idx: usize, lon: f64, lat: f64) -> f64 {
+        let Some(site) = self.views[idx]
+            .site
+            .as_deref()
+            .and_then(wxdata::sites::site_by_id)
+        else {
+            return 0.0;
+        };
+        crate::geo::great_circle([site.longitude as f64, site.latitude as f64], [lon, lat]).0
+    }
+
+    /// Deliver a rule's alert, unless its cooldown for this place is still running.
+    ///
+    /// Keyed by rule *and* place, so a rule watching two zones can speak about each of them.
+    fn fire_rule(&mut self, rule: &crate::settings::AlertRule, hit: &crate::rules::Detection) {
+        let place = crate::rules::place_label(&rule.place, &self.settings);
+        let key = format!("{}:{place}", rule.id);
+        let cooldown = std::time::Duration::from_secs(u64::from(rule.cooldown_min) * 60);
+        if self
+            .rules_fired
+            .get(&key)
+            .is_some_and(|t| t.elapsed() < cooldown)
+        {
+            return;
+        }
+        self.rules_fired.insert(key, Instant::now());
+        let title = format!("\u{25c9} {}", rule.title());
+        let body = match hit.strength {
+            Some(v) => format!("{} \u{2014} {v:.0} at {place}", rule.trigger.label()),
+            None => format!("{} at {place}", rule.trigger.label()),
+        };
+        // ponytail: no snapshot attachment (see `snapshot_push`) and no per-rule sound; the
+        // delivery fan-out in `notify_alert` is the place to add either.
+        self.notify_alert(&title, &body, rule.urgent);
+        self.banner(title, body);
     }
 
     /// Chime + push when cloud-to-ground lightning density exceeds a small threshold within ~15 km
@@ -7873,7 +8109,10 @@ impl HookEchoApp {
                         self.freezing = Some((site, h0, hm20));
                     }
                 }
-                OverlayMsg::ProbSevere(f) => self.probsevere = f,
+                OverlayMsg::ProbSevere(f) => {
+                    self.evaluate_probsevere_rules(&f);
+                    self.probsevere = f;
+                }
                 OverlayMsg::Hrrr(fc) => {
                     use crate::render::FieldLayer;
                     let upload = self.field_upload(FieldLayer::Hrrr, &fc.field);
@@ -10727,29 +10966,50 @@ impl HookEchoApp {
         } else {
             Vec::new()
         };
-        let tds_hits = if self.filters.show_tds && idx == self.active {
+        // A rule that watches a signature has to drive its detector even with the layer off —
+        // otherwise arming "hail spike near home" and then hiding the layer silently disarms it.
+        // The hits are computed here either way; only the drawing below checks the layer flag.
+        let armed = |t: &crate::settings::RuleTrigger| {
+            self.settings
+                .alert_rules
+                .iter()
+                .any(|r| r.enabled && &r.trigger == t)
+        };
+        let want_tds = self.filters.show_tds || armed(&crate::settings::RuleTrigger::Tds);
+        let want_tbss = self.filters.show_tbss || armed(&crate::settings::RuleTrigger::Tbss);
+        let want_zdr =
+            self.filters.show_zdr_columns || armed(&crate::settings::RuleTrigger::ZdrColumn);
+        let want_couplets =
+            self.filters.show_couplets || armed(&crate::settings::RuleTrigger::Rotation);
+        let tds_hits = if want_tds && idx == self.active {
             self.compute_tds(idx)
         } else {
             Vec::new()
         };
-        let tbss_hits = if self.filters.show_tbss && idx == self.active {
+        let tbss_hits = if want_tbss && idx == self.active {
             self.compute_tbss(idx)
         } else {
             Vec::new()
         };
-        let zdr_hits = if self.filters.show_zdr_columns && idx == self.active {
+        let zdr_hits = if want_zdr && idx == self.active {
             self.compute_zdr_columns(idx, ctx)
         } else {
             Vec::new()
         };
-        let couplets = if self.filters.show_couplets && idx == self.active {
+        let couplets = if want_couplets && idx == self.active {
             self.compute_couplets(idx)
         } else {
             Vec::new()
         };
         if idx == self.active {
             self.check_rain_arrival();
+            self.evaluate_scan_rules(idx, &tds_hits, &tbss_hits, &zdr_hits, &couplets);
         }
+        // Hidden layers computed only for a rule must not also be drawn.
+        let tds_hits = if self.filters.show_tds { tds_hits } else { Vec::new() };
+        let tbss_hits = if self.filters.show_tbss { tbss_hits } else { Vec::new() };
+        let zdr_hits = if self.filters.show_zdr_columns { zdr_hits } else { Vec::new() };
+        let couplets = if self.filters.show_couplets { couplets } else { Vec::new() };
 
         // --- Painter overlays (clipped to this pane) ---
         let painter = ui.painter_at(prect);
@@ -14735,7 +14995,14 @@ impl eframe::App for HookEchoApp {
         // GOES lightning: granules land every 20 s, so poll about that often. One in flight at a
         // time — a slow fetch must not queue up behind itself.
         let glm_fed_on = self.fields.get(&FL::GlmFed).is_some_and(|s| s.show);
-        if (self.show_glm || glm_fed_on)
+        // A lightning-density rule needs the flashes polled and the grid built even with the
+        // layer off, exactly like the scan signatures.
+        let glm_rule_armed = self
+            .settings
+            .alert_rules
+            .iter()
+            .any(|r| r.enabled && r.trigger == crate::settings::RuleTrigger::GlmFed);
+        if (self.show_glm || glm_fed_on || glm_rule_armed)
             && self
                 .glm_last_poll
                 .is_none_or(|t| t.elapsed().as_secs() >= 20)
@@ -14770,12 +15037,12 @@ impl eframe::App for HookEchoApp {
         // GLM flash-extent density: the same flashes the dots come from, gridded. Cheap enough
         // (one pass over a few thousand points) to do inline on the field-layer cadence rather
         // than spawning for it.
-        if glm_fed_on
-            && self.fields.get(&FL::GlmFed).is_some_and(|s| {
-                s.last_fetch
-                    .is_none_or(|t| t.elapsed().as_secs() >= field_refresh_secs(FL::GlmFed))
-            })
+        if (glm_fed_on || glm_rule_armed)
+            && self
+                .glm_fed_last
+                .is_none_or(|t| t.elapsed().as_secs() >= field_refresh_secs(FL::GlmFed))
         {
+            self.glm_fed_last = Some(Instant::now());
             if let Some(s) = self.fields.get_mut(&FL::GlmFed) {
                 s.last_fetch = Some(Instant::now());
             }
@@ -14787,7 +15054,10 @@ impl eframe::App for HookEchoApp {
                     Utc::now(),
                 )
             });
-            if let Some(field) = field {
+            if let Some(field) = &field {
+                self.evaluate_grid_rules(field);
+            }
+            if let (Some(field), true) = (field, glm_fed_on) {
                 let cap = self.field_texture_cap();
                 let _ = self
                     .overlay_tx

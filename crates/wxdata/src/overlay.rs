@@ -233,7 +233,7 @@ fn segments_cross(p1: [f64; 2], p2: [f64; 2], q1: [f64; 2], q2: [f64; 2]) -> boo
 }
 
 /// Even-odd point-in-polygon test on a `[lon, lat]` ring.
-fn point_in_ring(ring: &[[f64; 2]], lon: f64, lat: f64) -> bool {
+pub fn point_in_ring(ring: &[[f64; 2]], lon: f64, lat: f64) -> bool {
     let mut inside = false;
     let n = ring.len();
     if n < 3 {

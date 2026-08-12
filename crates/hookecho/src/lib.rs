@@ -49,6 +49,8 @@ pub mod render;
 pub mod render3d;
 /// Where background work goes: a tokio runtime natively, the page's event loop on the web.
 pub mod rt;
+/// User alert rules: which detections, where, are worth telling the user about.
+pub mod rules;
 /// The `--serve` HTTP endpoint (desktop only — Android has no headless mode to render from).
 #[cfg(not(any(target_os = "android", target_arch = "wasm32")))]
 pub mod serve;
