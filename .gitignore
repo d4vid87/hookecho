@@ -16,3 +16,6 @@ packaging/appimagetool-*.AppImage
 /android/app/build/
 /android/local.properties
 announce-drafts.md
+
+# Netlify CLI state (site link, local edge-function build).
+/.netlify/
