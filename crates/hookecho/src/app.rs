@@ -1126,6 +1126,8 @@ pub(crate) enum AppWindow {
     StormTable,
     /// What the signatures on the map are called.
     Glossary,
+    /// The user's own alert rules.
+    AlertRules,
     /// Warning verification lab (IEM Cow): how the office's warnings scored on an event day.
     Verify,
     Climatology,
@@ -1817,6 +1819,7 @@ pub struct HookEchoApp {
     video_player: Option<ui::video_window::VideoPlayer>,
     cells_window: ui::cells_window::CellsWindow,
     glossary: ui::glossary::Glossary,
+    rules_window: ui::rules_window::RulesWindow,
     /// Warning verification lab and its in-flight query.
     verify_window: ui::verify_window::VerifyWindow,
     verify_rx: Option<std::sync::mpsc::Receiver<Result<wxdata::verify::Verification, String>>>,
@@ -2582,6 +2585,7 @@ impl HookEchoApp {
             video_player: None,
             cells_window: Default::default(),
             glossary: Default::default(),
+            rules_window: Default::default(),
             verify_window: Default::default(),
             verify_rx: None,
             xsection_moment: Moment::Reflectivity,
@@ -7702,6 +7706,12 @@ impl HookEchoApp {
                 true,
             ),
             (
+                W::AlertRules,
+                "Alert rules\u{2026}",
+                "Tell the app what is worth interrupting you for",
+                false,
+            ),
+            (
                 W::Glossary,
                 "Glossary\u{2026}",
                 "What a TDS, a hail spike or a ZDR column actually is",
@@ -7952,6 +7962,7 @@ impl HookEchoApp {
                 }
                 W::StormTable => self.cells_window.toggle(),
                 W::Glossary => self.glossary.toggle(),
+                W::AlertRules => self.rules_window.toggle(),
                 W::Verify => self.open_verify(),
                 W::Volume3d => self.build_volume3d(),
                 W::Climatology => {
@@ -15830,6 +15841,9 @@ impl eframe::App for HookEchoApp {
             _ => std::collections::HashSet::new(),
         };
         ui::glossary::show(&mut self.glossary, ctx);
+        if ui::rules_window::show(&mut self.rules_window, ctx, &mut self.settings) {
+            self.settings.save();
+        }
         if let Some(id) = ui::cells_window::show(
             &mut self.cells_window,
             ctx,
