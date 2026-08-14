@@ -19,6 +19,23 @@
     <script type="module">
       import init, { start } from "./dist/hookecho.js";
       const boot = document.getElementById("boot");
+
+      // A dead map is indistinguishable from a slow one on a blank canvas, and the two ways it
+      // dies after a good start are a lost GPU context (driver reset, tab starved of VRAM, laptop
+      // waking) and a Rust panic unwinding out of the animation frame. Both leave the last frame
+      // painted forever otherwise. Say so, in the same box the loader used.
+      const dead = (msg) => {
+        const el = boot.isConnected ? boot : document.body.appendChild(boot);
+        el.textContent = msg;
+      };
+      document.getElementById("hookecho").addEventListener("webglcontextlost", (e) => {
+        e.preventDefault();
+        dead("Graphics context lost — reload the page.");
+      });
+      addEventListener("error", (e) => {
+        if (String(e.message || "").includes("unreachable")) dead("Hook Echo-WX stopped: " + e.message);
+      });
+
       try {
         await init();
         await start("hookecho");
