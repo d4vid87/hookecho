@@ -2557,7 +2557,10 @@ impl HookEchoApp {
             site_dialog: None,
             wizard: {
                 let mut w = ui::wizard::Wizard::default();
-                if !settings_setup_done {
+                // Never in an embed: the host page already chose the site, and its storage is
+                // partitioned, so "first run" would be every run — a setup dialog over someone
+                // else's dashboard panel, forever.
+                if !settings_setup_done && !is_embed() {
                     w.start();
                 }
                 w
@@ -3051,6 +3054,10 @@ impl HookEchoApp {
         };
         if let Some(o) = v.as_object_mut() {
             o.insert("hookecho".into(), serde_json::json!(1));
+            // The product goes out as its share-link code ("REF"), not the serde variant name:
+            // the host hands this straight back to us in a `#goto`, and `Moment::from_code` only
+            // knows the codes. Round-tripping the variant name would silently drop the product.
+            o.insert("moment".into(), serde_json::json!(snap.moment.short_name()));
         }
         if parent
             .post_message(&wasm_bindgen::JsValue::from_str(&v.to_string()), "*")
