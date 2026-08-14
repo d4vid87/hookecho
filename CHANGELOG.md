@@ -6,6 +6,21 @@ so **write the section before pushing the tag**, or the release job fails.
 
 The rolling `latest` release tracks `main` and is not listed here.
 
+## 0.10.0 - 2026-08-14
+
+- The browser build can be embedded in another page's dashboard: `?embed` hides
+  all chrome and holds the map at one frame a minute until it is touched, so a
+  radar living in someone else's iframe stops costing them a CPU core.
+- An embedded map hands its view (site, product, tilt, basemap, camera) to the
+  page hosting it once a second, and takes one back through the share link's new
+  `bm:<basemap>` and `srv` fields. Browsers partition an iframe's storage, so the
+  host is the only place an embedded view can persist — this is what stops
+  WeatherDesk's radar resetting on every launch.
+- A lost graphics context or a panic after startup now says so instead of leaving
+  the last frame on screen forever.
+- `cargo run -p wxdata --example sites_json` dumps the radar site registry for
+  embedders that want a site picker without the crate.
+
 ## 0.9.0 - 2026-08-11
 
 - Three dual-pol signatures the app never computed: three-body scatter spikes

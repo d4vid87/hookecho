@@ -1501,6 +1501,20 @@ fn windy_url(overlay: &str, lon: f64, lat: f64, zoom: f64) -> String {
     format!("https://www.windy.com/?{overlay},{lat:.3},{lon:.3},{z}")
 }
 
+/// `?embed` in the query string: this build is a chromeless pane inside another page's iframe.
+/// Read once at startup — nobody flips it at runtime.
+#[cfg(target_arch = "wasm32")]
+fn is_embed() -> bool {
+    web_sys::window()
+        .and_then(|w| w.location().search().ok())
+        .is_some_and(|s| s.trim_start_matches('?').split('&').any(|p| p == "embed"))
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn is_embed() -> bool {
+    false
+}
+
 /// URL scheme for a shared view. One parser serves all three ways a view arrives: the
 /// `HOOKECHO_GOTO` env var, the `goto.txt` the Android notification tap writes (which uses the
 /// site-less `,lon,lat,zoom` form), and a tapped `hookecho://goto/…` link.
@@ -1516,11 +1530,14 @@ struct Goto {
     time: Option<DateTime<Utc>>,
     moment: Option<Moment>,
     tilt: Option<usize>,
+    basemap: Option<String>,
+    srv: bool,
 }
 
 /// Parse `[hookecho://goto/]SITE[,lon,lat,zoom][,extra…]`, where each extra is an RFC3339 time, a
-/// moment code (`VEL`) or a tilt index — sniffed by shape, so their order does not matter. A bare
-/// `SITE` flies to the site itself; the site may be empty when lon/lat are given.
+/// moment code (`VEL`), a tilt index, a basemap (`bm:dark`) or the literal `srv` — sniffed by
+/// shape, so their order does not matter. A bare `SITE` flies to the site itself; the site may be
+/// empty when lon/lat are given.
 fn parse_goto(v: &str) -> Option<Goto> {
     let v = v.trim().strip_prefix(GOTO_SCHEME).unwrap_or(v.trim());
     // Chat clients and mail readers hand the link back percent-encoded, commas and the time's
@@ -1540,6 +1557,8 @@ fn parse_goto(v: &str) -> Option<Goto> {
             time: None,
             moment: None,
             tilt: None,
+            basemap: None,
+            srv: false,
         }
     } else {
         let (Some(site), Some(Ok(lon)), Some(Ok(lat)), Some(Ok(zoom))) = (
@@ -1558,6 +1577,8 @@ fn parse_goto(v: &str) -> Option<Goto> {
             time: None,
             moment: None,
             tilt: None,
+            basemap: None,
+            srv: false,
         }
     };
     for s in p.iter().skip(4).filter(|s| !s.is_empty()) {
@@ -1567,6 +1588,10 @@ fn parse_goto(v: &str) -> Option<Goto> {
             g.moment = Some(m);
         } else if let Ok(i) = s.parse::<usize>() {
             g.tilt = Some(i);
+        } else if let Some(slug) = s.strip_prefix("bm:") {
+            g.basemap = Some(slug.to_string());
+        } else if s.eq_ignore_ascii_case("srv") {
+            g.srv = true;
         } else {
             log::warn!("goto: ignoring unrecognized field {s:?}");
         }
@@ -2237,6 +2262,15 @@ pub struct HookEchoApp {
     hodo_last_fetch: Option<Instant>,
     /// Streamer/OBS mode: hide all chrome (drawer/pills/docks), leaving only the map.
     obs_mode: bool,
+    /// `?embed` in the browser build: chromeless map inside someone else's iframe (WeatherDesk).
+    /// Hides chrome like OBS mode, and idles at one frame a minute until the visitor touches it —
+    /// an embedded radar repainting at 10 fps costs the host page a whole core.
+    embed: bool,
+    /// Set by the first interaction with an embedded map: from then on it repaints normally.
+    embed_live: bool,
+    /// Last pane state posted to the parent frame, so only real changes cross the boundary.
+    #[cfg(target_arch = "wasm32")]
+    last_posted: Option<crate::workspace::PaneSnap>,
     /// Auto-tour: cycle the camera through active-warning centroids while in OBS mode.
     obs_tour: bool,
     obs_tour_last: Option<Instant>,
@@ -2836,6 +2870,10 @@ impl HookEchoApp {
             hodo_site: None,
             hodo_last_fetch: None,
             obs_mode: false,
+            embed: is_embed(),
+            embed_live: false,
+            #[cfg(target_arch = "wasm32")]
+            last_posted: None,
             obs_tour: false,
             obs_tour_last: None,
             obs_tour_idx: 0,
@@ -2936,6 +2974,12 @@ impl HookEchoApp {
         if let Some(t) = g.tilt {
             view.tilt = t;
         }
+        if let Some(slug) = &g.basemap {
+            view.basemap = crate::tiles::BasemapStyle::from_slug(slug);
+        }
+        if g.srv {
+            view.srv = true;
+        }
     }
 
     /// The browser's own deep link: `https://…/#goto=KTLX,-97.3,35.3,9`. Read once at boot — a
@@ -2983,6 +3027,37 @@ impl HookEchoApp {
                 ctx.request_repaint();
             }
         });
+    }
+
+    /// Post the active pane's state to the embedding page (`?embed`), tagged so the host can tell
+    /// it apart from every other frame shouting into the same window. `"*"` as the target origin:
+    /// this is view state, nothing secret, and the host has to origin-check us regardless.
+    #[cfg(target_arch = "wasm32")]
+    fn post_state_to_parent(&mut self) {
+        let snap = crate::workspace::PaneSnap::capture(&self.views[self.active]);
+        if self.last_posted.as_ref() == Some(&snap) {
+            return;
+        }
+        let Some(win) = web_sys::window() else {
+            return;
+        };
+        // No parent (or we are the top frame): nobody to tell.
+        let Ok(parent) = win.parent() else { return };
+        let Some(parent) = parent.filter(|p| p != &win) else {
+            return;
+        };
+        let Ok(mut v) = serde_json::to_value(&snap) else {
+            return;
+        };
+        if let Some(o) = v.as_object_mut() {
+            o.insert("hookecho".into(), serde_json::json!(1));
+        }
+        if parent
+            .post_message(&wasm_bindgen::JsValue::from_str(&v.to_string()), "*")
+            .is_ok()
+        {
+            self.last_posted = Some(snap);
+        }
     }
 
     /// Volume poll cadence, doubled on a metered link. A phone on mobile data pulls a multi-MB
@@ -11001,7 +11076,7 @@ impl HookEchoApp {
 
         // Per-pane product picker (multi-pane only): set THIS pane's moment directly, without
         // clicking to activate it first. Single-pane keeps using the product pill.
-        if self.views.len() > 1 && !self.obs_mode {
+        if self.views.len() > 1 && !self.obs_mode && !self.embed {
             let cur = self.views[idx].moment;
             // Same union as the sidebar uses, so this picker doesn't blink either.
             let have = self.views[idx].moments();
@@ -15393,7 +15468,7 @@ impl eframe::App for HookEchoApp {
 
         // Docked desktop chrome. Declared before every floating Area so those constrain to what's
         // left of the viewport (`self.chrome_rect`) instead of covering the bars.
-        let bare = self.obs_mode;
+        let bare = self.obs_mode || self.embed;
         if !cfg!(target_os = "android") && !bare {
             if !self.settings.hide_sidebar {
                 self.sidebar(root, ctx);
@@ -16050,7 +16125,7 @@ impl eframe::App for HookEchoApp {
             }
         }
         self.follow_badge(ctx);
-        if !self.obs_mode {
+        if !self.obs_mode && !self.embed {
             self.chase_hud(ctx);
         }
         if let Some(popup) = &mut self.warning_popup {
@@ -16276,6 +16351,15 @@ impl eframe::App for HookEchoApp {
             self.saved = self.settings.clone();
         }
 
+        // Embedded in another page: hand the active pane's state to the parent frame so it can
+        // persist it. Our own localStorage is partitioned (or wiped) inside a third-party iframe,
+        // so the host is the only place this survives a reload. Same once-a-second tick as above,
+        // and only when something actually moved.
+        #[cfg(target_arch = "wasm32")]
+        if due && self.embed {
+            self.post_state_to_parent();
+        }
+
         // Android text input: summon/dismiss the soft keyboard as egui focus moves in/out of
         // text fields, and float a Paste button (the system clipboard is unreachable from the
         // soft keyboard otherwise — egui gets the text as a Paste event next frame).
@@ -16309,7 +16393,15 @@ impl eframe::App for HookEchoApp {
         // Idle heartbeat so clocks (volume age, countdowns) tick without input. Data arrivals and
         // animations (pulse, banners) request faster repaints on their own. Slower on Android to
         // spare the battery — nothing on screen changes faster than this between frames.
-        let idle = if !crate::platform::activity::is_active() {
+        // An untouched embed is a still picture on someone else's dashboard: one frame a minute
+        // keeps the clocks honest without spending the host's CPU. The first interaction wakes it
+        // for good; data arrivals still request their own repaints either way.
+        if self.embed && !self.embed_live && ctx.input(|i| i.pointer.any_down() || i.any_touches()) {
+            self.embed_live = true;
+        }
+        let idle = if self.embed && !self.embed_live {
+            60_000
+        } else if !crate::platform::activity::is_active() {
             2_000 // backgrounded: just enough to notice coming back
         } else if cfg!(target_os = "android") {
             250
@@ -16552,6 +16644,22 @@ mod field_lut_tests {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn goto_extras_carry_basemap_and_srv() {
+        // New extras, in either order, alongside the old ones.
+        let g = super::parse_goto("KTLX,-97.3,35.3,6.5,bm:dark,srv,VEL,2").unwrap();
+        assert_eq!(g.site, "KTLX");
+        assert_eq!(g.basemap.as_deref(), Some("dark"));
+        assert!(g.srv);
+        assert_eq!(g.tilt, Some(2));
+        // Old links are unchanged: no basemap, not storm-relative.
+        let g = super::parse_goto(",-97.3,35.3,6.5").unwrap();
+        assert_eq!(g.site, "");
+        assert_eq!(g.basemap, None);
+        assert!(!g.srv);
+        assert_eq!(g.zoom, 6.5);
+    }
 
     #[test]
     fn goes_frame_follows_the_radar_clock() {
