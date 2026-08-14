@@ -1674,6 +1674,11 @@ pub struct HookEchoApp {
     update_rx: Receiver<Option<String>>,
     geocode_tx: Sender<Result<(String, f64, f64), String>>,
     geocode_rx: Receiver<Result<(String, f64, f64), String>>,
+    /// `(lon, lat)` from the hosting edge's own geo-IP (browser build only), used once at boot to
+    /// open on the nearest radar. Never fed on native, where the saved view is the answer.
+    #[cfg(target_arch = "wasm32")]
+    ipgeo_tx: Sender<(f64, f64)>,
+    ipgeo_rx: Receiver<(f64, f64)>,
     /// In-progress offline chase-pack tile download (basemap pre-cache for the current view).
     chasepack: Option<ChasePack>,
     /// Per-pane "what's uploaded" key, so each pane re-bins/re-uploads only on a real change.
@@ -2439,6 +2444,9 @@ impl HookEchoApp {
         let (overlay_tx, overlay_rx) = std::sync::mpsc::channel();
         let (update_tx, update_rx) = std::sync::mpsc::channel();
         let (geocode_tx, geocode_rx) = std::sync::mpsc::channel();
+        let (ipgeo_tx, ipgeo_rx) = std::sync::mpsc::channel::<(f64, f64)>();
+        #[cfg(not(target_arch = "wasm32"))]
+        drop(ipgeo_tx); // native never asks; the receiver just stays empty
         let (pf_icon_tx, pf_icon_rx) = std::sync::mpsc::channel();
         let (blockage_tx, blockage_rx) = std::sync::mpsc::channel();
         // Every app-level fetch (alerts, overlays, placefiles, radar index) goes through this one.
@@ -2450,6 +2458,11 @@ impl HookEchoApp {
         // Open on the saved startup view if set (and its site still resolves), else where the app
         // was last looking, else the default site.
         let resume = settings.start_view.as_ref().or(settings.last_view.as_ref());
+        // Nothing to resume means the default site is a guess, not a choice — the browser build
+        // improves on it below with the edge's geo-IP.
+        #[cfg(target_arch = "wasm32")]
+        let opened_on_default =
+            !matches!(resume, Some(sv) if wxdata::sites::site_by_id(&sv.site).is_some());
         let (start, camera) = match resume {
             Some(sv) if wxdata::sites::site_by_id(&sv.site).is_some() => (
                 sv.site.clone(),
@@ -2492,6 +2505,9 @@ impl HookEchoApp {
             update_rx,
             geocode_tx,
             geocode_rx,
+            #[cfg(target_arch = "wasm32")]
+            ipgeo_tx,
+            ipgeo_rx,
             chasepack: None,
             pane_shown: std::collections::HashMap::new(),
             theme_applied: None,
@@ -2870,6 +2886,10 @@ impl HookEchoApp {
         app.drain_goto_file();
         #[cfg(target_arch = "wasm32")]
         app.apply_goto_hash();
+        #[cfg(target_arch = "wasm32")]
+        if opened_on_default {
+            app.locate_by_ip(&cc.egui_ctx.clone());
+        }
         crate::platform::set_background_alerts(app.settings.background_alerts);
         app.fetch_overlays(&cc.egui_ctx.clone());
         app
@@ -2930,6 +2950,39 @@ impl HookEchoApp {
         if let Some(v) = h.strip_prefix("#goto=") {
             self.apply_goto(v);
         }
+    }
+
+    /// Ask our own origin where the visitor is (`/geo.json`, answered by the Netlify edge function
+    /// or the Cloudflare Worker from the request's geo-IP) and open on the nearest radar site.
+    ///
+    /// Same-origin, so no proxy and no CORS; the reply is `[lon, lat]` or `null` when the edge has
+    /// no fix. A deep link wins — someone who opened a share link asked for that site, not this one.
+    #[cfg(target_arch = "wasm32")]
+    fn locate_by_ip(&mut self, ctx: &egui::Context) {
+        let Some(win) = web_sys::window() else {
+            return;
+        };
+        if win.location().hash().is_ok_and(|h| h.starts_with("#goto=")) {
+            return;
+        }
+        let Ok(origin) = win.location().origin() else {
+            return;
+        };
+        let http = self.http.clone();
+        let tx = self.ipgeo_tx.clone();
+        let ctx = ctx.clone();
+        self.spawner.spawn(async move {
+            let Ok(resp) = http.get(format!("{origin}/geo.json")).send().await else {
+                return;
+            };
+            let Ok(body) = resp.text().await else {
+                return;
+            };
+            if let Ok(Some(pos)) = serde_json::from_str::<Option<(f64, f64)>>(&body) {
+                let _ = tx.send(pos);
+                ctx.request_repaint();
+            }
+        });
     }
 
     /// Volume poll cadence, doubled on a metered link. A phone on mobile data pulls a multi-MB
@@ -15528,6 +15581,16 @@ impl eframe::App for HookEchoApp {
             &active_fields,
         ) {
             self.overlay_gen += 1; // paint order / opacity changed — re-tessellate
+        }
+        // The edge's geo-IP fix, if it beat the user to it: move the default view to the radar
+        // that covers them. Skipped once they have panned or picked a site themselves.
+        while let Ok((lon, lat)) = self.ipgeo_rx.try_recv() {
+            if self.geocode_nav || self.views.len() > 1 {
+                continue;
+            }
+            if let Some(site) = crate::geo::nearest_site_id(lon, lat) {
+                self.goto_view(&site, lon, lat, 8.0, None);
+            }
         }
         // Drain geocode results: the search pill navigates, the marker window adds a marker.
         while let Ok(res) = self.geocode_rx.try_recv() {
