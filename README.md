@@ -645,6 +645,11 @@ page loads and draws nothing. The proxy's rules (exact-match allowlist, GET only
 64 MB cap, narrowed content types) live once in `web/_worker.js/proxy-core.js`;
 each host is a few lines of wiring around it.
 
+Both hosts also answer `/geo.json` with the visitor's rough position from their own
+geo-IP, which is how the demo opens on the radar nearest you instead of the
+configured default site. No third-party lookup and no browser permission prompt; a
+`#goto=` deep link still wins. A host without it just opens on the default.
+
 **Cloudflare Pages** — `web/_worker.js/`, deployed by
 `.github/workflows/demo.yml`. That's what `hookecho.pages.dev` is.
 
