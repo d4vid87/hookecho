@@ -22,7 +22,16 @@ pub fn fetch_url(url: &str) -> String {
     #[cfg(target_arch = "wasm32")]
     {
         /// Hosts that answer a cross-origin browser fetch on their own.
-        const CORS_OK: &[&str] = &["api.open-meteo.com", "api.mapbox.com", "api.maptiler.com"];
+        // The live-chunk bucket is here rather than proxied on purpose: those objects are seconds
+        // old and fetched one at a time as the radar writes them, so an extra hop buys nothing and
+        // costs latency. The *archive* bucket is not in this list — it goes through the proxy, so
+        // one visitor's volume download is the next visitor's cache hit.
+        const CORS_OK: &[&str] = &[
+            "api.open-meteo.com",
+            "api.mapbox.com",
+            "api.maptiler.com",
+            "unidata-nexrad-level2-chunks.s3.amazonaws.com",
+        ];
         let Some(rest) = url.strip_prefix("https://") else {
             return url.to_string();
         };
@@ -38,6 +47,15 @@ pub fn fetch_url(url: &str) -> String {
         };
         format!("{origin}/proxy/{host}/{path}")
     }
+}
+
+/// Route nexrad-data's S3 fetches through [`fetch_url`] as well.
+///
+/// That crate builds its own bucket URLs and hands them straight to reqwest, so it was the one
+/// feed path the proxy never saw. Call once at browser startup.
+#[cfg(target_arch = "wasm32")]
+pub fn install_s3_proxy_rewriter() {
+    nexrad_data::aws::client::set_url_rewriter(fetch_url);
 }
 
 #[cfg(test)]

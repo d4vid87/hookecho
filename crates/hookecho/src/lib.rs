@@ -154,6 +154,12 @@ pub async fn start(canvas_id: String) -> Result<(), wasm_bindgen::JsValue> {
     // Browser console logging: the app logs through `log`, same as everywhere else.
     let _ = console_log::init_with_level(log::Level::Info);
 
+    // nexrad-data builds its S3 URLs itself and fetches them directly, which is the one feed path
+    // that never saw `net::fetch_url`. Point it at the same same-origin proxy as everything else:
+    // archive volumes then get edge-cached, so a site every visitor opens is fetched from S3 once
+    // an hour rather than once per visitor. (Live chunks stay direct — see `CORS_OK`.)
+    wxdata::net::install_s3_proxy_rewriter();
+
     let canvas = web_sys::window()
         .and_then(|w| w.document())
         .and_then(|d| d.get_element_by_id(&canvas_id))

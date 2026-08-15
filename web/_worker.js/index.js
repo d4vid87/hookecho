@@ -22,7 +22,7 @@ export default {
     }
     if (!url.pathname.startsWith("/proxy/")) return env.ASSETS.fetch(request);
     return handleProxy(request, {
-      fetchInit: (host) => ({ cf: { cacheTtl: cacheSeconds(host), cacheEverything: true } }),
+      fetchInit: (host, search) => ({ cf: { cacheTtl: cacheSeconds(host, search), cacheEverything: true } }),
     });
   },
 };
