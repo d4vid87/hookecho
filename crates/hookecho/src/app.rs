@@ -1386,6 +1386,12 @@ const ANDROID_LOOP_WINDOW: usize = 6;
 #[cfg(not(target_os = "android"))]
 const ANDROID_LOOP_WINDOW: usize = 6;
 
+/// Loop frames the browser build keeps decoded at once — "the last fifteen minutes", which at a
+/// severe-weather VCP is four volumes. A wasm heap is 32-bit and a decoded volume is tens of MB,
+/// so this is a memory budget as much as a time window.
+#[allow(dead_code)]
+const WEB_LOOP_WINDOW: usize = 4;
+
 enum DataMsg {
     Volume {
         view: usize,
@@ -2415,8 +2421,12 @@ impl HookEchoApp {
         // actually afford (see ANDROID_LOOP_WINDOW) plus the head and the frame in flight —
         // enough that a loop stops re-downloading itself on every wrap, without the ~900 MB RSS
         // that holding a full desktop-sized window cost.
+        // The browser gets the same treatment for the same reason, only harder: a wasm heap is
+        // 32-bit, so thirty decoded volumes is not a large cache there, it is an out-of-memory.
         let scan_cache_cap = if cfg!(target_os = "android") {
             ANDROID_LOOP_WINDOW + 2
+        } else if cfg!(target_arch = "wasm32") {
+            WEB_LOOP_WINDOW + 4
         } else {
             30
         };

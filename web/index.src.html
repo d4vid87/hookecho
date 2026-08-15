@@ -20,6 +20,64 @@
       import init, { start } from "./dist/hookecho.js";
       const boot = document.getElementById("boot");
 
+      // Compile the wasm once and share the compiled module with the decode worker. A
+      // `WebAssembly.Module` is structured-cloneable, so the worker gets a second *instance* —
+      // its own heap, its own thread — without a second download or a second compile.
+      //
+      // What it is for: decoding a Level 2 volume is seconds of bzip2, and on this thread that is
+      // seconds of frozen map. See web/decode-worker.js and crates/wxdata/src/wasm_worker.rs.
+      const glueUrl = new URL("./dist/hookecho.js", import.meta.url).href;
+      const wasmUrl = new URL("./dist/hookecho_bg.wasm", import.meta.url).href;
+      const module = await WebAssembly.compileStreaming(fetch(wasmUrl));
+
+      let worker = null;
+      const pending = new Map();
+      let nextId = 1;
+
+      // Retire the worker for the rest of the session. A wasm trap poisons its heap — every later
+      // decode in that instance would fail too — so the honest move is to stop using it and let
+      // the app fall back to decoding inline. `"worker unavailable"` is the string wasm_worker.rs
+      // reads to tell "use the fallback" apart from "this volume is bad".
+      const retire = (why) => {
+        console.warn("decode worker retired:", why);
+        if (worker) worker.terminate();
+        worker = null;
+        for (const [, [, reject]] of pending) reject(new Error("worker unavailable"));
+        pending.clear();
+      };
+
+      try {
+        worker = new Worker(new URL("./decode-worker.js", import.meta.url), { type: "module" });
+        worker.postMessage({ module, glue: glueUrl });
+        worker.onerror = (e) => retire(e.message || "worker error");
+        worker.onmessage = (e) => {
+          const { id, ok, err } = e.data;
+          const entry = pending.get(id);
+          if (!entry) return;
+          pending.delete(id);
+          const [resolve, reject] = entry;
+          if (err) reject(new Error(err));
+          else resolve(new Uint8Array(ok));
+        };
+      } catch (e) {
+        // No module workers (or a `file://` page). Not fatal — the app decodes inline.
+        console.warn("no decode worker:", e);
+        worker = null;
+      }
+
+      // The bridge wasm_worker.rs looks up. Absent means "decode inline", which is why it is only
+      // defined when there is a live worker to talk to.
+      globalThis.__decodeVolume = (bytes) => {
+        if (!worker) return Promise.reject(new Error("worker unavailable"));
+        const id = nextId++;
+        return new Promise((resolve, reject) => {
+          pending.set(id, [resolve, reject]);
+          // Transfer, not copy: the volume is tens of MB and this side is finished with it. Rust
+          // hands us a fresh JS-heap array for exactly this reason.
+          worker.postMessage({ id, bytes: bytes.buffer }, [bytes.buffer]);
+        });
+      };
+
       // A dead map is indistinguishable from a slow one on a blank canvas, and the two ways it
       // dies after a good start are a lost GPU context (driver reset, tab starved of VRAM, laptop
       // waking) and a Rust panic unwinding out of the animation frame. Both leave the last frame
@@ -37,7 +95,8 @@
       });
 
       try {
-        await init();
+        // The module is already compiled above — hand it over rather than fetching the wasm twice.
+        await init({ module_or_path: module });
         await start("hookecho");
         boot.remove();
       } catch (e) {
