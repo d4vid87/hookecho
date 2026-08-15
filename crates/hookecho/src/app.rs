@@ -11083,7 +11083,7 @@ impl HookEchoApp {
 
         // Per-pane product picker (multi-pane only): set THIS pane's moment directly, without
         // clicking to activate it first. Single-pane keeps using the product pill.
-        if self.views.len() > 1 && !self.obs_mode && !self.embed {
+        if self.views.len() > 1 && !self.obs_mode {
             let cur = self.views[idx].moment;
             // Same union as the sidebar uses, so this picker doesn't blink either.
             let have = self.views[idx].moments();
@@ -15475,7 +15475,10 @@ impl eframe::App for HookEchoApp {
 
         // Docked desktop chrome. Declared before every floating Area so those constrain to what's
         // left of the viewport (`self.chrome_rect`) instead of covering the bars.
-        let bare = self.obs_mode || self.embed;
+        // Embedded panes keep their chrome: without it there is no play button, no site picker and
+        // no product menu, and an iframe is exactly where a user can't reach those any other way.
+        // `embed` still buys the idle heartbeat and the state postMessage.
+        let bare = self.obs_mode;
         if !cfg!(target_os = "android") && !bare {
             if !self.settings.hide_sidebar {
                 self.sidebar(root, ctx);
@@ -16132,7 +16135,7 @@ impl eframe::App for HookEchoApp {
             }
         }
         self.follow_badge(ctx);
-        if !self.obs_mode && !self.embed {
+        if !self.obs_mode {
             self.chase_hud(ctx);
         }
         if let Some(popup) = &mut self.warning_popup {
