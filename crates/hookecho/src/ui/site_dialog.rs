@@ -96,6 +96,10 @@ pub fn show(
         .open(&mut open)
         .default_size([460.0, 520.0])
         .show(ctx, |ui| {
+            // Selectable label text senses clicks and drags of its own, and a row is made of
+            // nothing but labels — so every click on a row went into selecting the city name and
+            // `row.response().clicked()` never fired. Clicking a site did nothing at all.
+            ui.style_mut().interaction.selectable_labels = false;
             ui.horizontal(|ui| {
                 ui.label("Filter:");
                 // The field's default width plus two buttons overflows a phone, pushing None/Home
