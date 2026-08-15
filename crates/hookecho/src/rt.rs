@@ -56,7 +56,8 @@ impl Spawner {
     /// There is no thread pool to move work to, so "blocking" work runs on the main thread.
     ///
     // ponytail: wasm spawn_blocking is spawn_local on the main thread; the ceiling is jank on big
-    // CPU work, and the upgrade path is a web worker if it ever hurts.
+    // CPU work. The one thing big enough to hurt — Level 2 decode — took that upgrade already and
+    // runs in a worker (`wxdata::wasm_worker`); everything else still lands here.
     pub fn spawn_blocking<F>(&self, f: F)
     where
         F: FnOnce() + 'static,

@@ -19,3 +19,8 @@ announce-drafts.md
 
 # Netlify CLI state (site link, local edge-function build).
 /.netlify/
+# Generated from web/index.src.html by scripts/web/build.sh (content-hashed asset names).
+/web/index.html
+
+# Local puppeteer for scripts/web/smoke.mjs (npm install --no-save).
+/node_modules/

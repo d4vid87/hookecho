@@ -15,7 +15,8 @@ pub async fn download_object(
     key: &str,
 ) -> crate::result::Result<DownloadedBucketObject> {
     debug!("Downloading object key \"{key}\" from bucket \"{bucket}\"");
-    let path = format!("https://{bucket}.s3.amazonaws.com/{key}");
+    // hookecho patch: see `client::set_url_rewriter`. Identity on native.
+    let path = crate::aws::client::rewrite_url(format!("https://{bucket}.s3.amazonaws.com/{key}"));
 
     let response = client()
         .get(&path)

@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no" />
+    <title>Hook Echo-WX</title>
+    <!-- The wasm is the critical path and it is megabytes: start it in parallel with the module
+         graph rather than after it. Without these the browser discovers the wasm only once it has
+         parsed and executed the glue, which serializes two large downloads for no reason. -->
+    <link rel="modulepreload" href="./dist/hookecho.js" />
+    <link rel="preload" href="./dist/hookecho_bg.wasm" as="fetch" type="application/wasm" crossorigin />
+    <!-- The first two hosts the app talks to once it is up: basemap tiles, and the live radar
+         chunk bucket (the only radar host it reaches cross-origin — volumes go via /proxy). -->
+    <link rel="preconnect" href="https://basemaps.cartocdn.com" crossorigin />
+    <link rel="preconnect" href="https://unidata-nexrad-level2-chunks.s3.amazonaws.com" crossorigin />
+    <style>
+      html, body { margin: 0; height: 100%; background: #101014; overflow: hidden; }
+      canvas { display: block; width: 100%; height: 100%; }
+      #boot {
+        position: absolute; inset: 0; display: grid; place-content: center;
+        color: #8a8a95; font: 14px system-ui, sans-serif; text-align: center;
+      }
+    </style>
+  </head>
+  <body>
+    <canvas id="hookecho"></canvas>
+    <div id="boot">Loading Hook Echo-WX…</div>
+    <!-- Which radar to open on comes from the edge, and nothing about it depends on the app being
+         loaded. Fired here, before the module graph is even parsed, it is almost always already
+         resolved by the time Rust asks — the app's opening site costs no round trip at all. -->
+    <script>
+      globalThis.__geo = fetch("/geo.json").then((r) => r.text()).catch(() => null);
+    </script>
+    <script type="module">
+      import init, { start } from "./dist/hookecho.js";
+      const boot = document.getElementById("boot");
+
+      // Compile the wasm once and share the compiled module with the decode worker. A
+      // `WebAssembly.Module` is structured-cloneable, so the worker gets a second *instance* —
+      // its own heap, its own thread — without a second download or a second compile.
+      //
+      // What it is for: decoding a Level 2 volume is seconds of bzip2, and on this thread that is
+      // seconds of frozen map. See web/decode-worker.js and crates/wxdata/src/wasm_worker.rs.
+      const glueUrl = new URL("./dist/hookecho.js", import.meta.url).href;
+      const wasmUrl = new URL("./dist/hookecho_bg.wasm", import.meta.url).href;
+      const module = await WebAssembly.compileStreaming(fetch(wasmUrl));
+
+      let worker = null;
+      const pending = new Map();
+      let nextId = 1;
+
+      // Retire the worker for the rest of the session. A wasm trap poisons its heap — every later
+      // decode in that instance would fail too — so the honest move is to stop using it and let
+      // the app fall back to decoding inline. `"worker unavailable"` is the string wasm_worker.rs
+      // reads to tell "use the fallback" apart from "this volume is bad".
+      const retire = (why) => {
+        console.warn("decode worker retired:", why);
+        if (worker) worker.terminate();
+        worker = null;
+        for (const [, [, reject]] of pending) reject(new Error("worker unavailable"));
+        pending.clear();
+      };
+
+      try {
+        worker = new Worker(new URL("./decode-worker.js", import.meta.url), { type: "module" });
+        worker.postMessage({ module, glue: glueUrl });
+        worker.onerror = (e) => retire(e.message || "worker error");
+        worker.onmessage = (e) => {
+          const { id, ok, err } = e.data;
+          const entry = pending.get(id);
+          if (!entry) return;
+          pending.delete(id);
+          const [resolve, reject] = entry;
+          if (err) reject(new Error(err));
+          else resolve(new Uint8Array(ok));
+        };
+      } catch (e) {
+        // No module workers (or a `file://` page). Not fatal — the app decodes inline.
+        console.warn("no decode worker:", e);
+        worker = null;
+      }
+
+      // The bridge wasm_worker.rs looks up. Absent means "decode inline", which is why it is only
+      // defined when there is a live worker to talk to.
+      globalThis.__decodeVolume = (bytes) => {
+        if (!worker) return Promise.reject(new Error("worker unavailable"));
+        const id = nextId++;
+        return new Promise((resolve, reject) => {
+          pending.set(id, [resolve, reject]);
+          // Transfer, not copy: the volume is tens of MB and this side is finished with it. Rust
+          // hands us a fresh JS-heap array for exactly this reason.
+          worker.postMessage({ id, bytes: bytes.buffer }, [bytes.buffer]);
+        });
+      };
+
+      // A dead map is indistinguishable from a slow one on a blank canvas, and the two ways it
+      // dies after a good start are a lost GPU context (driver reset, tab starved of VRAM, laptop
+      // waking) and a Rust panic unwinding out of the animation frame. Both leave the last frame
+      // painted forever otherwise. Say so, in the same box the loader used.
+      const dead = (msg) => {
+        const el = boot.isConnected ? boot : document.body.appendChild(boot);
+        el.textContent = msg;
+      };
+      document.getElementById("hookecho").addEventListener("webglcontextlost", (e) => {
+        e.preventDefault();
+        dead("Graphics context lost — reload the page.");
+      });
+      addEventListener("error", (e) => {
+        if (String(e.message || "").includes("unreachable")) dead("Hook Echo-WX stopped: " + e.message);
+      });
+
+      try {
+        // The module is already compiled above — hand it over rather than fetching the wasm twice.
+        await init({ module_or_path: module });
+        await start("hookecho");
+        boot.remove();
+      } catch (e) {
+        // Nearly always one of two things: a browser with neither WebGPU nor WebGL2, or the
+        // wasm being served with the wrong MIME type. Say which rather than showing a blank page.
+        boot.textContent = "Hook Echo-WX failed to start: " + e;
+        console.error(e);
+      }
+    </script>
+  </body>
+</html>

@@ -46,6 +46,15 @@ gribberish = { version = "1.5.0", default-features = false, features = ["png", "
 # JPEG2000-packed; MRMS and HRRR are PNG/simple/complex packing and decode unchanged.
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 gribberish = { version = "1.5.0", default-features = false, features = ["png"] }
+# A browser tab has one thread for everything, so the Level 2 decode (a gzip wrapper around ~130
+# bzip2 records, tens of MB of CPU) is run in a Web Worker instead — see `wasm_worker.rs`. The
+# worker can only send bytes back, so the decoded `Scan` crosses as postcard; nexrad-model already
+# derives Serialize/Deserialize behind its `serde` feature, so no wire types of our own.
+nexrad-model = { version = "1.0.0-rc.2", features = ["serde"] }
+postcard = { version = "1", features = ["alloc"] }
+js-sys = "0.3"
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
 # Already in the lockfile under eframe/wgpu — `net.rs` needs only the page origin, to point feed
 # fetches at the same-origin CORS proxy.
 web-sys = { version = "0.3", features = ["Window", "Location"] }

@@ -16,10 +16,13 @@ pub async fn list_objects(
     prefix: &str,
     max_keys: Option<usize>,
 ) -> crate::result::Result<BucketListResult> {
-    let mut path = format!("https://{bucket}.s3.amazonaws.com?list-type=2&prefix={prefix}");
+    // hookecho patch: the `/` before the query is new. S3 accepts it either way, but without it
+    // the host/path split in `wxdata::net::fetch_url` reads the query as part of the hostname.
+    let mut path = format!("https://{bucket}.s3.amazonaws.com/?list-type=2&prefix={prefix}");
     if let Some(max_keys) = max_keys {
         path.push_str(&format!("&max-keys={max_keys}"));
     }
+    let path = crate::aws::client::rewrite_url(path);
     debug!("Listing objects in bucket \"{bucket}\" with prefix \"{prefix}\"");
 
     let response = client().get(&path).send().await.map_err(S3ListObjects)?;

@@ -6,6 +6,29 @@
 use once_cell::sync::Lazy;
 use reqwest::Client;
 
+// hookecho patch: a hook for bending S3 URLs before they are fetched.
+//
+// The browser build routes every other feed through its own origin's CORS proxy
+// (`wxdata::net::fetch_url`), which is also where edge caching happens — a Level 2 volume that
+// one visitor pulls is then free for the next. These two modules were the exception: they build
+// bucket URLs and hand them straight to reqwest. Rather than thread a config through every
+// call site, the app installs a rewriter once at startup. Native never installs one, so
+// `rewrite_url` is the identity function there and nothing changes.
+static URL_REWRITER: once_cell::sync::OnceCell<fn(&str) -> String> =
+    once_cell::sync::OnceCell::new();
+
+/// Install a rewriter applied to every S3 URL this crate fetches. First call wins.
+pub fn set_url_rewriter(f: fn(&str) -> String) {
+    let _ = URL_REWRITER.set(f);
+}
+
+pub(crate) fn rewrite_url(url: String) -> String {
+    match URL_REWRITER.get() {
+        Some(f) => f(&url),
+        None => url,
+    }
+}
+
 /// Returns a reference to the shared HTTP client.
 ///
 /// The client is lazily initialized on first use and reused for all subsequent

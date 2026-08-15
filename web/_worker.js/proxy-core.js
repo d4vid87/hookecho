@@ -74,7 +74,21 @@ export const LIVE_HOSTS = new Set([
   "api.weather.gov",
 ]);
 
-export const cacheSeconds = (host) => (LIVE_HOSTS.has(host) ? 15 : 300);
+// Archived Level 2 volumes: the same four volumes are what every visitor on a given radar loads,
+// and each is tens of MB, so caching them at the edge is the difference between one S3 fetch per
+// hour and one per visitor.
+const ARCHIVE_BUCKET = "unidata-nexrad-level2.s3.amazonaws.com";
+
+export const cacheSeconds = (host, search = "") => {
+  // A bucket listing is how the app finds the newest volume — cache that like a live feed or the
+  // loop stops advancing.
+  if (search.includes("list-type=")) return 15;
+  // ponytail: an hour, not forever. The newest archive object is re-uploaded while the radar is
+  // still writing it, so a long TTL can pin a truncated volume at the edge; an hour bounds how
+  // long that can last. Drop it to 600 if it is ever seen to bite.
+  if (host === ARCHIVE_BUCKET) return 3600;
+  return LIVE_HOSTS.has(host) ? 15 : 300;
+};
 
 // The User-Agent the app identifies itself with everywhere else (wxdata::alerts::USER_AGENT);
 // api.weather.gov refuses a request without one.
@@ -134,7 +148,7 @@ function capped(body) {
 }
 
 /// Handle one `/proxy/{host}/{path}` request. `fetchInit(host)` lets a platform add its own cache
-/// hints to the upstream call, `extraHeaders(host)` the same for the response we send back.
+/// hints to the upstream call, `extraHeaders(host, search)` the same for the response we send back.
 export async function handleProxy(request, { fetchInit = () => ({}), extraHeaders = () => ({}) } = {}) {
   const url = new URL(request.url);
   const rest = url.pathname.slice("/proxy/".length);
@@ -150,7 +164,7 @@ export async function handleProxy(request, { fetchInit = () => ({}), extraHeader
     // No client header is forwarded — this is a fresh request, not a rewrite of theirs.
     upstream = await fetch(target, {
       headers: { "user-agent": USER_AGENT },
-      ...fetchInit(host),
+      ...fetchInit(host, url.search),
     });
   } catch {
     return badGateway();
@@ -163,7 +177,7 @@ export async function handleProxy(request, { fetchInit = () => ({}), extraHeader
   return new Response(upstream.body ? capped(upstream.body) : null, {
     headers: {
       "content-type": contentType(upstream.headers.get("content-type") || ""),
-      ...extraHeaders(host),
+      ...extraHeaders(host, url.search),
     },
   });
 }

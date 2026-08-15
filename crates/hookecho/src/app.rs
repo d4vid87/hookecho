@@ -1386,6 +1386,11 @@ const ANDROID_LOOP_WINDOW: usize = 6;
 #[cfg(not(target_os = "android"))]
 const ANDROID_LOOP_WINDOW: usize = 6;
 
+/// Loop frames the browser build keeps decoded at once — "the last fifteen minutes", which at a
+/// severe-weather VCP is four volumes. A wasm heap is 32-bit and a decoded volume is tens of MB,
+/// so this is a memory budget as much as a time window.
+const WEB_LOOP_WINDOW: usize = 4;
+
 enum DataMsg {
     Volume {
         view: usize,
@@ -1757,6 +1762,11 @@ pub struct HookEchoApp {
     /// whose result never arrives (it failed, or the site changed under it) ages out rather than
     /// blocking a retry — nothing here is ever waited on indefinitely.
     prefetching: std::collections::HashMap<String, Instant>,
+    /// Browser only: the opening loop has not started yet. Cleared the moment it does, or when a
+    /// deep link says the visitor asked for one specific moment rather than "show me now".
+    autoplay_pending: bool,
+    /// When this process started drawing — used to bound how long boot work may be deferred.
+    boot_at: Instant,
     // --- Overlays (severe-weather layers; geographic, shared across views) ---
     http: reqwest::Client,
     overlay_rx: Receiver<OverlayMsg>,
@@ -2415,8 +2425,12 @@ impl HookEchoApp {
         // actually afford (see ANDROID_LOOP_WINDOW) plus the head and the frame in flight —
         // enough that a loop stops re-downloading itself on every wrap, without the ~900 MB RSS
         // that holding a full desktop-sized window cost.
+        // The browser gets the same treatment for the same reason, only harder: a wasm heap is
+        // 32-bit, so thirty decoded volumes is not a large cache there, it is an out-of-memory.
         let scan_cache_cap = if cfg!(target_os = "android") {
             ANDROID_LOOP_WINDOW + 2
+        } else if cfg!(target_arch = "wasm32") {
+            WEB_LOOP_WINDOW + 4
         } else {
             30
         };
@@ -2473,6 +2487,9 @@ impl HookEchoApp {
         vtiles.set_ctx(cc.egui_ctx.clone());
         // One small JSON fetch up front: a chase pack can ask for street tiles while a raster
         // basemap is showing, and without the template `pack_jobs` would return nothing.
+        // Not on the web, where there are no chase packs and this is one more request racing the
+        // radar on the critical path — `request_missing` calls it anyway if vector tiles are used.
+        #[cfg(not(target_arch = "wasm32"))]
         vtiles.ensure_template();
         let (msg_tx, msg_rx) = std::sync::mpsc::channel();
         let (overlay_tx, overlay_rx) = std::sync::mpsc::channel();
@@ -2580,6 +2597,8 @@ impl HookEchoApp {
             // loop missed on every frame and re-downloaded the whole thing, forever. It has to
             // hold the window plus the head and the frame being fetched.
             prefetching: std::collections::HashMap::new(),
+            autoplay_pending: cfg!(target_arch = "wasm32"),
+            boot_at: Instant::now(),
             scan_cache: LruCache::new(NonZeroUsize::new(scan_cache_cap).unwrap()),
             http,
             overlay_rx,
@@ -2932,6 +2951,10 @@ impl HookEchoApp {
             app.locate_by_ip(&cc.egui_ctx.clone());
         }
         crate::platform::set_background_alerts(app.settings.background_alerts);
+        // Not on the web: this is a burst of six fetches, and on the one thread a browser gives
+        // us they queue ahead of the radar the visitor actually came for. The periodic refresh in
+        // `update` picks them up a moment later, once there is radar on screen.
+        #[cfg(not(target_arch = "wasm32"))]
         app.fetch_overlays(&cc.egui_ctx.clone());
         app
     }
@@ -2996,6 +3019,9 @@ impl HookEchoApp {
         };
         if let Some(v) = h.strip_prefix("#goto=") {
             self.apply_goto(v);
+            // A shared link points at one moment on purpose. Auto-playing away from it would
+            // throw away the thing the sender was pointing at.
+            self.autoplay_pending = false;
         }
     }
 
@@ -3019,17 +3045,40 @@ impl HookEchoApp {
         let tx = self.ipgeo_tx.clone();
         let ctx = ctx.clone();
         self.spawner.spawn(async move {
-            let Ok(resp) = http.get(format!("{origin}/geo.json")).send().await else {
-                return;
-            };
-            let Ok(body) = resp.text().await else {
-                return;
+            // index.html starts this fetch before the wasm has even downloaded, so by now it has
+            // almost always landed: the opening site costs no round trip. Falling back to our own
+            // request keeps the app working when the page didn't (an embed, a local build).
+            let body = match Self::page_geo().await {
+                Some(b) => b,
+                None => {
+                    let Ok(resp) = http.get(format!("{origin}/geo.json")).send().await else {
+                        return;
+                    };
+                    let Ok(b) = resp.text().await else {
+                        return;
+                    };
+                    b
+                }
             };
             if let Ok(Some(pos)) = serde_json::from_str::<Option<(f64, f64)>>(&body) {
                 let _ = tx.send(pos);
                 ctx.request_repaint();
             }
         });
+    }
+
+    /// The body of the `/geo.json` fetch `web/index.html` started at page load, if it started one.
+    #[cfg(target_arch = "wasm32")]
+    async fn page_geo() -> Option<String> {
+        use wasm_bindgen::JsCast as _;
+        let promise: js_sys::Promise = js_sys::Reflect::get(&js_sys::global(), &"__geo".into())
+            .ok()?
+            .dyn_into()
+            .ok()?;
+        wasm_bindgen_futures::JsFuture::from(promise)
+            .await
+            .ok()?
+            .as_string()
     }
 
     /// Post the active pane's state to the embedding page (`?embed`), tagged so the host can tell
@@ -9920,9 +9969,37 @@ impl HookEchoApp {
         // Advance playback (if playing) then reconcile the displayed volume with the timeline.
         self.views[idx].timeline.live_window = if cfg!(target_os = "android") {
             self.settings.live_loop_frames.clamp(1, ANDROID_LOOP_WINDOW)
+        } else if cfg!(target_arch = "wasm32") {
+            self.settings.live_loop_frames.clamp(1, WEB_LOOP_WINDOW)
         } else {
             self.settings.live_loop_frames.max(1)
         };
+
+        // The browser demo opens playing. A single frozen frame is indistinguishable from a broken
+        // map to someone who has never seen this app, and the last fifteen minutes is what makes
+        // radar readable — you cannot tell which way a storm is moving from a still.
+        //
+        // Waits for two frames rather than starting on one, so the first thing the visitor sees
+        // move is an actual loop and not a one-frame stutter. `backfill_loop_frames` is what
+        // fetches the tail; once playing, ordinary prefetch takes over.
+        if self.autoplay_pending {
+            let tl = &self.views[idx].timeline;
+            if tl.following && !tl.playing {
+                let window = tl.live_window.max(1);
+                let start = tl.frames.len().saturating_sub(window);
+                let ready = tl.frames[start..]
+                    .iter()
+                    .filter(|id| self.scan_cache.contains(&id.name().to_string()))
+                    .count();
+                if ready >= 2 {
+                    log::info!("loop: playing {ready}/{window} frames");
+                    self.views[idx].timeline.toggle_play();
+                    self.autoplay_pending = false;
+                } else {
+                    self.backfill_loop_frames(idx, ctx);
+                }
+            }
+        }
         // Hold the playhead while the next frame is still downloading. Advancing on the wall clock
         // regardless meant playback skipped frames it hadn't got yet and the loop read as juddery;
         // waiting reads as buffering, which is what it is. Only while there's a fetch to wait for,
@@ -10095,26 +10172,58 @@ impl HookEchoApp {
             .cloned()
             .collect();
         for id in next {
+            self.spawn_prefetch(idx, id, &site, ctx);
+        }
+    }
+
+    /// Start one frame download into the scan cache, unless it is already cached or in flight.
+    fn spawn_prefetch(&mut self, idx: usize, id: Identifier, site: &str, ctx: &egui::Context) {
+        let name = id.name().to_string();
+        if self.scan_cache.contains(&name) || self.prefetching.contains_key(&name) {
+            return;
+        }
+        self.prefetching.insert(name, Instant::now());
+        let tx = self.msg_tx.clone();
+        let (site, ctx) = (site.to_string(), ctx.clone());
+        let view = idx;
+        self.spawner.spawn(async move {
             let name = id.name().to_string();
-            if self.scan_cache.contains(&name) || self.prefetching.contains_key(&name) {
-                continue;
+            if let Ok(scan) = level2::download_scan(id, crate::paths::cache_dir()).await {
+                let _ = tx.send(DataMsg::Prefetched {
+                    view,
+                    site,
+                    name,
+                    scan,
+                });
+                ctx.request_repaint();
             }
-            self.prefetching.insert(name, Instant::now());
-            let tx = self.msg_tx.clone();
-            let (site, ctx) = (site.clone(), ctx.clone());
-            let view = idx;
-            self.spawner.spawn(async move {
-                let name = id.name().to_string();
-                if let Ok(scan) = level2::download_scan(id, crate::paths::cache_dir()).await {
-                    let _ = tx.send(DataMsg::Prefetched {
-                        view,
-                        site,
-                        name,
-                        scan,
-                    });
-                    ctx.request_repaint();
-                }
-            });
+        });
+    }
+
+    /// Fill the loop window *backwards* from the head, for the browser's opening auto-play.
+    ///
+    /// Ordinary prefetch only looks ahead of the playhead, which is the right thing once a loop is
+    /// running and useless before one starts: at the live head there is nothing ahead. This walks
+    /// back from the newest frame instead, under the same in-flight budget, so the visitor's first
+    /// volume is the current one and the recent past fills in behind it.
+    fn backfill_loop_frames(&mut self, idx: usize, ctx: &egui::Context) {
+        self.prefetching
+            .retain(|_, at| at.elapsed() < std::time::Duration::from_secs(15));
+        if self.prefetching.len() >= 2 {
+            return;
+        }
+        let Some(site) = self.views[idx].site.clone() else {
+            return;
+        };
+        let tl = &self.views[idx].timeline;
+        let window = tl.live_window.max(1);
+        let start = tl.frames.len().saturating_sub(window);
+        let tail: Vec<Identifier> = tl.frames[start..].iter().rev().cloned().collect();
+        for id in tail {
+            if self.prefetching.len() >= 2 {
+                break;
+            }
+            self.spawn_prefetch(idx, id, &site, ctx);
         }
     }
 
@@ -14958,7 +15067,14 @@ impl eframe::App for HookEchoApp {
         } else {
             120
         };
-        if crate::platform::activity::is_active()
+        // On the web the first pass through here *is* the boot fetch (App::new skips it), so hold
+        // it until there is radar on screen — or five seconds have gone by and the radar is
+        // evidently not coming, in which case the overlays are the only thing left to draw.
+        let overlays_may_start = !cfg!(target_arch = "wasm32")
+            || self.views[self.active].volume.is_some()
+            || self.boot_at.elapsed().as_secs() >= 5;
+        if overlays_may_start
+            && crate::platform::activity::is_active()
             && self
                 .overlay_last_fetch
                 .is_none_or(|t| t.elapsed().as_secs() >= overlay_secs)

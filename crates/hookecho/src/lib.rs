@@ -127,6 +127,18 @@ pub fn run_desktop() -> eframe::Result<()> {
     )
 }
 
+/// Decode one Level 2 volume, returning the `Scan` as postcard bytes.
+///
+/// This is the *worker's* entry point, not the page's: `web/decode-worker.js` instantiates a
+/// second copy of this same module (the page hands it the already-compiled `WebAssembly.Module`)
+/// purely to call this. `start` is never called there, so nothing else in the app wakes up —
+/// the worker is a decode function with a private 150 MB heap.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen::prelude::wasm_bindgen]
+pub fn decode_archive2(bytes: Vec<u8>) -> Result<Vec<u8>, wasm_bindgen::JsValue> {
+    wxdata::level2::decode_and_encode(bytes).map_err(|e| e.to_string().into())
+}
+
 /// Web entry point, called from `web/index.html` with the id of a `<canvas>`.
 ///
 /// Same `HookEchoApp` as every other platform — eframe's `WebRunner` takes the identical creation
@@ -141,6 +153,12 @@ pub async fn start(canvas_id: String) -> Result<(), wasm_bindgen::JsValue> {
     console_error_panic_hook::set_once();
     // Browser console logging: the app logs through `log`, same as everywhere else.
     let _ = console_log::init_with_level(log::Level::Info);
+
+    // nexrad-data builds its S3 URLs itself and fetches them directly, which is the one feed path
+    // that never saw `net::fetch_url`. Point it at the same same-origin proxy as everything else:
+    // archive volumes then get edge-cached, so a site every visitor opens is fetched from S3 once
+    // an hour rather than once per visitor. (Live chunks stay direct — see `CORS_OK`.)
+    wxdata::net::install_s3_proxy_rewriter();
 
     let canvas = web_sys::window()
         .and_then(|w| w.document())

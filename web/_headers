@@ -1,0 +1,21 @@
+# Cache policy for the browser demo. Both hosts read this file from the publish dir — Netlify and
+# Cloudflare Pages implement the same `_headers` format — so the two deployments cannot drift the
+# way they did when this lived in netlify.toml alone.
+#
+# Everything under /dist is content-hashed by scripts/web/build.sh (hookecho_bg-<sha8>.wasm and
+# hookecho-<sha8>.js), so a given URL's bytes never change: a returning visitor pays nothing, and
+# a new deploy is a new URL rather than a revalidation of a 3 MB file.
+
+/dist/*
+  Cache-Control: public, max-age=31536000, immutable
+
+# index.html carries the hashed names, so it is the one thing that must never be stale.
+/
+  Cache-Control: public, max-age=0, must-revalidate
+
+/index.html
+  Cache-Control: public, max-age=0, must-revalidate
+
+# Not hashed (it is referenced by a bare `new Worker(...)` path), and it names the glue.
+/decode-worker.js
+  Cache-Control: public, max-age=0, must-revalidate

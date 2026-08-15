@@ -226,6 +226,22 @@ fn decode_file(file: nexrad_data::volume::File) -> anyhow::Result<Scan> {
     file.scan().map_err(|e| anyhow::anyhow!("scan: {e}"))
 }
 
+/// Decode raw Archive II bytes and re-encode the [`Scan`] as postcard, for the Web Worker.
+///
+/// The worker runs a second instance of this same wasm module, so both sides agree on the format
+/// by construction — there is no version to negotiate. Exported to JS by `hookecho::decode_archive2`.
+#[cfg(target_arch = "wasm32")]
+pub fn decode_and_encode(bytes: Vec<u8>) -> anyhow::Result<Vec<u8>> {
+    let scan = decode_volume(bytes)?;
+    postcard::to_allocvec(&scan).map_err(|e| anyhow::anyhow!("encode scan: {e}"))
+}
+
+/// The other half of [`decode_and_encode`], run on the main thread.
+#[cfg(target_arch = "wasm32")]
+pub fn scan_from_wire(bytes: &[u8]) -> anyhow::Result<Scan> {
+    postcard::from_bytes(bytes).map_err(|e| anyhow::anyhow!("decode scan wire: {e}"))
+}
+
 /// Download and decode a specific volume to a [`Scan`].
 ///
 /// With `cache_dir` set the raw Archive II bytes are kept on disk, exactly as the bucket served
@@ -259,7 +275,17 @@ pub async fn download_scan(id: Identifier, cache_dir: Option<PathBuf>) -> anyhow
     // bzip2 decompression plus the message decode is tens of MB of pure CPU. On the async worker
     // it blocks every other fetch sharing that thread for as long as it runs; the `parallel`
     // feature of nexrad-data then spreads the decode itself across rayon.
+    #[cfg(not(target_arch = "wasm32"))]
     let scan = crate::task::blocking(move || decode_file(file)).await??;
+    // In the browser that "async worker" is the thread drawing the map, so try the Web Worker
+    // first. ponytail: no worker (old browser, `file://`, a worker that already trapped) means
+    // inline decode, jank and all — a frozen map still beats no radar.
+    #[cfg(target_arch = "wasm32")]
+    let scan = match crate::wasm_worker::decode_volume(file.data().to_vec()).await {
+        Ok(wire) => scan_from_wire(&wire)?,
+        Err(crate::wasm_worker::Error::Unavailable) => decode_file(file)?,
+        Err(e) => anyhow::bail!("{e}"),
+    };
     // Legacy (pre-2008) volumes carry no volume data block, so the decoder can't name the radar.
     // The volume's own filename can: "KTLX19910605_162126".
     Ok(match scan.site() {

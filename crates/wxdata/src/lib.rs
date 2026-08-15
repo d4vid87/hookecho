@@ -54,6 +54,9 @@ pub mod tropical;
 pub mod tz;
 pub mod verify;
 pub mod volume3d;
+/// Off-main-thread Level 2 decode in the browser.
+#[cfg(target_arch = "wasm32")]
+pub mod wasm_worker;
 pub mod webcams;
 pub mod wfigs;
 pub mod wssi;

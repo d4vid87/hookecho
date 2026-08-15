@@ -8,8 +8,8 @@ import { cacheSeconds, handleProxy } from "../../web/_worker.js/proxy-core.js";
 
 export default async (request) =>
   handleProxy(request, {
-    extraHeaders: (host) => {
-      const ttl = cacheSeconds(host);
+    extraHeaders: (host, search) => {
+      const ttl = cacheSeconds(host, search);
       return {
         "cache-control": `public, max-age=${ttl}`,
         "netlify-cdn-cache-control": `public, s-maxage=${ttl}, durable`,

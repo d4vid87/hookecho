@@ -23,5 +23,6 @@
 pub mod archive;
 pub mod realtime;
 
-mod client;
+// hookecho patch: public so the app can install a URL rewriter (see `client::set_url_rewriter`).
+pub mod client;
 mod s3;
