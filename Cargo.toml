@@ -29,6 +29,28 @@ lto = "fat"
 codegen-units = 1
 strip = true
 
+# The browser build, used by `scripts/web/build.sh` (`cargo build --profile web`). Every byte here
+# is a byte the visitor downloads before anything is on screen, so it optimizes for size where
+# release optimizes for speed. Not `opt-level = "z"`: with fat LTO already on, "z" buys single
+# digit percent and costs measurably more time in the decode loop below.
+[profile.web]
+inherits = "release"
+opt-level = "s"
+
+# ...except the crates that actually spend the CPU. A Level 2 volume is a gzip wrapper around ~130
+# bzip2-compressed records, and it is decoded before the first pixel of radar exists; shrinking
+# these costs more seconds on screen than it saves on the wire.
+[profile.web.package.nexrad-decode]
+opt-level = 3
+[profile.web.package.nexrad-data]
+opt-level = 3
+[profile.web.package.libbz2-rs-sys]
+opt-level = 3
+[profile.web.package.wxdata]
+opt-level = 3
+[profile.web.package.miniz_oxide]
+opt-level = 3
+
 [workspace.package]
 version = "0.10.0"
 edition = "2021"

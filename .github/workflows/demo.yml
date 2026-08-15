@@ -39,6 +39,11 @@ jobs:
       - name: Install wasm-bindgen-cli
         run: cargo install wasm-bindgen-cli --locked
 
+      # build.sh runs wasm-opt when it is on PATH and warns when it is not; the deployed bundle
+      # should always be the optimized one.
+      - name: Install binaryen (wasm-opt)
+        run: sudo apt-get update && sudo apt-get install -y binaryen
+
       - name: Build the bundle
         run: scripts/web/build.sh
 
@@ -66,10 +71,14 @@ jobs:
 
       # A fresh deployment answers 522 for the wasm for a few seconds before the asset is live,
       # which the smoke test would otherwise read as a broken build.
+      # The wasm filename is content-hashed, so ask the built index.html which one this deploy
+      # expects rather than guessing — a stale name here would poll a 404 for two minutes.
       - name: Wait for the bundle to be served
         run: |
+          asset=$(grep -o 'dist/hookecho_bg-[0-9a-f]*\.wasm' web/index.html | head -1)
+          echo "waiting for /$asset"
           for _ in $(seq 1 20); do
-            code=$(curl -s -o /dev/null -w '%{http_code}' https://hookecho.pages.dev/dist/hookecho_bg.wasm)
+            code=$(curl -s -o /dev/null -w '%{http_code}' "https://hookecho.pages.dev/$asset")
             [ "$code" = 200 ] && exit 0
             sleep 10
           done

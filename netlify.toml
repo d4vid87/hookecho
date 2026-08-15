@@ -25,15 +25,5 @@
   path = "/geo.json"
   function = "geo"
 
-# The wasm is content-hashed by nothing — it is rebuilt in place on every deploy — so it must not
-# be cached by the browser, or a returning visitor runs last week's build against this week's
-# index.html. Netlify's own CDN still caches it and revalidates on each deploy.
-[[headers]]
-  for = "/dist/*"
-  [headers.values]
-    Cache-Control = "public, max-age=0, must-revalidate"
-
-[[headers]]
-  for = "/index.html"
-  [headers.values]
-    Cache-Control = "public, max-age=0, must-revalidate"
+# Cache headers live in `web/_headers`, not here: Cloudflare Pages reads that file too, and this
+# section did not exist for it at all. One file, both hosts, no drift.

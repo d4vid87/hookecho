@@ -40,7 +40,9 @@ puffin_http = { version = "0.17", optional = true }
 # `accesskit` forwards to egui-winit and publishes the widget tree over the platform's
 # accessibility API — AT-SPI on Linux, UI Automation on Windows. Without it a screen reader sees
 # one opaque canvas, because that is all an egui window is at the OS level.
-eframe = { version = "0.35", default-features = false, features = ["accesskit", "default_fonts", "wgpu_no_default_features"] }
+# `accesskit` is native-only below: eframe 0.35's web runner drops the update on the floor
+# ("not currently implemented", eframe/src/web/app_runner.rs), so on wasm it is pure bundle weight.
+eframe = { version = "0.35", default-features = false, features = ["default_fonts", "wgpu_no_default_features"] }
 # `serde` gives Key/Modifiers/KeyboardShortcut their Serialize/Deserialize impls, which is what
 # lets user keybinds live in settings.json.
 egui = { version = "0.35", features = ["serde"] }
@@ -50,7 +52,9 @@ bytemuck.workspace = true
 anyhow.workspace = true
 log.workspace = true
 env_logger = "0.11"
-image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "ico"] }
+# `ico` is added native-only below — it is only ever encoded by `--headless-icon` in main.rs.
+# `gif` stays on every target: the loop exporter is compiled (if never usefully run) on the web.
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif"] }
 chrono.workspace = true
 # Deep links arrive percent-encoded from browsers and chat clients; reqwest already builds this.
 percent-encoding = "2.3"
@@ -64,10 +68,6 @@ lyon = "1.0.19"
 mvt-reader = "2.4"
 geo-types = "0.7"
 flate2.workspace = true
-rodio = { version = "0.19", default-features = false, features = ["wav", "mp3", "vorbis", "flac"] }
-# Already compiled as rodio's mp3 backend; named directly so the weather-radio player can decode a
-# live stream, which rodio's own `Decoder` can't (it needs `Seek`).
-symphonia = { version = "0.5", default-features = false, features = ["mp3"] }
 futures-util = { version = "0.3", default-features = false, features = ["std"] }
 glam = { version = "0.29", features = ["bytemuck"] }
 egui-phosphor = "0.13.0"
@@ -82,6 +82,16 @@ getrandom = "0.3"
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 egui-wgpu = { version = "0.35", default-features = false, features = ["winit"] }
 tokio.workspace = true
+eframe = { version = "0.35", default-features = false, features = ["accesskit"] }
+# Audio is native-only in the source already (`audio.rs` and `nwr.rs` are behind
+# `cfg(not(wasm32))`), but the deps were not — rodio and symphonia's mp3/vorbis/flac decoders were
+# compiling into the browser bundle for nothing.
+rodio = { version = "0.19", default-features = false, features = ["wav", "mp3", "vorbis", "flac"] }
+# Already compiled as rodio's mp3 backend; named directly so the weather-radio player can decode a
+# live stream, which rodio's own `Decoder` can't (it needs `Seek`).
+symphonia = { version = "0.5", default-features = false, features = ["mp3"] }
+# `--headless-icon` (main.rs) is the only ico writer, and there is no bin on the web.
+image = { version = "0.25", default-features = false, features = ["ico"] }
 
 # The web build. wgpu's backends are feature-unioned per platform below, and wasm has to name its
 # own: without these the browser build compiles and then finds zero adapters at runtime. WebGPU
