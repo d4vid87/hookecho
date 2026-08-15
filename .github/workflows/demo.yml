@@ -87,7 +87,7 @@ jobs:
 
       # The same boot check CI runs against a local server, now against the deployed origin.
       - name: Smoke-test the deployed demo
-        run: node scripts/web/smoke.mjs https://hookecho.pages.dev/
+        run: node scripts/web/smoke.mjs https://hookecho.pages.dev/ --expect-loop
 
       - name: Check the proxy answers and refuses
         run: |

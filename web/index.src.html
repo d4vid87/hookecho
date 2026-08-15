@@ -4,6 +4,15 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no" />
     <title>Hook Echo-WX</title>
+    <!-- The wasm is the critical path and it is megabytes: start it in parallel with the module
+         graph rather than after it. Without these the browser discovers the wasm only once it has
+         parsed and executed the glue, which serializes two large downloads for no reason. -->
+    <link rel="modulepreload" href="./dist/hookecho.js" />
+    <link rel="preload" href="./dist/hookecho_bg.wasm" as="fetch" type="application/wasm" crossorigin />
+    <!-- The first two hosts the app talks to once it is up: basemap tiles, and the live radar
+         chunk bucket (the only radar host it reaches cross-origin — volumes go via /proxy). -->
+    <link rel="preconnect" href="https://basemaps.cartocdn.com" crossorigin />
+    <link rel="preconnect" href="https://unidata-nexrad-level2-chunks.s3.amazonaws.com" crossorigin />
     <style>
       html, body { margin: 0; height: 100%; background: #101014; overflow: hidden; }
       canvas { display: block; width: 100%; height: 100%; }
@@ -16,6 +25,12 @@
   <body>
     <canvas id="hookecho"></canvas>
     <div id="boot">Loading Hook Echo-WX…</div>
+    <!-- Which radar to open on comes from the edge, and nothing about it depends on the app being
+         loaded. Fired here, before the module graph is even parsed, it is almost always already
+         resolved by the time Rust asks — the app's opening site costs no round trip at all. -->
+    <script>
+      globalThis.__geo = fetch("/geo.json").then((r) => r.text()).catch(() => null);
+    </script>
     <script type="module">
       import init, { start } from "./dist/hookecho.js";
       const boot = document.getElementById("boot");
