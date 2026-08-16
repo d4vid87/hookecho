@@ -158,9 +158,44 @@ pub async fn latest_identifiers(site: &str, n: usize) -> anyhow::Result<Vec<Iden
     Ok(out)
 }
 
-/// List every volume for `site` on a specific UTC `date`, oldest first.
+/// Volumes ending on a specific UTC `date`, oldest first — enough of them to fill a loop.
+///
+/// The archive is bucketed by UTC day, so a naive listing of "today" is nearly empty just after
+/// 00Z: for the first half hour of every UTC day the newest few volumes are all there is, and a
+/// loop that wants the last fifteen minutes cannot be built from them. When the day is young this
+/// borrows the tail of the previous day, which is where those minutes actually live.
+///
+/// Only for the current day, and only when it is short: a deliberate scrub back to a past date
+/// should show that date, not a few hours of the one before it.
 pub async fn list_volumes(site: &str, date: chrono::NaiveDate) -> anyhow::Result<Vec<Identifier>> {
-    list_day(site, date).await
+    /// Roughly two hours at a severe-weather VCP — comfortably more than any loop window, and
+    /// still one extra listing at most.
+    const MIN_FRAMES: usize = 24;
+
+    let ids = list_day(site, date).await?;
+    if ids.len() >= MIN_FRAMES || date != chrono::Utc::now().date_naive() {
+        return Ok(ids);
+    }
+    let Some(prev) = date.pred_opt() else {
+        return Ok(ids);
+    };
+    // A failed listing for yesterday is not a failure: today's frames are still perfectly good.
+    let Ok(older) = list_day(site, prev).await else {
+        return Ok(ids);
+    };
+    Ok(with_previous_tail(older, ids, MIN_FRAMES))
+}
+
+/// Take just enough of `older` (oldest first) to bring `today` up to `min`, and put it in front.
+fn with_previous_tail(
+    mut older: Vec<Identifier>,
+    today: Vec<Identifier>,
+    min: usize,
+) -> Vec<Identifier> {
+    let keep = min.saturating_sub(today.len());
+    older.drain(..older.len().saturating_sub(keep));
+    older.extend(today);
+    older
 }
 
 /// Recent day listings, so a site switch doesn't LIST the same S3 prefix two or three times over
@@ -542,6 +577,27 @@ pub fn bin_sweep_opts(
 mod tests {
     use super::*;
     use nexrad_model::data::{MomentData, Radial};
+
+    /// Just after 00Z the current UTC day holds only a volume or two, which is not a loop. The
+    /// missing minutes are at the end of yesterday, so they get borrowed — but only as many as
+    /// are needed, and only ever in front.
+    #[test]
+    fn short_day_borrows_the_previous_evening() {
+        let ids = |names: &[&str]| -> Vec<Identifier> {
+            names.iter().map(|n| Identifier::new(n.to_string())).collect()
+        };
+        let older = ids(&["a1", "a2", "a3", "a4"]);
+        let today = ids(&["b1", "b2"]);
+
+        let merged = with_previous_tail(older.clone(), today.clone(), 4);
+        let names: Vec<&str> = merged.iter().map(|i| i.name()).collect();
+        assert_eq!(names, ["a3", "a4", "b1", "b2"], "newest of yesterday, then today");
+
+        // Enough frames already: yesterday contributes nothing.
+        let merged = with_previous_tail(older, today, 2);
+        let names: Vec<&str> = merged.iter().map(|i| i.name()).collect();
+        assert_eq!(names, ["b1", "b2"]);
+    }
 
     /// The live head serves half-written objects, and anything shorter than the 24-byte volume
     /// header used to panic inside the decoder rather than come back as an error (found by
