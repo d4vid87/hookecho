@@ -1004,9 +1004,13 @@ pub(crate) async fn load_tile_bytes(
 }
 
 /// How many uploaded raster tiles to keep. A 256x256 RGBA tile is ~256 KB on the GPU, so 512 is
-/// ~134 MB on a desktop and 128 keeps a phone near 34 MB.
+/// ~134 MB on a desktop and 128 keeps a phone near 34 MB. In a browser — especially an iframe on
+/// Safari, where a Retina raster_bias quadruples the tile count — a desktop budget gets the whole
+/// device recycled out from under us, so wasm gets ~50 MB.
 const RASTER_TILE_CACHE: usize = if cfg!(target_os = "android") {
     128
+} else if cfg!(target_arch = "wasm32") {
+    192
 } else {
     512
 };

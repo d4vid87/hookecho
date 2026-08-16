@@ -101,9 +101,17 @@
         const el = boot.isConnected ? boot : document.body.appendChild(boot);
         el.textContent = msg;
       };
+      // Reload rather than sit on a dead canvas — but only once per 30s, or a GPU that dies on
+      // every boot turns into a reload loop.
       document.getElementById("hookecho").addEventListener("webglcontextlost", (e) => {
         e.preventDefault();
-        dead("Graphics context lost — reload the page.");
+        const last = +sessionStorage.getItem("hookecho_reload") || 0;
+        if (Date.now() - last < 30000) {
+          dead("Graphics context lost — reload the page.");
+          return;
+        }
+        sessionStorage.setItem("hookecho_reload", String(Date.now()));
+        location.reload();
       });
       addEventListener("error", (e) => {
         if (String(e.message || "").includes("unreachable")) dead("Hook Echo-WX stopped: " + e.message);
