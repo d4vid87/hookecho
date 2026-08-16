@@ -2395,6 +2395,26 @@ impl HookEchoApp {
         let spawner = crate::rt::Spawner::new();
 
         let render_state = cc.wgpu_render_state.as_ref().expect("wgpu backend");
+        // Safari 26+ runs us on WebGPU, where device loss is silent: the canvas simply goes black
+        // and `webglcontextlost` can never fire. Nothing can be rebuilt from inside a lost device,
+        // so reload — guarded so a device that dies on every boot doesn't loop.
+        #[cfg(target_arch = "wasm32")]
+        render_state.device.set_device_lost_callback(|reason, msg| {
+            if !matches!(reason, wgpu::DeviceLostReason::Unknown) {
+                return;
+            }
+            log::error!("wgpu device lost: {msg}");
+            let Some(win) = web_sys::window() else { return };
+            let now = js_sys::Date::now();
+            if let Ok(Some(store)) = win.session_storage() {
+                let last = store.get_item("hookecho_reload").ok().flatten().and_then(|v| v.parse::<f64>().ok());
+                if last.is_some_and(|t| now - t < 30_000.0) {
+                    return;
+                }
+                let _ = store.set_item("hookecho_reload", &now.to_string());
+            }
+            let _ = win.location().reload();
+        });
         // The GPU's 2D texture-size cap: desktop/Adreno do 16384, but many mobile GPUs cap at
         // 4096. Field grids (MRMS rotation/AzShear reach 14000 px) are decimated to fit this.
         let max_texture_dim = render_state.device.limits().max_texture_dimension_2d;
