@@ -101,20 +101,19 @@
         const el = boot.isConnected ? boot : document.body.appendChild(boot);
         el.textContent = msg;
       };
-      // Reload rather than sit on a dead canvas — but only once per 30s, or a GPU that dies on
-      // every boot turns into a reload loop.
+      // Reload rather than sit on a dead canvas — but at most once, or a GPU that dies on every
+      // boot turns into a reload loop.
       document.getElementById("hookecho").addEventListener("webglcontextlost", (e) => {
         e.preventDefault();
-        // WebKit throws on sessionStorage access in third-party iframes. No storage means no
-        // reload throttle, so fail closed: message instead of a possible reload loop.
-        let store = null;
-        try { store = sessionStorage; } catch (_) {}
-        if (!store || Date.now() - (+store.getItem("hookecho_reload") || 0) < 30000) {
+        // Throttle in the URL, not sessionStorage — WebKit blocks storage in third-party
+        // iframes, and a throttle that fails open is a reload loop. One reload per navigation.
+        const url = new URL(location.href);
+        if (url.searchParams.has("relaunched")) {
           dead("Graphics context lost — reload the page.");
           return;
         }
-        store.setItem("hookecho_reload", String(Date.now()));
-        location.reload();
+        url.searchParams.append("relaunched", "1");
+        location.href = url.href;
       });
       addEventListener("error", (e) => {
         if (String(e.message || "").includes("unreachable")) dead("Hook Echo-WX stopped: " + e.message);
@@ -125,6 +124,15 @@
         await init({ module_or_path: module });
         await start("hookecho");
         boot.remove();
+        // A recovery reload leaves ?relaunched in the URL, which is our one retry spent. 60s of
+        // healthy running earns it back.
+        if (new URL(location.href).searchParams.has("relaunched")) {
+          setTimeout(() => {
+            const u = new URL(location.href);
+            u.searchParams.delete("relaunched");
+            history.replaceState(null, "", u);
+          }, 60000);
+        }
       } catch (e) {
         // Nearly always one of two things: a browser with neither WebGPU nor WebGL2, or the
         // wasm being served with the wrong MIME type. Say which rather than showing a blank page.

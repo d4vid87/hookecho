@@ -2395,34 +2395,33 @@ impl HookEchoApp {
         let spawner = crate::rt::Spawner::new();
 
         let render_state = cc.wgpu_render_state.as_ref().expect("wgpu backend");
-        // Safari 26+ runs us on WebGPU, where device loss is silent: the canvas simply goes black
-        // and `webglcontextlost` can never fire. Nothing can be rebuilt from inside a lost device,
-        // so reload — guarded so a device that dies on every boot doesn't loop.
+        // Device loss on wasm is unrecoverable from inside the app: WebGPU (Safari 26+) loses
+        // devices silently — black canvas, `webglcontextlost` can never fire — and on the WebGL
+        // fallback (WebKitGTK) wgpu marks the device lost for gles errors that never surface as
+        // a JS context-loss event either (seen on NVIDIA + WebKitGTK: dies at first paint, the
+        // page-level handler never fires). Reload is the only recovery on every backend.
         //
-        // WebGPU backend only: on the WebGL fallback (WebKitGTK, older Safari) wgpu-core fires
-        // this callback with `Unknown` for transient GL errors too — not just real context loss —
-        // and index.src.html's `webglcontextlost` handler already owns that path.
+        // The throttle lives in the URL, not sessionStorage — WebKit blocks storage in
+        // third-party iframes (the WeatherDesk embed), and a throttle that fails open there is a
+        // reload loop (the Ubuntu lockup). One reload per navigation: flag already present means
+        // this navigation was the retry, so stay on the dead canvas. index.src.html strips the
+        // flag after 60s of healthy running, earning a future retry.
         #[cfg(target_arch = "wasm32")]
-        if render_state.adapter.get_info().backend == wgpu::Backend::BrowserWebGpu {
-            render_state.device.set_device_lost_callback(|reason, msg| {
-                if !matches!(reason, wgpu::DeviceLostReason::Unknown) {
-                    return;
-                }
-                log::error!("wgpu device lost: {msg}");
-                let Some(win) = web_sys::window() else { return };
-                // Fail closed: no sessionStorage (WebKit blocks it in third-party iframes) means
-                // no throttle, and an unthrottled reload is a reload loop. A dead canvas is the
-                // pre-reload floor; stay there.
-                let Ok(Some(store)) = win.session_storage() else { return };
-                let now = js_sys::Date::now();
-                let last = store.get_item("hookecho_reload").ok().flatten().and_then(|v| v.parse::<f64>().ok());
-                if last.is_some_and(|t| now - t < 30_000.0) {
-                    return;
-                }
-                let _ = store.set_item("hookecho_reload", &now.to_string());
-                let _ = win.location().reload();
-            });
-        }
+        render_state.device.set_device_lost_callback(|reason, msg| {
+            // `Dropped`/`ReplacedCallback` are clean teardown, not failure.
+            if !matches!(reason, wgpu::DeviceLostReason::Unknown) {
+                return;
+            }
+            log::error!("wgpu device lost: {msg}");
+            let Some(win) = web_sys::window() else { return };
+            let search = win.location().search().unwrap_or_default();
+            if search.contains("relaunched") {
+                return;
+            }
+            let sep = if search.is_empty() { "?" } else { "&" };
+            // Setting `search` navigates; the spec keeps the fragment, so `#goto=…` survives.
+            let _ = win.location().set_search(&format!("{search}{sep}relaunched"));
+        });
         // The GPU's 2D texture-size cap: desktop/Adreno do 16384, but many mobile GPUs cap at
         // 4096. Field grids (MRMS rotation/AzShear reach 14000 px) are decimated to fit this.
         let max_texture_dim = render_state.device.limits().max_texture_dimension_2d;
