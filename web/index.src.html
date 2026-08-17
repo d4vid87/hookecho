@@ -105,12 +105,15 @@
       // every boot turns into a reload loop.
       document.getElementById("hookecho").addEventListener("webglcontextlost", (e) => {
         e.preventDefault();
-        const last = +sessionStorage.getItem("hookecho_reload") || 0;
-        if (Date.now() - last < 30000) {
+        // WebKit throws on sessionStorage access in third-party iframes. No storage means no
+        // reload throttle, so fail closed: message instead of a possible reload loop.
+        let store = null;
+        try { store = sessionStorage; } catch (_) {}
+        if (!store || Date.now() - (+store.getItem("hookecho_reload") || 0) < 30000) {
           dead("Graphics context lost — reload the page.");
           return;
         }
-        sessionStorage.setItem("hookecho_reload", String(Date.now()));
+        store.setItem("hookecho_reload", String(Date.now()));
         location.reload();
       });
       addEventListener("error", (e) => {
