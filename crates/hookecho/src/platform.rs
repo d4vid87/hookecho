@@ -86,6 +86,69 @@ pub fn set_background_alerts(_enabled: bool) {
     android_alerts::set_enabled(_enabled);
 }
 
+/// Delivery health from the Android alert stack, parsed from `AlertAlarm.health`. `None`
+/// everywhere else — on desktop the window being open *is* the delivery mechanism.
+pub fn alert_health() -> Option<AlertHealth> {
+    #[cfg(target_os = "android")]
+    {
+        android_alerts::health().and_then(|s| AlertHealth::parse(&s))
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        None
+    }
+}
+
+/// What the Android alert stack reports about itself.
+#[derive(Debug, PartialEq)]
+pub struct AlertHealth {
+    /// The user's background-alerts switch.
+    pub enabled: bool,
+    /// Whether the OS will honour an exact alarm. False means polls arrive on Doze's schedule.
+    pub exact: bool,
+    /// Whether we are exempt from battery optimisation.
+    pub exempt: bool,
+    /// Since the last poll actually ran. `None` if it never has.
+    pub since_poll: Option<std::time::Duration>,
+    /// Until the next scheduled alarm. `None` if none is armed.
+    pub until_next: Option<std::time::Duration>,
+}
+
+impl AlertHealth {
+    /// `enabled \t exact \t exempt \t sincePollMs \t untilNextMs`, -1 for never/unknown.
+    pub fn parse(line: &str) -> Option<Self> {
+        let f: Vec<&str> = line.split('\t').collect();
+        if f.len() != 5 {
+            return None;
+        }
+        let ms = |s: &str| {
+            s.parse::<i64>()
+                .ok()
+                .filter(|v| *v >= 0)
+                .map(|v| std::time::Duration::from_millis(v as u64))
+        };
+        Some(Self {
+            enabled: f[0] == "true",
+            exact: f[1] == "true",
+            exempt: f[2] == "true",
+            since_poll: ms(f[3]),
+            until_next: ms(f[4]),
+        })
+    }
+}
+
+/// Open the OS screen that grants exact alarms (Android 12+). No-op elsewhere.
+pub fn request_exact_alarms() {
+    #[cfg(target_os = "android")]
+    android_alerts::call_void("requestExact");
+}
+
+/// Prompt for the battery-optimisation exemption. No-op elsewhere.
+pub fn request_battery_exemption() {
+    #[cfg(target_os = "android")]
+    android_alerts::call_void("requestExemption");
+}
+
 /// Open `url` in the system browser. Used by the Google sign-in, which has to hand the user off
 /// to a real browser and get them back. Desktop shells out to the platform opener; Android goes
 /// through an `ACTION_VIEW` intent.
@@ -396,7 +459,7 @@ mod android_ime {
 /// knows nothing about the APK's classes.
 #[cfg(target_os = "android")]
 mod android_alerts {
-    use jni::objects::{JClass, JObject, JValue};
+    use jni::objects::{JClass, JObject, JString, JValue};
 
     pub(super) fn set_enabled(enabled: bool) {
         if let Err(e) = try_set(enabled) {
@@ -404,9 +467,61 @@ mod android_alerts {
         }
     }
 
-    fn try_set(enabled: bool) -> jni::errors::Result<()> {
+    /// Call a `(Context)V` static on `AlertAlarm` — the two permission prompts share this shape.
+    pub(super) fn call_void(method: &str) {
+        if let Err(e) = try_call_alarm(method) {
+            log::warn!("AlertAlarm.{method} failed: {e:?}");
+        }
+    }
+
+    fn try_call_alarm(method: &str) -> jni::errors::Result<()> {
+        with_class("zip.batman.hookecho.AlertAlarm", |env, class, activity| {
+            let res = env.call_static_method(
+                class,
+                method,
+                "(Landroid/content/Context;)V",
+                &[JValue::Object(activity)],
+            );
+            if res.is_err() {
+                let _ = env.exception_clear();
+            }
+            res.map(|_| ())
+        })
+    }
+
+    /// `AlertAlarm.health(Context)` as its raw tab-separated line.
+    pub(super) fn health() -> Option<String> {
+        let out = with_class("zip.batman.hookecho.AlertAlarm", |env, class, activity| {
+            let s = env
+                .call_static_method(
+                    class,
+                    "health",
+                    "(Landroid/content/Context;)Ljava/lang/String;",
+                    &[JValue::Object(activity)],
+                )?
+                .l()?;
+            Ok(env.get_string(&JString::from(s))?.into())
+        });
+        match out {
+            Ok(s) => Some(s),
+            Err(e) => {
+                log::warn!("AlertAlarm.health failed: {e:?}");
+                None
+            }
+        }
+    }
+
+    /// Load a class through the activity's loader and hand it to `f` with the activity.
+    ///
+    /// The app's own classes are not on the JNI thread's default loader — `FindClass` from a
+    /// thread the JVM did not create only sees the system loader — so every call into our Kotlin
+    /// goes through `getClassLoader().loadClass()`.
+    fn with_class<T>(
+        name: &str,
+        f: impl FnOnce(&mut jni::JNIEnv, &JClass, &JObject) -> jni::errors::Result<T>,
+    ) -> jni::errors::Result<T> {
         let Some(app) = super::android::app() else {
-            return Ok(());
+            return Err(jni::errors::Error::NullPtr("no android app"));
         };
         let vm = unsafe { jni::JavaVM::from_raw(app.vm_as_ptr() as *mut jni::sys::JavaVM) }?;
         let mut env = vm.attach_current_thread()?;
@@ -419,26 +534,31 @@ mod android_alerts {
                 &[],
             )?
             .l()?;
-        let name = env.new_string("zip.batman.hookecho.AlertService")?;
+        let jname = env.new_string(name)?;
         let class = env
             .call_method(
                 &loader,
                 "loadClass",
                 "(Ljava/lang/String;)Ljava/lang/Class;",
-                &[(&name).into()],
+                &[(&jname).into()],
             )?
             .l()?;
-        let class = JClass::from(class);
-        let res = env.call_static_method(
-            &class,
-            "setEnabled",
-            "(Landroid/content/Context;Z)V",
-            &[JValue::Object(&activity), JValue::Bool(enabled as u8)],
-        );
-        if res.is_err() {
-            let _ = env.exception_clear();
-        }
-        res.map(|_| ())
+        f(&mut env, &JClass::from(class), &activity)
+    }
+
+    fn try_set(enabled: bool) -> jni::errors::Result<()> {
+        with_class("zip.batman.hookecho.AlertService", |env, class, activity| {
+            let res = env.call_static_method(
+                class,
+                "setEnabled",
+                "(Landroid/content/Context;Z)V",
+                &[JValue::Object(activity), JValue::Bool(enabled as u8)],
+            );
+            if res.is_err() {
+                let _ = env.exception_clear();
+            }
+            res.map(|_| ())
+        })
     }
 }
 
@@ -1034,4 +1154,19 @@ pub fn http_timeouts(b: reqwest::ClientBuilder) -> reqwest::ClientBuilder {
         .timeout(std::time::Duration::from_secs(30))
         .connect_timeout(std::time::Duration::from_secs(10));
     b
+}
+
+#[cfg(test)]
+mod health_tests {
+    use super::AlertHealth;
+
+    #[test]
+    fn health_line_parses_and_never_ran_is_none() {
+        let h = AlertHealth::parse("true\tfalse\ttrue\t-1\t42000").unwrap();
+        assert!(h.enabled && !h.exact && h.exempt);
+        assert_eq!(h.since_poll, None);
+        assert_eq!(h.until_next, Some(std::time::Duration::from_secs(42)));
+        // A short line is a Kotlin-side change we haven't followed; report nothing, not garbage.
+        assert_eq!(AlertHealth::parse("true\tfalse"), None);
+    }
 }

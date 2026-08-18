@@ -14,6 +14,9 @@ import android.content.Intent
 class BootReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         if (intent.action != Intent.ACTION_BOOT_COMPLETED) return
-        if (AlertService.isEnabled(context)) AlertWorker.enqueue(context)
+        if (!AlertService.isEnabled(context)) return
+        AlertWorker.enqueue(context)
+        // Alarms do not survive a reboot; this is the only thing that re-arms them.
+        AlertAlarm.arm(context)
     }
 }
