@@ -1386,6 +1386,30 @@ const ANDROID_LOOP_WINDOW: usize = 6;
 #[cfg(not(target_os = "android"))]
 const ANDROID_LOOP_WINDOW: usize = 6;
 
+/// Frame downloads allowed in flight at once, on top of the head poll and the frame being shown.
+///
+/// A phone (or a browser tab) on a cell radio gets nothing from a deeper queue: the frames arrive
+/// in the same total time and each one lands later than it would have with a queue behind it.
+const MAX_PREFETCH_INFLIGHT: usize =
+    if cfg!(target_os = "android") || cfg!(target_arch = "wasm32") {
+        2
+    } else {
+        4
+    };
+
+/// Which frames to pull in around the playhead, nearest first.
+///
+/// Playing only ever moves forward, so it looks ahead. Scrubbing can go either way and usually
+/// reverses, so it takes one behind as well — that one is what makes dragging the timeline back a
+/// frame feel instant instead of costing a fresh download.
+fn prefetch_offsets(playing: bool) -> &'static [isize] {
+    if playing {
+        &[1, 2, 3]
+    } else {
+        &[1, -1, 2, -2]
+    }
+}
+
 /// Loop frames the browser build keeps decoded at once — "the last fifteen minutes", which at a
 /// severe-weather VCP is four volumes. A wasm heap is 32-bit and a decoded volume is tens of MB,
 /// so this is a memory budget as much as a time window.
@@ -10141,12 +10165,11 @@ impl HookEchoApp {
                         self.spawn_frame_fetch(idx, s, id, ctx.clone());
                     }
                 }
-                // Pull the next two frames in behind the playhead, on their own in-flight book
-                // so they never compete with the frame being shown or with the head poll. Without
-                // this, playback is a serial download per frame with the loop stalled between.
-                if self.views[idx].timeline.playing {
-                    self.prefetch_frames(idx, ctx);
-                }
+                // Pull neighbouring frames in behind the playhead, on their own in-flight book so
+                // they never compete with the frame being shown or with the head poll. Without
+                // this, playback is a serial download per frame with the loop stalled between —
+                // and scrubbing, which runs this same path paused, was a cold download per step.
+                self.prefetch_frames(idx, ctx);
             }
         }
     }
@@ -10187,18 +10210,22 @@ impl HookEchoApp {
     fn prefetch_frames(&mut self, idx: usize, ctx: &egui::Context) {
         self.prefetching
             .retain(|_, at| at.elapsed() < std::time::Duration::from_secs(15));
-        if self.prefetching.len() >= 2 {
+        if self.prefetching.len() >= MAX_PREFETCH_INFLIGHT {
             return;
         }
         let Some(site) = self.views[idx].site.clone() else {
             return;
         };
         let tl = &self.views[idx].timeline;
-        let next: Vec<Identifier> = (1..=2)
-            .filter_map(|d| tl.frames.get(tl.playhead + d))
+        let wanted: Vec<Identifier> = prefetch_offsets(tl.playing)
+            .iter()
+            .filter_map(|d| tl.frames.get(tl.playhead.checked_add_signed(*d)?))
             .cloned()
             .collect();
-        for id in next {
+        for id in wanted {
+            if self.prefetching.len() >= MAX_PREFETCH_INFLIGHT {
+                break;
+            }
             self.spawn_prefetch(idx, id, &site, ctx);
         }
     }
@@ -10236,7 +10263,7 @@ impl HookEchoApp {
     fn backfill_loop_frames(&mut self, idx: usize, ctx: &egui::Context) {
         self.prefetching
             .retain(|_, at| at.elapsed() < std::time::Duration::from_secs(15));
-        if self.prefetching.len() >= 2 {
+        if self.prefetching.len() >= MAX_PREFETCH_INFLIGHT {
             return;
         }
         let Some(site) = self.views[idx].site.clone() else {
@@ -10247,7 +10274,7 @@ impl HookEchoApp {
         let start = tl.frames.len().saturating_sub(window);
         let tail: Vec<Identifier> = tl.frames[start..].iter().rev().cloned().collect();
         for id in tail {
-            if self.prefetching.len() >= 2 {
+            if self.prefetching.len() >= MAX_PREFETCH_INFLIGHT {
                 break;
             }
             self.spawn_prefetch(idx, id, &site, ctx);
@@ -16806,6 +16833,23 @@ mod field_lut_tests {
 
 #[cfg(test)]
 mod tests {
+
+    /// Scrubbing reverses constantly, so the paused set has to reach backwards as well; playback
+    /// only ever goes forward. Nearest frames come first either way, because the in-flight budget
+    /// usually runs out before the list does.
+    #[test]
+    fn prefetch_reaches_backwards_only_when_paused() {
+        let playing = super::prefetch_offsets(true);
+        assert!(playing.iter().all(|d| *d > 0), "playback never looks back");
+        let paused = super::prefetch_offsets(false);
+        assert!(paused.contains(&-1), "scrubbing back a frame must be warm");
+        assert_eq!(paused[0], 1, "nearest frame first");
+        for set in [playing, paused] {
+            let mut sorted = set.to_vec();
+            sorted.sort_by_key(|d| d.abs());
+            assert_eq!(set, sorted.as_slice(), "nearest-first order");
+        }
+    }
 
     #[test]
     fn goto_extras_carry_basemap_and_srv() {
