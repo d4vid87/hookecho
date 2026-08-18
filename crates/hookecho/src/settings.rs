@@ -111,6 +111,10 @@ impl AlertSound {
     }
 }
 
+fn default_custom_tile_max_z() -> u8 {
+    19
+}
+
 fn default_volume() -> f32 {
     0.2
 }
@@ -155,6 +159,16 @@ pub struct Settings {
     /// MapTiler API key (enables the MapTiler raster basemap styles). Held locally only.
     #[serde(default)]
     pub maptiler_key: String,
+    /// `{z}/{x}/{y}` tile URL template for the "Custom (XYZ URL)" basemap. Validated at the
+    /// settings boundary — see [`crate::tiles::valid_xyz_template`] — and desktop/Android only.
+    #[serde(default)]
+    pub custom_tile_url: String,
+    /// Max zoom the custom tile source serves. Deeper views stretch the deepest tile that loaded.
+    #[serde(default = "default_custom_tile_max_z")]
+    pub custom_tile_max_z: u8,
+    /// Attribution line to paint for the custom tile source.
+    #[serde(default)]
+    pub custom_tile_attribution: String,
     /// WeatherFlow Tempest personal access token — adds your Tempest stations to the live station
     /// cards. Held locally only, same as the basemap keys.
     #[serde(default)]
@@ -254,6 +268,11 @@ pub struct Settings {
     /// are what a chase pack is for; the raster imagery alone leaves you without road names.
     #[serde(default = "default_true")]
     pub pack_include_vector: bool,
+    /// Include satellite imagery in a chase pack even when the active basemap is vector. The
+    /// mirror of `pack_include_vector`: a road map offline is no help for spotting a wall cloud
+    /// against terrain you have never seen.
+    #[serde(default)]
+    pub pack_include_satellite: bool,
     /// User-drawn zones that alert when an NWS warning polygon intersects them. The Android
     /// background service reads this file too, so the name is load-bearing across the boundary.
     #[serde(default)]
@@ -880,6 +899,9 @@ impl Default for Settings {
             detectors: DetectorTuning::default(),
             alert_rules: Vec::new(),
             serve_token: String::new(),
+            custom_tile_url: String::new(),
+            custom_tile_max_z: default_custom_tile_max_z(),
+            custom_tile_attribution: String::new(),
             quiet_pending: Vec::new(),
             volume_cache_mb: 0,
             tile_disk_cache_mb: 0,
@@ -933,6 +955,7 @@ impl Default for Settings {
             background_alerts: false,
             pack_hires_dem: false,
             pack_include_vector: true,
+            pack_include_satellite: false,
             alert_polygons: Vec::new(),
             plugins: Vec::new(),
             close_to_tray: false,
@@ -1256,6 +1279,9 @@ mod tests {
     #[test]
     fn roundtrips() {
         let s = Settings {
+            custom_tile_url: String::new(),
+            custom_tile_max_z: default_custom_tile_max_z(),
+            custom_tile_attribution: String::new(),
             detectors: DetectorTuning::default(),
             alert_rules: Vec::new(),
             serve_token: String::new(),
@@ -1330,6 +1356,7 @@ mod tests {
             background_alerts: false,
             pack_hires_dem: false,
             pack_include_vector: true,
+            pack_include_satellite: false,
             alert_polygons: Vec::new(),
             plugins: Vec::new(),
             close_to_tray: true,

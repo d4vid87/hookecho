@@ -441,12 +441,13 @@ impl super::HookEchoApp {
             !self.settings.mapbox_key.is_empty(),
             !self.settings.maptiler_key.is_empty(),
         );
+        let cx = crate::tiles::valid_xyz_template(&self.settings.custom_tile_url);
         let cur = self.views[self.active].basemap;
         let mut pick = None;
         ui.label(egui::RichText::new("Basemap").size(crate::ui::m3::T_LABEL_LG));
         ui.horizontal_wrapped(|ui| {
             for s in BasemapStyle::COMMON {
-                if s.available(mb, mt)
+                if s.available(mb, mt, cx)
                     && crate::ui::m3::chip(ui, s.short_label(), s == cur).clicked()
                 {
                     pick = Some(s);
@@ -461,7 +462,7 @@ impl super::HookEchoApp {
             .show(ui, |ui| {
                 ui.horizontal_wrapped(|ui| {
                     for s in BasemapStyle::ALL {
-                        if BasemapStyle::COMMON.contains(&s) || !s.available(mb, mt) {
+                        if BasemapStyle::COMMON.contains(&s) || !s.available(mb, mt, cx) {
                             continue;
                         }
                         if crate::ui::m3::chip(ui, s.label(), s == cur).clicked() {
