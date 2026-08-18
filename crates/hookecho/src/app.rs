@@ -11365,7 +11365,7 @@ impl HookEchoApp {
             };
             let z = cam.zoom;
             let mut labels: Vec<&crate::vector_tiles::PlaceLabel> =
-                vlabels.iter().filter(|l| l.city || z >= 9.0).collect();
+                vlabels.iter().filter(|l| z >= l.min_zoom as f64).collect();
             labels.sort_by_key(|l| (!l.city, l.rank));
             let mut placed: Vec<egui::Rect> = Vec::new();
             let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
