@@ -329,6 +329,13 @@ pub struct Settings {
     /// 0 lets everything through, which is the default.
     #[serde(default)]
     pub alert_min_escalation: u8,
+    /// Alerts inside `alert_rollup_window_min` before pushes collapse into one rolling summary.
+    /// 0 turns the rollup off. Escalated alerts always push as themselves.
+    #[serde(default = "default_alert_rollup_threshold")]
+    pub alert_rollup_threshold: usize,
+    /// Window the rollup threshold counts over, in minutes.
+    #[serde(default = "default_alert_rollup_window_min")]
+    pub alert_rollup_window_min: u64,
     /// Chime when a new radar volume lands on the live pane in view.
     #[serde(default)]
     pub scan_chime: bool,
@@ -496,6 +503,12 @@ fn default_quiet_start() -> u32 {
     22
 }
 
+pub fn default_alert_rollup_threshold() -> usize {
+    5
+}
+pub fn default_alert_rollup_window_min() -> u64 {
+    10
+}
 fn default_quiet_end() -> u32 {
     7
 }
@@ -951,6 +964,8 @@ impl Default for Settings {
             quiet_start_hour: default_quiet_start(),
             quiet_end_hour: default_quiet_end(),
             alert_min_escalation: 0,
+            alert_rollup_threshold: default_alert_rollup_threshold(),
+            alert_rollup_window_min: default_alert_rollup_window_min(),
             scan_chime: false,
             scan_sound: default_scan_sound(),
             warn_sound: AlertSound::default(),

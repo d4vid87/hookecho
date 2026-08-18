@@ -1977,6 +1977,9 @@ pub struct HookEchoApp {
     /// Held across a restart through `Settings::quiet_pending`, written on exit: a quiet window
     /// that spans a relaunch still owes its catch-up.
     quiet_queue: std::sync::Mutex<Vec<(String, String)>>,
+    /// Outbreak rollup state. A `Mutex` for the same reason `quiet_queue` is one: `notify_alert`
+    /// takes `&self`.
+    rollup: std::sync::Mutex<crate::alert_rollup::Rollup>,
     /// Whether the last frame was inside quiet hours, so the end of the window is an edge.
     was_quiet: bool,
     /// Where a requested screenshot should go once the image event arrives.
@@ -2749,6 +2752,7 @@ impl HookEchoApp {
             rotation_alerted: std::collections::HashMap::new(),
             last_chime: None,
             quiet_queue: std::sync::Mutex::new(quiet_pending),
+            rollup: std::sync::Mutex::default(),
             was_quiet: false,
             screenshot_pending: None,
             share_card: None,
@@ -4672,7 +4676,34 @@ impl HookEchoApp {
             return;
         }
         let http = self.http.clone();
-        let (title, body) = (title.to_string(), body.to_string());
+        let (mut title, mut body) = (title.to_string(), body.to_string());
+
+        // Outbreak mode: past the threshold, one rolling summary goes out instead of one push per
+        // warning. Escalated alerts are exempt — those are the ones worth a buzz each.
+        // ponytail: the summary is a fresh notification each refresh, not an in-place replace;
+        // desktop replace-by-tag and the Android fixed notification id can land with the rest of
+        // the Android delivery stack.
+        if !urgent && self.settings.alert_rollup_threshold > 0 {
+            let window =
+                std::time::Duration::from_secs(self.settings.alert_rollup_window_min.max(1) * 60);
+            let decision = self.rollup.lock().map(|mut r| {
+                r.offer(
+                    Instant::now(),
+                    &title,
+                    self.settings.alert_rollup_threshold,
+                    window,
+                )
+            });
+            match decision {
+                Ok(crate::alert_rollup::Decision::Hold) => return,
+                Ok(crate::alert_rollup::Decision::Rollup(text)) => {
+                    title = "Multiple alerts".to_string();
+                    body = text;
+                }
+                _ => {}
+            }
+        }
+        let (title, body) = (title, body);
 
         if self.settings.desktop_notify {
             crate::notify::desktop(&title, &body);

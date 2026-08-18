@@ -904,6 +904,23 @@ fn alerts_tab(ui: &mut egui::Ui, settings: &mut Settings) {
         }
     });
     ui.weak("Quieter warnings still banner and still show in the alert list.");
+    ui.horizontal(|ui| {
+        ui.label("Roll up after");
+        ui.add(
+            egui::DragValue::new(&mut settings.alert_rollup_threshold)
+                .range(0..=50)
+                .suffix(" alerts"),
+        );
+        ui.label("within");
+        ui.add(
+            egui::DragValue::new(&mut settings.alert_rollup_window_min)
+                .range(1..=120)
+                .suffix(" min"),
+        );
+    });
+    ui.weak(
+        "On an outbreak day, pushes past that rate collapse into one rolling summary instead of          one buzz per warning. 0 turns it off; escalated warnings always push as themselves.",
+    );
 
     ui.add_space(8.0);
     ui.separator();

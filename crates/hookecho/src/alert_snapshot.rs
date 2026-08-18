@@ -85,6 +85,7 @@ mod tests {
                 tornado_detection: None,
                 damage_threat: None,
                 source: None,
+                vtec: None,
                 motion: None,
             }),
         }
