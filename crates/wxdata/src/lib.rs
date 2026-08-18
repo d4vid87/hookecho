@@ -51,6 +51,7 @@ pub mod task;
 pub mod tds;
 pub mod tdwr;
 pub mod torclimo;
+pub mod towers;
 pub mod tropical;
 pub mod tz;
 pub mod verify;

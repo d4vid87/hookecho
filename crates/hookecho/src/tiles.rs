@@ -369,6 +369,12 @@ impl BasemapStyle {
         self
     }
 
+    /// Stable small id for this style, used to key the GPU/fetch caches so panes showing
+    /// different basemaps don't overwrite each other's tiles. Index into [`Self::ALL`].
+    pub fn key(self) -> u8 {
+        Self::ALL.iter().position(|s| *s == self).unwrap_or(0) as u8
+    }
+
     /// Per-style cache subdir so sources don't collide on disk. Keys never appear here.
     fn provider(self) -> String {
         // 512-px tiles share the tile grid with the 256-px ones they replace, so a cache written
@@ -601,13 +607,14 @@ pub async fn fetch_goes_times(
 
 struct FetchedTile {
     id: TileId,
+    style: u8,
     rgba: Vec<u8>,
     width: u32,
     height: u32,
 }
 
 /// A finished fetch, or the id of one that failed (so it can leave `requested` and be retried).
-type TileResult = Result<FetchedTile, TileId>;
+type TileResult = Result<FetchedTile, crate::render::TileKey>;
 
 /// How many tile fetches may be in flight at once. A screenful is ~28 tiles, and firing all of
 /// them at a CDN at once means 28 TLS handshakes competing for the same radio: the first tile
@@ -629,15 +636,16 @@ pub struct TileManager {
     /// Fetches currently in flight, shared with the tasks so they can decrement on the way out.
     inflight: std::sync::Arc<std::sync::atomic::AtomicUsize>,
     /// Tiles whose fetch failed, and when. Retried after [`RETRY_AFTER`].
-    failed: std::collections::HashMap<TileId, wxdata::clock::Instant>,
-    requested: HashSet<TileId>,
+    failed: std::collections::HashMap<crate::render::TileKey, wxdata::clock::Instant>,
+    requested: HashSet<crate::render::TileKey>,
     /// Tiles believed to be live on the GPU, newest-touched first. This mirrors the renderer's
     /// tile map exactly: the CPU side decides what gets evicted and tells the renderer, so the
     /// two can never disagree about whether a tile still exists.
-    uploaded: LruCache<TileId, ()>,
+    uploaded: LruCache<crate::render::TileKey, ()>,
     /// Ids evicted by the last `touch_visible`, handed to the renderer to drop.
-    evicted: Vec<TileId>,
-    style: BasemapStyle,
+    evicted: Vec<crate::render::TileKey>,
+    /// Tiles counted visible across all panes this frame; drives the eviction high-water mark.
+    frame_visible: usize,
     cache_root: Option<std::path::PathBuf>,
     mapbox_key: String,
     maptiler_key: String,
@@ -667,7 +675,7 @@ impl TileManager {
             requested: HashSet::new(),
             uploaded: LruCache::new(NonZeroUsize::new(RASTER_TILE_CACHE).unwrap()),
             evicted: Vec::new(),
-            style: BasemapStyle::Dark,
+            frame_visible: 0,
             cache_root,
             mapbox_key: String::new(),
             maptiler_key: String::new(),
@@ -698,39 +706,29 @@ impl TileManager {
         }
     }
 
-    /// Switch basemap source. Returns true if the style changed (caller should clear the GPU
-    /// tile cache so stale tiles from the old source aren't shown).
-    pub fn set_style(&mut self, style: BasemapStyle) -> bool {
-        if self.style == style {
-            return false;
-        }
-        self.style = style;
-        self.requested.clear();
-        self.uploaded.clear();
-        true
-    }
-
     /// Integer tile ids covering the current view, and their world-space rects. `zoom_bias`
     /// pulls sharper tiles on high-DPI displays (see [`tile_cover`]).
     pub fn visible(
         &self,
+        style: BasemapStyle,
         cam: &Camera,
         viewport_px: (f32, f32),
         zoom_bias: f64,
     ) -> Vec<VisibleTile> {
-        tile_cover(cam, viewport_px, self.style.max_raster_z(), zoom_bias)
+        tile_cover(cam, viewport_px, style.max_raster_z(), zoom_bias)
     }
 
     /// Kick off fetches for any visible tiles not yet requested.
-    pub fn request_missing(&mut self, visible: &[VisibleTile]) {
+    pub fn request_missing(&mut self, style: BasemapStyle, visible: &[VisibleTile]) {
         use std::sync::atomic::Ordering;
+        let skey = style.key();
         for v in visible {
-            if self.requested.contains(&v.id) {
+            if self.requested.contains(&(skey, v.id)) {
                 continue;
             }
             if self
                 .failed
-                .get(&v.id)
+                .get(&(skey, v.id))
                 .is_some_and(|t| t.elapsed() < RETRY_AFTER)
             {
                 continue;
@@ -740,15 +738,13 @@ impl TileManager {
                 break;
             }
             let (z, x, y) = v.id;
-            let Some(mut url) = self
-                .style
-                .url(z, x, y, &self.mapbox_key, &self.maptiler_key)
+            let Some(mut url) = style.url(z, x, y, &self.mapbox_key, &self.maptiler_key)
             else {
                 continue;
             };
             // GOES frame time: rewrite the `default` time slot in the GIBS URL and tag the cache
             // dir so different frames don't collide. Latest (`None`) keeps `default`.
-            let time_tag = match (self.style.goes_layer(), self.goes_time) {
+            let time_tag = match (style.goes_layer(), self.goes_time) {
                 (Some(_), Some(t)) => {
                     let iso = t.format("%Y-%m-%dT%H:%M:%SZ").to_string();
                     url = url.replace(
@@ -759,9 +755,9 @@ impl TileManager {
                 }
                 _ => "default".to_string(),
             };
-            self.requested.insert(v.id);
+            self.requested.insert((skey, v.id));
             let path = self.cache_root.as_ref().map(|d| {
-                d.join(self.style.provider())
+                d.join(style.provider())
                     .join(&time_tag)
                     .join(format!("{z}/{x}/{y}"))
             });
@@ -784,12 +780,13 @@ impl TileManager {
                             let (w, h) = rgba.dimensions();
                             FetchedTile {
                                 id: (z, x, y),
+                                style: skey,
                                 rgba: rgba.into_raw(),
                                 width: w,
                                 height: h,
                             }
                         });
-                    let _ = tx.send(decoded.ok_or((z, x, y)));
+                    let _ = tx.send(decoded.ok_or((skey, (z, x, y))));
                     inflight.fetch_sub(1, Ordering::Relaxed);
                     if let Some(ctx) = ctx {
                         ctx.request_repaint();
@@ -885,11 +882,12 @@ impl TileManager {
                     continue;
                 }
             };
-            self.failed.remove(&t.id);
+            let key = (t.style, t.id);
+            self.failed.remove(&key);
             // `push` (not `put`) hands back whatever it evicted, so the renderer can free the
             // texture instead of leaking it.
-            let evicted = self.uploaded.push(t.id, ());
-            if let Some((id, _)) = evicted.filter(|(id, _)| *id != t.id) {
+            let evicted = self.uploaded.push(key, ());
+            if let Some((id, _)) = evicted.filter(|(id, _)| *id != key) {
                 self.requested.remove(&id);
                 self.evicted.push(id);
             } else if evicted.is_some() {
@@ -897,6 +895,7 @@ impl TileManager {
             }
             ready.push(PendingTile {
                 id: t.id,
+                style: t.style,
                 rgba: t.rgba,
                 width: t.width,
                 height: t.height,
@@ -910,16 +909,26 @@ impl TileManager {
         self.ctx = Some(ctx);
     }
 
-    /// Mark this frame's tiles as most-recently-used and return anything that fell out of the
-    /// cache, so the renderer can free it. Tiles on screen are touched first and so can never be
-    /// the ones evicted; an evicted tile also drops out of `requested`, so revisiting that area
-    /// re-fetches it (from disk, usually) instead of leaving a black square.
-    pub fn touch_visible(&mut self, visible: &[VisibleTile]) -> Vec<TileId> {
-        // Grow to fit a wide view: the cap is a resting size, not a per-frame limit.
-        let want = RASTER_TILE_CACHE.max(visible.len() + 16);
+    /// Mark this frame's tiles as most-recently-used. Called once per pane, because panes can
+    /// show different basemaps and each pane's tiles must survive the others' eviction pass.
+    /// Eviction itself runs once per frame in [`Self::evict_excess`], after every pane has been
+    /// counted — evicting mid-frame would drop tiles a later pane still needs.
+    pub fn promote_visible(&mut self, style: BasemapStyle, visible: &[VisibleTile]) {
+        let skey = style.key();
         for v in visible {
-            self.uploaded.promote(&v.id);
+            self.uploaded.promote(&(skey, v.id));
         }
+        self.frame_visible += visible.len();
+    }
+
+    /// Shrink the cache back to its resting size and return what fell out, so the renderer can
+    /// free those textures. Run after the last pane's [`Self::promote_visible`].
+    pub fn evict_excess(&mut self) -> Vec<crate::render::TileKey> {
+        // Grow to fit a wide (or multi-pane) frame: the cap is a resting size, not a per-frame
+        // limit. An evicted tile also drops out of `requested`, so revisiting that area re-fetches
+        // it (from disk, usually) instead of leaving a black square.
+        let want = RASTER_TILE_CACHE.max(self.frame_visible + 16);
+        self.frame_visible = 0;
         // Pop down to size FIRST: shrinking an `LruCache` evicts silently, and a silently evicted
         // tile is a texture the renderer never hears about again.
         while self.uploaded.len() > want {
@@ -963,6 +972,7 @@ pub async fn fetch_visible(
                     let (w, h) = rgba.dimensions();
                     out.push(PendingTile {
                         id: v.id,
+                        style: style.key(),
                         rgba: rgba.into_raw(),
                         width: w,
                         height: h,
@@ -1230,6 +1240,18 @@ pub fn start_pack_download(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Panes render their own basemap, so the caches are keyed by style as well as tile id. Two
+    /// styles must never collapse onto the same key — that is what put one pane's imagery under
+    /// another pane's radar.
+    #[test]
+    fn style_keys_are_unique() {
+        let mut seen = std::collections::HashSet::new();
+        for s in BasemapStyle::ALL {
+            assert!(seen.insert(s.key()), "duplicate style key for {s:?}");
+        }
+        assert_eq!(seen.len(), BasemapStyle::ALL.len());
+    }
 
     #[test]
     fn cache_caps_fall_back_to_the_platform_default_at_zero() {

@@ -38,6 +38,14 @@
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <!-- Re-arms the WorkManager poll after a reboot; see BootReceiver. -->
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <!-- An exact alarm is the only schedule Doze honours on time, and a warning delivered on the
+         OS's deferred schedule is not a warning. The user-grantable permission, not USE_EXACT_ALARM
+         (reserved for alarm-clock and calendar apps); denied, we fall back to inexact and say so in
+         the delivery-health panel. See AlertAlarm. -->
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
+    <!-- Prompts for the battery-optimisation exemption that decides whether overnight alerts
+         arrive on a Samsung. Play-policy-sensitive; see the note in AlertAlarm.requestExemption. -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
 
     <!-- The wgpu backend is Vulkan; require Vulkan 1.1 (0x00400003). -->
     <uses-feature
@@ -126,6 +134,12 @@
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
             </intent-filter>
         </receiver>
+
+        <!-- Exact-alarm poll: the leg that keeps working when the service is dead. Not exported;
+             only our own PendingIntent triggers it. -->
+        <receiver
+            android:name=".AlertAlarm"
+            android:exported="false" />
 
         <service
             android:name=".AlertService"

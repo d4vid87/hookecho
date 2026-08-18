@@ -58,6 +58,38 @@ pub fn beam_height_km(slant_km: f64, elev_deg: f64) -> f64 {
         - R_EFF_KM
 }
 
+/// Slant range (km) to the point where the `elev_deg` beam passes over a ground range of
+/// `ground_km`, under the same 4/3-earth model as [`beam_height_km`].
+///
+/// This replaces `ground_km / cos(elev)`, which is the flat-earth answer. Under the 4/3-earth
+/// model the ground arc subtends an angle at the earth's centre, and the beam climbs away from
+/// the surface as it goes; the closed form falls out of the plane triangle formed by the earth's
+/// centre, the radar and the target:
+///
+/// ```text
+///     theta = ground_km / R_eff              (angle subtended at the centre)
+///     slant = R_eff * sin(theta) / cos(elev + theta)
+/// ```
+///
+/// As `R_eff` grows the angle vanishes and this collapses back to `ground_km / cos(elev)`, which
+/// is why the old approximation was good close in and drifted with range.
+pub fn slant_from_ground_km(ground_km: f64, elev_deg: f64) -> f64 {
+    let theta = ground_km / R_EFF_KM;
+    let denom = (elev_deg.to_radians() + theta).cos();
+    if denom.abs() < 1e-9 {
+        return ground_km;
+    }
+    R_EFF_KM * theta.sin() / denom
+}
+
+/// Ground range (km) under the beam at slant range `slant_km` — the inverse of
+/// [`slant_from_ground_km`], used to check it.
+pub fn ground_from_slant_km(slant_km: f64, elev_deg: f64) -> f64 {
+    let h = beam_height_km(slant_km, elev_deg);
+    let e = elev_deg.to_radians();
+    R_EFF_KM * (slant_km * e.cos() / (R_EFF_KM + h)).clamp(-1.0, 1.0).asin()
+}
+
 /// Great-circle distance (km) and initial bearing (deg from north) from `(lon0,lat0)` to `(lon,lat)`.
 pub(crate) fn dist_bearing(lon0: f64, lat0: f64, lon: f64, lat: f64) -> (f64, f64) {
     let (p0, p1) = (lat0.to_radians(), lat.to_radians());
@@ -84,9 +116,7 @@ pub(crate) fn column_samples(
     out.clear();
     for s in sweeps {
         let e = s.elevation_deg as f64;
-        // ponytail: flat-fan slant approximation (ground/cos elev); exact inversion of the
-        // 4/3-earth ground-range formula only matters past ~200 km — fine for interrogation.
-        let slant = ground_km / e.to_radians().cos();
+        let slant = slant_from_ground_km(ground_km, e);
         let gate = ((slant - s.first_gate_km as f64) / s.gate_interval_km.max(f32::EPSILON) as f64)
             .round();
         if gate < 0.0 || gate as usize >= s.gate_count {
@@ -211,5 +241,39 @@ mod tests {
         assert_eq!(sample_profile(&s, 2.0), Some(30.0)); // midpoint
         assert_eq!(sample_profile(&s, 1.0), Some(20.0));
         assert_eq!(sample_profile(&s, 10.0), None); // far above top beam
+    }
+
+    /// The slant/ground conversion has to round-trip, or the cross-section is sampling the wrong
+    /// gate and drawing it at the wrong height.
+    #[test]
+    fn slant_and_ground_range_are_inverses() {
+        for elev in [0.5_f64, 1.5, 4.3, 10.0, 19.5] {
+            for ground in [1.0_f64, 10.0, 50.0, 100.0, 200.0, 300.0] {
+                let slant = slant_from_ground_km(ground, elev);
+                let back = ground_from_slant_km(slant, elev);
+                assert!(
+                    (back - ground).abs() < 0.01,
+                    "elev {elev} ground {ground}: round-tripped to {back}"
+                );
+                // The beam never gets closer than the ground range it covers.
+                assert!(slant >= ground - 1e-6, "elev {elev} ground {ground}");
+            }
+        }
+    }
+
+    /// What the flat-earth approximation this replaced actually cost. Close in it was right to
+    /// centimetres; at long range it put the sample in the wrong gate.
+    #[test]
+    fn the_flat_earth_approximation_drifts_with_range() {
+        let flat = |g: f64, e: f64| g / e.to_radians().cos();
+        assert!((slant_from_ground_km(10.0, 0.5) - flat(10.0, 0.5)).abs() < 0.01);
+        // A quarter-kilometre gate is 250 m wide. The error grows with both range and tilt: at
+        // 0.5° it stays inside a gate all the way out, but the upper tilts of a VCP walk clear of
+        // one — at 4.3° and 230 km the old formula was two gates out, so the cross-section read
+        // the wrong gate *and* drew it at the wrong height.
+        let err = (slant_from_ground_km(230.0, 4.3) - flat(230.0, 4.3)).abs();
+        assert!(err > 0.5, "expected a multi-gate error at long range, got {err} km");
+        // And still under a gate where most interrogation happens.
+        assert!((slant_from_ground_km(100.0, 0.5) - flat(100.0, 0.5)).abs() < 0.25);
     }
 }

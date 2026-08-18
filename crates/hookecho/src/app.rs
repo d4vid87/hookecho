@@ -1386,6 +1386,30 @@ const ANDROID_LOOP_WINDOW: usize = 6;
 #[cfg(not(target_os = "android"))]
 const ANDROID_LOOP_WINDOW: usize = 6;
 
+/// Frame downloads allowed in flight at once, on top of the head poll and the frame being shown.
+///
+/// A phone (or a browser tab) on a cell radio gets nothing from a deeper queue: the frames arrive
+/// in the same total time and each one lands later than it would have with a queue behind it.
+const MAX_PREFETCH_INFLIGHT: usize =
+    if cfg!(target_os = "android") || cfg!(target_arch = "wasm32") {
+        2
+    } else {
+        4
+    };
+
+/// Which frames to pull in around the playhead, nearest first.
+///
+/// Playing only ever moves forward, so it looks ahead. Scrubbing can go either way and usually
+/// reverses, so it takes one behind as well — that one is what makes dragging the timeline back a
+/// frame feel instant instead of costing a fresh download.
+fn prefetch_offsets(playing: bool) -> &'static [isize] {
+    if playing {
+        &[1, 2, 3]
+    } else {
+        &[1, -1, 2, -2]
+    }
+}
+
 /// Loop frames the browser build keeps decoded at once — "the last fifteen minutes", which at a
 /// severe-weather VCP is four volumes. A wasm heap is 32-bit and a decoded volume is tens of MB,
 /// so this is a memory budget as much as a time window.
@@ -1690,6 +1714,8 @@ pub struct HookEchoApp {
     spawner: crate::rt::Spawner,
     tiles: TileManager,
     vtiles: crate::vector_tiles::VectorTileManager,
+    /// One shared label-occupancy pass for the whole frame — see [`crate::labelplace`].
+    labels: crate::labelplace::Placer,
     settings: Settings,
     saved: Settings,
     views: Vec<MapView>,
@@ -1918,6 +1944,9 @@ pub struct HookEchoApp {
     raob_rx: Option<std::sync::mpsc::Receiver<Result<wxdata::sounding::Sounding, String>>>,
     /// Last spoken storm-position update: when, and the distance in whole miles it reported.
     spoke_pos: Option<(Instant, i32)>,
+    /// Detections seen recently, for compound rules to ask "and was there also…". Trimmed to the
+    /// compound window every pass, so it stays a handful of entries.
+    recent_hits: Vec<(crate::settings::RuleTrigger, crate::rules::Detection, Instant)>,
     /// Chase mode: follow a position, auto-switching the active pane to the nearest radar.
     chase_mode: bool,
     chase_pos: Option<(f64, f64)>,
@@ -2573,6 +2602,7 @@ impl HookEchoApp {
 
         let mut app = Self {
             vtiles,
+            labels: crate::labelplace::Placer::default(),
             spawner,
             #[cfg(not(target_arch = "wasm32"))]
             _rt: rt,
@@ -2722,6 +2752,7 @@ impl HookEchoApp {
             raob_rx: None,
             chase_mode: false,
             spoke_pos: None,
+            recent_hits: Vec::new(),
             chase_pos: None,
             chase_track: crate::chaselog::Track::default(),
             climo_tracks: None,
@@ -3235,8 +3266,9 @@ impl HookEchoApp {
         let beam = crate::elevation::BeamSite {
             lon: site.longitude as f64,
             lat: site.latitude as f64,
-            // The site registry is the elevation source; `elevation::TOWER_M` adds the antenna.
+            // The site registry is the elevation source; the tower table adds the antenna.
             ground_m: site.elevation_meters as f64,
+            tower_m: wxdata::towers::tower_m(site.id),
             tilt_deg: tilt_deg as f64,
         };
         self.blockage_pending = Some((key.clone(), Instant::now()));
@@ -3968,11 +4000,23 @@ impl HookEchoApp {
                             }),
                     };
                     if reaches {
-                        let place = crate::rules::place_label(&rule.place, &self.settings);
-                        let title = format!("\u{25c9} {}", rule.title());
-                        let body = format!("{} at {place}", a.event);
-                        self.notify_alert(&title, &body, rule.urgent);
-                        self.banner(title, body);
+                        // The warning's own centroid stands in for a detection, so a warning rule
+                        // can carry extra conditions like every other rule ("a tornado warning,
+                        // and also rotation within 20 km").
+                        let hit = f
+                            .rings
+                            .first()
+                            .filter(|r| !r.is_empty())
+                            .map(|ring| {
+                                let n = ring.len() as f64;
+                                let (x, y) =
+                                    ring.iter().fold((0.0, 0.0), |(x, y), p| (x + p[0], y + p[1]));
+                                crate::rules::Detection::at(x / n, y / n)
+                            })
+                            .unwrap_or(crate::rules::Detection::at(0.0, 0.0));
+                        if crate::rules::compound_ok(&rule, &hit, &self.recent_for_rules()) {
+                            self.fire_rule_named(&rule, &hit, Some(a.event.clone()));
+                        }
                     }
                 }
                 let zone_name = zone;
@@ -4103,6 +4147,13 @@ impl HookEchoApp {
                 _ => Vec::new(),
             }
         };
+        // Every scan detector's hits are remembered, not only the armed ones: a compound rule
+        // asks about a trigger no rule is armed on all the time ("rotation and also a TDS").
+        for t in [T::Tds, T::Tbss, T::ZdrColumn, T::Rotation] {
+            let h = hits(&t);
+            self.note_hits(&t, &h);
+        }
+        let recent = self.recent_for_rules();
         for rule in self.settings.alert_rules.clone() {
             if !rule.enabled || !rule.trigger.is_scan() {
                 continue;
@@ -4116,6 +4167,9 @@ impl HookEchoApp {
                     d(a).total_cmp(&d(b))
                 });
             let Some(hit) = hit else { continue };
+            if !crate::rules::compound_ok(&rule, &hit, &recent) {
+                continue;
+            }
             self.fire_rule(&rule, &hit);
         }
     }
@@ -4162,7 +4216,10 @@ impl HookEchoApp {
                         .total_cmp(&b.strength.unwrap_or(0.0))
                 });
             if let Some(hit) = best {
-                self.fire_rule(&rule, &hit);
+                self.note_hits(&crate::settings::RuleTrigger::GlmFed, &[hit]);
+                if crate::rules::compound_ok(&rule, &hit, &self.recent_for_rules()) {
+                    self.fire_rule(&rule, &hit);
+                }
             }
         }
     }
@@ -4202,7 +4259,10 @@ impl HookEchoApp {
                 })
                 .copied();
             if let Some(hit) = worst {
-                self.fire_rule(&rule, &hit);
+                self.note_hits(&crate::settings::RuleTrigger::ProbSevere, &[hit]);
+                if crate::rules::compound_ok(&rule, &hit, &self.recent_for_rules()) {
+                    self.fire_rule(&rule, &hit);
+                }
             }
         }
     }
@@ -4219,10 +4279,64 @@ impl HookEchoApp {
         crate::geo::great_circle([site.longitude as f64, site.latitude as f64], [lon, lat]).0
     }
 
+    /// Kick off a backtest of one rule against an archive day, on the shared runtime.
+    ///
+    /// The site is whichever radar the active pane is on: a rule about a place is only replayable
+    /// against a radar that can see it, and the pane the user is looking at is the best guess
+    /// anyone can make without asking.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn start_backtest(&mut self, rule_idx: usize, day: chrono::NaiveDate) {
+        let Some(rule) = self.settings.alert_rules.get(rule_idx).cloned() else {
+            return;
+        };
+        let Some(site) = self.views[self.active].site.clone() else {
+            return;
+        };
+        let shared: crate::backtest::Shared = Default::default();
+        self.rules_window.backtest = Some(shared.clone());
+        let settings = self.settings.clone();
+        self.spawner.spawn(crate::backtest::run(
+            site, day, rule, settings, shared,
+        ));
+    }
+
+    /// Remember detections so a compound rule can ask about them next pass, and forget anything
+    /// older than the compound window.
+    fn note_hits(&mut self, trigger: &crate::settings::RuleTrigger, hits: &[crate::rules::Detection]) {
+        let window = std::time::Duration::from_secs_f64(crate::rules::COMPOUND_WINDOW_MIN * 60.0);
+        self.recent_hits.retain(|(_, _, t)| t.elapsed() < window);
+        for h in hits {
+            self.recent_hits.push((trigger.clone(), *h, Instant::now()));
+        }
+    }
+
+    /// The recent detections in the shape `rules::compound_ok` wants.
+    fn recent_for_rules(&self) -> Vec<crate::rules::RecentHit> {
+        self.recent_hits
+            .iter()
+            .map(|(trigger, hit, t)| crate::rules::RecentHit {
+                trigger: trigger.clone(),
+                hit: *hit,
+                age_min: t.elapsed().as_secs_f64() / 60.0,
+            })
+            .collect()
+    }
+
     /// Deliver a rule's alert, unless its cooldown for this place is still running.
     ///
     /// Keyed by rule *and* place, so a rule watching two zones can speak about each of them.
     fn fire_rule(&mut self, rule: &crate::settings::AlertRule, hit: &crate::rules::Detection) {
+        self.fire_rule_named(rule, hit, None);
+    }
+
+    /// [`Self::fire_rule`], with the body spelled out. Warning rules name the event they matched,
+    /// which the trigger label alone does not carry.
+    fn fire_rule_named(
+        &mut self,
+        rule: &crate::settings::AlertRule,
+        hit: &crate::rules::Detection,
+        detail: Option<String>,
+    ) {
         let place = crate::rules::place_label(&rule.place, &self.settings);
         let key = format!("{}:{place}", rule.id);
         let cooldown = std::time::Duration::from_secs(u64::from(rule.cooldown_min) * 60);
@@ -4235,13 +4349,21 @@ impl HookEchoApp {
         }
         self.rules_fired.insert(key, Instant::now());
         let title = format!("\u{25c9} {}", rule.title());
-        let body = match hit.strength {
-            Some(v) => format!("{} \u{2014} {v:.0} at {place}", rule.trigger.label()),
-            None => format!("{} at {place}", rule.trigger.label()),
+        let body = match (detail, hit.strength) {
+            (Some(d), _) => format!("{d} at {place}"),
+            (None, Some(v)) => format!("{} \u{2014} {v:.0} at {place}", rule.trigger.label()),
+            (None, None) => format!("{} at {place}", rule.trigger.label()),
         };
-        // ponytail: no snapshot attachment (see `snapshot_push`) and no per-rule sound; the
-        // delivery fan-out in `notify_alert` is the place to add either.
+        if rule.snapshot {
+            // Same one-picture-per-pass rule the warning snapshot follows: newest wins.
+            self.snapshot_push = Some(format!("{title} — {place}"));
+        }
         self.notify_alert(&title, &body, rule.urgent);
+        if let Some(sound) = rule.sound.clone() {
+            if self.settings.alert_sound && !self.settings.mute_alerts {
+                self.play_alert(&sound);
+            }
+        }
         self.banner(title, body);
     }
 
@@ -7818,7 +7940,13 @@ impl HookEchoApp {
                 T::MiniLoop,
                 "Reference",
                 "Mini loop window",
-                "A small always-on-top window showing the active pane",
+                // Honest about the caveat rather than promising something the compositor will
+                // not do — see `mini_loop_viewport`.
+                if cfg!(unix) && std::env::var_os("WAYLAND_DISPLAY").is_some() {
+                    "A small window showing the active pane (Wayland cannot keep it on top)"
+                } else {
+                    "A small always-on-top window showing the active pane"
+                },
                 false,
             ),
         ] {
@@ -10266,12 +10394,11 @@ impl HookEchoApp {
                         self.spawn_frame_fetch(idx, s, id, ctx.clone());
                     }
                 }
-                // Pull the next two frames in behind the playhead, on their own in-flight book
-                // so they never compete with the frame being shown or with the head poll. Without
-                // this, playback is a serial download per frame with the loop stalled between.
-                if self.views[idx].timeline.playing {
-                    self.prefetch_frames(idx, ctx);
-                }
+                // Pull neighbouring frames in behind the playhead, on their own in-flight book so
+                // they never compete with the frame being shown or with the head poll. Without
+                // this, playback is a serial download per frame with the loop stalled between —
+                // and scrubbing, which runs this same path paused, was a cold download per step.
+                self.prefetch_frames(idx, ctx);
             }
         }
     }
@@ -10312,18 +10439,22 @@ impl HookEchoApp {
     fn prefetch_frames(&mut self, idx: usize, ctx: &egui::Context) {
         self.prefetching
             .retain(|_, at| at.elapsed() < std::time::Duration::from_secs(15));
-        if self.prefetching.len() >= 2 {
+        if self.prefetching.len() >= MAX_PREFETCH_INFLIGHT {
             return;
         }
         let Some(site) = self.views[idx].site.clone() else {
             return;
         };
         let tl = &self.views[idx].timeline;
-        let next: Vec<Identifier> = (1..=2)
-            .filter_map(|d| tl.frames.get(tl.playhead + d))
+        let wanted: Vec<Identifier> = prefetch_offsets(tl.playing)
+            .iter()
+            .filter_map(|d| tl.frames.get(tl.playhead.checked_add_signed(*d)?))
             .cloned()
             .collect();
-        for id in next {
+        for id in wanted {
+            if self.prefetching.len() >= MAX_PREFETCH_INFLIGHT {
+                break;
+            }
             self.spawn_prefetch(idx, id, &site, ctx);
         }
     }
@@ -10361,7 +10492,7 @@ impl HookEchoApp {
     fn backfill_loop_frames(&mut self, idx: usize, ctx: &egui::Context) {
         self.prefetching
             .retain(|_, at| at.elapsed() < std::time::Duration::from_secs(15));
-        if self.prefetching.len() >= 2 {
+        if self.prefetching.len() >= MAX_PREFETCH_INFLIGHT {
             return;
         }
         let Some(site) = self.views[idx].site.clone() else {
@@ -10372,7 +10503,7 @@ impl HookEchoApp {
         let start = tl.frames.len().saturating_sub(window);
         let tail: Vec<Identifier> = tl.frames[start..].iter().rev().cloned().collect();
         for id in tail {
-            if self.prefetching.len() >= 2 {
+            if self.prefetching.len() >= MAX_PREFETCH_INFLIGHT {
                 break;
             }
             self.spawn_prefetch(idx, id, &site, ctx);
@@ -10585,12 +10716,6 @@ impl HookEchoApp {
             return;
         }
         let idx = self.active.min(self.views.len() - 1);
-        let style = self.views[idx].basemap;
-        let is_vector = matches!(
-            style,
-            crate::tiles::BasemapStyle::Dark | crate::tiles::BasemapStyle::Light
-        );
-        let is_raster = style.is_raster();
         let caption = {
             let v = &self.views[idx];
             let time = v
@@ -10607,7 +10732,13 @@ impl HookEchoApp {
             .with_title("Hook Echo-WX — mini loop")
             .with_inner_size([340.0, 260.0])
             .with_decorations(false)
-            // ponytail: GNOME's Wayland compositor ignores this by policy; X11 and KDE honour it.
+            // Honoured on X11 only. The comment here used to blame GNOME's policy and say KDE
+            // was fine — it is not a policy question: winit's Wayland backend implements
+            // `set_window_level` as an empty function (winit 0.30, `platform_impl/linux/wayland/
+            // window/mod.rs`), so no Wayland compositor is ever asked. Nothing to fix here
+            // without going around winit to `xdg-foreign`/layer-shell, which is not worth it for
+            // one optional window. The tool's own description says so under Wayland rather than
+            // leaving the user to wonder why their window keeps disappearing behind the browser.
             .with_always_on_top();
         let mut close = false;
         ctx.show_viewport_immediate(
@@ -10673,7 +10804,9 @@ impl HookEchoApp {
                             .unwrap_or(self.views[idx].camera);
                         let pane_cam = std::mem::replace(&mut self.views[idx].camera, mine);
                         self.render_pane(
-                            ui, &vctx, idx, prect, is_vector, is_raster, false, false, false, &[],
+                            // `first`/`last` false: the mini-loop viewport is a passenger — the
+                            // main window's pane loop owns draining and evicting the tile caches.
+                            ui, &vctx, idx, prect, false, false, false, false, &[],
                         );
                         self.mini_cam =
                             Some(std::mem::replace(&mut self.views[idx].camera, pane_cam));
@@ -10699,14 +10832,17 @@ impl HookEchoApp {
         ctx: &egui::Context,
         idx: usize,
         prect: egui::Rect,
-        is_vector: bool,
-        is_raster: bool,
         clear_tiles: bool,
         clear_vector: bool,
         first: bool,
+        last: bool,
         placefile_labels: &[PlaceLabel],
     ) {
         use crate::tiles::BasemapStyle;
+        // This pane's own basemap: panes are independent, the tile caches are keyed by style.
+        let pane_style = self.views[idx].basemap;
+        let is_vector = matches!(pane_style, BasemapStyle::Dark | BasemapStyle::Light);
+        let is_raster = pane_style.is_raster();
         let vp = (prect.width(), prect.height());
         let response = ui.interact(
             prect,
@@ -11210,7 +11346,7 @@ impl HookEchoApp {
         } else {
             1.0
         };
-        let raster_bias = if self.views[idx].basemap.tiles_are_512() {
+        let raster_bias = if pane_style.tiles_are_512() {
             // 512-px providers already carry the extra detail in the tile itself; biasing on top
             // would fetch four of them per screen tile for nothing.
             0.0
@@ -11222,8 +11358,9 @@ impl HookEchoApp {
                 .clamp(0.0, bias_cap) as f64
         };
         let visible = if is_raster {
-            let vis = self.tiles.visible(&cam, vp, raster_bias);
-            self.tiles.request_missing(&vis);
+            let vis = self.tiles.visible(pane_style, &cam, vp, raster_bias);
+            self.tiles.request_missing(pane_style, &vis);
+            self.tiles.promote_visible(pane_style, &vis);
             vis
         } else {
             Vec::new()
@@ -11258,8 +11395,10 @@ impl HookEchoApp {
         // Drain finished fetches once (on the first pane) — they upload into the shared cache.
         // Eviction lives with the tile manager (it also owns `requested`/`uploaded`), and only
         // the first pane runs it so a multi-pane frame doesn't evict what a later pane needs.
-        let drop_tiles = if first && is_raster {
-            self.tiles.touch_visible(&visible)
+        // Eviction runs once per frame, on the last pane — after every pane has promoted its own
+        // visible tiles, so a multi-pane frame can't evict what a pane it already drew still needs.
+        let drop_tiles = if last {
+            self.tiles.evict_excess()
         } else {
             Vec::new()
         };
@@ -11320,6 +11459,7 @@ impl HookEchoApp {
             camera_scale: scale,
             new_tiles,
             visible,
+            basemap_key: pane_style.key(),
             radar_upload,
             draw_radar,
             overlay_upload: if first {
@@ -11423,6 +11563,50 @@ impl HookEchoApp {
         let view = &self.views[idx];
         let basemap = view.basemap;
 
+        // Storm-cell ids reserve their space first — they are the top tier, and the cell markers
+        // themselves are drawn much further down with the rest of the cell layer. Reserving here
+        // and drawing there is the whole reason the placer separates the two: a warning label
+        // must not lose its slot to a town name that merely happened to be painted earlier.
+        let cell_labels_shown: std::collections::HashSet<String> =
+            if self.filters.show_cells && self.cells_site.as_deref() == view.site.as_deref() {
+                let ids: Vec<(String, egui::Pos2)> = self
+                    .active_storm_cells()
+                    .iter()
+                    .filter(|c| c.kind == CellKind::Storm && !c.id.is_empty())
+                    .map(|c| {
+                        let w = crate::render::mercator::lonlat_to_world(c.lon, c.lat);
+                        let (sx, sy) = cam.world_to_screen(w, vp);
+                        (
+                            c.id.clone(),
+                            egui::pos2(prect.left() + sx, prect.top() + sy),
+                        )
+                    })
+                    .collect();
+                ids.into_iter()
+                    .filter(|(_, p)| prect.contains(*p))
+                    .filter(|(id, p)| {
+                        // Matches the draw below: 11 pt text, left-bottom anchored, up and right
+                        // of the marker.
+                        let anchor = *p + egui::vec2(8.0, -8.0);
+                        let size = egui::vec2(id.len() as f32 * 6.5, 13.0);
+                        let rect = egui::Rect::from_min_size(
+                            egui::pos2(anchor.x, anchor.y - size.y),
+                            size,
+                        )
+                        .expand(2.0);
+                        self.labels.place(
+                            crate::labelplace::key(id),
+                            rect,
+                            crate::labelplace::Priority::Warning,
+                        )
+                    })
+                    .map(|(id, _)| id)
+                    .collect()
+            } else {
+                std::collections::HashSet::new()
+            };
+        let view = &self.views[idx];
+
         // City/town labels, overlaid on every basemap. On raster (satellite) the baked-in labels
         // are faint over imagery + echoes, so we draw crisp white text with a solid black halo;
         // vector basemaps use their palette's label colors. Bigger fonts + an 8-way halo read well.
@@ -11444,8 +11628,16 @@ impl HookEchoApp {
             let z = cam.zoom;
             let mut labels: Vec<&crate::vector_tiles::PlaceLabel> =
                 vlabels.iter().filter(|l| l.city || z >= 9.0).collect();
-            labels.sort_by_key(|l| (!l.city, l.rank));
-            let mut placed: Vec<egui::Rect> = Vec::new();
+            // Labels already on screen are offered their slot before newcomers of the same
+            // importance; without that a name at the edge of a collision wins and loses on
+            // alternate frames, which is exactly the flicker you see while panning.
+            labels.sort_by_key(|l| {
+                (
+                    !self.labels.was_shown(crate::labelplace::key(&l.name)),
+                    !l.city,
+                    l.rank,
+                )
+            });
             let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
             // 8-way halo (cardinals + diagonals) for a solid, readable outline.
             const HALO: [egui::Vec2; 8] = [
@@ -11470,10 +11662,13 @@ impl HookEchoApp {
                 let font = egui::FontId::proportional(if l.city { big } else { big - 2.5 });
                 let galley = painter.layout_no_wrap(l.name.clone(), font, text_col);
                 let r = egui::Rect::from_min_size(p, galley.size()).expand(4.0);
-                if placed.iter().any(|q| q.intersects(r)) {
+                if !self.labels.place(
+                    crate::labelplace::key(&l.name),
+                    r,
+                    crate::labelplace::Priority::Place,
+                ) {
                     continue;
                 }
-                placed.push(r);
                 // One layout per label, reused for all nine draws. `painter.text` would lay the
                 // string out again every time, which at eight halo offsets meant ten text
                 // layouts per visible place name, every frame.
@@ -11957,7 +12152,7 @@ impl HookEchoApp {
                 let color = egui::Color32::from_rgba_unmultiplied(col[0], col[1], col[2], 255);
                 painter.circle_stroke(p, 6.0, egui::Stroke::new(2.0, color));
                 painter.circle_filled(p, 2.0, color);
-                if c.kind == CellKind::Storm && !c.id.is_empty() {
+                if c.kind == CellKind::Storm && cell_labels_shown.contains(&c.id) {
                     painter.text(
                         p + egui::vec2(8.0, -8.0),
                         egui::Align2::LEFT_BOTTOM,
@@ -12600,7 +12795,9 @@ impl HookEchoApp {
                     .unwrap_or(std::cmp::Ordering::Equal)
             });
             let temp_unit = self.settings.temp_unit;
-            let mut placed: Vec<egui::Rect> = Vec::new();
+            // Same stickiness rule as the place names: a station already plotted keeps its cell
+            // ahead of a windier one that has only just come into view.
+            obs.sort_by_key(|ob| !self.labels.was_shown(crate::labelplace::key(&ob.icao)));
             for ob in obs {
                 let w = crate::render::mercator::lonlat_to_world(ob.lon, ob.lat);
                 let (sx, sy) = cam.world_to_screen(w, vp);
@@ -12608,12 +12805,15 @@ impl HookEchoApp {
                 if !prect.contains(p) {
                     continue;
                 }
-                // Greedy declutter: skip stations whose plot cell overlaps one already drawn.
+                // Shared declutter: this also sees the place names drawn above it.
                 let cell = egui::Rect::from_center_size(p, egui::vec2(44.0, 34.0));
-                if placed.iter().any(|r| r.intersects(cell)) {
+                if !self.labels.place(
+                    crate::labelplace::key(&ob.icao),
+                    cell,
+                    crate::labelplace::Priority::Station,
+                ) {
                     continue;
                 }
-                placed.push(cell);
                 let col = flt_color(&ob.flt_cat);
                 painter.circle_stroke(p, 3.0, egui::Stroke::new(1.5, col));
                 // Wind barb, rotated so the shaft points toward the wind source (FROM bearing).
@@ -12703,7 +12903,6 @@ impl HookEchoApp {
                 FloodCat::NoFlooding => "no flooding",
                 FloodCat::Unknown => "no current reading",
             };
-            let mut placed: Vec<egui::Rect> = Vec::new();
             for g in &self.gauges {
                 let w = crate::render::mercator::lonlat_to_world(g.lon, g.lat);
                 let (sx, sy) = cam.world_to_screen(w, vp);
@@ -12711,12 +12910,15 @@ impl HookEchoApp {
                 if !prect.contains(p) {
                     continue;
                 }
-                // Greedy declutter: skip droplets that would overlap one already placed.
+                // Shared declutter: gauges are the lowest tier, so they fill what is left.
                 let cell = egui::Rect::from_center_size(p, egui::vec2(15.0, 15.0));
-                if placed.iter().any(|r| r.intersects(cell)) {
+                if !self.labels.place(
+                    crate::labelplace::key(&g.lid),
+                    cell,
+                    crate::labelplace::Priority::Minor,
+                ) {
                     continue;
                 }
-                placed.push(cell);
                 let s = 6.0;
                 painter.add(egui::Shape::convex_polygon(
                     vec![
@@ -13002,7 +13204,21 @@ impl HookEchoApp {
                 let r = if is_current { 5.0 } else { 3.5 };
                 painter.circle_stroke(p, r, egui::Stroke::new(1.5, col));
                 painter.circle_filled(p, 1.5, col);
-                if show_labels {
+                // The dot always draws — it is the click target, and it is small enough not to
+                // matter. Only the four-letter id competes for space, and it loses to city names:
+                // "TDAL" sitting across "Grapevine" is the exact overlap this pass exists for.
+                let id_rect = egui::Rect::from_min_size(
+                    p + egui::vec2(6.0, -6.0),
+                    egui::vec2(s.id.len() as f32 * 6.5, 12.0),
+                )
+                .expand(1.0);
+                if show_labels
+                    && self.labels.place(
+                        crate::labelplace::key(s.id),
+                        id_rect,
+                        crate::labelplace::Priority::Minor,
+                    )
+                {
                     painter.text(
                         p + egui::vec2(6.0, 0.0),
                         egui::Align2::LEFT_CENTER,
@@ -16228,6 +16444,10 @@ impl eframe::App for HookEchoApp {
             }
         }
 
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some((i, day)) = self.rules_window.backtest_request.take() {
+            self.start_backtest(i, day);
+        }
         if let Some(detail) = &self.detail {
             let tex = detail
                 .image
@@ -16506,6 +16726,10 @@ impl eframe::App for HookEchoApp {
         }
 
         let placefile_labels = self.placefile_labels();
+        // One occupancy set for the whole frame, across every pane and every label layer. Panes
+        // occupy disjoint screen rects, so sharing it between them costs nothing and saves
+        // resetting it per pane.
+        self.labels.begin();
         egui::CentralPanel::default().show(root, |ui| {
             let full = ui.available_rect_before_wrap();
             let n = self.views.len();
@@ -16519,15 +16743,22 @@ impl eframe::App for HookEchoApp {
                 }
             }
 
-            // Global basemap style is driven by the active pane.
+            // Each pane fetches and draws its own `View::basemap` (see `render_pane`). Two things
+            // stay global for now: the GOES frame cursor and the vector palette, both driven by
+            // the active pane.
+            // ponytail: one GOES cursor + one vector palette for all panes; split them when
+            // someone actually wants two satellite times or two vector palettes side by side.
             use crate::tiles::BasemapStyle;
             let style = self.views[self.active.min(n - 1)].basemap;
             let is_vector = matches!(style, BasemapStyle::Dark | BasemapStyle::Light);
-            let is_raster = style.is_raster();
-            let raster_style = if is_raster { style } else { BasemapStyle::None };
+            let raster_style = if style.is_raster() {
+                style
+            } else {
+                BasemapStyle::None
+            };
             self.tiles
                 .set_keys(&self.settings.mapbox_key, &self.settings.maptiler_key);
-            let mut clear_tiles = self.tiles.set_style(raster_style);
+            let mut clear_tiles = false;
             // GOES sub-hourly scrub: fetch the available frame times when a GOES style becomes
             // active, and apply the selected frame (None = latest).
             if raster_style.goes_layer().is_some() {
@@ -16581,11 +16812,10 @@ impl eframe::App for HookEchoApp {
                     ctx,
                     i,
                     *prect,
-                    is_vector,
-                    is_raster,
                     clear_tiles && first,
                     clear_vector && first,
                     first,
+                    i + 1 == n,
                     &placefile_labels,
                 );
             }
@@ -16928,6 +17158,23 @@ mod field_lut_tests {
 
 #[cfg(test)]
 mod tests {
+
+    /// Scrubbing reverses constantly, so the paused set has to reach backwards as well; playback
+    /// only ever goes forward. Nearest frames come first either way, because the in-flight budget
+    /// usually runs out before the list does.
+    #[test]
+    fn prefetch_reaches_backwards_only_when_paused() {
+        let playing = super::prefetch_offsets(true);
+        assert!(playing.iter().all(|d| *d > 0), "playback never looks back");
+        let paused = super::prefetch_offsets(false);
+        assert!(paused.contains(&-1), "scrubbing back a frame must be warm");
+        assert_eq!(paused[0], 1, "nearest frame first");
+        for set in [playing, paused] {
+            let mut sorted = set.to_vec();
+            sorted.sort_by_key(|d| d.abs());
+            assert_eq!(set, sorted.as_slice(), "nearest-first order");
+        }
+    }
 
     #[test]
     fn goto_extras_carry_basemap_and_srv() {

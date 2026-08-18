@@ -12,11 +12,18 @@ use wgpu::util::DeviceExt;
 /// XYZ tile id.
 pub type TileId = (u8, u32, u32);
 
+/// A tile plus which basemap style it came from. Panes can show different basemaps at once, so
+/// the same `(z, x, y)` may be resident twice with different imagery; the style key keeps them
+/// apart in the GPU cache.
+pub type TileKey = (u8, TileId);
+
 const MAX_TILE_VERTS: u64 = 512 * 6; // up to 512 visible tiles per frame
 
 /// A decoded RGBA tile the app wants uploaded this frame.
 pub struct PendingTile {
     pub id: TileId,
+    /// Basemap style this tile was fetched for ([`crate::tiles::BasemapStyle::key`]).
+    pub style: u8,
     pub rgba: Vec<u8>,
     pub width: u32,
     pub height: u32,
@@ -280,6 +287,8 @@ pub struct MapCallback {
     pub camera_scale: [f32; 2],
     pub new_tiles: Vec<PendingTile>,
     pub visible: Vec<VisibleTile>,
+    /// Which basemap style this pane draws ([`crate::tiles::BasemapStyle::key`]).
+    pub basemap_key: u8,
     pub radar_upload: Option<RadarUpload>,
     pub draw_radar: bool,
     /// `Some` only when the overlay geometry changed (else the last upload is reused).
@@ -289,7 +298,7 @@ pub struct MapCallback {
     pub clear_tiles: bool,
     /// Individual tiles the tile manager evicted; freed before this frame's uploads. Eviction is
     /// decided there, not here, so both sides agree on what is resident.
-    pub drop_tiles: Vec<TileId>,
+    pub drop_tiles: Vec<TileKey>,
     /// Field layers whose grid changed this frame (uploaded now); others reuse the last upload.
     pub field_uploads: Vec<(FieldLayer, MrmsUpload)>,
     /// Which field layers to paint this frame, with their opacity (0..1).
@@ -366,7 +375,7 @@ struct PaneGpu {
     radar: Option<RadarGpu>,
     /// Ids of the tiles this frame's quads draw, in quad order. Not the same as the visible list:
     /// a missing tile is stood in for by resident children or an ancestor.
-    frame_visible: Vec<TileId>,
+    frame_visible: Vec<TileKey>,
     frame_visible_vector: Vec<TileId>,
     frame_draw_radar: bool,
     frame_draw_overlay: bool,
@@ -389,7 +398,7 @@ pub struct RenderResources {
     // the ids to free (`drop_tiles`). Evicting here instead was a bug — the manager went on
     // believing an evicted tile was still uploaded and never re-sent it, so zooming back to an
     // area left black squares where those tiles used to be.
-    tiles: HashMap<TileId, TileGpu>,
+    tiles: HashMap<TileKey, TileGpu>,
     vector_tiles: HashMap<TileId, OverlayGpu>,
     overlay: Option<OverlayGpu>,
     fields: HashMap<FieldLayer, MrmsGpu>,
@@ -699,10 +708,14 @@ impl RenderResources {
     /// this the whole basemap blanks every time the integer zoom level changes, even though the
     /// pixels to show are sitting on the GPU.
     #[allow(clippy::type_complexity)] // one call site; a struct here would be ceremony
-    fn tile_quads(&self, v: &VisibleTile) -> Vec<(TileId, [f32; 2], [f32; 2], [f32; 2], [f32; 2])> {
+    fn tile_quads(
+        &self,
+        style: u8,
+        v: &VisibleTile,
+    ) -> Vec<(TileKey, [f32; 2], [f32; 2], [f32; 2], [f32; 2])> {
         const FULL: ([f32; 2], [f32; 2]) = ([0.0, 0.0], [1.0, 1.0]);
-        if self.tiles.contains_key(&v.id) {
-            return vec![(v.id, v.world_min, v.world_max, FULL.0, FULL.1)];
+        if self.tiles.contains_key(&(style, v.id)) {
+            return vec![((style, v.id), v.world_min, v.world_max, FULL.0, FULL.1)];
         }
         let (z, x, y) = v.id;
         let [x0, y0] = v.world_min;
@@ -711,7 +724,7 @@ impl RenderResources {
         let kids: Vec<_> = [(0u32, 0u32), (1, 0), (0, 1), (1, 1)]
             .into_iter()
             .filter_map(|(dx, dy)| {
-                let id = (z + 1, x * 2 + dx, y * 2 + dy);
+                let id = (style, (z + 1, x * 2 + dx, y * 2 + dy));
                 self.tiles.contains_key(&id).then(|| {
                     let (qx0, qx1) = if dx == 0 { (x0, mx) } else { (mx, x1) };
                     let (qy0, qy1) = if dy == 0 { (y0, my) } else { (my, y1) };
@@ -726,7 +739,7 @@ impl RenderResources {
             if up > z {
                 break;
             }
-            let id = (z - up, x >> up, y >> up);
+            let id = (style, (z - up, x >> up, y >> up));
             if self.tiles.contains_key(&id) {
                 let (uv_min, uv_max) = ancestor_uv(x, y, up);
                 return vec![(id, v.world_min, v.world_max, uv_min, uv_max)];
@@ -782,7 +795,7 @@ impl RenderResources {
             ],
         });
         self.tiles.insert(
-            t.id,
+            (t.style, t.id),
             TileGpu {
                 _tex: tex,
                 bind_group,
@@ -967,9 +980,9 @@ impl RenderResources {
         // Build the tile quad list against the shared tile cache before mutably borrowing the pane
         // — a tile with no texture yet borrows one from the tiles around it (see `tile_quads`).
         let mut tverts: Vec<TileVertex> = Vec::new();
-        let mut visible: Vec<TileId> = Vec::new();
+        let mut visible: Vec<TileKey> = Vec::new();
         for v in &cb.visible {
-            for (id, wmin, wmax, uvmin, uvmax) in self.tile_quads(v) {
+            for (id, wmin, wmax, uvmin, uvmax) in self.tile_quads(cb.basemap_key, v) {
                 if tverts.len() as u64 + 6 > MAX_TILE_VERTS {
                     break;
                 }

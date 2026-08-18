@@ -47,6 +47,14 @@ fn vs_main(in: VsIn) -> VsOut {
     return out;
 }
 
+// Width of the blend band as a fraction of a cell. 1.0 is plain bilinear; 0.0 is nearest.
+// ponytail: one fixed constant. It becomes a slider if anyone actually wants to tune it.
+const SHARPEN_W: f32 = 0.55;
+
+fn sharpen(t: f32) -> f32 {
+    return smoothstep(0.5 - SHARPEN_W * 0.5, 0.5 + SHARPEN_W * 0.5, t);
+}
+
 fn world_to_lonlat(w: vec2<f32>) -> vec2<f32> {
     let lon = w.x * 360.0 - 180.0;
     let n = PI * (1.0 - 2.0 * w.y);
@@ -93,8 +101,13 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
         let af = az_bin - 0.5;
         let g0 = i32(floor(gf));
         let a0 = i32(floor(af));
-        let tg = gf - floor(gf);
-        let ta = af - floor(af);
+        // Sharpened bilinear. Plain bilinear ramps linearly all the way across a gate, which
+        // smears every edge in the field by a full gate — a hail core's boundary and the far side
+        // of a hook both go soft, and the smoothing setting stops being usable for interrogation.
+        // Squeezing the ramp into a band around the cell boundary keeps the interior of each gate
+        // at its own value (crisp edges) while removing the staircase between them.
+        let tg = sharpen(gf - floor(gf));
+        let ta = sharpen(af - floor(af));
         var acc = 0.0;
         var wsum = 0.0;
         for (var i = 0; i < 2; i++) {

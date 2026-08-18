@@ -725,6 +725,54 @@ pub struct AlertRule {
     /// Rules are created switched off, and armed deliberately.
     #[serde(default)]
     pub enabled: bool,
+    /// Play this sound when the rule fires, instead of nothing. `None` keeps the old behaviour:
+    /// the rule banners and pushes but makes no noise of its own.
+    #[serde(default)]
+    pub sound: Option<AlertSound>,
+    /// Attach a picture of the map to the rule's push (desktop only, same path the warning
+    /// snapshot uses).
+    #[serde(default)]
+    pub snapshot: bool,
+    /// Extra conditions on top of the trigger. Empty is the old single-condition rule, and an old
+    /// rule deserializes into exactly that.
+    #[serde(default)]
+    pub conditions: Vec<RuleCondition>,
+    /// How the extra conditions combine among themselves. The rule's own trigger is always
+    /// required — it is what starts the evaluation.
+    #[serde(default)]
+    pub combine: RuleCombinator,
+}
+
+/// One extra thing that must (or may) also be true for a rule to fire.
+///
+/// Deliberately a trigger and a threshold, not an expression: one level, no nesting. A rule
+/// nobody can read at 3am is a rule nobody trusts.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct RuleCondition {
+    pub trigger: RuleTrigger,
+    #[serde(default)]
+    pub threshold: Option<f64>,
+}
+
+/// How a rule's extra conditions combine.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum RuleCombinator {
+    /// Every extra condition must also hold.
+    #[default]
+    And,
+    /// At least one of them must.
+    Or,
+}
+
+impl RuleCombinator {
+    pub const ALL: [RuleCombinator; 2] = [RuleCombinator::And, RuleCombinator::Or];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            RuleCombinator::And => "and also",
+            RuleCombinator::Or => "and either",
+        }
+    }
 }
 
 /// Ten minutes, matching the built-in proximity alerts' own cooldown.
@@ -745,6 +793,10 @@ impl AlertRule {
             urgent: false,
             cooldown_min: default_rule_cooldown(),
             enabled: false,
+            sound: None,
+            snapshot: false,
+            conditions: Vec::new(),
+            combine: RuleCombinator::default(),
         }
     }
 
@@ -1068,12 +1120,46 @@ impl Settings {
     }
 
     /// Load saved settings, falling back to defaults on any error (nothing saved, parse failure).
+    /// Parse a settings file, keeping every field that reads and defaulting only the ones that
+    /// do not.
+    ///
+    /// This used to be a plain `serde_json::from_str().unwrap_or_default()`. Every field carries
+    /// `#[serde(default)]`, so a *missing* key was always fine — but one bad *value* anywhere in
+    /// the file failed the whole struct, and the whole file was thrown away: every marker, every
+    /// alert rule, every API key, replaced by defaults, and then written back over the file by the
+    /// next `save()`. A settings file whose `theme` said `"light"` instead of `"Light"` is enough
+    /// to do it, which is how this was found.
+    ///
+    /// The repair is per-key: rebuild the object one key at a time and drop any key that stops it
+    /// parsing. That is one full deserialize per key, but only on a file that already failed, and
+    /// only at startup.
+    ///
+    /// ponytail: quadratic in the number of keys on the error path. It runs once, on a file that
+    /// is already broken.
+    fn from_json_lossy(text: &str) -> Self {
+        match serde_json::from_str::<Self>(text) {
+            Ok(v) => return v,
+            Err(e) => log::warn!("settings parse failed ({e}); salvaging what reads"),
+        }
+        let Ok(serde_json::Value::Object(map)) = serde_json::from_str::<serde_json::Value>(text)
+        else {
+            log::warn!("settings file is not a JSON object; using defaults");
+            return Self::default();
+        };
+        let mut good = serde_json::Map::new();
+        for (k, v) in map {
+            good.insert(k.clone(), v);
+            if serde_json::from_value::<Self>(serde_json::Value::Object(good.clone())).is_err() {
+                good.remove(&k);
+                log::warn!("settings: ignoring unreadable value for `{k}`");
+            }
+        }
+        serde_json::from_value(serde_json::Value::Object(good)).unwrap_or_default()
+    }
+
     pub fn load() -> Self {
         let mut loaded = match Self::read_saved() {
-            Some(s) => serde_json::from_str(&s).unwrap_or_else(|e| {
-                log::warn!("settings parse failed ({e}); using defaults");
-                Self::default()
-            }),
+            Some(s) => Self::from_json_lossy(&s),
             None => Self::default(),
         };
         // One-shot repair: early Android builds persisted ui_scale 1.3 as the default, which
@@ -1536,5 +1622,47 @@ mod tests {
             serde_json::json!(-97.0),
             "Nws.kt reads ring vertices as [lon, lat]"
         );
+    }
+
+    /// The bug this was written for: one bad enum value used to discard the entire settings file.
+    #[test]
+    fn one_unreadable_value_does_not_discard_the_whole_file() {
+        // `theme` serialises as "Light"; lowercase is not a valid variant. Everything else here
+        // is perfectly good and must survive.
+        let text = r#"{
+            "theme": "light",
+            "mapbox_key": "kept",
+            "ui_scale": 1.25,
+            "smooth_radar": true
+        }"#;
+        let s = Settings::from_json_lossy(text);
+        assert_eq!(s.mapbox_key, "kept", "a good key was thrown away");
+        assert!((s.ui_scale - 1.25).abs() < 1e-6);
+        assert!(s.smooth_radar);
+        // Only the unreadable field falls back.
+        assert_eq!(s.theme, Theme::default());
+    }
+
+    #[test]
+    fn a_good_file_is_unchanged_and_a_broken_one_still_loads() {
+        let mut original = Settings::default();
+        original.mapbox_key = "abc".to_string();
+        original.ui_scale = 1.1;
+        let text = serde_json::to_string(&original).unwrap();
+        let round = Settings::from_json_lossy(&text);
+        assert_eq!(round.mapbox_key, "abc");
+        assert!((round.ui_scale - 1.1).abs() < 1e-6);
+
+        // Not an object at all, and not even JSON: defaults, no panic.
+        assert_eq!(Settings::from_json_lossy("[1,2,3]").mapbox_key, "");
+        assert_eq!(Settings::from_json_lossy("not json").mapbox_key, "");
+    }
+
+    /// Unknown keys were already tolerated and must stay that way — a settings file written by a
+    /// newer build has to open in an older one.
+    #[test]
+    fn unknown_keys_are_still_ignored() {
+        let s = Settings::from_json_lossy(r#"{"mapbox_key":"x","a_field_from_the_future":42}"#);
+        assert_eq!(s.mapbox_key, "x");
     }
 }
