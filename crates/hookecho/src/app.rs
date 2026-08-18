@@ -7812,7 +7812,13 @@ impl HookEchoApp {
                 T::MiniLoop,
                 "Reference",
                 "Mini loop window",
-                "A small always-on-top window showing the active pane",
+                // Honest about the caveat rather than promising something the compositor will
+                // not do — see `mini_loop_viewport`.
+                if cfg!(unix) && std::env::var_os("WAYLAND_DISPLAY").is_some() {
+                    "A small window showing the active pane (Wayland cannot keep it on top)"
+                } else {
+                    "A small always-on-top window showing the active pane"
+                },
                 false,
             ),
         ] {
@@ -10598,7 +10604,13 @@ impl HookEchoApp {
             .with_title("Hook Echo-WX — mini loop")
             .with_inner_size([340.0, 260.0])
             .with_decorations(false)
-            // ponytail: GNOME's Wayland compositor ignores this by policy; X11 and KDE honour it.
+            // Honoured on X11 only. The comment here used to blame GNOME's policy and say KDE
+            // was fine — it is not a policy question: winit's Wayland backend implements
+            // `set_window_level` as an empty function (winit 0.30, `platform_impl/linux/wayland/
+            // window/mod.rs`), so no Wayland compositor is ever asked. Nothing to fix here
+            // without going around winit to `xdg-foreign`/layer-shell, which is not worth it for
+            // one optional window. The tool's own description says so under Wayland rather than
+            // leaving the user to wonder why their window keeps disappearing behind the browser.
             .with_always_on_top();
         let mut close = false;
         ctx.show_viewport_immediate(
