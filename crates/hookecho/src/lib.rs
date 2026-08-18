@@ -31,6 +31,7 @@ pub mod gps;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod headless;
 pub mod hotkeys;
+pub mod labelplace;
 pub mod icon;
 pub mod loopexport;
 pub mod notify;
