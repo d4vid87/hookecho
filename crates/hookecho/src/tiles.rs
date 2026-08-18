@@ -28,6 +28,37 @@ pub enum Provider {
     MapTiler,
 }
 
+/// Picker grouping for a [`BasemapStyle`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Category {
+    Vector,
+    Streets,
+    Satellite,
+    Topo,
+    Other,
+}
+
+impl Category {
+    /// Groups in picker order.
+    pub const ALL: [Category; 5] = [
+        Category::Vector,
+        Category::Streets,
+        Category::Satellite,
+        Category::Topo,
+        Category::Other,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Category::Vector => "Vector",
+            Category::Streets => "Streets",
+            Category::Satellite => "Satellite",
+            Category::Topo => "Terrain",
+            Category::Other => "Other",
+        }
+    }
+}
+
 /// A selectable basemap under the radar. Dark/Light are the vector MVT basemap
 /// (see [`crate::vector_tiles`]); Satellite is raster USGS imagery. The Mapbox*/MapTiler* styles
 /// are provider raster tiles, available only when the matching Settings API key is set.
@@ -486,6 +517,44 @@ impl BasemapStyle {
         self
     }
 
+    /// Which group this style belongs to in the picker.
+    pub fn category(self) -> Category {
+        if self.goes_layer().is_some() {
+            return Category::Satellite;
+        }
+        match self {
+            BasemapStyle::None | BasemapStyle::Auto | BasemapStyle::CustomXyz => Category::Other,
+            BasemapStyle::Dark
+            | BasemapStyle::Light
+            | BasemapStyle::VectorLiberty
+            | BasemapStyle::VectorBright
+            | BasemapStyle::VectorPositron
+            | BasemapStyle::VectorMidnight => Category::Vector,
+            BasemapStyle::Satellite
+            | BasemapStyle::EsriImagery
+            | BasemapStyle::HybridSatellite
+            | BasemapStyle::MapboxSatellite
+            | BasemapStyle::MapboxSatelliteStreets
+            | BasemapStyle::MapTilerSatellite => Category::Satellite,
+            BasemapStyle::OpenTopoMap
+            | BasemapStyle::UsgsTopo
+            | BasemapStyle::UsgsImageryTopo
+            | BasemapStyle::EsriTopo
+            | BasemapStyle::MapboxOutdoors
+            | BasemapStyle::MapTilerOutdoor
+            | BasemapStyle::MapTilerTopo
+            | BasemapStyle::EsriOcean => Category::Topo,
+            _ => Category::Streets,
+        }
+    }
+
+    /// URL of the one tile used as this style's picker thumbnail: z6 over the middle of CONUS,
+    /// which is the view the app opens on. Fetched through the same per-style disk cache as any
+    /// other tile, so opening the picker twice costs nothing.
+    pub(crate) fn thumb_url(self, mapbox: &str, maptiler: &str, custom: &str) -> Option<String> {
+        self.url(6, 14, 24, false, mapbox, maptiler, custom)
+    }
+
     /// [`Self::Auto`] resolved against the current theme; every other style is itself.
     ///
     /// Call this at the point a style is about to be *rendered or fetched*, not where it is
@@ -820,6 +889,13 @@ struct FetchedTile {
     height: u32,
 }
 
+/// A picker thumbnail's state.
+enum Thumb {
+    Loading,
+    Ready(egui::TextureHandle),
+    Failed,
+}
+
 /// A finished fetch, or the id of one that failed (so it can leave `requested` and be retried).
 type TileResult = Result<FetchedTile, crate::render::TileKey>;
 
@@ -864,11 +940,16 @@ pub struct TileManager {
     custom_template: String,
     /// Deepest zoom the custom source is configured to serve.
     custom_max_z: u8,
+    /// Picker thumbnails, keyed by [`BasemapStyle::key`].
+    thumbs: std::collections::HashMap<u8, Thumb>,
+    thumb_tx: Sender<(u8, Option<FetchedTile>)>,
+    thumb_rx: Receiver<(u8, Option<FetchedTile>)>,
 }
 
 impl TileManager {
     pub fn new(spawner: crate::rt::Spawner) -> Self {
         let (tx, rx) = std::sync::mpsc::channel();
+        let (thumb_tx, thumb_rx) = std::sync::mpsc::channel();
         let client =
             crate::platform::http_timeouts(reqwest::Client::builder().user_agent(USER_AGENT))
                 .build()
@@ -891,6 +972,9 @@ impl TileManager {
             frame_visible: 0,
             custom_template: String::new(),
             custom_max_z: 19,
+            thumbs: std::collections::HashMap::new(),
+            thumb_tx,
+            thumb_rx,
             cache_root,
             mapbox_key: String::new(),
             maptiler_key: String::new(),
@@ -938,6 +1022,85 @@ impl TileManager {
             self.requested.clear();
             self.uploaded.clear();
         }
+    }
+
+    /// This style's picker thumbnail, fetching it the first time it is asked for.
+    ///
+    /// One z6 tile over the middle of CONUS per style, through the same disk cache as any other
+    /// tile. Returns `None` while it is in flight, if it failed, or if the style has no raster
+    /// URL — the picker paints a palette swatch in all of those cases, so nothing ever waits on
+    /// a network round trip to draw.
+    pub fn thumb(&mut self, style: BasemapStyle, ctx: &egui::Context) -> Option<egui::TextureHandle> {
+        while let Ok((key, fetched)) = self.thumb_rx.try_recv() {
+            let state = match fetched {
+                Some(f) => {
+                    let img = egui::ColorImage::from_rgba_unmultiplied(
+                        [f.width as usize, f.height as usize],
+                        &f.rgba,
+                    );
+                    Thumb::Ready(ctx.load_texture(
+                        format!("basemap-thumb-{key}"),
+                        img,
+                        egui::TextureOptions::LINEAR,
+                    ))
+                }
+                None => Thumb::Failed,
+            };
+            self.thumbs.insert(key, state);
+        }
+        let key = style.key();
+        match self.thumbs.get(&key) {
+            Some(Thumb::Ready(t)) => return Some(t.clone()),
+            Some(_) => return None,
+            None => {}
+        }
+        // A cellular link should not spend a screenful of tiles on decoration.
+        if crate::platform::is_metered() {
+            return None;
+        }
+        // Small separate budget: the picker opening must not stall the map's own tile fetches.
+        // ponytail: flat 4, independent of MAX_INFLIGHT.
+        if self
+            .thumbs
+            .values()
+            .filter(|t| matches!(t, Thumb::Loading))
+            .count()
+            >= 4
+        {
+            return None;
+        }
+        let url = style.thumb_url(&self.mapbox_key, &self.maptiler_key, &self.custom_template)?;
+        let path = self.cache_root.as_ref().map(|d| {
+            d.join(style.provider(false, &self.custom_template))
+                .join("default")
+                .join("6/14/24")
+        });
+        self.thumbs.insert(key, Thumb::Loading);
+        let client = self.client.clone();
+        let tx = self.thumb_tx.clone();
+        let ctx2 = self.ctx.clone();
+        let blocking = self.spawner.clone();
+        self.spawner.spawn(async move {
+            let bytes = load_tile_bytes(&client, &url, path.as_deref()).await;
+            blocking.spawn_blocking(move || {
+                let decoded = bytes.ok().and_then(|b| image::load_from_memory(&b).ok()).map(|img| {
+                    let rgba = img.to_rgba8();
+                    let (w, h) = rgba.dimensions();
+                    FetchedTile {
+                        id: (6, 14, 24),
+                        style: key,
+                        rgba: rgba.into_raw(),
+                        width: w,
+                        height: h,
+                    }
+                });
+                let _ = tx.send((key, decoded));
+                if let Some(ctx) = ctx2 {
+                    ctx.request_repaint();
+                }
+            });
+        });
+        None
     }
 
     /// Point the custom-XYZ slot at a template. Clears the caches on change, like the key setter
@@ -1736,6 +1899,36 @@ mod tests {
                     .any(|s| s.vector_palette() == Some(pal)),
                 "{pal:?} is not reachable from the basemap list"
             );
+        }
+    }
+
+    /// The picker draws one section per category. A style in no section is invisible, and a
+    /// section with nothing in it is a stray heading.
+    #[test]
+    fn categories_partition_the_style_list() {
+        let mut seen = 0;
+        for cat in Category::ALL {
+            let n = BasemapStyle::ALL
+                .iter()
+                .filter(|s| s.category() == cat)
+                .count();
+            assert!(n > 0, "{cat:?} has no styles");
+            seen += n;
+        }
+        assert_eq!(seen, BasemapStyle::ALL.len());
+        // The three that are not a map of anywhere belong together, away from the imagery.
+        for s in [
+            BasemapStyle::None,
+            BasemapStyle::Auto,
+            BasemapStyle::CustomXyz,
+        ] {
+            assert_eq!(s.category(), Category::Other, "{s:?}");
+        }
+        // Every GOES product lands under Satellite whatever else the match says.
+        for s in BasemapStyle::ALL {
+            if s.goes_layer().is_some() {
+                assert_eq!(s.category(), Category::Satellite, "{s:?}");
+            }
         }
     }
 }

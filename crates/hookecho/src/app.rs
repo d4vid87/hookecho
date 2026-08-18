@@ -6184,31 +6184,29 @@ impl HookEchoApp {
     /// per-map state is edited.
     fn map_rows(&mut self, ui: &mut egui::Ui, actions: &mut ui::layer_options::UiActions) {
         use crate::settings::StartView;
-        use crate::tiles::BasemapStyle;
         let chasepack = self.chasepack_ui();
         let (mb_key, mt_key) = (
             !self.settings.mapbox_key.is_empty(),
             !self.settings.maptiler_key.is_empty(),
         );
-        let cx_ok = crate::tiles::valid_xyz_template(&self.settings.custom_tile_url);
-        // Split the borrow: the combo writes both the pane's style and the persisted default.
-        let (view, settings) = (&mut self.views[self.active], &mut self.settings);
-        egui::ComboBox::from_label("Background")
-            .selected_text(view.basemap.label())
-            .show_ui(ui, |ui| {
-                // Only styles whose provider key is set are selectable.
-                for s in BasemapStyle::ALL
-                    .into_iter()
-                    .filter(|s| s.available(mb_key, mt_key, cx_ok))
-                {
-                    if ui
-                        .selectable_value(&mut view.basemap, s, s.label())
-                        .clicked()
-                    {
-                        settings.basemap = s.slug().to_string(); // persist across restarts
-                    }
-                }
+        let current = self.views[self.active].basemap;
+        // A named button that opens the grid, rather than the grid inline: the drawer column is
+        // narrow, and fifty cards in it would push everything else off the panel.
+        let mut picked = None;
+        ui.menu_button(format!("Background: {}", current.label()), |ui| {
+            ui.set_min_width(460.0);
+            egui::ScrollArea::vertical().max_height(460.0).show(ui, |ui| {
+                picked = ui::basemap_picker::grid(ui, &mut self.tiles, current, &self.settings);
             });
+            if picked.is_some() {
+                ui.close();
+            }
+        });
+        if let Some(s) = picked {
+            self.views[self.active].basemap = s;
+            self.settings.basemap = s.slug().to_string(); // persist across restarts
+        }
+        let (view, settings) = (&mut self.views[self.active], &mut self.settings);
         ui.weak(if mb_key && mt_key {
             "Z cycles backgrounds"
         } else {
@@ -15761,6 +15759,7 @@ impl eframe::App for HookEchoApp {
             &mut self.settings,
             &mut self.views[active].basemap,
             &self.marker_icon_tex,
+            &mut self.tiles,
         ) {
             self.settings.setup_done = true;
             self.settings.save();
