@@ -11084,9 +11084,9 @@ impl HookEchoApp {
         } else {
             1.0
         };
-        let raster_bias = if pane_style.tiles_are_512() {
-            // 512-px providers already carry the extra detail in the tile itself; biasing on top
-            // would fetch four of them per screen tile for nothing.
+        let raster_bias = if pane_style.tiles_are_512() || self.tiles.is_retina(pane_style) {
+            // 512-px and `@2x` providers already carry the extra detail in the tile itself;
+            // biasing on top would fetch four of them per screen tile for nothing.
             0.0
         } else {
             ctx.pixels_per_point()
@@ -16406,7 +16406,12 @@ impl eframe::App for HookEchoApp {
             };
             self.tiles
                 .set_keys(&self.settings.mapbox_key, &self.settings.maptiler_key);
-            let mut clear_tiles = false;
+            // Ask for `@2x` tiles where the provider serves them: same tile count, twice the
+            // pixels, labels drawn for the density instead of magnified. Off on a metered link —
+            // a double-resolution tile is roughly double the bytes.
+            let mut clear_tiles = self.tiles.set_retina(
+                ctx.pixels_per_point() > 1.0 && !crate::platform::is_metered(),
+            );
             // GOES sub-hourly scrub: fetch the available frame times when a GOES style becomes
             // active, and apply the selected frame (None = latest).
             if raster_style.goes_layer().is_some() {
