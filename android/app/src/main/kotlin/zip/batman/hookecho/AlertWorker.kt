@@ -36,6 +36,11 @@ class AlertWorker(context: Context, params: WorkerParameters) : Worker(context, 
         }
         AlertService.pollOnce(context, AlertService.loadSeen(context))
         AlertWidget.refresh(context)
+        AlertAlarm.markPolled(context)
+        // Watchdog half: an exact alarm is a one-shot that re-arms itself, so anything that eats
+        // one — a force-stop, a reboot before BootReceiver, the OS cancelling on package replace
+        // — ends the chain silently. Re-arming here every 15 minutes is what restarts it.
+        AlertAlarm.arm(context)
         return Result.success()
     }
 

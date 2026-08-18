@@ -979,10 +979,7 @@ fn alerts_tab(ui: &mut egui::Ui, settings: &mut Settings) {
         {
             crate::platform::set_background_alerts(settings.background_alerts);
         }
-        ui.weak(
-            "Some phones kill background services aggressively — if alerts stop arriving, \
-                 exempt Hook Echo-WX from battery optimisation in system settings.",
-        );
+        alert_health(ui);
     }
 
     ui.add_space(8.0);
@@ -1043,4 +1040,57 @@ fn alerts_tab(ui: &mut egui::Ui, settings: &mut Settings) {
     );
     ui.checkbox(&mut settings.lightning_alarm, "Lightning within ~15 km of a saved location")
         .on_hover_text("Chime + push when CG lightning strikes near a marker. Requires the Lightning layer (National) to be on.");
+}
+
+/// Delivery health for the Android alert stack: what the OS is currently letting us do, and the
+/// two prompts that change it.
+///
+/// Worth its own panel because every honest answer to "why didn't I get that warning" is here,
+/// and none of it is visible anywhere else on the phone. The Samsung line is not an excuse — it
+/// is the truth, and a user who knows to check One UI's app-sleep list is better off than one
+/// who thinks the app is broken.
+fn alert_health(ui: &mut egui::Ui) {
+    let Some(h) = crate::platform::alert_health() else {
+        return;
+    };
+    let ago = |d: Option<std::time::Duration>| match d {
+        Some(d) if d.as_secs() < 90 => format!("{} s", d.as_secs()),
+        Some(d) => format!("{} min", d.as_secs() / 60),
+        None => "never".to_string(),
+    };
+    ui.add_space(4.0);
+    ui.horizontal(|ui| {
+        ui.label("Last check:");
+        ui.strong(ago(h.since_poll));
+        ui.label("· next in");
+        ui.strong(match h.until_next {
+            Some(d) => format!("{} min", d.as_secs() / 60),
+            None => "not scheduled".to_string(),
+        });
+    });
+    if !h.exact {
+        ui.horizontal(|ui| {
+            ui.colored_label(egui::Color32::from_rgb(230, 160, 60), "\u{26a0} Inexact alarms");
+            if ui.button("Allow exact alarms").clicked() {
+                crate::platform::request_exact_alarms();
+            }
+        });
+        ui.weak("Without this, checks arrive on Android's own schedule — minutes late, or later.");
+    }
+    if !h.exempt {
+        ui.horizontal(|ui| {
+            ui.colored_label(egui::Color32::from_rgb(230, 160, 60), "\u{26a0} Battery optimised");
+            if ui.button("Exempt from battery optimisation").clicked() {
+                crate::platform::request_battery_exemption();
+            }
+        });
+        ui.weak("This is the one that decides whether overnight warnings arrive.");
+    }
+    if h.exact && h.exempt {
+        ui.weak(
+            "Exact alarms and battery exemption are both granted. Samsung's One UI can still put \
+             the app to sleep on its own — that switch lives in Settings \u{2192} Battery \u{2192} \
+             Background usage limits, and is outside what any app can set for you.",
+        );
+    }
 }

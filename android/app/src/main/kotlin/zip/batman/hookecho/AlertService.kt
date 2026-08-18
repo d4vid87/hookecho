@@ -25,10 +25,9 @@ import android.os.PowerManager
  * [AlertWorker] is the safety net underneath it, not a replacement — both run the same
  * [pollOnce].
  *
- * ponytail: deep-Doze worst case is ~15 min via WorkManager once the OS kills this service;
- * setExactAndAllowWhileIdle escalation while a warning is active is the upgrade path if field
- * reports show FGS deaths. REQUEST_IGNORE_BATTERY_OPTIMIZATIONS is deliberately not requested
- * (Play-policy-sensitive).
+ * [AlertAlarm] is the third leg: an exact alarm is the one schedule Doze honours on time, so a
+ * poll still lands when this service has been killed and WorkManager's 15-minute floor is too
+ * slow to be a warning.
  */
 class AlertService : Service() {
     @Volatile private var running = false
@@ -65,6 +64,7 @@ class AlertService : Service() {
             // The widget's own 30-minute clock is a floor; while the service runs it stays as
             // fresh as the poll it just did.
             AlertWidget.refresh(this)
+            AlertAlarm.markPolled(this)
             // Tighten the cadence while something is actually warned at a watched point.
             val waitMs = if (hot) 60_000L else 300_000L
             var slept = 0L
@@ -215,9 +215,11 @@ class AlertService : Service() {
                 }
                 context.startForegroundService(intent)
                 AlertWorker.enqueue(context)
+                AlertAlarm.arm(context)
             } else {
                 context.stopService(intent)
                 AlertWorker.cancel(context)
+                AlertAlarm.cancel(context)
             }
         }
     }
