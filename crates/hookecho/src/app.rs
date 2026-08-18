@@ -1940,6 +1940,9 @@ pub struct HookEchoApp {
     sounding_rx: Option<std::sync::mpsc::Receiver<Result<wxdata::sounding::Sounding, String>>>,
     /// The observed RAOB fetched alongside the HRRR profile, for the same click.
     raob_rx: Option<std::sync::mpsc::Receiver<Result<wxdata::sounding::Sounding, String>>>,
+    /// Detections seen recently, for compound rules to ask "and was there also…". Trimmed to the
+    /// compound window every pass, so it stays a handful of entries.
+    recent_hits: Vec<(crate::settings::RuleTrigger, crate::rules::Detection, Instant)>,
     /// Chase mode: follow a position, auto-switching the active pane to the nearest radar.
     chase_mode: bool,
     chase_pos: Option<(f64, f64)>,
@@ -2739,6 +2742,7 @@ impl HookEchoApp {
             sounding_rx: None,
             raob_rx: None,
             chase_mode: false,
+            recent_hits: Vec::new(),
             chase_pos: None,
             chase_track: crate::chaselog::Track::default(),
             climo_tracks: None,
@@ -3979,11 +3983,23 @@ impl HookEchoApp {
                             }),
                     };
                     if reaches {
-                        let place = crate::rules::place_label(&rule.place, &self.settings);
-                        let title = format!("\u{25c9} {}", rule.title());
-                        let body = format!("{} at {place}", a.event);
-                        self.notify_alert(&title, &body, rule.urgent);
-                        self.banner(title, body);
+                        // The warning's own centroid stands in for a detection, so a warning rule
+                        // can carry extra conditions like every other rule ("a tornado warning,
+                        // and also rotation within 20 km").
+                        let hit = f
+                            .rings
+                            .first()
+                            .filter(|r| !r.is_empty())
+                            .map(|ring| {
+                                let n = ring.len() as f64;
+                                let (x, y) =
+                                    ring.iter().fold((0.0, 0.0), |(x, y), p| (x + p[0], y + p[1]));
+                                crate::rules::Detection::at(x / n, y / n)
+                            })
+                            .unwrap_or(crate::rules::Detection::at(0.0, 0.0));
+                        if crate::rules::compound_ok(&rule, &hit, &self.recent_for_rules()) {
+                            self.fire_rule_named(&rule, &hit, Some(a.event.clone()));
+                        }
                     }
                 }
                 let zone_name = zone;
@@ -4108,6 +4124,13 @@ impl HookEchoApp {
                 _ => Vec::new(),
             }
         };
+        // Every scan detector's hits are remembered, not only the armed ones: a compound rule
+        // asks about a trigger no rule is armed on all the time ("rotation and also a TDS").
+        for t in [T::Tds, T::Tbss, T::ZdrColumn, T::Rotation] {
+            let h = hits(&t);
+            self.note_hits(&t, &h);
+        }
+        let recent = self.recent_for_rules();
         for rule in self.settings.alert_rules.clone() {
             if !rule.enabled || !rule.trigger.is_scan() {
                 continue;
@@ -4121,6 +4144,9 @@ impl HookEchoApp {
                     d(a).total_cmp(&d(b))
                 });
             let Some(hit) = hit else { continue };
+            if !crate::rules::compound_ok(&rule, &hit, &recent) {
+                continue;
+            }
             self.fire_rule(&rule, &hit);
         }
     }
@@ -4167,7 +4193,10 @@ impl HookEchoApp {
                         .total_cmp(&b.strength.unwrap_or(0.0))
                 });
             if let Some(hit) = best {
-                self.fire_rule(&rule, &hit);
+                self.note_hits(&crate::settings::RuleTrigger::GlmFed, &[hit]);
+                if crate::rules::compound_ok(&rule, &hit, &self.recent_for_rules()) {
+                    self.fire_rule(&rule, &hit);
+                }
             }
         }
     }
@@ -4207,7 +4236,10 @@ impl HookEchoApp {
                 })
                 .copied();
             if let Some(hit) = worst {
-                self.fire_rule(&rule, &hit);
+                self.note_hits(&crate::settings::RuleTrigger::ProbSevere, &[hit]);
+                if crate::rules::compound_ok(&rule, &hit, &self.recent_for_rules()) {
+                    self.fire_rule(&rule, &hit);
+                }
             }
         }
     }
@@ -4224,10 +4256,64 @@ impl HookEchoApp {
         crate::geo::great_circle([site.longitude as f64, site.latitude as f64], [lon, lat]).0
     }
 
+    /// Kick off a backtest of one rule against an archive day, on the shared runtime.
+    ///
+    /// The site is whichever radar the active pane is on: a rule about a place is only replayable
+    /// against a radar that can see it, and the pane the user is looking at is the best guess
+    /// anyone can make without asking.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn start_backtest(&mut self, rule_idx: usize, day: chrono::NaiveDate) {
+        let Some(rule) = self.settings.alert_rules.get(rule_idx).cloned() else {
+            return;
+        };
+        let Some(site) = self.views[self.active].site.clone() else {
+            return;
+        };
+        let shared: crate::backtest::Shared = Default::default();
+        self.rules_window.backtest = Some(shared.clone());
+        let settings = self.settings.clone();
+        self.spawner.spawn(crate::backtest::run(
+            site, day, rule, settings, shared,
+        ));
+    }
+
+    /// Remember detections so a compound rule can ask about them next pass, and forget anything
+    /// older than the compound window.
+    fn note_hits(&mut self, trigger: &crate::settings::RuleTrigger, hits: &[crate::rules::Detection]) {
+        let window = std::time::Duration::from_secs_f64(crate::rules::COMPOUND_WINDOW_MIN * 60.0);
+        self.recent_hits.retain(|(_, _, t)| t.elapsed() < window);
+        for h in hits {
+            self.recent_hits.push((trigger.clone(), *h, Instant::now()));
+        }
+    }
+
+    /// The recent detections in the shape `rules::compound_ok` wants.
+    fn recent_for_rules(&self) -> Vec<crate::rules::RecentHit> {
+        self.recent_hits
+            .iter()
+            .map(|(trigger, hit, t)| crate::rules::RecentHit {
+                trigger: trigger.clone(),
+                hit: *hit,
+                age_min: t.elapsed().as_secs_f64() / 60.0,
+            })
+            .collect()
+    }
+
     /// Deliver a rule's alert, unless its cooldown for this place is still running.
     ///
     /// Keyed by rule *and* place, so a rule watching two zones can speak about each of them.
     fn fire_rule(&mut self, rule: &crate::settings::AlertRule, hit: &crate::rules::Detection) {
+        self.fire_rule_named(rule, hit, None);
+    }
+
+    /// [`Self::fire_rule`], with the body spelled out. Warning rules name the event they matched,
+    /// which the trigger label alone does not carry.
+    fn fire_rule_named(
+        &mut self,
+        rule: &crate::settings::AlertRule,
+        hit: &crate::rules::Detection,
+        detail: Option<String>,
+    ) {
         let place = crate::rules::place_label(&rule.place, &self.settings);
         let key = format!("{}:{place}", rule.id);
         let cooldown = std::time::Duration::from_secs(u64::from(rule.cooldown_min) * 60);
@@ -4240,13 +4326,21 @@ impl HookEchoApp {
         }
         self.rules_fired.insert(key, Instant::now());
         let title = format!("\u{25c9} {}", rule.title());
-        let body = match hit.strength {
-            Some(v) => format!("{} \u{2014} {v:.0} at {place}", rule.trigger.label()),
-            None => format!("{} at {place}", rule.trigger.label()),
+        let body = match (detail, hit.strength) {
+            (Some(d), _) => format!("{d} at {place}"),
+            (None, Some(v)) => format!("{} \u{2014} {v:.0} at {place}", rule.trigger.label()),
+            (None, None) => format!("{} at {place}", rule.trigger.label()),
         };
-        // ponytail: no snapshot attachment (see `snapshot_push`) and no per-rule sound; the
-        // delivery fan-out in `notify_alert` is the place to add either.
+        if rule.snapshot {
+            // Same one-picture-per-pass rule the warning snapshot follows: newest wins.
+            self.snapshot_push = Some(format!("{title} — {place}"));
+        }
         self.notify_alert(&title, &body, rule.urgent);
+        if let Some(sound) = rule.sound.clone() {
+            if self.settings.alert_sound && !self.settings.mute_alerts {
+                self.play_alert(&sound);
+            }
+        }
         self.banner(title, body);
     }
 
@@ -16127,6 +16221,10 @@ impl eframe::App for HookEchoApp {
             }
         }
 
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some((i, day)) = self.rules_window.backtest_request.take() {
+            self.start_backtest(i, day);
+        }
         if let Some(detail) = &self.detail {
             let tex = detail
                 .image

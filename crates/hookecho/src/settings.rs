@@ -701,6 +701,54 @@ pub struct AlertRule {
     /// Rules are created switched off, and armed deliberately.
     #[serde(default)]
     pub enabled: bool,
+    /// Play this sound when the rule fires, instead of nothing. `None` keeps the old behaviour:
+    /// the rule banners and pushes but makes no noise of its own.
+    #[serde(default)]
+    pub sound: Option<AlertSound>,
+    /// Attach a picture of the map to the rule's push (desktop only, same path the warning
+    /// snapshot uses).
+    #[serde(default)]
+    pub snapshot: bool,
+    /// Extra conditions on top of the trigger. Empty is the old single-condition rule, and an old
+    /// rule deserializes into exactly that.
+    #[serde(default)]
+    pub conditions: Vec<RuleCondition>,
+    /// How the extra conditions combine among themselves. The rule's own trigger is always
+    /// required — it is what starts the evaluation.
+    #[serde(default)]
+    pub combine: RuleCombinator,
+}
+
+/// One extra thing that must (or may) also be true for a rule to fire.
+///
+/// Deliberately a trigger and a threshold, not an expression: one level, no nesting. A rule
+/// nobody can read at 3am is a rule nobody trusts.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct RuleCondition {
+    pub trigger: RuleTrigger,
+    #[serde(default)]
+    pub threshold: Option<f64>,
+}
+
+/// How a rule's extra conditions combine.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum RuleCombinator {
+    /// Every extra condition must also hold.
+    #[default]
+    And,
+    /// At least one of them must.
+    Or,
+}
+
+impl RuleCombinator {
+    pub const ALL: [RuleCombinator; 2] = [RuleCombinator::And, RuleCombinator::Or];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            RuleCombinator::And => "and also",
+            RuleCombinator::Or => "and either",
+        }
+    }
 }
 
 /// Ten minutes, matching the built-in proximity alerts' own cooldown.
@@ -721,6 +769,10 @@ impl AlertRule {
             urgent: false,
             cooldown_min: default_rule_cooldown(),
             enabled: false,
+            sound: None,
+            snapshot: false,
+            conditions: Vec::new(),
+            combine: RuleCombinator::default(),
         }
     }
 

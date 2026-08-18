@@ -9,7 +9,7 @@
 //! why. The cooldown, the notification and the layer plumbing live in `app.rs` — this file is
 //! the part that can be tested without a GPU.
 
-use crate::settings::{AlertRule, RulePlace, RuleTrigger, Settings};
+use crate::settings::{AlertRule, RuleCombinator, RulePlace, RuleTrigger, Settings};
 
 /// One thing a rule could fire on: where it is, and how strong it is in the trigger's own units.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -78,6 +78,55 @@ pub fn place_contains(place: &RulePlace, hit: &Detection, settings: &Settings) -
             .iter()
             .find(|z| &z.name == name)
             .is_some_and(|z| wxdata::overlay::point_in_ring(&z.ring, hit.lon, hit.lat)),
+    }
+}
+
+/// Something that fired recently, kept so a compound rule can ask "and was there also…".
+#[derive(Debug, Clone, PartialEq)]
+pub struct RecentHit {
+    pub trigger: RuleTrigger2,
+    pub hit: Detection,
+    /// Minutes since it was seen.
+    pub age_min: f64,
+}
+
+/// Compound conditions are matched on trigger *kind*, not on the warning text a `Warning` trigger
+/// carries — a rule saying "rotation and also a warning" means any warning, and writing the text
+/// twice would be a second place to get it wrong.
+pub type RuleTrigger2 = RuleTrigger;
+
+/// How recently an extra condition must have been satisfied to count. A storm does not do two
+/// things in the same second, and it does not stay the same storm for an hour.
+pub const COMPOUND_WINDOW_MIN: f64 = 15.0;
+
+/// How close to the primary detection an extra condition must be. Two signatures 100 km apart are
+/// two storms, and a rule about one of them should not fire on the other.
+pub const COMPOUND_NEAR_KM: f64 = 20.0;
+
+/// Do the rule's extra conditions hold around `hit`?
+///
+/// The rule's own trigger is not re-checked here — it is what started the evaluation. A rule with
+/// no extra conditions is unchanged from before this existed, which is what makes every rule in
+/// every existing settings file keep working.
+pub fn compound_ok(rule: &AlertRule, hit: &Detection, recent: &[RecentHit]) -> bool {
+    if rule.conditions.is_empty() {
+        return true;
+    }
+    let holds = |c: &crate::settings::RuleCondition| {
+        recent.iter().any(|r| {
+            r.trigger == c.trigger
+                && r.age_min <= COMPOUND_WINDOW_MIN
+                && crate::geo::great_circle([hit.lon, hit.lat], [r.hit.lon, r.hit.lat]).0
+                    <= COMPOUND_NEAR_KM
+                && match c.threshold {
+                    Some(min) => r.hit.strength.is_some_and(|v| v >= min),
+                    None => true,
+                }
+        })
+    };
+    match rule.combine {
+        RuleCombinator::And => rule.conditions.iter().all(holds),
+        RuleCombinator::Or => rule.conditions.iter().any(holds),
     }
 }
 
@@ -221,6 +270,79 @@ mod tests {
         let mut tds = rule(RuleTrigger::Tds, RulePlace::Anywhere);
         tds.threshold = Some(99.0);
         assert!(matches(&tds, &Detection::at(-97.5, 35.3), &s));
+    }
+
+    #[test]
+    fn compound_conditions_need_the_same_storm_and_a_recent_one() {
+        let mut r = rule(RuleTrigger::Rotation, RulePlace::Anywhere);
+        r.conditions = vec![crate::settings::RuleCondition {
+            trigger: RuleTrigger::Tds,
+            threshold: None,
+        }];
+        let hit = Detection::with_strength(-97.5, 35.3, 50.0);
+        let near = |age_min: f64, lon: f64| RecentHit {
+            trigger: RuleTrigger::Tds,
+            hit: Detection::at(lon, 35.3),
+            age_min,
+        };
+        // Same storm, two minutes ago.
+        assert!(compound_ok(&r, &hit, &[near(2.0, -97.45)]));
+        // Same place, but an hour ago — a different storm by now.
+        assert!(!compound_ok(&r, &hit, &[near(60.0, -97.45)]));
+        // Recent, but 200 km away.
+        assert!(!compound_ok(&r, &hit, &[near(2.0, -95.3)]));
+        // Nothing at all.
+        assert!(!compound_ok(&r, &hit, &[]));
+    }
+
+    #[test]
+    fn and_needs_both_conditions_and_or_needs_one() {
+        let mut r = rule(RuleTrigger::Rotation, RulePlace::Anywhere);
+        r.conditions = vec![
+            crate::settings::RuleCondition {
+                trigger: RuleTrigger::Tds,
+                threshold: None,
+            },
+            crate::settings::RuleCondition {
+                trigger: RuleTrigger::ProbSevere,
+                threshold: Some(70.0),
+            },
+        ];
+        let hit = Detection::with_strength(-97.5, 35.3, 50.0);
+        let tds = RecentHit {
+            trigger: RuleTrigger::Tds,
+            hit: Detection::at(-97.5, 35.3),
+            age_min: 1.0,
+        };
+        let weak_ps = RecentHit {
+            trigger: RuleTrigger::ProbSevere,
+            hit: Detection::with_strength(-97.5, 35.3, 40.0),
+            age_min: 1.0,
+        };
+        let strong_ps = RecentHit {
+            trigger: RuleTrigger::ProbSevere,
+            hit: Detection::with_strength(-97.5, 35.3, 85.0),
+            age_min: 1.0,
+        };
+        r.combine = RuleCombinator::And;
+        assert!(!compound_ok(&r, &hit, std::slice::from_ref(&tds)));
+        assert!(!compound_ok(&r, &hit, &[tds.clone(), weak_ps.clone()]));
+        assert!(compound_ok(&r, &hit, &[tds.clone(), strong_ps]));
+        r.combine = RuleCombinator::Or;
+        assert!(compound_ok(&r, &hit, &[tds]));
+        assert!(!compound_ok(&r, &hit, &[weak_ps]));
+    }
+
+    #[test]
+    fn an_old_rule_deserializes_with_no_conditions_and_behaves_as_before() {
+        // The shape a settings file written before compound rules existed carries.
+        let json = r#"{"id":"abc","trigger":"Tds","place":"Anywhere","cooldown_min":10,
+                       "enabled":true}"#;
+        let r: AlertRule = serde_json::from_str(json).expect("old rules must still read");
+        assert!(r.conditions.is_empty());
+        assert_eq!(r.combine, RuleCombinator::And);
+        assert!(r.sound.is_none() && !r.snapshot);
+        assert!(compound_ok(&r, &Detection::at(-97.5, 35.3), &[]));
     }
 
     #[test]
