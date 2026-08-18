@@ -44,6 +44,7 @@ pub mod rotation;
 pub mod severe;
 pub mod sounding;
 pub mod spc;
+pub mod spoken;
 pub mod spotters;
 pub mod stations;
 pub mod task;

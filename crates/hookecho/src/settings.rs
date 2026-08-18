@@ -289,6 +289,17 @@ pub struct Settings {
     /// Read new warnings aloud (system speech engine). Off by default — speech is intrusive.
     #[serde(default)]
     pub speak_warnings: bool,
+    /// Path to a Piper binary, or blank to look on `PATH`. Piper is a local neural voice; when it
+    /// and a voice model are both present, spoken warnings go through it instead of espeak.
+    #[serde(default)]
+    pub piper_path: String,
+    /// Path to a Piper `.onnx` voice model. Blank turns Piper off — an engine with no model has
+    /// nothing to say. Never committed: it is a ~60 MB download or a file the user already has.
+    #[serde(default)]
+    pub piper_voice: String,
+    /// While chase mode is on, speak the nearest storm's bearing and distance as it changes.
+    #[serde(default)]
+    pub speak_position: bool,
     /// Alert when radar echo is heading for a saved location.
     #[serde(default)]
     pub rain_alerts: bool,
@@ -953,6 +964,9 @@ impl Default for Settings {
             anthropic_key: String::new(),
             lightning_alarm: false,
             speak_warnings: false,
+            piper_path: String::new(),
+            piper_voice: String::new(),
+            speak_position: false,
             rain_alerts: false,
             rain_sound: AlertSound::default(),
             setup_done: false,
@@ -1359,6 +1373,9 @@ mod tests {
             anthropic_key: "sk-test".to_string(),
             lightning_alarm: true,
             speak_warnings: true,
+            piper_path: String::new(),
+            piper_voice: String::new(),
+            speak_position: false,
             rain_alerts: true,
             rain_sound: AlertSound::Ding,
             setup_done: true,

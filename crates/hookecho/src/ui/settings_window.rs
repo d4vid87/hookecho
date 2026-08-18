@@ -1046,6 +1046,10 @@ fn alerts_tab(ui: &mut egui::Ui, settings: &mut Settings) {
              your eyes are on the road",
         );
     ui.weak("Linux needs spd-say or espeak installed; Android uses its built-in voice.");
+    #[cfg(not(target_arch = "wasm32"))]
+    if !cfg!(target_os = "android") {
+        piper_row(ui, settings);
+    }
 
     ui.add_space(8.0);
     ui.separator();
@@ -1060,4 +1064,60 @@ fn alerts_tab(ui: &mut egui::Ui, settings: &mut Settings) {
     );
     ui.checkbox(&mut settings.lightning_alarm, "Lightning within ~15 km of a saved location")
         .on_hover_text("Chime + push when CG lightning strikes near a marker. Requires the Lightning layer (National) to be on.");
+}
+
+/// Piper: the local neural voice, and the one download this app ever offers.
+///
+/// Nothing here is bundled. The binary is whatever the user installed (most distros package it),
+/// and the voice model is a ~60 MB file that would be absurd to commit — so the button fetches it
+/// into the data directory on request, and until then espeak keeps working.
+#[cfg(not(target_arch = "wasm32"))]
+fn piper_row(ui: &mut egui::Ui, settings: &mut Settings) {
+    ui.add_space(4.0);
+    let mut edited = false;
+    ui.horizontal(|ui| {
+        ui.label("Piper binary:");
+        edited |= ui
+            .add(
+                egui::TextEdit::singleline(&mut settings.piper_path)
+                    .hint_text("blank = find `piper` on PATH"),
+            )
+            .changed();
+    });
+    ui.horizontal(|ui| {
+        ui.label("Voice model:");
+        edited |= ui
+            .add(
+                egui::TextEdit::singleline(&mut settings.piper_voice)
+                    .hint_text("path to a .onnx voice"),
+            )
+            .changed();
+    });
+    if edited {
+        crate::speech::set_piper(&settings.piper_path, &settings.piper_voice);
+    }
+    ui.horizontal(|ui| {
+        let status = crate::speech::voice_status();
+        if settings.piper_voice.is_empty()
+            && !status.busy
+            && ui.button("Download a voice").clicked()
+        {
+            crate::speech::request_voice_download();
+        }
+        if !status.text.is_empty() {
+            ui.weak(&status.text);
+        }
+    });
+    // The download writes the model to a known path, so filling the field in for the user is the
+    // whole handoff — there is nothing else to configure.
+    if settings.piper_voice.is_empty() {
+        if let Some(p) = crate::speech::default_voice_path().filter(|p| p.exists()) {
+            settings.piper_voice = p.to_string_lossy().into_owned();
+            crate::speech::set_piper(&settings.piper_path, &settings.piper_voice);
+        }
+    }
+    ui.checkbox(
+        &mut settings.speak_position,
+        "Speak the nearest storm's bearing while chasing",
+    );
 }

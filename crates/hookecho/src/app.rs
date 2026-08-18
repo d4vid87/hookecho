@@ -1916,6 +1916,8 @@ pub struct HookEchoApp {
     sounding_rx: Option<std::sync::mpsc::Receiver<Result<wxdata::sounding::Sounding, String>>>,
     /// The observed RAOB fetched alongside the HRRR profile, for the same click.
     raob_rx: Option<std::sync::mpsc::Receiver<Result<wxdata::sounding::Sounding, String>>>,
+    /// Last spoken storm-position update: when, and the distance in whole miles it reported.
+    spoke_pos: Option<(Instant, i32)>,
     /// Chase mode: follow a position, auto-switching the active pane to the nearest radar.
     chase_mode: bool,
     chase_pos: Option<(f64, f64)>,
@@ -2719,6 +2721,7 @@ impl HookEchoApp {
             sounding_rx: None,
             raob_rx: None,
             chase_mode: false,
+            spoke_pos: None,
             chase_pos: None,
             chase_track: crate::chaselog::Track::default(),
             climo_tracks: None,
@@ -2983,6 +2986,9 @@ impl HookEchoApp {
             app.locate_by_ip(&cc.egui_ctx.clone());
         }
         crate::platform::set_background_alerts(app.settings.background_alerts);
+        // Point the speech path at Piper before anything can speak.
+        #[cfg(not(target_arch = "wasm32"))]
+        crate::speech::set_piper(&app.settings.piper_path, &app.settings.piper_voice);
         // Not on the web: this is a burst of six fetches, and on the one thread a browser gives
         // us they queue ahead of the radar the visitor actually came for. The periodic refresh in
         // `update` picks them up a moment later, once there is radar on screen.
@@ -4026,7 +4032,13 @@ impl HookEchoApp {
                         })
                         .unwrap_or_default();
                     if !self.settings.mute_alerts {
-                        crate::speech::speak(&format!("{} for {}{}", a.event, area, until));
+                        // Hazard, place and heading first — see `wxdata::spoken`. `until` here
+                        // still carries its leading " until ", which the script builder adds.
+                        crate::speech::speak(&wxdata::spoken::warning_script(
+                            a,
+                            &area,
+                            until.trim_start_matches(" until "),
+                        ));
                     }
                 }
                 if notify_ok && self.settings.ntfy_snapshot {
@@ -4779,6 +4791,72 @@ impl HookEchoApp {
                 .await;
             });
         }
+    }
+
+    /// Fetch the Piper voice model into the data directory.
+    ///
+    /// The model and the `.onnx.json` beside it are both required — Piper reads its sample rate
+    /// and phoneme table from the JSON — so a download that gets one and not the other is a
+    /// failure, not a half-success. Written to a `.part` file and renamed, so an interrupted
+    /// download cannot leave a truncated model that Piper would then crash on.
+    ///
+    // ponytail: no pinned hash. The download is https from Piper's own voice repository and both
+    // files are validated (the JSON parses, the model is the size of a model); pinning a digest
+    // means pinning a version, and I could not verify one offline to pin.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn download_voice(&self) {
+        let Some(path) = crate::speech::default_voice_path() else {
+            crate::speech::set_voice_status(false, "no data directory to download into");
+            return;
+        };
+        let http = self.http.clone();
+        self.spawner.spawn(async move {
+            let cfg_url = format!("{}.json", crate::speech::VOICE_URL);
+            let cfg_path = path.with_extension("onnx.json");
+            if let Some(dir) = path.parent() {
+                if let Err(e) = std::fs::create_dir_all(dir) {
+                    crate::speech::set_voice_status(false, format!("could not create {dir:?}: {e}"));
+                    return;
+                }
+            }
+            crate::speech::set_voice_status(true, "downloading voice (~60 MB)…");
+            let get = |url: String| {
+                let http = http.clone();
+                async move { http.get(url).send().await?.error_for_status()?.bytes().await }
+            };
+            let cfg = match get(cfg_url).await {
+                Ok(b) => b,
+                Err(e) => {
+                    crate::speech::set_voice_status(false, format!("voice config failed: {e}"));
+                    return;
+                }
+            };
+            if serde_json::from_slice::<serde_json::Value>(&cfg).is_err() {
+                crate::speech::set_voice_status(false, "voice config was not JSON; refusing it");
+                return;
+            }
+            let model = match get(crate::speech::VOICE_URL.to_string()).await {
+                Ok(b) => b,
+                Err(e) => {
+                    crate::speech::set_voice_status(false, format!("voice download failed: {e}"));
+                    return;
+                }
+            };
+            // A medium-quality Piper voice is tens of megabytes; anything tiny is an error page
+            // that happened to arrive with a 200.
+            if model.len() < 1_000_000 {
+                crate::speech::set_voice_status(false, "download was too small to be a voice");
+                return;
+            }
+            let part = path.with_extension("part");
+            let wrote = std::fs::write(&part, &model)
+                .and_then(|()| std::fs::rename(&part, &path))
+                .and_then(|()| std::fs::write(&cfg_path, &cfg));
+            match wrote {
+                Ok(()) => crate::speech::set_voice_status(false, "voice ready"),
+                Err(e) => crate::speech::set_voice_status(false, format!("writing the voice failed: {e}")),
+            }
+        });
     }
 
     /// Sub-hourly GOES scrub bar: shown when the active basemap is a GOES layer and its frame
@@ -6986,6 +7064,29 @@ impl HookEchoApp {
         let (close_km, close_min) =
             crate::geo::closest_approach([c.lon, c.lat], dir, kt, me, 120.0);
         let escape = crate::geo::escape_bearing([c.lon, c.lat], dir, me);
+        // Spoken position updates: only while chasing, only when the picture has actually
+        // changed, and never more than once a minute — a voice that repeats itself is a voice the
+        // user turns off. Reported in whole miles, so a storm parked in place says nothing.
+        if self.settings.speak_position && !self.settings.mute_alerts {
+            let miles = (km * 0.621_371).round() as i32;
+            let fresh = self
+                .spoke_pos
+                .is_none_or(|(t, m)| m != miles && t.elapsed() >= std::time::Duration::from_secs(60));
+            if fresh {
+                self.spoke_pos = Some((Instant::now(), miles));
+                crate::speech::speak(&wxdata::spoken::position_script(
+                    // "Cell O7", not the bare id — a synthesizer reading "O7" alone is a noise.
+                    &if c.id.is_empty() {
+                        c.title.clone()
+                    } else {
+                        format!("Cell {}", c.id)
+                    },
+                    bearing as f32,
+                    km,
+                    c.mvt_deg,
+                ));
+            }
+        }
         let mi = |km: f64| km * 0.621_371;
         // Urgent when the storm will be on top of you soon.
         let urgent = mi(close_km) < 5.0 && close_min < 20.0;
@@ -14997,6 +15098,12 @@ impl eframe::App for HookEchoApp {
         {
             self.goto_poll = Some(Instant::now());
             self.drain_goto_file();
+        }
+        // The settings window has no HTTP client or runtime, so the voice-download button raises
+        // a flag and the work happens here, on the same spawner everything else fetches on.
+        #[cfg(not(target_arch = "wasm32"))]
+        if crate::speech::take_voice_request() {
+            self.download_voice();
         }
         // A file the user picked, from any of the import buttons. Routed here rather than at the
         // button, because on Android the picker is an activity result that lands long after the
