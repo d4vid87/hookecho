@@ -3224,8 +3224,9 @@ impl HookEchoApp {
         let beam = crate::elevation::BeamSite {
             lon: site.longitude as f64,
             lat: site.latitude as f64,
-            // The site registry is the elevation source; `elevation::TOWER_M` adds the antenna.
+            // The site registry is the elevation source; the tower table adds the antenna.
             ground_m: site.elevation_meters as f64,
+            tower_m: wxdata::towers::tower_m(site.id),
             tilt_deg: tilt_deg as f64,
         };
         self.blockage_pending = Some((key.clone(), Instant::now()));

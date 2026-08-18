@@ -191,14 +191,17 @@ pub struct BeamSite {
     pub lat: f64,
     /// Ground elevation MSL from the site registry, in metres.
     pub ground_m: f64,
+    /// Antenna height above `ground_m`, from [`wxdata::towers::tower_m`].
+    pub tower_m: f64,
     /// Elevation angle of the tilt being displayed, in degrees.
     pub tilt_deg: f64,
 }
 
-/// Antenna height above the site's registry ground elevation. The registry carries the ground, not
-/// the feedhorn, and WSR-88D towers are all in this neighbourhood.
-/// ponytail: one constant for every site; per-site tower heights if a shading check needs them.
-pub const TOWER_M: f64 = 20.0;
+/// Antenna height above the site's registry ground elevation, for a site we have no measurement
+/// for. Real per-site heights live in [`wxdata::towers`] — they run from 10 m to 55 m, so the flat
+/// 20 m this used to be was wrong by up to 35 m, about a fifth of a degree of beam elevation at
+/// 10 km.
+pub const TOWER_M: f64 = wxdata::towers::DEFAULT_TOWER_M;
 
 /// Beam is only useful out to about the unambiguous range; past it there is nothing to shade.
 const MAX_RANGE_KM: f64 = 250.0;
@@ -250,7 +253,7 @@ pub async fn blockage_image(
     site: BeamSite,
     world: [f64; 4],
 ) -> egui::ColorImage {
-    let radar_msl = site.ground_m + TOWER_M;
+    let radar_msl = site.ground_m + site.tower_m;
     let polar = occultation(client, site, radar_msl).await;
     let mut px = vec![egui::Color32::TRANSPARENT; RASTER_N * RASTER_N];
     let (wx0, wy0, wx1, wy1) = (world[0], world[1], world[2], world[3]);
@@ -387,6 +390,7 @@ mod tests {
             lon: -122.717,
             lat: 42.081,
             ground_m: summit as f64,
+            tower_m: wxdata::towers::tower_m("KMAX"),
             tilt_deg: 0.5,
         };
         let (cx, cy) = crate::render::mercator::lonlat_to_world(site.lon, site.lat);
