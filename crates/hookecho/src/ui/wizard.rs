@@ -143,13 +143,14 @@ fn card_map(ui: &mut egui::Ui, settings: &mut Settings, basemap: &mut BasemapSty
     // Basemap picker, filtered by whichever keys are set this frame (typing a key unlocks styles).
     let mb = !settings.mapbox_key.is_empty();
     let mt = !settings.maptiler_key.is_empty();
+    let cx = crate::tiles::valid_xyz_template(&settings.custom_tile_url);
     ui.horizontal(|ui| {
         ui.label("Basemap");
         egui::ComboBox::from_id_salt("wiz_basemap")
             .selected_text(basemap.label())
             .show_ui(ui, |ui| {
                 for s in BasemapStyle::ALL {
-                    if s.available(mb, mt)
+                    if s.available(mb, mt, cx)
                         && ui.selectable_label(*basemap == s, s.label()).clicked()
                     {
                         *basemap = s;

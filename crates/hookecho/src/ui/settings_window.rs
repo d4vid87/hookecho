@@ -512,6 +512,50 @@ fn units_tab(ui: &mut egui::Ui, settings: &mut Settings) {
     ui.weak("Reflectivity stays dBZ; internal data is unchanged (display-only).");
 }
 
+/// The "Custom (XYZ URL)" basemap's template, zoom cap and attribution.
+///
+/// Hidden on web: the tile proxy is an exact-host allowlist, so an arbitrary host cannot be
+/// fetched there at all (see `BasemapStyle::available`).
+fn custom_tile_source(ui: &mut egui::Ui, settings: &mut Settings) {
+    if cfg!(target_arch = "wasm32") {
+        return;
+    }
+    ui.separator();
+    ui.label("Custom tile source");
+    ui.weak("An XYZ template adds a \"Custom\" entry to the basemap list. Desktop and Android only.");
+    ui.add_space(6.0);
+    ui.horizontal(|ui| {
+        ui.label("URL template");
+        ui.add(
+            egui::TextEdit::singleline(&mut settings.custom_tile_url)
+                .hint_text("https://tiles.example.com/{z}/{x}/{y}.png")
+                .desired_width(340.0),
+        );
+    });
+    if !settings.custom_tile_url.is_empty()
+        && !crate::tiles::valid_xyz_template(&settings.custom_tile_url)
+    {
+        // Says why rather than silently dropping the entry from the list.
+        ui.colored_label(
+            egui::Color32::from_rgb(220, 120, 100),
+            "Needs to be an https URL containing {z}, {x} and {y}.",
+        );
+    }
+    ui.horizontal(|ui| {
+        ui.label("Max zoom");
+        ui.add(egui::DragValue::new(&mut settings.custom_tile_max_z).range(1..=22))
+            .on_hover_text("Deeper views stretch the deepest tile that loaded rather than blanking");
+    });
+    ui.horizontal(|ui| {
+        ui.label("Attribution");
+        ui.add(
+            egui::TextEdit::singleline(&mut settings.custom_tile_attribution)
+                .hint_text("© Your data source")
+                .desired_width(340.0),
+        );
+    });
+}
+
 fn basemaps_tab(ui: &mut egui::Ui, settings: &mut Settings) {
     ui.label("Provider API keys unlock additional raster basemap styles.");
     ui.add_space(6.0);
@@ -520,6 +564,8 @@ fn basemaps_tab(ui: &mut egui::Ui, settings: &mut Settings) {
     key_field(ui, "MapTiler API key", &mut settings.maptiler_key);
     ui.add_space(6.0);
     ui.weak("Keys are stored locally in settings.json and sent only to the provider's tile API.");
+    ui.add_space(12.0);
+    custom_tile_source(ui, settings);
     ui.add_space(12.0);
     ui.separator();
     ui.label("Live station cards");

@@ -289,6 +289,9 @@ pub struct MapCallback {
     pub visible: Vec<VisibleTile>,
     /// Which basemap style this pane draws ([`crate::tiles::BasemapStyle::key`]).
     pub basemap_key: u8,
+    /// Draw the vector basemap *after* the raster tiles instead of under them — the hybrid
+    /// satellite style, where the vector geometry is roads over imagery.
+    pub vector_over_raster: bool,
     pub radar_upload: Option<RadarUpload>,
     pub draw_radar: bool,
     /// `Some` only when the overlay geometry changed (else the last upload is reused).
@@ -377,6 +380,7 @@ struct PaneGpu {
     /// a missing tile is stood in for by resident children or an ancestor.
     frame_visible: Vec<TileKey>,
     frame_visible_vector: Vec<TileId>,
+    vector_over_raster: bool,
     frame_draw_radar: bool,
     frame_draw_overlay: bool,
 }
@@ -693,6 +697,7 @@ impl RenderResources {
                 radar: None,
                 frame_visible: Vec::new(),
                 frame_visible_vector: Vec::new(),
+                vector_over_raster: false,
                 frame_draw_radar: false,
                 frame_draw_overlay: false,
             }
@@ -1049,6 +1054,7 @@ impl RenderResources {
         }
         pane.frame_visible = visible;
         pane.frame_visible_vector = cb.visible_vector.clone();
+        pane.vector_over_raster = cb.vector_over_raster;
         pane.frame_draw_radar = cb.draw_radar && pane.radar.is_some();
         pane.frame_draw_overlay = cb.draw_overlay && overlay_present;
     }
@@ -1241,17 +1247,10 @@ impl RenderResources {
             return;
         };
         let cam = &pane.camera_bg;
-        // Vector basemap first (opaque, under everything).
-        if !pane.frame_visible_vector.is_empty() {
-            pass.set_pipeline(&self.overlay_pipeline);
-            pass.set_bind_group(0, cam, &[]);
-            for tid in &pane.frame_visible_vector {
-                if let Some(t) = self.vector_tiles.get(tid) {
-                    pass.set_vertex_buffer(0, t.vbuf.slice(..));
-                    pass.set_index_buffer(t.ibuf.slice(..), wgpu::IndexFormat::Uint32);
-                    pass.draw_indexed(0..t.index_count, 0, 0..1);
-                }
-            }
+        // Vector basemap first (opaque, under everything) — unless it is the hybrid overlay, in
+        // which case it is roads drawn *onto* the raster imagery and has to come after it.
+        if !pane.vector_over_raster {
+            self.draw_vector_basemap(pane, cam, pass);
         }
         pass.set_pipeline(&self.tile_pipeline);
         pass.set_bind_group(0, cam, &[]);
@@ -1262,6 +1261,9 @@ impl RenderResources {
                 let base = (i * 6) as u32;
                 pass.draw(base..base + 6, 0..1);
             }
+        }
+        if pane.vector_over_raster {
+            self.draw_vector_basemap(pane, cam, pass);
         }
         // Field layers under the radar (national mosaic context).
         self.draw_fields(cam, pass, true);
@@ -1294,6 +1296,28 @@ impl RenderResources {
     }
 
     /// Stage a pane's uploads (mirrors the egui `prepare` phase). Public for the headless harness.
+    /// Draw one pane's resident vector-basemap tiles. Extracted so the caller can put it either
+    /// side of the raster tiles (see [`MapCallback::vector_over_raster`]).
+    fn draw_vector_basemap(
+        &self,
+        pane: &PaneGpu,
+        cam: &wgpu::BindGroup,
+        pass: &mut wgpu::RenderPass<'_>,
+    ) {
+        if pane.frame_visible_vector.is_empty() {
+            return;
+        }
+        pass.set_pipeline(&self.overlay_pipeline);
+        pass.set_bind_group(0, cam, &[]);
+        for tid in &pane.frame_visible_vector {
+            if let Some(t) = self.vector_tiles.get(tid) {
+                pass.set_vertex_buffer(0, t.vbuf.slice(..));
+                pass.set_index_buffer(t.ibuf.slice(..), wgpu::IndexFormat::Uint32);
+                pass.draw_indexed(0..t.index_count, 0, 0..1);
+            }
+        }
+    }
+
     pub fn prepare_pane(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, cb: &MapCallback) {
         self.upload_frame(device, queue, cb);
     }

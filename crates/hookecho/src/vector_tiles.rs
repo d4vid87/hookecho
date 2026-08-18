@@ -141,7 +141,7 @@ fn maybe_gunzip(bytes: &[u8]) -> Vec<u8> {
 pub fn build_tile(
     bytes: &[u8],
     id: TileId,
-    dark: bool,
+    palette: basemap_style::Palette,
     tess_zoom: f64,
 ) -> (Vec<OverlayVertex>, Vec<u32>, Vec<PlaceLabel>) {
     let (z, tx, ty) = id;
@@ -151,30 +151,33 @@ pub fn build_tile(
     let mut verts: Vec<OverlayVertex> = Vec::new();
     let mut indices: Vec<u32> = Vec::new();
 
-    // Background land quad covering the whole tile.
-    let bg = color(basemap_style::style(dark).background);
-    let (x0, y0) = (txf / n, tyf / n);
-    let (x1, y1) = ((txf + 1.0) / n, (tyf + 1.0) / n);
-    let base = verts.len() as u32;
-    verts.extend_from_slice(&[
-        OverlayVertex {
-            world: [x0 as f32, y0 as f32],
-            color: bg,
-        },
-        OverlayVertex {
-            world: [x1 as f32, y0 as f32],
-            color: bg,
-        },
-        OverlayVertex {
-            world: [x1 as f32, y1 as f32],
-            color: bg,
-        },
-        OverlayVertex {
-            world: [x0 as f32, y1 as f32],
-            color: bg,
-        },
-    ]);
-    indices.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
+    // Background land quad covering the whole tile — skipped entirely by the overlay palette,
+    // which draws on top of raster imagery and must not hide it.
+    if let Some(bg) = basemap_style::style(palette).background {
+        let bg = color(bg);
+        let (x0, y0) = (txf / n, tyf / n);
+        let (x1, y1) = ((txf + 1.0) / n, (tyf + 1.0) / n);
+        let base = verts.len() as u32;
+        verts.extend_from_slice(&[
+            OverlayVertex {
+                world: [x0 as f32, y0 as f32],
+                color: bg,
+            },
+            OverlayVertex {
+                world: [x1 as f32, y0 as f32],
+                color: bg,
+            },
+            OverlayVertex {
+                world: [x1 as f32, y1 as f32],
+                color: bg,
+            },
+            OverlayVertex {
+                world: [x0 as f32, y1 as f32],
+                color: bg,
+            },
+        ]);
+        indices.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
+    }
 
     let data = maybe_gunzip(bytes);
     let Ok(reader) = Reader::new(data) else {
@@ -197,7 +200,7 @@ pub fn build_tile(
         let feats = reader.get_features(i).unwrap_or_default();
         for f in &feats {
             let cls = prop(&f.properties, key);
-            let Some(c) = basemap_style::fill(dark, layer, &cls) else {
+            let Some(c) = basemap_style::fill(palette, layer, &cls) else {
                 continue;
             };
             let mut b = Path::builder();
@@ -256,7 +259,7 @@ pub fn build_tile(
             if *layer == "boundary" && cls == "6" && z < 7 {
                 continue;
             }
-            let Some((c, wpx)) = basemap_style::stroke(dark, layer, &cls) else {
+            let Some((c, wpx)) = basemap_style::stroke(palette, layer, &cls) else {
                 continue;
             };
             let w = (wpx as f64 * px_to_world) as f32;
@@ -359,7 +362,7 @@ fn extract_labels(
     out
 }
 
-fn fill_template(template: &str, z: u8, x: u32, y: u32) -> String {
+pub(crate) fn fill_template(template: &str, z: u8, x: u32, y: u32) -> String {
     template
         .replace("{z}", &z.to_string())
         .replace("{x}", &x.to_string())
@@ -413,7 +416,7 @@ pub async fn fetch_tilejson(
 pub async fn fetch_visible_vector(
     client: &reqwest::Client,
     template: &str,
-    dark: bool,
+    palette: basemap_style::Palette,
     tess_zoom: f64,
     visible: &[VisibleTile],
 ) -> (Vec<PendingVectorTile>, Vec<PlaceLabel>) {
@@ -424,7 +427,7 @@ pub async fn fetch_visible_vector(
         let url = fill_template(template, z, x, y);
         match load_tile_bytes(client, &url, None).await {
             Ok(bytes) => {
-                let (verts, indices, lbls) = build_tile(&bytes, v.id, dark, tess_zoom);
+                let (verts, indices, lbls) = build_tile(&bytes, v.id, palette, tess_zoom);
                 labels.extend(lbls);
                 out.push(PendingVectorTile {
                     id: v.id,
@@ -462,7 +465,7 @@ pub struct VectorTileManager {
     labels: HashMap<TileId, Vec<PlaceLabel>>,
     /// Bumped on every change to `labels` (see [`Self::label_generation`]).
     label_gen: u64,
-    dark: bool,
+    palette: basemap_style::Palette,
     tess_zoom: i32,
     /// Candidate new tessellation zoom and when it was first seen — see [`Self::note_zoom`].
     zoom_settled: Option<(i32, wxdata::clock::Instant)>,
@@ -497,7 +500,7 @@ impl VectorTileManager {
             vevicted: Vec::new(),
             labels: HashMap::new(),
             label_gen: 0,
-            dark: true,
+            palette: basemap_style::Palette::Dark,
             tess_zoom: 7,
             zoom_settled: None,
             cache_root,
@@ -513,12 +516,16 @@ impl VectorTileManager {
         self.ctx = Some(ctx);
     }
 
-    /// Switch dark/light. Returns true if changed (caller should clear the GPU vector cache).
-    pub fn set_style(&mut self, dark: bool) -> bool {
-        if self.dark == dark {
+    /// Switch palette. Returns true if changed (caller should clear the GPU vector cache).
+    ///
+    /// Colors are baked in at tessellation, so a palette change has to re-tessellate everything —
+    /// the same cost the dark/light switch always paid. ponytail: draw-time color indirection if
+    /// palette switching ever stops being a rare user action.
+    pub fn set_style(&mut self, palette: basemap_style::Palette) -> bool {
+        if self.palette == palette {
             return false;
         }
-        self.dark = dark;
+        self.palette = palette;
         self.requested.clear();
         self.uploaded.clear();
         self.labels.clear();
@@ -595,7 +602,7 @@ impl VectorTileManager {
         let Some(template) = self.template.clone() else {
             return;
         };
-        let dark = self.dark;
+        let palette = self.palette;
         let tess_zoom = self.tess_zoom as f64;
         for v in visible {
             if !self.requested.insert(v.id) {
@@ -617,7 +624,7 @@ impl VectorTileManager {
                     // gunzip + lyon tessellation is the heaviest CPU in the app after the volume
                     // decode; running it on the async worker starves every other fetch.
                     blocking.spawn_blocking(move || {
-                        let (vertices, indices, labels) = build_tile(&bytes, id, dark, tess_zoom);
+                        let (vertices, indices, labels) = build_tile(&bytes, id, palette, tess_zoom);
                         let _ = tx.send(FetchedVector {
                             id,
                             vertices,
@@ -739,10 +746,21 @@ mod tests {
     #[test]
     fn empty_bytes_yield_background_quad_only() {
         // Not a valid tile: build_tile still emits the background land quad (2 triangles).
-        let (verts, indices, labels) = build_tile(b"", (7, 30, 49), true, 7.0);
+        let (verts, indices, labels) =
+            build_tile(b"", (7, 30, 49), basemap_style::Palette::Dark, 7.0);
         assert_eq!(verts.len(), 4);
         assert_eq!(indices.len(), 6);
         assert!(labels.is_empty());
+    }
+
+    /// The hybrid overlay draws no background, so it must emit nothing at all for a tile with no
+    /// features — otherwise every hybrid tile would be a solid quad over the satellite imagery.
+    #[test]
+    fn overlay_palette_emits_no_background_quad() {
+        let (verts, indices, _) =
+            build_tile(b"", (7, 30, 49), basemap_style::Palette::HybridOverlay, 7.0);
+        assert!(verts.is_empty());
+        assert!(indices.is_empty());
     }
 
     #[test]
