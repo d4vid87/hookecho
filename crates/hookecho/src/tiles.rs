@@ -82,6 +82,14 @@ pub enum BasemapStyle {
     UsgsImageryTopo,
     OsmHot,
     CyclOsm,
+    /// Vector basemap, OSM Liberty look.
+    VectorLiberty,
+    /// Vector basemap, pale low-ink look.
+    VectorBright,
+    /// Vector basemap, near-monochrome look.
+    VectorPositron,
+    /// Vector basemap, night-drive look.
+    VectorMidnight,
     EsriDarkGray,
     EsriLightGray,
     EsriNatGeo,
@@ -99,7 +107,7 @@ pub enum BasemapStyle {
 
 impl BasemapStyle {
     /// Cycle order for the `z` hotkey; provider styles trail the built-ins.
-    pub const ALL: [BasemapStyle; 47] = [
+    pub const ALL: [BasemapStyle; 51] = [
         BasemapStyle::Dark,
         BasemapStyle::Light,
         BasemapStyle::Satellite,
@@ -116,6 +124,10 @@ impl BasemapStyle {
         BasemapStyle::UsgsImageryTopo,
         BasemapStyle::OsmHot,
         BasemapStyle::CyclOsm,
+        BasemapStyle::VectorLiberty,
+        BasemapStyle::VectorBright,
+        BasemapStyle::VectorPositron,
+        BasemapStyle::VectorMidnight,
         BasemapStyle::HybridSatellite,
         BasemapStyle::EsriDarkGray,
         BasemapStyle::EsriLightGray,
@@ -219,6 +231,10 @@ impl BasemapStyle {
             BasemapStyle::UsgsImageryTopo => "USGS Imagery Topo",
             BasemapStyle::OsmHot => "OSM Humanitarian",
             BasemapStyle::CyclOsm => "CyclOSM",
+            BasemapStyle::VectorLiberty => "Liberty",
+            BasemapStyle::VectorBright => "Bright",
+            BasemapStyle::VectorPositron => "Positron",
+            BasemapStyle::VectorMidnight => "Midnight",
             BasemapStyle::EsriDarkGray => "Esri Dark Gray Canvas",
             BasemapStyle::EsriLightGray => "Esri Light Gray Canvas",
             BasemapStyle::EsriNatGeo => "Esri National Geographic",
@@ -272,6 +288,10 @@ impl BasemapStyle {
             BasemapStyle::UsgsImageryTopo => "usgs-imagery-topo",
             BasemapStyle::OsmHot => "osm-hot",
             BasemapStyle::CyclOsm => "cyclosm",
+            BasemapStyle::VectorLiberty => "liberty",
+            BasemapStyle::VectorBright => "bright",
+            BasemapStyle::VectorPositron => "positron",
+            BasemapStyle::VectorMidnight => "midnight",
             BasemapStyle::EsriDarkGray => "esri-dark-gray",
             BasemapStyle::EsriLightGray => "esri-light-gray",
             BasemapStyle::EsriNatGeo => "esri-natgeo",
@@ -373,7 +393,14 @@ impl BasemapStyle {
     pub fn is_raster(self) -> bool {
         !matches!(
             self,
-            BasemapStyle::Dark | BasemapStyle::Light | BasemapStyle::None | BasemapStyle::Auto
+            BasemapStyle::Dark
+                | BasemapStyle::Light
+                | BasemapStyle::None
+                | BasemapStyle::Auto
+                | BasemapStyle::VectorLiberty
+                | BasemapStyle::VectorBright
+                | BasemapStyle::VectorPositron
+                | BasemapStyle::VectorMidnight
         )
     }
 
@@ -478,6 +505,10 @@ impl BasemapStyle {
         match self {
             BasemapStyle::Dark => Some(crate::basemap_style::Palette::Dark),
             BasemapStyle::Light => Some(crate::basemap_style::Palette::Light),
+            BasemapStyle::VectorLiberty => Some(crate::basemap_style::Palette::Liberty),
+            BasemapStyle::VectorBright => Some(crate::basemap_style::Palette::Bright),
+            BasemapStyle::VectorPositron => Some(crate::basemap_style::Palette::Positron),
+            BasemapStyle::VectorMidnight => Some(crate::basemap_style::Palette::Midnight),
             BasemapStyle::HybridSatellite => Some(crate::basemap_style::Palette::HybridOverlay),
             _ => None,
         }
@@ -1635,7 +1666,6 @@ mod tests {
             BasemapStyle::GoesEast.goes_layer().unwrap().1
         );
     }
-}
 
     /// `Auto` is a marker, not something the tile layer should ever be asked to fetch.
     #[test]
@@ -1695,3 +1725,17 @@ mod tests {
         // And it is only selectable once a template exists.
         assert!(!BasemapStyle::CustomXyz.available(true, true, false));
     }
+
+    /// Every vector look has to be selectable, or it is dead code that still costs a review.
+    #[test]
+    fn every_palette_has_a_basemap_entry() {
+        for pal in crate::basemap_style::Palette::ALL {
+            assert!(
+                BasemapStyle::ALL
+                    .iter()
+                    .any(|s| s.vector_palette() == Some(pal)),
+                "{pal:?} is not reachable from the basemap list"
+            );
+        }
+    }
+}
