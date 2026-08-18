@@ -1714,6 +1714,8 @@ pub struct HookEchoApp {
     spawner: crate::rt::Spawner,
     tiles: TileManager,
     vtiles: crate::vector_tiles::VectorTileManager,
+    /// One shared label-occupancy pass for the whole frame — see [`crate::labelplace`].
+    labels: crate::labelplace::Placer,
     settings: Settings,
     saved: Settings,
     views: Vec<MapView>,
@@ -2594,6 +2596,7 @@ impl HookEchoApp {
 
         let mut app = Self {
             vtiles,
+            labels: crate::labelplace::Placer::default(),
             spawner,
             #[cfg(not(target_arch = "wasm32"))]
             _rt: rt,
@@ -11435,6 +11438,50 @@ impl HookEchoApp {
         let view = &self.views[idx];
         let basemap = view.basemap;
 
+        // Storm-cell ids reserve their space first — they are the top tier, and the cell markers
+        // themselves are drawn much further down with the rest of the cell layer. Reserving here
+        // and drawing there is the whole reason the placer separates the two: a warning label
+        // must not lose its slot to a town name that merely happened to be painted earlier.
+        let cell_labels_shown: std::collections::HashSet<String> =
+            if self.filters.show_cells && self.cells_site.as_deref() == view.site.as_deref() {
+                let ids: Vec<(String, egui::Pos2)> = self
+                    .active_storm_cells()
+                    .iter()
+                    .filter(|c| c.kind == CellKind::Storm && !c.id.is_empty())
+                    .map(|c| {
+                        let w = crate::render::mercator::lonlat_to_world(c.lon, c.lat);
+                        let (sx, sy) = cam.world_to_screen(w, vp);
+                        (
+                            c.id.clone(),
+                            egui::pos2(prect.left() + sx, prect.top() + sy),
+                        )
+                    })
+                    .collect();
+                ids.into_iter()
+                    .filter(|(_, p)| prect.contains(*p))
+                    .filter(|(id, p)| {
+                        // Matches the draw below: 11 pt text, left-bottom anchored, up and right
+                        // of the marker.
+                        let anchor = *p + egui::vec2(8.0, -8.0);
+                        let size = egui::vec2(id.len() as f32 * 6.5, 13.0);
+                        let rect = egui::Rect::from_min_size(
+                            egui::pos2(anchor.x, anchor.y - size.y),
+                            size,
+                        )
+                        .expand(2.0);
+                        self.labels.place(
+                            crate::labelplace::key(id),
+                            rect,
+                            crate::labelplace::Priority::Warning,
+                        )
+                    })
+                    .map(|(id, _)| id)
+                    .collect()
+            } else {
+                std::collections::HashSet::new()
+            };
+        let view = &self.views[idx];
+
         // City/town labels, overlaid on every basemap. On raster (satellite) the baked-in labels
         // are faint over imagery + echoes, so we draw crisp white text with a solid black halo;
         // vector basemaps use their palette's label colors. Bigger fonts + an 8-way halo read well.
@@ -11456,8 +11503,16 @@ impl HookEchoApp {
             let z = cam.zoom;
             let mut labels: Vec<&crate::vector_tiles::PlaceLabel> =
                 vlabels.iter().filter(|l| l.city || z >= 9.0).collect();
-            labels.sort_by_key(|l| (!l.city, l.rank));
-            let mut placed: Vec<egui::Rect> = Vec::new();
+            // Labels already on screen are offered their slot before newcomers of the same
+            // importance; without that a name at the edge of a collision wins and loses on
+            // alternate frames, which is exactly the flicker you see while panning.
+            labels.sort_by_key(|l| {
+                (
+                    !self.labels.was_shown(crate::labelplace::key(&l.name)),
+                    !l.city,
+                    l.rank,
+                )
+            });
             let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
             // 8-way halo (cardinals + diagonals) for a solid, readable outline.
             const HALO: [egui::Vec2; 8] = [
@@ -11482,10 +11537,13 @@ impl HookEchoApp {
                 let font = egui::FontId::proportional(if l.city { big } else { big - 2.5 });
                 let galley = painter.layout_no_wrap(l.name.clone(), font, text_col);
                 let r = egui::Rect::from_min_size(p, galley.size()).expand(4.0);
-                if placed.iter().any(|q| q.intersects(r)) {
+                if !self.labels.place(
+                    crate::labelplace::key(&l.name),
+                    r,
+                    crate::labelplace::Priority::Place,
+                ) {
                     continue;
                 }
-                placed.push(r);
                 // One layout per label, reused for all nine draws. `painter.text` would lay the
                 // string out again every time, which at eight halo offsets meant ten text
                 // layouts per visible place name, every frame.
@@ -11969,7 +12027,7 @@ impl HookEchoApp {
                 let color = egui::Color32::from_rgba_unmultiplied(col[0], col[1], col[2], 255);
                 painter.circle_stroke(p, 6.0, egui::Stroke::new(2.0, color));
                 painter.circle_filled(p, 2.0, color);
-                if c.kind == CellKind::Storm && !c.id.is_empty() {
+                if c.kind == CellKind::Storm && cell_labels_shown.contains(&c.id) {
                     painter.text(
                         p + egui::vec2(8.0, -8.0),
                         egui::Align2::LEFT_BOTTOM,
@@ -12612,7 +12670,9 @@ impl HookEchoApp {
                     .unwrap_or(std::cmp::Ordering::Equal)
             });
             let temp_unit = self.settings.temp_unit;
-            let mut placed: Vec<egui::Rect> = Vec::new();
+            // Same stickiness rule as the place names: a station already plotted keeps its cell
+            // ahead of a windier one that has only just come into view.
+            obs.sort_by_key(|ob| !self.labels.was_shown(crate::labelplace::key(&ob.icao)));
             for ob in obs {
                 let w = crate::render::mercator::lonlat_to_world(ob.lon, ob.lat);
                 let (sx, sy) = cam.world_to_screen(w, vp);
@@ -12620,12 +12680,15 @@ impl HookEchoApp {
                 if !prect.contains(p) {
                     continue;
                 }
-                // Greedy declutter: skip stations whose plot cell overlaps one already drawn.
+                // Shared declutter: this also sees the place names drawn above it.
                 let cell = egui::Rect::from_center_size(p, egui::vec2(44.0, 34.0));
-                if placed.iter().any(|r| r.intersects(cell)) {
+                if !self.labels.place(
+                    crate::labelplace::key(&ob.icao),
+                    cell,
+                    crate::labelplace::Priority::Station,
+                ) {
                     continue;
                 }
-                placed.push(cell);
                 let col = flt_color(&ob.flt_cat);
                 painter.circle_stroke(p, 3.0, egui::Stroke::new(1.5, col));
                 // Wind barb, rotated so the shaft points toward the wind source (FROM bearing).
@@ -12715,7 +12778,6 @@ impl HookEchoApp {
                 FloodCat::NoFlooding => "no flooding",
                 FloodCat::Unknown => "no current reading",
             };
-            let mut placed: Vec<egui::Rect> = Vec::new();
             for g in &self.gauges {
                 let w = crate::render::mercator::lonlat_to_world(g.lon, g.lat);
                 let (sx, sy) = cam.world_to_screen(w, vp);
@@ -12723,12 +12785,15 @@ impl HookEchoApp {
                 if !prect.contains(p) {
                     continue;
                 }
-                // Greedy declutter: skip droplets that would overlap one already placed.
+                // Shared declutter: gauges are the lowest tier, so they fill what is left.
                 let cell = egui::Rect::from_center_size(p, egui::vec2(15.0, 15.0));
-                if placed.iter().any(|r| r.intersects(cell)) {
+                if !self.labels.place(
+                    crate::labelplace::key(&g.lid),
+                    cell,
+                    crate::labelplace::Priority::Minor,
+                ) {
                     continue;
                 }
-                placed.push(cell);
                 let s = 6.0;
                 painter.add(egui::Shape::convex_polygon(
                     vec![
@@ -13014,7 +13079,21 @@ impl HookEchoApp {
                 let r = if is_current { 5.0 } else { 3.5 };
                 painter.circle_stroke(p, r, egui::Stroke::new(1.5, col));
                 painter.circle_filled(p, 1.5, col);
-                if show_labels {
+                // The dot always draws — it is the click target, and it is small enough not to
+                // matter. Only the four-letter id competes for space, and it loses to city names:
+                // "TDAL" sitting across "Grapevine" is the exact overlap this pass exists for.
+                let id_rect = egui::Rect::from_min_size(
+                    p + egui::vec2(6.0, -6.0),
+                    egui::vec2(s.id.len() as f32 * 6.5, 12.0),
+                )
+                .expand(1.0);
+                if show_labels
+                    && self.labels.place(
+                        crate::labelplace::key(s.id),
+                        id_rect,
+                        crate::labelplace::Priority::Minor,
+                    )
+                {
                     painter.text(
                         p + egui::vec2(6.0, 0.0),
                         egui::Align2::LEFT_CENTER,
@@ -16516,6 +16595,10 @@ impl eframe::App for HookEchoApp {
         }
 
         let placefile_labels = self.placefile_labels();
+        // One occupancy set for the whole frame, across every pane and every label layer. Panes
+        // occupy disjoint screen rects, so sharing it between them costs nothing and saves
+        // resetting it per pane.
+        self.labels.begin();
         egui::CentralPanel::default().show(root, |ui| {
             let full = ui.available_rect_before_wrap();
             let n = self.views.len();
