@@ -49,6 +49,7 @@ pub fn show(
     settings: &mut Settings,
     basemap: &mut BasemapStyle,
     icon_tex: &IconTextures,
+    tiles: &mut crate::tiles::TileManager,
 ) -> Option<Finish> {
     if !wiz.open {
         return None;
@@ -65,7 +66,7 @@ pub fn show(
             ui.set_width(420.0_f32.min(ctx.content_rect().width() - 40.0));
             match wiz.step {
                 0 => card_site(ui, wiz, settings),
-                1 => card_map(ui, settings, basemap),
+                1 => card_map(ui, settings, basemap, tiles),
                 2 => card_alerts(ui, settings, icon_tex),
                 _ => {
                     if let Some(take_tour) = card_done(ui, settings, *basemap) {
@@ -127,7 +128,12 @@ fn card_site(ui: &mut egui::Ui, wiz: &mut Wizard, settings: &mut Settings) {
         });
 }
 
-fn card_map(ui: &mut egui::Ui, settings: &mut Settings, basemap: &mut BasemapStyle) {
+fn card_map(
+    ui: &mut egui::Ui,
+    settings: &mut Settings,
+    basemap: &mut BasemapStyle,
+    tiles: &mut crate::tiles::TileManager,
+) {
     heading(ui, 1);
     ui.small(
         "Plenty of basemaps work with no key at all. Free keys from mapbox.com and maptiler.com \
@@ -140,24 +146,13 @@ fn card_map(ui: &mut egui::Ui, settings: &mut Settings, basemap: &mut BasemapSty
     ui.add_space(4.0);
     super::settings_window::key_field(ui, "MapTiler key", &mut settings.maptiler_key);
     ui.add_space(6.0);
-    // Basemap picker, filtered by whichever keys are set this frame (typing a key unlocks styles).
-    let mb = !settings.mapbox_key.is_empty();
-    let mt = !settings.maptiler_key.is_empty();
-    let cx = crate::tiles::valid_xyz_template(&settings.custom_tile_url);
-    ui.horizontal(|ui| {
-        ui.label("Basemap");
-        egui::ComboBox::from_id_salt("wiz_basemap")
-            .selected_text(basemap.label())
-            .show_ui(ui, |ui| {
-                for s in BasemapStyle::ALL {
-                    if s.available(mb, mt, cx)
-                        && ui.selectable_label(*basemap == s, s.label()).clicked()
-                    {
-                        *basemap = s;
-                        settings.basemap = s.slug().to_string();
-                    }
-                }
-            });
+    // Same grid the drawer and the phone sheet use: the first thing a new user picks should look
+    // like the thing they will use to change it later. It re-filters as keys are typed above.
+    egui::ScrollArea::vertical().max_height(300.0).show(ui, |ui| {
+        if let Some(s) = crate::ui::basemap_picker::grid(ui, tiles, *basemap, settings) {
+            *basemap = s;
+            settings.basemap = s.slug().to_string();
+        }
     });
     ui.add_space(8.0);
     ui.label("Theme");
