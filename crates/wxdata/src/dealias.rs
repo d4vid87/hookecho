@@ -12,6 +12,26 @@
 //! global edge-cost optimization, and no second (sequential) pass. Sound and deterministic
 //! for typical single-fold storms; upgrade to the graph optimizer if multi-fold cases
 //! (very high-shear tornadic couplets past 2·V_ny) show seams.
+//!
+//! Two things it does do beyond the simplest version of that idea. Region folds are chosen by a
+//! *vote* over the gate pairs along a boundary rather than by averaging them: one stray pair on a
+//! long boundary used to be able to drag the mean across the rounding line and fold a whole
+//! region wrongly. And the anchor region can be tied to a reference field — the previous sweep's
+//! already-dealiased velocity — instead of being assumed unfolded, which is what keeps a storm
+//! that is genuinely moving faster than the Nyquist velocity from snapping back to zero folds the
+//! moment it becomes the largest region in the sweep.
+//!
+//! ponytail: one previous sweep of continuity, not a 4D UNRAVEL-style solve.
+
+/// The fold with the most votes. Ties break toward the smaller unfold: with no evidence either
+/// way, the answer that moves the data least is the safer one.
+fn winning_fold(votes: std::collections::HashMap<i32, u32>) -> i32 {
+    votes
+        .into_iter()
+        .max_by_key(|&(fold, n)| (n, -fold.abs()))
+        .map(|(fold, _)| fold)
+        .unwrap_or(0)
+}
 
 /// Estimate the Nyquist velocity from a folded field as the largest observed |v|.
 /// Folded data saturates at ±V_ny, so this is a robust practical proxy when the model
@@ -30,6 +50,24 @@ pub fn dealias(
     az_bins: usize,
     gate_count: usize,
     nyquist: f32,
+) -> Vec<Option<f32>> {
+    dealias_with_reference(vel, az_bins, gate_count, nyquist, None)
+}
+
+/// As [`dealias`], with an optional continuity reference on the same grid — normally the previous
+/// sweep's dealiased output.
+///
+/// The reference does one job: it decides how many folds the *anchor* region carries, instead of
+/// the anchor being assumed unfolded. Everything else is unchanged, because every other region is
+/// already solved relative to the anchor. A sweep whose fastest air is genuinely past the Nyquist
+/// velocity is stable across volumes this way rather than snapping to zero whenever the fast
+/// region happens to become the biggest one.
+pub fn dealias_with_reference(
+    vel: &[Option<f32>],
+    az_bins: usize,
+    gate_count: usize,
+    nyquist: f32,
+    reference: Option<&[Option<f32>]>,
 ) -> Vec<Option<f32>> {
     let n = az_bins * gate_count;
     debug_assert_eq!(vel.len(), n);
@@ -127,6 +165,25 @@ pub fn dealias(
     let Some(anchor) = (0..region_count).max_by_key(|&r| sizes[r]) else {
         return vel.to_vec();
     };
+    // Anchor fold: zero unless a reference field says otherwise. Same vote, against the previous
+    // sweep's value at each of the anchor's own gates.
+    unfold[anchor] = reference
+        .filter(|r| r.len() == n)
+        .map(|refv| {
+            let mut votes: std::collections::HashMap<i32, u32> = std::collections::HashMap::new();
+            for i in 0..n {
+                if labels[i] != anchor {
+                    continue;
+                }
+                let (Some(v), Some(rv)) = (vel[i], refv[i]) else {
+                    continue;
+                };
+                let fold = ((rv as f64 - v as f64) / interval as f64).round() as i32;
+                *votes.entry(fold).or_insert(0) += 1;
+            }
+            winning_fold(votes)
+        })
+        .unwrap_or(0);
     solved[anchor] = true;
     let mut queue = std::collections::VecDeque::new();
     for &(nb, _, _) in &edges[anchor] {
@@ -138,24 +195,29 @@ pub fn dealias(
         if solved[r] {
             continue;
         }
-        // Fold count that best aligns this region with its already-solved neighbors:
-        // per boundary edge the ideal fold is round(((v_nb + f_nb·interval) - v_self)/interval);
-        // average over all such edges, then round to an integer number of folds.
-        let mut sum = 0.0f64;
-        let mut count = 0u32;
+        // Fold count that best aligns this region with its already-solved neighbours. Each
+        // boundary gate pair votes for the integer fold that would make it continuous, and the
+        // fold with the most votes wins.
+        //
+        // This used to average the per-pair ideal folds and round the mean. On a long boundary
+        // that is fragile: the pairs cluster tightly around the right integer, but a handful of
+        // pairs sitting on a genuine shear line contribute values half a fold away, and a mean
+        // near x.5 rounds the whole region the wrong way. A vote cannot be dragged like that —
+        // the outliers have to outnumber the rest, not merely outweigh them.
+        let mut votes: std::collections::HashMap<i32, u32> = std::collections::HashMap::new();
         for &(nb, v_self, v_nb) in &edges[r] {
             if solved[nb] {
                 let target = v_nb as f64 + unfold[nb] as f64 * interval as f64;
-                sum += (target - v_self as f64) / interval as f64;
-                count += 1;
+                let fold = ((target - v_self as f64) / interval as f64).round() as i32;
+                *votes.entry(fold).or_insert(0) += 1;
             }
         }
-        if count == 0 {
+        if votes.is_empty() {
             // Not yet reachable from the solved set; requeue later.
             queue.push_back(r);
             continue;
         }
-        unfold[r] = (sum / count as f64).round() as i32;
+        unfold[r] = winning_fold(votes);
         solved[r] = true;
         for &(nb, _, _) in &edges[r] {
             if !solved[nb] {
@@ -230,5 +292,130 @@ mod tests {
     fn passthrough_when_no_nyquist() {
         let f = vec![Some(3.0f32), None, Some(-7.0)];
         assert_eq!(dealias(&f, 1, 3, 0.0), f);
+    }
+
+    /// Build a folded sweep from a truth field: `v_folded = ((v + nyq) mod 2nyq) - nyq`.
+    fn fold(truth: &[f32], nyq: f32) -> Vec<Option<f32>> {
+        truth
+            .iter()
+            .map(|&v| Some(((v + nyq).rem_euclid(2.0 * nyq)) - nyq))
+            .collect()
+    }
+
+    /// Compare two fields up to one whole-field constant fold, which is all an unreferenced
+    /// dealias can ever recover.
+    fn matches_up_to_a_constant_fold(got: &[Option<f32>], truth: &[f32], nyq: f32) -> bool {
+        let interval = 2.0 * nyq;
+        let Some(offset) = got.first().and_then(|g| *g).map(|g| truth[0] - g) else {
+            return false;
+        };
+        let offset = (offset / interval).round() * interval;
+        got.iter()
+            .zip(truth)
+            .all(|(g, t)| g.is_none_or(|g| (g + offset - t).abs() < 0.5))
+    }
+
+    /// A tornadic couplet: inbound and outbound maxima either side of a shear line, both past the
+    /// Nyquist velocity so both fold. The shear line itself is a real discontinuity — the point of
+    /// the fixture is that the dealiaser must not treat it as a fold.
+    #[test]
+    fn unfolds_an_aliased_couplet_across_a_shear_line() {
+        let nyq = 25.0f32;
+        let (az_bins, gates) = (36, 20);
+        let mut truth = vec![0.0f32; az_bins * gates];
+        for az in 0..az_bins {
+            for g in 0..gates {
+                // Inbound on one side of the couplet, outbound on the other, peaking at 40 m/s —
+                // well past the 25 m/s Nyquist, so the field folds on both sides.
+                let across = if az < az_bins / 2 { -1.0 } else { 1.0 };
+                let ramp = (g as f32 / (gates - 1) as f32) * 40.0;
+                truth[az * gates + g] = across * ramp;
+            }
+        }
+        let folded = fold(&truth, nyq);
+        assert!(
+            folded.iter().enumerate().any(|(i, v)| {
+                (v.unwrap() - truth[i]).abs() > 1.0
+            }),
+            "fixture should actually fold"
+        );
+        let out = dealias(&folded, az_bins, gates, nyq);
+        // Every gate recovered, up to the one constant fold the anchor choice leaves free.
+        assert!(
+            matches_up_to_a_constant_fold(&out, &truth, nyq),
+            "couplet not recovered"
+        );
+    }
+
+    /// The failure the vote exists to prevent: a long boundary whose gate pairs mostly agree on
+    /// one fold, plus a minority sitting on a shear line that pull the *mean* over the rounding
+    /// line. Averaging folds the region the wrong way; voting does not.
+    #[test]
+    fn a_minority_of_shear_pairs_cannot_outweigh_the_boundary() {
+        // Nine boundary gate pairs agree on fold 1; three sit on a shear line and ask for 3.
+        // The mean of those is 1.5 and rounds away to 2, which is what the old code did. The vote
+        // holds, because the outliers have to outnumber the majority, not merely outweigh it.
+        let ideal = [1.0_f64; 9]
+            .into_iter()
+            .chain([3.0_f64; 3])
+            .collect::<Vec<_>>();
+        let mean = ideal.iter().sum::<f64>() / ideal.len() as f64;
+        assert_eq!(mean.round() as i32, 2, "the mean really is dragged across");
+
+        let mut votes = std::collections::HashMap::new();
+        for v in &ideal {
+            *votes.entry(v.round() as i32).or_insert(0) += 1;
+        }
+        assert_eq!(winning_fold(votes), 1);
+    }
+
+    #[test]
+    fn an_empty_or_tied_vote_moves_the_data_least() {
+        assert_eq!(winning_fold(std::collections::HashMap::new()), 0);
+        let tied = std::collections::HashMap::from([(0, 4), (3, 4)]);
+        assert_eq!(winning_fold(tied), 0);
+        let tied_both_folded = std::collections::HashMap::from([(-1, 2), (4, 2)]);
+        assert_eq!(winning_fold(tied_both_folded), -1);
+    }
+
+    /// Continuity: a field whose *whole* content is past the Nyquist velocity has no internal
+    /// evidence of how many folds it carries, so an unreferenced dealias anchors it at zero. Given
+    /// the previous sweep it should keep the folds instead of snapping back.
+    #[test]
+    fn a_reference_sweep_anchors_folds_the_field_cannot_infer() {
+        let nyq = 25.0f32;
+        let (az_bins, gates) = (4, 8);
+        // Uniformly 60 m/s outbound: one region, folds once, and nothing inside the sweep says so.
+        let truth = vec![60.0f32; az_bins * gates];
+        let folded = fold(&truth, nyq);
+        let bare = dealias(&folded, az_bins, gates, nyq);
+        assert!(
+            (bare[0].unwrap() - 60.0).abs() > 1.0,
+            "without a reference there is nothing to anchor to"
+        );
+        // The previous sweep had the same air, correctly unfolded.
+        let reference: Vec<Option<f32>> = truth.iter().map(|v| Some(*v)).collect();
+        let out = dealias_with_reference(&folded, az_bins, gates, nyq, Some(&reference));
+        for v in out.iter().flatten() {
+            assert!((v - 60.0).abs() < 0.5, "expected 60 m/s, got {v}");
+        }
+    }
+
+    /// A reference of the wrong shape, or one full of holes, must be ignored rather than trusted.
+    #[test]
+    fn a_useless_reference_changes_nothing() {
+        let nyq = 25.0f32;
+        let folded = fold(&[10.0, 20.0, 30.0, 40.0], nyq);
+        let bare = dealias(&folded, 1, 4, nyq);
+        let wrong_size = vec![Some(60.0f32); 99];
+        assert_eq!(
+            dealias_with_reference(&folded, 1, 4, nyq, Some(&wrong_size)),
+            bare
+        );
+        let all_holes = vec![None; 4];
+        assert_eq!(
+            dealias_with_reference(&folded, 1, 4, nyq, Some(&all_holes)),
+            bare
+        );
     }
 }
