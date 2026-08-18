@@ -55,6 +55,7 @@ pub fn parse(json: &str) -> anyhow::Result<Vec<GeoFeature>> {
             get("expire"),
         );
         let alert = AlertInfo {
+            vtec: None,
             id,
             event: event.clone(),
             headline: event.clone(),

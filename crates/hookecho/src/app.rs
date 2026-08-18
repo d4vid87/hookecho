@@ -1942,6 +1942,8 @@ pub struct HookEchoApp {
     sounding_rx: Option<std::sync::mpsc::Receiver<Result<wxdata::sounding::Sounding, String>>>,
     /// The observed RAOB fetched alongside the HRRR profile, for the same click.
     raob_rx: Option<std::sync::mpsc::Receiver<Result<wxdata::sounding::Sounding, String>>>,
+    /// Last spoken storm-position update: when, and the distance in whole miles it reported.
+    spoke_pos: Option<(Instant, i32)>,
     /// Detections seen recently, for compound rules to ask "and was there also…". Trimmed to the
     /// compound window every pass, so it stays a handful of entries.
     recent_hits: Vec<(crate::settings::RuleTrigger, crate::rules::Detection, Instant)>,
@@ -2006,6 +2008,9 @@ pub struct HookEchoApp {
     /// Held across a restart through `Settings::quiet_pending`, written on exit: a quiet window
     /// that spans a relaunch still owes its catch-up.
     quiet_queue: std::sync::Mutex<Vec<(String, String)>>,
+    /// Outbreak rollup state. A `Mutex` for the same reason `quiet_queue` is one: `notify_alert`
+    /// takes `&self`.
+    rollup: std::sync::Mutex<crate::alert_rollup::Rollup>,
     /// Whether the last frame was inside quiet hours, so the end of the window is an edge.
     was_quiet: bool,
     /// Where a requested screenshot should go once the image event arrives.
@@ -2314,7 +2319,8 @@ pub struct HookEchoApp {
     obs_tour: bool,
     obs_tour_last: Option<Instant>,
     obs_tour_idx: usize,
-    /// Warning ids already seen, so a new warning is detected on arrival (not re-alerted).
+    /// Warning dedupe keys already seen (VTEC event keys), so a new warning is detected on
+    /// arrival and a continuation of one already announced is not.
     known_warning_ids: std::collections::HashSet<String>,
     /// False until the first alert fetch seeds `known_warning_ids` (avoids alerting on startup).
     warnings_seeded: bool,
@@ -2496,7 +2502,7 @@ impl HookEchoApp {
         let seeded_alerts = crate::alert_snapshot::load();
         let known_warning_ids: std::collections::HashSet<String> = seeded_alerts
             .iter()
-            .filter_map(|f| f.alert.as_ref().map(|a| a.id.clone()))
+            .filter_map(|f| f.alert.as_ref().map(|a| a.dedupe_key()))
             .collect();
         // Zone geometry (county and forecast-zone shapes) never changes, so it outlives the run.
         if let Some(dir) = crate::paths::cache_dir() {
@@ -2745,6 +2751,7 @@ impl HookEchoApp {
             sounding_rx: None,
             raob_rx: None,
             chase_mode: false,
+            spoke_pos: None,
             recent_hits: Vec::new(),
             chase_pos: None,
             chase_track: crate::chaselog::Track::default(),
@@ -2779,6 +2786,7 @@ impl HookEchoApp {
             rotation_alerted: std::collections::HashMap::new(),
             last_chime: None,
             quiet_queue: std::sync::Mutex::new(quiet_pending),
+            rollup: std::sync::Mutex::default(),
             was_quiet: false,
             screenshot_pending: None,
             share_card: None,
@@ -3009,6 +3017,9 @@ impl HookEchoApp {
             app.locate_by_ip(&cc.egui_ctx.clone());
         }
         crate::platform::set_background_alerts(app.settings.background_alerts);
+        // Point the speech path at Piper before anything can speak.
+        #[cfg(not(target_arch = "wasm32"))]
+        crate::speech::set_piper(&app.settings.piper_path, &app.settings.piper_voice);
         // Not on the web: this is a burst of six fetches, and on the one thread a browser gives
         // us they queue ahead of the radar the visitor actually came for. The periodic refresh in
         // `update` picks them up a moment later, once there is radar on screen.
@@ -3907,8 +3918,10 @@ impl HookEchoApp {
             }
             let Some(a) = &f.alert else { continue };
             // Mark every warning seen so it can't re-banner later, but only alert on genuinely new
-            // ones after the first (seeding) pass.
-            if self.known_warning_ids.insert(a.id.clone()) && self.warnings_seeded {
+            // ones after the first (seeding) pass. Keyed by VTEC event, not message id — an office
+            // re-issues a continuation of the same warning every few minutes with a fresh id, and
+            // deduping on that is why the same tornado warning announced itself over and over.
+            if self.known_warning_ids.insert(a.dedupe_key()) && self.warnings_seeded {
                 let esc = wxdata::alerts::escalation(a);
                 let urgent = esc >= 2;
                 // Severity floor: below the tier the user set, the warning still banners and
@@ -4063,7 +4076,13 @@ impl HookEchoApp {
                         })
                         .unwrap_or_default();
                     if !self.settings.mute_alerts {
-                        crate::speech::speak(&format!("{} for {}{}", a.event, area, until));
+                        // Hazard, place and heading first — see `wxdata::spoken`. `until` here
+                        // still carries its leading " until ", which the script builder adds.
+                        crate::speech::speak(&wxdata::spoken::warning_script(
+                            a,
+                            &area,
+                            until.trim_start_matches(" until "),
+                        ));
                     }
                 }
                 if notify_ok && self.settings.ntfy_snapshot {
@@ -4776,7 +4795,6 @@ impl HookEchoApp {
     /// Deliver an alert to every configured channel: ntfy.sh push plus Discord / Slack / Matrix
     /// webhooks. Each is a no-op when its settings field is blank.
     /// Best-effort on the shared tokio runtime; failures are logged, never fatal.
-    // ponytail: fire-and-forget, no retry; add a bounded retry queue if users report drops.
     fn notify_alert(&self, title: &str, body: &str, urgent: bool) {
         // Quiet hours hold everything back except the escalated tier, which is the one worth
         // waking up for. Banners and the alert list are untouched — this gates what leaves the
@@ -4791,7 +4809,34 @@ impl HookEchoApp {
             return;
         }
         let http = self.http.clone();
-        let (title, body) = (title.to_string(), body.to_string());
+        let (mut title, mut body) = (title.to_string(), body.to_string());
+
+        // Outbreak mode: past the threshold, one rolling summary goes out instead of one push per
+        // warning. Escalated alerts are exempt — those are the ones worth a buzz each.
+        // ponytail: the summary is a fresh notification each refresh, not an in-place replace;
+        // desktop replace-by-tag and the Android fixed notification id can land with the rest of
+        // the Android delivery stack.
+        if !urgent && self.settings.alert_rollup_threshold > 0 {
+            let window =
+                std::time::Duration::from_secs(self.settings.alert_rollup_window_min.max(1) * 60);
+            let decision = self.rollup.lock().map(|mut r| {
+                r.offer(
+                    Instant::now(),
+                    &title,
+                    self.settings.alert_rollup_threshold,
+                    window,
+                )
+            });
+            match decision {
+                Ok(crate::alert_rollup::Decision::Hold) => return,
+                Ok(crate::alert_rollup::Decision::Rollup(text)) => {
+                    title = "Multiple alerts".to_string();
+                    body = text;
+                }
+                _ => {}
+            }
+        }
+        let (title, body) = (title, body);
 
         if self.settings.desktop_notify {
             crate::notify::desktop(&title, &body);
@@ -4802,17 +4847,14 @@ impl HookEchoApp {
             let (http, title, body) = (http.clone(), title.clone(), body.clone());
             let priority = if urgent { "urgent" } else { "high" };
             self.spawner.spawn(async move {
-                let res = http
-                    .post(format!("https://ntfy.sh/{topic}"))
-                    .header("Title", title)
-                    .header("Priority", priority)
-                    .header("Tags", "warning,cloud_with_lightning")
-                    .body(body)
-                    .send()
-                    .await;
-                if let Err(e) = res {
-                    log::warn!("ntfy push failed: {e}");
-                }
+                crate::notify::send_retrying("ntfy push", || {
+                    http.post(format!("https://ntfy.sh/{topic}"))
+                        .header("Title", title.clone())
+                        .header("Priority", priority)
+                        .header("Tags", "warning,cloud_with_lightning")
+                        .body(body.clone())
+                })
+                .await;
             });
         }
 
@@ -4839,15 +4881,12 @@ impl HookEchoApp {
         for (what, url, payload, _) in posts {
             let http = http.clone();
             self.spawner.spawn(async move {
-                let res = http
-                    .post(url)
-                    .header("Content-Type", "application/json")
-                    .body(payload)
-                    .send()
-                    .await;
-                if let Err(e) = res {
-                    log::warn!("{what} webhook failed: {e}");
-                }
+                crate::notify::send_retrying(&format!("{what} webhook"), || {
+                    http.post(url.clone())
+                        .header("Content-Type", "application/json")
+                        .body(payload.clone())
+                })
+                .await;
             });
         }
 
@@ -4865,18 +4904,81 @@ impl HookEchoApp {
             let url = crate::notify::matrix_url(&hs, &room, txn);
             let payload = crate::notify::matrix_body(&title, &body);
             self.spawner.spawn(async move {
-                let res = http
-                    .put(url)
-                    .bearer_auth(token)
-                    .header("Content-Type", "application/json")
-                    .body(payload)
-                    .send()
-                    .await;
-                if let Err(e) = res {
-                    log::warn!("matrix webhook failed: {e}");
-                }
+                crate::notify::send_retrying("matrix webhook", || {
+                    http.put(url.clone())
+                        .bearer_auth(token.clone())
+                        .header("Content-Type", "application/json")
+                        .body(payload.clone())
+                })
+                .await;
             });
         }
+    }
+
+    /// Fetch the Piper voice model into the data directory.
+    ///
+    /// The model and the `.onnx.json` beside it are both required — Piper reads its sample rate
+    /// and phoneme table from the JSON — so a download that gets one and not the other is a
+    /// failure, not a half-success. Written to a `.part` file and renamed, so an interrupted
+    /// download cannot leave a truncated model that Piper would then crash on.
+    ///
+    // ponytail: no pinned hash. The download is https from Piper's own voice repository and both
+    // files are validated (the JSON parses, the model is the size of a model); pinning a digest
+    // means pinning a version, and I could not verify one offline to pin.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn download_voice(&self) {
+        let Some(path) = crate::speech::default_voice_path() else {
+            crate::speech::set_voice_status(false, "no data directory to download into");
+            return;
+        };
+        let http = self.http.clone();
+        self.spawner.spawn(async move {
+            let cfg_url = format!("{}.json", crate::speech::VOICE_URL);
+            let cfg_path = path.with_extension("onnx.json");
+            if let Some(dir) = path.parent() {
+                if let Err(e) = std::fs::create_dir_all(dir) {
+                    crate::speech::set_voice_status(false, format!("could not create {dir:?}: {e}"));
+                    return;
+                }
+            }
+            crate::speech::set_voice_status(true, "downloading voice (~60 MB)…");
+            let get = |url: String| {
+                let http = http.clone();
+                async move { http.get(url).send().await?.error_for_status()?.bytes().await }
+            };
+            let cfg = match get(cfg_url).await {
+                Ok(b) => b,
+                Err(e) => {
+                    crate::speech::set_voice_status(false, format!("voice config failed: {e}"));
+                    return;
+                }
+            };
+            if serde_json::from_slice::<serde_json::Value>(&cfg).is_err() {
+                crate::speech::set_voice_status(false, "voice config was not JSON; refusing it");
+                return;
+            }
+            let model = match get(crate::speech::VOICE_URL.to_string()).await {
+                Ok(b) => b,
+                Err(e) => {
+                    crate::speech::set_voice_status(false, format!("voice download failed: {e}"));
+                    return;
+                }
+            };
+            // A medium-quality Piper voice is tens of megabytes; anything tiny is an error page
+            // that happened to arrive with a 200.
+            if model.len() < 1_000_000 {
+                crate::speech::set_voice_status(false, "download was too small to be a voice");
+                return;
+            }
+            let part = path.with_extension("part");
+            let wrote = std::fs::write(&part, &model)
+                .and_then(|()| std::fs::rename(&part, &path))
+                .and_then(|()| std::fs::write(&cfg_path, &cfg));
+            match wrote {
+                Ok(()) => crate::speech::set_voice_status(false, "voice ready"),
+                Err(e) => crate::speech::set_voice_status(false, format!("writing the voice failed: {e}")),
+            }
+        });
     }
 
     /// Sub-hourly GOES scrub bar: shown when the active basemap is a GOES layer and its frame
@@ -7084,6 +7186,29 @@ impl HookEchoApp {
         let (close_km, close_min) =
             crate::geo::closest_approach([c.lon, c.lat], dir, kt, me, 120.0);
         let escape = crate::geo::escape_bearing([c.lon, c.lat], dir, me);
+        // Spoken position updates: only while chasing, only when the picture has actually
+        // changed, and never more than once a minute — a voice that repeats itself is a voice the
+        // user turns off. Reported in whole miles, so a storm parked in place says nothing.
+        if self.settings.speak_position && !self.settings.mute_alerts {
+            let miles = (km * 0.621_371).round() as i32;
+            let fresh = self
+                .spoke_pos
+                .is_none_or(|(t, m)| m != miles && t.elapsed() >= std::time::Duration::from_secs(60));
+            if fresh {
+                self.spoke_pos = Some((Instant::now(), miles));
+                crate::speech::speak(&wxdata::spoken::position_script(
+                    // "Cell O7", not the bare id — a synthesizer reading "O7" alone is a noise.
+                    &if c.id.is_empty() {
+                        c.title.clone()
+                    } else {
+                        format!("Cell {}", c.id)
+                    },
+                    bearing as f32,
+                    km,
+                    c.mvt_deg,
+                ));
+            }
+        }
         let mi = |km: f64| km * 0.621_371;
         // Urgent when the storm will be on top of you soon.
         let urgent = mi(close_km) < 5.0 && close_min < 20.0;
@@ -15189,6 +15314,12 @@ impl eframe::App for HookEchoApp {
         {
             self.goto_poll = Some(Instant::now());
             self.drain_goto_file();
+        }
+        // The settings window has no HTTP client or runtime, so the voice-download button raises
+        // a flag and the work happens here, on the same spawner everything else fetches on.
+        #[cfg(not(target_arch = "wasm32"))]
+        if crate::speech::take_voice_request() {
+            self.download_voice();
         }
         // A file the user picked, from any of the import buttons. Routed here rather than at the
         // button, because on Android the picker is an activity result that lands long after the

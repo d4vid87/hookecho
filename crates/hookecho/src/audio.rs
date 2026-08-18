@@ -51,6 +51,29 @@ pub fn play(sound: &AlertSound, volume: f32) {
     });
 }
 
+/// Play WAV bytes that some other part of the app just produced (today: Piper's stdout).
+/// Non-blocking, same detached-thread shape as [`play`].
+#[cfg(not(target_arch = "wasm32"))]
+pub fn play_wav(bytes: Vec<u8>) {
+    std::thread::spawn(move || {
+        let Ok((_stream, handle)) = rodio::OutputStream::try_default() else {
+            log::warn!("no audio output for speech");
+            return;
+        };
+        let Ok(sink) = Sink::try_new(&handle) else {
+            return;
+        };
+        match rodio::Decoder::new(std::io::Cursor::new(bytes)) {
+            Ok(src) => sink.append(src),
+            Err(e) => {
+                log::warn!("speech audio decode failed: {e}");
+                return;
+            }
+        }
+        sink.sleep_until_end();
+    });
+}
+
 /// Try to queue a user audio file (wav/mp3/ogg/flac). Returns false (logged) on any failure.
 #[cfg(not(target_arch = "wasm32"))]
 fn append_file(sink: &Sink, path: &str) -> bool {

@@ -289,6 +289,17 @@ pub struct Settings {
     /// Read new warnings aloud (system speech engine). Off by default — speech is intrusive.
     #[serde(default)]
     pub speak_warnings: bool,
+    /// Path to a Piper binary, or blank to look on `PATH`. Piper is a local neural voice; when it
+    /// and a voice model are both present, spoken warnings go through it instead of espeak.
+    #[serde(default)]
+    pub piper_path: String,
+    /// Path to a Piper `.onnx` voice model. Blank turns Piper off — an engine with no model has
+    /// nothing to say. Never committed: it is a ~60 MB download or a file the user already has.
+    #[serde(default)]
+    pub piper_voice: String,
+    /// While chase mode is on, speak the nearest storm's bearing and distance as it changes.
+    #[serde(default)]
+    pub speak_position: bool,
     /// Alert when radar echo is heading for a saved location.
     #[serde(default)]
     pub rain_alerts: bool,
@@ -329,6 +340,13 @@ pub struct Settings {
     /// 0 lets everything through, which is the default.
     #[serde(default)]
     pub alert_min_escalation: u8,
+    /// Alerts inside `alert_rollup_window_min` before pushes collapse into one rolling summary.
+    /// 0 turns the rollup off. Escalated alerts always push as themselves.
+    #[serde(default = "default_alert_rollup_threshold")]
+    pub alert_rollup_threshold: usize,
+    /// Window the rollup threshold counts over, in minutes.
+    #[serde(default = "default_alert_rollup_window_min")]
+    pub alert_rollup_window_min: u64,
     /// Chime when a new radar volume lands on the live pane in view.
     #[serde(default)]
     pub scan_chime: bool,
@@ -496,6 +514,12 @@ fn default_quiet_start() -> u32 {
     22
 }
 
+pub fn default_alert_rollup_threshold() -> usize {
+    5
+}
+pub fn default_alert_rollup_window_min() -> u64 {
+    10
+}
 fn default_quiet_end() -> u32 {
     7
 }
@@ -992,6 +1016,9 @@ impl Default for Settings {
             anthropic_key: String::new(),
             lightning_alarm: false,
             speak_warnings: false,
+            piper_path: String::new(),
+            piper_voice: String::new(),
+            speak_position: false,
             rain_alerts: false,
             rain_sound: AlertSound::default(),
             setup_done: false,
@@ -1003,6 +1030,8 @@ impl Default for Settings {
             quiet_start_hour: default_quiet_start(),
             quiet_end_hour: default_quiet_end(),
             alert_min_escalation: 0,
+            alert_rollup_threshold: default_alert_rollup_threshold(),
+            alert_rollup_window_min: default_alert_rollup_window_min(),
             scan_chime: false,
             scan_sound: default_scan_sound(),
             warn_sound: AlertSound::default(),
@@ -1430,6 +1459,9 @@ mod tests {
             anthropic_key: "sk-test".to_string(),
             lightning_alarm: true,
             speak_warnings: true,
+            piper_path: String::new(),
+            piper_voice: String::new(),
+            speak_position: false,
             rain_alerts: true,
             rain_sound: AlertSound::Ding,
             setup_done: true,
@@ -1441,6 +1473,8 @@ mod tests {
             quiet_start_hour: 22,
             quiet_end_hour: 7,
             alert_min_escalation: 0,
+            alert_rollup_threshold: default_alert_rollup_threshold(),
+            alert_rollup_window_min: default_alert_rollup_window_min(),
             scan_chime: false,
             scan_sound: AlertSound::Ding,
             warn_sound: AlertSound::Siren,

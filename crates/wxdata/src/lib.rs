@@ -44,6 +44,7 @@ pub mod rotation;
 pub mod severe;
 pub mod sounding;
 pub mod spc;
+pub mod spoken;
 pub mod spotters;
 pub mod stations;
 pub mod task;
@@ -54,6 +55,7 @@ pub mod towers;
 pub mod tropical;
 pub mod tz;
 pub mod verify;
+pub mod vtec;
 pub mod volume3d;
 /// Off-main-thread Level 2 decode in the browser.
 #[cfg(target_arch = "wasm32")]

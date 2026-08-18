@@ -75,6 +75,46 @@ pub struct AlertInfo {
     pub source: Option<String>,
     /// Parsed storm motion (direction/speed/track) from `eventMotionDescription`; not persisted.
     pub motion: Option<StormMotion>,
+    /// Raw P-VTEC string, when the product carries one. [`Self::event_key`] is what uses it.
+    #[serde(default)]
+    pub vtec: Option<String>,
+}
+
+impl AlertInfo {
+    /// Identity of the *event*, for a seen-set to key on.
+    ///
+    /// `id` identifies a *message*, not an event. Continuing a tornado warning issues a fresh
+    /// message with a fresh id and the same warning underneath, so an id-keyed seen-set
+    /// re-announces the same warning every few minutes. The VTEC event key does not move.
+    /// Products with no VTEC (most non-warning-tier alerts) fall back to the id, which is the
+    /// old behaviour.
+    pub fn event_key(&self) -> String {
+        self.vtec
+            .as_deref()
+            .and_then(crate::vtec::Vtec::parse)
+            .map(|v| v.event_key())
+            .unwrap_or_else(|| self.id.clone())
+    }
+
+    /// The string the app dedupes announcements on. Normally one entry per *event*, so a
+    /// continuation of a tornado warning is silent; an upgrade earns its own entry (keyed by
+    /// message id) so it announces once and only once.
+    pub fn dedupe_key(&self) -> String {
+        let k = self.event_key();
+        if self.is_upgrade() {
+            format!("{k}#{}", self.id)
+        } else {
+            k
+        }
+    }
+
+    /// Should this message re-announce an event we have already announced? Only an upgrade does.
+    pub fn is_upgrade(&self) -> bool {
+        self.vtec
+            .as_deref()
+            .and_then(crate::vtec::Vtec::parse)
+            .is_some_and(|v| v.action.is_newsworthy_repeat())
+    }
 }
 
 /// One renderable, clickable overlay polygon.
@@ -399,5 +439,52 @@ mod tests {
         assert!(rings_intersect(&base, &sq(1.0, 0.0, 1.0)));
         // Degenerate rings are never a match.
         assert!(!rings_intersect(&base, &[[0.5, 0.5], [0.6, 0.6]]));
+    }
+}
+
+#[cfg(test)]
+mod dedupe_tests {
+    use super::*;
+
+    fn alert(id: &str, vtec: &str) -> AlertInfo {
+        AlertInfo {
+            id: id.into(),
+            event: "Tornado Warning".into(),
+            headline: String::new(),
+            area: String::new(),
+            description: String::new(),
+            instruction: String::new(),
+            expires: None,
+            max_hail_in: None,
+            max_wind: None,
+            tornado_detection: None,
+            damage_threat: None,
+            source: None,
+            motion: None,
+            vtec: Some(vtec.into()),
+        }
+    }
+
+    #[test]
+    fn a_continuation_dedupes_against_the_new_warning() {
+        // Same event, two messages: the second must not announce.
+        let new = alert("urn:a", "/O.NEW.KOUN.TO.W.0071.130520T2012Z-130520T2045Z/");
+        let con = alert("urn:b", "/O.CON.KOUN.TO.W.0071.000000T0000Z-130520T2045Z/");
+        assert_eq!(new.dedupe_key(), con.dedupe_key());
+    }
+
+    #[test]
+    fn an_upgrade_announces_once_and_only_once() {
+        let new = alert("urn:a", "/O.NEW.KOUN.TO.W.0071.130520T2012Z-130520T2045Z/");
+        let upg = alert("urn:c", "/O.UPG.KOUN.TO.W.0071.000000T0000Z-130520T2045Z/");
+        assert_ne!(new.dedupe_key(), upg.dedupe_key());
+        assert_eq!(upg.dedupe_key(), upg.dedupe_key());
+    }
+
+    #[test]
+    fn no_vtec_falls_back_to_the_message_id() {
+        let mut a = alert("urn:z", "");
+        a.vtec = None;
+        assert_eq!(a.dedupe_key(), "urn:z");
     }
 }
