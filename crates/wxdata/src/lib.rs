@@ -53,6 +53,7 @@ pub mod torclimo;
 pub mod tropical;
 pub mod tz;
 pub mod verify;
+pub mod vtec;
 pub mod volume3d;
 /// Off-main-thread Level 2 decode in the browser.
 #[cfg(target_arch = "wasm32")]

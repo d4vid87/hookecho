@@ -212,6 +212,7 @@ fn build_alert(
         tornado_detection: param(props, "tornadoDetection"),
         damage_threat: param(props, "thunderstormDamageThreat")
             .or_else(|| param(props, "tornadoDamageThreat")),
+        vtec: param(props, "VTEC"),
         source: param(props, "eventMotionDescription").or_else(|| Some("Radar indicated".into())),
         motion: param(props, "eventMotionDescription")
             .as_deref()
@@ -530,6 +531,7 @@ mod tests {
             tornado_detection: det.map(str::to_string),
             damage_threat: threat.map(str::to_string),
             source: None,
+            vtec: None,
             motion: None,
         };
         assert_eq!(escalation(&mk("plain warning", None, None)), 0);

@@ -2285,7 +2285,8 @@ pub struct HookEchoApp {
     obs_tour: bool,
     obs_tour_last: Option<Instant>,
     obs_tour_idx: usize,
-    /// Warning ids already seen, so a new warning is detected on arrival (not re-alerted).
+    /// Warning dedupe keys already seen (VTEC event keys), so a new warning is detected on
+    /// arrival and a continuation of one already announced is not.
     known_warning_ids: std::collections::HashSet<String>,
     /// False until the first alert fetch seeds `known_warning_ids` (avoids alerting on startup).
     warnings_seeded: bool,
@@ -2467,7 +2468,7 @@ impl HookEchoApp {
         let seeded_alerts = crate::alert_snapshot::load();
         let known_warning_ids: std::collections::HashSet<String> = seeded_alerts
             .iter()
-            .filter_map(|f| f.alert.as_ref().map(|a| a.id.clone()))
+            .filter_map(|f| f.alert.as_ref().map(|a| a.dedupe_key()))
             .collect();
         // Zone geometry (county and forecast-zone shapes) never changes, so it outlives the run.
         if let Some(dir) = crate::paths::cache_dir() {
@@ -3875,8 +3876,10 @@ impl HookEchoApp {
             }
             let Some(a) = &f.alert else { continue };
             // Mark every warning seen so it can't re-banner later, but only alert on genuinely new
-            // ones after the first (seeding) pass.
-            if self.known_warning_ids.insert(a.id.clone()) && self.warnings_seeded {
+            // ones after the first (seeding) pass. Keyed by VTEC event, not message id — an office
+            // re-issues a continuation of the same warning every few minutes with a fresh id, and
+            // deduping on that is why the same tornado warning announced itself over and over.
+            if self.known_warning_ids.insert(a.dedupe_key()) && self.warnings_seeded {
                 let esc = wxdata::alerts::escalation(a);
                 let urgent = esc >= 2;
                 // Severity floor: below the tier the user set, the warning still banners and
