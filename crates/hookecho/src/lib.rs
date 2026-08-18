@@ -9,6 +9,8 @@ pub mod alert_snapshot;
 pub mod app;
 pub mod astro;
 pub mod audio;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod backtest;
 pub mod basemap_style;
 /// Live camera video (desktop only — Android cannot spawn an ffmpeg child).
 #[cfg(not(any(target_os = "android", target_arch = "wasm32")))]
