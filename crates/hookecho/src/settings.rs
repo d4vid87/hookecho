@@ -1370,6 +1370,8 @@ mod tests {
             quiet_start_hour: 22,
             quiet_end_hour: 7,
             alert_min_escalation: 0,
+            alert_rollup_threshold: default_alert_rollup_threshold(),
+            alert_rollup_window_min: default_alert_rollup_window_min(),
             scan_chime: false,
             scan_sound: AlertSound::Ding,
             warn_sound: AlertSound::Siren,

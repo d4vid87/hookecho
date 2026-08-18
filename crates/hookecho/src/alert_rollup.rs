@@ -25,6 +25,7 @@ pub enum Decision {
 }
 
 /// Rolling window of recently pushed alert titles.
+#[derive(Default)]
 pub struct Rollup {
     /// (arrival, short title) within the window, oldest first.
     recent: VecDeque<(Instant, String)>,
@@ -36,16 +37,6 @@ pub struct Rollup {
 
 /// Don't re-push the summary more often than this, however fast the alerts land.
 const SUMMARY_EVERY: Duration = Duration::from_secs(60);
-
-impl Default for Rollup {
-    fn default() -> Self {
-        Self {
-            recent: VecDeque::new(),
-            folded: Vec::new(),
-            last_summary: None,
-        }
-    }
-}
 
 impl Rollup {
     /// Offer an alert. `threshold` alerts inside `window` turns rollup on; it turns off by itself

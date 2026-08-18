@@ -4661,7 +4661,6 @@ impl HookEchoApp {
     /// Deliver an alert to every configured channel: ntfy.sh push plus Discord / Slack / Matrix
     /// webhooks. Each is a no-op when its settings field is blank.
     /// Best-effort on the shared tokio runtime; failures are logged, never fatal.
-    // ponytail: fire-and-forget, no retry; add a bounded retry queue if users report drops.
     fn notify_alert(&self, title: &str, body: &str, urgent: bool) {
         // Quiet hours hold everything back except the escalated tier, which is the one worth
         // waking up for. Banners and the alert list are untouched — this gates what leaves the
@@ -4714,17 +4713,14 @@ impl HookEchoApp {
             let (http, title, body) = (http.clone(), title.clone(), body.clone());
             let priority = if urgent { "urgent" } else { "high" };
             self.spawner.spawn(async move {
-                let res = http
-                    .post(format!("https://ntfy.sh/{topic}"))
-                    .header("Title", title)
-                    .header("Priority", priority)
-                    .header("Tags", "warning,cloud_with_lightning")
-                    .body(body)
-                    .send()
-                    .await;
-                if let Err(e) = res {
-                    log::warn!("ntfy push failed: {e}");
-                }
+                crate::notify::send_retrying("ntfy push", || {
+                    http.post(format!("https://ntfy.sh/{topic}"))
+                        .header("Title", title.clone())
+                        .header("Priority", priority)
+                        .header("Tags", "warning,cloud_with_lightning")
+                        .body(body.clone())
+                })
+                .await;
             });
         }
 
@@ -4751,15 +4747,12 @@ impl HookEchoApp {
         for (what, url, payload, _) in posts {
             let http = http.clone();
             self.spawner.spawn(async move {
-                let res = http
-                    .post(url)
-                    .header("Content-Type", "application/json")
-                    .body(payload)
-                    .send()
-                    .await;
-                if let Err(e) = res {
-                    log::warn!("{what} webhook failed: {e}");
-                }
+                crate::notify::send_retrying(&format!("{what} webhook"), || {
+                    http.post(url.clone())
+                        .header("Content-Type", "application/json")
+                        .body(payload.clone())
+                })
+                .await;
             });
         }
 
@@ -4777,16 +4770,13 @@ impl HookEchoApp {
             let url = crate::notify::matrix_url(&hs, &room, txn);
             let payload = crate::notify::matrix_body(&title, &body);
             self.spawner.spawn(async move {
-                let res = http
-                    .put(url)
-                    .bearer_auth(token)
-                    .header("Content-Type", "application/json")
-                    .body(payload)
-                    .send()
-                    .await;
-                if let Err(e) = res {
-                    log::warn!("matrix webhook failed: {e}");
-                }
+                crate::notify::send_retrying("matrix webhook", || {
+                    http.put(url.clone())
+                        .bearer_auth(token.clone())
+                        .header("Content-Type", "application/json")
+                        .body(payload.clone())
+                })
+                .await;
             });
         }
     }
