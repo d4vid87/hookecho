@@ -10460,12 +10460,6 @@ impl HookEchoApp {
             return;
         }
         let idx = self.active.min(self.views.len() - 1);
-        let style = self.views[idx].basemap;
-        let is_vector = matches!(
-            style,
-            crate::tiles::BasemapStyle::Dark | crate::tiles::BasemapStyle::Light
-        );
-        let is_raster = style.is_raster();
         let caption = {
             let v = &self.views[idx];
             let time = v
@@ -10548,7 +10542,9 @@ impl HookEchoApp {
                             .unwrap_or(self.views[idx].camera);
                         let pane_cam = std::mem::replace(&mut self.views[idx].camera, mine);
                         self.render_pane(
-                            ui, &vctx, idx, prect, is_vector, is_raster, false, false, false, &[],
+                            // `first`/`last` false: the mini-loop viewport is a passenger — the
+                            // main window's pane loop owns draining and evicting the tile caches.
+                            ui, &vctx, idx, prect, false, false, false, false, &[],
                         );
                         self.mini_cam =
                             Some(std::mem::replace(&mut self.views[idx].camera, pane_cam));
@@ -10574,14 +10570,17 @@ impl HookEchoApp {
         ctx: &egui::Context,
         idx: usize,
         prect: egui::Rect,
-        is_vector: bool,
-        is_raster: bool,
         clear_tiles: bool,
         clear_vector: bool,
         first: bool,
+        last: bool,
         placefile_labels: &[PlaceLabel],
     ) {
         use crate::tiles::BasemapStyle;
+        // This pane's own basemap: panes are independent, the tile caches are keyed by style.
+        let pane_style = self.views[idx].basemap;
+        let is_vector = matches!(pane_style, BasemapStyle::Dark | BasemapStyle::Light);
+        let is_raster = pane_style.is_raster();
         let vp = (prect.width(), prect.height());
         let response = ui.interact(
             prect,
@@ -11085,7 +11084,7 @@ impl HookEchoApp {
         } else {
             1.0
         };
-        let raster_bias = if self.views[idx].basemap.tiles_are_512() {
+        let raster_bias = if pane_style.tiles_are_512() {
             // 512-px providers already carry the extra detail in the tile itself; biasing on top
             // would fetch four of them per screen tile for nothing.
             0.0
@@ -11097,8 +11096,9 @@ impl HookEchoApp {
                 .clamp(0.0, bias_cap) as f64
         };
         let visible = if is_raster {
-            let vis = self.tiles.visible(&cam, vp, raster_bias);
-            self.tiles.request_missing(&vis);
+            let vis = self.tiles.visible(pane_style, &cam, vp, raster_bias);
+            self.tiles.request_missing(pane_style, &vis);
+            self.tiles.promote_visible(pane_style, &vis);
             vis
         } else {
             Vec::new()
@@ -11133,8 +11133,10 @@ impl HookEchoApp {
         // Drain finished fetches once (on the first pane) — they upload into the shared cache.
         // Eviction lives with the tile manager (it also owns `requested`/`uploaded`), and only
         // the first pane runs it so a multi-pane frame doesn't evict what a later pane needs.
-        let drop_tiles = if first && is_raster {
-            self.tiles.touch_visible(&visible)
+        // Eviction runs once per frame, on the last pane — after every pane has promoted its own
+        // visible tiles, so a multi-pane frame can't evict what a pane it already drew still needs.
+        let drop_tiles = if last {
+            self.tiles.evict_excess()
         } else {
             Vec::new()
         };
@@ -11195,6 +11197,7 @@ impl HookEchoApp {
             camera_scale: scale,
             new_tiles,
             visible,
+            basemap_key: pane_style.key(),
             radar_upload,
             draw_radar,
             overlay_upload: if first {
@@ -16388,15 +16391,22 @@ impl eframe::App for HookEchoApp {
                 }
             }
 
-            // Global basemap style is driven by the active pane.
+            // Each pane fetches and draws its own `View::basemap` (see `render_pane`). Two things
+            // stay global for now: the GOES frame cursor and the vector palette, both driven by
+            // the active pane.
+            // ponytail: one GOES cursor + one vector palette for all panes; split them when
+            // someone actually wants two satellite times or two vector palettes side by side.
             use crate::tiles::BasemapStyle;
             let style = self.views[self.active.min(n - 1)].basemap;
             let is_vector = matches!(style, BasemapStyle::Dark | BasemapStyle::Light);
-            let is_raster = style.is_raster();
-            let raster_style = if is_raster { style } else { BasemapStyle::None };
+            let raster_style = if style.is_raster() {
+                style
+            } else {
+                BasemapStyle::None
+            };
             self.tiles
                 .set_keys(&self.settings.mapbox_key, &self.settings.maptiler_key);
-            let mut clear_tiles = self.tiles.set_style(raster_style);
+            let mut clear_tiles = false;
             // GOES sub-hourly scrub: fetch the available frame times when a GOES style becomes
             // active, and apply the selected frame (None = latest).
             if raster_style.goes_layer().is_some() {
@@ -16450,11 +16460,10 @@ impl eframe::App for HookEchoApp {
                     ctx,
                     i,
                     *prect,
-                    is_vector,
-                    is_raster,
                     clear_tiles && first,
                     clear_vector && first,
                     first,
+                    i + 1 == n,
                     &placefile_labels,
                 );
             }

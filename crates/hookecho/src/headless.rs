@@ -68,9 +68,8 @@ fn national_basemap(
         let style = crate::tiles::BasemapStyle::from_slug(&slug);
         if style.is_raster() {
             let settings = crate::settings::Settings::load();
-            let mut tm = TileManager::new(crate::rt::Spawner::new(rt.handle().clone()));
-            tm.set_style(style);
-            let vis = tm.visible(camera, vp, 0.0);
+            let tm = TileManager::new(crate::rt::Spawner::new(rt.handle().clone()));
+            let vis = tm.visible(style, camera, vp, 0.0);
             let tiles = rt.block_on(crate::tiles::fetch_visible(
                 &client,
                 style,
@@ -198,9 +197,9 @@ pub fn run(
     let settings = crate::settings::Settings::load();
     let is_vector = matches!(basemap, BasemapStyle::Dark | BasemapStyle::Light);
     let (new_tiles, visible) = if basemap.is_raster() {
-        let mut tm = TileManager::new(crate::rt::Spawner::new(rt.handle().clone()));
-        tm.set_style(basemap); // so the zoom cap matches this source (GOES layers top out early)
-        let vis = tm.visible(&camera, vp, 0.0);
+        let tm = TileManager::new(crate::rt::Spawner::new(rt.handle().clone()));
+        // Style is passed per call so the zoom cap matches this source (GOES layers top out early).
+        let vis = tm.visible(basemap, &camera, vp, 0.0);
         let tiles = rt.block_on(crate::tiles::fetch_visible(
             &client,
             basemap,
@@ -252,6 +251,7 @@ pub fn run(
         camera_scale: scale,
         new_tiles,
         visible,
+        basemap_key: basemap.key(),
         radar_upload: Some(crate::app::to_upload(
             &sweep, &table, None, smooth, storm_uv,
         )),
@@ -302,6 +302,7 @@ pub fn run_multipane(site: &str, out_a: &str, out_b: &str) -> anyhow::Result<()>
             pane,
             camera_center: center,
             camera_scale: scale,
+            basemap_key: 0,
             new_tiles: Vec::new(),
             visible: Vec::new(),
             radar_upload: Some(crate::app::to_upload(&sweep, &table, None, false, None)),
@@ -952,6 +953,7 @@ pub fn run_live(out_path: &str, site: &str, moment: Moment) -> anyhow::Result<()
         pane: 0,
         camera_center: center,
         camera_scale: scale,
+        basemap_key: 0,
         new_tiles: Vec::new(),
         visible: Vec::new(),
         radar_upload: Some(crate::app::to_upload(&sweep, &table, None, false, None)),
@@ -1031,6 +1033,7 @@ pub fn run_placefile(path: &str, out_path: &str) -> anyhow::Result<()> {
         pane: 0,
         camera_center: center,
         camera_scale: scale,
+        basemap_key: 0,
         new_tiles: Vec::new(),
         visible: Vec::new(),
         radar_upload: None,
@@ -1089,6 +1092,7 @@ pub fn run_overlay(out_path: &str) -> anyhow::Result<()> {
         pane: 0,
         camera_center: center,
         camera_scale: scale,
+        basemap_key: 0,
         new_tiles,
         visible,
         radar_upload: None,
@@ -1188,6 +1192,7 @@ pub fn run_mrms(out_path: &str) -> anyhow::Result<()> {
         pane: 0,
         camera_center: center,
         camera_scale: scale,
+        basemap_key: 0,
         new_tiles,
         visible,
         radar_upload: None,
@@ -1241,6 +1246,7 @@ pub fn run_lightning(out_path: &str) -> anyhow::Result<()> {
         pane: 0,
         camera_center: center,
         camera_scale: scale,
+        basemap_key: 0,
         new_tiles,
         visible,
         radar_upload: None,
@@ -1310,6 +1316,7 @@ pub fn run_field(slug: &str, out_path: &str) -> anyhow::Result<()> {
         pane: 0,
         camera_center: center,
         camera_scale: scale,
+        basemap_key: 0,
         new_tiles,
         visible,
         radar_upload: None,
@@ -1407,6 +1414,7 @@ pub fn run_global(model: &str, slug: &str, out_path: &str) -> anyhow::Result<()>
         pane: 0,
         camera_center: center,
         camera_scale: scale,
+        basemap_key: 0,
         new_tiles,
         visible,
         radar_upload: None,
@@ -1519,6 +1527,7 @@ pub fn run_diff(slug: &str, out_path: &str) -> anyhow::Result<()> {
         pane: 0,
         camera_center: center,
         camera_scale: scale,
+        basemap_key: 0,
         new_tiles,
         visible,
         radar_upload: None,
@@ -1836,6 +1845,7 @@ pub fn run_l3grid(kind: &str, site: &str, out_path: &str) -> anyhow::Result<()> 
         pane: 0,
         camera_center: center,
         camera_scale: scale,
+        basemap_key: 0,
         new_tiles,
         visible,
         radar_upload: None,
@@ -1907,6 +1917,7 @@ pub fn run_env(slug: &str, out_path: &str) -> anyhow::Result<()> {
         pane: 0,
         camera_center: center,
         camera_scale: scale,
+        basemap_key: 0,
         new_tiles,
         visible,
         radar_upload: None,
@@ -2087,6 +2098,7 @@ pub fn run_hrrr_layer(
         pane: 0,
         camera_center: center,
         camera_scale: scale,
+        basemap_key: 0,
         new_tiles,
         visible,
         radar_upload: None,
@@ -2121,6 +2133,7 @@ fn render_field_png(
         pane: 0,
         camera_center: center,
         camera_scale: scale,
+        basemap_key: 0,
         new_tiles,
         visible,
         radar_upload: None,
@@ -2844,6 +2857,7 @@ mod golden_tests {
             pane: 0,
             camera_center: center,
             camera_scale: scale,
+            basemap_key: 0,
             new_tiles: Vec::new(),
             visible: Vec::new(),
             radar_upload: Some(crate::app::to_upload(&sweep, &table, None, false, None)),
