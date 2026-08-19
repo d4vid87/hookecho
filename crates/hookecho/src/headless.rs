@@ -85,7 +85,13 @@ fn national_basemap(
     let tiles = rt.block_on(async {
         let template = crate::vector_tiles::fetch_tilejson(&client, None).await?;
         Some(
-            crate::vector_tiles::fetch_visible_vector(&client, &template, true, camera.zoom, &vis)
+            crate::vector_tiles::fetch_visible_vector(
+                &client,
+                &template,
+                crate::basemap_style::Palette::Dark,
+                camera.zoom,
+                &vis,
+            )
                 .await
                 .0,
         )
@@ -223,7 +229,15 @@ pub fn run(
             println!("tilejson template: {template}");
             Ok::<_, anyhow::Error>(
                 crate::vector_tiles::fetch_visible_vector(
-                    &client, &template, dark, tess_zoom, &vis,
+                    &client,
+                    &template,
+                    if dark {
+                        crate::basemap_style::Palette::Dark
+                    } else {
+                        crate::basemap_style::Palette::Light
+                    },
+                    tess_zoom,
+                    &vis,
                 )
                 .await,
             )
@@ -252,6 +266,7 @@ pub fn run(
         new_tiles,
         visible,
         basemap_key: basemap.key(),
+        vector_over_raster: false,
         radar_upload: Some(crate::app::to_upload(
             &sweep, &table, None, smooth, storm_uv,
         )),
@@ -303,6 +318,7 @@ pub fn run_multipane(site: &str, out_a: &str, out_b: &str) -> anyhow::Result<()>
             camera_center: center,
             camera_scale: scale,
             basemap_key: 0,
+            vector_over_raster: false,
             new_tiles: Vec::new(),
             visible: Vec::new(),
             radar_upload: Some(crate::app::to_upload(&sweep, &table, None, false, None)),
@@ -954,6 +970,7 @@ pub fn run_live(out_path: &str, site: &str, moment: Moment) -> anyhow::Result<()
         camera_center: center,
         camera_scale: scale,
         basemap_key: 0,
+        vector_over_raster: false,
         new_tiles: Vec::new(),
         visible: Vec::new(),
         radar_upload: Some(crate::app::to_upload(&sweep, &table, None, false, None)),
@@ -1034,6 +1051,7 @@ pub fn run_placefile(path: &str, out_path: &str) -> anyhow::Result<()> {
         camera_center: center,
         camera_scale: scale,
         basemap_key: 0,
+        vector_over_raster: false,
         new_tiles: Vec::new(),
         visible: Vec::new(),
         radar_upload: None,
@@ -1093,6 +1111,7 @@ pub fn run_overlay(out_path: &str) -> anyhow::Result<()> {
         camera_center: center,
         camera_scale: scale,
         basemap_key: 0,
+        vector_over_raster: false,
         new_tiles,
         visible,
         radar_upload: None,
@@ -1193,6 +1212,7 @@ pub fn run_mrms(out_path: &str) -> anyhow::Result<()> {
         camera_center: center,
         camera_scale: scale,
         basemap_key: 0,
+        vector_over_raster: false,
         new_tiles,
         visible,
         radar_upload: None,
@@ -1247,6 +1267,7 @@ pub fn run_lightning(out_path: &str) -> anyhow::Result<()> {
         camera_center: center,
         camera_scale: scale,
         basemap_key: 0,
+        vector_over_raster: false,
         new_tiles,
         visible,
         radar_upload: None,
@@ -1317,6 +1338,7 @@ pub fn run_field(slug: &str, out_path: &str) -> anyhow::Result<()> {
         camera_center: center,
         camera_scale: scale,
         basemap_key: 0,
+        vector_over_raster: false,
         new_tiles,
         visible,
         radar_upload: None,
@@ -1415,6 +1437,7 @@ pub fn run_global(model: &str, slug: &str, out_path: &str) -> anyhow::Result<()>
         camera_center: center,
         camera_scale: scale,
         basemap_key: 0,
+        vector_over_raster: false,
         new_tiles,
         visible,
         radar_upload: None,
@@ -1528,6 +1551,7 @@ pub fn run_diff(slug: &str, out_path: &str) -> anyhow::Result<()> {
         camera_center: center,
         camera_scale: scale,
         basemap_key: 0,
+        vector_over_raster: false,
         new_tiles,
         visible,
         radar_upload: None,
@@ -1846,6 +1870,7 @@ pub fn run_l3grid(kind: &str, site: &str, out_path: &str) -> anyhow::Result<()> 
         camera_center: center,
         camera_scale: scale,
         basemap_key: 0,
+        vector_over_raster: false,
         new_tiles,
         visible,
         radar_upload: None,
@@ -1918,6 +1943,7 @@ pub fn run_env(slug: &str, out_path: &str) -> anyhow::Result<()> {
         camera_center: center,
         camera_scale: scale,
         basemap_key: 0,
+        vector_over_raster: false,
         new_tiles,
         visible,
         radar_upload: None,
@@ -2099,6 +2125,7 @@ pub fn run_hrrr_layer(
         camera_center: center,
         camera_scale: scale,
         basemap_key: 0,
+        vector_over_raster: false,
         new_tiles,
         visible,
         radar_upload: None,
@@ -2134,6 +2161,7 @@ fn render_field_png(
         camera_center: center,
         camera_scale: scale,
         basemap_key: 0,
+        vector_over_raster: false,
         new_tiles,
         visible,
         radar_upload: None,
@@ -2858,6 +2886,7 @@ mod golden_tests {
             camera_center: center,
             camera_scale: scale,
             basemap_key: 0,
+            vector_over_raster: false,
             new_tiles: Vec::new(),
             visible: Vec::new(),
             radar_upload: Some(crate::app::to_upload(&sweep, &table, None, false, None)),

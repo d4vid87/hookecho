@@ -6219,7 +6219,7 @@ impl HookEchoApp {
     /// deepest level instead of an empty range).
     fn chasepack_zoom(&self) -> (u8, u8) {
         use crate::tiles::BasemapStyle;
-        let style = self.views[self.active].basemap;
+        let style = self.views[self.active].basemap.resolve(true);
         let z_lo = (self.views[self.active].camera.zoom.floor() as i64).clamp(2, 18) as u8;
         let max_z = if style.is_raster() {
             self.tiles.max_pack_z(style)
@@ -6235,7 +6235,9 @@ impl HookEchoApp {
     /// Per-frame chase-pack estimate + progress [`map_rows`](Self::map_rows) renders.
     fn chasepack_ui(&self) -> ui::layer_options::ChasePackUi {
         use crate::tiles::BasemapStyle;
-        let style = self.views[self.active].basemap;
+        // Dark and Light pack the same vector tiles (the `.pbf` cache is palette-agnostic), so
+        // resolving `Auto` either way gives the same pack.
+        let style = self.views[self.active].basemap.resolve(true);
         let packable = if style.is_raster() {
             self.tiles.packable(style)
         } else if matches!(style, BasemapStyle::Dark | BasemapStyle::Light) {
@@ -6267,6 +6269,17 @@ impl HookEchoApp {
                     vz_hi,
                 );
             }
+            if !style.is_raster() && self.settings.pack_include_satellite {
+                let sz_hi = z_hi.min(self.tiles.max_pack_z(BasemapStyle::HybridSatellite));
+                n += crate::tiles::pack_tile_count(
+                    min_lon,
+                    min_lat,
+                    max_lon,
+                    max_lat,
+                    z_lo.min(sz_hi),
+                    sz_hi,
+                );
+            }
             n
         } else {
             0
@@ -6293,7 +6306,7 @@ impl HookEchoApp {
         if self.chasepack.is_some() {
             return;
         }
-        let style = self.views[self.active].basemap;
+        let style = self.views[self.active].basemap.resolve(true);
         let (z_lo, z_hi) = self.chasepack_zoom();
         let (min_lon, min_lat, max_lon, max_lat) = self.view_bounds();
         // The DEM resolution is a per-session choice; make sure the pack fetches what the sampler
@@ -6318,6 +6331,20 @@ impl HookEchoApp {
                 self.vtiles
                     .pack_jobs(min_lon, min_lat, max_lon, max_lat, vz_lo, vz_hi),
             );
+        }
+        // And imagery alongside the streets, for the packs that went the other way round.
+        if !style.is_raster() && self.settings.pack_include_satellite {
+            let sat = BasemapStyle::HybridSatellite;
+            let sz_hi = z_hi.min(self.tiles.max_pack_z(sat));
+            jobs.extend(self.tiles.pack_jobs(
+                sat,
+                min_lon,
+                min_lat,
+                max_lon,
+                max_lat,
+                z_lo.min(sz_hi),
+                sz_hi,
+            ));
         }
         // The DEM rides along with every pack, whatever the basemap: offline chase mode wants the
         // blockage overlay as much as it wants the map under it.
@@ -6407,30 +6434,29 @@ impl HookEchoApp {
     /// per-map state is edited.
     fn map_rows(&mut self, ui: &mut egui::Ui, actions: &mut ui::layer_options::UiActions) {
         use crate::settings::StartView;
-        use crate::tiles::BasemapStyle;
         let chasepack = self.chasepack_ui();
         let (mb_key, mt_key) = (
             !self.settings.mapbox_key.is_empty(),
             !self.settings.maptiler_key.is_empty(),
         );
-        // Split the borrow: the combo writes both the pane's style and the persisted default.
-        let (view, settings) = (&mut self.views[self.active], &mut self.settings);
-        egui::ComboBox::from_label("Background")
-            .selected_text(view.basemap.label())
-            .show_ui(ui, |ui| {
-                // Only styles whose provider key is set are selectable.
-                for s in BasemapStyle::ALL
-                    .into_iter()
-                    .filter(|s| s.available(mb_key, mt_key))
-                {
-                    if ui
-                        .selectable_value(&mut view.basemap, s, s.label())
-                        .clicked()
-                    {
-                        settings.basemap = s.slug().to_string(); // persist across restarts
-                    }
-                }
+        let current = self.views[self.active].basemap;
+        // A named button that opens the grid, rather than the grid inline: the drawer column is
+        // narrow, and fifty cards in it would push everything else off the panel.
+        let mut picked = None;
+        ui.menu_button(format!("Background: {}", current.label()), |ui| {
+            ui.set_min_width(460.0);
+            egui::ScrollArea::vertical().max_height(460.0).show(ui, |ui| {
+                picked = ui::basemap_picker::grid(ui, &mut self.tiles, current, &self.settings);
             });
+            if picked.is_some() {
+                ui.close();
+            }
+        });
+        if let Some(s) = picked {
+            self.views[self.active].basemap = s;
+            self.settings.basemap = s.slug().to_string(); // persist across restarts
+        }
+        let (view, settings) = (&mut self.views[self.active], &mut self.settings);
         ui.weak(if mb_key && mt_key {
             "Z cycles backgrounds"
         } else {
@@ -6508,6 +6534,11 @@ impl HookEchoApp {
                         "Pack vector street tiles beside raster imagery, so road names still \
                          render offline",
                     );
+                ui.checkbox(&mut settings.pack_include_satellite, "Include satellite")
+                    .on_hover_text(
+                        "Pack satellite imagery beside the vector streets, so terrain still \
+                         renders offline",
+                    );
                 ui.checkbox(&mut settings.pack_hires_dem, "High-detail terrain")
                     .on_hover_text(
                         "z12 terrain (~40 m/px) instead of z10 — sixteen times the tiles",
@@ -6565,6 +6596,7 @@ impl HookEchoApp {
     /// windows — searchable) with the app's own commands below it. It replaces a wall of parallel
     /// entry points; the map keeps nothing but transient status.
     fn sidebar(&mut self, root: &mut egui::Ui, ctx: &egui::Context) {
+        crate::prof_scope!("sidebar");
         let accent = crate::theme::accent(self.settings.theme);
         let entries = self.palette_entries();
         let mut query = std::mem::take(&mut self.layers_query);
@@ -6785,6 +6817,7 @@ impl HookEchoApp {
     }
 
     fn timeline_bar(&mut self, root: &mut egui::Ui) {
+        crate::prof_scope!("timeline_bar");
         use egui_phosphor::regular as ph;
         let accent = crate::theme::accent(self.settings.theme);
         let tz = self.active_tz();
@@ -8346,7 +8379,11 @@ impl HookEchoApp {
                     !self.settings.mapbox_key.is_empty(),
                     !self.settings.maptiler_key.is_empty(),
                 );
-                let next = self.views[self.active].basemap.next(mb, mt);
+                let next = self.views[self.active].basemap.next(
+                    mb,
+                    mt,
+                    crate::tiles::valid_xyz_template(&self.settings.custom_tile_url),
+                );
                 self.set_basemap(next);
             }
             PaletteAction::ToggleMute => self.apply_action(BindableAction::ToggleMute, ctx),
@@ -9594,6 +9631,7 @@ impl HookEchoApp {
     /// `(item, opacity, loaded-placefile index)`. Iterated in `settings.placefiles` order, which
     /// is the paint order the Layer Manager reorders.
     fn visible_placefile_items(&self) -> Vec<(&wxdata::placefile::PlaceItem, f32, usize)> {
+        crate::prof_scope!("visible_placefile_items");
         let range = self.view_range_nmi();
         let now = Utc::now();
         let mut out = Vec::new();
@@ -9640,6 +9678,7 @@ impl HookEchoApp {
     /// Owned labels/markers for the visible placefile items (drawn by the egui painter).
     /// Icons resolve their sheet cell here, so the painter just blits a quad.
     fn placefile_labels(&self) -> Vec<PlaceLabel> {
+        crate::prof_scope!("placefile_labels");
         use wxdata::placefile::PlaceKind;
         self.visible_placefile_items()
             .iter()
@@ -10864,10 +10903,15 @@ impl HookEchoApp {
         last: bool,
         placefile_labels: &[PlaceLabel],
     ) {
+        crate::prof_scope!("render_pane");
         use crate::tiles::BasemapStyle;
         // This pane's own basemap: panes are independent, the tile caches are keyed by style.
-        let pane_style = self.views[idx].basemap;
-        let is_vector = matches!(pane_style, BasemapStyle::Dark | BasemapStyle::Light);
+        // `Auto` resolves here rather than where it is stored, so the stored choice keeps
+        // following the theme instead of being frozen the first time it is rendered.
+        let pane_style = self.views[idx].basemap.resolve(ui.visuals().dark_mode);
+        // Hybrid satellite is both: Esri imagery from the raster path, roads and boundaries from
+        // the vector one drawn on top of it.
+        let is_vector = pane_style.vector_palette().is_some();
         let is_raster = pane_style.is_raster();
         let vp = (prect.width(), prect.height());
         let response = ui.interact(
@@ -11372,9 +11416,9 @@ impl HookEchoApp {
         } else {
             1.0
         };
-        let raster_bias = if pane_style.tiles_are_512() {
-            // 512-px providers already carry the extra detail in the tile itself; biasing on top
-            // would fetch four of them per screen tile for nothing.
+        let raster_bias = if pane_style.tiles_are_512() || self.tiles.is_retina(pane_style) {
+            // 512-px and `@2x` providers already carry the extra detail in the tile itself;
+            // biasing on top would fetch four of them per screen tile for nothing.
             0.0
         } else {
             ctx.pixels_per_point()
@@ -11486,6 +11530,7 @@ impl HookEchoApp {
             new_tiles,
             visible,
             basemap_key: pane_style.key(),
+            vector_over_raster: pane_style == BasemapStyle::HybridSatellite,
             radar_upload,
             draw_radar,
             overlay_upload: if first {
@@ -11587,7 +11632,7 @@ impl HookEchoApp {
         // --- Painter overlays (clipped to this pane) ---
         let painter = ui.painter_at(prect);
         let view = &self.views[idx];
-        let basemap = view.basemap;
+        let basemap = pane_style;
 
         // Storm-cell ids reserve their space first — they are the top tier, and the cell markers
         // themselves are drawn much further down with the rest of the cell layer. Reserving here
@@ -11638,7 +11683,9 @@ impl HookEchoApp {
         // vector basemaps use their palette's label colors. Bigger fonts + an 8-way halo read well.
         if !vlabels.is_empty() {
             let (text_col, halo_col, big) = if is_vector {
-                let st = crate::basemap_style::style(basemap == BasemapStyle::Dark);
+                let st = crate::basemap_style::style(
+                    basemap.vector_palette().unwrap_or_default(),
+                );
                 (
                     egui::Color32::from_rgb(st.label[0], st.label[1], st.label[2]),
                     egui::Color32::from_rgb(st.label_halo[0], st.label_halo[1], st.label_halo[2]),
@@ -11653,7 +11700,7 @@ impl HookEchoApp {
             };
             let z = cam.zoom;
             let mut labels: Vec<&crate::vector_tiles::PlaceLabel> =
-                vlabels.iter().filter(|l| l.city || z >= 9.0).collect();
+                vlabels.iter().filter(|l| z >= l.min_zoom as f64).collect();
             // Labels already on screen are offered their slot before newcomers of the same
             // importance; without that a name at the edge of a collision wins and loses on
             // alternate frames, which is exactly the flicker you see while panning.
@@ -11714,12 +11761,18 @@ impl HookEchoApp {
         }
 
         // Raster basemap attribution (provider styles + USGS satellite).
-        if view.basemap.is_raster() {
+        if pane_style.is_raster() {
             let col = egui::Color32::from_gray(200).gamma_multiply(0.6);
             painter.text(
                 egui::pos2(prect.left() + 6.0, prect.bottom() - 4.0),
                 egui::Align2::LEFT_BOTTOM,
-                view.basemap.attribution(),
+                if pane_style == BasemapStyle::CustomXyz
+                    && !self.settings.custom_tile_attribution.is_empty()
+                {
+                    self.settings.custom_tile_attribution.as_str()
+                } else {
+                    pane_style.attribution()
+                },
                 egui::FontId::proportional(10.0),
                 col,
             );
@@ -12805,6 +12858,7 @@ impl HookEchoApp {
 
         // Surface obs (METAR station plots): fltCat-colored circle, wind barb, T/Td in °F.
         if self.show_metar && cam.zoom >= 6.0 {
+            crate::prof_scope!("metar_plots");
             let show_labels = cam.zoom >= 7.0;
             let flt_color = |c: &str| match c {
                 "VFR" => egui::Color32::from_rgb(60, 200, 90),
@@ -12929,6 +12983,7 @@ impl HookEchoApp {
                 FloodCat::NoFlooding => "no flooding",
                 FloodCat::Unknown => "no current reading",
             };
+            crate::prof_scope!("river_gauges");
             for g in &self.gauges {
                 let w = crate::render::mercator::lonlat_to_world(g.lon, g.lat);
                 let (sx, sy) = cam.world_to_screen(w, vp);
@@ -16078,6 +16133,7 @@ impl eframe::App for HookEchoApp {
             &mut self.settings,
             &mut self.views[active].basemap,
             &self.marker_icon_tex,
+            &mut self.tiles,
         ) {
             self.settings.setup_done = true;
             self.settings.save();
@@ -16772,8 +16828,10 @@ impl eframe::App for HookEchoApp {
             // ponytail: one GOES cursor + one vector palette for all panes; split them when
             // someone actually wants two satellite times or two vector palettes side by side.
             use crate::tiles::BasemapStyle;
-            let style = self.views[self.active.min(n - 1)].basemap;
-            let is_vector = matches!(style, BasemapStyle::Dark | BasemapStyle::Light);
+            let style = self.views[self.active.min(n - 1)]
+                .basemap
+                .resolve(ctx.theme() == egui::Theme::Dark);
+            let is_vector = style.vector_palette().is_some();
             let raster_style = if style.is_raster() {
                 style
             } else {
@@ -16781,7 +16839,15 @@ impl eframe::App for HookEchoApp {
             };
             self.tiles
                 .set_keys(&self.settings.mapbox_key, &self.settings.maptiler_key);
-            let mut clear_tiles = false;
+            self.tiles
+                .set_custom_template(&self.settings.custom_tile_url);
+            self.tiles.set_custom_max_z(self.settings.custom_tile_max_z);
+            // Ask for `@2x` tiles where the provider serves them: same tile count, twice the
+            // pixels, labels drawn for the density instead of magnified. Off on a metered link —
+            // a double-resolution tile is roughly double the bytes.
+            let mut clear_tiles = self.tiles.set_retina(
+                ctx.pixels_per_point() > 1.0 && !crate::platform::is_metered(),
+            );
             // GOES sub-hourly scrub: fetch the available frame times when a GOES style becomes
             // active, and apply the selected frame (None = latest).
             if raster_style.goes_layer().is_some() {
@@ -16819,7 +16885,9 @@ impl eframe::App for HookEchoApp {
             }
             let mut clear_vector = false;
             if is_vector {
-                clear_vector |= self.vtiles.set_style(style == BasemapStyle::Dark);
+                clear_vector |= self
+                    .vtiles
+                    .set_style(style.vector_palette().unwrap_or_default());
                 clear_vector |= self
                     .vtiles
                     .note_zoom(self.views[self.active.min(n - 1)].camera.zoom);

@@ -28,6 +28,37 @@ pub enum Provider {
     MapTiler,
 }
 
+/// Picker grouping for a [`BasemapStyle`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Category {
+    Vector,
+    Streets,
+    Satellite,
+    Topo,
+    Other,
+}
+
+impl Category {
+    /// Groups in picker order.
+    pub const ALL: [Category; 5] = [
+        Category::Vector,
+        Category::Streets,
+        Category::Satellite,
+        Category::Topo,
+        Category::Other,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Category::Vector => "Vector",
+            Category::Streets => "Streets",
+            Category::Satellite => "Satellite",
+            Category::Topo => "Terrain",
+            Category::Other => "Other",
+        }
+    }
+}
+
 /// A selectable basemap under the radar. Dark/Light are the vector MVT basemap
 /// (see [`crate::vector_tiles`]); Satellite is raster USGS imagery. The Mapbox*/MapTiler* styles
 /// are provider raster tiles, available only when the matching Settings API key is set.
@@ -82,11 +113,32 @@ pub enum BasemapStyle {
     UsgsImageryTopo,
     OsmHot,
     CyclOsm,
+    /// Vector basemap, OSM Liberty look.
+    VectorLiberty,
+    /// Vector basemap, pale low-ink look.
+    VectorBright,
+    /// Vector basemap, near-monochrome look.
+    VectorPositron,
+    /// Vector basemap, night-drive look.
+    VectorMidnight,
+    EsriDarkGray,
+    EsriLightGray,
+    EsriNatGeo,
+    EsriOcean,
+    /// Esri World Imagery with our own vector roads/boundaries/labels drawn over it. Keyless, and
+    /// the closest thing to the "hybrid" layer every commercial provider charges for.
+    HybridSatellite,
+    /// Follows the app theme: resolves to [`Self::Dark`] or [`Self::Light`]. Never rendered
+    /// directly — see [`Self::resolve`].
+    Auto,
+    /// User-supplied `{z}/{x}/{y}` URL template from settings. Desktop and Android only; the web
+    /// build's proxy is exact-host allowlisted, so an arbitrary host cannot be fetched there.
+    CustomXyz,
 }
 
 impl BasemapStyle {
     /// Cycle order for the `z` hotkey; provider styles trail the built-ins.
-    pub const ALL: [BasemapStyle; 40] = [
+    pub const ALL: [BasemapStyle; 51] = [
         BasemapStyle::Dark,
         BasemapStyle::Light,
         BasemapStyle::Satellite,
@@ -103,6 +155,17 @@ impl BasemapStyle {
         BasemapStyle::UsgsImageryTopo,
         BasemapStyle::OsmHot,
         BasemapStyle::CyclOsm,
+        BasemapStyle::VectorLiberty,
+        BasemapStyle::VectorBright,
+        BasemapStyle::VectorPositron,
+        BasemapStyle::VectorMidnight,
+        BasemapStyle::HybridSatellite,
+        BasemapStyle::EsriDarkGray,
+        BasemapStyle::EsriLightGray,
+        BasemapStyle::EsriNatGeo,
+        BasemapStyle::EsriOcean,
+        BasemapStyle::Auto,
+        BasemapStyle::CustomXyz,
         BasemapStyle::GoesEast,
         BasemapStyle::GoesWest,
         BasemapStyle::GoesEastIR,
@@ -149,6 +212,12 @@ impl BasemapStyle {
         match self {
             BasemapStyle::Satellite => "USGS",
             BasemapStyle::EsriImagery => "Satellite",
+            BasemapStyle::HybridSatellite => "Hybrid",
+            BasemapStyle::EsriDarkGray => "Dark Gray",
+            BasemapStyle::EsriLightGray => "Light Gray",
+            BasemapStyle::EsriNatGeo => "NatGeo",
+            BasemapStyle::EsriOcean => "Ocean",
+            BasemapStyle::CustomXyz => "Custom",
             BasemapStyle::OsmStandard => "Streets",
             BasemapStyle::OpenTopoMap => "Topo",
             BasemapStyle::GoesEast => "GOES-East",
@@ -193,6 +262,17 @@ impl BasemapStyle {
             BasemapStyle::UsgsImageryTopo => "USGS Imagery Topo",
             BasemapStyle::OsmHot => "OSM Humanitarian",
             BasemapStyle::CyclOsm => "CyclOSM",
+            BasemapStyle::VectorLiberty => "Liberty",
+            BasemapStyle::VectorBright => "Bright",
+            BasemapStyle::VectorPositron => "Positron",
+            BasemapStyle::VectorMidnight => "Midnight",
+            BasemapStyle::EsriDarkGray => "Esri Dark Gray Canvas",
+            BasemapStyle::EsriLightGray => "Esri Light Gray Canvas",
+            BasemapStyle::EsriNatGeo => "Esri National Geographic",
+            BasemapStyle::EsriOcean => "Esri Ocean",
+            BasemapStyle::HybridSatellite => "Hybrid Satellite",
+            BasemapStyle::Auto => "Auto (follow theme)",
+            BasemapStyle::CustomXyz => "Custom (XYZ URL)",
             BasemapStyle::MapTilerStreets => "MapTiler Streets",
             BasemapStyle::MapTilerSatellite => "MapTiler Satellite",
             BasemapStyle::MapTilerOutdoor => "MapTiler Outdoor",
@@ -239,6 +319,17 @@ impl BasemapStyle {
             BasemapStyle::UsgsImageryTopo => "usgs-imagery-topo",
             BasemapStyle::OsmHot => "osm-hot",
             BasemapStyle::CyclOsm => "cyclosm",
+            BasemapStyle::VectorLiberty => "liberty",
+            BasemapStyle::VectorBright => "bright",
+            BasemapStyle::VectorPositron => "positron",
+            BasemapStyle::VectorMidnight => "midnight",
+            BasemapStyle::EsriDarkGray => "esri-dark-gray",
+            BasemapStyle::EsriLightGray => "esri-light-gray",
+            BasemapStyle::EsriNatGeo => "esri-natgeo",
+            BasemapStyle::EsriOcean => "esri-ocean",
+            BasemapStyle::HybridSatellite => "hybrid-satellite",
+            BasemapStyle::Auto => "auto",
+            BasemapStyle::CustomXyz => "custom",
             BasemapStyle::MapTilerStreets => "maptiler-streets",
             BasemapStyle::MapTilerSatellite => "maptiler-satellite",
             BasemapStyle::MapTilerOutdoor => "maptiler-outdoor",
@@ -293,8 +384,17 @@ impl BasemapStyle {
                 BasemapStyle::CartoPositron
                 | BasemapStyle::CartoDarkMatter
                 | BasemapStyle::CartoVoyager => "© CARTO © OpenStreetMap",
-                BasemapStyle::EsriImagery => "© Esri, Maxar, Earthstar Geographics",
+                BasemapStyle::EsriImagery | BasemapStyle::HybridSatellite => {
+                    "© Esri, Maxar, Earthstar Geographics"
+                }
                 BasemapStyle::EsriStreets | BasemapStyle::EsriTopo => "© Esri © OpenStreetMap",
+                BasemapStyle::EsriDarkGray | BasemapStyle::EsriLightGray => {
+                    "© Esri © OpenStreetMap, HERE, Garmin"
+                }
+                BasemapStyle::EsriNatGeo => "© Esri, National Geographic",
+                BasemapStyle::EsriOcean => "© Esri, GEBCO, NOAA",
+                // The template is the user's; we cannot know whose data it serves.
+                BasemapStyle::CustomXyz => "Custom tile source",
                 _ if self.goes_layer().is_some() => "NASA GIBS · NOAA GOES",
                 _ => "© OpenMapTiles © OpenStreetMap",
             },
@@ -324,20 +424,61 @@ impl BasemapStyle {
     pub fn is_raster(self) -> bool {
         !matches!(
             self,
-            BasemapStyle::Dark | BasemapStyle::Light | BasemapStyle::None
+            BasemapStyle::Dark
+                | BasemapStyle::Light
+                | BasemapStyle::None
+                | BasemapStyle::Auto
+                | BasemapStyle::VectorLiberty
+                | BasemapStyle::VectorBright
+                | BasemapStyle::VectorPositron
+                | BasemapStyle::VectorMidnight
         )
     }
 
-    /// Max zoom the raster source serves; deeper views upscale rather than fetch 404s. GIBS
-    /// GOES layers top out at their matrix level; the USGS ArcGIS services cap at 16.
+    /// Max zoom the raster source serves; deeper views upscale rather than fetch 404s. GIBS GOES
+    /// layers top out at their matrix level.
+    ///
+    /// Every value below was checked against the live endpoint over Dallas: one level past the
+    /// number here either 404s or returns the provider's fixed "no data" placeholder (OpenTopoMap
+    /// hands back the same 4343-byte image at 18, 19 and 20). Guessing high is not free — a 404
+    /// leaves a hole until an ancestor tile happens to be resident, which is what made the USGS
+    /// satellite basemap blank out on close zoom: it served nothing past 16 but was asked for 18.
     fn max_raster_z(self) -> u8 {
         if let Some((_, level)) = self.goes_layer() {
             return level;
         }
         match self {
-            BasemapStyle::UsgsTopo | BasemapStyle::UsgsImageryTopo => 16,
-            _ => 18,
+            // USGS ArcGIS services (imagery and topo alike) stop at 16.
+            BasemapStyle::Satellite | BasemapStyle::UsgsTopo | BasemapStyle::UsgsImageryTopo => 16,
+            BasemapStyle::OpenTopoMap => 17,
+            // Measured over Dallas: the Canvas and NatGeo services hand back a fixed 2521-byte
+            // placeholder from 17 up, and the ocean base does the same from 11.
+            BasemapStyle::EsriOcean => 10,
+            BasemapStyle::EsriDarkGray | BasemapStyle::EsriLightGray | BasemapStyle::EsriNatGeo => {
+                16
+            }
+            // World Imagery serves real tiles through 20 and placeholders at 21.
+            BasemapStyle::HybridSatellite => 20,
+            // We cannot probe the user's own server, so we trust the max zoom they configured;
+            // overzoom covers an overshoot by stretching the deepest tile that did load.
+            // ponytail: no validation of the user's max_z beyond the settings clamp.
+            BasemapStyle::CustomXyz => 22,
+            BasemapStyle::OsmHot => 18,
+            BasemapStyle::OsmStandard | BasemapStyle::CyclOsm => 19,
+            BasemapStyle::CartoPositron | BasemapStyle::CartoDarkMatter | BasemapStyle::CartoVoyager => 20,
+            BasemapStyle::EsriImagery | BasemapStyle::EsriStreets | BasemapStyle::EsriTopo => 20,
+            _ => 20, // Mapbox and MapTiler raster both serve past 20; the vector styles never get here.
         }
+    }
+
+    /// Whether this source serves a true double-resolution tile at the same grid position (the
+    /// `@2x` suffix). Worth more than the retina zoom bias it replaces: same tile count, twice the
+    /// pixels, and the labels are drawn for the higher density instead of being magnified.
+    fn has_2x(self) -> bool {
+        matches!(
+            self,
+            BasemapStyle::CartoPositron | BasemapStyle::CartoDarkMatter | BasemapStyle::CartoVoyager
+        )
     }
 
     /// Whether this style's tiles are 512 px rather than 256. Mapbox and MapTiler both serve the
@@ -348,8 +489,15 @@ impl BasemapStyle {
         matches!(self.provider_kind(), Provider::Mapbox | Provider::MapTiler)
     }
 
-    /// Is this style selectable given which provider keys are set?
-    pub fn available(self, mapbox_key: bool, maptiler_key: bool) -> bool {
+    /// Is this style selectable given which provider keys are set and whether the user has
+    /// configured a custom tile template?
+    pub fn available(self, mapbox_key: bool, maptiler_key: bool, custom: bool) -> bool {
+        if self == BasemapStyle::CustomXyz {
+            // Nothing to fetch without a template, and the web build cannot fetch an arbitrary
+            // host at all: the proxy allowlist is exact-match, and a direct fetch is at the mercy
+            // of whatever CORS headers the user's server happens to send.
+            return custom && !cfg!(target_arch = "wasm32");
+        }
         match self.provider_kind() {
             Provider::Mapbox => mapbox_key,
             Provider::MapTiler => maptiler_key,
@@ -358,15 +506,81 @@ impl BasemapStyle {
     }
 
     /// Next *available* style in [`Self::ALL`] (wraps) — the `z`-cycle step.
-    pub fn next(self, mapbox_key: bool, maptiler_key: bool) -> BasemapStyle {
+    pub fn next(self, mapbox_key: bool, maptiler_key: bool, custom: bool) -> BasemapStyle {
         let i = Self::ALL.iter().position(|s| *s == self).unwrap_or(0);
         for step in 1..=Self::ALL.len() {
             let cand = Self::ALL[(i + step) % Self::ALL.len()];
-            if cand.available(mapbox_key, maptiler_key) {
+            if cand.available(mapbox_key, maptiler_key, custom) {
                 return cand;
             }
         }
         self
+    }
+
+    /// Which group this style belongs to in the picker.
+    pub fn category(self) -> Category {
+        if self.goes_layer().is_some() {
+            return Category::Satellite;
+        }
+        match self {
+            BasemapStyle::None | BasemapStyle::Auto | BasemapStyle::CustomXyz => Category::Other,
+            BasemapStyle::Dark
+            | BasemapStyle::Light
+            | BasemapStyle::VectorLiberty
+            | BasemapStyle::VectorBright
+            | BasemapStyle::VectorPositron
+            | BasemapStyle::VectorMidnight => Category::Vector,
+            BasemapStyle::Satellite
+            | BasemapStyle::EsriImagery
+            | BasemapStyle::HybridSatellite
+            | BasemapStyle::MapboxSatellite
+            | BasemapStyle::MapboxSatelliteStreets
+            | BasemapStyle::MapTilerSatellite => Category::Satellite,
+            BasemapStyle::OpenTopoMap
+            | BasemapStyle::UsgsTopo
+            | BasemapStyle::UsgsImageryTopo
+            | BasemapStyle::EsriTopo
+            | BasemapStyle::MapboxOutdoors
+            | BasemapStyle::MapTilerOutdoor
+            | BasemapStyle::MapTilerTopo
+            | BasemapStyle::EsriOcean => Category::Topo,
+            _ => Category::Streets,
+        }
+    }
+
+    /// URL of the one tile used as this style's picker thumbnail: z6 over the middle of CONUS,
+    /// which is the view the app opens on. Fetched through the same per-style disk cache as any
+    /// other tile, so opening the picker twice costs nothing.
+    pub(crate) fn thumb_url(self, mapbox: &str, maptiler: &str, custom: &str) -> Option<String> {
+        self.url(6, 14, 24, false, mapbox, maptiler, custom)
+    }
+
+    /// [`Self::Auto`] resolved against the current theme; every other style is itself.
+    ///
+    /// Call this at the point a style is about to be *rendered or fetched*, not where it is
+    /// stored — the stored value has to stay `Auto` or it would stop following the theme.
+    pub fn resolve(self, dark_theme: bool) -> BasemapStyle {
+        match self {
+            BasemapStyle::Auto if dark_theme => BasemapStyle::Dark,
+            BasemapStyle::Auto => BasemapStyle::Light,
+            other => other,
+        }
+    }
+
+    /// Which vector palette this style tessellates with, or `None` if it draws no vector geometry
+    /// (raster basemaps other than hybrid, and `None`). Labels are drawn over every basemap
+    /// regardless — this is about the roads/fills.
+    pub fn vector_palette(self) -> Option<crate::basemap_style::Palette> {
+        match self {
+            BasemapStyle::Dark => Some(crate::basemap_style::Palette::Dark),
+            BasemapStyle::Light => Some(crate::basemap_style::Palette::Light),
+            BasemapStyle::VectorLiberty => Some(crate::basemap_style::Palette::Liberty),
+            BasemapStyle::VectorBright => Some(crate::basemap_style::Palette::Bright),
+            BasemapStyle::VectorPositron => Some(crate::basemap_style::Palette::Positron),
+            BasemapStyle::VectorMidnight => Some(crate::basemap_style::Palette::Midnight),
+            BasemapStyle::HybridSatellite => Some(crate::basemap_style::Palette::HybridOverlay),
+            _ => None,
+        }
     }
 
     /// Stable small id for this style, used to key the GPU/fetch caches so panes showing
@@ -376,11 +590,19 @@ impl BasemapStyle {
     }
 
     /// Per-style cache subdir so sources don't collide on disk. Keys never appear here.
-    fn provider(self) -> String {
+    fn provider(self, retina: bool, custom: &str) -> String {
+        // The user can repoint the custom slot at a different server; hashing the template keeps
+        // the old server's tiles from being served for the new one.
+        if self == BasemapStyle::CustomXyz {
+            return format!("custom-{:08x}", template_hash(custom));
+        }
         // 512-px tiles share the tile grid with the 256-px ones they replace, so a cache written
-        // before the switch would keep serving blurry 256s from the same paths. Separate dir.
+        // before the switch would keep serving blurry 256s from the same paths. Separate dir —
+        // and `@2x` tiles get their own for the same reason.
         if self.tiles_are_512() {
             format!("{}-512", self.slug())
+        } else if retina && self.has_2x() {
+            format!("{}-2x", self.slug())
         } else {
             self.slug().to_string()
         }
@@ -409,7 +631,22 @@ impl BasemapStyle {
 
     /// Raster tile URL for `(z, x, y)`. Built-in Dark/Light are the vector MVT basemap and return
     /// `None` here. Provider styles inject the matching key (never logged/cached in a path).
-    fn url(self, z: u8, x: u32, y: u32, mapbox_key: &str, maptiler_key: &str) -> Option<String> {
+    // Eight arguments because a URL needs all eight: the tile, whether to ask for @2x, and the
+    // three user-supplied strings a style might interpolate. A struct here would be one field per
+    // argument and one more thing to keep in sync.
+    #[allow(clippy::too_many_arguments)]
+    fn url(
+        self,
+        z: u8,
+        x: u32,
+        y: u32,
+        retina: bool,
+        mapbox_key: &str,
+        maptiler_key: &str,
+        custom: &str,
+    ) -> Option<String> {
+        // `@2x` on the sources that serve it; empty everywhere else, so the URL is unchanged.
+        let hi = if retina && self.has_2x() { "@2x" } else { "" };
         match self.provider_kind() {
             Provider::Builtin => match self {
                 // ArcGIS MapServer tiles (public). All use `{z}/{y}/{x}` order and serve JPEG.
@@ -431,6 +668,27 @@ impl BasemapStyle {
                 BasemapStyle::EsriTopo => Some(format!(
                     "https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}"
                 )),
+                // Hybrid is World Imagery underneath; the roads and labels on top come from the
+                // vector pipeline, not from a second raster fetch.
+                BasemapStyle::HybridSatellite => Some(format!(
+                    "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
+                )),
+                // The extra Esri services live on `services.` rather than `server.`; both hosts
+                // are already in the proxy allowlist.
+                BasemapStyle::EsriDarkGray => Some(format!(
+                    "https://services.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}"
+                )),
+                BasemapStyle::EsriLightGray => Some(format!(
+                    "https://services.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Base/MapServer/tile/{z}/{y}/{x}"
+                )),
+                BasemapStyle::EsriNatGeo => Some(format!(
+                    "https://services.arcgisonline.com/ArcGIS/rest/services/NatGeo_World_Map/MapServer/tile/{z}/{y}/{x}"
+                )),
+                BasemapStyle::EsriOcean => Some(format!(
+                    "https://services.arcgisonline.com/ArcGIS/rest/services/Ocean/World_Ocean_Base/MapServer/tile/{z}/{y}/{x}"
+                )),
+                BasemapStyle::CustomXyz => valid_xyz_template(custom)
+                    .then(|| crate::vector_tiles::fill_template(custom, z, x, y)),
                 // Standard XYZ `{z}/{x}/{y}.png` slippy tiles. Single subdomain shard where the
                 // provider uses them (ponytail: rotate a-c only if throttled).
                 BasemapStyle::OsmStandard => {
@@ -440,13 +698,13 @@ impl BasemapStyle {
                     Some(format!("https://a.tile.opentopomap.org/{z}/{x}/{y}.png"))
                 }
                 BasemapStyle::CartoPositron => {
-                    Some(format!("https://basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png"))
+                    Some(format!("https://basemaps.cartocdn.com/light_all/{z}/{x}/{y}{hi}.png"))
                 }
                 BasemapStyle::CartoDarkMatter => {
-                    Some(format!("https://basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png"))
+                    Some(format!("https://basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{hi}.png"))
                 }
                 BasemapStyle::CartoVoyager => {
-                    Some(format!("https://basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png"))
+                    Some(format!("https://basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{hi}.png"))
                 }
                 BasemapStyle::OsmHot => {
                     Some(format!("https://a.tile.openstreetmap.fr/hot/{z}/{x}/{y}.png"))
@@ -476,6 +734,28 @@ impl BasemapStyle {
             }),
         }
     }
+}
+
+/// Is this a tile-URL template we are willing to fetch?
+///
+/// Trust boundary: the string comes from the user's settings file, and whatever it points at gets
+/// fetched with the app's HTTP client. `https` only — a plain-http template would silently
+/// downgrade every tile request — and it has to actually be a slippy template, or every tile
+/// would be the same URL hammered a screenful at a time.
+pub fn valid_xyz_template(t: &str) -> bool {
+    t.starts_with("https://") && t.contains("{z}") && t.contains("{x}") && t.contains("{y}")
+}
+
+/// Short stable hash of a custom template, for its cache directory name.
+fn template_hash(t: &str) -> u32 {
+    // ponytail: FNV-1a, not a crypto hash. This names a cache directory; a collision would serve
+    // one custom source's tiles for another, which is why it is 32 bits and not 8.
+    let mut h: u32 = 0x811c9dc5;
+    for b in t.as_bytes() {
+        h ^= *b as u32;
+        h = h.wrapping_mul(0x01000193);
+    }
+    h
 }
 
 /// Integer tile ids covering `cam`'s view (zoom clamped to `max_z`) with their world rects.
@@ -613,6 +893,13 @@ struct FetchedTile {
     height: u32,
 }
 
+/// A picker thumbnail's state.
+enum Thumb {
+    Loading,
+    Ready(egui::TextureHandle),
+    Failed,
+}
+
 /// A finished fetch, or the id of one that failed (so it can leave `requested` and be retried).
 type TileResult = Result<FetchedTile, crate::render::TileKey>;
 
@@ -651,11 +938,22 @@ pub struct TileManager {
     maptiler_key: String,
     /// Selected GOES frame time (`None` = latest/`default`). Only affects GOES styles.
     goes_time: Option<chrono::DateTime<chrono::Utc>>,
+    /// Ask sources that serve them for `@2x` tiles (high-DPI screen, unmetered link).
+    retina: bool,
+    /// `{z}/{x}/{y}` template for [`BasemapStyle::CustomXyz`]. Empty until the user sets one.
+    custom_template: String,
+    /// Deepest zoom the custom source is configured to serve.
+    custom_max_z: u8,
+    /// Picker thumbnails, keyed by [`BasemapStyle::key`].
+    thumbs: std::collections::HashMap<u8, Thumb>,
+    thumb_tx: Sender<(u8, Option<FetchedTile>)>,
+    thumb_rx: Receiver<(u8, Option<FetchedTile>)>,
 }
 
 impl TileManager {
     pub fn new(spawner: crate::rt::Spawner) -> Self {
         let (tx, rx) = std::sync::mpsc::channel();
+        let (thumb_tx, thumb_rx) = std::sync::mpsc::channel();
         let client =
             crate::platform::http_timeouts(reqwest::Client::builder().user_agent(USER_AGENT))
                 .build()
@@ -676,10 +974,16 @@ impl TileManager {
             uploaded: LruCache::new(NonZeroUsize::new(RASTER_TILE_CACHE).unwrap()),
             evicted: Vec::new(),
             frame_visible: 0,
+            custom_template: String::new(),
+            custom_max_z: 19,
+            thumbs: std::collections::HashMap::new(),
+            thumb_tx,
+            thumb_rx,
             cache_root,
             mapbox_key: String::new(),
             maptiler_key: String::new(),
             goes_time: None,
+            retina: false,
         }
     }
 
@@ -695,12 +999,125 @@ impl TileManager {
         true
     }
 
+    /// Turn `@2x` tiles on or off (high-DPI screen, and not on a metered link). Returns true if it
+    /// changed, so the caller can clear the GPU cache: the old tiles are a different size.
+    pub fn set_retina(&mut self, retina: bool) -> bool {
+        if self.retina == retina {
+            return false;
+        }
+        self.retina = retina;
+        self.requested.clear();
+        self.uploaded.clear();
+        true
+    }
+
+    /// Whether `style` is being fetched at double resolution right now — the caller drops its
+    /// retina zoom bias when this is true, since the extra pixels are already in the tile.
+    pub fn is_retina(&self, style: BasemapStyle) -> bool {
+        self.retina && style.has_2x()
+    }
+
     /// Update the provider API keys (from Settings). Clears fetch state if a key changed so the
     /// active provider style refetches. Keys are held in memory only — never written to a path.
     pub fn set_keys(&mut self, mapbox: &str, maptiler: &str) {
         if self.mapbox_key != mapbox || self.maptiler_key != maptiler {
             self.mapbox_key = mapbox.to_string();
             self.maptiler_key = maptiler.to_string();
+            self.requested.clear();
+            self.uploaded.clear();
+        }
+    }
+
+    /// This style's picker thumbnail, fetching it the first time it is asked for.
+    ///
+    /// One z6 tile over the middle of CONUS per style, through the same disk cache as any other
+    /// tile. Returns `None` while it is in flight, if it failed, or if the style has no raster
+    /// URL — the picker paints a palette swatch in all of those cases, so nothing ever waits on
+    /// a network round trip to draw.
+    pub fn thumb(&mut self, style: BasemapStyle, ctx: &egui::Context) -> Option<egui::TextureHandle> {
+        while let Ok((key, fetched)) = self.thumb_rx.try_recv() {
+            let state = match fetched {
+                Some(f) => {
+                    let img = egui::ColorImage::from_rgba_unmultiplied(
+                        [f.width as usize, f.height as usize],
+                        &f.rgba,
+                    );
+                    Thumb::Ready(ctx.load_texture(
+                        format!("basemap-thumb-{key}"),
+                        img,
+                        egui::TextureOptions::LINEAR,
+                    ))
+                }
+                None => Thumb::Failed,
+            };
+            self.thumbs.insert(key, state);
+        }
+        let key = style.key();
+        match self.thumbs.get(&key) {
+            Some(Thumb::Ready(t)) => return Some(t.clone()),
+            Some(_) => return None,
+            None => {}
+        }
+        // A cellular link should not spend a screenful of tiles on decoration.
+        if crate::platform::is_metered() {
+            return None;
+        }
+        // Small separate budget: the picker opening must not stall the map's own tile fetches.
+        // ponytail: flat 4, independent of MAX_INFLIGHT.
+        if self
+            .thumbs
+            .values()
+            .filter(|t| matches!(t, Thumb::Loading))
+            .count()
+            >= 4
+        {
+            return None;
+        }
+        let url = style.thumb_url(&self.mapbox_key, &self.maptiler_key, &self.custom_template)?;
+        let path = self.cache_root.as_ref().map(|d| {
+            d.join(style.provider(false, &self.custom_template))
+                .join("default")
+                .join("6/14/24")
+        });
+        self.thumbs.insert(key, Thumb::Loading);
+        let client = self.client.clone();
+        let tx = self.thumb_tx.clone();
+        let ctx2 = self.ctx.clone();
+        let blocking = self.spawner.clone();
+        self.spawner.spawn(async move {
+            let bytes = load_tile_bytes(&client, &url, path.as_deref()).await;
+            blocking.spawn_blocking(move || {
+                let decoded = bytes.ok().and_then(|b| image::load_from_memory(&b).ok()).map(|img| {
+                    let rgba = img.to_rgba8();
+                    let (w, h) = rgba.dimensions();
+                    FetchedTile {
+                        id: (6, 14, 24),
+                        style: key,
+                        rgba: rgba.into_raw(),
+                        width: w,
+                        height: h,
+                    }
+                });
+                let _ = tx.send((key, decoded));
+                if let Some(ctx) = ctx2 {
+                    ctx.request_repaint();
+                }
+            });
+        });
+        None
+    }
+
+    /// Point the custom-XYZ slot at a template. Clears the caches on change, like the key setter
+    /// above: the same `(z, x, y)` now means a different server's imagery.
+    pub fn set_custom_max_z(&mut self, z: u8) {
+        // Clamped rather than trusted: `tile_cover` builds a grid of `4^z` tiles, and a typo in
+        // the settings file should not turn into an unbounded fetch loop.
+        self.custom_max_z = z.clamp(1, 22);
+    }
+
+    pub fn set_custom_template(&mut self, template: &str) {
+        if self.custom_template != template {
+            self.custom_template = template.to_string();
             self.requested.clear();
             self.uploaded.clear();
         }
@@ -715,7 +1132,17 @@ impl TileManager {
         viewport_px: (f32, f32),
         zoom_bias: f64,
     ) -> Vec<VisibleTile> {
-        tile_cover(cam, viewport_px, style.max_raster_z(), zoom_bias)
+        tile_cover(cam, viewport_px, self.max_z(style), zoom_bias)
+    }
+
+    /// Deepest zoom to fetch for `style` — the measured provider cap, except for the custom slot
+    /// where only the user knows.
+    fn max_z(&self, style: BasemapStyle) -> u8 {
+        if style == BasemapStyle::CustomXyz {
+            self.custom_max_z
+        } else {
+            style.max_raster_z()
+        }
     }
 
     /// Kick off fetches for any visible tiles not yet requested.
@@ -738,7 +1165,8 @@ impl TileManager {
                 break;
             }
             let (z, x, y) = v.id;
-            let Some(mut url) = style.url(z, x, y, &self.mapbox_key, &self.maptiler_key)
+            let Some(mut url) =
+                style.url(z, x, y, self.retina, &self.mapbox_key, &self.maptiler_key, &self.custom_template)
             else {
                 continue;
             };
@@ -757,7 +1185,7 @@ impl TileManager {
             };
             self.requested.insert((skey, v.id));
             let path = self.cache_root.as_ref().map(|d| {
-                d.join(style.provider())
+                d.join(style.provider(self.retina, &self.custom_template))
                     .join(&time_tag)
                     .join(format!("{z}/{x}/{y}"))
             });
@@ -798,7 +1226,7 @@ impl TileManager {
 
     /// Max zoom `style` serves (for the chase-pack depth cap).
     pub fn max_pack_z(&self, style: BasemapStyle) -> u8 {
-        style.max_raster_z()
+        self.max_z(style)
     }
 
     /// Whether `style` produces raster tiles a chase pack can pre-download (has a URL, isn't a
@@ -807,7 +1235,7 @@ impl TileManager {
     pub fn packable(&self, style: BasemapStyle) -> bool {
         style.goes_layer().is_none()
             && style
-                .url(0, 0, 0, &self.mapbox_key, &self.maptiler_key)
+                .url(0, 0, 0, false, &self.mapbox_key, &self.maptiler_key, &self.custom_template)
                 .is_some()
     }
 
@@ -831,12 +1259,13 @@ impl TileManager {
         if style.goes_layer().is_some() {
             return Vec::new();
         }
-        let z_hi = z_hi.min(style.max_raster_z());
-        let dir = root.join(style.provider()).join("default");
+        let z_hi = z_hi.min(self.max_z(style));
+        // Packs are always 1x: a pack is written once and read on whatever device opens it later.
+        let dir = root.join(style.provider(false, &self.custom_template)).join("default");
         pack_tile_ids(min_lon, min_lat, max_lon, max_lat, z_lo, z_hi)
             .into_iter()
             .filter_map(|(z, x, y)| {
-                let url = style.url(z, x, y, &self.mapbox_key, &self.maptiler_key)?;
+                let url = style.url(z, x, y, false, &self.mapbox_key, &self.maptiler_key, &self.custom_template)?;
                 Some((url, dir.join(format!("{z}/{x}/{y}"))))
             })
             .collect()
@@ -962,7 +1391,7 @@ pub async fn fetch_visible(
     let mut out = Vec::new();
     for v in visible {
         let (z, x, y) = v.id;
-        let Some(url) = style.url(z, x, y, mapbox_key, maptiler_key) else {
+        let Some(url) = style.url(z, x, y, false, mapbox_key, maptiler_key, "") else {
             continue;
         };
         match load_tile_bytes(client, &url, None).await {
@@ -1002,7 +1431,16 @@ pub(crate) async fn load_tile_bytes(
             return Ok(bytes);
         }
     }
-    let resp = client.get(url).send().await?.error_for_status()?;
+    // Browser builds cannot fetch most tile hosts directly — they send no CORS header — so the
+    // request goes to the page's own `/proxy/{host}/...` instead, which also means one visitor's
+    // tile is the next visitor's edge-cache hit. `fetch_url` leaves the keyed providers alone:
+    // api.mapbox.com and api.maptiler.com answer CORS themselves, and proxying them would put a
+    // user's API key in a shared cache. Native builds get the URL back unchanged.
+    let resp = client
+        .get(wxdata::net::fetch_url(url))
+        .send()
+        .await?
+        .error_for_status()?;
     let bytes = resp.bytes().await?.to_vec();
     if let Some(p) = path {
         if let Some(parent) = p.parent() {
@@ -1343,22 +1781,158 @@ mod tests {
             BasemapStyle::UsgsImageryTopo,
             BasemapStyle::OsmHot,
             BasemapStyle::CyclOsm,
+            BasemapStyle::EsriDarkGray,
+            BasemapStyle::EsriLightGray,
+            BasemapStyle::EsriNatGeo,
+            BasemapStyle::EsriOcean,
+            BasemapStyle::HybridSatellite,
         ];
         for s in keyless {
             assert!(s.is_raster(), "{s:?} should be raster");
             assert!(
-                s.url(6, 15, 25, "", "").is_some(),
+                s.url(6, 15, 25, false, "", "", "").is_some(),
                 "{s:?} should have a keyless URL"
             );
         }
         // ArcGIS services use {z}/{y}/{x}: y before x in the path.
-        let esri = BasemapStyle::EsriImagery.url(6, 15, 25, "", "").unwrap();
+        let esri = BasemapStyle::EsriImagery.url(6, 15, 25, false, "", "", "").unwrap();
         assert!(esri.ends_with("/6/25/15"), "Esri y/x order: {esri}");
         // Standard slippy tiles use {z}/{x}/{y}.
-        let osm = BasemapStyle::OsmStandard.url(6, 15, 25, "", "").unwrap();
+        let osm = BasemapStyle::OsmStandard.url(6, 15, 25, false, "", "", "").unwrap();
         assert!(osm.ends_with("/6/15/25.png"), "OSM x/y order: {osm}");
         // Mapbox nav styles stay key-gated.
-        assert!(BasemapStyle::MapboxNavDay.url(6, 15, 25, "", "").is_none());
-        assert!(BasemapStyle::MapboxNavDay.url(6, 15, 25, "k", "").is_some());
+        assert!(BasemapStyle::MapboxNavDay.url(6, 15, 25, false, "", "", "").is_none());
+        assert!(BasemapStyle::MapboxNavDay.url(6, 15, 25, false, "k", "", "").is_some());
+    }
+
+    /// Retina asks for the `@2x` tile only where the provider serves one, and those tiles get
+    /// their own cache directory so a 1x and a 2x tile never overwrite each other on disk.
+    #[test]
+    fn retina_only_changes_the_sources_that_serve_2x() {
+        let carto = BasemapStyle::CartoDarkMatter;
+        assert!(carto.url(6, 15, 25, true, "", "", "").unwrap().ends_with("@2x.png"));
+        assert!(carto.url(6, 15, 25, false, "", "", "").unwrap().ends_with("/25.png"));
+        assert_ne!(carto.provider(true, ""), carto.provider(false, ""));
+        // No `@2x` upstream: the URL and the cache path are identical either way.
+        let osm = BasemapStyle::OsmStandard;
+        assert_eq!(osm.url(6, 15, 25, true, "", "", ""), osm.url(6, 15, 25, false, "", "", ""));
+        assert_eq!(osm.provider(true, ""), osm.provider(false, ""));
+    }
+
+    /// The USGS satellite basemap serves nothing past zoom 16; asking for 17 got a 404 and left a
+    /// hole in the map, which is what "blurry, then blank, when you zoom in" turned out to be.
+    #[test]
+    fn max_zoom_matches_what_the_providers_actually_serve() {
+        assert_eq!(BasemapStyle::Satellite.max_raster_z(), 16);
+        assert_eq!(BasemapStyle::OpenTopoMap.max_raster_z(), 17);
+        assert_eq!(BasemapStyle::OsmStandard.max_raster_z(), 19);
+        assert_eq!(BasemapStyle::CartoDarkMatter.max_raster_z(), 20);
+        // GOES layers keep their own matrix level, whatever the table above says.
+        assert_eq!(
+            BasemapStyle::GoesEast.max_raster_z(),
+            BasemapStyle::GoesEast.goes_layer().unwrap().1
+        );
+    }
+
+    /// `Auto` is a marker, not something the tile layer should ever be asked to fetch.
+    #[test]
+    fn auto_resolves_to_a_real_style_and_nothing_else_moves() {
+        assert_eq!(BasemapStyle::Auto.resolve(true), BasemapStyle::Dark);
+        assert_eq!(BasemapStyle::Auto.resolve(false), BasemapStyle::Light);
+        assert!(!BasemapStyle::Auto.is_raster());
+        for s in BasemapStyle::ALL {
+            if s != BasemapStyle::Auto {
+                assert_eq!(s.resolve(true), s, "{s:?} should not follow the theme");
+                assert_eq!(s.resolve(false), s, "{s:?} should not follow the theme");
+            }
+        }
+    }
+
+    /// Hybrid satellite is the one style that is raster *and* draws vector geometry.
+    #[test]
+    fn only_hybrid_is_both_raster_and_vector() {
+        for s in BasemapStyle::ALL {
+            let both = s.is_raster() && s.vector_palette().is_some();
+            assert_eq!(
+                both,
+                s == BasemapStyle::HybridSatellite,
+                "{s:?} raster+vector should only be hybrid"
+            );
+        }
+        assert_eq!(
+            BasemapStyle::HybridSatellite.vector_palette(),
+            Some(crate::basemap_style::Palette::HybridOverlay)
+        );
+    }
+
+    /// The custom template comes out of the settings file, so it is a trust boundary: anything
+    /// that is not an https slippy template must not be fetched at all.
+    #[test]
+    fn custom_template_is_validated_and_keyed_by_content() {
+        assert!(valid_xyz_template("https://t.example/{z}/{x}/{y}.png"));
+        assert!(!valid_xyz_template("http://t.example/{z}/{x}/{y}.png"));
+        assert!(!valid_xyz_template("https://t.example/tiles.png"));
+        assert!(!valid_xyz_template(""));
+        assert!(!valid_xyz_template("file:///etc/{z}/{x}/{y}"));
+
+        let good = "https://t.example/{z}/{x}/{y}.png";
+        assert_eq!(
+            BasemapStyle::CustomXyz.url(6, 15, 25, false, "", "", good),
+            Some("https://t.example/6/15/25.png".to_string())
+        );
+        // An invalid template produces no URL rather than a request to something unexpected.
+        assert!(BasemapStyle::CustomXyz
+            .url(6, 15, 25, false, "", "", "http://t.example/{z}/{x}/{y}")
+            .is_none());
+        // Repointing the slot must not read the previous server's tiles out of the cache.
+        assert_ne!(
+            BasemapStyle::CustomXyz.provider(false, good),
+            BasemapStyle::CustomXyz.provider(false, "https://other.example/{z}/{x}/{y}.png")
+        );
+        // And it is only selectable once a template exists.
+        assert!(!BasemapStyle::CustomXyz.available(true, true, false));
+    }
+
+    /// Every vector look has to be selectable, or it is dead code that still costs a review.
+    #[test]
+    fn every_palette_has_a_basemap_entry() {
+        for pal in crate::basemap_style::Palette::ALL {
+            assert!(
+                BasemapStyle::ALL
+                    .iter()
+                    .any(|s| s.vector_palette() == Some(pal)),
+                "{pal:?} is not reachable from the basemap list"
+            );
+        }
+    }
+
+    /// The picker draws one section per category. A style in no section is invisible, and a
+    /// section with nothing in it is a stray heading.
+    #[test]
+    fn categories_partition_the_style_list() {
+        let mut seen = 0;
+        for cat in Category::ALL {
+            let n = BasemapStyle::ALL
+                .iter()
+                .filter(|s| s.category() == cat)
+                .count();
+            assert!(n > 0, "{cat:?} has no styles");
+            seen += n;
+        }
+        assert_eq!(seen, BasemapStyle::ALL.len());
+        // The three that are not a map of anywhere belong together, away from the imagery.
+        for s in [
+            BasemapStyle::None,
+            BasemapStyle::Auto,
+            BasemapStyle::CustomXyz,
+        ] {
+            assert_eq!(s.category(), Category::Other, "{s:?}");
+        }
+        // Every GOES product lands under Satellite whatever else the match says.
+        for s in BasemapStyle::ALL {
+            if s.goes_layer().is_some() {
+                assert_eq!(s.category(), Category::Satellite, "{s:?}");
+            }
+        }
     }
 }

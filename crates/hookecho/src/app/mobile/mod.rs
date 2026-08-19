@@ -441,34 +441,30 @@ impl super::HookEchoApp {
             !self.settings.mapbox_key.is_empty(),
             !self.settings.maptiler_key.is_empty(),
         );
+        let cx = crate::tiles::valid_xyz_template(&self.settings.custom_tile_url);
         let cur = self.views[self.active].basemap;
         let mut pick = None;
         ui.label(egui::RichText::new("Basemap").size(crate::ui::m3::T_LABEL_LG));
+        // The common styles stay a chip row: one tap, no scrolling, thumb-reachable. It is the
+        // *other* forty-odd that needed the grid.
         ui.horizontal_wrapped(|ui| {
             for s in BasemapStyle::COMMON {
-                if s.available(mb, mt)
+                if s.available(mb, mt, cx)
                     && crate::ui::m3::chip(ui, s.short_label(), s == cur).clicked()
                 {
                     pick = Some(s);
                 }
             }
         });
-        // Everything COMMON leaves out — the other GOES products, the provider styles a key
-        // unlocks — behind one disclosure rather than in the chip row.
         egui::CollapsingHeader::new("All basemaps")
             .id_salt("m_basemap_all")
             .default_open(!BasemapStyle::COMMON.contains(&cur))
             .show(ui, |ui| {
-                ui.horizontal_wrapped(|ui| {
-                    for s in BasemapStyle::ALL {
-                        if BasemapStyle::COMMON.contains(&s) || !s.available(mb, mt) {
-                            continue;
-                        }
-                        if crate::ui::m3::chip(ui, s.label(), s == cur).clicked() {
-                            pick = Some(s);
-                        }
-                    }
-                });
+                if let Some(s) =
+                    crate::ui::basemap_picker::grid(ui, &mut self.tiles, cur, &self.settings)
+                {
+                    pick = Some(s);
+                }
             });
         if let Some(s) = pick {
             self.set_basemap(s);
