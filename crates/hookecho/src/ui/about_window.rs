@@ -12,6 +12,10 @@ pub enum UpdateState {
     Checking,
     UpToDate,
     Newer(String),
+    /// The repo has no published versioned release to compare against. Distinct from `Failed`:
+    /// the request worked, there was simply nothing tagged. A repo whose releases are all still
+    /// drafts looks like this to everyone but its owner.
+    NoRelease,
     Failed,
 }
 
@@ -50,6 +54,9 @@ pub fn show(ctx: &egui::Context, open: &mut bool, update: &UpdateState, accent: 
                         ui.hyperlink_to("Download", format!("{REPO}/releases/latest"));
                     });
                 }
+                UpdateState::NoRelease => {
+                    ui.label(egui::RichText::new("No published release to compare against.").weak());
+                }
                 UpdateState::Failed => {
                     ui.label(egui::RichText::new("Couldn't check for updates.").weak());
                 }
@@ -83,6 +90,28 @@ pub fn compare(tag: &str) -> UpdateState {
     }
 }
 
+/// The newest version tag in a GitHub `/releases` response.
+///
+/// Not `/releases/latest`, which returns whatever was published most recently regardless of what
+/// it is called — here that is the rolling `latest` CI build, whose tag is not a version at all,
+/// so the check reported "couldn't check for updates" forever. Scanning the list and taking the
+/// highest tag that actually parses as a version ignores rolling and named builds by
+/// construction. Drafts and prereleases are skipped; the API omits drafts from unauthenticated
+/// callers anyway, which is every copy of this app.
+pub fn pick_latest_tag(json: &str) -> Option<String> {
+    let releases: Vec<serde_json::Value> = serde_json::from_str(json).ok()?;
+    releases
+        .iter()
+        .filter(|r| {
+            !r.get("draft").and_then(|v| v.as_bool()).unwrap_or(false)
+                && !r.get("prerelease").and_then(|v| v.as_bool()).unwrap_or(false)
+        })
+        .filter_map(|r| r.get("tag_name")?.as_str())
+        .filter_map(|tag| Some((parse_version(tag)?, tag.to_string())))
+        .max()
+        .map(|(_, tag)| tag)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -94,6 +123,34 @@ mod tests {
         assert_eq!(parse_version("v1.2.3-rc1"), Some((1, 2, 3)));
         assert_eq!(parse_version("nightly"), None);
         assert!(parse_version("v0.6.0") > parse_version("v0.5.9"));
+    }
+
+    #[test]
+    fn the_rolling_build_is_not_mistaken_for_a_release() {
+        // Shape of the real response as of 0.10.0: a rolling `latest` that is neither a draft nor
+        // a prerelease, sitting above the version tags. `/releases/latest` hands back this one.
+        let json = r##"[
+            {"tag_name":"latest","draft":false,"prerelease":false},
+            {"tag_name":"v0.9.0","draft":false,"prerelease":false},
+            {"tag_name":"v0.10.0","draft":false,"prerelease":false},
+            {"tag_name":"v0.11.0","draft":true,"prerelease":false},
+            {"tag_name":"v0.12.0","draft":false,"prerelease":true}
+        ]"##;
+        // Highest *version*, not the newest entry, and not the draft or prerelease above it.
+        assert_eq!(pick_latest_tag(json).as_deref(), Some("v0.10.0"));
+    }
+
+    #[test]
+    fn a_repo_with_nothing_published_yields_no_tag() {
+        assert_eq!(pick_latest_tag("[]"), None);
+        // Every version still a draft: this is what the repo looks like today to anyone but its
+        // owner, and it must not read as "you're on the latest release".
+        let drafts = r##"[
+            {"tag_name":"latest","draft":false,"prerelease":false},
+            {"tag_name":"v0.10.0","draft":true,"prerelease":false}
+        ]"##;
+        assert_eq!(pick_latest_tag(drafts), None);
+        assert_eq!(pick_latest_tag("not json"), None);
     }
 
     #[test]

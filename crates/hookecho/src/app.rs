@@ -1726,8 +1726,8 @@ pub struct HookEchoApp {
     /// About window + the once-per-session release check.
     about_open: bool,
     update_state: ui::about_window::UpdateState,
-    update_tx: Sender<Option<String>>,
-    update_rx: Receiver<Option<String>>,
+    update_tx: Sender<ui::about_window::UpdateState>,
+    update_rx: Receiver<ui::about_window::UpdateState>,
     geocode_tx: Sender<Result<(String, f64, f64), String>>,
     geocode_rx: Receiver<Result<(String, f64, f64), String>>,
     /// `(lon, lat)` from the hosting edge's own geo-IP (browser build only), used once at boot to
@@ -3642,8 +3642,11 @@ impl HookEchoApp {
         Some((dir, (u * u + v * v).sqrt()))
     }
 
-    /// Ask GitHub for the newest tagged release, once per session. `/releases/latest` skips
-    /// prereleases, which is exactly right here: the rolling `latest` build is a prerelease.
+    /// Ask GitHub for the newest tagged release, once per session.
+    ///
+    /// The list endpoint, not `/releases/latest` — see [`ui::about_window::pick_latest_tag`] for
+    /// why. Thirty is more releases than this project has, and one page keeps it to one request
+    /// against the 60/hour unauthenticated budget.
     fn check_for_update(&mut self, ctx: &egui::Context) {
         if self.update_state != ui::about_window::UpdateState::Idle {
             return;
@@ -3653,23 +3656,33 @@ impl HookEchoApp {
         let tx = self.update_tx.clone();
         let ctx2 = ctx.clone();
         self.spawner.spawn(async move {
-            let url = "https://api.github.com/repos/d4vid87/hookecho/releases/latest";
+            let url = "https://api.github.com/repos/d4vid87/hookecho/releases?per_page=30";
             // GitHub rejects requests without a User-Agent.
-            let tag = async {
+            let body = async {
                 let text = http
                     .get(url)
                     .header("User-Agent", "hookecho")
                     .send()
                     .await
                     .ok()?
+                    .error_for_status()
+                    .ok()?
                     .text()
                     .await
                     .ok()?;
-                let body: serde_json::Value = serde_json::from_str(&text).ok()?;
-                body.get("tag_name")?.as_str().map(str::to_string)
+                Some(text)
             }
             .await;
-            let _ = tx.send(tag);
+            // `None` means the request itself failed; a body with no version tag in it is a
+            // different answer, and the two must not collapse into one message.
+            let state = match body {
+                Some(body) => match ui::about_window::pick_latest_tag(&body) {
+                    Some(tag) => ui::about_window::compare(&tag),
+                    None => ui::about_window::UpdateState::NoRelease,
+                },
+                None => ui::about_window::UpdateState::Failed,
+            };
+            let _ = tx.send(state);
             ctx2.request_repaint();
         });
     }
@@ -16036,11 +16049,8 @@ impl eframe::App for HookEchoApp {
         if ctx.input(|i| i.time) > 30.0 {
             self.check_for_update(ctx);
         }
-        while let Ok(tag) = self.update_rx.try_recv() {
-            self.update_state = match tag {
-                Some(tag) => ui::about_window::compare(&tag),
-                None => ui::about_window::UpdateState::Failed,
-            };
+        while let Ok(state) = self.update_rx.try_recv() {
+            self.update_state = state;
             if let ui::about_window::UpdateState::Newer(v) = self.update_state.clone() {
                 self.toast(ToastKind::Info, format!("Hook Echo-WX {v} is available"));
             }
