@@ -922,7 +922,7 @@ fn main() -> eframe::Result<()> {
         let basemap = match flag_value(&args, "--basemap") {
             Some("sat") => tiles::BasemapStyle::Satellite,
             Some(s) => tiles::BasemapStyle::from_slug(s),
-            None => tiles::BasemapStyle::Dark,
+            None => tiles::BasemapStyle::default(),
         };
         headless::set_output(
             flag_value(&args, "--size").and_then(|v| v.parse().ok()),

@@ -13875,7 +13875,7 @@ impl HookEchoApp {
                 let mut on = v.basemap != crate::tiles::BasemapStyle::None;
                 if ui.checkbox(&mut on, "Basemap").changed() {
                     v.basemap = if on {
-                        crate::tiles::BasemapStyle::Dark
+                        crate::tiles::BasemapStyle::default()
                     } else {
                         crate::tiles::BasemapStyle::None
                     };
