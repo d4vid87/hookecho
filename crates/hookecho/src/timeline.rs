@@ -86,8 +86,14 @@ impl Timeline {
     }
 
     /// Install a fresh frame listing; keeps the playhead at the head while following, else
-    /// clamps it into range (so appended live frames don't move a scrubbed view).
+    /// clamps it into range (so appended live frames don't move a scrubbed view). A listing for
+    /// a different site never keeps the old index.
     pub fn set_frames(&mut self, frames: Vec<Identifier>, key: (String, NaiveDate)) {
+        // A listing for a different site is a different axis: index N of one radar's day is not
+        // the same moment as index N of another's. Carrying the playhead index across a site
+        // switch is what drops a live loop hours into the archive — the loop window is a dozen
+        // frames, a full day is hundreds, so index 8 lands just after 00Z instead of at the head.
+        let switched_site = self.frames_key.as_ref().is_some_and(|(s, _)| *s != key.0);
         self.frames = frames;
         self.frames_key = Some(key);
         self.listing = false;
@@ -101,7 +107,7 @@ impl Timeline {
         }
         // While live-looping, a fresh listing must not yank the playhead to the head — the loop
         // owns the playhead. Only clamp it back into range if it now points past the end.
-        if self.following && self.playing && !self.frames.is_empty() {
+        if self.following && self.playing && !switched_site && !self.frames.is_empty() {
             self.playhead = self.playhead.min(self.frames.len() - 1);
         } else if self.following || self.playhead >= self.frames.len() {
             self.playhead = self.frames.len().saturating_sub(1);
@@ -238,6 +244,53 @@ mod tests {
         // Still nothing to pace with an empty frame list, even once "playing".
         t.playing = true;
         assert!(t.time_to_next_frame().is_none());
+    }
+
+    /// A day of volumes for `site`, one every five minutes from 00Z.
+    fn day(site: &str, n: usize) -> Vec<Identifier> {
+        (0..n)
+            .map(|i| {
+                let (h, m) = (i * 5 / 60, i * 5 % 60);
+                Identifier::new(format!("{site}20260819_{h:02}{m:02}00_V06"))
+            })
+            .collect()
+    }
+
+    #[test]
+    fn switching_sites_mid_loop_does_not_land_in_the_small_hours() {
+        let mut t = Timeline::default();
+        let today = t.date;
+        // A live loop over the newest dozen frames of one radar's day.
+        t.set_frames(day("KTLX", 280), ("KTLX".into(), today));
+        t.toggle_play();
+        assert!(t.live_looping(), "looping the tail of KTLX");
+        let looped_at = t.playhead;
+        assert!(looped_at > 12, "loop starts near the head, not the start");
+
+        // The same index in another radar's listing is a different moment entirely.
+        t.set_frames(day("KFWS", 24), ("KFWS".into(), today));
+        assert_eq!(
+            t.playhead, 23,
+            "new site starts at its head, not index {looped_at}"
+        );
+        assert!(t.following);
+    }
+
+    #[test]
+    fn a_scrubbed_pane_keeps_its_time_across_a_site_switch() {
+        let mut t = Timeline::default();
+        let today = t.date;
+        t.set_frames(day("KTLX", 280), ("KTLX".into(), today));
+        t.step(-100); // scrub back; un-pins from live
+        assert!(!t.following);
+        let want = t.current().unwrap().date_time().unwrap();
+
+        // The app clears the old site's frames and hands the time over as a seek target.
+        t.seek_target = Some(want);
+        t.frames.clear();
+        t.playhead = 0;
+        t.set_frames(day("KFWS", 280), ("KFWS".into(), today));
+        assert_eq!(t.current().unwrap().date_time(), Some(want));
     }
 
     #[test]
