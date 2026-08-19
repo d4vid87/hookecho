@@ -645,26 +645,15 @@ page loads and draws nothing. The proxy's rules (exact-match allowlist, GET only
 64 MB cap, narrowed content types) live once in `web/_worker.js/proxy-core.js`;
 each host is a few lines of wiring around it.
 
-Both hosts also answer `/geo.json` with the visitor's rough position from their own
-geo-IP, which is how the demo opens on the radar nearest you instead of the
-configured default site. No third-party lookup and no browser permission prompt; a
-`#goto=` deep link still wins. A host without it just opens on the default.
+The Worker also answers `/geo.json` with the visitor's rough position from
+Cloudflare's own geo-IP, which is how the demo opens on the radar nearest you
+instead of the configured default site. No third-party lookup and no browser
+permission prompt; a `#goto=` deep link still wins. A host without it just opens
+on the default.
 
 **Cloudflare Pages** — `web/_worker.js/`, deployed by
-`.github/workflows/demo.yml`. That's what `hookecho.pages.dev` is.
-
-**Netlify** — `netlify.toml` plus the edge function in `netlify/edge-functions/`.
-Either connect the repo (Netlify runs `scripts/netlify-build.sh`, ~5 minutes cold
-because it compiles `wasm-bindgen-cli`), or build once and push the result:
-
-```sh
-./scripts/web/build.sh
-npx netlify-cli deploy --dir web --prod
-```
-
-Set `NETLIFY_AUTH_TOKEN` and `NETLIFY_SITE_ID` as repository secrets and the demo
-workflow deploys there too, alongside Pages; leave them unset and that step is
-skipped. Both tokens are secrets — never committed.
+`.github/workflows/demo.yml`. That's what `hookecho.pages.dev` is, and it is the
+only host this repo deploys to.
 
 Any other host works the same way if it can run one small function on
 `/proxy/*`. A purely static host cannot: without the proxy the app opens, and

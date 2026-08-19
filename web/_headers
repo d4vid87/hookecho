@@ -1,6 +1,5 @@
-# Cache policy for the browser demo. Both hosts read this file from the publish dir — Netlify and
-# Cloudflare Pages implement the same `_headers` format — so the two deployments cannot drift the
-# way they did when this lived in netlify.toml alone.
+# Cache policy for the browser demo. Cloudflare Pages reads this file from the publish dir, so the
+# policy travels with the bundle instead of living in host configuration.
 #
 # Everything under /dist is content-hashed by scripts/web/build.sh (hookecho_bg-<sha8>.wasm and
 # hookecho-<sha8>.js), so a given URL's bytes never change: a returning visitor pays nothing, and
