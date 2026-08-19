@@ -58,7 +58,14 @@ jobs:
 
       # The same bundle on Netlify. Skipped entirely when the secrets are absent, so a fork — or
       # this repo before the site exists — still gets a green Cloudflare deploy.
+      #
+      # Advisory, because the two hosts fail for unrelated reasons and only one of them is the
+      # primary. Netlify blocked deploys on an account credit limit for a week; that aborted the
+      # job *after* Cloudflare had already published, so every smoke test below was skipped and
+      # the demo went unverified while looking merely "red". The step still reports its own
+      # failure — this only stops one host's billing from silencing the other host's checks.
       - name: Deploy to Netlify
+        continue-on-error: true
         if: ${{ env.NETLIFY_AUTH_TOKEN != '' && env.NETLIFY_SITE_ID != '' }}
         run: npx --yes netlify-cli@17 deploy --dir web --prod --message "$GITHUB_SHA"
 
