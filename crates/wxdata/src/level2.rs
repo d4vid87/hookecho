@@ -436,6 +436,45 @@ pub fn bin_lowest_sweep(scan: &Scan, moment: Moment) -> anyhow::Result<BinnedSwe
     bin_scan(scan, moment, 0)
 }
 
+/// Which sweep a dealias continuity reference belongs to. The site is in the key so two panes on
+/// two radars never hand each other a reference; the gate count is in it because a reference of a
+/// different shape is unusable.
+#[derive(PartialEq, Eq, Clone, Copy)]
+struct DealiasKey {
+    lat_e2: i32,
+    lon_e2: i32,
+    elevation_number: u8,
+    gate_count: usize,
+}
+
+/// How far back a reference may be. A volume lands every 4-6 minutes; past about three of them
+/// the wind field has moved on and anchoring to it is worse than anchoring to zero.
+const DEALIAS_REF_MAX_AGE_MS: i64 = 15 * 60 * 1000;
+
+/// ponytail: exactly one reference is kept, not one per tilt. The dealiased view is a tilt at a
+/// time, so the entry that matters is nearly always the one that is here; changing tilt just
+/// costs the first frame its reference, which is what the code did everywhere before. It is a
+/// ~7 MB field, and one of them is cheap where six would not be. Key it into a small map if
+/// flipping tilts on a folded storm turns out to matter.
+#[allow(clippy::type_complexity)]
+static DEALIAS_REF: std::sync::Mutex<Option<(DealiasKey, i64, Vec<Option<f32>>)>> =
+    std::sync::Mutex::new(None);
+
+/// The previous pass over this tilt, if there is one and it is recent enough to mean anything.
+/// A reference from *later* than this sweep is a scrub backwards through the timeline: skipped,
+/// because "previous" is the only relationship the dealiaser can use.
+fn take_dealias_reference(key: &DealiasKey, at: i64) -> Option<Vec<Option<f32>>> {
+    let guard = DEALIAS_REF.lock().ok()?;
+    let (k, t, field) = guard.as_ref()?;
+    (k == key && at > *t && at - *t <= DEALIAS_REF_MAX_AGE_MS).then(|| field.clone())
+}
+
+fn put_dealias_reference(key: DealiasKey, at: i64, field: &[Option<f32>]) {
+    if let Ok(mut guard) = DEALIAS_REF.lock() {
+        *guard = Some((key, at, field.to_vec()));
+    }
+}
+
 /// Bin one sweep's `moment` into a fixed azimuth grid.
 pub fn bin_sweep(
     sweep: &Sweep,
@@ -524,7 +563,24 @@ pub fn bin_sweep_opts(
             gather_row(bin, row);
         }
         let nyq = crate::dealias::estimate_nyquist(&vel);
-        let unfolded = crate::dealias::dealias(&vel, AZ_BINS, gate_count, nyq);
+        // Continuity: hand the previous pass over this same tilt to the dealiaser, so a storm
+        // whose fastest air genuinely sits past the Nyquist velocity stays unfolded from volume
+        // to volume instead of snapping to zero whenever the fast region becomes the biggest one.
+        let key = DealiasKey {
+            lat_e2: (radar_lat * 100.0) as i32,
+            lon_e2: (radar_lon * 100.0) as i32,
+            elevation_number: sweep.elevation_number(),
+            gate_count,
+        };
+        let at = radials
+            .iter()
+            .map(|r| r.collection_timestamp())
+            .min()
+            .unwrap_or(0);
+        let reference = take_dealias_reference(&key, at);
+        let unfolded =
+            crate::dealias::dealias_with_reference(&vel, AZ_BINS, gate_count, nyq, reference.as_deref());
+        put_dealias_reference(key, at, &unfolded);
         for (i, v) in unfolded.iter().enumerate() {
             if let Some(v) = v {
                 data[i] = normalize(*v);
@@ -762,5 +818,36 @@ mod tests {
             "no dual-pol in 1991"
         );
         assert!(bin_scan_opts(&scan, Moment::Reflectivity, 0, false).is_ok());
+    }
+
+    /// The continuity reference is only handed back for the same tilt of the same radar, moving
+    /// forward in time, within the age limit. Every other case has to come back `None` — a
+    /// reference from the wrong sweep is worse than no reference at all.
+    #[test]
+    fn a_dealias_reference_is_only_reused_for_the_next_pass_over_the_same_tilt() {
+        let key = DealiasKey {
+            lat_e2: 3_552,
+            lon_e2: -9_727,
+            elevation_number: 1,
+            gate_count: 2,
+        };
+        let field = vec![Some(1.0), Some(2.0)];
+        put_dealias_reference(key, 100_000, &field);
+
+        assert_eq!(take_dealias_reference(&key, 400_000), Some(field.clone()));
+        assert_eq!(take_dealias_reference(&key, 100_000), None, "same instant");
+        assert_eq!(take_dealias_reference(&key, 50_000), None, "scrubbed back");
+        assert_eq!(
+            take_dealias_reference(&key, 100_000 + DEALIAS_REF_MAX_AGE_MS + 1),
+            None,
+            "too old to mean anything"
+        );
+        let other_tilt = DealiasKey {
+            elevation_number: 2,
+            ..key
+        };
+        assert_eq!(take_dealias_reference(&other_tilt, 400_000), None);
+        let other_site = DealiasKey { lat_e2: 4_100, ..key };
+        assert_eq!(take_dealias_reference(&other_site, 400_000), None);
     }
 }

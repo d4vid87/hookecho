@@ -12,7 +12,7 @@ use crate::level2::{elevation_angles, Scan};
 use nexrad_data::aws::realtime::{
     assemble_volume, download_chunk, Chunk, ChunkIdentifier, ChunkIterator, ChunkType,
 };
-use nexrad_model::data::Sweep;
+use nexrad_model::data::{Radial, Sweep};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -199,6 +199,49 @@ fn emit<F: FnMut(Update)>(
     });
 }
 
+/// A sweep pass finishes in well under this. A base sweep older than that at the same elevation
+/// number is the *previous* volume's version of the tilt, which has to be dropped whole rather
+/// than stitched, or a rollover would leave last volume's radials standing in the gaps.
+const SAME_PASS_MS: i64 = 90_000;
+
+/// Stitch a partial sweep onto the base sweep of the same tilt, newest radial wins per azimuth.
+///
+/// This is the seam fix. A chunk can straddle a sweep boundary, so the chunks assembled for one
+/// sweep can also carry the first radials of the next one. Those early radials land in `merged`,
+/// and the window for the *next* boundary no longer contains the chunk they came from — so the
+/// sweep assembled there is missing its own beginning. Replacing wholesale threw the early
+/// radials away and drew the volume with a wedge of empty azimuths: the seam.
+fn stitch(base: &Sweep, partial: &Sweep) -> Sweep {
+    let start = |s: &Sweep| {
+        s.radials()
+            .iter()
+            .map(|r| r.collection_timestamp())
+            .min()
+    };
+    let same_pass = match (start(base), start(partial)) {
+        (Some(b), Some(p)) => (p - b).abs() < SAME_PASS_MS,
+        _ => false,
+    };
+    if !same_pass {
+        return partial.clone();
+    }
+    // ponytail: BTreeMap because it dedupes and sorts by azimuth in one pass, and a sweep is
+    // ~720 radials. A merge of two already-sorted slices would allocate less, if it ever shows up
+    // in a profile.
+    let mut by_az: std::collections::BTreeMap<u16, Radial> = base
+        .radials()
+        .iter()
+        .map(|r| (r.azimuth_number(), r.clone()))
+        .collect();
+    by_az.extend(
+        partial
+            .radials()
+            .iter()
+            .map(|r| (r.azimuth_number(), r.clone())),
+    );
+    Sweep::new(base.elevation_number(), by_az.into_values().collect())
+}
+
 /// Merge `partial` into `base`, newest-wins by elevation number.
 ///
 /// A VCP change replaces the volume wholesale (tilt set changed). Otherwise each partial
@@ -221,7 +264,7 @@ pub fn merge_scan(base: &Scan, partial: Scan) -> (Scan, Vec<f32>) {
         match sweeps.iter().position(|s| s.elevation_number() == en) {
             Some(i) => {
                 if &sweeps[i] != ps {
-                    sweeps[i] = ps.clone();
+                    sweeps[i] = stitch(&sweeps[i], ps);
                     changed_nums.push(en);
                 }
             }
@@ -271,6 +314,32 @@ mod tests {
             false,
             Vec::new(),
         )
+    }
+
+    // A sweep covering `azimuths` (as azimuth numbers), collected at `t_ms`.
+    fn wedge(elevation_number: u8, azimuths: std::ops::Range<u16>, t_ms: i64) -> Sweep {
+        let radials = azimuths
+            .map(|az| {
+                let data = MomentData::from_fixed_point(1, 2125, 250, 8, 2.0, 66.0, vec![100]);
+                Radial::new(
+                    t_ms,
+                    az,
+                    az as f32 * 0.5,
+                    0.5,
+                    RadialStatus::ScanStart,
+                    elevation_number,
+                    0.5,
+                    Some(data),
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                )
+            })
+            .collect();
+        Sweep::new(elevation_number, radials)
     }
 
     // A sweep at the given elevation number/angle carrying a single reflectivity value.
@@ -327,5 +396,42 @@ mod tests {
         let (merged, _) = merge_scan(&base, partial);
         assert_eq!(merged.coverage_pattern_number(), vcp(35).pattern_number());
         assert_eq!(merged.sweeps().len(), 1, "wholesale replace");
+    }
+
+    #[test]
+    fn a_partial_sweep_does_not_punch_a_hole_in_the_one_already_merged() {
+        // The seam: a chunk straddled the boundary, so the first 120 azimuths of tilt 1 were
+        // already merged, and the window for this boundary only assembles the rest.
+        let base = Scan::new(vcp(212), vec![wedge(1, 0..120, 1_000)]);
+        let partial = Scan::new(vcp(212), vec![wedge(1, 120..720, 12_000)]);
+        let (merged, changed) = merge_scan(&base, partial);
+        assert_eq!(changed.len(), 1);
+        let r = merged.sweeps()[0].radials();
+        assert_eq!(r.len(), 720, "sweep lost radials — this is the seam");
+        assert!(
+            r.windows(2)
+                .all(|w| w[1].azimuth_number() == w[0].azimuth_number() + 1),
+            "radials must stay sorted and gapless"
+        );
+    }
+
+    #[test]
+    fn a_new_volume_replaces_the_tilt_instead_of_stitching_to_it() {
+        // Same tilt five minutes later is the next volume, not the rest of this pass. Keeping the
+        // old radials would leave last volume's echoes standing wherever the new one is thin.
+        let base = Scan::new(vcp(212), vec![wedge(1, 0..720, 1_000)]);
+        let partial = Scan::new(vcp(212), vec![wedge(1, 0..120, 301_000)]);
+        let (merged, _) = merge_scan(&base, partial);
+        assert_eq!(merged.sweeps()[0].radials().len(), 120);
+    }
+
+    #[test]
+    fn stitching_prefers_the_newer_radial_for_an_azimuth_it_already_has() {
+        let base = Scan::new(vcp(212), vec![wedge(1, 0..120, 1_000)]);
+        let partial = Scan::new(vcp(212), vec![wedge(1, 60..180, 9_000)]);
+        let (merged, _) = merge_scan(&base, partial);
+        let r = merged.sweeps()[0].radials();
+        assert_eq!(r.len(), 180, "overlap must dedupe, not duplicate");
+        assert_eq!(r[60].collection_timestamp(), 9_000);
     }
 }

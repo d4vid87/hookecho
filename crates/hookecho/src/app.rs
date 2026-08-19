@@ -2430,6 +2430,19 @@ impl HookEchoApp {
         let spawner = crate::rt::Spawner::new();
 
         let render_state = cc.wgpu_render_state.as_ref().expect("wgpu backend");
+        // Which GPU actually got picked. One line, at startup, because every performance report
+        // is unreadable without it — "the map is choppy" means one thing on a discrete adapter
+        // and another on llvmpipe, and nothing in the app said which one was running.
+        {
+            let info = render_state.adapter.get_info();
+            log::info!(
+                "gpu: {} ({:?}, {:?}) driver {}",
+                info.name,
+                info.device_type,
+                info.backend,
+                info.driver
+            );
+        }
         // Device loss on wasm is unrecoverable from inside the app: WebGPU (Safari 26+) loses
         // devices silently — black canvas, `webglcontextlost` can never fire — and on the WebGL
         // fallback (WebKitGTK) wgpu marks the device lost for gles errors that never surface as
