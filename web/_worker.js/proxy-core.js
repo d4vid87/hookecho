@@ -7,9 +7,8 @@
 // allowlist exactly, only GET is issued upstream, no client header is forwarded, and the response
 // is capped and stripped down to a known content type.
 //
-// Two deployments import this: web/_worker.js/index.js (Cloudflare Pages) and
-// netlify/edge-functions/proxy.js (Netlify, Deno). They differ only in how they ask their own CDN
-// to cache — the allowlist and the checks live here once, so they cannot drift apart.
+// web/_worker.js/index.js (Cloudflare Pages) imports this. It is kept separate from the wiring so
+// another host's function can reuse the same allowlist and checks rather than restating them.
 //
 // The ALLOWED_HOSTS list below is checked against serve.rs by .github/workflows/demo.yml — the two
 // must stay identical, and the deploy fails if they drift.

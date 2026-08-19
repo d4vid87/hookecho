@@ -3107,7 +3107,7 @@ impl HookEchoApp {
         }
     }
 
-    /// Ask our own origin where the visitor is (`/geo.json`, answered by the Netlify edge function
+    /// Ask our own origin where the visitor is (`/geo.json`, answered by the Pages Worker
     /// or the Cloudflare Worker from the request's geo-IP) and open on the nearest radar site.
     ///
     /// Same-origin, so no proxy and no CORS; the reply is `[lon, lat]` or `null` when the edge has
