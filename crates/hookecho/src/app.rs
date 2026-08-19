@@ -10282,6 +10282,15 @@ impl HookEchoApp {
             // site changes, its result is dropped on arrival (site mismatch) without clearing
             // `loading`, which would then block the new site's fetch forever ("no volume").
             v.loading = false;
+            // The old site's frame list is not this site's. Left in place it is both what the
+            // scrub path displays and what it downloads until the new listing lands — i.e. the
+            // wrong radar's volumes at an index that means nothing here. A scrubbed pane keeps
+            // the time it was looking at; a live one just goes back to the head.
+            if !v.timeline.following {
+                v.timeline.seek_target = v.timeline.current().and_then(|id| id.date_time());
+            }
+            v.timeline.frames.clear();
+            v.timeline.playhead = 0;
             match &v.site {
                 // ...unless a deep link already aimed the camera at something specific.
                 Some(_) if std::mem::take(&mut v.camera_placed) => {}
