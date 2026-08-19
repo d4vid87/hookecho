@@ -183,8 +183,34 @@ fn push_polys(
     }
 }
 
-/// Parse an SPC Mesoscale Discussion GeoJSON payload.
-pub fn parse_md(json: &str) -> anyhow::Result<Vec<GeoFeature>> {
+/// The plain-text bulletin URL for an MCD whose `popupinfo` is `page`.
+///
+/// SPC serves every discussion twice: `md2032.html` for a browser and `md2032.txt` for the raw
+/// product. The map service only ever hands out the HTML one, so the readout has to be derived.
+fn md_text_url(page: &str) -> Option<String> {
+    let page = page.trim();
+    let rest = page
+        .strip_prefix("https://")
+        .or_else(|| page.strip_prefix("http://"))?;
+    // Upgraded to https on the way out: the service still advertises these links as plain http.
+    Some(format!("https://{}.txt", rest.strip_suffix(".html")?))
+}
+
+/// Strip the WMO routing header off a raw SPC product, leaving the discussion itself.
+///
+/// The first four lines are `ZCZC`, the AWIPS/WMO ids and the UGC zone line — machine routing
+/// nobody clicked a polygon to read. Anything unrecognized is returned whole rather than
+/// truncated on a guess.
+fn strip_wmo_header(text: &str) -> &str {
+    match text.find("\nMesoscale Discussion") {
+        Some(i) => text[i + 1..].trim_end(),
+        None => text.trim_end(),
+    }
+}
+
+/// Parse an SPC Mesoscale Discussion GeoJSON payload into features paired with the URL of each
+/// one's bulletin text, which the payload itself does not carry.
+pub fn parse_md(json: &str) -> anyhow::Result<Vec<(GeoFeature, Option<String>)>> {
     let mut out = Vec::new();
     for_each_feature(json, |geom, props| {
         let str_of = |k: &str| props.get(k).and_then(|v| v.as_str()).unwrap_or("");
@@ -194,21 +220,22 @@ pub fn parse_md(json: &str) -> anyhow::Result<Vec<GeoFeature>> {
         } else {
             format!("Mesoscale Discussion {name}")
         };
-        let detail = format!(
-            "{title}\n\n{}\n{}",
-            str_of("popupinfo"),
-            str_of("folderpath")
-        );
+        let page = str_of("popupinfo");
+        let detail = format!("{}\n\n{page}", str_of("folderpath"));
+        let text_url = md_text_url(page);
         for poly in polygons_of(geom) {
-            out.push(GeoFeature {
-                rings: poly,
-                fill: [255, 120, 0, 30],
-                stroke: [255, 140, 0, 235],
-                kind: FeatureKind::MesoDiscussion,
-                title: title.clone(),
-                detail: detail.clone(),
-                alert: None,
-            });
+            out.push((
+                GeoFeature {
+                    rings: poly,
+                    fill: [255, 120, 0, 30],
+                    stroke: [255, 140, 0, 235],
+                    kind: FeatureKind::MesoDiscussion,
+                    title: title.clone(),
+                    detail: detail.clone(),
+                    alert: None,
+                },
+                text_url.clone(),
+            ));
         }
     })?;
     Ok(out)
@@ -242,7 +269,28 @@ pub async fn fetch_outlook_kind(
     parse_outlook_kind(&body, day, kind)
 }
 
-/// Fetch active Mesoscale Discussions.
+/// Fetch one MCD's bulletin text. `None` on any failure: a discussion whose text will not load
+/// still has a polygon worth drawing, and the URL stays in the detail either way.
+async fn fetch_md_text(client: &reqwest::Client, url: &str) -> Option<String> {
+    let body = client
+        .get(crate::net::fetch_url(url))
+        .header("User-Agent", USER_AGENT)
+        .send()
+        .await
+        .ok()?
+        .error_for_status()
+        .ok()?
+        .text()
+        .await
+        .ok()?;
+    Some(strip_wmo_header(&body).to_string())
+}
+
+/// Fetch active Mesoscale Discussions, each with its full bulletin text.
+///
+/// The GeoJSON carries a link and nothing else, so clicking a discussion used to show a URL. The
+/// text is a second request per discussion, done here rather than on click so the popup opens
+/// with the readout already in it.
 pub async fn fetch_mesoscale_discussions(
     client: &reqwest::Client,
 ) -> anyhow::Result<Vec<GeoFeature>> {
@@ -254,7 +302,25 @@ pub async fn fetch_mesoscale_discussions(
         .error_for_status()?
         .text()
         .await?;
-    parse_md(&body)
+    // ponytail: sequential, and cached per URL because one MultiPolygon MD yields several
+    // features sharing a bulletin. A handful are active at once even on an outbreak day; reach
+    // for join_all only if that stops being true.
+    let mut texts: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    let mut out = Vec::new();
+    for (mut feature, url) in parse_md(&body)? {
+        if let Some(url) = url {
+            if !texts.contains_key(&url) {
+                if let Some(text) = fetch_md_text(client, &url).await {
+                    texts.insert(url.clone(), text);
+                }
+            }
+            if let Some(text) = texts.get(&url) {
+                feature.detail = format!("{text}\n\n{}", feature.detail);
+            }
+        }
+        out.push(feature);
+    }
+    Ok(out)
 }
 
 /// Kind of a local storm report (drives the marker color/label).
@@ -302,6 +368,67 @@ pub struct StormReport {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Live check against SPC, run by hand: `cargo test -p wxdata live_mcd -- --ignored`.
+    /// Quiet when no discussion is active — there is nothing to fetch on a calm day.
+    #[tokio::test]
+    #[ignore = "network"]
+    async fn live_mcd_text_arrives_with_the_polygon() {
+        let client = reqwest::Client::new();
+        let features = fetch_mesoscale_discussions(&client).await.unwrap();
+        for f in &features {
+            assert!(
+                f.detail.starts_with("Mesoscale Discussion"),
+                "no readout, only a link: {}",
+                f.detail
+            );
+        }
+    }
+
+    #[test]
+    fn a_discussion_link_becomes_its_bulletin_url() {
+        // What the map service actually hands out, plain http and all.
+        assert_eq!(
+            md_text_url("http://www.spc.noaa.gov/products/md/md2032.html").as_deref(),
+            Some("https://www.spc.noaa.gov/products/md/md2032.txt")
+        );
+        assert_eq!(md_text_url(""), None);
+        assert_eq!(md_text_url("www.spc.noaa.gov/products/md/md2032.html"), None);
+        assert_eq!(
+            md_text_url("https://www.spc.noaa.gov/products/md/md2032"),
+            None
+        );
+    }
+
+    #[test]
+    fn the_readout_starts_at_the_discussion_not_the_routing_header() {
+        let raw = "ZCZC SPCSWOMCD ALL\nACUS11 KWNS 190154 \nSPC MCD 190154 \nSDZ000-190330-\n\n\
+                   Mesoscale Discussion 2032\nNWS Storm Prediction Center Norman OK\n\nSUMMARY...\
+                   hail\n";
+        let out = strip_wmo_header(raw);
+        assert!(out.starts_with("Mesoscale Discussion 2032"), "{out}");
+        assert!(out.ends_with("hail"), "{out}");
+        // A product that doesn't look like an MCD comes back whole rather than half-eaten.
+        assert_eq!(strip_wmo_header("something else\n"), "something else");
+    }
+
+    #[test]
+    fn parsing_a_discussion_yields_the_url_the_text_fetch_needs() {
+        let json = r##"{"type":"FeatureCollection","features":[
+            {"type":"Feature",
+             "properties":{"name":"MD 2032","folderpath":"MD 2032 Active Till 0330 UTC",
+                           "popupinfo":"http://www.spc.noaa.gov/products/md/md2032.html"},
+             "geometry":{"type":"Polygon","coordinates":[[[-98.0,35.0],[-97.0,35.0],[-97.0,36.0],[-98.0,35.0]]]}}
+        ]}"##;
+        let out = parse_md(json).unwrap();
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].0.title, "Mesoscale Discussion MD 2032");
+        assert_eq!(out[0].0.kind, FeatureKind::MesoDiscussion);
+        assert_eq!(
+            out[0].1.as_deref(),
+            Some("https://www.spc.noaa.gov/products/md/md2032.txt")
+        );
+    }
 
     #[test]
     fn parses_outlook_with_own_color() {
