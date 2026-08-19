@@ -19,7 +19,9 @@ pub fn show(ctx: &egui::Context, detail: &Detail, image: Option<&egui::TextureHa
     let mut open = true;
     crate::ui::phone_surface(ctx, egui::Window::new("Feature Details"))
         .open(&mut open)
-        .default_size([380.0, 320.0])
+        // Wide enough for a 69-column fixed-width product (SPC bulletins, L3 attribute
+        // tables) to land on its own line breaks instead of the wrap point.
+        .default_size([560.0, 420.0])
         .show(ctx, |ui| {
             ui.horizontal(|ui| {
                 let c = detail.color;
