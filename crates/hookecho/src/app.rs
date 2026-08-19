@@ -10267,6 +10267,55 @@ impl HookEchoApp {
         }
     }
 
+    /// The MRMS product the national field loop fetches for `layer`, or `None` for a layer that
+    /// has a fetch block of its own (HRRR forecast, the environment suite, the global models,
+    /// per-site Level 3 grids).
+    ///
+    /// One exhaustive match rather than a skip list and a second match that had to agree with it:
+    /// they drifted, the global model fields were missing from the skip list, and switching one on
+    /// walked into an `unreachable!()` and took the app down. A layer added to `FieldLayer` now
+    /// fails to compile here instead of panicking at runtime.
+    fn mrms_product(&self, layer: crate::render::FieldLayer) -> Option<String> {
+        use crate::render::FieldLayer as FL;
+        Some(match layer {
+            FL::Mrms => wxdata::mrms::REFLECTIVITY.to_string(),
+            FL::Lightning => {
+                wxdata::mrms::lightning_density(self.settings.lightning_minutes).to_string()
+            }
+            FL::Mesh => wxdata::mrms::MESH.to_string(),
+            FL::AzShear => wxdata::mrms::AZSHEAR.to_string(),
+            FL::Rotation => wxdata::mrms::rotation_track(self.rotation_minutes).to_string(),
+            FL::Qpe1h => wxdata::mrms::QPE_01H.to_string(),
+            FL::Qpe24h => wxdata::mrms::QPE_24H.to_string(),
+            FL::PrecipType => wxdata::mrms::PRECIP_TYPE.to_string(),
+            FL::FlashFlood => wxdata::mrms::FLASH_ARI30.to_string(),
+            FL::HailSwath => wxdata::mrms::MESH_1440.to_string(),
+            FL::Hrrr
+            | FL::Cape
+            | FL::Srh
+            | FL::Vil
+            | FL::EchoTops
+            | FL::Hca
+            | FL::UpdraftHelicity
+            | FL::Smoke
+            | FL::Mosaic
+            | FL::VilLocal
+            | FL::VilDensity
+            | FL::EtopLocal
+            | FL::HailMehs
+            | FL::HailPosh
+            | FL::Snowfall
+            | FL::SnowAnalysis
+            | FL::GlobalMslp
+            | FL::GlobalHeight500
+            | FL::GlobalTemp2m
+            | FL::GlobalWind10m
+            | FL::GlobalPrecip
+            | FL::ModelDiff
+            | FL::GlmFed => return None,
+        })
+    }
+
     /// Per-frame per-pane: react to site changes, keep the timeline current, and (for the active
     /// pane) manage the live stream. Each pane fetches its own volume via its view index.
     fn sync_pane(&mut self, idx: usize, ctx: &egui::Context) {
@@ -15540,30 +15589,10 @@ impl eframe::App for HookEchoApp {
         // National field layers: fetch each enabled layer at its product cadence.
         use crate::render::FieldLayer as FL;
         for layer in FL::DRAW_ORDER {
-            // HRRR forecast, HRRR environment, and per-site L3 grids each fetch in their own block.
-            if matches!(
-                layer,
-                FL::Hrrr
-                    | FL::Cape
-                    | FL::Srh
-                    | FL::Vil
-                    | FL::EchoTops
-                    | FL::Hca
-                    | FL::UpdraftHelicity
-                    | FL::Smoke
-                    | FL::Mosaic
-                    | FL::VilLocal
-                    | FL::VilDensity
-                    | FL::EtopLocal
-                    | FL::HailMehs
-                    | FL::HailPosh
-                    | FL::Snowfall
-                    | FL::SnowAnalysis
-                    | FL::ModelDiff
-                    | FL::GlmFed
-            ) {
+            // Layers with a fetch block of their own answer `None` and are skipped here.
+            let Some(product) = self.mrms_product(layer) else {
                 continue;
-            }
+            };
             let stale = self.fields.get(&layer).is_some_and(|s| {
                 s.show
                     && s.last_fetch
@@ -15573,43 +15602,6 @@ impl eframe::App for HookEchoApp {
                 if let Some(s) = self.fields.get_mut(&layer) {
                     s.last_fetch = Some(Instant::now());
                 }
-                let product = match layer {
-                    FL::Mrms => wxdata::mrms::REFLECTIVITY.to_string(),
-                    FL::Lightning => {
-                        wxdata::mrms::lightning_density(self.settings.lightning_minutes).to_string()
-                    }
-                    FL::Mesh => wxdata::mrms::MESH.to_string(),
-                    FL::AzShear => wxdata::mrms::AZSHEAR.to_string(),
-                    FL::Rotation => wxdata::mrms::rotation_track(self.rotation_minutes).to_string(),
-                    FL::Qpe1h => wxdata::mrms::QPE_01H.to_string(),
-                    FL::Qpe24h => wxdata::mrms::QPE_24H.to_string(),
-                    FL::PrecipType => wxdata::mrms::PRECIP_TYPE.to_string(),
-                    FL::FlashFlood => wxdata::mrms::FLASH_ARI30.to_string(),
-                    FL::HailSwath => wxdata::mrms::MESH_1440.to_string(),
-                    FL::Hrrr
-                    | FL::Cape
-                    | FL::Srh
-                    | FL::Vil
-                    | FL::EchoTops
-                    | FL::Hca
-                    | FL::UpdraftHelicity
-                    | FL::Smoke
-                    | FL::Mosaic
-                    | FL::VilLocal
-                    | FL::VilDensity
-                    | FL::EtopLocal
-                    | FL::HailMehs
-                    | FL::HailPosh
-                    | FL::Snowfall
-                    | FL::SnowAnalysis
-                    | FL::GlobalMslp
-                    | FL::GlobalHeight500
-                    | FL::GlobalTemp2m
-                    | FL::GlobalWind10m
-                    | FL::GlobalPrecip
-                    | FL::ModelDiff
-                    | FL::GlmFed => unreachable!(),
-                };
                 self.spawn_overlay(ctx, OverlaySource::Field(layer, product));
             }
         }
