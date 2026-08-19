@@ -631,6 +631,10 @@ impl BasemapStyle {
 
     /// Raster tile URL for `(z, x, y)`. Built-in Dark/Light are the vector MVT basemap and return
     /// `None` here. Provider styles inject the matching key (never logged/cached in a path).
+    // Eight arguments because a URL needs all eight: the tile, whether to ask for @2x, and the
+    // three user-supplied strings a style might interpolate. A struct here would be one field per
+    // argument and one more thing to keep in sync.
+    #[allow(clippy::too_many_arguments)]
     fn url(
         self,
         z: u8,
