@@ -64,7 +64,6 @@ impl Category {
 /// are provider raster tiles, available only when the matching Settings API key is set.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum BasemapStyle {
-    #[default]
     Dark,
     Light,
     Satellite,
@@ -110,6 +109,10 @@ pub enum BasemapStyle {
     EsriStreets,
     EsriTopo,
     UsgsTopo,
+    /// USGS aerial imagery with the topographic map drawn over it. The shipped default: keyless,
+    /// so it works on a fresh install with no account anywhere, and it reads as terrain rather
+    /// than as an abstraction, which is what a radar echo needs to sit on top of.
+    #[default]
     UsgsImageryTopo,
     OsmHot,
     CyclOsm,
@@ -196,9 +199,11 @@ impl BasemapStyle {
     /// ground, roads, terrain, live satellite, and nothing at all. Everything else in [`Self::ALL`]
     /// is a variation on one of these and lives behind the picker's "All basemaps".
     pub const COMMON: [BasemapStyle; 8] = [
+        // The shipped default leads: a phone's quick chips are the only basemap UI most people
+        // will use, and a default they cannot get back to from there is not much of a default.
+        BasemapStyle::UsgsImageryTopo,
         BasemapStyle::Dark,
         BasemapStyle::Light,
-        BasemapStyle::Satellite,
         BasemapStyle::EsriImagery,
         BasemapStyle::OsmStandard,
         BasemapStyle::OpenTopoMap,
@@ -211,6 +216,7 @@ impl BasemapStyle {
     pub fn short_label(self) -> &'static str {
         match self {
             BasemapStyle::Satellite => "USGS",
+            BasemapStyle::UsgsImageryTopo => "Imagery Topo",
             BasemapStyle::EsriImagery => "Satellite",
             BasemapStyle::HybridSatellite => "Hybrid",
             BasemapStyle::EsriDarkGray => "Dark Gray",
@@ -1678,6 +1684,26 @@ pub fn start_pack_download(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The shipped default. A fresh install with no settings file and no API key anywhere lands
+    /// here, so it has to be keyless, reachable on the web build, and offered on a phone.
+    #[test]
+    fn the_default_basemap_ships_usable() {
+        let d = BasemapStyle::default();
+        assert_eq!(d, BasemapStyle::UsgsImageryTopo);
+        assert_eq!(d.slug(), "usgs-imagery-topo");
+        // Keyless: `available` says yes with no Mapbox key, no MapTiler key, no custom template.
+        assert!(d.available(false, false, false));
+        // It draws something. `url` returning None would mean the vector path, which this is not.
+        let url = d
+            .url(6, 14, 24, false, "", "", "")
+            .expect("the default basemap must resolve to a tile URL");
+        // The host the browser build fetches through must be one the proxy will pass.
+        assert!(url.starts_with("https://basemap.nationalmap.gov/"), "{url}");
+        // Reachable from the phone's quick chips, and named short enough to fit one.
+        assert!(BasemapStyle::COMMON.contains(&d));
+        assert!(d.short_label().len() <= 14, "{}", d.short_label());
+    }
 
     /// Panes render their own basemap, so the caches are keyed by style as well as tile id. Two
     /// styles must never collapse onto the same key — that is what put one pane's imagery under

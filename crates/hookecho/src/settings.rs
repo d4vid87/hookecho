@@ -394,7 +394,7 @@ pub struct Settings {
     /// Number of newest volumes the live loop cycles over when playing.
     #[serde(default = "default_live_loop_frames")]
     pub live_loop_frames: usize,
-    /// Persisted basemap style slug for startup (empty = pane default Dark).
+    /// Persisted basemap style slug for startup (empty = the pane default, [`crate::tiles::BasemapStyle::default`]).
     #[serde(default)]
     pub basemap: String,
     /// Overlay toggles that were on when the app last ran, by name (see `OverlayToggle::slug`).
