@@ -6583,6 +6583,7 @@ impl HookEchoApp {
     /// windows — searchable) with the app's own commands below it. It replaces a wall of parallel
     /// entry points; the map keeps nothing but transient status.
     fn sidebar(&mut self, root: &mut egui::Ui, ctx: &egui::Context) {
+        crate::prof_scope!("sidebar");
         let accent = crate::theme::accent(self.settings.theme);
         let entries = self.palette_entries();
         let mut query = std::mem::take(&mut self.layers_query);
@@ -6803,6 +6804,7 @@ impl HookEchoApp {
     }
 
     fn timeline_bar(&mut self, root: &mut egui::Ui) {
+        crate::prof_scope!("timeline_bar");
         use egui_phosphor::regular as ph;
         let accent = crate::theme::accent(self.settings.theme);
         let tz = self.active_tz();
@@ -9616,6 +9618,7 @@ impl HookEchoApp {
     /// `(item, opacity, loaded-placefile index)`. Iterated in `settings.placefiles` order, which
     /// is the paint order the Layer Manager reorders.
     fn visible_placefile_items(&self) -> Vec<(&wxdata::placefile::PlaceItem, f32, usize)> {
+        crate::prof_scope!("visible_placefile_items");
         let range = self.view_range_nmi();
         let now = Utc::now();
         let mut out = Vec::new();
@@ -9662,6 +9665,7 @@ impl HookEchoApp {
     /// Owned labels/markers for the visible placefile items (drawn by the egui painter).
     /// Icons resolve their sheet cell here, so the painter just blits a quad.
     fn placefile_labels(&self) -> Vec<PlaceLabel> {
+        crate::prof_scope!("placefile_labels");
         use wxdata::placefile::PlaceKind;
         self.visible_placefile_items()
             .iter()
@@ -10886,6 +10890,7 @@ impl HookEchoApp {
         last: bool,
         placefile_labels: &[PlaceLabel],
     ) {
+        crate::prof_scope!("render_pane");
         use crate::tiles::BasemapStyle;
         // This pane's own basemap: panes are independent, the tile caches are keyed by style.
         // `Auto` resolves here rather than where it is stored, so the stored choice keeps
@@ -12840,6 +12845,7 @@ impl HookEchoApp {
 
         // Surface obs (METAR station plots): fltCat-colored circle, wind barb, T/Td in °F.
         if self.show_metar && cam.zoom >= 6.0 {
+            crate::prof_scope!("metar_plots");
             let show_labels = cam.zoom >= 7.0;
             let flt_color = |c: &str| match c {
                 "VFR" => egui::Color32::from_rgb(60, 200, 90),
@@ -12964,6 +12970,7 @@ impl HookEchoApp {
                 FloodCat::NoFlooding => "no flooding",
                 FloodCat::Unknown => "no current reading",
             };
+            crate::prof_scope!("river_gauges");
             for g in &self.gauges {
                 let w = crate::render::mercator::lonlat_to_world(g.lon, g.lat);
                 let (sx, sy) = cam.world_to_screen(w, vp);
