@@ -6884,14 +6884,29 @@ impl HookEchoApp {
                         t.step(1);
                     }
                     // Live / archive badge: click to re-pin to the newest volume.
-                    let (col, text) = if t.following && fresh {
-                        (mobile::OMEGA_GREEN, "LIVE".to_string())
+                    //
+                    // Pinned to live but the newest volume is old means the site's feed has
+                    // stopped, not that playback drifted — there is nothing newer to jump to.
+                    // The colour said so already; saying "LIVE" over a volume hours old did not.
+                    let (col, text, hint) = if t.following && fresh {
+                        (
+                            mobile::OMEGA_GREEN,
+                            "LIVE".to_string(),
+                            "Following the newest volume.",
+                        )
                     } else if t.following {
-                        (egui::Color32::from_rgb(220, 180, 0), "LIVE".to_string())
+                        (
+                            egui::Color32::from_rgb(220, 180, 0),
+                            "STALE".to_string(),
+                            "Following the newest volume, but this site has not produced one \
+                             recently — its feed has stopped. The age next to the clock is how \
+                             far behind it is.",
+                        )
                     } else {
                         (
                             egui::Color32::from_gray(150),
                             format!("ARCHIVE {}", t.date.format("%m/%d")),
+                            "Scrubbed to an archive day. Click to jump back to live.",
                         )
                     };
                     let badge = ui.add(
@@ -6903,7 +6918,8 @@ impl HookEchoApp {
                         )
                         .fill(col)
                         .corner_radius(9.0),
-                    );
+                    )
+                    .on_hover_text(hint);
                     if badge.clicked() {
                         go_head = true;
                     }
