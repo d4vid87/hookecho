@@ -212,6 +212,17 @@ static DAY_LIST_CACHE: std::sync::OnceLock<std::sync::Mutex<DayListCache>> =
 /// sees a new one promptly and long enough to collapse the burst a site switch makes.
 const DAY_LIST_TTL: std::time::Duration = std::time::Duration::from_secs(20);
 
+/// Whether an archive object name is a radar volume rather than one of the sidecar objects the
+/// bucket carries alongside them.
+///
+/// `..._V06_MDM` is a Metadata Message file: the volume's metadata records with none of the
+/// radials. It sorts in among the volumes and, taken for one, becomes a "newest volume" that is
+/// really a few minutes older and has nothing to draw — which is how a site whose feed had
+/// stopped ended up showing 09:55 when its last actual volume was 10:12.
+fn is_volume(name: &str) -> bool {
+    !name.ends_with("_MDM")
+}
+
 async fn list_day(site: &str, date: chrono::NaiveDate) -> anyhow::Result<Vec<Identifier>> {
     use nexrad_data::aws::archive;
     let key = (site.to_string(), date);
@@ -226,6 +237,7 @@ async fn list_day(site: &str, date: chrono::NaiveDate) -> anyhow::Result<Vec<Ide
     let mut ids = archive::list_files(site, &date)
         .await
         .map_err(|e| anyhow::anyhow!("list_files({site}, {date}): {e}"))?;
+    ids.retain(|id| is_volume(id.name()));
     ids.sort_by_key(|id| id.date_time());
     if let Ok(mut map) = cache.lock() {
         map.insert(key, (crate::clock::Instant::now(), ids.clone()));
@@ -633,6 +645,21 @@ pub fn bin_sweep_opts(
 mod tests {
     use super::*;
     use nexrad_model::data::{MomentData, Radial};
+
+    /// The bucket carries a metadata-message sidecar next to the volumes. It parses as an
+    /// identifier and sorts in among them, so nothing downstream notices it is not a volume.
+    #[test]
+    fn a_metadata_sidecar_is_not_a_volume() {
+        assert!(is_volume("KTLH20260819_101257_V06"));
+        assert!(!is_volume("KTLH20260819_095548_V06_MDM"));
+        // The newest object for a site whose feed had stopped was the sidecar, so "latest"
+        // resolved to 09:55 while the last real volume was 10:12.
+        let newest = ["KTLH20260819_095548_V06_MDM", "KTLH20260819_101257_V06"]
+            .into_iter()
+            .filter(|n| is_volume(n))
+            .max();
+        assert_eq!(newest, Some("KTLH20260819_101257_V06"));
+    }
 
     /// Just after 00Z the current UTC day holds only a volume or two, which is not a loop. The
     /// missing minutes are at the end of yesterday, so they get borrowed — but only as many as
