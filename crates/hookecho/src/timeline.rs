@@ -112,6 +112,24 @@ impl Timeline {
         } else if self.following || self.playhead >= self.frames.len() {
             self.playhead = self.frames.len().saturating_sub(1);
         }
+        self.pin_to_live_window();
+    }
+
+    /// Pull the playhead back inside the live window when a fresh listing is installed.
+    ///
+    /// `following` means "showing live": the newest volume, or — while looping — one of the
+    /// newest `live_window`. A listing replaces the whole axis under the playhead, and nothing
+    /// used to check the index still meant anything afterwards: a day listing that arrives
+    /// hundreds of frames long, or a window shrunk in settings, left the LIVE badge lit over a
+    /// volume hours old. Deliberately not applied to `append_head`/`tick` — a head arriving
+    /// mid-loop slides the window on the next wrap, which is what
+    /// `appended_head_slides_the_window` pins down.
+    fn pin_to_live_window(&mut self) {
+        if !self.following || self.frames.is_empty() {
+            return;
+        }
+        let oldest_live = self.frames.len().saturating_sub(self.live_window.max(1));
+        self.playhead = self.playhead.clamp(oldest_live, self.frames.len() - 1);
     }
 
     /// Append a newly-arrived live head frame (keeps the loop window sliding forward). The
@@ -291,6 +309,30 @@ mod tests {
         t.playhead = 0;
         t.set_frames(day("KFWS", 280), ("KFWS".into(), today));
         assert_eq!(t.current().unwrap().date_time(), Some(want));
+    }
+
+    #[test]
+    fn live_never_installs_a_listing_older_than_the_loop_window() {
+        let mut t = Timeline::default();
+        let today = t.date;
+        t.set_frames(day("KFTG", 24), ("KFTG".into(), today));
+        t.live_window = 10;
+        t.playing = true;
+        t.playhead = 2; // looping near the start of a short listing
+
+        // The day's full listing lands: the same index is now the small hours of the morning.
+        t.set_frames(day("KFTG", 280), ("KFTG".into(), today));
+        assert!(
+            t.playhead >= 270,
+            "LIVE must land inside the live window, got {}",
+            t.playhead
+        );
+
+        // A scrubbed timeline is not pinned and keeps the frame the user chose.
+        t.following = false;
+        t.playhead = 2;
+        t.set_frames(day("KFTG", 280), ("KFTG".into(), today));
+        assert_eq!(t.playhead, 2, "archive scrubbing is untouched");
     }
 
     #[test]
