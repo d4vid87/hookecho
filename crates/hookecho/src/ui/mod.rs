@@ -13,18 +13,14 @@ pub(crate) fn loading(ui: &mut egui::Ui, what: &str) {
 ///
 /// Material 3's rule for the compact width class is that a secondary screen takes the whole
 /// screen — no floating panel, no dialog margins, no dragging a window around a display it barely
-/// fits on. So on Android every one of these windows becomes a full-screen surface: pinned to the
-/// content rect (which already excludes the system bars and grows to clear the keyboard), not
-/// draggable, not resizable, not collapsible, scrolling its body, with square corners because
-/// there is nothing behind it to round against. The title bar stays: its ✕ is the surface's back
-/// affordance, and it is already wired to each caller's `open` flag.
+/// fits on. So on Android these become full-screen surfaces: pinned to the content rect (which
+/// already excludes the system bars and grows to clear the keyboard), not draggable, not
+/// resizable, not collapsible, scrolling their body, with square corners because there is nothing
+/// behind them to round against.
 ///
-/// One function, because there is exactly one right answer for all twenty-odd of these windows,
-/// and a per-window conversion would be twenty chances to get it slightly different.
-///
-/// ponytail: `Window` rather than a hand-rolled surface widget — it already does the title row,
-/// the close button, the open flag and the scroll body, and reusing it keeps the desktop and
-/// phone call sites identical.
+/// What is left after B4b is the handful of surfaces that are not drawer pages: the first-run
+/// card, the anchored map-click popovers, and the station cards. Every browsable tool now goes
+/// through [`drawer::Drawer::page`], which owns its own chrome.
 pub(crate) fn phone_surface<'a>(ctx: &egui::Context, w: egui::Window<'a>) -> egui::Window<'a> {
     if cfg!(target_os = "android") {
         let r = ctx.content_rect();

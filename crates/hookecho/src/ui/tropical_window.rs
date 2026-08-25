@@ -62,16 +62,25 @@ pub fn show(
     w: &mut TropicalWindow,
     ctx: &egui::Context,
     storms: &[TropicalStorm],
+    drawer: &mut crate::ui::drawer::Drawer,
 ) -> Option<(String, Product)> {
     if !w.open {
         return None;
     }
     let mut want: Option<(String, Product)> = None;
     let mut open = w.open;
-    crate::ui::phone_surface(ctx, egui::Window::new("Tropical products"))
-        .open(&mut open)
-        .default_size([600.0, 540.0])
-        .show(ctx, |ui| {
+    let Some(window) = drawer.page_sized(
+        ctx,
+        "Tropical products",
+        &mut open,
+        false,
+        600.0,
+        egui::Window::new("Tropical products"),
+    ) else {
+        w.open = open;
+        return None;
+    };
+    window.show(ctx, |ui| {
             if storms.is_empty() {
                 ui.weak("No active tropical cyclones.");
                 ui.small("The NHC publishes these only while a storm is being advised on.");

@@ -56,7 +56,7 @@ impl VideoPlayer {
 
     /// Draw the window. Returns false once the user closes it (the caller drops the player,
     /// which stops the download).
-    pub fn show(&mut self, ctx: &egui::Context) -> bool {
+    pub fn show(&mut self, ctx: &egui::Context, drawer: &mut crate::ui::drawer::Drawer) -> bool {
         #[cfg(not(any(target_os = "android", target_arch = "wasm32")))]
         {
             if let Some(img) = self.stream.take_frame() {
@@ -72,12 +72,18 @@ impl VideoPlayer {
             }
         }
         let mut open = true;
-        crate::ui::phone_surface(ctx, egui::Window::new(format!("📹 {}", self.title)))
-            .id(egui::Id::new(("video-window", &self.url)))
-            .open(&mut open)
-            .vscroll(false)
-            .default_width(480.0)
-            .show(ctx, |ui| {
+        let title = format!("📹 {}", self.title);
+        let Some(window) = drawer.page_sized(
+            ctx,
+            &title,
+            &mut open,
+            false,
+            480.0,
+            egui::Window::new(title.clone()).id(egui::Id::new(("video-window", &self.url))),
+        ) else {
+            return open;
+        };
+        window.vscroll(false).show(ctx, |ui| {
                 let w = ui.available_width();
                 match &self.tex {
                     Some(tex) => {

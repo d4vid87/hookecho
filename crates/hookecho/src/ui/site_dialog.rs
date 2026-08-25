@@ -46,6 +46,7 @@ pub fn show(
     dialog: &mut SiteDialog,
     view: &mut MapView,
     settings: &mut Settings,
+    drawer: &mut crate::ui::drawer::Drawer,
 ) -> bool {
     let center = world_to_lonlat(view.camera.center.0, view.camera.center.1);
 
@@ -95,10 +96,17 @@ pub fn show(
     let mut go_home = false;
     let mut toggle_star: Option<String> = None;
 
-    crate::ui::phone_surface(ctx, egui::Window::new("Select Radar Site"))
-        .open(&mut open)
-        .default_size([460.0, 520.0])
-        .show(ctx, |ui| {
+    let Some(window) = drawer.page_sized(
+        ctx,
+        "Select Radar Site",
+        &mut open,
+        false,
+        460.0,
+        egui::Window::new("Select Radar Site"),
+    ) else {
+        return open;
+    };
+    window.show(ctx, |ui| {
             // Selectable label text senses clicks and drags of its own, and a row is made of
             // nothing but labels — so every click on a row went into selecting the city name and
             // `row.response().clicked()` never fired. Clicking a site did nothing at all.
