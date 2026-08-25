@@ -2247,6 +2247,11 @@ pub struct HookEchoApp {
     pf_icon_tx: Sender<(String, egui::ColorImage)>,
     /// Android: hide all floating chrome to view the whole radar (toggled by the eye button).
     mobile_chrome_hidden: bool,
+    /// Touch: when and where the last tap landed, so a drag that starts right on top of it is
+    /// read as the second half of a double-tap-drag zoom rather than a pan.
+    last_tap: Option<(f64, egui::Pos2)>,
+    /// Touch: the anchor of a double-tap-drag zoom in progress (`None` = a drag pans).
+    tap_zoom: Option<egui::Pos2>,
     /// Android: rects the mobile chrome covers this frame. Two-finger gestures are read straight
     /// off the raw input, which has no idea egui drew a sheet over the map, so the pane input
     /// block checks the gesture center against these.
@@ -3004,6 +3009,8 @@ impl HookEchoApp {
             pf_icon_rx,
             pf_icon_tx,
             mobile_chrome_hidden: false,
+            last_tap: None,
+            tap_zoom: None,
             mobile_occlusion: Vec::new(),
             last_gesture_end: None,
             show_spotters: false,
@@ -9673,8 +9680,37 @@ impl HookEchoApp {
         } else if response.dragged() && quiet {
             self.active = idx;
             let d = response.drag_delta();
-            self.views[idx].camera.pan_pixels(d.x, d.y);
-            self.follow_cell = None; // a manual pan takes over the camera
+            match self.tap_zoom {
+                // Double-tap-drag: the map zoom every phone map has, and the only one you can do
+                // one-handed. Drag up to zoom in, anchored on the point that was tapped, so the
+                // thing you double-tapped is the thing that stays put.
+                Some(anchor) => {
+                    let cursor = (anchor.x - prect.left(), anchor.y - prect.top());
+                    self.views[idx]
+                        .camera
+                        .zoom_at(-d.y as f64 * 0.01, cursor, vp);
+                }
+                None => {
+                    self.views[idx].camera.pan_pixels(d.x, d.y);
+                    self.follow_cell = None; // a manual pan takes over the camera
+                }
+            }
+        }
+        if cfg!(target_os = "android") {
+            if response.drag_started() {
+                // Within a third of a second of the last tap and within a thumb's width of it:
+                // this is the second tap, still down. Anything else is an ordinary drag.
+                self.tap_zoom = response.interact_pointer_pos().filter(|p| {
+                    self.last_tap.is_some_and(|(t, at)| {
+                        ui.input(|i| i.time) - t < 0.35 && at.distance(*p) < 44.0
+                    })
+                });
+            }
+            if response.drag_stopped() {
+                self.tap_zoom = None;
+                // One zoom per double tap: the next one has to be armed by a fresh tap.
+                self.last_tap = None;
+            }
         }
         // Wheel, trackpad, and pinch all land here. `zoom_delta` is a scale factor carrying the
         // macOS/precision-touchpad pinch gesture (and ctrl+wheel, which egui folds into the same
@@ -9752,9 +9788,22 @@ impl HookEchoApp {
                 }
             }
         }
-        if response.clicked() && quiet {
+        // Long-press inspects, whatever tool is armed. A phone has no right-click and no hover,
+        // and arming Interrogate first to ask "what is that" is a step nobody discovers — so the
+        // press that means "tell me about this" is the press people already try.
+        let long_press = cfg!(target_os = "android") && response.long_touched();
+        if (response.clicked() || long_press) && quiet {
             self.active = idx;
+            // What this press means. A long press is always an interrogation; anything else is
+            // whatever the toolbar says.
+            let tool = if long_press {
+                MapTool::Interrogate
+            } else {
+                self.tool
+            };
             if let Some(pos) = response.interact_pointer_pos() {
+                // Remember the tap for the double-tap-drag zoom below.
+                self.last_tap = Some((ui.input(|i| i.time), pos));
                 let cam = self.views[idx].camera;
                 let px = (pos.x - prect.left(), pos.y - prect.top());
                 let w = cam.screen_to_world(px, vp);
@@ -9762,7 +9811,7 @@ impl HookEchoApp {
                 // Your own markers win over everything else on the map: you put them at a place you
                 // chose, so a tap there means that pin, not whatever the radar drew underneath.
                 // Nearest wins, so clustered markers stay individually reachable.
-                let marker_hit = matches!(self.tool, MapTool::Interrogate | MapTool::Marker)
+                let marker_hit = matches!(tool, MapTool::Interrogate | MapTool::Marker)
                     .then(|| {
                         self.settings
                             .markers
@@ -9781,7 +9830,7 @@ impl HookEchoApp {
                     })
                     .flatten();
                 // A chase partner's dot, if they published a stream with their position.
-                let peer_hit = (marker_hit.is_none() && self.tool == MapTool::Interrogate)
+                let peer_hit = (marker_hit.is_none() && tool == MapTool::Interrogate)
                     .then(|| {
                         self.peers
                             .values()
@@ -9799,7 +9848,7 @@ impl HookEchoApp {
                 // A watch zone under the click, when nothing more specific is there.
                 let zone_hit = (marker_hit.is_none()
                     && peer_hit.is_none()
-                    && self.tool == MapTool::Interrogate)
+                    && tool == MapTool::Interrogate)
                     .then(|| {
                         self.settings
                             .alert_polygons
@@ -9810,14 +9859,14 @@ impl HookEchoApp {
                 // Interrogate + a click on a radar-site ring switches radars (storm features win,
                 // handled inside try_pick_site). Consumes the click so no popup opens underneath.
                 let picked_site = marker_hit.is_none()
-                    && self.tool == MapTool::Interrogate
+                    && tool == MapTool::Interrogate
                     && self.show_radar_sites
                     && self.try_pick_site(idx, pos, cam, prect, vp);
                 // A camera site under an interrogate click wins over everything below it: the
                 // markers are sparse, so a tap on one is never ambiguous.
                 let cam_site = (marker_hit.is_none()
                     && !picked_site
-                    && self.tool == MapTool::Interrogate
+                    && tool == MapTool::Interrogate
                     && self.show_webcams)
                     .then(|| {
                         self.webcams
@@ -9836,7 +9885,7 @@ impl HookEchoApp {
                 // both sit on one airport, the card carries the camera and the telemetry.
                 let station_hit = (marker_hit.is_none()
                     && !picked_site
-                    && self.tool == MapTool::Interrogate
+                    && tool == MapTool::Interrogate
                     && self.show_stations)
                     .then(|| {
                         let to_screen = |lon: f64, lat: f64| {
@@ -9856,7 +9905,7 @@ impl HookEchoApp {
                 let dat_hit = (marker_hit.is_none()
                     && !picked_site
                     && cam_site.is_none()
-                    && self.tool == MapTool::Interrogate
+                    && tool == MapTool::Interrogate
                     && self.show_dat)
                     .then(|| {
                         self.dat_points
@@ -9878,7 +9927,7 @@ impl HookEchoApp {
                     self.stations.open_card(ob, &rt, &http, ctx);
                     return;
                 }
-                match self.tool {
+                match tool {
                     // Also catches the drop tool: a second marker within a finger's width of an
                     // existing one is never what someone meant, and this makes a stray drop undoable.
                     _ if marker_hit.is_some() => {
@@ -14720,6 +14769,7 @@ impl eframe::App for HookEchoApp {
                 self.search_pill(ctx);
                 self.control_column(ctx);
                 self.scrubber(ctx);
+                self.pane_strip(ctx);
                 self.panel(ctx);
                 self.basemap_panel(ctx);
                 self.info_chip(ctx);
@@ -15441,7 +15491,14 @@ impl eframe::App for HookEchoApp {
         egui::CentralPanel::default().show(root, |ui| {
             let full = ui.available_rect_before_wrap();
             let n = self.views.len();
-            let rects = pane_rects(full, n);
+            // A phone shows one pane at a time. Two 400x400 pt panes stacked is two views of
+            // nothing; the pane strip above the scrubber is how you get to the others.
+            let solo = cfg!(target_os = "android") && n > 1;
+            let rects = if solo {
+                vec![full; n]
+            } else {
+                pane_rects(full, n)
+            };
 
             // If cameras are linked, mirror the active pane's camera to the others.
             if self.link_cameras {
@@ -15525,8 +15582,14 @@ impl eframe::App for HookEchoApp {
                 .get(self.active)
                 .map_or((full.width(), full.height()), |r| (r.width(), r.height()));
 
+            // Which pane carries the once-per-frame work (tile-cache clears, the shared label
+            // pass): the first one actually drawn, which under `solo` is the active one.
+            let head = if solo { self.active.min(n - 1) } else { 0 };
             for (i, prect) in rects.iter().enumerate() {
-                let first = i == 0;
+                if solo && i != head {
+                    continue;
+                }
+                let first = i == head;
                 self.render_pane(
                     ui,
                     ctx,
@@ -15535,13 +15598,14 @@ impl eframe::App for HookEchoApp {
                     clear_tiles && first,
                     clear_vector && first,
                     first,
-                    i + 1 == n,
+                    solo || i + 1 == n,
                     &placefile_labels,
                 );
             }
 
-            // Pane borders; the active pane gets an accent outline.
-            if n > 1 {
+            // Pane borders; the active pane gets an accent outline. Nothing to outline under
+            // `solo` — there is one pane on screen and the strip says which.
+            if n > 1 && !solo {
                 for (i, prect) in rects.iter().enumerate() {
                     let (w, col) = if i == self.active {
                         (2.0, crate::theme::accent(self.settings.theme))
