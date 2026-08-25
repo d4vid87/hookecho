@@ -13370,6 +13370,7 @@ impl HookEchoApp {
             .map(|vol| crate::timefmt::fmt_date_clock(vol.time, self.active_tz()))
             .unwrap_or_default();
         let accent = crate::theme::accent(self.settings.theme);
+        let logo = crate::icon::texture(ctx, 64);
         egui::Area::new(egui::Id::new("share_card"))
             .order(egui::Order::Foreground)
             .constrain_to(self.chrome_rect)
@@ -13392,6 +13393,11 @@ impl HookEchoApp {
                             egui::RichText::new(line)
                                 .size(crate::ui::style::FONT_BASE)
                                 .color(egui::Color32::from_gray(238)),
+                        );
+                        // The mark rides with the caption: a shared loop travels without the app
+                        // around it, and the wordmark alone is not what anyone recognises.
+                        ui.add(
+                            egui::Image::new(&logo).fit_to_exact_size(egui::vec2(16.0, 16.0)),
                         );
                         ui.label(
                             egui::RichText::new("Hook Echo-WX · data: NOAA/NWS")

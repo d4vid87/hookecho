@@ -11,7 +11,10 @@
 -->
 <resources>
     <style name="Theme.HookEcho" parent="Theme.AppCompat.NoActionBar">
-        <item name="android:windowBackground">@android:color/black</item>
+        <!-- The mark on the app's navy while the renderer starts, rather than a black flash.
+             Android 12+ overrides this with the SplashScreen API (values-v31/themes.xml); the
+             extra overdraw is one pre-first-frame window, not a per-frame cost. -->
+        <item name="android:windowBackground">@drawable/splash_screen</item>
         <item name="android:windowNoTitle">true</item>
         <item name="android:windowFullscreen">false</item>
         <item name="android:windowDrawsSystemBarBackgrounds">true</item>

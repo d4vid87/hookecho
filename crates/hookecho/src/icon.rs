@@ -95,6 +95,22 @@ pub fn icon_data() -> egui::IconData {
     }
 }
 
+/// The logo as a texture, drawn once and kept for the session.
+///
+/// `rgba` is a per-pixel distance field over six blobs — cheap at 64 px, not something to redo
+/// every frame for a window that is open while somebody reads it. The handle lives in egui's own
+/// temp store keyed by size, which is already the right lifetime: it dies with the context.
+pub fn texture(ctx: &egui::Context, size: usize) -> egui::TextureHandle {
+    let id = egui::Id::new(("app_logo_tex", size));
+    if let Some(t) = ctx.data(|d| d.get_temp::<egui::TextureHandle>(id)) {
+        return t;
+    }
+    let img = egui::ColorImage::from_rgba_unmultiplied([size, size], &rgba(size));
+    let t = ctx.load_texture("app_logo", img, egui::TextureOptions::LINEAR);
+    ctx.data_mut(|d| d.insert_temp(id, t.clone()));
+    t
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

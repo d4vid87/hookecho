@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The cold-start window on Android 10 and 11, which have no SplashScreen API to configure (see
+  values-v31/themes.xml for the 12+ half). It is a window background, not a layout: the platform
+  draws it the moment the window exists and throws it away on our first frame.
+-->
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:drawable="@color/hookecho_navy" />
+    <item>
+        <bitmap
+            android:gravity="center"
+            android:src="@mipmap/ic_launcher_foreground" />
+    </item>
+</layer-list>
