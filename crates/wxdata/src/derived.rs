@@ -1,4 +1,5 @@
-//! Products derived locally from a Level 2 volume: VIL, VIL density, echo tops, MEHS/POSH hail.
+//! Products derived locally from a Level 2 volume: composite reflectivity, VIL, VIL density,
+//! echo tops, MEHS/POSH hail.
 //!
 //! The NWS ships some of these as Level 3 grids (DVL, EET, and per-cell hail attributes in HI),
 //! but only for the products and resolutions it chooses to distribute, and only for the current
@@ -40,6 +41,9 @@ impl Default for DerivedOpts {
 
 /// The three integrated products, on one shared grid.
 pub struct Derived {
+    /// Column-maximum reflectivity (dBZ) — the strongest echo anywhere above each point,
+    /// rather than what one tilt happens to cut through.
+    pub composite: MrmsField,
     /// Vertically integrated liquid, kg/m².
     pub vil: MrmsField,
     /// VIL density, g/m³ (VIL over echo-top height).
@@ -155,16 +159,26 @@ pub fn derive(sweeps: &[BinnedSweep], opts: &DerivedOpts) -> Option<Derived> {
     let g = Grid::for_sweeps(sweeps)?;
     let n = g.nx * g.ny;
     let (mut vil, mut vild, mut etop) = (vec![f32::NAN; n], vec![f32::NAN; n], vec![f32::NAN; n]);
+    let mut composite = vec![f32::NAN; n];
     let mut samples: Vec<(f64, f32)> = Vec::with_capacity(sweeps.len());
 
     for gy in 0..g.ny {
         for gx in 0..g.nx {
             let (ground_km, az) = g.ground_az(gx, gy);
             column_samples(sweeps, ground_km, az, &mut samples);
+            let i = gy * g.nx + gx;
+            // Composite is a maximum, not an integral, so unlike VIL and echo tops it means
+            // something from a single sample — it is taken before the two-sample guard.
+            if let Some(max) = samples
+                .iter()
+                .map(|(_, dbz)| *dbz)
+                .fold(None, |acc: Option<f32>, d| Some(acc.map_or(d, |a| a.max(d))))
+            {
+                composite[i] = max;
+            }
             if samples.len() < 2 {
                 continue;
             }
-            let i = gy * g.nx + gx;
             let v = vil_of(&samples);
             if v > 0.0 {
                 vil[i] = v;
@@ -179,6 +193,7 @@ pub fn derive(sweeps: &[BinnedSweep], opts: &DerivedOpts) -> Option<Derived> {
     }
 
     Some(Derived {
+        composite: g.field(composite, opts.time),
         vil: g.field(vil, opts.time),
         vild: g.field(vild, opts.time),
         etop: g.field(etop, opts.time),
@@ -342,8 +357,26 @@ mod tests {
         assert!(sample(&d.vil, -97.0, 35.3) > 0.0);
         assert!(sample(&d.etop, -97.0, 35.3) > 0.0);
         assert!(sample(&d.vild, -97.0, 35.3) > 0.0);
+        assert!(sample(&d.composite, -97.0, 35.3) > 0.0);
         // The grid corner is past the 200 km range disk.
         assert!(sample(&d.vil, d.lon_west_corner(), d.lat_north_corner()).is_nan());
+        assert!(sample(&d.composite, d.lon_west_corner(), d.lat_north_corner()).is_nan());
+    }
+
+    /// Composite is the column maximum, so it must equal the strongest tilt over that point —
+    /// never the tilt the display happens to be sitting on.
+    #[test]
+    fn composite_takes_the_strongest_tilt_in_the_column() {
+        // Three tilts, and the middle one is the hot one.
+        let mut sweeps = uniform_sweeps(20.0, &[0.5]);
+        sweeps.extend(uniform_sweeps(58.0, &[2.4]));
+        sweeps.extend(uniform_sweeps(35.0, &[6.0]));
+        let d = derive(&sweeps, &DerivedOpts::default()).unwrap();
+        let gx = ((-97.0 - d.composite.lon_west) / RES_DEG) as usize;
+        let gy = ((d.composite.lat_north - 35.3) / RES_DEG) as usize;
+        let v = d.composite.values[gy * d.composite.nx + gx];
+        // Quantization through the u8 band costs a fraction of a dBZ.
+        assert!((v - 58.0).abs() < 0.6, "column max read {v}, wanted the 58 dBZ tilt");
     }
 
     #[test]

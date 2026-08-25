@@ -86,6 +86,10 @@ pub enum FieldLayer {
     Smoke,
     /// Multi-radar base-reflectivity composite (L3 N0B from every radar covering the view).
     Mosaic,
+    /// Column-maximum reflectivity from this radar's own volume — the strongest echo anywhere
+    /// above each point. Unlike the MRMS composite this is one site at its own resolution, and
+    /// it works in archive replay.
+    CompositeLocal,
     /// VIL integrated locally from the Level 2 volume (works in archive replay, unlike L3 DVL).
     VilLocal,
     /// VIL density — VIL over echo-top height, the classic large-hail discriminator.
@@ -140,7 +144,7 @@ impl FieldLayer {
     }
 
     /// Fixed bottom-to-top paint order within each band.
-    pub const DRAW_ORDER: [FieldLayer; 33] = [
+    pub const DRAW_ORDER: [FieldLayer; 34] = [
         // Below-radar context band (bottom to top). The global models sit at the very bottom:
         // they are the synoptic backdrop everything else is drawn against.
         FieldLayer::GlobalMslp,
@@ -163,6 +167,7 @@ impl FieldLayer {
         FieldLayer::Qpe24h,
         FieldLayer::FlashFlood,
         FieldLayer::HailSwath,
+        FieldLayer::CompositeLocal,
         FieldLayer::Vil,
         FieldLayer::VilLocal,
         FieldLayer::EchoTops,
@@ -202,6 +207,7 @@ impl FieldLayer {
             FieldLayer::UpdraftHelicity => "updrafthelicity",
             FieldLayer::Smoke => "smoke",
             FieldLayer::Mosaic => "mosaic",
+            FieldLayer::CompositeLocal => "composite-local",
             FieldLayer::VilLocal => "vil-local",
             FieldLayer::VilDensity => "vil-density",
             FieldLayer::EtopLocal => "etop-local",

@@ -1280,7 +1280,12 @@ fn field_refresh_secs(layer: crate::render::FieldLayer) -> u64 {
         // Environment (HRRR CAPE/SRH) refreshes slowly — 15 min.
         FL::Cape | FL::Srh => 900,
         // Derived products cost no network: they recompute when the volume does, not on a clock.
-        FL::VilLocal | FL::VilDensity | FL::EtopLocal | FL::HailMehs | FL::HailPosh => 60,
+        FL::CompositeLocal
+        | FL::VilLocal
+        | FL::VilDensity
+        | FL::EtopLocal
+        | FL::HailMehs
+        | FL::HailPosh => 60,
         // Gridded from the GLM feed the app already polls every 20 s; regridding is local work.
         FL::GlmFed => 60,
     }
@@ -3303,7 +3308,8 @@ impl HookEchoApp {
     /// work in archive replay and on each live tilt.
     fn recompute_derived(&mut self, ctx: &egui::Context) {
         use crate::render::FieldLayer as FL;
-        const LAYERS: [FL; 5] = [
+        const LAYERS: [FL; 6] = [
+            FL::CompositeLocal,
             FL::VilLocal,
             FL::VilDensity,
             FL::EtopLocal,
@@ -3372,6 +3378,7 @@ impl HookEchoApp {
             if mask & !HAIL_BITS != 0 {
                 if let Some(d) = wxdata::derived::derive(&sweeps, &opts) {
                     out.extend([
+                        (FL::CompositeLocal, d.composite),
                         (FL::VilLocal, d.vil),
                         (FL::VilDensity, d.vild),
                         (FL::EtopLocal, d.etop),
@@ -7611,6 +7618,13 @@ impl HookEchoApp {
                 false,
             ),
             (
+                FL::CompositeLocal,
+                "Radar",
+                "Composite reflectivity",
+                "The strongest echo anywhere above each point, not just what this tilt cuts through",
+                false,
+            ),
+            (
                 FL::VilLocal,
                 "Radar",
                 "VIL (derived)",
@@ -10315,6 +10329,7 @@ impl HookEchoApp {
             | FL::UpdraftHelicity
             | FL::Smoke
             | FL::Mosaic
+            | FL::CompositeLocal
             | FL::VilLocal
             | FL::VilDensity
             | FL::EtopLocal
