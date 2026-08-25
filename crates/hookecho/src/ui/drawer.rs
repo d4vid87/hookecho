@@ -44,6 +44,12 @@ impl Drawer {
         !self.stack.is_empty()
     }
 
+    /// The page on top, if any. What a workspace saves; the pages underneath it are a back-stack,
+    /// which is a history, not an arrangement.
+    pub fn top(&self) -> Option<&str> {
+        self.stack.last().map(String::as_str)
+    }
+
     /// Claim the drawer for `title`, drawing its header. Returns the window to render the page
     /// body in, or `None` when another page is on top — the caller draws nothing that frame but
     /// stays open, and comes back when the page above it closes.

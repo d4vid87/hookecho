@@ -24,6 +24,11 @@ impl HookEchoApp {
     /// app's own commands below it, plus the alerts tab. Closed by default; the search pill and
     /// the control column are the ways in.
     pub(crate) fn panel(&mut self, ctx: &egui::Context) {
+        // The tour's product stop spotlights the site and tilt rows, which are in here.
+        if self.tour.wants_panel() {
+            self.panel_open = true;
+            self.show_alert_panel = false;
+        }
         if !self.panel_open || self.drawer.is_open() {
             return;
         }
@@ -47,12 +52,10 @@ impl HookEchoApp {
         let mosaic = self.mosaic_status();
         let mut etop_dbz = self.settings.etop_dbz;
         let mut hide = false;
-        // Tour spotlights, recorded from inside the panel (no `self` reachable in there).
-        let mut alerts_rect = None;
         // Height budget: the search pill above, the scrubber pill below (which is centred and
         // grows with the window, so on a narrow one it would otherwise run under this panel).
         let max_h = (self.chrome_rect.height() - PANEL_TOP - SCRUBBER_CLEARANCE).max(160.0);
-        let panel_rect = egui::Area::new(egui::Id::new("panel"))
+        egui::Area::new(egui::Id::new("panel"))
             .constrain_to(self.chrome_rect)
             .anchor(egui::Align2::LEFT_TOP, egui::vec2(PANEL_X, PANEL_TOP))
             .show(ctx, |ui| {
@@ -81,9 +84,7 @@ impl HookEchoApp {
                         } else {
                             format!("Alerts ({alert_count})")
                         };
-                        let alerts_hit = ui.selectable_label(alerts_tab, label);
-                        alerts_rect = Some(alerts_hit.rect);
-                        if alerts_hit.clicked() {
+                        if ui.selectable_label(alerts_tab, label).clicked() {
                             alerts_tab = true;
                         }
                         // Collapse, on the row it collapses. The floating button that brings the
@@ -204,11 +205,7 @@ impl HookEchoApp {
                         .default_open(false)
                         .show(ui, |ui| self.app_rows(ui));
                 });
-            })
-            .response
-            .rect;
-        self.tour_anchors.menu = Some(panel_rect);
-        self.tour_anchors.alerts = alerts_rect;
+            });
         self.show_alert_panel = alerts_tab;
         self.settings.mute_alerts = muted;
         if hide {
@@ -254,6 +251,7 @@ impl HookEchoApp {
     /// two would need two states to keep in sync for no extra reach.
     pub(crate) fn search_pill(&mut self, ctx: &egui::Context) {
         let accent = crate::theme::accent(self.settings.theme);
+        let mut anchor = None;
         egui::Area::new(egui::Id::new("search_pill"))
             .constrain_to(self.chrome_rect)
             .anchor(egui::Align2::LEFT_TOP, egui::vec2(PANEL_X, 10.0))
@@ -273,6 +271,9 @@ impl HookEchoApp {
                             .fill(egui::Color32::TRANSPARENT)
                             .stroke(egui::Stroke::NONE),
                         );
+                        // The tour's "everything else" stop points here: the pill is always on
+                        // screen, where the panel it opens is not.
+                        anchor = Some(menu.rect);
                         if menu.on_hover_text("Show or hide the panel").clicked() {
                             self.panel_open = !self.panel_open;
                         }
@@ -296,11 +297,13 @@ impl HookEchoApp {
                     });
                 });
             });
+        self.tour_anchors.menu = anchor;
     }
 
     /// The right-edge control column: the buttons that open what floats over the map.
     pub(crate) fn control_column(&mut self, ctx: &egui::Context) {
         use crate::ui::style::square_btn;
+        let mut alerts_anchor = None;
         let accent = crate::theme::accent(self.settings.theme);
         let (alert_count, esc) = self.alert_badge();
         let layers_on = self.panel_open && !self.show_alert_panel;
@@ -330,6 +333,7 @@ impl HookEchoApp {
                     }
                     let bell = square_btn(ui, egui_phosphor::regular::BELL, alerts_on, accent)
                         .on_hover_text("Active alerts in view");
+                    alerts_anchor = Some(bell.rect);
                     if bell.clicked() {
                         self.panel_open = !alerts_on;
                         self.show_alert_panel = true;
@@ -354,6 +358,7 @@ impl HookEchoApp {
                     }
                 });
             });
+        self.tour_anchors.alerts = alerts_anchor;
     }
 
     /// Background picker, slid in beside the control column.

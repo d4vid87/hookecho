@@ -95,6 +95,12 @@ impl Tour {
         self.open && self.step < 2
     }
 
+    /// The desktop equivalent: the product stop points at the site and tilt rows, which live in
+    /// the slide-over panel. Spotlighting a control the user has to find first is not a tour.
+    pub fn wants_panel(&self) -> bool {
+        self.open && self.step == 1
+    }
+
     fn body(&self, sig: Signals) -> String {
         let android = cfg!(target_os = "android");
         match self.step {
@@ -103,9 +109,9 @@ impl Tour {
                  newest scan. Every overlay — warnings, reports, lightning — follows you back in \
                  time."
             } else {
-                "Drag the timeline to walk back through the storm, or click LIVE to snap to the \
-                 newest scan. Every overlay — warnings, reports, lightning — follows you back in \
-                 time."
+                "Drag the scrubber along the bottom to walk back through the storm, or click LIVE \
+                 to snap to the newest scan. Every overlay — warnings, reports, lightning — \
+                 follows you back in time."
             }
             .to_string(),
             1 => {
@@ -126,9 +132,12 @@ impl Tour {
                  search box — type what you want in plain English (\"hail\", \"sounding\", a town \
                  name) and it's one tap away."
             } else {
-                "The sidebar holds everything else: products, overlays, tools, windows, settings. \
-                 Ctrl+K jumps straight to its search — type what you want in plain English \
-                 (\"hail\", \"sounding\", a town name) and Enter runs the top match."
+                "This pill opens the panel, and the panel holds everything else: products, \
+                 overlays, tools, settings. Ctrl+K jumps straight to its search — type what you \
+                 want in plain English (\"hail\", \"sounding\", a town name) and Enter runs the \
+                 top match. Tools you read rather than watch open as pages in a drawer down the \
+                 left edge; the buttons down the right edge are the layers, the background map \
+                 and the alert bell."
             }
             .to_string(),
             _ => {

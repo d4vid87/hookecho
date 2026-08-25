@@ -36,6 +36,30 @@ pub struct Workspace {
     /// overlays; `default` so a workspace written before this field existed still loads.
     #[serde(default)]
     pub fields_on: Vec<String>,
+    /// What the chrome looked like: which panel was showing, which drawer page was open. `None`
+    /// on a workspace written before this field existed, and on the starters — both mean "leave
+    /// the chrome where the user left it" rather than "close everything", which is what a
+    /// defaulted struct would have meant.
+    #[serde(default)]
+    pub chrome: Option<Chrome>,
+}
+
+/// The floating chrome's state, as far as it is worth restoring: which surface was showing, not
+/// how far it was scrolled.
+#[derive(Debug, Clone, PartialEq, Default, serde::Serialize, serde::Deserialize)]
+pub struct Chrome {
+    #[serde(default)]
+    pub panel_open: bool,
+    /// The panel's Alerts tab rather than Data.
+    #[serde(default)]
+    pub alerts_tab: bool,
+    #[serde(default)]
+    pub basemap_open: bool,
+    /// Title of the drawer page on top, if any — matched back to a window by
+    /// `app::chrome::window_for_page`. A title this build no longer has is skipped, same rule as
+    /// the overlay slugs.
+    #[serde(default)]
+    pub drawer: Option<String>,
 }
 
 /// One pane's state. Camera as lon/lat/zoom, basemap as its slug: both survive a file written by
@@ -125,6 +149,7 @@ pub fn starters() -> Vec<Workspace> {
             ],
             adopt_site: true,
             fields_on: Vec::new(),
+            chrome: None,
         },
         Workspace {
             name: "National overview".into(),
@@ -144,6 +169,7 @@ pub fn starters() -> Vec<Workspace> {
             overlays_on: vec!["Alerts".into(), "StormReports".into(), "Fronts".into()],
             adopt_site: false,
             fields_on: vec!["mrms".into()],
+            chrome: None,
         },
         Workspace {
             name: "Analysis".into(),
@@ -155,6 +181,7 @@ pub fn starters() -> Vec<Workspace> {
             overlays_on: vec!["Alerts".into(), "Cells".into(), "RangeRings".into()],
             adopt_site: true,
             fields_on: Vec::new(),
+            chrome: None,
         },
     ]
 }
@@ -208,6 +235,12 @@ mod tests {
             overlays_on: vec!["Alerts".into(), "Cells".into()],
             adopt_site: false,
             fields_on: vec!["mrms".into()],
+            chrome: Some(Chrome {
+                panel_open: true,
+                alerts_tab: false,
+                basemap_open: false,
+                drawer: Some("Settings".into()),
+            }),
         };
         let json = serde_json::to_string(&ws).unwrap();
         assert_eq!(serde_json::from_str::<Workspace>(&json).unwrap(), ws);
@@ -219,7 +252,7 @@ mod tests {
         let json = r#"{"name":"old","panes":[],"active":0,"link_cameras":false,
             "overlays_on":["Alerts"]}"#;
         let ws: Workspace = serde_json::from_str(json).unwrap();
-        assert!(ws.fields_on.is_empty() && !ws.adopt_site);
+        assert!(ws.fields_on.is_empty() && !ws.adopt_site && ws.chrome.is_none());
     }
 
     #[test]

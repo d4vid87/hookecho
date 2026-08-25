@@ -6,6 +6,7 @@ mod chips;
 mod overlay;
 mod registry;
 mod scrubber;
+mod state;
 mod window_frame;
 mod windows;
 
