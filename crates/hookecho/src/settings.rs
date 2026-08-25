@@ -428,10 +428,6 @@ pub struct Settings {
     /// receives it.
     #[serde(default = "default_true")]
     pub share_card: bool,
-    /// Hide the docked timeline bar under the map (desktop). The transport keeps working from the
-    /// keyboard; this is for people who want the map edge-to-edge.
-    #[serde(default)]
-    pub hide_toolbar: bool,
     /// Registry labels in the order the user dragged them, across every category. Labels not in
     /// here keep their registry order behind the ones that are — so a reorder never hides a row,
     /// and a renamed action just falls back to its default place.
@@ -968,7 +964,6 @@ impl Default for Settings {
             volume_cache_mb: 0,
             tile_disk_cache_mb: 0,
             share_card: true,
-            hide_toolbar: false,
             layer_order: Vec::new(),
             mping_key: String::new(),
             etop_dbz: default_etop_dbz(),
@@ -1396,7 +1391,6 @@ mod tests {
             seeded_workspaces: false,
             smooth_radar: false,
             share_card: true,
-            hide_toolbar: false,
             layer_order: Vec::new(),
             mping_key: String::new(),
             etop_dbz: 30.0,

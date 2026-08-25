@@ -84,9 +84,11 @@ bar, no docked columns eating the weather:
   and closes to nothing — the map runs edge to edge underneath it.
 - Its **Alerts tab** lists every alert covering your view, worst first, badged
   with the count. Click a row to fly there and read the bulletin.
-- **The bottom bar** is the timeline: site, clock, play, scrub, and a LIVE badge
-  that snaps back to the newest scan. Right-click the badge for the archive day,
-  loop and playback speed.
+- **The scrubber** floats along the bottom: site, clock, play, a LIVE badge that
+  snaps back to the newest scan, and a time track marked with one tick per volume
+  and labelled by the hour, in the radar's own timezone. Drag it or click anywhere
+  on it. The shaded stretch at the live end is the loop the play button cycles.
+  Right-click the badge for the archive day, loop and playback speed.
 - **The right edge** carries the control column — layers, background map, and an
   alert bell badged with the number of alerts in view — and the color scale for the product each pane is
   showing — a thin bar floating over the map, spanning only the values the color

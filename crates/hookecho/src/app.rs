@@ -1181,7 +1181,6 @@ pub(crate) enum PaletteAction {
     CycleBasemap,
     ToggleMute,
     /// Show/hide the docked timeline bar under the map (desktop).
-    ToggleToolbar,
     /// Show/hide the docked sidebar on the left (desktop).
     TogglePanel,
     Reload,
@@ -6960,10 +6959,6 @@ impl HookEchoApp {
                 self.set_basemap(next);
             }
             PaletteAction::ToggleMute => self.apply_action(BindableAction::ToggleMute, ctx),
-            PaletteAction::ToggleToolbar => {
-                self.settings.hide_toolbar = !self.settings.hide_toolbar;
-                self.settings.save();
-            }
             PaletteAction::TogglePanel => self.panel_open = !self.panel_open,
             PaletteAction::Reload => self.trigger_reload(ctx),
             PaletteAction::InstantReplay => self.instant_replay(),
@@ -14645,9 +14640,6 @@ impl eframe::App for HookEchoApp {
         // no product menu, and an iframe is exactly where a user can't reach those any other way.
         // `embed` still buys the idle heartbeat and the state postMessage.
         let bare = self.obs_mode;
-        if !cfg!(target_os = "android") && !bare && !self.settings.hide_toolbar {
-            self.timeline_bar(root);
-        }
 
         self.chrome_rect = root.available_rect_before_wrap();
 
@@ -14667,6 +14659,7 @@ impl eframe::App for HookEchoApp {
         if !cfg!(target_os = "android") && !bare {
             self.search_pill(ctx);
             self.control_column(ctx);
+            self.scrubber(ctx);
             self.panel(ctx);
             self.basemap_panel(ctx);
             self.info_chip(ctx);

@@ -700,14 +700,6 @@ impl HookEchoApp {
             Some(self.panel_open),
         );
         push(
-            "Timeline bar",
-            "Reference",
-            "The transport strip under the map \u{2014} hide it for an edge-to-edge map",
-            false,
-            PaletteAction::ToggleToolbar,
-            Some(!self.settings.hide_toolbar),
-        );
-        push(
             "About Hook Echo-WX",
             "Reference",
             "Version, links, and whether a newer release is out",
