@@ -94,8 +94,7 @@ impl MarkerWindow {
     }
 }
 
-/// Editable marker table (home/name/lat/lon/watch radius/icon). Shared by the manager window and
-/// the wizard.
+/// Editable marker table (home/name/lat/lon/watch radius/icon).
 /// Returns the index that was removed this frame, if any: a popup open on a later marker is
 /// pointing at the wrong one afterwards, and the caller is the only place that knows.
 pub fn marker_grid(

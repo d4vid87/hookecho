@@ -7,8 +7,8 @@
 //! control under the spotlight stays clickable. That is what lets two of the four stops be
 //! "do the thing" rather than "read the card".
 //!
-//! Nothing here auto-starts. The wizard offers it on its last card, and it is re-runnable from
-//! the command palette, the sidebar's App section, and Settings → General.
+//! Nothing here auto-starts. The first-run card offers it, and it is re-runnable from the command
+//! palette, the panel's App section, and Settings → General.
 
 use wxdata::level2::Moment;
 

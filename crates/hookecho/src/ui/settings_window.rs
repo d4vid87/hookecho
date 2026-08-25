@@ -58,7 +58,7 @@ pub struct SettingsWindow {
     #[cfg(not(target_arch = "wasm32"))]
     storage_rows: Option<Vec<crate::storage::Entry>>,
     /// Set by the General tab's two buttons; the app drains them after `show`.
-    pub run_wizard: bool,
+    pub run_setup: bool,
     pub run_tour: bool,
     /// True while a keypress is being captured — the app stands its global hotkey table down so
     /// binding `A` doesn't also toggle the alert panel.
@@ -128,7 +128,7 @@ impl SettingsWindow {
             });
             ui.separator();
             match self.tab {
-                Tab::General => general_tab(ui, settings, &mut self.run_wizard, &mut self.run_tour),
+                Tab::General => general_tab(ui, settings, &mut self.run_setup, &mut self.run_tour),
                 Tab::Palettes => self.palettes_tab(ui, settings, palettes),
                 Tab::Units => units_tab(ui, settings),
                 Tab::Basemaps => basemaps_tab(ui, settings),
@@ -725,7 +725,7 @@ fn sync_tab(ui: &mut egui::Ui, settings: &mut Settings, sync: &SyncView) -> Opti
 fn general_tab(
     ui: &mut egui::Ui,
     settings: &mut Settings,
-    run_wizard: &mut bool,
+    run_setup: &mut bool,
     run_tour: &mut bool,
 ) {
     egui::Grid::new("general_grid")
@@ -807,11 +807,11 @@ fn general_tab(
     ui.strong("Getting started");
     ui.horizontal(|ui| {
         if ui
-            .button("Setup wizard\u{2026}")
-            .on_hover_text("Re-run first-time setup")
+            .button("Set up again\u{2026}")
+            .on_hover_text("Pick your home radar again")
             .clicked()
         {
-            *run_wizard = true;
+            *run_setup = true;
         }
         if ui
             .button("Take the tour\u{2026}")
@@ -875,7 +875,7 @@ fn general_tab(
 }
 
 /// Alert-sound controls: master toggle, volume, and a per-event sound picker with previews.
-/// Shared by the Settings ▸ Audio tab and the first-run wizard.
+/// Shared by the Settings ▸ Audio tab and the alert rules page.
 pub fn sound_picker(ui: &mut egui::Ui, settings: &mut Settings) {
     use crate::settings::AlertSound;
 

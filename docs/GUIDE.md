@@ -7,10 +7,11 @@ parts that need a filesystem or GPS.
 
 ## Getting oriented
 
-First launch runs a four-card setup: home radar site, map and theme, how
-warnings reach you. Its last card offers a 60-second tour of the live map; take
-it or skip it, and re-run either from the panel's **App** section, `Ctrl+K`,
-or **Settings → General**. After that the whole app is a full-bleed map with three floating pieces — the
+First launch asks for one thing — your home radar — and offers to find the
+nearest one from your location. It also offers a 60-second tour of the live map;
+take it or skip it, and re-run either from the panel's **App** section, `Ctrl+K`,
+or **Settings → General**. Everything else has a default and lives in
+**Settings**. After that the whole app is a full-bleed map with three floating pieces — the
 **panel** (site, product, tilt, every layer, window, tool and setting), opened
 from the search pill top-left or the control column on the **right edge** (which
 also carries the color scale for what you're looking at), and the **scrubber**
