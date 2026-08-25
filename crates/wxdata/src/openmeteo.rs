@@ -50,6 +50,8 @@ pub fn parse_forecast(body: &str) -> anyhow::Result<PointForecast> {
                 (Some(s), None) => format!("{s:.0} mph"),
                 _ => String::new(),
             },
+            wind_mph: wind.get(i).map(|s| *s as f32),
+            wind_deg: wind_dir.get(i).map(|d| *d as f32),
             // A daily row covers a whole day; the window colors it as a day period.
             is_day: true,
         });
@@ -70,6 +72,8 @@ fn parse_hourly(hourly: &serde_json::Value) -> Vec<Period> {
     let times = arr_i64(hourly, "time");
     let temps = arr_f64(hourly, "temperature_2m");
     let precip = arr_f64(hourly, "precipitation_probability");
+    let wind = arr_f64(hourly, "wind_speed_10m");
+    let wind_dir = arr_f64(hourly, "wind_direction_10m");
     let now = Utc::now().timestamp();
     times
         .iter()
@@ -82,7 +86,13 @@ fn parse_hourly(hourly: &serde_json::Value) -> Vec<Period> {
                 temp_f: temps.get(i).copied().unwrap_or(f64::NAN) as f32,
                 precip_pct: precip.get(i).map(|p| *p as u8),
                 short: String::new(),
-                wind: String::new(),
+                wind: match (wind.get(i), wind_dir.get(i)) {
+                    (Some(s), Some(d)) => format!("{} {s:.0} mph", compass(*d)),
+                    (Some(s), None) => format!("{s:.0} mph"),
+                    _ => String::new(),
+                },
+                wind_mph: wind.get(i).map(|s| *s as f32),
+                wind_deg: wind_dir.get(i).map(|d| *d as f32),
                 is_day: true,
             })
         })
@@ -152,7 +162,7 @@ pub async fn fetch(http: &reqwest::Client, lat: f64, lon: f64) -> anyhow::Result
     let url = format!(
         "{BASE}?latitude={lat:.4}&longitude={lon:.4}\
          &temperature_unit=fahrenheit&wind_speed_unit=mph&timeformat=unixtime&timezone=UTC\
-         &hourly=temperature_2m,precipitation_probability\
+         &hourly=temperature_2m,precipitation_probability,wind_speed_10m,wind_direction_10m\
          &daily=temperature_2m_max,precipitation_probability_max,weather_code,\
 wind_speed_10m_max,wind_direction_10m_dominant&forecast_days=7"
     );

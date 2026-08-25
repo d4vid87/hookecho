@@ -1280,7 +1280,12 @@ fn field_refresh_secs(layer: crate::render::FieldLayer) -> u64 {
         // Environment (HRRR CAPE/SRH) refreshes slowly — 15 min.
         FL::Cape | FL::Srh => 900,
         // Derived products cost no network: they recompute when the volume does, not on a clock.
-        FL::VilLocal | FL::VilDensity | FL::EtopLocal | FL::HailMehs | FL::HailPosh => 60,
+        FL::CompositeLocal
+        | FL::VilLocal
+        | FL::VilDensity
+        | FL::EtopLocal
+        | FL::HailMehs
+        | FL::HailPosh => 60,
         // Gridded from the GLM feed the app already polls every 20 s; regridding is local work.
         FL::GlmFed => 60,
     }
@@ -3227,7 +3232,7 @@ impl HookEchoApp {
     /// Spawn a background overlay fetch, routing the result to `overlay_rx`.
     /// Which moments the active pane's volume carries. All true when nothing is loaded, so an
     /// empty pane still offers the full product list.
-    fn available_moments(&self) -> [bool; 6] {
+    fn available_moments(&self) -> [bool; Moment::ALL.len()] {
         // The pane's remembered union, not this instant's volume: a half-arrived live volume
         // carries fewer moments than the radar sends, and the rows must not blink.
         self.views[self.active].moments()
@@ -3303,7 +3308,8 @@ impl HookEchoApp {
     /// work in archive replay and on each live tilt.
     fn recompute_derived(&mut self, ctx: &egui::Context) {
         use crate::render::FieldLayer as FL;
-        const LAYERS: [FL; 5] = [
+        const LAYERS: [FL; 6] = [
+            FL::CompositeLocal,
             FL::VilLocal,
             FL::VilDensity,
             FL::EtopLocal,
@@ -3372,6 +3378,7 @@ impl HookEchoApp {
             if mask & !HAIL_BITS != 0 {
                 if let Some(d) = wxdata::derived::derive(&sweeps, &opts) {
                     out.extend([
+                        (FL::CompositeLocal, d.composite),
                         (FL::VilLocal, d.vil),
                         (FL::VilDensity, d.vild),
                         (FL::EtopLocal, d.etop),
@@ -6937,11 +6944,17 @@ impl HookEchoApp {
                                         t.following = false;
                                     }
                                 }
-                                ui.monospace(t.date.format("%Y-%m-%d").to_string())
-                                    .on_hover_text(
-                                        "Archive days are UTC days — the S3 buckets are \
-                                             bucketed that way",
-                                    );
+                                // The carets are still the fastest way to step a day, but they
+                                // were the *only* way: reaching a storm from years back meant
+                                // thousands of clicks. The archive runs to June 1991.
+                                let today = chrono::Utc::now().date_naive();
+                                if let Some(d) = archive_day_input(ui, t.date) {
+                                    // Clamp rather than trust the input: neither a calendar
+                                    // widget nor a typed string knows where the archive starts
+                                    // or that the future is empty.
+                                    t.date = d.clamp(wxdata::level2::ARCHIVE_START, today);
+                                    t.following = t.date >= today;
+                                }
                                 let is_today = t.date >= chrono::Utc::now().date_naive();
                                 if ui
                                     .add_enabled(
@@ -7608,6 +7621,13 @@ impl HookEchoApp {
                 "National",
                 "Flash density (GLM)",
                 "Where the satellite flashes are densest \u{2014} the total-lightning field                  behind the individual dots, and where a lightning jump shows up first.",
+                false,
+            ),
+            (
+                FL::CompositeLocal,
+                "Radar",
+                "Composite reflectivity",
+                "The strongest echo anywhere above each point, not just what this tilt cuts through",
                 false,
             ),
             (
@@ -10315,6 +10335,7 @@ impl HookEchoApp {
             | FL::UpdraftHelicity
             | FL::Smoke
             | FL::Mosaic
+            | FL::CompositeLocal
             | FL::VilLocal
             | FL::VilDensity
             | FL::EtopLocal
@@ -10341,7 +10362,7 @@ impl HookEchoApp {
             let v = &mut self.views[idx];
             v.loaded_site = v.site.clone();
             v.volume = None;
-            v.moments_seen = [false; 6];
+            v.moments_seen = [false; Moment::ALL.len()];
             v.error = None;
             // Clear a stuck in-flight flag: if the previous site's fetch is still running when the
             // site changes, its result is dropped on arrival (site mismatch) without clearing
@@ -16587,6 +16608,7 @@ impl eframe::App for HookEchoApp {
             ctx,
             cells,
             &zdr_cells,
+            &self.cell_trends,
             crate::theme::accent(self.settings.theme),
         ) {
             if let Some(c) = self
@@ -17431,5 +17453,89 @@ mod tests {
         strokes.pop(); // Undo
         assert_eq!(strokes.len(), 1);
         assert_eq!(strokes[0].color, red);
+    }
+}
+
+/// The archive-day control inside the LIVE/ARCHIVE badge menu. `Some` on the frame the user
+/// picks a new day.
+///
+/// Native gets a calendar. The web build does not: the picker widget and the `jiff` date type
+/// it takes cost about 120 KB gzipped, which is a real share of the wasm budget to spend on a
+/// convenience, and a typed date reaches 1991 just as directly. Everything else about the menu
+/// — the carets, the UTC-day caveat — is the same on both.
+#[cfg(not(target_arch = "wasm32"))]
+fn archive_day_input(ui: &mut egui::Ui, date: chrono::NaiveDate) -> Option<chrono::NaiveDate> {
+    let mut picked = to_jiff(date);
+    let changed = ui
+        .add(
+            egui_extras::DatePickerButton::new(&mut picked)
+                .id_salt("archive-day")
+                .format("%Y-%m-%d")
+                .highlight_weekends(false),
+        )
+        .on_hover_text("Archive days are UTC days — the S3 buckets are bucketed that way")
+        .changed();
+    changed.then(|| from_jiff(picked)).flatten()
+}
+
+/// Web: type the day instead. The buffer lives in egui's own memory rather than app state,
+/// because a half-typed date is not something the app has any use for.
+#[cfg(target_arch = "wasm32")]
+fn archive_day_input(ui: &mut egui::Ui, date: chrono::NaiveDate) -> Option<chrono::NaiveDate> {
+    let id = egui::Id::new("archive-day-text");
+    let shown = date.format("%Y-%m-%d").to_string();
+    let mut buf: String = ui.data_mut(|d| d.get_temp(id)).unwrap_or_else(|| shown.clone());
+    // Someone else moved the day (a caret, a deep link): follow it rather than argue.
+    if !buf.starts_with(&shown[..4]) && chrono::NaiveDate::parse_from_str(&buf, "%Y-%m-%d").is_ok()
+    {
+        buf = shown.clone();
+    }
+    let resp = ui
+        .add(
+            egui::TextEdit::singleline(&mut buf)
+                .desired_width(84.0)
+                .font(egui::TextStyle::Monospace),
+        )
+        .on_hover_text(
+            "Archive days are UTC days — the S3 buckets are bucketed that way. \
+             Type YYYY-MM-DD; the archive starts 1991-06-05.",
+        );
+    let out = chrono::NaiveDate::parse_from_str(&buf, "%Y-%m-%d")
+        .ok()
+        .filter(|d| *d != date);
+    ui.data_mut(|d| d.insert_temp(id, buf));
+    // Only commit on a complete, parseable date — otherwise every keystroke mid-typing would
+    // send the timeline somewhere.
+    resp.changed().then_some(out).flatten()
+}
+
+/// A chrono date as a jiff one, for `egui_extras`'s date picker.
+///
+/// ponytail: the two crates model a civil date identically, so this is a field copy. It exists
+/// because the picker is the only jiff-speaking thing in the app and converting one widget's
+/// argument is cheaper than migrating every date in the codebase. Out-of-range dates cannot
+/// happen — chrono's year range is a subset of jiff's — so the fallback is the epoch.
+#[cfg(not(target_arch = "wasm32"))]
+fn to_jiff(d: chrono::NaiveDate) -> jiff::civil::Date {
+    use chrono::Datelike;
+    jiff::civil::Date::new(d.year() as i16, d.month() as i8, d.day() as i8)
+        .unwrap_or(jiff::civil::Date::ZERO)
+}
+
+/// The inverse of [`to_jiff`]; `None` for a date chrono cannot represent.
+#[cfg(not(target_arch = "wasm32"))]
+fn from_jiff(d: jiff::civil::Date) -> Option<chrono::NaiveDate> {
+    chrono::NaiveDate::from_ymd_opt(d.year() as i32, d.month() as u32, d.day() as u32)
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod date_picker_tests {
+    /// The picker's date must survive the round trip, or picking a day would move it.
+    #[test]
+    fn dates_round_trip_through_jiff() {
+        for (y, m, d) in [(1991, 6, 5), (2026, 8, 24), (2000, 2, 29), (2011, 12, 31)] {
+            let orig = chrono::NaiveDate::from_ymd_opt(y, m, d).unwrap();
+            assert_eq!(super::from_jiff(super::to_jiff(orig)), Some(orig));
+        }
     }
 }
