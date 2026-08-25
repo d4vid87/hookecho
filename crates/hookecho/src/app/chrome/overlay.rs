@@ -22,7 +22,7 @@ impl HookEchoApp {
     /// app's own commands below it, plus the alerts tab. Closed by default; the search pill and
     /// the control column are the ways in.
     pub(crate) fn panel(&mut self, ctx: &egui::Context) {
-        if !self.panel_open {
+        if !self.panel_open || self.drawer.is_open() {
             return;
         }
         crate::prof_scope!("panel");

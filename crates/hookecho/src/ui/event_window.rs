@@ -25,71 +25,83 @@ pub struct EventWindow {
 }
 
 impl EventWindow {
-    pub fn show(&mut self, ctx: &egui::Context, settings: &mut Settings) -> Option<EventAction> {
+    pub fn show(
+        &mut self,
+        ctx: &egui::Context,
+        settings: &mut Settings,
+        drawer: &mut crate::ui::drawer::Drawer,
+    ) -> Option<EventAction> {
         let mut open = self.open;
         let mut action = None;
         let mut remove: Option<usize> = None;
-        crate::ui::phone_surface(ctx, egui::Window::new("Event Library"))
-            .open(&mut open)
-            .default_size([460.0, 460.0])
-            .show(ctx, |ui| {
-                crate::theme::section(ui, "Famous events", |ui| {
-                    for e in crate::events::EVENTS {
-                        ui.horizontal(|ui| {
-                            if ui
-                                .button(egui_phosphor::regular::CARET_RIGHT)
-                                .on_hover_text("Jump the active pane here")
-                                .clicked()
-                            {
-                                action = Some(EventAction::Goto {
-                                    site: e.site.to_string(),
-                                    lon: e.lon,
-                                    lat: e.lat,
-                                    zoom: e.zoom,
-                                    time: Some(e.datetime()),
-                                });
-                            }
-                            ui.strong(e.name);
-                            ui.weak(e.site);
-                        });
-                        ui.label(egui::RichText::new(e.blurb).size(11.0).weak());
-                        ui.add_space(2.0);
-                    }
-                });
-
-                ui.add_space(6.0);
-                crate::theme::section(ui, "My bookmarks", |ui| {
-                    if settings.bookmarks.is_empty() {
-                        ui.weak("None yet — click “Bookmark current view”.");
-                    }
-                    for (i, b) in settings.bookmarks.iter().enumerate() {
-                        ui.horizontal(|ui| {
-                            if ui.button(egui_phosphor::regular::CARET_RIGHT).clicked() {
-                                let (lon, lat) = crate::render::mercator::world_to_lonlat(b.x, b.y);
-                                action = Some(EventAction::Goto {
-                                    site: b.site.clone(),
-                                    lon,
-                                    lat,
-                                    zoom: b.zoom,
-                                    time: b.time_secs.and_then(|s| DateTime::from_timestamp(s, 0)),
-                                });
-                            }
-                            ui.strong(&b.name);
-                            ui.weak(&b.site);
-                            if b.time_secs.is_some() {
-                                ui.weak("· archive");
-                            }
-                            if ui.button("✖").clicked() {
-                                remove = Some(i);
-                            }
-                        });
-                    }
-                    ui.add_space(4.0);
-                    if ui.button("🔖 Bookmark current view").clicked() {
-                        action = Some(EventAction::AddBookmark);
-                    }
-                });
+        let Some(window) = drawer.page(
+            ctx,
+            "Event Library",
+            &mut open,
+            false,
+            egui::Window::new("Event Library"),
+        ) else {
+            self.open = open;
+            return None;
+        };
+        window.show(ctx, |ui| {
+            crate::theme::section(ui, "Famous events", |ui| {
+                for e in crate::events::EVENTS {
+                    ui.horizontal(|ui| {
+                        if ui
+                            .button(egui_phosphor::regular::CARET_RIGHT)
+                            .on_hover_text("Jump the active pane here")
+                            .clicked()
+                        {
+                            action = Some(EventAction::Goto {
+                                site: e.site.to_string(),
+                                lon: e.lon,
+                                lat: e.lat,
+                                zoom: e.zoom,
+                                time: Some(e.datetime()),
+                            });
+                        }
+                        ui.strong(e.name);
+                        ui.weak(e.site);
+                    });
+                    ui.label(egui::RichText::new(e.blurb).size(11.0).weak());
+                    ui.add_space(2.0);
+                }
             });
+
+            ui.add_space(6.0);
+            crate::theme::section(ui, "My bookmarks", |ui| {
+                if settings.bookmarks.is_empty() {
+                    ui.weak("None yet — click “Bookmark current view”.");
+                }
+                for (i, b) in settings.bookmarks.iter().enumerate() {
+                    ui.horizontal(|ui| {
+                        if ui.button(egui_phosphor::regular::CARET_RIGHT).clicked() {
+                            let (lon, lat) = crate::render::mercator::world_to_lonlat(b.x, b.y);
+                            action = Some(EventAction::Goto {
+                                site: b.site.clone(),
+                                lon,
+                                lat,
+                                zoom: b.zoom,
+                                time: b.time_secs.and_then(|s| DateTime::from_timestamp(s, 0)),
+                            });
+                        }
+                        ui.strong(&b.name);
+                        ui.weak(&b.site);
+                        if b.time_secs.is_some() {
+                            ui.weak("· archive");
+                        }
+                        if ui.button("✖").clicked() {
+                            remove = Some(i);
+                        }
+                    });
+                }
+                ui.add_space(4.0);
+                if ui.button("🔖 Bookmark current view").clicked() {
+                    action = Some(EventAction::AddBookmark);
+                }
+            });
+        });
         if let Some(i) = remove {
             settings.bookmarks.remove(i);
         }

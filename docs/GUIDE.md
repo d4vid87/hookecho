@@ -14,7 +14,9 @@ or **Settings → General**. After that the whole app is a full-bleed map with t
 **panel** (site, product, tilt, every layer, window, tool and setting), opened
 from the search pill top-left or the control column on the **right edge** (which
 also carries the color scale for what you're looking at), and the **bottom bar**
-(the timeline).
+(the timeline). Tools you browse rather than watch — settings, the event
+library, alert rules — open as pages in a slide-over **drawer** on that same
+left edge, one page at a time, with a back arrow to the page you came from.
 
 **If you remember one thing, remember `Ctrl+K`.** It searches the panel, and
 Enter runs the top match. Every action in the app is in there, described in

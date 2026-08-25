@@ -1946,6 +1946,8 @@ pub struct HookEchoApp {
     cells_window: ui::cells_window::CellsWindow,
     glossary: ui::glossary::Glossary,
     rules_window: ui::rules_window::RulesWindow,
+    /// The one slide-over surface every browsable tool page renders into.
+    drawer: ui::drawer::Drawer,
     /// Warning verification lab and its in-flight query.
     verify_window: ui::verify_window::VerifyWindow,
     verify_rx: Option<std::sync::mpsc::Receiver<Result<wxdata::verify::Verification, String>>>,
@@ -2830,6 +2832,7 @@ impl HookEchoApp {
             cells_window: Default::default(),
             glossary: Default::default(),
             rules_window: Default::default(),
+            drawer: Default::default(),
             verify_window: Default::default(),
             verify_rx: None,
             xsection_moment: Moment::Reflectivity,
@@ -14770,8 +14773,14 @@ impl eframe::App for HookEchoApp {
             last_sync: self.sync_state.last_sync,
         };
         let sync_action =
-            self.settings_window
-                .show(ctx, &mut self.settings, &self.palettes, sync_view, &entries);
+            self.settings_window.show(
+                ctx,
+                &mut self.settings,
+                &self.palettes,
+                sync_view,
+                &entries,
+                &mut self.drawer,
+            );
         self.capture_key = self.settings_window.capturing;
         if std::mem::take(&mut self.settings_window.run_wizard) {
             self.wizard.start();
@@ -15126,7 +15135,10 @@ impl eframe::App for HookEchoApp {
             }
         }
         self.goes_time_bar(ctx);
-        if let Some(act) = self.event_window.show(ctx, &mut self.settings) {
+        if let Some(act) = self
+            .event_window
+            .show(ctx, &mut self.settings, &mut self.drawer)
+        {
             use ui::event_window::EventAction;
             match act {
                 EventAction::Goto {
@@ -15184,7 +15196,12 @@ impl eframe::App for HookEchoApp {
             _ => std::collections::HashSet::new(),
         };
         ui::glossary::show(&mut self.glossary, ctx);
-        if ui::rules_window::show(&mut self.rules_window, ctx, &mut self.settings) {
+        if ui::rules_window::show(
+            &mut self.rules_window,
+            ctx,
+            &mut self.settings,
+            &mut self.drawer,
+        ) {
             self.settings.save();
         }
         if let Some(id) = ui::cells_window::show(
