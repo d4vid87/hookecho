@@ -16625,6 +16625,7 @@ impl eframe::App for HookEchoApp {
             ctx,
             cells,
             &zdr_cells,
+            &self.cell_trends,
             crate::theme::accent(self.settings.theme),
         ) {
             if let Some(c) = self

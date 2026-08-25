@@ -155,6 +155,9 @@ pub fn show(
     // Cell ids with a ZDR column detected near them — an updraft the storm table cannot see on
     // its own, badged next to the rotation flags it already carries.
     zdr_cells: &std::collections::HashSet<String>,
+    // Per-cell-id history across volumes, oldest→newest — the same map the attributes popup
+    // draws its trend rows from.
+    trends: &std::collections::HashMap<String, Vec<crate::ui::cell_window::CellSample>>,
     accent: egui::Color32,
 ) -> Option<String> {
     if !w.open {
@@ -248,6 +251,7 @@ pub fn show(
                     .column(Column::exact(48.0)) // poh
                     .column(Column::exact(52.0)) // posh
                     .column(Column::exact(56.0)) // hail
+                    .column(Column::exact(64.0)) // trend
                     .column(Column::remainder()) // flags
                     .min_scrolled_height(0.0)
                     .header(22.0, |mut h| {
@@ -262,6 +266,12 @@ pub fn show(
                         h.col(|ui| header(ui, "POH", SortCol::Poh, w));
                         h.col(|ui| header(ui, "SVR", SortCol::Posh, w));
                         h.col(|ui| header(ui, "Hail", SortCol::Hail, w));
+                        h.col(|ui| {
+                            ui.label("Trend").on_hover_text(
+                                "Peak reflectivity over the volumes this cell has been tracked \
+                                 for \u{2014} whether it is strengthening or falling apart",
+                            );
+                        });
                         h.col(|ui| {
                             ui.label("Flags");
                         });
@@ -301,6 +311,48 @@ pub fn show(
                                 } else {
                                     t
                                 });
+                            });
+                            row.col(|ui| {
+                                // A column of numbers says how strong a storm is now; it cannot
+                                // say which way it is going, which is the thing you actually
+                                // triage on when six cells are on screen.
+                                let hist = trends.get(&c.id).map(Vec::as_slice).unwrap_or(&[]);
+                                let dbz: Vec<f32> = hist.iter().filter_map(|s| s.dbz).collect();
+                                let resp = crate::theme::sparkline_sized(
+                                    ui,
+                                    &dbz,
+                                    egui::Color32::from_rgb(240, 170, 60),
+                                    egui::vec2(60.0, 16.0),
+                                );
+                                if !hist.is_empty() {
+                                    resp.on_hover_ui(|ui| {
+                                        ui.label(
+                                            RichText::new(format!("{} over {} volumes", c.title, hist.len()))
+                                                .strong(),
+                                        );
+                                        for (label, vals, color) in [
+                                            ("Peak dBZ", dbz.clone(), egui::Color32::from_rgb(240, 170, 60)),
+                                            (
+                                                "VIL",
+                                                hist.iter().filter_map(|s| s.vil).collect::<Vec<_>>(),
+                                                egui::Color32::from_rgb(120, 200, 240),
+                                            ),
+                                            (
+                                                "Top (kft)",
+                                                hist.iter().filter_map(|s| s.top).collect::<Vec<_>>(),
+                                                egui::Color32::from_rgb(150, 230, 170),
+                                            ),
+                                        ] {
+                                            ui.label(RichText::new(label).small().weak());
+                                            crate::theme::sparkline_sized(
+                                                ui,
+                                                &vals,
+                                                color,
+                                                egui::vec2(160.0, 26.0),
+                                            );
+                                        }
+                                    });
+                                }
                             });
                             row.col(|ui| {
                                 ui.with_layout(Layout::left_to_right(Align::Center), |ui| {

@@ -406,10 +406,21 @@ pub fn stat_card(ui: &mut egui::Ui, label: &str, value: &str) {
 
 /// A min-max normalized sparkline of `vals` (oldest→newest) in a fixed-height row.
 pub fn sparkline(ui: &mut egui::Ui, vals: &[f32], color: Color32) {
-    let (rect, _) = ui.allocate_exact_size(
-        egui::vec2(ui.available_width().min(300.0), 34.0),
-        egui::Sense::hover(),
-    );
+    let size = egui::vec2(ui.available_width().min(300.0), 34.0);
+    sparkline_sized(ui, vals, color, size);
+}
+
+/// [`sparkline`] at a caller-chosen size, for places with a row height to fit inside — a table
+/// cell has ~20 px, where the default 34 would overlap its neighbours.
+///
+/// Returns the response so a caller can hang a tooltip on it.
+pub fn sparkline_sized(
+    ui: &mut egui::Ui,
+    vals: &[f32],
+    color: Color32,
+    size: egui::Vec2,
+) -> egui::Response {
+    let (rect, response) = ui.allocate_exact_size(size, egui::Sense::hover());
     let painter = ui.painter_at(rect);
     painter.rect_filled(rect, 3.0, ui.visuals().extreme_bg_color);
     if vals.len() < 2 {
@@ -420,7 +431,7 @@ pub fn sparkline(ui: &mut egui::Ui, vals: &[f32], color: Color32) {
             egui::FontId::proportional(10.0),
             ui.visuals().weak_text_color(),
         );
-        return;
+        return response;
     }
     let (mut lo, mut hi) = (f32::INFINITY, f32::NEG_INFINITY);
     for &v in vals {
@@ -455,6 +466,7 @@ pub fn sparkline(ui: &mut egui::Ui, vals: &[f32], color: Color32) {
         egui::FontId::proportional(9.0),
         weak,
     );
+    response
 }
 
 /// A collapsible, accent-labelled section with consistent inner spacing.
