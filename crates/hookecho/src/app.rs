@@ -7029,7 +7029,7 @@ impl HookEchoApp {
             }
             PaletteAction::ApplyWorkspace(i) => {
                 if let Some(ws) = self.settings.workspaces.get(i).cloned() {
-                    self.apply_workspace(&ws);
+                    self.apply_workspace(&ws, ctx);
                     self.toast(ToastKind::Info, format!("Workspace: {}", ws.name));
                 }
             }
@@ -12566,12 +12566,13 @@ impl HookEchoApp {
                 .filter(|(_, st)| st.show)
                 .map(|(l, _)| l.slug().to_string())
                 .collect(),
+            chrome: Some(self.capture_chrome()),
         }
     }
 
     /// Restore a saved arrangement. Panes come back empty of data and fill through the normal
     /// poll, exactly as a freshly split pane does.
-    fn apply_workspace(&mut self, ws: &crate::workspace::Workspace) {
+    fn apply_workspace(&mut self, ws: &crate::workspace::Workspace, ctx: &egui::Context) {
         if ws.panes.is_empty() {
             return;
         }
@@ -12604,6 +12605,9 @@ impl HookEchoApp {
         // doesn't have, which is a thing to skip rather than an error.
         for (layer, st) in self.fields.iter_mut() {
             st.show = ws.fields_on.iter().any(|s| s == layer.slug());
+        }
+        if let Some(c) = &ws.chrome {
+            self.apply_chrome(c, ctx);
         }
         self.rebuild_overlays();
         self.pane_shown.clear();

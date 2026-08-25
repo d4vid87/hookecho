@@ -41,6 +41,13 @@ impl HookEchoApp {
             })
             .collect();
         let mut push = |label: &str, category, desc, common, action, on| {
+            // The panel groups rows by category, one collapsible per name in `CATEGORIES`. A row
+            // with a category that isn't in that list draws nowhere: reachable from Ctrl+K, gone
+            // from the panel. Cheaper to catch here than to notice a missing layer months later.
+            debug_assert!(
+                crate::ui::layers_panel::CATEGORIES.contains(&category),
+                "registry row {label:?} has category {category:?}, which the panel does not draw"
+            );
             out.push(PaletteEntry {
                 label: label.to_string(),
                 category,
