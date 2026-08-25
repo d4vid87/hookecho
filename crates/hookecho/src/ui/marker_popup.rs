@@ -19,12 +19,17 @@ pub struct MarkerPopupResult {
 }
 
 /// Show the popup for `m`, editing its name in place.
-pub fn show(ctx: &egui::Context, m: &mut Marker) -> MarkerPopupResult {
+pub fn show(
+    ctx: &egui::Context,
+    m: &mut Marker,
+    popovers: &mut crate::ui::popover::Popovers,
+) -> MarkerPopupResult {
     let mut r = MarkerPopupResult {
         open: true,
         ..Default::default()
     };
-    crate::ui::phone_surface(ctx, egui::Window::new("Marker"))
+    popovers
+        .card(ctx, "marker", egui::Window::new("Marker"))
         .open(&mut r.open)
         .resizable(false)
         // Three fixed rows: nothing to scroll, and `phone_surface`'s vscroll would otherwise stretch

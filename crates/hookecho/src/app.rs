@@ -1422,12 +1422,12 @@ const ANDROID_LOOP_WINDOW: usize = 6;
 ///
 /// A phone (or a browser tab) on a cell radio gets nothing from a deeper queue: the frames arrive
 /// in the same total time and each one lands later than it would have with a queue behind it.
-const MAX_PREFETCH_INFLIGHT: usize =
-    if cfg!(target_os = "android") || cfg!(target_arch = "wasm32") {
-        2
-    } else {
-        4
-    };
+const MAX_PREFETCH_INFLIGHT: usize = if cfg!(target_os = "android") || cfg!(target_arch = "wasm32")
+{
+    2
+} else {
+    4
+};
 
 /// Which frames to pull in around the playhead, nearest first.
 ///
@@ -1947,6 +1947,8 @@ pub struct HookEchoApp {
     rules_window: ui::rules_window::RulesWindow,
     /// The one slide-over surface every browsable tool page renders into.
     drawer: ui::drawer::Drawer,
+    /// Anchors for the cards that answer a click on the map.
+    popovers: ui::popover::Popovers,
     /// Warning verification lab and its in-flight query.
     verify_window: ui::verify_window::VerifyWindow,
     verify_rx: Option<std::sync::mpsc::Receiver<Result<wxdata::verify::Verification, String>>>,
@@ -2007,7 +2009,11 @@ pub struct HookEchoApp {
     spoke_pos: Option<(Instant, i32)>,
     /// Detections seen recently, for compound rules to ask "and was there also…". Trimmed to the
     /// compound window every pass, so it stays a handful of entries.
-    recent_hits: Vec<(crate::settings::RuleTrigger, crate::rules::Detection, Instant)>,
+    recent_hits: Vec<(
+        crate::settings::RuleTrigger,
+        crate::rules::Detection,
+        Instant,
+    )>,
     /// Chase mode: follow a position, auto-switching the active pane to the nearest radar.
     chase_mode: bool,
     chase_pos: Option<(f64, f64)>,
@@ -2186,8 +2192,7 @@ pub struct HookEchoApp {
     afd_rx: Option<std::sync::mpsc::Receiver<Result<wxdata::afd::Afd, String>>>,
     /// NHC public advisory / forecast discussion reader.
     tropical_window: ui::tropical_window::TropicalWindow,
-    tropical_text_rx:
-        Option<std::sync::mpsc::Receiver<Result<wxdata::tropical::Advisory, String>>>,
+    tropical_text_rx: Option<std::sync::mpsc::Receiver<Result<wxdata::tropical::Advisory, String>>>,
     /// Range rings + azimuth spokes around the active site (feature HH).
     show_range_rings: bool,
     /// Draw all NEXRAD radar sites on the map; clicking one switches the pane to that radar.
@@ -2565,7 +2570,9 @@ impl HookEchoApp {
             }
             let sep = if search.is_empty() { "?" } else { "&" };
             // Setting `search` navigates; the spec keeps the fragment, so `#goto=…` survives.
-            let _ = win.location().set_search(&format!("{search}{sep}relaunched"));
+            let _ = win
+                .location()
+                .set_search(&format!("{search}{sep}relaunched"));
         });
         // The GPU's 2D texture-size cap: desktop/Adreno do 16384, but many mobile GPUs cap at
         // 4096. Field grids (MRMS rotation/AzShear reach 14000 px) are decimated to fit this.
@@ -2832,6 +2839,7 @@ impl HookEchoApp {
             glossary: Default::default(),
             rules_window: Default::default(),
             drawer: Default::default(),
+            popovers: Default::default(),
             verify_window: Default::default(),
             verify_rx: None,
             xsection_moment: Moment::Reflectivity,
@@ -3119,13 +3127,7 @@ impl HookEchoApp {
             use OverlayToggle as T;
             matches!(
                 t,
-                T::Tropical
-                    | T::ProbSevere
-                    | T::Aviation
-                    | T::Tfr
-                    | T::Alerts
-                    | T::Mds
-                    | T::Fires
+                T::Tropical | T::ProbSevere | T::Aviation | T::Tfr | T::Alerts | T::Mds | T::Fires
             )
         });
         for t in restore {
@@ -3872,7 +3874,11 @@ impl HookEchoApp {
             let units = m.units();
             let value = match (g.value, g.folded) {
                 (Some(v), _) => {
-                    let precision = if m == Moment::CorrelationCoefficient { 3 } else { 1 };
+                    let precision = if m == Moment::CorrelationCoefficient {
+                        3
+                    } else {
+                        1
+                    };
                     if units.is_empty() {
                         format!("{v:.*}", precision)
                     } else {
@@ -4091,8 +4097,9 @@ impl HookEchoApp {
                             .filter(|r| !r.is_empty())
                             .map(|ring| {
                                 let n = ring.len() as f64;
-                                let (x, y) =
-                                    ring.iter().fold((0.0, 0.0), |(x, y), p| (x + p[0], y + p[1]));
+                                let (x, y) = ring
+                                    .iter()
+                                    .fold((0.0, 0.0), |(x, y), p| (x + p[0], y + p[1]));
                                 crate::rules::Detection::at(x / n, y / n)
                             })
                             .unwrap_or(crate::rules::Detection::at(0.0, 0.0));
@@ -4326,7 +4333,9 @@ impl HookEchoApp {
                 let pct = crate::rules::probsevere_percent(&f.detail)?;
                 let ring = f.rings.first()?;
                 let n = ring.len().max(1) as f64;
-                let (lon, lat) = ring.iter().fold((0.0, 0.0), |(x, y), p| (x + p[0], y + p[1]));
+                let (lon, lat) = ring
+                    .iter()
+                    .fold((0.0, 0.0), |(x, y), p| (x + p[0], y + p[1]));
                 Some(Detection::with_strength(lon / n, lat / n, pct))
             })
             .collect();
@@ -4377,14 +4386,17 @@ impl HookEchoApp {
         let shared: crate::backtest::Shared = Default::default();
         self.rules_window.backtest = Some(shared.clone());
         let settings = self.settings.clone();
-        self.spawner.spawn(crate::backtest::run(
-            site, day, rule, settings, shared,
-        ));
+        self.spawner
+            .spawn(crate::backtest::run(site, day, rule, settings, shared));
     }
 
     /// Remember detections so a compound rule can ask about them next pass, and forget anything
     /// older than the compound window.
-    fn note_hits(&mut self, trigger: &crate::settings::RuleTrigger, hits: &[crate::rules::Detection]) {
+    fn note_hits(
+        &mut self,
+        trigger: &crate::settings::RuleTrigger,
+        hits: &[crate::rules::Detection],
+    ) {
         let window = std::time::Duration::from_secs_f64(crate::rules::COMPOUND_WINDOW_MIN * 60.0);
         self.recent_hits.retain(|(_, _, t)| t.elapsed() < window);
         for h in hits {
@@ -5019,14 +5031,24 @@ impl HookEchoApp {
             let cfg_path = path.with_extension("onnx.json");
             if let Some(dir) = path.parent() {
                 if let Err(e) = std::fs::create_dir_all(dir) {
-                    crate::speech::set_voice_status(false, format!("could not create {dir:?}: {e}"));
+                    crate::speech::set_voice_status(
+                        false,
+                        format!("could not create {dir:?}: {e}"),
+                    );
                     return;
                 }
             }
             crate::speech::set_voice_status(true, "downloading voice (~60 MB)…");
             let get = |url: String| {
                 let http = http.clone();
-                async move { http.get(url).send().await?.error_for_status()?.bytes().await }
+                async move {
+                    http.get(url)
+                        .send()
+                        .await?
+                        .error_for_status()?
+                        .bytes()
+                        .await
+                }
             };
             let cfg = match get(cfg_url).await {
                 Ok(b) => b,
@@ -5058,7 +5080,9 @@ impl HookEchoApp {
                 .and_then(|()| std::fs::write(&cfg_path, &cfg));
             match wrote {
                 Ok(()) => crate::speech::set_voice_status(false, "voice ready"),
-                Err(e) => crate::speech::set_voice_status(false, format!("writing the voice failed: {e}")),
+                Err(e) => {
+                    crate::speech::set_voice_status(false, format!("writing the voice failed: {e}"))
+                }
             }
         });
     }
@@ -5778,9 +5802,7 @@ impl HookEchoApp {
             .and_then(|v| v.binned(Moment::CorrelationCoefficient, 0, false).ok())
             .cloned();
         let out = match (z, cc) {
-            (Some(z), Some(cc)) => {
-                wxdata::dualpol::tbss(&z, &cc, core_dbz, 20.0, 0.8, 4.0, 150.0)
-            }
+            (Some(z), Some(cc)) => wxdata::dualpol::tbss(&z, &cc, core_dbz, 20.0, 0.8, 4.0, 150.0),
             _ => Vec::new(),
         };
         self.tbss_cache = Some((key, out.clone()));
@@ -6390,9 +6412,11 @@ impl HookEchoApp {
         let mut picked = None;
         ui.menu_button(format!("Background: {}", current.label()), |ui| {
             ui.set_min_width(460.0);
-            egui::ScrollArea::vertical().max_height(460.0).show(ui, |ui| {
-                picked = ui::basemap_picker::grid(ui, &mut self.tiles, current, &self.settings);
-            });
+            egui::ScrollArea::vertical()
+                .max_height(460.0)
+                .show(ui, |ui| {
+                    picked = ui::basemap_picker::grid(ui, &mut self.tiles, current, &self.settings);
+                });
             if picked.is_some() {
                 ui.close();
             }
@@ -6750,9 +6774,9 @@ impl HookEchoApp {
         // user turns off. Reported in whole miles, so a storm parked in place says nothing.
         if self.settings.speak_position && !self.settings.mute_alerts {
             let miles = (km * 0.621_371).round() as i32;
-            let fresh = self
-                .spoke_pos
-                .is_none_or(|(t, m)| m != miles && t.elapsed() >= std::time::Duration::from_secs(60));
+            let fresh = self.spoke_pos.is_none_or(|(t, m)| {
+                m != miles && t.elapsed() >= std::time::Duration::from_secs(60)
+            });
             if fresh {
                 self.spoke_pos = Some((Instant::now(), miles));
                 crate::speech::speak(&wxdata::spoken::position_script(
@@ -7481,12 +7505,20 @@ impl HookEchoApp {
             return;
         };
         let Some(url) = product.url(&storm).map(str::to_string) else {
-            self.tropical_window.error =
-                Some(format!("no {} published for {}", product.label(), storm.name));
+            self.tropical_window.error = Some(format!(
+                "no {} published for {}",
+                product.label(),
+                storm.name
+            ));
             self.tropical_window.text = None;
             return;
         };
-        let title = format!("{} {} — {}", storm.classification, storm.name, product.label());
+        let title = format!(
+            "{} {} — {}",
+            storm.classification,
+            storm.name,
+            product.label()
+        );
         let (tx, rx) = std::sync::mpsc::channel();
         self.tropical_text_rx = Some(rx);
         self.tropical_window.busy = true;
@@ -9393,9 +9425,7 @@ impl HookEchoApp {
             self.palettes.gen,
             uv_key,
             dealias,
-            self.settings
-                .precip_tint
-                .then_some(self.precip_flag_gen),
+            self.settings.precip_tint.then_some(self.precip_flag_gen),
         );
         if self.pane_shown.get(&idx) == Some(&key) {
             return (None, true);
@@ -9450,10 +9480,10 @@ impl HookEchoApp {
         let idx = self.active.min(self.views.len() - 1);
         let caption = {
             let v = &self.views[idx];
-            let time = v
-                .volume
-                .as_ref()
-                .map_or_else(|| "—".to_string(), |vol| vol.time.format("%H:%MZ").to_string());
+            let time = v.volume.as_ref().map_or_else(
+                || "—".to_string(),
+                |vol| vol.time.format("%H:%MZ").to_string(),
+            );
             format!(
                 "{} {} {time}",
                 v.site.as_deref().unwrap_or("—"),
@@ -9530,15 +9560,20 @@ impl HookEchoApp {
                         // Swap this window's camera in around the render, and take back whatever
                         // the pointer did to it. Nothing returns early in between, so the pane
                         // always gets its own camera back.
-                        let mine = self
-                            .mini_cam
-                            .take()
-                            .unwrap_or(self.views[idx].camera);
+                        let mine = self.mini_cam.take().unwrap_or(self.views[idx].camera);
                         let pane_cam = std::mem::replace(&mut self.views[idx].camera, mine);
                         self.render_pane(
                             // `first`/`last` false: the mini-loop viewport is a passenger — the
                             // main window's pane loop owns draining and evicting the tile caches.
-                            ui, &vctx, idx, prect, false, false, false, false, &[],
+                            ui,
+                            &vctx,
+                            idx,
+                            prect,
+                            false,
+                            false,
+                            false,
+                            false,
+                            &[],
                         );
                         self.mini_cam =
                             Some(std::mem::replace(&mut self.views[idx].camera, pane_cam));
@@ -10325,10 +10360,26 @@ impl HookEchoApp {
             self.evaluate_scan_rules(idx, &tds_hits, &tbss_hits, &zdr_hits, &couplets);
         }
         // Hidden layers computed only for a rule must not also be drawn.
-        let tds_hits = if self.filters.show_tds { tds_hits } else { Vec::new() };
-        let tbss_hits = if self.filters.show_tbss { tbss_hits } else { Vec::new() };
-        let zdr_hits = if self.filters.show_zdr_columns { zdr_hits } else { Vec::new() };
-        let couplets = if self.filters.show_couplets { couplets } else { Vec::new() };
+        let tds_hits = if self.filters.show_tds {
+            tds_hits
+        } else {
+            Vec::new()
+        };
+        let tbss_hits = if self.filters.show_tbss {
+            tbss_hits
+        } else {
+            Vec::new()
+        };
+        let zdr_hits = if self.filters.show_zdr_columns {
+            zdr_hits
+        } else {
+            Vec::new()
+        };
+        let couplets = if self.filters.show_couplets {
+            couplets
+        } else {
+            Vec::new()
+        };
 
         // Radar values under the cursor. Computed here, before the long immutable borrow of the
         // pane below, because sampling the volume needs it mutably — the binned sweeps are
@@ -10352,44 +10403,43 @@ impl HookEchoApp {
         // themselves are drawn much further down with the rest of the cell layer. Reserving here
         // and drawing there is the whole reason the placer separates the two: a warning label
         // must not lose its slot to a town name that merely happened to be painted earlier.
-        let cell_labels_shown: std::collections::HashSet<String> =
-            if self.filters.show_cells && self.cells_site.as_deref() == view.site.as_deref() {
-                let ids: Vec<(String, egui::Pos2)> = self
-                    .active_storm_cells()
-                    .iter()
-                    .filter(|c| c.kind == CellKind::Storm && !c.id.is_empty())
-                    .map(|c| {
-                        let w = crate::render::mercator::lonlat_to_world(c.lon, c.lat);
-                        let (sx, sy) = cam.world_to_screen(w, vp);
-                        (
-                            c.id.clone(),
-                            egui::pos2(prect.left() + sx, prect.top() + sy),
-                        )
-                    })
-                    .collect();
-                ids.into_iter()
-                    .filter(|(_, p)| prect.contains(*p))
-                    .filter(|(id, p)| {
-                        // Matches the draw below: 11 pt text, left-bottom anchored, up and right
-                        // of the marker.
-                        let anchor = *p + egui::vec2(8.0, -8.0);
-                        let size = egui::vec2(id.len() as f32 * 6.5, 13.0);
-                        let rect = egui::Rect::from_min_size(
-                            egui::pos2(anchor.x, anchor.y - size.y),
-                            size,
-                        )
-                        .expand(2.0);
-                        self.labels.place(
-                            crate::labelplace::key(id),
-                            rect,
-                            crate::labelplace::Priority::Warning,
-                        )
-                    })
-                    .map(|(id, _)| id)
-                    .collect()
-            } else {
-                std::collections::HashSet::new()
-            };
+        let cell_labels_shown: std::collections::HashSet<String> = if self.filters.show_cells
+            && self.cells_site.as_deref() == view.site.as_deref()
+        {
+            let ids: Vec<(String, egui::Pos2)> = self
+                .active_storm_cells()
+                .iter()
+                .filter(|c| c.kind == CellKind::Storm && !c.id.is_empty())
+                .map(|c| {
+                    let w = crate::render::mercator::lonlat_to_world(c.lon, c.lat);
+                    let (sx, sy) = cam.world_to_screen(w, vp);
+                    (
+                        c.id.clone(),
+                        egui::pos2(prect.left() + sx, prect.top() + sy),
+                    )
+                })
+                .collect();
+            ids.into_iter()
+                .filter(|(_, p)| prect.contains(*p))
+                .filter(|(id, p)| {
+                    // Matches the draw below: 11 pt text, left-bottom anchored, up and right
+                    // of the marker.
+                    let anchor = *p + egui::vec2(8.0, -8.0);
+                    let size = egui::vec2(id.len() as f32 * 6.5, 13.0);
+                    let rect =
+                        egui::Rect::from_min_size(egui::pos2(anchor.x, anchor.y - size.y), size)
+                            .expand(2.0);
+                    self.labels.place(
+                        crate::labelplace::key(id),
+                        rect,
+                        crate::labelplace::Priority::Warning,
+                    )
+                })
+                .map(|(id, _)| id)
+                .collect()
+        } else {
+            std::collections::HashSet::new()
+        };
         let view = &self.views[idx];
 
         // City/town labels, overlaid on every basemap. On raster (satellite) the baked-in labels
@@ -10397,9 +10447,7 @@ impl HookEchoApp {
         // vector basemaps use their palette's label colors. Bigger fonts + an 8-way halo read well.
         if !vlabels.is_empty() {
             let (text_col, halo_col, big) = if is_vector {
-                let st = crate::basemap_style::style(
-                    basemap.vector_palette().unwrap_or_default(),
-                );
+                let st = crate::basemap_style::style(basemap.vector_palette().unwrap_or_default());
                 (
                     egui::Color32::from_rgb(st.label[0], st.label[1], st.label[2]),
                     egui::Color32::from_rgb(st.label_halo[0], st.label_halo[1], st.label_halo[2]),
@@ -13345,7 +13393,6 @@ impl HookEchoApp {
             }
         }
     }
-
 }
 
 /// Convert a binned sweep into a GPU upload with its world-space bounding box.
@@ -14765,15 +14812,14 @@ impl eframe::App for HookEchoApp {
             login_url: self.sync_login.as_ref().map(|p| p.url.as_str()),
             last_sync: self.sync_state.last_sync,
         };
-        let sync_action =
-            self.settings_window.show(
-                ctx,
-                &mut self.settings,
-                &self.palettes,
-                sync_view,
-                &entries,
-                &mut self.drawer,
-            );
+        let sync_action = self.settings_window.show(
+            ctx,
+            &mut self.settings,
+            &self.palettes,
+            sync_view,
+            &entries,
+            &mut self.drawer,
+        );
         self.capture_key = self.settings_window.capturing;
         if std::mem::take(&mut self.settings_window.run_wizard) {
             self.wizard.start();
@@ -15085,8 +15131,15 @@ impl eframe::App for HookEchoApp {
                 .forecast_obs_cache
                 .get(&key)
                 .map(|(_, station, ob)| (station.as_str(), ob));
-            if !ui::forecast_window::show(ctx, &self.forecast_state, at, tz, minute.as_deref(), now)
-            {
+            if !ui::forecast_window::show(
+                ctx,
+                &self.forecast_state,
+                at,
+                tz,
+                minute.as_deref(),
+                now,
+                &mut self.popovers,
+            ) {
                 self.forecast_open = false;
             }
         }
@@ -15160,7 +15213,7 @@ impl eframe::App for HookEchoApp {
                 .as_ref()
                 .and_then(|k| self.pf_icon_tex.get(k))
                 .and_then(|t| t.as_ref());
-            if !ui::detail_window::show(ctx, detail, tex) {
+            if !ui::detail_window::show(ctx, detail, tex, &mut self.popovers) {
                 self.detail = None;
             }
         }
@@ -15227,7 +15280,8 @@ impl eframe::App for HookEchoApp {
                 .follow_cell
                 .as_ref()
                 .is_some_and(|(_, c, _)| c.id == cell.id);
-            let (open, toggled) = ui::cell_window::show(ctx, cell, trend, following);
+            let (open, toggled) =
+                ui::cell_window::show(ctx, cell, trend, following, &mut self.popovers);
             if toggled {
                 if following {
                     self.follow_cell = None;
@@ -15245,7 +15299,7 @@ impl eframe::App for HookEchoApp {
                 // The list shrank under us (the manager window deleted a row this frame).
                 None => self.marker_popup = None,
                 Some(m) => {
-                    let r = ui::marker_popup::show(ctx, m);
+                    let r = ui::marker_popup::show(ctx, m, &mut self.popovers);
                     let watch = r
                         .watch
                         .then(|| (m.name.clone(), m.video_url.trim().to_string()));
@@ -15264,74 +15318,8 @@ impl eframe::App for HookEchoApp {
                 }
             }
         }
-        if let Some(i) = self.zone_popup {
-            match self.settings.alert_polygons.get_mut(i) {
-                None => self.zone_popup = None,
-                Some(z) => {
-                    let mut open = true;
-                    let mut remove = false;
-                    egui::Window::new("Watch zone")
-                        .open(&mut open)
-                        .resizable(false)
-                        .vscroll(false)
-                        .default_width(240.0)
-                        .show(ctx, |ui| {
-                            ui.add(
-                                egui::TextEdit::singleline(&mut z.name)
-                                    .hint_text("Name")
-                                    .desired_width(ui.available_width()),
-                            );
-                            ui.weak(format!("{} corners", z.ring.len()));
-                            // ponytail: no vertex editing — redrawing a four-click shape is
-                            // faster than any handle-dragging UI would be to build.
-                            remove = ui.button("✖ Remove").clicked();
-                        });
-                    if remove {
-                        self.settings.alert_polygons.remove(i);
-                        self.zone_popup = None;
-                        self.settings.save();
-                    } else if !open {
-                        self.zone_popup = None;
-                        self.settings.save();
-                    }
-                }
-            }
-        }
-        if self.zone_naming.is_some() {
-            let mut save = false;
-            let mut cancel = false;
-            if let Some((ring, name)) = &mut self.zone_naming {
-                egui::Window::new("Name this watch zone")
-                    .collapsible(false)
-                    .resizable(false)
-                    .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
-                    .show(ctx, |ui| {
-                        ui.weak(format!("{} corners", ring.len()));
-                        let edit = ui.add(
-                            egui::TextEdit::singleline(name)
-                                .hint_text("Home area")
-                                .desired_width(220.0),
-                        );
-                        edit.request_focus();
-                        ui.weak("Alerts fire when a warning polygon touches this area.");
-                        ui.horizontal(|ui| {
-                            save = ui.button("Save").clicked()
-                                || ui.input(|i| i.key_pressed(egui::Key::Enter));
-                            cancel = ui.button("Cancel").clicked();
-                        });
-                    });
-            }
-            if save {
-                if let Some((ring, name)) = self.zone_naming.take() {
-                    self.settings
-                        .alert_polygons
-                        .push(crate::settings::AlertPolygon { name, ring });
-                    self.settings.save();
-                }
-            } else if cancel {
-                self.zone_naming = None;
-            }
-        }
+        self.zone_popup_card(ctx);
+        self.zone_naming_dialog(ctx);
         if let Some(sp) = self.pending_spotter.take() {
             self.open_spotter(&sp);
         }
@@ -15345,7 +15333,7 @@ impl eframe::App for HookEchoApp {
             self.chase_hud(ctx);
         }
         if let Some(popup) = &mut self.warning_popup {
-            if !ui::warning_window::show(ctx, popup) {
+            if !ui::warning_window::show(ctx, popup, &mut self.popovers) {
                 self.warning_popup = None;
             }
         }
@@ -15395,16 +15383,10 @@ impl eframe::App for HookEchoApp {
         }
         if self.show_cappi {
             self.update_cappi(ctx);
-            let mut open = true;
-            if let Some(tex) = self.cappi_tex.clone() {
-                open = ui::cappi_window::show(ctx, &tex, &mut self.cappi_alt_km, 300.0);
-            } else {
-                crate::ui::phone_surface(ctx, egui::Window::new("CAPPI slice"))
-                    .open(&mut open)
-                    .show(ctx, |ui| {
-                        ui.weak("No volume loaded in the active pane.");
-                    });
-            }
+            let open = match self.cappi_tex.clone() {
+                Some(tex) => ui::cappi_window::show(ctx, &tex, &mut self.cappi_alt_km, 300.0),
+                None => ui::cappi_window::show_empty(ctx),
+            };
             self.show_cappi = open;
         }
         self.show_warning_banners(ctx);
@@ -15478,9 +15460,9 @@ impl eframe::App for HookEchoApp {
             // Ask for `@2x` tiles where the provider serves them: same tile count, twice the
             // pixels, labels drawn for the density instead of magnified. Off on a metered link —
             // a double-resolution tile is roughly double the bytes.
-            let mut clear_tiles = self.tiles.set_retina(
-                ctx.pixels_per_point() > 1.0 && !crate::platform::is_metered(),
-            );
+            let mut clear_tiles = self
+                .tiles
+                .set_retina(ctx.pixels_per_point() > 1.0 && !crate::platform::is_metered());
             // GOES sub-hourly scrub: fetch the available frame times when a GOES style becomes
             // active, and apply the selected frame (None = latest).
             if raster_style.goes_layer().is_some() {
@@ -15634,7 +15616,8 @@ impl eframe::App for HookEchoApp {
         // An untouched embed is a still picture on someone else's dashboard: one frame a minute
         // keeps the clocks honest without spending the host's CPU. The first interaction wakes it
         // for good; data arrivals still request their own repaints either way.
-        if self.embed && !self.embed_live && ctx.input(|i| i.pointer.any_down() || i.any_touches()) {
+        if self.embed && !self.embed_live && ctx.input(|i| i.pointer.any_down() || i.any_touches())
+        {
             self.embed_live = true;
         }
         let idle = if self.embed && !self.embed_live {
@@ -16046,7 +16029,9 @@ mod tests {
     fn goto_parses_a_threshold_by_shape() {
         // Order does not matter, and the field is sniffed by shape like every other extra.
         assert_eq!(
-            parse_goto("KTLX,-97.3,35.3,8,thr:25,VEL").unwrap().threshold,
+            parse_goto("KTLX,-97.3,35.3,8,thr:25,VEL")
+                .unwrap()
+                .threshold,
             Some(Some(25.0))
         );
         // Off is a deliberate instruction, distinct from saying nothing at all.
@@ -16114,7 +16099,9 @@ fn archive_day_input(ui: &mut egui::Ui, date: chrono::NaiveDate) -> Option<chron
 fn archive_day_input(ui: &mut egui::Ui, date: chrono::NaiveDate) -> Option<chrono::NaiveDate> {
     let id = egui::Id::new("archive-day-text");
     let shown = date.format("%Y-%m-%d").to_string();
-    let mut buf: String = ui.data_mut(|d| d.get_temp(id)).unwrap_or_else(|| shown.clone());
+    let mut buf: String = ui
+        .data_mut(|d| d.get_temp(id))
+        .unwrap_or_else(|| shown.clone());
     // Someone else moved the day (a caret, a deep link): follow it rather than argue.
     if !buf.starts_with(&shown[..4]) && chrono::NaiveDate::parse_from_str(&buf, "%Y-%m-%d").is_ok()
     {

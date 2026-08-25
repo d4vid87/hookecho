@@ -39,3 +39,14 @@ pub fn show(ctx: &egui::Context, tex: &egui::TextureHandle, alt_km: &mut f32, le
         });
     open
 }
+
+/// The same window with nothing to slice yet. Its own function so `app` keeps no window bodies.
+pub fn show_empty(ctx: &egui::Context) -> bool {
+    let mut open = true;
+    crate::ui::phone_surface(ctx, egui::Window::new("CAPPI slice"))
+        .open(&mut open)
+        .show(ctx, |ui| {
+            ui.weak("No volume loaded in the active pane.");
+        });
+    open
+}

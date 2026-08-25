@@ -163,4 +163,81 @@ impl HookEchoApp {
             self.crash_report = None;
         }
     }
+    /// The card behind a click on one of your own watch zones: rename it, or get rid of it.
+    pub(crate) fn zone_popup_card(&mut self, ctx: &egui::Context) {
+        if let Some(i) = self.zone_popup {
+            match self.settings.alert_polygons.get_mut(i) {
+                None => self.zone_popup = None,
+                Some(z) => {
+                    let mut open = true;
+                    let mut remove = false;
+                    self.popovers
+                        .card(ctx, "zone", egui::Window::new("Watch zone"))
+                        .open(&mut open)
+                        .resizable(false)
+                        .vscroll(false)
+                        .default_width(240.0)
+                        .show(ctx, |ui| {
+                            ui.add(
+                                egui::TextEdit::singleline(&mut z.name)
+                                    .hint_text("Name")
+                                    .desired_width(ui.available_width()),
+                            );
+                            ui.weak(format!("{} corners", z.ring.len()));
+                            // ponytail: no vertex editing — redrawing a four-click shape is
+                            // faster than any handle-dragging UI would be to build.
+                            remove = ui.button("✖ Remove").clicked();
+                        });
+                    if remove {
+                        self.settings.alert_polygons.remove(i);
+                        self.zone_popup = None;
+                        self.settings.save();
+                    } else if !open {
+                        self.zone_popup = None;
+                        self.settings.save();
+                    }
+                }
+            }
+        }
+    }
+
+    /// Naming step for a watch zone that was just drawn — modal in spirit, so it stays centered
+    /// rather than anchored to the last corner clicked.
+    pub(crate) fn zone_naming_dialog(&mut self, ctx: &egui::Context) {
+        if self.zone_naming.is_some() {
+            let mut save = false;
+            let mut cancel = false;
+            if let Some((ring, name)) = &mut self.zone_naming {
+                egui::Window::new("Name this watch zone")
+                    .collapsible(false)
+                    .resizable(false)
+                    .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+                    .show(ctx, |ui| {
+                        ui.weak(format!("{} corners", ring.len()));
+                        let edit = ui.add(
+                            egui::TextEdit::singleline(name)
+                                .hint_text("Home area")
+                                .desired_width(220.0),
+                        );
+                        edit.request_focus();
+                        ui.weak("Alerts fire when a warning polygon touches this area.");
+                        ui.horizontal(|ui| {
+                            save = ui.button("Save").clicked()
+                                || ui.input(|i| i.key_pressed(egui::Key::Enter));
+                            cancel = ui.button("Cancel").clicked();
+                        });
+                    });
+            }
+            if save {
+                if let Some((ring, name)) = self.zone_naming.take() {
+                    self.settings
+                        .alert_polygons
+                        .push(crate::settings::AlertPolygon { name, ring });
+                    self.settings.save();
+                }
+            } else if cancel {
+                self.zone_naming = None;
+            }
+        }
+    }
 }

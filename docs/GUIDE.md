@@ -18,6 +18,8 @@ also carries the color scale for what you're looking at), and the **scrubber**
 settings, the event library, alert rules — open as pages in a slide-over
 **drawer** on that same left edge, one page at a time, with a back arrow to the
 page you came from.
+Anything you click *on the map* — a storm cell, a warning polygon, one of your
+own markers — answers in a card next to the click instead.
 
 **If you remember one thing, remember `Ctrl+K`.** It searches the panel, and
 Enter runs the top match. Every action in the app is in there, described in
