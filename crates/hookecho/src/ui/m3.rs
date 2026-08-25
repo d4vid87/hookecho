@@ -312,3 +312,101 @@ mod tests {
         assert!(!is_landscape(square));
     }
 }
+
+// ---------- Density ----------
+
+/// UI density. `Comfortable` is the product default; `Compact` restores the pro-dense desktop
+/// metrics the app shipped with through 0.11.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, Default)]
+pub enum Density {
+    #[default]
+    Comfortable,
+    Compact,
+}
+
+impl Density {
+    pub const ALL: [Density; 2] = [Density::Comfortable, Density::Compact];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Density::Comfortable => "Comfortable",
+            Density::Compact => "Compact",
+        }
+    }
+}
+
+/// The spacing/type numbers `theme::apply` installs, as one table per density.
+///
+/// ponytail: a plain struct of values, not a trait or a config file — density is a table swap,
+/// so widgets never branch on it. Add a third table here if a "spacious" mode ever matters.
+#[derive(Debug, Clone, Copy)]
+pub struct Metrics {
+    pub item_spacing: Vec2,
+    pub button_padding: Vec2,
+    pub interact_h: f32,
+    pub window_margin: i8,
+    pub menu_margin: i8,
+    pub heading: f32,
+    pub body: f32,
+    pub button: f32,
+    pub small: f32,
+    pub mono: f32,
+}
+
+/// Touch metrics (Android): the M3 type scale and a touch-sized interact height, independent of
+/// density — a finger is the same size in either mode.
+pub const TOUCH: Metrics = Metrics {
+    item_spacing: vec2(SP_2, SP_2),
+    button_padding: vec2(SP_3, SP_2),
+    // 44, not 48: `interact_size` is the *minimum* egui pads every widget to, and 48 there
+    // bloats inline rows. Real tap targets get `MIN_TARGET` explicitly.
+    interact_h: 44.0,
+    window_margin: 10,
+    menu_margin: 8,
+    heading: T_TITLE,
+    body: T_BODY,
+    button: T_LABEL_LG,
+    small: T_LABEL_SM,
+    mono: T_LABEL,
+};
+
+/// Pointer metrics, comfortable: roomier rows and readable type for a map-first product.
+pub const COMFORT: Metrics = Metrics {
+    item_spacing: vec2(8.0, 6.0),
+    button_padding: vec2(10.0, 5.0),
+    interact_h: 26.0,
+    window_margin: 10,
+    menu_margin: 8,
+    heading: 15.0,
+    body: 13.5,
+    button: 13.5,
+    small: 11.0,
+    mono: 12.5,
+};
+
+/// Pointer metrics, compact: the pre-0.12 desktop density, for users who want a section, a
+/// category row, a tree and three disclosures in one panel.
+pub const COMPACT: Metrics = Metrics {
+    item_spacing: vec2(6.0, 4.0),
+    button_padding: vec2(8.0, 3.0),
+    interact_h: 22.0,
+    window_margin: 10,
+    menu_margin: 8,
+    heading: 14.0,
+    body: 12.5,
+    button: 12.5,
+    small: 11.0,
+    mono: 12.0,
+};
+
+/// The table `theme::apply` should install. Touch wins over density.
+pub fn metrics(density: Density, touch: bool) -> Metrics {
+    if touch {
+        TOUCH
+    } else {
+        match density {
+            Density::Comfortable => COMFORT,
+            Density::Compact => COMPACT,
+        }
+    }
+}
