@@ -86,6 +86,7 @@ pub mod event_window;
 pub mod firstrun;
 pub mod forecast_window;
 pub mod glossary;
+pub mod help_hub;
 pub mod hodograph_window;
 pub mod layer_options;
 pub mod layer_window;

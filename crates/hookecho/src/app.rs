@@ -1150,8 +1150,9 @@ pub(crate) enum AppWindow {
     Cappi,
     Volume3d,
     StormTable,
-    /// What the signatures on the map are called.
-    Glossary,
+    /// Shortcuts, vocabulary, the tour, and what changed — one searchable page.
+    #[serde(alias = "Glossary")]
+    Help,
     /// The user's own alert rules.
     AlertRules,
     /// Warning verification lab (IEM Cow): how the office's warnings scored on an event day.
@@ -1945,7 +1946,7 @@ pub struct HookEchoApp {
     // ponytail: one at a time; a Vec of players when someone wants a wall of streams.
     video_player: Option<ui::video_window::VideoPlayer>,
     cells_window: ui::cells_window::CellsWindow,
-    glossary: ui::glossary::Glossary,
+    help_hub: ui::help_hub::HelpHub,
     rules_window: ui::rules_window::RulesWindow,
     /// The one slide-over surface every browsable tool page renders into.
     drawer: ui::drawer::Drawer,
@@ -2838,7 +2839,7 @@ impl HookEchoApp {
             pending_spotter: None,
             video_player: None,
             cells_window: Default::default(),
-            glossary: Default::default(),
+            help_hub: Default::default(),
             rules_window: Default::default(),
             drawer: Default::default(),
             popovers: Default::default(),
@@ -7086,7 +7087,7 @@ impl HookEchoApp {
                     self.cappi_key = None; // force a re-slice on open
                 }
                 W::StormTable => self.cells_window.toggle(),
-                W::Glossary => self.glossary.toggle(),
+                W::Help => self.help_hub.toggle(),
                 W::AlertRules => self.rules_window.toggle(),
                 W::Verify => self.open_verify(),
                 W::Volume3d => self.build_volume3d(),
@@ -15227,6 +15228,11 @@ impl eframe::App for HookEchoApp {
         }
         // Storm attributes table: clicking a row flies there and opens that cell's popup, the
         // same destination as clicking the dot on the map.
+        let entries = self.palette_entries();
+        let bindings = crate::hotkeys::active(&self.settings).into_owned();
+        if self.help_hub.show(ctx, &mut self.drawer, &bindings, &entries) {
+            self.tour.start();
+        }
         let cells: &[Cell] = if self.archive_bucket().is_some() {
             &[]
         } else {
@@ -15249,7 +15255,6 @@ impl eframe::App for HookEchoApp {
                 .collect(),
             _ => std::collections::HashSet::new(),
         };
-        ui::glossary::show(&mut self.glossary, ctx);
         if ui::rules_window::show(
             &mut self.rules_window,
             ctx,

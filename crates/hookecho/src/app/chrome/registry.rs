@@ -856,9 +856,9 @@ impl HookEchoApp {
                 false,
             ),
             (
-                W::Glossary,
-                "Glossary\u{2026}",
-                "What a TDS, a hail spike or a ZDR column actually is",
+                W::Help,
+                "Help \u{2014} shortcuts, glossary, tour\u{2026}",
+                "What a TDS, a hail spike or a ZDR column actually is, and every keyboard shortcut",
                 false,
             ),
             (

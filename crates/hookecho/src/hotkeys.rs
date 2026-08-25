@@ -6,7 +6,7 @@
 //! are app-level variants. [`defaults`] is the shipped table; [`active`] swaps in the user's
 //! overrides from settings without touching call sites.
 
-use crate::app::PaletteAction;
+use crate::app::{AppWindow, PaletteAction};
 use crate::settings::Settings;
 use std::borrow::Cow;
 use wxdata::level2::Moment;
@@ -98,6 +98,8 @@ pub(crate) fn defaults() -> Vec<Binding> {
         plain(K::M, A::ToggleMute),
         plain(K::F11, A::Fullscreen),
         plain(K::Questionmark, A::CheatSheet),
+        // `?` stays the shortcut overlay; F1 is the searchable hub the overlay points at.
+        plain(K::F1, A::Palette(P::OpenWindow(AppWindow::Help))),
         Binding {
             shortcut: egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::K),
             action: A::CommandSearch,
