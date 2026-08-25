@@ -14816,7 +14816,7 @@ impl eframe::App for HookEchoApp {
         if self.about_open {
             let accent = crate::theme::accent(self.settings.theme);
             let mut open = self.about_open;
-            ui::about_window::show(ctx, &mut open, &self.update_state, accent);
+            ui::about_window::show(ctx, &mut open, &self.update_state, accent, &mut self.drawer);
             self.about_open = open;
         }
 
@@ -14860,6 +14860,7 @@ impl eframe::App for HookEchoApp {
                 dialog,
                 &mut self.views[self.active],
                 &mut self.settings,
+                &mut self.drawer,
             );
             if !keep {
                 self.site_dialog = None;
@@ -14911,7 +14912,7 @@ impl eframe::App for HookEchoApp {
             })
             .collect();
         self.placefile_window
-            .show(ctx, &mut self.settings, &pf_status);
+            .show(ctx, &mut self.settings, &pf_status, &mut self.drawer);
         // Names come from the action registry, so a layer reads the same here as in the layers
         // panel — the enum's Debug spelling ("Mrms") is not a label.
         let names: std::collections::HashMap<crate::render::FieldLayer, String> =
@@ -14940,6 +14941,7 @@ impl eframe::App for HookEchoApp {
             &mut self.layer_window_open,
             &mut self.settings,
             &active_fields,
+            &mut self.drawer,
         ) {
             self.overlay_gen += 1; // paint order / opacity changed — re-tessellate
         }
@@ -15000,7 +15002,7 @@ impl eframe::App for HookEchoApp {
         }
         let query = self
             .marker_window
-            .show(ctx, &mut self.settings, &self.marker_icon_tex);
+            .show(ctx, &mut self.settings, &self.marker_icon_tex, &mut self.drawer);
         // The map popup indexes into the same list: a delete above it leaves it describing the
         // wrong marker, which is the one way this UI can lie about which place you are editing.
         if let (Some(gone), Some(open)) = (self.marker_window.removed, self.marker_popup) {
@@ -15037,7 +15039,7 @@ impl eframe::App for HookEchoApp {
             }
         }
         self.palette_editor
-            .show(ctx, &mut self.settings, &self.palettes);
+            .show(ctx, &mut self.settings, &self.palettes, &mut self.drawer);
         // Storm digest: poll a pending Claude result, then render + handle Generate.
         if let Some(rx) = &self.digest_rx {
             if let Ok(res) = rx.try_recv() {
@@ -15052,7 +15054,7 @@ impl eframe::App for HookEchoApp {
                 }
             }
         }
-        if let Some(ui::digest_window::DigestAction::Generate) = self.digest_window.show(ctx) {
+        if let Some(ui::digest_window::DigestAction::Generate) = self.digest_window.show(ctx, &mut self.drawer) {
             self.generate_digest();
         }
         // Live station cards. Video keeps arriving between input events, so a playing card asks
@@ -15084,6 +15086,7 @@ impl eframe::App for HookEchoApp {
                 self.afd.as_ref(),
                 self.afd_busy,
                 self.afd_error.as_deref(),
+                &mut self.drawer,
             );
             if refresh {
                 self.fetch_afd();
@@ -15113,7 +15116,7 @@ impl eframe::App for HookEchoApp {
                 .map(|t| t.storms.clone())
                 .unwrap_or_default();
             if let Some((id, product)) =
-                ui::tropical_window::show(&mut self.tropical_window, ctx, &storms)
+                ui::tropical_window::show(&mut self.tropical_window, ctx, &storms, &mut self.drawer)
             {
                 self.fetch_tropical_text(&id, product);
             }
@@ -15140,7 +15143,8 @@ impl eframe::App for HookEchoApp {
                 }
             }
         }
-        self.sounding_window.show(ctx, self.active_tz());
+        let tz = self.active_tz();
+        self.sounding_window.show(ctx, tz, &mut self.drawer);
         if std::mem::take(&mut self.sounding_window.refetch) {
             self.refetch_sounding();
         }
@@ -15157,7 +15161,8 @@ impl eframe::App for HookEchoApp {
                 }
             }
         }
-        let vact = self.verify_window.show(ctx, self.active_tz());
+        let tz = self.active_tz();
+        let vact = self.verify_window.show(ctx, tz, &mut self.drawer);
         if vact.refresh {
             self.verify_window.data = None;
             self.fetch_verify();
@@ -15327,6 +15332,7 @@ impl eframe::App for HookEchoApp {
             &zdr_cells,
             &self.cell_trends,
             crate::theme::accent(self.settings.theme),
+            &mut self.drawer,
         ) {
             if let Some(c) = self
                 .active_storm_cells()
@@ -15394,7 +15400,7 @@ impl eframe::App for HookEchoApp {
             self.open_spotter(&sp);
         }
         if let Some(p) = &mut self.video_player {
-            if !p.show(ctx) {
+            if !p.show(ctx, &mut self.drawer) {
                 self.video_player = None; // dropping the player stops the download
             }
         }
@@ -15407,8 +15413,9 @@ impl eframe::App for HookEchoApp {
                 self.warning_popup = None;
             }
         }
+        let tz = self.active_tz();
         if self.show_sensors
-            && !ui::sensor_window::show(ctx, self.sensor_data.as_ref(), self.active_tz())
+            && !ui::sensor_window::show(ctx, self.sensor_data.as_ref(), tz, &mut self.drawer)
         {
             self.show_sensors = false;
         }
@@ -15420,13 +15427,14 @@ impl eframe::App for HookEchoApp {
                 self.hodo_history.make_contiguous(),
                 &mut self.hodo_tab,
                 self.settings.tz_for(self.hodo_site.as_deref()),
+                &mut self.drawer,
             )
         {
             self.show_hodo = false;
         }
         if let (Some(xs), Some(tex)) = (&self.xsection, &self.xsection_tex) {
             let mut moment = self.xsection_moment;
-            let open = ui::xsection_window::show(ctx, xs, tex, &mut moment);
+            let open = ui::xsection_window::show(ctx, xs, tex, &mut moment, &mut self.drawer);
             if !open {
                 self.xsection = None;
                 self.xsection_tex = None;
@@ -15448,14 +15456,17 @@ impl eframe::App for HookEchoApp {
                 VOL3D_N as u32,
                 VOL3D_NZ as u32,
                 self.vol3d_range,
+                &mut self.drawer,
             );
             self.show_3d = open;
         }
         if self.show_cappi {
             self.update_cappi(ctx);
             let open = match self.cappi_tex.clone() {
-                Some(tex) => ui::cappi_window::show(ctx, &tex, &mut self.cappi_alt_km, 300.0),
-                None => ui::cappi_window::show_empty(ctx),
+                Some(tex) => {
+                    ui::cappi_window::show(ctx, &tex, &mut self.cappi_alt_km, 300.0, &mut self.drawer)
+                }
+                None => ui::cappi_window::show_empty(ctx, &mut self.drawer),
             };
             self.show_cappi = open;
         }

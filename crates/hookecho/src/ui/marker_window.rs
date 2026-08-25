@@ -35,14 +35,23 @@ impl MarkerWindow {
         ctx: &egui::Context,
         settings: &mut Settings,
         icon_tex: &IconTextures,
+        drawer: &mut crate::ui::drawer::Drawer,
     ) -> Option<String> {
         let mut open = self.open;
         let mut go: Option<String> = None;
         self.removed = None;
-        crate::ui::phone_surface(ctx, egui::Window::new("Location Markers"))
-            .open(&mut open)
-            .default_size([520.0, 360.0])
-            .show(ctx, |ui| {
+        let Some(window) = drawer.page_sized(
+            ctx,
+            "Location Markers",
+            &mut open,
+            false,
+            520.0,
+            egui::Window::new("Location Markers"),
+        ) else {
+            self.open = open;
+            return None;
+        };
+        window.show(ctx, |ui| {
                 ui.strong("Add by address");
                 ui.horizontal(|ui| {
                     let field = ui.add(

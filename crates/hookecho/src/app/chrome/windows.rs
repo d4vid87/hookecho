@@ -10,10 +10,17 @@ impl HookEchoApp {
             return;
         }
         let mut open = self.climo_open;
-        crate::ui::phone_surface(ctx, egui::Window::new("Tornado climatology"))
-            .open(&mut open)
-            .default_width(360.0)
-            .show(ctx, |ui| {
+        let Some(window) = self.drawer.page(
+            ctx,
+            "Tornado climatology",
+            &mut open,
+            false,
+            egui::Window::new("Tornado climatology"),
+        ) else {
+            self.climo_open = open;
+            return;
+        };
+        window.show(ctx, |ui| {
                 if let Some((lon, lat)) = self.climo_center {
                     ui.label(format!("Within 25 mi of {lat:.3}, {lon:.3}"));
                 }

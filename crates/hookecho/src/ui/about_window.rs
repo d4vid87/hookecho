@@ -20,11 +20,18 @@ pub enum UpdateState {
 }
 
 /// Draw the window. Returns false once the user closed it.
-pub fn show(ctx: &egui::Context, open: &mut bool, update: &UpdateState, accent: egui::Color32) {
-    crate::ui::phone_surface(ctx, egui::Window::new("About Hook Echo-WX"))
-        .open(open)
-        .default_size([380.0, 260.0])
-        .show(ctx, |ui| {
+pub fn show(
+    ctx: &egui::Context,
+    open: &mut bool,
+    update: &UpdateState,
+    accent: egui::Color32,
+    drawer: &mut crate::ui::drawer::Drawer,
+) {
+    let Some(window) = drawer.page(ctx, "About Hook Echo-WX", open, false, egui::Window::new("About Hook Echo-WX"))
+    else {
+        return;
+    };
+    window.show(ctx, |ui| {
             ui.label(
                 egui::RichText::new("Hook Echo-WX")
                     .size(style::FONT_TITLE)

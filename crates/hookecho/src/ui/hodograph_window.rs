@@ -27,12 +27,20 @@ pub fn show(
     history: &[(DateTime<Utc>, Vec<VwpLevel>)],
     tab: &mut Tab,
     tz: Option<wxdata::tz::Tz>,
+    drawer: &mut crate::ui::drawer::Drawer,
 ) -> bool {
     let mut open = true;
-    crate::ui::phone_surface(ctx, egui::Window::new("VAD wind profile"))
-        .open(&mut open)
-        .default_size([420.0, 460.0])
-        .show(ctx, |ui| {
+    let Some(window) = drawer.page_sized(
+        ctx,
+        "VAD wind profile",
+        &mut open,
+        false,
+        420.0,
+        egui::Window::new("VAD wind profile"),
+    ) else {
+        return open;
+    };
+    window.show(ctx, |ui| {
             ui.horizontal(|ui| {
                 ui.strong(site.unwrap_or("—"));
                 ui.weak(format!("{} levels", levels.len()));

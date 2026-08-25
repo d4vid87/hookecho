@@ -159,6 +159,7 @@ pub fn show(
     // draws its trend rows from.
     trends: &std::collections::HashMap<String, Vec<crate::ui::cell_window::CellSample>>,
     accent: egui::Color32,
+    drawer: &mut crate::ui::drawer::Drawer,
 ) -> Option<String> {
     if !w.open {
         return None;
@@ -166,10 +167,18 @@ pub fn show(
     let mut chosen = None;
     let mut open = w.open;
     let order = sorted_indices(cells, w.sort, w.desc);
-    crate::ui::phone_surface(ctx, egui::Window::new("Storm attributes"))
-        .open(&mut open)
-        .default_size([720.0, 420.0])
-        .show(ctx, |ui| {
+    let Some(window) = drawer.page_sized(
+        ctx,
+        "Storm attributes",
+        &mut open,
+        false,
+        720.0,
+        egui::Window::new("Storm attributes"),
+    ) else {
+        w.open = open;
+        return None;
+    };
+    window.show(ctx, |ui| {
             if cells.is_empty() {
                 ui.weak("No tracked storm cells for this site right now.");
                 ui.small("Cells come from the radar's own storm-tracking product (SCIT).");

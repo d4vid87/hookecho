@@ -31,17 +31,29 @@ pub struct VerifyWindow {
 }
 
 impl VerifyWindow {
-    pub fn show(&mut self, ctx: &egui::Context, tz: Option<wxdata::tz::Tz>) -> VerifyActions {
+    pub fn show(
+        &mut self,
+        ctx: &egui::Context,
+        tz: Option<wxdata::tz::Tz>,
+        drawer: &mut crate::ui::drawer::Drawer,
+    ) -> VerifyActions {
         let mut act = VerifyActions::default();
         if !self.open {
             return act;
         }
         let mut open = self.open;
-        crate::ui::phone_surface(ctx, egui::Window::new("Warning Verification"))
-            .open(&mut open)
-            .default_width(560.0)
-            .default_height(460.0)
-            .show(ctx, |ui| {
+        let Some(window) = drawer.page_sized(
+            ctx,
+            "Warning Verification",
+            &mut open,
+            false,
+            560.0,
+            egui::Window::new("Warning Verification"),
+        ) else {
+            self.open = open;
+            return act;
+        };
+        window.show(ctx, |ui| {
                 ui.horizontal_wrapped(|ui| {
                     ui.label("Office:");
                     ui.add(egui::TextEdit::singleline(&mut self.wfo).desired_width(56.0));

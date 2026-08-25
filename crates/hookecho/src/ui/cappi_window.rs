@@ -18,12 +18,25 @@ pub fn to_image(c: &Cappi, table: &ColorTable) -> egui::ColorImage {
 
 /// Show the CAPPI window. `alt_km` is edited by the slider; `length` is the box width (km).
 /// Returns `false` when the window should close.
-pub fn show(ctx: &egui::Context, tex: &egui::TextureHandle, alt_km: &mut f32, length: f32) -> bool {
+pub fn show(
+    ctx: &egui::Context,
+    tex: &egui::TextureHandle,
+    alt_km: &mut f32,
+    length: f32,
+    drawer: &mut crate::ui::drawer::Drawer,
+) -> bool {
     let mut open = true;
-    crate::ui::phone_surface(ctx, egui::Window::new("CAPPI slice"))
-        .open(&mut open)
-        .default_size([420.0, 480.0])
-        .show(ctx, |ui| {
+    let Some(window) = drawer.page_sized(
+        ctx,
+        "CAPPI slice",
+        &mut open,
+        false,
+        420.0,
+        egui::Window::new("CAPPI slice"),
+    ) else {
+        return open;
+    };
+    window.show(ctx, |ui| {
             ui.horizontal(|ui| {
                 ui.label("Altitude");
                 ui.add(egui::Slider::new(alt_km, 0.5..=15.0).suffix(" km"));
@@ -41,11 +54,18 @@ pub fn show(ctx: &egui::Context, tex: &egui::TextureHandle, alt_km: &mut f32, le
 }
 
 /// The same window with nothing to slice yet. Its own function so `app` keeps no window bodies.
-pub fn show_empty(ctx: &egui::Context) -> bool {
+pub fn show_empty(ctx: &egui::Context, drawer: &mut crate::ui::drawer::Drawer) -> bool {
     let mut open = true;
-    crate::ui::phone_surface(ctx, egui::Window::new("CAPPI slice"))
-        .open(&mut open)
-        .show(ctx, |ui| {
+    let Some(window) = drawer.page(
+        ctx,
+        "CAPPI slice",
+        &mut open,
+        false,
+        egui::Window::new("CAPPI slice"),
+    ) else {
+        return open;
+    };
+    window.show(ctx, |ui| {
             ui.weak("No volume loaded in the active pane.");
         });
     open

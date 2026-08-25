@@ -61,12 +61,21 @@ pub fn show(
     n: u32,
     nz: u32,
     range: (f32, f32),
+    drawer: &mut crate::ui::drawer::Drawer,
 ) {
     let mut keep = *open;
-    crate::ui::phone_surface(ctx, egui::Window::new("3D Reflectivity"))
-        .open(&mut keep)
-        .default_size([480.0, 480.0])
-        .show(ctx, |ui| {
+    let Some(window) = drawer.page_sized(
+        ctx,
+        "3D Reflectivity",
+        &mut keep,
+        false,
+        480.0,
+        egui::Window::new("3D Reflectivity"),
+    ) else {
+        *open = keep;
+        return;
+    };
+    window.show(ctx, |ui| {
             ui.weak("Drag to orbit · scroll to zoom · max-intensity projection");
             ui.horizontal(|ui| {
                 let mut on = st.threshold_dbz.is_finite();

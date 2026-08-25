@@ -47,15 +47,28 @@ impl Default for SoundingWindow {
 }
 
 impl SoundingWindow {
-    pub fn show(&mut self, ctx: &egui::Context, tz: Option<wxdata::tz::Tz>) {
+    pub fn show(
+        &mut self,
+        ctx: &egui::Context,
+        tz: Option<wxdata::tz::Tz>,
+        drawer: &mut crate::ui::drawer::Drawer,
+    ) {
         if !self.open {
             return;
         }
         let mut open = self.open;
-        crate::ui::phone_surface(ctx, egui::Window::new("Point Sounding"))
-            .open(&mut open)
-            .default_size([560.0, 460.0])
-            .show(ctx, |ui| {
+        let Some(window) = drawer.page_sized(
+            ctx,
+            "Point Sounding",
+            &mut open,
+            false,
+            560.0,
+            egui::Window::new("Point Sounding"),
+        ) else {
+            self.open = open;
+            return;
+        };
+        window.show(ctx, |ui| {
                 if self.busy {
                     ui.horizontal(|ui| {
                         ui.spinner();

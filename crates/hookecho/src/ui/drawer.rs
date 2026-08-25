@@ -64,6 +64,21 @@ impl Drawer {
         gear: bool,
         w: egui::Window<'a>,
     ) -> Option<egui::Window<'a>> {
+        self.page_sized(ctx, title, open, gear, WIDTH, w)
+    }
+
+    /// Same, for a page that carries a drawing rather than a list — a hodograph, a cross-section,
+    /// a 3D volume. `width` is what the old floating window asked for; the drawer still clamps it
+    /// to the screen, and the phone still takes the whole thing.
+    pub fn page_sized<'a>(
+        &mut self,
+        ctx: &egui::Context,
+        title: &str,
+        open: &mut bool,
+        gear: bool,
+        width: f32,
+        w: egui::Window<'a>,
+    ) -> Option<egui::Window<'a>> {
         // A page that isn't open doesn't get a slot: several callers reach `page` before their
         // own `open` check, and a closed page silently holding the top of the stack would hide
         // the one the user actually asked for.
@@ -86,7 +101,7 @@ impl Drawer {
             return None;
         }
 
-        let (head, body) = rects(ctx);
+        let (head, body) = rects(ctx, width);
         let depth = self.stack.len();
         let mut gear_on = self.gear;
         let mut close = false;
@@ -174,14 +189,14 @@ impl Drawer {
 }
 
 /// Header and body rectangles for the current screen.
-fn rects(ctx: &egui::Context) -> (Rect, Rect) {
+fn rects(ctx: &egui::Context, width: f32) -> (Rect, Rect) {
     let full = ctx.content_rect();
     let (x, w, top, bottom) = if cfg!(target_os = "android") {
         (full.left(), full.width(), full.top(), full.bottom())
     } else {
         (
             full.left() + X,
-            WIDTH.min(full.width() - 2.0 * X),
+            width.min(full.width() - 2.0 * X),
             full.top() + TOP,
             (full.bottom() - BOTTOM_CLEARANCE).max(full.top() + TOP + 200.0),
         )

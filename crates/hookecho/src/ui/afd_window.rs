@@ -9,12 +9,20 @@ pub fn show(
     afd: Option<&Afd>,
     busy: bool,
     error: Option<&str>,
+    drawer: &mut crate::ui::drawer::Drawer,
 ) -> bool {
     let mut refresh = false;
-    crate::ui::phone_surface(ctx, egui::Window::new("Forecast Discussion"))
-        .open(open)
-        .default_size([560.0, 520.0])
-        .show(ctx, |ui| {
+    let Some(window) = drawer.page_sized(
+        ctx,
+        "Forecast Discussion",
+        open,
+        false,
+        560.0,
+        egui::Window::new("Forecast Discussion"),
+    ) else {
+        return false;
+    };
+    window.show(ctx, |ui| {
             ui.horizontal(|ui| {
                 match afd {
                     Some(a) => {
