@@ -385,10 +385,17 @@ pub(crate) fn show(
         header(ui, "Nowcast");
         ui.horizontal(|ui| {
             ui.label("Lead:");
-            for m in [15u8, 30, 45] {
+            for m in [15u8, 30, 45, 60, 90, 120] {
                 ui.selectable_value(&mut filters.nowcast_lead_min, m, format!("{m}m"));
             }
         });
+        if filters.nowcast_lead_min > 45 {
+            ui.small(
+                "Past 45 minutes this is extrapolation, not forecasting — it moves the echo \
+                 that exists and cannot grow or decay it. HRRR future radar is the model \
+                 answer for an hour or more.",
+            );
+        }
     }
 
     if filters.show_alerts {

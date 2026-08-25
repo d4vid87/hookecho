@@ -1258,6 +1258,8 @@ fn field_refresh_secs(layer: crate::render::FieldLayer) -> u64 {
         FL::Lightning | FL::AzShear => 60,
         FL::Mrms | FL::Mesh | FL::Rotation | FL::Hrrr | FL::Mosaic => 120,
         // QPE accumulations update on a ~2-minute MRMS cadence.
+        // The rate product lands every 2 minutes; the accumulations move far more slowly.
+        FL::PrecipRate => 120,
         FL::Qpe1h | FL::Qpe24h => 120,
         // MRMS precip type / flash-flood ARI on the ~2-min cadence; L3 grids on the 120 s L3 cadence.
         FL::PrecipType | FL::FlashFlood | FL::Vil | FL::EchoTops | FL::Hca => 120,
@@ -5741,6 +5743,10 @@ impl HookEchoApp {
             Some(s) => s.clone(),
             None => return Vec::new(),
         };
+        // Confidence in a pure advection falls off with lead: it moves the echo that exists and
+        // cannot grow, decay or turn it. Fading the points says so without a disclaimer nobody
+        // reads.
+        let alpha = (150.0 * nowcast_confidence(self.filters.nowcast_lead_min)) as u8;
         let table = self.palettes.table(Moment::Reflectivity);
         let span = (sweep.value_max - sweep.value_min).max(1e-3);
         let radar = [sweep.radar_lon as f64, sweep.radar_lat as f64];
@@ -5763,7 +5769,7 @@ impl HookEchoApp {
                 out.push((
                     adv[0],
                     adv[1],
-                    egui::Color32::from_rgba_unmultiplied(c[0], c[1], c[2], 150),
+                    egui::Color32::from_rgba_unmultiplied(c[0], c[1], c[2], alpha),
                 ));
             }
         }
@@ -7624,6 +7630,13 @@ impl HookEchoApp {
                 "National",
                 "AzShear (0–2 km)",
                 "Low-level rotation strength, right now",
+                false,
+            ),
+            (
+                FL::PrecipRate,
+                "National",
+                "Rain rate",
+                "How hard it is coming down right now, rather than how much has fallen",
                 false,
             ),
             (
@@ -10387,6 +10400,7 @@ impl HookEchoApp {
             FL::Mesh => wxdata::mrms::MESH.to_string(),
             FL::AzShear => wxdata::mrms::AZSHEAR.to_string(),
             FL::Rotation => wxdata::mrms::rotation_track(self.rotation_minutes).to_string(),
+            FL::PrecipRate => wxdata::mrms::PRECIP_RATE.to_string(),
             FL::Qpe1h => wxdata::mrms::QPE_01H.to_string(),
             FL::Qpe24h => wxdata::mrms::QPE_24H.to_string(),
             FL::PrecipType => wxdata::mrms::PRECIP_TYPE.to_string(),
@@ -12198,17 +12212,27 @@ impl HookEchoApp {
 
             // Optical-flow nowcast: advected echo ghost + a lead-time banner.
             if !nowcast_pts.is_empty() {
+                // The dots also grow with lead: a longer extrapolation is a blurrier claim
+                // about where the echo will be, and a bigger, softer dot reads that way.
+                let lead = self.filters.nowcast_lead_min;
+                let radius = 2.5 + (1.0 - nowcast_confidence(lead)) * 3.0;
                 for (lon, lat, col) in &nowcast_pts {
                     let p = to_screen(*lon, *lat);
                     if prect.contains(p) {
-                        painter.circle_filled(p, 2.5, *col);
+                        painter.circle_filled(p, radius, *col);
                     }
                 }
                 if idx == self.active {
-                    let text = format!(
-                        "◈ NOWCAST +{} min — echo extrapolated from storm motion",
-                        self.filters.nowcast_lead_min
-                    );
+                    let text = if lead > 45 {
+                        format!(
+                            "\u{25c8} NOWCAST +{lead} min \u{2014} extrapolation only; try HRRR \
+                             future radar for an hour or more"
+                        )
+                    } else {
+                        format!(
+                            "\u{25c8} NOWCAST +{lead} min \u{2014} echo extrapolated from storm motion"
+                        )
+                    };
                     let font = egui::FontId::proportional(12.0);
                     let anchor = egui::pos2(prect.left() + 8.0, prect.top() + 20.0);
                     let galley =
@@ -17622,6 +17646,45 @@ mod date_picker_tests {
         for (y, m, d) in [(1991, 6, 5), (2026, 8, 24), (2000, 2, 29), (2011, 12, 31)] {
             let orig = chrono::NaiveDate::from_ymd_opt(y, m, d).unwrap();
             assert_eq!(super::from_jiff(super::to_jiff(orig)), Some(orig));
+        }
+    }
+}
+
+/// How much to trust a pure advection at `lead_min` minutes, 1.0 down to ~0.35.
+///
+/// The nowcast moves the echo that exists along the mean storm motion. It cannot grow a cell,
+/// collapse one, or turn it, and every minute of lead is another minute for those to happen. Up
+/// to 45 minutes — the range this shipped with — it is taken at face value; past that it fades,
+/// which is the only honest way to keep offering it.
+fn nowcast_confidence(lead_min: u8) -> f32 {
+    const FULL: f32 = 45.0;
+    const FLOOR: f32 = 0.35;
+    if lead_min as f32 <= FULL {
+        return 1.0;
+    }
+    let over = (lead_min as f32 - FULL) / (120.0 - FULL);
+    (1.0 - over.clamp(0.0, 1.0) * (1.0 - FLOOR)).clamp(FLOOR, 1.0)
+}
+
+#[cfg(test)]
+mod nowcast_tests {
+    use super::nowcast_confidence;
+
+    #[test]
+    fn confidence_is_full_inside_the_old_range_and_fades_past_it() {
+        for lead in [15u8, 30, 45] {
+            assert_eq!(nowcast_confidence(lead), 1.0, "{lead} min");
+        }
+        assert!(nowcast_confidence(60) < 1.0);
+        assert!(nowcast_confidence(90) < nowcast_confidence(60));
+        assert!((nowcast_confidence(120) - 0.35).abs() < 1e-5);
+    }
+
+    /// It must never fade to invisible, or the layer would silently stop existing.
+    #[test]
+    fn confidence_never_reaches_zero() {
+        for lead in 0u8..=255 {
+            assert!(nowcast_confidence(lead) >= 0.35, "{lead} min");
         }
     }
 }

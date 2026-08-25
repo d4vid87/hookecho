@@ -34,6 +34,8 @@ pub const AZSHEAR: &str = "CONUS/MergedAzShear_0-2kmAGL_00.50";
 pub const QPE_01H: &str = "CONUS/MultiSensor_QPE_01H_Pass2_00.00";
 /// Multi-sensor 24-hour QPE accumulation, Pass-2 gauge-corrected (mm; storm-total scale).
 pub const QPE_24H: &str = "CONUS/MultiSensor_QPE_24H_Pass2_00.00";
+/// Instantaneous surface precipitation rate (mm/hr), 2-minute cadence.
+pub const PRECIP_RATE: &str = "CONUS/PrecipRate_00.00";
 /// Surface precipitation type flag (categorical: rain/snow/hail/convective).
 pub const PRECIP_TYPE: &str = "CONUS/PrecipFlag_00.00";
 /// FLASH flash-flood average recurrence interval over the 30-min QPE window (years).
