@@ -607,6 +607,7 @@ const ALLOWED_HOSTS: &[&str] = &[
     "www.ndbc.noaa.gov",
     "api.water.noaa.gov",
     "aviationweather.gov",
+    "tfr.faa.gov",
     "services.dat.noaa.gov",
     "apps.dat.noaa.gov",
     "mesonet.agron.iastate.edu",

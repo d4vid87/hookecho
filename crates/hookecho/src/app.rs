@@ -151,6 +151,13 @@ impl Default for OverlayFilters {
     }
 }
 
+/// How many TFR shapes to fetch per refresh.
+///
+/// The FAA lists ~135 active restrictions and each shape is a separate document, so a first load
+/// cannot be one request. Shapes never change once issued, so this only paces that first load: a
+/// few refresh cycles and the set is complete and stays complete.
+const TFR_BATCH: usize = 25;
+
 /// Background overlay fetch results.
 enum OverlayMsg {
     Alerts(Vec<GeoFeature>),
@@ -242,6 +249,8 @@ enum OverlayMsg {
     Tropical(wxdata::tropical::TropicalData),
     /// Aviation SIGMET/AIRMET hazard polygons (feature GG).
     Aviation(Vec<GeoFeature>),
+    /// Newly-fetched TFR shapes keyed by NOTAM id, and how many are still unfetched.
+    Tfr(Vec<(String, GeoFeature)>, usize),
 }
 
 /// One overlay data source to fetch.
@@ -307,6 +316,9 @@ enum OverlaySource {
     ArchiveWarnings(i64),
     /// Aviation SIGMET/AIRMET polygons (feature GG).
     Aviation,
+    /// FAA Temporary Flight Restrictions; carries the NOTAM ids already held, so a refresh only
+    /// fetches shapes that are new.
+    Tfr(Vec<String>),
     /// Surface observations within a lat/lon bbox `(lat0, lon0, lat1, lon1)` (feature U).
     Metar(f64, f64, f64, f64),
     /// Run an external-process plugin: `(key, command, args, context)`. The key is the synthetic
@@ -759,7 +771,18 @@ impl OverlaySource {
                 }))
             }
             OverlaySource::Aviation => {
-                OverlayMsg::Aviation(wxdata::aviation::fetch_airsigmet(http).await?)
+                let mut f = wxdata::aviation::fetch_airsigmet(http).await?;
+                // G-AIRMETs ride with the SIGMETs: same layer, same question, and a failure
+                // fetching them must not cost the SIGMETs that already arrived.
+                match wxdata::aviation::fetch_gairmet(http).await {
+                    Ok(g) => f.extend(g),
+                    Err(e) => log::warn!("g-airmet: {e}"),
+                }
+                OverlayMsg::Aviation(f)
+            }
+            OverlaySource::Tfr(have) => {
+                let (new, remaining) = wxdata::tfr::fetch(http, &have, TFR_BATCH).await?;
+                OverlayMsg::Tfr(new, remaining)
             }
         })
     }
@@ -1011,6 +1034,7 @@ pub(crate) enum OverlayToggle {
     Tropical,
     ProbSevere,
     Aviation,
+    Tfr,
     RangeRings,
     Sensors,
     Hodo,
@@ -1051,7 +1075,7 @@ pub(crate) struct BlockageKey {
 impl OverlayToggle {
     /// Every toggle, for the persistence sweep. A new variant belongs here too, or it silently
     /// stops being remembered across restarts.
-    pub(crate) const ALL: [OverlayToggle; 36] = [
+    pub(crate) const ALL: [OverlayToggle; 37] = [
         Self::AlertPanel,
         Self::StormReports,
         Self::Spotters,
@@ -1066,6 +1090,7 @@ impl OverlayToggle {
         Self::Tropical,
         Self::ProbSevere,
         Self::Aviation,
+        Self::Tfr,
         Self::RangeRings,
         Self::Sensors,
         Self::Hodo,
@@ -2112,6 +2137,12 @@ pub struct HookEchoApp {
     show_aviation: bool,
     aviation_features: Vec<GeoFeature>,
     aviation_last_fetch: Option<Instant>,
+    /// FAA Temporary Flight Restrictions: toggle, shapes by NOTAM id, refresh clock, and how
+    /// many shapes are still unfetched (the first load comes in batches).
+    show_tfr: bool,
+    tfr_features: std::collections::HashMap<String, GeoFeature>,
+    tfr_last_fetch: Option<Instant>,
+    tfr_pending: usize,
     /// Area Forecast Discussion window (feature DD): open flag, fetched text, in-flight receiver.
     afd_open: bool,
     afd: Option<wxdata::afd::Afd>,
@@ -2874,6 +2905,10 @@ impl HookEchoApp {
             show_aviation: false,
             aviation_features: Vec::new(),
             aviation_last_fetch: None,
+            show_tfr: false,
+            tfr_features: std::collections::HashMap::new(),
+            tfr_last_fetch: None,
+            tfr_pending: 0,
             afd_open: false,
             afd: None,
             afd_error: None,
@@ -3024,7 +3059,13 @@ impl HookEchoApp {
             use OverlayToggle as T;
             matches!(
                 t,
-                T::Tropical | T::ProbSevere | T::Aviation | T::Alerts | T::Mds | T::Fires
+                T::Tropical
+                    | T::ProbSevere
+                    | T::Aviation
+                    | T::Tfr
+                    | T::Alerts
+                    | T::Mds
+                    | T::Fires
             )
         });
         for t in restore {
@@ -7484,6 +7525,7 @@ impl HookEchoApp {
             T::Tropical => &mut self.show_tropical,
             T::ProbSevere => &mut self.show_probsevere,
             T::Aviation => &mut self.show_aviation,
+            T::Tfr => &mut self.show_tfr,
             T::RangeRings => &mut self.show_range_rings,
             T::Fronts => &mut self.show_fronts,
             T::GlmLightning => &mut self.show_glm,
@@ -8067,6 +8109,13 @@ impl HookEchoApp {
                 false,
             ),
             (
+                T::Tfr,
+                "Reference",
+                "Flight restrictions (TFR)",
+                "Airspace you may not fly through: fires, stadiums, VIP movements, launches",
+                false,
+            ),
+            (
                 T::Blockage,
                 "Reference",
                 "Beam blockage (terrain)",
@@ -8478,7 +8527,13 @@ impl HookEchoApp {
                 use OverlayToggle as T;
                 if matches!(
                     t,
-                    T::Tropical | T::ProbSevere | T::Aviation | T::Alerts | T::Mds | T::Fires
+                    T::Tropical
+                        | T::ProbSevere
+                        | T::Aviation
+                        | T::Tfr
+                        | T::Alerts
+                        | T::Mds
+                        | T::Fires
                 ) {
                     self.rebuild_overlays();
                 }
@@ -8761,6 +8816,10 @@ impl HookEchoApp {
                     }
                 },
                 OverlayMsg::Aviation(f) => self.aviation_features = f,
+                OverlayMsg::Tfr(new, remaining) => {
+                    self.tfr_features.extend(new);
+                    self.tfr_pending = remaining;
+                }
                 OverlayMsg::Spotters(spotters) => self.spotters = spotters,
                 OverlayMsg::Fronts(a) => self.fronts = Some(a),
                 OverlayMsg::FreezingLevels(h0, hm20) => {
@@ -9765,6 +9824,16 @@ impl HookEchoApp {
         }
         if self.show_aviation {
             v.extend(self.aviation_features.iter().cloned());
+        }
+        if self.show_tfr {
+            // Shapes that failed to parse are kept as empty placeholders so they are not
+            // refetched forever; they have nothing to draw.
+            v.extend(
+                self.tfr_features
+                    .values()
+                    .filter(|f| !f.rings.is_empty())
+                    .cloned(),
+            );
         }
         if self.show_fires {
             v.extend(self.fire_perims.iter().cloned());
@@ -16160,6 +16229,20 @@ impl eframe::App for HookEchoApp {
         {
             self.aviation_last_fetch = Some(Instant::now());
             self.spawn_overlay(ctx, OverlaySource::Aviation);
+        }
+        // TFR refresh. Slow, because a restriction's shape never changes once issued — the
+        // cadence is really about noticing new ones. While the first load is still filling in,
+        // the next batch is asked for promptly instead.
+        if self.show_tfr {
+            let due = if self.tfr_pending > 0 { 5 } else { 900 };
+            if self
+                .tfr_last_fetch
+                .is_none_or(|t| t.elapsed().as_secs() >= due)
+            {
+                self.tfr_last_fetch = Some(Instant::now());
+                let have: Vec<String> = self.tfr_features.keys().cloned().collect();
+                self.spawn_overlay(ctx, OverlaySource::Tfr(have));
+            }
         }
         // Spotter Network refresh (feed's own 1-min cadence).
         if self.show_spotters

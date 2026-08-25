@@ -1,11 +1,12 @@
-//! Aviation hazard polygons — SIGMETs and AIRMETs (G-AIRMETs are a follow-up) from
-//! aviationweather.gov, decoded into [`GeoFeature`]s colored by hazard.
+//! Aviation hazard polygons — SIGMETs, AIRMETs and G-AIRMETs from aviationweather.gov, decoded
+//! into [`GeoFeature`]s colored by hazard.
 
 use crate::alerts::USER_AGENT;
 use crate::overlay::{for_each_feature, polygons_of, FeatureKind, GeoFeature};
 
 const AIRSIGMET_URL: &str = "https://aviationweather.gov/api/data/airsigmet";
 const PIREP_URL: &str = "https://aviationweather.gov/api/data/pirep";
+const GAIRMET_URL: &str = "https://aviationweather.gov/api/data/gairmet";
 
 /// Base RGB per hazard string (CONVECTIVE / TURB / ICE / IFR / MTN OBSCN / ASH).
 fn hazard_color(hazard: &str) -> [u8; 3] {
@@ -75,6 +76,109 @@ pub async fn fetch_airsigmet(client: &reqwest::Client) -> anyhow::Result<Vec<Geo
         .text()
         .await?;
     parse(&body)
+}
+
+/// Parse a `gairmet?format=json` payload into overlay features.
+///
+/// G-AIRMETs are the gridded, time-stepped successor to the text AIRMET: instead of one area
+/// valid for six hours, a snapshot every three. That is why each feature carries its forecast
+/// hour in the title — two of these on screen at once are two different times, and reading them
+/// as one area is the mistake this layer can cause.
+///
+/// The endpoint does not answer GeoJSON like `airsigmet` does; it returns its own shape with a
+/// flat `coords` list of lat/lon strings, so this cannot share the SIGMET parser.
+pub fn parse_gairmet(json: &str) -> anyhow::Result<Vec<GeoFeature>> {
+    let v: serde_json::Value = serde_json::from_str(json)?;
+    let arr = v
+        .as_array()
+        .ok_or_else(|| anyhow::anyhow!("G-AIRMET payload is not an array"))?;
+    let mut out = Vec::new();
+    for e in arr {
+        let s = |k: &str| e.get(k).and_then(|x| x.as_str()).unwrap_or("");
+        let hazard = s("hazard");
+        let ring: Vec<[f64; 2]> = e
+            .get("coords")
+            .and_then(|c| c.as_array())
+            .map(|c| {
+                c.iter()
+                    .filter_map(|p| {
+                        let f = |k: &str| {
+                            p.get(k).and_then(|x| {
+                                x.as_str()
+                                    .and_then(|t| t.parse::<f64>().ok())
+                                    .or_else(|| x.as_f64())
+                            })
+                        };
+                        Some([f("lon")?, f("lat")?])
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        if ring.len() < 3 || hazard.is_empty() {
+            continue;
+        }
+        let rgb = hazard_color(hazard);
+        let fh = e.get("forecastHour").and_then(|x| x.as_i64()).unwrap_or(0);
+        let title = format!("G-AIRMET {hazard} +{fh}h");
+        let alt = match (
+            e.get("base").and_then(|x| x.as_i64()),
+            e.get("top").and_then(|x| x.as_i64()),
+        ) {
+            (Some(b), Some(t)) => format!("\nFL{:03}–FL{:03}", b / 100, t / 100),
+            (None, Some(t)) => format!("\nto FL{:03}", t / 100),
+            _ => String::new(),
+        };
+        let detail = format!(
+            "{title}{alt}\nValid {}\nProduct: {}\n\n{}",
+            s("validTime"),
+            s("product"),
+            s("due_to"),
+        );
+        out.push(GeoFeature {
+            rings: vec![ring],
+            // Fainter than a SIGMET on purpose: a G-AIRMET is a forecast of conditions, not a
+            // hazard someone has observed.
+            fill: [rgb[0], rgb[1], rgb[2], 18],
+            stroke: [rgb[0], rgb[1], rgb[2], 150],
+            kind: FeatureKind::Sigmet,
+            title,
+            detail,
+            alert: None,
+        });
+    }
+    Ok(out)
+}
+
+/// Fetch the current G-AIRMET set as overlay features.
+///
+/// Only the nearest forecast step is kept. The endpoint returns every step out to twelve hours,
+/// and drawing them all stacks a dozen overlapping areas per hazard into something unreadable —
+/// worse than not having the layer. The nearest step is the honest analogue of the text AIRMET
+/// this sits beside.
+pub async fn fetch_gairmet(client: &reqwest::Client) -> anyhow::Result<Vec<GeoFeature>> {
+    let body = client
+        .get(crate::net::fetch_url(GAIRMET_URL))
+        .query(&[("format", "json")])
+        .header("User-Agent", USER_AGENT)
+        .send()
+        .await?
+        .error_for_status()?
+        .text()
+        .await?;
+    let all = parse_gairmet(&body)?;
+    let soonest = all.iter().filter_map(forecast_hour).min();
+    Ok(match soonest {
+        Some(h) => all
+            .into_iter()
+            .filter(|f| forecast_hour(f) == Some(h))
+            .collect(),
+        None => all,
+    })
+}
+
+/// The forecast hour back out of a feature's title, which is where [`parse_gairmet`] put it.
+fn forecast_hour(f: &GeoFeature) -> Option<i64> {
+    f.title.rsplit_once('+')?.1.trim_end_matches('h').parse().ok()
 }
 
 /// A pilot report: what someone actually flew through, at a known altitude.
@@ -238,5 +342,67 @@ mod tests {
         assert_eq!(f[0].stroke, [255, 100, 30, 200]);
         assert!(f[0].detail.contains("to FL450"));
         assert_eq!(f[1].title, "AIRMET TURB");
+    }
+}
+
+#[cfg(test)]
+mod gairmet_tests {
+    use super::*;
+
+    const SAMPLE: &str = r#"[
+      {"tag":"2E","forecastHour":6,"validTime":"2026-08-25T03:00:00.000Z","hazard":"IFR",
+       "due_to":"CIG BLW 010","product":"SIERRA","base":null,"top":null,
+       "coords":[{"lat":"48.56","lon":"-126.50"},{"lat":"47.27","lon":"-126.22"},
+                 {"lat":"47.54","lon":"-125.61"}]},
+      {"tag":"2E","forecastHour":9,"hazard":"","coords":[]},
+      {"tag":"3E","forecastHour":3,"hazard":"TURB","base":10000,"top":24000,
+       "coords":[{"lat":"40.0","lon":"-100.0"},{"lat":"41.0","lon":"-100.0"}]}
+    ]"#;
+
+    #[test]
+    fn parses_coords_and_keeps_the_forecast_hour() {
+        let f = parse_gairmet(SAMPLE).unwrap();
+        // Row 2 has no hazard and no ring; row 3 has only two points — neither is an area.
+        assert_eq!(f.len(), 1);
+        assert_eq!(f[0].rings[0].len(), 3);
+        assert_eq!(f[0].rings[0][0], [-126.50, 48.56]);
+        assert!(f[0].title.contains("+6h"), "{}", f[0].title);
+    }
+
+    /// Altitudes come as feet and are shown as flight levels.
+    #[test]
+    fn altitudes_become_flight_levels() {
+        let json = r#"[{"hazard":"TURB","forecastHour":3,"base":10000,"top":24000,
+          "coords":[{"lat":"40.0","lon":"-100.0"},{"lat":"41.0","lon":"-100.0"},
+                    {"lat":"41.0","lon":"-99.0"}]}]"#;
+        let f = parse_gairmet(json).unwrap();
+        assert!(f[0].detail.contains("FL100\u{2013}FL240"), "{}", f[0].detail);
+
+        // Only a top: the label says so rather than inventing a floor at the surface.
+        let json = json.replace(r#""base":10000,"#, "");
+        let f = parse_gairmet(&json).unwrap();
+        assert!(f[0].detail.contains("to FL240"), "{}", f[0].detail);
+    }
+
+    #[test]
+    fn junk_is_an_error_not_a_panic() {
+        assert!(parse_gairmet("{}").is_err());
+        assert!(parse_gairmet("not json").is_err());
+        assert!(parse_gairmet("[]").unwrap().is_empty());
+    }
+}
+
+#[cfg(test)]
+mod gairmet_step_tests {
+    use super::*;
+
+    /// Keeping every forecast step would stack a dozen areas per hazard; only the nearest is
+    /// drawn, and the filter has to read the hour back correctly to do that.
+    #[test]
+    fn the_forecast_hour_round_trips_through_the_title() {
+        let json = r#"[{"hazard":"IFR","forecastHour":6,
+          "coords":[{"lat":"40","lon":"-100"},{"lat":"41","lon":"-100"},{"lat":"41","lon":"-99"}]}]"#;
+        let f = parse_gairmet(json).unwrap();
+        assert_eq!(super::forecast_hour(&f[0]), Some(6));
     }
 }

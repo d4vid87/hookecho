@@ -20,6 +20,8 @@ pub enum FeatureKind {
     TropicalCone,
     /// Aviation SIGMET/AIRMET hazard area (feature GG).
     Sigmet,
+    /// FAA Temporary Flight Restriction — airspace that is closed, not weather.
+    Tfr,
 }
 
 impl FeatureKind {
@@ -36,6 +38,9 @@ impl FeatureKind {
             FeatureKind::MesoDiscussion => 2,
             FeatureKind::TropicalCone => 2,
             FeatureKind::Sigmet => 2,
+            // Above the other airspace layers: a TFR is a legal boundary, and if one is under
+            // the cursor it is the thing the click was about.
+            FeatureKind::Tfr => 3,
             FeatureKind::Outlook => 1,
         }
     }
