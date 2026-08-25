@@ -918,6 +918,58 @@ mod android_browser {
     }
 }
 
+/// Hand a typeset text product to the Kotlin `TextViewActivity`, which puts it in a WebView.
+///
+/// The document travels as a string extra rather than a file: it is generated fresh each time, it
+/// is inert (see [`crate::textview`]), and a `file://` extra would need a FileProvider and a grant
+/// to say the same thing.
+#[cfg(target_os = "android")]
+pub fn open_textview(title: &str, html: &str) -> Result<(), String> {
+    android_textview::open(title, html).map_err(|e| format!("could not open the reader: {e:?}"))
+}
+
+#[cfg(target_os = "android")]
+mod android_textview {
+    use jni::objects::JObject;
+
+    pub(super) fn open(title: &str, html: &str) -> jni::errors::Result<()> {
+        let Some(app) = super::android::app() else {
+            return Ok(());
+        };
+        let vm = unsafe { jni::JavaVM::from_raw(app.vm_as_ptr() as *mut jni::sys::JavaVM) }?;
+        let mut env = vm.attach_current_thread()?;
+        let activity = unsafe { JObject::from_raw(app.activity_as_ptr() as jni::sys::jobject) };
+        let intent = env.new_object("android/content/Intent", "()V", &[])?;
+        let class = env.new_string("zip.batman.hookecho.TextViewActivity")?;
+        env.call_method(
+            &intent,
+            "setClassName",
+            "(Landroid/content/Context;Ljava/lang/String;)Landroid/content/Intent;",
+            &[(&activity).into(), (&class).into()],
+        )?;
+        for (key, value) in [("title", title), ("html", html)] {
+            let key = env.new_string(key)?;
+            let value = env.new_string(value)?;
+            env.call_method(
+                &intent,
+                "putExtra",
+                "(Ljava/lang/String;Ljava/lang/String;)Landroid/content/Intent;",
+                &[(&key).into(), (&value).into()],
+            )?;
+        }
+        let res = env.call_method(
+            &activity,
+            "startActivity",
+            "(Landroid/content/Intent;)V",
+            &[(&intent).into()],
+        );
+        if res.is_err() {
+            let _ = env.exception_clear();
+        }
+        res.map(|_| ())
+    }
+}
+
 #[cfg(target_os = "android")]
 mod android_location {
     use jni::objects::JObject;

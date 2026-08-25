@@ -47,6 +47,26 @@ pub(crate) fn phone_surface<'a>(ctx: &egui::Context, w: egui::Window<'a>) -> egu
     }
 }
 
+/// Hand this product to the platform's reader — Android's WebView, the desktop's browser.
+///
+/// Drawn only where there is one: the web build has neither, and keeps the monospace view it was
+/// already showing. See [`crate::textview`] for why the desktop half is the system browser and not
+/// an embedded webview.
+pub(crate) fn reader_button(ui: &mut egui::Ui, title: &str, issued: &str, text: &str) {
+    if !crate::textview::available() {
+        return;
+    }
+    if ui
+        .button(format!("{} Read", egui_phosphor::regular::BOOK_OPEN))
+        .on_hover_text("Opens this product typeset for reading \u{2014} paragraphs instead of teletype columns")
+        .clicked()
+    {
+        if let Err(e) = crate::textview::open(title, issued, text) {
+            log::warn!("reader failed: {e}");
+        }
+    }
+}
+
 /// The "Copy CSV" / "Save CSV…" pair every table window ends up wanting. `csv` is only called
 /// when a button is clicked, so building the text stays off the per-frame path.
 ///
