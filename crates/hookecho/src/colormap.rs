@@ -268,16 +268,17 @@ pub fn parse_pal(text: &str) -> anyhow::Result<ColorTable> {
 
 // --- Built-in defaults: real .pal files parsed through the one code path above ---
 
-const BUILTIN_SRC: [(&str, &str); 6] = [
+const BUILTIN_SRC: [(&str, &str); Moment::ALL.len()] = [
     ("REF", include_str!("../data/colortables/REF.pal")),
     ("VEL", include_str!("../data/colortables/VEL.pal")),
     ("SW", include_str!("../data/colortables/SW.pal")),
     ("ZDR", include_str!("../data/colortables/ZDR.pal")),
     ("PHI", include_str!("../data/colortables/PHI.pal")),
+    ("KDP", include_str!("../data/colortables/KDP.pal")),
     ("RHO", include_str!("../data/colortables/RHO.pal")),
 ];
 
-static BUILTINS: LazyLock<[ColorTable; 6]> = LazyLock::new(|| {
+static BUILTINS: LazyLock<[ColorTable; Moment::ALL.len()]> = LazyLock::new(|| {
     BUILTIN_SRC
         .map(|(name, src)| parse_pal(src).unwrap_or_else(|e| panic!("built-in {name}.pal: {e}")))
 });
@@ -326,8 +327,8 @@ pub fn default_table(moment: Moment) -> &'static ColorTable {
 ///
 /// `gen` bumps on every reload so the render sync can detect a table change and re-bake LUTs.
 pub struct Palettes {
-    pub tables: [ColorTable; 6],
-    pub errors: [Option<String>; 6],
+    pub tables: [ColorTable; Moment::ALL.len()],
+    pub errors: [Option<String>; Moment::ALL.len()],
     pub gen: u64,
 }
 
@@ -335,7 +336,7 @@ impl Default for Palettes {
     fn default() -> Self {
         Self {
             tables: BUILTINS.clone(),
-            errors: [const { None }; 6],
+            errors: [const { None }; Moment::ALL.len()],
             gen: 0,
         }
     }
@@ -349,7 +350,7 @@ impl Palettes {
 
     /// Reload each moment's table from `paths` (`None` = built-in default). A parse/read
     /// failure keeps the built-in and records the error. Bumps `gen`.
-    pub fn reload(&mut self, paths: &[Option<std::path::PathBuf>; 6]) {
+    pub fn reload(&mut self, paths: &[Option<std::path::PathBuf>; Moment::ALL.len()]) {
         for (i, moment) in Moment::ALL.into_iter().enumerate() {
             let (table, err) = match &paths[i] {
                 None => (default_table(moment).clone(), None),
@@ -406,7 +407,7 @@ mod tests {
         assert_eq!(alt_names(Moment::SpectrumWidth).count(), 0);
 
         let mut p = Palettes::default();
-        let mut paths: [Option<std::path::PathBuf>; 6] = Default::default();
+        let mut paths: [Option<std::path::PathBuf>; Moment::ALL.len()] = Default::default();
         let name = alt_names(Moment::Reflectivity).next().unwrap();
         paths[0] = Some(format!("{BUILTIN_PREFIX}{name}").into());
         paths[1] = Some(format!("{BUILTIN_PREFIX}nope").into());
@@ -449,7 +450,7 @@ SolidColorRange: 60 70 255 0 0
         std::fs::write(&path, src).unwrap();
 
         let mut p = Palettes::default();
-        let mut paths: [Option<std::path::PathBuf>; 6] = Default::default();
+        let mut paths: [Option<std::path::PathBuf>; Moment::ALL.len()] = Default::default();
         paths[Moment::Reflectivity.index()] = Some(path.clone());
         p.reload(&paths);
 

@@ -1,6 +1,6 @@
 //! The one place a radar product gets its name, its plain-English blurb, and its hotkey.
 //!
-//! Before this table the six moments had four different sets of labels — `REF`/`VEL` on the toolbox
+//! Before this table the moments had four different sets of labels — `REF`/`VEL` on the toolbox
 //! buttons, "Hi-Res Reflectivity" on mobile, "Correlation Coefficient (CC)" in the command palette,
 //! and bare numbers in the hotkey hints. A layman met a different vocabulary in every surface.
 
@@ -20,7 +20,7 @@ pub struct ProductInfo {
 }
 
 /// Every product, in hotkey order.
-pub const PRODUCTS: [ProductInfo; 6] = [
+pub const PRODUCTS: [ProductInfo; 7] = [
     ProductInfo {
         short: "REF",
         name: "Reflectivity",
@@ -51,16 +51,23 @@ pub const PRODUCTS: [ProductInfo; 6] = [
     },
     ProductInfo {
         short: "PHI",
-        name: "Specific Differential Phase",
-        blurb: "Rainfall rate in the heaviest cores, unaffected by hail",
+        name: "Differential Phase",
+        blurb: "Total phase shift the beam has picked up on its way out and back",
         hotkey: 5,
         moment: Moment::DifferentialPhase,
+    },
+    ProductInfo {
+        short: "KDP",
+        name: "Specific Differential Phase",
+        blurb: "Rainfall rate in the heaviest cores, unaffected by hail",
+        hotkey: 6,
+        moment: Moment::SpecificDifferentialPhase,
     },
     ProductInfo {
         short: "CC",
         name: "Correlation Coefficient",
         blurb: "How uniform the targets are — tells rain from hail, debris and birds",
-        hotkey: 6,
+        hotkey: 7,
         moment: Moment::CorrelationCoefficient,
     },
 ];
@@ -117,6 +124,7 @@ mod tests {
                 4 => egui::Key::Num4,
                 5 => egui::Key::Num5,
                 6 => egui::Key::Num6,
+                7 => egui::Key::Num7,
                 n => panic!("no key for hotkey {n}"),
             };
             let bound = crate::hotkeys::defaults()

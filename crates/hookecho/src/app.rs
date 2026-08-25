@@ -3227,7 +3227,7 @@ impl HookEchoApp {
     /// Spawn a background overlay fetch, routing the result to `overlay_rx`.
     /// Which moments the active pane's volume carries. All true when nothing is loaded, so an
     /// empty pane still offers the full product list.
-    fn available_moments(&self) -> [bool; 6] {
+    fn available_moments(&self) -> [bool; Moment::ALL.len()] {
         // The pane's remembered union, not this instant's volume: a half-arrived live volume
         // carries fewer moments than the radar sends, and the rows must not blink.
         self.views[self.active].moments()
@@ -10341,7 +10341,7 @@ impl HookEchoApp {
             let v = &mut self.views[idx];
             v.loaded_site = v.site.clone();
             v.volume = None;
-            v.moments_seen = [false; 6];
+            v.moments_seen = [false; Moment::ALL.len()];
             v.error = None;
             // Clear a stuck in-flight flag: if the previous site's fetch is still running when the
             // site changes, its result is dropped on arrival (site mismatch) without clearing

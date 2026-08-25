@@ -72,6 +72,10 @@ pub(crate) fn defaults() -> Vec<Binding> {
         ),
         plain(
             K::Num6,
+            A::Palette(P::SetMoment(Moment::SpecificDifferentialPhase, false)),
+        ),
+        plain(
+            K::Num7,
             A::Palette(P::SetMoment(Moment::CorrelationCoefficient, false)),
         ),
         plain(K::PageUp, A::TiltUp),

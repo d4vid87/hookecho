@@ -19,17 +19,21 @@ pub enum Moment {
     SpectrumWidth,
     DifferentialReflectivity,
     DifferentialPhase,
+    /// Specific differential phase — not transmitted; derived from [`Moment::DifferentialPhase`]
+    /// at bin time by [`crate::kdp`].
+    SpecificDifferentialPhase,
     CorrelationCoefficient,
 }
 
 impl Moment {
     /// All moments, in toolbox/hotkey display order (REF..RHO).
-    pub const ALL: [Moment; 6] = [
+    pub const ALL: [Moment; 7] = [
         Moment::Reflectivity,
         Moment::Velocity,
         Moment::SpectrumWidth,
         Moment::DifferentialReflectivity,
         Moment::DifferentialPhase,
+        Moment::SpecificDifferentialPhase,
         Moment::CorrelationCoefficient,
     ];
 
@@ -41,6 +45,7 @@ impl Moment {
             Moment::SpectrumWidth => "SW",
             Moment::DifferentialReflectivity => "ZDR",
             Moment::DifferentialPhase => "PHI",
+            Moment::SpecificDifferentialPhase => "KDP",
             Moment::CorrelationCoefficient => "CC",
         }
     }
@@ -52,6 +57,7 @@ impl Moment {
             Moment::Velocity | Moment::SpectrumWidth => "m/s",
             Moment::DifferentialReflectivity => "dB",
             Moment::DifferentialPhase => "deg",
+            Moment::SpecificDifferentialPhase => "deg/km",
             Moment::CorrelationCoefficient => "",
         }
     }
@@ -81,7 +87,11 @@ impl Moment {
             Moment::Velocity => radial.velocity(),
             Moment::SpectrumWidth => radial.spectrum_width(),
             Moment::DifferentialReflectivity => radial.differential_reflectivity(),
-            Moment::DifferentialPhase => radial.differential_phase(),
+            // KDP rides on the phase field: it is what the derivative is taken of, so sweep
+            // selection and gate geometry are decided by ΦDP's presence.
+            Moment::DifferentialPhase | Moment::SpecificDifferentialPhase => {
+                radial.differential_phase()
+            }
             Moment::CorrelationCoefficient => radial.correlation_coefficient(),
         }
     }
@@ -95,6 +105,7 @@ impl Moment {
             Moment::SpectrumWidth => (0.0, 63.0),            // m/s
             Moment::DifferentialReflectivity => (-7.9, 7.9), // dB
             Moment::DifferentialPhase => (0.0, 360.0),       // deg
+            Moment::SpecificDifferentialPhase => (-2.0, 8.0), // deg/km
             Moment::CorrelationCoefficient => (0.0, 1.05),
         }
     }
@@ -385,8 +396,8 @@ pub fn elevation_angles(scan: &Scan) -> Vec<f32> {
 /// Not every radar sends everything: a TDWR has only reflectivity and velocity, and volumes from
 /// before the 2011-13 dual-polarization upgrade have no ZDR/PHI/CC. The UI reads this so those
 /// products are absent rather than selectable-and-blank.
-pub fn available_moments(scan: &Scan) -> [bool; 6] {
-    let mut got = [false; 6];
+pub fn available_moments(scan: &Scan) -> [bool; Moment::ALL.len()] {
+    let mut got = [false; Moment::ALL.len()];
     for sweep in scan.sweeps() {
         for radial in sweep.radials() {
             for m in Moment::ALL {
@@ -546,33 +557,59 @@ pub fn bin_sweep_opts(
         by_bin[bin].push(radial);
     }
 
+    // Gather one radial's worth of raw f32 values into `row`. Below-threshold and range-folded
+    // gates stay `None` — derived moments must not read them as measurements.
+    let gather_row = |bin: usize, row: &mut [Option<f32>], by_bin: &Vec<Vec<&_>>| {
+        for radial in &by_bin[bin] {
+            let Some(m) = moment.select(radial) else {
+                continue;
+            };
+            for (g, value) in m.iter().enumerate().take(gate_count) {
+                if let MomentValue::Value(v) = value {
+                    row[g] = Some(v);
+                }
+            }
+        }
+    };
+
     let mut data = vec![0u8; AZ_BINS * gate_count];
-    if dealias && moment == Moment::Velocity {
+    if moment == Moment::SpecificDifferentialPhase {
+        // KDP is the range derivative of ΦDP, so it has to be taken on the physical field:
+        // the u8 band quantizes 0..360 deg into 253 steps (~1.4 deg), which is the same order
+        // as the per-gate phase change being measured. Differentiating that reads mostly
+        // quantization staircase.
+        let mut phi = vec![None; AZ_BINS * gate_count];
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            use rayon::prelude::*;
+            phi.par_chunks_mut(gate_count)
+                .enumerate()
+                .for_each(|(bin, row)| gather_row(bin, row, &by_bin));
+        }
+        #[cfg(target_arch = "wasm32")]
+        for (bin, row) in phi.chunks_mut(gate_count).enumerate() {
+            gather_row(bin, row, &by_bin);
+        }
+        let kdp = crate::kdp::from_differential_phase(&phi, AZ_BINS, gate_count, gate_interval_km);
+        for (i, v) in kdp.iter().enumerate() {
+            if let Some(v) = v {
+                data[i] = normalize(*v);
+            }
+        }
+    } else if dealias && moment == Moment::Velocity {
         // Gather the raw velocity field (m/s) into the az×gate grid, unfold it region-based,
         // then normalize. Below-threshold/range-folded gates stay None → code 0.
         let mut vel = vec![None; AZ_BINS * gate_count];
-        let gather_row = |bin: usize, row: &mut [Option<f32>]| {
-            for radial in &by_bin[bin] {
-                let Some(m) = moment.select(radial) else {
-                    continue;
-                };
-                for (g, value) in m.iter().enumerate().take(gate_count) {
-                    if let MomentValue::Value(v) = value {
-                        row[g] = Some(v);
-                    }
-                }
-            }
-        };
         #[cfg(not(target_arch = "wasm32"))]
         {
             use rayon::prelude::*;
             vel.par_chunks_mut(gate_count)
                 .enumerate()
-                .for_each(|(bin, row)| gather_row(bin, row));
+                .for_each(|(bin, row)| gather_row(bin, row, &by_bin));
         }
         #[cfg(target_arch = "wasm32")]
         for (bin, row) in vel.chunks_mut(gate_count).enumerate() {
-            gather_row(bin, row);
+            gather_row(bin, row, &by_bin);
         }
         let nyq = crate::dealias::estimate_nyquist(&vel);
         // Continuity: hand the previous pass over this same tilt to the dealiaser, so a storm

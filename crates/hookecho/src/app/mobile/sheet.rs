@@ -318,14 +318,17 @@ impl crate::app::HookEchoApp {
         // ---- Products ----
         // Same rows the old modal picker had; the difference is that they are two taps closer.
         type Row = (Moment, bool, &'static str);
-        let rows: [Row; 7] = [
+        let rows: [Row; 8] = [
             (Moment::Reflectivity, false, "Reflectivity"),
             (Moment::Velocity, false, "Velocity"),
             (Moment::Velocity, true, "Storm-Relative"),
             (Moment::SpectrumWidth, false, "Spectrum Width"),
             (Moment::CorrelationCoefficient, false, "CC"),
             (Moment::DifferentialReflectivity, false, "ZDR"),
-            (Moment::DifferentialPhase, false, "KDP"),
+            // This chip was labelled KDP while selecting ΦDP, which is a different field.
+            // Now that KDP is derived it gets its own chip and PHI gets its real name.
+            (Moment::DifferentialPhase, false, "PHI"),
+            (Moment::SpecificDifferentialPhase, false, "KDP"),
         ];
         let chips = ui.horizontal_wrapped(|ui| {
             for (m, want_srv, label) in rows {

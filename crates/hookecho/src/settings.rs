@@ -1099,7 +1099,7 @@ impl Settings {
 
     /// Resolve the per-moment `.pal` override paths (`None` = built-in default), indexed by
     /// [`wxdata::level2::Moment::index`].
-    pub fn palette_paths(&self) -> [Option<PathBuf>; 6] {
+    pub fn palette_paths(&self) -> [Option<PathBuf>; wxdata::level2::Moment::ALL.len()] {
         use wxdata::level2::Moment;
         Moment::ALL.map(|m| {
             let mut p = self.palettes.get(m.short_name());

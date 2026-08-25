@@ -12,7 +12,7 @@ use wxdata::level2::{self, BinnedSweep, Moment, Scan};
 
 /// How many binned sweeps one volume keeps. A sweep is ~1.3 MB, and the working set while
 /// flipping through moments and tilts is a handful — 12 covers it without the old unbounded
-/// map's ~120 MB worst case (6 moments x ~15 tilts, all resident at once).
+/// map's ~140 MB worst case (7 moments x ~15 tilts, all resident at once).
 const BINNED_CACHE: usize = 12;
 
 /// A decoded volume plus lazily-binned sweeps for the moments/tilts the user has viewed.
@@ -28,7 +28,7 @@ pub struct Volume {
     /// Sorted, deduped tilt angles; the tilt index selects into this.
     pub elevations: Vec<f32>,
     /// Which moments *this* volume carries (the pane keeps the wider union for its UI rows).
-    pub moments: [bool; 6],
+    pub moments: [bool; Moment::ALL.len()],
     binned: LruCache<(Moment, usize, bool), BinnedSweep>,
 }
 
@@ -126,8 +126,8 @@ pub struct MapView {
     pub moment: Moment,
     pub tilt: usize,
     /// Per-moment display threshold (physical units), indexed by [`Moment::index`].
-    pub thresholds: [Option<f32>; 6],
-    pub threshold_enabled: [bool; 6],
+    pub thresholds: [Option<f32>; Moment::ALL.len()],
+    pub threshold_enabled: [bool; Moment::ALL.len()],
     pub volume: Option<Volume>,
     /// The site the current volume/fetch belongs to; drives site-change detection.
     pub loaded_site: Option<String>,
@@ -156,7 +156,7 @@ pub struct MapView {
     /// the merged volume is reflectivity-only, so reading availability off it alone made the
     /// dual-pol rows blink out of the sidebar once a volume. What a radar sends doesn't change
     /// mid-session, so remember it.
-    pub moments_seen: [bool; 6],
+    pub moments_seen: [bool; Moment::ALL.len()],
 }
 
 impl MapView {
@@ -166,8 +166,8 @@ impl MapView {
             site,
             moment: Moment::Reflectivity,
             tilt: 0,
-            thresholds: [None; 6],
-            threshold_enabled: [false; 6],
+            thresholds: [None; Moment::ALL.len()],
+            threshold_enabled: [false; Moment::ALL.len()],
             volume: None,
             loaded_site: None,
             camera_placed: false,
@@ -182,7 +182,7 @@ impl MapView {
             loading: false,
             last_poll: None,
             error: None,
-            moments_seen: [false; 6],
+            moments_seen: [false; Moment::ALL.len()],
         }
     }
 
@@ -218,11 +218,11 @@ impl MapView {
 
     /// What this site's radar sends: the union over every volume seen since the site was
     /// selected, or "everything" before the first one lands.
-    pub fn moments(&self) -> [bool; 6] {
+    pub fn moments(&self) -> [bool; Moment::ALL.len()] {
         if self.moments_seen.iter().any(|m| *m) {
             self.moments_seen
         } else {
-            [true; 6]
+            [true; Moment::ALL.len()]
         }
     }
 
@@ -330,7 +330,7 @@ mod tests {
     fn moment_availability_is_remembered_across_volumes() {
         let mut v = MapView::new(Some("KTLX".into()), Camera::at_lonlat(-97.0, 35.0, 8.0));
         // Nothing loaded yet: assume the radar sends everything rather than hiding rows.
-        assert_eq!(v.moments(), [true; 6]);
+        assert_eq!(v.moments(), [true; Moment::ALL.len()]);
         v.volume = Some(Volume::new(scan_at(&[0.5]), "a".into(), chrono::Utc::now()));
         v.clamp_moment();
         let refl_only = v.moments();

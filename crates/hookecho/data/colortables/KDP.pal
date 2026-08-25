@@ -1,0 +1,18 @@
+; Hook Echo default specific differential phase color table (GRLevelX .pal v2)
+; Range matches Moment::value_range for KDP: -2..8 deg/km. Negative KDP is not a rain
+; signature (it is noise, or non-meteorological scatter) so it stays grey; the warm end is
+; where the heavy rain lives.
+Product: KDP
+Units: deg/km
+Step: 1
+RF: 128 128 128
+SolidColor: -2 60 60 60
+SolidColor: -0.5 90 90 90
+SolidColor: 0 0 0 140
+SolidColor: 0.5 0 120 200
+SolidColor: 1 0 200 200
+SolidColor: 1.5 0 200 0
+SolidColor: 2.5 230 230 0
+SolidColor: 4 230 120 0
+SolidColor: 6 230 0 0
+SolidColor: 8 250 0 250

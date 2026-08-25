@@ -20,6 +20,7 @@ pub mod geocode;
 pub mod glm;
 pub mod global;
 pub mod hrrr;
+pub mod kdp;
 pub mod level2;
 pub mod level3;
 pub mod live;
