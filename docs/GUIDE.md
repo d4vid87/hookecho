@@ -9,12 +9,14 @@ parts that need a filesystem or GPS.
 
 First launch runs a four-card setup: home radar site, map and theme, how
 warnings reach you. Its last card offers a 60-second tour of the live map; take
-it or skip it, and re-run either from the sidebar's **App** section, `Ctrl+K`,
-or **Settings → General**. After that the whole app is four regions — **left sidebar** (site, product,
-tilt, every layer, window, tool and setting), **bottom bar** (the timeline),
-**right edge** (the color scale for what you're looking at), and the map.
+it or skip it, and re-run either from the panel's **App** section, `Ctrl+K`,
+or **Settings → General**. After that the whole app is a full-bleed map with three floating pieces — the
+**panel** (site, product, tilt, every layer, window, tool and setting), opened
+from the search pill top-left or the control column on the **right edge** (which
+also carries the color scale for what you're looking at), and the **bottom bar**
+(the timeline).
 
-**If you remember one thing, remember `Ctrl+K`.** It searches the sidebar, and
+**If you remember one thing, remember `Ctrl+K`.** It searches the panel, and
 Enter runs the top match. Every action in the app is in there, described in
 plain English — products, layers, windows, workspaces, and "Fly to" for any
 place name. You do not need to learn where anything lives.
@@ -25,7 +27,7 @@ place name. You do not need to learn where anything lives.
 2. Product **Reflectivity (Z)** shows structure — where the rain and hail are.
 3. Product **Velocity (V)** shows motion. Dealiasing is on by default, so a
    couplet reads as red against green rather than folding into nonsense.
-4. Tilt: the sidebar's tilt row walks the VCP's elevation angles. 0.5° is what's
+4. Tilt: the panel's tilt row walks the VCP's elevation angles. 0.5° is what's
    near the ground; climb the tilts to see whether a storm leans.
 5. The **LIVE** badge on the bottom bar means you're on the newest scan. Anything
    that moves you off it turns it off; click it to snap back.
@@ -81,7 +83,7 @@ warned for.
 
 ## Get told without watching
 
-- **Markers** are what alerts watch. Search a place in the sidebar → **Save marker**.
+- **Markers** are what alerts watch. Search a place in the panel → **Save marker**.
 - Settings → Alerts: chime, desktop notification, [ntfy.sh](https://ntfy.sh)
   push, Discord/Slack/Matrix webhook. Triggers include warnings, lightning
   distance, rain arrival, debris signature and rotation.

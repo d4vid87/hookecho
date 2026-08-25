@@ -62,52 +62,54 @@ Versioned `v*` releases are the stable channel. Every push to `main` also
 refreshes a [`latest`](../../releases/tag/latest) rolling prerelease carrying the
 same artifacts, if you want the newest work without waiting for a tag.
 
-First launch opens a four-card setup: home radar site, map and theme (13 built
-in), and how warnings should reach you (chime and/or [ntfy.sh](https://ntfy.sh)
+First launch opens a four-card setup: home radar site, map and theme (7 built
+in, plus your own accent color), and how warnings should reach you (chime and/or [ntfy.sh](https://ntfy.sh)
 push to your phone). The last card offers a 60-second tour — four stops
 spotlighted on the live map, two of which you finish by doing the thing rather
-than reading about it. Neither is forced, and both re-run from the sidebar's
+than reading about it. Neither is forced, and both re-run from the panel's
 **App** section, `Ctrl+K`, or **Settings → General**.
 
 ## The interface
 
-Hook Echo-WX is a map with its controls docked around it — no menu bar, no
-floating cards over the weather:
+Hook Echo-WX is a full-bleed map with its controls floating over it — no menu
+bar, no docked columns eating the weather:
 
-- **The left sidebar** holds everything: the site, the current product and its
+- **The panel** holds everything: the site, the current product and its
   tilt, the expert knobs for that product, then every layer, window and tool —
   one icon-led row each, described in plain English, filed under collapsible
   categories that carry their own count, with the layer options, map settings and
   app commands under them. Search it with `Ctrl+K`; Enter runs the top match.
-  Drag a row by its icon to pin it above the rest of its category, and collapse
-  the whole sidebar to a single button when you want the map and nothing else.
+  Drag a row by its icon to pin it above the rest of its category. It opens from
+  the search pill in the top-left corner or the layers button on the right edge,
+  and closes to nothing — the map runs edge to edge underneath it.
 - Its **Alerts tab** lists every alert covering your view, worst first, badged
   with the count. Click a row to fly there and read the bulletin.
 - **The bottom bar** is the timeline: site, clock, play, scrub, and a LIVE badge
   that snaps back to the newest scan. Right-click the badge for the archive day,
   loop and playback speed.
-- **The right edge** carries the color scale for the product each pane is
+- **The right edge** carries the control column — layers, background map, and an
+  alert bell badged with the number of alerts in view — and the color scale for the product each pane is
   showing — a thin bar floating over the map, spanning only the values the color
   table actually paints.
 
 That's the whole of it. Searching for a place is the same box — type a name and
 take the **Fly to** row at the bottom of the results.
 
-| Search everything | One sidebar for everything |
+| Search everything | One panel for everything |
 |---|---|
-| ![Searching the sidebar for "hail" over the Joplin supercell](docs/shots/products.jpg) | ![The sidebar over the Mayfield supercell](docs/shots/layers.jpg) |
+| ![Searching for "hail" over the Joplin supercell](docs/shots/products.jpg) | ![The panel over the Mayfield supercell](docs/shots/layers.jpg) |
 | <sub>Joplin, MO — 22 May 2011</sub> | <sub>Mayfield, KY — 11 Dec 2021</sub> |
 
 Radar times read in **the selected radar's local time**, not Zulu — a KEPZ pane
 shows MDT while a KTLX pane shows CDT, side by side. Settings → Units puts it
 back to UTC if you'd rather work in Zulu.
 
-Every expert control is still there, in the sidebar's **Layer options** section,
+Every expert control is still there, in the panel's **Layer options** section,
 which shows a layer's settings only once that layer is on — so the forecast-hour
 slider appears when you turn on future radar, and stays out of the way when you
 haven't.
 
-Search a place in the sidebar and it flies there, with a **Save marker** button
+Search a place in the panel and it flies there, with a **Save marker** button
 if you want to keep it. Markers are what the warning, lightning and rain-arrival
 alerts watch. Tap one on the map to rename or remove it.
 
@@ -455,7 +457,7 @@ layout over the same renderer, the same data paths and the same action registry:
 | ![The map with the sheet at peek](docs/shots/android/map.jpg) | ![The sheet at half height, showing the scrubber and product chips](docs/shots/android/sheet.jpg) |
 | **Map first.** The radar owns the screen; one chip names the site and VCP. | **One sheet, three snaps.** Drag it up for the scrubber, speed, products and tilts; drag it to full for the archive. |
 | ![The layers and tools sheet](docs/shots/android/layers.jpg) | ![Active alerts listed in a modal sheet](docs/shots/android/alerts.jpg) |
-| **Everything else is a sheet.** The same described, categorized action registry the desktop sidebar uses. | **Alerts in view**, tap to fly there and read the full text. |
+| **Everything else is a sheet.** The same described, categorized action registry the desktop panel uses. | **Alerts in view**, tap to fly there and read the full text. |
 
 - A docked five-action toolbar along the sheet's bottom edge — no second bar
   stacked under it.

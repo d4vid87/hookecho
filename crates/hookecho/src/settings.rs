@@ -428,10 +428,6 @@ pub struct Settings {
     /// receives it.
     #[serde(default = "default_true")]
     pub share_card: bool,
-    /// Hide the docked sidebar on the left (desktop). A floating button on the map's top-left
-    /// brings it back, as does the drawer hotkey.
-    #[serde(default)]
-    pub hide_sidebar: bool,
     /// Hide the docked timeline bar under the map (desktop). The transport keeps working from the
     /// keyboard; this is for people who want the map edge-to-edge.
     #[serde(default)]
@@ -972,7 +968,6 @@ impl Default for Settings {
             volume_cache_mb: 0,
             tile_disk_cache_mb: 0,
             share_card: true,
-            hide_sidebar: false,
             hide_toolbar: false,
             layer_order: Vec::new(),
             mping_key: String::new(),
@@ -1401,7 +1396,6 @@ mod tests {
             seeded_workspaces: false,
             smooth_radar: false,
             share_card: true,
-            hide_sidebar: false,
             hide_toolbar: false,
             layer_order: Vec::new(),
             mping_key: String::new(),
