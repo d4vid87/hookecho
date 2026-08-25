@@ -114,6 +114,10 @@ pub fn site_tz(id: &str) -> Option<Tz> {
         "TFLL" | "TMCO" | "TMIA" | "TPBI" | "TTPA" => America__New_York, // FL
         "TSJU" => America__Puerto_Rico,                         // PR
 
+        // Germany is one zone, so the DWD table needs no per-site entry — but it does need to be
+        // asked, or every German radar falls through to `None` and reads UTC.
+        _ if crate::dwd::is_dwd(id) => Europe__Berlin,
+
         _ => return None,
     })
 }
