@@ -860,20 +860,55 @@ fn parse_iso_minutes(p: &str) -> Option<i64> {
     }
 }
 
-/// Fetch the available GOES frame times for `style` over the last `hours` (best-effort; empty on
-/// any failure). Uses the GIBS REST DescribeDomains endpoint.
+/// Which GOES frame times to ask for, given the wall clock and the active pane's radar time.
+///
+/// Returns the archive hour the window covers (`None` while live) and the window itself. The hour
+/// is the refetch key: scrubbing within it reuses the frames already loaded, and only crossing
+/// into another hour asks GIBS again.
+pub fn goes_window(
+    now: chrono::DateTime<chrono::Utc>,
+    radar: Option<chrono::DateTime<chrono::Utc>>,
+) -> (
+    Option<i64>,
+    chrono::DateTime<chrono::Utc>,
+    chrono::DateTime<chrono::Utc>,
+) {
+    // Four hours back is well past the point where a pane is replaying rather than lagging.
+    let hour = radar
+        .filter(|t| now.signed_duration_since(*t) > chrono::Duration::hours(4))
+        .map(|t| t.timestamp().div_euclid(3600));
+    match hour {
+        // Brackets the hour so stepping either way stays inside what was loaded.
+        Some(h) => {
+            let c = chrono::DateTime::from_timestamp(h * 3600, 0).unwrap_or(now);
+            (
+                hour,
+                c - chrono::Duration::hours(1),
+                c + chrono::Duration::hours(2),
+            )
+        }
+        None => (None, now - chrono::Duration::hours(8), now),
+    }
+}
+
+/// Fetch the available GOES frame times for `style` between `from` and `to` (best-effort; empty
+/// on any failure). Uses the GIBS REST DescribeDomains endpoint.
+///
+/// The window is a parameter rather than "the last N hours" because the same call serves the live
+/// loop and archive replay: GIBS keeps GeoColor about two weeks back and Band 13 several months,
+/// so scrubbing the radar into last week's event can ask for that week's satellite frames.
 pub async fn fetch_goes_times(
     client: &reqwest::Client,
     style: BasemapStyle,
-    hours: i64,
+    from: chrono::DateTime<chrono::Utc>,
+    to: chrono::DateTime<chrono::Utc>,
     limit: usize,
 ) -> Vec<chrono::DateTime<chrono::Utc>> {
     let Some((layer, level)) = style.goes_layer() else {
         return Vec::new();
     };
-    let now = chrono::Utc::now();
-    let from = (now - chrono::Duration::hours(hours)).format("%Y-%m-%dT%H:%M:%SZ");
-    let to = now.format("%Y-%m-%dT%H:%M:%SZ");
+    let from = from.format("%Y-%m-%dT%H:%M:%SZ");
+    let to = to.format("%Y-%m-%dT%H:%M:%SZ");
     let url = format!(
         "https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/1.0.0/{layer}/default/GoogleMapsCompatible_Level{level}/-180,-90,180,90/{from}--{to}.xml"
     );
@@ -1960,5 +1995,29 @@ mod tests {
                 assert_eq!(s.category(), Category::Satellite, "{s:?}");
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod goes_window_tests {
+    use super::goes_window;
+
+    #[test]
+    fn live_asks_for_the_last_eight_hours_and_an_archive_brackets_its_hour() {
+        let now = chrono::DateTime::from_timestamp(1_700_000_000, 0).unwrap();
+        let (hour, from, to) = goes_window(now, Some(now - chrono::Duration::minutes(6)));
+        assert_eq!(hour, None, "a lagging live pane is still live");
+        assert_eq!(to, now);
+        assert_eq!(now - from, chrono::Duration::hours(8));
+
+        let old = now - chrono::Duration::days(3);
+        let (hour, from, to) = goes_window(now, Some(old));
+        let h = hour.expect("three days back is an archive");
+        assert_eq!(h, old.timestamp().div_euclid(3600));
+        assert!(from <= old && old <= to, "the frame we are replaying is covered");
+        assert_eq!(to - from, chrono::Duration::hours(3));
+        // Scrubbing a few minutes inside the same hour must not change the refetch key.
+        let (again, ..) = goes_window(now, Some(old + chrono::Duration::minutes(5)));
+        assert_eq!(again, hour);
     }
 }
