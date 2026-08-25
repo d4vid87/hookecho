@@ -23,6 +23,12 @@ permissions:
 jobs:
   announce:
     runs-on: ubuntu-latest
+    # Prereleases are checkpoints, not releases: `v0.12.0-alpha.1` is for people already following
+    # the work, and broadcasting one to Bluesky/Mastodon/X/Discord announces a version most
+    # readers cannot sensibly install. A hyphen in the tag is the same prerelease test
+    # `release.yml` uses. A manual dispatch is exempt — asking for it by hand, tag and all, is
+    # saying you meant it (and its `dry_run` default is still true).
+    if: ${{ github.event_name == 'workflow_dispatch' || !contains(github.ref_name, '-') }}
     steps:
       # On a tag push this is the tag itself; a manual dispatch takes the default branch, so a
       # rehearsal works for a version that has not been tagged yet.
