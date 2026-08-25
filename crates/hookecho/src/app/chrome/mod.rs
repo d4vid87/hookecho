@@ -5,7 +5,7 @@
 mod chips;
 mod overlay;
 mod registry;
-mod timeline;
+mod scrubber;
 mod windows;
 
 use super::*;
