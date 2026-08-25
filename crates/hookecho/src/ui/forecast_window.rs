@@ -24,9 +24,11 @@ pub fn show(
     tz: Option<wxdata::tz::Tz>,
     minute: Option<&[Option<f32>]>,
     now: Option<(&str, &wxdata::obs::Observation)>,
+    popovers: &mut crate::ui::popover::Popovers,
 ) -> bool {
     let mut open = true;
-    crate::ui::phone_surface(ctx, egui::Window::new("Forecast"))
+    popovers
+        .card(ctx, "forecast", egui::Window::new("Forecast"))
         .open(&mut open)
         .default_size([460.0, 460.0])
         .show(ctx, |ui| {
@@ -68,7 +70,7 @@ fn body(ui: &mut egui::Ui, f: &PointForecast, tz: Option<wxdata::tz::Tz>) {
     if !f.hourly.is_empty() {
         ui.label(RichText::new("Next 24 hours").strong());
         hourly_strip(ui, &f.hourly, tz);
-    wind_strip(ui, &f.hourly);
+        wind_strip(ui, &f.hourly);
         ui.add_space(6.0);
     }
     ui.label(RichText::new("This week").strong());

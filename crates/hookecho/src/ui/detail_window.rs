@@ -15,9 +15,15 @@ pub struct Detail {
 
 /// Show the detail window. Returns `false` when it should close. `image` is the resolved texture
 /// for `detail.image`, if it has finished loading.
-pub fn show(ctx: &egui::Context, detail: &Detail, image: Option<&egui::TextureHandle>) -> bool {
+pub fn show(
+    ctx: &egui::Context,
+    detail: &Detail,
+    image: Option<&egui::TextureHandle>,
+    popovers: &mut crate::ui::popover::Popovers,
+) -> bool {
     let mut open = true;
-    crate::ui::phone_surface(ctx, egui::Window::new("Feature Details"))
+    popovers
+        .card(ctx, "detail", egui::Window::new("Feature Details"))
         .open(&mut open)
         // Wide enough for a 69-column fixed-width product (SPC bulletins, L3 attribute
         // tables) to land on its own line breaks instead of the wrap point.
