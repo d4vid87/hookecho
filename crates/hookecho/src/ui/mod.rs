@@ -86,6 +86,8 @@ pub(crate) fn csv_buttons(
     }
 }
 
+/// Accessible names for icon-only chrome.
+pub mod a11y;
 pub mod about_window;
 pub mod afd_window;
 pub mod tropical_window;

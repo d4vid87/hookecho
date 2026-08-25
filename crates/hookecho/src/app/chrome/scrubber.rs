@@ -6,6 +6,7 @@
 //! same axis.
 
 use super::*;
+use crate::ui::a11y::Named as _;
 
 impl HookEchoApp {
     pub(crate) fn scrubber(&mut self, ctx: &egui::Context) {
@@ -76,7 +77,7 @@ impl HookEchoApp {
                                 .color(egui::Color32::from_gray(238)),
                         );
                     }
-                    let btn = |ui: &mut egui::Ui, glyph: &str, on: bool| {
+                    let btn = |ui: &mut egui::Ui, glyph: &str, on: bool, name: &str| {
                         let fg = if on {
                             accent
                         } else {
@@ -88,16 +89,22 @@ impl HookEchoApp {
                                 .fill(egui::Color32::TRANSPARENT)
                                 .stroke(egui::Stroke::NONE),
                         )
+                        .named_toggle(name, on)
                         .clicked()
                     };
-                    if btn(ui, ph::SKIP_BACK, false) {
+                    if btn(ui, ph::SKIP_BACK, false, "Previous frame") {
                         t.step(-1);
                     }
                     let playing = t.playing;
-                    if btn(ui, if playing { ph::PAUSE } else { ph::PLAY }, playing) {
+                    if btn(
+                        ui,
+                        if playing { ph::PAUSE } else { ph::PLAY },
+                        playing,
+                        if playing { "Pause" } else { "Play" },
+                    ) {
                         t.toggle_play();
                     }
-                    if btn(ui, ph::SKIP_FORWARD, false) {
+                    if btn(ui, ph::SKIP_FORWARD, false, "Next frame") {
                         t.step(1);
                     }
                     // Live / archive badge: click to re-pin to the newest volume.
@@ -136,7 +143,7 @@ impl HookEchoApp {
                         .fill(col)
                         .corner_radius(9.0),
                     )
-                    .on_hover_text(hint);
+                    .named(hint);
                     if badge.clicked() {
                         go_head = true;
                     }
@@ -390,6 +397,12 @@ fn track(
             }
         }
     }
+    // The track is painted rather than built from widgets, so its accessibility node is empty
+    // unless we fill it in. Where the playhead sits is the whole of what it says.
+    let (at, of) = (t.playhead + 1, slots.max(1));
+    resp.widget_info(|| {
+        egui::WidgetInfo::slider(true, at as f64, format!("Timeline, frame {at} of {of}"))
+    });
     rect
 }
 
