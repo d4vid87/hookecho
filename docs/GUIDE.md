@@ -13,10 +13,11 @@ it or skip it, and re-run either from the panel's **App** section, `Ctrl+K`,
 or **Settings → General**. After that the whole app is a full-bleed map with three floating pieces — the
 **panel** (site, product, tilt, every layer, window, tool and setting), opened
 from the search pill top-left or the control column on the **right edge** (which
-also carries the color scale for what you're looking at), and the **bottom bar**
-(the timeline). Tools you browse rather than watch — settings, the event
-library, alert rules — open as pages in a slide-over **drawer** on that same
-left edge, one page at a time, with a back arrow to the page you came from.
+also carries the color scale for what you're looking at), and the **scrubber**
+(the timeline, floating along the bottom). Tools you browse rather than watch —
+settings, the event library, alert rules — open as pages in a slide-over
+**drawer** on that same left edge, one page at a time, with a back arrow to the
+page you came from.
 
 **If you remember one thing, remember `Ctrl+K`.** It searches the panel, and
 Enter runs the top match. Every action in the app is in there, described in
@@ -31,7 +32,7 @@ place name. You do not need to learn where anything lives.
    couplet reads as red against green rather than folding into nonsense.
 4. Tilt: the panel's tilt row walks the VCP's elevation angles. 0.5° is what's
    near the ground; climb the tilts to see whether a storm leans.
-5. The **LIVE** badge on the bottom bar means you're on the newest scan. Anything
+5. The **LIVE** badge on the scrubber means you're on the newest scan. Anything
    that moves you off it turns it off; click it to snap back.
 
 Moving the map: drag to pan, scroll to zoom. On a trackpad, pinch to zoom and

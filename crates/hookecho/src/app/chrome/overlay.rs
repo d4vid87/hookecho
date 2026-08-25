@@ -14,6 +14,8 @@ const PANEL_W: f32 = 300.0;
 /// inset, and the value labels to its left), so the two never share pixels.
 const CONTROLS: egui::Vec2 = egui::vec2(-70.0, 44.0);
 const RIGHT_PANEL: egui::Vec2 = egui::vec2(-130.0, 44.0);
+/// What the scrubber pill needs along the bottom edge, plus a margin.
+const SCRUBBER_CLEARANCE: f32 = 84.0;
 
 impl HookEchoApp {
     /// The main panel: everything that isn't the map, floating over the map's left edge.
@@ -47,8 +49,9 @@ impl HookEchoApp {
         let mut hide = false;
         // Tour spotlights, recorded from inside the panel (no `self` reachable in there).
         let mut alerts_rect = None;
-        // Height budget: the pill above it, the bottom bar below it, and a margin at each end.
-        let max_h = (self.chrome_rect.height() - PANEL_TOP - 16.0).max(160.0);
+        // Height budget: the search pill above, the scrubber pill below (which is centred and
+        // grows with the window, so on a narrow one it would otherwise run under this panel).
+        let max_h = (self.chrome_rect.height() - PANEL_TOP - SCRUBBER_CLEARANCE).max(160.0);
         let panel_rect = egui::Area::new(egui::Id::new("panel"))
             .constrain_to(self.chrome_rect)
             .anchor(egui::Align2::LEFT_TOP, egui::vec2(PANEL_X, PANEL_TOP))
