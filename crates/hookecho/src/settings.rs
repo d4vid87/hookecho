@@ -150,6 +150,10 @@ pub struct Settings {
     pub placefiles: Vec<PlacefileConfig>,
     /// User-placed location markers.
     pub markers: Vec<Marker>,
+    /// Recolour reflectivity by the MRMS surface precipitation type: blue where it is falling
+    /// as snow, pink where it is freezing rain or sleet.
+    #[serde(default)]
+    pub precip_tint: bool,
     /// Unfold aliased Doppler velocity (region-based dealiasing) when displaying VEL.
     #[serde(default)]
     pub dealias_velocity: bool,
@@ -1000,6 +1004,7 @@ impl Default for Settings {
             ui_scale: 1.0,
             placefiles: Vec::new(),
             markers: Vec::new(),
+            precip_tint: false,
             dealias_velocity: false,
             mapbox_key: String::new(),
             maptiler_key: String::new(),
@@ -1394,6 +1399,7 @@ mod tests {
     #[test]
     fn roundtrips() {
         let s = Settings {
+            precip_tint: false,
             custom_tile_url: String::new(),
             custom_tile_max_z: default_custom_tile_max_z(),
             custom_tile_attribution: String::new(),

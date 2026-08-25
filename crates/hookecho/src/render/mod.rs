@@ -43,10 +43,17 @@ pub struct RadarUpload {
     pub gate_count: u32,
     pub data: Vec<u8>,
     /// [radar_lat, radar_lon, first_gate_km, gate_interval_km, az_bins, gate_count,
-    ///  smoothing, srv, motion_e, motion_n, _pad, _pad] (see `shaders/radar.wgsl`).
-    pub uniform: [f32; 12],
-    /// 256×1 RGBA color LUT indexed by the sweep's `u8` (see `colormap::bake_lut`).
+    ///  smoothing, srv, motion_e, motion_n, tint, flag_nx, flag_ny, flag_west, flag_north,
+    ///  flag_east, flag_south, _pad, _pad, _pad] (see `shaders/radar.wgsl`).
+    pub uniform: [f32; 20],
+    /// 256×3 RGBA color LUT indexed by the sweep's `u8`: row 0 rain (the user's own table),
+    /// row 1 snow, row 2 mix. Rows 1 and 2 are copies of row 0 unless the precipitation-type
+    /// tint is on (see `colormap::tint_lut`).
     pub lut: Vec<u8>,
+    /// MRMS surface precipitation-type classes on their own lat/lon grid, one byte per cell
+    /// (0 rain, 1 snow, 2 mix). Empty when the tint is off; a 1×1 dummy is bound instead,
+    /// because every binding has to exist whether or not it is read.
+    pub precip_flag: Vec<u8>,
     /// World-space quad corners covering the disk (min/max box).
     pub world_min: [f32; 2],
     pub world_max: [f32; 2],
@@ -358,6 +365,7 @@ struct TileGpu {
 
 struct RadarGpu {
     _tex: wgpu::Texture,
+    _flag: wgpu::Texture,
     _lut: wgpu::Texture,
     _uni: wgpu::Buffer,
     bind_group: wgpu::BindGroup,
@@ -480,7 +488,7 @@ impl RenderResources {
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Uniform,
                         has_dynamic_offset: false,
-                        min_binding_size: NonZeroU64::new(48),
+                        min_binding_size: NonZeroU64::new(80),
                     },
                     count: None,
                 },
@@ -503,6 +511,18 @@ impl RenderResources {
                         multisampled: false,
                     },
                     count: None,
+                },
+                // The precipitation-type grid. Always bound — a binding cannot be conditional —
+                // and 1×1 when the tint is off.
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Uint,
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None
                 },
             ],
         });
@@ -856,10 +876,10 @@ impl RenderResources {
             usage: wgpu::BufferUsages::UNIFORM,
         });
 
-        // 256×1 color LUT, indexed by the sweep u8 in the fragment shader.
+        // 256×3 color LUT, indexed by the sweep u8 across and the precipitation type down.
         let lut_size = wgpu::Extent3d {
             width: 256,
-            height: 1,
+            height: 3,
             depth_or_array_layers: 1,
         };
         let lut_tex = device.create_texture(&wgpu::TextureDescriptor {
@@ -883,13 +903,54 @@ impl RenderResources {
             wgpu::TexelCopyBufferLayout {
                 offset: 0,
                 bytes_per_row: Some(256 * 4),
-                rows_per_image: Some(1),
+                rows_per_image: Some(3),
             },
             lut_size,
         );
 
         let view = tex.create_view(&wgpu::TextureViewDescriptor::default());
         let lut_view = lut_tex.create_view(&wgpu::TextureViewDescriptor::default());
+
+        // Precipitation-type grid. One byte per cell; 1×1 of zeroes when the tint is off, which
+        // the shader never reads because the tint flag in the uniform is zero too.
+        let (fnx, fny) = (r.uniform[11] as u32, r.uniform[12] as u32);
+        let (fnx, fny, flag_data) = if r.precip_flag.len() == (fnx * fny) as usize && fnx > 0 {
+            (fnx, fny, r.precip_flag.clone())
+        } else {
+            (1, 1, vec![0u8])
+        };
+        let flag_size = wgpu::Extent3d {
+            width: fnx,
+            height: fny,
+            depth_or_array_layers: 1,
+        };
+        let flag_tex = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("radar_precip_flag"),
+            size: flag_size,
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::R8Uint,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &flag_tex,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            &flag_data,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(fnx),
+                rows_per_image: Some(fny),
+            },
+            flag_size,
+        );
+        let flag_view = flag_tex.create_view(&wgpu::TextureViewDescriptor::default());
+
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("radar_bg"),
             layout: &self.radar_bgl,
@@ -906,10 +967,15 @@ impl RenderResources {
                     binding: 2,
                     resource: wgpu::BindingResource::TextureView(&lut_view),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::TextureView(&flag_view),
+                },
             ],
         });
         RadarGpu {
             _tex: tex,
+            _flag: flag_tex,
             _lut: lut_tex,
             _uni: uni,
             bind_group,

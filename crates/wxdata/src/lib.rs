@@ -50,6 +50,7 @@ pub mod spotters;
 pub mod stations;
 pub mod task;
 pub mod tds;
+pub mod tfr;
 pub mod tdwr;
 pub mod torclimo;
 pub mod towers;

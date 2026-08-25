@@ -558,3 +558,114 @@ SolidColor: 20 0 255 0
         assert!(parse_pal("; only a comment\nUnits: dBZ\n").is_err());
     }
 }
+
+/// Which precipitation the tinted reflectivity row is for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PrecipTint {
+    /// The user's own reflectivity table, untouched.
+    Rain,
+    Snow,
+    /// Freezing rain, sleet, and the melting layer — anything that is neither cleanly.
+    Mix,
+}
+
+/// Recolour a baked reflectivity LUT for a precipitation type.
+///
+/// The point is to keep the structure the user already reads — where the bands fall, how hard
+/// the gradient is, their own `.pal` choices — and change only the hue, so a snow band is
+/// obviously snow at a glance without becoming a different chart. So this takes each entry's
+/// luminance as the intensity it encodes and re-ramps that through a single-hue scale, rather
+/// than substituting an unrelated palette.
+///
+/// ponytail: two fixed destination hues. A user-supplied snow `.pal` is the upgrade path if
+/// anyone asks for one.
+pub fn tint_lut(lut: &[u8; 1024], tint: PrecipTint) -> [u8; 1024] {
+    if tint == PrecipTint::Rain {
+        return *lut;
+    }
+    let mut out = *lut;
+    // Index 0 (transparent) and 1 (range fold) are not values and are left alone.
+    for raw in 2usize..=255 {
+        let b = raw * 4;
+        let (r, g, bl, a) = (lut[b], lut[b + 1], lut[b + 2], lut[b + 3]);
+        if a == 0 {
+            continue;
+        }
+        // Rec. 601 luma: close enough to perceived intensity for a colour ramp.
+        let y = (0.299 * r as f32 + 0.587 * g as f32 + 0.114 * bl as f32) / 255.0;
+        let t = y.clamp(0.0, 1.0);
+        let rgb = match tint {
+            // Pale blue into deep blue, then white at the very top — heavy snow reads bright.
+            PrecipTint::Snow => [
+                (210.0 - 190.0 * t + 200.0 * (t * t * t)).clamp(0.0, 255.0) as u8,
+                (235.0 - 150.0 * t + 150.0 * (t * t * t)).clamp(0.0, 255.0) as u8,
+                255.0_f32.clamp(0.0, 255.0) as u8,
+            ],
+            // Pink into magenta: the conventional "this is not simply rain or snow" colour.
+            PrecipTint::Mix => [
+                (245.0 - 30.0 * t).clamp(0.0, 255.0) as u8,
+                (200.0 - 170.0 * t).clamp(0.0, 255.0) as u8,
+                (230.0 - 40.0 * t).clamp(0.0, 255.0) as u8,
+            ],
+            PrecipTint::Rain => [r, g, bl],
+        };
+        out[b] = rgb[0];
+        out[b + 1] = rgb[1];
+        out[b + 2] = rgb[2];
+    }
+    out
+}
+
+#[cfg(test)]
+mod tint_tests {
+    use super::*;
+
+    fn a_lut() -> [u8; 1024] {
+        let mut l = [0u8; 1024];
+        for raw in 2usize..=255 {
+            let b = raw * 4;
+            l[b..b + 4].copy_from_slice(&[raw as u8, 60, 20, 255]);
+        }
+        l
+    }
+
+    /// Rain is the user's own table and must come back byte-identical.
+    #[test]
+    fn rain_is_untouched() {
+        let l = a_lut();
+        assert_eq!(tint_lut(&l, PrecipTint::Rain), l);
+    }
+
+    /// The two sentinel codes are not values and must survive any tint.
+    #[test]
+    fn the_sentinels_survive() {
+        let mut l = a_lut();
+        l[4..8].copy_from_slice(&[128, 128, 128, 200]);
+        for t in [PrecipTint::Snow, PrecipTint::Mix] {
+            let o = tint_lut(&l, t);
+            assert_eq!(&o[0..4], &[0, 0, 0, 0], "index 0");
+            assert_eq!(&o[4..8], &[128, 128, 128, 200], "range fold");
+        }
+    }
+
+    /// Transparency carries the threshold the user set, so a tint must not make hidden gates
+    /// visible.
+    #[test]
+    fn alpha_is_preserved() {
+        let mut l = a_lut();
+        l[40 * 4 + 3] = 0;
+        for t in [PrecipTint::Snow, PrecipTint::Mix] {
+            assert_eq!(tint_lut(&l, t)[40 * 4 + 3], 0);
+        }
+    }
+
+    /// Snow must actually read as blue, not as the reflectivity colours it came from.
+    #[test]
+    fn snow_is_blue() {
+        let o = tint_lut(&a_lut(), PrecipTint::Snow);
+        for raw in [10usize, 120, 200] {
+            let b = raw * 4;
+            assert!(o[b + 2] >= o[b], "raw {raw} should be blue-dominant");
+        }
+    }
+}

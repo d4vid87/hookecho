@@ -151,6 +151,13 @@ impl Default for OverlayFilters {
     }
 }
 
+/// How many TFR shapes to fetch per refresh.
+///
+/// The FAA lists ~135 active restrictions and each shape is a separate document, so a first load
+/// cannot be one request. Shapes never change once issued, so this only paces that first load: a
+/// few refresh cycles and the set is complete and stays complete.
+const TFR_BATCH: usize = 25;
+
 /// Background overlay fetch results.
 enum OverlayMsg {
     Alerts(Vec<GeoFeature>),
@@ -242,6 +249,8 @@ enum OverlayMsg {
     Tropical(wxdata::tropical::TropicalData),
     /// Aviation SIGMET/AIRMET hazard polygons (feature GG).
     Aviation(Vec<GeoFeature>),
+    /// Newly-fetched TFR shapes keyed by NOTAM id, and how many are still unfetched.
+    Tfr(Vec<(String, GeoFeature)>, usize),
 }
 
 /// One overlay data source to fetch.
@@ -307,6 +316,9 @@ enum OverlaySource {
     ArchiveWarnings(i64),
     /// Aviation SIGMET/AIRMET polygons (feature GG).
     Aviation,
+    /// FAA Temporary Flight Restrictions; carries the NOTAM ids already held, so a refresh only
+    /// fetches shapes that are new.
+    Tfr(Vec<String>),
     /// Surface observations within a lat/lon bbox `(lat0, lon0, lat1, lon1)` (feature U).
     Metar(f64, f64, f64, f64),
     /// Run an external-process plugin: `(key, command, args, context)`. The key is the synthetic
@@ -759,7 +771,18 @@ impl OverlaySource {
                 }))
             }
             OverlaySource::Aviation => {
-                OverlayMsg::Aviation(wxdata::aviation::fetch_airsigmet(http).await?)
+                let mut f = wxdata::aviation::fetch_airsigmet(http).await?;
+                // G-AIRMETs ride with the SIGMETs: same layer, same question, and a failure
+                // fetching them must not cost the SIGMETs that already arrived.
+                match wxdata::aviation::fetch_gairmet(http).await {
+                    Ok(g) => f.extend(g),
+                    Err(e) => log::warn!("g-airmet: {e}"),
+                }
+                OverlayMsg::Aviation(f)
+            }
+            OverlaySource::Tfr(have) => {
+                let (new, remaining) = wxdata::tfr::fetch(http, &have, TFR_BATCH).await?;
+                OverlayMsg::Tfr(new, remaining)
             }
         })
     }
@@ -1011,6 +1034,7 @@ pub(crate) enum OverlayToggle {
     Tropical,
     ProbSevere,
     Aviation,
+    Tfr,
     RangeRings,
     Sensors,
     Hodo,
@@ -1051,7 +1075,7 @@ pub(crate) struct BlockageKey {
 impl OverlayToggle {
     /// Every toggle, for the persistence sweep. A new variant belongs here too, or it silently
     /// stops being remembered across restarts.
-    pub(crate) const ALL: [OverlayToggle; 36] = [
+    pub(crate) const ALL: [OverlayToggle; 37] = [
         Self::AlertPanel,
         Self::StormReports,
         Self::Spotters,
@@ -1066,6 +1090,7 @@ impl OverlayToggle {
         Self::Tropical,
         Self::ProbSevere,
         Self::Aviation,
+        Self::Tfr,
         Self::RangeRings,
         Self::Sensors,
         Self::Hodo,
@@ -1508,6 +1533,9 @@ type ShownKey = (
     u64,
     Option<(u32, u32)>,
     bool,
+    // Precipitation-tint generation: `None` when the tint is off, else the grid revision, so a
+    // new precipitation-type grid or toggling the tint rebuilds the image.
+    Option<u32>,
 );
 
 /// An in-progress offline chase-pack download: the worker outcome channel, a cancel flag the
@@ -2112,6 +2140,18 @@ pub struct HookEchoApp {
     show_aviation: bool,
     aviation_features: Vec<GeoFeature>,
     aviation_last_fetch: Option<Instant>,
+    /// FAA Temporary Flight Restrictions: toggle, shapes by NOTAM id, refresh clock, and how
+    /// many shapes are still unfetched (the first load comes in batches).
+    /// MRMS surface precipitation classes for the reflectivity tint, kept whether or not the
+    /// precipitation-type layer itself is shown. Behind an `Arc` so a pane can take a cheap
+    /// handle to it while the volume it is drawing is mutably borrowed.
+    precip_flag_grid: Option<std::sync::Arc<PrecipGrid>>,
+    /// Bumped whenever `precip_flag_grid` is replaced, so a pane knows its upload is stale.
+    precip_flag_gen: u32,
+    show_tfr: bool,
+    tfr_features: std::collections::HashMap<String, GeoFeature>,
+    tfr_last_fetch: Option<Instant>,
+    tfr_pending: usize,
     /// Area Forecast Discussion window (feature DD): open flag, fetched text, in-flight receiver.
     afd_open: bool,
     afd: Option<wxdata::afd::Afd>,
@@ -2874,6 +2914,12 @@ impl HookEchoApp {
             show_aviation: false,
             aviation_features: Vec::new(),
             aviation_last_fetch: None,
+            precip_flag_grid: None,
+            precip_flag_gen: 0,
+            show_tfr: false,
+            tfr_features: std::collections::HashMap::new(),
+            tfr_last_fetch: None,
+            tfr_pending: 0,
             afd_open: false,
             afd: None,
             afd_error: None,
@@ -3024,7 +3070,13 @@ impl HookEchoApp {
             use OverlayToggle as T;
             matches!(
                 t,
-                T::Tropical | T::ProbSevere | T::Aviation | T::Alerts | T::Mds | T::Fires
+                T::Tropical
+                    | T::ProbSevere
+                    | T::Aviation
+                    | T::Tfr
+                    | T::Alerts
+                    | T::Mds
+                    | T::Fires
             )
         });
         for t in restore {
@@ -7194,6 +7246,7 @@ impl HookEchoApp {
         // doesn't need `self`. They used to live in the toolbox's Product ▸ Options disclosure.
         let mut srv_from_cells = false;
         let mut dealias = self.settings.dealias_velocity;
+        let mut precip_tint = self.settings.precip_tint;
         let mut srv_on = srv;
         let mi = moment.index();
         let (mut dir_deg, mut speed_kt) = {
@@ -7257,6 +7310,14 @@ impl HookEchoApp {
         egui::CollapsingHeader::new("Product options")
             .default_open(false)
             .show(ui, |ui| {
+                if moment == wxdata::level2::Moment::Reflectivity {
+                    ui.checkbox(&mut precip_tint, "Tint by precipitation type")
+                        .on_hover_text(
+                            "Colour the echo blue where it is falling as snow and pink where \
+                             it is freezing rain or sleet, from the MRMS surface type. \
+                             Reflectivity alone cannot tell them apart.",
+                        );
+                }
                 if moment == wxdata::level2::Moment::Velocity {
                     ui.checkbox(&mut dealias, "Dealias")
                         .on_hover_text("Unfold aliased velocity (region-based dealiasing)");
@@ -7307,6 +7368,10 @@ impl HookEchoApp {
 
         if let Some(i) = pick_tilt {
             self.views[self.active].tilt = i;
+        }
+        if self.settings.precip_tint != precip_tint {
+            self.settings.precip_tint = precip_tint;
+            self.settings.save();
         }
         self.settings.dealias_velocity = dealias;
         // A product row was clicked this frame: it already set the moment and SRV flag, so the
@@ -7484,6 +7549,7 @@ impl HookEchoApp {
             T::Tropical => &mut self.show_tropical,
             T::ProbSevere => &mut self.show_probsevere,
             T::Aviation => &mut self.show_aviation,
+            T::Tfr => &mut self.show_tfr,
             T::RangeRings => &mut self.show_range_rings,
             T::Fronts => &mut self.show_fronts,
             T::GlmLightning => &mut self.show_glm,
@@ -8067,6 +8133,13 @@ impl HookEchoApp {
                 false,
             ),
             (
+                T::Tfr,
+                "Reference",
+                "Flight restrictions (TFR)",
+                "Airspace you may not fly through: fires, stadiums, VIP movements, launches",
+                false,
+            ),
+            (
                 T::Blockage,
                 "Reference",
                 "Beam blockage (terrain)",
@@ -8478,7 +8551,13 @@ impl HookEchoApp {
                 use OverlayToggle as T;
                 if matches!(
                     t,
-                    T::Tropical | T::ProbSevere | T::Aviation | T::Alerts | T::Mds | T::Fires
+                    T::Tropical
+                        | T::ProbSevere
+                        | T::Aviation
+                        | T::Tfr
+                        | T::Alerts
+                        | T::Mds
+                        | T::Fires
                 ) {
                     self.rebuild_overlays();
                 }
@@ -8731,6 +8810,12 @@ impl HookEchoApp {
                     if layer == crate::render::FieldLayer::Lightning {
                         self.check_lightning_proximity(&field);
                     }
+                    // The precipitation-type grid is kept, not just uploaded: the radar tint
+                    // reads it per fragment, and the layer it belongs to may well be hidden.
+                    if layer == crate::render::FieldLayer::PrecipType {
+                        self.precip_flag_grid = Some(std::sync::Arc::new(PrecipGrid::new(&field)));
+                        self.precip_flag_gen = self.precip_flag_gen.wrapping_add(1);
+                    }
                     let upload = self.field_upload(layer, &field);
                     if let Some(s) = self.fields.get_mut(&layer) {
                         s.pending = Some(upload);
@@ -8761,6 +8846,10 @@ impl HookEchoApp {
                     }
                 },
                 OverlayMsg::Aviation(f) => self.aviation_features = f,
+                OverlayMsg::Tfr(new, remaining) => {
+                    self.tfr_features.extend(new);
+                    self.tfr_pending = remaining;
+                }
                 OverlayMsg::Spotters(spotters) => self.spotters = spotters,
                 OverlayMsg::Fronts(a) => self.fronts = Some(a),
                 OverlayMsg::FreezingLevels(h0, hm20) => {
@@ -9765,6 +9854,16 @@ impl HookEchoApp {
         }
         if self.show_aviation {
             v.extend(self.aviation_features.iter().cloned());
+        }
+        if self.show_tfr {
+            // Shapes that failed to parse are kept as empty placeholders so they are not
+            // refetched forever; they have nothing to draw.
+            v.extend(
+                self.tfr_features
+                    .values()
+                    .filter(|f| !f.rings.is_empty())
+                    .cloned(),
+            );
         }
         if self.show_fires {
             v.extend(self.fire_perims.iter().cloned());
@@ -10905,11 +11004,20 @@ impl HookEchoApp {
             self.palettes.gen,
             uv_key,
             dealias,
+            self.settings
+                .precip_tint
+                .then_some(self.precip_flag_gen),
         );
         if self.pane_shown.get(&idx) == Some(&key) {
             return (None, true);
         }
         let table = self.palettes.table(moment);
+        // Cheap handle taken before the volume is borrowed mutably below.
+        let precip = self
+            .settings
+            .precip_tint
+            .then(|| self.precip_flag_grid.clone())
+            .flatten();
         let upload = {
             let Some(vol) = self.views[data].volume.as_mut() else {
                 return (None, true);
@@ -10920,7 +11028,7 @@ impl HookEchoApp {
                 return (None, true);
             }
             vol.binned(moment, tilt, dealias)
-                .map(|s| to_upload(s, table, threshold, smooth, storm_uv))
+                .map(|s| to_upload(s, table, threshold, smooth, storm_uv, precip.as_deref()))
         };
         match upload {
             Ok(up) => {
@@ -15094,13 +15202,15 @@ impl HookEchoApp {
 /// `threshold` (physical units) is baked into the color LUT; `None` shows all values.
 /// `smooth` enables bilinear sampling in the shader. `table` selects the colormap.
 /// `storm_uv` is the storm motion (east, north) in m/s for storm-relative velocity, or
-/// `None` for ground-relative.
+/// `None` for ground-relative. `precip` is the MRMS surface precipitation-type field, when the
+/// user has asked for reflectivity to be tinted by it.
 pub(crate) fn to_upload(
     s: &BinnedSweep,
     table: &ColorTable,
     threshold: Option<f32>,
     smooth: bool,
     storm_uv: Option<(f32, f32)>,
+    precip: Option<&PrecipGrid>,
 ) -> RadarUpload {
     use crate::render::mercator::lonlat_to_world;
     let max_range_km = s.first_gate_km + s.gate_count as f32 * s.gate_interval_km;
@@ -15118,6 +15228,36 @@ pub(crate) fn to_upload(
         Some((e, n)) => (1.0, e * per_ms, n * per_ms),
         None => (0.0, 0.0, 0.0),
     };
+    // Only reflectivity is tinted: the tint says what kind of precipitation an echo is, and
+    // that is not a statement about a velocity or a correlation coefficient.
+    let tint = precip.filter(|_| s.moment == Moment::Reflectivity);
+    let base = crate::colormap::bake_lut(table, (s.value_min, s.value_max), threshold);
+    // Three rows, always. When the tint is off they are identical, which costs 2 KB and keeps
+    // the shader and the bind group the same shape in both cases.
+    let mut lut = Vec::with_capacity(1024 * 3);
+    lut.extend_from_slice(&base);
+    for kind in [
+        crate::colormap::PrecipTint::Snow,
+        crate::colormap::PrecipTint::Mix,
+    ] {
+        match tint {
+            Some(_) => lut.extend_from_slice(&crate::colormap::tint_lut(&base, kind)),
+            None => lut.extend_from_slice(&base),
+        }
+    }
+    let (precip_flag, flag_nx, flag_ny, flag_w, flag_n, flag_e, flag_s) = match tint {
+        Some(g) => (
+            g.classes.clone(),
+            g.nx,
+            g.ny,
+            g.west,
+            g.north,
+            g.east,
+            g.south,
+        ),
+        None => (Vec::new(), 0.0, 0.0, 0.0, 0.0, 0.0, 0.0),
+    };
+
     RadarUpload {
         az_bins: s.az_bins as u32,
         gate_count: s.gate_count as u32,
@@ -15133,12 +15273,63 @@ pub(crate) fn to_upload(
             srv,
             me,
             mn,
+            if tint.is_some() { 1.0 } else { 0.0 },
+            flag_nx,
+            flag_ny,
+            flag_w,
+            flag_n,
+            flag_e,
+            flag_s,
+            0.0,
             0.0,
             0.0,
         ],
-        lut: crate::colormap::bake_lut(table, (s.value_min, s.value_max), threshold).to_vec(),
+        lut,
+        precip_flag,
         world_min: [wx0 as f32, wy0 as f32],
         world_max: [wx1 as f32, wy1 as f32],
+    }
+}
+
+/// MRMS surface precipitation classes on their own lat/lon grid, ready for the GPU.
+pub(crate) struct PrecipGrid {
+    /// One byte per cell: 0 rain, 1 snow, 2 mix.
+    pub classes: Vec<u8>,
+    pub nx: f32,
+    pub ny: f32,
+    pub west: f32,
+    pub north: f32,
+    pub east: f32,
+    pub south: f32,
+}
+
+impl PrecipGrid {
+    fn new(f: &wxdata::mrms::MrmsField) -> Self {
+        Self {
+            classes: f.values.iter().map(|v| precip_class(*v)).collect(),
+            nx: f.nx as f32,
+            ny: f.ny as f32,
+            west: f.lon_west as f32,
+            north: f.lat_north as f32,
+            east: f.lon_east as f32,
+            south: f.lat_south as f32,
+        }
+    }
+}
+
+/// MRMS `PrecipFlag` categories collapsed to the three the tint distinguishes.
+///
+/// The product carries more classes than that — several flavours of rain, hail, tropical rain —
+/// but colouring reflectivity is a coarse statement and only three destinations exist. Hail and
+/// convective rain stay on the rain ramp deliberately: they are the cases where the existing
+/// reflectivity colours already carry the meaning.
+fn precip_class(flag: f32) -> u8 {
+    match flag as i32 {
+        // 3 snow, 4 wet snow.
+        3 | 4 => 1,
+        // 6 freezing rain, 7 ice pellets/sleet.
+        6 | 7 => 2,
+        _ => 0,
     }
 }
 
@@ -15824,15 +16015,17 @@ impl eframe::App for HookEchoApp {
             let Some(product) = self.mrms_product(layer) else {
                 continue;
             };
-            let stale = self.fields.get(&layer).is_some_and(|s| {
-                s.show
-                    && s.last_fetch
+            // The reflectivity tint reads the precipitation-type grid whether or not that
+            // layer is being drawn, so wanting the tint counts as wanting the layer's data.
+            let wanted = self.fields.get(&layer).is_some_and(|s| s.show)
+                || (layer == FL::PrecipType && self.settings.precip_tint);
+            let stale = wanted
+                && self.fields.get(&layer).is_none_or(|s| {
+                    s.last_fetch
                         .is_none_or(|t| t.elapsed().as_secs() >= field_refresh_secs(layer))
-            });
+                });
             if stale {
-                if let Some(s) = self.fields.get_mut(&layer) {
-                    s.last_fetch = Some(Instant::now());
-                }
+                self.fields.entry(layer).or_default().last_fetch = Some(Instant::now());
                 self.spawn_overlay(ctx, OverlaySource::Field(layer, product));
             }
         }
@@ -16160,6 +16353,20 @@ impl eframe::App for HookEchoApp {
         {
             self.aviation_last_fetch = Some(Instant::now());
             self.spawn_overlay(ctx, OverlaySource::Aviation);
+        }
+        // TFR refresh. Slow, because a restriction's shape never changes once issued — the
+        // cadence is really about noticing new ones. While the first load is still filling in,
+        // the next batch is asked for promptly instead.
+        if self.show_tfr {
+            let due = if self.tfr_pending > 0 { 5 } else { 900 };
+            if self
+                .tfr_last_fetch
+                .is_none_or(|t| t.elapsed().as_secs() >= due)
+            {
+                self.tfr_last_fetch = Some(Instant::now());
+                let have: Vec<String> = self.tfr_features.keys().cloned().collect();
+                self.spawn_overlay(ctx, OverlaySource::Tfr(have));
+            }
         }
         // Spotter Network refresh (feed's own 1-min cadence).
         if self.show_spotters

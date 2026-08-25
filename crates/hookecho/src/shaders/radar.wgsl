@@ -23,14 +23,24 @@ struct Radar {
     // Storm motion east/north, premultiplied into raw-index units (253 / value_span).
     motion_e: f32,
     motion_n: f32,
+    // Precipitation-type tint: 0 = off (always LUT row 0), 1 = pick the row from the flag grid.
+    tint: f32,
+    flag_nx: f32,
+    flag_ny: f32,
+    flag_west: f32,
+    flag_north: f32,
+    flag_east: f32,
+    flag_south: f32,
     _pad0: f32,
     _pad1: f32,
+    _pad2: f32,
 };
 
 @group(0) @binding(0) var<uniform> camera: Camera;
 @group(1) @binding(0) var<uniform> radar: Radar;
 @group(1) @binding(1) var sweep_tex: texture_2d<u32>;
 @group(1) @binding(2) var lut_tex: texture_2d<f32>;
+@group(1) @binding(3) var precip_flag_tex: texture_2d<u32>;
 
 struct VsIn { @location(0) world: vec2<f32> };
 struct VsOut {
@@ -141,6 +151,23 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
         rawf = clamp(rawf + delta, 2.0, 255.0);
     }
 
+    // Which LUT row: 0 rain, 1 snow, 2 mix. Reflectivity cannot tell them apart — the same
+    // 30 dBZ is a downpour or a heavy snow band — so the class comes from the MRMS surface
+    // precipitation-type grid, sampled at this fragment's own position. Off the grid, or with
+    // the tint off, everything falls back to row 0, which is the user's own table.
+    var row: i32 = 0;
+    if (radar.tint > 0.5) {
+        // `ll` is degrees; `lon`/`lat` above were shadowed into radians for the range maths.
+        let u = (ll.x - radar.flag_west) / (radar.flag_east - radar.flag_west);
+        let v = (radar.flag_north - ll.y) / (radar.flag_north - radar.flag_south);
+        if (u >= 0.0 && u < 1.0 && v >= 0.0 && v < 1.0) {
+            let fx = i32(u * radar.flag_nx);
+            let fy = i32(v * radar.flag_ny);
+            let cls = textureLoad(precip_flag_tex, vec2<i32>(fx, fy), 0).r;
+            row = min(i32(cls), 2);
+        }
+    }
+
     // The LUT encodes everything: 0 -> transparent, 1 -> range-fold, 2..255 -> value band,
     // threshold baked into the alpha. Colormap selection is the choice of LUT, so the shader
     // is moment-agnostic.
@@ -149,11 +176,11 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
         // Blend adjacent LUT entries. Only ever adjacent, so this stays correct for the diverging
         // velocity maps too — the zero crossing spans two neighbouring bands.
         let i0 = i32(floor(rawf));
-        let a = textureLoad(lut_tex, vec2<i32>(i0, 0), 0);
-        let b = textureLoad(lut_tex, vec2<i32>(min(i0 + 1, 255), 0), 0);
+        let a = textureLoad(lut_tex, vec2<i32>(i0, row), 0);
+        let b = textureLoad(lut_tex, vec2<i32>(min(i0 + 1, 255), row), 0);
         color = mix(a, b, fract(rawf));
     } else {
-        color = textureLoad(lut_tex, vec2<i32>(i32(round(rawf)), 0), 0);
+        color = textureLoad(lut_tex, vec2<i32>(i32(round(rawf)), row), 0);
     }
     if (color.a == 0.0) { discard; }
     return color;
