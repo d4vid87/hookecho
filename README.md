@@ -72,7 +72,11 @@ than reading about it. Neither is forced, and both re-run from the panel's
 ## The interface
 
 Hook Echo-WX is a full-bleed map with its controls floating over it — no menu
-bar, no docked columns eating the weather:
+bar, no docked columns eating the weather, and no title bar either: the window
+is borderless and its three buttons float with the rest of the chrome. Drag it
+by the empty strip along the top edge, double-click that strip to maximize, and
+resize from any edge or corner. If your window manager disagrees with any of
+that, `--decorated` hands the frame back to it.
 
 - **The panel** holds everything: the site, the current product and its
   tilt, the expert knobs for that product, then every layer, window and tool —

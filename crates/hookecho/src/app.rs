@@ -14707,6 +14707,9 @@ impl eframe::App for HookEchoApp {
         // Floating map-first chrome (desktop): a hamburger, an alert bell, the two bottom pills.
         // Everything else is one drawer behind the hamburger.
         if !cfg!(target_os = "android") && !bare {
+            // First: its drag strip covers the top edge, and everything drawn after it takes
+            // back the clicks that land on an actual control.
+            self.window_frame(ctx);
             self.search_pill(ctx);
             self.control_column(ctx);
             self.scrubber(ctx);

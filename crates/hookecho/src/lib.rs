@@ -106,6 +106,23 @@ fn cap_texture_limit_to_adapter(options: &mut egui_wgpu::WgpuConfiguration) {
     });
 }
 
+/// Is the OS drawing the window frame?
+///
+/// Normally it isn't: the app is borderless and draws its own controls into the floating chrome
+/// (`app::chrome::window_frame`). `--decorated` puts the OS frame back — a safety valve for a
+/// window manager where the compositor-side drag or resize misbehaves, not a layout toggle. There
+/// is no borderless anything on Android or the web, so there the answer is always yes.
+#[cfg(not(any(target_os = "android", target_arch = "wasm32")))]
+pub fn os_decorated() -> bool {
+    static DECORATED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *DECORATED.get_or_init(|| std::env::args().any(|a| a == "--decorated"))
+}
+
+#[cfg(any(target_os = "android", target_arch = "wasm32"))]
+pub fn os_decorated() -> bool {
+    true
+}
+
 /// Launch the windowed desktop app (Windows/Linux/macOS). Called from `main.rs` after it has
 /// dispatched any `--headless-*` verifier.
 #[cfg(not(any(target_os = "android", target_arch = "wasm32")))]
@@ -117,6 +134,7 @@ pub fn run_desktop() -> eframe::Result<()> {
             // and each other.
             .with_min_inner_size([800.0, 500.0])
             .with_title("Hook Echo-WX")
+            .with_decorations(os_decorated())
             // Matches the .desktop file, so Wayland taskbars find the icon.
             .with_app_id("hookecho")
             .with_icon(icon::icon_data()),
