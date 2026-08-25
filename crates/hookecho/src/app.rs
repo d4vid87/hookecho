@@ -3724,6 +3724,72 @@ impl HookEchoApp {
         Some(wxdata::xsection::beam_height_km(km, elev) * 3280.84)
     }
 
+    /// Every moment this volume carries, at the gate under `(lon, lat)`, plus where that gate
+    /// is: azimuth and range from the radar, and how high the beam is there.
+    ///
+    /// The height is the part people forget. A 60 dBZ reading 90 km out on the 0.5 degree cut is
+    /// 1.5 km up, so it is not what is reaching the ground, and a velocity couplet is only a
+    /// low-level couplet if the beam is low. Showing the number without the height invites the
+    /// wrong reading of it.
+    ///
+    /// Returns `None` when the pointer is off the sweep entirely, so hovering empty map says
+    /// nothing rather than flashing an empty tooltip.
+    fn gate_readout(&mut self, idx: usize, lon: f64, lat: f64) -> Option<String> {
+        let tilt = self.views[idx].tilt;
+        let active = self.views[idx].moment;
+        let dealias = self.settings.dealias_velocity;
+        let carried = self.views[idx].volume.as_ref()?.moments;
+        let vol = self.views[idx].volume.as_mut()?;
+
+        // The active moment leads — it is the one being looked at — then the rest in the usual
+        // product order, skipping any this volume does not carry.
+        let order = std::iter::once(active)
+            .chain(Moment::ALL.into_iter().filter(|m| *m != active))
+            .filter(|m| carried[m.index()]);
+
+        let mut lines: Vec<String> = Vec::new();
+        let mut where_at: Option<String> = None;
+        for m in order {
+            // Velocity is read dealiased when the display is dealiased, or the number under the
+            // cursor would disagree with the colour over it.
+            let want_dealias = dealias && m == Moment::Velocity;
+            let Ok(sweep) = vol.binned(m, tilt, want_dealias) else {
+                continue;
+            };
+            let Some(g) = sweep.sample_at(lon, lat) else {
+                continue;
+            };
+            if where_at.is_none() {
+                where_at = Some(format!(
+                    "{:.0}\u{b0} at {:.0} km \u{b7} beam {:.0} ft",
+                    g.azimuth_deg,
+                    g.range_km,
+                    sweep.beam_height_ft(g.range_km)
+                ));
+            }
+            let name = crate::products::info(m).short;
+            let units = m.units();
+            let value = match (g.value, g.folded) {
+                (Some(v), _) => {
+                    let precision = if m == Moment::CorrelationCoefficient { 3 } else { 1 };
+                    if units.is_empty() {
+                        format!("{v:.*}", precision)
+                    } else {
+                        format!("{v:.*} {units}", precision)
+                    }
+                }
+                // "Range folded" and "nothing here" look identical on the map and mean opposite
+                // things, so the readout is where the difference gets said out loud.
+                (None, true) => "range folded".to_string(),
+                (None, false) => "\u{2014}".to_string(),
+            };
+            let marker = if m == active { "\u{25b8} " } else { "  " };
+            lines.push(format!("{marker}{name:<4}{value}"));
+        }
+        let where_at = where_at?;
+        Some(format!("{where_at}\n{}", lines.join("\n")))
+    }
+
     /// Chime when a new volume lands on the live pane you are watching — the "look up" cue for
     /// someone doing something else while a storm is on.
     ///
@@ -11724,6 +11790,19 @@ impl HookEchoApp {
         let zdr_hits = if self.filters.show_zdr_columns { zdr_hits } else { Vec::new() };
         let couplets = if self.filters.show_couplets { couplets } else { Vec::new() };
 
+        // Radar values under the cursor. Computed here, before the long immutable borrow of the
+        // pane below, because sampling the volume needs it mutably — the binned sweeps are
+        // cached on it as they are asked for.
+        let gate_tooltip = (self.tool == MapTool::Interrogate && self.views[idx].show_radar)
+            .then(|| {
+                let hp = response.hover_pos().filter(|p| prect.contains(*p))?;
+                let cam = self.views[idx].camera;
+                let w = cam.screen_to_world((hp.x - prect.left(), hp.y - prect.top()), vp);
+                let (lon, lat) = crate::render::mercator::world_to_lonlat(w.0, w.1);
+                self.gate_readout(idx, lon, lat)
+            })
+            .flatten();
+
         // --- Painter overlays (clipped to this pane) ---
         let painter = ui.painter_at(prect);
         let view = &self.views[idx];
@@ -13272,6 +13351,13 @@ impl HookEchoApp {
                     response.clone().show_tooltip_text(&label.hover);
                 }
             }
+        }
+
+        // The inspector readout, sampled above. Every competitor has one and this had none: the
+        // app could draw a 68 dBZ core and a velocity couplet and never tell you a single number
+        // behind either.
+        if let Some(text) = &gate_tooltip {
+            response.clone().show_tooltip_text(text);
         }
 
         // The difference layer reads as "they disagree here" and nothing more without a number,

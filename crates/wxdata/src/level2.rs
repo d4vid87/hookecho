@@ -143,6 +143,69 @@ pub const ARCHIVE_START: chrono::NaiveDate =
         None => panic!("1991-06-05 is a real date"),
     };
 
+/// What a [`BinnedSweep`] holds at one gate, and where that gate is.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct GateSample {
+    /// Physical value in the moment's units; `None` when the gate is below threshold or the
+    /// value is range-folded (see [`GateSample::folded`]).
+    pub value: Option<f32>,
+    /// The gate is range-folded — the radar saw a target it cannot place in range, which is a
+    /// different statement from "nothing there".
+    pub folded: bool,
+    /// Azimuth from the radar, degrees clockwise from north.
+    pub azimuth_deg: f32,
+    /// Slant range from the radar along the beam, km.
+    pub range_km: f32,
+    /// Gate index along the radial — what a range-resolution argument is actually about.
+    pub gate: usize,
+}
+
+impl BinnedSweep {
+    /// The gate under a ground position, or `None` when it falls outside this sweep.
+    ///
+    /// This is the inverse of the binning: ground distance and bearing from the radar, the
+    /// slant range that ground distance implies at this tilt, and then the same azimuth-bin and
+    /// gate-index arithmetic [`bin_sweep_opts`] used on the way in. Deliberately no
+    /// interpolation — the question a readout answers is "what did the radar record *here*",
+    /// and a blend of neighbouring gates is a number the radar never produced.
+    pub fn sample_at(&self, lon: f64, lat: f64) -> Option<GateSample> {
+        let (ground_km, bearing) = crate::xsection::dist_bearing(
+            self.radar_lon as f64,
+            self.radar_lat as f64,
+            lon,
+            lat,
+        );
+        let slant = crate::xsection::slant_from_ground_km(ground_km, self.elevation_deg as f64);
+        let gate = ((slant - self.first_gate_km as f64) / self.gate_interval_km.max(1e-6) as f64)
+            .floor();
+        if gate < 0.0 || gate >= self.gate_count as f64 {
+            return None;
+        }
+        let gate = gate as usize;
+        let az = bearing.rem_euclid(360.0);
+        let bin = ((az / 360.0 * self.az_bins as f64) as usize) % self.az_bins;
+        let code = *self.data.get(bin * self.gate_count + gate)?;
+        // 0 and 1 are the two sentinel codes the binner writes; 2..=255 is the value band.
+        let value = (code >= 2).then(|| {
+            let t = (code - 2) as f32 / 253.0;
+            self.value_min + t * (self.value_max - self.value_min)
+        });
+        Some(GateSample {
+            value,
+            folded: code == 1,
+            azimuth_deg: az as f32,
+            range_km: slant as f32,
+            gate,
+        })
+    }
+
+    /// Height of the beam centre above the radar at `range_km`, in feet — the number that says
+    /// whether a reading is near the ground or three miles up.
+    pub fn beam_height_ft(&self, range_km: f32) -> f64 {
+        crate::xsection::beam_height_km(range_km as f64, self.elevation_deg as f64) * 3280.84
+    }
+}
+
 /// An AWS archive volume identifier (re-exported so callers needn't depend on `nexrad-data`).
 pub use nexrad_data::aws::archive::Identifier;
 
@@ -696,6 +759,99 @@ mod tests {
 
     /// The bucket carries a metadata-message sidecar next to the volumes. It parses as an
     /// identifier and sorts in among them, so nothing downstream notices it is not a volume.
+    /// A sweep sampled at a point built from a known azimuth and range must hand back that
+    /// azimuth, that range, and the value written into that gate. This is the whole inspector:
+    /// if the inverse mapping is off, every number it shows is off with it.
+    #[test]
+    fn sampling_a_gate_inverts_the_binning() {
+        let (az_bins, gate_count) = (720, 200);
+        let mut sweep = BinnedSweep {
+            moment: Moment::Reflectivity,
+            az_bins,
+            gate_count,
+            data: vec![0u8; az_bins * gate_count],
+            first_gate_km: 0.0,
+            gate_interval_km: 0.25,
+            radar_lat: 35.0,
+            radar_lon: -97.0,
+            elevation_deg: 0.5,
+            value_min: -32.0,
+            value_max: 95.0,
+        };
+        // Write a known value into one gate: azimuth bin 180 (= 90 deg, due east), gate 100.
+        let (want_az, want_gate) = (90.0_f64, 100usize);
+        let code = 200u8;
+        sweep.data[(want_az / 360.0 * az_bins as f64) as usize * gate_count + want_gate] = code;
+
+        // Where is that gate on the ground? Slant range of its centre, converted back to ground.
+        let slant = (want_gate as f64 + 0.5) * 0.25;
+        let ground = crate::xsection::ground_from_slant_km(slant, 0.5);
+        let (lon, lat) = destination(-97.0, 35.0, want_az, ground);
+
+        let got = sweep.sample_at(lon, lat).expect("point is inside the sweep");
+        assert_eq!(got.gate, want_gate, "gate index");
+        assert!((got.azimuth_deg as f64 - want_az).abs() < 0.5, "azimuth {got:?}");
+        let want_value = -32.0 + (code - 2) as f32 / 253.0 * (95.0 - -32.0);
+        assert!((got.value.unwrap() - want_value).abs() < 0.01, "value {got:?}");
+    }
+
+    /// The two sentinel codes are not values, and must not be reported as one.
+    #[test]
+    fn below_threshold_and_range_folded_are_not_values() {
+        let mut sweep = BinnedSweep {
+            moment: Moment::Velocity,
+            az_bins: 720,
+            gate_count: 10,
+            data: vec![0u8; 720 * 10],
+            first_gate_km: 0.0,
+            gate_interval_km: 1.0,
+            radar_lat: 35.0,
+            radar_lon: -97.0,
+            elevation_deg: 0.5,
+            value_min: -127.0,
+            value_max: 127.0,
+        };
+        sweep.data[1] = 1; // range folded, due north, gate 1
+        let (lon, lat) = destination(-97.0, 35.0, 0.0, 1.5);
+        let got = sweep.sample_at(lon, lat).unwrap();
+        assert!(got.folded && got.value.is_none());
+
+        let (lon, lat) = destination(-97.0, 35.0, 0.0, 3.5);
+        let got = sweep.sample_at(lon, lat).unwrap();
+        assert!(!got.folded && got.value.is_none(), "below threshold is not folded");
+    }
+
+    /// Past the last gate there is no reading — not a clamped one at the edge of the sweep.
+    #[test]
+    fn a_point_beyond_the_last_gate_has_no_sample() {
+        let sweep = BinnedSweep {
+            moment: Moment::Reflectivity,
+            az_bins: 720,
+            gate_count: 10,
+            data: vec![9u8; 720 * 10],
+            first_gate_km: 0.0,
+            gate_interval_km: 1.0,
+            radar_lat: 35.0,
+            radar_lon: -97.0,
+            elevation_deg: 0.5,
+            value_min: -32.0,
+            value_max: 95.0,
+        };
+        let (lon, lat) = destination(-97.0, 35.0, 45.0, 400.0);
+        assert!(sweep.sample_at(lon, lat).is_none());
+    }
+
+    /// Walk `km` from a point along `bearing`, for placing test points at a known gate.
+    fn destination(lon: f64, lat: f64, bearing_deg: f64, km: f64) -> (f64, f64) {
+        let r = 6371.0088_f64;
+        let (b, d) = (bearing_deg.to_radians(), km / r);
+        let (p0, l0) = (lat.to_radians(), lon.to_radians());
+        let p = (p0.sin() * d.cos() + p0.cos() * d.sin() * b.cos()).asin();
+        let l = l0
+            + (b.sin() * d.sin() * p0.cos()).atan2(d.cos() - p0.sin() * p.sin());
+        (l.to_degrees(), p.to_degrees())
+    }
+
     #[test]
     fn a_metadata_sidecar_is_not_a_volume() {
         assert!(is_volume("KTLH20260819_101257_V06"));
