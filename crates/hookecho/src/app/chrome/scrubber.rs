@@ -384,6 +384,9 @@ fn track(
                 t.playhead = idx;
                 t.playing = false;
                 t.following = idx + 1 == observed;
+                // One detent per frame: the track has no ticks under a thumb that covers it, so
+                // the frames are felt instead.
+                crate::platform::haptic(crate::platform::Haptic::Tick);
             }
         }
     }

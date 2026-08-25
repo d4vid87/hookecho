@@ -531,6 +531,8 @@ impl HookEchoApp {
             });
         if let Some(i) = pick.filter(|i| *i != self.active) {
             self.active = i;
+            // A swipe walks several dots; each pane it lands on gets its own detent.
+            crate::platform::haptic(crate::platform::Haptic::Tick);
         }
     }
 
