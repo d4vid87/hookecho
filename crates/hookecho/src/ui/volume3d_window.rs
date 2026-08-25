@@ -53,6 +53,9 @@ fn axis_slice(ui: &mut egui::Ui, label: &str, lo: &mut f32, hi: &mut f32) {
 
 /// Show the 3D window. `pending` is a one-shot volume upload consumed by the first paint;
 /// `n`/`nz` are the grid dimensions and `range` the volume's `(value_min, value_max)` dBZ span.
+// ponytail: eight loose arguments rather than a params struct — every one of them is already a
+// field on the caller, and a struct here would just be that call site written twice.
+#[allow(clippy::too_many_arguments)]
 pub fn show(
     ctx: &egui::Context,
     open: &mut bool,

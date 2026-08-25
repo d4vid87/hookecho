@@ -117,6 +117,10 @@ pub struct Settings {
     pub density: Density,
     /// User accent override as RGB. `None` keeps the theme's own accent.
     pub accent: Option<[u8; 3]>,
+    /// Hold every animation at its endpoint. The app also sets this for itself when frames get
+    /// slow; this flag is only the user's half of that.
+    #[serde(default)]
+    pub reduce_motion: bool,
     /// Starred radar sites shown in the toolbox presets dropdown.
     pub presets: Vec<String>,
     /// Per-moment color-table override: moment short name (`REF`, `VEL`, …) -> `.pal` path.
@@ -976,6 +980,7 @@ impl Default for Settings {
             theme: Theme::Dark,
             density: Density::default(),
             accent: None,
+            reduce_motion: false,
             presets: Vec::new(),
             palettes: BTreeMap::new(),
             velocity_unit: VelocityUnit::default(),
@@ -1384,6 +1389,7 @@ mod tests {
     fn roundtrips() {
         let s = Settings {
             hints_seen: Vec::new(),
+            reduce_motion: true,
             precip_tint: false,
             custom_tile_url: String::new(),
             custom_tile_max_z: default_custom_tile_max_z(),

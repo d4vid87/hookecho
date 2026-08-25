@@ -111,6 +111,8 @@ pub mod legend;
 /// Material 3 design tokens for the mobile chrome.
 pub mod m3;
 pub mod marker_popup;
+/// Easing and the reduced-motion brake.
+pub mod motion;
 pub mod marker_window;
 pub mod palette_editor;
 pub mod placefile_window;
