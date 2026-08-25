@@ -86,18 +86,6 @@ fn palette(theme: Theme, system_dark: bool) -> Palette {
             text: c(0xe8e2ff),
             accent: c(0xff3d9e),
         },
-        // Acid Storm — radar scope on energy drinks.
-        Theme::AcidStorm => Palette {
-            is_dark: true,
-            bg: c(0x111a11),
-            extreme: c(0x0a0f0a),
-            faint: c(0x162216),
-            stroke: c(0x2a3f2a),
-            widget: c(0x162216),
-            widget_hover: c(0x1f2f1f),
-            text: c(0xe4ffe0),
-            accent: c(0xaaff00),
-        },
         // Aurora — northern lights over ice.
         Theme::Aurora => Palette {
             is_dark: true,
@@ -109,90 +97,6 @@ fn palette(theme: Theme, system_dark: bool) -> Palette {
             widget_hover: c(0x1c2f45),
             text: c(0xd6f2ea),
             accent: c(0x3dffb0),
-        },
-        // Magma — lava glow, warm and loud.
-        Theme::Magma => Palette {
-            is_dark: true,
-            bg: c(0x221310),
-            extreme: c(0x160b09),
-            faint: c(0x2e1a15),
-            stroke: c(0x502a20),
-            widget: c(0x2e1a15),
-            widget_hover: c(0x3d221a),
-            text: c(0xffe8d6),
-            accent: c(0xff6b1a),
-        },
-        // Bubblegum — candy-shop light theme.
-        Theme::Bubblegum => Palette {
-            is_dark: false,
-            bg: c(0xffe9f2),
-            extreme: c(0xfff4f8),
-            faint: c(0xffdcea),
-            stroke: c(0xf5b8d2),
-            widget: c(0xffd4e6),
-            widget_hover: c(0xffc2da),
-            text: c(0x3a1030),
-            accent: c(0xff2d78),
-        },
-        // Riptide — electric cyan on deep ocean navy.
-        Theme::Riptide => Palette {
-            is_dark: true,
-            bg: c(0x0a1a2a),
-            extreme: c(0x06101a),
-            faint: c(0x0e2236),
-            stroke: c(0x1a4a66),
-            widget: c(0x0e2236),
-            widget_hover: c(0x132d46),
-            text: c(0xd8f4ff),
-            accent: c(0x00e5ff),
-        },
-        // Ultraviolet — electric purple under blacklight.
-        Theme::Ultraviolet => Palette {
-            is_dark: true,
-            bg: c(0x190e2b),
-            extreme: c(0x100821),
-            faint: c(0x22133a),
-            stroke: c(0x452a70),
-            widget: c(0x22133a),
-            widget_hover: c(0x2e1a4e),
-            text: c(0xece0ff),
-            accent: c(0xb44bff),
-        },
-        // Voltage — cyber yellow hi-vis HUD on graphite.
-        Theme::Voltage => Palette {
-            is_dark: true,
-            bg: c(0x141418),
-            extreme: c(0x0d0d10),
-            faint: c(0x1c1c22),
-            stroke: c(0x3a3a26),
-            widget: c(0x1c1c22),
-            widget_hover: c(0x26262e),
-            text: c(0xf2f0dc),
-            accent: c(0xffe600),
-        },
-        // Redline — signal crimson on ember maroon.
-        Theme::Redline => Palette {
-            is_dark: true,
-            bg: c(0x1c0d11),
-            extreme: c(0x120809),
-            faint: c(0x29141a),
-            stroke: c(0x55222e),
-            widget: c(0x29141a),
-            widget_hover: c(0x371b23),
-            text: c(0xffdfe3),
-            accent: c(0xff2b4a),
-        },
-        // Glacier — vivid azure on polar-morning frost (light).
-        Theme::Glacier => Palette {
-            is_dark: false,
-            bg: c(0xe6f1fc),
-            extreme: c(0xf2f8fe),
-            faint: c(0xd9e8f8),
-            stroke: c(0xa9c9e8),
-            widget: c(0xd2e3f6),
-            widget_hover: c(0xc2d9f2),
-            text: c(0x0d2440),
-            accent: c(0x0077ff),
         },
         // High contrast — black, white and one saturated yellow, for low vision and for direct
         // sunlight, which is the same problem from a different direction.
@@ -231,8 +135,30 @@ fn palette(theme: Theme, system_dark: bool) -> Palette {
 
 /// The primary accent color for a theme (map markers, active-pane outline, status highlights).
 pub fn accent(theme: Theme) -> Color32 {
+    if let Some(c) = accent_override() {
+        return c;
+    }
     // system_dark doesn't affect any accent (Dark and Light share ACCENT), so pass true.
     palette(theme, true).accent
+}
+
+/// User accent override, packed as `0xFF_RR_GG_BB` (0 = none).
+///
+/// ponytail: a process-global instead of threading `&Settings` through 19 `accent()` call sites —
+/// the accent is one app-wide value and `apply()` is the only writer. If accent ever becomes
+/// per-window, pass it explicitly instead.
+static ACCENT_OVERRIDE: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+pub fn set_accent_override(rgb: Option<[u8; 3]>) {
+    let packed = rgb.map_or(0, |[r, g, b]| {
+        0xFF00_0000 | (u32::from(r) << 16) | (u32::from(g) << 8) | u32::from(b)
+    });
+    ACCENT_OVERRIDE.store(packed, std::sync::atomic::Ordering::Relaxed);
+}
+
+fn accent_override() -> Option<Color32> {
+    let p = ACCENT_OVERRIDE.load(std::sync::atomic::Ordering::Relaxed);
+    (p != 0).then(|| Color32::from_rgb((p >> 16) as u8, (p >> 8) as u8, p as u8))
 }
 
 /// The background fill for a theme, for the settings swatch preview.
@@ -240,8 +166,18 @@ pub fn preview_bg(theme: Theme) -> Color32 {
     palette(theme, true).bg
 }
 
-pub fn apply(ctx: &egui::Context, theme: Theme, system_dark: bool, density: Density) {
-    let pal = palette(theme, system_dark);
+pub fn apply(
+    ctx: &egui::Context,
+    theme: Theme,
+    system_dark: bool,
+    density: Density,
+    accent_rgb: Option<[u8; 3]>,
+) {
+    set_accent_override(accent_rgb);
+    let mut pal = palette(theme, system_dark);
+    if let Some(c) = accent_override() {
+        pal.accent = c;
+    }
     let mut visuals = if pal.is_dark {
         Visuals::dark()
     } else {

@@ -1793,8 +1793,13 @@ pub struct HookEchoApp {
     chasepack: Option<ChasePack>,
     /// Per-pane "what's uploaded" key, so each pane re-bins/re-uploads only on a real change.
     pane_shown: std::collections::HashMap<usize, ShownKey>,
-    /// Last `(theme, system_dark, density)` handed to `theme::apply`.
-    theme_applied: Option<(crate::settings::Theme, bool, crate::ui::m3::Density)>,
+    /// Last `(theme, system_dark, density, accent)` handed to `theme::apply`.
+    theme_applied: Option<(
+        crate::settings::Theme,
+        bool,
+        crate::ui::m3::Density,
+        Option<[u8; 3]>,
+    )>,
     /// When the settings tree was last diffed against the saved copy.
     settings_checked: Option<Instant>,
     /// Frame counter, only used to invalidate within-frame memos.
@@ -15965,9 +15970,21 @@ impl eframe::App for HookEchoApp {
         // or the system light/dark preference changes — it rebuilds and installs a whole
         // `egui::Style`, which is wasted work on every other frame.
         let system_dark = ctx.input(|i| i.raw.system_theme) != Some(egui::Theme::Light);
-        if self.theme_applied != Some((self.settings.theme, system_dark, self.settings.density)) {
-            crate::theme::apply(ctx, self.settings.theme, system_dark, self.settings.density);
-            self.theme_applied = Some((self.settings.theme, system_dark, self.settings.density));
+        let theme_key = (
+            self.settings.theme,
+            system_dark,
+            self.settings.density,
+            self.settings.accent,
+        );
+        if self.theme_applied != Some(theme_key) {
+            crate::theme::apply(
+                ctx,
+                self.settings.theme,
+                system_dark,
+                self.settings.density,
+                self.settings.accent,
+            );
+            self.theme_applied = Some(theme_key);
         }
 
         // UI scale: apply the setting when the slider moved, else absorb built-in keyboard zoom

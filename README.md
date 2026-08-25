@@ -437,7 +437,7 @@ clearing a cache costs the next fetch and nothing else.
   newest still instead, refreshed on the poll clock (a phone can't spawn ffmpeg,
   and a video decoder per open card is not what its battery is for).
 - Multi-pane layouts, placefiles with icon sheets and a layer manager, a sensor
-  dashboard, range rings, 15 themes, and tray-based background alerting.
+  dashboard, range rings, 7 themes with a custom accent color, and tray-based background alerting.
 
 ### On your phone
 
