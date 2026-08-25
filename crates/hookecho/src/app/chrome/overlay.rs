@@ -17,6 +17,19 @@ const RIGHT_PANEL: egui::Vec2 = egui::vec2(-130.0, 44.0);
 /// What the scrubber pill needs along the bottom edge, plus a margin.
 const SCRUBBER_CLEARANCE: f32 = 84.0;
 
+/// Is this the phone layout? Same surfaces, same registry, same state — a thumb-sized pill across
+/// the top, a control column with room around it, and panels that come up from the bottom edge as
+/// modal sheets instead of floating beside the map.
+fn phone() -> bool {
+    cfg!(target_os = "android")
+}
+
+/// Where the phone's chrome starts: under the status bar and the color-scale strips.
+fn phone_top(ctx: &egui::Context) -> f32 {
+    let content = ctx.content_rect();
+    (content.top() - ctx.viewport_rect().top()).max(0.0) + 26.0
+}
+
 impl HookEchoApp {
     /// The main panel: everything that isn't the map, floating over the map's left edge.
     ///
@@ -59,25 +72,26 @@ impl HookEchoApp {
         // Height budget: the search pill above, the scrubber pill below (which is centred and
         // grows with the window, so on a narrow one it would otherwise run under this panel).
         let max_h = (self.chrome_rect.height() - PANEL_TOP - SCRUBBER_CLEARANCE).max(160.0);
-        egui::Area::new(egui::Id::new("panel"))
-            .constrain_to(self.chrome_rect)
-            .anchor(egui::Align2::LEFT_TOP, egui::vec2(PANEL_X, PANEL_TOP))
-            .show(ctx, |ui| {
-                // Denser than the chips: this one carries a wall of small text, and a basemap
-                // label showing through a list row is unreadable, not tasteful.
-                crate::ui::style::glass(ui, 250).show(ui, |ui| {
-                    ui.set_width(PANEL_W);
-                    ui.set_max_height(max_h);
+        // Read before the body closure takes `&mut self`.
+        let chrome = self.chrome_rect;
+        // One body, two presentations: a floating card beside the map on a desktop, a modal
+        // bottom sheet on a phone. The content is identical — that is the point of the wave, and
+        // why the phone's own menu sheet could be deleted rather than kept in sync.
+        let alerts_tab_was = alerts_tab;
+        let mut sheet_close = false;
+        let mut body = |ui: &mut egui::Ui| {
                     // Title on the same line as the tabs: the name is branding, not a section, and
                     // its own row plus separator cost 30 px of every screen height.
                     ui.horizontal(|ui| {
-                        ui.label(
-                            egui::RichText::new("Hook Echo-WX")
-                                .size(13.0)
-                                .strong()
-                                .color(accent),
-                        );
-                        ui.add_space(4.0);
+                        if !phone() {
+                            ui.label(
+                                egui::RichText::new("Hook Echo-WX")
+                                    .size(13.0)
+                                    .strong()
+                                    .color(accent),
+                            );
+                            ui.add_space(4.0);
+                        }
                         // Data | Alerts. `show_alert_panel` is the same flag the bell and the A hotkey
                         // flip, so every entry point lands on the same tab.
                         if ui.selectable_label(!alerts_tab, "Data").clicked() {
@@ -92,9 +106,11 @@ impl HookEchoApp {
                             alerts_tab = true;
                         }
                         // Collapse, on the row it collapses. The floating button that brings the
-                        // panel back lands in the same corner this one sits in.
+                        // panel back lands in the same corner this one sits in. The sheet has a
+                        // ✕ of its own, so the phone does not draw a second one.
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if ui
+                            if !phone()
+                                && ui
                                 .add(
                                     egui::Button::new(
                                         egui::RichText::new(egui_phosphor::regular::X).size(14.0),
@@ -123,8 +139,14 @@ impl HookEchoApp {
                         &entries,
                         &mut query,
                         accent,
-                        // Leave room for the disclosures under the tree, whatever the window height.
-                        (ui.available_height() - 110.0).max(120.0),
+                        // Leave room for the disclosures under the tree, whatever the window
+                        // height. In the sheet there is no height to read yet — it scrolls — so
+                        // the tree takes half the screen and the rest scrolls past it.
+                        if phone() {
+                            chrome.height() * 0.5
+                        } else {
+                            (ui.available_height() - 110.0).max(120.0)
+                        },
                         std::mem::take(&mut focus_search),
                         &mut self.settings.layer_order,
                         |ui| {
@@ -208,11 +230,41 @@ impl HookEchoApp {
                     egui::CollapsingHeader::new("App")
                         .default_open(false)
                         .show(ui, |ui| self.app_rows(ui));
+        };
+        if phone() {
+            let title = if alerts_tab_was {
+                format!("Alerts in view ({alert_count})")
+            } else {
+                "Layers & tools".to_string()
+            };
+            let rect = crate::app::mobile::sheet::modal_sheet(
+                ctx,
+                chrome,
+                "m_panel",
+                &title,
+                &mut sheet_close,
+                body,
+            );
+            // Two-finger gestures are read raw off the input state, which knows nothing about
+            // egui's layers — without this rect a pinch on the sheet zoomed the map under it.
+            self.mobile_occlusion.push(rect);
+        } else {
+            egui::Area::new(egui::Id::new("panel"))
+                .constrain_to(chrome)
+                .anchor(egui::Align2::LEFT_TOP, egui::vec2(PANEL_X, PANEL_TOP))
+                .show(ctx, |ui| {
+                    // Denser than the chips: this one carries a wall of small text, and a basemap
+                    // label showing through a list row is unreadable, not tasteful.
+                    crate::ui::style::glass(ui, 250).show(ui, |ui| {
+                        ui.set_width(PANEL_W);
+                        ui.set_max_height(max_h);
+                        body(ui);
+                    });
                 });
-            });
+        }
         self.show_alert_panel = alerts_tab;
         self.settings.mute_alerts = muted;
-        if hide {
+        if hide || sheet_close {
             self.panel_open = false;
         }
         if let Some((id, lon, lat)) = alert_hit {
@@ -256,16 +308,43 @@ impl HookEchoApp {
     pub(crate) fn search_pill(&mut self, ctx: &egui::Context) {
         let accent = crate::theme::accent(self.settings.theme);
         let mut anchor = None;
+        // The phone's pill also carries the radar context — site and VCP — which the desktop keeps
+        // in the scrubber. There is no room for both readouts down there on a 400 pt screen, and
+        // the site is the one control a phone user reaches for most.
+        let site = self.views[self.active]
+            .site
+            .clone()
+            .unwrap_or_else(|| "\u{2014}".to_string());
+        // Just the number on a phone: "VCP 12: Precipitation, fast update" is a desktop caption
+        // and it pushed the search glyph off the pill.
+        let vcp = self.views[self.active]
+            .volume
+            .as_ref()
+            .map(|v| v.vcp.split(" (").next().unwrap_or_default().to_string())
+            .unwrap_or_default();
+        let width = if phone() {
+            // Clear of the chrome-hide eye in the opposite corner, which is a 48 pt target with
+            // a margin of its own.
+            (self.chrome_rect.width() - crate::ui::m3::SP_3 * 3.0 - 48.0).max(180.0)
+        } else {
+            PANEL_W
+        };
+        let (x, y) = if phone() {
+            (crate::ui::m3::SP_3, phone_top(ctx))
+        } else {
+            (PANEL_X, 10.0)
+        };
         egui::Area::new(egui::Id::new("search_pill"))
             .constrain_to(self.chrome_rect)
-            .anchor(egui::Align2::LEFT_TOP, egui::vec2(PANEL_X, 10.0))
+            .anchor(egui::Align2::LEFT_TOP, egui::vec2(x, y))
             .show(ctx, |ui| {
                 crate::ui::style::glass(ui, 238).show(ui, |ui| {
+                    ui.set_width(width);
                     ui.horizontal(|ui| {
                         let menu = ui.add(
                             egui::Button::new(
                                 egui::RichText::new(egui_phosphor::regular::LIST)
-                                    .size(16.0)
+                                    .size(if phone() { 20.0 } else { 16.0 })
                                     .color(if self.panel_open {
                                         accent
                                     } else {
@@ -281,23 +360,48 @@ impl HookEchoApp {
                         if menu.on_hover_text("Show or hide the panel").clicked() {
                             self.panel_open = !self.panel_open;
                         }
-                        let hint = egui::RichText::new(format!(
-                            "{}  Search layers, tools, places",
-                            egui_phosphor::regular::MAGNIFYING_GLASS
-                        ))
+                        if phone() {
+                            let label = ui
+                                .add(
+                                    egui::Button::new(
+                                        egui::RichText::new(format!("{site}  {vcp}"))
+                                            .size(crate::ui::m3::T_LABEL_LG),
+                                    )
+                                    .fill(egui::Color32::TRANSPARENT)
+                                    .stroke(egui::Stroke::NONE),
+                                )
+                                .on_hover_text("Change radar site");
+                            if label.clicked() && self.site_dialog.is_none() {
+                                self.site_dialog = Some(Default::default());
+                            }
+                        }
+                        let hint = egui::RichText::new(if phone() {
+                            egui_phosphor::regular::MAGNIFYING_GLASS.to_string()
+                        } else {
+                            format!(
+                                "{}  Search layers, tools, places",
+                                egui_phosphor::regular::MAGNIFYING_GLASS
+                            )
+                        })
                         .size(crate::ui::style::FONT_BASE)
                         .weak();
-                        let search = ui.add(
-                            egui::Button::new(hint)
-                                .min_size(egui::vec2(PANEL_W - 74.0, 26.0))
-                                .fill(egui::Color32::TRANSPARENT)
-                                .stroke(egui::Stroke::NONE),
-                        );
-                        if search.clicked() {
-                            self.panel_open = true;
-                            self.show_alert_panel = false;
-                            self.sidebar_focus_search = true;
-                        }
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            let search = ui.add(
+                                egui::Button::new(hint)
+                                    .min_size(if phone() {
+                                        egui::vec2(40.0, 32.0)
+                                    } else {
+                                        egui::vec2(PANEL_W - 74.0, 26.0)
+                                    })
+                                    .fill(egui::Color32::TRANSPARENT)
+                                    .stroke(egui::Stroke::NONE),
+                            );
+                            if search.clicked() {
+                                self.panel_open = true;
+                                self.show_alert_panel = false;
+                                self.sidebar_focus_search = true;
+                            }
+                        });
                     });
                 });
             });
@@ -312,9 +416,16 @@ impl HookEchoApp {
         let (alert_count, esc) = self.alert_badge();
         let layers_on = self.panel_open && !self.show_alert_panel;
         let alerts_on = self.panel_open && self.show_alert_panel;
+        // On the phone the column drops below the pill and the chrome-hide eye, and sits at the
+        // screen edge: there is no legend box to stay clear of, the color scale is a top strip.
+        let at = if phone() {
+            egui::vec2(-crate::ui::m3::SP_3, phone_top(ctx) + 56.0)
+        } else {
+            CONTROLS
+        };
         egui::Area::new(egui::Id::new("control_column"))
             .constrain_to(self.chrome_rect)
-            .anchor(egui::Align2::RIGHT_TOP, CONTROLS)
+            .anchor(egui::Align2::RIGHT_TOP, at)
             .show(ctx, |ui| {
                 ui.vertical(|ui| {
                     if square_btn(ui, egui_phosphor::regular::STACK, layers_on, accent)
@@ -371,14 +482,35 @@ impl HookEchoApp {
             return;
         }
         let mut picked = None;
+        let chrome = self.chrome_rect;
+        if phone() {
+            // The phone gets the chip row above the grid: the eight common styles are one tap
+            // each, and the grid is for the other forty.
+            let mut close = false;
+            let rect = crate::app::mobile::sheet::modal_sheet(
+                ctx,
+                chrome,
+                "m_basemap",
+                "Background map",
+                &mut close,
+                |ui| {
+                    self.basemap_chips(ui);
+                },
+            );
+            self.mobile_occlusion.push(rect);
+            if close {
+                self.basemap_open = false;
+            }
+            return;
+        }
         egui::Area::new(egui::Id::new("basemap_panel"))
-            .constrain_to(self.chrome_rect)
+            .constrain_to(chrome)
             .anchor(egui::Align2::RIGHT_TOP, RIGHT_PANEL)
             .show(ctx, |ui| {
                 crate::ui::style::glass(ui, 238).show(ui, |ui| {
                     ui.set_max_width(460.0);
                     egui::ScrollArea::vertical()
-                        .max_height((self.chrome_rect.height() - 120.0).max(200.0))
+                        .max_height((chrome.height() - 120.0).max(200.0))
                         .show(ui, |ui| {
                             let current = self.views[self.active].basemap;
                             picked = crate::ui::basemap_picker::grid(

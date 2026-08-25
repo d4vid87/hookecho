@@ -24,7 +24,9 @@ impl HookEchoApp {
             .unwrap_or_else(|| "no site".to_string());
         let age = self.views[self.active].volume.as_ref().map(|v| {
             let secs = (Utc::now() - v.time).num_seconds().max(0);
-            format!("({} ago)", humanize(secs))
+            // Leading space: on the phone this label butts straight up against the clock, which
+            // is the last thing in the opposite layout.
+            format!(" ({} ago)", humanize(secs))
         });
         let loading = self.views[self.active].loading;
         let mut go_head = false;
@@ -40,8 +42,18 @@ impl HookEchoApp {
         let mut loop_frames = self.settings.live_loop_frames;
         // Where the scrubber lands, for the tour's spotlight (same reason: no `self` in there).
         let mut scrub_rect = None;
-        // Wide enough for the track to be worth scrubbing, never so wide it spans a 4K map.
-        let width = (self.chrome_rect.width() - 160.0).clamp(420.0, 900.0);
+        // Wide enough for the track to be worth scrubbing, never so wide it spans a 4K map — and
+        // never wider than the screen, which on a phone the 420 pt floor would otherwise be.
+        let width = (self.chrome_rect.width() - 160.0)
+            .clamp(420.0, 900.0)
+            .min(self.chrome_rect.width() - 16.0);
+        // The phone's pill drops the two extras: the readouts fit a desktop row, not a 400 pt one,
+        // and rain arrival has its own chip lane.
+        let (dvr, rain) = if cfg!(target_os = "android") {
+            (0, None)
+        } else {
+            (dvr, rain)
+        };
         let live_window = self.views[self.active].timeline.live_window;
         egui::Area::new(egui::Id::new("scrubber"))
             .constrain_to(self.chrome_rect)
@@ -54,12 +66,16 @@ impl HookEchoApp {
                 ui.set_width(width);
                 let t = &mut self.views[self.active].timeline;
                 ui.horizontal(|ui| {
-                    ui.label(
-                        egui::RichText::new(&site)
-                            .size(crate::ui::style::FONT_BASE)
-                            .strong()
-                            .color(egui::Color32::from_gray(238)),
-                    );
+                    // The phone says the site in its search pill; a second copy here is 60 pt of
+                    // a 400 pt row spent saying it twice, and the clock loses that argument.
+                    if !cfg!(target_os = "android") {
+                        ui.label(
+                            egui::RichText::new(&site)
+                                .size(crate::ui::style::FONT_BASE)
+                                .strong()
+                                .color(egui::Color32::from_gray(238)),
+                        );
+                    }
                     let btn = |ui: &mut egui::Ui, glyph: &str, on: bool| {
                         let fg = if on {
                             accent
@@ -247,6 +263,10 @@ impl HookEchoApp {
                 });
             });
         self.settings.live_loop_frames = loop_frames;
+        if let Some(r) = scrub_rect {
+            // The scrubber swallows two-finger gestures on the phone like any other surface.
+            self.mobile_occlusion.push(r);
+        }
         self.tour_anchors.timeline = scrub_rect;
         if go_head {
             self.views[self.active].timeline.go_head();
