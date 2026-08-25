@@ -692,12 +692,12 @@ impl HookEchoApp {
             Some(self.settings.mute_alerts),
         );
         push(
-            "Sidebar",
+            "Layers panel",
             "Reference",
-            "This panel \u{2014} hide it and the map runs to the left edge",
+            "The floating panel \u{2014} close it and nothing covers the map",
             false,
-            PaletteAction::ToggleSidebar,
-            Some(!self.settings.hide_sidebar),
+            PaletteAction::TogglePanel,
+            Some(self.panel_open),
         );
         push(
             "Timeline bar",

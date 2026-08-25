@@ -1183,7 +1183,7 @@ pub(crate) enum PaletteAction {
     /// Show/hide the docked timeline bar under the map (desktop).
     ToggleToolbar,
     /// Show/hide the docked sidebar on the left (desktop).
-    ToggleSidebar,
+    TogglePanel,
     Reload,
     InstantReplay,
     GoLive,
@@ -2207,6 +2207,11 @@ pub struct HookEchoApp {
     layers_query: String,
     /// Ctrl+K command palette: open flag, query, and the highlighted row.
     /// Set by Ctrl+K so the drawer grabs the search field on the frame it opens.
+    /// Is the floating left panel showing? Runtime state, not a setting: the map is the app,
+    /// and a panel you left open yesterday shouldn't cover it today.
+    panel_open: bool,
+    /// Is the background picker slid out beside the control column?
+    basemap_open: bool,
     sidebar_focus_search: bool,
     /// The `?` keyboard cheat sheet is up.
     show_cheatsheet: bool,
@@ -2978,6 +2983,8 @@ impl HookEchoApp {
             // and the full toolbox is one "Advanced" tap away.
             chrome_rect: egui::Rect::EVERYTHING,
             layers_query: String::new(),
+            panel_open: false,
+            basemap_open: false,
             sidebar_focus_search: false,
             show_cheatsheet: false,
             capture_key: false,
@@ -6957,10 +6964,7 @@ impl HookEchoApp {
                 self.settings.hide_toolbar = !self.settings.hide_toolbar;
                 self.settings.save();
             }
-            PaletteAction::ToggleSidebar => {
-                self.settings.hide_sidebar = !self.settings.hide_sidebar;
-                self.settings.save();
-            }
+            PaletteAction::TogglePanel => self.panel_open = !self.panel_open,
             PaletteAction::Reload => self.trigger_reload(ctx),
             PaletteAction::InstantReplay => self.instant_replay(),
             PaletteAction::GoLive => self.views[self.active].timeline.go_head(),
@@ -8799,7 +8803,13 @@ impl HookEchoApp {
                     self.site_dialog = Some(Default::default());
                 }
             }
-            A::ToggleAlertPanel => self.show_alert_panel = !self.show_alert_panel,
+            A::ToggleAlertPanel => {
+                // The bell tab and the panel are one surface now: the key opens the panel on
+                // Alerts, and closes it if that's already what's showing.
+                let showing = self.panel_open && self.show_alert_panel;
+                self.panel_open = !showing;
+                self.show_alert_panel = true;
+            }
             A::ToggleObs => {
                 self.obs_mode = !self.obs_mode;
                 if !self.obs_mode {
@@ -8816,10 +8826,8 @@ impl HookEchoApp {
             A::ToggleDrawer => {
                 // Hidden: bring it back and land in the search box. Visible: focus the search,
                 // which is what the key always did.
-                if self.settings.hide_sidebar {
-                    self.settings.hide_sidebar = false;
-                    self.settings.save();
-                }
+                self.panel_open = true;
+                self.show_alert_panel = false;
                 self.sidebar_focus_search = true;
             }
             A::StepBack => self.views[self.active].timeline.step(-1),
@@ -8833,6 +8841,8 @@ impl HookEchoApp {
             }
             A::CommandSearch => {
                 self.layers_query.clear();
+                self.panel_open = true;
+                self.show_alert_panel = false;
                 self.sidebar_focus_search = true;
             }
             A::CheatSheet => self.show_cheatsheet = !self.show_cheatsheet,
@@ -14635,13 +14645,8 @@ impl eframe::App for HookEchoApp {
         // no product menu, and an iframe is exactly where a user can't reach those any other way.
         // `embed` still buys the idle heartbeat and the state postMessage.
         let bare = self.obs_mode;
-        if !cfg!(target_os = "android") && !bare {
-            if !self.settings.hide_sidebar {
-                self.sidebar(root, ctx);
-            }
-            if !self.settings.hide_toolbar {
-                self.timeline_bar(root);
-            }
+        if !cfg!(target_os = "android") && !bare && !self.settings.hide_toolbar {
+            self.timeline_bar(root);
         }
 
         self.chrome_rect = root.available_rect_before_wrap();
@@ -14660,7 +14665,10 @@ impl eframe::App for HookEchoApp {
         // Floating map-first chrome (desktop): a hamburger, an alert bell, the two bottom pills.
         // Everything else is one drawer behind the hamburger.
         if !cfg!(target_os = "android") && !bare {
-            self.sidebar_button(ctx);
+            self.search_pill(ctx);
+            self.control_column(ctx);
+            self.panel(ctx);
+            self.basemap_panel(ctx);
             self.info_chip(ctx);
             self.error_chip(ctx);
         }
