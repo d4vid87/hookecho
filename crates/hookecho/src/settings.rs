@@ -642,6 +642,9 @@ pub enum RuleTrigger {
     ProbSevere,
     /// GLM flash-extent density; the threshold is minimum flashes per cell per window.
     GlmFed,
+    /// A lightning jump: how fast flash-extent density is *rising*, in flashes per cell per
+    /// minute. The threshold is that rate.
+    GlmJump,
     /// An NWS warning whose event name contains this text, case-insensitively. Empty matches
     /// every warning.
     Warning { event_contains: String },
@@ -649,13 +652,14 @@ pub enum RuleTrigger {
 
 impl RuleTrigger {
     /// Every trigger, with the defaults a fresh rule starts on — menu order.
-    pub const ALL: [RuleTrigger; 7] = [
+    pub const ALL: [RuleTrigger; 8] = [
         RuleTrigger::Tds,
         RuleTrigger::Tbss,
         RuleTrigger::ZdrColumn,
         RuleTrigger::Rotation,
         RuleTrigger::ProbSevere,
         RuleTrigger::GlmFed,
+        RuleTrigger::GlmJump,
         RuleTrigger::Warning {
             event_contains: String::new(),
         },
@@ -669,6 +673,7 @@ impl RuleTrigger {
             RuleTrigger::Rotation => "Rotation",
             RuleTrigger::ProbSevere => "ProbSevere",
             RuleTrigger::GlmFed => "Lightning density",
+            RuleTrigger::GlmJump => "Lightning jump",
             RuleTrigger::Warning { .. } => "NWS warning",
         }
     }
@@ -680,6 +685,7 @@ impl RuleTrigger {
             RuleTrigger::Rotation => Some(("kt Vrot", 40.0)),
             RuleTrigger::ProbSevere => Some(("% severe", 50.0)),
             RuleTrigger::GlmFed => Some(("flashes", 20.0)),
+            RuleTrigger::GlmJump => Some(("flashes/min rise", 4.0)),
             _ => None,
         }
     }
