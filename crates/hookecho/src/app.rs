@@ -14754,6 +14754,9 @@ impl eframe::App for HookEchoApp {
         let bare = self.obs_mode;
 
         self.chrome_rect = root.available_rect_before_wrap();
+        // Before any chrome: everything below asks `motion::reduced()`, and the answer has to be
+        // the same for every surface in a frame.
+        ui::motion::frame(ctx, self.settings.reduce_motion);
 
         // Chrome: touch-first on Android (top chips + bottom sheet + docked toolbar), desktop
         // otherwise (the floating map-first chrome below). Both funnel into the same `UiActions`
@@ -14781,6 +14784,16 @@ impl eframe::App for HookEchoApp {
                 self.info_chip(ctx);
                 self.error_chip(ctx);
             }
+        }
+
+        // The one decoration with no job. Costs nothing after the first second and a half, and
+        // never runs at all under OBS — a capture is not a place for a flourish.
+        if !bare {
+            ui::motion::intro(
+                ctx,
+                self.chrome_rect,
+                crate::theme::accent(self.settings.theme),
+            );
         }
 
         // Over everything, and only while a capture is pending.

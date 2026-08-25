@@ -785,6 +785,14 @@ fn general_tab(
             .on_hover_text("Compact restores the denser spacing of earlier releases.");
             ui.end_row();
 
+            ui.label("Motion");
+            ui.checkbox(&mut settings.reduce_motion, "Reduce motion")
+                .on_hover_text(
+                    "Panels and cards appear where they belong instead of sliding in. The app \
+                     also turns this on for itself if frames get slow.",
+                );
+            ui.end_row();
+
             ui.label("UI scale");
             // Phones start denser: 0.5 × a 4.0 density factor ≈ a desktop-density canvas.
             let lo = if cfg!(target_os = "android") {

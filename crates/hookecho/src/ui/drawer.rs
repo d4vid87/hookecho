@@ -32,6 +32,9 @@ pub struct Drawer {
     seen: Vec<String>,
     /// Which frame `seen` belongs to, so the stack can prune itself without the app calling us.
     frame: u64,
+    /// App time the drawer last went from empty to showing something, so the slide-in animates
+    /// from where the drawer actually came from rather than from wherever egui last latched it.
+    opened_at: f64,
     /// Is the top page's quick-settings row expanded? Per-page state would outlive the page it
     /// belongs to; a single flag reset on every page change is the honest scope.
     pub gear: bool,
@@ -93,6 +96,9 @@ impl Drawer {
             self.frame = frame;
         }
         self.seen.push(title.to_string());
+        if self.stack.is_empty() {
+            self.opened_at = ctx.input(|i| i.time);
+        }
         if !self.stack.iter().any(|t| t == title) {
             self.stack.push(title.to_string());
             self.gear = false;
@@ -102,6 +108,7 @@ impl Drawer {
         }
 
         let (head, body) = rects(ctx, width);
+        let (head, body) = self.slide(ctx, head, body);
         let depth = self.stack.len();
         let mut gear_on = self.gear;
         let mut close = false;
@@ -185,6 +192,22 @@ impl Drawer {
                 .vscroll(true)
                 .frame(frame),
         )
+    }
+
+    /// Walk the drawer in from the edge it lives on, overshooting a hair before it settles.
+    ///
+    /// ponytail: translation only — no fade, no scale. The drawer is opaque glass over a map, so
+    /// sliding is the only one of the three that reads at all, and it is the one that says where
+    /// the thing came from.
+    fn slide(&self, ctx: &egui::Context, head: Rect, body: Rect) -> (Rect, Rect) {
+        let dur = crate::ui::m3::DUR_MED as f64;
+        let t = (ctx.input(|i| i.time) - self.opened_at) / dur;
+        if crate::ui::motion::reduced() || t >= 1.0 {
+            return (head, body);
+        }
+        ctx.request_repaint();
+        let off = (1.0 - crate::ui::motion::ease_out_back(t as f32)) * (head.width() + X);
+        (head.translate(vec2(-off, 0.0)), body.translate(vec2(-off, 0.0)))
     }
 }
 
