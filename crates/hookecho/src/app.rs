@@ -2065,6 +2065,10 @@ pub struct HookEchoApp {
     /// Keep the GOES frame on the active pane's radar clock rather than on a hand-picked frame.
     goes_follow_radar: bool,
     goes_times_rx: Option<std::sync::mpsc::Receiver<Vec<chrono::DateTime<chrono::Utc>>>>,
+    /// The archive hour the loaded frame times cover (`None` = the live window ending now).
+    /// Scrubbing far enough back to cross into another hour refetches; staying inside one does
+    /// not, which is what keeps an archive loop from asking GIBS a question per frame.
+    goes_hour: Option<i64>,
     /// When the Android widget snapshot was last written.
     widget_shot_at: Option<Instant>,
     /// A warning that wants a radar picture pushed after it (see `settings.ntfy_snapshot`).
@@ -2902,6 +2906,7 @@ impl HookEchoApp {
             goes_time_idx: None,
             goes_follow_radar: true,
             goes_times_rx: None,
+            goes_hour: None,
             widget_shot_at: None,
             snapshot_push: None,
             rotation_alerted: std::collections::HashMap::new(),
@@ -15574,8 +15579,17 @@ impl eframe::App for HookEchoApp {
             // GOES sub-hourly scrub: fetch the available frame times when a GOES style becomes
             // active, and apply the selected frame (None = latest).
             if raster_style.goes_layer().is_some() {
-                if self.goes_times_style != Some(raster_style) {
+                // Which hour of imagery to ask for: the pane's own clock when it is replaying an
+                // archive, otherwise the live window ending now. GIBS keeps GeoColor about two
+                // weeks and Band 13 several months, so a replayed event usually has satellite.
+                let radar_time = self.views[self.active.min(n - 1)]
+                    .volume
+                    .as_ref()
+                    .map(|v| v.time);
+                let (hour, from, to) = crate::tiles::goes_window(chrono::Utc::now(), radar_time);
+                if self.goes_times_style != Some(raster_style) || self.goes_hour != hour {
                     self.goes_times_style = Some(raster_style);
+                    self.goes_hour = hour;
                     self.goes_times.clear();
                     self.goes_time_idx = None;
                     let (tx, rx) = std::sync::mpsc::channel();
@@ -15583,7 +15597,7 @@ impl eframe::App for HookEchoApp {
                     let http = self.http.clone();
                     self.spawner.spawn(async move {
                         let times =
-                            crate::tiles::fetch_goes_times(&http, raster_style, 8, 48).await;
+                            crate::tiles::fetch_goes_times(&http, raster_style, from, to, 48).await;
                         let _ = tx.send(times);
                     });
                 }
@@ -15600,9 +15614,17 @@ impl eframe::App for HookEchoApp {
                     self.goes_time_idx
                         .and_then(|i| self.goes_times.get(i).copied())
                 };
+                // `None` means GIBS's own default, which is the newest imagery there is — right
+                // for a live pane, three days wrong for one replaying an archive. In an archive
+                // window, fall back to the newest frame *in that window* instead.
+                let selected = match (selected, self.goes_hour) {
+                    (None, Some(_)) => self.goes_times.last().copied(),
+                    (s, _) => s,
+                };
                 clear_tiles |= self.tiles.set_goes_time(selected);
             } else if self.goes_times_style.is_some() {
                 self.goes_times_style = None;
+                self.goes_hour = None;
                 self.goes_times.clear();
                 clear_tiles |= self.tiles.set_goes_time(None);
             }
