@@ -5,6 +5,7 @@
 //! switches. `// ponytail: no bundled font — egui's default proportional face is fine; drop an
 //! Inter/IBM-Plex TTF into data/fonts/ and install it here if a distinct face is wanted.`
 
+use crate::ui::m3::{self, Density};
 use crate::settings::Theme;
 use egui::{Color32, CornerRadius, Margin, Stroke, Style, Visuals};
 
@@ -239,7 +240,7 @@ pub fn preview_bg(theme: Theme) -> Color32 {
     palette(theme, true).bg
 }
 
-pub fn apply(ctx: &egui::Context, theme: Theme, system_dark: bool) {
+pub fn apply(ctx: &egui::Context, theme: Theme, system_dark: bool, density: Density) {
     let pal = palette(theme, system_dark);
     let mut visuals = if pal.is_dark {
         Visuals::dark()
@@ -253,12 +254,14 @@ pub fn apply(ctx: &egui::Context, theme: Theme, system_dark: bool) {
         ..Default::default()
     };
 
-    // Spacing.
-    style.spacing.item_spacing = egui::vec2(8.0, 6.0);
-    style.spacing.button_padding = egui::vec2(10.0, 5.0);
-    style.spacing.interact_size.y = 26.0;
-    style.spacing.window_margin = Margin::same(10);
-    style.spacing.menu_margin = Margin::same(8);
+    // Spacing and type come from one token table: touch on Android, else the density the user
+    // picked (`m3::COMFORT` / `m3::COMPACT`). No widget branches on density.
+    let m = m3::metrics(density, cfg!(target_os = "android"));
+    style.spacing.item_spacing = m.item_spacing;
+    style.spacing.button_padding = m.button_padding;
+    style.spacing.interact_size.y = m.interact_h;
+    style.spacing.window_margin = Margin::same(m.window_margin);
+    style.spacing.menu_margin = Margin::same(m.menu_margin);
 
     // Rounding on every widget state.
     let r = CornerRadius::same(6);
@@ -277,54 +280,16 @@ pub fn apply(ctx: &egui::Context, theme: Theme, system_dark: bool) {
     // Type scale (egui's default face; sizes only).
     use egui::{FontFamily::Proportional, FontId, TextStyle};
     style.text_styles = [
-        (TextStyle::Heading, FontId::new(15.0, Proportional)),
-        (TextStyle::Body, FontId::new(13.5, Proportional)),
-        (TextStyle::Button, FontId::new(13.5, Proportional)),
-        (TextStyle::Small, FontId::new(11.0, Proportional)),
+        (TextStyle::Heading, FontId::new(m.heading, Proportional)),
+        (TextStyle::Body, FontId::new(m.body, Proportional)),
+        (TextStyle::Button, FontId::new(m.button, Proportional)),
+        (TextStyle::Small, FontId::new(m.small, Proportional)),
         (
             TextStyle::Monospace,
-            FontId::new(12.5, egui::FontFamily::Monospace),
+            FontId::new(m.mono, egui::FontFamily::Monospace),
         ),
     ]
     .into();
-
-    // Desktop runs denser than touch: the sidebar has to fit a product section, a category row,
-    // a tree and three disclosures in 320 px, and a mouse doesn't need 26 px targets. Android
-    // gets the Material 3 type scale and a touch-sized interact height instead.
-    if cfg!(target_os = "android") {
-        use crate::ui::m3;
-        style.spacing.item_spacing = egui::vec2(m3::SP_2, m3::SP_2);
-        style.spacing.button_padding = egui::vec2(m3::SP_3, m3::SP_2);
-        // 44, not 48: `interact_size` is the *minimum* egui pads every widget to, and 48 there
-        // bloats inline rows. Real tap targets get `MIN_TARGET` explicitly.
-        style.spacing.interact_size.y = 44.0;
-        style.text_styles = [
-            (TextStyle::Heading, FontId::new(m3::T_TITLE, Proportional)),
-            (TextStyle::Body, FontId::new(m3::T_BODY, Proportional)),
-            (TextStyle::Button, FontId::new(m3::T_LABEL_LG, Proportional)),
-            (TextStyle::Small, FontId::new(m3::T_LABEL_SM, Proportional)),
-            (
-                TextStyle::Monospace,
-                FontId::new(m3::T_LABEL, egui::FontFamily::Monospace),
-            ),
-        ]
-        .into();
-    } else {
-        style.spacing.item_spacing = egui::vec2(6.0, 4.0);
-        style.spacing.button_padding = egui::vec2(8.0, 3.0);
-        style.spacing.interact_size.y = 22.0;
-        style.text_styles = [
-            (TextStyle::Heading, FontId::new(14.0, Proportional)),
-            (TextStyle::Body, FontId::new(12.5, Proportional)),
-            (TextStyle::Button, FontId::new(12.5, Proportional)),
-            (TextStyle::Small, FontId::new(11.0, Proportional)),
-            (
-                TextStyle::Monospace,
-                FontId::new(12.0, egui::FontFamily::Monospace),
-            ),
-        ]
-        .into();
-    }
 
     let egui_theme = if pal.is_dark {
         egui::Theme::Dark

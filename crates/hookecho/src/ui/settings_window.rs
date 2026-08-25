@@ -751,6 +751,16 @@ fn general_tab(
             });
             ui.end_row();
 
+            ui.label("Density");
+            ui.horizontal(|ui| {
+                for d in crate::ui::m3::Density::ALL {
+                    ui.selectable_value(&mut settings.density, d, d.label());
+                }
+            })
+            .response
+            .on_hover_text("Compact restores the denser spacing of earlier releases.");
+            ui.end_row();
+
             ui.label("UI scale");
             // Phones start denser: 0.5 × a 4.0 density factor ≈ a desktop-density canvas.
             let lo = if cfg!(target_os = "android") {

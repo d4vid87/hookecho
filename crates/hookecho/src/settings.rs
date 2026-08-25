@@ -4,6 +4,7 @@
 //! land in later milestones. `#[serde(default)]` makes old config files forward-compatible
 //! — new fields fill from `Default`, unknown fields are ignored.
 
+use crate::ui::m3::Density;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -131,6 +132,9 @@ pub struct Settings {
     /// Seconds between live-update polls for the newest volume.
     pub poll_interval_secs: u64,
     pub theme: Theme,
+    /// UI density (spacing/type token table). Comfortable by default; Compact restores the
+    /// pre-0.12 pro-dense desktop metrics.
+    pub density: Density,
     /// Starred radar sites shown in the toolbox presets dropdown.
     pub presets: Vec<String>,
     /// Per-moment color-table override: moment short name (`REF`, `VEL`, …) -> `.pal` path.
@@ -993,6 +997,7 @@ impl Default for Settings {
             etop_dbz: default_etop_dbz(),
             poll_interval_secs: 30,
             theme: Theme::Dark,
+            density: Density::default(),
             presets: Vec::new(),
             palettes: BTreeMap::new(),
             velocity_unit: VelocityUnit::default(),
@@ -1419,6 +1424,7 @@ mod tests {
             mping_key: String::new(),
             etop_dbz: 30.0,
             default_site: "KFWS".to_string(),
+            density: Density::Compact,
             poll_interval_secs: 45,
             theme: Theme::Synthwave,
             presets: vec!["KTLX".to_string(), "KOUN".to_string()],
@@ -1678,9 +1684,11 @@ mod tests {
 
     #[test]
     fn a_good_file_is_unchanged_and_a_broken_one_still_loads() {
-        let mut original = Settings::default();
-        original.mapbox_key = "abc".to_string();
-        original.ui_scale = 1.1;
+        let original = Settings {
+            mapbox_key: "abc".to_string(),
+            ui_scale: 1.1,
+            ..Default::default()
+        };
         let text = serde_json::to_string(&original).unwrap();
         let round = Settings::from_json_lossy(&text);
         assert_eq!(round.mapbox_key, "abc");
