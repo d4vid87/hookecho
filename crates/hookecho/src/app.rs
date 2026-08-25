@@ -15499,7 +15499,8 @@ impl eframe::App for HookEchoApp {
             let n = self.views.len();
             // A phone shows one pane at a time. Two 400x400 pt panes stacked is two views of
             // nothing; the pane strip above the scrubber is how you get to the others.
-            let solo = cfg!(target_os = "android") && n > 1;
+            // Only where one pane is all that fits: a tablet shows the split.
+            let solo = cfg!(target_os = "android") && n > 1 && chrome::compact(ctx);
             let rects = if solo {
                 vec![full; n]
             } else {

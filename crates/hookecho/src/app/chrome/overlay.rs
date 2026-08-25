@@ -26,6 +26,21 @@ fn phone() -> bool {
     cfg!(target_os = "android")
 }
 
+/// Is this a compact screen — a phone held in portrait?
+///
+/// The touch layout and the sheet layout are two different questions, and a tablet answers them
+/// differently: it wants the big targets and the top pill, and it has room to put the panel beside
+/// the map like a desktop does rather than over it. M3 calls the line 600 dp; the same line moves
+/// a phone in landscape onto the tablet layout, which is the right answer there too.
+pub(crate) fn compact(ctx: &egui::Context) -> bool {
+    crate::ui::m3::width_class(ctx.content_rect().width()) == crate::ui::m3::WidthClass::Compact
+}
+
+/// Does this screen get bottom sheets instead of a docked panel?
+fn sheets(ctx: &egui::Context) -> bool {
+    phone() && compact(ctx)
+}
+
 /// Where the phone's chrome starts: under the status bar and the color-scale strips.
 fn phone_top(ctx: &egui::Context) -> f32 {
     let content = ctx.content_rect();
@@ -80,6 +95,7 @@ impl HookEchoApp {
         // bottom sheet on a phone. The content is identical — that is the point of the wave, and
         // why the phone's own menu sheet could be deleted rather than kept in sync.
         let alerts_tab_was = alerts_tab;
+        let sheets_layout = sheets(ctx);
         let mut sheet_close = false;
         let mut body = |ui: &mut egui::Ui| {
                     // Title on the same line as the tabs: the name is branding, not a section, and
@@ -144,7 +160,7 @@ impl HookEchoApp {
                         // Leave room for the disclosures under the tree, whatever the window
                         // height. In the sheet there is no height to read yet — it scrolls — so
                         // the tree takes half the screen and the rest scrolls past it.
-                        if phone() {
+                        if sheets_layout {
                             chrome.height() * 0.5
                         } else {
                             (ui.available_height() - 110.0).max(120.0)
@@ -233,7 +249,7 @@ impl HookEchoApp {
                         .default_open(false)
                         .show(ui, |ui| self.app_rows(ui));
         };
-        if phone() {
+        if sheets(ctx) {
             let title = if alerts_tab_was {
                 format!("Alerts in view ({alert_count})")
             } else {
@@ -258,7 +274,12 @@ impl HookEchoApp {
                     // Denser than the chips: this one carries a wall of small text, and a basemap
                     // label showing through a list row is unreadable, not tasteful.
                     crate::ui::style::glass(ui, 250).show(ui, |ui| {
-                        ui.set_width(PANEL_W);
+                        // A tablet's docked panel is a rail: same card, thumb-width.
+                        ui.set_width(if phone() {
+                            crate::ui::m3::RAIL_W
+                        } else {
+                            PANEL_W
+                        });
                         ui.set_max_height(max_h);
                         body(ui);
                     });
@@ -489,7 +510,7 @@ impl HookEchoApp {
     /// which is exactly the cost showing one pane at a time was buying back.
     pub(crate) fn pane_strip(&mut self, ctx: &egui::Context) {
         let n = self.views.len();
-        if !phone() || n < 2 {
+        if !sheets(ctx) || n < 2 {
             return;
         }
         let accent = crate::theme::accent(self.settings.theme);
@@ -543,7 +564,7 @@ impl HookEchoApp {
         }
         let mut picked = None;
         let chrome = self.chrome_rect;
-        if phone() {
+        if sheets(ctx) {
             // The phone gets the chip row above the grid: the eight common styles are one tap
             // each, and the grid is for the other forty.
             let mut close = false;
