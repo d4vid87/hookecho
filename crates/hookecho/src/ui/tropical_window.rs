@@ -106,6 +106,9 @@ pub fn show(
                         want = Some((id, w.product));
                     }
                 }
+                if let Some(a) = &w.text {
+                    crate::ui::reader_button(ui, &a.title, w.product.label(), &a.text);
+                }
             });
             if let Some(e) = &w.error {
                 ui.colored_label(egui::Color32::from_rgb(230, 90, 90), e);

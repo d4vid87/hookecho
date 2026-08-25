@@ -89,6 +89,14 @@
             </intent-filter>
         </activity>
 
+        <!-- Reader for NWS text products: one WebView, one inert local document, no network of
+             its own. Not exported; only the app's own explicit intent starts it. -->
+        <activity
+            android:name=".TextViewActivity"
+            android:exported="false"
+            android:parentActivityName=".MainActivity"
+            android:label="@string/app_name" />
+
         <!-- Home-screen widget: current alerts at the saved locations, tap to open there. -->
         <receiver
             android:name=".AlertWidget"

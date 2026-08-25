@@ -31,6 +31,9 @@ pub fn show(
                 if ui.button("⟳ Refresh").clicked() {
                     refresh = true;
                 }
+                if let Some(a) = afd {
+                    crate::ui::reader_button(ui, &format!("AFD {}", a.office), &a.issued, &a.text);
+                }
             });
             if let Some(e) = error {
                 ui.colored_label(egui::Color32::from_rgb(230, 90, 90), e);
