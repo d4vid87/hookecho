@@ -49,7 +49,10 @@ egui = { version = "0.35", features = ["serde"] }
 egui_extras = { version = "0.35", features = ["datepicker"] }
 # Only to speak to egui_extras's date picker, which takes a jiff date rather than a chrono one.
 # Already in the tree via that feature; the app's own dates stay chrono.
-jiff = "0.2"
+# Default features bundle the IANA timezone database, which on wasm is ~117 KB gzipped of
+# data the app never reads — it formats a civil date and nothing else. Feature unification
+# means enabling it here would have turned it on for egui_extras too.
+jiff = { version = "0.2", default-features = false, features = ["std"] }
 wgpu = { version = "29", default-features = false, features = ["wgsl", "std"] }
 bytemuck.workspace = true
 anyhow.workspace = true
