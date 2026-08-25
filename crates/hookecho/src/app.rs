@@ -2118,6 +2118,10 @@ pub struct HookEchoApp {
     afd_error: Option<String>,
     afd_busy: bool,
     afd_rx: Option<std::sync::mpsc::Receiver<Result<wxdata::afd::Afd, String>>>,
+    /// NHC public advisory / forecast discussion reader.
+    tropical_window: ui::tropical_window::TropicalWindow,
+    tropical_text_rx:
+        Option<std::sync::mpsc::Receiver<Result<wxdata::tropical::Advisory, String>>>,
     /// Range rings + azimuth spokes around the active site (feature HH).
     show_range_rings: bool,
     /// Draw all NEXRAD radar sites on the map; clicking one switches the pane to that radar.
@@ -2875,6 +2879,8 @@ impl HookEchoApp {
             afd_error: None,
             afd_busy: false,
             afd_rx: None,
+            tropical_window: ui::tropical_window::TropicalWindow::default(),
+            tropical_text_rx: None,
             show_range_rings: false,
             show_radar_sites: true,
             show_blockage: false,
@@ -8998,6 +9004,41 @@ impl HookEchoApp {
         });
     }
 
+    /// Fetch one NHC text product for `storm_id`.
+    ///
+    /// The URL comes out of the storm feed rather than being built from the id: NHC's product
+    /// filenames key off the basin bin (`EP4`), not the storm id, and the feed already carries
+    /// the exact page for the current advisory number.
+    fn fetch_tropical_text(&mut self, storm_id: &str, product: ui::tropical_window::Product) {
+        let Some(storm) = self
+            .tropical
+            .as_ref()
+            .and_then(|t| t.storms.iter().find(|s| s.id == storm_id))
+            .cloned()
+        else {
+            self.tropical_window.error = Some("that storm is no longer being advised on".into());
+            return;
+        };
+        let Some(url) = product.url(&storm).map(str::to_string) else {
+            self.tropical_window.error =
+                Some(format!("no {} published for {}", product.label(), storm.name));
+            self.tropical_window.text = None;
+            return;
+        };
+        let title = format!("{} {} — {}", storm.classification, storm.name, product.label());
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.tropical_text_rx = Some(rx);
+        self.tropical_window.busy = true;
+        self.tropical_window.error = None;
+        let http = self.http.clone();
+        self.spawner.spawn(async move {
+            let res = wxdata::tropical::fetch_advisory(&http, &title, &url)
+                .await
+                .map_err(|e| e.to_string());
+            let _ = tx.send(res);
+        });
+    }
+
     /// Drive the METAR station-plot fetch (feature U): only when enabled and zoomed in enough,
     /// refetching every 75 s or when the view center drifts out of the fetched bbox's middle half.
     fn sync_metar(&mut self, ctx: &egui::Context) {
@@ -11416,7 +11457,41 @@ impl HookEchoApp {
                     // Drawing happens on drag, not on click; a bare click leaves no mark.
                     MapTool::Draw => {}
                     MapTool::AlertZone => self.zone_pts.push([lon, lat]),
-                    MapTool::Interrogate => {
+                    // Labelled so the storm-marker shortcut below can bail out of the hit-test
+                    // chain without returning from `render_pane` and costing this pane its
+                    // tiles and radar for the frame.
+                    MapTool::Interrogate => 'interrogate: {
+                        // A tropical cyclone's own marker sits above everything else: it is the
+                        // one feature whose words matter more than its geometry, and the cone
+                        // polygon underneath would otherwise swallow the click.
+                        let storm_hit = self
+                            .show_tropical
+                            .then(|| {
+                                self.tropical.as_ref().and_then(|t| {
+                                    t.storms
+                                        .iter()
+                                        .find(|s| {
+                                            let w = crate::render::mercator::lonlat_to_world(
+                                                s.lon, s.lat,
+                                            );
+                                            let (sx, sy) = cam.world_to_screen(w, vp);
+                                            let (dx, dy) = (
+                                                prect.left() + sx - pos.x,
+                                                prect.top() + sy - pos.y,
+                                            );
+                                            dx * dx + dy * dy <= tap_r2(14.0)
+                                        })
+                                        .map(|s| s.id.clone())
+                                })
+                            })
+                            .flatten();
+                        if let Some(id) = storm_hit {
+                            self.tropical_window.open = true;
+                            self.tropical_window.storm_id = Some(id.clone());
+                            let product = self.tropical_window.product;
+                            self.fetch_tropical_text(&id, product);
+                            break 'interrogate;
+                        }
                         // Storm reports sit on top: a click near a report dot opens its detail.
                         let report = self
                             .show_storm_reports
@@ -16528,6 +16603,35 @@ impl eframe::App for HookEchoApp {
             );
             if refresh {
                 self.fetch_afd();
+            }
+        }
+        // NHC text products: poll the fetch, then draw the reader.
+        if let Some(rx) = &self.tropical_text_rx {
+            if let Ok(res) = rx.try_recv() {
+                self.tropical_window.busy = false;
+                self.tropical_text_rx = None;
+                match res {
+                    Ok(a) => {
+                        self.tropical_window.text = Some(a);
+                        self.tropical_window.error = None;
+                    }
+                    Err(e) => {
+                        self.tropical_window.text = None;
+                        self.tropical_window.error = Some(e);
+                    }
+                }
+            }
+        }
+        if self.tropical_window.open {
+            let storms = self
+                .tropical
+                .as_ref()
+                .map(|t| t.storms.clone())
+                .unwrap_or_default();
+            if let Some((id, product)) =
+                ui::tropical_window::show(&mut self.tropical_window, ctx, &storms)
+            {
+                self.fetch_tropical_text(&id, product);
             }
         }
         // Point sounding: poll the async fetch, then render the Skew-T / hodograph.

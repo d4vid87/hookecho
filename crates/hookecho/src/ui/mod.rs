@@ -72,6 +72,7 @@ pub(crate) fn csv_buttons(
 
 pub mod about_window;
 pub mod afd_window;
+pub mod tropical_window;
 pub mod alert_panel;
 pub mod basemap_picker;
 pub mod cappi_window;
