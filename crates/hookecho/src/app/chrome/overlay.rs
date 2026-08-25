@@ -16,6 +16,8 @@ const CONTROLS: egui::Vec2 = egui::vec2(-70.0, 44.0);
 const RIGHT_PANEL: egui::Vec2 = egui::vec2(-130.0, 44.0);
 /// What the scrubber pill needs along the bottom edge, plus a margin.
 const SCRUBBER_CLEARANCE: f32 = 84.0;
+/// How far above the bottom edge the phone's pane strip sits: over the scrubber pill, not on it.
+const PANE_STRIP_UP: f32 = 150.0;
 
 /// Is this the phone layout? Same surfaces, same registry, same state — a thumb-sized pill across
 /// the top, a control column with room around it, and panels that come up from the bottom edge as
@@ -474,6 +476,62 @@ impl HookEchoApp {
                 });
             });
         self.tour_anchors.alerts = alerts_anchor;
+    }
+
+    /// The pane strip: which of the split panes is on screen, and the way to the others.
+    ///
+    /// The phone draws one pane at a time, so the desktop's accent outline has nothing to say —
+    /// and a horizontal swipe on the map itself is already a pan, which leaves nowhere to put the
+    /// swipe the panes want. So the swipe gets a target of its own: drag across the dots to move
+    /// between panes, or tap one.
+    ///
+    /// ponytail: dots, not thumbnails — a thumbnail means rendering a pane that is not on screen,
+    /// which is exactly the cost showing one pane at a time was buying back.
+    pub(crate) fn pane_strip(&mut self, ctx: &egui::Context) {
+        let n = self.views.len();
+        if !phone() || n < 2 {
+            return;
+        }
+        let accent = crate::theme::accent(self.settings.theme);
+        let mut pick = None;
+        egui::Area::new(egui::Id::new("pane_strip"))
+            .constrain_to(self.chrome_rect)
+            // Clear of the whole scrubber pill, not just the margin under it: the pill is two
+            // rows tall (transport and track) once there are frames to scrub.
+            .anchor(egui::Align2::CENTER_BOTTOM, egui::vec2(0.0, -PANE_STRIP_UP))
+            .show(ctx, |ui| {
+                crate::ui::style::glass(ui, 238).show(ui, |ui| {
+                    let w = 28.0 * n as f32;
+                    let (rect, resp) = ui.allocate_exact_size(
+                        egui::vec2(w, 24.0),
+                        egui::Sense::click_and_drag(),
+                    );
+                    for i in 0..n {
+                        let c = egui::pos2(rect.left() + 28.0 * (i as f32 + 0.5), rect.center().y);
+                        let on = i == self.active;
+                        ui.painter().circle_filled(
+                            c,
+                            if on { 6.0 } else { 4.0 },
+                            if on {
+                                accent
+                            } else {
+                                egui::Color32::from_gray(130)
+                            },
+                        );
+                    }
+                    // Tap and drag are the same hit test: whichever dot the finger is over wins,
+                    // so a swipe walks the panes as it passes them.
+                    if resp.clicked() || resp.dragged() {
+                        if let Some(p) = resp.interact_pointer_pos() {
+                            let i = ((p.x - rect.left()) / 28.0).floor().clamp(0.0, n as f32 - 1.0);
+                            pick = Some(i as usize);
+                        }
+                    }
+                });
+            });
+        if let Some(i) = pick.filter(|i| *i != self.active) {
+            self.active = i;
+        }
     }
 
     /// Background picker, slid in beside the control column.

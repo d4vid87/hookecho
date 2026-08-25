@@ -24,9 +24,9 @@ impl HookEchoApp {
             .unwrap_or_else(|| "no site".to_string());
         let age = self.views[self.active].volume.as_ref().map(|v| {
             let secs = (Utc::now() - v.time).num_seconds().max(0);
-            // Leading space: on the phone this label butts straight up against the clock, which
-            // is the last thing in the opposite layout.
-            format!(" ({} ago)", humanize(secs))
+            // A separator, not brackets: this label is laid out from the right edge and butts
+            // straight up against the clock, which is laid out from the left.
+            format!("\u{b7} {} ago", humanize(secs))
         });
         let loading = self.views[self.active].loading;
         let mut go_head = false;
