@@ -177,8 +177,8 @@ impl HookEchoApp {
             (
                 FL::HailSwath,
                 "National",
-                "Hail swaths (24 h)",
-                "Where hail has fallen over the past day",
+                "Hail swaths",
+                "Where hail has fallen — over the past day, or a window you pick",
                 false,
             ),
             (

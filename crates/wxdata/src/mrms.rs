@@ -28,6 +28,22 @@ pub fn lightning_density(minutes: u16) -> &'static str {
 pub const MESH: &str = "CONUS/MESH_00.50";
 /// 24-hour running max of MESH (mm) — hail swaths / damage tracks.
 pub const MESH_1440: &str = "CONUS/MESH_Max_1440min_00.50";
+
+/// Running-max MESH (hail swath) product for an accumulation window in minutes.
+///
+/// MRMS publishes the accumulation itself, so the swath is a fetch rather than a grid the client
+/// keeps a history of and maxes frame by frame. 30/60/120/240/360/1440 are published; 720 is not
+/// (checked against the bucket listing), and anything else falls back to the 24-hour swath.
+pub fn hail_swath(minutes: u16) -> &'static str {
+    match minutes {
+        30 => "CONUS/MESH_Max_30min_00.50",
+        60 => "CONUS/MESH_Max_60min_00.50",
+        120 => "CONUS/MESH_Max_120min_00.50",
+        240 => "CONUS/MESH_Max_240min_00.50",
+        360 => "CONUS/MESH_Max_360min_00.50",
+        _ => MESH_1440,
+    }
+}
 /// Instantaneous 0–2 km AGL azimuthal shear (s⁻¹).
 pub const AZSHEAR: &str = "CONUS/MergedAzShear_0-2kmAGL_00.50";
 /// Multi-sensor 1-hour QPE accumulation, Pass-2 gauge-corrected (mm).
@@ -530,5 +546,14 @@ mod tests {
         let passthrough = f.decimated(8192);
         assert_eq!(passthrough.nx, 4);
         assert_eq!(passthrough.values.as_ptr(), ptr);
+    }
+
+    #[test]
+    fn hail_swath_windows_map_to_published_products_and_fall_back_to_the_day() {
+        assert_eq!(hail_swath(60), "CONUS/MESH_Max_60min_00.50");
+        assert_eq!(hail_swath(360), "CONUS/MESH_Max_360min_00.50");
+        // 720 is not published, so it lands on the 24-hour swath rather than a 404.
+        assert_eq!(hail_swath(720), MESH_1440);
+        assert_eq!(hail_swath(1440), MESH_1440);
     }
 }
