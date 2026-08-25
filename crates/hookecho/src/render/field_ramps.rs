@@ -474,6 +474,23 @@ static SNOW_ANALYSIS: FieldRamp = FieldRamp {
     )
 };
 
+/// Banded snow. The values are reflectivity, but the scale is not the reflectivity palette: what
+/// the layer says is "this echo is organised into a line", and it has to read as that against the
+/// mosaic it was cut out of.
+static SNOW_BANDS: FieldRamp = ramp!(
+    "Snow bands",
+    "dBZ",
+    10.0,
+    45.0,
+    RampScale::Linear,
+    230,
+    &[
+        (0.0, [120, 160, 210]),
+        (0.5, [180, 215, 250]),
+        (1.0, [255, 255, 255]),
+    ]
+);
+
 static PRECIP_TYPE: FieldRamp = FieldRamp {
     label: "Precip type",
     units: "",
@@ -618,6 +635,7 @@ pub fn ramp_for(layer: FieldLayer) -> Option<&'static FieldRamp> {
         FL::GlobalPrecip => &GLOBAL_PRECIP,
         FL::Hca => &HCA,
         FL::GlmFed => &GLM_FED,
+        FL::SnowBands => &SNOW_BANDS,
         // Composite is reflectivity in dBZ, so like the mosaic it follows the user's own
         // reflectivity `.pal` rather than a fixed ramp of its own.
         FL::Mrms | FL::Mosaic | FL::CompositeLocal | FL::Hrrr | FL::Lightning | FL::ModelDiff => {

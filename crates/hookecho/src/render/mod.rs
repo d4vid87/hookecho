@@ -124,6 +124,8 @@ pub enum FieldLayer {
     GlobalWind10m,
     /// Global model precipitable water / total precipitation.
     GlobalPrecip,
+    /// Banded precipitation from the MRMS mosaic, narrowed to snow — the snow-squall layer.
+    SnowBands,
     /// GLM flash-extent density — the recent satellite flashes gridded into a density field.
     GlmFed,
     /// One model minus another — which field, and therefore which pair, is `app.diff_field`.
@@ -154,7 +156,7 @@ impl FieldLayer {
     }
 
     /// Fixed bottom-to-top paint order within each band.
-    pub const DRAW_ORDER: [FieldLayer; 35] = [
+    pub const DRAW_ORDER: [FieldLayer; 36] = [
         // Below-radar context band (bottom to top). The global models sit at the very bottom:
         // they are the synoptic backdrop everything else is drawn against.
         FieldLayer::GlobalMslp,
@@ -173,6 +175,7 @@ impl FieldLayer {
         FieldLayer::SnowAnalysis,
         FieldLayer::PrecipType,
         // Above-radar severe-signal band.
+        FieldLayer::SnowBands,
         FieldLayer::PrecipRate,
         FieldLayer::Qpe1h,
         FieldLayer::Qpe24h,
@@ -215,6 +218,7 @@ impl FieldLayer {
             FieldLayer::Vil => "vil",
             FieldLayer::EchoTops => "echotops",
             FieldLayer::HailSwath => "hailswath",
+            FieldLayer::SnowBands => "snowbands",
             FieldLayer::Hca => "hca",
             FieldLayer::UpdraftHelicity => "updrafthelicity",
             FieldLayer::Smoke => "smoke",

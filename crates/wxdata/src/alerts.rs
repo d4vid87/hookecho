@@ -127,7 +127,8 @@ pub fn escalation(a: &AlertInfo) -> u8 {
     if threat.contains("DESTRUCTIVE") || threat.contains("CATASTROPHIC") || observed {
         return 2;
     }
-    if threat.contains("CONSIDERABLE") {
+    // SIGNIFICANT is the snow squall's own escalation tag — the one that sends a phone alert.
+    if threat.contains("CONSIDERABLE") || threat.contains("SIGNIFICANT") {
         return 1;
     }
     0
@@ -150,6 +151,10 @@ pub(crate) fn event_style(event: &str) -> (FeatureKind, [u8; 3]) {
         "Severe Thunderstorm Warning" => [255, 165, 0],
         "Flash Flood Warning" => [0, 200, 0],
         "Flood Warning" => [0, 160, 90],
+        // NWS's own color for the product. A snow squall is a short-fuse life-threatening
+        // warning and used to draw in the same generic red as everything else with "warning" in
+        // its name, which is the one thing it must not look like on a winter map.
+        "Snow Squall Warning" => [199, 21, 133],
         "Tornado Watch" => [255, 255, 0],
         "Severe Thunderstorm Watch" => [219, 112, 147],
         "Special Weather Statement" => [255, 228, 181],
@@ -211,7 +216,10 @@ fn build_alert(
         max_wind: param(props, "maxWindGust"),
         tornado_detection: param(props, "tornadoDetection"),
         damage_threat: param(props, "thunderstormDamageThreat")
-            .or_else(|| param(props, "tornadoDamageThreat")),
+            .or_else(|| param(props, "tornadoDamageThreat"))
+            // A snow squall's tag rides in the same field: it is the same kind of statement about
+            // the same kind of warning, and everything downstream already reads this one.
+            .or_else(|| param(props, "snowSquallImpact")),
         vtec: param(props, "VTEC"),
         source: param(props, "eventMotionDescription").or_else(|| Some("Radar indicated".into())),
         motion: param(props, "eventMotionDescription")
@@ -551,5 +559,32 @@ mod tests {
         let client = reqwest::Client::new();
         let feats = fetch_active(&client, &[(32.57, -97.30)]).await.unwrap();
         eprintln!("fetched {} alert polygons", feats.len());
+    }
+
+    #[test]
+    fn a_snow_squall_gets_its_own_color_and_its_impact_tag_escalates() {
+        let (kind, rgb) = event_style("Snow Squall Warning");
+        assert_eq!(kind, FeatureKind::Warning);
+        assert_ne!(rgb, event_style("Winter Storm Warning").1, "not generic red");
+
+        let mut a = AlertInfo {
+            id: "urn:x".into(),
+            event: "Snow Squall Warning".into(),
+            headline: String::new(),
+            area: String::new(),
+            description: String::new(),
+            instruction: String::new(),
+            expires: None,
+            max_hail_in: None,
+            max_wind: None,
+            tornado_detection: None,
+            damage_threat: Some("SIGNIFICANT".into()),
+            source: None,
+            motion: None,
+            vtec: None,
+        };
+        assert_eq!(escalation(&a), 1, "a tagged squall sorts above plain warnings");
+        a.damage_threat = None;
+        assert_eq!(escalation(&a), 0);
     }
 }
