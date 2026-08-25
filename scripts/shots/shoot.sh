@@ -63,14 +63,18 @@ preflight() {
   # since the last build, and the scene silently shoots without its layer.
   log "building release"
   (cd "$REPO" && cargo build --release --quiet)
+  # The registry moved out of app.rs in the R18 chrome extraction; labels can legitimately live
+  # in either file, so both are searched.
+  REGISTRY="$REPO/crates/hookecho/src/app/chrome/registry.rs"
+  APP="$REPO/crates/hookecho/src/app.rs"
   # "4 panes" is built by format!("{n} pane{}"), so it never appears literally in the source.
-  grep -qF '{n} pane' "$REPO/crates/hookecho/src/app.rs" \
-    || die "palette label '$L_PANES' is not in app.rs any more — update shoot.sh"
+  grep -qF '{n} pane' "$APP" "$REGISTRY" \
+    || die "palette label '$L_PANES' is not in the registry any more — update shoot.sh"
   for l in "$L_TOUR" "$L_ALLTILTS" "$L_LINKCAM" "$L_WIND" "$L_SITES" "$L_XSECTION" "$L_FORECAST" "$L_STORMTABLE" "$L_FRONTS" "$L_GLM" \
            "$L_MRMS" "$L_MOSAIC" "$L_QPE" "$L_HRRR" "$L_VERIFY" \
            "$L_VILD" "$L_MEHS" "$L_SNOW" "$L_RECON"; do
-    grep -qF "$l" "$REPO/crates/hookecho/src/app.rs" \
-      || die "palette label '$l' is not in app.rs any more — update shoot.sh"
+    grep -qF "$l" "$APP" "$REGISTRY" \
+      || die "palette label '$l' is not in the registry any more — update shoot.sh"
   done
 }
 
@@ -289,11 +293,11 @@ scene_alerts() {
 
 # --- onboarding -------------------------------------------------------------------------------
 
-scene_wizard() {
-  # A profile with setup_done cleared is the whole trick: the app opens the wizard itself.
+scene_setup() {
+  # A profile with setup_done cleared is the whole trick: the app opens the first-run card itself.
   launch "$TUSCALOOSA" '{"setup_done": false}'
   wait_settle 12
-  snap wizard
+  snap setup
 }
 
 scene_tour() {

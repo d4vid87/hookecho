@@ -1158,7 +1158,9 @@ pub(crate) enum AppWindow {
     Verify,
     Climatology,
     LayerManager,
-    Wizard,
+    /// First-run setup: which radar to open to.
+    #[serde(alias = "Wizard")]
+    Setup,
     /// The spotlight tour of the live chrome.
     Tour,
     About,
@@ -1825,7 +1827,7 @@ pub struct HookEchoApp {
     zdr_cache: Option<ZdrCache>,
     couplet_cache: Option<((usize, String, usize), Vec<wxdata::rotation::CoupletHit>)>,
     site_dialog: Option<ui::site_dialog::SiteDialog>,
-    wizard: ui::wizard::Wizard,
+    firstrun: ui::firstrun::FirstRun,
     /// The optional spotlight tour, and where the chrome drew the things it points at this frame.
     tour: ui::tour::Tour,
     tour_anchors: ui::tour::TourAnchors,
@@ -2752,8 +2754,8 @@ impl HookEchoApp {
             zdr_cache: None,
             couplet_cache: None,
             site_dialog: None,
-            wizard: {
-                let mut w = ui::wizard::Wizard::default();
+            firstrun: {
+                let mut w = ui::firstrun::FirstRun::default();
                 // Never in an embed: the host page already chose the site, and its storage is
                 // partitioned, so "first run" would be every run — a setup dialog over someone
                 // else's dashboard panel, forever.
@@ -7093,7 +7095,7 @@ impl HookEchoApp {
                     self.load_climatology();
                 }
                 W::LayerManager => self.layer_window_open = true,
-                W::Wizard => self.wizard.start(),
+                W::Setup => self.firstrun.start(),
                 W::Tour => self.tour.start(),
                 W::About => {
                     self.about_open = true;
@@ -12898,8 +12900,8 @@ impl HookEchoApp {
             ui.separator();
             ui.weak("Hook Echo-WX — NEXRAD radar viewer");
             ui.weak("github.com/d4vid87/hookecho");
-            if ui.button("Setup wizard…").clicked() {
-                self.wizard.start();
+            if ui.button("Set up again…").clicked() {
+                self.firstrun.start();
             }
             if ui.button("Take the tour…").clicked() {
                 self.tour.start();
@@ -12914,7 +12916,7 @@ impl HookEchoApp {
     ///
     /// Remembering is the point: the basemap used to live only on the view, so a style picked
     /// during a chase was gone at the next launch, which read `settings.basemap` and found
-    /// whatever the setup wizard wrote months earlier.
+    /// whatever the first-run card wrote months earlier.
     pub(crate) fn set_basemap(&mut self, style: crate::tiles::BasemapStyle) {
         self.views[self.active].basemap = style;
         if self.settings.basemap != style.slug() {
@@ -14726,9 +14728,9 @@ impl eframe::App for HookEchoApp {
         // Over everything, and only while a capture is pending.
         self.share_card_footer(ctx);
 
-        // The spotlight tour, over the chrome it points at. Paused under the wizard and the
-        // cheat sheet — all three draw on `Order::Foreground` and would fight for it.
-        if self.tour.open && !self.wizard.open && !self.show_cheatsheet {
+        // The spotlight tour, over the chrome it points at. Paused under the first-run card and
+        // the cheat sheet — all three draw on `Order::Foreground` and would fight for it.
+        if self.tour.open && !self.firstrun.open && !self.show_cheatsheet {
             let v = &self.views[self.active];
             let sig = ui::tour::Signals {
                 moment: v.moment,
@@ -14760,7 +14762,7 @@ impl eframe::App for HookEchoApp {
             self.about_open = open;
         }
 
-        // The `?` cheat sheet floats over everything, including the wizard.
+        // The `?` cheat sheet floats over everything, including the first-run card.
         if self.show_cheatsheet {
             let entries = self.palette_entries();
             let bindings = hotkeys::active(&self.settings).into_owned();
@@ -14768,26 +14770,25 @@ impl eframe::App for HookEchoApp {
             self.show_cheatsheet = ui::cheatsheet::show(ctx, &bindings, &entries, accent);
         }
 
-        // First-run setup wizard.
-        let active = self.active;
-        if let Some(fin) = ui::wizard::show(
-            ctx,
-            &mut self.wizard,
-            &mut self.settings,
-            &mut self.views[active].basemap,
-            &self.marker_icon_tex,
-            &mut self.tiles,
-        ) {
+        // First run: pick a radar (or let the location do it) and get out of the way.
+        if let Some(fin) = ui::firstrun::show(ctx, &mut self.firstrun, &mut self.settings) {
             self.settings.setup_done = true;
             self.settings.save();
             let v = &mut self.views[self.active];
             v.site = Some(fin.site.clone());
             ui::site_dialog::center_on_site(&mut v.camera, &fin.site);
+            if fin.located {
+                // Nobody chose this site, so say which one it is and that it can be changed.
+                self.toast(
+                    ToastKind::Info,
+                    format!("Nearest radar: {} — change it any time in the panel", fin.site),
+                );
+            }
             if fin.take_tour {
                 self.tour.start();
             }
         }
-        if !self.wizard.open && !self.settings.setup_done {
+        if !self.firstrun.open && !self.settings.setup_done {
             // Dismissed without finishing. Setup is optional and re-runnable from three places,
             // so take the ✕ at its word rather than reopening this on every launch.
             self.settings.setup_done = true;
@@ -14828,8 +14829,8 @@ impl eframe::App for HookEchoApp {
             &mut self.drawer,
         );
         self.capture_key = self.settings_window.capturing;
-        if std::mem::take(&mut self.settings_window.run_wizard) {
-            self.wizard.start();
+        if std::mem::take(&mut self.settings_window.run_setup) {
+            self.firstrun.start();
         }
         if std::mem::take(&mut self.settings_window.run_tour) {
             self.tour.start();

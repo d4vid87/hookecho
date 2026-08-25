@@ -315,7 +315,7 @@ pub struct Settings {
     /// Sound for the rain-arrival alert.
     #[serde(default)]
     pub rain_sound: AlertSound,
-    /// First-run setup wizard completed (or dismissed). `false` shows it at startup.
+    /// First-run setup completed (or dismissed). `false` shows the first-run card at startup.
     #[serde(default)]
     pub setup_done: bool,
     /// Post alerts to the desktop's own notification centre, so they arrive with the window

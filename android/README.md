@@ -79,9 +79,10 @@ a Gradle `preBuild` hook deletes anything in that directory that is not `libhook
 
 ## First run
 
-A four-card setup opens (home radar, map and theme, alerting and saved places), ending with an
-optional 60-second tour of the sheet, the dock and the timeline. Both re-run from **Layers → App**
-and **Settings → General**.
+A single card opens asking for your home radar, with a **Use my location** button that picks the
+nearest one (this is the only place the app asks for the location permission outside chase mode).
+It also offers an optional 60-second tour. Both re-run from **Layers → App** and
+**Settings → General**.
 
 Background alerting is opt-in from Settings. When it is on, a foreground service polls
 `api.weather.gov` for your saved markers (60 s while something is warned, 5 min otherwise) and a
