@@ -68,6 +68,7 @@ fn body(ui: &mut egui::Ui, f: &PointForecast, tz: Option<wxdata::tz::Tz>) {
     if !f.hourly.is_empty() {
         ui.label(RichText::new("Next 24 hours").strong());
         hourly_strip(ui, &f.hourly, tz);
+    wind_strip(ui, &f.hourly);
         ui.add_space(6.0);
     }
     ui.label(RichText::new("This week").strong());
@@ -240,6 +241,77 @@ fn hourly_strip(ui: &mut egui::Ui, hours: &[wxdata::forecast::Period], tz: Optio
             Color32::from_gray(170),
         );
     }
+}
+
+/// Wind speed over the same 24 hours the temperature curve covers, with an arrow every third
+/// hour showing where the wind is coming from.
+///
+/// The window showed wind only as prose on the current-conditions line, which answers "what is
+/// it doing now" but not "when does it get windy" — the question that decides whether you tie
+/// something down. Gusts are missing on purpose: neither feed publishes an hourly gust, so
+/// there is nothing honest to draw.
+fn wind_strip(ui: &mut egui::Ui, hours: &[wxdata::forecast::Period]) {
+    let hours: Vec<_> = hours.iter().take(24).collect();
+    // Nothing to say if the feed gave no numbers — the NWS publishes wind as prose, and a
+    // string it cannot parse must not become a flat line at zero.
+    if hours.len() < 2 || hours.iter().all(|h| h.wind_mph.is_none()) {
+        return;
+    }
+    let w = ui.available_width().max(220.0);
+    let h = 46.0;
+    let (rect, resp) = ui.allocate_exact_size(Vec2::new(w, h), Sense::hover());
+    let p = ui.painter_at(rect);
+    p.rect_filled(rect, 4.0, Color32::from_black_alpha(90));
+    let body = rect.shrink2(Vec2::new(6.0, 5.0));
+
+    let peak = hours
+        .iter()
+        .filter_map(|x| x.wind_mph)
+        .fold(0.0f32, f32::max)
+        .max(10.0); // a calm day still gets a sensible scale rather than a magnified wobble
+    let x_of = |i: usize| body.left() + (i as f32 + 0.5) / hours.len() as f32 * body.width();
+    let y_of = |v: f32| body.bottom() - (v / peak) * body.height() * 0.62;
+
+    let pts: Vec<egui::Pos2> = hours
+        .iter()
+        .enumerate()
+        .filter_map(|(i, x)| Some(egui::pos2(x_of(i), y_of(x.wind_mph?))))
+        .collect();
+    p.add(egui::Shape::line(
+        pts,
+        Stroke::new(1.6, Color32::from_rgb(120, 210, 190)),
+    ));
+
+    // Direction arrows: every third hour, pointing the way the wind is going (the compass
+    // reading is where it comes *from*, so the arrow is the reverse).
+    for (i, x) in hours.iter().enumerate() {
+        if i % 3 != 0 {
+            continue;
+        }
+        let (Some(v), Some(from_deg)) = (x.wind_mph, x.wind_deg) else {
+            continue;
+        };
+        let to = (from_deg + 180.0).to_radians();
+        // Screen y grows downward, so north is -y.
+        let dir = Vec2::new(to.sin(), -to.cos());
+        let c = egui::pos2(x_of(i), y_of(v) - 9.0);
+        let tip = c + dir * 4.5;
+        let tail = c - dir * 4.5;
+        let wing = Vec2::new(-dir.y, dir.x) * 2.4;
+        let grey = Color32::from_gray(180);
+        p.line_segment([tail, tip], Stroke::new(1.0, grey));
+        p.line_segment([tip, tip - dir * 3.0 + wing], Stroke::new(1.0, grey));
+        p.line_segment([tip, tip - dir * 3.0 - wing], Stroke::new(1.0, grey));
+    }
+
+    p.text(
+        rect.left_top() + Vec2::new(6.0, 2.0),
+        Align2::LEFT_TOP,
+        format!("wind · peak {peak:.0} mph"),
+        FontId::proportional(9.0),
+        Color32::from_gray(170),
+    );
+    resp.on_hover_text("Sustained wind over the next 24 hours; arrows show which way it blows");
 }
 
 /// One-line current conditions, skipping whatever the station didn't report:

@@ -26,7 +26,39 @@ pub struct Period {
     pub short: String,
     /// "10 to 15 mph".
     pub wind: String,
+    /// Sustained wind in mph, parsed out of [`Period::wind`] for charting.
+    ///
+    /// This endpoint publishes wind as prose, not numbers, and it publishes no gust at all —
+    /// gusts live in the raw gridpoint product, which is a different fetch. A range ("10 to 15")
+    /// reads as its upper bound, which is what a wind chart should show.
+    pub wind_mph: Option<f32>,
+    /// Wind direction in degrees the wind blows *from*, parsed from the compass point.
+    pub wind_deg: Option<f32>,
     pub is_day: bool,
+}
+
+/// Largest number of mph in a National Weather Service wind string.
+///
+/// The strings are "10 mph", "10 to 15 mph", or empty. Taking the maximum makes a plain speed
+/// and the top of a range read the same way.
+fn parse_wind_mph(s: &str) -> Option<f32> {
+    s.split(|c: char| !c.is_ascii_digit())
+        .filter(|t| !t.is_empty())
+        .filter_map(|t| t.parse::<f32>().ok())
+        .fold(None, |acc: Option<f32>, v| Some(acc.map_or(v, |a| a.max(v))))
+}
+
+/// A compass point ("NNW") as degrees the wind blows from.
+fn parse_wind_deg(s: &str) -> Option<f32> {
+    const POINTS: [&str; 16] = [
+        "N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE", "S", "SSW", "SW", "WSW", "W", "WNW",
+        "NW", "NNW",
+    ];
+    let s = s.trim();
+    POINTS
+        .iter()
+        .position(|p| p.eq_ignore_ascii_case(s))
+        .map(|i| i as f32 * 22.5)
 }
 
 /// A point forecast: named periods out ~7 days, plus hour-by-hour for the near term.
@@ -81,6 +113,14 @@ fn parse_periods(body: &str) -> anyhow::Result<Vec<Period>> {
                     (Some(s), _) => s.to_string(),
                     _ => String::new(),
                 },
+                wind_mph: p
+                    .get("windSpeed")
+                    .and_then(|s| s.as_str())
+                    .and_then(parse_wind_mph),
+                wind_deg: p
+                    .get("windDirection")
+                    .and_then(|s| s.as_str())
+                    .and_then(parse_wind_deg),
                 is_day: p.get("isDaytime").and_then(|b| b.as_bool()).unwrap_or(true),
             })
         })
@@ -214,5 +254,25 @@ mod tests {
     fn missing_periods_is_an_error_not_a_panic() {
         assert!(parse_periods("{}").is_err());
         assert!(parse_periods("not json").is_err());
+    }
+
+    /// A range reads as its top; a plain speed reads as itself; prose without a number is None,
+    /// not zero — a chart must not draw calm where the feed said nothing.
+    #[test]
+    fn wind_speed_comes_out_of_the_prose() {
+        assert_eq!(parse_wind_mph("10 mph"), Some(10.0));
+        assert_eq!(parse_wind_mph("10 to 15 mph"), Some(15.0));
+        assert_eq!(parse_wind_mph(""), None);
+        assert_eq!(parse_wind_mph("calm"), None);
+    }
+
+    #[test]
+    fn compass_points_become_degrees() {
+        assert_eq!(parse_wind_deg("N"), Some(0.0));
+        assert_eq!(parse_wind_deg("E"), Some(90.0));
+        assert_eq!(parse_wind_deg("SW"), Some(225.0));
+        assert_eq!(parse_wind_deg("NNW"), Some(337.5));
+        assert_eq!(parse_wind_deg(""), None);
+        assert_eq!(parse_wind_deg("variable"), None);
     }
 }
