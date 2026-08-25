@@ -13,6 +13,7 @@
 //! scrolling body and the frame — the drawer only takes over the chrome and the ordering. If
 //! pages ever need transitions of their own, that's the seam to cut at.
 
+use crate::ui::a11y::Named as _;
 use egui::{pos2, vec2, Rect};
 
 /// The drawer's geometry on a desktop-sized screen. On a phone it takes the whole content rect,
@@ -133,7 +134,7 @@ impl Drawer {
                                 .fill(egui::Color32::TRANSPARENT)
                                 .stroke(egui::Stroke::NONE),
                             )
-                            .on_hover_text(hint)
+                            .named(hint)
                             .clicked()
                         {
                             close = true;
@@ -156,7 +157,7 @@ impl Drawer {
                                             .fill(egui::Color32::TRANSPARENT)
                                             .stroke(egui::Stroke::NONE),
                                         )
-                                        .on_hover_text("Quick settings for this page")
+                                        .named_toggle("Quick settings for this page", gear_on)
                                         .clicked()
                                     {
                                         gear_on = !gear_on;

@@ -65,6 +65,7 @@ impl HookEchoApp {
 
 /// One small glassy chrome button, sized for a row of three rather than the 44 px column.
 fn btn(ui: &mut egui::Ui, glyph: &str, hint: &str) -> bool {
+    use crate::ui::a11y::Named as _;
     let (r, g, b) = crate::ui::style::CARD_FILL;
     ui.add(
         egui::Button::new(
@@ -80,7 +81,7 @@ fn btn(ui: &mut egui::Ui, glyph: &str, hint: &str) -> bool {
         ))
         .corner_radius(crate::ui::style::RADIUS_SM),
     )
-    .on_hover_text(hint)
+    .named(hint)
     .clicked()
 }
 

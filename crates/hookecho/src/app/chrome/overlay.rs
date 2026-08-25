@@ -5,6 +5,7 @@
 //! costs the map nothing.
 
 use super::*;
+use crate::ui::a11y::Named as _;
 
 /// The floating panel's geometry: left margin, top offset (clear of the search pill), width.
 const PANEL_X: f32 = 10.0;
@@ -136,7 +137,7 @@ impl HookEchoApp {
                                     .fill(egui::Color32::TRANSPARENT)
                                     .stroke(egui::Stroke::NONE),
                                 )
-                                .on_hover_text("Close this panel")
+                                .named("Close this panel")
                                 .clicked()
                             {
                                 hide = true;
@@ -234,7 +235,7 @@ impl HookEchoApp {
                                 .min_size(egui::vec2(w, 34.0))
                                 .corner_radius(10.0),
                             )
-                            .on_hover_text("Search the place name and move the map there")
+                            .named("Search the place name and move the map there")
                             .clicked()
                         {
                             fly_to = Some(query.trim().to_string());
@@ -380,7 +381,7 @@ impl HookEchoApp {
                         // The tour's "everything else" stop points here: the pill is always on
                         // screen, where the panel it opens is not.
                         anchor = Some(menu.rect);
-                        if menu.on_hover_text("Show or hide the panel").clicked() {
+                        if menu.named_toggle("Show or hide the panel", self.panel_open).clicked() {
                             self.panel_open = !self.panel_open;
                         }
                         if phone() {
@@ -393,7 +394,7 @@ impl HookEchoApp {
                                     .fill(egui::Color32::TRANSPARENT)
                                     .stroke(egui::Stroke::NONE),
                                 )
-                                .on_hover_text("Change radar site");
+                                .named("Change radar site");
                             if label.clicked() && self.site_dialog.is_none() {
                                 self.site_dialog = Some(Default::default());
                             }
@@ -452,7 +453,7 @@ impl HookEchoApp {
             .show(ctx, |ui| {
                 ui.vertical(|ui| {
                     if square_btn(ui, egui_phosphor::regular::STACK, layers_on, accent)
-                        .on_hover_text("Layers, products and tools")
+                        .named_toggle("Layers, products and tools", layers_on)
                         .clicked()
                     {
                         self.panel_open = !layers_on;
@@ -464,13 +465,13 @@ impl HookEchoApp {
                         self.basemap_open,
                         accent,
                     )
-                    .on_hover_text("Background map")
+                    .named_toggle("Background map", self.basemap_open)
                     .clicked()
                     {
                         self.basemap_open = !self.basemap_open;
                     }
                     let bell = square_btn(ui, egui_phosphor::regular::BELL, alerts_on, accent)
-                        .on_hover_text("Active alerts in view");
+                        .named_toggle("Active alerts in view", alerts_on);
                     alerts_anchor = Some(bell.rect);
                     if bell.clicked() {
                         self.panel_open = !alerts_on;
