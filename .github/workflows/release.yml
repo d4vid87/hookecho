@@ -11,10 +11,59 @@ permissions:
   contents: write
 
 jobs:
+  # One job creates the release; the platform jobs only ever upload into it. Before this each of
+  # the four raced `action-gh-release`, and on v0.12.0-alpha.1 two of them created one release
+  # object while two created another, splitting the artifacts across a published release and a
+  # draft — and failing the macOS job when it tried to publish the loser.
+  create-release:
+    name: Create the release
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # The tag's own CHANGELOG section becomes the release body. Empty means the section is
+      # missing, which is worth failing the release over — a release with no notes is the state
+      # this repo shipped eight versions in.
+      - name: Extract release notes
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          awk -v v="$VERSION" '
+            $0 ~ "^## " v " " { want = 1; next }
+            want && /^## / { exit }
+            want { print }
+          ' CHANGELOG.md > notes.md
+          test -s notes.md || { echo "::error::no CHANGELOG.md section for $VERSION"; exit 1; }
+          cat notes.md
+
+      - name: Create it
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          # Re-running a release workflow is a normal thing to do; the release surviving from the
+          # first attempt is not an error.
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "$TAG already exists"
+            exit 0
+          fi
+          # A hyphen in the tag is a prerelease (`v0.12.0-alpha.1`): flagged as one, and never
+          # made "Latest", so nobody lands on an alpha from the repo's front page.
+          case "$TAG" in
+            *-*) flags="--prerelease --latest=false";;
+            *)   flags="--latest";;
+          esac
+          gh release create "$TAG" --title "$TAG" --notes-file notes.md $flags
+
   appimage:
     name: Linux AppImage
     # 22.04 sets the glibc floor (2.35); an AppImage built on newer won't run on older distros.
     runs-on: ubuntu-22.04
+    # Waits only so the release exists before the upload at the end. `!cancelled()` because on a
+    # push to main `create-release` is skipped, and a skipped dependency would otherwise skip the
+    # build too.
+    needs: create-release
+    if: ${{ !cancelled() }}
     steps:
       - uses: actions/checkout@v4
 
@@ -63,33 +112,12 @@ jobs:
           name: hookecho-deb
           path: dist/*.deb
 
-      # The tag's own CHANGELOG section becomes the release body. Empty means the section is
-      # missing, which is worth failing the release over — a release with no notes is the state
-      # this repo shipped eight versions in.
-      - name: Extract release notes
-        if: startsWith(github.ref, 'refs/tags/')
-        run: |
-          VERSION="${GITHUB_REF_NAME#v}"
-          awk -v v="$VERSION" '
-            $0 ~ "^## " v " " { want = 1; next }
-            want && /^## / { exit }
-            want { print }
-          ' CHANGELOG.md > notes.md
-          test -s notes.md || { echo "::error::no CHANGELOG.md section for $VERSION"; exit 1; }
-          cat notes.md
-
       - name: Attach to release
         if: startsWith(github.ref, 'refs/tags/')
-        uses: softprops/action-gh-release@v2
-        with:
-          # A hyphen in the tag is a prerelease (`v0.12.0-alpha.1`): flagged as one, and never
-          # made "Latest", so nobody lands on an alpha from the repo's front page.
-          prerelease: ${{ contains(github.ref_name, '-') }}
-          make_latest: ${{ !contains(github.ref_name, '-') }}
-          body_path: notes.md
-          files: |
-            dist/Hook_Echo-WX-x86_64.AppImage
-            dist/*.deb
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: gh release upload "$TAG" dist/Hook_Echo-WX-x86_64.AppImage dist/*.deb --clobber
 
       # Every push to main refreshes a rolling "latest" prerelease, so the Releases page always
       # carries current builds. Before this, artifacts only ever reached Releases on a tag push,
@@ -112,6 +140,11 @@ jobs:
   windows:
     name: Windows zip
     runs-on: windows-latest
+    # Waits only so the release exists before the upload at the end. `!cancelled()` because on a
+    # push to main `create-release` is skipped, and a skipped dependency would otherwise skip the
+    # build too.
+    needs: create-release
+    if: ${{ !cancelled() }}
     steps:
       - uses: actions/checkout@v4
 
@@ -137,17 +170,24 @@ jobs:
           cp target/release/hookecho.exe dist/
           cd dist && 7z a hookecho-windows-x86_64.zip hookecho.exe
 
+      # Two versions, because the installers cannot take the one the tag uses: WiX rejects
+      # anything but `x.x.x.x` ("The Product/@Version attribute's value, '0.12.0-alpha.1', is not
+      # a valid version"), and Inno is no happier. `numeric` drops the prerelease suffix, so
+      # `0.12.0-alpha.1` installs as 0.12.0 — the release page still carries the full name.
       - name: Read version
         id: ver
         shell: bash
-        run: echo "version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)" >> "$GITHUB_OUTPUT"
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "numeric=${version%%-*}" >> "$GITHUB_OUTPUT"
 
       # WiX 3 (candle/light) is preinstalled on windows-latest.
       - name: Build MSI
         shell: bash
         run: |
           candle -nologo -arch x64 \
-            -dAppVersion=${{ steps.ver.outputs.version }} \
+            -dAppVersion=${{ steps.ver.outputs.numeric }} \
             -dExePath=target/release/hookecho.exe \
             -o dist/hookecho.wixobj packaging/windows/main.wxs
           light -nologo -o dist/Hook_Echo-WX-x86_64.msi dist/hookecho.wixobj
@@ -158,7 +198,7 @@ jobs:
         shell: pwsh
         run: |
           & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" `
-            /DAppVersion=${{ steps.ver.outputs.version }} `
+            /DAppVersion=${{ steps.ver.outputs.numeric }} `
             /DExeDir=${{ github.workspace }}\target\release `
             /Odist packaging\windows\hookecho.iss
 
@@ -190,16 +230,10 @@ jobs:
 
       - name: Attach to release
         if: startsWith(github.ref, 'refs/tags/')
-        uses: softprops/action-gh-release@v2
-        with:
-          # A hyphen in the tag is a prerelease (`v0.12.0-alpha.1`): flagged as one, and never
-          # made "Latest", so nobody lands on an alpha from the repo's front page.
-          prerelease: ${{ contains(github.ref_name, '-') }}
-          make_latest: ${{ !contains(github.ref_name, '-') }}
-          files: |
-            dist/hookecho-windows-x86_64.zip
-            dist/Hook_Echo-WX-x86_64.msi
-            dist/Hook_Echo-WX-setup-x86_64.exe
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: gh release upload "$TAG" dist/hookecho-windows-x86_64.zip dist/Hook_Echo-WX-x86_64.msi dist/Hook_Echo-WX-setup-x86_64.exe --clobber
 
       # Every push to main refreshes a rolling "latest" prerelease, so the Releases page always
       # carries current builds. Before this, artifacts only ever reached Releases on a tag push,
@@ -223,6 +257,11 @@ jobs:
   macos:
     name: macOS app (experimental)
     runs-on: macos-latest
+    # Waits only so the release exists before the upload at the end. `!cancelled()` because on a
+    # push to main `create-release` is skipped, and a skipped dependency would otherwise skip the
+    # build too.
+    needs: create-release
+    if: ${{ !cancelled() }}
     steps:
       - uses: actions/checkout@v4
 
@@ -320,13 +359,10 @@ jobs:
 
       - name: Attach to release
         if: startsWith(github.ref, 'refs/tags/')
-        uses: softprops/action-gh-release@v2
-        with:
-          # A hyphen in the tag is a prerelease (`v0.12.0-alpha.1`): flagged as one, and never
-          # made "Latest", so nobody lands on an alpha from the repo's front page.
-          prerelease: ${{ contains(github.ref_name, '-') }}
-          make_latest: ${{ !contains(github.ref_name, '-') }}
-          files: dist/Hook_Echo-WX-macos.zip
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: gh release upload "$TAG" dist/Hook_Echo-WX-macos.zip --clobber
 
       - name: Update rolling release
         if: github.ref == 'refs/heads/main'
@@ -344,6 +380,11 @@ jobs:
   android:
     name: Android APK (arm64-v8a)
     runs-on: ubuntu-latest
+    # Waits only so the release exists before the upload at the end. `!cancelled()` because on a
+    # push to main `create-release` is skipped, and a skipped dependency would otherwise skip the
+    # build too.
+    needs: create-release
+    if: ${{ !cancelled() }}
     steps:
       - uses: actions/checkout@v4
 
@@ -420,13 +461,10 @@ jobs:
 
       - name: Attach to release
         if: startsWith(github.ref, 'refs/tags/')
-        uses: softprops/action-gh-release@v2
-        with:
-          # A hyphen in the tag is a prerelease (`v0.12.0-alpha.1`): flagged as one, and never
-          # made "Latest", so nobody lands on an alpha from the repo's front page.
-          prerelease: ${{ contains(github.ref_name, '-') }}
-          make_latest: ${{ !contains(github.ref_name, '-') }}
-          files: Hook_Echo-WX-arm64-v8a.apk
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: gh release upload "$TAG" Hook_Echo-WX-arm64-v8a.apk --clobber
 
       # Every push to main refreshes a rolling "latest" prerelease, so the Releases page always
       # carries current builds. Before this, artifacts only ever reached Releases on a tag push,
@@ -483,6 +521,9 @@ jobs:
         run: docker push --all-tags ${{ steps.build.outputs.image }}
 
   # Only the current build should be public. Everything else gets demoted to a draft:
+  # ... except prereleases, which are checkpoints people are asked to go and test: an alpha that
+  # goes invisible on the next push to main is an alpha nobody can install. They stay until the
+  # release they lead to ships, and are cleaned up by hand then.
   # still on the Releases page for anyone with push access, assets intact, but invisible
   # (and undownloadable) to the public. Deleting would lose the binaries; drafts don't.
   # The git tags stay public either way — they're repo history, not release pages.
@@ -501,7 +542,7 @@ jobs:
           keep="latest"
           case "$REF" in refs/tags/*) keep="$keep ${REF#refs/tags/}";; esac
           gh api "repos/$REPO/releases" --paginate \
-            --jq '.[] | select(.draft == false) | "\(.id) \(.tag_name)"' |
+            --jq '.[] | select(.draft == false and .prerelease == false) | "\(.id) \(.tag_name)"' |
           while read -r id tag; do
             case " $keep " in *" $tag "*) continue;; esac
             echo "drafting $tag (id $id)"
