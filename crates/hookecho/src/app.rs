@@ -1595,12 +1595,15 @@ struct Goto {
     moment: Option<Moment>,
     tilt: Option<usize>,
     basemap: Option<String>,
+    /// Outer `None`: the link said nothing about the threshold, so the viewer keeps its own.
+    /// Inner `None`: the link said `thr:off`, which turns the threshold off on purpose.
+    threshold: Option<Option<f32>>,
     srv: bool,
 }
 
 /// Parse `[hookecho://goto/]SITE[,lon,lat,zoom][,extra…]`, where each extra is an RFC3339 time, a
-/// moment code (`VEL`), a tilt index, a basemap (`bm:dark`) or the literal `srv` — sniffed by
-/// shape, so their order does not matter. A bare `SITE` flies to the site itself; the site may be
+/// moment code (`VEL`), a tilt index, a basemap (`bm:dark`), a threshold (`thr:25` / `thr:off`)
+/// or the literal `srv` — sniffed by shape, so their order does not matter. A bare `SITE` flies to the site itself; the site may be
 /// empty when lon/lat are given.
 fn parse_goto(v: &str) -> Option<Goto> {
     let v = v.trim().strip_prefix(GOTO_SCHEME).unwrap_or(v.trim());
@@ -1622,6 +1625,7 @@ fn parse_goto(v: &str) -> Option<Goto> {
             moment: None,
             tilt: None,
             basemap: None,
+            threshold: None,
             srv: false,
         }
     } else {
@@ -1642,6 +1646,7 @@ fn parse_goto(v: &str) -> Option<Goto> {
             moment: None,
             tilt: None,
             basemap: None,
+            threshold: None,
             srv: false,
         }
     };
@@ -1654,6 +1659,18 @@ fn parse_goto(v: &str) -> Option<Goto> {
             g.tilt = Some(i);
         } else if let Some(slug) = s.strip_prefix("bm:") {
             g.basemap = Some(slug.to_string());
+        } else if let Some(t) = s.strip_prefix("thr:") {
+            // The value is in the moment's own unit, which is what the slider stores: dBZ for
+            // reflectivity, m/s for velocity. Not the display unit — a link must mean the same
+            // thing whichever Units the recipient has set.
+            g.threshold = if t.eq_ignore_ascii_case("off") {
+                Some(None)
+            } else if let Ok(v) = t.parse::<f32>() {
+                Some(Some(v))
+            } else {
+                log::warn!("goto: want thr:<number> or thr:off, got {s:?}");
+                None
+            };
         } else if s.eq_ignore_ascii_case("srv") {
             g.srv = true;
         } else {
@@ -1666,29 +1683,31 @@ fn parse_goto(v: &str) -> Option<Goto> {
 /// The shareable link for a view. Native gets the `hookecho://` scheme the OS has registered; the
 /// browser build gets its own origin with the state in the fragment, which never leaves the client
 /// — no server, cache or worker ever sees where someone is looking.
-fn goto_link(
-    site: &str,
-    lon: f64,
-    lat: f64,
-    zoom: f64,
-    time: Option<DateTime<Utc>>,
-    moment: Moment,
-    tilt: usize,
-) -> String {
-    let t = time
+fn goto_link(g: &Goto) -> String {
+    let site = &g.site;
+    let (lon, lat, zoom) = (g.lon, g.lat, g.zoom);
+    let t = g
+        .time
         .map(|t| format!(",{}", t.to_rfc3339()))
         .unwrap_or_default();
-    let m = if moment != Moment::Reflectivity {
-        format!(",{}", moment.short_name())
-    } else {
-        String::new()
+    // Defaults stay out of the link: a field that isn't there leaves the recipient's own alone,
+    // which is the whole contract of the trailing fields.
+    let m = match g.moment {
+        Some(m) if m != Moment::Reflectivity => format!(",{}", m.short_name()),
+        _ => String::new(),
     };
-    let z = if tilt != 0 {
-        format!(",{tilt}")
-    } else {
-        String::new()
+    let z = match g.tilt {
+        Some(i) if i != 0 => format!(",{i}"),
+        _ => String::new(),
     };
-    let body = format!("{site},{lon:.4},{lat:.4},{zoom:.1}{t}{m}{z}");
+    // Only an active threshold travels. Sharing "no threshold" as `thr:off` would override the
+    // recipient's own setting with a default nobody chose.
+    let thr = g
+        .threshold
+        .flatten()
+        .map(|v| format!(",thr:{v}"))
+        .unwrap_or_default();
+    let body = format!("{site},{lon:.4},{lat:.4},{zoom:.1}{t}{m}{z}{thr}");
     #[cfg(target_arch = "wasm32")]
     {
         let origin = web_sys::window()
@@ -3149,6 +3168,14 @@ impl HookEchoApp {
         }
         if let Some(slug) = &g.basemap {
             view.basemap = crate::tiles::BasemapStyle::from_slug(slug);
+        }
+        // After the moment, so `VEL,thr:15` thresholds velocity and not whatever was showing.
+        if let Some(t) = g.threshold {
+            let mi = view.moment.index();
+            view.threshold_enabled[mi] = t.is_some();
+            if t.is_some() {
+                view.thresholds[mi] = t;
+            }
         }
         if g.srv {
             view.srv = true;
@@ -8607,15 +8634,19 @@ impl HookEchoApp {
                 let time = (!v.timeline.following)
                     .then(|| v.timeline.current().and_then(|id| id.date_time()))
                     .flatten();
-                let link = goto_link(
-                    v.site.as_deref().unwrap_or(""),
+                let link = goto_link(&Goto {
+                    site: v.site.clone().unwrap_or_default(),
                     lon,
                     lat,
-                    v.camera.zoom,
+                    zoom: v.camera.zoom,
                     time,
-                    v.moment,
-                    v.tilt,
-                );
+                    moment: Some(v.moment),
+                    tilt: Some(v.tilt),
+                    basemap: None,
+                    threshold: v.threshold_enabled[v.moment.index()]
+                        .then(|| v.thresholds[v.moment.index()]),
+                    srv: false,
+                });
                 ctx.copy_text(link.clone());
                 self.banner("Link copied".to_string(), link);
             }
@@ -17843,15 +17874,19 @@ mod tests {
 
     #[test]
     fn goto_link_round_trips() {
-        let link = goto_link(
-            "KFWS",
-            -97.3031,
-            32.5731,
-            8.5,
-            None,
-            Moment::Reflectivity,
-            0,
-        );
+        let base = |moment, tilt, threshold| Goto {
+            site: "KFWS".to_string(),
+            lon: -97.3031,
+            lat: 32.5731,
+            zoom: 8.5,
+            time: None,
+            moment: Some(moment),
+            tilt: Some(tilt),
+            basemap: None,
+            threshold,
+            srv: false,
+        };
+        let link = goto_link(&base(Moment::Reflectivity, 0, None));
         assert!(link.starts_with("hookecho://goto/KFWS,"), "{link}");
         let g = parse_goto(&link).unwrap();
         assert_eq!(g.site, "KFWS");
@@ -17859,9 +17894,41 @@ mod tests {
         assert_eq!(g.zoom, 8.5);
         // Reflectivity at the base tilt is the default, so it stays out of the link.
         assert!(!link.contains("dBZ"), "{link}");
-        let link = goto_link("KFWS", -97.3, 32.5, 8.5, None, Moment::Velocity, 3);
+
+        let link = goto_link(&base(Moment::Velocity, 3, None));
         let g = parse_goto(&link).unwrap();
         assert_eq!((g.moment, g.tilt), (Some(Moment::Velocity), Some(3)));
+        // No threshold set means the link says nothing, leaving the recipient's own alone.
+        assert!(!link.contains("thr:"), "{link}");
+
+        // Issue #71: an embedded dashboard needs to deep-link a threshold, and the link the Copy
+        // button produces has to come back as the threshold it was copied from.
+        let link = goto_link(&base(Moment::Reflectivity, 0, Some(Some(25.0))));
+        assert!(link.contains(",thr:25"), "{link}");
+        assert_eq!(parse_goto(&link).unwrap().threshold, Some(Some(25.0)));
+        // A view with the threshold switched off shares as "nothing to say", not as `thr:off` —
+        // overriding the recipient's own setting with a default nobody chose.
+        assert!(!goto_link(&base(Moment::Reflectivity, 0, Some(None))).contains("thr:"));
+    }
+
+    #[test]
+    fn goto_parses_a_threshold_by_shape() {
+        // Order does not matter, and the field is sniffed by shape like every other extra.
+        assert_eq!(
+            parse_goto("KTLX,-97.3,35.3,8,thr:25,VEL").unwrap().threshold,
+            Some(Some(25.0))
+        );
+        // Off is a deliberate instruction, distinct from saying nothing at all.
+        assert_eq!(
+            parse_goto("KTLX,-97.3,35.3,8,thr:off").unwrap().threshold,
+            Some(None)
+        );
+        assert_eq!(parse_goto("KTLX,-97.3,35.3,8").unwrap().threshold, None);
+        // Garbage is ignored, not applied as zero.
+        assert_eq!(
+            parse_goto("KTLX,-97.3,35.3,8,thr:loud").unwrap().threshold,
+            None
+        );
     }
 
     /// The draw tool must append into the stroke in flight and start a new one per drag, and Undo

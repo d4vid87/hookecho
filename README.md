@@ -680,13 +680,20 @@ hookecho://goto/KTLX,-97.28,35.33,9                    # site, lon, lat, zoom
 hookecho://goto/,-97.28,35.33,9                        # no site: just the view
 hookecho://goto/KTLX,-97.28,35.33,9,2013-05-20T20:00:00Z   # and an instant
 hookecho://goto/KTLX,-97.28,35.33,9,VEL,1              # and a product and tilt
+hookecho://goto/KTLX,-97.28,35.33,9,thr:25             # and a threshold, in dBZ
 ```
 
 The timestamp is RFC 3339 and puts the timeline where it was, so a link can
 point at a moment in the archive rather than at "now". The trailing fields are
 recognized by shape, not position: a timestamp, a product code (`VEL`, `ZDR`,
-`CC`, …) and a tilt index can appear in any order, and any you leave out keep
-whatever the person opening the link already had.
+`CC`, …), a tilt index, a basemap (`bm:dark`), a threshold (`thr:25`, or
+`thr:off` to turn one off) and `srv` can appear in any order, and any you leave
+out keep whatever the person opening the link already had.
+
+The threshold is in the product's own unit — dBZ for reflectivity, m/s for
+velocity — so a link means the same thing whichever Units the recipient uses. It
+applies to the product the link names, which is why `VEL,thr:15` thresholds
+velocity rather than whatever happened to be showing.
 
 The browser build takes the same thing in the URL fragment, which never leaves
 the client — no server sees where you are looking:
