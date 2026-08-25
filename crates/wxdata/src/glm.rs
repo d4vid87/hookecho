@@ -314,6 +314,117 @@ pub fn flash_density(
     })
 }
 
+/// Rate of change of flash-extent density between two [`flash_density`] grids, in flashes per
+/// cell per minute — the lightning jump.
+///
+/// A storm that is about to do something usually electrifies first: total flash rate climbs
+/// sharply several minutes before the severe weather arrives. A high density on its own only says
+/// the storm is already big; the *rise* is the part with lead time in it.
+///
+/// Both grids snap to the same lattice, so cells line up by an integer offset and no interpolation
+/// is involved — but only if they were built with the same cell size, which is checked. Cells that
+/// fell (or held steady) come back `NaN`: a jump layer showing decay would bury the thing it is
+/// for. `None` when the grids do not line up or no time passed between them.
+pub fn flash_jump(
+    prev: &crate::mrms::MrmsField,
+    cur: &crate::mrms::MrmsField,
+) -> Option<crate::mrms::MrmsField> {
+    let dt_min = (cur.time - prev.time).num_seconds() as f32 / 60.0;
+    if dt_min <= 0.0 || cur.nx == 0 || cur.ny == 0 || prev.nx == 0 || prev.ny == 0 {
+        return None;
+    }
+    let cell = (cur.lon_east - cur.lon_west) / cur.nx as f64;
+    let prev_cell = (prev.lon_east - prev.lon_west) / prev.nx as f64;
+    if cell <= 0.0 || (cell - prev_cell).abs() > cell * 1e-6 {
+        return None;
+    }
+    // Where cur's origin sits in prev's index space. Rows run north to south.
+    let ox = ((cur.lon_west - prev.lon_west) / cell).round() as isize;
+    let oy = ((prev.lat_north - cur.lat_north) / cell).round() as isize;
+    let mut values = vec![f32::NAN; cur.nx * cur.ny];
+    for y in 0..cur.ny {
+        for x in 0..cur.nx {
+            let now = cur.values[y * cur.nx + x];
+            if !now.is_finite() {
+                continue;
+            }
+            let (px, py) = (x as isize + ox, y as isize + oy);
+            let before = if px >= 0 && py >= 0 && (px as usize) < prev.nx && (py as usize) < prev.ny
+            {
+                let v = prev.values[py as usize * prev.nx + px as usize];
+                if v.is_finite() {
+                    v
+                } else {
+                    0.0
+                }
+            } else {
+                // Off the edge of the older grid: the storm moved in, so all of it is new.
+                0.0
+            };
+            let rate = (now - before) / dt_min;
+            if rate > 0.0 {
+                values[y * cur.nx + x] = rate;
+            }
+        }
+    }
+    Some(crate::mrms::MrmsField {
+        values,
+        nx: cur.nx,
+        ny: cur.ny,
+        lon_west: cur.lon_west,
+        lon_east: cur.lon_east,
+        lat_north: cur.lat_north,
+        lat_south: cur.lat_south,
+        time: cur.time,
+    })
+}
+
+#[cfg(test)]
+mod jump_tests {
+    use super::*;
+
+    fn grid(vals: &[f32], lon_west: f64, lat_north: f64, min_ago: i64) -> crate::mrms::MrmsField {
+        crate::mrms::MrmsField {
+            values: vals.to_vec(),
+            nx: 2,
+            ny: 1,
+            lon_west,
+            lon_east: lon_west + 2.0,
+            lat_north,
+            lat_south: lat_north - 1.0,
+            time: Utc::now() - chrono::Duration::minutes(min_ago),
+        }
+    }
+
+    #[test]
+    fn a_rising_cell_reports_its_rate_and_a_falling_one_reports_nothing() {
+        let prev = grid(&[10.0, 30.0], 0.0, 10.0, 5);
+        let cur = grid(&[20.0, 12.0], 0.0, 10.0, 0);
+        let j = flash_jump(&prev, &cur).expect("same lattice, five minutes apart");
+        assert!((j.values[0] - 2.0).abs() < 1e-4, "10 flashes over 5 min");
+        assert!(j.values[1].is_nan(), "decay is not a jump");
+    }
+
+    #[test]
+    fn a_shifted_grid_lines_up_by_offset_and_new_ground_counts_as_all_new() {
+        // cur sits one cell east of prev: cur cell 0 is prev cell 1, cur cell 1 is off the edge.
+        let prev = grid(&[0.0, 5.0], 0.0, 10.0, 5);
+        let cur = grid(&[10.0, 10.0], 1.0, 10.0, 0);
+        let j = flash_jump(&prev, &cur).unwrap();
+        assert!((j.values[0] - 1.0).abs() < 1e-4, "(10 - 5) / 5 min");
+        assert!((j.values[1] - 2.0).abs() < 1e-4, "nothing there before");
+    }
+
+    #[test]
+    fn mismatched_cell_sizes_and_stopped_clocks_are_refused() {
+        let prev = grid(&[1.0, 1.0], 0.0, 10.0, 5);
+        let mut coarse = grid(&[2.0, 2.0], 0.0, 10.0, 0);
+        coarse.lon_east = coarse.lon_west + 4.0;
+        assert!(flash_jump(&prev, &coarse).is_none());
+        assert!(flash_jump(&prev, &grid(&[2.0, 2.0], 0.0, 10.0, 5)).is_none());
+    }
+}
+
 #[cfg(test)]
 mod density_tests {
     use super::*;

@@ -2069,6 +2069,8 @@ pub struct HookEchoApp {
     /// Scrubbing far enough back to cross into another hour refetches; staying inside one does
     /// not, which is what keeps an archive loop from asking GIBS a question per frame.
     goes_hour: Option<i64>,
+    /// The previous flash-extent grid, kept only so the lightning jump has something to subtract.
+    glm_fed_prev: Option<wxdata::mrms::MrmsField>,
     /// When the Android widget snapshot was last written.
     widget_shot_at: Option<Instant>,
     /// A warning that wants a radar picture pushed after it (see `settings.ntfy_snapshot`).
@@ -2909,6 +2911,7 @@ impl HookEchoApp {
             goes_follow_radar: true,
             goes_times_rx: None,
             goes_hour: None,
+            glm_fed_prev: None,
             widget_shot_at: None,
             snapshot_push: None,
             rotation_alerted: std::collections::HashMap::new(),
@@ -4274,17 +4277,22 @@ impl HookEchoApp {
         }
     }
 
-    /// Run the lightning-density rules over a freshly built flash-extent grid.
+    /// Run the rules on `trigger` over a freshly built lightning grid (density, or its rate of
+    /// rise).
     ///
     /// The grid's own cell is the detection: a cell whose flash count clears the rule's threshold
     /// is somewhere worth knowing about. Cooldowns are per rule and place, as everywhere else.
-    fn evaluate_grid_rules(&mut self, field: &wxdata::mrms::MrmsField) {
+    fn evaluate_grid_rules(
+        &mut self,
+        trigger: crate::settings::RuleTrigger,
+        field: &wxdata::mrms::MrmsField,
+    ) {
         use crate::rules::Detection;
         let rules: Vec<crate::settings::AlertRule> = self
             .settings
             .alert_rules
             .iter()
-            .filter(|r| r.enabled && r.trigger == crate::settings::RuleTrigger::GlmFed)
+            .filter(|r| r.enabled && r.trigger == trigger)
             .cloned()
             .collect();
         if rules.is_empty() || field.nx == 0 || field.ny == 0 {
@@ -4316,7 +4324,7 @@ impl HookEchoApp {
                         .total_cmp(&b.strength.unwrap_or(0.0))
                 });
             if let Some(hit) = best {
-                self.note_hits(&crate::settings::RuleTrigger::GlmFed, &[hit]);
+                self.note_hits(&trigger, &[hit]);
                 if crate::rules::compound_ok(&rule, &hit, &self.recent_for_rules()) {
                     self.fire_rule(&rule, &hit);
                 }
@@ -14416,11 +14424,13 @@ impl eframe::App for HookEchoApp {
         let glm_fed_on = self.fields.get(&FL::GlmFed).is_some_and(|s| s.show);
         // A lightning-density rule needs the flashes polled and the grid built even with the
         // layer off, exactly like the scan signatures.
-        let glm_rule_armed = self
-            .settings
-            .alert_rules
-            .iter()
-            .any(|r| r.enabled && r.trigger == crate::settings::RuleTrigger::GlmFed);
+        let glm_rule_armed = self.settings.alert_rules.iter().any(|r| {
+            r.enabled
+                && matches!(
+                    r.trigger,
+                    crate::settings::RuleTrigger::GlmFed | crate::settings::RuleTrigger::GlmJump
+                )
+        });
         if (self.show_glm || glm_fed_on || glm_rule_armed)
             && self
                 .glm_last_poll
@@ -14474,7 +14484,16 @@ impl eframe::App for HookEchoApp {
                 )
             });
             if let Some(field) = &field {
-                self.evaluate_grid_rules(field);
+                self.evaluate_grid_rules(crate::settings::RuleTrigger::GlmFed, field);
+                // The jump is the difference between this grid and the one before it, so it can
+                // only be asked for once there is a previous one — the first grid after launch
+                // has no rate.
+                if let Some(prev) = &self.glm_fed_prev {
+                    if let Some(jump) = wxdata::glm::flash_jump(prev, field) {
+                        self.evaluate_grid_rules(crate::settings::RuleTrigger::GlmJump, &jump);
+                    }
+                }
+                self.glm_fed_prev = Some(field.clone());
             }
             if let (Some(field), true) = (field, glm_fed_on) {
                 let cap = self.field_texture_cap();
