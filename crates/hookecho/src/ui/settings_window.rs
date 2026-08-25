@@ -751,6 +751,21 @@ fn general_tab(
             });
             ui.end_row();
 
+            ui.label("Accent color");
+            ui.horizontal(|ui| {
+                let mut on = settings.accent.is_some();
+                let theme_accent = crate::theme::accent(settings.theme);
+                if ui.checkbox(&mut on, "Custom").changed() {
+                    settings.accent = on.then(|| {
+                        [theme_accent.r(), theme_accent.g(), theme_accent.b()]
+                    });
+                }
+                if let Some(rgb) = settings.accent.as_mut() {
+                    ui.color_edit_button_srgb(rgb);
+                }
+            });
+            ui.end_row();
+
             ui.label("Density");
             ui.horizontal(|ui| {
                 for d in crate::ui::m3::Density::ALL {

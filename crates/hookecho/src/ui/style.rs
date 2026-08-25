@@ -51,7 +51,7 @@ pub const LANE_BOTTOM_CHASE: f32 = -92.0;
 
 /// Translucent card used by the floating bars, in the current theme's colors.
 ///
-/// The fill used to be a hardcoded near-black, which meant the light themes (Glacier, Light)
+/// The fill used to be a hardcoded near-black, which meant the light themes (Light)
 /// painted dark cards full of dark text over a light map. Reading `ui.visuals()` keeps it honest
 /// without plumbing a `Theme` through every call site — `theme::apply` has already put the
 /// palette there.
