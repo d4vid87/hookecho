@@ -53,6 +53,9 @@ fn axis_slice(ui: &mut egui::Ui, label: &str, lo: &mut f32, hi: &mut f32) {
 
 /// Show the 3D window. `pending` is a one-shot volume upload consumed by the first paint;
 /// `n`/`nz` are the grid dimensions and `range` the volume's `(value_min, value_max)` dBZ span.
+// ponytail: eight loose arguments rather than a params struct — every one of them is already a
+// field on the caller, and a struct here would just be that call site written twice.
+#[allow(clippy::too_many_arguments)]
 pub fn show(
     ctx: &egui::Context,
     open: &mut bool,
@@ -61,12 +64,21 @@ pub fn show(
     n: u32,
     nz: u32,
     range: (f32, f32),
+    drawer: &mut crate::ui::drawer::Drawer,
 ) {
     let mut keep = *open;
-    crate::ui::phone_surface(ctx, egui::Window::new("3D Reflectivity"))
-        .open(&mut keep)
-        .default_size([480.0, 480.0])
-        .show(ctx, |ui| {
+    let Some(window) = drawer.page_sized(
+        ctx,
+        "3D Reflectivity",
+        &mut keep,
+        false,
+        480.0,
+        egui::Window::new("3D Reflectivity"),
+    ) else {
+        *open = keep;
+        return;
+    };
+    window.show(ctx, |ui| {
             ui.weak("Drag to orbit · scroll to zoom · max-intensity projection");
             ui.horizontal(|ui| {
                 let mut on = st.threshold_dbz.is_finite();

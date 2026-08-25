@@ -17,16 +17,25 @@ pub(crate) fn show(
     open: &mut bool,
     settings: &mut Settings,
     active: &[(FieldLayer, String)],
+    drawer: &mut crate::ui::drawer::Drawer,
 ) -> bool {
     if !*open {
         return false;
     }
     let mut changed = false;
     let mut win_open = *open;
-    crate::ui::phone_surface(ctx, egui::Window::new("Layer Manager"))
-        .open(&mut win_open)
-        .default_width(420.0)
-        .show(ctx, |ui| {
+    let Some(window) = drawer.page_sized(
+        ctx,
+        "Layer Manager",
+        &mut win_open,
+        false,
+        420.0,
+        egui::Window::new("Layer Manager"),
+    ) else {
+        *open = win_open;
+        return false;
+    };
+    window.show(ctx, |ui| {
             if !active.is_empty() {
                 ui.label(egui::RichText::new("Field layers").strong());
                 for (layer, name) in active {

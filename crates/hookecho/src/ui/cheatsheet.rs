@@ -48,7 +48,8 @@ pub(crate) fn show(
                 ui.label(
                     egui::RichText::new(
                         "Ctrl + = / − / 0 resize the interface · Escape closes whatever is in \
-                         front · rebind anything in Settings → Hotkeys",
+                         front · rebind anything in Settings → Hotkeys · F1 opens Help, which \
+                         searches these and the glossary together",
                     )
                     .size(style::FONT_SM)
                     .weak(),

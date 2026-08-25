@@ -28,6 +28,18 @@ impl HookEchoApp {
         });
     }
 
+    /// Say something once, ever. A hint is for the thing that is discoverable only if somebody
+    /// tells you it is there — the ⓘ links, the fact that panes are independent — and it earns
+    /// exactly one appearance per install.
+    pub(crate) fn hint(&mut self, id: &str, text: &str) {
+        if self.settings.hints_seen.iter().any(|s| s == id) {
+            return;
+        }
+        self.settings.hints_seen.push(id.to_string());
+        self.settings.save();
+        self.toast(ToastKind::Info, text);
+    }
+
     /// Toast stack, below the right-hand control column. Expires after ~4 s, fading out over the
     /// last second; click to dismiss.
     /// ponytail: clock-based fade, no per-toast animation ids.

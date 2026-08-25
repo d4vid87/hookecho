@@ -13,18 +13,14 @@ pub(crate) fn loading(ui: &mut egui::Ui, what: &str) {
 ///
 /// Material 3's rule for the compact width class is that a secondary screen takes the whole
 /// screen — no floating panel, no dialog margins, no dragging a window around a display it barely
-/// fits on. So on Android every one of these windows becomes a full-screen surface: pinned to the
-/// content rect (which already excludes the system bars and grows to clear the keyboard), not
-/// draggable, not resizable, not collapsible, scrolling its body, with square corners because
-/// there is nothing behind it to round against. The title bar stays: its ✕ is the surface's back
-/// affordance, and it is already wired to each caller's `open` flag.
+/// fits on. So on Android these become full-screen surfaces: pinned to the content rect (which
+/// already excludes the system bars and grows to clear the keyboard), not draggable, not
+/// resizable, not collapsible, scrolling their body, with square corners because there is nothing
+/// behind them to round against.
 ///
-/// One function, because there is exactly one right answer for all twenty-odd of these windows,
-/// and a per-window conversion would be twenty chances to get it slightly different.
-///
-/// ponytail: `Window` rather than a hand-rolled surface widget — it already does the title row,
-/// the close button, the open flag and the scroll body, and reusing it keeps the desktop and
-/// phone call sites identical.
+/// What is left after B4b is the handful of surfaces that are not drawer pages: the first-run
+/// card, the anchored map-click popovers, and the station cards. Every browsable tool now goes
+/// through [`drawer::Drawer::page`], which owns its own chrome.
 pub(crate) fn phone_surface<'a>(ctx: &egui::Context, w: egui::Window<'a>) -> egui::Window<'a> {
     if cfg!(target_os = "android") {
         let r = ctx.content_rect();
@@ -44,6 +40,26 @@ pub(crate) fn phone_surface<'a>(ctx: &egui::Context, w: egui::Window<'a>) -> egu
             .frame(frame)
     } else {
         w
+    }
+}
+
+/// Hand this product to the platform's reader — Android's WebView, the desktop's browser.
+///
+/// Drawn only where there is one: the web build has neither, and keeps the monospace view it was
+/// already showing. See [`crate::textview`] for why the desktop half is the system browser and not
+/// an embedded webview.
+pub(crate) fn reader_button(ui: &mut egui::Ui, title: &str, issued: &str, text: &str) {
+    if !crate::textview::available() {
+        return;
+    }
+    if ui
+        .button(format!("{} Read", egui_phosphor::regular::BOOK_OPEN))
+        .on_hover_text("Opens this product typeset for reading \u{2014} paragraphs instead of teletype columns")
+        .clicked()
+    {
+        if let Err(e) = crate::textview::open(title, issued, text) {
+            log::warn!("reader failed: {e}");
+        }
     }
 }
 
@@ -70,6 +86,8 @@ pub(crate) fn csv_buttons(
     }
 }
 
+/// Accessible names for icon-only chrome.
+pub mod a11y;
 pub mod about_window;
 pub mod afd_window;
 pub mod tropical_window;
@@ -86,6 +104,7 @@ pub mod event_window;
 pub mod firstrun;
 pub mod forecast_window;
 pub mod glossary;
+pub mod help_hub;
 pub mod hodograph_window;
 pub mod layer_options;
 pub mod layer_window;
@@ -94,6 +113,8 @@ pub mod legend;
 /// Material 3 design tokens for the mobile chrome.
 pub mod m3;
 pub mod marker_popup;
+/// Easing and the reduced-motion brake.
+pub mod motion;
 pub mod marker_window;
 pub mod palette_editor;
 pub mod placefile_window;

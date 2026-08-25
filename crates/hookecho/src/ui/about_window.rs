@@ -20,18 +20,33 @@ pub enum UpdateState {
 }
 
 /// Draw the window. Returns false once the user closed it.
-pub fn show(ctx: &egui::Context, open: &mut bool, update: &UpdateState, accent: egui::Color32) {
-    crate::ui::phone_surface(ctx, egui::Window::new("About Hook Echo-WX"))
-        .open(open)
-        .default_size([380.0, 260.0])
-        .show(ctx, |ui| {
-            ui.label(
-                egui::RichText::new("Hook Echo-WX")
-                    .size(style::FONT_TITLE)
-                    .color(accent)
-                    .strong(),
-            );
-            ui.label(egui::RichText::new(format!("Version {VERSION}")).weak());
+pub fn show(
+    ctx: &egui::Context,
+    open: &mut bool,
+    update: &UpdateState,
+    accent: egui::Color32,
+    drawer: &mut crate::ui::drawer::Drawer,
+) {
+    let Some(window) = drawer.page(ctx, "About Hook Echo-WX", open, false, egui::Window::new("About Hook Echo-WX"))
+    else {
+        return;
+    };
+    let logo = crate::icon::texture(ctx, 128);
+    window.show(ctx, |ui| {
+            // The mark beside the name, which is the one place in the app the logo is looked at
+            // rather than glanced at in a taskbar.
+            ui.horizontal(|ui| {
+                ui.add(egui::Image::new(&logo).fit_to_exact_size(egui::vec2(64.0, 64.0)));
+                ui.vertical(|ui| {
+                    ui.label(
+                        egui::RichText::new("Hook Echo-WX")
+                            .size(style::FONT_TITLE)
+                            .color(accent)
+                            .strong(),
+                    );
+                    ui.label(egui::RichText::new(format!("Version {VERSION}")).weak());
+                });
+            });
             ui.add_space(8.0);
             ui.label("An advanced NEXRAD weather radar viewer. Free and MIT licensed.");
             ui.add_space(8.0);

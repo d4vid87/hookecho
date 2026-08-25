@@ -70,6 +70,7 @@ pub mod storage;
 /// The `--status` report; native only — it builds its own runtime.
 #[cfg(not(target_arch = "wasm32"))]
 pub mod status;
+pub mod textview;
 pub mod theme;
 pub mod tiles;
 pub mod timefmt;

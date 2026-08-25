@@ -6,6 +6,7 @@
 //! same axis.
 
 use super::*;
+use crate::ui::a11y::Named as _;
 
 impl HookEchoApp {
     pub(crate) fn scrubber(&mut self, ctx: &egui::Context) {
@@ -24,7 +25,9 @@ impl HookEchoApp {
             .unwrap_or_else(|| "no site".to_string());
         let age = self.views[self.active].volume.as_ref().map(|v| {
             let secs = (Utc::now() - v.time).num_seconds().max(0);
-            format!("({} ago)", humanize(secs))
+            // A separator, not brackets: this label is laid out from the right edge and butts
+            // straight up against the clock, which is laid out from the left.
+            format!("\u{b7} {} ago", humanize(secs))
         });
         let loading = self.views[self.active].loading;
         let mut go_head = false;
@@ -40,8 +43,18 @@ impl HookEchoApp {
         let mut loop_frames = self.settings.live_loop_frames;
         // Where the scrubber lands, for the tour's spotlight (same reason: no `self` in there).
         let mut scrub_rect = None;
-        // Wide enough for the track to be worth scrubbing, never so wide it spans a 4K map.
-        let width = (self.chrome_rect.width() - 160.0).clamp(420.0, 900.0);
+        // Wide enough for the track to be worth scrubbing, never so wide it spans a 4K map — and
+        // never wider than the screen, which on a phone the 420 pt floor would otherwise be.
+        let width = (self.chrome_rect.width() - 160.0)
+            .clamp(420.0, 900.0)
+            .min(self.chrome_rect.width() - 16.0);
+        // The phone's pill drops the two extras: the readouts fit a desktop row, not a 400 pt one,
+        // and rain arrival has its own chip lane.
+        let (dvr, rain) = if cfg!(target_os = "android") {
+            (0, None)
+        } else {
+            (dvr, rain)
+        };
         let live_window = self.views[self.active].timeline.live_window;
         egui::Area::new(egui::Id::new("scrubber"))
             .constrain_to(self.chrome_rect)
@@ -54,13 +67,17 @@ impl HookEchoApp {
                 ui.set_width(width);
                 let t = &mut self.views[self.active].timeline;
                 ui.horizontal(|ui| {
-                    ui.label(
-                        egui::RichText::new(&site)
-                            .size(crate::ui::style::FONT_BASE)
-                            .strong()
-                            .color(egui::Color32::from_gray(238)),
-                    );
-                    let btn = |ui: &mut egui::Ui, glyph: &str, on: bool| {
+                    // The phone says the site in its search pill; a second copy here is 60 pt of
+                    // a 400 pt row spent saying it twice, and the clock loses that argument.
+                    if !cfg!(target_os = "android") {
+                        ui.label(
+                            egui::RichText::new(&site)
+                                .size(crate::ui::style::FONT_BASE)
+                                .strong()
+                                .color(egui::Color32::from_gray(238)),
+                        );
+                    }
+                    let btn = |ui: &mut egui::Ui, glyph: &str, on: bool, name: &str| {
                         let fg = if on {
                             accent
                         } else {
@@ -72,16 +89,22 @@ impl HookEchoApp {
                                 .fill(egui::Color32::TRANSPARENT)
                                 .stroke(egui::Stroke::NONE),
                         )
+                        .named_toggle(name, on)
                         .clicked()
                     };
-                    if btn(ui, ph::SKIP_BACK, false) {
+                    if btn(ui, ph::SKIP_BACK, false, "Previous frame") {
                         t.step(-1);
                     }
                     let playing = t.playing;
-                    if btn(ui, if playing { ph::PAUSE } else { ph::PLAY }, playing) {
+                    if btn(
+                        ui,
+                        if playing { ph::PAUSE } else { ph::PLAY },
+                        playing,
+                        if playing { "Pause" } else { "Play" },
+                    ) {
                         t.toggle_play();
                     }
-                    if btn(ui, ph::SKIP_FORWARD, false) {
+                    if btn(ui, ph::SKIP_FORWARD, false, "Next frame") {
                         t.step(1);
                     }
                     // Live / archive badge: click to re-pin to the newest volume.
@@ -120,7 +143,7 @@ impl HookEchoApp {
                         .fill(col)
                         .corner_radius(9.0),
                     )
-                    .on_hover_text(hint);
+                    .named(hint);
                     if badge.clicked() {
                         go_head = true;
                     }
@@ -247,6 +270,10 @@ impl HookEchoApp {
                 });
             });
         self.settings.live_loop_frames = loop_frames;
+        if let Some(r) = scrub_rect {
+            // The scrubber swallows two-finger gestures on the phone like any other surface.
+            self.mobile_occlusion.push(r);
+        }
         self.tour_anchors.timeline = scrub_rect;
         if go_head {
             self.views[self.active].timeline.go_head();
@@ -364,9 +391,18 @@ fn track(
                 t.playhead = idx;
                 t.playing = false;
                 t.following = idx + 1 == observed;
+                // One detent per frame: the track has no ticks under a thumb that covers it, so
+                // the frames are felt instead.
+                crate::platform::haptic(crate::platform::Haptic::Tick);
             }
         }
     }
+    // The track is painted rather than built from widgets, so its accessibility node is empty
+    // unless we fill it in. Where the playhead sits is the whole of what it says.
+    let (at, of) = (t.playhead + 1, slots.max(1));
+    resp.widget_info(|| {
+        egui::WidgetInfo::slider(true, at as f64, format!("Timeline, frame {at} of {of}"))
+    });
     rect
 }
 

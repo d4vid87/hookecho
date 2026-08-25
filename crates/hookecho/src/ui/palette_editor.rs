@@ -30,6 +30,7 @@ impl PaletteEditor {
         ctx: &egui::Context,
         settings: &mut Settings,
         active: &crate::colormap::Palettes,
+        drawer: &mut crate::ui::drawer::Drawer,
     ) {
         if !self.open {
             return;
@@ -49,10 +50,18 @@ impl PaletteEditor {
         }
 
         let mut open = self.open;
-        crate::ui::phone_surface(ctx, egui::Window::new("Color-Table Editor"))
-            .open(&mut open)
-            .default_size([460.0, 520.0])
-            .show(ctx, |ui| {
+        let Some(window) = drawer.page_sized(
+            ctx,
+            "Color-Table Editor",
+            &mut open,
+            false,
+            460.0,
+            egui::Window::new("Color-Table Editor"),
+        ) else {
+            self.open = open;
+            return;
+        };
+        window.show(ctx, |ui| {
                 ui.horizontal(|ui| {
                     ui.label("Moment");
                     egui::ComboBox::from_id_salt("pal_moment")

@@ -25,14 +25,22 @@ pub fn show(
     xs: &CrossSection,
     tex: &egui::TextureHandle,
     moment: &mut wxdata::level2::Moment,
+    drawer: &mut crate::ui::drawer::Drawer,
 ) -> bool {
     use wxdata::level2::Moment;
     let mut open = true;
     let mut changed = false;
-    crate::ui::phone_surface(ctx, egui::Window::new("Cross-section"))
-        .open(&mut open)
-        .default_size([560.0, 300.0])
-        .show(ctx, |ui| {
+    let Some(window) = drawer.page_sized(
+        ctx,
+        "Cross-section",
+        &mut open,
+        false,
+        560.0,
+        egui::Window::new("Cross-section"),
+    ) else {
+        return open;
+    };
+    window.show(ctx, |ui| {
             ui.horizontal(|ui| {
                 ui.label(format!(
                     "Length {:.0} km · top {:.0} km",

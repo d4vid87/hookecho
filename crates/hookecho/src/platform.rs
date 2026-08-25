@@ -918,6 +918,141 @@ mod android_browser {
     }
 }
 
+/// A short, physical acknowledgement. What the phone does when the screen says nothing.
+#[derive(Clone, Copy)]
+pub enum Haptic {
+    /// A detent: one scrubber frame, one pane. The lightest thing the OS offers.
+    Tick,
+    /// A press was recognised as a long press, before anything appears.
+    Press,
+    /// A warning fired. The one buzz that should be felt through a pocket.
+    Alert,
+}
+
+/// Play `h` on the device. No-op off Android.
+///
+/// ponytail: no app-level "enable haptics" setting — `performHapticFeedback` already obeys the
+/// system's own touch-feedback switch, and a second toggle that can disagree with it is a support
+/// question, not a feature.
+pub fn haptic(h: Haptic) {
+    #[cfg(target_os = "android")]
+    {
+        // HapticFeedbackConstants: CLOCK_TICK, LONG_PRESS, CONFIRM.
+        let effect = match h {
+            Haptic::Tick => 4,
+            Haptic::Press => 0,
+            Haptic::Alert => 16,
+        };
+        let _ = android_haptics::play(effect);
+    }
+    #[cfg(not(target_os = "android"))]
+    let _ = h;
+}
+
+/// `decorView.performHapticFeedback(effect)` — the Android half of [`haptic`].
+#[cfg(target_os = "android")]
+mod android_haptics {
+    use jni::objects::{GlobalRef, JObject};
+    use std::sync::OnceLock;
+
+    /// The decor view, held for the life of the process. Resolving it costs four JNI calls, and a
+    /// scrubber drag asks for a tick every frame.
+    static VIEW: OnceLock<Option<GlobalRef>> = OnceLock::new();
+
+    fn view() -> Option<&'static GlobalRef> {
+        VIEW.get_or_init(|| resolve().ok().flatten()).as_ref()
+    }
+
+    fn resolve() -> jni::errors::Result<Option<GlobalRef>> {
+        let Some(app) = super::android::app() else {
+            return Ok(None);
+        };
+        let vm = unsafe { jni::JavaVM::from_raw(app.vm_as_ptr() as *mut jni::sys::JavaVM) }?;
+        let mut env = vm.attach_current_thread()?;
+        let activity = unsafe { JObject::from_raw(app.activity_as_ptr() as jni::sys::jobject) };
+        let window = env
+            .call_method(&activity, "getWindow", "()Landroid/view/Window;", &[])?
+            .l()?;
+        let decor = env
+            .call_method(&window, "getDecorView", "()Landroid/view/View;", &[])?
+            .l()?;
+        Ok(Some(env.new_global_ref(&decor)?))
+    }
+
+    pub(super) fn play(effect: i32) -> jni::errors::Result<()> {
+        let Some(view) = view() else {
+            return Ok(());
+        };
+        let Some(app) = super::android::app() else {
+            return Ok(());
+        };
+        let vm = unsafe { jni::JavaVM::from_raw(app.vm_as_ptr() as *mut jni::sys::JavaVM) }?;
+        let mut env = vm.attach_current_thread()?;
+        let res = env.call_method(
+            view.as_obj(),
+            "performHapticFeedback",
+            "(I)Z",
+            &[effect.into()],
+        );
+        if res.is_err() {
+            let _ = env.exception_clear();
+        }
+        res.map(|_| ())
+    }
+}
+
+/// Hand a typeset text product to the Kotlin `TextViewActivity`, which puts it in a WebView.
+///
+/// The document travels as a string extra rather than a file: it is generated fresh each time, it
+/// is inert (see [`crate::textview`]), and a `file://` extra would need a FileProvider and a grant
+/// to say the same thing.
+#[cfg(target_os = "android")]
+pub fn open_textview(title: &str, html: &str) -> Result<(), String> {
+    android_textview::open(title, html).map_err(|e| format!("could not open the reader: {e:?}"))
+}
+
+#[cfg(target_os = "android")]
+mod android_textview {
+    use jni::objects::JObject;
+
+    pub(super) fn open(title: &str, html: &str) -> jni::errors::Result<()> {
+        let Some(app) = super::android::app() else {
+            return Ok(());
+        };
+        let vm = unsafe { jni::JavaVM::from_raw(app.vm_as_ptr() as *mut jni::sys::JavaVM) }?;
+        let mut env = vm.attach_current_thread()?;
+        let activity = unsafe { JObject::from_raw(app.activity_as_ptr() as jni::sys::jobject) };
+        let intent = env.new_object("android/content/Intent", "()V", &[])?;
+        let class = env.new_string("zip.batman.hookecho.TextViewActivity")?;
+        env.call_method(
+            &intent,
+            "setClassName",
+            "(Landroid/content/Context;Ljava/lang/String;)Landroid/content/Intent;",
+            &[(&activity).into(), (&class).into()],
+        )?;
+        for (key, value) in [("title", title), ("html", html)] {
+            let key = env.new_string(key)?;
+            let value = env.new_string(value)?;
+            env.call_method(
+                &intent,
+                "putExtra",
+                "(Ljava/lang/String;Ljava/lang/String;)Landroid/content/Intent;",
+                &[(&key).into(), (&value).into()],
+            )?;
+        }
+        let res = env.call_method(
+            &activity,
+            "startActivity",
+            "(Landroid/content/Intent;)V",
+            &[(&intent).into()],
+        );
+        if res.is_err() {
+            let _ = env.exception_clear();
+        }
+        res.map(|_| ())
+    }
+}
+
 #[cfg(target_os = "android")]
 mod android_location {
     use jni::objects::JObject;

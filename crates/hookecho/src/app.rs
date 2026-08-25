@@ -1150,8 +1150,9 @@ pub(crate) enum AppWindow {
     Cappi,
     Volume3d,
     StormTable,
-    /// What the signatures on the map are called.
-    Glossary,
+    /// Shortcuts, vocabulary, the tour, and what changed — one searchable page.
+    #[serde(alias = "Glossary")]
+    Help,
     /// The user's own alert rules.
     AlertRules,
     /// Warning verification lab (IEM Cow): how the office's warnings scored on an event day.
@@ -1192,6 +1193,9 @@ pub(crate) enum PaletteAction {
     OpenInWindy,
     /// Copy a `hookecho://goto/…` link to this view (site, center, zoom, archive time).
     CopyViewLink,
+    /// Open Help at the glossary entry that explains a label's abbreviation. An index into
+    /// `ui::glossary::ENTRIES` rather than the term itself, so the action stays `Copy`.
+    Explain(usize),
     /// Snapshot the current pane layout as a new workspace.
     SaveWorkspace,
     /// Restore the saved workspace at this index (an index, not the workspace itself, so the enum
@@ -1945,7 +1949,7 @@ pub struct HookEchoApp {
     // ponytail: one at a time; a Vec of players when someone wants a wall of streams.
     video_player: Option<ui::video_window::VideoPlayer>,
     cells_window: ui::cells_window::CellsWindow,
-    glossary: ui::glossary::Glossary,
+    help_hub: ui::help_hub::HelpHub,
     rules_window: ui::rules_window::RulesWindow,
     /// The one slide-over surface every browsable tool page renders into.
     drawer: ui::drawer::Drawer,
@@ -1966,7 +1970,6 @@ pub struct HookEchoApp {
     /// Newest pane error and the time it appeared, for the auto-hiding bottom-center chip.
     error_chip: Option<(String, f64)>,
     /// Search text in the mobile navigation drawer's registry list.
-    mobile_drawer_query: String,
     /// Forecast hour each HRRR-backed field layer was last fetched for, so scrubbing the tail
     /// refetches instead of showing a stale hour until the cadence expires.
     hrrr_layer_hour: std::collections::HashMap<crate::render::FieldLayer, u8>,
@@ -2242,15 +2245,13 @@ pub struct HookEchoApp {
     pf_icon_tex: std::collections::HashMap<String, Option<egui::TextureHandle>>,
     pf_icon_rx: Receiver<(String, egui::ColorImage)>,
     pf_icon_tx: Sender<(String, egui::ColorImage)>,
-    /// Android only: which slide-up sheet the mobile chrome is showing (see `app::mobile`).
-    mobile_sheet: mobile::MobileSheet,
     /// Android: hide all floating chrome to view the whole radar (toggled by the eye button).
     mobile_chrome_hidden: bool,
-    /// Android: how far open the persistent bottom sheet is.
-    mobile_snap: mobile::sheet::SheetSnap,
-    /// Android: the sheet's live height while a finger is dragging it (`None` = at/easing to a
-    /// snap).
-    mobile_sheet_drag: Option<f32>,
+    /// Touch: when and where the last tap landed, so a drag that starts right on top of it is
+    /// read as the second half of a double-tap-drag zoom rather than a pan.
+    last_tap: Option<(f64, egui::Pos2)>,
+    /// Touch: the anchor of a double-tap-drag zoom in progress (`None` = a drag pans).
+    tap_zoom: Option<egui::Pos2>,
     /// Android: rects the mobile chrome covers this frame. Two-finger gestures are read straight
     /// off the raw input, which has no idea egui drew a sheet over the map, so the pane input
     /// block checks the gesture center against these.
@@ -2838,7 +2839,7 @@ impl HookEchoApp {
             pending_spotter: None,
             video_player: None,
             cells_window: Default::default(),
-            glossary: Default::default(),
+            help_hub: Default::default(),
             rules_window: Default::default(),
             drawer: Default::default(),
             popovers: Default::default(),
@@ -2849,7 +2850,6 @@ impl HookEchoApp {
             follow_notice: None,
             warning_popup: None,
             error_chip: None,
-            mobile_drawer_query: String::new(),
             hrrr_layer_hour: std::collections::HashMap::new(),
             storm_cells: Vec::new(),
             ui_scale_applied: -1.0,
@@ -3008,10 +3008,9 @@ impl HookEchoApp {
             pf_icon_tex: std::collections::HashMap::new(),
             pf_icon_rx,
             pf_icon_tx,
-            mobile_sheet: mobile::MobileSheet::None,
             mobile_chrome_hidden: false,
-            mobile_snap: Default::default(),
-            mobile_sheet_drag: None,
+            last_tap: None,
+            tap_zoom: None,
             mobile_occlusion: Vec::new(),
             last_gesture_end: None,
             show_spotters: false,
@@ -3928,6 +3927,7 @@ impl HookEchoApp {
             return;
         }
         crate::audio::play(sound, self.settings.alert_volume);
+        crate::platform::haptic(crate::platform::Haptic::Alert);
     }
 
     /// A sound quiet hours does not silence: the escalated warning tiers and the two detections
@@ -3938,6 +3938,7 @@ impl HookEchoApp {
             return;
         }
         crate::audio::play(sound, self.settings.alert_volume);
+        crate::platform::haptic(crate::platform::Haptic::Alert);
     }
 
     /// Everywhere the proximity alerts watch: the saved markers, plus your own live position when
@@ -6973,7 +6974,15 @@ impl HookEchoApp {
                     t
                 }
             }
-            PaletteAction::SetPanes(n) => self.set_pane_count(n),
+            PaletteAction::SetPanes(n) => {
+                self.set_pane_count(n);
+                if n > 1 {
+                    self.hint(
+                        "panes",
+                        "Each pane keeps its own radar, product and tilt \u{2014}                          turn on Link pane cameras to pan them together",
+                    );
+                }
+            }
             PaletteAction::AllTilts => self.apply_all_tilts(),
             PaletteAction::CycleBasemap => {
                 let (mb, mt) = (
@@ -6988,6 +6997,7 @@ impl HookEchoApp {
                 self.set_basemap(next);
             }
             PaletteAction::ToggleMute => self.apply_action(BindableAction::ToggleMute, ctx),
+            PaletteAction::Explain(i) => self.help_hub.explain(i),
             PaletteAction::TogglePanel => self.panel_open = !self.panel_open,
             PaletteAction::Reload => self.trigger_reload(ctx),
             PaletteAction::InstantReplay => self.instant_replay(),
@@ -7086,7 +7096,7 @@ impl HookEchoApp {
                     self.cappi_key = None; // force a re-slice on open
                 }
                 W::StormTable => self.cells_window.toggle(),
-                W::Glossary => self.glossary.toggle(),
+                W::Help => self.help_hub.toggle(),
                 W::AlertRules => self.rules_window.toggle(),
                 W::Verify => self.open_verify(),
                 W::Volume3d => self.build_volume3d(),
@@ -9672,8 +9682,37 @@ impl HookEchoApp {
         } else if response.dragged() && quiet {
             self.active = idx;
             let d = response.drag_delta();
-            self.views[idx].camera.pan_pixels(d.x, d.y);
-            self.follow_cell = None; // a manual pan takes over the camera
+            match self.tap_zoom {
+                // Double-tap-drag: the map zoom every phone map has, and the only one you can do
+                // one-handed. Drag up to zoom in, anchored on the point that was tapped, so the
+                // thing you double-tapped is the thing that stays put.
+                Some(anchor) => {
+                    let cursor = (anchor.x - prect.left(), anchor.y - prect.top());
+                    self.views[idx]
+                        .camera
+                        .zoom_at(-d.y as f64 * 0.01, cursor, vp);
+                }
+                None => {
+                    self.views[idx].camera.pan_pixels(d.x, d.y);
+                    self.follow_cell = None; // a manual pan takes over the camera
+                }
+            }
+        }
+        if cfg!(target_os = "android") {
+            if response.drag_started() {
+                // Within a third of a second of the last tap and within a thumb's width of it:
+                // this is the second tap, still down. Anything else is an ordinary drag.
+                self.tap_zoom = response.interact_pointer_pos().filter(|p| {
+                    self.last_tap.is_some_and(|(t, at)| {
+                        ui.input(|i| i.time) - t < 0.35 && at.distance(*p) < 44.0
+                    })
+                });
+            }
+            if response.drag_stopped() {
+                self.tap_zoom = None;
+                // One zoom per double tap: the next one has to be armed by a fresh tap.
+                self.last_tap = None;
+            }
         }
         // Wheel, trackpad, and pinch all land here. `zoom_delta` is a scale factor carrying the
         // macOS/precision-touchpad pinch gesture (and ctrl+wheel, which egui folds into the same
@@ -9751,9 +9790,26 @@ impl HookEchoApp {
                 }
             }
         }
-        if response.clicked() && quiet {
+        // Long-press inspects, whatever tool is armed. A phone has no right-click and no hover,
+        // and arming Interrogate first to ask "what is that" is a step nobody discovers — so the
+        // press that means "tell me about this" is the press people already try.
+        let long_press = cfg!(target_os = "android") && response.long_touched();
+        if long_press {
+            // Before anything is drawn: the buzz is what says the press was heard.
+            crate::platform::haptic(crate::platform::Haptic::Press);
+        }
+        if (response.clicked() || long_press) && quiet {
             self.active = idx;
+            // What this press means. A long press is always an interrogation; anything else is
+            // whatever the toolbar says.
+            let tool = if long_press {
+                MapTool::Interrogate
+            } else {
+                self.tool
+            };
             if let Some(pos) = response.interact_pointer_pos() {
+                // Remember the tap for the double-tap-drag zoom below.
+                self.last_tap = Some((ui.input(|i| i.time), pos));
                 let cam = self.views[idx].camera;
                 let px = (pos.x - prect.left(), pos.y - prect.top());
                 let w = cam.screen_to_world(px, vp);
@@ -9761,7 +9817,7 @@ impl HookEchoApp {
                 // Your own markers win over everything else on the map: you put them at a place you
                 // chose, so a tap there means that pin, not whatever the radar drew underneath.
                 // Nearest wins, so clustered markers stay individually reachable.
-                let marker_hit = matches!(self.tool, MapTool::Interrogate | MapTool::Marker)
+                let marker_hit = matches!(tool, MapTool::Interrogate | MapTool::Marker)
                     .then(|| {
                         self.settings
                             .markers
@@ -9780,7 +9836,7 @@ impl HookEchoApp {
                     })
                     .flatten();
                 // A chase partner's dot, if they published a stream with their position.
-                let peer_hit = (marker_hit.is_none() && self.tool == MapTool::Interrogate)
+                let peer_hit = (marker_hit.is_none() && tool == MapTool::Interrogate)
                     .then(|| {
                         self.peers
                             .values()
@@ -9798,7 +9854,7 @@ impl HookEchoApp {
                 // A watch zone under the click, when nothing more specific is there.
                 let zone_hit = (marker_hit.is_none()
                     && peer_hit.is_none()
-                    && self.tool == MapTool::Interrogate)
+                    && tool == MapTool::Interrogate)
                     .then(|| {
                         self.settings
                             .alert_polygons
@@ -9809,14 +9865,14 @@ impl HookEchoApp {
                 // Interrogate + a click on a radar-site ring switches radars (storm features win,
                 // handled inside try_pick_site). Consumes the click so no popup opens underneath.
                 let picked_site = marker_hit.is_none()
-                    && self.tool == MapTool::Interrogate
+                    && tool == MapTool::Interrogate
                     && self.show_radar_sites
                     && self.try_pick_site(idx, pos, cam, prect, vp);
                 // A camera site under an interrogate click wins over everything below it: the
                 // markers are sparse, so a tap on one is never ambiguous.
                 let cam_site = (marker_hit.is_none()
                     && !picked_site
-                    && self.tool == MapTool::Interrogate
+                    && tool == MapTool::Interrogate
                     && self.show_webcams)
                     .then(|| {
                         self.webcams
@@ -9835,7 +9891,7 @@ impl HookEchoApp {
                 // both sit on one airport, the card carries the camera and the telemetry.
                 let station_hit = (marker_hit.is_none()
                     && !picked_site
-                    && self.tool == MapTool::Interrogate
+                    && tool == MapTool::Interrogate
                     && self.show_stations)
                     .then(|| {
                         let to_screen = |lon: f64, lat: f64| {
@@ -9855,7 +9911,7 @@ impl HookEchoApp {
                 let dat_hit = (marker_hit.is_none()
                     && !picked_site
                     && cam_site.is_none()
-                    && self.tool == MapTool::Interrogate
+                    && tool == MapTool::Interrogate
                     && self.show_dat)
                     .then(|| {
                         self.dat_points
@@ -9877,7 +9933,7 @@ impl HookEchoApp {
                     self.stations.open_card(ob, &rt, &http, ctx);
                     return;
                 }
-                match self.tool {
+                match tool {
                     // Also catches the drop tool: a second marker within a finger's width of an
                     // existing one is never what someone meant, and this makes a stray drop undoable.
                     _ if marker_hit.is_some() => {
@@ -13314,6 +13370,7 @@ impl HookEchoApp {
             .map(|vol| crate::timefmt::fmt_date_clock(vol.time, self.active_tz()))
             .unwrap_or_default();
         let accent = crate::theme::accent(self.settings.theme);
+        let logo = crate::icon::texture(ctx, 64);
         egui::Area::new(egui::Id::new("share_card"))
             .order(egui::Order::Foreground)
             .constrain_to(self.chrome_rect)
@@ -13336,6 +13393,11 @@ impl HookEchoApp {
                             egui::RichText::new(line)
                                 .size(crate::ui::style::FONT_BASE)
                                 .color(egui::Color32::from_gray(238)),
+                        );
+                        // The mark rides with the caption: a shared loop travels without the app
+                        // around it, and the wordmark alone is not what anyone recognises.
+                        ui.add(
+                            egui::Image::new(&logo).fit_to_exact_size(egui::vec2(16.0, 16.0)),
                         );
                         ui.label(
                             egui::RichText::new("Hook Echo-WX · data: NOAA/NWS")
@@ -14698,31 +14760,46 @@ impl eframe::App for HookEchoApp {
         let bare = self.obs_mode;
 
         self.chrome_rect = root.available_rect_before_wrap();
+        // Before any chrome: everything below asks `motion::reduced()`, and the answer has to be
+        // the same for every surface in a frame.
+        ui::motion::frame(ctx, self.settings.reduce_motion);
 
         // Chrome: touch-first on Android (top chips + bottom sheet + docked toolbar), desktop
         // otherwise (the floating map-first chrome below). Both funnel into the same `UiActions`
         // handling. The occlusion rects are rebuilt from scratch every frame; a stale rect would
         // keep swallowing gestures over a sheet that closed.
         self.mobile_occlusion.clear();
-        let mut actions = ui::layer_options::UiActions::default();
-        if cfg!(target_os = "android") && !bare {
-            actions = self.mobile_chrome(root, ctx);
-        }
-        self.apply_ui_actions(actions, ctx);
-
-        // Floating map-first chrome (desktop): a hamburger, an alert bell, the two bottom pills.
-        // Everything else is one drawer behind the hamburger.
-        if !cfg!(target_os = "android") && !bare {
-            // First: its drag strip covers the top edge, and everything drawn after it takes
+        if !bare {
+            // The phone draws its own top strips and back wiring first, and can ask for the rest
+            // to be skipped entirely (the hide-all-chrome eye). Desktop draws the window frame
+            // first instead: its drag strip covers the top edge, and everything after it takes
             // back the clicks that land on an actual control.
-            self.window_frame(ctx);
-            self.search_pill(ctx);
-            self.control_column(ctx);
-            self.scrubber(ctx);
-            self.panel(ctx);
-            self.basemap_panel(ctx);
-            self.info_chip(ctx);
-            self.error_chip(ctx);
+            let chrome = if cfg!(target_os = "android") {
+                self.mobile_chrome(ctx)
+            } else {
+                self.window_frame(ctx);
+                true
+            };
+            if chrome {
+                self.search_pill(ctx);
+                self.control_column(ctx);
+                self.scrubber(ctx);
+                self.pane_strip(ctx);
+                self.panel(ctx);
+                self.basemap_panel(ctx);
+                self.info_chip(ctx);
+                self.error_chip(ctx);
+            }
+        }
+
+        // The one decoration with no job. Costs nothing after the first second and a half, and
+        // never runs at all under OBS — a capture is not a place for a flourish.
+        if !bare {
+            ui::motion::intro(
+                ctx,
+                self.chrome_rect,
+                crate::theme::accent(self.settings.theme),
+            );
         }
 
         // Over everything, and only while a capture is pending.
@@ -14758,7 +14835,7 @@ impl eframe::App for HookEchoApp {
         if self.about_open {
             let accent = crate::theme::accent(self.settings.theme);
             let mut open = self.about_open;
-            ui::about_window::show(ctx, &mut open, &self.update_state, accent);
+            ui::about_window::show(ctx, &mut open, &self.update_state, accent, &mut self.drawer);
             self.about_open = open;
         }
 
@@ -14802,6 +14879,7 @@ impl eframe::App for HookEchoApp {
                 dialog,
                 &mut self.views[self.active],
                 &mut self.settings,
+                &mut self.drawer,
             );
             if !keep {
                 self.site_dialog = None;
@@ -14853,7 +14931,7 @@ impl eframe::App for HookEchoApp {
             })
             .collect();
         self.placefile_window
-            .show(ctx, &mut self.settings, &pf_status);
+            .show(ctx, &mut self.settings, &pf_status, &mut self.drawer);
         // Names come from the action registry, so a layer reads the same here as in the layers
         // panel — the enum's Debug spelling ("Mrms") is not a label.
         let names: std::collections::HashMap<crate::render::FieldLayer, String> =
@@ -14882,6 +14960,7 @@ impl eframe::App for HookEchoApp {
             &mut self.layer_window_open,
             &mut self.settings,
             &active_fields,
+            &mut self.drawer,
         ) {
             self.overlay_gen += 1; // paint order / opacity changed — re-tessellate
         }
@@ -14942,7 +15021,7 @@ impl eframe::App for HookEchoApp {
         }
         let query = self
             .marker_window
-            .show(ctx, &mut self.settings, &self.marker_icon_tex);
+            .show(ctx, &mut self.settings, &self.marker_icon_tex, &mut self.drawer);
         // The map popup indexes into the same list: a delete above it leaves it describing the
         // wrong marker, which is the one way this UI can lie about which place you are editing.
         if let (Some(gone), Some(open)) = (self.marker_window.removed, self.marker_popup) {
@@ -14979,7 +15058,7 @@ impl eframe::App for HookEchoApp {
             }
         }
         self.palette_editor
-            .show(ctx, &mut self.settings, &self.palettes);
+            .show(ctx, &mut self.settings, &self.palettes, &mut self.drawer);
         // Storm digest: poll a pending Claude result, then render + handle Generate.
         if let Some(rx) = &self.digest_rx {
             if let Ok(res) = rx.try_recv() {
@@ -14994,7 +15073,7 @@ impl eframe::App for HookEchoApp {
                 }
             }
         }
-        if let Some(ui::digest_window::DigestAction::Generate) = self.digest_window.show(ctx) {
+        if let Some(ui::digest_window::DigestAction::Generate) = self.digest_window.show(ctx, &mut self.drawer) {
             self.generate_digest();
         }
         // Live station cards. Video keeps arriving between input events, so a playing card asks
@@ -15026,6 +15105,7 @@ impl eframe::App for HookEchoApp {
                 self.afd.as_ref(),
                 self.afd_busy,
                 self.afd_error.as_deref(),
+                &mut self.drawer,
             );
             if refresh {
                 self.fetch_afd();
@@ -15055,7 +15135,7 @@ impl eframe::App for HookEchoApp {
                 .map(|t| t.storms.clone())
                 .unwrap_or_default();
             if let Some((id, product)) =
-                ui::tropical_window::show(&mut self.tropical_window, ctx, &storms)
+                ui::tropical_window::show(&mut self.tropical_window, ctx, &storms, &mut self.drawer)
             {
                 self.fetch_tropical_text(&id, product);
             }
@@ -15082,7 +15162,8 @@ impl eframe::App for HookEchoApp {
                 }
             }
         }
-        self.sounding_window.show(ctx, self.active_tz());
+        let tz = self.active_tz();
+        self.sounding_window.show(ctx, tz, &mut self.drawer);
         if std::mem::take(&mut self.sounding_window.refetch) {
             self.refetch_sounding();
         }
@@ -15099,7 +15180,8 @@ impl eframe::App for HookEchoApp {
                 }
             }
         }
-        let vact = self.verify_window.show(ctx, self.active_tz());
+        let tz = self.active_tz();
+        let vact = self.verify_window.show(ctx, tz, &mut self.drawer);
         if vact.refresh {
             self.verify_window.data = None;
             self.fetch_verify();
@@ -15227,6 +15309,11 @@ impl eframe::App for HookEchoApp {
         }
         // Storm attributes table: clicking a row flies there and opens that cell's popup, the
         // same destination as clicking the dot on the map.
+        let entries = self.palette_entries();
+        let bindings = crate::hotkeys::active(&self.settings).into_owned();
+        if self.help_hub.show(ctx, &mut self.drawer, &bindings, &entries) {
+            self.tour.start();
+        }
         let cells: &[Cell] = if self.archive_bucket().is_some() {
             &[]
         } else {
@@ -15249,7 +15336,6 @@ impl eframe::App for HookEchoApp {
                 .collect(),
             _ => std::collections::HashSet::new(),
         };
-        ui::glossary::show(&mut self.glossary, ctx);
         if ui::rules_window::show(
             &mut self.rules_window,
             ctx,
@@ -15265,6 +15351,7 @@ impl eframe::App for HookEchoApp {
             &zdr_cells,
             &self.cell_trends,
             crate::theme::accent(self.settings.theme),
+            &mut self.drawer,
         ) {
             if let Some(c) = self
                 .active_storm_cells()
@@ -15332,7 +15419,7 @@ impl eframe::App for HookEchoApp {
             self.open_spotter(&sp);
         }
         if let Some(p) = &mut self.video_player {
-            if !p.show(ctx) {
+            if !p.show(ctx, &mut self.drawer) {
                 self.video_player = None; // dropping the player stops the download
             }
         }
@@ -15345,8 +15432,9 @@ impl eframe::App for HookEchoApp {
                 self.warning_popup = None;
             }
         }
+        let tz = self.active_tz();
         if self.show_sensors
-            && !ui::sensor_window::show(ctx, self.sensor_data.as_ref(), self.active_tz())
+            && !ui::sensor_window::show(ctx, self.sensor_data.as_ref(), tz, &mut self.drawer)
         {
             self.show_sensors = false;
         }
@@ -15358,13 +15446,14 @@ impl eframe::App for HookEchoApp {
                 self.hodo_history.make_contiguous(),
                 &mut self.hodo_tab,
                 self.settings.tz_for(self.hodo_site.as_deref()),
+                &mut self.drawer,
             )
         {
             self.show_hodo = false;
         }
         if let (Some(xs), Some(tex)) = (&self.xsection, &self.xsection_tex) {
             let mut moment = self.xsection_moment;
-            let open = ui::xsection_window::show(ctx, xs, tex, &mut moment);
+            let open = ui::xsection_window::show(ctx, xs, tex, &mut moment, &mut self.drawer);
             if !open {
                 self.xsection = None;
                 self.xsection_tex = None;
@@ -15386,14 +15475,17 @@ impl eframe::App for HookEchoApp {
                 VOL3D_N as u32,
                 VOL3D_NZ as u32,
                 self.vol3d_range,
+                &mut self.drawer,
             );
             self.show_3d = open;
         }
         if self.show_cappi {
             self.update_cappi(ctx);
             let open = match self.cappi_tex.clone() {
-                Some(tex) => ui::cappi_window::show(ctx, &tex, &mut self.cappi_alt_km, 300.0),
-                None => ui::cappi_window::show_empty(ctx),
+                Some(tex) => {
+                    ui::cappi_window::show(ctx, &tex, &mut self.cappi_alt_km, 300.0, &mut self.drawer)
+                }
+                None => ui::cappi_window::show_empty(ctx, &mut self.drawer),
             };
             self.show_cappi = open;
         }
@@ -15435,7 +15527,15 @@ impl eframe::App for HookEchoApp {
         egui::CentralPanel::default().show(root, |ui| {
             let full = ui.available_rect_before_wrap();
             let n = self.views.len();
-            let rects = pane_rects(full, n);
+            // A phone shows one pane at a time. Two 400x400 pt panes stacked is two views of
+            // nothing; the pane strip above the scrubber is how you get to the others.
+            // Only where one pane is all that fits: a tablet shows the split.
+            let solo = cfg!(target_os = "android") && n > 1 && chrome::compact(ctx);
+            let rects = if solo {
+                vec![full; n]
+            } else {
+                pane_rects(full, n)
+            };
 
             // If cameras are linked, mirror the active pane's camera to the others.
             if self.link_cameras {
@@ -15519,8 +15619,14 @@ impl eframe::App for HookEchoApp {
                 .get(self.active)
                 .map_or((full.width(), full.height()), |r| (r.width(), r.height()));
 
+            // Which pane carries the once-per-frame work (tile-cache clears, the shared label
+            // pass): the first one actually drawn, which under `solo` is the active one.
+            let head = if solo { self.active.min(n - 1) } else { 0 };
             for (i, prect) in rects.iter().enumerate() {
-                let first = i == 0;
+                if solo && i != head {
+                    continue;
+                }
+                let first = i == head;
                 self.render_pane(
                     ui,
                     ctx,
@@ -15529,13 +15635,14 @@ impl eframe::App for HookEchoApp {
                     clear_tiles && first,
                     clear_vector && first,
                     first,
-                    i + 1 == n,
+                    solo || i + 1 == n,
                     &placefile_labels,
                 );
             }
 
-            // Pane borders; the active pane gets an accent outline.
-            if n > 1 {
+            // Pane borders; the active pane gets an accent outline. Nothing to outline under
+            // `solo` — there is one pane on screen and the strip says which.
+            if n > 1 && !solo {
                 for (i, prect) in rects.iter().enumerate() {
                     let (w, col) = if i == self.active {
                         (2.0, crate::theme::accent(self.settings.theme))

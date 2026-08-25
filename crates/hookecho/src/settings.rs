@@ -117,6 +117,10 @@ pub struct Settings {
     pub density: Density,
     /// User accent override as RGB. `None` keeps the theme's own accent.
     pub accent: Option<[u8; 3]>,
+    /// Hold every animation at its endpoint. The app also sets this for itself when frames get
+    /// slow; this flag is only the user's half of that.
+    #[serde(default)]
+    pub reduce_motion: bool,
     /// Starred radar sites shown in the toolbox presets dropdown.
     pub presets: Vec<String>,
     /// Per-moment color-table override: moment short name (`REF`, `VEL`, …) -> `.pal` path.
@@ -315,6 +319,11 @@ pub struct Settings {
     /// Sound for the rain-arrival alert.
     #[serde(default)]
     pub rain_sound: AlertSound,
+    /// One-time hints already shown, by id. A hint is a sentence somebody needs once: showing it
+    /// twice is nagging, and the only way to know is to remember. Ids, not text, so rewording a
+    /// hint doesn't bring it back for everyone who already read it.
+    #[serde(default)]
+    pub hints_seen: Vec<String>,
     /// First-run setup completed (or dismissed). `false` shows the first-run card at startup.
     #[serde(default)]
     pub setup_done: bool,
@@ -971,6 +980,7 @@ impl Default for Settings {
             theme: Theme::Dark,
             density: Density::default(),
             accent: None,
+            reduce_motion: false,
             presets: Vec::new(),
             palettes: BTreeMap::new(),
             velocity_unit: VelocityUnit::default(),
@@ -1027,6 +1037,7 @@ impl Default for Settings {
             speak_position: false,
             rain_alerts: false,
             rain_sound: AlertSound::default(),
+            hints_seen: Vec::new(),
             setup_done: false,
             desktop_notify: false,
             chase_log: false,
@@ -1377,6 +1388,8 @@ mod tests {
     #[test]
     fn roundtrips() {
         let s = Settings {
+            hints_seen: Vec::new(),
+            reduce_motion: true,
             precip_tint: false,
             custom_tile_url: String::new(),
             custom_tile_max_z: default_custom_tile_max_z(),

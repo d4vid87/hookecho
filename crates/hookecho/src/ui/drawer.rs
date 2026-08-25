@@ -13,6 +13,7 @@
 //! scrolling body and the frame — the drawer only takes over the chrome and the ordering. If
 //! pages ever need transitions of their own, that's the seam to cut at.
 
+use crate::ui::a11y::Named as _;
 use egui::{pos2, vec2, Rect};
 
 /// The drawer's geometry on a desktop-sized screen. On a phone it takes the whole content rect,
@@ -32,6 +33,9 @@ pub struct Drawer {
     seen: Vec<String>,
     /// Which frame `seen` belongs to, so the stack can prune itself without the app calling us.
     frame: u64,
+    /// App time the drawer last went from empty to showing something, so the slide-in animates
+    /// from where the drawer actually came from rather than from wherever egui last latched it.
+    opened_at: f64,
     /// Is the top page's quick-settings row expanded? Per-page state would outlive the page it
     /// belongs to; a single flag reset on every page change is the honest scope.
     pub gear: bool,
@@ -64,6 +68,21 @@ impl Drawer {
         gear: bool,
         w: egui::Window<'a>,
     ) -> Option<egui::Window<'a>> {
+        self.page_sized(ctx, title, open, gear, WIDTH, w)
+    }
+
+    /// Same, for a page that carries a drawing rather than a list — a hodograph, a cross-section,
+    /// a 3D volume. `width` is what the old floating window asked for; the drawer still clamps it
+    /// to the screen, and the phone still takes the whole thing.
+    pub fn page_sized<'a>(
+        &mut self,
+        ctx: &egui::Context,
+        title: &str,
+        open: &mut bool,
+        gear: bool,
+        width: f32,
+        w: egui::Window<'a>,
+    ) -> Option<egui::Window<'a>> {
         // A page that isn't open doesn't get a slot: several callers reach `page` before their
         // own `open` check, and a closed page silently holding the top of the stack would hide
         // the one the user actually asked for.
@@ -78,6 +97,9 @@ impl Drawer {
             self.frame = frame;
         }
         self.seen.push(title.to_string());
+        if self.stack.is_empty() {
+            self.opened_at = ctx.input(|i| i.time);
+        }
         if !self.stack.iter().any(|t| t == title) {
             self.stack.push(title.to_string());
             self.gear = false;
@@ -86,7 +108,8 @@ impl Drawer {
             return None;
         }
 
-        let (head, body) = rects(ctx);
+        let (head, body) = rects(ctx, width);
+        let (head, body) = self.slide(ctx, head, body);
         let depth = self.stack.len();
         let mut gear_on = self.gear;
         let mut close = false;
@@ -111,7 +134,7 @@ impl Drawer {
                                 .fill(egui::Color32::TRANSPARENT)
                                 .stroke(egui::Stroke::NONE),
                             )
-                            .on_hover_text(hint)
+                            .named(hint)
                             .clicked()
                         {
                             close = true;
@@ -134,7 +157,7 @@ impl Drawer {
                                             .fill(egui::Color32::TRANSPARENT)
                                             .stroke(egui::Stroke::NONE),
                                         )
-                                        .on_hover_text("Quick settings for this page")
+                                        .named_toggle("Quick settings for this page", gear_on)
                                         .clicked()
                                     {
                                         gear_on = !gear_on;
@@ -171,17 +194,33 @@ impl Drawer {
                 .frame(frame),
         )
     }
+
+    /// Walk the drawer in from the edge it lives on, overshooting a hair before it settles.
+    ///
+    /// ponytail: translation only — no fade, no scale. The drawer is opaque glass over a map, so
+    /// sliding is the only one of the three that reads at all, and it is the one that says where
+    /// the thing came from.
+    fn slide(&self, ctx: &egui::Context, head: Rect, body: Rect) -> (Rect, Rect) {
+        let dur = crate::ui::m3::DUR_MED as f64;
+        let t = (ctx.input(|i| i.time) - self.opened_at) / dur;
+        if crate::ui::motion::reduced() || t >= 1.0 {
+            return (head, body);
+        }
+        ctx.request_repaint();
+        let off = (1.0 - crate::ui::motion::ease_out_back(t as f32)) * (head.width() + X);
+        (head.translate(vec2(-off, 0.0)), body.translate(vec2(-off, 0.0)))
+    }
 }
 
 /// Header and body rectangles for the current screen.
-fn rects(ctx: &egui::Context) -> (Rect, Rect) {
+fn rects(ctx: &egui::Context, width: f32) -> (Rect, Rect) {
     let full = ctx.content_rect();
     let (x, w, top, bottom) = if cfg!(target_os = "android") {
         (full.left(), full.width(), full.top(), full.bottom())
     } else {
         (
             full.left() + X,
-            WIDTH.min(full.width() - 2.0 * X),
+            width.min(full.width() - 2.0 * X),
             full.top() + TOP,
             (full.bottom() - BOTTOM_CLEARANCE).max(full.top() + TOP + 200.0),
         )

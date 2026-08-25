@@ -12,12 +12,14 @@ pub fn show(
     ctx: &egui::Context,
     data: Option<&Result<StationObs, String>>,
     tz: Option<wxdata::tz::Tz>,
+    drawer: &mut crate::ui::drawer::Drawer,
 ) -> bool {
     let mut open = true;
-    crate::ui::phone_surface(ctx, egui::Window::new("Sensors"))
-        .open(&mut open)
-        .default_size([340.0, 520.0])
-        .show(ctx, |ui| match data {
+    let Some(window) = drawer.page(ctx, "Sensors", &mut open, false, egui::Window::new("Sensors"))
+    else {
+        return open;
+    };
+    window.show(ctx, |ui| match data {
             None => {
                 ui.weak("Loading nearest station…");
             }

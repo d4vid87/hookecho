@@ -15,16 +15,27 @@ pub enum DigestAction {
 }
 
 impl DigestWindow {
-    pub fn show(&mut self, ctx: &egui::Context) -> Option<DigestAction> {
+    pub fn show(
+        &mut self,
+        ctx: &egui::Context,
+        drawer: &mut crate::ui::drawer::Drawer,
+    ) -> Option<DigestAction> {
         if !self.open {
             return None;
         }
         let mut open = self.open;
         let mut action = None;
-        crate::ui::phone_surface(ctx, egui::Window::new("Storm Digest"))
-            .open(&mut open)
-            .default_size([420.0, 240.0])
-            .show(ctx, |ui| {
+        let Some(window) = drawer.page(
+            ctx,
+            "Storm Digest",
+            &mut open,
+            false,
+            egui::Window::new("Storm Digest"),
+        ) else {
+            self.open = open;
+            return None;
+        };
+        window.show(ctx, |ui| {
                 ui.horizontal(|ui| {
                     if ui.add_enabled(!self.busy, egui::Button::new("↻ Generate")).clicked() {
                         action = Some(DigestAction::Generate);

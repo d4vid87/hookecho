@@ -26,12 +26,21 @@ impl PlacefileWindow {
         ctx: &egui::Context,
         settings: &mut Settings,
         status: &[PlacefileStatus],
+        drawer: &mut crate::ui::drawer::Drawer,
     ) {
         let mut open = self.open;
-        crate::ui::phone_surface(ctx, egui::Window::new("Placefile Manager"))
-            .open(&mut open)
-            .default_size([520.0, 320.0])
-            .show(ctx, |ui| {
+        let Some(window) = drawer.page_sized(
+            ctx,
+            "Placefile Manager",
+            &mut open,
+            false,
+            520.0,
+            egui::Window::new("Placefile Manager"),
+        ) else {
+            self.open = open;
+            return;
+        };
+        window.show(ctx, |ui| {
                 ui.label("GRLevelX placefiles (lines, polygons, text, icons at lat/lon).");
                 ui.add_space(4.0);
 

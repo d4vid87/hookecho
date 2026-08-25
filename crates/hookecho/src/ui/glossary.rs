@@ -4,15 +4,18 @@
 //! meteorologist would. That is the right vocabulary — but somebody who installed this to watch
 //! the storm over their own house has no way to look any of it up without leaving the app for a
 //! forum post of unknown vintage. Fifteen entries, searchable, no network.
+//!
+//! The entries are the data half only: [`crate::ui::help_hub`] renders them, alongside the
+//! shortcuts and the tour, so there is one place to search rather than three.
 
 /// One term: what it is called, and the two or three sentences that make it useful.
-struct Entry {
-    term: &'static str,
+pub(crate) struct Entry {
+    pub(crate) term: &'static str,
     /// What it is, in the plainest words that stay true.
-    body: &'static str,
+    pub(crate) body: &'static str,
 }
 
-const ENTRIES: &[Entry] = &[
+pub(crate) const ENTRIES: &[Entry] = &[
     Entry {
         term: "Hook echo",
         body: "The comma-shaped notch on the back-right of a supercell's reflectivity, where the \
@@ -110,60 +113,30 @@ const ENTRIES: &[Entry] = &[
     },
 ];
 
-#[derive(Default)]
-pub struct Glossary {
-    pub open: bool,
-    query: String,
-}
-
-impl Glossary {
-    pub fn toggle(&mut self) {
-        self.open = !self.open;
-    }
-}
-
-pub fn show(state: &mut Glossary, ctx: &egui::Context) {
-    if !state.open {
-        return;
-    }
-    let mut open = state.open;
-    let window = egui::Window::new("Glossary")
-        .open(&mut open)
-        .default_width(430.0)
-        .default_height(480.0)
-        .resizable(true);
-    crate::ui::phone_surface(ctx, window).show(ctx, |ui| {
-        ui.horizontal(|ui| {
-            ui.label("Find");
-            ui.text_edit_singleline(&mut state.query);
-            if !state.query.is_empty() && ui.button("✕").clicked() {
-                state.query.clear();
-            }
-        });
-        ui.separator();
-        let q = state.query.trim().to_ascii_lowercase();
-        // Search the bodies too: someone who only knows "the debris thing" should still land on
-        // TDS without knowing to type three letters.
-        let hits: Vec<&Entry> = ENTRIES
-            .iter()
-            .filter(|e| {
-                q.is_empty()
-                    || e.term.to_ascii_lowercase().contains(&q)
-                    || e.body.to_ascii_lowercase().contains(&q)
-            })
-            .collect();
-        egui::ScrollArea::vertical().show(ui, |ui| {
-            if hits.is_empty() {
-                ui.weak("Nothing matches that.");
-            }
-            for e in hits {
-                ui.label(egui::RichText::new(e.term).strong());
-                ui.label(e.body);
-                ui.add_space(8.0);
-            }
-        });
-    });
-    state.open = open;
+/// The glossary entry that explains `label`, if one does.
+///
+/// Matched on the abbreviation the plain-first labels keep in their parentheses — "Debris
+/// detection (TDS)" is exactly the case an ⓘ link exists for: the plain half says what it is for,
+/// the abbreviation is what everyone else calls it, and the entry is what it means. Matching on
+/// the abbreviation rather than a per-row table means a new registry row that names a known term
+/// gets its link for free.
+pub(crate) fn explains(label: &str) -> Option<usize> {
+    let up = label.to_uppercase();
+    ENTRIES.iter().position(|e| {
+        // Entry terms read "TDS — tornado debris signature"; the key is the head word, and it
+        // only counts as a hit when the label names it as a word of its own.
+        let key = e.term.split([' ', '\u{2014}']).next().unwrap_or("");
+        key.len() >= 3
+            && key.chars().all(|c| c.is_ascii_uppercase())
+            && up
+                .match_indices(key)
+                .any(|(i, _)| {
+                    let before = up[..i].chars().next_back();
+                    let after = up[i + key.len()..].chars().next();
+                    !before.is_some_and(|c| c.is_ascii_alphanumeric())
+                        && !after.is_some_and(|c| c.is_ascii_alphanumeric())
+                })
+    })
 }
 
 #[cfg(test)]
@@ -184,5 +157,21 @@ mod tests {
                 "missing {must}"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod link_tests {
+    use super::*;
+
+    #[test]
+    fn plain_first_labels_link_to_the_term_they_name() {
+        let i = explains("Debris detection (TDS)").expect("TDS is in the glossary");
+        assert!(ENTRIES[i].term.starts_with("TDS"));
+        assert!(explains("Hail spikes (TBSS)").is_some());
+        assert!(explains("Water aloft (VIL, derived)").is_some());
+        // A label that names no term, and one that only contains a term's letters inside a word.
+        assert_eq!(explains("Radar sites"), None);
+        assert_eq!(explains("TDSOMETHING"), None);
     }
 }

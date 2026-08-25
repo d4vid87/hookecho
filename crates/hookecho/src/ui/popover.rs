@@ -23,11 +23,13 @@ const KEEPOUT_TOP: f32 = 58.0;
 const KEEPOUT_RIGHT: f32 = 74.0;
 const KEEPOUT_BOTTOM: f32 = 96.0;
 const KEEPOUT_SIDE: f32 = 10.0;
+/// How far a card rises into place when it opens.
+const RISE: f32 = 12.0;
 
 #[derive(Default)]
 pub struct Popovers {
-    /// Where each open card was summoned from, keyed by the id its caller passes.
-    at: Vec<(String, Pos2)>,
+    /// Where each open card was summoned from, and when, keyed by the id its caller passes.
+    at: Vec<(String, Pos2, f64)>,
     /// Ids that drew this frame; anything else has closed and loses its anchor.
     seen: Vec<String>,
     frame: u64,
@@ -48,14 +50,15 @@ impl Popovers {
         }
         let frame = ctx.cumulative_pass_nr();
         if frame != self.frame {
-            self.at.retain(|(k, _)| self.seen.iter().any(|s| s == k));
+            self.at.retain(|(k, ..)| self.seen.iter().any(|s| s == k));
             self.seen.clear();
             self.frame = frame;
         }
         self.seen.push(id.to_string());
         let field = field(ctx);
-        let anchor = match self.at.iter().find(|(k, _)| k == id) {
-            Some((_, p)) => *p,
+        let now = ctx.input(|i| i.time);
+        let (anchor, born) = match self.at.iter().find(|(k, ..)| k == id) {
+            Some((_, p, t)) => (*p, *t),
             None => {
                 // No pointer at all (a card opened by a hotkey, or a touch that already lifted):
                 // the middle of the map is the least wrong place left.
@@ -63,9 +66,18 @@ impl Popovers {
                     .pointer_interact_pos()
                     .map(|p| p + egui::vec2(OFFSET, OFFSET))
                     .unwrap_or_else(|| field.center());
-                self.at.push((id.to_string(), p));
-                p
+                self.at.push((id.to_string(), p, now));
+                (p, now)
             }
+        };
+        // A card that appears at full size looks like it was already there; one that rises the
+        // last few pixels into place looks like it came from the click. Two frames of work.
+        let t = ((now - born) / crate::ui::m3::DUR_SHORT as f64) as f32;
+        let anchor = if crate::ui::motion::reduced() || t >= 1.0 {
+            anchor
+        } else {
+            ctx.request_repaint();
+            anchor + egui::vec2(0.0, (1.0 - crate::ui::motion::ease_out_cubic(t)) * RISE)
         };
         w.fixed_pos(anchor).constrain_to(field)
     }
