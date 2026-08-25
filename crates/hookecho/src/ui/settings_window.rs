@@ -75,6 +75,7 @@ impl SettingsWindow {
         palettes: &Palettes,
         sync: SyncView,
         entries: &[PaletteEntry],
+        drawer: &mut crate::ui::drawer::Drawer,
     ) -> Option<SyncAction> {
         let mut action = None;
         if self.open && !self.prev_open {
@@ -87,52 +88,57 @@ impl SettingsWindow {
         self.prev_open = self.open;
 
         let mut open = self.open;
-        crate::ui::phone_surface(ctx, egui::Window::new("Settings"))
-            .open(&mut open)
-            .default_size([460.0, 340.0])
-            .show(ctx, |ui| {
-                // Keep the whole window inside a phone screen; tabs wrap instead of clipping.
-                if cfg!(target_os = "android") {
-                    ui.set_max_width(ui.ctx().content_rect().width() - 28.0);
-                }
-                ui.horizontal_wrapped(|ui| {
-                    for (tab, label) in [
-                        (Tab::General, "General"),
-                        (Tab::Palettes, "Palettes"),
-                        (Tab::Units, "Units"),
-                        (Tab::Basemaps, "Basemaps"),
-                        (Tab::Alerts, "Alerts"),
-                        (Tab::Hotkeys, "Hotkeys"),
-                        (Tab::Sync, "Sync"),
-                        #[cfg(not(target_arch = "wasm32"))]
-                        (Tab::Storage, "Storage"),
-                    ] {
-                        // Chips on the phone: a `selectable_value` is a text-height target, and
-                        // seven of them wrapped across a 360pt screen is a game of darts.
-                        if cfg!(target_os = "android") {
-                            if crate::ui::m3::chip(ui, label, self.tab == tab).clicked() {
-                                self.tab = tab;
-                            }
-                        } else {
-                            ui.selectable_value(&mut self.tab, tab, label);
-                        }
-                    }
-                });
-                ui.separator();
-                match self.tab {
-                    Tab::General => {
-                        general_tab(ui, settings, &mut self.run_wizard, &mut self.run_tour)
-                    }
-                    Tab::Palettes => self.palettes_tab(ui, settings, palettes),
-                    Tab::Units => units_tab(ui, settings),
-                    Tab::Basemaps => basemaps_tab(ui, settings),
-                    Tab::Alerts => alerts_tab(ui, settings),
-                    Tab::Hotkeys => self.hotkeys_tab(ui, settings, entries),
-                    Tab::Sync => action = sync_tab(ui, settings, &sync),
+        let Some(window) = drawer.page(
+            ctx,
+            "Settings",
+            &mut open,
+            false,
+            egui::Window::new("Settings"),
+        ) else {
+            self.open = open;
+            return None;
+        };
+        window.show(ctx, |ui| {
+            // Keep the whole window inside a phone screen; tabs wrap instead of clipping.
+            if cfg!(target_os = "android") {
+                ui.set_max_width(ui.ctx().content_rect().width() - 28.0);
+            }
+            ui.horizontal_wrapped(|ui| {
+                for (tab, label) in [
+                    (Tab::General, "General"),
+                    (Tab::Palettes, "Palettes"),
+                    (Tab::Units, "Units"),
+                    (Tab::Basemaps, "Basemaps"),
+                    (Tab::Alerts, "Alerts"),
+                    (Tab::Hotkeys, "Hotkeys"),
+                    (Tab::Sync, "Sync"),
                     #[cfg(not(target_arch = "wasm32"))]
-                    Tab::Storage => self.storage_tab(ui, settings),
+                    (Tab::Storage, "Storage"),
+                ] {
+                    // Chips on the phone: a `selectable_value` is a text-height target, and
+                    // seven of them wrapped across a 360pt screen is a game of darts.
+                    if cfg!(target_os = "android") {
+                        if crate::ui::m3::chip(ui, label, self.tab == tab).clicked() {
+                            self.tab = tab;
+                        }
+                    } else {
+                        ui.selectable_value(&mut self.tab, tab, label);
+                    }
                 }
             });
+            ui.separator();
+            match self.tab {
+                Tab::General => general_tab(ui, settings, &mut self.run_wizard, &mut self.run_tour),
+                Tab::Palettes => self.palettes_tab(ui, settings, palettes),
+                Tab::Units => units_tab(ui, settings),
+                Tab::Basemaps => basemaps_tab(ui, settings),
+                Tab::Alerts => alerts_tab(ui, settings),
+                Tab::Hotkeys => self.hotkeys_tab(ui, settings, entries),
+                Tab::Sync => action = sync_tab(ui, settings, &sync),
+                #[cfg(not(target_arch = "wasm32"))]
+                Tab::Storage => self.storage_tab(ui, settings),
+            }
+        });
         self.capturing = self.rebinding.is_some() && open;
         if !open {
             self.rebinding = None;
@@ -377,9 +383,9 @@ impl SettingsWindow {
                     let p = e.path();
                     // File names, not stems: `.pal` and `.pal3` both load, and two tables can
                     // share a stem.
-                    if p.extension()
-                        .is_some_and(|x| x.eq_ignore_ascii_case("pal") || x.eq_ignore_ascii_case("pal3"))
-                    {
+                    if p.extension().is_some_and(|x| {
+                        x.eq_ignore_ascii_case("pal") || x.eq_ignore_ascii_case("pal3")
+                    }) {
                         if let Some(name) = p.file_name().and_then(|s| s.to_str()) {
                             self.pal_stems.push(name.to_string());
                         }
@@ -522,7 +528,9 @@ fn custom_tile_source(ui: &mut egui::Ui, settings: &mut Settings) {
     }
     ui.separator();
     ui.label("Custom tile source");
-    ui.weak("An XYZ template adds a \"Custom\" entry to the basemap list. Desktop and Android only.");
+    ui.weak(
+        "An XYZ template adds a \"Custom\" entry to the basemap list. Desktop and Android only.",
+    );
     ui.add_space(6.0);
     ui.horizontal(|ui| {
         ui.label("URL template");
@@ -544,7 +552,9 @@ fn custom_tile_source(ui: &mut egui::Ui, settings: &mut Settings) {
     ui.horizontal(|ui| {
         ui.label("Max zoom");
         ui.add(egui::DragValue::new(&mut settings.custom_tile_max_z).range(1..=22))
-            .on_hover_text("Deeper views stretch the deepest tile that loaded rather than blanking");
+            .on_hover_text(
+                "Deeper views stretch the deepest tile that loaded rather than blanking",
+            );
     });
     ui.horizontal(|ui| {
         ui.label("Attribution");
@@ -756,9 +766,8 @@ fn general_tab(
                 let mut on = settings.accent.is_some();
                 let theme_accent = crate::theme::accent(settings.theme);
                 if ui.checkbox(&mut on, "Custom").changed() {
-                    settings.accent = on.then(|| {
-                        [theme_accent.r(), theme_accent.g(), theme_accent.b()]
-                    });
+                    settings.accent =
+                        on.then(|| [theme_accent.r(), theme_accent.g(), theme_accent.b()]);
                 }
                 if let Some(rgb) = settings.accent.as_mut() {
                     ui.color_edit_button_srgb(rgb);
@@ -1218,7 +1227,10 @@ fn alert_health(ui: &mut egui::Ui) {
     });
     if !h.exact {
         ui.horizontal(|ui| {
-            ui.colored_label(egui::Color32::from_rgb(230, 160, 60), "\u{26a0} Inexact alarms");
+            ui.colored_label(
+                egui::Color32::from_rgb(230, 160, 60),
+                "\u{26a0} Inexact alarms",
+            );
             if ui.button("Allow exact alarms").clicked() {
                 crate::platform::request_exact_alarms();
             }
@@ -1227,7 +1239,10 @@ fn alert_health(ui: &mut egui::Ui) {
     }
     if !h.exempt {
         ui.horizontal(|ui| {
-            ui.colored_label(egui::Color32::from_rgb(230, 160, 60), "\u{26a0} Battery optimised");
+            ui.colored_label(
+                egui::Color32::from_rgb(230, 160, 60),
+                "\u{26a0} Battery optimised",
+            );
             if ui.button("Exempt from battery optimisation").clicked() {
                 crate::platform::request_battery_exemption();
             }

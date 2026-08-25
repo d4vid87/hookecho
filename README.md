@@ -722,7 +722,7 @@ ones worth knowing before you look:
 | `Page Up` / `Page Down` | tilt up / down |
 | `1`–`6` | products: reflectivity, velocity, spectrum width, ZDR, PHI, CC |
 | `Ctrl+K` | command palette |
-| `L` | the drawer |
+| `L` | the panel |
 | `A` | the alert panel |
 | `Z` | cycle the basemap |
 | `M` | mute |

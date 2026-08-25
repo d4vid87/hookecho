@@ -30,17 +30,42 @@ impl RulesWindow {
     }
 }
 
-pub fn show(state: &mut RulesWindow, ctx: &egui::Context, settings: &mut Settings) -> bool {
+pub fn show(
+    state: &mut RulesWindow,
+    ctx: &egui::Context,
+    settings: &mut Settings,
+    drawer: &mut crate::ui::drawer::Drawer,
+) -> bool {
     if !state.open {
         return false;
     }
     let mut open = state.open;
     let mut changed = false;
-    let window = egui::Window::new("Alert rules")
-        .open(&mut open)
-        .default_width(720.0)
-        .resizable(true);
-    crate::ui::phone_surface(ctx, window).show(ctx, |ui| {
+    // The gear carries the one knob that decides whether any of these rules can reach the user
+    // at all — the page is pointless with it off, and it lives three tabs deep in Settings.
+    let gear = drawer.gear;
+    let Some(window) = drawer.page(
+        ctx,
+        "Alert rules",
+        &mut open,
+        true,
+        egui::Window::new("Alert rules"),
+    ) else {
+        state.open = open;
+        return false;
+    };
+    window.show(ctx, |ui| {
+        if gear {
+            ui.horizontal(|ui| {
+                if ui
+                    .checkbox(&mut settings.mute_alerts, "Mute all alerts")
+                    .changed()
+                {
+                    changed = true;
+                }
+            });
+            ui.separator();
+        }
         ui.weak(
             "Tell the app what is worth interrupting you for. New rules start switched off — \
              set the threshold and the place, then arm it.",
@@ -94,7 +119,9 @@ pub fn show(state: &mut RulesWindow, ctx: &egui::Context, settings: &mut Setting
                                     .range(1..=240)
                                     .suffix(" min"),
                             )
-                            .on_hover_text("How long before this rule may fire for the same place again")
+                            .on_hover_text(
+                                "How long before this rule may fire for the same place again",
+                            )
                             .changed();
                         if ui.button("🗑").on_hover_text("Delete this rule").clicked() {
                             remove = Some(i);
@@ -245,10 +272,7 @@ fn place_combo(
         .width(170.0)
         .show_ui(ui, |ui| {
             for (place, label) in places {
-                if ui
-                    .selectable_label(&rule.place == place, label)
-                    .clicked()
-                {
+                if ui.selectable_label(&rule.place == place, label).clicked() {
                     rule.place = place.clone();
                     changed = true;
                 }
@@ -353,10 +377,7 @@ fn extra_row(ui: &mut egui::Ui, i: usize, rule: &mut AlertRule, changed: &mut bo
                 .show_ui(ui, |ui| {
                     for t in RuleTrigger::ALL {
                         let label = t.label();
-                        if ui
-                            .selectable_label(cond.trigger == t, label)
-                            .clicked()
-                        {
+                        if ui.selectable_label(cond.trigger == t, label).clicked() {
                             cond.threshold = t.threshold_hint().map(|(_, d)| d);
                             cond.trigger = t;
                             *changed = true;
@@ -463,4 +484,3 @@ mod tests {
         );
     }
 }
-
