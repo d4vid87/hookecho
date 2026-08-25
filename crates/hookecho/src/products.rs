@@ -23,49 +23,49 @@ pub struct ProductInfo {
 pub const PRODUCTS: [ProductInfo; 7] = [
     ProductInfo {
         short: "REF",
-        name: "Reflectivity",
+        name: "Rain intensity (reflectivity)",
         blurb: "How heavy the precipitation is — the classic green-to-red radar picture",
         hotkey: 1,
         moment: Moment::Reflectivity,
     },
     ProductInfo {
         short: "VEL",
-        name: "Velocity",
+        name: "Wind toward/away (velocity)",
         blurb: "Wind blowing toward or away from the radar — how you spot rotation",
         hotkey: 2,
         moment: Moment::Velocity,
     },
     ProductInfo {
         short: "SW",
-        name: "Spectrum Width",
+        name: "Turbulence (spectrum width)",
         blurb: "How turbulent the wind is inside the storm",
         hotkey: 3,
         moment: Moment::SpectrumWidth,
     },
     ProductInfo {
         short: "ZDR",
-        name: "Differential Reflectivity",
+        name: "Drop shape (ZDR)",
         blurb: "Whether the drops are flat or round — big rain drops vs hail",
         hotkey: 4,
         moment: Moment::DifferentialReflectivity,
     },
     ProductInfo {
         short: "PHI",
-        name: "Differential Phase",
+        name: "Phase shift (PhiDP)",
         blurb: "Total phase shift the beam has picked up on its way out and back",
         hotkey: 5,
         moment: Moment::DifferentialPhase,
     },
     ProductInfo {
         short: "KDP",
-        name: "Specific Differential Phase",
+        name: "Rain rate in cores (KDP)",
         blurb: "Rainfall rate in the heaviest cores, unaffected by hail",
         hotkey: 6,
         moment: Moment::SpecificDifferentialPhase,
     },
     ProductInfo {
         short: "CC",
-        name: "Correlation Coefficient",
+        name: "Debris and mixtures (CC)",
         blurb: "How uniform the targets are — tells rain from hail, debris and birds",
         hotkey: 7,
         moment: Moment::CorrelationCoefficient,
@@ -83,7 +83,7 @@ pub fn info(moment: Moment) -> &'static ProductInfo {
 /// Display name, with the storm-relative qualifier when velocity is storm-relative.
 pub fn name(moment: Moment, srv: bool) -> &'static str {
     if srv && moment == Moment::Velocity {
-        "Storm-Relative Velocity"
+        "Storm rotation (SRV)"
     } else {
         info(moment).name
     }

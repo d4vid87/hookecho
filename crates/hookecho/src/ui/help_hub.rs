@@ -40,6 +40,16 @@ impl HelpHub {
         }
     }
 
+    /// Open the hub with the search box already pointed at one glossary term, for the ⓘ links on
+    /// the layer rows.
+    pub(crate) fn explain(&mut self, entry: usize) {
+        self.open = true;
+        self.query = crate::ui::glossary::ENTRIES
+            .get(entry)
+            .map(|e| e.term.split([' ', '\u{2014}']).next().unwrap_or(e.term).to_string())
+            .unwrap_or_default();
+    }
+
     /// Draw the page. Returns true when the user asked for the tour — the app owns the tour, and
     /// starting it from here would mean this module knowing about app state.
     pub(crate) fn show(

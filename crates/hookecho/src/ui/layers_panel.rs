@@ -60,12 +60,20 @@ pub(crate) fn glyph(e: &PaletteEntry) -> &'static str {
     let l = e.label.to_lowercase();
     let has = |w: &str| l.contains(w);
     match () {
-        _ if has("velocity") || has("azshear") || has("rotation") => ph::ARROWS_CLOCKWISE,
+        _ if has("velocity") || has("azshear") || has("rotation") || has("srv")
+            || has("srh") || has("spin") =>
+        {
+            ph::ARROWS_CLOCKWISE
+        }
         _ if has("hail") || has("mesh") => ph::CIRCLE,
         _ if has("tornado") || has("tds") => ph::TORNADO,
         _ if has("lightning") || has("glm") => ph::LIGHTNING,
         _ if has("snow") || has("winter") || has("ice") => ph::SNOWFLAKE,
-        _ if has("rain") || has("qpe") || has("precip") || has("flood") => ph::DROP,
+        _ if has("rain") || has("qpe") || has("precip") || has("flood") || has("vil")
+            || has("moisture") =>
+        {
+            ph::DROP
+        }
         _ if has("wind") => ph::WIND,
         _ if has("temp") || has("dewpoint") => ph::THERMOMETER,
         _ if has("satellite") || has("cloud") || has("smoke") => ph::CLOUD,
@@ -111,12 +119,15 @@ pub(crate) fn reorder(pref: &mut Vec<String>, seq: &[String], drag: &str, before
 /// fold; the description is a hint, not something you read twenty times in a row.
 /// `draggable` puts the icon on a drag handle; the returned response covers the whole row and is
 /// what the caller tests for a drop.
-fn row(
-    ui: &mut egui::Ui,
-    e: &PaletteEntry,
-    accent: Color32,
-    draggable: bool,
-) -> (bool, egui::Response) {
+/// What a row click did: toggled the layer, or asked what the label's abbreviation means.
+struct Hit {
+    clicked: bool,
+    /// Index into [`crate::ui::glossary::ENTRIES`], when the ⓘ was the thing clicked.
+    explain: Option<usize>,
+    resp: egui::Response,
+}
+
+fn row(ui: &mut egui::Ui, e: &PaletteEntry, accent: Color32, draggable: bool) -> Hit {
     let on = e.on.unwrap_or(false);
     let (fg, bg) = if on {
         (accent, Color32::from_rgba_unmultiplied(255, 255, 255, 22))
@@ -182,7 +193,12 @@ fn row(
     let resp = outer;
     // Binding chip, left of where the state dot goes: the shortcut stays learnable from the row.
     if let Some(key) = &e.key {
-        let dx = if e.on.is_some() { -22.0 } else { -8.0 };
+        let info_w = if crate::ui::glossary::explains(&e.label).is_some() {
+            14.0
+        } else {
+            0.0
+        };
+        let dx = if e.on.is_some() { -22.0 } else { -8.0 } - info_w;
         ui.painter().text(
             resp.rect.right_center() + vec2(dx, 0.0),
             egui::Align2::RIGHT_CENTER,
@@ -190,6 +206,30 @@ fn row(
             egui::FontId::monospace(10.0),
             Color32::from_gray(140),
         );
+    }
+    // ⓘ for a row whose label names a term the glossary defines, drawn over the button the same
+    // way the key chip and the state dot are. Clicking it explains instead of toggling: the
+    // person who doesn't know what MESH is is not the person who wants it turned on yet.
+    let mut explain = None;
+    if let Some(term) = crate::ui::glossary::explains(&e.label) {
+        let at = resp.rect.right_center() + vec2(if e.on.is_some() { -34.0 } else { -20.0 }, 0.0);
+        ui.painter().text(
+            at,
+            egui::Align2::CENTER_CENTER,
+            egui_phosphor::regular::INFO,
+            egui::FontId::proportional(13.0),
+            Color32::from_gray(150),
+        );
+        let hit = egui::Rect::from_center_size(at, vec2(18.0, ROW_H));
+        if clicked
+            && ui
+                .ctx()
+                .input(|i| i.pointer.interact_pos())
+                .is_some_and(|p| hit.contains(p))
+        {
+            clicked = false;
+            explain = Some(term);
+        }
     }
     // State dot, drawn over the button's right edge (a nested layout inside a Button isn't a thing).
     if let Some(on) = e.on {
@@ -199,7 +239,11 @@ fn row(
             if on { accent } else { Color32::from_gray(90) },
         );
     }
-    (clicked, resp)
+    Hit {
+        clicked,
+        explain,
+        resp,
+    }
 }
 
 /// The panel body: search box + categorized rows. Returns the clicked action, if any.
@@ -257,8 +301,12 @@ pub(crate) fn body(
                 for i in &order {
                     // No dragging in search results: the order you're looking at is the ranking,
                     // not the list you'd be reordering.
-                    if row(ui, &entries[*i], accent, false).0 {
+                    let hit = row(ui, &entries[*i], accent, false);
+                    if hit.clicked {
                         chosen = Some(entries[*i].action);
+                    }
+                    if let Some(t) = hit.explain {
+                        chosen = Some(PaletteAction::Explain(t));
                     }
                     ui.add_space(2.0);
                 }
@@ -293,9 +341,16 @@ pub(crate) fn body(
                     .default_open(cat == "Radar")
                     .show_unindented(ui, |ui| {
                         for i in in_cat {
-                            let (clicked, resp) = row(ui, &entries[i], accent, true);
+                            let Hit {
+                                clicked,
+                                explain,
+                                resp,
+                            } = row(ui, &entries[i], accent, true);
                             if clicked {
                                 chosen = Some(entries[i].action);
+                            }
+                            if let Some(t) = explain {
+                                chosen = Some(PaletteAction::Explain(t));
                             }
                             // Insertion line above the row the pointer is over, so a drop lands
                             // where the preview says it will.
