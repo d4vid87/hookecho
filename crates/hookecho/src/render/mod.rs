@@ -62,6 +62,9 @@ pub enum FieldLayer {
     Mesh,
     AzShear,
     Lightning,
+    /// Instantaneous precipitation rate (mm/hr) — how hard it is coming down right now,
+    /// as against the QPE layers' how much has fallen.
+    PrecipRate,
     Qpe1h,
     Qpe24h,
     /// HRRR surface CAPE (environment suite).
@@ -144,7 +147,7 @@ impl FieldLayer {
     }
 
     /// Fixed bottom-to-top paint order within each band.
-    pub const DRAW_ORDER: [FieldLayer; 34] = [
+    pub const DRAW_ORDER: [FieldLayer; 35] = [
         // Below-radar context band (bottom to top). The global models sit at the very bottom:
         // they are the synoptic backdrop everything else is drawn against.
         FieldLayer::GlobalMslp,
@@ -163,6 +166,7 @@ impl FieldLayer {
         FieldLayer::SnowAnalysis,
         FieldLayer::PrecipType,
         // Above-radar severe-signal band.
+        FieldLayer::PrecipRate,
         FieldLayer::Qpe1h,
         FieldLayer::Qpe24h,
         FieldLayer::FlashFlood,
@@ -194,6 +198,7 @@ impl FieldLayer {
             FieldLayer::Mesh => "mesh",
             FieldLayer::AzShear => "azshear",
             FieldLayer::Lightning => "lightning",
+            FieldLayer::PrecipRate => "preciprate",
             FieldLayer::Qpe1h => "qpe1h",
             FieldLayer::Qpe24h => "qpe24h",
             FieldLayer::Cape => "cape",

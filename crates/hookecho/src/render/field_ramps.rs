@@ -174,6 +174,17 @@ static QPE_STOPS: &[(f32, [u8; 3])] = &[
     (0.8, [220, 40, 60]),
     (1.0, [230, 220, 240]),
 ];
+// Rate, not accumulation: the top of the scale is a rain rate rather than a storm total, so
+// it shares the QPE colours but not its bounds. 100 mm/hr is a tropical downpour.
+static PRECIP_RATE: FieldRamp = ramp!(
+    "Rain rate",
+    "mm/hr",
+    0.25,
+    100.0,
+    RampScale::Log,
+    255,
+    QPE_STOPS
+);
 static QPE_1H: FieldRamp = ramp!(
     "Rain (1 h)",
     "mm",
@@ -581,6 +592,7 @@ pub fn ramp_for(layer: FieldLayer) -> Option<&'static FieldRamp> {
         FL::Rotation | FL::AzShear => &ROTATION,
         FL::Mesh => &MESH,
         FL::HailSwath => &HAIL_SWATH,
+        FL::PrecipRate => &PRECIP_RATE,
         FL::Qpe1h => &QPE_1H,
         FL::Qpe24h => &QPE_24H,
         FL::Cape => &CAPE,

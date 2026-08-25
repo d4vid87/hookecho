@@ -36,6 +36,10 @@ pub struct TropicalStorm {
     pub lat: f64,
     pub lon: f64,
     pub points: Vec<TrackPoint>,
+    /// Public advisory (TCP) page for this storm, straight from the feed.
+    pub advisory_url: Option<String>,
+    /// Forecast discussion (TCD) page — the hurricane specialist's own reasoning.
+    pub discussion_url: Option<String>,
 }
 
 /// The fetched tropical picture: cones (as overlay features) plus per-storm positions/tracks.
@@ -223,6 +227,13 @@ pub async fn fetch_active_opts(
             }
         }
 
+        // The feed nests each product's page under its own key; take the URL and nothing else.
+        let product_url = |key: &str| {
+            s.get(key)
+                .and_then(|p| p.get("url"))
+                .and_then(|u| u.as_str())
+                .map(str::to_string)
+        };
         data.storms.push(TropicalStorm {
             id: get("id"),
             name,
@@ -231,6 +242,8 @@ pub async fn fetch_active_opts(
             lat,
             lon,
             points,
+            advisory_url: product_url("publicAdvisory"),
+            discussion_url: product_url("forecastDiscussion"),
         });
     }
     if surge {
@@ -338,6 +351,59 @@ fn features(
     out
 }
 
+/// One fetched NHC text product.
+#[derive(Debug, Clone)]
+pub struct Advisory {
+    /// Storm name plus which product this is, for the window title.
+    pub title: String,
+    pub text: String,
+}
+
+/// The product text out of an NHC text page.
+///
+/// These pages are `.shtml` with the product in a single `<pre>` block — there is no `.txt`
+/// variant (they 404), so the block is what there is to take. Returns `None` rather than a page
+/// full of navigation chrome if the layout ever changes.
+pub fn advisory_text(html: &str) -> Option<String> {
+    let start = html.find("<pre>")? + "<pre>".len();
+    let end = html[start..].find("</pre>")? + start;
+    let body = html[start..end].trim();
+    if body.is_empty() {
+        return None;
+    }
+    // The products are plain text inside the block, but the page still escapes the handful of
+    // characters HTML reserves.
+    Some(
+        body.replace("&lt;", "<")
+            .replace("&gt;", ">")
+            .replace("&quot;", "\"")
+            .replace("&#39;", "'")
+            .replace("&amp;", "&"),
+    )
+}
+
+/// Fetch one of a storm's text products by URL.
+pub async fn fetch_advisory(
+    client: &reqwest::Client,
+    title: &str,
+    url: &str,
+) -> anyhow::Result<Advisory> {
+    let body = client
+        .get(crate::net::fetch_url(url))
+        .header("User-Agent", USER_AGENT)
+        .send()
+        .await?
+        .error_for_status()?
+        .text()
+        .await?;
+    let text = advisory_text(&body)
+        .ok_or_else(|| anyhow::anyhow!("no product text in the NHC page"))?;
+    Ok(Advisory {
+        title: title.to_string(),
+        text,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -384,6 +450,30 @@ mod tests {
         let v: serde_json::Value = serde_json::from_str(json).unwrap();
         let active = v.get("activeStorms").and_then(|a| a.as_array()).unwrap();
         assert!(active.is_empty(), "off-season → no storms");
+    }
+
+    #[test]
+    fn advisory_text_comes_out_of_the_pre_block() {
+        let page = "<html><body><div>nav junk</div><pre>\nWTPZ44 KNHC 242032\nTCDEP4\n\n\
+                    Tropical Storm Iselle Discussion Number 6\n</pre><footer>more junk</footer>";
+        let t = advisory_text(page).expect("pre block");
+        assert!(t.starts_with("WTPZ44"), "{t}");
+        assert!(t.contains("Discussion Number 6"));
+        assert!(!t.contains("junk"), "page chrome must not come through");
+    }
+
+    #[test]
+    fn a_page_without_a_product_is_none_not_chrome() {
+        assert!(advisory_text("<html><body>no product here</body></html>").is_none());
+        assert!(advisory_text("<pre>   </pre>").is_none());
+    }
+
+    #[test]
+    fn escaped_characters_are_unescaped() {
+        assert_eq!(
+            advisory_text("<pre>winds &gt; 50 kt &amp; rising</pre>").unwrap(),
+            "winds > 50 kt & rising"
+        );
     }
 
     #[test]

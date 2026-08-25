@@ -1258,6 +1258,8 @@ fn field_refresh_secs(layer: crate::render::FieldLayer) -> u64 {
         FL::Lightning | FL::AzShear => 60,
         FL::Mrms | FL::Mesh | FL::Rotation | FL::Hrrr | FL::Mosaic => 120,
         // QPE accumulations update on a ~2-minute MRMS cadence.
+        // The rate product lands every 2 minutes; the accumulations move far more slowly.
+        FL::PrecipRate => 120,
         FL::Qpe1h | FL::Qpe24h => 120,
         // MRMS precip type / flash-flood ARI on the ~2-min cadence; L3 grids on the 120 s L3 cadence.
         FL::PrecipType | FL::FlashFlood | FL::Vil | FL::EchoTops | FL::Hca => 120,
@@ -2116,6 +2118,10 @@ pub struct HookEchoApp {
     afd_error: Option<String>,
     afd_busy: bool,
     afd_rx: Option<std::sync::mpsc::Receiver<Result<wxdata::afd::Afd, String>>>,
+    /// NHC public advisory / forecast discussion reader.
+    tropical_window: ui::tropical_window::TropicalWindow,
+    tropical_text_rx:
+        Option<std::sync::mpsc::Receiver<Result<wxdata::tropical::Advisory, String>>>,
     /// Range rings + azimuth spokes around the active site (feature HH).
     show_range_rings: bool,
     /// Draw all NEXRAD radar sites on the map; clicking one switches the pane to that radar.
@@ -2873,6 +2879,8 @@ impl HookEchoApp {
             afd_error: None,
             afd_busy: false,
             afd_rx: None,
+            tropical_window: ui::tropical_window::TropicalWindow::default(),
+            tropical_text_rx: None,
             show_range_rings: false,
             show_radar_sites: true,
             show_blockage: false,
@@ -3722,6 +3730,72 @@ impl HookEchoApp {
         let elev = *v.volume.as_ref()?.elevations.get(v.tilt)? as f64;
         let (km, _) = crate::geo::great_circle([site.longitude as f64, site.latitude as f64], ll);
         Some(wxdata::xsection::beam_height_km(km, elev) * 3280.84)
+    }
+
+    /// Every moment this volume carries, at the gate under `(lon, lat)`, plus where that gate
+    /// is: azimuth and range from the radar, and how high the beam is there.
+    ///
+    /// The height is the part people forget. A 60 dBZ reading 90 km out on the 0.5 degree cut is
+    /// 1.5 km up, so it is not what is reaching the ground, and a velocity couplet is only a
+    /// low-level couplet if the beam is low. Showing the number without the height invites the
+    /// wrong reading of it.
+    ///
+    /// Returns `None` when the pointer is off the sweep entirely, so hovering empty map says
+    /// nothing rather than flashing an empty tooltip.
+    fn gate_readout(&mut self, idx: usize, lon: f64, lat: f64) -> Option<String> {
+        let tilt = self.views[idx].tilt;
+        let active = self.views[idx].moment;
+        let dealias = self.settings.dealias_velocity;
+        let carried = self.views[idx].volume.as_ref()?.moments;
+        let vol = self.views[idx].volume.as_mut()?;
+
+        // The active moment leads — it is the one being looked at — then the rest in the usual
+        // product order, skipping any this volume does not carry.
+        let order = std::iter::once(active)
+            .chain(Moment::ALL.into_iter().filter(|m| *m != active))
+            .filter(|m| carried[m.index()]);
+
+        let mut lines: Vec<String> = Vec::new();
+        let mut where_at: Option<String> = None;
+        for m in order {
+            // Velocity is read dealiased when the display is dealiased, or the number under the
+            // cursor would disagree with the colour over it.
+            let want_dealias = dealias && m == Moment::Velocity;
+            let Ok(sweep) = vol.binned(m, tilt, want_dealias) else {
+                continue;
+            };
+            let Some(g) = sweep.sample_at(lon, lat) else {
+                continue;
+            };
+            if where_at.is_none() {
+                where_at = Some(format!(
+                    "{:.0}\u{b0} at {:.0} km \u{b7} beam {:.0} ft",
+                    g.azimuth_deg,
+                    g.range_km,
+                    sweep.beam_height_ft(g.range_km)
+                ));
+            }
+            let name = crate::products::info(m).short;
+            let units = m.units();
+            let value = match (g.value, g.folded) {
+                (Some(v), _) => {
+                    let precision = if m == Moment::CorrelationCoefficient { 3 } else { 1 };
+                    if units.is_empty() {
+                        format!("{v:.*}", precision)
+                    } else {
+                        format!("{v:.*} {units}", precision)
+                    }
+                }
+                // "Range folded" and "nothing here" look identical on the map and mean opposite
+                // things, so the readout is where the difference gets said out loud.
+                (None, true) => "range folded".to_string(),
+                (None, false) => "\u{2014}".to_string(),
+            };
+            let marker = if m == active { "\u{25b8} " } else { "  " };
+            lines.push(format!("{marker}{name:<4}{value}"));
+        }
+        let where_at = where_at?;
+        Some(format!("{where_at}\n{}", lines.join("\n")))
     }
 
     /// Chime when a new volume lands on the live pane you are watching — the "look up" cue for
@@ -5675,6 +5749,10 @@ impl HookEchoApp {
             Some(s) => s.clone(),
             None => return Vec::new(),
         };
+        // Confidence in a pure advection falls off with lead: it moves the echo that exists and
+        // cannot grow, decay or turn it. Fading the points says so without a disclaimer nobody
+        // reads.
+        let alpha = (150.0 * nowcast_confidence(self.filters.nowcast_lead_min)) as u8;
         let table = self.palettes.table(Moment::Reflectivity);
         let span = (sweep.value_max - sweep.value_min).max(1e-3);
         let radar = [sweep.radar_lon as f64, sweep.radar_lat as f64];
@@ -5697,7 +5775,7 @@ impl HookEchoApp {
                 out.push((
                     adv[0],
                     adv[1],
-                    egui::Color32::from_rgba_unmultiplied(c[0], c[1], c[2], 150),
+                    egui::Color32::from_rgba_unmultiplied(c[0], c[1], c[2], alpha),
                 ));
             }
         }
@@ -7561,6 +7639,13 @@ impl HookEchoApp {
                 false,
             ),
             (
+                FL::PrecipRate,
+                "National",
+                "Rain rate",
+                "How hard it is coming down right now, rather than how much has fallen",
+                false,
+            ),
+            (
                 FL::Qpe1h,
                 "National",
                 "QPE 1-hour",
@@ -8913,6 +8998,41 @@ impl HookEchoApp {
         let http = self.http.clone();
         self.spawner.spawn(async move {
             let res = wxdata::afd::fetch(&http, lat, lon)
+                .await
+                .map_err(|e| e.to_string());
+            let _ = tx.send(res);
+        });
+    }
+
+    /// Fetch one NHC text product for `storm_id`.
+    ///
+    /// The URL comes out of the storm feed rather than being built from the id: NHC's product
+    /// filenames key off the basin bin (`EP4`), not the storm id, and the feed already carries
+    /// the exact page for the current advisory number.
+    fn fetch_tropical_text(&mut self, storm_id: &str, product: ui::tropical_window::Product) {
+        let Some(storm) = self
+            .tropical
+            .as_ref()
+            .and_then(|t| t.storms.iter().find(|s| s.id == storm_id))
+            .cloned()
+        else {
+            self.tropical_window.error = Some("that storm is no longer being advised on".into());
+            return;
+        };
+        let Some(url) = product.url(&storm).map(str::to_string) else {
+            self.tropical_window.error =
+                Some(format!("no {} published for {}", product.label(), storm.name));
+            self.tropical_window.text = None;
+            return;
+        };
+        let title = format!("{} {} — {}", storm.classification, storm.name, product.label());
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.tropical_text_rx = Some(rx);
+        self.tropical_window.busy = true;
+        self.tropical_window.error = None;
+        let http = self.http.clone();
+        self.spawner.spawn(async move {
+            let res = wxdata::tropical::fetch_advisory(&http, &title, &url)
                 .await
                 .map_err(|e| e.to_string());
             let _ = tx.send(res);
@@ -10321,6 +10441,7 @@ impl HookEchoApp {
             FL::Mesh => wxdata::mrms::MESH.to_string(),
             FL::AzShear => wxdata::mrms::AZSHEAR.to_string(),
             FL::Rotation => wxdata::mrms::rotation_track(self.rotation_minutes).to_string(),
+            FL::PrecipRate => wxdata::mrms::PRECIP_RATE.to_string(),
             FL::Qpe1h => wxdata::mrms::QPE_01H.to_string(),
             FL::Qpe24h => wxdata::mrms::QPE_24H.to_string(),
             FL::PrecipType => wxdata::mrms::PRECIP_TYPE.to_string(),
@@ -11336,7 +11457,41 @@ impl HookEchoApp {
                     // Drawing happens on drag, not on click; a bare click leaves no mark.
                     MapTool::Draw => {}
                     MapTool::AlertZone => self.zone_pts.push([lon, lat]),
-                    MapTool::Interrogate => {
+                    // Labelled so the storm-marker shortcut below can bail out of the hit-test
+                    // chain without returning from `render_pane` and costing this pane its
+                    // tiles and radar for the frame.
+                    MapTool::Interrogate => 'interrogate: {
+                        // A tropical cyclone's own marker sits above everything else: it is the
+                        // one feature whose words matter more than its geometry, and the cone
+                        // polygon underneath would otherwise swallow the click.
+                        let storm_hit = self
+                            .show_tropical
+                            .then(|| {
+                                self.tropical.as_ref().and_then(|t| {
+                                    t.storms
+                                        .iter()
+                                        .find(|s| {
+                                            let w = crate::render::mercator::lonlat_to_world(
+                                                s.lon, s.lat,
+                                            );
+                                            let (sx, sy) = cam.world_to_screen(w, vp);
+                                            let (dx, dy) = (
+                                                prect.left() + sx - pos.x,
+                                                prect.top() + sy - pos.y,
+                                            );
+                                            dx * dx + dy * dy <= tap_r2(14.0)
+                                        })
+                                        .map(|s| s.id.clone())
+                                })
+                            })
+                            .flatten();
+                        if let Some(id) = storm_hit {
+                            self.tropical_window.open = true;
+                            self.tropical_window.storm_id = Some(id.clone());
+                            let product = self.tropical_window.product;
+                            self.fetch_tropical_text(&id, product);
+                            break 'interrogate;
+                        }
                         // Storm reports sit on top: a click near a report dot opens its detail.
                         let report = self
                             .show_storm_reports
@@ -11723,6 +11878,19 @@ impl HookEchoApp {
         let tbss_hits = if self.filters.show_tbss { tbss_hits } else { Vec::new() };
         let zdr_hits = if self.filters.show_zdr_columns { zdr_hits } else { Vec::new() };
         let couplets = if self.filters.show_couplets { couplets } else { Vec::new() };
+
+        // Radar values under the cursor. Computed here, before the long immutable borrow of the
+        // pane below, because sampling the volume needs it mutably — the binned sweeps are
+        // cached on it as they are asked for.
+        let gate_tooltip = (self.tool == MapTool::Interrogate && self.views[idx].show_radar)
+            .then(|| {
+                let hp = response.hover_pos().filter(|p| prect.contains(*p))?;
+                let cam = self.views[idx].camera;
+                let w = cam.screen_to_world((hp.x - prect.left(), hp.y - prect.top()), vp);
+                let (lon, lat) = crate::render::mercator::world_to_lonlat(w.0, w.1);
+                self.gate_readout(idx, lon, lat)
+            })
+            .flatten();
 
         // --- Painter overlays (clipped to this pane) ---
         let painter = ui.painter_at(prect);
@@ -12119,17 +12287,27 @@ impl HookEchoApp {
 
             // Optical-flow nowcast: advected echo ghost + a lead-time banner.
             if !nowcast_pts.is_empty() {
+                // The dots also grow with lead: a longer extrapolation is a blurrier claim
+                // about where the echo will be, and a bigger, softer dot reads that way.
+                let lead = self.filters.nowcast_lead_min;
+                let radius = 2.5 + (1.0 - nowcast_confidence(lead)) * 3.0;
                 for (lon, lat, col) in &nowcast_pts {
                     let p = to_screen(*lon, *lat);
                     if prect.contains(p) {
-                        painter.circle_filled(p, 2.5, *col);
+                        painter.circle_filled(p, radius, *col);
                     }
                 }
                 if idx == self.active {
-                    let text = format!(
-                        "◈ NOWCAST +{} min — echo extrapolated from storm motion",
-                        self.filters.nowcast_lead_min
-                    );
+                    let text = if lead > 45 {
+                        format!(
+                            "\u{25c8} NOWCAST +{lead} min \u{2014} extrapolation only; try HRRR \
+                             future radar for an hour or more"
+                        )
+                    } else {
+                        format!(
+                            "\u{25c8} NOWCAST +{lead} min \u{2014} echo extrapolated from storm motion"
+                        )
+                    };
                     let font = egui::FontId::proportional(12.0);
                     let anchor = egui::pos2(prect.left() + 8.0, prect.top() + 20.0);
                     let galley =
@@ -13272,6 +13450,13 @@ impl HookEchoApp {
                     response.clone().show_tooltip_text(&label.hover);
                 }
             }
+        }
+
+        // The inspector readout, sampled above. Every competitor has one and this had none: the
+        // app could draw a 68 dBZ core and a velocity couplet and never tell you a single number
+        // behind either.
+        if let Some(text) = &gate_tooltip {
+            response.clone().show_tooltip_text(text);
         }
 
         // The difference layer reads as "they disagree here" and nothing more without a number,
@@ -16420,6 +16605,35 @@ impl eframe::App for HookEchoApp {
                 self.fetch_afd();
             }
         }
+        // NHC text products: poll the fetch, then draw the reader.
+        if let Some(rx) = &self.tropical_text_rx {
+            if let Ok(res) = rx.try_recv() {
+                self.tropical_window.busy = false;
+                self.tropical_text_rx = None;
+                match res {
+                    Ok(a) => {
+                        self.tropical_window.text = Some(a);
+                        self.tropical_window.error = None;
+                    }
+                    Err(e) => {
+                        self.tropical_window.text = None;
+                        self.tropical_window.error = Some(e);
+                    }
+                }
+            }
+        }
+        if self.tropical_window.open {
+            let storms = self
+                .tropical
+                .as_ref()
+                .map(|t| t.storms.clone())
+                .unwrap_or_default();
+            if let Some((id, product)) =
+                ui::tropical_window::show(&mut self.tropical_window, ctx, &storms)
+            {
+                self.fetch_tropical_text(&id, product);
+            }
+        }
         // Point sounding: poll the async fetch, then render the Skew-T / hodograph.
         if let Some(rx) = &self.sounding_rx {
             if let Ok(res) = rx.try_recv() {
@@ -17536,6 +17750,45 @@ mod date_picker_tests {
         for (y, m, d) in [(1991, 6, 5), (2026, 8, 24), (2000, 2, 29), (2011, 12, 31)] {
             let orig = chrono::NaiveDate::from_ymd_opt(y, m, d).unwrap();
             assert_eq!(super::from_jiff(super::to_jiff(orig)), Some(orig));
+        }
+    }
+}
+
+/// How much to trust a pure advection at `lead_min` minutes, 1.0 down to ~0.35.
+///
+/// The nowcast moves the echo that exists along the mean storm motion. It cannot grow a cell,
+/// collapse one, or turn it, and every minute of lead is another minute for those to happen. Up
+/// to 45 minutes — the range this shipped with — it is taken at face value; past that it fades,
+/// which is the only honest way to keep offering it.
+fn nowcast_confidence(lead_min: u8) -> f32 {
+    const FULL: f32 = 45.0;
+    const FLOOR: f32 = 0.35;
+    if lead_min as f32 <= FULL {
+        return 1.0;
+    }
+    let over = (lead_min as f32 - FULL) / (120.0 - FULL);
+    (1.0 - over.clamp(0.0, 1.0) * (1.0 - FLOOR)).clamp(FLOOR, 1.0)
+}
+
+#[cfg(test)]
+mod nowcast_tests {
+    use super::nowcast_confidence;
+
+    #[test]
+    fn confidence_is_full_inside_the_old_range_and_fades_past_it() {
+        for lead in [15u8, 30, 45] {
+            assert_eq!(nowcast_confidence(lead), 1.0, "{lead} min");
+        }
+        assert!(nowcast_confidence(60) < 1.0);
+        assert!(nowcast_confidence(90) < nowcast_confidence(60));
+        assert!((nowcast_confidence(120) - 0.35).abs() < 1e-5);
+    }
+
+    /// It must never fade to invisible, or the layer would silently stop existing.
+    #[test]
+    fn confidence_never_reaches_zero() {
+        for lead in 0u8..=255 {
+            assert!(nowcast_confidence(lead) >= 0.35, "{lead} min");
         }
     }
 }
