@@ -13,39 +13,27 @@ use std::path::PathBuf;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum Theme {
     #[default]
+    #[serde(alias = "Magma", alias = "Redline", alias = "AcidStorm")]
     Dark,
+    #[serde(alias = "Glacier")]
     Light,
     System,
+    #[serde(alias = "Ultraviolet", alias = "Bubblegum", alias = "Voltage")]
     Synthwave,
-    AcidStorm,
+    #[serde(alias = "Riptide")]
     Aurora,
-    Magma,
-    Bubblegum,
-    Riptide,
-    Ultraviolet,
-    Voltage,
-    Redline,
-    Glacier,
     HighContrast,
     Oled,
 }
 
 impl Theme {
     /// All themes in menu order.
-    pub const ALL: [Theme; 15] = [
+    pub const ALL: [Theme; 7] = [
         Theme::Dark,
         Theme::Light,
         Theme::System,
         Theme::Synthwave,
-        Theme::AcidStorm,
         Theme::Aurora,
-        Theme::Magma,
-        Theme::Bubblegum,
-        Theme::Riptide,
-        Theme::Ultraviolet,
-        Theme::Voltage,
-        Theme::Redline,
-        Theme::Glacier,
         Theme::HighContrast,
         Theme::Oled,
     ];
@@ -56,15 +44,7 @@ impl Theme {
             Theme::Light => "Light",
             Theme::System => "System",
             Theme::Synthwave => "Synthwave",
-            Theme::AcidStorm => "Acid Storm",
             Theme::Aurora => "Aurora",
-            Theme::Magma => "Magma",
-            Theme::Bubblegum => "Bubblegum",
-            Theme::Riptide => "Riptide",
-            Theme::Ultraviolet => "Ultraviolet",
-            Theme::Voltage => "Voltage",
-            Theme::Redline => "Redline",
-            Theme::Glacier => "Glacier",
             Theme::HighContrast => "High contrast",
             Theme::Oled => "OLED black",
         }
@@ -135,6 +115,8 @@ pub struct Settings {
     /// UI density (spacing/type token table). Comfortable by default; Compact restores the
     /// pre-0.12 pro-dense desktop metrics.
     pub density: Density,
+    /// User accent override as RGB. `None` keeps the theme's own accent.
+    pub accent: Option<[u8; 3]>,
     /// Starred radar sites shown in the toolbox presets dropdown.
     pub presets: Vec<String>,
     /// Per-moment color-table override: moment short name (`REF`, `VEL`, …) -> `.pal` path.
@@ -998,6 +980,7 @@ impl Default for Settings {
             poll_interval_secs: 30,
             theme: Theme::Dark,
             density: Density::default(),
+            accent: None,
             presets: Vec::new(),
             palettes: BTreeMap::new(),
             velocity_unit: VelocityUnit::default(),
@@ -1425,6 +1408,7 @@ mod tests {
             etop_dbz: 30.0,
             default_site: "KFWS".to_string(),
             density: Density::Compact,
+            accent: Some([255, 0, 128]),
             poll_interval_secs: 45,
             theme: Theme::Synthwave,
             presets: vec!["KTLX".to_string(), "KOUN".to_string()],
@@ -1582,7 +1566,7 @@ mod tests {
         }"#;
         let s = Settings::import_bundle(json).expect("import");
         assert_eq!(s.default_site, "KFWS");
-        assert_eq!(s.theme, Theme::Magma);
+        assert_eq!(s.theme, Theme::Dark); // "Magma" is aliased onto Dark
         let ref_path = s.palettes.get("REF").expect("REF palette path set");
         let text = std::fs::read_to_string(ref_path).expect("palette file written");
         assert!(text.contains("test palette"));
