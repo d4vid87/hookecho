@@ -1,4 +1,4 @@
-//! "Select Radar Site" dialog: a sortable, filterable table over the NEXRAD registry.
+//! "Select Radar Site" dialog: a sortable, filterable table over every radar the app can fetch.
 
 use crate::render::mercator::{world_to_lonlat, Camera};
 use crate::settings::Settings;
@@ -51,8 +51,9 @@ pub fn show(
 
     // Build filtered rows (cloned so no borrow is held across the table).
     let needle = dialog.filter.to_ascii_uppercase();
-    // The WSR-88D registry and the TDWR table, in one list. A site's kind comes from which table
-    // it is in — the old `starts_with('T')` guess labelled TJUA (a WSR-88D) a terminal radar.
+    // The WSR-88D registry, the TDWR table and the DWD table, in one list. A site's kind comes
+    // from which table it is in — the old `starts_with('T')` guess labelled TJUA (a WSR-88D) a
+    // terminal radar.
     let mut rows: Vec<Row> = wxdata::sites::all()
         .filter(|s| {
             needle.is_empty()
@@ -68,6 +69,8 @@ pub fn show(
             // `starts_with('T')` guess labelled TJUA (a WSR-88D) a terminal radar.
             kind: if wxdata::tdwr::is_tdwr(s.id) {
                 "TDWR"
+            } else if wxdata::dwd::is_dwd(s.id) {
+                "DWD"
             } else {
                 "WSR-88D"
             },

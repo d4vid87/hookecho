@@ -3544,12 +3544,12 @@ impl HookEchoApp {
                 OverlaySource::Outlook(self.filters.outlook_day, self.outlook_kind_for_day()),
             );
         }
-        // Storm cells for the active view's site (Level 3 products are per-site). Terminal
-        // radars don't run the storm-cell algorithms under their four-letter id.
+        // Storm cells for the active view's site (Level 3 products are per-site). Terminal and
+        // DWD radars don't publish the storm-cell algorithms under their four-letter id.
         if let Some(site) = self.views[self.active]
             .site
             .clone()
-            .filter(|s| !wxdata::tdwr::is_tdwr(s))
+            .filter(|s| wxdata::sites::is_nexrad(s))
         {
             self.spawn_overlay(ctx, OverlaySource::Cells(site));
         }
@@ -10080,12 +10080,22 @@ impl HookEchoApp {
         ctx: egui::Context,
     ) {
         let tx = self.msg_tx.clone();
-        if wxdata::tdwr::is_tdwr(&site) {
-            // Terminal radars have no Level 2 feed and no archive: one synthesized volume per
-            // poll, from the newest Level 3 tilt products.
+        if !wxdata::sites::is_nexrad(&site) {
+            // Neither network has a Level 2 feed or an archive: one volume per poll, synthesized
+            // from the newest Level 3 tilt products (TDWR) or assembled from the newest ODIM
+            // sweep files (DWD).
             let http = self.http.clone();
+            let dwd = wxdata::dwd::is_dwd(&site);
             self.spawner.spawn(async move {
-                let msg = match wxdata::tdwr::fetch_volume(&http, &site).await {
+                let fetched = match dwd {
+                    #[cfg(not(target_arch = "wasm32"))]
+                    true => wxdata::dwd::fetch_volume(&http, &site).await,
+                    // `dwd::SITES` is empty on wasm, so no view can be holding a German site.
+                    #[cfg(target_arch = "wasm32")]
+                    true => unreachable!("the web build offers no DWD sites"),
+                    false => wxdata::tdwr::fetch_volume(&http, &site).await,
+                };
+                let msg = match fetched {
                     Ok((name, _, _)) if current_name.as_deref() == Some(name.as_str()) => {
                         DataMsg::UpToDate {
                             view: view_idx,
@@ -10211,7 +10221,7 @@ impl HookEchoApp {
                     // the frame list so the loop window slides forward. A frame-fetch result for a
                     // scrubbed/loop-display frame is older than the head and isn't a new head.
                     let new_head = v.timeline.following
-                        && !v.site.as_deref().is_some_and(wxdata::tdwr::is_tdwr)
+                        && v.site.as_deref().is_some_and(wxdata::sites::is_nexrad)
                         && {
                             let last_time = v.timeline.frames.last().and_then(|id| id.date_time());
                             if time.date_naive() != v.timeline.date {
@@ -10310,11 +10320,11 @@ impl HookEchoApp {
             // Stream only while pinned to the live head; scrubbing pauses it. A live loop is
             // suppressed too — the loop shows past frames, so interval polling (not the sweep
             // stream) carries new-volume arrival. ponytail: stream resumes on pause / go_head.
-            // TDWRs have no Level 2 chunk stream to merge — asking for one downloads a
+            // Only WSR-88Ds have a Level 2 chunk stream to merge — asking for one downloads a
             // WSR-88D-shaped file that isn't there and decodes garbage.
             let want = v.timeline.following
                 && !v.timeline.live_looping()
-                && v.site.as_deref().is_some_and(|s| !wxdata::tdwr::is_tdwr(s))
+                && v.site.as_deref().is_some_and(wxdata::sites::is_nexrad)
                 && v.volume.is_some();
             (
                 want,
@@ -10705,8 +10715,9 @@ impl HookEchoApp {
         let (site, date, following, need_list, listing) = {
             let v = &self.views[idx];
             let key = v.site.clone().map(|s| (s, v.timeline.date));
-            // TDWRs have no archive to list; their timeline stays empty and always live.
-            let need = v.site.as_deref().is_some_and(|s| !wxdata::tdwr::is_tdwr(s))
+            // TDWRs and DWD radars have no archive to list; their timeline stays empty and
+            // always live.
+            let need = v.site.as_deref().is_some_and(wxdata::sites::is_nexrad)
                 && v.timeline.frames_key != key;
             (
                 v.site.clone(),

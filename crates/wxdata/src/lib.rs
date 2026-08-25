@@ -11,6 +11,7 @@ pub mod dat;
 pub mod dealias;
 pub mod derived;
 pub mod dualpol;
+pub mod dwd;
 pub mod dotcams;
 pub mod efield;
 pub mod ero;
@@ -70,18 +71,28 @@ pub mod xsection;
 /// Radar site registry (id, city, state, lat/lon, elevation).
 ///
 /// Wraps `nexrad-model`'s WSR-88D registry so the app has one dependency surface for site data,
-/// and folds in the TDWR table — everything that resolves a site id gets terminal radars for
-/// free, instead of each call site remembering there are two networks.
+/// and folds in the TDWR and DWD tables — everything that resolves a site id gets terminal and
+/// German radars for free, instead of each call site remembering there are three networks.
 pub mod sites {
     pub use nexrad_model::meta::registry::{nearest_site, sites, SiteEntry};
 
-    /// The site with this id, from either network (case-insensitive).
+    /// The site with this id, from any network (case-insensitive).
     pub fn site_by_id(id: &str) -> Option<&'static SiteEntry> {
-        nexrad_model::meta::registry::site_by_id(id).or_else(|| crate::tdwr::site_by_id(id))
+        nexrad_model::meta::registry::site_by_id(id)
+            .or_else(|| crate::tdwr::site_by_id(id))
+            .or_else(|| crate::dwd::site_by_id(id))
     }
 
-    /// Every site in both networks: WSR-88Ds first, then TDWRs.
+    /// Whether `id` is a WSR-88D — the only network with a Level 2 stream, a volume archive and
+    /// Level 3 algorithm products. TDWR volumes are synthesized from Level 3 tilts and DWD's are
+    /// assembled from ODIM files, so every archive/stream/algorithm path asks this instead of
+    /// assuming the site it was handed is a NEXRAD.
+    pub fn is_nexrad(id: &str) -> bool {
+        !crate::tdwr::is_tdwr(id) && !crate::dwd::is_dwd(id)
+    }
+
+    /// Every site the app can fetch: WSR-88Ds first, then TDWRs, then Germany's DWD network.
     pub fn all() -> impl Iterator<Item = &'static SiteEntry> {
-        sites().iter().chain(crate::tdwr::SITES)
+        sites().iter().chain(crate::tdwr::SITES).chain(crate::dwd::SITES)
     }
 }
