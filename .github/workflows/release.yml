@@ -82,6 +82,10 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
+          # A hyphen in the tag is a prerelease (`v0.12.0-alpha.1`): flagged as one, and never
+          # made "Latest", so nobody lands on an alpha from the repo's front page.
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          make_latest: ${{ !contains(github.ref_name, '-') }}
           body_path: notes.md
           files: |
             dist/Hook_Echo-WX-x86_64.AppImage
@@ -188,6 +192,10 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
+          # A hyphen in the tag is a prerelease (`v0.12.0-alpha.1`): flagged as one, and never
+          # made "Latest", so nobody lands on an alpha from the repo's front page.
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          make_latest: ${{ !contains(github.ref_name, '-') }}
           files: |
             dist/hookecho-windows-x86_64.zip
             dist/Hook_Echo-WX-x86_64.msi
@@ -314,6 +322,10 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
+          # A hyphen in the tag is a prerelease (`v0.12.0-alpha.1`): flagged as one, and never
+          # made "Latest", so nobody lands on an alpha from the repo's front page.
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          make_latest: ${{ !contains(github.ref_name, '-') }}
           files: dist/Hook_Echo-WX-macos.zip
 
       - name: Update rolling release
@@ -410,6 +422,10 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
+          # A hyphen in the tag is a prerelease (`v0.12.0-alpha.1`): flagged as one, and never
+          # made "Latest", so nobody lands on an alpha from the repo's front page.
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          make_latest: ${{ !contains(github.ref_name, '-') }}
           files: Hook_Echo-WX-arm64-v8a.apk
 
       # Every push to main refreshes a rolling "latest" prerelease, so the Releases page always

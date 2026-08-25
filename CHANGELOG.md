@@ -6,6 +6,35 @@ so **write the section before pushing the tag**, or the release job fails.
 
 The rolling `latest` release tracks `main` and is not listed here.
 
+## 0.12.0-alpha.1 - 2026-08-25
+
+First R18 checkpoint: the desktop and web chrome, rebuilt. A prerelease — the
+mobile chrome is still the old sheet-and-toolbar layout, and the data lanes
+land later in the cycle.
+
+- The docked sidebar and the docked timeline bar are gone. The map runs edge
+  to edge, and everything that used to eat it now floats over it: a search
+  pill top-left, a control column down the right edge beside the color scale,
+  and a scrubber pill along the bottom with time ticks, play, a LIVE badge and
+  the loop range.
+- Tools you browse rather than watch — settings, the event library, alert
+  rules — open as pages in one slide-over drawer with a back-stack, one page
+  at a time, on every platform. Anything you click *on the map* answers in a
+  card anchored next to the click instead of in a window wherever egui last
+  left one.
+- The window is borderless: its three buttons float with the rest of the
+  chrome, the empty strip along the top edge drags it, double-clicking that
+  strip maximizes, and any edge or corner resizes. `--decorated` hands the
+  frame back to your window manager if it disagrees.
+- Design tokens: one metrics module with a Comfortable default and a Compact
+  density, the theme list curated to six, a free accent color, and Inter
+  bundled on every platform including web.
+- The 60-second tour now points at the chrome that exists; the keyboard cheat
+  sheet and every hotkey work unchanged; workspaces round-trip and now also
+  remember which panel and drawer page were open.
+- Streamer (OBS) mode and `?embed=1` strip all of the new chrome, same as
+  before.
+
 ## 0.11.0 - 2026-08-25
 
 - Basemaps stopped being an afterthought: every pane now draws its own style
