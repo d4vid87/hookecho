@@ -6,6 +6,49 @@ so **write the section before pushing the tag**, or the release job fails.
 
 The rolling `latest` release tracks `main` and is not listed here.
 
+## 0.11.0 - 2026-08-25
+
+- Basemaps stopped being an afterthought: every pane now draws its own style
+  instead of borrowing the active pane's, tiles are fetched at retina
+  resolution and overzoomed from the deepest resident ancestor rather than
+  going blank, the built-in vector cartography gained buildings, a full road
+  ladder and POIs, and the 40-item dropdown became a categorized thumbnail
+  grid on both desktop and Android. New sources: keyless hybrid satellite
+  (Esri imagery under our own labels), the Esri gray/NatGeo/Oceans canvases,
+  an "Auto" entry that follows the theme, and a custom XYZ template on
+  desktop and Android.
+- The live data path no longer re-merges the whole volume per chunk, which is
+  what made a site switch stall and left seams across a partial sweep. Label
+  placement, alert rows and the desktop frame loop were profiled and fixed in
+  that order; the Android loop cache and site-switch fetches now run in
+  parallel.
+- Alerts identify a warning by its VTEC event key instead of its message id,
+  so a continuation stops re-firing; an outbreak collapses into one rolling
+  summary past a threshold; webhooks retry with backoff; Android gained exact
+  alarms, a battery-exemption prompt, a watchdog and a delivery-health
+  readout; and the spoken script leads with hazard, place and direction
+  through an optional local neural voice.
+- The rules engine can attach a snapshot, play a per-rule sound, combine
+  conditions with one level of AND/OR, and backtest a rule against archived
+  volumes.
+- Radar accuracy: dealiasing scores region merges by boundary vote and
+  anchors on the previous sweep, gate edges stay crisp under smoothing, and
+  beam height uses each site's real tower height instead of a flat 20 m.
+- Products the app could not show: specific differential phase (KDP, derived
+  from the phase field already fetched), single-site composite reflectivity,
+  a gate inspector that reads every moment at the gate under the cursor, MRMS
+  precipitation rate, nowcast leads out to 120 minutes drawn faintly enough
+  to read as a guess, an archive date picker, a wind row on the meteogram,
+  trend sparklines in the cells table, NHC advisory and discussion text, TFRs
+  and G-AIRMETs, and reflectivity tinted by precipitation type.
+- German radar. DWD's open data is the only keyless international volume feed
+  there is — seventeen sites, five-minute volumes, reflectivity only. The
+  browser build does not offer it; a volume is 4.4 MB and the web build
+  fetches through a shared cache.
+- A share link can carry the reflectivity threshold (`thr:25`, or `thr:off`),
+  which is what an embedded dashboard needs to open at its own threshold
+  without changing anyone else's defaults.
+
 ## 0.10.0 - 2026-08-14
 
 - The browser build can be embedded in another page's dashboard: `?embed` hides
