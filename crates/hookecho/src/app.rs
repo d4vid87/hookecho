@@ -6948,29 +6948,12 @@ impl HookEchoApp {
                                 // were the *only* way: reaching a storm from years back meant
                                 // thousands of clicks. The archive runs to June 1991.
                                 let today = chrono::Utc::now().date_naive();
-                                // The picker speaks jiff; the rest of the app speaks chrono.
-                                // Convert at this one boundary rather than churn either.
-                                let mut picked_date = to_jiff(t.date);
-                                let picked = ui
-                                    .add(
-                                        egui_extras::DatePickerButton::new(&mut picked_date)
-                                            .id_salt("archive-day")
-                                            .format("%Y-%m-%d")
-                                            .highlight_weekends(false),
-                                    )
-                                    .on_hover_text(
-                                        "Archive days are UTC days — the S3 buckets are \
-                                             bucketed that way",
-                                    );
-                                if picked.changed() {
-                                    if let Some(d) = from_jiff(picked_date) {
-                                        // Clamp rather than trust the widget: it has no notion
-                                        // of where the archive starts or that the future is
-                                        // empty.
-                                        t.date =
-                                            d.clamp(wxdata::level2::ARCHIVE_START, today);
-                                        t.following = t.date >= today;
-                                    }
+                                if let Some(d) = archive_day_input(ui, t.date) {
+                                    // Clamp rather than trust the input: neither a calendar
+                                    // widget nor a typed string knows where the archive starts
+                                    // or that the future is empty.
+                                    t.date = d.clamp(wxdata::level2::ARCHIVE_START, today);
+                                    t.following = t.date >= today;
                                 }
                                 let is_today = t.date >= chrono::Utc::now().date_naive();
                                 if ui
@@ -17473,12 +17456,66 @@ mod tests {
     }
 }
 
+/// The archive-day control inside the LIVE/ARCHIVE badge menu. `Some` on the frame the user
+/// picks a new day.
+///
+/// Native gets a calendar. The web build does not: the picker widget and the `jiff` date type
+/// it takes cost about 120 KB gzipped, which is a real share of the wasm budget to spend on a
+/// convenience, and a typed date reaches 1991 just as directly. Everything else about the menu
+/// — the carets, the UTC-day caveat — is the same on both.
+#[cfg(not(target_arch = "wasm32"))]
+fn archive_day_input(ui: &mut egui::Ui, date: chrono::NaiveDate) -> Option<chrono::NaiveDate> {
+    let mut picked = to_jiff(date);
+    let changed = ui
+        .add(
+            egui_extras::DatePickerButton::new(&mut picked)
+                .id_salt("archive-day")
+                .format("%Y-%m-%d")
+                .highlight_weekends(false),
+        )
+        .on_hover_text("Archive days are UTC days — the S3 buckets are bucketed that way")
+        .changed();
+    changed.then(|| from_jiff(picked)).flatten()
+}
+
+/// Web: type the day instead. The buffer lives in egui's own memory rather than app state,
+/// because a half-typed date is not something the app has any use for.
+#[cfg(target_arch = "wasm32")]
+fn archive_day_input(ui: &mut egui::Ui, date: chrono::NaiveDate) -> Option<chrono::NaiveDate> {
+    let id = egui::Id::new("archive-day-text");
+    let shown = date.format("%Y-%m-%d").to_string();
+    let mut buf: String = ui.data_mut(|d| d.get_temp(id)).unwrap_or_else(|| shown.clone());
+    // Someone else moved the day (a caret, a deep link): follow it rather than argue.
+    if !buf.starts_with(&shown[..4]) && chrono::NaiveDate::parse_from_str(&buf, "%Y-%m-%d").is_ok()
+    {
+        buf = shown.clone();
+    }
+    let resp = ui
+        .add(
+            egui::TextEdit::singleline(&mut buf)
+                .desired_width(84.0)
+                .font(egui::TextStyle::Monospace),
+        )
+        .on_hover_text(
+            "Archive days are UTC days — the S3 buckets are bucketed that way. \
+             Type YYYY-MM-DD; the archive starts 1991-06-05.",
+        );
+    let out = chrono::NaiveDate::parse_from_str(&buf, "%Y-%m-%d")
+        .ok()
+        .filter(|d| *d != date);
+    ui.data_mut(|d| d.insert_temp(id, buf));
+    // Only commit on a complete, parseable date — otherwise every keystroke mid-typing would
+    // send the timeline somewhere.
+    resp.changed().then_some(out).flatten()
+}
+
 /// A chrono date as a jiff one, for `egui_extras`'s date picker.
 ///
 /// ponytail: the two crates model a civil date identically, so this is a field copy. It exists
 /// because the picker is the only jiff-speaking thing in the app and converting one widget's
 /// argument is cheaper than migrating every date in the codebase. Out-of-range dates cannot
 /// happen — chrono's year range is a subset of jiff's — so the fallback is the epoch.
+#[cfg(not(target_arch = "wasm32"))]
 fn to_jiff(d: chrono::NaiveDate) -> jiff::civil::Date {
     use chrono::Datelike;
     jiff::civil::Date::new(d.year() as i16, d.month() as i8, d.day() as i8)
@@ -17486,11 +17523,12 @@ fn to_jiff(d: chrono::NaiveDate) -> jiff::civil::Date {
 }
 
 /// The inverse of [`to_jiff`]; `None` for a date chrono cannot represent.
+#[cfg(not(target_arch = "wasm32"))]
 fn from_jiff(d: jiff::civil::Date) -> Option<chrono::NaiveDate> {
     chrono::NaiveDate::from_ymd_opt(d.year() as i32, d.month() as u32, d.day() as u32)
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(target_arch = "wasm32")))]
 mod date_picker_tests {
     /// The picker's date must survive the round trip, or picking a day would move it.
     #[test]

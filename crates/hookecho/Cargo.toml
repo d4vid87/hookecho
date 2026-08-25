@@ -46,13 +46,7 @@ eframe = { version = "0.35", default-features = false, features = ["default_font
 # `serde` gives Key/Modifiers/KeyboardShortcut their Serialize/Deserialize impls, which is what
 # lets user keybinds live in settings.json.
 egui = { version = "0.35", features = ["serde"] }
-egui_extras = { version = "0.35", features = ["datepicker"] }
-# Only to speak to egui_extras's date picker, which takes a jiff date rather than a chrono one.
-# Already in the tree via that feature; the app's own dates stay chrono.
-# Default features bundle the IANA timezone database, which on wasm is ~117 KB gzipped of
-# data the app never reads — it formats a civil date and nothing else. Feature unification
-# means enabling it here would have turned it on for egui_extras too.
-jiff = { version = "0.2", default-features = false, features = ["std"] }
+egui_extras = "0.35"
 wgpu = { version = "29", default-features = false, features = ["wgsl", "std"] }
 bytemuck.workspace = true
 anyhow.workspace = true
@@ -86,6 +80,12 @@ getrandom = "0.3"
 # and none on the web, where there is no winit; tokio is a native runtime and simply does not
 # build for wasm (the browser's event loop is the runtime there — see `rt.rs`).
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+# The archive date picker is native-only. The widget plus its `jiff` date type cost ~120 KB
+# gzipped of wasm, which is real money on a first visit for a convenience the web build can
+# get from a typed date instead. `default-features = false` keeps jiff's bundled IANA
+# timezone database out even here — the app formats a civil date and reads no zone.
+egui_extras = { version = "0.35", features = ["datepicker"] }
+jiff = { version = "0.2", default-features = false, features = ["std"] }
 egui-wgpu = { version = "0.35", default-features = false, features = ["winit"] }
 tokio.workspace = true
 eframe = { version = "0.35", default-features = false, features = ["accesskit"] }
