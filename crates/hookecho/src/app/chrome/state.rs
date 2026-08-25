@@ -17,6 +17,7 @@ pub(crate) fn window_for_page(title: &str) -> Option<AppWindow> {
         "Settings" => AppWindow::Settings,
         "Event Library" => AppWindow::Events,
         "Alert rules" => AppWindow::AlertRules,
+        "Help" => AppWindow::Help,
         _ => return None,
     })
 }
