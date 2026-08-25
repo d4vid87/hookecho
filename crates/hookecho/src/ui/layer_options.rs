@@ -52,6 +52,7 @@ pub(crate) fn show(
     filters: &mut OverlayFilters,
     fields: &mut std::collections::HashMap<crate::render::FieldLayer, crate::app::FieldState>,
     rotation_minutes: &mut u16,
+    hail_minutes: &mut u16,
     hrrr_fcst_hour: &mut u8,
     hrrr_valid: Option<chrono::DateTime<chrono::Utc>>,
     tz: Option<wxdata::tz::Tz>,
@@ -312,6 +313,23 @@ pub(crate) fn show(
             // Duration change → force an immediate refetch of the rotation grid.
             if dur {
                 if let Some(s) = fields.get_mut(&FL::Rotation) {
+                    s.last_fetch = None;
+                }
+            }
+        });
+    }
+
+    if fields.get(&FL::HailSwath).is_some_and(|s| s.show) {
+        header(ui, "Hail swaths");
+        ui.horizontal(|ui| {
+            ui.label("Window:");
+            let mut dur = false;
+            for (m, label) in [(30u16, "30m"), (60, "1h"), (120, "2h"), (360, "6h"), (1440, "24h")]
+            {
+                dur |= ui.selectable_value(hail_minutes, m, label).changed();
+            }
+            if dur {
+                if let Some(s) = fields.get_mut(&FL::HailSwath) {
                     s.last_fetch = None;
                 }
             }

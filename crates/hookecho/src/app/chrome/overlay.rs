@@ -184,6 +184,7 @@ impl HookEchoApp {
                                         &mut self.filters,
                                         &mut self.fields,
                                         &mut self.rotation_minutes,
+                                        &mut self.hail_minutes,
                                         &mut self.hrrr_fcst_hour,
                                         self.hrrr_valid,
                                         tz,

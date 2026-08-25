@@ -1308,7 +1308,7 @@ fn field_refresh_secs(layer: crate::render::FieldLayer) -> u64 {
         // Two global cycles behind it, so the same half hour.
         | FL::ModelDiff => 1800,
         FL::Smoke => 900,
-        // The 24-h hail-swath accumulation moves slowly.
+        // An accumulation moves slower than the grid it accumulates, whatever the window.
         FL::HailSwath => 300,
         // Environment (HRRR CAPE/SRH) refreshes slowly — 15 min.
         FL::Cape | FL::Srh => 900,
@@ -2109,6 +2109,8 @@ pub struct HookEchoApp {
     fields: std::collections::HashMap<crate::render::FieldLayer, FieldState>,
     /// Selected rotation-track accumulation window (minutes): 30, 60, or 120.
     rotation_minutes: u16,
+    /// Selected hail-swath accumulation window (minutes); see [`wxdata::mrms::hail_swath`].
+    hail_minutes: u16,
     /// Environment suite (HRRR CAPE/SRH): CAPE uses the mixed-layer (90-0 mb) parcel when true,
     /// else surface-based; SRH depth in km (1 = 0-1 km, 3 = 0-3 km). Changing either clears the
     /// layer's last_fetch so the next frame refetches.
@@ -2932,6 +2934,7 @@ impl HookEchoApp {
                 .map(|&l| (l, FieldState::default()))
                 .collect(),
             rotation_minutes: 30,
+            hail_minutes: 1440,
             env_cape_ml: false,
             env_srh_km: 3,
             l3grid_site: None,
@@ -8982,7 +8985,7 @@ impl HookEchoApp {
             FL::Qpe24h => wxdata::mrms::QPE_24H.to_string(),
             FL::PrecipType => wxdata::mrms::PRECIP_TYPE.to_string(),
             FL::FlashFlood => wxdata::mrms::FLASH_ARI30.to_string(),
-            FL::HailSwath => wxdata::mrms::MESH_1440.to_string(),
+            FL::HailSwath => wxdata::mrms::hail_swath(self.hail_minutes).to_string(),
             FL::Hrrr
             | FL::Cape
             | FL::Srh
