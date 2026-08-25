@@ -132,6 +132,17 @@ pub struct BinnedSweep {
     pub value_max: f32,
 }
 
+/// The first UTC day with volumes in the AWS NEXRAD archive.
+///
+/// Nothing before this exists to be asked for, so it is where a date picker has to stop. The
+/// early years are legacy pre-dual-pol Type-1 messages, which decode but carry reflectivity
+/// and velocity only.
+pub const ARCHIVE_START: chrono::NaiveDate =
+    match chrono::NaiveDate::from_ymd_opt(1991, 6, 5) {
+        Some(d) => d,
+        None => panic!("1991-06-05 is a real date"),
+    };
+
 /// An AWS archive volume identifier (re-exported so callers needn't depend on `nexrad-data`).
 pub use nexrad_data::aws::archive::Identifier;
 

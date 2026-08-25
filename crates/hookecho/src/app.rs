@@ -6944,11 +6944,34 @@ impl HookEchoApp {
                                         t.following = false;
                                     }
                                 }
-                                ui.monospace(t.date.format("%Y-%m-%d").to_string())
+                                // The carets are still the fastest way to step a day, but they
+                                // were the *only* way: reaching a storm from years back meant
+                                // thousands of clicks. The archive runs to June 1991.
+                                let today = chrono::Utc::now().date_naive();
+                                // The picker speaks jiff; the rest of the app speaks chrono.
+                                // Convert at this one boundary rather than churn either.
+                                let mut picked_date = to_jiff(t.date);
+                                let picked = ui
+                                    .add(
+                                        egui_extras::DatePickerButton::new(&mut picked_date)
+                                            .id_salt("archive-day")
+                                            .format("%Y-%m-%d")
+                                            .highlight_weekends(false),
+                                    )
                                     .on_hover_text(
                                         "Archive days are UTC days — the S3 buckets are \
                                              bucketed that way",
                                     );
+                                if picked.changed() {
+                                    if let Some(d) = from_jiff(picked_date) {
+                                        // Clamp rather than trust the widget: it has no notion
+                                        // of where the archive starts or that the future is
+                                        // empty.
+                                        t.date =
+                                            d.clamp(wxdata::level2::ARCHIVE_START, today);
+                                        t.following = t.date >= today;
+                                    }
+                                }
                                 let is_today = t.date >= chrono::Utc::now().date_naive();
                                 if ui
                                     .add_enabled(
@@ -17446,5 +17469,34 @@ mod tests {
         strokes.pop(); // Undo
         assert_eq!(strokes.len(), 1);
         assert_eq!(strokes[0].color, red);
+    }
+}
+
+/// A chrono date as a jiff one, for `egui_extras`'s date picker.
+///
+/// ponytail: the two crates model a civil date identically, so this is a field copy. It exists
+/// because the picker is the only jiff-speaking thing in the app and converting one widget's
+/// argument is cheaper than migrating every date in the codebase. Out-of-range dates cannot
+/// happen — chrono's year range is a subset of jiff's — so the fallback is the epoch.
+fn to_jiff(d: chrono::NaiveDate) -> jiff::civil::Date {
+    use chrono::Datelike;
+    jiff::civil::Date::new(d.year() as i16, d.month() as i8, d.day() as i8)
+        .unwrap_or(jiff::civil::Date::ZERO)
+}
+
+/// The inverse of [`to_jiff`]; `None` for a date chrono cannot represent.
+fn from_jiff(d: jiff::civil::Date) -> Option<chrono::NaiveDate> {
+    chrono::NaiveDate::from_ymd_opt(d.year() as i32, d.month() as u32, d.day() as u32)
+}
+
+#[cfg(test)]
+mod date_picker_tests {
+    /// The picker's date must survive the round trip, or picking a day would move it.
+    #[test]
+    fn dates_round_trip_through_jiff() {
+        for (y, m, d) in [(1991, 6, 5), (2026, 8, 24), (2000, 2, 29), (2011, 12, 31)] {
+            let orig = chrono::NaiveDate::from_ymd_opt(y, m, d).unwrap();
+            assert_eq!(super::from_jiff(super::to_jiff(orig)), Some(orig));
+        }
     }
 }

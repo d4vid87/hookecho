@@ -46,7 +46,10 @@ eframe = { version = "0.35", default-features = false, features = ["default_font
 # `serde` gives Key/Modifiers/KeyboardShortcut their Serialize/Deserialize impls, which is what
 # lets user keybinds live in settings.json.
 egui = { version = "0.35", features = ["serde"] }
-egui_extras = "0.35"
+egui_extras = { version = "0.35", features = ["datepicker"] }
+# Only to speak to egui_extras's date picker, which takes a jiff date rather than a chrono one.
+# Already in the tree via that feature; the app's own dates stay chrono.
+jiff = "0.2"
 wgpu = { version = "29", default-features = false, features = ["wgsl", "std"] }
 bytemuck.workspace = true
 anyhow.workspace = true
