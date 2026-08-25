@@ -33,6 +33,10 @@ impl HookEchoApp {
             return;
         }
         crate::prof_scope!("panel");
+        self.hint(
+            "info_links",
+            "Rows with an \u{24d8} explain themselves \u{2014} click it for what the              abbreviation means",
+        );
         let accent = crate::theme::accent(self.settings.theme);
         let entries = self.palette_entries();
         let mut query = std::mem::take(&mut self.layers_query);

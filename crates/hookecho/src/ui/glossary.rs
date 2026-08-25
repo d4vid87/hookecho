@@ -113,6 +113,32 @@ pub(crate) const ENTRIES: &[Entry] = &[
     },
 ];
 
+/// The glossary entry that explains `label`, if one does.
+///
+/// Matched on the abbreviation the plain-first labels keep in their parentheses — "Debris
+/// detection (TDS)" is exactly the case an ⓘ link exists for: the plain half says what it is for,
+/// the abbreviation is what everyone else calls it, and the entry is what it means. Matching on
+/// the abbreviation rather than a per-row table means a new registry row that names a known term
+/// gets its link for free.
+pub(crate) fn explains(label: &str) -> Option<usize> {
+    let up = label.to_uppercase();
+    ENTRIES.iter().position(|e| {
+        // Entry terms read "TDS — tornado debris signature"; the key is the head word, and it
+        // only counts as a hit when the label names it as a word of its own.
+        let key = e.term.split([' ', '\u{2014}']).next().unwrap_or("");
+        key.len() >= 3
+            && key.chars().all(|c| c.is_ascii_uppercase())
+            && up
+                .match_indices(key)
+                .any(|(i, _)| {
+                    let before = up[..i].chars().next_back();
+                    let after = up[i + key.len()..].chars().next();
+                    !before.is_some_and(|c| c.is_ascii_alphanumeric())
+                        && !after.is_some_and(|c| c.is_ascii_alphanumeric())
+                })
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -131,5 +157,21 @@ mod tests {
                 "missing {must}"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod link_tests {
+    use super::*;
+
+    #[test]
+    fn plain_first_labels_link_to_the_term_they_name() {
+        let i = explains("Debris detection (TDS)").expect("TDS is in the glossary");
+        assert!(ENTRIES[i].term.starts_with("TDS"));
+        assert!(explains("Hail spikes (TBSS)").is_some());
+        assert!(explains("Water aloft (VIL, derived)").is_some());
+        // A label that names no term, and one that only contains a term's letters inside a word.
+        assert_eq!(explains("Radar sites"), None);
+        assert_eq!(explains("TDSOMETHING"), None);
     }
 }

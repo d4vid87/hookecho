@@ -1193,6 +1193,9 @@ pub(crate) enum PaletteAction {
     OpenInWindy,
     /// Copy a `hookecho://goto/…` link to this view (site, center, zoom, archive time).
     CopyViewLink,
+    /// Open Help at the glossary entry that explains a label's abbreviation. An index into
+    /// `ui::glossary::ENTRIES` rather than the term itself, so the action stays `Copy`.
+    Explain(usize),
     /// Snapshot the current pane layout as a new workspace.
     SaveWorkspace,
     /// Restore the saved workspace at this index (an index, not the workspace itself, so the enum
@@ -6974,7 +6977,15 @@ impl HookEchoApp {
                     t
                 }
             }
-            PaletteAction::SetPanes(n) => self.set_pane_count(n),
+            PaletteAction::SetPanes(n) => {
+                self.set_pane_count(n);
+                if n > 1 {
+                    self.hint(
+                        "panes",
+                        "Each pane keeps its own radar, product and tilt \u{2014}                          turn on Link pane cameras to pan them together",
+                    );
+                }
+            }
             PaletteAction::AllTilts => self.apply_all_tilts(),
             PaletteAction::CycleBasemap => {
                 let (mb, mt) = (
@@ -6989,6 +7000,7 @@ impl HookEchoApp {
                 self.set_basemap(next);
             }
             PaletteAction::ToggleMute => self.apply_action(BindableAction::ToggleMute, ctx),
+            PaletteAction::Explain(i) => self.help_hub.explain(i),
             PaletteAction::TogglePanel => self.panel_open = !self.panel_open,
             PaletteAction::Reload => self.trigger_reload(ctx),
             PaletteAction::InstantReplay => self.instant_replay(),
