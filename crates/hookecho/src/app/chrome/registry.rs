@@ -182,6 +182,14 @@ impl HookEchoApp {
                 false,
             ),
             (
+                FL::SnowBands,
+                "National",
+                "Snow bands",
+                "Snow organised into a line — the squall that whites out a road in two minutes, \
+                 cut out of the national mosaic",
+                false,
+            ),
+            (
                 FL::Vil,
                 "National",
                 "Water aloft (VIL, L3)",

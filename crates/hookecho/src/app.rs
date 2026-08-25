@@ -305,6 +305,8 @@ enum OverlaySource {
     FreezingLevels(f64, f64),
     /// NOHRSC observed snowfall analysis over an accumulation window (hours).
     Snow(u16),
+    /// Banded snow: the MRMS mosaic cut to elongated echo and masked to snow.
+    SnowBands,
     /// Nearest-station observations for `site` at `(lat, lon)`.
     Obs {
         site: String,
@@ -406,6 +408,19 @@ impl OverlaySource {
             }
             OverlaySource::Field(layer, product) => {
                 OverlayMsg::Field(layer, wxdata::mrms::fetch_latest(http, &product).await?)
+            }
+            OverlaySource::SnowBands => {
+                // Both grids at once: the mask is useless without the echo and vice versa.
+                let (mosaic, flags) = futures_util::future::try_join(
+                    wxdata::mrms::fetch_latest(http, wxdata::mrms::REFLECTIVITY),
+                    wxdata::mrms::fetch_latest(http, wxdata::mrms::PRECIP_TYPE),
+                )
+                .await?;
+                // MRMS PrecipFlag: 3 is snow, 4 is wet snow. Everything else is rain, ice or
+                // nothing, and a snow-squall layer that lit up over warm rain would be a liar.
+                let bands = wxdata::banding::bands(&mosaic, 20.0, Some((&flags, &[3, 4])))
+                    .ok_or_else(|| anyhow::anyhow!("the mosaic came back empty"))?;
+                OverlayMsg::Field(crate::render::FieldLayer::SnowBands, bands)
             }
             OverlaySource::Global(layer, model, field, fh) => {
                 let fc = wxdata::global::fetch(http, model, field, fh).await?;
@@ -1294,6 +1309,8 @@ fn field_refresh_secs(layer: crate::render::FieldLayer) -> u64 {
         FL::Qpe1h | FL::Qpe24h => 120,
         // MRMS precip type / flash-flood ARI on the ~2-min cadence; L3 grids on the 120 s L3 cadence.
         FL::PrecipType | FL::FlashFlood | FL::Vil | FL::EchoTops | FL::Hca => 120,
+        // Bands are cut from the ~2-min mosaic, so they are as fresh as it is.
+        FL::SnowBands => 120,
         FL::UpdraftHelicity => 600,
         // Snowfall accumulates over a whole model run; it moves as slowly as the run does.
         FL::Snowfall => 600,
@@ -9017,7 +9034,9 @@ impl HookEchoApp {
             | FL::GlobalWind10m
             | FL::GlobalPrecip
             | FL::ModelDiff
-            | FL::GlmFed => return None,
+            | FL::GlmFed
+            // Built from two grids at once, so it has a fetch block of its own.
+            | FL::SnowBands => return None,
         })
     }
 
@@ -14321,6 +14340,21 @@ impl eframe::App for HookEchoApp {
             if stale {
                 self.fields.entry(layer).or_default().last_fetch = Some(Instant::now());
                 self.spawn_overlay(ctx, OverlaySource::Field(layer, product));
+            }
+        }
+        // Snow bands: the mosaic and the precipitation-type grid, cut to the banded snow.
+        {
+            let layer = FL::SnowBands;
+            let stale = self.fields.get(&layer).is_some_and(|s| {
+                s.show
+                    && s.last_fetch
+                        .is_none_or(|t| t.elapsed().as_secs() >= field_refresh_secs(layer))
+            });
+            if stale {
+                if let Some(s) = self.fields.get_mut(&layer) {
+                    s.last_fetch = Some(Instant::now());
+                }
+                self.spawn_overlay(ctx, OverlaySource::SnowBands);
             }
         }
         // Environment suite (HRRR CAPE/SRH): fetch each enabled layer at f00, refresh ~15 min.
