@@ -3927,6 +3927,7 @@ impl HookEchoApp {
             return;
         }
         crate::audio::play(sound, self.settings.alert_volume);
+        crate::platform::haptic(crate::platform::Haptic::Alert);
     }
 
     /// A sound quiet hours does not silence: the escalated warning tiers and the two detections
@@ -3937,6 +3938,7 @@ impl HookEchoApp {
             return;
         }
         crate::audio::play(sound, self.settings.alert_volume);
+        crate::platform::haptic(crate::platform::Haptic::Alert);
     }
 
     /// Everywhere the proximity alerts watch: the saved markers, plus your own live position when
@@ -9792,6 +9794,10 @@ impl HookEchoApp {
         // and arming Interrogate first to ask "what is that" is a step nobody discovers — so the
         // press that means "tell me about this" is the press people already try.
         let long_press = cfg!(target_os = "android") && response.long_touched();
+        if long_press {
+            // Before anything is drawn: the buzz is what says the press was heard.
+            crate::platform::haptic(crate::platform::Haptic::Press);
+        }
         if (response.clicked() || long_press) && quiet {
             self.active = idx;
             // What this press means. A long press is always an interrogation; anything else is
