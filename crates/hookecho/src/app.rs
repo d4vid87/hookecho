@@ -2492,6 +2492,21 @@ impl HookEchoApp {
         // face has none. Cheap; desktop uses them too (no-op if unreferenced).
         let mut fonts = egui::FontDefinitions::default();
         egui_phosphor::add_to_fonts(&mut fonts, egui_phosphor::Variant::Regular);
+        // Inter as the proportional face on every platform, ahead of egui's default. A Latin +
+        // punctuation + symbol subset (SIL OFL, see data/fonts/Inter-LICENSE.txt) — ~26 KB
+        // gzipped. egui's defaults stay in the list behind it as the fallback for anything the
+        // subset dropped, so a missing glyph is a fallback, not a box.
+        fonts.font_data.insert(
+            "Inter".to_owned(),
+            std::sync::Arc::new(egui::FontData::from_static(include_bytes!(
+                "../data/fonts/Inter-Regular-subset.ttf"
+            ))),
+        );
+        fonts
+            .families
+            .entry(egui::FontFamily::Proportional)
+            .or_default()
+            .insert(0, "Inter".to_owned());
         cc.egui_ctx.set_fonts(fonts);
 
         #[cfg(not(target_arch = "wasm32"))]
