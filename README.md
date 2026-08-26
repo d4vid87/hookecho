@@ -643,11 +643,13 @@ sweep during a scan rather than waiting out the whole volume. Settings persist t
 own audio and `speechSynthesis`. It is also **installable**: a manifest and a
 service worker put it on the home screen or in its own window, and precache the
 app shell so a launch with no signal still opens the map instead of a browser
-error. Only the shell is cached — radar and everything through the proxy stay on
-the network, because a cached radar frame is a wrong radar frame.
+error. Basemap tiles are cached too, so a second visit draws the map without
+re-downloading geography that has not moved. Radar, satellite and everything else
+through the proxy stay on the network, because a cached radar frame is a wrong
+radar frame.
 
 This is a **core viewer**, though, not parity.
-There is no filesystem, so caches are memory-only and imports and exports are
+There is no filesystem, so volume caches are memory-only and imports and exports are
 out; there is no camera, plugin or GPS support; and any feed whose host refuses
 cross-origin requests simply doesn't load. Anything that needs those is on the
 desktop and Android builds.
