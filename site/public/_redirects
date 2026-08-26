@@ -1,0 +1,4 @@
+# Cloudflare Pages redirects. Both hookecho.io and www.hookecho.io point at this project, so the
+# www copy is redirected here rather than in a dashboard rule — one less thing living outside git.
+# A rule with a scheme+host matches on the full URL; the 301! forces it ahead of the static asset.
+https://www.hookecho.io/* https://hookecho.io/:splat 301!
