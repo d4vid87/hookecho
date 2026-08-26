@@ -1,0 +1,46 @@
+---
+import { getCollection } from "astro:content";
+import Base from "../../layouts/Base.astro";
+
+// Same date on every launch post, so the id is the tiebreak that keeps the order stable.
+const posts = (await getCollection("blog")).sort(
+  (a, b) => b.data.date.valueOf() - a.data.date.valueOf() || a.id.localeCompare(b.id),
+);
+---
+
+<Base
+  title="Blog — HookEcho"
+  description="Release notes and plain-language explainers about weather radar, from the people building HookEcho."
+>
+  <div class="wrap blog">
+    <p class="eyebrow">Blog</p>
+    <h1>Release notes, and how radar works</h1>
+    <p>
+      What's new in the app, and explainers for anyone who wants to read a radar display
+      properly. <a href="/rss.xml">RSS</a>.
+    </p>
+
+    <ul class="posts">
+      {posts.map((post) => (
+        <li>
+          <time datetime={post.data.date.toISOString().slice(0, 10)}>
+            {post.data.date.toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric", timeZone: "UTC" })}
+          </time>
+          <h2><a href={`/blog/${post.id}/`}>{post.data.title}</a></h2>
+          <p>{post.data.description}</p>
+        </li>
+      ))}
+    </ul>
+  </div>
+</Base>
+
+<style>
+  .blog { padding: 3rem 0 4.5rem; }
+  .posts { list-style: none; margin: 2.5rem 0 0; padding: 0; display: grid; gap: 2.2rem; }
+  .posts li { max-width: var(--measure); }
+  .posts time { font-size: 0.8rem; color: var(--text-dim); letter-spacing: 0.04em; }
+  .posts h2 { font-size: 1.35rem; margin: 0.3rem 0 0.4rem; }
+  .posts h2 a { color: var(--text); text-decoration: none; }
+  .posts h2 a:hover { color: var(--accent); }
+  .posts p { color: var(--text-dim); margin: 0; }
+</style>
