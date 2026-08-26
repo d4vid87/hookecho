@@ -25,7 +25,7 @@ mod imp {
             "hookecho".into()
         }
         fn title(&self) -> String {
-            "Hook Echo-WX".into()
+            "HookEcho".into()
         }
         fn icon_pixmap(&self) -> Vec<ksni::Icon> {
             vec![self.icon.clone()]
@@ -38,7 +38,7 @@ mod imp {
             use ksni::menu::StandardItem;
             vec![
                 StandardItem {
-                    label: "Show Hook Echo-WX".into(),
+                    label: "Show HookEcho".into(),
                     activate: Box::new(|t: &mut HookEchoTray| {
                         let _ = t.tx.send(TrayCmd::Show);
                     }),
@@ -57,7 +57,7 @@ mod imp {
         }
     }
 
-    /// ARGB32 (network byte order) tray icon from our procedural logo.
+    /// ARGB32 (network byte order) tray icon from the app logo.
     fn logo_icon() -> ksni::Icon {
         let size = 64usize;
         let mut data = crate::icon::rgba(size); // RGBA

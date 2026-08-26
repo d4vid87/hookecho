@@ -1,1 +1,1 @@
-Hook Echo-WX
+HookEcho

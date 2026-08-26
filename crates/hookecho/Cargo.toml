@@ -1,6 +1,6 @@
 [package]
 name = "hookecho"
-description = "Hook Echo-WX — advanced NEXRAD weather radar viewer"
+description = "HookEcho — advanced NEXRAD weather radar viewer"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -182,10 +182,10 @@ jni = "0.21"
 # `target/deb-assets/`, so no PNG is committed; `packaging/build-deb.sh` does that first.
 [package.metadata.deb]
 maintainer = "d4vid87 <davidmay87@gmail.com>"
-copyright = "2026, Hook Echo-WX contributors"
+copyright = "2026, HookEcho contributors"
 license-file = ["../../LICENSE", "0"]
 extended-description = """\
-Hook Echo-WX renders NEXRAD Level II and Level III radar with dual-pol moments, \
+HookEcho renders NEXRAD Level II and Level III radar with dual-pol moments, \
 storm-relative velocity, derived products, warnings, satellite and lightning — \
 locally, with no account and no central server."""
 section = "science"

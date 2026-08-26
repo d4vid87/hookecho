@@ -1,4 +1,4 @@
-"""Hook Echo-WX integration: poll a local `hookecho --serve` for conditions and alerts."""
+"""HookEcho integration: poll a local `hookecho --serve` for conditions and alerts."""
 
 from __future__ import annotations
 

@@ -1,13 +1,13 @@
-; Inno Setup script: classic setup.exe for Hook Echo-WX.
+; Inno Setup script: classic setup.exe for HookEcho.
 ; CI passes /DAppVersion=X.Y.Z and /DExeDir=path\to\dir-containing-hookecho.exe.
 
 [Setup]
 AppId={{c5f4f6f0-52c0-4b6e-9d3e-2c8f6f7d1b11}
-AppName=Hook Echo-WX
+AppName=HookEcho
 AppVersion={#AppVersion}
-AppPublisher=Hook Echo-WX project
-DefaultDirName={autopf}\Hook Echo-WX
-DefaultGroupName=Hook Echo-WX
+AppPublisher=HookEcho project
+DefaultDirName={autopf}\HookEcho
+DefaultGroupName=HookEcho
 DisableProgramGroupPage=yes
 OutputBaseFilename=Hook_Echo-WX-setup-x86_64
 Compression=lzma2
@@ -22,12 +22,12 @@ UninstallDisplayIcon={app}\hookecho.exe
 Source: "{#ExeDir}\hookecho.exe"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
-Name: "{group}\Hook Echo-WX"; Filename: "{app}\hookecho.exe"
-Name: "{autodesktop}\Hook Echo-WX"; Filename: "{app}\hookecho.exe"; Tasks: desktopicon
+Name: "{group}\HookEcho"; Filename: "{app}\hookecho.exe"
+Name: "{autodesktop}\HookEcho"; Filename: "{app}\hookecho.exe"; Tasks: desktopicon
 
 [Registry]
 ; Shared hookecho:// links open the app, the way they already do on Android.
-Root: HKLM; Subkey: "Software\Classes\hookecho"; ValueType: string; ValueName: ""; ValueData: "URL:Hook Echo-WX"; Flags: uninsdeletekey
+Root: HKLM; Subkey: "Software\Classes\hookecho"; ValueType: string; ValueName: ""; ValueData: "URL:HookEcho"; Flags: uninsdeletekey
 Root: HKLM; Subkey: "Software\Classes\hookecho"; ValueType: string; ValueName: "URL Protocol"; ValueData: ""
 Root: HKLM; Subkey: "Software\Classes\hookecho\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: "{app}\hookecho.exe,0"
 Root: HKLM; Subkey: "Software\Classes\hookecho\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\hookecho.exe"" ""%1"""
@@ -36,4 +36,4 @@ Root: HKLM; Subkey: "Software\Classes\hookecho\shell\open\command"; ValueType: s
 Name: "desktopicon"; Description: "Create a &desktop shortcut"; Flags: unchecked
 
 [Run]
-Filename: "{app}\hookecho.exe"; Description: "Launch Hook Echo-WX"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\hookecho.exe"; Description: "Launch HookEcho"; Flags: nowait postinstall skipifsilent

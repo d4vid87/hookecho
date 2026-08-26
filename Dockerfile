@@ -1,4 +1,4 @@
-# Hook Echo-WX as a service: `--serve` in a container, radar snapshots included.
+# HookEcho as a service: `--serve` in a container, radar snapshots included.
 #
 # The snapshot endpoint renders through wgpu with no display attached, so the runtime image
 # carries Mesa's lavapipe software Vulkan driver. That is what makes this image ~400 MB rather

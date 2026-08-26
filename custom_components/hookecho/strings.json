@@ -2,7 +2,7 @@
   "config": {
     "step": {
       "user": {
-        "title": "Hook Echo-WX",
+        "title": "HookEcho",
         "description": "Point this at a machine running `hookecho --serve`.",
         "data": {
           "host": "Host",
@@ -12,7 +12,7 @@
     },
     "error": {
       "cannot_connect": "Nothing answered at that address. Is `hookecho --serve` running, and is it bound somewhere this Home Assistant can reach (`--bind 0.0.0.0`)?",
-      "invalid_response": "Something answered, but it wasn't a Hook Echo-WX status report.",
+      "invalid_response": "Something answered, but it wasn't a HookEcho status report.",
       "no_locations": "The server is running but has no saved locations, so there would be nothing to report. Add a marker in the app first."
     },
     "abort": {

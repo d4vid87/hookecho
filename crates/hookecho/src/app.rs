@@ -1,4 +1,4 @@
-//! Hook Echo-WX application shell: the map view, its floating chrome, and the async data flow.
+//! HookEcho application shell: the map view, its floating chrome, and the async data flow.
 //!
 //! UI code only mutates the active [`MapView`]; a single per-frame sync step turns those
 //! mutations into GPU uploads and background fetches, so buttons and hotkeys share one path.
@@ -7145,7 +7145,7 @@ impl HookEchoApp {
                 });
                 // A phone or a tablet has a share sheet, and pasting into a chat is what this is
                 // for; the clipboard is the fallback for everything that does not.
-                if !crate::platform::share_link("Hook Echo-WX", &link) {
+                if !crate::platform::share_link("HookEcho", &link) {
                     ctx.copy_text(link.clone());
                     self.banner("Link copied".to_string(), link);
                 }
@@ -9631,7 +9631,7 @@ impl HookEchoApp {
             )
         };
         let builder = egui::ViewportBuilder::default()
-            .with_title("Hook Echo-WX — mini loop")
+            .with_title("HookEcho — mini loop")
             .with_inner_size([340.0, 260.0])
             .with_decorations(false)
             // Honoured on X11 only. The comment here used to blame GNOME's policy and say KDE
@@ -12984,7 +12984,7 @@ impl HookEchoApp {
             // as dots on the same radar. LAN needs no setup; the relay covers cellular.
             ui.checkbox(&mut self.settings.share_position, "Share my position")
                 .on_hover_text(
-                    "Broadcast your GPS fix to other Hook Echo instances, and show theirs",
+                    "Broadcast your GPS fix to other HookEcho instances, and show theirs",
                 );
             if self.settings.share_position {
                 ui.horizontal(|ui| {
@@ -13089,7 +13089,7 @@ impl HookEchoApp {
             }
 
             ui.separator();
-            ui.weak("Hook Echo-WX — NEXRAD radar viewer");
+            ui.weak("HookEcho — NEXRAD radar viewer");
             ui.weak("github.com/d4vid87/hookecho");
             if ui.button("Set up again…").clicked() {
                 self.firstrun.start();
@@ -13606,7 +13606,7 @@ impl HookEchoApp {
                             egui::Image::new(&logo).fit_to_exact_size(egui::vec2(16.0, 16.0)),
                         );
                         ui.label(
-                            egui::RichText::new("Hook Echo-WX · data: NOAA/NWS")
+                            egui::RichText::new("HookEcho · data: NOAA/NWS")
                                 .size(crate::ui::style::FONT_SM)
                                 .color(egui::Color32::from_gray(160)),
                         );
@@ -15094,7 +15094,7 @@ impl eframe::App for HookEchoApp {
         while let Ok(state) = self.update_rx.try_recv() {
             self.update_state = state;
             if let ui::about_window::UpdateState::Newer(v) = self.update_state.clone() {
-                self.toast(ToastKind::Info, format!("Hook Echo-WX {v} is available"));
+                self.toast(ToastKind::Info, format!("HookEcho {v} is available"));
             }
         }
         if self.about_open {

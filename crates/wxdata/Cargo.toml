@@ -1,6 +1,6 @@
 [package]
 name = "wxdata"
-description = "Weather radar data acquisition and domain model for Hook Echo-WX"
+description = "Weather radar data acquisition and domain model for HookEcho"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

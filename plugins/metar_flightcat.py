@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Colour every airport in view by flight category (VFR / MVFR / IFR / LIFR).
 
-An example Hook Echo-WX plugin: read the view from the environment, print a placefile on stdout,
+An example HookEcho plugin: read the view from the environment, print a placefile on stdout,
 exit 0. Nothing else is required of a plugin — no library, no registration, no build step.
 
     Name:     metar

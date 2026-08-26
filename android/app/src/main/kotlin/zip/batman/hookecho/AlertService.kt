@@ -84,7 +84,7 @@ class AlertService : Service() {
     private fun statusNotification(): Notification =
         Notification.Builder(this, CH_STATUS)
             .setSmallIcon(android.R.drawable.ic_menu_compass)
-            .setContentTitle("Hook Echo-WX is watching your locations")
+            .setContentTitle("HookEcho is watching your locations")
             .setContentText("Alerts arrive even with the app closed")
             .setOngoing(true)
             .build()

@@ -5,6 +5,8 @@ Cargo.lock
 !android/app/src/main/res/**/*.png
 !crates/hookecho/tests/golden/*.png
 !web/icon-*.png
+!assets/brand/*.png
+!crates/hookecho/data/*.png
 /dist
 # Browser bundle output (scripts/web/build.sh).
 /web/dist/

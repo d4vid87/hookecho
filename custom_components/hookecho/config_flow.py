@@ -20,7 +20,7 @@ SCHEMA = vol.Schema(
 
 
 class HookEchoConfigFlow(ConfigFlow, domain=DOMAIN):
-    """Handle a config flow for Hook Echo-WX."""
+    """Handle a config flow for HookEcho."""
 
     VERSION = 1
 
@@ -35,7 +35,7 @@ class HookEchoConfigFlow(ConfigFlow, domain=DOMAIN):
             error = await self._probe(host, port)
             if error is None:
                 return self.async_create_entry(
-                    title=f"Hook Echo-WX ({host})", data=user_input
+                    title=f"HookEcho ({host})", data=user_input
                 )
             errors["base"] = error
 

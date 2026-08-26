@@ -1,4 +1,4 @@
-/* Hook Echo C ABI. Link against libhookecho_ffi (cdylib or staticlib).
+/* HookEcho C ABI. Link against libhookecho_ffi (cdylib or staticlib).
    ponytail: cbindgen when the surface grows. */
 #ifndef HOOKECHO_H
 #define HOOKECHO_H

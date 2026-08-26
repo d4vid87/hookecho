@@ -1,4 +1,4 @@
-//! C ABI bridge to the Hook Echo decoders.
+//! C ABI bridge to the HookEcho decoders.
 //!
 //! The bridge hands back JSON rather than opaque handles. A decoded `Level3Product` is a tree of
 //! `Vec`s, `String`s and nested `Vec`s; exposing it accessor-by-accessor would take dozens of

@@ -134,7 +134,7 @@ impl HookEchoApp {
         };
         let mut open = true;
         let mut dismiss = false;
-        egui::Window::new("Hook Echo-WX closed unexpectedly last time")
+        egui::Window::new("HookEcho closed unexpectedly last time")
             .open(&mut open)
             .collapsible(false)
             .default_size([560.0, 320.0])

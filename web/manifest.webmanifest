@@ -1,6 +1,6 @@
 {
-  "name": "Hook Echo-WX",
-  "short_name": "Hook Echo",
+  "name": "HookEcho",
+  "short_name": "HookEcho",
   "description": "NEXRAD radar, satellite and warnings in the browser.",
   "start_url": "/",
   "scope": "/",

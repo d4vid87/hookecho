@@ -104,7 +104,7 @@ impl HookEchoApp {
                     ui.horizontal(|ui| {
                         if !phone() {
                             ui.label(
-                                egui::RichText::new("Hook Echo-WX")
+                                egui::RichText::new("HookEcho")
                                     .size(13.0)
                                     .strong()
                                     .color(accent),

@@ -1,4 +1,4 @@
-Hook Echo-WX is a full-fidelity weather radar viewer for storm chasers, spotters and
+HookEcho is a full-fidelity weather radar viewer for storm chasers, spotters and
 weather nerds — the same Rust engine as the desktop build, drawing every pixel on the GPU.
 
 It reads the real data, not a rendered picture of it: NEXRAD Level 2 super-resolution

@@ -40,7 +40,7 @@ pub fn install_hook() {
 /// The report body. Split out so a test can assert what does — and does not — end up in it.
 pub fn format_report(msg: &str, location: Option<&str>, backtrace: &str) -> String {
     format!(
-        "Hook Echo-WX {} on {}\n{}\n\npanic: {msg}\nat {}\n\n{backtrace}",
+        "HookEcho {} on {}\n{}\n\npanic: {msg}\nat {}\n\n{backtrace}",
         env!("CARGO_PKG_VERSION"),
         std::env::consts::OS,
         chrono::Utc::now().format("%Y-%m-%d %H:%M:%SZ"),

@@ -1,10 +1,10 @@
 # Settings sync with Google
 
 Sign in once and your settings — saved locations, placefiles, palette choices, theme, alert
-configuration and API keys — stay the same on every machine you run Hook Echo-WX on.
+configuration and API keys — stay the same on every machine you run HookEcho on.
 
 The data lives in **your own Google Drive**, in the hidden per-app folder (`appDataFolder`) that
-only this app and you can see. There is no Hook Echo server, no account, and nothing to pay for.
+only this app and you can see. There is no HookEcho server, no account, and nothing to pay for.
 The OAuth grant covers exactly one scope, `drive.appdata`: it cannot read the rest of your Drive.
 
 Three things stay local to each machine, because they describe the machine and not you:
@@ -13,7 +13,7 @@ alerts are on. Everything else follows the sync.
 
 ## One-time setup: your own OAuth client
 
-Hook Echo ships no client id. A shared one in an open-source binary would put every user on one
+HookEcho ships no client id. A shared one in an open-source binary would put every user on one
 quota, and one abusive user could get it revoked for everybody. Making your own takes a few
 minutes and it is yours.
 

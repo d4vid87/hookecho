@@ -1,4 +1,4 @@
-//! Hook Echo-WX library crate: the app shell, render pipelines, and platform glue shared by the
+//! HookEcho library crate: the app shell, render pipelines, and platform glue shared by the
 //! desktop binary (`main.rs`) and the Android `cdylib` (`android_main`, below).
 //!
 //! The same `HookEchoApp` drives both; only the launch path differs — desktop builds a windowed
@@ -139,7 +139,7 @@ pub fn run_desktop() -> eframe::Result<()> {
             // The floating chrome has fixed-width cards; below this they stack on top of the map
             // and each other.
             .with_min_inner_size([800.0, 500.0])
-            .with_title("Hook Echo-WX")
+            .with_title("HookEcho")
             .with_decorations(os_decorated())
             // Matches the .desktop file, so Wayland taskbars find the icon.
             .with_app_id("hookecho")
@@ -149,7 +149,7 @@ pub fn run_desktop() -> eframe::Result<()> {
     };
     cap_texture_limit_to_adapter(&mut native_options.wgpu_options);
     eframe::run_native(
-        "Hook Echo-WX",
+        "HookEcho",
         native_options,
         Box::new(|cc| Ok(Box::new(HookEchoApp::new(cc)))),
     )
@@ -233,7 +233,7 @@ fn android_main(app: winit::platform::android::activity::AndroidApp) {
     };
     cap_texture_limit_to_adapter(&mut native_options.wgpu_options);
     if let Err(e) = eframe::run_native(
-        "Hook Echo-WX",
+        "HookEcho",
         native_options,
         Box::new(|cc| Ok(Box::new(HookEchoApp::new(cc)))),
     ) {

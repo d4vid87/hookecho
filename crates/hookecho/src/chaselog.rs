@@ -83,7 +83,7 @@ impl Track {
         };
         let mut s = String::from(
             "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<gpx version=\"1.1\" \
-             creator=\"Hook Echo-WX\" xmlns=\"http://www.topografix.com/GPX/1/1\">\n",
+             creator=\"HookEcho\" xmlns=\"http://www.topografix.com/GPX/1/1\">\n",
         );
         for (idx, label) in &self.waypoints {
             let Some(p) = self.points.get(*idx) else {

@@ -9,7 +9,7 @@
 // ponytail: no stored state. The window is 8 days against a weekly cron, so clock skew produces a
 // repeat rather than a gap.
 const REPO = "d4vid87/hookecho";
-const QUERY = "hookecho OR \"Hook Echo-WX\"";
+const QUERY = "hookecho OR \"HookEcho\"";
 const SINCE = Date.now() - 8 * 24 * 3600 * 1000;
 const UA = "hookecho-digest (github.com/d4vid87/hookecho)";
 
@@ -74,7 +74,7 @@ await section("GitHub", async () => {
 });
 
 const body = [
-  `**Hook Echo-WX — last 8 days**`,
+  `**HookEcho — last 8 days**`,
   ...sections,
   failures.length ? `_sources that failed: ${failures.join("; ")}_` : "",
 ]

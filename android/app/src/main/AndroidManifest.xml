@@ -20,7 +20,7 @@
          cadence and fewer basemap tiles (see `platform::is_metered`). Not a runtime prompt. -->
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 
-    <!-- Position sharing listens for UDP broadcasts from other Hook Echo instances on the same
+    <!-- Position sharing listens for UDP broadcasts from other HookEcho instances on the same
          network; Android drops those packets unless the app holds a Wi-Fi multicast lock. -->
     <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
 

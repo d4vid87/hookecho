@@ -54,7 +54,7 @@ function highlights(body, max) {
 }
 
 const body = notes();
-const headline = `Hook Echo-WX ${version} is out — an open-source NEXRAD radar viewer in Rust (wgpu + egui). No accounts, no telemetry, runs on your machine.`;
+const headline = `HookEcho ${version} is out — an open-source NEXRAD radar viewer in Rust (wgpu + egui). No accounts, no telemetry, runs on your machine.`;
 
 function compose(limit, links) {
   const tail = `\n\n${links}`;
@@ -217,27 +217,27 @@ Reddit and HN are deliberately not automated. Reply to everything for the first
 
 ${sub(
   "rust",
-  `Hook Echo-WX ${version} — NEXRAD weather radar in Rust, wgpu + egui, also compiled to wasm`,
+  `HookEcho ${version} — NEXRAD weather radar in Rust, wgpu + egui, also compiled to wasm`,
   "Written from scratch in Rust: Level 2/3 radar decode, a wgpu render pipeline, egui UI, and the same codebase running as a desktop app, an Android APK and a wasm build in the browser. Happy to talk about the rendering or the decoding.",
 )}
 ${sub(
   "meteorology",
-  `Hook Echo-WX ${version} — a free, open-source radar viewer with soundings, effective-layer parameters and model fields`,
+  `HookEcho ${version} — a free, open-source radar viewer with soundings, effective-layer parameters and model fields`,
   "Free and open source, no account or subscription. Level 2/3 per-site analysis, archive replay back to 1991, forecast soundings with effective-layer severe parameters, HRRR/RAP/GFS/ECMWF fields and a model difference layer.",
 )}
 ${sub(
   "stormchasing",
-  `Hook Echo-WX ${version} — open-source radar for chasing: archive replay, spotter network, rain-arrival ETA, offline chase packs`,
+  `HookEcho ${version} — open-source radar for chasing: archive replay, spotter network, rain-arrival ETA, offline chase packs`,
   "Built for the road: offline chase packs, GPS position sharing through your own relay, spotter network overlay, warning alerts read aloud, rain-arrival ETA, and Android as well as desktop. No subscription.",
 )}
 ${sub(
   "opensource",
-  `Hook Echo-WX ${version} — MIT-licensed NEXRAD radar viewer, no accounts, no telemetry`,
+  `HookEcho ${version} — MIT-licensed NEXRAD radar viewer, no accounts, no telemetry`,
   "MIT, Rust, no hosted service and no telemetry — the app talks to public NOAA/NWS feeds from your own machine. Linux AppImage, Windows installer, Android APK, container image, and a browser build.",
 )}
 ## Hacker News (Show HN)
 
-**Title:** Show HN: Hook Echo-WX – NEXRAD weather radar viewer in Rust (${DEMO})
+**Title:** Show HN: HookEcho – NEXRAD weather radar viewer in Rust (${DEMO})
 
 **First comment (post it immediately after submitting):**
 

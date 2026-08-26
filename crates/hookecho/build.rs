@@ -16,10 +16,10 @@ fn main() {
         println!("cargo:rerun-if-changed=../../packaging/windows/icon.ico");
         let mut res = winresource::WindowsResource::new();
         res.set_icon("../../packaging/windows/icon.ico")
-            .set("ProductName", "Hook Echo-WX")
+            .set("ProductName", "HookEcho")
             .set(
                 "FileDescription",
-                "Hook Echo-WX — NEXRAD weather radar viewer",
+                "HookEcho — NEXRAD weather radar viewer",
             )
             .set("LegalCopyright", "MIT licensed");
         if let Err(e) = res.compile() {

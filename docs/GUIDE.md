@@ -122,7 +122,7 @@ warned for.
   approach and escape bearing.
 - **Offline chase packs**: pre-download basemap tiles for the area you're
   driving into, before you lose signal. Radar still needs data; the map won't.
-- **Position sharing**: opt in and every Hook Echo on the same network sees
+- **Position sharing**: opt in and every HookEcho on the same network sees
   everyone's dot. Off-network, point it at a relay URL you host.
 - **Streamer mode**: `F8` hides the chrome, `F9` auto-tours active warnings.
 

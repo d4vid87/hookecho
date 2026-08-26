@@ -920,7 +920,7 @@ fn index(server: &Server) -> String {
     format!(
         r##"<!doctype html><html lang="en"><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Hook Echo-WX</title>
+<title>HookEcho</title>
 <!-- No icon to serve, and without this the browser asks for /favicon.ico on every load and logs
      the 404 it gets. -->
 <link rel="icon" href="data:,">

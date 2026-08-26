@@ -119,7 +119,7 @@ launch() { # launch SITE,lon,lat,zoom[,RFC3339]  [settings-overrides-json]
     # cache means every scene waits on Mapbox before it can settle.
     "$BIN" >"$WORK/app.log" 2>&1 & )
   for _ in $(seq 40); do
-    WID="$(DISPLAY="$DISPLAY_NUM" xdotool search --name "Hook Echo" 2>/dev/null | tail -1 || true)"
+    WID="$(DISPLAY="$DISPLAY_NUM" xdotool search --name "HookEcho" 2>/dev/null | tail -1 || true)"
     [ -n "$WID" ] && break
     sleep 0.5
   done

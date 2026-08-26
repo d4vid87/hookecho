@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Plot local storm reports — hail, wind, tornadoes — for the time on screen.
 
-An example Hook Echo-WX plugin: read the view from the environment, print a placefile on stdout,
+An example HookEcho plugin: read the view from the environment, print a placefile on stdout,
 exit 0. This one is archive-aware on purpose: it asks the IEM for the six hours ending at
 HOOKECHO_TIME, so scrubbing back through an event shows the reports as they came in.
 

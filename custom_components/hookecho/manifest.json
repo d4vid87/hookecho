@@ -1,6 +1,6 @@
 {
   "domain": "hookecho",
-  "name": "Hook Echo-WX",
+  "name": "HookEcho",
   "codeowners": ["@d4vid87"],
   "config_flow": true,
   "documentation": "https://github.com/d4vid87/hookecho",
