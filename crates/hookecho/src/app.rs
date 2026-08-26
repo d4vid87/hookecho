@@ -1824,6 +1824,8 @@ pub struct HookEchoApp {
     /// About window + the once-per-session release check.
     about_open: bool,
     update_state: ui::about_window::UpdateState,
+    /// Update chip dismissed this session (see `chrome::chips::update_chip`).
+    update_chip_hidden: bool,
     update_tx: Sender<ui::about_window::UpdateState>,
     update_rx: Receiver<ui::about_window::UpdateState>,
     geocode_tx: Sender<Result<(String, f64, f64), String>>,
@@ -2785,6 +2787,7 @@ impl HookEchoApp {
             msg_tx,
             about_open: false,
             update_state: ui::about_window::UpdateState::Idle,
+            update_chip_hidden: false,
             update_tx,
             update_rx,
             geocode_tx,
@@ -15054,6 +15057,7 @@ impl eframe::App for HookEchoApp {
                 self.basemap_panel(ctx);
                 self.info_chip(ctx);
                 self.error_chip(ctx);
+                self.update_chip(ctx);
             }
         }
 
@@ -15093,9 +15097,6 @@ impl eframe::App for HookEchoApp {
         }
         while let Ok(state) = self.update_rx.try_recv() {
             self.update_state = state;
-            if let ui::about_window::UpdateState::Newer(v) = self.update_state.clone() {
-                self.toast(ToastKind::Info, format!("HookEcho {v} is available"));
-            }
         }
         if self.about_open {
             let accent = crate::theme::accent(self.settings.theme);
