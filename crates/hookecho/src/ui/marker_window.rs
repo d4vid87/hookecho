@@ -174,7 +174,9 @@ pub fn marker_grid(
                                 .corner_radius(10.0),
                         );
                     }
-                    if ui.button("Browse…").clicked() {
+                    // Icons are copied into the data dir and referenced by name from then on;
+                    // in a browser there is no data dir, so there is nothing to browse to.
+                    if !cfg!(target_arch = "wasm32") && ui.button("Browse…").clicked() {
                         crate::dialog::request_open(
                             crate::dialog::ImportKind::MarkerIcon,
                             i.to_string(),
