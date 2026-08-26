@@ -32,9 +32,8 @@ cp "$ROOT/packaging/hookecho.desktop" "$APPDIR/hookecho.desktop"
 mkdir -p "$APPDIR/usr/share/applications"
 cp "$ROOT/packaging/hookecho.desktop" "$APPDIR/usr/share/applications/hookecho.desktop"
 
-# Icon: our procedural logo, rendered by the binary we just built. Every hicolor size is drawn at
-# its own resolution rather than resampled from one — the logo is vector arithmetic, so a 48 px
-# icon costs the same as scaling one and looks like it was meant.
+# Icon: the app logo, rendered by the binary we just built. Every hicolor size gets its own file
+# so the desktop picks one rather than scaling a 256 px PNG down to a 48 px slot itself.
 echo "==> rendering icons"
 "$APPDIR/usr/bin/hookecho" --headless-icon "$APPDIR/hookecho.png" 256
 for px in 48 64 128 256 512; do

@@ -101,8 +101,8 @@ fn main() -> eframe::Result<()> {
     }
 
     // Logo export: `hookecho --headless-icon <out.png> [SIZE]` (PNG inspection, not a desktop
-    // capture). The logo is drawn procedurally, so any size is exact rather than resampled —
-    // which is what the hicolor theme wants, one file per size.
+    // capture). Resampled from the bundled 256 px master, which is what the hicolor theme wants:
+    // one file per size, rather than one PNG the desktop scales itself.
     if let Some(pos) = args.iter().position(|a| a == "--headless-icon") {
         let out = args.get(pos + 1).map(String::as_str).unwrap_or("icon.png");
         let size = args

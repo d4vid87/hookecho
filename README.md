@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/brand/hookecho-logo.png" alt="HookEcho" width="320">
+</p>
+
 # HookEcho
 
 [![CI](https://github.com/d4vid87/hookecho/actions/workflows/ci.yml/badge.svg)](https://github.com/d4vid87/hookecho/actions/workflows/ci.yml)

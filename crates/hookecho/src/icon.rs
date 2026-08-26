@@ -1,88 +1,37 @@
-//! Procedural app logo: a hook-echo reflectivity signature on a dark radar scope.
+//! The app logo: the HookEcho mark, bundled as one PNG and resampled to whatever size a caller
+//! wants (window icon, tray, About page, `.ico` frames, hicolor theme export).
 //!
-//! Drawn in code (no bundled image asset) so it scales to any size and stays in the binary.
-//! `rgba(size)` returns straight RGBA8; `icon_data()` wraps the 64px version for the window.
+//! It used to be drawn procedurally — six blobs and a distance field — which scaled to any size
+//! for free but was never going to be the brand. The artwork replaces it. The bundled copy is a
+//! 256 px palette PNG (~24 KB): 256 is the largest size anything asks for, and the quantise keeps
+//! it cheap enough to ride in the wasm as well as the binary. Regenerate it from the master with
+//! `scripts/brand/icons.sh`.
+
+use std::sync::OnceLock;
+
+/// The 256 px master, decoded once per process.
+///
+/// ponytail: decoded eagerly on first use and kept for the process — it is ~256 KB of RGBA, and
+/// the alternative (decode per call) would re-run the PNG decoder for every tray repaint.
+fn master() -> &'static image::RgbaImage {
+    static MASTER: OnceLock<image::RgbaImage> = OnceLock::new();
+    MASTER.get_or_init(|| {
+        image::load_from_memory(include_bytes!("../data/logo.png"))
+            .expect("bundled logo.png decodes")
+            .to_rgba8()
+    })
+}
 
 /// Render the logo as `size × size` RGBA8 (row-major, straight alpha).
 pub fn rgba(size: usize) -> Vec<u8> {
-    let mut buf = vec![0u8; size * size * 4];
-    let s = size as f32;
-    let c = s * 0.5;
-    let r_scope = s * 0.47;
-
-    // Hook-echo core: a short arc of blob centers curling from center to lower-left, so the
-    // filled union reads as a supercell reflectivity max with a hook appendage. Points are in
-    // scope-radius units from center; distance-field union of soft disks colors by intensity.
-    let arc: [(f32, f32, f32); 6] = [
-        (0.10, -0.05, 0.30), // core (upper-right of the hook)
-        (0.02, 0.08, 0.26),
-        (-0.06, 0.20, 0.22),
-        (-0.16, 0.28, 0.18), // curling down-left
-        (-0.28, 0.26, 0.15),
-        (-0.34, 0.14, 0.12), // hook tip curling back up
-    ];
-
-    for y in 0..size {
-        for x in 0..size {
-            let px = x as f32 + 0.5;
-            let py = y as f32 + 0.5;
-            let dx = px - c;
-            let dy = py - c;
-            let dist = (dx * dx + dy * dy).sqrt();
-            let idx = (y * size + x) * 4;
-
-            if dist > r_scope + 1.0 {
-                continue; // transparent outside the disc
-            }
-
-            // Base scope: dark navy disc, brighter accent rim.
-            let mut col = [10u8, 18, 34, 255];
-            if dist > r_scope - s * 0.03 {
-                col = [77, 163, 255, 255]; // accent rim (#4da3ff)
-            } else {
-                // Faint green range rings + crosshair.
-                let ring1 = (dist - r_scope * 0.33).abs() < s * 0.008;
-                let ring2 = (dist - r_scope * 0.66).abs() < s * 0.008;
-                let cross = dx.abs() < s * 0.006 || dy.abs() < s * 0.006;
-                if ring1 || ring2 || cross {
-                    col = [30, 70, 50, 255];
-                }
-            }
-
-            // Hook-echo blobs: nearest blob's soft coverage picks a green→yellow→red color.
-            let mut best = f32::MAX;
-            for (bx, by, br) in arc {
-                let cx = c + bx * r_scope;
-                let cy = c + by * r_scope;
-                let d = ((px - cx).powi(2) + (py - cy).powi(2)).sqrt() / (br * r_scope);
-                if d < best {
-                    best = d;
-                }
-            }
-            if best < 1.0 {
-                col = dbz_color(best);
-            }
-
-            buf[idx..idx + 4].copy_from_slice(&col);
-        }
+    let size = size.max(1) as u32;
+    let m = master();
+    if m.width() == size && m.height() == size {
+        return m.as_raw().clone();
     }
-    buf
-}
-
-/// Reflectivity ramp for the hook: `t` is normalized distance from a blob center (0 = core).
-fn dbz_color(t: f32) -> [u8; 4] {
-    // 0.0 red core → 0.4 orange → 0.7 yellow → 1.0 green edge.
-    let (r, g, b) = if t < 0.4 {
-        let k = t / 0.4;
-        (230, (40.0 + k * 120.0) as u8, 20)
-    } else if t < 0.7 {
-        let k = (t - 0.4) / 0.3;
-        ((230.0 - k * 20.0) as u8, (160.0 + k * 80.0) as u8, 20)
-    } else {
-        let k = (t - 0.7) / 0.3;
-        ((210.0 - k * 160.0) as u8, 230, (20.0 + k * 40.0) as u8)
-    };
-    [r, g, b, 255]
+    // Lanczos3 down, which is what the small launcher sizes are; it is also fine on the rare
+    // upscale past 256 (`--headless-icon 512`), just soft.
+    image::imageops::resize(m, size, size, image::imageops::FilterType::Lanczos3).into_raw()
 }
 
 /// The 64px window icon.
@@ -97,9 +46,8 @@ pub fn icon_data() -> egui::IconData {
 
 /// The logo as a texture, drawn once and kept for the session.
 ///
-/// `rgba` is a per-pixel distance field over six blobs — cheap at 64 px, not something to redo
-/// every frame for a window that is open while somebody reads it. The handle lives in egui's own
-/// temp store keyed by size, which is already the right lifetime: it dies with the context.
+/// The handle lives in egui's own temp store keyed by size, which is already the right lifetime:
+/// it dies with the context.
 pub fn texture(ctx: &egui::Context, size: usize) -> egui::TextureHandle {
     let id = egui::Id::new(("app_logo_tex", size));
     if let Some(t) = ctx.data(|d| d.get_temp::<egui::TextureHandle>(id)) {
@@ -116,15 +64,16 @@ mod tests {
     use super::*;
 
     #[test]
-    fn has_red_core_and_clear_corners() {
-        let s = 64;
-        let px = rgba(s);
-        // Corner pixel is outside the disc → fully transparent.
-        assert_eq!(px[3], 0, "top-left corner transparent");
-        // Somewhere a strongly-red (hook core) pixel exists.
-        let red = px
-            .chunks_exact(4)
-            .any(|p| p[3] == 255 && p[0] > 180 && p[1] < 120 && p[2] < 80);
-        assert!(red, "logo has a red reflectivity core");
+    fn renders_the_mark_at_any_size() {
+        for s in [16usize, 64, 256] {
+            let px = rgba(s);
+            assert_eq!(px.len(), s * s * 4, "{s}px buffer is RGBA8");
+            // The artwork is a badge on transparency: the very corner is outside it.
+            assert_eq!(px[3], 0, "{s}px top-left corner is transparent");
+            // And something in the middle is opaque and colored, i.e. the decode produced the
+            // mark rather than an empty buffer.
+            let mid = ((s / 2) * s + s / 2) * 4;
+            assert_eq!(px[mid + 3], 255, "{s}px centre is opaque");
+        }
     }
 }

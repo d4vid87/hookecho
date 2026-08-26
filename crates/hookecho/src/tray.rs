@@ -57,7 +57,7 @@ mod imp {
         }
     }
 
-    /// ARGB32 (network byte order) tray icon from our procedural logo.
+    /// ARGB32 (network byte order) tray icon from the app logo.
     fn logo_icon() -> ksni::Icon {
         let size = 64usize;
         let mut data = crate::icon::rgba(size); // RGBA

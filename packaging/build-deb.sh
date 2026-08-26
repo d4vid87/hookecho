@@ -2,7 +2,7 @@
 # Build the Debian package of HookEcho.
 #
 # cargo-deb does the packaging; this script only does the two things it can't: build the release
-# binary and render the icons out of it (`--headless-icon`), which is why no PNG is committed. The
+# binary and render the icons out of it (`--headless-icon`), which is why no sized PNG is committed. The
 # asset list lives in `crates/hookecho/Cargo.toml` under `[package.metadata.deb]`.
 #
 # Usage: packaging/build-deb.sh
