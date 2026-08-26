@@ -1093,6 +1093,47 @@ fn alerts_tab(ui: &mut egui::Ui, settings: &mut Settings) {
     ui.weak("Every alert that goes to ntfy also posts here. Blank fields are off.");
     ui.weak("These URLs and the token are secrets — they stay in your settings file.");
 
+    // No Android (its alerts leave through the foreground service) and no web (no TCP socket).
+    if !cfg!(any(target_os = "android", target_arch = "wasm32")) {
+        ui.add_space(8.0);
+        ui.separator();
+        ui.strong("MQTT");
+        ui.horizontal(|ui| {
+            ui.label("Broker:");
+            ui.add(
+                egui::TextEdit::singleline(&mut settings.mqtt_host)
+                    .desired_width(160.0)
+                    .hint_text("mqtt.lan"),
+            );
+            ui.add(egui::DragValue::new(&mut settings.mqtt_port).range(1..=65535));
+            ui.checkbox(&mut settings.mqtt_tls, "TLS");
+        });
+        ui.horizontal(|ui| {
+            ui.label("User:");
+            ui.add(
+                egui::TextEdit::singleline(&mut settings.mqtt_user)
+                    .desired_width(110.0)
+                    .hint_text("optional"),
+            );
+            ui.label("Password:");
+            ui.add(
+                egui::TextEdit::singleline(&mut settings.mqtt_pass)
+                    .desired_width(110.0)
+                    .password(true),
+            );
+        });
+        ui.horizontal(|ui| {
+            ui.label("Topic prefix:");
+            ui.add(
+                egui::TextEdit::singleline(&mut settings.mqtt_prefix).hint_text("home/weather"),
+            );
+        });
+        ui.weak(
+            "Publishes <prefix>/status and <prefix>/nearest every five minutes, and \
+             <prefix>/alerts as warnings arrive. Takes effect on restart.",
+        );
+    }
+
     if cfg!(target_os = "android") {
         ui.add_space(8.0);
         ui.separator();

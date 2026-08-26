@@ -90,6 +90,9 @@ fn main() -> eframe::Result<()> {
             .map(str::to_string)
             .unwrap_or_else(|| saved.serve_token.clone());
         let spots = hookecho::status::spots(&saved, None);
+        // A headless box on a shelf is exactly where MQTT earns its keep — this is the process
+        // that is always up.
+        hookecho::mqtt::spawn(&saved);
         if let Err(e) = hookecho::serve::run(spots, bind, port, web_root, token) {
             eprintln!("serve failed: {e}");
             std::process::exit(1);

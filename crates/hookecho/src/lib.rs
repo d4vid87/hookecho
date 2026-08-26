@@ -38,6 +38,9 @@ pub mod labelplace;
 pub mod icon;
 pub mod loopexport;
 pub mod notify;
+/// MQTT publishing for home automation; native only (no TCP socket in a browser).
+#[cfg(not(any(target_os = "android", target_arch = "wasm32")))]
+pub mod mqtt;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod nwr;
 pub mod overlay_build;
