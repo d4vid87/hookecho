@@ -18,6 +18,8 @@ const social = new URL(image, Astro.site);
 
 // A link is only listed once the page exists, so the build's link check stays meaningful.
 const nav = [
+  { href: "/features/", label: "Features" },
+  { href: "/compare/", label: "Compare" },
   { href: "/docs/", label: "Docs" },
   { href: "/blog/", label: "Blog" },
   { href: "/weatherdesk/", label: "WeatherDesk" },
@@ -87,7 +89,8 @@ const nav = [
         <p class="dim">
           <a href="https://github.com/d4vid87/hookecho">Source</a> ·
           <a href="https://github.com/d4vid87/hookecho/issues">Report a problem</a> ·
-          <a href="/weatherdesk/">WeatherDesk</a>
+          <a href="/weatherdesk/">WeatherDesk</a> ·
+          <a href="https://github.com/d4vid87/weatherdesk">WeatherDesk source</a>
         </p>
       </div>
     </footer>

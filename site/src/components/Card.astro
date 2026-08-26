@@ -21,7 +21,7 @@ const Tag = href ? "a" : "div";
     display: block;
     color: var(--text);
     text-decoration: none;
-    transition: border-color 160ms ease, transform 160ms ease;
+    transition: border-color var(--dur) ease, transform var(--dur) var(--spring);
   }
   a.linked:hover { border-color: var(--accent); transform: translateY(-2px); }
 </style>

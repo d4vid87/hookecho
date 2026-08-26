@@ -3,6 +3,9 @@ import Base from "../layouts/Base.astro";
 import Hero from "../components/Hero.astro";
 import FeatureGrid from "../components/FeatureGrid.astro";
 import ShotGallery from "../components/ShotGallery.astro";
+import Ticker from "../components/Ticker.astro";
+import NearYou from "../components/NearYou.astro";
+import LiveMosaic from "../components/LiveMosaic.astro";
 import Card from "../components/Card.astro";
 
 // The three tiers are the same progressive-disclosure story the app itself tells: the first
@@ -31,28 +34,35 @@ const tiers = [
   },
 ];
 
+// Hotlinked from the repo at a tag, same as /features and /weatherdesk: GitHub carries the
+// bytes, and a later commit on main cannot change what the page shows. Only the hero poster and
+// the social card stay local — those two have to be there on first paint and for scrapers.
+const repoShots = "https://raw.githubusercontent.com/d4vid87/hookecho/v0.12.0-beta.1/docs/shots";
+
 const shots = [
   {
-    src: "/shots/mosaic.jpg",
-    alt: "The national MRMS radar mosaic over the United States",
-    caption: "The whole country at once, from the MRMS mosaic.",
-  },
-  {
-    src: "/shots/alerts.jpg",
+    src: `${repoShots}/alerts.jpg`,
     alt: "Warning polygons, storm reports and spotter positions on the map",
     caption: "Warnings, storm reports and spotters, live.",
   },
   {
-    src: "/shots/alltilts.jpg",
+    src: `${repoShots}/alltilts.jpg`,
     alt: "Four radar tilts of the same storm side by side",
     caption: "Every tilt of the volume, side by side.",
   },
   {
-    src: "/shots/hrrr.jpg",
+    src: `${repoShots}/velocity.jpg`,
+    alt: "Storm-relative velocity showing a rotation couplet in a supercell",
+    caption: "Velocity and dual-pol, dealiased.",
+  },
+  {
+    src: `${repoShots}/hrrr.jpg`,
     alt: "HRRR model fields drawn over the map with severe composite parameters",
     caption: "HRRR and NAM fields, with the severe parameters.",
   },
 ];
+
+const weatherdeskRepo = "https://github.com/d4vid87/weatherdesk";
 ---
 
 <Base
@@ -63,6 +73,25 @@ const shots = [
     title="Weather radar for everyone"
     tagline="Live NEXRAD radar, warnings and storm tracking — straight from the public NOAA feeds to your own machine."
   />
+
+  <section class="live">
+    <div class="wrap">
+      <p class="eyebrow">Right now</p>
+      <Ticker />
+      <div class="live-grid">
+        <div>
+          <h2>The weather on this page is real</h2>
+          <p>
+            Those counts are live warnings from the National Weather Service, and the mosaic
+            beside them is the current national radar picture. HookEcho reads the same feeds —
+            at full resolution, from your own machine, with nothing in between.
+          </p>
+          <NearYou />
+        </div>
+        <LiveMosaic />
+      </div>
+    </div>
+  </section>
 
   <section>
     <div class="wrap">
@@ -99,15 +128,31 @@ const shots = [
 
   <section class="alt">
     <div class="wrap">
+      <p class="eyebrow">Against the field</p>
+      <h2>Yes, we will tell you when to buy something else</h2>
+      <p>
+        We put HookEcho next to RadarScope, MyRadar, Windy and RainViewer, row by row, including
+        the four rows they win. If the thing you need is global model data, Windy is better at it.
+      </p>
+      <div class="platforms">
+        <a class="btn btn-primary" href="/compare/">See the comparison</a>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="wrap">
       <p class="eyebrow">More from us</p>
       <h2>WeatherDesk</h2>
-      <Card
-        title="Your own weather station, on your own dashboard"
-        href="/weatherdesk/"
-      >
+      <!-- No href on the Card: it would wrap the whole thing in an <a>, and the two links below
+           cannot live inside one. -->
+      <Card title="Your own weather station, on your own dashboard">
         <p>
           A self-hosted dashboard for a Tempest weather station: live gauges, history and
           forecasts on your own hardware. The radar inside it is HookEcho.
+        </p>
+        <p class="wd-links">
+          <a href="/weatherdesk/">What it does</a> · <a href={weatherdeskRepo}>Source on GitHub</a>
         </p>
       </Card>
     </div>
@@ -117,4 +162,12 @@ const shots = [
 <style>
   .alt { background: var(--bg-deep); border-block: 1px solid var(--stroke); }
   .platforms { display: flex; gap: 0.75rem; flex-wrap: wrap; margin-top: 1.4rem; }
+  .live { padding-top: clamp(2rem, 5vw, 3rem); }
+  .live-grid {
+    display: grid;
+    gap: 2rem;
+    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+    align-items: center;
+    margin-top: 2.2rem;
+  }
 </style>
