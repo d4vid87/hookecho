@@ -2,7 +2,7 @@
 title: "Hello, HookEcho"
 description: "A free, open-source weather radar app that talks straight to the public NOAA feeds — why it exists, and who it's for."
 date: 2026-08-26
-image: /shots/hero.gif
+image: /shots/reflectivity.jpg
 ---
 
 Every radar app on your phone is somebody's business model. The data underneath
