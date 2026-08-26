@@ -1,0 +1,32 @@
+---
+import { getCollection } from "astro:content";
+import Docs from "../../layouts/Docs.astro";
+
+const pages = (await getCollection("docs")).sort((a, b) => a.data.order - b.data.order);
+---
+
+<Docs
+  title="Documentation"
+  description="How to use HookEcho: getting started, installing, reading the radar, alerts, the phone app and the browser version."
+>
+  <p>
+    Short guides, in plain language. If you've just installed it, start with
+    <a href="/docs/getting-started/">Getting started</a>.
+  </p>
+
+  <ul class="toc">
+    {pages.map((p) => (
+      <li>
+        <a href={`/docs/${p.id}/`}>{p.data.title}</a>
+        <span>{p.data.description}</span>
+      </li>
+    ))}
+  </ul>
+</Docs>
+
+<style>
+  .toc { list-style: none; margin: 2rem 0 0; padding: 0; display: grid; gap: 1.1rem; }
+  .toc li { max-width: var(--measure); }
+  .toc a { font-weight: 600; font-size: 1.05rem; }
+  .toc span { display: block; color: var(--text-dim); font-size: 0.95rem; }
+</style>

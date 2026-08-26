@@ -1,0 +1,121 @@
+---
+import { getCollection } from "astro:content";
+import Base from "./Base.astro";
+
+interface Props {
+  title: string;
+  description: string;
+  /** Collection id of the page being shown, or undefined on the docs index. */
+  current?: string;
+}
+
+const { title, description, current } = Astro.props;
+
+const pages = (await getCollection("docs")).sort((a, b) => a.data.order - b.data.order);
+const at = pages.findIndex((p) => p.id === current);
+const prev = at > 0 ? pages[at - 1] : undefined;
+const next = at >= 0 && at < pages.length - 1 ? pages[at + 1] : undefined;
+---
+
+<Base title={`${title} — HookEcho docs`} description={description}>
+  <div class="wrap docs">
+    <nav class="side" aria-label="Documentation">
+      <p class="eyebrow">Docs</p>
+      <ul>
+        {pages.map((p) => (
+          <li>
+            <a href={`/docs/${p.id}/`} aria-current={p.id === current ? "page" : undefined}>
+              {p.data.title}
+            </a>
+          </li>
+        ))}
+      </ul>
+    </nav>
+
+    <article class="prose">
+      <h1>{title}</h1>
+      <slot />
+
+      {(prev || next) && (
+        <nav class="seq" aria-label="More documentation">
+          {prev ? (
+            <a class="btn" href={`/docs/${prev.id}/`}>← {prev.data.title}</a>
+          ) : (
+            <span />
+          )}
+          {next && <a class="btn" href={`/docs/${next.id}/`}>{next.data.title} →</a>}
+        </nav>
+      )}
+    </article>
+  </div>
+</Base>
+
+<style>
+  .docs {
+    display: grid;
+    grid-template-columns: 220px minmax(0, 1fr);
+    gap: clamp(2rem, 5vw, 4rem);
+    padding: 3rem 0 4.5rem;
+    align-items: start;
+  }
+  @media (max-width: 800px) {
+    .docs { grid-template-columns: minmax(0, 1fr); }
+    .side { position: static; border-bottom: 1px solid var(--stroke); padding-bottom: 1.5rem; }
+  }
+  .side { position: sticky; top: 5rem; }
+  .side ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.55rem; }
+  .side a {
+    color: var(--text-dim);
+    text-decoration: none;
+    font-size: 0.95rem;
+    display: block;
+    border-left: 2px solid transparent;
+    padding-left: 0.7rem;
+  }
+  .side a:hover { color: var(--text); }
+  .side a[aria-current="page"] {
+    color: var(--text);
+    border-left-color: var(--accent);
+    font-weight: 600;
+  }
+
+  .prose h1 { font-size: clamp(1.9rem, 4.5vw, 2.6rem); margin-bottom: 1rem; }
+  .prose :global(h2) { margin-top: 2.2rem; }
+  .prose :global(h3) { margin-top: 1.6rem; }
+  .prose :global(ul), .prose :global(ol) { max-width: var(--measure); padding-left: 1.2rem; }
+  .prose :global(li) { margin-bottom: 0.4rem; }
+  .prose :global(strong) { color: var(--text); font-weight: 600; }
+  .prose :global(kbd) {
+    font: inherit;
+    font-size: 0.85em;
+    background: var(--widget);
+    border: 1px solid var(--stroke);
+    border-radius: 5px;
+    padding: 0.1em 0.4em;
+  }
+  .prose :global(pre) {
+    background: var(--bg-deep);
+    border: 1px solid var(--stroke);
+    border-radius: var(--radius);
+    padding: 1rem 1.1rem;
+    overflow-x: auto;
+    max-width: var(--measure);
+  }
+  .prose :global(code) { font-size: 0.9em; }
+  .prose :global(:not(pre) > code) {
+    background: var(--faint);
+    border: 1px solid var(--stroke);
+    border-radius: 5px;
+    padding: 0.1em 0.35em;
+  }
+
+  .seq {
+    display: flex;
+    justify-content: space-between;
+    gap: 1rem;
+    flex-wrap: wrap;
+    margin-top: 3.5rem;
+    padding-top: 2rem;
+    border-top: 1px solid var(--stroke);
+  }
+</style>
