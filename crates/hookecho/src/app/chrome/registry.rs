@@ -833,6 +833,12 @@ impl HookEchoApp {
                 false,
             ),
             (
+                W::ChaseReplay,
+                "Chase replay\u{2026}",
+                "Drive a recorded chase again, with the radar as it was",
+                false,
+            ),
+            (
                 W::Digest,
                 "Storm digest…",
                 "A plain-language summary of what's happening now",

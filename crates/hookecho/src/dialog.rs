@@ -80,6 +80,8 @@ pub enum ImportKind {
     MarkerIcon,
     /// A sound file to play for alerts.
     AlertSound,
+    /// A GPX track to replay (one this app wrote, or one another chase logger did).
+    ChaseGpx,
 }
 
 impl ImportKind {
@@ -89,6 +91,7 @@ impl ImportKind {
             ImportKind::Palette => "GRLevelX color table",
             ImportKind::MarkerIcon => "Marker icon",
             ImportKind::AlertSound => "Alert sound",
+            ImportKind::ChaseGpx => "GPX track",
         }
     }
 
@@ -98,6 +101,7 @@ impl ImportKind {
             ImportKind::Palette => &["pal", "pal3"],
             ImportKind::MarkerIcon => &["png"],
             ImportKind::AlertSound => &["wav", "mp3", "ogg", "flac"],
+            ImportKind::ChaseGpx => &["gpx"],
         }
     }
 
@@ -110,6 +114,9 @@ impl ImportKind {
             ImportKind::Palette => "*/*",
             ImportKind::MarkerIcon => "image/png",
             ImportKind::AlertSound => "audio/*",
+            // No registered MIME for GPX that pickers agree on; the extension is checked on the
+            // way back, same as a palette.
+            ImportKind::ChaseGpx => "*/*",
         }
     }
 }
@@ -215,6 +222,7 @@ mod android_open {
             ImportKind::Palette => "palette",
             ImportKind::MarkerIcon => "marker",
             ImportKind::AlertSound => "sound",
+            ImportKind::ChaseGpx => "gpx",
         }
     }
 
@@ -224,6 +232,7 @@ mod android_open {
             "palette" => ImportKind::Palette,
             "marker" => ImportKind::MarkerIcon,
             "sound" => ImportKind::AlertSound,
+            "gpx" => ImportKind::ChaseGpx,
             _ => return None,
         })
     }
