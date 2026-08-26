@@ -8,7 +8,8 @@
     "build": "npm run shots && astro build",
     "preview": "astro preview",
     "shots": "mkdir -p public/shots && cp ../docs/shots/reflectivity.jpg ../docs/shots/alltilts.jpg ../docs/shots/layers.jpg ../docs/shots/velocity.jpg public/shots/",
-    "linkcheck": "linkinator dist --recurse --skip \"radar.weather.gov|api.weather.gov|hookecho.io/og/\""
+    "linkcheck": "linkinator dist --recurse --skip \"radar.weather.gov|api.weather.gov|hookecho.io/og/\"",
+    "postbuild": "pagefind --site dist"
   },
   "dependencies": {
     "@astrojs/rss": "^4.0.19",
@@ -18,6 +19,7 @@
   "devDependencies": {
     "astro-og-canvas": "^0.13.0",
     "canvaskit-wasm": "^0.42.0",
-    "linkinator": "^6.1.2"
+    "linkinator": "^6.1.2",
+    "pagefind": "^1.5.2"
   }
 }
