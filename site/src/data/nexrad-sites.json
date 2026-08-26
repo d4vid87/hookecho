@@ -1,0 +1,1379 @@
+[
+  {
+    "city": "Aberdeen",
+    "elev_m": 397,
+    "id": "KABR",
+    "lat": 45.4558,
+    "lon": -98.4131,
+    "state": "SD",
+    "tz": "America/Chicago"
+  },
+  {
+    "city": "Albuquerque",
+    "elev_m": 1789,
+    "id": "KABX",
+    "lat": 35.1497,
+    "lon": -106.8239,
+    "state": "NM",
+    "tz": "America/Denver"
+  },
+  {
+    "city": "Wakefield",
+    "elev_m": 34,
+    "id": "KAKQ",
+    "lat": 36.9839,
+    "lon": -77.0072,
+    "state": "VA",
+    "tz": "America/New_York"
+  },
+  {
+    "city": "Amarillo",
+    "elev_m": 1093,
+    "id": "KAMA",
+    "lat": 35.2333,
+    "lon": -101.7092,
+    "state": "TX",
+    "tz": "America/Chicago"
+  },
+  {
+    "city": "Miami",
+    "elev_m": 4,
+    "id": "KAMX",
+    "lat": 25.6111,
+    "lon": -80.4128,
+    "state": "FL",
+    "tz": "America/New_York"
+  },
+  {
+    "city": "Gaylord",
+    "elev_m": 446,
+    "id": "KAPX",
+    "lat": 44.9072,
+    "lon": -84.7197,
+    "state": "MI",
+    "tz": "America/Detroit"
+  },
+  {
+    "city": "La Crosse",
+    "elev_m": 389,
+    "id": "KARX",
+    "lat": 43.8228,
+    "lon": -91.1911,
+    "state": "WI",
+    "tz": "America/Chicago"
+  },
+  {
+    "city": "Seattle",
+    "elev_m": 151,
+    "id": "KATX",
+    "lat": 48.1944,
+    "lon": -122.4958,
+    "state": "WA",
+    "tz": "America/Los_Angeles"
+  },
+  {
+    "city": "Beale AFB",
+    "elev_m": 53,
+    "id": "KBBX",
+    "lat": 39.4961,
+    "lon": -121.6317,
+    "state": "CA",
+    "tz": "America/Los_Angeles"
+  },
+  {
+    "city": "Binghamton",
+    "elev_m": 490,
+    "id": "KBGM",
+    "lat": 42.1997,
+    "lon": -75.9847,
+    "state": "NY",
+    "tz": "America/New_York"
+  },
+  {
+    "city": "Bismarck",
+    "elev_m": 505,
+    "id": "KBIS",
+    "lat": 46.7708,
+    "lon": -100.7603,
+    "state": "ND",
+    "tz": "America/Chicago"
+  },
+  {
+    "city": "Billings",
+    "elev_m": 1097,
+    "id": "KBLX",
+    "lat": 45.8536,
+    "lon": -108.6069,
+    "state": "MT",
+    "tz": "America/Denver"
+  },
+  {
+    "city": "Birmingham",
+    "elev_m": 197,
+    "id": "KBMX",
+    "lat": 33.1722,
+    "lon": -86.7698,
+    "state": "AL",
+    "tz": "America/Chicago"
+  },
+  {
+    "city": "Boston",
+    "elev_m": 36,
+    "id": "KBOX",
+    "lat": 41.9558,
+    "lon": -71.1369,
+    "state": "MA",
+    "tz": "America/New_York"
+  },
+  {
+    "city": "Brownsville",
+    "elev_m": 7,
+    "id": "KBRO",
+    "lat": 25.9158,
+    "lon": -97.4189,
+    "state": "TX",
+    "tz": "America/Chicago"
+  },
+  {
+    "city": "Buffalo",
+    "elev_m": 211,
+    "id": "KBUF",
+    "lat": 42.9486,
+    "lon": -78.7369,
+    "state": "NY",
+    "tz": "America/New_York"
+  },
+  {
+    "city": "Key West",
+    "elev_m": 3,
+    "id": "KBYX",
+    "lat": 24.5975,
+    "lon": -81.7031,
+    "state": "FL",
+    "tz": "America/New_York"
+  },
+  {
+    "city": "Columbia",
+    "elev_m": 70,
+    "id": "KCAE",
+    "lat": 33.9486,
+    "lon": -81.1186,
+    "state": "SC",
+    "tz": "America/New_York"
+  },
+  {
+    "city": "Caribou",
+    "elev_m": 227,
+    "id": "KCBW",
+    "lat": 46.0392,
+    "lon": -67.8067,
+    "state": "ME",
+    "tz": "America/New_York"
+  },
+  {
+    "city": "Boise",
+    "elev_m": 933,
+    "id": "KCBX",
+    "lat": 43.4908,
+    "lon": -116.2358,
+    "state": "ID",
+    "tz": "America/Boise"
+  },
+  {
+    "city": "State College",
+    "elev_m": 733,
+    "id": "KCCX",
+    "lat": 40.9231,
+    "lon": -78.0039,
+    "state": "PA",
+    "tz": "America/New_York"
+  },
+  {
+    "city": "State College",
+    "elev_m": 733,
+    "id": "KCCX",
+    "lat": 40.9231,
+    "lon": -78.0039,
+    "state": "PA",
+    "tz": "America/New_York"
+  },
+  {
+    "city": "Cleveland",
+    "elev_m": 233,
+    "id": "KCLE",
+    "lat": 41.4131,
+    "lon": -81.8597,
+    "state": "OH",
+    "tz": "America/New_York"
+  },
+  {
+    "city": "Charleston",
+    "elev_m": 30,
+    "id": "KCLX",
+    "lat": 32.6556,
+    "lon": -81.0425,
+    "state": "SC",
+    "tz": "America/New_York"
+  },
+  {
+    "city": "Corpus Christi",
+    "elev_m": 14,
+    "id": "KCRP",
+    "lat": 27.7842,
+    "lon": -97.5111,
+    "state": "TX",
+    "tz": "America/Chicago"
+  },
+  {
+    "city": "Burlington",
+    "elev_m": 97,
+    "id": "KCXX",
+    "lat": 44.5111,
+    "lon": -73.1667,
+    "state": "VT",
+    "tz": "America/New_York"
+  },
+  {
+    "city": "Cheyenne",
+    "elev_m": 1868,
+    "id": "KCYS",
+    "lat": 41.1519,
+    "lon": -104.8061,
+    "state": "WY",
+    "tz": "America/Denver"
+  },
+  {
+    "city": "Sacramento",
+    "elev_m": 9,
+    "id": "KDAX",
+    "lat": 38.5011,
+    "lon": -121.6778,
+    "state": "CA",
+    "tz": "America/Los_Angeles"
+  },
+  {
+    "city": "Dodge City",
+    "elev_m": 790,
+    "id": "KDDC",
+    "lat": 37.7608,
+    "lon": -99.9689,
+    "state": "KS",
+    "tz": "America/Chicago"
+  },
+  {
+    "city": "Laughlin AFB",
+    "elev_m": 345,
+    "id": "KDFX",
+    "lat": 29.2722,
+    "lon": -100.2803,
+    "state": "TX",
+    "tz": "America/Chicago"
+  },
+  {
+    "city": "Brandon",
+    "elev_m": 149,
+    "id": "KDGX",
+    "lat": 32.28,
+    "lon": -89.9844,
+    "state": "MS",
+    "tz": "America/Chicago"
+  },
+  {
+    "city": "Philadelphia",
+    "elev_m": 45,
+    "id": "KDIX",
+    "lat": 39.9469,
+    "lon": -74.4108,
+    "state": "PA",
+    "tz": "America/New_York"
+  },
+  {
+    "city": "Duluth",
+    "elev_m": 435,
+    "id": "KDLH",
+    "lat": 46.8369,
+    "lon": -92.2097,
+    "state": "MN",
+    "tz": "America/Chicago"
+  },
+  {
+    "city": "Des Moines",
+    "elev_m": 299,
+    "id": "KDMX",
+    "lat": 41.7311,
+    "lon": -93.7228,
+    "state": "IA",
+    "tz": "America/Chicago"
+  },
+  {
+    "city": "Detroit",
+    "elev_m": 327,
+    "id": "KDTX",
+    "lat": 42.6997,
+    "lon": -83.4717,
+    "state": "MI",
+    "tz": "America/Detroit"
+  },
+  {
+    "city": "Davenport",
+    "elev_m": 230,
+    "id": "KDVN",
+    "lat": 41.6117,
+    "lon": -90.5808,
+    "state": "IA",
+    "tz": "America/Chicago"
+  },
+  {
+    "city": "Dyess AFB",
+    "elev_m": 463,
+    "id": "KDYX",
+    "lat": 32.5386,
+    "lon": -99.2544,
+    "state": "TX",
+    "tz": "America/Chicago"
+  },
+  {
+    "city": "Kansas City",
+    "elev_m": 303,
+    "id": "KEAX",
+    "lat": 38.8103,
+    "lon": -94.2644,
+    "state": "MO",
+    "tz": "America/Chicago"
+  },
+  {
+    "city": "Tucson",
+    "elev_m": 1586,
+    "id": "KEMX",
+    "lat": 31.8939,
+    "lon": -110.6303,
+    "state": "AZ",
+    "tz": "America/Phoenix"
+  },
+  {
+    "city": "Albany",
+    "elev_m": 557,
+    "id": "KENX",
+    "lat": 42.5864,
+    "lon": -74.0639,
+    "state": "NY",
+    "tz": "America/New_York"
+  },
+  {
+    "city": "Fort Rucker",
+    "elev_m": 132,
+    "id": "KEOX",
+    "lat": 31.4606,
+    "lon": -85.4592,
+    "state": "AL",
+    "tz": "America/Chicago"
+  },
+  {
+    "city": "El Paso",
+    "elev_m": 1251,
+    "id": "KEPZ",
+    "lat": 31.8731,
+    "lon": -106.6978,
+    "state": "TX",
+    "tz": "America/Denver"
+  },
+  {
+    "city": "Las Vegas",
+    "elev_m": 1483,
+    "id": "KESX",
+    "lat": 35.7011,
+    "lon": -114.8914,
+    "state": "NV",
+    "tz": "America/Los_Angeles"
+  },
+  {
+    "city": "Eglin AFB",
+    "elev_m": 43,
+    "id": "KEVX",
+    "lat": 30.5644,
+    "lon": -85.9214,
+    "state": "FL",
+    "tz": "America/Chicago"
+  },
+  {
+    "city": "San Antonio",
+    "elev_m": 193,
+    "id": "KEWX",
+    "lat": 29.7039,
+    "lon": -98.0286,
+    "state": "TX",
+    "tz": "America/Chicago"
+  },
+  {
+    "city": "Edwards AFB",
+    "elev_m": 840,
+    "id": "KEYX",
+    "lat": 35.0978,
+    "lon": -117.5608,
+    "state": "CA",
+    "tz": "America/Los_Angeles"
+  },
+  {
+    "city": "Roanoke",
+    "elev_m": 874,
+    "id": "KFCX",
+    "lat": 37.0242,
+    "lon": -80.2744,
+    "state": "VA",
+    "tz": "America/New_York"
+  },
+  {
+    "city": "Frederick",
+    "elev_m": 386,
+    "id": "KFDR",
+    "lat": 34.3622,
+    "lon": -98.9764,
+    "state": "OK",
+    "tz": "America/Chicago"
+  },
+  {
+    "city": "Cannon AFB",
+    "elev_m": 1417,
+    "id": "KFDX",
+    "lat": 34.635,
+    "lon": -103.6297,
+    "state": "NM",
+    "tz": "America/Denver"
+  },
+  {
+    "city": "Atlanta",
+    "elev_m": 262,
+    "id": "KFFC",
+    "lat": 33.3636,
+    "lon": -84.5658,
+    "state": "GA",
+    "tz": "America/New_York"
+  },
+  {
+    "city": "Sioux Falls",
+    "elev_m": 436,
+    "id": "KFSD",
+    "lat": 43.5878,
+    "lon": -96.7289,
+    "state": "SD",
+    "tz": "America/Chicago"
+  },
+  {
+    "city": "Flagstaff",
+    "elev_m": 2261,
+    "id": "KFSX",
+    "lat": 34.5744,
+    "lon": -111.1983,
+    "state": "AZ",
+    "tz": "America/Phoenix"
+  },
+  {
+    "city": "Denver",
+    "elev_m": 1675,
+    "id": "KFTG",
+    "lat": 39.7867,
+    "lon": -104.5458,
+    "state": "CO",
+    "tz": "America/Denver"
+  },
+  {
+    "city": "Dallas/Fort Worth",
+    "elev_m": 208,
+    "id": "KFWS",
+    "lat": 32.5731,
+    "lon": -97.3031,
+    "state": "TX",
+    "tz": "America/Chicago"
+  },
+  {
+    "city": "Glasgow",
+    "elev_m": 694,
+    "id": "KGGW",
+    "lat": 48.2064,
+    "lon": -106.6253,
+    "state": "MT",
+    "tz": "America/Denver"
+  },
+  {
+    "city": "Grand Junction",
+    "elev_m": 3045,
+    "id": "KGJX",
+    "lat": 39.0622,
+    "lon": -108.2139,
+    "state": "CO",
+    "tz": "America/Denver"
+  },
+  {
+    "city": "Goodland",
+    "elev_m": 1113,
+    "id": "KGLD",
+    "lat": 39.3669,
+    "lon": -101.7003,
+    "state": "KS",
+    "tz": "America/Denver"
+  },
+  {
+    "city": "Green Bay",
+    "elev_m": 208,
+    "id": "KGRB",
+    "lat": 44.4986,
+    "lon": -88.1111,
+    "state": "WI",
+    "tz": "America/Chicago"
+  },
+  {
+    "city": "Fort Hood",
+    "elev_m": 164,
+    "id": "KGRK",
+    "lat": 30.7217,
+    "lon": -97.3828,
+    "state": "TX",
+    "tz": "America/Chicago"
+  },
+  {
+    "city": "Grand Rapids",
+    "elev_m": 237,
+    "id": "KGRR",
+    "lat": 42.8939,
+    "lon": -85.5447,
+    "state": "MI",
+    "tz": "America/Detroit"
+  },
+  {
+    "city": "Greenville",
+    "elev_m": 296,
+    "id": "KGSP",
+    "lat": 34.8833,
+    "lon": -82.22,
+    "state": "SC",
+    "tz": "America/New_York"
+  },
+  {
+    "city": "Columbus AFB",
+    "elev_m": 145,
+    "id": "KGWX",
+    "lat": 33.8967,
+    "lon": -88.3289,
+    "state": "MS",
+    "tz": "America/Chicago"
+  },
+  {
+    "city": "Portland",
+    "elev_m": 125,
+    "id": "KGYX",
+    "lat": 43.8914,
+    "lon": -70.2567,
+    "state": "ME",
+    "tz": "America/New_York"
+  },
+  {
+    "city": "Holloman AFB",
+    "elev_m": 1287,
+    "id": "KHDX",
+    "lat": 33.0769,
+    "lon": -106.12,
+    "state": "NM",
+    "tz": "America/Denver"
+  },
+  {
+    "city": "Houston",
+    "elev_m": 5,
+    "id": "KHGX",
+    "lat": 29.4719,
+    "lon": -95.0792,
+    "state": "TX",
+    "tz": "America/Chicago"
+  },
+  {
+    "city": "Hanford",
+    "elev_m": 74,
+    "id": "KHNX",
+    "lat": 36.3142,
+    "lon": -119.6322,
+    "state": "CA",
+    "tz": "America/Los_Angeles"
+  },
+  {
+    "city": "Fort Campbell",
+    "elev_m": 177,
+    "id": "KHPX",
+    "lat": 36.7369,
+    "lon": -87.285,
+    "state": "KY",
+    "tz": "America/Chicago"
+  },
+  {
+    "city": "Huntsville",
+    "elev_m": 536,
+    "id": "KHTX",
+    "lat": 34.9306,
+    "lon": -86.0833,
+    "state": "AL",
+    "tz": "America/Chicago"
+  },
+  {
+    "city": "Wichita",
+    "elev_m": 407,
+    "id": "KICT",
+    "lat": 37.6544,
+    "lon": -97.4428,
+    "state": "KS",
+    "tz": "America/Chicago"
+  },
+  {
+    "city": "Cedar City",
+    "elev_m": 3231,
+    "id": "KICX",
+    "lat": 37.5911,
+    "lon": -112.8622,
+    "state": "UT",
+    "tz": "America/Denver"
+  },
+  {
+    "city": "Wilmington",
+    "elev_m": 322,
+    "id": "KILN",
+    "lat": 39.4203,
+    "lon": -83.8217,
+    "state": "OH",
+    "tz": "America/New_York"
+  },
+  {
+    "city": "Lincoln",
+    "elev_m": 177,
+    "id": "KILX",
+    "lat": 40.1506,
+    "lon": -89.3369,
+    "state": "IL",
+    "tz": "America/Chicago"
+  },
+  {
+    "city": "Indianapolis",
+    "elev_m": 241,
+    "id": "KIND",
+    "lat": 39.7075,
+    "lon": -86.2803,
+    "state": "IN",
+    "tz": "America/Indiana/Indianapolis"
+  },
+  {
+    "city": "Tulsa",
+    "elev_m": 204,
+    "id": "KINX",
+    "lat": 36.175,
+    "lon": -95.5647,
+    "state": "OK",
+    "tz": "America/Chicago"
+  },
+  {
+    "city": "Phoenix",
+    "elev_m": 413,
+    "id": "KIWA",
+    "lat": 33.2892,
+    "lon": -111.67,
+    "state": "AZ",
+    "tz": "America/Phoenix"
+  },
+  {
+    "city": "Fort Wayne",
+    "elev_m": 293,
+    "id": "KIWX",
+    "lat": 41.3586,
+    "lon": -85.7,
+    "state": "IN",
+    "tz": "America/Indiana/Indianapolis"
+  },
+  {
+    "city": "Jacksonville",
+    "elev_m": 10,
+    "id": "KJAX",
+    "lat": 30.4847,
+    "lon": -81.7019,
+    "state": "FL",
+    "tz": "America/New_York"
+  },
+  {
+    "city": "Robins AFB",
+    "elev_m": 159,
+    "id": "KJGX",
+    "lat": 32.6756,
+    "lon": -83.3511,
+    "state": "GA",
+    "tz": "America/New_York"
+  },
+  {
+    "city": "Jackson",
+    "elev_m": 415,
+    "id": "KJKL",
+    "lat": 37.5908,
+    "lon": -83.3131,
+    "state": "KY",
+    "tz": "America/New_York"
+  },
+  {
+    "city": "Lubbock",
+    "elev_m": 993,
+    "id": "KLBB",
+    "lat": 33.6542,
+    "lon": -101.8142,
+    "state": "TX",
+    "tz": "America/Chicago"
+  },
+  {
+    "city": "Lake Charles",
+    "elev_m": 4,
+    "id": "KLCH",
+    "lat": 30.1253,
+    "lon": -93.2158,
+    "state": "LA",
+    "tz": "America/Chicago"
+  },
+  {
+    "city": "New Orleans",
+    "elev_m": 7,
+    "id": "KLIX",
+    "lat": 30.3367,
+    "lon": -89.8256,
+    "state": "LA",
+    "tz": "America/Chicago"
+  },
+  {
+    "city": "North Platte",
+    "elev_m": 906,
+    "id": "KLNX",
+    "lat": 41.9578,
+    "lon": -100.5761,
+    "state": "NE",
+    "tz": "America/Chicago"
+  },
+  {
+    "city": "Chicago",
+    "elev_m": 202,
+    "id": "KLOT",
+    "lat": 41.6044,
+    "lon": -88.0847,
+    "state": "IL",
+    "tz": "America/Chicago"
+  },
+  {
+    "city": "Elko",
+    "elev_m": 2056,
+    "id": "KLRX",
+    "lat": 40.74,
+    "lon": -116.8025,
+    "state": "NV",
+    "tz": "America/Los_Angeles"
+  },
+  {
+    "city": "St. Louis",
+    "elev_m": 185,
+    "id": "KLSX",
+    "lat": 38.6986,
+    "lon": -90.6828,
+    "state": "MO",
+    "tz": "America/Chicago"
+  },
+  {
+    "city": "Wilmington",
+    "elev_m": 19,
+    "id": "KLTX",
+    "lat": 33.9892,
+    "lon": -78.4292,
+    "state": "NC",
+    "tz": "America/New_York"
+  },
+  {
+    "city": "Louisville",
+    "elev_m": 219,
+    "id": "KLVX",
+    "lat": 37.9753,
+    "lon": -85.9439,
+    "state": "KY",
+    "tz": "America/New_York"
+  },
+  {
+    "city": "Sterling",
+    "elev_m": 83,
+    "id": "KLWX",
+    "lat": 38.9753,
+    "lon": -77.4778,
+    "state": "VA",
+    "tz": "America/New_York"
+  },
+  {
+    "city": "Little Rock",
+    "elev_m": 173,
+    "id": "KLZK",
+    "lat": 34.8364,
+    "lon": -92.2622,
+    "state": "AR",
+    "tz": "America/Chicago"
+  },
+  {
+    "city": "Midland/Odessa",
+    "elev_m": 874,
+    "id": "KMAF",
+    "lat": 31.9433,
+    "lon": -102.1892,
+    "state": "TX",
+    "tz": "America/Chicago"
+  },
+  {
+    "city": "Medford",
+    "elev_m": 2290,
+    "id": "KMAX",
+    "lat": 42.0811,
+    "lon": -122.7167,
+    "state": "OR",
+    "tz": "America/Los_Angeles"
+  },
+  {
+    "city": "Minot AFB",
+    "elev_m": 455,
+    "id": "KMBX",
+    "lat": 48.3925,
+    "lon": -100.8644,
+    "state": "ND",
+    "tz": "America/Chicago"
+  },
+  {
+    "city": "Morehead City",
+    "elev_m": 9,
+    "id": "KMHX",
+    "lat": 34.7761,
+    "lon": -76.8764,
+    "state": "NC",
+    "tz": "America/New_York"
+  },
+  {
+    "city": "Milwaukee",
+    "elev_m": 292,
+    "id": "KMKX",
+    "lat": 42.9678,
+    "lon": -88.5506,
+    "state": "WI",
+    "tz": "America/Chicago"
+  },
+  {
+    "city": "Melbourne",
+    "elev_m": 11,
+    "id": "KMLB",
+    "lat": 28.1133,
+    "lon": -80.6542,
+    "state": "FL",
+    "tz": "America/New_York"
+  },
+  {
+    "city": "Mobile",
+    "elev_m": 63,
+    "id": "KMOB",
+    "lat": 30.6794,
+    "lon": -88.2397,
+    "state": "AL",
+    "tz": "America/Chicago"
+  },
+  {
+    "city": "Minneapolis",
+    "elev_m": 288,
+    "id": "KMPX",
+    "lat": 44.8489,
+    "lon": -93.5653,
+    "state": "MN",
+    "tz": "America/Chicago"
+  },
+  {
+    "city": "Marquette",
+    "elev_m": 430,
+    "id": "KMQT",
+    "lat": 46.5314,
+    "lon": -87.5486,
+    "state": "MI",
+    "tz": "America/Detroit"
+  },
+  {
+    "city": "Knoxville",
+    "elev_m": 408,
+    "id": "KMRX",
+    "lat": 36.1686,
+    "lon": -83.4017,
+    "state": "TN",
+    "tz": "America/New_York"
+  },
+  {
+    "city": "Missoula",
+    "elev_m": 2394,
+    "id": "KMSX",
+    "lat": 47.0411,
+    "lon": -113.9864,
+    "state": "MT",
+    "tz": "America/Denver"
+  },
+  {
+    "city": "Salt Lake City",
+    "elev_m": 1969,
+    "id": "KMTX",
+    "lat": 41.2628,
+    "lon": -112.4478,
+    "state": "UT",
+    "tz": "America/Denver"
+  },
+  {
+    "city": "San Francisco",
+    "elev_m": 1057,
+    "id": "KMUX",
+    "lat": 37.1553,
+    "lon": -121.8983,
+    "state": "CA",
+    "tz": "America/Los_Angeles"
+  },
+  {
+    "city": "Fargo",
+    "elev_m": 301,
+    "id": "KMVX",
+    "lat": 47.5281,
+    "lon": -97.3256,
+    "state": "ND",
+    "tz": "America/Chicago"
+  },
+  {
+    "city": "Maxwell AFB",
+    "elev_m": 122,
+    "id": "KMXX",
+    "lat": 32.5367,
+    "lon": -85.7897,
+    "state": "AL",
+    "tz": "America/Chicago"
+  },
+  {
+    "city": "San Diego",
+    "elev_m": 291,
+    "id": "KNKX",
+    "lat": 32.9189,
+    "lon": -117.0419,
+    "state": "CA",
+    "tz": "America/Los_Angeles"
+  },
+  {
+    "city": "Memphis",
+    "elev_m": 86,
+    "id": "KNQA",
+    "lat": 35.3447,
+    "lon": -89.8733,
+    "state": "TN",
+    "tz": "America/Chicago"
+  },
+  {
+    "city": "Omaha",
+    "elev_m": 350,
+    "id": "KOAX",
+    "lat": 41.3203,
+    "lon": -96.3667,
+    "state": "NE",
+    "tz": "America/Chicago"
+  },
+  {
+    "city": "Nashville",
+    "elev_m": 176,
+    "id": "KOHX",
+    "lat": 36.2472,
+    "lon": -86.5625,
+    "state": "TN",
+    "tz": "America/Chicago"
+  },
+  {
+    "city": "Upton",
+    "elev_m": 26,
+    "id": "KOKX",
+    "lat": 40.8656,
+    "lon": -72.8639,
+    "state": "NY",
+    "tz": "America/New_York"
+  },
+  {
+    "city": "Spokane",
+    "elev_m": 728,
+    "id": "KOTX",
+    "lat": 47.6806,
+    "lon": -117.6267,
+    "state": "WA",
+    "tz": "America/Los_Angeles"
+  },
+  {
+    "city": "Paducah",
+    "elev_m": 119,
+    "id": "KPAH",
+    "lat": 37.0683,
+    "lon": -88.7722,
+    "state": "KY",
+    "tz": "America/Chicago"
+  },
+  {
+    "city": "Pittsburgh",
+    "elev_m": 361,
+    "id": "KPBZ",
+    "lat": 40.5317,
+    "lon": -80.0183,
+    "state": "PA",
+    "tz": "America/New_York"
+  },
+  {
+    "city": "Pendleton",
+    "elev_m": 462,
+    "id": "KPDT",
+    "lat": 45.6906,
+    "lon": -118.8528,
+    "state": "OR",
+    "tz": "America/Los_Angeles"
+  },
+  {
+    "city": "Fort Polk",
+    "elev_m": 124,
+    "id": "KPOE",
+    "lat": 31.1556,
+    "lon": -92.9756,
+    "state": "LA",
+    "tz": "America/Chicago"
+  },
+  {
+    "city": "Pueblo",
+    "elev_m": 1600,
+    "id": "KPUX",
+    "lat": 38.4594,
+    "lon": -104.1817,
+    "state": "CO",
+    "tz": "America/Denver"
+  },
+  {
+    "city": "Raleigh",
+    "elev_m": 106,
+    "id": "KRAX",
+    "lat": 35.6656,
+    "lon": -78.4903,
+    "state": "NC",
+    "tz": "America/New_York"
+  },
+  {
+    "city": "Reno",
+    "elev_m": 2530,
+    "id": "KRGX",
+    "lat": 39.7542,
+    "lon": -119.4622,
+    "state": "NV",
+    "tz": "America/Los_Angeles"
+  },
+  {
+    "city": "Riverton",
+    "elev_m": 1697,
+    "id": "KRIW",
+    "lat": 43.0661,
+    "lon": -108.4772,
+    "state": "WY",
+    "tz": "America/Denver"
+  },
+  {
+    "city": "Charleston",
+    "elev_m": 329,
+    "id": "KRLX",
+    "lat": 38.3111,
+    "lon": -81.7231,
+    "state": "WV",
+    "tz": "America/New_York"
+  },
+  {
+    "city": "Portland",
+    "elev_m": 479,
+    "id": "KRTX",
+    "lat": 45.715,
+    "lon": -122.9653,
+    "state": "OR",
+    "tz": "America/Los_Angeles"
+  },
+  {
+    "city": "Pocatello",
+    "elev_m": 1364,
+    "id": "KSFX",
+    "lat": 43.1058,
+    "lon": -112.6861,
+    "state": "ID",
+    "tz": "America/Boise"
+  },
+  {
+    "city": "Springfield",
+    "elev_m": 390,
+    "id": "KSGF",
+    "lat": 37.2353,
+    "lon": -93.4006,
+    "state": "MO",
+    "tz": "America/Chicago"
+  },
+  {
+    "city": "Shreveport",
+    "elev_m": 83,
+    "id": "KSHV",
+    "lat": 32.4508,
+    "lon": -93.8411,
+    "state": "LA",
+    "tz": "America/Chicago"
+  },
+  {
+    "city": "San Angelo",
+    "elev_m": 576,
+    "id": "KSJT",
+    "lat": 31.3714,
+    "lon": -100.4925,
+    "state": "TX",
+    "tz": "America/Chicago"
+  },
+  {
+    "city": "Santa Ana Mountains",
+    "elev_m": 923,
+    "id": "KSOX",
+    "lat": 33.8178,
+    "lon": -117.6358,
+    "state": "CA",
+    "tz": "America/Los_Angeles"
+  },
+  {
+    "city": "Fort Smith",
+    "elev_m": 195,
+    "id": "KSRX",
+    "lat": 35.2906,
+    "lon": -94.3619,
+    "state": "AR",
+    "tz": "America/Chicago"
+  },
+  {
+    "city": "Tampa Bay",
+    "elev_m": 13,
+    "id": "KTBW",
+    "lat": 27.7056,
+    "lon": -82.4017,
+    "state": "FL",
+    "tz": "America/New_York"
+  },
+  {
+    "city": "Great Falls",
+    "elev_m": 1132,
+    "id": "KTFX",
+    "lat": 47.4597,
+    "lon": -111.3853,
+    "state": "MT",
+    "tz": "America/Denver"
+  },
+  {
+    "city": "Tallahassee",
+    "elev_m": 19,
+    "id": "KTLH",
+    "lat": 30.3975,
+    "lon": -84.3289,
+    "state": "FL",
+    "tz": "America/New_York"
+  },
+  {
+    "city": "Oklahoma City",
+    "elev_m": 370,
+    "id": "KTLX",
+    "lat": 35.3331,
+    "lon": -97.2778,
+    "state": "OK",
+    "tz": "America/Chicago"
+  },
+  {
+    "city": "Topeka",
+    "elev_m": 417,
+    "id": "KTWX",
+    "lat": 38.9969,
+    "lon": -96.2325,
+    "state": "KS",
+    "tz": "America/Chicago"
+  },
+  {
+    "city": "Montague",
+    "elev_m": 562,
+    "id": "KTYX",
+    "lat": 43.7558,
+    "lon": -75.68,
+    "state": "NY",
+    "tz": "America/New_York"
+  },
+  {
+    "city": "Rapid City",
+    "elev_m": 919,
+    "id": "KUDX",
+    "lat": 44.125,
+    "lon": -102.8297,
+    "state": "SD",
+    "tz": "America/Denver"
+  },
+  {
+    "city": "Hastings",
+    "elev_m": 602,
+    "id": "KUEX",
+    "lat": 40.3208,
+    "lon": -98.4419,
+    "state": "NE",
+    "tz": "America/Chicago"
+  },
+  {
+    "city": "Moody AFB",
+    "elev_m": 54,
+    "id": "KVAX",
+    "lat": 30.89,
+    "lon": -83.0019,
+    "state": "GA",
+    "tz": "America/New_York"
+  },
+  {
+    "city": "Vandenberg AFB",
+    "elev_m": 373,
+    "id": "KVBX",
+    "lat": 34.8383,
+    "lon": -120.3978,
+    "state": "CA",
+    "tz": "America/Los_Angeles"
+  },
+  {
+    "city": "Vance AFB",
+    "elev_m": 369,
+    "id": "KVNX",
+    "lat": 36.7406,
+    "lon": -98.1278,
+    "state": "OK",
+    "tz": "America/Chicago"
+  },
+  {
+    "city": "Los Angeles",
+    "elev_m": 831,
+    "id": "KVTX",
+    "lat": 34.4114,
+    "lon": -119.1794,
+    "state": "CA",
+    "tz": "America/Los_Angeles"
+  },
+  {
+    "city": "Evansville",
+    "elev_m": 155,
+    "id": "KVWX",
+    "lat": 38.2603,
+    "lon": -87.7247,
+    "state": "IN",
+    "tz": "America/Chicago"
+  },
+  {
+    "city": "Yuma",
+    "elev_m": 53,
+    "id": "KYUX",
+    "lat": 32.4953,
+    "lon": -114.6567,
+    "state": "AZ",
+    "tz": "America/Phoenix"
+  },
+  {
+    "city": "Bethel",
+    "elev_m": 48,
+    "id": "PABC",
+    "lat": 60.7919,
+    "lon": -161.8764,
+    "state": "AK",
+    "tz": "America/Anchorage"
+  },
+  {
+    "city": "Sitka",
+    "elev_m": 63,
+    "id": "PACG",
+    "lat": 56.8525,
+    "lon": -135.5294,
+    "state": "AK",
+    "tz": "America/Sitka"
+  },
+  {
+    "city": "Nome",
+    "elev_m": 16,
+    "id": "PAEC",
+    "lat": 64.5114,
+    "lon": -165.295,
+    "state": "AK",
+    "tz": "America/Anchorage"
+  },
+  {
+    "city": "Anchorage",
+    "elev_m": 74,
+    "id": "PAHG",
+    "lat": 60.7258,
+    "lon": -151.3514,
+    "state": "AK",
+    "tz": "America/Anchorage"
+  },
+  {
+    "city": "Middleton Island",
+    "elev_m": 20,
+    "id": "PAIH",
+    "lat": 59.4614,
+    "lon": -146.3031,
+    "state": "AK",
+    "tz": "America/Anchorage"
+  },
+  {
+    "city": "King Salmon",
+    "elev_m": 19,
+    "id": "PAKC",
+    "lat": 58.6794,
+    "lon": -156.6297,
+    "state": "AK",
+    "tz": "America/Anchorage"
+  },
+  {
+    "city": "Andersen AFB",
+    "elev_m": 78,
+    "id": "PGUA",
+    "lat": 13.4544,
+    "lon": 144.8111,
+    "state": "GU",
+    "tz": "Pacific/Guam"
+  },
+  {
+    "city": "South Kauai",
+    "elev_m": 55,
+    "id": "PHKI",
+    "lat": 21.8939,
+    "lon": -159.5522,
+    "state": "HI",
+    "tz": "Pacific/Honolulu"
+  },
+  {
+    "city": "Kamuela",
+    "elev_m": 1161,
+    "id": "PHKM",
+    "lat": 20.1253,
+    "lon": -155.7781,
+    "state": "HI",
+    "tz": "Pacific/Honolulu"
+  },
+  {
+    "city": "Molokai",
+    "elev_m": 416,
+    "id": "PHMO",
+    "lat": 21.1328,
+    "lon": -157.1803,
+    "state": "HI",
+    "tz": "Pacific/Honolulu"
+  },
+  {
+    "city": "South Shore",
+    "elev_m": 421,
+    "id": "PHWA",
+    "lat": 19.095,
+    "lon": -155.5689,
+    "state": "HI",
+    "tz": "Pacific/Honolulu"
+  },
+  {
+    "city": "San Juan",
+    "elev_m": 867,
+    "id": "TJUA",
+    "lat": 18.1156,
+    "lon": -66.0781,
+    "state": "PR",
+    "tz": "America/Puerto_Rico"
+  }
+]

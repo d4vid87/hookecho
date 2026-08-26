@@ -44,6 +44,14 @@ jobs:
       - name: Test
         run: cargo test --workspace
 
+      # The website ships a committed copy of the NEXRAD site table (its build has no Rust), so
+      # check it still matches the registry.
+      - name: Site table up to date
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          cargo run -q -p wxdata --example nexrad_sites > /tmp/nexrad-sites.json
+          diff -u site/src/data/nexrad-sites.json /tmp/nexrad-sites.json
+
       # Advisory: clippy lints are surfaced but don't fail the build (the tree is tuned for a
       # custom hand-format, and some pedantic lints are intentionally left).
       - name: Clippy (advisory)
