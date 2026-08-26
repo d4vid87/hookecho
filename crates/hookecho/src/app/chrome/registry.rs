@@ -708,7 +708,10 @@ impl HookEchoApp {
         }
         push(
             "Mute audio alerts",
-            "Alerts",
+            // "Tools", not "Alerts": there is no Alerts group in the panel, and a row filed under
+            // one draws nowhere — reachable from Ctrl+K and invisible everywhere else. The debug
+            // assertion in `push` caught it; a debug build panicked at startup.
+            "Tools",
             "Silence every chime and spoken warning without changing your sound choices",
             true,
             PaletteAction::ToggleMute,
