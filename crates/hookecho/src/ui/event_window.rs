@@ -14,9 +14,12 @@ pub enum EventAction {
         lat: f64,
         zoom: f64,
         time: Option<DateTime<Utc>>,
+        /// Minutes to replay around `time`; `0` jumps there and stops.
+        span_min: u16,
     },
-    /// Save the active pane's current view as a bookmark.
-    AddBookmark,
+    /// Save the active pane's current view as a bookmark. The span is the replay window to save
+    /// with it, `0` for a still.
+    AddBookmark(u16),
 }
 
 #[derive(Default)]
@@ -59,10 +62,12 @@ impl EventWindow {
                                 lat: e.lat,
                                 zoom: e.zoom,
                                 time: Some(e.datetime()),
+                                span_min: e.span_min,
                             });
                         }
                         ui.strong(e.name);
                         ui.weak(e.site);
+                        ui.weak(format!("· {} min replay", e.span_min));
                     });
                     ui.label(egui::RichText::new(e.blurb).size(11.0).weak());
                     ui.add_space(2.0);
@@ -84,12 +89,17 @@ impl EventWindow {
                                 lat,
                                 zoom: b.zoom,
                                 time: b.time_secs.and_then(|s| DateTime::from_timestamp(s, 0)),
+                                span_min: b.span_min,
                             });
                         }
                         ui.strong(&b.name);
                         ui.weak(&b.site);
                         if b.time_secs.is_some() {
-                            ui.weak("· archive");
+                            ui.weak(if b.span_min > 0 {
+                                format!("· {} min replay", b.span_min)
+                            } else {
+                                "· archive".to_string()
+                            });
                         }
                         if ui.button("✖").clicked() {
                             remove = Some(i);
@@ -97,9 +107,25 @@ impl EventWindow {
                     });
                 }
                 ui.add_space(4.0);
-                if ui.button("🔖 Bookmark current view").clicked() {
-                    action = Some(EventAction::AddBookmark);
-                }
+                ui.horizontal(|ui| {
+                    if ui
+                        .button("🔖 Bookmark current view")
+                        .on_hover_text("The frame you are on, as a still")
+                        .clicked()
+                    {
+                        action = Some(EventAction::AddBookmark(0));
+                    }
+                    if ui
+                        .button("▶ Save as replay")
+                        .on_hover_text(
+                            "The hour around this frame, looped \u{2014} the storm becoming the \
+                             thing worth saving, not one volume of it",
+                        )
+                        .clicked()
+                    {
+                        action = Some(EventAction::AddBookmark(60));
+                    }
+                });
             });
         });
         if let Some(i) = remove {
