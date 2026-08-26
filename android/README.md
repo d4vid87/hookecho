@@ -73,8 +73,8 @@ produces `libhookecho.so` before Gradle runs — verbatim:
 ```
 
 Notes for the MR: the toolchain is pinned (`1.96.1`, matching CI) and `cargo-ndk` is version-pinned
-for reproducibility (`Cargo.lock` is *not* committed — expect this to be the review round-trip;
-`cargo generate-lockfile` in `prebuild` or committing the lockfile are the two answers); the `.so` lands in `app/src/main/jniLibs/` and
+for reproducibility, and `Cargo.lock` is committed so the F-Droid build resolves the same crates
+this repo builds against; the `.so` lands in `app/src/main/jniLibs/` and
 a Gradle `preBuild` hook deletes anything in that directory that is not `libhookecho.so`.
 
 ## First run

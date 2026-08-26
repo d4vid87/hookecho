@@ -1,5 +1,9 @@
 /target
+# Vendored crates and the fuzz workspace bring their own lockfiles; only the root one is
+# ours to pin. It is committed: it is what makes the Flathub sources file (and any build)
+# reproducible — see packaging/SUBMITTING.md.
 Cargo.lock
+!/Cargo.lock
 *.png
 !docs/shots/*.png
 !android/app/src/main/res/**/*.png
