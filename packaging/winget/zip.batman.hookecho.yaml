@@ -5,7 +5,7 @@
 # with the URL and hash filled in, rather than three files written from memory each time.
 #
 # At tag time:
-#   sha256sum dist/Hook_Echo-WX-setup-x86_64.exe
+#   sha256sum dist/HookEcho-setup-x86_64.exe
 # and paste the result into the installer manifest below.
 PackageIdentifier: zip.batman.hookecho
 PackageVersion: 0.8.0

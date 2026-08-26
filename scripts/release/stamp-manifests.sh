@@ -7,11 +7,11 @@
 # winget-pkgs, a push to the tap and to the AUR); nothing commits them back to this repo.
 #
 # Usage: scripts/release/stamp-manifests.sh <version> [setup-exe]
-#   e.g. scripts/release/stamp-manifests.sh 0.8.0 dist/Hook_Echo-WX-setup-x86_64.exe
+#   e.g. scripts/release/stamp-manifests.sh 0.8.0 dist/HookEcho-setup-x86_64.exe
 set -euo pipefail
 
 VER="${1:?usage: stamp-manifests.sh <version> [setup-exe]}"
-EXE="${2:-dist/Hook_Echo-WX-setup-x86_64.exe}"
+EXE="${2:-dist/HookEcho-setup-x86_64.exe}"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$ROOT"
 
