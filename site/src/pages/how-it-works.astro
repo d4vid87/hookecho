@@ -1,0 +1,109 @@
+---
+import Base from "../layouts/Base.astro";
+import ShotGallery from "../components/ShotGallery.astro";
+
+const repoShots = "https://raw.githubusercontent.com/d4vid87/hookecho/v0.12.0-beta.1/docs/shots";
+
+const shots = [
+  {
+    src: `${repoShots}/products.jpg`,
+    alt: "The product picker showing Level 3 algorithm products for the selected site",
+    caption: "Level 3 products, decoded on your machine.",
+  },
+  {
+    src: `${repoShots}/fronts.jpg`,
+    alt: "Surface analysis fronts and pressure centers drawn over the map",
+    caption: "Surface analysis, from the same charts forecasters draw.",
+  },
+  {
+    src: `${repoShots}/forecast.jpg`,
+    alt: "A point forecast panel opened by clicking a location on the map",
+    caption: "Click anywhere: that is the NWS forecast for that point.",
+  },
+  {
+    src: `${repoShots}/qpe.jpg`,
+    alt: "Multi-hour precipitation accumulation shaded across a region",
+    caption: "Rainfall accumulation, straight from MRMS.",
+  },
+];
+---
+
+<Base
+  title="How HookEcho works | HookEcho"
+  description="Where the data comes from, what happens on your machine, and why there is no server in the middle. NEXRAD Level 2, MRMS, HRRR and the NWS API, decoded locally."
+>
+  <section>
+    <div class="wrap prose">
+      <p class="eyebrow">How it works</p>
+      <h1>There is no server in the middle</h1>
+      <p class="lede">
+        Most weather apps are a thin client for someone's rendering service: their server reads the
+        radar, draws a picture, and sends you the picture. HookEcho downloads the radar itself and
+        draws it on your machine. That one difference explains almost everything else about it.
+      </p>
+
+      <h2>Where the data comes from</h2>
+      <p>
+        All of it is public and all of it is free, because the American taxpayer already paid for
+        it. The app reads:
+      </p>
+      <ul>
+        <li>
+          <strong>NEXRAD Level 2</strong> — the full volume scan from a WSR-88D: every elevation
+          angle, reflectivity, velocity, spectrum width and the dual-polarization fields. Live from
+          the real-time feed, and archived back to 1991.
+        </li>
+        <li>
+          <strong>NEXRAD Level 3</strong> — the algorithm products the radar itself computes:
+          storm tracks, hail, mesocyclone detections, precipitation totals.
+        </li>
+        <li>
+          <strong>MRMS</strong> — the national mosaic, rotation tracks, hail swaths and quantitative
+          precipitation estimates, blended across every radar at once.
+        </li>
+        <li>
+          <strong>HRRR and NAM</strong> — hourly model fields, including the severe composite
+          parameters, read straight from the public model buckets.
+        </li>
+        <li>
+          <strong>The National Weather Service API</strong> — warnings, watches, point forecasts,
+          storm reports, surface observations and text products.
+        </li>
+      </ul>
+
+      <h2>What happens on your machine</h2>
+      <p>
+        The app decodes the raw volume, corrects the velocity aliasing, builds the sweep geometry
+        and rasterizes it on your GPU. Nothing has been resampled, smoothed or downscaled by anyone
+        before you see it, because nobody else touched it. When you switch tilts, the data for that
+        tilt is already in memory — it came down in the same volume.
+      </p>
+      <p>
+        It also means the app works in places a thin client cannot. Offline chase packs are just
+        the volumes you already downloaded, and the archive is the same decoder pointed at an older
+        file.
+      </p>
+
+      <ShotGallery shots={shots} />
+
+      <h2>Why it is free</h2>
+      <p>
+        Because it costs nothing to run. There is no rendering server, no data licence, no API
+        contract and no infrastructure bill to pass on to you. The desktop app talks directly to
+        NOAA; the browser version is a static bundle. What is left is the code, which is MIT
+        licensed and
+        <a href="https://github.com/d4vid87/hookecho">on GitHub</a>.
+      </p>
+      <p>
+        <a href="/privacy/">What the app and this site actually contact</a> ·
+        <a href="/compare/">How it compares to the alternatives</a>
+      </p>
+    </div>
+  </section>
+</Base>
+
+<style>
+  .prose { max-width: 70ch; }
+  .lede { font-size: 1.1rem; color: var(--text-dim); }
+  li { margin: 0.5rem 0; }
+</style>

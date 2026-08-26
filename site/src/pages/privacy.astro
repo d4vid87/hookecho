@@ -1,0 +1,84 @@
+---
+import Base from "../layouts/Base.astro";
+---
+
+<Base
+  title="Privacy | HookEcho"
+  description="What this website loads, what the app sends, and what neither of them collects. No accounts, no telemetry, no ad network."
+>
+  <section>
+    <div class="wrap prose">
+      <p class="eyebrow">Privacy</p>
+      <h1>What we collect: nothing you would call data</h1>
+      <p class="lede">
+        There is no account system, no telemetry, no ad network and no analytics product that
+        follows you between sites. This page is the specific version of that claim, because the
+        vague version is worth nothing.
+      </p>
+
+      <h2>The app</h2>
+      <p>
+        HookEcho runs on your own machine and talks straight to the public weather feeds — NOAA's
+        NEXRAD archive and MRMS, the National Weather Service API, and the model buckets. Those
+        servers see the requests, exactly as they would if you loaded a weather page. Nothing is
+        routed through us, because there is no us to route it through: we run no server that the
+        app contacts.
+      </p>
+      <p>
+        Your settings, bookmarks and chase logs are files on your disk. API keys you enter — for a
+        basemap provider or a mesonet network — stay in your own settings file and are sent only to
+        the service that issued them.
+      </p>
+      <p>
+        Location is used only if you turn it on, and only to pick your nearest radar. It is not
+        sent anywhere.
+      </p>
+
+      <h2>This website</h2>
+      <p>Loading a page here contacts, and only ever contacts:</p>
+      <ul>
+        <li>
+          <strong>api.weather.gov</strong> — the live warning counts on the landing page and the
+          per-radar pages. Public data, no key, requested by your browser directly.
+        </li>
+        <li>
+          <strong>radar.weather.gov</strong> — the live radar loops. Images, hotlinked from the
+          NWS's own server.
+        </li>
+        <li>
+          <strong>raw.githubusercontent.com</strong> — the screenshots, served from our repository
+          at a fixed tag so GitHub carries the bandwidth rather than us.
+        </li>
+        <li>
+          <strong>static.cloudflareinsights.com</strong> — Cloudflare Web Analytics, when it is
+          enabled. It is cookieless, records no personal data and does not fingerprint or track you
+          across sites. It exists so we know which pages people read.
+        </li>
+      </ul>
+      <p>
+        The site also answers a request to its own <code>/geo.json</code>, which returns the rough
+        city and coordinates our host already derived from your IP address, so the page can say
+        which radar is nearest without asking your browser for location permission. It is computed
+        per request and never stored, logged or associated with anything.
+      </p>
+      <p>
+        We set no cookies. There is no login, no newsletter, no form and no comment box, so there
+        is nothing here for you to hand us.
+      </p>
+
+      <h2>If you would rather check than trust</h2>
+      <p>
+        The site and the app are both in
+        <a href="https://github.com/d4vid87/hookecho">the same public repository</a>. Every network
+        call either makes is in that source, and the desktop app's allowed-host list is compiled in
+        and checked by CI.
+      </p>
+    </div>
+  </section>
+</Base>
+
+<style>
+  .prose { max-width: 68ch; }
+  .lede { font-size: 1.1rem; color: var(--text-dim); }
+  li { margin: 0.5rem 0; }
+</style>
