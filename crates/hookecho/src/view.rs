@@ -150,6 +150,11 @@ pub struct MapView {
     pub loading: bool,
     pub last_poll: Option<Instant>,
     pub error: Option<String>,
+    /// National field layers drawn in this pane. Per-pane rather than app-wide: two panes is how
+    /// you compare two fields, and the model-difference layer would rather be a pair of panes
+    /// than a subtraction. The grids themselves stay in one shared cache — only the choice of
+    /// what to draw lives here.
+    pub fields_on: std::collections::HashSet<crate::render::FieldLayer>,
     /// Every moment seen in any volume from `loaded_site`, cleared when the site changes.
     ///
     /// A single live volume is only as complete as the tilts that have arrived: early in a scan
@@ -182,6 +187,7 @@ impl MapView {
             loading: false,
             last_poll: None,
             error: None,
+            fields_on: Default::default(),
             moments_seen: [false; Moment::ALL.len()],
         }
     }

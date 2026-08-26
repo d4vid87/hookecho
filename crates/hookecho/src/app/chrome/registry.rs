@@ -359,7 +359,7 @@ impl HookEchoApp {
                 false,
             ),
         ] {
-            let on = self.fields.get(&layer).is_some_and(|s| s.show);
+            let on = self.views[self.active].fields_on.contains(&layer);
             push(
                 label,
                 category,

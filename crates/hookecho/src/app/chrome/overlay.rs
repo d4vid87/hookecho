@@ -175,14 +175,14 @@ impl HookEchoApp {
                                 .default_open(false)
                                 .show(ui, |ui| {
                                     let glm_options = self.show_glm
-                                        || self
-                                            .fields
-                                            .get(&crate::render::FieldLayer::GlmFed)
-                                            .is_some_and(|s| s.show);
+                                        || self.views[self.active]
+                                            .fields_on
+                                            .contains(&crate::render::FieldLayer::GlmFed);
                                     crate::ui::layer_options::show(
                                         ui,
                                         &mut self.filters,
                                         &mut self.fields,
+                                        &self.views[self.active].fields_on.clone(),
                                         &mut self.rotation_minutes,
                                         &mut self.hail_minutes,
                                         &mut self.hrrr_fcst_hour,

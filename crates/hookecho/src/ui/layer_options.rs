@@ -57,6 +57,9 @@ pub(crate) fn show(
     ui: &mut egui::Ui,
     filters: &mut OverlayFilters,
     fields: &mut std::collections::HashMap<crate::render::FieldLayer, crate::app::FieldState>,
+    // Which layers the active pane draws. Visibility is per-pane now; the map above is the shared
+    // fetch state, which is what `fields` is still needed for (clearing a refetch clock).
+    on: &std::collections::HashSet<crate::render::FieldLayer>,
     rotation_minutes: &mut u16,
     hail_minutes: &mut u16,
     hrrr_fcst_hour: &mut u8,
@@ -104,7 +107,7 @@ pub(crate) fn show(
         FL::GlobalPrecip,
     ]
     .iter()
-    .any(|l| fields.get(l).is_some_and(|s| s.show));
+    .any(|l| on.contains(l));
     if global_on {
         ui.horizontal(|ui| {
             ui.label("Global model:");
@@ -128,7 +131,7 @@ pub(crate) fn show(
         });
     }
 
-    if fields.get(&FL::ModelDiff).is_some_and(|s| s.show) {
+    if on.contains(&FL::ModelDiff) {
         let (a, b) = diff_field.pair();
         ui.horizontal_wrapped(|ui| {
             ui.label("Difference:");
@@ -153,7 +156,7 @@ pub(crate) fn show(
         }
     }
 
-    if fields.get(&FL::Lightning).is_some_and(|s| s.show) {
+    if on.contains(&FL::Lightning) {
         ui.horizontal(|ui| {
             ui.label("CG density window:");
             for m in [1u16, 5, 15, 30] {
@@ -311,7 +314,7 @@ pub(crate) fn show(
         ui.label(egui::RichText::new(text).small().strong());
     };
 
-    if fields.get(&FL::Rotation).is_some_and(|s| s.show) {
+    if on.contains(&FL::Rotation) {
         header(ui, "Rotation tracks");
         ui.horizontal(|ui| {
             ui.label("Window:");
@@ -330,7 +333,7 @@ pub(crate) fn show(
         });
     }
 
-    if fields.get(&FL::HailSwath).is_some_and(|s| s.show) {
+    if on.contains(&FL::HailSwath) {
         header(ui, "Hail swaths");
         ui.horizontal(|ui| {
             ui.label("Window:");
@@ -347,14 +350,14 @@ pub(crate) fn show(
         });
     }
 
-    if fields.get(&FL::Mosaic).is_some_and(|s| s.show) {
+    if on.contains(&FL::Mosaic) {
         header(ui, "Radar mosaic");
         if let Some(m) = mosaic {
             ui.weak(m);
         }
     }
 
-    if fields.get(&FL::Hrrr).is_some_and(|s| s.show) {
+    if on.contains(&FL::Hrrr) {
         header(ui, "Future radar");
         ui.add(egui::Slider::new(hrrr_fcst_hour, 0..=18).text("F+ hr"));
         match hrrr_valid {
@@ -374,7 +377,7 @@ pub(crate) fn show(
         }
     }
 
-    if fields.get(&FL::Cape).is_some_and(|s| s.show) {
+    if on.contains(&FL::Cape) {
         header(ui, "CAPE");
         ui.horizontal(|ui| {
             ui.label("Parcel:");
@@ -388,7 +391,7 @@ pub(crate) fn show(
         });
     }
 
-    if fields.get(&FL::Srh).is_some_and(|s| s.show) {
+    if on.contains(&FL::Srh) {
         header(ui, "Storm-relative helicity");
         ui.horizontal(|ui| {
             ui.label("Depth:");
@@ -456,7 +459,7 @@ pub(crate) fn show(
             .changed();
     }
 
-    if fields.get(&FL::SnowAnalysis).is_some_and(|s| s.show) {
+    if on.contains(&FL::SnowAnalysis) {
         header(ui, "Snowfall analysis");
         ui.horizontal(|ui| {
             ui.label("Window:");
@@ -470,7 +473,7 @@ pub(crate) fn show(
 
     if [FL::VilLocal, FL::VilDensity, FL::EtopLocal]
         .iter()
-        .any(|l| fields.get(l).is_some_and(|s| s.show))
+        .any(|l| on.contains(l))
     {
         header(ui, "Derived products");
         ui.horizontal(|ui| {
@@ -530,7 +533,7 @@ pub(crate) fn show(
 
     if [FL::Vil, FL::EchoTops, FL::Hca]
         .iter()
-        .any(|l| fields.get(l).is_some_and(|s| s.show))
+        .any(|l| on.contains(l))
     {
         header(ui, "Level 3 grids");
         ui.weak(format!("Site: {}", l3grid_site.unwrap_or("—")));
