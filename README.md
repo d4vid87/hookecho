@@ -641,8 +641,9 @@ requests. **Live chunk streaming works too**, so a browser tab updates sweep by
 sweep during a scan rather than waiting out the whole volume. Settings persist to
 `localStorage`, and alert sounds and spoken warnings play through the browser's
 own audio and `speechSynthesis`. "Use my location" and chase follow-me work too,
-off the browser's own Geolocation — asked for when you press the button, never
-before. It is also **installable**: a manifest and a
+off the browser's own Geolocation, and "Post alerts to the desktop" posts real
+browser notifications. Both permissions are asked for at the moment you turn the
+thing on and never before. It is also **installable**: a manifest and a
 service worker put it on the home screen or in its own window, and precache the
 app shell so a launch with no signal still opens the map instead of a browser
 error. Basemap tiles are cached too, so a second visit draws the map without

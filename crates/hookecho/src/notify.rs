@@ -82,9 +82,59 @@ pub fn desktop(title: &str, body: &str) {
     }
 }
 
-/// No-op on Android (the alert service posts its own) and on the web.
-#[cfg(any(target_os = "android", target_arch = "wasm32"))]
+/// No-op on Android — the alert service posts its own, through the system channel.
+#[cfg(target_os = "android")]
 pub fn desktop(_title: &str, _body: &str) {}
+
+/// Post a browser notification, so an alert reaches someone whose tab is behind something else.
+///
+/// Best effort in the same way the desktop one is: no permission, or a browser that refuses,
+/// logs and carries on. The in-app banner and the alert list never depended on this.
+#[cfg(target_arch = "wasm32")]
+pub fn desktop(title: &str, body: &str) {
+    use web_sys::NotificationPermission as P;
+    match web_sys::Notification::permission() {
+        P::Granted => {
+            let opts = web_sys::NotificationOptions::new();
+            opts.set_body(body);
+            opts.set_icon("/icon-192.png");
+            // One notification per event, replacing rather than stacking: an outbreak should not
+            // leave forty cards in the tray.
+            opts.set_tag("hookecho-alert");
+            if let Err(e) = web_sys::Notification::new_with_options(title, &opts) {
+                log::warn!("browser notification failed: {e:?}");
+            }
+        }
+        // Never prompt from here. An alert firing is not a moment to interrupt someone with a
+        // permission dialog, and the ask already happened when they turned the setting on.
+        _ => log::debug!("browser notification skipped: no permission"),
+    }
+}
+
+/// Ask the browser for notification permission, if it has not already been answered.
+///
+/// Called from the one place that makes it contextual — the moment the user turns alert
+/// notifications on — never at load. A denial is final and is not asked about again; the browser
+/// enforces that anyway.
+#[cfg(target_arch = "wasm32")]
+pub fn ask_permission() {
+    if web_sys::Notification::permission() != web_sys::NotificationPermission::Default {
+        return;
+    }
+    match web_sys::Notification::request_permission() {
+        Ok(p) => wasm_bindgen_futures::spawn_local(async move {
+            match wasm_bindgen_futures::JsFuture::from(p).await {
+                Ok(v) => log::info!("notification permission: {v:?}"),
+                Err(e) => log::warn!("notification permission request failed: {e:?}"),
+            }
+        }),
+        Err(e) => log::warn!("cannot ask for notification permission: {e:?}"),
+    }
+}
+
+/// Nothing to ask for: desktop notifications need no permission, and Android's are the service's.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn ask_permission() {}
 
 /// Waits before each retry. A webhook that fails is usually failing for seconds (a Discord blip,
 /// a laptop's wifi coming back after a lid open), so the first retry is quick and the last one is

@@ -337,8 +337,8 @@ pub struct Settings {
     /// First-run setup completed (or dismissed). `false` shows the first-run card at startup.
     #[serde(default)]
     pub setup_done: bool,
-    /// Post alerts to the desktop's own notification centre, so they arrive with the window
-    /// behind something else. Ignored on Android (the alert service posts its own) and the web.
+    /// Post alerts to the platform's own notification centre, so they arrive with the window
+    /// behind something else. Ignored on Android, where the alert service posts its own.
     #[serde(default)]
     pub desktop_notify: bool,
     /// Record a breadcrumb track of the session's GPS fixes, exportable as GPX. Off by default:
