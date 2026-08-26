@@ -9,7 +9,8 @@
 //! doesn't capture is anything tied to the moment rather than the arrangement — the archive
 //! playhead, open windows, per-moment thresholds.
 //!
-//! `ponytail: no per-pane thresholds; add them if someone asks for a saved threshold set.`
+//! Per-pane display thresholds and field layers ride along, since a pane that shows one field
+//! above 50 dBZ beside another that shows a different one is exactly the arrangement worth saving.
 
 use crate::view::MapView;
 
@@ -75,6 +76,15 @@ pub struct PaneSnap {
     pub lon: f64,
     pub lat: f64,
     pub zoom: f64,
+    /// Field layers this pane drew, by slug. Same forward-compatibility rule as the overlays: a
+    /// slug this build does not have is skipped. Empty on a snapshot written before per-pane
+    /// layers existed, which is read as "fall back to the workspace-wide list".
+    #[serde(default)]
+    pub fields_on: Vec<String>,
+    /// Enabled display thresholds, as `(moment, physical value)`. Only the enabled ones are
+    /// stored: a threshold that was set but switched off is not part of the arrangement.
+    #[serde(default)]
+    pub thresholds: Vec<(wxdata::level2::Moment, f32)>,
 }
 
 impl PaneSnap {
@@ -90,6 +100,17 @@ impl PaneSnap {
             lon,
             lat,
             zoom: v.camera.zoom,
+            fields_on: crate::render::FieldLayer::DRAW_ORDER
+                .iter()
+                .filter(|l| v.fields_on.contains(l))
+                .map(|l| l.slug().to_string())
+                .collect(),
+            thresholds: wxdata::level2::Moment::ALL
+                .iter()
+                .enumerate()
+                .filter(|&(i, _)| v.threshold_enabled[i])
+                .filter_map(|(i, m)| v.thresholds[i].map(|t| (*m, t)))
+                .collect(),
         }
     }
 
@@ -105,6 +126,14 @@ impl PaneSnap {
         // The camera came from the saved layout, not from a site recenter — hold it through the
         // site change the restore just triggered.
         v.camera_placed = true;
+        // Thresholds are a per-moment array; clear it first so restoring an arrangement without
+        // one does not leave the previous pane's filter in place.
+        v.thresholds = Default::default();
+        v.threshold_enabled = Default::default();
+        for (m, t) in &self.thresholds {
+            v.thresholds[m.index()] = Some(*t);
+            v.threshold_enabled[m.index()] = true;
+        }
     }
 }
 
@@ -122,6 +151,8 @@ fn pane(moment: wxdata::level2::Moment, tilt: usize, srv: bool) -> PaneSnap {
         lon: -97.5,
         lat: 35.5,
         zoom: 7.5,
+        fields_on: Vec::new(),
+        thresholds: Vec::new(),
     }
 }
 
@@ -163,6 +194,8 @@ pub fn starters() -> Vec<Workspace> {
                 lon: -97.0,
                 lat: 38.5,
                 zoom: 4.0,
+                fields_on: vec!["mrms".into()],
+                thresholds: Vec::new(),
             }],
             active: 0,
             link_cameras: false,
@@ -217,6 +250,42 @@ mod tests {
     }
 
     #[test]
+    fn per_pane_thresholds_and_layers_survive_the_round_trip() {
+        use wxdata::level2::Moment;
+        let mut v = MapView::new(None, crate::render::mercator::Camera::at_lonlat(0.0, 0.0, 3.0));
+        v.fields_on.insert(crate::render::FieldLayer::Mrms);
+        v.thresholds[Moment::Reflectivity.index()] = Some(35.0);
+        v.threshold_enabled[Moment::Reflectivity.index()] = true;
+        // Set but switched off: part of the session, not part of the arrangement.
+        v.thresholds[Moment::Velocity.index()] = Some(20.0);
+
+        let snap = PaneSnap::capture(&v);
+        assert_eq!(snap.fields_on, vec!["mrms"]);
+        assert_eq!(snap.thresholds, vec![(Moment::Reflectivity, 35.0)]);
+
+        let mut fresh = MapView::new(None, crate::render::mercator::Camera::at_lonlat(0.0, 0.0, 3.0));
+        // A leftover filter from whatever this pane was showing before must not survive a restore.
+        fresh.thresholds[Moment::SpectrumWidth.index()] = Some(4.0);
+        fresh.threshold_enabled[Moment::SpectrumWidth.index()] = true;
+        snap.apply(&mut fresh);
+        assert_eq!(fresh.thresholds[Moment::Reflectivity.index()], Some(35.0));
+        assert!(fresh.threshold_enabled[Moment::Reflectivity.index()]);
+        assert!(!fresh.threshold_enabled[Moment::SpectrumWidth.index()]);
+        assert_eq!(fresh.thresholds[Moment::Velocity.index()], None);
+    }
+
+    #[test]
+    fn a_pane_written_before_per_pane_layers_still_loads() {
+        // No `fields_on`, no `thresholds` — exactly what an older build wrote.
+        let snap: PaneSnap = serde_json::from_str(
+            r#"{"site":"KTLX","moment":"Reflectivity","tilt":0,"basemap":"dark",
+                "lon":-97.3,"lat":35.3,"zoom":8.0}"#,
+        )
+        .expect("old pane snapshots still parse");
+        assert!(snap.fields_on.is_empty() && snap.thresholds.is_empty());
+    }
+
+    #[test]
     fn workspace_roundtrips_through_json() {
         let ws = Workspace {
             name: "Two-site chase".into(),
@@ -229,6 +298,8 @@ mod tests {
                 lon: -93.72,
                 lat: 41.73,
                 zoom: 7.25,
+                fields_on: Vec::new(),
+                thresholds: Vec::new(),
             }],
             active: 0,
             link_cameras: true,

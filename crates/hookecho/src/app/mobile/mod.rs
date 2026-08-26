@@ -279,7 +279,7 @@ impl super::HookEchoApp {
             if let Some(top) = crate::render::FieldLayer::DRAW_ORDER
                 .iter()
                 .rev()
-                .find(|l| self.fields.get(l).is_some_and(|s| s.show))
+                .find(|l| self.views[self.active].fields_on.contains(l))
             {
                 paint_field_strip(&painter, strip.translate(vec2(0.0, 11.0)), *top);
             }

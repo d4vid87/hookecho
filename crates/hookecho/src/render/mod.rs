@@ -411,6 +411,9 @@ struct PaneGpu {
     vector_over_raster: bool,
     frame_draw_radar: bool,
     frame_draw_overlay: bool,
+    /// Field layers this pane draws this frame. Per-pane, not shared: two panes are how you look
+    /// at two fields at once.
+    field_draws: Vec<FieldLayer>,
 }
 
 /// Long-lived GPU resources, stored in egui's `CallbackResources` type-map.
@@ -434,7 +437,6 @@ pub struct RenderResources {
     vector_tiles: HashMap<TileId, OverlayGpu>,
     overlay: Option<OverlayGpu>,
     fields: HashMap<FieldLayer, MrmsGpu>,
-    field_draws: Vec<FieldLayer>,
     // One entry per live pane.
     panes: HashMap<u32, PaneGpu>,
     /// GPU wind particles, built on first use. `None` when the CPU path is in charge.
@@ -692,7 +694,6 @@ impl RenderResources {
             vector_tiles: HashMap::new(),
             overlay: None,
             fields: HashMap::new(),
-            field_draws: Vec::new(),
             panes: HashMap::new(),
             wind: None,
             target_format,
@@ -740,6 +741,7 @@ impl RenderResources {
                 vector_over_raster: false,
                 frame_draw_radar: false,
                 frame_draw_overlay: false,
+                field_draws: Vec::new(),
             }
         })
     }
@@ -1055,11 +1057,11 @@ impl RenderResources {
         }
         // Draw only the requested layers that actually have GPU data. Opacity rides in the grid
         // uniform's first pad word, so it costs one 4-byte write per drawn layer — no LUT re-bake.
-        self.field_draws.clear();
+        let mut field_draws = Vec::new();
         for (layer, opacity) in &cb.field_draws {
             if let Some(f) = self.fields.get(layer) {
                 queue.write_buffer(&f.uni, 24, &opacity.to_le_bytes());
-                self.field_draws.push(*layer);
+                field_draws.push(*layer);
             }
         }
 
@@ -1143,6 +1145,7 @@ impl RenderResources {
         pane.vector_over_raster = cb.vector_over_raster;
         pane.frame_draw_radar = cb.draw_radar && pane.radar.is_some();
         pane.frame_draw_overlay = cb.draw_overlay && overlay_present;
+        pane.field_draws = field_draws;
     }
 
     fn upload_overlay(&mut self, device: &wgpu::Device, o: &OverlayUpload) {
@@ -1311,9 +1314,10 @@ impl RenderResources {
 
     /// Paint the active field layers in the requested band (below/above the radar), in the fixed
     /// bottom-to-top order, using this pane's camera.
-    fn draw_fields(&self, cam: &wgpu::BindGroup, pass: &mut wgpu::RenderPass<'_>, below: bool) {
+    fn draw_fields(&self, pane: &PaneGpu, pass: &mut wgpu::RenderPass<'_>, below: bool) {
+        let cam = &pane.camera_bg;
         for layer in FieldLayer::DRAW_ORDER {
-            if layer.below_radar() != below || !self.field_draws.contains(&layer) {
+            if layer.below_radar() != below || !pane.field_draws.contains(&layer) {
                 continue;
             }
             if let Some(f) = self.fields.get(&layer) {
@@ -1352,7 +1356,7 @@ impl RenderResources {
             self.draw_vector_basemap(pane, cam, pass);
         }
         // Field layers under the radar (national mosaic context).
-        self.draw_fields(cam, pass, true);
+        self.draw_fields(pane, pass, true);
         if pane.frame_draw_radar {
             if let Some(radar) = &pane.radar {
                 pass.set_pipeline(&self.radar_pipeline);
@@ -1363,7 +1367,7 @@ impl RenderResources {
             }
         }
         // Field layers over the radar (rotation/hail/shear/lightning signals).
-        self.draw_fields(cam, pass, false);
+        self.draw_fields(pane, pass, false);
         // Wind particles under the overlay, not over it: the CPU path paints in egui's own layer,
         // which is above everything, and a warning polygon disappearing under a particle trail
         // was the one complaint that layer ever attracted.

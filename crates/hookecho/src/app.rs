@@ -1389,7 +1389,6 @@ type ZdrCache = (
 /// Per-field-layer UI + fetch state (toggle, pending upload, refresh clock).
 #[derive(Default)]
 pub(crate) struct FieldState {
-    pub show: bool,
     pub pending: Option<crate::render::MrmsUpload>,
     pub last_fetch: Option<Instant>,
 }
@@ -3487,7 +3486,7 @@ impl HookEchoApp {
         /// Bit positions in the mask for the two hail grids.
         const HAIL_BITS: u8 = 0b11000;
         let mask = LAYERS.iter().enumerate().fold(0u8, |m, (i, l)| {
-            m | u8::from(self.fields.get(l).is_some_and(|s| s.show)) << i
+            m | u8::from(self.field_wanted(*l)) << i
         });
         if mask == 0 {
             self.derived_key = None;
@@ -4696,16 +4695,12 @@ impl HookEchoApp {
         match self.views[self.active].timeline.forecast_hour() {
             Some(h) => {
                 self.hrrr_fcst_hour = h;
-                if let Some(s) = self.fields.get_mut(&FL::Hrrr) {
-                    s.show = true;
-                }
+                self.views[self.active].fields_on.insert(FL::Hrrr);
                 self.hrrr_by_timeline = true;
             }
             None => {
                 if self.hrrr_by_timeline {
-                    if let Some(s) = self.fields.get_mut(&FL::Hrrr) {
-                        s.show = false;
-                    }
+                    self.views[self.active].fields_on.remove(&FL::Hrrr);
                     self.hrrr_by_timeline = false;
                 }
             }
@@ -6940,6 +6935,22 @@ impl HookEchoApp {
 
     /// The boolean behind an [`OverlayToggle`]. One place to resolve a named toggle so the
     /// layers panel, command palette, and mobile sheet never drift apart.
+    /// Does any pane want this field layer? The grids are fetched once and shared, so one pane
+    /// asking is enough to keep the download alive.
+    fn field_wanted(&self, layer: crate::render::FieldLayer) -> bool {
+        self.views.iter().any(|v| v.fields_on.contains(&layer))
+    }
+
+    /// Turn a field layer on or off in the active pane.
+    fn set_field(&mut self, layer: crate::render::FieldLayer, on: bool) {
+        let set = &mut self.views[self.active].fields_on;
+        if on {
+            set.insert(layer);
+        } else {
+            set.remove(&layer);
+        }
+    }
+
     fn overlay_flag(&mut self, t: OverlayToggle) -> &mut bool {
         use OverlayToggle as T;
         match t {
@@ -6995,9 +7006,10 @@ impl HookEchoApp {
                 }
             }
             PaletteAction::ToggleField(layer) => {
-                if let Some(s) = self.fields.get_mut(&layer) {
-                    s.show = !s.show;
-                }
+                // The active pane's choice, not the app's: that is what makes two panes able to
+                // show two fields.
+                let on = self.views[self.active].fields_on.contains(&layer);
+                self.set_field(layer, !on);
             }
             PaletteAction::ToggleOverlay(t) => {
                 let f = self.overlay_flag(t);
@@ -7107,11 +7119,7 @@ impl HookEchoApp {
                 // branch dead code and always land people on the same Windy page.
                 let overlay = if self.show_wind {
                     "wind"
-                } else if self
-                    .fields
-                    .get(&crate::render::FieldLayer::Cape)
-                    .is_some_and(|s| s.show)
-                {
+                } else if self.field_wanted(crate::render::FieldLayer::Cape) {
                     "cape"
                 } else if v.basemap.slug().starts_with("goes") {
                     "satellite"
@@ -7674,7 +7682,7 @@ impl HookEchoApp {
 
     fn sync_mosaic(&mut self, ctx: &egui::Context) {
         use crate::render::FieldLayer as FL;
-        if !self.fields.get(&FL::Mosaic).is_some_and(|s| s.show) {
+        if !self.field_wanted(FL::Mosaic) {
             return;
         }
         if !self.views[self.active].timeline.following {
@@ -10360,11 +10368,10 @@ impl HookEchoApp {
         } else {
             Vec::new()
         };
-        let field_draws: Vec<(crate::render::FieldLayer, f32)> = self
-            .fields
+        let field_draws: Vec<(crate::render::FieldLayer, f32)> = self.views[idx]
+            .fields_on
             .iter()
-            .filter(|(_, s)| s.show)
-            .map(|(k, _)| {
+            .map(|k| {
                 (
                     *k,
                     self.settings.field_opacity.get(k).copied().unwrap_or(1.0),
@@ -11990,12 +11997,7 @@ impl HookEchoApp {
         }
 
         // HRRR "future radar" banner — unmistakable that this is model forecast, not observation.
-        if idx == self.active
-            && self
-                .fields
-                .get(&crate::render::FieldLayer::Hrrr)
-                .is_some_and(|s| s.show)
-        {
+        if idx == self.active && view.fields_on.contains(&crate::render::FieldLayer::Hrrr) {
             let valid = self
                 .hrrr_valid
                 .map(|v| crate::timefmt::fmt_date_clock(v, self.active_tz()))
@@ -12076,11 +12078,7 @@ impl HookEchoApp {
 
         // The difference layer reads as "they disagree here" and nothing more without a number,
         // so the cursor samples the grid it was drawn from.
-        if self
-            .fields
-            .get(&crate::render::FieldLayer::ModelDiff)
-            .is_some_and(|s| s.show)
-        {
+        if view.fields_on.contains(&crate::render::FieldLayer::ModelDiff) {
             if let (Some(grid), Some(hp)) = (self.diff_grid.as_ref(), response.hover_pos()) {
                 let w = cam.screen_to_world((hp.x - prect.left(), hp.y - prect.top()), vp);
                 let (lon, lat) = crate::render::mercator::world_to_lonlat(w.0, w.1);
@@ -12537,7 +12535,7 @@ impl HookEchoApp {
             if let Some(top) = crate::render::FieldLayer::DRAW_ORDER
                 .iter()
                 .rev()
-                .find(|l| self.fields.get(l).is_some_and(|s| s.show))
+                .find(|l| view.fields_on.contains(l))
             {
                 y += if *top == crate::render::FieldLayer::ModelDiff {
                     ui::legend::draw_diff(&painter, prect, self.diff_field, y)
@@ -12676,11 +12674,12 @@ impl HookEchoApp {
             // A workspace you saved records the sites you had open; only the shipped starters
             // adopt whatever is on screen.
             adopt_site: false,
-            fields_on: self
-                .fields
+            // The workspace-wide list stays as the union across panes: it is what an older build
+            // reads, and what a pane snapshot written before per-pane layers falls back to.
+            fields_on: crate::render::FieldLayer::DRAW_ORDER
                 .iter()
-                .filter(|(_, st)| st.show)
-                .map(|(l, _)| l.slug().to_string())
+                .filter(|l| self.field_wanted(**l))
+                .map(|l| l.slug().to_string())
                 .collect(),
             chrome: Some(self.capture_chrome()),
         }
@@ -12719,8 +12718,19 @@ impl HookEchoApp {
         }
         // Same rule for the national field layers: an unknown slug is a layer this build
         // doesn't have, which is a thing to skip rather than an error.
-        for (layer, st) in self.fields.iter_mut() {
-            st.show = ws.fields_on.iter().any(|s| s == layer.slug());
+        for (v, snap) in self.views.iter_mut().zip(&ws.panes) {
+            // A pane snapshot written before per-pane layers existed carries none, and falls back
+            // to the workspace-wide list so an old file still restores what it meant.
+            let list = if snap.fields_on.is_empty() {
+                &ws.fields_on
+            } else {
+                &snap.fields_on
+            };
+            v.fields_on = crate::render::FieldLayer::DRAW_ORDER
+                .iter()
+                .copied()
+                .filter(|l| list.iter().any(|s| s == l.slug()))
+                .collect();
         }
         if let Some(c) = &ws.chrome {
             self.apply_chrome(c, ctx);
@@ -14353,7 +14363,7 @@ impl eframe::App for HookEchoApp {
             };
             // The reflectivity tint reads the precipitation-type grid whether or not that
             // layer is being drawn, so wanting the tint counts as wanting the layer's data.
-            let wanted = self.fields.get(&layer).is_some_and(|s| s.show)
+            let wanted = self.field_wanted(layer)
                 || (layer == FL::PrecipType && self.settings.precip_tint);
             let stale = wanted
                 && self.fields.get(&layer).is_none_or(|s| {
@@ -14368,11 +14378,11 @@ impl eframe::App for HookEchoApp {
         // Snow bands: the mosaic and the precipitation-type grid, cut to the banded snow.
         {
             let layer = FL::SnowBands;
-            let stale = self.fields.get(&layer).is_some_and(|s| {
-                s.show
-                    && s.last_fetch
+            let stale = self.field_wanted(layer)
+                && self.fields.get(&layer).is_none_or(|s| {
+                    s.last_fetch
                         .is_none_or(|t| t.elapsed().as_secs() >= field_refresh_secs(layer))
-            });
+                });
             if stale {
                 if let Some(s) = self.fields.get_mut(&layer) {
                     s.last_fetch = Some(Instant::now());
@@ -14382,11 +14392,11 @@ impl eframe::App for HookEchoApp {
         }
         // Environment suite (HRRR CAPE/SRH): fetch each enabled layer at f00, refresh ~15 min.
         for layer in [FL::Cape, FL::Srh] {
-            let stale = self.fields.get(&layer).is_some_and(|s| {
-                s.show
-                    && s.last_fetch
+            let stale = self.field_wanted(layer)
+                && self.fields.get(&layer).is_none_or(|s| {
+                    s.last_fetch
                         .is_none_or(|t| t.elapsed().as_secs() >= field_refresh_secs(layer))
-            });
+                });
             if stale {
                 if let Some(s) = self.fields.get_mut(&layer) {
                     s.last_fetch = Some(Instant::now());
@@ -14407,7 +14417,7 @@ impl eframe::App for HookEchoApp {
         ] {
             let fh = self.global_fcst_hour;
             let model = self.global_model;
-            let on = self.fields.get(&layer).is_some_and(|s| s.show);
+            let on = self.field_wanted(layer);
             let stale = on
                 && self.fields.get(&layer).is_some_and(|s| {
                     s.last_fetch
@@ -14427,7 +14437,7 @@ impl eframe::App for HookEchoApp {
         {
             let layer = FL::ModelDiff;
             let fh = self.global_fcst_hour;
-            let on = self.fields.get(&layer).is_some_and(|s| s.show);
+            let on = self.field_wanted(layer);
             let stale = on
                 && self.fields.get(&layer).is_some_and(|s| {
                     s.last_fetch
@@ -14450,14 +14460,14 @@ impl eframe::App for HookEchoApp {
             FL::ThunderProb,
         ] {
             let fh = self.hrrr_fcst_hour;
-            let stale = self.fields.get(&layer).is_some_and(|s| {
-                s.show
-                    && s.last_fetch
+            let stale = self.field_wanted(layer)
+                && self.fields.get(&layer).is_none_or(|s| {
+                    s.last_fetch
                         .is_none_or(|t| t.elapsed().as_secs() >= field_refresh_secs(layer))
-            });
+                });
             // Scrubbing the forecast tail must refetch immediately, not wait out the cadence.
-            let hour_changed = self.fields.get(&layer).is_some_and(|s| s.show)
-                && self.hrrr_layer_hour.get(&layer) != Some(&fh);
+            let hour_changed =
+                self.field_wanted(layer) && self.hrrr_layer_hour.get(&layer) != Some(&fh);
             if stale || hour_changed {
                 if let Some(s) = self.fields.get_mut(&layer) {
                     s.last_fetch = Some(Instant::now());
@@ -14483,7 +14493,7 @@ impl eframe::App for HookEchoApp {
 
         // GOES lightning: granules land every 20 s, so poll about that often. One in flight at a
         // time — a slow fetch must not queue up behind itself.
-        let glm_fed_on = self.fields.get(&FL::GlmFed).is_some_and(|s| s.show);
+        let glm_fed_on = self.field_wanted(FL::GlmFed);
         // A lightning-density rule needs the flashes polled and the grid built even with the
         // layer off, exactly like the scan signatures.
         let glm_rule_armed = self.settings.alert_rules.iter().any(|r| {
@@ -14622,7 +14632,7 @@ impl eframe::App for HookEchoApp {
         // Observed snowfall analysis: its own block because the accumulation window is a knob,
         // and changing it must refetch at once rather than wait out the cadence.
         {
-            let on = self.fields.get(&FL::SnowAnalysis).is_some_and(|s| s.show);
+            let on = self.field_wanted(FL::SnowAnalysis);
             let stale = self.fields.get(&FL::SnowAnalysis).is_some_and(|s| {
                 s.last_fetch
                     .is_none_or(|t| t.elapsed().as_secs() >= field_refresh_secs(FL::SnowAnalysis))
@@ -14665,7 +14675,7 @@ impl eframe::App for HookEchoApp {
         let l3_site = self.views[self.active].site.clone();
         let site_changed = self.l3grid_site != l3_site;
         for layer in [FL::Vil, FL::EchoTops, FL::Hca] {
-            let on = self.fields.get(&layer).is_some_and(|s| s.show);
+            let on = self.field_wanted(layer);
             if !on {
                 continue;
             }
@@ -14685,13 +14695,13 @@ impl eframe::App for HookEchoApp {
         if site_changed
             && [FL::Vil, FL::EchoTops, FL::Hca]
                 .iter()
-                .any(|l| self.fields.get(l).is_some_and(|s| s.show))
+                .any(|l| self.field_wanted(*l))
         {
             self.l3grid_site = l3_site;
         }
         // HRRR future radar: fetch when enabled and the forecast hour changed or the run refreshed
         // (~10-min throttle; a new run posts hourly).
-        let hrrr_on = self.fields.get(&FL::Hrrr).is_some_and(|s| s.show);
+        let hrrr_on = self.field_wanted(FL::Hrrr);
         if hrrr_on {
             let hour_changed = self.hrrr_fetched_hour != Some(self.hrrr_fcst_hour);
             let stale = self
@@ -15038,7 +15048,7 @@ impl eframe::App for HookEchoApp {
         let active_fields: Vec<(crate::render::FieldLayer, String)> =
             crate::render::FieldLayer::DRAW_ORDER
                 .into_iter()
-                .filter(|l| self.fields.get(l).is_some_and(|s| s.show))
+                .filter(|l| self.field_wanted(*l))
                 .map(|l| {
                     let name = names.get(&l).cloned().unwrap_or_else(|| format!("{l:?}"));
                     (l, name)
