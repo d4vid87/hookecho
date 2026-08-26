@@ -51,6 +51,35 @@ run time and never leaves the scratch profile; the committed template has an emp
 | `fronts` | **live** | Fronts crossing the frame |
 | `glm` | **live** | Lightning on an active storm |
 
+## The phone set
+
+`./shoot.sh android` shoots `docs/shots/android/` on a real device over adb, and copies the same
+five frames into `android/fastlane/.../phoneScreenshots` so the store listing can never disagree
+with the README. It needs the phone plugged in and the APK installed (`INSTALL=1
+./android/build.sh`); nothing else on the desktop side is involved — no Xvfb, no release binary.
+
+| Scene | What it has to show |
+|---|---|
+| `hero.gif` | Moore, OK — May 20 2013, stepped a volume at a time |
+| `map` | The floating chrome over Tuscaloosa — pill, control column, scrubber, nothing open |
+| `layers` | The Layers & tools sheet on its Data tab, tilts and the registry visible |
+| `alerts` | The Alerts tab with the archived tornado-warning stack of April 27 2011 |
+| `site` | The radar-site picker, nearest first |
+
+Four stills and not more. Each one past the first costs another blind tap, and a blind tap that
+misses does not fail — it toggles a layer or knocks the timeline to live, and the next frame
+looks plausible and is wrong. A fifth scene showing velocity was cut for exactly that.
+
+Two things about this that are easy to get wrong. The run starts with `pm clear`, because the
+sheet remembers its tab and the map remembers its layers, and a set shot on top of yesterday's
+state fails by looking fine. And the deep link has to be sent *after* the first-run picker is
+dismissed: on a cold start that screen owns the site, so an intent delivered underneath it moves
+a camera nobody is looking at.
+
+Tap targets are device pixels for a 1440x3120 screen at density 640. On a different phone they
+are wrong, and wrong here means a tap lands on the map and a layer silently toggles — check the
+frames, or re-read the coordinates off a capture.
+
 Storm anatomy comes from the archive on purpose. The previous set was shot in one session at a
 coastal radar on a quiet day, and it showed: empty panels, half-empty panes, and a lot of ocean.
 

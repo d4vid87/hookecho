@@ -7101,7 +7101,8 @@ impl HookEchoApp {
                 if n > 1 {
                     self.hint(
                         "panes",
-                        "Each pane keeps its own radar, product and tilt \u{2014}                          turn on Link pane cameras to pan them together",
+                        "Each pane keeps its own radar, product and tilt \u{2014} turn \
+                         on Link pane cameras to pan them together",
                     );
                 }
             }
@@ -12593,7 +12594,12 @@ impl HookEchoApp {
                     dl,
                 );
             }
-            let mut y = 0.0;
+            // The field cards stack down the pane's top-left corner, which in the full-overlay
+            // chrome is where the search pill floats — the first card was drawn half under it.
+            // Every pane ducks by the same amount rather than only the top row: in a 2x2 grid the
+            // lower cards then sit a little further from their pane's edge, which nobody notices,
+            // and the alternative is a rect comparison that has to know about window insets.
+            let mut y = 48.0;
             // Whichever gridded layer the user actually sees on top — the last enabled one in
             // paint order — gets its scale keyed underneath. Without this, MESH/QPE/VIL and the
             // categorical classifications were unlabeled color.

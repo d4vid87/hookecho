@@ -457,29 +457,34 @@ clearing a cache costs the next fetch and nothing else.
 ![HookEcho on Android replaying the Moore, Oklahoma tornado of 20 May 2013](docs/shots/android/hero.gif)
 
 <sub>**The same Rust app, rebuilt around the phone.** KTLX 0.5° reflectivity,
-20 May 2013, playing out of the archive at half speed with the tornado warnings
-of the day counting up on the alert badge.</sub>
+20 May 2013, stepped out of the archive as the hook closes off, with the tornado
+warnings of the day counting on the alert badge.</sub>
 
-Android is not the desktop squeezed onto a smaller screen — it is a Material 3
-layout over the same renderer, the same data paths and the same action registry:
+Android is not the desktop squeezed onto a smaller screen — and it is no longer
+an app of its own either. The phone had its own chrome once: a persistent sheet
+with three snap points and a docked five-slot toolbar, both of them duplicating
+surfaces the shared action registry already fed. They are gone. What is here is
+the same floating chrome the desktop draws, over the same renderer and the same
+data paths, laid out for a thumb:
 
 | | |
 |---|---|
-| ![The map with the sheet at peek](docs/shots/android/map.jpg) | ![The sheet at half height, showing the scrubber and product chips](docs/shots/android/sheet.jpg) |
-| **Map first.** The radar owns the screen; one chip names the site and VCP. | **One sheet, three snaps.** Drag it up for the scrubber, speed, products and tilts; drag it to full for the archive. |
-| ![The layers and tools sheet](docs/shots/android/layers.jpg) | ![Active alerts listed in a modal sheet](docs/shots/android/alerts.jpg) |
-| **Everything else is a sheet.** The same described, categorized action registry the desktop panel uses. | **Alerts in view**, tap to fly there and read the full text. |
+| ![The map, with the search pill, the control column and the scrubber floating over it](docs/shots/android/map.jpg) | ![The layers and tools sheet](docs/shots/android/layers.jpg) |
+| **Map first.** The radar owns the screen. One pill names the site and its VCP, a column of buttons runs down the thumb's side, and the scrubber floats along the bottom edge. | **Panels come up as sheets.** The same described, categorized registry the desktop panel uses, with the tilt strip and product options above it. |
+| ![Alerts in view, listed in the sheet](docs/shots/android/alerts.jpg) | ![The radar site picker, nearest first](docs/shots/android/site.jpg) |
+| **Alerts in view** on their own tab of that sheet — tap one to fly there and read the bulletin. | **Nearest first.** The site picker sorts by distance from wherever you are looking, over every WSR-88D, TDWR and DWD radar the app can fetch. |
 
-- A docked five-action toolbar along the sheet's bottom edge — no second bar
-  stacked under it.
-- Every tool window (soundings, cross-sections, settings, the site picker) is a
-  full-screen surface, because that is what the compact width class is for.
+- Every tool window — soundings, cross-sections, settings, the site picker — is
+  a full-screen surface, because that is what the compact width class is for.
 - Real `WindowInsets`, including the keyboard, so a focused field rises above it.
 - The real system IME through GameActivity: autocorrect, suggestions, and every
   language the phone has, instead of NativeActivity's raw ASCII key events.
 - Predictive back: back dismisses the innermost surface, and with nothing open
   Android draws its own home-screen preview as you drag.
-- In landscape the sheet becomes a full-height side rail.
+- Long-press to inspect, double-tap-drag to zoom, and haptics on the scrubber
+  ticks, the sheet snaps and a new warning.
+- Give it the width of a tablet or a landscape phone and the sheet becomes a
+  docked side rail instead.
 - Native GPS for chase mode, and opt-in background alerting: a foreground
   service watches your saved locations and notifies you with the app closed,
   tiered by watch / warning / emergency, tapping through to the storm.
