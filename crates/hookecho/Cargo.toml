@@ -124,6 +124,10 @@ web-sys = { version = "0.3", features = ["Document", "Window", "HtmlCanvasElemen
 # both have their own notification story.
 notify-rust = "4"
 rfd = "0.15"
+# MQTT publishing (`mqtt.rs`). No Android (its alerts go through the foreground service) and no
+# wasm (no TCP socket). Its default `use-rustls` is kept: a broker password must not cross a
+# network in the clear, and rustls is already in the graph via reqwest.
+rumqttc = "0.25"
 
 # One wgpu backend set per platform, feature-unioned onto the base wgpu above.
 [target.'cfg(any(target_os = "linux", target_os = "android"))'.dependencies]

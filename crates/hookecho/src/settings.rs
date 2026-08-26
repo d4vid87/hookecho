@@ -264,6 +264,24 @@ pub struct Settings {
     /// Matrix access token. User secret, as above.
     #[serde(default)]
     pub matrix_token: String,
+    /// MQTT broker hostname for publishing alerts and status (empty = off).
+    #[serde(default)]
+    pub mqtt_host: String,
+    /// Broker port. 1883 is the plain default, 8883 the TLS one.
+    #[serde(default = "default_mqtt_port")]
+    pub mqtt_port: u16,
+    /// Connect over TLS. Off by default: a house broker on the same LAN usually is not.
+    #[serde(default)]
+    pub mqtt_tls: bool,
+    /// Broker username (empty = anonymous).
+    #[serde(default)]
+    pub mqtt_user: String,
+    /// Broker password. A user secret: settings.json only, never committed.
+    #[serde(default)]
+    pub mqtt_pass: String,
+    /// Topic prefix everything is published under, e.g. `home/weather`.
+    #[serde(default = "default_mqtt_prefix")]
+    pub mqtt_prefix: String,
     /// Fetch terrain at z12 (~40 m/px) instead of z10. Sixteen times the tiles, so it is off by
     /// default and meant for chase packs you download deliberately.
     #[serde(default)]
@@ -844,6 +862,14 @@ pub fn default_lightning_minutes() -> u16 {
     5
 }
 
+fn default_mqtt_port() -> u16 {
+    1883
+}
+
+fn default_mqtt_prefix() -> String {
+    "hookecho".to_string()
+}
+
 pub fn default_spotter_range_km() -> f64 {
     230.0
 }
@@ -1043,6 +1069,12 @@ impl Default for Settings {
             matrix_homeserver: String::new(),
             matrix_room: String::new(),
             matrix_token: String::new(),
+            mqtt_host: String::new(),
+            mqtt_port: default_mqtt_port(),
+            mqtt_tls: false,
+            mqtt_user: String::new(),
+            mqtt_pass: String::new(),
+            mqtt_prefix: default_mqtt_prefix(),
             background_alerts: false,
             pack_hires_dem: false,
             pack_include_vector: true,
@@ -1512,6 +1544,12 @@ mod tests {
             matrix_homeserver: String::new(),
             matrix_room: String::new(),
             matrix_token: String::new(),
+            mqtt_host: String::new(),
+            mqtt_port: default_mqtt_port(),
+            mqtt_tls: false,
+            mqtt_user: String::new(),
+            mqtt_pass: String::new(),
+            mqtt_prefix: default_mqtt_prefix(),
             background_alerts: false,
             pack_hires_dem: false,
             pack_include_vector: true,

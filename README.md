@@ -621,6 +621,28 @@ Remember the server has to be reachable from Home Assistant — that means
 `--bind 0.0.0.0` (or the container), and a network you're willing to expose your
 saved locations on. Set `serve_token` if that network is not one you control.
 
+### Over MQTT
+
+If the rest of the house already talks to a broker, hookecho can talk to it too.
+Set the broker under **Settings → Alerts → MQTT** (host, port, optional TLS and
+credentials, and a topic prefix), restart, and three topics appear:
+
+| Topic | Retained | What it carries |
+|---|---|---|
+| `<prefix>/status` | yes | the whole `--status` report as JSON, every five minutes |
+| `<prefix>/nearest` | yes | the closest tracked cell to your home location, or `null` |
+| `<prefix>/alerts` | no | one message per alert as it is delivered — title, body, urgency, time |
+
+Alerts are not retained on purpose: a warning is an event, and a subscriber that
+connects tomorrow must not be handed yesterday's tornado. `null` on `nearest` is
+the honest answer for "nothing is being tracked" — a retained topic that simply
+stopped updating looks the same as a dead app.
+
+Publishing only; nothing subscribes, so a compromised broker cannot drive the
+app. The password is a secret like the rest — it stays in your settings file.
+`hookecho --serve` publishes too, which is usually the process you want doing it:
+it is the one that is always up.
+
 ### In a browser
 
 A hosted build of `main` runs at **<https://hookecho.pages.dev/>** if you only

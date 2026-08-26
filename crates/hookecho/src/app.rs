@@ -3194,6 +3194,10 @@ impl HookEchoApp {
             app.locate_by_ip(&cc.egui_ctx.clone());
         }
         crate::platform::set_background_alerts(app.settings.background_alerts);
+        // The broker is publish-only and reconnects on its own, so it starts here and is never
+        // stopped; changing the setting takes a restart, same as the tray.
+        #[cfg(not(any(target_os = "android", target_arch = "wasm32")))]
+        crate::mqtt::spawn(&app.settings);
         // Point the speech path at Piper before anything can speak.
         #[cfg(not(target_arch = "wasm32"))]
         crate::speech::set_piper(&app.settings.piper_path, &app.settings.piper_voice);
@@ -4986,6 +4990,9 @@ impl HookEchoApp {
         if self.settings.desktop_notify {
             crate::notify::desktop(&title, &body);
         }
+
+        #[cfg(not(any(target_os = "android", target_arch = "wasm32")))]
+        crate::mqtt::publish_alert(&self.settings, &title, &body, urgent);
 
         let topic = self.settings.ntfy_topic.trim().to_string();
         if !topic.is_empty() {
