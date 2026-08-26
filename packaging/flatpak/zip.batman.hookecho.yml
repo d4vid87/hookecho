@@ -60,4 +60,12 @@ modules:
     sources:
       - type: dir
         path: ../..
+        # A `dir` source is copied wholesale, and an everyday checkout has a multi-gigabyte
+        # `target/` in it. None of these are build inputs.
+        skip:
+          - target
+          - web/dist
+          - android/app/build
+          - android/.gradle
+          - .git
       - cargo-sources.json

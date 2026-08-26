@@ -21,13 +21,11 @@ Longest review, so start here.
   `packaging/flatpak/cargo-sources.json`.
 - Regenerate the sources file after any `Cargo.lock` change:
   `python3 flatpak-cargo-generator.py Cargo.lock -o packaging/flatpak/cargo-sources.json`.
-- **Known gap:** `Cargo.lock` is gitignored, so the committed sources file is
-  generated from whatever a machine resolved that day and a fresh checkout
-  resolves something newer. As of this writing it is ~79 crates behind, which is
-  a Flathub build failure waiting to happen. Committing the lockfile — normal
-  for an application, and what makes a build reproducible — is the fix; the
-  `flatpak_sources` test in `crates/hookecho/tests/` starts enforcing freshness
-  the moment it lands, and skips until then.
+- `Cargo.lock` is committed, so the sources file describes the same crates a
+  fresh checkout resolves. The `flatpak_sources` test in
+  `crates/hookecho/tests/` enforces that: every registry crate in the lockfile
+  must have a source entry, so a dependency bump that forgets the regenerate
+  step fails `cargo test` here rather than in Flathub's CI a week later.
 - Build it locally first — `flatpak-builder --force-clean build
   packaging/flatpak/zip.batman.hookecho.yml` — because a build failure in their
   CI costs another round trip through the queue.
