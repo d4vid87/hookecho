@@ -15433,10 +15433,17 @@ impl eframe::App for HookEchoApp {
         ) {
             self.settings.save();
         }
+        // One score per cell so the table can rank them; the join lives in wxdata.
+        let couplets: &[wxdata::rotation::CoupletHit] = match &self.couplet_cache {
+            Some((_, hits)) => hits,
+            None => &[],
+        };
+        let cell_scores = wxdata::cellscore::score_all(cells, &self.probsevere, couplets);
         if let Some(id) = ui::cells_window::show(
             &mut self.cells_window,
             ctx,
             cells,
+            &cell_scores,
             &zdr_cells,
             &self.cell_trends,
             crate::theme::accent(self.settings.theme),

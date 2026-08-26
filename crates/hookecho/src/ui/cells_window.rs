@@ -12,6 +12,10 @@ use wxdata::level3::Cell;
 /// Which column the table is ordered by.
 #[derive(Default, PartialEq, Clone, Copy)]
 pub enum SortCol {
+    /// The composite severity score — the default, because "which of these thirty" is the
+    /// question the table exists to answer.
+    #[default]
+    Rank,
     Id,
     Range,
     MaxDbz,
@@ -19,7 +23,6 @@ pub enum SortCol {
     Vil,
     Poh,
     Posh,
-    #[default]
     Hail,
 }
 
@@ -38,7 +41,7 @@ impl CellsWindow {
         self.open = !self.open;
         if self.open && !self.first_run {
             self.first_run = true;
-            self.sort = SortCol::Hail;
+            self.sort = SortCol::Rank;
             self.desc = true;
         }
     }
@@ -63,12 +66,24 @@ fn cmp_opt<T: PartialOrd>(a: Option<T>, b: Option<T>, desc: bool) -> std::cmp::O
     }
 }
 
+/// Green through amber to red across the score, so the top of the table reads at a glance.
+fn rank_color(score: u8) -> egui::Color32 {
+    let t = score as f32 / 100.0;
+    if t < 0.5 {
+        egui::Color32::from_rgb((60.0 + t * 2.0 * 195.0) as u8, 200, 60)
+    } else {
+        let k = (t - 0.5) * 2.0;
+        egui::Color32::from_rgb(255, (200.0 - k * 160.0) as u8, (60.0 - k * 20.0) as u8)
+    }
+}
+
 /// Order `cells` by `sort`, returning indices. Kept separate from the widget so it's testable.
-pub fn sorted_indices(cells: &[Cell], sort: SortCol, desc: bool) -> Vec<usize> {
+pub fn sorted_indices(cells: &[Cell], scores: &[u8], sort: SortCol, desc: bool) -> Vec<usize> {
     let mut idx: Vec<usize> = (0..cells.len()).collect();
     idx.sort_by(|&a, &b| {
         let (x, y) = (&cells[a], &cells[b]);
         match sort {
+            SortCol::Rank => cmp_opt(scores.get(a), scores.get(b), desc),
             SortCol::Id => {
                 let o = x.id.cmp(&y.id);
                 if desc {
@@ -91,17 +106,18 @@ pub fn sorted_indices(cells: &[Cell], sort: SortCol, desc: bool) -> Vec<usize> {
 
 /// The table as CSV, in `order` — what's on screen, in the order it's on screen. Unknowns are
 /// empty fields rather than the em dash the table draws, so a spreadsheet reads them as blanks.
-pub fn to_csv(cells: &[Cell], order: &[usize]) -> String {
+pub fn to_csv(cells: &[Cell], scores: &[u8], order: &[usize]) -> String {
     fn c<T: std::fmt::Display>(v: Option<T>) -> String {
         v.map(|x| x.to_string()).unwrap_or_default()
     }
     let mut s = String::from(
-        "id,azimuth_deg,range_nm,movement_deg,movement_kt,max_dbz,top_kft,vil,poh,posh,hail_in,tvs,meso\n",
+        "severity,id,azimuth_deg,range_nm,movement_deg,movement_kt,max_dbz,top_kft,vil,poh,posh,hail_in,tvs,meso\n",
     );
     for &i in order {
         let x = &cells[i];
         s.push_str(&format!(
-            "{},{},{},{},{},{},{},{},{},{},{},{},{}\n",
+            "{},{},{},{},{},{},{},{},{},{},{},{},{},{}\n",
+            scores.get(i).copied().unwrap_or(0),
             x.title,
             c(x.az_deg),
             c(x.range_nm),
@@ -148,10 +164,13 @@ fn position(c: &Cell) -> String {
 }
 
 /// Show the table. Returns the id of a clicked cell, if any.
+#[allow(clippy::too_many_arguments)] // one call site, flat; a params struct buys nothing
 pub fn show(
     w: &mut CellsWindow,
     ctx: &egui::Context,
     cells: &[Cell],
+    // Composite severity 0-100 per cell, parallel to `cells` (see [`wxdata::cellscore`]).
+    scores: &[u8],
     // Cell ids with a ZDR column detected near them — an updraft the storm table cannot see on
     // its own, badged next to the rotation flags it already carries.
     zdr_cells: &std::collections::HashSet<String>,
@@ -166,7 +185,7 @@ pub fn show(
     }
     let mut chosen = None;
     let mut open = w.open;
-    let order = sorted_indices(cells, w.sort, w.desc);
+    let order = sorted_indices(cells, scores, w.sort, w.desc);
     let Some(window) = drawer.page_sized(
         ctx,
         "Storm attributes",
@@ -193,7 +212,7 @@ pub fn show(
                 ui.weak("· click a row to fly there");
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     crate::ui::csv_buttons(ui, "cells.csv", "Every row, current sort", || {
-                        to_csv(cells, &order)
+                        to_csv(cells, scores, &order)
                     });
                 });
             });
@@ -206,7 +225,8 @@ pub fn show(
                     for &i in &order {
                         let c = &cells[i];
                         let line = format!(
-                            "{}   {}   {} dBZ   hail {}\"\n{}   top {} kft   VIL {}",
+                            "{}  {}   {}   {} dBZ   hail {}\"\n{}   top {} kft   VIL {}",
+                            scores.get(i).copied().unwrap_or(0),
                             c.title,
                             position(c),
                             f0(c.max_dbz),
@@ -251,6 +271,7 @@ pub fn show(
                 TableBuilder::new(ui)
                     .striped(true)
                     .sense(egui::Sense::click())
+                    .column(Column::exact(46.0)) // rank
                     .column(Column::exact(52.0)) // id
                     .column(Column::exact(92.0)) // az/range
                     .column(Column::exact(86.0)) // movement
@@ -264,6 +285,7 @@ pub fn show(
                     .column(Column::remainder()) // flags
                     .min_scrolled_height(0.0)
                     .header(22.0, |mut h| {
+                        h.col(|ui| header(ui, "Sev", SortCol::Rank, w));
                         h.col(|ui| header(ui, "ID", SortCol::Id, w));
                         h.col(|ui| header(ui, "Pos", SortCol::Range, w));
                         h.col(|ui| {
@@ -287,7 +309,16 @@ pub fn show(
                     })
                     .body(|body| {
                         body.rows(20.0, order.len(), |mut row| {
-                            let c = &cells[order[row.index()]];
+                            let i = order[row.index()];
+                            let c = &cells[i];
+                            let score = scores.get(i).copied().unwrap_or(0);
+                            row.col(|ui| {
+                                ui.label(RichText::new(score.to_string()).strong().color(rank_color(score)))
+                                    .on_hover_text(
+                                        "Severity 0\u{2013}100: ProbSevere, rotation (Vrot) and \
+                                         hail size blended, nudged by the radar's TVS/MESO flags",
+                                    );
+                            });
                             row.col(|ui| {
                                 ui.label(RichText::new(&c.title).strong());
                             });
@@ -427,19 +458,31 @@ mod tests {
             cell("B", None, None),
             cell("C", Some(2.5), None),
         ];
-        let order = sorted_indices(&cells, SortCol::Hail, true);
+        let order = sorted_indices(&cells, &[], SortCol::Hail, true);
         assert_eq!(order, vec![2, 0, 1], "biggest hail first, unknown last");
+    }
+
+    #[test]
+    fn severity_sorts_the_table_and_a_missing_score_sinks() {
+        let cells = [
+            cell("A", Some(2.0), Some(60.0)),
+            cell("B", Some(0.2), Some(45.0)),
+            cell("C", None, None),
+        ];
+        // Only two scores for three cells: the third is unknown, and unknown sorts last either way.
+        assert_eq!(sorted_indices(&cells, &[30, 88], SortCol::Rank, true), vec![1, 0, 2]);
+        assert_eq!(sorted_indices(&cells, &[30, 88], SortCol::Rank, false), vec![0, 1, 2]);
     }
 
     #[test]
     fn csv_follows_the_table() {
         let cells = [cell("A", Some(0.5), Some(60.0)), cell("B", None, None)];
-        let order = sorted_indices(&cells, SortCol::Hail, true);
-        let csv = to_csv(&cells, &order);
+        let order = sorted_indices(&cells, &[], SortCol::Hail, true);
+        let csv = to_csv(&cells, &[71, 12], &order);
         let lines: Vec<&str> = csv.lines().collect();
-        assert!(lines[0].starts_with("id,azimuth_deg"), "header first");
-        assert!(lines[1].starts_with("A,"), "sorted order, not input order");
-        assert_eq!(lines[2], "B,,,,,,,,,,,0,0", "unknowns are empty fields");
+        assert!(lines[0].starts_with("severity,id,azimuth_deg"), "header first");
+        assert!(lines[1].starts_with("71,A,"), "sorted order, not input order");
+        assert_eq!(lines[2], "12,B,,,,,,,,,,,0,0", "unknowns are empty fields");
     }
 
     #[test]
@@ -449,14 +492,14 @@ mod tests {
             cell("B", None, None),
             cell("C", Some(2.5), None),
         ];
-        let order = sorted_indices(&cells, SortCol::Hail, false);
+        let order = sorted_indices(&cells, &[], SortCol::Hail, false);
         assert_eq!(order, vec![0, 2, 1], "smallest first, unknown still last");
     }
 
     #[test]
     fn sorts_by_id_alphabetically() {
         let cells = [cell("Q7", None, None), cell("B3", None, None)];
-        assert_eq!(sorted_indices(&cells, SortCol::Id, false), vec![1, 0]);
-        assert_eq!(sorted_indices(&cells, SortCol::Id, true), vec![0, 1]);
+        assert_eq!(sorted_indices(&cells, &[], SortCol::Id, false), vec![1, 0]);
+        assert_eq!(sorted_indices(&cells, &[], SortCol::Id, true), vec![0, 1]);
     }
 }
