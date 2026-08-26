@@ -2484,7 +2484,7 @@ dependencies = [
 
 [[package]]
 name = "hdf5lite"
-version = "0.12.0-alpha.1"
+version = "0.12.0-beta.1"
 dependencies = [
  "flate2",
  "log",
@@ -2547,7 +2547,7 @@ checksum = "dfa686283ad6dd069f105e5ab091b04c62850d3e4cf5d67debad1933f55023df"
 
 [[package]]
 name = "hookecho"
-version = "0.12.0-alpha.1"
+version = "0.12.0-beta.1"
 dependencies = [
  "android_logger",
  "anyhow",
@@ -2603,7 +2603,7 @@ dependencies = [
 
 [[package]]
 name = "hookecho-ffi"
-version = "0.12.0-alpha.1"
+version = "0.12.0-beta.1"
 dependencies = [
  "nexrad-level3",
  "serde_json",
@@ -3504,7 +3504,7 @@ dependencies = [
 
 [[package]]
 name = "nexrad-level3"
-version = "0.12.0-alpha.1"
+version = "0.12.0-beta.1"
 dependencies = [
  "bzip2",
  "flate2",
@@ -7247,7 +7247,7 @@ checksum = "1ffae5123b2d3fc086436f8834ae3ab053a283cfac8fe0a0b8eaae044768a4c4"
 
 [[package]]
 name = "wxdata"
-version = "0.12.0-alpha.1"
+version = "0.12.0-beta.1"
 dependencies = [
  "anyhow",
  "chrono",

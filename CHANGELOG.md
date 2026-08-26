@@ -6,6 +6,75 @@ so **write the section before pushing the tag**, or the release job fails.
 
 The rolling `latest` release tracks `main` and is not listed here.
 
+## 0.12.0-beta.1 - 2026-08-26
+
+Second R18 checkpoint. The phone gets the same chrome the desktop got in
+alpha.1, onboarding stops asking questions, and the data lanes land. Still a
+prerelease: a few lanes (RRFS, the remaining store submissions) come at 0.12.0.
+
+### The phone
+
+- The persistent bottom sheet and the five-slot toolbar are gone. The phone
+  draws the same floating chrome the desktop does — search pill, control
+  column, scrubber — with content in Material modal sheets instead of a
+  drawer. Predictive back still works.
+- Long-press the map to inspect what is under your finger, double-tap and drag
+  to zoom with one hand, swipe sideways between panes.
+- Haptics: ticks as the scrubber crosses a frame, a buzz when a warning lands
+  on you, a bump when a sheet snaps.
+- Tablets and landscape phones get a side rail and a docked drawer instead of
+  sheets.
+- Widgets show how far the nearest storm is. A battery-saver mode stretches
+  the poll cadence and throttles repaints. On a chase, the next radar down the
+  road is prefetched before you need it, and a chase can be replayed against
+  the archive afterwards.
+
+### Getting started
+
+- The setup wizard is gone. First run finds you, picks the nearest radar and
+  draws it — about ten seconds, no questions.
+- Notification permission is asked for when you turn on something that
+  notifies, or when a warning lands near you. Never at install.
+- One help hub behind `?`: glossary, hotkeys, the tour and what's new, all
+  searchable in one place. Labels across the app read in plain language, with
+  the abbreviation kept in parentheses for anyone who wants it.
+- Text products — area forecast discussions, tropical advisories — render in a
+  real webview with real typography, on both desktop and Android.
+
+### Weather
+
+- GOES loops run over archive dates alongside the radar timeline, and the
+  mid-level water vapor bands are selectable.
+- MRMS rotation tracks (30/60/120 minutes) are field layers now, and hail
+  swaths accumulate locally over a window you choose.
+- Snow squalls and banding get their own emphasis in winter.
+- An alert rule can trigger on a lightning jump — the rate of change of flash
+  density inside a cell.
+- NAM nest and NBM join the model list. Synoptic mesonets join the surface
+  obs, with your own API key.
+- Cells are ranked by a composite severity score, and tapping one opens the 3D
+  volume already centered on it.
+- Panes remember their own thresholds and field layers. Events can be saved as
+  replay bundles — time range, site, camera — and replayed with archived
+  radar, warnings, reports and outlooks in sync.
+
+### The web build
+
+- Installable as a PWA, with the app shell cached offline.
+- Tiles, volumes and palettes persist between visits.
+- File dialogs, GPS and notifications all work in the browser now.
+- A share button writes a permalink that carries the site, camera and time.
+
+### Elsewhere
+
+- MQTT publishing, a Home Assistant camera loop endpoint and a live dashboard
+  at the `--serve` index.
+- An update chip appears when a newer release exists. No self-updating.
+- Motion throughout, with `reduce_motion` and an automatic degrade on slow
+  frames. Labels, roles and focus order on all of the new chrome.
+- The application id is `io.hookecho.HookEcho`, and every screenshot in the
+  README, the store listings and this repo was reshot on the new chrome.
+
 ## 0.12.0-alpha.1 - 2026-08-25
 
 First R18 checkpoint: the desktop and web chrome, rebuilt. A prerelease — the
