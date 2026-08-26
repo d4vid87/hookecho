@@ -18,6 +18,7 @@ pub(crate) fn window_for_page(title: &str) -> Option<AppWindow> {
     Some(match title {
         "Settings" => AppWindow::Settings,
         "Event Library" => AppWindow::Events,
+        "Chase Replay" => AppWindow::ChaseReplay,
         "Alert rules" => AppWindow::AlertRules,
         "Help" => AppWindow::Help,
         "About Hook Echo-WX" => AppWindow::About,

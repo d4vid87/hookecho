@@ -1178,6 +1178,8 @@ pub(crate) enum AppWindow {
     Placefiles,
     Palettes,
     Events,
+    /// Replay a recorded drive against the archive.
+    ChaseReplay,
     Digest,
     Afd,
     Cappi,
@@ -2039,6 +2041,7 @@ pub struct HookEchoApp {
     draw_color: egui::Color32,
     marker_window: ui::marker_window::MarkerWindow,
     event_window: ui::event_window::EventWindow,
+    chase_replay: ui::chase_replay::ChaseReplay,
     palette_editor: ui::palette_editor::PaletteEditor,
     digest_window: ui::digest_window::DigestWindow,
     digest_rx: Option<std::sync::mpsc::Receiver<Result<String, String>>>,
@@ -2912,6 +2915,7 @@ impl HookEchoApp {
             draw_color: DRAW_COLORS[0],
             marker_window: Default::default(),
             event_window: Default::default(),
+            chase_replay: Default::default(),
             palette_editor: Default::default(),
             digest_window: Default::default(),
             digest_rx: None,
@@ -7198,6 +7202,7 @@ impl HookEchoApp {
                 W::Placefiles => self.placefile_window.open = true,
                 W::Palettes => self.palette_editor.open = true,
                 W::Events => self.event_window.open = true,
+                W::ChaseReplay => self.chase_replay.open = true,
                 W::Digest => {
                     self.digest_window.open = true;
                     self.generate_digest();
@@ -13224,6 +13229,19 @@ impl HookEchoApp {
                 // Setting the override triggers the next-frame dirty-diff palette reload.
                 self.settings.palettes.insert(import.tag, value);
             }
+            K::ChaseGpx => match import.text() {
+                Ok(xml) => {
+                    let track = crate::chaselog::from_gpx(&xml);
+                    if track.points.len() < 2 {
+                        self.toast(ToastKind::Error, "No track points in that file".to_string());
+                    } else {
+                        let n = track.points.len();
+                        self.chase_replay.load(track, import.name());
+                        self.toast(ToastKind::Info, format!("Loaded {n} track points"));
+                    }
+                }
+                Err(e) => self.toast(ToastKind::Error, format!("GPX import failed: {e}")),
+            },
             K::MarkerIcon => {
                 let idx = import.tag.parse::<usize>().ok();
                 match (
@@ -15545,6 +15563,24 @@ impl eframe::App for HookEchoApp {
                 EventAction::AddBookmark(span_min) => {
                     let n = self.settings.bookmarks.len() + 1;
                     self.add_bookmark(format!("Bookmark {n}"), span_min);
+                }
+            }
+        }
+
+        if let Some(act) = self
+            .chase_replay
+            .show(ctx, &self.chase_track, &mut self.drawer)
+        {
+            use ui::chase_replay::ReplayAction;
+            match act {
+                ReplayAction::Seek { lon, lat, time } => {
+                    // Empty site: the replay flies the camera and moves the clock, and leaves the
+                    // radar choice alone — the same handoff rule the deep links use.
+                    let zoom = self.views[self.active].camera.zoom.max(8.0);
+                    self.goto_view("", lon, lat, zoom, Some(time));
+                }
+                ReplayAction::OpenFile => {
+                    crate::dialog::request_open(crate::dialog::ImportKind::ChaseGpx, "");
                 }
             }
         }

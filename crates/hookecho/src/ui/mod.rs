@@ -97,6 +97,7 @@ pub mod cells_window;
 pub mod cheatsheet;
 pub mod detail_window;
 pub mod digest_window;
+pub mod chase_replay;
 pub mod event_window;
 pub mod firstrun;
 pub mod forecast_window;
