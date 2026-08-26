@@ -93,7 +93,11 @@ class AlertService : Service() {
         private const val FOREGROUND_ID = 1
         private const val CH_STATUS = "status"
         private const val CH_WATCH = "watch"
-        private const val CH_WARNING = "warning"
+        // Versioned id: a channel's vibration is fixed at creation and the OS ignores later
+        // edits, so correcting it means a new channel. The old one is deleted in
+        // [createChannels] rather than left behind as a second "Warnings" row in settings.
+        private const val CH_WARNING = "warning_v2"
+        private const val CH_WARNING_OLD = "warning"
         private const val CH_EMERGENCY = "emergency"
         private const val PREFS = "alerts"
         private const val KEY_SEEN = "seen"
@@ -192,8 +196,14 @@ class AlertService : Service() {
             m.createNotificationChannel(
                 NotificationChannel(CH_WATCH, "Watches", NotificationManager.IMPORTANCE_DEFAULT)
             )
+            m.deleteNotificationChannel(CH_WARNING_OLD)
             m.createNotificationChannel(
                 NotificationChannel(CH_WARNING, "Warnings", NotificationManager.IMPORTANCE_HIGH)
+                    // IMPORTANCE_HIGH does not imply vibration, which is how a tornado warning
+                    // arrived silent-to-the-wrist: `mVibrationEnabled=false` on the device. This
+                    // is also the whole Wear story — a bridged notification buzzes the watch on
+                    // the phone channel's terms, so the watch needed nothing of its own.
+                    .apply { enableVibration(true) }
             )
             m.createNotificationChannel(
                 NotificationChannel(CH_EMERGENCY, "Emergencies", NotificationManager.IMPORTANCE_HIGH)
