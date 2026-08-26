@@ -34,8 +34,8 @@ class HookEchoRadar(Camera):
         self._attr_unique_id = f"hookecho_{host}_{port}_radar"
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, f"{host}:{port}")},
-            name="Hook Echo-WX",
-            manufacturer="Hook Echo-WX",
+            name="HookEcho",
+            manufacturer="HookEcho",
             configuration_url=f"http://{host}:{port}/",
         )
 

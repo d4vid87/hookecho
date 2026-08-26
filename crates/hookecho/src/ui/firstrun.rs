@@ -82,7 +82,7 @@ pub fn show(ctx: &egui::Context, fr: &mut FirstRun, settings: &mut Settings) -> 
 
     let mut finished = None;
     let mut open = true;
-    crate::ui::phone_surface(ctx, egui::Window::new("Welcome to Hook Echo-WX"))
+    crate::ui::phone_surface(ctx, egui::Window::new("Welcome to HookEcho"))
         .open(&mut open)
         .collapsible(false)
         .resizable(false)

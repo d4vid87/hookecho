@@ -33,7 +33,7 @@ class RadarWidget : AppWidgetProvider() {
             }
             views.setTextViewText(R.id.widget_radar_text, caption(context, png.lastModified()))
         } else {
-            views.setTextViewText(R.id.widget_radar_text, "Open Hook Echo-WX to fill this in")
+            views.setTextViewText(R.id.widget_radar_text, "Open HookEcho to fill this in")
         }
         val tap = PendingIntent.getActivity(
             context,

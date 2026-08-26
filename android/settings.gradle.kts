@@ -12,5 +12,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "HookEchoWX"
+rootProject.name = "HookEcho"
 include(":app")

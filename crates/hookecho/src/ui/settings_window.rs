@@ -676,7 +676,7 @@ pub(crate) fn key_field(ui: &mut egui::Ui, label: &str, value: &mut String) {
 }
 
 /// Sign in with Google and keep every machine's settings the same. The data goes to the hidden
-/// per-app folder in the user's own Drive — there is no Hook Echo account and no server.
+/// per-app folder in the user's own Drive — there is no HookEcho account and no server.
 fn sync_tab(ui: &mut egui::Ui, settings: &mut Settings, sync: &SyncView) -> Option<SyncAction> {
     let mut action = None;
     ui.label("Sign in with Google to keep your settings, saved locations, placefiles and API keys the same on every machine.");

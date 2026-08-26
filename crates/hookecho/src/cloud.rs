@@ -1,7 +1,7 @@
 //! Sign in with Google, and keep `settings.json` the same on every machine.
 //!
 //! The data lives in **your own Drive**, in the hidden per-app folder (`appDataFolder`) that only
-//! this app and you can see — there is no Hook Echo server, no account, and nothing to pay for.
+//! this app and you can see — there is no HookEcho server, no account, and nothing to pay for.
 //! Sign-in is the OAuth 2.0 **loopback redirect with PKCE**: the app listens on a random port on
 //! 127.0.0.1, opens your browser at Google, and Google redirects back to that port with the code.
 //! (The device flow would be less machinery, but Google does not allow Drive scopes on it — it
@@ -143,8 +143,8 @@ fn serve_redirect(listener: &std::net::TcpListener) -> Result<String, String> {
         None => Err(param(&query, "error").unwrap_or_else(|| "no code in redirect".into())),
     };
     let body = match &result {
-        Ok(_) => "<h2>Signed in.</h2><p>You can close this tab and go back to Hook Echo-WX.</p>",
-        Err(_) => "<h2>Sign-in failed.</h2><p>Go back to Hook Echo-WX for the reason.</p>",
+        Ok(_) => "<h2>Signed in.</h2><p>You can close this tab and go back to HookEcho.</p>",
+        Err(_) => "<h2>Sign-in failed.</h2><p>Go back to HookEcho for the reason.</p>",
     };
     let _ = write!(
         stream,

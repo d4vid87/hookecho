@@ -46,8 +46,8 @@ async def async_setup_entry(
 def device_info(coordinator: HookEchoCoordinator, spot: str) -> DeviceInfo:
     return DeviceInfo(
         identifiers={(DOMAIN, f"{coordinator.host}:{coordinator.port}:{spot}")},
-        name=f"Hook Echo-WX {spot}",
-        manufacturer="Hook Echo-WX",
+        name=f"HookEcho {spot}",
+        manufacturer="HookEcho",
         configuration_url=f"http://{coordinator.host}:{coordinator.port}/",
     )
 

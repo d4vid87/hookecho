@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build a single-file Linux AppImage of Hook Echo-WX.
+# Build a single-file Linux AppImage of HookEcho.
 #
 # The binary is nearly self-contained: TLS is static rustls (no libssl), D-Bus/tray/file-dialogs
 # ride the D-Bus/portal socket (no libdbus/GTK link), X11/Wayland client libs are dlopened. The

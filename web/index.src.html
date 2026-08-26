@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no" />
-    <title>Hook Echo-WX</title>
+    <title>HookEcho</title>
     <link rel="manifest" href="/manifest.webmanifest" />
     <meta name="theme-color" content="#101014" />
     <link rel="icon" href="/icon-192.png" type="image/png" />
@@ -36,8 +36,8 @@
   </head>
   <body>
     <canvas id="hookecho"></canvas>
-    <div id="boot">Loading Hook Echo-WX…</div>
-    <button id="install" type="button">Install Hook Echo-WX</button>
+    <div id="boot">Loading HookEcho…</div>
+    <button id="install" type="button">Install HookEcho</button>
     <!-- Which radar to open on comes from the edge, and nothing about it depends on the app being
          loaded. Fired here, before the module graph is even parsed, it is almost always already
          resolved by the time Rust asks — the app's opening site costs no round trip at all. -->
@@ -155,7 +155,7 @@
         location.href = url.href;
       });
       addEventListener("error", (e) => {
-        if (String(e.message || "").includes("unreachable")) dead("Hook Echo-WX stopped: " + e.message);
+        if (String(e.message || "").includes("unreachable")) dead("HookEcho stopped: " + e.message);
       });
 
       try {
@@ -175,7 +175,7 @@
       } catch (e) {
         // Nearly always one of two things: a browser with neither WebGPU nor WebGL2, or the
         // wasm being served with the wrong MIME type. Say which rather than showing a blank page.
-        boot.textContent = "Hook Echo-WX failed to start: " + e;
+        boot.textContent = "HookEcho failed to start: " + e;
         console.error(e);
       }
     </script>

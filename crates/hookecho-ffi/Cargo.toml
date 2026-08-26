@@ -1,6 +1,6 @@
 [package]
 name = "hookecho-ffi"
-description = "C ABI bridge to the Hook Echo decoders — decode in, JSON out"
+description = "C ABI bridge to the HookEcho decoders — decode in, JSON out"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

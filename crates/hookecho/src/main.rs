@@ -1,4 +1,4 @@
-//! Hook Echo-WX — advanced NEXRAD weather radar viewer.
+//! HookEcho — advanced NEXRAD weather radar viewer.
 //!
 //! The desktop binary: dispatches the `--headless-*` verifiers, then launches the windowed app.
 //! The shared app + render pipelines live in the `hookecho` library crate (see `lib.rs`), so the
@@ -994,7 +994,7 @@ fn hand_link_to_running_instance(link: &str) -> bool {
     std::fs::write(&path, link).is_ok()
 }
 
-/// Whether another Hook Echo owns this machine's session, over a bound loopback port.
+/// Whether another HookEcho owns this machine's session, over a bound loopback port.
 ///
 /// A bound socket is its own liveness proof — no stale pid file to reason about — and the
 /// greeting keeps an unrelated listener on the port from swallowing links.

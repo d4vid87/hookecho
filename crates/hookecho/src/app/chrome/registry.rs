@@ -683,7 +683,7 @@ impl HookEchoApp {
         push(
             "Copy link to this view",
             "Reference",
-            "A link to this site, place, zoom, time and product \u{2014} opens Hook Echo here",
+            "A link to this site, place, zoom, time and product \u{2014} opens HookEcho here",
             true,
             PaletteAction::CopyViewLink,
             None,
@@ -726,7 +726,7 @@ impl HookEchoApp {
             Some(self.panel_open),
         );
         push(
-            "About Hook Echo-WX",
+            "About HookEcho",
             "Reference",
             "Version, links, and whether a newer release is out",
             false,

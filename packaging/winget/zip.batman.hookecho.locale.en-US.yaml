@@ -3,7 +3,7 @@ PackageVersion: 0.8.0
 PackageLocale: en-US
 Publisher: d4vid87
 PublisherUrl: https://github.com/d4vid87
-PackageName: Hook Echo-WX
+PackageName: HookEcho
 PackageUrl: https://github.com/d4vid87/hookecho
 License: MIT
 LicenseUrl: https://github.com/d4vid87/hookecho/blob/main/LICENSE

@@ -1,4 +1,4 @@
-; Hook Echo default correlation coefficient color table — NWS St. Louis (user-supplied .pal)
+; HookEcho default correlation coefficient color table — NWS St. Louis (user-supplied .pal)
 Product: CC
 Units: %
 Scale: 100

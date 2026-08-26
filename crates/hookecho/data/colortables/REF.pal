@@ -1,4 +1,4 @@
-; Hook Echo default reflectivity color table — FOXweather (user-supplied .pal)
+; HookEcho default reflectivity color table — FOXweather (user-supplied .pal)
 product: BR
 units: dBZ
 step: 5

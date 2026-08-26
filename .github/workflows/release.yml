@@ -298,8 +298,8 @@ jobs:
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
           <plist version="1.0">
           <dict>
-            <key>CFBundleName</key><string>Hook Echo-WX</string>
-            <key>CFBundleDisplayName</key><string>Hook Echo-WX</string>
+            <key>CFBundleName</key><string>HookEcho</string>
+            <key>CFBundleDisplayName</key><string>HookEcho</string>
             <key>CFBundleIdentifier</key><string>zip.batman.hookecho</string>
             <key>CFBundleVersion</key><string>$VERSION</string>
             <key>CFBundleShortVersionString</key><string>$VERSION</string>
@@ -311,7 +311,7 @@ jobs:
             <key>CFBundleURLTypes</key>
             <array>
               <dict>
-                <key>CFBundleURLName</key><string>Hook Echo-WX deep link</string>
+                <key>CFBundleURLName</key><string>HookEcho deep link</string>
                 <key>CFBundleURLSchemes</key><array><string>hookecho</string></array>
               </dict>
             </array>

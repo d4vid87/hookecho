@@ -1,4 +1,4 @@
-# Hook Echo-WX
+# HookEcho
 
 [![CI](https://github.com/d4vid87/hookecho/actions/workflows/ci.yml/badge.svg)](https://github.com/d4vid87/hookecho/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/d4vid87/hookecho?sort=semver)](../../releases)
@@ -72,7 +72,7 @@ panel's **App** section, `Ctrl+K`, or **Settings → General**.
 
 ## The interface
 
-Hook Echo-WX is a full-bleed map with its controls floating over it — no menu
+HookEcho is a full-bleed map with its controls floating over it — no menu
 bar, no docked columns eating the weather, and no title bar either: the window
 is borderless and its three buttons float with the rest of the chrome. Drag it
 by the empty strip along the top edge, double-click that strip to maximize, and
@@ -379,7 +379,7 @@ clearing a cache costs the next fetch and nothing else.
 
 - **Sign in with Google** (Settings → Sync) and your settings, saved locations,
   placefiles, palettes and API keys follow you to every machine. The data lives
-  in your own Drive's hidden per-app folder — no Hook Echo account, no server,
+  in your own Drive's hidden per-app folder — no HookEcho account, no server,
   and a scope that cannot see the rest of your Drive. Screen scale and device
   name stay local. One-time OAuth client setup: [docs/sync.md](docs/sync.md).
 
@@ -389,7 +389,7 @@ clearing a cache costs the next fetch and nothing else.
   Android) drawn as a blue dot on the radar, a storm-relative HUD with closest
   approach and escape bearing, and offline "chase packs" of pre-downloaded
   basemap tiles.
-- **Position sharing**: opt in and every Hook Echo on the same network sees
+- **Position sharing**: opt in and every HookEcho on the same network sees
   everyone else's dot, no account and no configuration (UDP broadcast on
   :41777). For devices that aren't on one network — the phone chasing on
   cellular, the desktop at home — set a relay URL in the same panel: any HTTP
@@ -450,7 +450,7 @@ clearing a cache costs the next fetch and nothing else.
 
 ### On your phone
 
-![Hook Echo-WX on Android replaying the Moore, Oklahoma tornado of 20 May 2013](docs/shots/android/hero.gif)
+![HookEcho on Android replaying the Moore, Oklahoma tornado of 20 May 2013](docs/shots/android/hero.gif)
 
 <sub>**The same Rust app, rebuilt around the phone.** KTLX 0.5° reflectivity,
 20 May 2013, playing out of the archive at half speed with the tornado warnings

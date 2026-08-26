@@ -1,4 +1,4 @@
-; Hook Echo built-in — colorblind-safe velocity (blue/orange diverging)
+; HookEcho built-in — colorblind-safe velocity (blue/orange diverging)
 ;
 ; Inbound blue, outbound orange: the one diverging pair that survives every common form of
 ; color vision deficiency (red/green diverging tables do not). Zero is a neutral gray so the

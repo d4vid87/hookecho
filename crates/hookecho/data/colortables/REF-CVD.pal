@@ -1,4 +1,4 @@
-; Hook Echo built-in — colorblind-safe reflectivity (viridis)
+; HookEcho built-in — colorblind-safe reflectivity (viridis)
 ;
 ; Perceptually uniform and readable under protan/deutan/tritan vision: brightness rises
 ; monotonically with dBZ, so the ramp still reads as "stronger" even with no hue channel at

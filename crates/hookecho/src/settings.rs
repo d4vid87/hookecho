@@ -211,7 +211,7 @@ pub struct Settings {
     /// Sync settings through your Google Drive app folder once signed in.
     #[serde(default)]
     pub sync_enabled: bool,
-    /// Share your GPS position with other Hook Echo instances (LAN broadcast, and the relay below
+    /// Share your GPS position with other HookEcho instances (LAN broadcast, and the relay below
     /// when one is set). Off by default: your live position is not shared without asking.
     #[serde(default)]
     pub share_position: bool,

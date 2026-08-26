@@ -25,7 +25,7 @@ mod imp {
             "hookecho".into()
         }
         fn title(&self) -> String {
-            "Hook Echo-WX".into()
+            "HookEcho".into()
         }
         fn icon_pixmap(&self) -> Vec<ksni::Icon> {
             vec![self.icon.clone()]
@@ -38,7 +38,7 @@ mod imp {
             use ksni::menu::StandardItem;
             vec![
                 StandardItem {
-                    label: "Show Hook Echo-WX".into(),
+                    label: "Show HookEcho".into(),
                     activate: Box::new(|t: &mut HookEchoTray| {
                         let _ = t.tx.send(TrayCmd::Show);
                     }),

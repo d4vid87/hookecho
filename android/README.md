@@ -1,4 +1,4 @@
-# Hook Echo-WX for Android
+# HookEcho for Android
 
 The Android app is the **same Rust codebase** as the desktop build, compiled to a `cdylib`
 (`libhookecho.so`) and loaded by a `GameActivity` — `android_main` in

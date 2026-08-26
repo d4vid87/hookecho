@@ -75,7 +75,7 @@ pub fn desktop(title: &str, body: &str) {
     let res = Notification::new()
         .summary(title)
         .body(body)
-        .appname("Hook Echo-WX")
+        .appname("HookEcho")
         .show();
     if let Err(e) = res {
         log::warn!("desktop notification failed: {e}");

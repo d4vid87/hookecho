@@ -21,7 +21,7 @@ pub(crate) fn window_for_page(title: &str) -> Option<AppWindow> {
         "Chase Replay" => AppWindow::ChaseReplay,
         "Alert rules" => AppWindow::AlertRules,
         "Help" => AppWindow::Help,
-        "About Hook Echo-WX" => AppWindow::About,
+        "About HookEcho" => AppWindow::About,
         "Forecast Discussion" => AppWindow::Afd,
         "CAPPI slice" => AppWindow::Cappi,
         "Storm attributes" => AppWindow::StormTable,

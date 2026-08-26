@@ -1,6 +1,6 @@
 [Desktop Entry]
 Type=Application
-Name=Hook Echo-WX
+Name=HookEcho
 Comment=Advanced NEXRAD weather radar viewer
 Exec=hookecho %u
 Icon=hookecho

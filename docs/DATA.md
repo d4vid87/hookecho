@@ -1,6 +1,6 @@
 # Where the data comes from
 
-Every feed Hook Echo-WX decodes, what it costs you, and how fresh it is. All of
+Every feed HookEcho decodes, what it costs you, and how fresh it is. All of
 it is public; nothing is proxied through a server of ours, because there isn't
 one — the app talks to NOAA, the NWS and the rest directly from your machine.
 

@@ -34,7 +34,7 @@ trap 'pkill -x hookecho 2>/dev/null || true' EXIT
 
 WID=""
 for _ in $(seq 60); do
-  WID="$(DISPLAY=$DISPLAY_NUM xdotool search --name "Hook Echo" 2>/dev/null | tail -1 || true)"
+  WID="$(DISPLAY=$DISPLAY_NUM xdotool search --name "HookEcho" 2>/dev/null | tail -1 || true)"
   [ -n "$WID" ] && break
   sleep 0.5
 done

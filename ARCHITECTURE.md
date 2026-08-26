@@ -1,6 +1,6 @@
 # Architecture
 
-How Hook Echo-WX is put together, for someone about to change it.
+How HookEcho is put together, for someone about to change it.
 [CONTRIBUTING.md](CONTRIBUTING.md) covers the workflow — the gate, the tests,
 the commit style. This file covers the shape of the code.
 

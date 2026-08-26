@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build the Debian package of Hook Echo-WX.
+# Build the Debian package of HookEcho.
 #
 # cargo-deb does the packaging; this script only does the two things it can't: build the release
 # binary and render the icons out of it (`--headless-icon`), which is why no PNG is committed. The

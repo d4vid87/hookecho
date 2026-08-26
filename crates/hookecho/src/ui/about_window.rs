@@ -27,7 +27,7 @@ pub fn show(
     accent: egui::Color32,
     drawer: &mut crate::ui::drawer::Drawer,
 ) {
-    let Some(window) = drawer.page(ctx, "About Hook Echo-WX", open, false, egui::Window::new("About Hook Echo-WX"))
+    let Some(window) = drawer.page(ctx, "About HookEcho", open, false, egui::Window::new("About HookEcho"))
     else {
         return;
     };
@@ -39,7 +39,7 @@ pub fn show(
                 ui.add(egui::Image::new(&logo).fit_to_exact_size(egui::vec2(64.0, 64.0)));
                 ui.vertical(|ui| {
                     ui.label(
-                        egui::RichText::new("Hook Echo-WX")
+                        egui::RichText::new("HookEcho")
                             .size(style::FONT_TITLE)
                             .color(accent)
                             .strong(),

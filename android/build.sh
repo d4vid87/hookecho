@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build the Hook Echo-WX Android APK (arm64-v8a, directly sideloadable).
+# Build the HookEcho Android APK (arm64-v8a, directly sideloadable).
 #
 # Prerequisites (see android/README.md):
 #   - Android SDK + NDK (r26+), with ANDROID_HOME / ANDROID_NDK_HOME set

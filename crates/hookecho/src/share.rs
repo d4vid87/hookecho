@@ -1,4 +1,4 @@
-//! Position sharing between Hook Echo instances — the phone out chasing, the desktop at home.
+//! Position sharing between HookEcho instances — the phone out chasing, the desktop at home.
 //!
 //! Two transports, both optional and independent:
 //!   * **LAN** — a UDP broadcast on [`PORT`]. Zero configuration, but only reaches devices on the
@@ -14,7 +14,7 @@ use std::collections::HashMap;
 use std::net::UdpSocket;
 use std::sync::mpsc::{self, Receiver, Sender};
 
-/// Broadcast port. Arbitrary, unassigned, and shared by every Hook Echo on the network.
+/// Broadcast port. Arbitrary, unassigned, and shared by every HookEcho on the network.
 pub const PORT: u16 = 41777;
 /// Drop a peer whose last fix is older than this — a stale dot is worse than no dot.
 pub const STALE_SECS: i64 = 300;
