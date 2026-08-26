@@ -15461,6 +15461,7 @@ impl eframe::App for HookEchoApp {
                 self.cell_popup = Some(c);
             }
         }
+        let mut open_3d: Option<[f32; 6]> = None;
         if let Some(cell) = &self.cell_popup {
             let trend = self
                 .cell_trends
@@ -15471,8 +15472,26 @@ impl eframe::App for HookEchoApp {
                 .follow_cell
                 .as_ref()
                 .is_some_and(|(_, c, _)| c.id == cell.id);
-            let (open, toggled) =
+            let (open, toggled, to_3d) =
                 ui::cell_window::show(ctx, cell, trend, following, &mut self.popovers);
+            // Crop the volume to this storm before opening it: the full 300 km box is a wall of
+            // echo you would then have to hunt through by hand. The clip is computed here, where
+            // the cell is still borrowed, and applied below.
+            if to_3d {
+                open_3d = Some(
+                    self.views[self.active]
+                        .site
+                        .as_deref()
+                        .and_then(wxdata::sites::site_by_id)
+                        .map(|site| {
+                            let (slat, slon) = (site.latitude as f64, site.longitude as f64);
+                            let dy = ((cell.lat - slat) * 111.0) as f32;
+                            let dx = ((cell.lon - slon) * 111.0 * slat.to_radians().cos()) as f32;
+                            wxdata::volume3d::clip_around(150.0, dx, dy, 30.0)
+                        })
+                        .unwrap_or([0.0, 1.0, 0.0, 1.0, 0.0, 1.0]),
+                );
+            }
             if toggled {
                 if following {
                     self.follow_cell = None;
@@ -15484,6 +15503,10 @@ impl eframe::App for HookEchoApp {
             if !open {
                 self.cell_popup = None;
             }
+        }
+        if let Some(clip) = open_3d {
+            self.vol3d.clip = clip;
+            self.build_volume3d();
         }
         if let Some(i) = self.marker_popup {
             match self.settings.markers.get_mut(i) {

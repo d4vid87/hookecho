@@ -157,6 +157,31 @@ pub fn cappi(sweeps: &[BinnedSweep], alt_km: f32, n: usize, half_km: f32) -> Opt
     })
 }
 
+/// Clip slab that isolates one storm inside the volume box, in the `[x0, x1, y0, y1, z0, z1]`
+/// fractions [`crate::volume3d`]'s consumers use.
+///
+/// `dx_km`/`dy_km` are the storm's offset east and north of the radar, `pad_km` the half-width to
+/// keep around it. The vertical span is left alone: the whole point of looking at a storm in 3D is
+/// its depth, so cropping height would throw away the answer.
+pub fn clip_around(half_km: f32, dx_km: f32, dy_km: f32, pad_km: f32) -> [f32; 6] {
+    // The box spans [-half_km, +half_km] in x and y, mapped onto 0..1.
+    let frac = |km: f32| ((km + half_km) / (2.0 * half_km)).clamp(0.0, 1.0);
+    let pad = (pad_km / (2.0 * half_km)).clamp(0.0, 0.5);
+    let span = |c: f32| {
+        let (mut lo, mut hi) = (c - pad, c + pad);
+        // A storm near the edge of the box slides its window inward rather than shrinking it.
+        if lo < 0.0 {
+            (lo, hi) = (0.0, (2.0 * pad).min(1.0));
+        } else if hi > 1.0 {
+            (lo, hi) = ((1.0 - 2.0 * pad).max(0.0), 1.0);
+        }
+        (lo, hi)
+    };
+    let (x0, x1) = span(frac(dx_km));
+    let (y0, y1) = span(frac(dy_km));
+    [x0, x1, y0, y1, 0.0, 1.0]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -229,5 +254,27 @@ mod tests {
             0,
             "14 km empty"
         );
+    }
+}
+
+#[cfg(test)]
+mod clip_tests {
+    use super::clip_around;
+
+    #[test]
+    fn the_slab_brackets_the_storm_and_slides_in_at_the_edge() {
+        // Dead center of a 150 km box, 25 km of padding: an eighth of the box either side.
+        let c = clip_around(150.0, 0.0, 0.0, 25.0);
+        assert!((c[0] - 0.4167).abs() < 1e-3 && (c[1] - 0.5833).abs() < 1e-3);
+        // Height is never cropped.
+        assert_eq!([c[4], c[5]], [0.0, 1.0]);
+        // Hard against the west wall: the window slides inward instead of collapsing.
+        let w = clip_around(150.0, -150.0, 0.0, 25.0);
+        assert_eq!(w[0], 0.0);
+        assert!((w[1] - w[0] - (c[1] - c[0])).abs() < 1e-3);
+        // And against the north wall.
+        let n = clip_around(150.0, 0.0, 150.0, 25.0);
+        assert_eq!(n[3], 1.0);
+        assert!((n[3] - n[2] - (c[1] - c[0])).abs() < 1e-3);
     }
 }
