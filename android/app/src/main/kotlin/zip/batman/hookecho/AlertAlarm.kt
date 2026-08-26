@@ -52,6 +52,9 @@ class AlertAlarm : BroadcastReceiver() {
     companion object {
         /** How often the alarm polls. Matches the service's calm-weather cadence. */
         private const val PERIOD_MS = 5 * 60 * 1000L
+
+        /** …and under battery saver, WorkManager's own floor: three wakeups an hour, not twelve. */
+        private const val PERIOD_SAVER_MS = 15 * 60 * 1000L
         private const val PREFS = "alerts"
         private const val KEY_LAST_POLL = "last_alarm_poll"
         private const val KEY_NEXT = "next_alarm"
@@ -84,7 +87,8 @@ class AlertAlarm : BroadcastReceiver() {
         @JvmStatic
         fun arm(context: Context) {
             if (!AlertService.isEnabled(context)) return
-            val at = System.currentTimeMillis() + PERIOD_MS
+            val period = if (AlertService.batterySaver(context)) PERIOD_SAVER_MS else PERIOD_MS
+            val at = System.currentTimeMillis() + period
             val pi = intent(context)
             // A denied exact alarm throws rather than degrading, so the fallback is a catch too:
             // the permission can be revoked between the check and the call.

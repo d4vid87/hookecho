@@ -86,6 +86,13 @@ pub fn set_background_alerts(_enabled: bool) {
     android_alerts::set_enabled(_enabled);
 }
 
+/// Tell the Android alert stack to poll on the relaxed schedule (or back on the normal one).
+/// A no-op everywhere else: a desktop's background alert path is the open window.
+pub fn set_battery_saver(_on: bool) {
+    #[cfg(target_os = "android")]
+    android_alerts::set_saver(_on);
+}
+
 /// Delivery health from the Android alert stack, parsed from `AlertAlarm.health`. `None`
 /// everywhere else — on desktop the window being open *is* the delivery mechanism.
 pub fn alert_health() -> Option<AlertHealth> {
@@ -591,6 +598,27 @@ mod android_alerts {
             )?
             .l()?;
         f(&mut env, &JClass::from(class), &activity)
+    }
+
+    pub(super) fn set_saver(on: bool) {
+        if let Err(e) = try_set_saver(on) {
+            log::warn!("battery saver toggle failed: {e:?}");
+        }
+    }
+
+    fn try_set_saver(on: bool) -> jni::errors::Result<()> {
+        with_class("zip.batman.hookecho.AlertService", |env, class, activity| {
+            let res = env.call_static_method(
+                class,
+                "setBatterySaver",
+                "(Landroid/content/Context;Z)V",
+                &[JValue::Object(activity), JValue::Bool(on as u8)],
+            );
+            if res.is_err() {
+                let _ = env.exception_clear();
+            }
+            res.map(|_| ())
+        })
     }
 
     fn try_set(enabled: bool) -> jni::errors::Result<()> {

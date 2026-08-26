@@ -1134,6 +1134,24 @@ fn alerts_tab(ui: &mut egui::Ui, settings: &mut Settings) {
         );
     }
 
+    ui.add_space(8.0);
+    ui.separator();
+    ui.strong("Battery");
+    if ui
+        .checkbox(
+            &mut settings.battery_saver,
+            "Battery saver — check less often",
+        )
+        .on_hover_text(
+            "Slows every cadence the app controls: the screen redraws four times a second \
+             instead of ten, volumes are polled half as often, and on Android the background \
+             alert poll drops from every 5 minutes to every 15. Warnings still arrive, later.",
+        )
+        .changed()
+    {
+        crate::platform::set_battery_saver(settings.battery_saver);
+    }
+
     if cfg!(target_os = "android") {
         ui.add_space(8.0);
         ui.separator();

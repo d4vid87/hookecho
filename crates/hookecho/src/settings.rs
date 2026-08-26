@@ -359,6 +359,12 @@ pub struct Settings {
     /// behind something else. Ignored on Android, where the alert service posts its own.
     #[serde(default)]
     pub desktop_notify: bool,
+    /// Battery saver: relax every cadence the app controls — the idle repaint clock, the volume
+    /// poll, the widget snapshot, and the background alert alarm on Android. Warnings still
+    /// arrive; they arrive on a slower schedule. Off by default, because a weather app that
+    /// quietly polls less often than it says it does is the wrong kind of surprise.
+    #[serde(default)]
+    pub battery_saver: bool,
     /// Record a breadcrumb track of the session's GPS fixes, exportable as GPX. Off by default:
     /// where you drove is yours, and nothing records it unless you say so. The track lives in
     /// memory only until you save it.
@@ -1095,6 +1101,7 @@ impl Default for Settings {
             setup_done: false,
             desktop_notify: false,
             chase_log: false,
+            battery_saver: false,
             ntfy_snapshot: false,
             alert_follow_gps: false,
             quiet_hours: false,
@@ -1577,6 +1584,7 @@ mod tests {
             setup_done: true,
             desktop_notify: false,
             chase_log: false,
+            battery_saver: false,
             ntfy_snapshot: false,
             alert_follow_gps: false,
             quiet_hours: false,
