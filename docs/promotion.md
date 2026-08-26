@@ -16,7 +16,8 @@ Everything below then happens on its own:
 | Workflow | Trigger | Does |
 |---|---|---|
 | `release.yml` | tag `v*`, and every push to main | builds AppImage / Windows / macOS / Android / container, attaches them, and uses the CHANGELOG section as the notes |
-| `demo.yml` | push to main | rebuilds and deploys <https://hookecho.pages.dev/>, then smoke-tests it |
+| `demo.yml` | push to main | rebuilds and deploys <https://app.hookecho.io/>, then smoke-tests it |
+| `site.yml` | push to main touching `site/**` | builds and deploys the website, <https://hookecho.io/> |
 | `announce.yml` | tag `v*` | posts to Bluesky, Mastodon, X and Discord, and attaches `announce-drafts.md` to the release |
 | `digest.yml` | Mondays | mentions and metrics into Discord |
 

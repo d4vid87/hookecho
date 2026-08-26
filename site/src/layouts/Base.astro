@@ -10,6 +10,10 @@ interface Props {
 
 const { title, description, image = "/shots/alltilts.jpg" } = Astro.props;
 const url = new URL(Astro.url.pathname, Astro.site);
+// Cloudflare Web Analytics: cookieless, one script tag, and only rendered when the token is set —
+// so local builds and forks stay beacon-free. The token is public by design (it identifies the
+// site, not the account); it comes from the CF_ANALYTICS_TOKEN secret in site.yml.
+const analytics = import.meta.env.PUBLIC_CF_ANALYTICS_TOKEN;
 const social = new URL(image, Astro.site);
 
 // A link is only listed once the page exists, so the build's link check stays meaningful.
@@ -48,6 +52,16 @@ const nav = [
     <meta property="og:url" content={url} />
     <meta property="og:image" content={social} />
     <meta name="twitter:card" content="summary_large_image" />
+
+    {
+      analytics && (
+        <script
+          defer
+          src="https://static.cloudflareinsights.com/beacon.min.js"
+          data-cf-beacon={`{"token": "${analytics}"}`}
+        />
+      )
+    }
   </head>
   <body>
     <header class="site-head">
