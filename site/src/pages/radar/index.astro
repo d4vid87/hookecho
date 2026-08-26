@@ -1,0 +1,75 @@
+---
+import Base from "../../layouts/Base.astro";
+import sites from "../../data/nexrad-sites.json";
+
+// Grouped by state, states alphabetical — 153 links need some spine, and "which radar covers me"
+// is a geography question before it is anything else.
+const byState = new Map<string, typeof sites>();
+for (const site of sites) {
+  const list = byState.get(site.state) ?? [];
+  list.push(site);
+  byState.set(site.state, list);
+}
+const states = [...byState.keys()].sort();
+---
+
+<Base
+  title="Every NEXRAD radar site | HookEcho"
+  description="All 153 WSR-88D NEXRAD radar sites, by state: live loops, active warnings and every tilt of the Level 2 volume, opened straight in HookEcho."
+>
+  <section>
+    <div class="wrap">
+      <p class="eyebrow">Radar sites</p>
+      <h1>Every NEXRAD radar, one page each</h1>
+      <p class="lede">
+        The National Weather Service runs {sites.length} WSR-88D radars. Each has a page here with
+        its live loop, the warnings currently over it, and a link that opens that radar in HookEcho
+        at full resolution.
+      </p>
+
+      {
+        states.map((state) => (
+          <div class="state">
+            <h2 id={state.toLowerCase()}>{state}</h2>
+            <ul>
+              {byState
+                .get(state)!
+                .map((site) => (
+                  <li>
+                    <a href={`/radar/${site.id.toLowerCase()}/`}>
+                      <strong>{site.id}</strong> {site.city}
+                    </a>
+                  </li>
+                ))}
+            </ul>
+          </div>
+        ))
+      }
+    </div>
+  </section>
+</Base>
+
+<style>
+  .lede { font-size: 1.1rem; color: var(--text-dim); max-width: 62ch; }
+  .state { margin-top: 2.2rem; }
+  .state h2 { margin-bottom: 0.6rem; font-size: 1.15rem; color: var(--text-dim); }
+  ul {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+    display: grid;
+    gap: 0.4rem;
+    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  }
+  li a {
+    display: block;
+    padding: 0.5rem 0.7rem;
+    border: 1px solid var(--stroke);
+    border-radius: var(--radius);
+    color: var(--text-dim);
+    text-decoration: none;
+    font-size: 0.95rem;
+  }
+  li a:hover { border-color: var(--accent); color: var(--text); }
+  li strong { color: var(--text); margin-right: 0.4rem; }
+</style>

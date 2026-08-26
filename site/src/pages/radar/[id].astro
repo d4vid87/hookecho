@@ -1,0 +1,114 @@
+---
+import Base from "../../layouts/Base.astro";
+import LiveMosaic from "../../components/LiveMosaic.astro";
+import sites from "../../data/nexrad-sites.json";
+
+export function getStaticPaths() {
+  return sites.map((site) => ({ params: { id: site.id.toLowerCase() }, props: { site } }));
+}
+
+const { site } = Astro.props;
+// lon before lat — the app's #goto vocabulary, same as the deep links on /features.
+const appLink = `https://app.hookecho.io/#goto=${site.id},${site.lon},${site.lat},8`;
+const loop = `https://radar.weather.gov/ridge/standard/${site.id}_loop.gif`;
+const place = `${site.city}, ${site.state}`;
+---
+
+<Base
+  title={`${site.id} radar — ${place} | HookEcho`}
+  description={`Live NEXRAD radar for ${site.id}, the WSR-88D at ${place}: the current loop, active warnings near the site, and every tilt of the Level 2 volume in HookEcho.`}
+>
+  <section>
+    <div class="wrap">
+      <p class="eyebrow"><a href="/radar/">NEXRAD sites</a> · {site.state}</p>
+      <h1>{site.id} — {place}</h1>
+      <p class="lede">
+        The WSR-88D at {place}. Below is the National Weather Service's own loop for this radar;
+        open it in HookEcho for every tilt of the Level 2 volume, velocity, dual-pol and the
+        archive back to 1991.
+      </p>
+
+      <p class="warnings" data-point={`${site.lat},${site.lon}`}>
+        <span class="count">—</span> active warnings over this radar
+      </p>
+
+      <div class="cta">
+        <a class="btn btn-primary" href={appLink}>Open {site.id} in your browser</a>
+        <a class="btn" href="/download/">Get the app</a>
+      </div>
+
+      <LiveMosaic
+        src={loop}
+        alt={`The current radar loop from ${site.id} at ${place}`}
+        caption={`${site.id} base reflectivity, refreshed live from the NWS.`}
+      />
+
+      <dl class="facts">
+        <div><dt>Site ID</dt><dd>{site.id}</dd></div>
+        <div><dt>Location</dt><dd>{place}</dd></div>
+        <div><dt>Coordinates</dt><dd>{site.lat}, {site.lon}</dd></div>
+        <div><dt>Elevation</dt><dd>{site.elev_m} m</dd></div>
+        <div><dt>Local time zone</dt><dd>{site.tz}</dd></div>
+      </dl>
+
+      <h2>What HookEcho shows that the loop above does not</h2>
+      <p>
+        That GIF is one product at one tilt, rendered on someone else's server. HookEcho reads the
+        Level 2 volume from {site.id} directly: every elevation angle, storm-relative velocity with
+        dealiasing, correlation coefficient for debris signatures, and the warnings, storm reports
+        and lightning drawn over the same map.
+      </p>
+      <p><a href="/features/">See what else it does</a> · <a href="/compare/">How it compares</a></p>
+    </div>
+  </section>
+</Base>
+
+<script>
+  // Warnings whose polygon covers the radar itself — the honest reading of "over this site", and
+  // one request. Same no-Accept-header rule as the landing ticker: the API's preflight only
+  // allows API-Key and User-Agent.
+  const el = document.querySelector<HTMLElement>(".warnings");
+  const point = el?.dataset.point;
+  const slot = el?.querySelector(".count");
+  if (el && point && slot) {
+    fetch(`https://api.weather.gov/alerts/active?point=${point}`)
+      .then((r) => (r.ok ? r.json() : Promise.reject(r.status)))
+      .then((d) => {
+        const n = d?.features?.length ?? 0;
+        slot.textContent = String(n);
+        el.classList.toggle("hot", n > 0);
+      })
+      .catch(() => {});
+  }
+</script>
+
+<style>
+  .lede { font-size: 1.1rem; color: var(--text-dim); max-width: 60ch; }
+  .eyebrow a { color: inherit; }
+  .cta { display: flex; gap: 0.75rem; flex-wrap: wrap; margin: 1.4rem 0 2rem; }
+  .warnings {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 0.5rem;
+    padding: 0.5rem 1rem;
+    border: 1px solid var(--stroke);
+    border-radius: 999px;
+    background: var(--faint);
+    color: var(--text-dim);
+    font-size: 0.95rem;
+  }
+  .warnings .count { font-size: 1.25rem; font-weight: 700; color: var(--text); }
+  .warnings.hot .count { color: var(--accent); }
+  .facts {
+    display: grid;
+    gap: 1rem;
+    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+    margin: 2rem 0;
+    padding: 1.2rem;
+    border: 1px solid var(--stroke);
+    border-radius: var(--radius);
+    background: var(--bg-deep);
+  }
+  .facts dt { color: var(--text-dim); font-size: 0.85rem; }
+  .facts dd { margin: 0.2rem 0 0; font-weight: 600; }
+</style>

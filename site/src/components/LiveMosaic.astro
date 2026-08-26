@@ -3,15 +3,24 @@
 // timer. It is the cheapest possible proof that the page is looking at real weather right now.
 // ponytail: a cache-busting query on an <img> is the whole refresh mechanism — no canvas, no
 // preloading, no fade. The server updates roughly every 10 minutes; we ask every 5.
-const src = "https://radar.weather.gov/ridge/standard/CONUS_0.gif";
+interface Props {
+  src?: string;
+  alt?: string;
+  caption?: string;
+}
+
+const {
+  src = "https://radar.weather.gov/ridge/standard/CONUS_0.gif",
+  alt = "The national radar mosaic across the United States, updated live",
+  caption =
+    "Live national mosaic, straight from the NWS. HookEcho draws this from MRMS at full resolution.",
+} = Astro.props;
 const everyMs = 5 * 60 * 1000;
 ---
 
 <figure class="mosaic" data-src={src} data-every={everyMs}>
-  <img src={src} alt="The national radar mosaic across the United States, updated live" />
-  <figcaption>
-    Live national mosaic, straight from the NWS. HookEcho draws this from MRMS at full resolution.
-  </figcaption>
+  <img src={src} alt={alt} />
+  <figcaption>{caption}</figcaption>
 </figure>
 
 <script>
