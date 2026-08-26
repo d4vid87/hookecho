@@ -1,0 +1,16 @@
+{
+  "name": "Hook Echo-WX",
+  "short_name": "Hook Echo",
+  "description": "NEXRAD radar, satellite and warnings in the browser.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#101014",
+  "theme_color": "#101014",
+  "categories": ["weather", "utilities"],
+  "icons": [
+    { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png" }
+  ]
+}

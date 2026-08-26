@@ -4,6 +4,7 @@ Cargo.lock
 !docs/shots/*.png
 !android/app/src/main/res/**/*.png
 !crates/hookecho/tests/golden/*.png
+!web/icon-*.png
 /dist
 # Browser bundle output (scripts/web/build.sh).
 /web/dist/
@@ -17,8 +18,10 @@ packaging/appimagetool-*.AppImage
 /android/local.properties
 announce-drafts.md
 
-# Generated from web/index.src.html by scripts/web/build.sh (content-hashed asset names).
+# Generated from web/index.src.html and web/sw.src.js by scripts/web/build.sh (both name the
+# content-hashed assets).
 /web/index.html
+/web/sw.js
 
 # Local puppeteer for scripts/web/smoke.mjs (npm install --no-save).
 /node_modules/

@@ -4,6 +4,10 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no" />
     <title>Hook Echo-WX</title>
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <meta name="theme-color" content="#101014" />
+    <link rel="icon" href="/icon-192.png" type="image/png" />
+    <link rel="apple-touch-icon" href="/icon-192.png" />
     <!-- The wasm is the critical path and it is megabytes: start it in parallel with the module
          graph rather than after it. Without these the browser discovers the wasm only once it has
          parsed and executed the glue, which serializes two large downloads for no reason. -->
@@ -20,16 +24,51 @@
         position: absolute; inset: 0; display: grid; place-content: center;
         color: #8a8a95; font: 14px system-ui, sans-serif; text-align: center;
       }
+      /* Only ever visible when the browser has said the app is installable, and only for a few
+         seconds — it floats over the map, and a permanent button there is a permanent dead zone. */
+      #install {
+        position: absolute; left: 12px; bottom: 12px; display: none;
+        padding: 8px 14px; border: 0; border-radius: 999px; cursor: pointer;
+        background: #2b2b36; color: #e6e6ee; font: 13px system-ui, sans-serif;
+        box-shadow: 0 2px 10px #0008;
+      }
     </style>
   </head>
   <body>
     <canvas id="hookecho"></canvas>
     <div id="boot">Loading Hook Echo-WX…</div>
+    <button id="install" type="button">Install Hook Echo-WX</button>
     <!-- Which radar to open on comes from the edge, and nothing about it depends on the app being
          loaded. Fired here, before the module graph is even parsed, it is almost always already
          resolved by the time Rust asks — the app's opening site costs no round trip at all. -->
     <script>
       globalThis.__geo = fetch("/geo.json").then((r) => r.text()).catch(() => null);
+    </script>
+    <!-- The app shell offline, and an installable app on Android/desktop Chromium. Registered
+         after load so the worker's install never competes with the wasm for bandwidth, and
+         skipped on file:// and any insecure origin, where it would only throw. -->
+    <script>
+      if ("serviceWorker" in navigator) {
+        addEventListener("load", () => {
+          navigator.serviceWorker.register("/sw.js").catch((e) => console.warn("sw:", e));
+        });
+      }
+      // Chromium fires this instead of showing its own install UI; Safari and Firefox never do,
+      // which is exactly why the button starts hidden rather than starting shown and hiding.
+      addEventListener("beforeinstallprompt", (e) => {
+        e.preventDefault();
+        const btn = document.getElementById("install");
+        btn.style.display = "block";
+        setTimeout(() => (btn.style.display = "none"), 15000);
+        btn.onclick = async () => {
+          btn.style.display = "none";
+          e.prompt();
+          await e.userChoice;
+        };
+      });
+      addEventListener("appinstalled", () => {
+        document.getElementById("install").style.display = "none";
+      });
     </script>
     <script type="module">
       import init, { start } from "./dist/hookecho.js";
