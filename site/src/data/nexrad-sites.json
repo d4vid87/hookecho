@@ -189,15 +189,6 @@
     "tz": "America/New_York"
   },
   {
-    "city": "State College",
-    "elev_m": 733,
-    "id": "KCCX",
-    "lat": 40.9231,
-    "lon": -78.0039,
-    "state": "PA",
-    "tz": "America/New_York"
-  },
-  {
     "city": "Cleveland",
     "elev_m": 233,
     "id": "KCLE",
