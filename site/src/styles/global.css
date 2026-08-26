@@ -26,6 +26,11 @@
   --radius: 12px;
   --measure: 68ch;
   --page: 1120px;
+  /* Motion + glow, matching the app's playful pass (crates/hookecho/src/ui/m3.rs DUR_*).
+     Every use goes through these so the prefers-reduced-motion block below is the one switch. */
+  --dur: 220ms;
+  --spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+  --glow: radial-gradient(60% 50% at 50% 0%, color-mix(in srgb, var(--accent) 22%, transparent), transparent 70%);
   color-scheme: dark;
 }
 
@@ -52,6 +57,7 @@ html { scroll-behavior: smooth; }
 @media (prefers-reduced-motion: reduce) {
   html { scroll-behavior: auto; }
   * { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+  .sweep { display: none; }
 }
 
 body {
@@ -65,8 +71,8 @@ body {
 }
 
 h1, h2, h3 { line-height: 1.15; letter-spacing: -0.02em; margin: 0 0 0.4em; }
-h1 { font-size: clamp(2.2rem, 6vw, 3.6rem); font-weight: 700; }
-h2 { font-size: clamp(1.6rem, 3.5vw, 2.2rem); font-weight: 600; }
+h1 { font-size: clamp(2.5rem, 7vw, 4.2rem); font-weight: 700; }
+h2 { font-size: clamp(1.75rem, 4vw, 2.6rem); font-weight: 700; }
 h3 { font-size: 1.15rem; font-weight: 600; }
 p { margin: 0 0 1em; max-width: var(--measure); }
 
@@ -99,9 +105,14 @@ section { padding: clamp(3rem, 8vw, 5.5rem) 0; }
   color: var(--text);
   font-weight: 600;
   text-decoration: none;
-  transition: transform 160ms ease, background 160ms ease, border-color 160ms ease;
+  transition: transform var(--dur) var(--spring), background var(--dur) ease,
+    border-color var(--dur) ease, box-shadow var(--dur) ease;
 }
-.btn:hover { transform: translateY(-1px); border-color: var(--accent); }
+.btn:hover {
+  transform: translateY(-2px);
+  border-color: var(--accent);
+  box-shadow: 0 8px 24px color-mix(in srgb, var(--accent) 24%, transparent);
+}
 .btn-primary {
   background: var(--accent);
   border-color: var(--accent);
@@ -113,4 +124,27 @@ section { padding: clamp(3rem, 8vw, 5.5rem) 0; }
   border: 1px solid var(--stroke);
   border-radius: var(--radius);
   padding: 1.4rem;
+  transition: transform var(--dur) var(--spring), border-color var(--dur) ease;
+}
+.card:hover { transform: translateY(-3px); border-color: var(--accent); }
+
+/* The radar-sweep accent: one conic gradient rotating behind a section, echoing the app's
+   intro sweep. Decorative only — aria-hidden at every call site. */
+.sweep {
+  position: absolute;
+  inset: -30% -10% auto -10%;
+  aspect-ratio: 1;
+  pointer-events: none;
+  border-radius: 50%;
+  background: conic-gradient(
+    from 0deg,
+    color-mix(in srgb, var(--accent) 20%, transparent),
+    transparent 28%
+  );
+  mask-image: radial-gradient(closest-side, #000 40%, transparent 72%);
+  animation: sweep 7s linear infinite;
+  opacity: 0.55;
+}
+@keyframes sweep {
+  to { transform: rotate(1turn); }
 }
