@@ -34,24 +34,29 @@ const tiers = [
   },
 ];
 
+// Hotlinked from the repo at a tag, same as /features and /weatherdesk: GitHub carries the
+// bytes, and a later commit on main cannot change what the page shows. Only the hero poster and
+// the social card stay local — those two have to be there on first paint and for scrapers.
+const repoShots = "https://raw.githubusercontent.com/d4vid87/hookecho/v0.12.0-beta.1/docs/shots";
+
 const shots = [
   {
-    src: "/shots/alerts.jpg",
+    src: `${repoShots}/alerts.jpg`,
     alt: "Warning polygons, storm reports and spotter positions on the map",
     caption: "Warnings, storm reports and spotters, live.",
   },
   {
-    src: "/shots/alltilts.jpg",
+    src: `${repoShots}/alltilts.jpg`,
     alt: "Four radar tilts of the same storm side by side",
     caption: "Every tilt of the volume, side by side.",
   },
   {
-    src: "/shots/velocity.jpg",
+    src: `${repoShots}/velocity.jpg`,
     alt: "Storm-relative velocity showing a rotation couplet in a supercell",
     caption: "Velocity and dual-pol, dealiased.",
   },
   {
-    src: "/shots/hrrr.jpg",
+    src: `${repoShots}/hrrr.jpg`,
     alt: "HRRR model fields drawn over the map with severe composite parameters",
     caption: "HRRR and NAM fields, with the severe parameters.",
   },
@@ -122,6 +127,20 @@ const weatherdeskRepo = "https://github.com/d4vid87/weatherdesk";
   </section>
 
   <section class="alt">
+    <div class="wrap">
+      <p class="eyebrow">Against the field</p>
+      <h2>Yes, we will tell you when to buy something else</h2>
+      <p>
+        We put HookEcho next to RadarScope, MyRadar, Windy and RainViewer, row by row, including
+        the four rows they win. If the thing you need is global model data, Windy is better at it.
+      </p>
+      <div class="platforms">
+        <a class="btn btn-primary" href="/compare/">See the comparison</a>
+      </div>
+    </div>
+  </section>
+
+  <section>
     <div class="wrap">
       <p class="eyebrow">More from us</p>
       <h2>WeatherDesk</h2>
