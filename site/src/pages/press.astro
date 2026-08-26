@@ -1,0 +1,104 @@
+---
+import Base from "../layouts/Base.astro";
+
+const tag = "v0.12.0-beta.1";
+const raw = `https://raw.githubusercontent.com/d4vid87/hookecho/${tag}`;
+// Assets are linked at a tag rather than copied into this site: GitHub carries the bandwidth, and
+// a later commit cannot change what a published article ends up pointing at.
+const assets = [
+  { href: `${raw}/assets/brand/hookecho-logo.png`, label: "App icon", note: "PNG, 1024×1024" },
+  { href: `${raw}/docs/shots/alltilts.jpg`, label: "Every tilt", note: "Level 2 volume, all elevations" },
+  { href: `${raw}/docs/shots/velocity.jpg`, label: "Velocity", note: "Storm-relative velocity, dealiased" },
+  { href: `${raw}/docs/shots/alerts.jpg`, label: "Warnings", note: "Polygons, storm reports, spotters" },
+  { href: `${raw}/docs/shots/mosaic.jpg`, label: "National mosaic", note: "MRMS" },
+  { href: `${raw}/docs/shots/hrrr.jpg`, label: "Model fields", note: "HRRR with severe parameters" },
+];
+---
+
+<Base
+  title="Press kit | HookEcho"
+  description="Boilerplate, fact sheet and screenshots for writing about HookEcho — the free, open-source NEXRAD weather radar app."
+>
+  <section>
+    <div class="wrap prose">
+      <p class="eyebrow">Press</p>
+      <h1>Press kit</h1>
+      <p class="lede">
+        Everything here is free to use in coverage of HookEcho, with credit to the project. No
+        permission request needed.
+      </p>
+
+      <h2>Boilerplate</h2>
+      <blockquote>
+        HookEcho is a free, open-source weather radar app for Windows, macOS, Linux, Android and
+        the browser. It reads NEXRAD Level 2 volumes, MRMS, HRRR and the National Weather Service
+        feeds directly from the public NOAA sources and renders them on the user's own machine —
+        every radar tilt, dual-polarization products, storm-relative velocity, warnings and archive
+        playback back to 1991 — with no account, no subscription, no ads and no telemetry. It is
+        MIT licensed.
+      </blockquote>
+
+      <h2>Fact sheet</h2>
+      <dl class="facts">
+        <div><dt>Name</dt><dd>HookEcho (one word, capital H and E)</dd></div>
+        <div><dt>What it is</dt><dd>Desktop, mobile and browser weather radar viewer</dd></div>
+        <div><dt>Platforms</dt><dd>Windows, macOS, Linux, Android, any modern browser</dd></div>
+        <div><dt>Price</dt><dd>Free. No paid tier, no in-app purchase</dd></div>
+        <div><dt>Licence</dt><dd>MIT</dd></div>
+        <div><dt>Data sources</dt><dd>NOAA NEXRAD, MRMS, HRRR/NAM, National Weather Service API</dd></div>
+        <div><dt>Coverage</dt><dd>153 NEXRAD sites, 44 TDWR terminal radars, Germany's DWD network</dd></div>
+        <div><dt>Archive</dt><dd>Back to 1991</dd></div>
+        <div><dt>Source</dt><dd><a href="https://github.com/d4vid87/hookecho">github.com/d4vid87/hookecho</a></dd></div>
+      </dl>
+
+      <h2>Where the name comes from</h2>
+      <p>
+        A hook echo is the comma-shaped appendage on a supercell's radar signature, wrapped around
+        the storm's rotating updraft. It was first documented in Illinois in 1953, and it has been
+        the classic radar indicator of a possible tornado ever since — the thing a forecaster looks
+        for first.
+        <a href="/blog/what-is-a-hook-echo/">The longer version.</a>
+      </p>
+
+      <h2>Images</h2>
+      <p class="dim">
+        Linked from the repository at tag {tag}. Right-click to save; hotlinking is fine too.
+      </p>
+      <ul class="assets">
+        {
+          assets.map((asset) => (
+            <li>
+              <a href={asset.href}>{asset.label}</a> — <span class="dim">{asset.note}</span>
+            </li>
+          ))
+        }
+      </ul>
+
+      <h2>Contact</h2>
+      <p>
+        Questions, corrections and interview requests:
+        <a href="https://github.com/d4vid87/hookecho/discussions">GitHub Discussions</a>, or open an
+        <a href="https://github.com/d4vid87/hookecho/issues">issue</a>.
+      </p>
+    </div>
+  </section>
+</Base>
+
+<style>
+  .prose { max-width: 70ch; }
+  .lede { font-size: 1.1rem; color: var(--text-dim); }
+  .dim { color: var(--text-dim); }
+  blockquote {
+    margin: 1.2rem 0;
+    padding: 1.2rem;
+    border-left: 3px solid var(--accent);
+    background: var(--bg-deep);
+    border-radius: var(--radius);
+  }
+  .facts { display: grid; gap: 0.8rem; margin: 1.2rem 0; }
+  .facts div { display: grid; grid-template-columns: minmax(120px, 180px) 1fr; gap: 1rem; }
+  .facts dt { color: var(--text-dim); }
+  .facts dd { margin: 0; }
+  .assets { padding-left: 1.1rem; }
+  .assets li { margin: 0.4rem 0; }
+</style>
