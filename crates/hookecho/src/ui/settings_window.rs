@@ -978,11 +978,17 @@ fn alerts_tab(ui: &mut egui::Ui, settings: &mut Settings) {
     ui.separator();
     ui.strong("When to interrupt");
     ui.add_enabled_ui(!cfg!(target_os = "android"), |ui| {
-        ui.checkbox(&mut settings.desktop_notify, "Post alerts to the desktop")
+        let r = ui
+            .checkbox(&mut settings.desktop_notify, "Post alerts to the desktop")
             .on_hover_text(
                 "Use the system notification centre, so an alert arrives with the window \
                  behind something else",
             );
+        // Turning it on is the moment to ask, and the only one — a browser that is asked at load,
+        // or when a warning fires, gets a permission dialog nobody was expecting. No-op natively.
+        if r.changed() && settings.desktop_notify {
+            crate::notify::ask_permission();
+        }
     });
     ui.checkbox(&mut settings.alert_follow_gps, "Alert where I am, too")
         .on_hover_text(
