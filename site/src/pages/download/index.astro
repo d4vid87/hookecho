@@ -1,0 +1,154 @@
+---
+import Base from "../../layouts/Base.astro";
+
+const releases = "https://github.com/d4vid87/hookecho/releases/latest";
+const asset = (name: string) => `${releases}/download/${name}`;
+
+// The `id` values are what the OS sniff below matches on, and the order is the order the grid
+// renders in. Artifact names come from the release workflow — keep them in step with the
+// install docs (src/content/docs/install.md) when a filename changes.
+const platforms = [
+  {
+    id: "windows",
+    name: "Windows",
+    note: "Windows 10 or newer, 64-bit.",
+    links: [
+      { label: "Installer (.exe)", href: asset("HookEcho-setup-x86_64.exe"), primary: true },
+      { label: "MSI package", href: asset("HookEcho-x86_64.msi") },
+      { label: "Portable .zip", href: asset("hookecho-windows-x86_64.zip") },
+    ],
+  },
+  {
+    id: "linux",
+    name: "Linux",
+    note: "AppImage runs anywhere; the .deb adds a menu entry on Debian and Ubuntu.",
+    links: [
+      { label: "AppImage", href: asset("HookEcho-x86_64.AppImage"), primary: true },
+      // The .deb filename carries the version, so it can't be a /latest/download/ link.
+      { label: "Debian package (.deb)", href: releases },
+    ],
+  },
+  {
+    id: "mac",
+    name: "macOS",
+    note: "Experimental: built and smoke-tested in CI, never run on real Apple hardware, and ad-hoc signed — Gatekeeper will ask before it opens.",
+    links: [{ label: "HookEcho-macos.zip", href: asset("HookEcho-macos.zip"), primary: true }],
+  },
+  {
+    id: "android",
+    name: "Android",
+    note: "arm64, Android 10 or newer. Sideload it — enable “install unknown apps” first.",
+    links: [{ label: "APK (arm64-v8a)", href: asset("HookEcho-arm64-v8a.apk"), primary: true }],
+  },
+];
+
+// Nothing is published to a store yet; the badges are here so the page doesn't need rebuilding
+// around them later, greyed until each submission lands.
+const stores = ["Flathub", "Snap Store", "AUR", "Homebrew", "winget"];
+---
+
+<Base
+  title="Download HookEcho"
+  description="Download HookEcho for Windows, macOS, Linux or Android — or open it straight in your browser. Free, open source, no account."
+>
+  <section>
+    <div class="wrap">
+      <h1>Download</h1>
+      <p class="lede">
+        Free and open source, no account, no telemetry. Or skip the download entirely:
+        <a href="https://app.hookecho.io">app.hookecho.io</a> is the whole app running in your
+        browser on live data.
+      </p>
+
+      <p id="pick" class="pick" hidden></p>
+
+      <div class="grid">
+        {platforms.map((p) => (
+          <div class="card platform" id={`p-${p.id}`}>
+            <h2>{p.name}</h2>
+            <p class="note">{p.note}</p>
+            <div class="links">
+              {p.links.map((l) => (
+                <a class:list={["btn", { "btn-primary": l.primary }]} href={l.href}>{l.label}</a>
+              ))}
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <p class="dim">
+        Every build comes from the same
+        <a href={releases}>Releases page</a>. Versioned <code>v*</code> releases are the stable
+        channel; a rolling <code>latest</code> prerelease carries the newest work. Trouble
+        installing? <a href="/docs/install/">The install guide</a> walks through each platform.
+      </p>
+
+      <h2 class="stores-head">In the app stores</h2>
+      <p>
+        The Flatpak, Snap, AUR, Homebrew and winget manifests all live in the repo and build
+        today, but nothing is published yet. Until then, grab a build above.
+      </p>
+      <ul class="stores">
+        {stores.map((s) => <li>{s} <span>coming soon</span></li>)}
+      </ul>
+    </div>
+  </section>
+</Base>
+
+<script is:inline>
+  // Progressive enhancement only: without JS the full grid is already on the page, and this
+  // just marks the likely one and says so.
+  // ponytail: the UA string, not navigator.userAgentData — userAgentData is Chromium-only and
+  // needs an async call for anything past the low-entropy platform, and this only has to pick
+  // one of four cards. Order matters: Android's UA says "Linux", iOS says "like Mac OS X".
+  (function () {
+    var ua = navigator.userAgent || "";
+    var os = /android/i.test(ua)
+      ? "android"
+      : /iphone|ipad|ipod/i.test(ua)
+        ? ""
+        : /windows/i.test(ua)
+          ? "windows"
+          : /mac os x|macintosh/i.test(ua)
+            ? "mac"
+            : /linux|x11|cros/i.test(ua)
+              ? "linux"
+              : "";
+    if (!os) return;
+    var card = document.getElementById("p-" + os);
+    if (!card) return;
+    card.classList.add("is-yours");
+    var line = document.getElementById("pick");
+    line.textContent = "Looks like you're on " + card.querySelector("h2").textContent + ".";
+    line.hidden = false;
+  })();
+</script>
+
+<style>
+  .lede { font-size: 1.15rem; color: var(--text-dim); }
+  .pick { color: var(--text); font-weight: 600; }
+  .grid {
+    display: grid;
+    gap: 1rem;
+    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+    margin: 1.5rem 0 2rem;
+  }
+  .platform { display: flex; flex-direction: column; }
+  .platform h2 { font-size: 1.2rem; }
+  .platform .note { color: var(--text-dim); font-size: 0.95rem; }
+  .platform.is-yours { border-color: var(--accent); }
+  /* Push the buttons to the bottom so they line up across cards with different note lengths. */
+  .links { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: auto; }
+  .links .btn { padding: 0.55rem 1rem; font-size: 0.95rem; }
+  .dim { color: var(--text-dim); font-size: 0.95rem; }
+  .stores-head { margin-top: 3rem; }
+  .stores { list-style: none; padding: 0; display: flex; flex-wrap: wrap; gap: 0.6rem; }
+  .stores li {
+    border: 1px solid var(--stroke);
+    border-radius: 999px;
+    padding: 0.5rem 1rem;
+    color: var(--text-dim);
+    font-size: 0.95rem;
+  }
+  .stores span { opacity: 0.7; font-size: 0.85rem; }
+</style>

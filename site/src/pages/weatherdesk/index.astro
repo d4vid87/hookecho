@@ -1,0 +1,101 @@
+---
+import Base from "../../layouts/Base.astro";
+
+const repo = "https://github.com/d4vid87/weatherdesk";
+// Screenshots are hotlinked from the weatherdesk repo, pinned to a tag so a later commit there
+// can't change what this page shows — and so several MB of GIF stay out of this repo.
+const shots = "https://raw.githubusercontent.com/d4vid87/weatherdesk/v3.2.0/docs";
+---
+
+<Base
+  title="WeatherDesk — your weather station, on your own dashboard"
+  description="A self-hosted weather dashboard for your own station: Tempest, Ecowitt, Ambient, Davis and more. Vanilla JS, no backend, no accounts — with HookEcho radar inside."
+  image={`${shots}/weatherdeskgauges.png`}
+>
+  <section>
+    <div class="wrap">
+      <p class="eyebrow">More from us</p>
+      <h1>WeatherDesk</h1>
+      <p class="lede">
+        A self-hosted weather dashboard for your own weather station, built for a wall tablet on
+        the LAN. WeatherFlow Tempest, Ecowitt, Ambient Weather, Davis, AcuRite, La Crosse and any
+        Weather Underground console all work — and with no station at all, it runs on the forecast
+        for a place you name.
+      </p>
+      <div class="cta">
+        <a class="btn btn-primary" href={repo}>Get WeatherDesk</a>
+        <a class="btn" href={`${repo}/releases/latest`}>Latest release</a>
+      </div>
+
+      <img
+        src={`${shots}/hero-3.0.5.gif`}
+        alt="A walkthrough: pasting a station token into the first-run wizard, the dashboard filling in with live temperature, day cards and dial gauges, a warning polygon with its text, then the radar zoomed on a storm cell"
+        loading="lazy"
+      />
+    </div>
+  </section>
+
+  <section class="alt">
+    <div class="wrap">
+      <h2>What it does</h2>
+      <div class="grid">
+        <div class="card">
+          <h3>Your station, read properly</h3>
+          <p>
+            Live temperature, wind, rain, pressure, humidity, UV, lightning and dew point on dial
+            gauges, with trends, records and a 7-day history you can chart column by column.
+          </p>
+        </div>
+        <div class="card">
+          <h3>Forecast you can argue with</h3>
+          <p>
+            Day cards, a 48-hour chart, an alert center with the full warning text, and a model
+            agreement panel that puts GFS, ECMWF, ICON and GEM side by side — plus a running log
+            of how well each one did.
+          </p>
+        </div>
+        <div class="card">
+          <h3>Nothing to host</h3>
+          <p>
+            Vanilla JavaScript and native modules: no build step, no framework, no chart library,
+            no backend. Every call goes browser-direct to a free public API.
+          </p>
+        </div>
+      </div>
+
+      <img
+        src={`${shots}/weatherdeskgauges.png`}
+        alt="The full dashboard: sky hero, trend panels, a 48-hour forecast chart, day cards and eight dial gauges"
+        loading="lazy"
+      />
+    </div>
+  </section>
+
+  <section>
+    <div class="wrap">
+      <h2>The radar inside it is HookEcho</h2>
+      <p>
+        WeatherDesk embeds HookEcho for its radar, centered on your station and following it as
+        you move the map. It runs in the viewer's embedded mode on the dashboard — no chrome, one
+        frame a minute until you touch it — and full-chrome in the Forecast Lab tab.
+      </p>
+      <div class="cta">
+        <a class="btn btn-primary" href="/download/">Get HookEcho</a>
+        <a class="btn" href="https://app.hookecho.io">Open it in your browser</a>
+      </div>
+    </div>
+  </section>
+</Base>
+
+<style>
+  .lede { font-size: 1.15rem; color: var(--text-dim); }
+  .alt { background: var(--bg-deep); border-block: 1px solid var(--stroke); }
+  .cta { display: flex; gap: 0.75rem; flex-wrap: wrap; margin: 1.4rem 0 2rem; }
+  .grid {
+    display: grid;
+    gap: 1rem;
+    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+    margin: 1.5rem 0 2rem;
+  }
+  img { border: 1px solid var(--stroke); border-radius: var(--radius); display: block; }
+</style>
