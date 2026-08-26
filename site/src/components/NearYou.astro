@@ -1,0 +1,43 @@
+---
+// "Open radar near Norman" — the city comes from the edge's own geo-IP (site/public/_worker.js
+// serves /geo.json from request.cf), so the page can be specific without a permission prompt.
+// The app does its own identical lookup on load, so no coordinates need handing over.
+---
+
+<a class="near" href="https://app.hookecho.io">
+  <span class="pin" aria-hidden="true">◎</span>
+  <span class="text">Open the radar<span class="where"></span></span>
+</a>
+
+<script>
+  fetch("/geo.json")
+    .then((r) => (r.ok ? r.json() : null))
+    .then((geo) => {
+      if (!geo?.city) return;
+      const where = document.querySelector(".near .where");
+      if (where) where.textContent = ` near ${geo.city}`;
+    })
+    // No city, no worry: the link still reads "Open the radar" and still works.
+    .catch(() => {});
+</script>
+
+<style>
+  .near {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.6rem;
+    padding: 0.75rem 1.4rem;
+    border-radius: 999px;
+    border: 1px solid var(--accent);
+    background: color-mix(in srgb, var(--accent) 12%, transparent);
+    color: var(--text);
+    font-weight: 600;
+    text-decoration: none;
+    transition: transform var(--dur) var(--spring), box-shadow var(--dur) ease;
+  }
+  .near:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 10px 30px color-mix(in srgb, var(--accent) 28%, transparent);
+  }
+  .pin { color: var(--accent); }
+</style>

@@ -37,3 +37,6 @@ announce-drafts.md
 /.fpbuild/
 /.fpstate/
 /.fprepo/
+
+# wrangler dev scratch
+site/.wrangler/
