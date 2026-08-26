@@ -1,4 +1,4 @@
-package zip.batman.hookecho
+package io.hookecho.HookEcho
 
 import android.app.AlarmManager
 import android.app.PendingIntent

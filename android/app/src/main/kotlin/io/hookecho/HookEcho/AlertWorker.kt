@@ -1,4 +1,4 @@
-package zip.batman.hookecho
+package io.hookecho.HookEcho
 
 import android.app.ForegroundServiceStartNotAllowedException
 import android.content.Context

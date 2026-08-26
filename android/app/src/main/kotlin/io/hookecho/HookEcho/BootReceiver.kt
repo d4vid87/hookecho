@@ -1,4 +1,4 @@
-package zip.batman.hookecho
+package io.hookecho.HookEcho
 
 import android.content.BroadcastReceiver
 import android.content.Context

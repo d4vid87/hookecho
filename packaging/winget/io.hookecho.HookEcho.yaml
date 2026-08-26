@@ -7,7 +7,7 @@
 # At tag time:
 #   sha256sum dist/HookEcho-setup-x86_64.exe
 # and paste the result into the installer manifest below.
-PackageIdentifier: zip.batman.hookecho
+PackageIdentifier: io.hookecho.HookEcho
 PackageVersion: 0.8.0
 DefaultLocale: en-US
 ManifestType: version

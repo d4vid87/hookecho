@@ -1,4 +1,4 @@
-PackageIdentifier: zip.batman.hookecho
+PackageIdentifier: io.hookecho.HookEcho
 PackageVersion: 0.8.0
 InstallerType: inno
 Scope: user

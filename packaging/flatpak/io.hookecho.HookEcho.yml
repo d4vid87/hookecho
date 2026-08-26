@@ -10,7 +10,7 @@
 #   python3 flatpak-cargo-generator.py Cargo.lock -o packaging/flatpak/cargo-sources.json
 #
 # (from https://github.com/flatpak/flatpak-builder-tools/tree/master/cargo)
-app-id: zip.batman.hookecho
+app-id: io.hookecho.HookEcho
 runtime: org.freedesktop.Platform
 runtime-version: '25.08'
 sdk: org.freedesktop.Sdk
@@ -48,23 +48,23 @@ modules:
     build-commands:
       - cargo --offline build --release -p hookecho
       - install -Dm755 target/release/hookecho /app/bin/hookecho
-      - install -Dm644 packaging/hookecho.desktop /app/share/applications/zip.batman.hookecho.desktop
+      - install -Dm644 packaging/hookecho.desktop /app/share/applications/io.hookecho.HookEcho.desktop
       # flatpak-builder only exports files under /app/share whose name starts with the app id, so
-      # the desktop file and the icons are installed as `zip.batman.hookecho`. Every other
+      # the desktop file and the icons are installed as `io.hookecho.HookEcho`. Every other
       # packager installs them as plain `hookecho`, which is what the committed copies say — so
       # the two id references inside them are rewritten here rather than renamed repo-wide.
-      - sed -i 's|^Icon=hookecho$|Icon=zip.batman.hookecho|'
-        /app/share/applications/zip.batman.hookecho.desktop
-      - install -Dm644 packaging/zip.batman.hookecho.metainfo.xml
-        /app/share/metainfo/zip.batman.hookecho.metainfo.xml
+      - sed -i 's|^Icon=hookecho$|Icon=io.hookecho.HookEcho|'
+        /app/share/applications/io.hookecho.HookEcho.desktop
+      - install -Dm644 packaging/io.hookecho.HookEcho.metainfo.xml
+        /app/share/metainfo/io.hookecho.HookEcho.metainfo.xml
       - sed -i 's|<launchable type="desktop-id">hookecho.desktop</launchable>|<launchable
-        type="desktop-id">zip.batman.hookecho.desktop</launchable>|'
-        /app/share/metainfo/zip.batman.hookecho.metainfo.xml
+        type="desktop-id">io.hookecho.HookEcho.desktop</launchable>|'
+        /app/share/metainfo/io.hookecho.HookEcho.metainfo.xml
       # Icons are drawn by the binary that was just built, one per size.
       - for px in 48 64 128 256 512; do
         mkdir -p /app/share/icons/hicolor/${px}x${px}/apps;
         /app/bin/hookecho --headless-icon
-        /app/share/icons/hicolor/${px}x${px}/apps/zip.batman.hookecho.png ${px};
+        /app/share/icons/hicolor/${px}x${px}/apps/io.hookecho.HookEcho.png ${px};
         done
     sources:
       - type: dir

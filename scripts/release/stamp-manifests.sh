@@ -24,9 +24,9 @@ sed -i \
   -e "s|^PackageVersion: .*|PackageVersion: $VER|" \
   -e "s|releases/download/v[^/]*/|releases/download/v$VER/|" \
   -e "s|^\( *InstallerSha256: \).*|\1${EXE_SHA^^}|" \
-  "$W/zip.batman.hookecho.installer.yaml"
+  "$W/io.hookecho.HookEcho.installer.yaml"
 sed -i "s|^PackageVersion: .*|PackageVersion: $VER|" \
-  "$W/zip.batman.hookecho.yaml" "$W/zip.batman.hookecho.locale.en-US.yaml"
+  "$W/io.hookecho.HookEcho.yaml" "$W/io.hookecho.HookEcho.locale.en-US.yaml"
 
 # Homebrew and the AUR both build from the GitHub tag tarball, so both want its hash. GitHub
 # generates that tarball on demand but it is byte-stable for a given tag.

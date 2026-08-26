@@ -44,7 +44,7 @@ done
 
 # AppStream metadata, so software centres have something to show.
 mkdir -p "$APPDIR/usr/share/metainfo"
-cp "$ROOT/packaging/zip.batman.hookecho.metainfo.xml" "$APPDIR/usr/share/metainfo/"
+cp "$ROOT/packaging/io.hookecho.HookEcho.metainfo.xml" "$APPDIR/usr/share/metainfo/"
 
 # AppRun -> the binary.
 ln -sf usr/bin/hookecho "$APPDIR/AppRun"

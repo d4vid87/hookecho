@@ -529,7 +529,7 @@ mod android_alerts {
     }
 
     fn try_call_alarm(method: &str) -> jni::errors::Result<()> {
-        with_class("zip.batman.hookecho.AlertAlarm", |env, class, activity| {
+        with_class("io.hookecho.HookEcho.AlertAlarm", |env, class, activity| {
             let res = env.call_static_method(
                 class,
                 method,
@@ -545,7 +545,7 @@ mod android_alerts {
 
     /// `AlertAlarm.health(Context)` as its raw tab-separated line.
     pub(super) fn health() -> Option<String> {
-        let out = with_class("zip.batman.hookecho.AlertAlarm", |env, class, activity| {
+        let out = with_class("io.hookecho.HookEcho.AlertAlarm", |env, class, activity| {
             let s = env
                 .call_static_method(
                     class,
@@ -607,7 +607,7 @@ mod android_alerts {
     }
 
     fn try_set_saver(on: bool) -> jni::errors::Result<()> {
-        with_class("zip.batman.hookecho.AlertService", |env, class, activity| {
+        with_class("io.hookecho.HookEcho.AlertService", |env, class, activity| {
             let res = env.call_static_method(
                 class,
                 "setBatterySaver",
@@ -622,7 +622,7 @@ mod android_alerts {
     }
 
     fn try_set(enabled: bool) -> jni::errors::Result<()> {
-        with_class("zip.batman.hookecho.AlertService", |env, class, activity| {
+        with_class("io.hookecho.HookEcho.AlertService", |env, class, activity| {
             let res = env.call_static_method(
                 class,
                 "setEnabled",
@@ -731,7 +731,7 @@ mod android_widget {
                 &[],
             )?
             .l()?;
-        let name = env.new_string("zip.batman.hookecho.RadarWidget")?;
+        let name = env.new_string("io.hookecho.HookEcho.RadarWidget")?;
         let class = env
             .call_method(
                 &loader,
@@ -1098,7 +1098,7 @@ mod android_textview {
         let mut env = vm.attach_current_thread()?;
         let activity = unsafe { JObject::from_raw(app.activity_as_ptr() as jni::sys::jobject) };
         let intent = env.new_object("android/content/Intent", "()V", &[])?;
-        let class = env.new_string("zip.batman.hookecho.TextViewActivity")?;
+        let class = env.new_string("io.hookecho.HookEcho.TextViewActivity")?;
         env.call_method(
             &intent,
             "setClassName",
