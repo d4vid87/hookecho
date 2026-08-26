@@ -151,6 +151,7 @@ fn route(server: &Server, path: &str, query: &str) -> (&'static str, &'static st
         "/status.json" | "/alerts.json" | "/obs.json" | "/health.json" => "json",
         "/cells.json" => "cells",
         "/snapshot.png" => "snapshot",
+        "/loop.gif" | "/loop.mp4" => "loop",
         "/metrics" => "metrics",
         _ if path.starts_with("/proxy/") => "proxy",
         _ => "other",
@@ -172,6 +173,14 @@ fn route(server: &Server, path: &str, query: &str) -> (&'static str, &'static st
         },
         "/snapshot.png" => match snapshot(server, query) {
             Ok(png) => ("200 OK", "image/png", png),
+            Err(e) => error_json(e),
+        },
+        "/loop.gif" => match loop_clip(server, query, crate::loopexport::LoopFormat::Gif) {
+            Ok(body) => ("200 OK", "image/gif", body),
+            Err(e) => error_json(e),
+        },
+        "/loop.mp4" => match loop_clip(server, query, crate::loopexport::LoopFormat::Mp4) {
+            Ok(body) => ("200 OK", "video/mp4", body),
             Err(e) => error_json(e),
         },
         "/metrics" => (
@@ -392,40 +401,179 @@ fn health_json(server: &Server) -> anyhow::Result<Vec<u8>> {
 /// When this process started serving, for `/health.json`.
 static STARTED: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
 
+/// The render knobs every image endpoint shares, parsed out of a query string.
+struct Frame {
+    site: String,
+    moment: wxdata::level2::Moment,
+    basemap: crate::tiles::BasemapStyle,
+    px: u32,
+    zoom: Option<f64>,
+    zoom_tag: String,
+    tilt: usize,
+}
+
+impl Frame {
+    fn parse(query: &str) -> anyhow::Result<Frame> {
+        let site = crate::cloud::param(query, "site").unwrap_or_else(|| "KTLX".to_string());
+        let product = crate::cloud::param(query, "product").unwrap_or_else(|| "REF".to_string());
+        if !site.chars().all(|c| c.is_ascii_alphanumeric()) {
+            anyhow::bail!("bad site");
+        }
+        let moment = wxdata::level2::Moment::from_code(&product.to_ascii_uppercase())
+            .ok_or_else(|| anyhow::anyhow!("unknown product '{product}'"))?;
+        // A bare sweep on a blank field is unreadable on a dashboard; the keyless dark vector map
+        // is the sane default, and `basemap=none` gets the bare sweep back.
+        let basemap = crate::tiles::BasemapStyle::from_slug(
+            &crate::cloud::param(query, "basemap").unwrap_or_else(|| "dark".to_string()),
+        );
+        // A dashboard wants a tile it can fit, and a widget wants its own framing; both are one
+        // parameter each on a render that was already happening.
+        let size: Option<u32> = crate::cloud::param(query, "size").and_then(|v| v.parse().ok());
+        let zoom: Option<f64> = crate::cloud::param(query, "zoom").and_then(|v| v.parse().ok());
+        // Elevation index, not degrees: the same number the app's tilt picker uses. A volume has
+        // at most a couple of dozen sweeps, and asking past the end is a missing render, not a
+        // crash.
+        let tilt: usize = crate::cloud::param(query, "tilt")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0)
+            .min(30);
+        Ok(Frame {
+            site,
+            moment,
+            basemap,
+            px: size.unwrap_or(1000).clamp(256, 2048),
+            zoom,
+            zoom_tag: zoom.map_or_else(|| "auto".to_string(), |z| format!("{z:.2}")),
+            tilt,
+        })
+    }
+
+    /// Everything that changes the pixels, in one string — the cache key and the filename both
+    /// have to carry all of it. The basemap used to be missing from the filename, so two styles
+    /// of the same site raced over one file on disk.
+    fn tag(&self) -> String {
+        format!(
+            "{}-{}-{}-{}-{}-{}",
+            self.site,
+            self.moment.short_name(),
+            self.basemap.slug(),
+            self.px,
+            self.zoom_tag,
+            self.tilt
+        )
+    }
+}
+
+/// Render one frame to `out` and hand back the PNG bytes. `at` picks an archived volume; `None`
+/// is the latest one.
+///
+/// The renderer builds its own runtime, so it can only be called from a plain thread — which this
+/// is, one connection per thread.
+fn render_png(
+    server: &Server,
+    f: &Frame,
+    at: Option<chrono::DateTime<chrono::Utc>>,
+    out: &std::path::Path,
+) -> anyhow::Result<Vec<u8>> {
+    // `HH:MM`, with the colon: the archive picker parses on it, and a bare `1230` silently falls
+    // through to "the latest volume" — which is a loop of the same frame six times.
+    let hhmm = at.map(|t| t.format("%H:%M").to_string());
+    {
+        let _one_at_a_time = server.render.lock().unwrap();
+        // Global knobs on the renderer, set under the same lock that serializes the render.
+        crate::headless::set_output(Some(f.px), f.zoom);
+        crate::headless::run(
+            out.to_string_lossy().as_ref(),
+            &f.site,
+            f.moment,
+            f.tilt,
+            true,
+            None,
+            None,
+            at.map(|t| t.date_naive()),
+            hhmm.as_deref(),
+            f.basemap,
+            false,
+        )?;
+    }
+    Ok(std::fs::read(out)?)
+}
+
+/// Where rendered frames are kept between requests.
+fn snapshot_dir() -> anyhow::Result<std::path::PathBuf> {
+    let dir = crate::paths::cache_dir()
+        .ok_or_else(|| anyhow::anyhow!("no cache directory"))?
+        .join("snapshots");
+    std::fs::create_dir_all(&dir)?;
+    Ok(dir)
+}
+
 /// A radar PNG through the same off-screen renderer the `--headless` verifier uses.
 ///
 // ponytail: one render at a time; the palette is still fixed. Add it when someone asks.
 fn snapshot(server: &Server, query: &str) -> anyhow::Result<Vec<u8>> {
-    let site = crate::cloud::param(query, "site").unwrap_or_else(|| "KTLX".to_string());
-    let product = crate::cloud::param(query, "product").unwrap_or_else(|| "REF".to_string());
-    if !site.chars().all(|c| c.is_ascii_alphanumeric()) {
-        anyhow::bail!("bad site");
+    let f = Frame::parse(query)?;
+    let key = format!("/snapshot.png?{}", f.tag());
+    if let Some(hit) = server
+        .cache
+        .lock()
+        .unwrap()
+        .get(&key)
+        .filter(|(when, _)| when.elapsed() < SNAPSHOT_TTL)
+    {
+        return Ok(hit.1.clone());
     }
-    let moment = wxdata::level2::Moment::from_code(&product.to_ascii_uppercase())
-        .ok_or_else(|| anyhow::anyhow!("unknown product '{product}'"))?;
-    // A bare sweep on a blank field is unreadable on a dashboard; the keyless dark vector map is
-    // the sane default, and `basemap=none` gets the bare sweep back.
-    let basemap = crate::tiles::BasemapStyle::from_slug(
-        &crate::cloud::param(query, "basemap").unwrap_or_else(|| "dark".to_string()),
-    );
+    let out = snapshot_dir()?.join(format!("snapshot-{}.png", f.tag()));
+    let png = render_png(server, &f, None, &out)?;
+    server
+        .cache
+        .lock()
+        .unwrap()
+        .insert(key, (Instant::now(), png.clone()));
+    Ok(png)
+}
 
-    // A dashboard wants a tile it can fit, and a widget wants its own framing; both are one
-    // parameter each on a render that was already happening.
-    let size: Option<u32> = crate::cloud::param(query, "size").and_then(|v| v.parse().ok());
-    let zoom: Option<f64> = crate::cloud::param(query, "zoom").and_then(|v| v.parse().ok());
-    let px = size.unwrap_or(1000).clamp(256, 2048);
-    let zoom_tag = zoom.map_or_else(|| "auto".to_string(), |z| format!("{z:.2}"));
-    // Elevation index, not degrees: the same number the app's tilt picker uses. A volume has at
-    // most a couple of dozen sweeps, and asking past the end is a missing render, not a crash.
-    let tilt: usize = crate::cloud::param(query, "tilt")
+/// How far apart the frames of a loop are asked for. A volume is about five minutes wide; a site
+/// in clear-air mode is slower, and two targets then land on the same volume — a repeated frame,
+/// not an error.
+const LOOP_STEP_MIN: i64 = 5;
+/// Rendered loop frames older than this are never wanted again — the window only slides forward.
+const LOOP_FRAME_TTL: Duration = Duration::from_secs(2 * 3600);
+
+/// A radar loop as a GIF (or MP4), for the dashboard that wants motion rather than a still.
+///
+/// This is the Home Assistant camera endpoint: point a `generic` camera or a picture card at it
+/// and the last half hour animates. Each frame is a full render, so the answer is cached for the
+/// same window a snapshot is, and frames already on disk are reused — a poll a minute later
+/// renders one new frame, not six.
+///
+// ponytail: frames are picked by wall-clock steps rather than by listing the site's volumes,
+// which reuses the archive path the timeline already uses. Listing volumes would give exact
+// frames; it also gives a second network round trip per request, for a dashboard that cannot
+// tell the difference.
+fn loop_clip(
+    server: &Server,
+    query: &str,
+    format: crate::loopexport::LoopFormat,
+) -> anyhow::Result<Vec<u8>> {
+    let f = Frame::parse(query)?;
+    // Six frames is half an hour of storm, and the ceiling is there because each one is a full
+    // render on a machine that is probably also serving snapshots.
+    let count: usize = crate::cloud::param(query, "frames")
         .and_then(|v| v.parse().ok())
-        .unwrap_or(0)
-        .min(30);
+        .unwrap_or(6)
+        .clamp(2, 12);
+    let fps: u32 = crate::cloud::param(query, "fps")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(2)
+        .clamp(1, 10);
+    let ext = match format {
+        crate::loopexport::LoopFormat::Gif => "gif",
+        crate::loopexport::LoopFormat::Mp4 => "mp4",
+    };
 
-    let key = format!(
-        "/snapshot.png?{site}&{product}&{}&{px}&{zoom_tag}&{tilt}",
-        basemap.slug()
-    );
+    let now = chrono::Utc::now();
+    let key = format!("/loop.{ext}?{}-{count}-{fps}", f.tag());
     if let Some(hit) = server
         .cache
         .lock()
@@ -436,48 +584,73 @@ fn snapshot(server: &Server, query: &str) -> anyhow::Result<Vec<u8>> {
         return Ok(hit.1.clone());
     }
 
-    let dir = crate::paths::cache_dir().ok_or_else(|| anyhow::anyhow!("no cache directory"))?;
-    std::fs::create_dir_all(&dir)?;
-    // Everything the memory key distinguishes has to be in the filename too: the basemap used to
-    // be missing from it, so two styles of the same site raced over one file on disk.
-    let dir = dir.join("snapshots");
-    std::fs::create_dir_all(&dir)?;
-    let out = dir.join(format!(
-        "snapshot-{site}-{product}-{}-{px}-{zoom_tag}-{tilt}.png",
-        basemap.slug()
-    ));
-    {
-        // The headless renderer builds its own runtime, so it can only be called from a plain
-        // thread — which this is, one connection per thread.
-        let _one_at_a_time = server.render.lock().unwrap();
-        // Global knobs on the renderer, set under the same lock that serializes the render.
-        crate::headless::set_output(Some(px), zoom);
-        crate::headless::run(
-            out.to_string_lossy().as_ref(),
-            &site,
-            moment,
-            tilt,
-            true,
-            None,
-            None,
-            None,
-            None,
-            basemap,
-            false,
-        )?;
+    let dir = snapshot_dir()?;
+    let mut frames = Vec::with_capacity(count);
+    let mut last: Option<Vec<u8>> = None;
+    for k in (0..count as i64).rev() {
+        let at = now - chrono::Duration::minutes(k * LOOP_STEP_MIN);
+        let out = dir.join(format!(
+            "loop-{}-{}.png",
+            f.tag(),
+            at.format("%Y%m%d-%H%M")
+        ));
+        // An archived frame never changes, so one already on disk is the answer. Only the newest
+        // step is rendered on a repeat poll.
+        let png = match std::fs::read(&out) {
+            Ok(bytes) if !bytes.is_empty() => bytes,
+            _ => render_png(server, &f, Some(at), &out)?,
+        };
+        // Two steps can land on the same volume — a site scanning every 3.5 minutes has no frame
+        // newer than the one three minutes old, so the head of the window repeats it. Identical
+        // consecutive frames are a stutter in the loop, not information.
+        if last.as_deref() == Some(png.as_slice()) {
+            continue;
+        }
+        frames.push(image::load_from_memory(&png)?.to_rgba8());
+        last = Some(png);
     }
-    let png = std::fs::read(&out)?;
+    prune_loop_frames(&dir);
+
+    let clip = dir.join(format!("loop-{}.{ext}", f.tag()));
+    match format {
+        crate::loopexport::LoopFormat::Gif => {
+            crate::loopexport::encode_gif(&frames, (1000 / fps) as u16, &clip)?
+        }
+        crate::loopexport::LoopFormat::Mp4 => crate::loopexport::encode_mp4(&frames, fps, &clip)?,
+    }
+    let body = std::fs::read(&clip)?;
     server
         .cache
         .lock()
         .unwrap()
-        .insert(key, (Instant::now(), png.clone()));
-    Ok(png)
+        .insert(key, (Instant::now(), body.clone()));
+    Ok(body)
+}
+
+/// Drop loop frames that have slid out of every window. Without this the cache directory grows by
+/// a render every five minutes for as long as the box is up.
+fn prune_loop_frames(dir: &std::path::Path) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for e in entries.flatten() {
+        if !e.file_name().to_string_lossy().starts_with("loop-") {
+            continue;
+        }
+        let stale = e
+            .metadata()
+            .and_then(|m| m.modified())
+            .map(|t| t.elapsed().unwrap_or_default() > LOOP_FRAME_TTL)
+            .unwrap_or(false);
+        if stale {
+            let _ = std::fs::remove_file(e.path());
+        }
+    }
 }
 
 /// The route labels `/metrics` reports, in counter order.
-const ROUTES: [&str; 8] = [
-    "index", "json", "cells", "snapshot", "metrics", "proxy", "denied", "other",
+const ROUTES: [&str; 9] = [
+    "index", "json", "cells", "snapshot", "loop", "metrics", "proxy", "denied", "other",
 ];
 /// One counter per label in [`ROUTES`], bumped on every request in [`route`].
 ///
@@ -750,6 +923,28 @@ mod tests {
         // A dashboard's `?token=` form.
         assert_eq!(query_token("site=KTLX&token=abc"), Some("abc".to_string()));
         assert_eq!(query_token("site=KTLX"), None);
+    }
+
+    #[test]
+    fn a_frame_carries_everything_that_changes_the_pixels() {
+        let f = Frame::parse("site=KOUN&product=vel&size=512&zoom=8&tilt=2&basemap=light").unwrap();
+        assert_eq!(f.site, "KOUN");
+        assert_eq!(f.px, 512);
+        assert_eq!(f.tilt, 2);
+        // Two renders that differ in any knob must not share a cache key or a filename.
+        let other = Frame::parse("site=KOUN&product=vel&size=512&zoom=8&tilt=3&basemap=light")
+            .unwrap();
+        assert_ne!(f.tag(), other.tag());
+        assert!(!f.tag().contains(['/', '\\', ' ']), "tag becomes a filename");
+
+        // Defaults are the dashboard case: latest reflectivity on the dark vector map.
+        let d = Frame::parse("").unwrap();
+        assert_eq!(d.site, "KTLX");
+        assert_eq!(d.zoom_tag, "auto");
+
+        // A site is pasted into a URL by whoever is looking; it also becomes a path segment.
+        assert!(Frame::parse("site=../../etc").is_err());
+        assert!(Frame::parse("product=NOPE").is_err());
     }
 
     #[test]

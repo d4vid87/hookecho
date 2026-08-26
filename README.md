@@ -546,9 +546,14 @@ hookecho --serve 9000 --bind 0.0.0.0
 | `/cells.json?site=KTLX` | every storm cell the radar's algorithms track — hail size, tops, VIL, TVS, forecast track |
 | `/health.json` | version, uptime and how stale the answers are, for a container health check |
 | `/snapshot.png?site=KTLX` | a radar render — `&product=VEL`, `&basemap=none`, `&size=512` (256–2048), `&zoom=6.5`, `&tilt=1` |
+| `/loop.gif?site=KTLX` | the last half hour animating — same render knobs, plus `&frames=6` (2–12) and `&fps=2` |
+| `/loop.mp4?site=KTLX` | the same loop as H.264, if ffmpeg is installed |
 
-JSON answers are cached for a minute and snapshots for five, so polling it every
-30 seconds costs the upstream services nothing extra.
+JSON answers are cached for a minute, snapshots and loops for five, so polling it
+every 30 seconds costs the upstream services nothing extra. A loop reuses the
+frames it already rendered, so a poll five minutes later renders one new frame
+rather than six — and two steps landing on the same volume become one frame, not
+a stutter.
 
 The server binds loopback and answers anyone who asks. Putting it on a network
 (`--bind 0.0.0.0`, or a container port that isn't `127.0.0.1:`) means publishing
@@ -607,6 +612,16 @@ sensors, an **alert count** sensor and an **alert active** binary sensor
 sensor giving the distance to the closest cell the radar is tracking
 (attributes: cell id, bearing, max dBZ, hail size, TVS), plus one **radar
 camera** entity showing the live snapshot.
+
+A `generic` camera pointed at `/loop.gif` gives a dashboard card that animates:
+
+```yaml
+camera:
+  - platform: generic
+    name: Radar loop
+    still_image_url: http://boxname:8080/snapshot.png?site=KTLX&token=hunter2
+    stream_source: http://boxname:8080/loop.mp4?site=KTLX&token=hunter2
+```
 
 The nearest-storm sensor is the one to automate on: it answers "is a storm
 coming" minutes before anybody issues a warning, and goes unavailable — never
