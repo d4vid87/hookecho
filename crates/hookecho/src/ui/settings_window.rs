@@ -398,6 +398,8 @@ impl SettingsWindow {
     }
 
     fn palettes_tab(&mut self, ui: &mut egui::Ui, settings: &mut Settings, palettes: &Palettes) {
+        // Collected up front: the combo below writes to `settings` while this is being read.
+        let imported: Vec<String> = settings.web_files.keys().cloned().collect();
         if !self.scanned {
             self.rescan();
         }
@@ -463,6 +465,15 @@ impl SettingsWindow {
                                             path.to_string_lossy().into_owned(),
                                         );
                                     }
+                                }
+                            }
+                            // Tables that live in the settings rather than on disk (the browser
+                            // has nowhere to put a file). Named, not pathed — the name is the
+                            // whole handle.
+                            for name in &imported {
+                                let is_sel = current.as_deref() == Some(name.as_str());
+                                if ui.selectable_label(is_sel, name).clicked() {
+                                    settings.palettes.insert(key.to_string(), name.clone());
                                 }
                             }
                         });
@@ -935,7 +946,11 @@ pub fn sound_picker(ui: &mut egui::Ui, settings: &mut Settings) {
                             }
                         }
                         let is_custom = matches!(sound, AlertSound::Custom(_));
-                        if ui.selectable_label(is_custom, "Custom…").clicked() {
+                        // A custom sound is a file the mixer reopens on every alert, and a
+                        // browser has no path that outlives the picker. Built-ins only there.
+                        if !cfg!(target_arch = "wasm32")
+                            && ui.selectable_label(is_custom, "Custom…").clicked()
+                        {
                             crate::dialog::request_open(
                                 crate::dialog::ImportKind::AlertSound,
                                 label,

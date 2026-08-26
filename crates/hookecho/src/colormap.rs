@@ -304,6 +304,11 @@ const ALT_SRC: [(&str, usize, &str); 2] = [
 /// The `settings.palettes` value that selects built-in alternate `name`.
 pub const BUILTIN_PREFIX: &str = "builtin:";
 
+/// A "path" that is really the file's own content. The browser has nowhere to put an imported
+/// `.pal`, so `Settings::palette_paths` inlines it behind this and the loader parses it directly.
+/// The marker is a prefix no real path starts with, same trick as [`BUILTIN_PREFIX`].
+pub const INLINE_PREFIX: &str = "inline:";
+
 /// Names of the built-in alternates offered for `moment`, in menu order.
 pub fn alt_names(moment: Moment) -> impl Iterator<Item = &'static str> {
     ALT_SRC
@@ -369,6 +374,13 @@ impl Palettes {
                         ),
                     }
                 }
+                Some(path) if path.to_string_lossy().starts_with(INLINE_PREFIX) => {
+                    let text = path.to_string_lossy()[INLINE_PREFIX.len()..].to_string();
+                    match parse_pal(&text) {
+                        Ok(t) => (t, None),
+                        Err(e) => (default_table(moment).clone(), Some(e.to_string())),
+                    }
+                }
                 Some(path) => match std::fs::read_to_string(path)
                     .map_err(|e| e.to_string())
                     .and_then(|s| parse_pal(&s).map_err(|e| e.to_string()))
@@ -387,6 +399,18 @@ impl Palettes {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_inline_table_loads_without_a_file() {
+        let mut p = Palettes::default();
+        let mut paths: [Option<std::path::PathBuf>; Moment::ALL.len()] = Default::default();
+        paths[0] = Some(format!("{INLINE_PREFIX}Color: 5 255 0 0\nColor: 70 255 255 255").into());
+        paths[1] = Some(format!("{INLINE_PREFIX}not a palette").into());
+        p.reload(&paths);
+        assert_eq!(p.tables[0].stops.len(), 2);
+        assert!(p.errors[0].is_none());
+        assert!(p.errors[1].is_some(), "bad inline content reports, not panics");
+    }
 
     #[test]
     fn all_builtins_parse() {

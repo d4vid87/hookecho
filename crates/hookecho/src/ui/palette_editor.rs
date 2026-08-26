@@ -16,7 +16,8 @@ pub struct PaletteEditor {
     /// A `.pal` the user picked, waiting to become the working copy. The picker answers a frame
     /// or more later — on Android, after a whole activity round trip — so the file arrives here
     /// through the app rather than as a return value.
-    pub pending_import: Option<std::path::PathBuf>,
+    /// A picked `.pal`, as its text — the browser never has a path to hand over.
+    pub pending_import: Option<String>,
 }
 
 /// Tag for the editor's own import, so a `.pal` picked here becomes the working copy instead of
@@ -42,10 +43,13 @@ impl PaletteEditor {
             self.loaded_for = Some(self.moment_idx);
         }
         // A `.pal` the user picked since the last frame becomes the working copy.
-        if let Some(path) = self.pending_import.take() {
-            if let Some(t) = read_pal(&path) {
-                self.table = Some(t);
-                self.loaded_for = Some(self.moment_idx);
+        if let Some(text) = self.pending_import.take() {
+            match crate::colormap::parse_pal(&text) {
+                Ok(t) => {
+                    self.table = Some(t);
+                    self.loaded_for = Some(self.moment_idx);
+                }
+                Err(e) => log::warn!("could not parse the picked palette: {e}"),
             }
         }
 
@@ -206,10 +210,17 @@ fn color_edit(ui: &mut egui::Ui, rgba: &mut [u8; 4]) {
 
 /// Write the working table into the colortables dir and set it as the moment's override.
 fn save_and_apply(table: &ColorTable, moment: Moment, settings: &mut Settings) {
+    let name = format!("{}.pal", moment.short_name());
     let Some(dir) = Settings::colortables_dir() else {
+        // No colortables dir means no filesystem (the browser). The table rides in the settings
+        // instead, which is the same place an imported one goes — see `Settings::web_files`.
+        settings
+            .web_files
+            .insert(name.clone(), crate::colormap::to_pal_string(table));
+        settings.palettes.insert(moment.short_name().to_string(), name);
         return;
     };
-    let path = dir.join(format!("{}.pal", moment.short_name()));
+    let path = dir.join(&name);
     if let Err(e) = std::fs::write(&path, crate::colormap::to_pal_string(table)) {
         log::warn!("palette save failed: {e}");
         return;
@@ -221,25 +232,10 @@ fn save_and_apply(table: &ColorTable, moment: Moment, settings: &mut Settings) {
     );
 }
 
-/// Parse a picked `.pal` into a table, or complain in the log and change nothing.
-pub(crate) fn read_pal(path: &std::path::Path) -> Option<ColorTable> {
-    match std::fs::read_to_string(path)
-        .ok()
-        .and_then(|t| crate::colormap::parse_pal(&t).ok())
-    {
-        Some(t) => Some(t),
-        None => {
-            log::warn!("could not parse {}", path.display());
-            None
-        }
-    }
-}
-
 fn export_pal(table: &ColorTable) {
-    let Some(path) = crate::dialog::save_path("palette.pal", "pal") else {
-        return;
-    };
-    if let Err(e) = std::fs::write(&path, crate::colormap::to_pal_string(table)) {
+    let pal = crate::colormap::to_pal_string(table);
+    if let crate::dialog::Saved::Failed(e) = crate::dialog::save_bytes("palette.pal", "pal", pal.as_bytes())
+    {
         log::warn!("palette export failed: {e}");
     }
 }

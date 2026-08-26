@@ -1,9 +1,50 @@
-//! Native file-dialog shim. Desktop uses `rfd`; Android goes through the Storage Access
-//! Framework, which is asynchronous, so opening a file is a request now and a result later on
-//! both platforms. Keeping both behind this shim lets the call sites stay platform-agnostic and
-//! `rfd` stay off the Android build.
+//! File-dialog shim. Desktop uses `rfd`; Android goes through the Storage Access Framework; the
+//! browser uses a hidden `<input type="file">` and a download link. All three are asynchronous —
+//! opening a file is a request now and a result later — so the call sites stay platform-agnostic
+//! and `rfd` stays off the Android and wasm builds.
+//!
+//! The browser has no filesystem, so a picked file arrives as bytes rather than a path and a
+//! saved file leaves as a download. [`Import::text`] and [`save_bytes`] are the two call-site
+//! shapes that work on every platform; a raw `path` is native-only by construction.
 
 use std::path::PathBuf;
+
+/// Where a save went, for the caller's toast. Cancelling is not a failure and gets no message.
+pub enum Saved {
+    /// The user dismissed the dialog.
+    Cancelled,
+    /// Written. The string is where, in whatever terms that platform has — a path, or "Downloads".
+    Where(String),
+    /// It did not get written. The string is why.
+    Failed(String),
+}
+
+/// Save `bytes` under `default_name`. The whole-file form: the caller has the content in hand, so
+/// the browser can hand it to the user as a download and no call site needs a path at all.
+///
+/// ponytail: byte-sized exports only. A screenshot or a loop export picks its destination before
+/// it has any content to write and streams into it, which is why those still go through
+/// [`save_path`] and stay native-only.
+pub fn save_bytes(default_name: &str, ext: &str, bytes: &[u8]) -> Saved {
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = ext;
+        return match web_save::download(default_name, bytes) {
+            Ok(()) => Saved::Where("your downloads".to_string()),
+            Err(e) => Saved::Failed(e),
+        };
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let Some(path) = save_path(default_name, ext) else {
+            return Saved::Cancelled;
+        };
+        match std::fs::write(&path, bytes) {
+            Ok(()) => Saved::Where(path.display().to_string()),
+            Err(e) => Saved::Failed(e.to_string()),
+        }
+    }
+}
 
 /// Choose a save path for `default_name` (a `<label>.<ext>` filename). Desktop pops a native save
 /// dialog; Android returns `<data>/exports/<timestamp>-<default_name>` (creating the folder), so
@@ -85,7 +126,30 @@ pub struct Import {
     /// Caller-chosen: a moment name, a marker index, an alert-sound row. Empty when the kind
     /// alone says everything.
     pub tag: String,
+    /// Where it landed. In a browser there is nowhere for it to land, so this is the file's own
+    /// name and nothing will ever open it — read the content through [`Import::text`] instead.
     pub path: PathBuf,
+    /// The content, when the platform handed it over instead of a path (the browser always does).
+    pub bytes: Option<Vec<u8>>,
+}
+
+impl Import {
+    /// The file's content as text. The one read that works everywhere: native and Android reopen
+    /// the path, the browser already has the bytes.
+    pub fn text(&self) -> Result<String, String> {
+        match &self.bytes {
+            Some(b) => String::from_utf8(b.clone()).map_err(|e| e.to_string()),
+            None => std::fs::read_to_string(&self.path).map_err(|e| e.to_string()),
+        }
+    }
+
+    /// The name to show, and on the web the only handle there is.
+    pub fn name(&self) -> String {
+        self.path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default()
+    }
 }
 
 /// Ask the user for a file. Returns immediately on every platform; the answer arrives through
@@ -101,7 +165,12 @@ pub fn request_open(kind: ImportKind, tag: impl Into<String>) {
             .add_filter(kind.label(), kind.extensions())
             .pick_file()
         {
-            deliver(Import { kind, tag, path });
+            deliver(Import {
+                kind,
+                tag,
+                path,
+                bytes: None,
+            });
         }
     }
     #[cfg(target_os = "android")]
@@ -112,8 +181,7 @@ pub fn request_open(kind: ImportKind, tag: impl Into<String>) {
     }
     #[cfg(target_arch = "wasm32")]
     {
-        // No filesystem to import into. The buttons are hidden on the web anyway.
-        let _ = (kind, tag);
+        web_open::pick(kind, tag);
     }
 }
 
@@ -201,8 +269,103 @@ mod android_open {
                 kind,
                 tag: tag.to_string(),
                 path: std::path::PathBuf::from(file),
+                bytes: None,
             }),
             None => log::warn!("import.txt names an unknown kind '{kind}'"),
         }
+    }
+}
+
+/// The browser's own file picker: a hidden `<input type="file">`, clicked from here.
+///
+/// It has to be an element in the document — a detached input's `click()` is ignored by every
+/// browser's popup blocker unless it is reachable — and it has to survive the call, because the
+/// `change` event fires long after `pick` returns. So it is appended, hidden, and removes itself
+/// once it has answered.
+#[cfg(target_arch = "wasm32")]
+mod web_open {
+    use super::{deliver, Import, ImportKind};
+    use wasm_bindgen::prelude::*;
+    use wasm_bindgen::JsCast;
+
+    pub fn pick(kind: ImportKind, tag: String) {
+        if let Err(e) = try_pick(kind, tag) {
+            log::warn!("file picker failed: {e:?}");
+        }
+    }
+
+    fn try_pick(kind: ImportKind, tag: String) -> Result<(), JsValue> {
+        let doc = web_sys::window()
+            .and_then(|w| w.document())
+            .ok_or_else(|| JsValue::from_str("no document"))?;
+        let input: web_sys::HtmlInputElement = doc.create_element("input")?.unchecked_into();
+        input.set_type("file");
+        // Extensions, not MIME: a `.pal` has no registered type, and every browser accepts a
+        // dotted-extension accept list.
+        let accept: Vec<String> = kind.extensions().iter().map(|e| format!(".{e}")).collect();
+        input.set_accept(&accept.join(","));
+        input.style().set_property("display", "none")?;
+        doc.body()
+            .ok_or_else(|| JsValue::from_str("no body"))?
+            .append_child(&input)?;
+
+        let el = input.clone();
+        let on_change = Closure::once(Box::new(move || {
+            let file = el.files().and_then(|f| f.get(0));
+            el.remove();
+            let Some(file) = file else { return };
+            let name = file.name();
+            wasm_bindgen_futures::spawn_local(async move {
+                match wasm_bindgen_futures::JsFuture::from(file.array_buffer()).await {
+                    Ok(buf) => {
+                        let bytes = js_sys::Uint8Array::new(&buf).to_vec();
+                        deliver(Import {
+                            kind,
+                            tag,
+                            path: std::path::PathBuf::from(&name),
+                            bytes: Some(bytes),
+                        });
+                    }
+                    Err(e) => log::warn!("could not read {name}: {e:?}"),
+                }
+            });
+        }) as Box<dyn FnOnce()>);
+        input.set_onchange(Some(on_change.as_ref().unchecked_ref()));
+        // The closure outlives this function by design — it fires when the user picks, which may
+        // be a minute from now. `forget` is the honest way to say "the DOM owns this".
+        on_change.forget();
+        input.click();
+        Ok(())
+    }
+}
+
+/// Saving in a browser: a Blob, an object URL, and a synthetic click on a download link. There is
+/// no dialog to cancel — the browser either takes it or the user's download settings intervene.
+#[cfg(target_arch = "wasm32")]
+mod web_save {
+    use wasm_bindgen::prelude::*;
+    use wasm_bindgen::JsCast;
+
+    pub fn download(name: &str, bytes: &[u8]) -> Result<(), String> {
+        inner(name, bytes).map_err(|e| format!("{e:?}"))
+    }
+
+    fn inner(name: &str, bytes: &[u8]) -> Result<(), JsValue> {
+        let doc = web_sys::window()
+            .and_then(|w| w.document())
+            .ok_or_else(|| JsValue::from_str("no document"))?;
+        // `Uint8Array::from` copies into the JS heap, which the Blob then owns — the Rust slice is
+        // free to go the moment this returns.
+        let array = js_sys::Array::of1(&js_sys::Uint8Array::from(bytes));
+        let blob = web_sys::Blob::new_with_u8_array_sequence(&array)?;
+        let url = web_sys::Url::create_object_url_with_blob(&blob)?;
+        let a: web_sys::HtmlAnchorElement = doc.create_element("a")?.unchecked_into();
+        a.set_href(&url);
+        a.set_download(name);
+        a.click();
+        // The click is synchronous, so by here the browser has taken what it needs. Holding the
+        // URL any longer pins the whole blob in memory for the life of the document.
+        web_sys::Url::revoke_object_url(&url)?;
+        Ok(())
     }
 }

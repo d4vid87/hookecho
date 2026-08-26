@@ -65,20 +65,17 @@ pub(crate) fn reader_button(ui: &mut egui::Ui, title: &str, issued: &str, text: 
 
 /// The "Copy CSV" / "Save CSV…" pair every table window ends up wanting. `csv` is only called
 /// when a button is clicked, so building the text stays off the per-frame path.
-///
-/// ponytail: no file dialog on the web — there is no filesystem behind `save_path` there, and the
-/// clipboard already covers that platform.
 pub(crate) fn csv_buttons(
     ui: &mut egui::Ui,
     default_name: &str,
     hover: &str,
     csv: impl Fn() -> String,
 ) {
-    if !cfg!(target_arch = "wasm32") && ui.button("Save CSV…").on_hover_text(hover).clicked() {
-        if let Some(path) = crate::dialog::save_path(default_name, "csv") {
-            if let Err(e) = std::fs::write(&path, csv()) {
-                log::warn!("CSV export failed: {e}");
-            }
+    if ui.button("Save CSV…").on_hover_text(hover).clicked() {
+        if let crate::dialog::Saved::Failed(e) =
+            crate::dialog::save_bytes(default_name, "csv", csv().as_bytes())
+        {
+            log::warn!("CSV export failed: {e}");
         }
     }
     if ui.button("Copy CSV").on_hover_text(hover).clicked() {

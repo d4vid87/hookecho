@@ -649,8 +649,12 @@ through the proxy stay on the network, because a cached radar frame is a wrong
 radar frame.
 
 This is a **core viewer**, though, not parity.
-There is no filesystem, so volume caches are memory-only and imports and exports are
-out; there is no camera, plugin or GPS support; and any feed whose host refuses
+Settings bundles, color tables and CSV/GPX exports import and export through the
+browser's own file picker and downloads — an imported `.pal` has no path to live
+at, so its content rides in the settings and survives a reload like everything
+else there. There is still no filesystem, though, so volume caches are
+memory-only and marker icons and custom alert sounds (both of which are files the
+app reopens later) stay off; there is no camera, plugin or GPS support; and any feed whose host refuses
 cross-origin requests simply doesn't load. Anything that needs those is on the
 desktop and Android builds.
 

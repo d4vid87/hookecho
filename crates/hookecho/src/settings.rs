@@ -126,6 +126,12 @@ pub struct Settings {
     /// Per-moment color-table override: moment short name (`REF`, `VEL`, …) -> `.pal` path.
     /// A missing key uses the built-in default table.
     pub palettes: BTreeMap<String, String>,
+    /// File name -> file content, for platforms with nowhere to put a file. A browser hands an
+    /// imported `.pal` over as bytes and there is no path that would survive the next reload, so
+    /// the content rides along in the settings — which already persist, and already export with
+    /// the settings bundle. Empty everywhere else.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub web_files: BTreeMap<String, String>,
     /// Velocity/spectrum-width display unit (internal data stays m/s).
     pub velocity_unit: VelocityUnit,
     /// Temperature display unit for the surface station plots (internal data stays Celsius).
@@ -977,6 +983,7 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             default_site: "KTLX".to_string(),
+            web_files: BTreeMap::new(),
             detectors: DetectorTuning::default(),
             alert_rules: Vec::new(),
             serve_token: String::new(),
@@ -1115,7 +1122,12 @@ impl Settings {
             if p.is_none() && m == Moment::CorrelationCoefficient {
                 p = self.palettes.get("RHO"); // legacy key, pre-CC rename
             }
-            p.map(PathBuf::from)
+            // A name that is in `web_files` names content, not a file. Resolved here rather than
+            // in the loader so the loader keeps taking one kind of thing.
+            p.map(|v| match self.web_files.get(v) {
+                Some(text) => PathBuf::from(format!("{}{text}", crate::colormap::INLINE_PREFIX)),
+                None => PathBuf::from(v),
+            })
         })
     }
 
@@ -1401,9 +1413,28 @@ mod tests {
     }
 
     #[test]
+    fn a_web_file_name_resolves_to_its_content() {
+        let mut s = Settings::default();
+        s.palettes.insert("REF".to_string(), "mine.pal".to_string());
+        // Not in web_files yet: it is an ordinary path, whatever the platform makes of it.
+        assert_eq!(
+            s.palette_paths()[0].as_deref(),
+            Some(std::path::Path::new("mine.pal"))
+        );
+        s.web_files
+            .insert("mine.pal".to_string(), "Color: 5 255 0 0".to_string());
+        let p = s.palette_paths()[0].clone().unwrap();
+        assert_eq!(
+            p.to_string_lossy(),
+            format!("{}Color: 5 255 0 0", crate::colormap::INLINE_PREFIX)
+        );
+    }
+
+    #[test]
     fn roundtrips() {
         let s = Settings {
             hints_seen: Vec::new(),
+            web_files: BTreeMap::new(),
             reduce_motion: true,
             precip_tint: false,
             custom_tile_url: String::new(),

@@ -12854,17 +12854,16 @@ impl HookEchoApp {
                         let n = self.chase_track.waypoints.len() + 1;
                         self.chase_track.mark(format!("Mark {n}"));
                     }
-                    if !cfg!(target_arch = "wasm32") && ui.button("Save GPX…").clicked() {
-                        if let Some(path) = crate::dialog::save_path("chase.gpx", "gpx") {
-                            match std::fs::write(&path, self.chase_track.to_gpx()) {
-                                Ok(()) => {
-                                    let msg = format!("Saved {}", path.display());
-                                    self.toast(ToastKind::Success, msg);
-                                }
-                                Err(e) => {
-                                    self.toast(ToastKind::Error, format!("GPX save failed: {e}"))
-                                }
+                    if ui.button("Save GPX…").clicked() {
+                        let gpx = self.chase_track.to_gpx();
+                        match crate::dialog::save_bytes("chase.gpx", "gpx", gpx.as_bytes()) {
+                            crate::dialog::Saved::Where(w) => {
+                                self.toast(ToastKind::Success, format!("Saved to {w}"))
                             }
+                            crate::dialog::Saved::Failed(e) => {
+                                self.toast(ToastKind::Error, format!("GPX save failed: {e}"))
+                            }
+                            crate::dialog::Saved::Cancelled => {}
                         }
                     }
                     if ui
@@ -13104,24 +13103,26 @@ impl HookEchoApp {
         });
     }
 
-    /// Export settings + referenced color tables to a portable JSON bundle (rfd save dialog).
+    /// Export settings + referenced color tables to a portable JSON bundle (a save dialog on
+    /// desktop, a download in a browser).
     fn export_settings_bundle(&mut self) {
-        let Some(path) = crate::dialog::save_path("hookecho-settings.json", "json") else {
-            return;
-        };
-        match self
-            .settings
-            .export_bundle()
-            .and_then(|json| std::fs::write(&path, json).map_err(|e| e.to_string()))
-        {
-            Ok(()) => self.toast(
-                ToastKind::Success,
-                format!("Settings saved to {}", path.display()),
-            ),
+        let json = match self.settings.export_bundle() {
+            Ok(json) => json,
             Err(e) => {
                 log::warn!("settings export failed: {e}");
                 self.toast(ToastKind::Error, format!("Settings export failed: {e}"));
+                return;
             }
+        };
+        match crate::dialog::save_bytes("hookecho-settings.json", "json", json.as_bytes()) {
+            crate::dialog::Saved::Where(w) => {
+                self.toast(ToastKind::Success, format!("Settings saved to {w}"))
+            }
+            crate::dialog::Saved::Failed(e) => {
+                log::warn!("settings export failed: {e}");
+                self.toast(ToastKind::Error, format!("Settings export failed: {e}"));
+            }
+            crate::dialog::Saved::Cancelled => {}
         }
     }
 
@@ -13135,15 +13136,33 @@ impl HookEchoApp {
     fn apply_import(&mut self, import: crate::dialog::Import) {
         use crate::dialog::ImportKind as K;
         match import.kind {
-            K::SettingsBundle => self.apply_settings_bundle(&import.path),
+            K::SettingsBundle => self.apply_settings_bundle(&import),
             K::Palette if import.tag == crate::ui::palette_editor::EDITOR_TAG => {
-                self.palette_editor.pending_import = Some(import.path);
+                match import.text() {
+                    Ok(text) => self.palette_editor.pending_import = Some(text),
+                    Err(e) => self.toast(ToastKind::Error, format!("Palette import failed: {e}")),
+                }
             }
             K::Palette => {
+                // A platform that handed over content rather than a path (the browser) has no
+                // path worth storing — the content goes into the settings and the override names
+                // it, which is what `palette_paths` resolves back to a table.
+                let value = match &import.bytes {
+                    None => import.path.to_string_lossy().into_owned(),
+                    Some(_) => match import.text() {
+                        Ok(text) => {
+                            let name = import.name();
+                            self.settings.web_files.insert(name.clone(), text);
+                            name
+                        }
+                        Err(e) => {
+                            self.toast(ToastKind::Error, format!("Palette import failed: {e}"));
+                            return;
+                        }
+                    },
+                };
                 // Setting the override triggers the next-frame dirty-diff palette reload.
-                self.settings
-                    .palettes
-                    .insert(import.tag, import.path.to_string_lossy().into_owned());
+                self.settings.palettes.insert(import.tag, value);
             }
             K::MarkerIcon => {
                 let idx = import.tag.parse::<usize>().ok();
@@ -13172,9 +13191,9 @@ impl HookEchoApp {
     }
 
     /// Apply a settings bundle the user picked.
-    fn apply_settings_bundle(&mut self, path: &std::path::Path) {
-        match std::fs::read_to_string(path)
-            .map_err(|e| e.to_string())
+    fn apply_settings_bundle(&mut self, import: &crate::dialog::Import) {
+        match import
+            .text()
             .and_then(|s| crate::settings::Settings::import_bundle(&s))
         {
             Ok(settings) => {
