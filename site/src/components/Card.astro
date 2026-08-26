@@ -1,0 +1,27 @@
+---
+interface Props {
+  title: string;
+  eyebrow?: string;
+  href?: string;
+}
+const { title, eyebrow, href } = Astro.props;
+const Tag = href ? "a" : "div";
+---
+
+<Tag class:list={["card", { linked: href }]} href={href}>
+  {eyebrow && <p class="eyebrow">{eyebrow}</p>}
+  <h3>{title}</h3>
+  <slot />
+</Tag>
+
+<style>
+  .card :global(p:last-child) { margin-bottom: 0; }
+  .card :global(p) { color: var(--text-dim); }
+  a.linked {
+    display: block;
+    color: var(--text);
+    text-decoration: none;
+    transition: border-color 160ms ease, transform 160ms ease;
+  }
+  a.linked:hover { border-color: var(--accent); transform: translateY(-2px); }
+</style>

@@ -1,0 +1,114 @@
+/*
+  Tokens lifted from the app's own palette (crates/hookecho/src/theme.rs) so the site and the
+  product read as one thing: Dark is the default, Light comes from prefers-color-scheme.
+*/
+@font-face {
+  font-family: "Inter";
+  /* The same Latin subset the app bundles (crates/hookecho/data/fonts), converted to woff2.
+     ponytail: Regular only — headings get synthetic weight. Ship a Medium face if it shows. */
+  src: url("/fonts/Inter-Regular-subset.woff2") format("woff2");
+  font-weight: 400 700;
+  font-display: swap;
+}
+
+:root {
+  --bg: #14161b;
+  --bg-deep: #0e1013;
+  --faint: #1a1d23;
+  --stroke: #2a2f38;
+  --widget: #1c1f26;
+  --text: #c8d0da;
+  --text-dim: #8b95a3;
+  --accent: #4da3ff;
+  --accent-ink: #06121f;
+  --radius: 12px;
+  --measure: 68ch;
+  --page: 1120px;
+  color-scheme: dark;
+}
+
+@media (prefers-color-scheme: light) {
+  :root {
+    --bg: #f6f7f9;
+    --bg-deep: #ffffff;
+    --faint: #eceef1;
+    --stroke: #d0d3d8;
+    --widget: #e8eaed;
+    --text: #1b1e24;
+    --text-dim: #5a626d;
+    --accent-ink: #ffffff;
+    color-scheme: light;
+  }
+}
+
+*,
+*::before,
+*::after { box-sizing: border-box; }
+
+html { scroll-behavior: smooth; }
+
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  * { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
+  font-size: 17px;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+}
+
+h1, h2, h3 { line-height: 1.15; letter-spacing: -0.02em; margin: 0 0 0.4em; }
+h1 { font-size: clamp(2.2rem, 6vw, 3.6rem); font-weight: 700; }
+h2 { font-size: clamp(1.6rem, 3.5vw, 2.2rem); font-weight: 600; }
+h3 { font-size: 1.15rem; font-weight: 600; }
+p { margin: 0 0 1em; max-width: var(--measure); }
+
+a { color: var(--accent); text-decoration-thickness: 1px; text-underline-offset: 2px; }
+
+img { max-width: 100%; height: auto; }
+
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 4px; }
+
+.wrap { width: min(100% - 2.5rem, var(--page)); margin-inline: auto; }
+
+section { padding: clamp(3rem, 8vw, 5.5rem) 0; }
+
+.eyebrow {
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  font-size: 0.78rem;
+  color: var(--text-dim);
+  margin-bottom: 0.6rem;
+}
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.75rem 1.4rem;
+  border-radius: 999px;
+  border: 1px solid var(--stroke);
+  background: var(--widget);
+  color: var(--text);
+  font-weight: 600;
+  text-decoration: none;
+  transition: transform 160ms ease, background 160ms ease, border-color 160ms ease;
+}
+.btn:hover { transform: translateY(-1px); border-color: var(--accent); }
+.btn-primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-ink);
+}
+
+.card {
+  background: var(--faint);
+  border: 1px solid var(--stroke);
+  border-radius: var(--radius);
+  padding: 1.4rem;
+}

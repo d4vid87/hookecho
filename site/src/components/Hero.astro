@@ -1,0 +1,45 @@
+---
+interface Props {
+  title: string;
+  tagline: string;
+}
+const { title, tagline } = Astro.props;
+---
+
+<section class="hero">
+  <div class="wrap">
+    <h1>{title}</h1>
+    <p class="tagline">{tagline}</p>
+    <div class="ctas">
+      <a class="btn btn-primary" href="https://app.hookecho.io">Open in your browser</a>
+      <a class="btn" href="https://github.com/d4vid87/hookecho/releases/latest">Download the app</a>
+    </div>
+    <p class="fineprint">Free, open source, no account. Windows, macOS, Linux and Android.</p>
+    <img
+      class="shot"
+      src="/shots/hero.gif"
+      alt="A radar loop animating over an interactive map, with warnings and storm cells drawn on top"
+      width="1600"
+      height="1000"
+    />
+  </div>
+</section>
+
+<style>
+  .hero { padding-top: clamp(2.5rem, 7vw, 4.5rem); }
+  .tagline {
+    font-size: clamp(1.05rem, 2.4vw, 1.3rem);
+    color: var(--text-dim);
+    max-width: 46ch;
+  }
+  .ctas { display: flex; gap: 0.75rem; flex-wrap: wrap; margin: 1.6rem 0 0.8rem; }
+  .fineprint { color: var(--text-dim); font-size: 0.9rem; }
+  .shot {
+    display: block;
+    margin-top: 2.2rem;
+    width: 100%;
+    border: 1px solid var(--stroke);
+    border-radius: var(--radius);
+    box-shadow: 0 24px 60px rgb(0 0 0 / 0.35);
+  }
+</style>

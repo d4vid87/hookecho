@@ -1,0 +1,119 @@
+---
+import "../styles/global.css";
+
+interface Props {
+  title: string;
+  description: string;
+  /** Absolute-from-root path to the social card image. */
+  image?: string;
+}
+
+const { title, description, image = "/shots/alltilts.jpg" } = Astro.props;
+const url = new URL(Astro.url.pathname, Astro.site);
+const social = new URL(image, Astro.site);
+
+// Waves W2–W4 add their pages here; a link is only listed once the page exists, so the
+// build's link check stays meaningful.
+const nav = [
+  { href: "https://app.hookecho.io", label: "Open in browser" },
+  { href: "https://github.com/d4vid87/hookecho/releases/latest", label: "Download" },
+  { href: "https://github.com/d4vid87/hookecho", label: "GitHub" },
+];
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{title}</title>
+    <meta name="description" content={description} />
+    <link rel="canonical" href={url} />
+    <link rel="icon" href="/logo.png" type="image/png" />
+    <meta name="theme-color" content="#14161b" />
+    <link
+      rel="preload"
+      href="/fonts/Inter-Regular-subset.woff2"
+      as="font"
+      type="font/woff2"
+      crossorigin
+    />
+
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content={title} />
+    <meta property="og:description" content={description} />
+    <meta property="og:url" content={url} />
+    <meta property="og:image" content={social} />
+    <meta name="twitter:card" content="summary_large_image" />
+  </head>
+  <body>
+    <header class="site-head">
+      <div class="wrap head-inner">
+        <a class="brand" href="/">
+          <img src="/logo.png" alt="" width="28" height="28" />
+          <span>HookEcho</span>
+        </a>
+        <nav aria-label="Main">
+          {nav.map((item) => <a href={item.href}>{item.label}</a>)}
+        </nav>
+      </div>
+    </header>
+
+    <main><slot /></main>
+
+    <footer class="site-foot">
+      <div class="wrap foot-inner">
+        <p>
+          HookEcho is free and open source, MIT licensed. Weather data comes from NOAA, the
+          National Weather Service and other public feeds — no account, no telemetry.
+        </p>
+        <p class="dim">
+          <a href="https://github.com/d4vid87/hookecho">Source</a> ·
+          <a href="https://github.com/d4vid87/hookecho/issues">Report a problem</a> ·
+          <a href="https://github.com/d4vid87/weatherdesk">WeatherDesk</a>
+        </p>
+      </div>
+    </footer>
+  </body>
+</html>
+
+<style>
+  .site-head {
+    position: sticky;
+    top: 0;
+    z-index: 10;
+    background: color-mix(in srgb, var(--bg) 88%, transparent);
+    backdrop-filter: blur(10px);
+    border-bottom: 1px solid var(--stroke);
+  }
+  .head-inner,
+  .foot-inner {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    flex-wrap: wrap;
+  }
+  .head-inner { padding: 0.7rem 0; }
+  .brand {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-weight: 700;
+    color: var(--text);
+    text-decoration: none;
+    letter-spacing: -0.01em;
+  }
+  nav { display: flex; gap: 1.25rem; flex-wrap: wrap; }
+  nav a { color: var(--text-dim); text-decoration: none; font-size: 0.95rem; }
+  nav a:hover { color: var(--text); }
+  .site-foot {
+    border-top: 1px solid var(--stroke);
+    padding: 2.5rem 0;
+    color: var(--text-dim);
+    font-size: 0.9rem;
+  }
+  .foot-inner { align-items: flex-start; }
+  .site-foot p { margin: 0; max-width: 52ch; }
+  .dim a { color: var(--text-dim); }
+</style>

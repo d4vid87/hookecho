@@ -1,0 +1,15 @@
+{
+  "name": "hookecho-site",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "npm run shots && astro dev",
+    "build": "npm run shots && astro build",
+    "preview": "astro preview",
+    "shots": "mkdir -p public/shots && cp ../docs/shots/*.jpg ../docs/shots/*.gif public/shots/"
+  },
+  "dependencies": {
+    "@astrojs/sitemap": "^3.2.1",
+    "astro": "^5.1.1"
+  }
+}
