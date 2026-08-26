@@ -158,7 +158,7 @@ fn route(server: &Server, path: &str, query: &str) -> (&'static str, &'static st
     });
     match path {
         "/" if server.web_root.is_some() => static_file(server, "/index.html"),
-        "/" => ("200 OK", "text/html; charset=utf-8", index().into_bytes()),
+        "/" => ("200 OK", "text/html; charset=utf-8", index(server).into_bytes()),
         "/status.json" | "/alerts.json" | "/obs.json" => match cached_json(server, path) {
             Ok(body) => ("200 OK", "application/json", body),
             Err(e) => error_json(e),
@@ -895,16 +895,132 @@ fn proxy_content_type(upstream: &str) -> &'static str {
     }
 }
 
-fn index() -> String {
-    "<!doctype html><meta charset=utf-8><title>Hook Echo-WX</title>\
-     <h1>Hook Echo-WX</h1><ul>\
-     <li><a href=\"/status.json\">/status.json</a> — conditions and alerts at your locations</li>\
-     <li><a href=\"/alerts.json\">/alerts.json</a> — alerts only</li>\
-     <li><a href=\"/obs.json\">/obs.json</a> — conditions only</li>\
-     <li><a href=\"/snapshot.png?site=KTLX\">/snapshot.png?site=KTLX&amp;product=REF</a> — radar render</li>\
-     <li><a href=\"/metrics\">/metrics</a> — Prometheus scrape</li>\
-     </ul>"
-        .to_string()
+/// The page `/` serves when there is no `--web-root`: a dashboard rather than a list of links.
+///
+/// Everything on it comes from the endpoints below it — the radar render, the conditions and the
+/// alerts — and it refreshes itself, so a spare monitor on the wall stays current without anyone
+/// touching it.
+///
+/// The rows are built from `/status.json` in the browser with `textContent`, never by pasting
+/// JSON into HTML: a spot name is whatever the user typed into the marker dialog, and this page
+/// is served from the same origin as the token'd endpoints.
+///
+// ponytail: one page, no framework, no build step — it is served as a string literal from the
+// binary. If it ever wants charts, it wants `--web-root` and the real app instead.
+fn index(server: &Server) -> String {
+    // The nearest radar to home, so the picture is of somewhere the user cares about.
+    let site = server
+        .spots
+        .iter()
+        .find(|s| s.home)
+        .or_else(|| server.spots.first())
+        .and_then(|s| crate::geo::nearest_site_id(s.lon, s.lat))
+        .unwrap_or_else(|| "KTLX".to_string());
+    let version = env!("CARGO_PKG_VERSION");
+    format!(
+        r##"<!doctype html><html lang="en"><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Hook Echo-WX</title>
+<!-- No icon to serve, and without this the browser asks for /favicon.ico on every load and logs
+     the 404 it gets. -->
+<link rel="icon" href="data:,">
+<style>
+:root {{ color-scheme: dark; }}
+body {{ margin:0; font:15px/1.5 system-ui,sans-serif; background:#0e1116; color:#e6edf3;
+  display:grid; grid-template-columns:minmax(320px,1fr) minmax(280px,420px); gap:16px; padding:16px; }}
+@media (max-width:800px) {{ body {{ grid-template-columns:1fr; }} }}
+h1 {{ font-size:16px; margin:0 0 8px; font-weight:600; letter-spacing:.02em; }}
+img {{ width:100%; border-radius:10px; display:block; background:#161b22; }}
+.card {{ background:#161b22; border:1px solid #21262d; border-radius:10px; padding:12px; margin-bottom:12px; }}
+.spot {{ font-weight:600; }}
+.cond {{ color:#9aa7b4; }}
+.alert {{ margin-top:6px; padding:6px 8px; border-radius:6px; background:#3d1d1d; border-left:3px solid #f85149; }}
+.alert.warn {{ background:#3d3319; border-left-color:#d29922; }}
+.cell {{ margin-top:6px; color:#9aa7b4; }}
+footer {{ grid-column:1/-1; color:#6e7681; font-size:13px; }}
+a {{ color:#58a6ff; }}
+</style>
+<main>
+  <h1>Radar — <span id="site">{site}</span></h1>
+  <img id="radar" alt="radar">
+</main>
+<aside>
+  <h1>Conditions</h1>
+  <div id="spots"><div class="card">loading…</div></div>
+</aside>
+<footer>
+  hookecho {version} · <span id="when">—</span> ·
+  <a href="/status.json">status</a> · <a href="/cells.json?site={site}">cells</a> ·
+  <a href="/loop.gif?site={site}">loop</a> · <a href="/health.json">health</a> ·
+  <a href="/metrics">metrics</a>
+</footer>
+<script>
+// A token'd server is reached with `?token=`; every fetch this page makes has to carry it too.
+const token = new URLSearchParams(location.search).get("token");
+const q = (path, extra) => path + (path.includes("?") ? "&" : "?") +
+  (token ? "token=" + encodeURIComponent(token) + "&" : "") + extra;
+const site = document.getElementById("site").textContent;
+
+function radar() {{
+  // The server caches a render for five minutes; the cache-buster is what stops the browser
+  // holding on to it for longer than that.
+  document.getElementById("radar").src = q("/snapshot.png", "site=" + site + "&size=900&t=" + Date.now());
+}}
+
+function row(s) {{
+  const card = document.createElement("div");
+  card.className = "card";
+  const name = document.createElement("div");
+  name.className = "spot";
+  name.textContent = s.name;
+  card.append(name);
+  const bits = [];
+  if (s.temp_f != null) bits.push(Math.round(s.temp_f) + "°F");
+  if (s.dewpoint_f != null) bits.push("dew " + Math.round(s.dewpoint_f) + "°");
+  if (s.wind_kt != null) bits.push((s.wind_dir || "") + " " + Math.round(s.wind_kt) + " kt");
+  const cond = document.createElement("div");
+  cond.className = "cond";
+  cond.textContent = bits.length ? bits.join(" · ") : "no observations";
+  card.append(cond);
+  for (const a of s.alerts || []) {{
+    const el = document.createElement("div");
+    el.className = "alert" + (a.escalation > 0 ? "" : " warn");
+    el.textContent = a.event + (a.until ? " until " + a.until : "");
+    card.append(el);
+  }}
+  if (s.nearest_cell) {{
+    const c = document.createElement("div");
+    c.className = "cell";
+    c.textContent = "storm " + s.nearest_cell.id + " " + Math.round(s.nearest_cell.distance_km) +
+      " km at " + Math.round(s.nearest_cell.bearing_deg) + "°";
+    card.append(c);
+  }}
+  return card;
+}}
+
+async function refresh() {{
+  const box = document.getElementById("spots");
+  try {{
+    const r = await fetch(q("/status.json", ""));
+    if (!r.ok) throw new Error(r.status + "");
+    const report = await r.json();
+    box.replaceChildren(...report.map(row));
+    document.getElementById("when").textContent = new Date().toLocaleTimeString();
+  }} catch (e) {{
+    // A failed poll must not blank the last good answer — a stale reading beats an empty page.
+    document.getElementById("when").textContent = "offline (" + e.message + ")";
+  }}
+}}
+
+radar();
+refresh();
+// The answers behind these are cached for a minute and five minutes; polling faster only spends
+// the browser's battery.
+setInterval(refresh, 60000);
+setInterval(radar, 300000);
+</script>
+</html>"##
+    )
 }
 
 #[cfg(test)]
@@ -945,6 +1061,34 @@ mod tests {
         // A site is pasted into a URL by whoever is looking; it also becomes a path segment.
         assert!(Frame::parse("site=../../etc").is_err());
         assert!(Frame::parse("product=NOPE").is_err());
+    }
+
+    #[test]
+    fn the_dashboard_points_at_the_radar_nearest_home() {
+        let server = Server {
+            token: String::new(),
+            spots: vec![Spot {
+                name: "home".to_string(),
+                lat: 35.22,
+                lon: -97.44,
+                radius_mi: 20.0,
+                home: true,
+            }],
+            web_root: None,
+            rt: tokio::runtime::Builder::new_current_thread()
+                .build()
+                .unwrap(),
+            http: reqwest::Client::new(),
+            cache: Mutex::new(HashMap::new()),
+            render: Mutex::new(()),
+        };
+        let page = index(&server);
+        assert!(page.contains("KTLX"), "Norman's nearest radar is KTLX");
+        // The page is the only thing served at `/` without a web root, so it has to carry its own
+        // refresh — a wall display nobody touches is the whole point.
+        assert!(page.contains("setInterval"));
+        // Spot names reach the page as `textContent`, never pasted into HTML.
+        assert!(page.contains("name.textContent = s.name"));
     }
 
     #[test]
