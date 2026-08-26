@@ -9090,7 +9090,10 @@ impl HookEchoApp {
             // scrub path displays and what it downloads until the new listing lands — i.e. the
             // wrong radar's volumes at an index that means nothing here. A scrubbed pane keeps
             // the time it was looking at; a live one just goes back to the head.
-            if !v.timeline.following {
+            // ...unless a deep link, an event or a replay bundle already asked for an instant:
+            // that target is the whole point of the jump, and overwriting it with the frame the
+            // pane happened to be showing sent every Event Library entry to the wrong day.
+            if !v.timeline.following && v.timeline.seek_target.is_none() {
                 v.timeline.seek_target = v.timeline.current().and_then(|id| id.date_time());
             }
             v.timeline.frames.clear();

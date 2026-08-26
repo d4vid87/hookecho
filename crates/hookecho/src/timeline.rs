@@ -106,9 +106,13 @@ impl Timeline {
         self.frames = frames;
         self.frames_key = Some(key);
         self.listing = false;
-        // A pending event/deep-link seek wins: snap to the nearest frame by time.
-        if let Some(target) = self.seek_target.take() {
+        // A pending event/deep-link seek wins: snap to the nearest frame by time. The target is
+        // only consumed once a listing actually has a frame to land on — the first listing after
+        // a site switch can arrive empty, and taking the seek there dropped it on the floor and
+        // left the pane parked at the end of the day.
+        if let Some(target) = self.seek_target {
             if let Some(i) = self.nearest_frame(target) {
+                self.seek_target = None;
                 self.playhead = i;
                 self.following = false;
                 // A replay bundle brackets the event rather than starting on it: the minutes
@@ -120,10 +124,15 @@ impl Timeline {
                     let to = self
                         .nearest_frame(target + half)
                         .unwrap_or(self.frames.len().saturating_sub(1));
-                    self.replay = Some((from.min(to), to.max(from)));
-                    self.playhead = from.min(to);
-                    self.playing = true;
-                    self.loop_enabled = true;
+                    let (from, to) = (from.min(to), to.max(from));
+                    // A window that collapsed onto one frame is not a replay: a listing that
+                    // thin would loop the same volume forever, which reads as a frozen app.
+                    if to > from {
+                        self.replay = Some((from, to));
+                        self.playhead = from;
+                        self.playing = true;
+                        self.loop_enabled = true;
+                    }
                 }
                 return;
             }
@@ -452,6 +461,37 @@ mod tests {
             "playhead unmoved; window slides on next wrap"
         );
         assert!(t.live_looping());
+    }
+
+    #[test]
+    fn a_seek_survives_a_listing_it_cannot_land_on() {
+        let mut t = Timeline::default();
+        let day_frames = day("KTLX", 288);
+        let target = day_frames[144].date_time().expect("frame time parses");
+        t.seek_target = Some(target);
+        t.replay_span_min = 60;
+        // The first listing after a site switch can arrive empty; the seek must outlive it.
+        t.set_frames(Vec::new(), ("KTLX".into(), t.date));
+        assert_eq!(t.seek_target, Some(target));
+        assert_eq!(t.replay_span_min, 60);
+
+        t.set_frames(day_frames, ("KTLX".into(), t.date));
+        assert_eq!(t.seek_target, None);
+        assert_eq!(t.replay, Some((138, 150)));
+    }
+
+    #[test]
+    fn a_listing_too_thin_to_bracket_does_not_loop_one_frame_forever() {
+        let mut t = Timeline::default();
+        let frames = day("KTLX", 1);
+        let target = frames[0].date_time().expect("frame time parses");
+        t.seek_target = Some(target);
+        t.replay_span_min = 60;
+        t.set_frames(frames, ("KTLX".into(), t.date));
+        // A single-volume listing: both ends of the window land on it. Seek there, but do not
+        // call it a replay.
+        assert_eq!(t.replay, None);
+        assert!(!t.playing);
     }
 
     #[test]
