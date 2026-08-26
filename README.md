@@ -640,7 +640,13 @@ forecasts all work: the Level 2 buckets and `api.weather.gov` allow cross-origin
 requests. **Live chunk streaming works too**, so a browser tab updates sweep by
 sweep during a scan rather than waiting out the whole volume. Settings persist to
 `localStorage`, and alert sounds and spoken warnings play through the browser's
-own audio and `speechSynthesis`. This is a **core viewer**, though, not parity.
+own audio and `speechSynthesis`. It is also **installable**: a manifest and a
+service worker put it on the home screen or in its own window, and precache the
+app shell so a launch with no signal still opens the map instead of a browser
+error. Only the shell is cached — radar and everything through the proxy stay on
+the network, because a cached radar frame is a wrong radar frame.
+
+This is a **core viewer**, though, not parity.
 There is no filesystem, so caches are memory-only and imports and exports are
 out; there is no camera, plugin or GPS support; and any feed whose host refuses
 cross-origin requests simply doesn't load. Anything that needs those is on the

@@ -234,6 +234,7 @@ fn content_type(path: &std::path::Path) -> &'static str {
         Some("wasm") => "application/wasm",
         Some("css") => "text/css; charset=utf-8",
         Some("json") => "application/json",
+        Some("webmanifest") => "application/manifest+json",
         Some("png") => "image/png",
         Some("jpg") | Some("jpeg") => "image/jpeg",
         Some("svg") => "image/svg+xml",
@@ -799,6 +800,12 @@ mod tests {
         assert_eq!(
             content_type(std::path::Path::new("a/b.wasm")),
             "application/wasm"
+        );
+        // A manifest served as octet-stream is a manifest the browser ignores, and the app then
+        // silently stops being installable.
+        assert_eq!(
+            content_type(std::path::Path::new("manifest.webmanifest")),
+            "application/manifest+json"
         );
     }
 

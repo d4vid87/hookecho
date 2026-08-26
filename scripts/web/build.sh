@@ -68,10 +68,19 @@ sed \
   -e "s#dist/hookecho_bg\.wasm#dist/hookecho_bg-$wasm_hash.wasm#g" \
   web/index.src.html > web/index.html
 
+# web/sw.js is generated the same way, from web/sw.src.js: the shell list has to name the hashed
+# assets of *this* build, and the body doubles as the worker's version — a byte-identical script is
+# a worker the browser never bothers to install.
+shell_json="[\"/\",\"/dist/hookecho-$glue_hash.js\",\"/dist/hookecho_bg-$wasm_hash.wasm\",\"/decode-worker.js\",\"/manifest.webmanifest\",\"/icon-192.png\",\"/icon-512.png\"]"
+sed \
+  -e "s#__SHELL__#$shell_json#" \
+  -e "s#__VERSION__#\"$glue_hash-$wasm_hash\"#" \
+  web/sw.src.js > web/sw.js
+
 # A sed that silently matched nothing ships a 404 instead of an app. Assert every dist reference
 # in the deployed HTML actually exists on disk.
-grep -o 'dist/[A-Za-z0-9_.-]*' web/index.html | sort -u | while read -r ref; do
-  [ -f "web/$ref" ] || { echo "build.sh: index.html references missing web/$ref" >&2; exit 1; }
+grep -oh 'dist/[A-Za-z0-9_.-]*' web/index.html web/sw.js | sort -u | while read -r ref; do
+  [ -f "web/$ref" ] || { echo "build.sh: a deployed file references missing web/$ref" >&2; exit 1; }
 done
 
 # Size gate. The wire cost is the compressed size, so that is what is budgeted. Runs here rather
