@@ -14,7 +14,7 @@ import { createHmac } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 
 const REPO = "d4vid87/hookecho";
-const DEMO = "https://hookecho.pages.dev/";
+const DEMO = "https://app.hookecho.io/";
 const tag = process.argv[2];
 const dryRun = process.argv.includes("--dry-run");
 if (!tag) {

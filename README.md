@@ -15,7 +15,7 @@ with `wgpu` + `egui`. Deep per-site Level 2 / Level 3 analysis plus national
 situational awareness, forecast environment overlays, and warning intelligence —
 on Windows, Linux, and Android.
 
-### **[Try it in your browser →](https://hookecho.pages.dev/)**
+### **[hookecho.io](https://hookecho.io/)** · **[Try it in your browser →](https://app.hookecho.io/)**
 
 The whole app as wasm, on live data, with nothing to install.
 
@@ -675,7 +675,7 @@ it is the one that is always up.
 
 ### In a browser
 
-A hosted build of `main` runs at **<https://hookecho.pages.dev/>** if you only
+A hosted build of `main` runs at **<https://app.hookecho.io/>** if you only
 want to look at it.
 
 The app also builds for wasm and runs on a canvas — the same `HookEchoApp`, not
@@ -733,8 +733,10 @@ looking at, archive time included. The share button in the control column does
 the same thing through the platform's share sheet where there is one.
 
 **Cloudflare Pages** — `web/_worker.js/`, deployed by
-`.github/workflows/demo.yml`. That's what `hookecho.pages.dev` is, and it is the
-only host this repo deploys to.
+`.github/workflows/demo.yml`. That's what `app.hookecho.io` is (`hookecho.pages.dev`
+underneath). The website in `site/` deploys the same way from
+`.github/workflows/site.yml`, to a second Pages project at
+<https://hookecho.io/>.
 
 Any other host works the same way if it can run one small function on
 `/proxy/*`. A purely static host cannot: without the proxy the app opens, and
@@ -780,7 +782,7 @@ The browser build takes the same thing in the URL fragment, which never leaves
 the client — no server sees where you are looking:
 
 ```
-https://hookecho.pages.dev/#goto=KTLX,-97.28,35.33,9,VEL
+https://app.hookecho.io/#goto=KTLX,-97.28,35.33,9,VEL
 ```
 
 "Copy link to this view" in the command palette writes the right form for

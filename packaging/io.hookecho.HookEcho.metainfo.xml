@@ -55,7 +55,7 @@
   </screenshots>
 
   <launchable type="desktop-id">hookecho.desktop</launchable>
-  <url type="homepage">https://github.com/d4vid87/hookecho</url>
+  <url type="homepage">https://hookecho.io</url>
   <url type="bugtracker">https://github.com/d4vid87/hookecho/issues</url>
 
   <provides>

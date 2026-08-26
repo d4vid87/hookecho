@@ -2,7 +2,7 @@
 
 Task by task: how to actually do the thing you opened the app for. The
 [README](../README.md) is the tour and the feature list; this is the "how do I…"
-The [browser demo](https://hookecho.pages.dev/) runs everything below except the
+The [browser demo](https://app.hookecho.io/) runs everything below except the
 parts that need a filesystem or GPS.
 
 ## Getting oriented
