@@ -592,6 +592,8 @@ const ALLOWED_HOSTS: &[&str] = &[
     "noaa-mrms-pds.s3.amazonaws.com",
     "noaa-hrrr-bdp-pds.s3.amazonaws.com",
     "noaa-rap-pds.s3.amazonaws.com",
+    "noaa-nam-pds.s3.amazonaws.com",
+    "noaa-nbm-grib2-pds.s3.amazonaws.com",
     "noaa-goes19.s3.amazonaws.com",
     "noaa-goes18.s3.amazonaws.com",
     "noaa-gfs-bdp-pds.s3.amazonaws.com",

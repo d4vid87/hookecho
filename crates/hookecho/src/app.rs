@@ -535,6 +535,20 @@ impl OverlaySource {
                         )
                         .await?
                     }
+                    // NBM's calibrated probability of thunder over the hour ending at `fh`. The
+                    // idx lists the trailing window first, so the plain var+level match already
+                    // picks that one over the run-total windows beside it.
+                    FL::ThunderProb => {
+                        wxdata::hrrr::fetch_field(
+                            http,
+                            wxdata::hrrr::Model::Nbm,
+                            "TSTM",
+                            "surface",
+                            fh.max(1),
+                            0.0,
+                        )
+                        .await?
+                    }
                     _ => {
                         wxdata::hrrr::fetch_field(
                             http,
@@ -1325,6 +1339,8 @@ fn field_refresh_secs(layer: crate::render::FieldLayer) -> u64 {
         // Two global cycles behind it, so the same half hour.
         | FL::ModelDiff => 1800,
         FL::Smoke => 900,
+        // NBM posts hourly; the blend moves no faster than that.
+        FL::ThunderProb => 900,
         // An accumulation moves slower than the grid it accumulates, whatever the window.
         FL::HailSwath => 300,
         // Environment (HRRR CAPE/SRH) refreshes slowly — 15 min.
@@ -9036,7 +9052,9 @@ impl HookEchoApp {
             | FL::ModelDiff
             | FL::GlmFed
             // Built from two grids at once, so it has a fetch block of its own.
-            | FL::SnowBands => return None,
+            | FL::SnowBands
+            // Model layers, fetched on the forecast-hour scrub rather than a product path.
+            | FL::ThunderProb => return None,
         })
     }
 
@@ -14420,7 +14438,12 @@ impl eframe::App for HookEchoApp {
             }
         }
         // HRRR rotation tracks + smoke: same forecast-hour scrub as future radar, own cadences.
-        for layer in [FL::UpdraftHelicity, FL::Smoke, FL::Snowfall] {
+        for layer in [
+            FL::UpdraftHelicity,
+            FL::Smoke,
+            FL::Snowfall,
+            FL::ThunderProb,
+        ] {
             let fh = self.hrrr_fcst_hour;
             let stale = self.fields.get(&layer).is_some_and(|s| {
                 s.show
