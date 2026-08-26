@@ -1,0 +1,120 @@
+---
+import Base from "../layouts/Base.astro";
+import Hero from "../components/Hero.astro";
+import FeatureGrid from "../components/FeatureGrid.astro";
+import ShotGallery from "../components/ShotGallery.astro";
+import Card from "../components/Card.astro";
+
+// The three tiers are the same progressive-disclosure story the app itself tells: the first
+// screen answers "is it going to rain on me", and the depth is there when you go looking.
+const tiers = [
+  {
+    eyebrow: "See the rain",
+    title: "Open it and the radar is already there",
+    body:
+      "It finds your nearest radar and starts the loop. No account, no setup questions, no ads. " +
+      "Watch the rain move, tap anywhere for the forecast at that spot.",
+  },
+  {
+    eyebrow: "Follow the storm",
+    title: "Warnings, lightning and storm tracks on the map",
+    body:
+      "Live watches and warnings, storm reports, lightning, and cells ranked by how nasty they " +
+      "look — with alerts on your phone when one is headed your way.",
+  },
+  {
+    eyebrow: "Chase it",
+    title: "Every tilt, every product, straight from the source",
+    body:
+      "Level 2 volumes at all tilts, velocity and dual-pol, the national MRMS mosaic, HRRR and " +
+      "NAM fields, soundings, cross-sections, archive playback to 1991, and offline chase packs.",
+  },
+];
+
+const shots = [
+  {
+    src: "/shots/mosaic.jpg",
+    alt: "The national MRMS radar mosaic over the United States",
+    caption: "The whole country at once, from the MRMS mosaic.",
+  },
+  {
+    src: "/shots/alerts.jpg",
+    alt: "Warning polygons, storm reports and spotter positions on the map",
+    caption: "Warnings, storm reports and spotters, live.",
+  },
+  {
+    src: "/shots/alltilts.jpg",
+    alt: "Four radar tilts of the same storm side by side",
+    caption: "Every tilt of the volume, side by side.",
+  },
+  {
+    src: "/shots/hrrr.jpg",
+    alt: "HRRR model fields drawn over the map with severe composite parameters",
+    caption: "HRRR and NAM fields, with the severe parameters.",
+  },
+];
+---
+
+<Base
+  title="HookEcho — weather radar for everyone"
+  description="A free, open-source weather radar app for Windows, macOS, Linux, Android and the browser. Live NEXRAD radar, warnings and storm tracking, straight from the public NOAA feeds."
+>
+  <Hero
+    title="Weather radar for everyone"
+    tagline="Live NEXRAD radar, warnings and storm tracking — straight from the public NOAA feeds to your own machine."
+  />
+
+  <section>
+    <div class="wrap">
+      <p class="eyebrow">What you get</p>
+      <h2>Simple on the surface. Deep when you need it.</h2>
+      <FeatureGrid features={tiers} />
+    </div>
+  </section>
+
+  <section class="alt">
+    <div class="wrap">
+      <p class="eyebrow">A look around</p>
+      <h2>The same data the professionals use</h2>
+      <ShotGallery shots={shots} />
+    </div>
+  </section>
+
+  <section>
+    <div class="wrap">
+      <p class="eyebrow">Everywhere you are</p>
+      <h2>One app, all your screens</h2>
+      <p>
+        Native builds for Windows, macOS and Linux, an Android app for the field, and a full
+        browser version with nothing to install.
+      </p>
+      <div class="platforms">
+        <a class="btn btn-primary" href="https://app.hookecho.io">Try it in the browser</a>
+        <a class="btn" href="https://github.com/d4vid87/hookecho/releases/latest">
+          Windows · macOS · Linux · Android
+        </a>
+      </div>
+    </div>
+  </section>
+
+  <section class="alt">
+    <div class="wrap">
+      <p class="eyebrow">More from us</p>
+      <h2>WeatherDesk</h2>
+      <Card
+        title="Your own weather station, on your own dashboard"
+        href="https://github.com/d4vid87/weatherdesk"
+      >
+        <p>
+          A self-hosted dashboard for a Tempest weather station: live gauges, history and
+          forecasts on your own hardware. The radar inside it is HookEcho.
+        </p>
+      </Card>
+    </div>
+  </section>
+</Base>
+
+<style>
+  .alt { background: var(--bg-deep); border-block: 1px solid var(--stroke); }
+  .platforms { display: flex; gap: 0.75rem; flex-wrap: wrap; margin-top: 1.4rem; }
+</style>
