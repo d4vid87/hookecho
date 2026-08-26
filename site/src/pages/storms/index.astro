@@ -1,0 +1,58 @@
+---
+import { getCollection } from "astro:content";
+import Base from "../../layouts/Base.astro";
+
+const storms = (await getCollection("storms")).sort(
+  (a, b) => b.data.date.valueOf() - a.data.date.valueOf(),
+);
+---
+
+<Base
+  title="Storms on the radar | HookEcho"
+  description="Joplin, El Reno, Moore, Tuscaloosa, Greensburg, Katrina and the 2020 derecho — replay the archived NEXRAD volumes of the storms that defined modern radar, one link each."
+>
+  <section>
+    <div class="wrap">
+      <p class="eyebrow">Storms on the radar</p>
+      <h1>The storms that taught us to read radar</h1>
+      <p class="lede">
+        HookEcho's archive goes back to 1991, which means every one of these is still there to
+        replay volume by volume. Each page opens the app on the right radar, at the right minute,
+        on the product that makes the storm legible.
+      </p>
+
+      <ul class="list">
+        {
+          storms.map((storm) => (
+            <li>
+              <a href={`/storms/${storm.id}/`}>
+                <h2>{storm.data.title}</h2>
+                <p>{storm.data.description}</p>
+                <span class="meta">{storm.data.site}</span>
+              </a>
+            </li>
+          ))
+        }
+      </ul>
+    </div>
+  </section>
+</Base>
+
+<style>
+  .lede { font-size: 1.1rem; color: var(--text-dim); max-width: 62ch; }
+  .list { list-style: none; padding: 0; margin: 2.2rem 0 0; display: grid; gap: 1rem; }
+  .list a {
+    display: block;
+    padding: 1.2rem;
+    border: 1px solid var(--stroke);
+    border-radius: var(--radius);
+    background: var(--bg-deep);
+    text-decoration: none;
+    color: var(--text-dim);
+    transition: border-color var(--dur) ease, transform var(--dur) var(--spring);
+  }
+  .list a:hover { border-color: var(--accent); transform: translateY(-2px); }
+  .list h2 { margin: 0 0 0.4rem; font-size: 1.15rem; color: var(--text); }
+  .list p { margin: 0; max-width: 70ch; }
+  .meta { display: inline-block; margin-top: 0.6rem; font-size: 0.85rem; color: var(--accent); }
+</style>

@@ -1,0 +1,57 @@
+---
+import { getCollection, render } from "astro:content";
+import Base from "../../layouts/Base.astro";
+
+export async function getStaticPaths() {
+  const storms = await getCollection("storms");
+  return storms.map((storm) => ({ params: { slug: storm.id }, props: { storm } }));
+}
+
+const { storm } = Astro.props;
+const { Content } = await render(storm);
+const s = storm.data;
+
+// The app's #goto vocabulary: SITE,lon,lat,zoom then order-independent extras (a timestamp, a
+// moment code, a tilt, srv). Built from frontmatter so no storm page hand-writes a URL.
+const goto = [s.site, s.lon, s.lat, s.zoom, s.at, ...s.extras].join(",");
+const appLink = `https://app.hookecho.io/#goto=${goto}`;
+const when = s.date.toLocaleDateString("en-US", {
+  year: "numeric",
+  month: "long",
+  day: "numeric",
+  timeZone: "UTC",
+});
+---
+
+<Base title={`${s.title} — on the radar | HookEcho`} description={s.description} image={s.image}>
+  <article>
+    <div class="wrap">
+      <p class="eyebrow"><a href="/storms/">Storms on the radar</a> · {when}</p>
+      <h1>{s.title}</h1>
+
+      <div class="cta">
+        <a class="btn btn-primary" href={appLink}>Replay it in your browser</a>
+        <a class="btn" href={`/radar/${s.site.toLowerCase()}/`}>{s.site} radar</a>
+      </div>
+      <p class="dim">
+        Opens HookEcho on {s.site} at {s.at.replace("T", " ").replace("Z", " UTC")} and loads the
+        archived volumes for that day. The archive goes back to 1991.
+      </p>
+
+      <div class="prose"><Content /></div>
+
+      <p class="dim">
+        Archive volumes come from NOAA's public NEXRAD archive on AWS, the same source the
+        National Weather Service publishes. Nothing here is a re-render of someone else's picture.
+      </p>
+    </div>
+  </article>
+</Base>
+
+<style>
+  .eyebrow a { color: inherit; }
+  .cta { display: flex; gap: 0.75rem; flex-wrap: wrap; margin: 1.4rem 0 1rem; }
+  .dim { color: var(--text-dim); font-size: 0.92rem; max-width: 62ch; }
+  .prose { max-width: 62ch; margin-top: 2rem; }
+  .prose :global(p) { margin: 1rem 0; }
+</style>

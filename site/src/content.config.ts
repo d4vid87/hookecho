@@ -24,4 +24,26 @@ const blog = defineCollection({
   }),
 });
 
-export const collections = { docs, blog };
+// Historic storms: the frontmatter is the archive deep link, spelled out in fields rather than a
+// pasted URL, so the app's #goto vocabulary lives in one place (storms/[...slug].astro).
+const storms = defineCollection({
+  loader: glob({ pattern: "**/*.md", base: "./src/content/storms" }),
+  schema: z.object({
+    title: z.string(),
+    description: z.string(),
+    /** When the storm happened — used for sorting and for the page's dateline. */
+    date: z.coerce.date(),
+    /** NEXRAD site that watched it, e.g. "KTLX". Must have a page under /radar/. */
+    site: z.string(),
+    lon: z.number(),
+    lat: z.number(),
+    zoom: z.number(),
+    /** RFC3339 volume time the archive opens on. */
+    at: z.string(),
+    /** Extra #goto tokens: a moment code (VEL, CC…), a tilt number, `srv`. */
+    extras: z.array(z.string()).default([]),
+    image: z.string().optional(),
+  }),
+});
+
+export const collections = { docs, blog, storms };
