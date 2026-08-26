@@ -22,6 +22,7 @@ const next = at >= 0 && at < pages.length - 1 ? pages[at + 1] : undefined;
   <div class="wrap docs">
     <nav class="side" aria-label="Documentation">
       <p class="eyebrow">Docs</p>
+      <div id="search"></div>
       <ul>
         {pages.map((p) => (
           <li>
@@ -33,7 +34,7 @@ const next = at >= 0 && at < pages.length - 1 ? pages[at + 1] : undefined;
       </ul>
     </nav>
 
-    <article class="prose">
+    <article class="prose" data-pagefind-body>
       <h1>{title}</h1>
       <slot />
 
@@ -50,6 +51,18 @@ const next = at >= 0 && at < pages.length - 1 ? pages[at + 1] : undefined;
     </article>
   </div>
 </Base>
+
+<!-- Pagefind builds its bundle from dist after astro build (the postbuild script), so these two
+     files do not exist during dev and 404 there. is:inline keeps Vite from trying to resolve a
+     path that is not on disk yet. Failing quietly is right: the sidebar is the fallback. -->
+<link rel="stylesheet" href="/pagefind/pagefind-ui.css" />
+<script is:inline type="module">
+  import("/pagefind/pagefind-ui.js")
+    .then(({ PagefindUI }) => {
+      new PagefindUI({ element: "#search", showSubResults: true, showImages: false });
+    })
+    .catch(() => {});
+</script>
 
 <style>
   .docs {
