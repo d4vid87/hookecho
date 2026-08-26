@@ -478,6 +478,14 @@ impl HookEchoApp {
                         self.panel_open = !alerts_on;
                         self.show_alert_panel = true;
                     }
+                    // Sharing where you are looking is the thing people do with a radar and had
+                    // no button for — only Ctrl+K knew about it.
+                    if square_btn(ui, egui_phosphor::regular::SHARE_NETWORK, false, accent)
+                        .named("Share this view")
+                        .clicked()
+                    {
+                        self.apply_palette(crate::app::PaletteAction::CopyViewLink, ctx);
+                    }
                     // Count over the bell's top-right corner, coloured by the worst alert in
                     // view — the same escalation the alert panel sorts by.
                     if alert_count > 0 {
