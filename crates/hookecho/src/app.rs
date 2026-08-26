@@ -2060,6 +2060,9 @@ pub struct HookEchoApp {
     chase_pos: Option<(f64, f64)>,
     /// Breadcrumb track of this session's fixes (see `settings.chase_log`).
     chase_track: crate::chaselog::Track,
+    /// The site last warmed ahead of a chase handoff, and when — so a fix every two seconds does
+    /// not queue a download every two seconds.
+    warmed_site: Option<(String, Instant)>,
     /// Tornado climatology: the loaded SPC track database (lazy), a pending async load, the last
     /// query result + its center, a window-open flag, and a query queued while the CSV loads.
     climo_tracks: Option<std::sync::Arc<Vec<wxdata::torclimo::TornadoTrack>>>,
@@ -2920,6 +2923,7 @@ impl HookEchoApp {
             recent_hits: Vec::new(),
             chase_pos: None,
             chase_track: crate::chaselog::Track::default(),
+            warmed_site: None,
             climo_tracks: None,
             climo_rx: None,
             climo_hits: Vec::new(),
@@ -5271,6 +5275,37 @@ impl HookEchoApp {
             self.goto_view(&site, lon, lat, zoom, None);
         }
         self.chase_applied = Some((lon, lat));
+        self.warm_next_site();
+    }
+
+    /// Pull the next site's newest volume into the cache before the handoff needs it.
+    ///
+    /// Only ever one download ahead, and only once per site: this runs off a GPS fix, which on a
+    /// moving car is every couple of seconds. Needs the chase log switched on — the prediction
+    /// reads the breadcrumb track, and a single fix has no direction in it.
+    fn warm_next_site(&mut self) {
+        const EVERY: std::time::Duration = std::time::Duration::from_secs(120);
+        if !self.settings.chase_log {
+            return;
+        }
+        let current = self.views[self.active].site.clone();
+        let Some(site) = crate::chase::next_site(
+            &self.chase_track,
+            current.as_deref(),
+            crate::chase::LOOKAHEAD_MIN,
+        ) else {
+            return;
+        };
+        if self
+            .warmed_site
+            .as_ref()
+            .is_some_and(|(s, at)| *s == site && at.elapsed() < EVERY)
+        {
+            return;
+        }
+        self.warmed_site = Some((site.clone(), Instant::now()));
+        log::debug!("chase: warming {site} ahead of the handoff");
+        self.spawner.spawn(crate::chase::warm(site));
     }
 
     /// Start the Google sign-in: bind a loopback port, send the browser to Google, and wait for
