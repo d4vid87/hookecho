@@ -85,7 +85,7 @@ jobs:
 
       - name: Smoke-test the AppImage
         run: |
-          APPIMAGE_EXTRACT_AND_RUN=1 ./dist/Hook_Echo-WX-x86_64.AppImage \
+          APPIMAGE_EXTRACT_AND_RUN=1 ./dist/HookEcho-x86_64.AppImage \
             --headless-icon /tmp/icon.png
           test -s /tmp/icon.png
 
@@ -103,8 +103,8 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Hook_Echo-WX-x86_64.AppImage
-          path: dist/Hook_Echo-WX-x86_64.AppImage
+          name: HookEcho-x86_64.AppImage
+          path: dist/HookEcho-x86_64.AppImage
 
       - name: Upload .deb artifact
         uses: actions/upload-artifact@v4
@@ -117,7 +117,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
-        run: gh release upload "$TAG" dist/Hook_Echo-WX-x86_64.AppImage dist/*.deb --clobber
+        run: gh release upload "$TAG" dist/HookEcho-x86_64.AppImage dist/*.deb --clobber
 
       # Every push to main refreshes a rolling "latest" prerelease, so the Releases page always
       # carries current builds. Before this, artifacts only ever reached Releases on a tag push,
@@ -134,7 +134,7 @@ jobs:
             Rolling build of `main` — rebuilt and re-published on every push, so this
             is always the newest code. Older releases are kept as drafts.
           files: |
-            dist/Hook_Echo-WX-x86_64.AppImage
+            dist/HookEcho-x86_64.AppImage
             dist/*.deb
 
   windows:
@@ -190,7 +190,7 @@ jobs:
             -dAppVersion=${{ steps.ver.outputs.numeric }} \
             -dExePath=target/release/hookecho.exe \
             -o dist/hookecho.wixobj packaging/windows/main.wxs
-          light -nologo -o dist/Hook_Echo-WX-x86_64.msi dist/hookecho.wixobj
+          light -nologo -o dist/HookEcho-x86_64.msi dist/hookecho.wixobj
 
       # Inno Setup 6 is preinstalled on windows-latest (not on PATH). pwsh avoids
       # Git-bash mangling of the /D switches.
@@ -210,7 +210,7 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/')
         shell: bash
         run: |
-          scripts/release/stamp-manifests.sh "${GITHUB_REF_NAME#v}" dist/Hook_Echo-WX-setup-x86_64.exe
+          scripts/release/stamp-manifests.sh "${GITHUB_REF_NAME#v}" dist/HookEcho-setup-x86_64.exe
 
       - name: Upload the store manifests
         if: startsWith(github.ref, 'refs/tags/')
@@ -225,15 +225,15 @@ jobs:
           name: hookecho-windows-x86_64
           path: |
             dist/hookecho-windows-x86_64.zip
-            dist/Hook_Echo-WX-x86_64.msi
-            dist/Hook_Echo-WX-setup-x86_64.exe
+            dist/HookEcho-x86_64.msi
+            dist/HookEcho-setup-x86_64.exe
 
       - name: Attach to release
         if: startsWith(github.ref, 'refs/tags/')
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
-        run: gh release upload "$TAG" dist/hookecho-windows-x86_64.zip dist/Hook_Echo-WX-x86_64.msi dist/Hook_Echo-WX-setup-x86_64.exe --clobber
+        run: gh release upload "$TAG" dist/hookecho-windows-x86_64.zip dist/HookEcho-x86_64.msi dist/HookEcho-setup-x86_64.exe --clobber
 
       # Every push to main refreshes a rolling "latest" prerelease, so the Releases page always
       # carries current builds. Before this, artifacts only ever reached Releases on a tag push,
@@ -251,8 +251,8 @@ jobs:
             is always the newest code. Older releases are kept as drafts.
           files: |
             dist/hookecho-windows-x86_64.zip
-            dist/Hook_Echo-WX-x86_64.msi
-            dist/Hook_Echo-WX-setup-x86_64.exe
+            dist/HookEcho-x86_64.msi
+            dist/HookEcho-setup-x86_64.exe
 
   macos:
     name: macOS app (experimental)
@@ -329,7 +329,7 @@ jobs:
           set -euo pipefail
           codesign --force --deep --sign - dist/HookEcho.app
           codesign -dv dist/HookEcho.app
-          ditto -c -k --keepParent dist/HookEcho.app dist/Hook_Echo-WX-macos.zip
+          ditto -c -k --keepParent dist/HookEcho.app dist/HookEcho-macos.zip
 
       - name: Smoke-test
         run: |
@@ -354,15 +354,15 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Hook_Echo-WX-macos
-          path: dist/Hook_Echo-WX-macos.zip
+          name: HookEcho-macos
+          path: dist/HookEcho-macos.zip
 
       - name: Attach to release
         if: startsWith(github.ref, 'refs/tags/')
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
-        run: gh release upload "$TAG" dist/Hook_Echo-WX-macos.zip --clobber
+        run: gh release upload "$TAG" dist/HookEcho-macos.zip --clobber
 
       - name: Update rolling release
         if: github.ref == 'refs/heads/main'
@@ -375,7 +375,7 @@ jobs:
           body: |
             Rolling build of `main` — rebuilt and re-published on every push, so this
             is always the newest code. Older releases are kept as drafts.
-          files: dist/Hook_Echo-WX-macos.zip
+          files: dist/HookEcho-macos.zip
 
   android:
     name: Android APK (arm64-v8a)
@@ -444,27 +444,27 @@ jobs:
           # Without the keystore secrets (forks) AGP emits app-release-unsigned.apk instead.
           apk=android/app/build/outputs/apk/release/app-release.apk
           [ -f "$apk" ] || apk=android/app/build/outputs/apk/release/app-release-unsigned.apk
-          cp "$apk" Hook_Echo-WX-arm64-v8a.apk
-          cp android/app/build/outputs/bundle/release/app-release.aab Hook_Echo-WX-arm64-v8a.aab
+          cp "$apk" HookEcho-arm64-v8a.apk
+          cp android/app/build/outputs/bundle/release/app-release.aab HookEcho-arm64-v8a.aab
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Hook_Echo-WX-arm64-v8a.apk
-          path: Hook_Echo-WX-arm64-v8a.apk
+          name: HookEcho-arm64-v8a.apk
+          path: HookEcho-arm64-v8a.apk
 
       - name: Upload AAB artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Hook_Echo-WX-arm64-v8a.aab
-          path: Hook_Echo-WX-arm64-v8a.aab
+          name: HookEcho-arm64-v8a.aab
+          path: HookEcho-arm64-v8a.aab
 
       - name: Attach to release
         if: startsWith(github.ref, 'refs/tags/')
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
-        run: gh release upload "$TAG" Hook_Echo-WX-arm64-v8a.apk --clobber
+        run: gh release upload "$TAG" HookEcho-arm64-v8a.apk --clobber
 
       # Every push to main refreshes a rolling "latest" prerelease, so the Releases page always
       # carries current builds. Before this, artifacts only ever reached Releases on a tag push,
@@ -480,7 +480,7 @@ jobs:
           body: |
             Rolling build of `main` — rebuilt and re-published on every push, so this
             is always the newest code. Older releases are kept as drafts.
-          files: Hook_Echo-WX-arm64-v8a.apk
+          files: HookEcho-arm64-v8a.apk
 
   # The image people actually run the server from. Built on every push to main so `:latest`
   # tracks the rolling release, and tagged with the version on a `v*` push.

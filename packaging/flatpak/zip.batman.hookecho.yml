@@ -12,7 +12,7 @@
 # (from https://github.com/flatpak/flatpak-builder-tools/tree/master/cargo)
 app-id: zip.batman.hookecho
 runtime: org.freedesktop.Platform
-runtime-version: '24.08'
+runtime-version: '25.08'
 sdk: org.freedesktop.Sdk
 sdk-extensions:
   - org.freedesktop.Sdk.Extension.rust-stable
@@ -49,7 +49,16 @@ modules:
       - cargo --offline build --release -p hookecho
       - install -Dm755 target/release/hookecho /app/bin/hookecho
       - install -Dm644 packaging/hookecho.desktop /app/share/applications/zip.batman.hookecho.desktop
+      # flatpak-builder only exports files under /app/share whose name starts with the app id, so
+      # the desktop file and the icons are installed as `zip.batman.hookecho`. Every other
+      # packager installs them as plain `hookecho`, which is what the committed copies say — so
+      # the two id references inside them are rewritten here rather than renamed repo-wide.
+      - sed -i 's|^Icon=hookecho$|Icon=zip.batman.hookecho|'
+        /app/share/applications/zip.batman.hookecho.desktop
       - install -Dm644 packaging/zip.batman.hookecho.metainfo.xml
+        /app/share/metainfo/zip.batman.hookecho.metainfo.xml
+      - sed -i 's|<launchable type="desktop-id">hookecho.desktop</launchable>|<launchable
+        type="desktop-id">zip.batman.hookecho.desktop</launchable>|'
         /app/share/metainfo/zip.batman.hookecho.metainfo.xml
       # Icons are drawn by the binary that was just built, one per size.
       - for px in 48 64 128 256 512; do

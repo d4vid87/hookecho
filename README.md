@@ -32,19 +32,19 @@ built from NOAA's free GRIB grids, so it needs no API key.</sub>
 
 ## Install
 
-- **Linux**: download `Hook_Echo-WX-x86_64.AppImage` from
+- **Linux**: download `HookEcho-x86_64.AppImage` from
   [Releases](../../releases), `chmod +x`, run. Debian/Ubuntu users can install
   `hookecho_<version>_amd64.deb` from the same place
   (`sudo apt install ./hookecho_*.deb`) to get the menu entry and icon.
 - **Windows**: grab the installer from [Releases](../../releases) —
-  `Hook_Echo-WX-setup-x86_64.exe` (setup wizard) or `Hook_Echo-WX-x86_64.msi`
+  `HookEcho-setup-x86_64.exe` (setup wizard) or `HookEcho-x86_64.msi`
   (MSI, for scripted/enterprise installs). A portable
   `hookecho-windows-x86_64.zip` is there too: unzip, run `hookecho.exe`.
-- **Android** (arm64, Android 10+): sideload `Hook_Echo-WX-arm64-v8a.apk` from
+- **Android** (arm64, Android 10+): sideload `HookEcho-arm64-v8a.apk` from
   [Releases](../../releases) (`adb install -r …`, or open it on-device with
   "install unknown apps" enabled). The same Rust app as desktop,
   with a Material 3 phone UI — see [`android/README.md`](android/README.md).
-- **macOS** (experimental): `Hook_Echo-WX-macos.zip` from
+- **macOS** (experimental): `HookEcho-macos.zip` from
   [Releases](../../releases). The build is made and smoke-tested in CI but has
   never been run on real Apple hardware, and it is ad-hoc signed, so Gatekeeper
   will ask before it opens. Homebrew users can build it instead:

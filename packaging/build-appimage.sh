@@ -8,7 +8,7 @@
 # would auto-bundle is on the AppImage excludelist anyway.
 #
 # Usage: packaging/build-appimage.sh
-# Output: dist/Hook_Echo-WX-x86_64.AppImage
+# Output: dist/HookEcho-x86_64.AppImage
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -16,7 +16,7 @@ cd "$ROOT"
 
 ARCH=x86_64
 APPDIR="$ROOT/target/appimage/HookEcho.AppDir"
-OUT="$ROOT/dist/Hook_Echo-WX-${ARCH}.AppImage"
+OUT="$ROOT/dist/HookEcho-${ARCH}.AppImage"
 TOOL="$ROOT/packaging/appimagetool-${ARCH}.AppImage"
 
 echo "==> building release binary"
