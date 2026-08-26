@@ -12,10 +12,11 @@ const { title, description, image = "/shots/alltilts.jpg" } = Astro.props;
 const url = new URL(Astro.url.pathname, Astro.site);
 const social = new URL(image, Astro.site);
 
-// Waves W3–W4 add their pages here; a link is only listed once the page exists, so the
+// Wave W4 adds its pages here; a link is only listed once the page exists, so the
 // build's link check stays meaningful.
 const nav = [
   { href: "/docs/", label: "Docs" },
+  { href: "/blog/", label: "Blog" },
   { href: "https://app.hookecho.io", label: "Open in browser" },
   { href: "https://github.com/d4vid87/hookecho/releases/latest", label: "Download" },
   { href: "https://github.com/d4vid87/hookecho", label: "GitHub" },
@@ -31,6 +32,7 @@ const nav = [
     <meta name="description" content={description} />
     <link rel="canonical" href={url} />
     <link rel="icon" href="/logo.png" type="image/png" />
+    <link rel="alternate" type="application/rss+xml" title="HookEcho" href="/rss.xml" />
     <meta name="theme-color" content="#14161b" />
     <link
       rel="preload"

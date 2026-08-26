@@ -12,4 +12,16 @@ const docs = defineCollection({
   }),
 });
 
-export const collections = { docs };
+// Posts are dated rather than ordered; the index and the feed both sort on `date`.
+const blog = defineCollection({
+  loader: glob({ pattern: "**/*.md", base: "./src/content/blog" }),
+  schema: z.object({
+    title: z.string(),
+    description: z.string(),
+    date: z.coerce.date(),
+    /** Absolute-from-root path to the social card image, if the post has one of its own. */
+    image: z.string().optional(),
+  }),
+});
+
+export const collections = { docs, blog };

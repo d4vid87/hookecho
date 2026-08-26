@@ -1,0 +1,55 @@
+---
+import Base from "./Base.astro";
+
+interface Props {
+  title: string;
+  description: string;
+  date: Date;
+  image?: string;
+}
+
+const { title, description, date, image } = Astro.props;
+const stamp = date.toISOString().slice(0, 10);
+// Frontmatter dates parse as UTC midnight; format in UTC too, or a machine west of
+// Greenwich renders every post a day early.
+const pretty = date.toLocaleDateString("en-GB", {
+  day: "numeric",
+  month: "long",
+  year: "numeric",
+  timeZone: "UTC",
+});
+---
+
+<Base title={`${title} — HookEcho`} description={description} image={image}>
+  <article class="wrap post">
+    <p class="eyebrow"><a href="/blog/">Blog</a> · <time datetime={stamp}>{pretty}</time></p>
+    <h1>{title}</h1>
+    <p class="lede">{description}</p>
+    {image && <img class="lede-shot" src={image} alt="" width="1600" height="1000" />}
+    <slot />
+  </article>
+</Base>
+
+<style>
+  .post { max-width: 780px; padding: 3rem 0 4.5rem; }
+  .eyebrow a { color: var(--text-dim); }
+  .lede { font-size: 1.15rem; color: var(--text-dim); }
+  .lede-shot {
+    display: block;
+    width: 100%;
+    border-radius: var(--radius);
+    border: 1px solid var(--stroke);
+    margin: 2rem 0 2.5rem;
+  }
+  .post :global(h2) { margin-top: 2.4rem; }
+  .post :global(ul) { padding-left: 1.2rem; max-width: var(--measure); }
+  .post :global(li) { margin-bottom: 0.5rem; }
+  .post :global(strong) { color: var(--text); font-weight: 600; }
+  .post :global(:not(pre) > code) {
+    background: var(--faint);
+    border: 1px solid var(--stroke);
+    border-radius: 5px;
+    padding: 0.1em 0.35em;
+    font-size: 0.9em;
+  }
+</style>
