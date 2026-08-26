@@ -41,11 +41,10 @@ impl FirstRun {
         self.refused = false;
     }
 
-    /// Ask the platform where we are. Same two sources chase mode uses — Android polls the system
-    /// LocationManager over JNI, desktop streams from a local gpsd.
+    /// Ask the platform where we are. The same sources chase mode uses — Android polls the system
+    /// LocationManager over JNI, desktop streams from a local gpsd, the web watches the browser's
+    /// own Geolocation.
     fn locate(&mut self) {
-        // ponytail: no web arm — the browser's Geolocation API is I5's job, and `gps::spawn`'s
-        // TcpStream can't work there. The button isn't drawn on wasm until it does.
         self.rx = if cfg!(target_os = "android") {
             crate::platform::start_location()
         } else {
@@ -94,9 +93,7 @@ pub fn show(ctx: &egui::Context, fr: &mut FirstRun, settings: &mut Settings) -> 
             ui.add_space(8.0);
 
             ui.horizontal(|ui| {
-                if cfg!(target_arch = "wasm32") {
-                    // Nothing to ask: the web build has no position source yet.
-                } else if fr.rx.is_some() {
+                if fr.rx.is_some() {
                     // getLastKnownLocation is null until the first fix lands, and gpsd can take a
                     // few seconds to see a satellite. Say so rather than look stuck.
                     ui.spinner();
@@ -107,7 +104,7 @@ pub fn show(ctx: &egui::Context, fr: &mut FirstRun, settings: &mut Settings) -> 
                         "{} Use my location",
                         egui_phosphor::regular::CROSSHAIR
                     ))
-                    .on_hover_text(if cfg!(target_os = "android") {
+                    .on_hover_text(if cfg!(any(target_os = "android", target_arch = "wasm32")) {
                         "Asks for the location permission, picks the nearest radar, and gets out of the way"
                     } else {
                         "Reads a local gpsd on :2947 and picks the nearest radar"
@@ -118,7 +115,7 @@ pub fn show(ctx: &egui::Context, fr: &mut FirstRun, settings: &mut Settings) -> 
                 }
             });
             if fr.refused {
-                ui.small(if cfg!(target_os = "android") {
+                ui.small(if cfg!(any(target_os = "android", target_arch = "wasm32")) {
                     "No position yet \u{2014} pick a radar below instead."
                 } else {
                     "No gpsd on this machine \u{2014} pick a radar below instead."

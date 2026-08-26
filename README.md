@@ -640,7 +640,9 @@ forecasts all work: the Level 2 buckets and `api.weather.gov` allow cross-origin
 requests. **Live chunk streaming works too**, so a browser tab updates sweep by
 sweep during a scan rather than waiting out the whole volume. Settings persist to
 `localStorage`, and alert sounds and spoken warnings play through the browser's
-own audio and `speechSynthesis`. It is also **installable**: a manifest and a
+own audio and `speechSynthesis`. "Use my location" and chase follow-me work too,
+off the browser's own Geolocation — asked for when you press the button, never
+before. It is also **installable**: a manifest and a
 service worker put it on the home screen or in its own window, and precache the
 app shell so a launch with no signal still opens the map instead of a browser
 error. Basemap tiles are cached too, so a second visit draws the map without
@@ -654,7 +656,7 @@ browser's own file picker and downloads — an imported `.pal` has no path to li
 at, so its content rides in the settings and survives a reload like everything
 else there. There is still no filesystem, though, so volume caches are
 memory-only and marker icons and custom alert sounds (both of which are files the
-app reopens later) stay off; there is no camera, plugin or GPS support; and any feed whose host refuses
+app reopens later) stay off; there is no camera or plugin support; and any feed whose host refuses
 cross-origin requests simply doesn't load. Anything that needs those is on the
 desktop and Android builds.
 
