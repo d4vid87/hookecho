@@ -26,6 +26,8 @@ pub enum Network {
     Metar,
     Tempest,
     WeatherUnderground,
+    /// Synoptic Data's mesonet aggregation — state, university and DOT networks.
+    Synoptic,
 }
 
 impl Network {
@@ -34,6 +36,7 @@ impl Network {
             Network::Metar => "METAR",
             Network::Tempest => "Tempest",
             Network::WeatherUnderground => "Weather Underground",
+            Network::Synoptic => "Mesonet",
         }
     }
 }
@@ -364,6 +367,7 @@ pub async fn fetch_all(
     metars: &[crate::metar::SurfaceOb],
     tempest: &str,
     wu: &str,
+    synoptic: &str,
     lat: f64,
     lon: f64,
 ) -> Vec<StationOb> {
@@ -397,6 +401,14 @@ pub async fn fetch_all(
                 }
             }
             Err(e) => log::warn!("wu stations near {lat},{lon}: {e}"),
+        }
+    }
+
+    if !synoptic.is_empty() {
+        // One request for the whole circle, unlike the per-station networks above.
+        match crate::synoptic::fetch_near(client, synoptic, lat, lon, 60, 60).await {
+            Ok(obs) => out.extend(obs),
+            Err(e) => log::warn!("synoptic stations near {lat},{lon}: {e}"),
         }
     }
 
@@ -491,7 +503,7 @@ mod tests {
     async fn live_tempest_stations_report() {
         let token = std::env::var("HOOKECHO_TEMPEST_TOKEN").expect("set HOOKECHO_TEMPEST_TOKEN");
         let client = reqwest::Client::new();
-        let obs = fetch_all(&client, &[], &token, "", 33.0, -96.0).await;
+        let obs = fetch_all(&client, &[], &token, "", "", 33.0, -96.0).await;
         for o in &obs {
             println!(
                 "{} {} {:.4},{:.4} temp={:?}",
@@ -503,5 +515,21 @@ mod tests {
             );
         }
         assert!(!obs.is_empty(), "token saw no stations");
+    }
+
+    /// Live Synoptic check. `HOOKECHO_SYNOPTIC_TOKEN=... cargo test -p wxdata live_synoptic -- --ignored --nocapture`
+    #[tokio::test]
+    #[ignore]
+    async fn live_synoptic_mesonets_report() {
+        let token = std::env::var("HOOKECHO_SYNOPTIC_TOKEN").expect("set HOOKECHO_SYNOPTIC_TOKEN");
+        let client = reqwest::Client::new();
+        // Norman: as dense a mesonet as the country has.
+        let obs = crate::synoptic::fetch_near(&client, &token, 35.22, -97.44, 60, 60)
+            .await
+            .expect("synoptic answered");
+        assert!(!obs.is_empty(), "no stations came back");
+        for o in obs.iter().take(10) {
+            println!("{} {} temp={:?} gust={:?}", o.id, o.name, o.temp_c, o.gust_kt);
+        }
     }
 }

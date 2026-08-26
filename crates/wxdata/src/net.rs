@@ -26,6 +26,9 @@ pub const CORS_OK: &[&str] = &[
     "api.open-meteo.com",
     "api.mapbox.com",
     "api.maptiler.com",
+    // Same reason as the tile providers: the request carries the user's Synoptic token, and the
+    // proxy is a shared cache. Synoptic sends `Access-Control-Allow-Origin: *`, so this works.
+    "api.synopticdata.com",
     "unidata-nexrad-level2-chunks.s3.amazonaws.com",
 ];
 
