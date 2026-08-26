@@ -50,6 +50,7 @@ pub mod spc;
 pub mod spoken;
 pub mod spotters;
 pub mod stations;
+pub mod synoptic;
 pub mod task;
 pub mod tds;
 pub mod tfr;

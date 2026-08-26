@@ -584,6 +584,12 @@ fn basemaps_tab(ui: &mut egui::Ui, settings: &mut Settings) {
     key_field(ui, "WeatherFlow Tempest token", &mut settings.tempest_token);
     ui.add_space(8.0);
     key_field(ui, "Weather Underground API key", &mut settings.wu_key);
+    ui.add_space(8.0);
+    key_field(ui, "Synoptic Data token", &mut settings.synoptic_token);
+    ui.weak(
+        "Synoptic aggregates the mesonets \u{2014} state, university and highway-department \
+         networks. The stations actually inside the storm, rather than at the airport.",
+    );
     ui.add_space(12.0);
     ui.separator();
     ui.label("Crowd reports");

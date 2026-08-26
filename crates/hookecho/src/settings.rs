@@ -170,6 +170,10 @@ pub struct Settings {
     /// Weather Underground API key — adds nearby PWS stations to the live station cards.
     #[serde(default)]
     pub wu_key: String,
+    /// Synoptic Data token — adds the mesonets (state, university, DOT) to the station cards.
+    /// Held locally only, and never sent through the web build's proxy.
+    #[serde(default)]
+    pub synoptic_token: String,
     /// AirNow API key — turns on the AQI station layer. Held locally, same as the other keys.
     #[serde(default)]
     pub airnow_key: String,
@@ -1004,6 +1008,7 @@ impl Default for Settings {
             maptiler_key: String::new(),
             tempest_token: String::new(),
             wu_key: String::new(),
+            synoptic_token: String::new(),
             field_opacity: Default::default(),
             airnow_key: String::new(),
             windy_key: String::new(),
@@ -1450,6 +1455,7 @@ mod tests {
             mapbox_key: "pk.test".to_string(),
             tempest_token: String::new(),
             wu_key: String::new(),
+            synoptic_token: String::new(),
             field_opacity: Default::default(),
             airnow_key: String::new(),
             windy_key: String::new(),

@@ -342,6 +342,7 @@ enum OverlaySource {
         center: (f64, f64),
         tempest: String,
         wu: String,
+        synoptic: String,
     },
     /// NOAA's PPEF electric-field table.
     Ppef,
@@ -718,14 +719,17 @@ impl OverlaySource {
                 center,
                 tempest,
                 wu,
+                synoptic,
             } => {
                 // METARs come first and cost one request; the keyed networks add themselves.
                 let metars = wxdata::metar::fetch_bbox(http, bbox.0, bbox.1, bbox.2, bbox.3)
                     .await
                     .unwrap_or_default();
                 OverlayMsg::Stations(
-                    wxdata::stations::fetch_all(http, &metars, &tempest, &wu, center.0, center.1)
-                        .await,
+                    wxdata::stations::fetch_all(
+                        http, &metars, &tempest, &wu, &synoptic, center.0, center.1,
+                    )
+                    .await,
                 )
             }
             OverlaySource::Ppef => OverlayMsg::Ppef(wxdata::efield::fetch_ppef(http).await?),
@@ -7829,6 +7833,7 @@ impl HookEchoApp {
                     center: ((min_lat + max_lat) * 0.5, (min_lon + max_lon) * 0.5),
                     tempest: self.settings.tempest_token.clone(),
                     wu: self.settings.wu_key.clone(),
+                    synoptic: self.settings.synoptic_token.clone(),
                 },
             );
             if !self.settings.field_mill_url.is_empty() {
