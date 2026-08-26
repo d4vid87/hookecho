@@ -9,8 +9,30 @@ export async function getStaticPaths() {
 
 const { page } = Astro.props;
 const { Content } = await render(page);
+
+// The FAQ writes each question as a bold line with its answer in the paragraph underneath, so the
+// structured data comes out of the same prose the page renders — no second copy to keep in sync.
+// ponytail: a regex over the markdown source, not an AST walk. It breaks loudly (no FAQPage) if
+// the page stops using that shape, which is the failure mode you want.
+const faq =
+  page.id === "faq"
+    ? [...page.body!.matchAll(/^\*\*(.+?)\*\*\n([\s\S]+?)(?=\n\n|\n##)/gm)].map((m) => ({
+        "@type": "Question",
+        name: m[1],
+        acceptedAnswer: { "@type": "Answer", text: m[2].replace(/\s+/g, " ").trim() },
+      }))
+    : [];
+
+const jsonld = faq.length
+  ? { "@context": "https://schema.org", "@type": "FAQPage", mainEntity: faq }
+  : undefined;
 ---
 
-<Docs title={page.data.title} description={page.data.description} current={page.id}>
+<Docs
+  title={page.data.title}
+  description={page.data.description}
+  current={page.id}
+  jsonld={jsonld}
+>
   <Content />
 </Docs>

@@ -87,11 +87,30 @@ const androidShots = [
 ];
 
 const weatherdeskRepo = "https://github.com/d4vid87/weatherdesk";
+
+const jsonld = {
+  "@context": "https://schema.org",
+  "@type": "SoftwareApplication",
+  name: "HookEcho",
+  applicationCategory: "WeatherApplication",
+  operatingSystem: "Windows, macOS, Linux, Android, Web",
+  url: "https://hookecho.io",
+  downloadUrl: "https://hookecho.io/download/",
+  softwareVersion: "0.12.0-beta.1",
+  license: "https://opensource.org/licenses/MIT",
+  isAccessibleForFree: true,
+  offers: { "@type": "Offer", price: "0", priceCurrency: "USD" },
+  author: { "@type": "Person", name: "David May" },
+  description:
+    "A free, open-source weather radar app reading NEXRAD Level 2, MRMS, HRRR and the National " +
+    "Weather Service feeds directly from the public NOAA sources.",
+};
 ---
 
 <Base
   title="HookEcho — weather radar for everyone"
   description="A free, open-source weather radar app for Windows, macOS, Linux, Android and the browser. Live NEXRAD radar, warnings and storm tracking, straight from the public NOAA feeds."
+  jsonld={jsonld}
 >
   <Hero
     title="Weather radar for everyone"

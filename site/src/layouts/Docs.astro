@@ -7,9 +7,10 @@ interface Props {
   description: string;
   /** Collection id of the page being shown, or undefined on the docs index. */
   current?: string;
+  jsonld?: object;
 }
 
-const { title, description, current } = Astro.props;
+const { title, description, current, jsonld } = Astro.props;
 
 const pages = (await getCollection("docs")).sort((a, b) => a.data.order - b.data.order);
 const at = pages.findIndex((p) => p.id === current);
@@ -17,7 +18,7 @@ const prev = at > 0 ? pages[at - 1] : undefined;
 const next = at >= 0 && at < pages.length - 1 ? pages[at + 1] : undefined;
 ---
 
-<Base title={`${title} — HookEcho docs`} description={description}>
+<Base title={`${title} — HookEcho docs`} description={description} jsonld={jsonld}>
   <div class="wrap docs">
     <nav class="side" aria-label="Documentation">
       <p class="eyebrow">Docs</p>
