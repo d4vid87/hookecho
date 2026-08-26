@@ -16,16 +16,18 @@ pub struct CellSample {
 
 /// Show the storm-attributes window. `trend` is the cell's per-volume history (oldest→newest);
 /// `following` reflects whether the camera is currently tracking this cell. Returns
-/// `(still_open, follow_toggled)` — `follow_toggled` is `true` the frame the Follow button is hit.
+/// `(still_open, follow_toggled, to_3d)` — the two flags are `true` for the one frame their
+/// button is hit.
 pub fn show(
     ctx: &egui::Context,
     cell: &Cell,
     trend: &[CellSample],
     following: bool,
     popovers: &mut crate::ui::popover::Popovers,
-) -> (bool, bool) {
+) -> (bool, bool, bool) {
     let mut open = true;
     let mut follow_toggled = false;
+    let mut to_3d = false;
     popovers
         .card(
             ctx,
@@ -49,6 +51,19 @@ pub fn show(
                     .clicked()
                 {
                     follow_toggled = true;
+                }
+                if ui
+                    .add(
+                        egui::Button::new("\u{25A6} See in 3D")
+                            .min_size(egui::vec2(ui.available_width(), 0.0)),
+                    )
+                    .on_hover_text(
+                        "Open the raymarched volume cropped to this storm \u{2014} the whole box \
+                         at once is a wall of echo you then have to hunt through",
+                    )
+                    .clicked()
+                {
+                    to_3d = true;
                 }
                 theme::section(ui, "Current Position", |ui| {
                     grid(
@@ -154,7 +169,7 @@ pub fn show(
                 }
             });
         });
-    (open, follow_toggled)
+    (open, follow_toggled, to_3d)
 }
 
 /// A labelled trend sparkline over the samples that carry the selected field.
