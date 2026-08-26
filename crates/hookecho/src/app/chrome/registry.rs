@@ -182,6 +182,14 @@ impl HookEchoApp {
                 false,
             ),
             (
+                FL::ThunderProb,
+                "Models",
+                "Chance of thunder (NBM)",
+                "The National Blend's calibrated probability of a thunderstorm in the hour you \
+                 have scrubbed to — a forecast, not a detection",
+                false,
+            ),
+            (
                 FL::SnowBands,
                 "National",
                 "Snow bands",

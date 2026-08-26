@@ -12,6 +12,10 @@ use futures_util::StreamExt;
 
 const BUCKET: &str = "https://noaa-hrrr-bdp-pds.s3.amazonaws.com";
 const RAP_BUCKET: &str = "https://noaa-rap-pds.s3.amazonaws.com";
+const NAM_BUCKET: &str = "https://noaa-nam-pds.s3.amazonaws.com";
+/// The National Blend of Models, in GRIB2 with `.idx` sidecars. Not `noaa-nbm-pds`: that bucket
+/// republished as per-element GeoTIFF, which would need a TIFF decoder to read one field.
+const NBM_BUCKET: &str = "https://noaa-nbm-grib2-pds.s3.amazonaws.com";
 
 /// Which model to pull a field from.
 ///
@@ -27,6 +31,12 @@ pub enum Model {
     /// HRRR's pressure-level file. Not offered as a user-facing source — it exists for the
     /// effective-layer parameters, which need real columns.
     HrrrPressure,
+    /// NAM 3 km CONUS nest. A second convection-allowing opinion at HRRR's resolution, on its own
+    /// dynamical core and its own 6-hourly cycle — which is the point of having it.
+    NamNest,
+    /// National Blend of Models, CONUS domain. Statistically post-processed guidance rather than
+    /// a raw model: no updraft helicity, but the calibrated probabilities nobody else publishes.
+    Nbm,
 }
 
 impl Model {
@@ -45,6 +55,22 @@ impl Model {
             Model::Rap => {
                 format!("{RAP_BUCKET}/rap.{date}/rap.t{cycle_hour:02}z.awp130pgrbf{fh:02}.grib2")
             }
+            Model::NamNest => format!(
+                "{NAM_BUCKET}/nam.{date}/nam.t{cycle_hour:02}z.conusnest.hiresf{fh:02}.tm00.grib2"
+            ),
+            // `co` is the CONUS domain; the forecast hour is three digits here, not two.
+            Model::Nbm => format!(
+                "{NBM_BUCKET}/blend.{date}/{cycle_hour:02}/core/blend.t{cycle_hour:02}z.core.f{fh:03}.co.grib2"
+            ),
+        }
+    }
+
+    /// Hours between cycles. Walking back an hour at a time past a model that runs every six only
+    /// ever finds 404s.
+    fn cycle_hours(self) -> u32 {
+        match self {
+            Model::NamNest => 6,
+            _ => 1,
         }
     }
 
@@ -55,6 +81,9 @@ impl Model {
         match self {
             Model::Hrrr | Model::HrrrPressure => 0.04,
             Model::Rap => 0.15,
+            // The NAM nest is 3 km like the HRRR; the NBM CONUS grid is 2.5 km.
+            Model::NamNest => 0.04,
+            Model::Nbm => 0.035,
         }
     }
 
@@ -63,6 +92,8 @@ impl Model {
             Model::Hrrr => "HRRR",
             Model::HrrrPressure => "HRRR pressure",
             Model::Rap => "RAP",
+            Model::NamNest => "NAM 3 km nest",
+            Model::Nbm => "NBM",
         }
     }
 }
@@ -111,14 +142,7 @@ pub async fn fetch_field(
     let fh = fcst_hour.min(18);
     let now = Utc::now();
     let mut last_err = None;
-    for back in 1..=6 {
-        let run = (now - chrono::Duration::hours(back))
-            .with_minute(0)
-            .unwrap()
-            .with_second(0)
-            .unwrap()
-            .with_nanosecond(0)
-            .unwrap();
+    for run in recent_cycles(model, now) {
         match fetch_run_field(http, model, run, fh, var, level, min_valid).await {
             Ok(field) => {
                 return Ok(HrrrForecast {
@@ -131,6 +155,28 @@ pub async fn fetch_field(
         }
     }
     Err(last_err.unwrap_or_else(|| anyhow::anyhow!("no HRRR run found")))
+}
+
+/// The six most recent cycles of `model` that could plausibly be posted, newest first.
+///
+/// Stepping back an hour at a time is right for the hourly models and useless for the NAM nest,
+/// which runs every six: the run hour is floored onto the model's own cycle lattice first.
+pub(crate) fn recent_cycles(model: Model, now: DateTime<Utc>) -> Vec<DateTime<Utc>> {
+    let step = model.cycle_hours();
+    // One step back before the first candidate: a cycle is not on the wire the moment it is named.
+    let base = now - chrono::Duration::hours(step as i64);
+    let floored = base
+        .with_hour(base.hour() / step * step)
+        .unwrap_or(base)
+        .with_minute(0)
+        .unwrap()
+        .with_second(0)
+        .unwrap()
+        .with_nanosecond(0)
+        .unwrap();
+    (0..6)
+        .map(|i| floored - chrono::Duration::hours((i * step) as i64))
+        .collect()
 }
 
 /// How many HRRR field fetches run at once. NOMADS is a shared public service; six is brisk
@@ -171,14 +217,7 @@ pub async fn fetch_fields_one_run_capped(
         .collect();
     let now = Utc::now();
     let mut last_err = None;
-    for back in 1..=6 {
-        let run = (now - chrono::Duration::hours(back))
-            .with_minute(0)
-            .unwrap()
-            .with_second(0)
-            .unwrap()
-            .with_nanosecond(0)
-            .unwrap();
+    for run in recent_cycles(model, now) {
         let results: Vec<_> = futures_util::stream::iter(owned_specs.clone().into_iter().map(
             |(var, level, mv): (String, String, f64)| {
                 let http = http.clone();
@@ -787,5 +826,34 @@ mod tests {
         );
         let dropped = regrid(&lats, &lons, &data, Utc::now(), 0.04, -30.0).unwrap();
         assert!(dropped.values[0].is_nan(), "below-threshold dropped");
+    }
+
+    #[test]
+    fn cycle_walks_follow_each_model_s_own_run_schedule() {
+        let now = "2026-08-25T14:37:00Z".parse::<DateTime<Utc>>().unwrap();
+
+        let hrrr = recent_cycles(Model::Hrrr, now);
+        assert_eq!(hrrr[0].hour(), 13, "one hour back, on the hour");
+        assert_eq!(hrrr[1].hour(), 12);
+        assert_eq!(hrrr.len(), 6);
+
+        // The nest runs 00/06/12/18: 14:37 minus a cycle is 08:37, which floors to 06z.
+        let nam = recent_cycles(Model::NamNest, now);
+        assert_eq!(nam[0].hour(), 6);
+        assert_eq!(nam[1].hour(), 0);
+        assert_eq!(nam[2].hour(), 18, "and back into yesterday");
+        assert_eq!(nam[2].day(), 24);
+        assert!(nam.iter().all(|c| c.hour() % 6 == 0));
+    }
+
+    #[test]
+    fn the_new_sources_point_at_their_own_buckets() {
+        let nam = Model::NamNest.url("20260825", 12, 6);
+        assert!(nam.contains("noaa-nam-pds"));
+        assert!(nam.ends_with("nam.t12z.conusnest.hiresf06.tm00.grib2"));
+        // NBM forecast hours are three digits, and CONUS is the `co` domain.
+        let nbm = Model::Nbm.url("20260825", 12, 6);
+        assert!(nbm.contains("noaa-nbm-grib2-pds"));
+        assert!(nbm.ends_with("blend.t12z.core.f006.co.grib2"));
     }
 }

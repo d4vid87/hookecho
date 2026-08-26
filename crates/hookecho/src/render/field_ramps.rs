@@ -491,6 +491,23 @@ static SNOW_BANDS: FieldRamp = ramp!(
     ]
 );
 
+/// Calibrated chance of a thunderstorm. A probability, so the scale is linear and the numbers on
+/// the legend are the forecast: 30 means thirty percent.
+static THUNDER_PROB: FieldRamp = ramp!(
+    "Chance of thunder",
+    "%",
+    5.0,
+    100.0,
+    RampScale::Linear,
+    150,
+    &[
+        (0.0, [70, 100, 140]),
+        (0.35, [90, 180, 190]),
+        (0.7, [240, 200, 90]),
+        (1.0, [235, 90, 70]),
+    ]
+);
+
 static PRECIP_TYPE: FieldRamp = FieldRamp {
     label: "Precip type",
     units: "",
@@ -636,6 +653,7 @@ pub fn ramp_for(layer: FieldLayer) -> Option<&'static FieldRamp> {
         FL::Hca => &HCA,
         FL::GlmFed => &GLM_FED,
         FL::SnowBands => &SNOW_BANDS,
+        FL::ThunderProb => &THUNDER_PROB,
         // Composite is reflectivity in dBZ, so like the mosaic it follows the user's own
         // reflectivity `.pal` rather than a fixed ramp of its own.
         FL::Mrms | FL::Mosaic | FL::CompositeLocal | FL::Hrrr | FL::Lightning | FL::ModelDiff => {

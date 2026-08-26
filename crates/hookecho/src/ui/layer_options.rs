@@ -46,6 +46,12 @@ pub struct ChasePackUi {
     pub progress: Option<(u64, u64, u64, f64)>,
 }
 
+/// Can STP be computed from this source? It needs an LCL height, which only the HRRR surface
+/// file publishes — the RAP analysis and the NAM nest both leave it out.
+fn stp_source(model: wxdata::hrrr::Model) -> bool {
+    matches!(model, wxdata::hrrr::Model::Hrrr)
+}
+
 #[allow(clippy::too_many_arguments)] // one flat call per frame; a params struct adds churn for no reader gain
 pub(crate) fn show(
     ui: &mut egui::Ui,
@@ -265,6 +271,11 @@ pub(crate) fn show(
             .on_hover_text(
                 "RAP f00 observed analysis, 13 km grid — coarser, but what is, not what's forecast",
             );
+        ui.selectable_value(env_model, wxdata::hrrr::Model::NamNest, "NAM 3 km nest")
+            .on_hover_text(
+                "The NAM's 3 km CONUS nest — a second convection-allowing opinion on its own \
+                 dynamical core, run every six hours",
+            );
     });
     if *env_model != env_before {
         // Both sources feed CAPE/SRH and the contours; drop their clocks so the next frame refetches.
@@ -274,7 +285,7 @@ pub(crate) fn show(
             }
         }
         // STP needs an LCL height the RAP file doesn't carry (see wxdata::severe::fetch_grid).
-        if *env_model == wxdata::hrrr::Model::Rap && *contour_kind == crate::app::ContourKind::Stp {
+        if !stp_source(*env_model) && *contour_kind == crate::app::ContourKind::Stp {
             *contour_kind = crate::app::ContourKind::Off;
         }
         changed = true;
@@ -285,8 +296,8 @@ pub(crate) fn show(
         .selected_text(contour_kind.label())
         .show_ui(ui, |ui| {
             for k in crate::app::ContourKind::ALL {
-                if k == crate::app::ContourKind::Stp && *env_model == wxdata::hrrr::Model::Rap {
-                    continue; // no LCL height in the RAP analysis file
+                if k == crate::app::ContourKind::Stp && !stp_source(*env_model) {
+                    continue; // no LCL height in these files
                 }
                 ui.selectable_value(contour_kind, k, k.label());
             }

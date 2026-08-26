@@ -126,6 +126,8 @@ pub enum FieldLayer {
     GlobalPrecip,
     /// Banded precipitation from the MRMS mosaic, narrowed to snow — the snow-squall layer.
     SnowBands,
+    /// NBM calibrated probability of thunder over the hour ending at the scrubbed forecast hour.
+    ThunderProb,
     /// GLM flash-extent density — the recent satellite flashes gridded into a density field.
     GlmFed,
     /// One model minus another — which field, and therefore which pair, is `app.diff_field`.
@@ -143,6 +145,7 @@ impl FieldLayer {
                 | FieldLayer::Cape
                 | FieldLayer::Srh
                 | FieldLayer::PrecipType
+                | FieldLayer::ThunderProb
                 | FieldLayer::Smoke
                 | FieldLayer::Snowfall
                 | FieldLayer::SnowAnalysis
@@ -156,7 +159,7 @@ impl FieldLayer {
     }
 
     /// Fixed bottom-to-top paint order within each band.
-    pub const DRAW_ORDER: [FieldLayer; 36] = [
+    pub const DRAW_ORDER: [FieldLayer; 37] = [
         // Below-radar context band (bottom to top). The global models sit at the very bottom:
         // they are the synoptic backdrop everything else is drawn against.
         FieldLayer::GlobalMslp,
@@ -174,6 +177,7 @@ impl FieldLayer {
         FieldLayer::Snowfall,
         FieldLayer::SnowAnalysis,
         FieldLayer::PrecipType,
+        FieldLayer::ThunderProb,
         // Above-radar severe-signal band.
         FieldLayer::SnowBands,
         FieldLayer::PrecipRate,
@@ -219,6 +223,7 @@ impl FieldLayer {
             FieldLayer::EchoTops => "echotops",
             FieldLayer::HailSwath => "hailswath",
             FieldLayer::SnowBands => "snowbands",
+            FieldLayer::ThunderProb => "thunderprob",
             FieldLayer::Hca => "hca",
             FieldLayer::UpdraftHelicity => "updrafthelicity",
             FieldLayer::Smoke => "smoke",

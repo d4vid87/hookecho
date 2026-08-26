@@ -91,8 +91,8 @@ pub async fn fetch_grid(
     // STP needs an LCL height, and the RAP analysis file doesn't carry the adiabatic-condensation
     // level HRRR does. Say so rather than quietly serving a different parameter.
     anyhow::ensure!(
-        !(model == hrrr::Model::Rap && kind == SevereKind::Stp),
-        "STP needs an LCL height the RAP analysis doesn't publish — use the HRRR source"
+        !(model != hrrr::Model::Hrrr && kind == SevereKind::Stp),
+        "STP needs an LCL height only the HRRR surface file publishes — use the HRRR source"
     );
     if let SevereKind::Lapse700500 | SevereKind::Lapse850500 = kind {
         return fetch_lapse_grid(http, model, kind).await;
