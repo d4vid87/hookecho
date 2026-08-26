@@ -49,8 +49,8 @@ parts:
       craftctl default
       install -Dm644 packaging/hookecho.desktop \
         "$CRAFT_PART_INSTALL/usr/share/applications/hookecho.desktop"
-      install -Dm644 packaging/zip.batman.hookecho.metainfo.xml \
-        "$CRAFT_PART_INSTALL/usr/share/metainfo/zip.batman.hookecho.metainfo.xml"
+      install -Dm644 packaging/io.hookecho.HookEcho.metainfo.xml \
+        "$CRAFT_PART_INSTALL/usr/share/metainfo/io.hookecho.HookEcho.metainfo.xml"
       for px in 48 64 128 256 512; do
         d="$CRAFT_PART_INSTALL/usr/share/icons/hicolor/${px}x${px}/apps"
         mkdir -p "$d"

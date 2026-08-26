@@ -1,4 +1,4 @@
-package zip.batman.hookecho
+package io.hookecho.HookEcho
 
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.contract.ActivityResultContracts

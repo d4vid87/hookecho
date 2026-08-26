@@ -31,11 +31,11 @@ val cargoVersionCode: Int = cargoVersion.split(".", "-")
     .let { it[0].toInt() * 1_000_000 + it[1].toInt() * 10_000 + it[2].toInt() }
 
 android {
-    namespace = "zip.batman.hookecho"
+    namespace = "io.hookecho.HookEcho"
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "zip.batman.hookecho"
+        applicationId = "io.hookecho.HookEcho"
         // API 29 (Android 10): guarantees Vulkan 1.1 + AAudio + scoped storage semantics we design
         // around. arm64-v8a only for v1 — every phone that can run this ships it.
         minSdk = 29

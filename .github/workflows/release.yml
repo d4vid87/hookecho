@@ -300,7 +300,7 @@ jobs:
           <dict>
             <key>CFBundleName</key><string>HookEcho</string>
             <key>CFBundleDisplayName</key><string>HookEcho</string>
-            <key>CFBundleIdentifier</key><string>zip.batman.hookecho</string>
+            <key>CFBundleIdentifier</key><string>io.hookecho.HookEcho</string>
             <key>CFBundleVersion</key><string>$VERSION</string>
             <key>CFBundleShortVersionString</key><string>$VERSION</string>
             <key>CFBundleExecutable</key><string>hookecho</string>

@@ -1,4 +1,4 @@
-package zip.batman.hookecho
+package io.hookecho.HookEcho
 
 import org.json.JSONObject
 import java.io.File

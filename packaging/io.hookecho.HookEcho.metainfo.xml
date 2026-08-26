@@ -6,7 +6,7 @@
   Flatpak and Snap builds all install this same copy.
 -->
 <component type="desktop-application">
-  <id>zip.batman.hookecho</id>
+  <id>io.hookecho.HookEcho</id>
   <metadata_license>CC0-1.0</metadata_license>
   <project_license>MIT</project_license>
   <name>HookEcho</name>
@@ -26,7 +26,7 @@
     </p>
   </description>
 
-  <developer id="zip.batman">
+  <developer id="io.hookecho">
     <name>David May</name>
   </developer>
 

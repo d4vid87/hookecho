@@ -17,7 +17,7 @@ stamps is committed back to this repo; the stamped copies are submission inputs.
 
 Longest review, so start here.
 
-- Input: `packaging/flatpak/zip.batman.hookecho.yml` and
+- Input: `packaging/flatpak/io.hookecho.HookEcho.yml` and
   `packaging/flatpak/cargo-sources.json`.
 - Regenerate the sources file after any `Cargo.lock` change:
   `python3 flatpak-cargo-generator.py Cargo.lock -o packaging/flatpak/cargo-sources.json`.
@@ -27,7 +27,7 @@ Longest review, so start here.
   must have a source entry, so a dependency bump that forgets the regenerate
   step fails `cargo test` here rather than in Flathub's CI a week later.
 - Build it locally first — `flatpak-builder --force-clean build
-  packaging/flatpak/zip.batman.hookecho.yml` — because a build failure in their
+  packaging/flatpak/io.hookecho.HookEcho.yml` — because a build failure in their
   CI costs another round trip through the queue.
 - Submit: a pull request to
   [flathub/flathub](https://github.com/flathub/flathub) on the `new-pr` branch,
@@ -60,7 +60,7 @@ Longest review, so start here.
   Windows machine, `winget install --manifest packaging/winget`.
 - Submit: a pull request to
   [microsoft/winget-pkgs](https://github.com/microsoft/winget-pkgs) under
-  `manifests/z/zip.batman/hookecho/<version>/`. Their bot does most of the
+  `manifests/i/io.hookecho/HookEcho/<version>/`. Their bot does most of the
   review; the usual failure is a hash that does not match the URL's contents.
 
 ## 5. Snap — needs a name registration first

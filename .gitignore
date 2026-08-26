@@ -31,3 +31,8 @@ announce-drafts.md
 
 # Local puppeteer for scripts/web/smoke.mjs (npm install --no-save).
 /node_modules/
+
+# Local flatpak-builder scratch (packaging/flatpak/*.yml built in-repo; the sandbox can't see /tmp).
+/.fpbuild/
+/.fpstate/
+/.fprepo/
