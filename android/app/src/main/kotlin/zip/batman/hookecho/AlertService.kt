@@ -65,8 +65,14 @@ class AlertService : Service() {
             // fresh as the poll it just did.
             AlertWidget.refresh(this)
             AlertAlarm.markPolled(this)
-            // Tighten the cadence while something is actually warned at a watched point.
-            val waitMs = if (hot) 60_000L else 300_000L
+            // Tighten the cadence while something is actually warned at a watched point. Battery
+            // saver stretches the calm case only: once a warning is up, the user has bigger
+            // problems than battery, and the tight loop is the whole reason this service exists.
+            val waitMs = when {
+                hot -> 60_000L
+                batterySaver(this) -> 900_000L
+                else -> 300_000L
+            }
             var slept = 0L
             while (running && slept < waitMs) {
                 Thread.sleep(5_000L.coerceAtMost(waitMs - slept))
@@ -92,6 +98,7 @@ class AlertService : Service() {
         private const val PREFS = "alerts"
         private const val KEY_SEEN = "seen"
         private const val KEY_ENABLED = "enabled"
+        private const val KEY_SAVER = "battery_saver"
 
         /** Newest-last, so trimming from the front drops the oldest IDs. */
         private const val SEEN_CAP = 200
@@ -192,6 +199,20 @@ class AlertService : Service() {
                 NotificationChannel(CH_EMERGENCY, "Emergencies", NotificationManager.IMPORTANCE_HIGH)
                     .apply { enableVibration(true); setBypassDnd(true) }
             )
+        }
+
+        /** Whether the user asked for the relaxed polling schedule (see `Settings::battery_saver`). */
+        @JvmStatic
+        fun batterySaver(context: Context): Boolean = prefs(context).getBoolean(KEY_SAVER, false)
+
+        /**
+         * Battery saver, pushed from the in-app switch over JNI. Re-arms the alarm so the new
+         * cadence starts now rather than after one more poll on the old one.
+         */
+        @JvmStatic
+        fun setBatterySaver(context: Context, on: Boolean) {
+            prefs(context).edit().putBoolean(KEY_SAVER, on).apply()
+            if (isEnabled(context)) AlertAlarm.arm(context)
         }
 
         /**

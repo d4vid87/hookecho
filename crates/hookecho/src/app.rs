@@ -3194,6 +3194,7 @@ impl HookEchoApp {
             app.locate_by_ip(&cc.egui_ctx.clone());
         }
         crate::platform::set_background_alerts(app.settings.background_alerts);
+        crate::platform::set_battery_saver(app.settings.battery_saver);
         // The broker is publish-only and reconnects on its own, so it starts here and is never
         // stopped; changing the setting takes a restart, same as the tray.
         #[cfg(not(any(target_os = "android", target_arch = "wasm32")))]
@@ -3379,7 +3380,14 @@ impl HookEchoApp {
     /// the live head, which the chunk stream covers anyway when it is running.
     fn poll_interval_secs(&self) -> u64 {
         let base = self.settings.poll_interval_secs;
-        if crate::platform::is_metered() {
+        let base = if crate::platform::is_metered() {
+            base * 2
+        } else {
+            base
+        };
+        // Battery saver stacks with metering: both are "spend less", and a chaser who has turned
+        // both on has said so twice.
+        if self.settings.battery_saver {
             base * 2
         } else {
             base
@@ -13394,7 +13402,11 @@ impl HookEchoApp {
     /// Every few minutes, not every scan: the widget's own clock cannot beat 30 minutes anyway,
     /// and a full-resolution PNG per volume is a write nobody asked for. Nothing runs off Android.
     fn drive_widget_snapshot(&mut self, ctx: &egui::Context) {
-        const EVERY: std::time::Duration = std::time::Duration::from_secs(300);
+        let every = std::time::Duration::from_secs(if self.settings.battery_saver {
+            900
+        } else {
+            300
+        });
         if !cfg!(target_os = "android")
             || self.screenshot_pending.is_some()
             || self.share_card.is_some()
@@ -13402,7 +13414,7 @@ impl HookEchoApp {
         {
             return;
         }
-        if self.widget_shot_at.is_some_and(|t| t.elapsed() < EVERY) {
+        if self.widget_shot_at.is_some_and(|t| t.elapsed() < every) {
             return;
         }
         let Some(path) = crate::paths::widget_snapshot() else {
@@ -15995,6 +16007,11 @@ impl eframe::App for HookEchoApp {
             60_000
         } else if !crate::platform::activity::is_active() {
             2_000 // backgrounded: just enough to notice coming back
+        } else if self.settings.battery_saver {
+            // Four frames a second is still a live clock; it is not a live animation. Anything
+            // that actually moves (a banner, a play head, an arriving volume) asks for its own
+            // repaint and is unaffected.
+            1_000
         } else if cfg!(target_os = "android") {
             250
         } else {
