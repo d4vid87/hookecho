@@ -79,7 +79,7 @@ pub struct Cell {
 }
 
 impl Cell {
-    fn new(kind: CellKind, lon: f64, lat: f64, id: String, title: String) -> Self {
+    pub(crate) fn new(kind: CellKind, lon: f64, lat: f64, id: String, title: String) -> Self {
         Cell {
             kind,
             lon,

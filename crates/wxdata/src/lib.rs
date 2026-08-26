@@ -6,6 +6,7 @@ pub mod alerts;
 pub mod archive_warnings;
 pub mod aviation;
 pub mod banding;
+pub mod cellscore;
 pub mod clock;
 pub mod contour;
 pub mod dat;
