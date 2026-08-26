@@ -4,6 +4,7 @@
 
 mod chips;
 mod overlay;
+mod permalink;
 pub(crate) use overlay::compact;
 mod registry;
 mod scrubber;

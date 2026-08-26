@@ -675,6 +675,11 @@ instead of the configured default site. No third-party lookup and no browser
 permission prompt; a `#goto=` deep link still wins. A host without it just opens
 on the default.
 
+The address bar is a permalink: the `#goto=` fragment follows the active pane as
+you pan, zoom and scrub, so copying the URL sends someone to the frame you were
+looking at, archive time included. The share button in the control column does
+the same thing through the platform's share sheet where there is one.
+
 **Cloudflare Pages** — `web/_worker.js/`, deployed by
 `.github/workflows/demo.yml`. That's what `hookecho.pages.dev` is, and it is the
 only host this repo deploys to.

@@ -7089,8 +7089,12 @@ impl HookEchoApp {
                         .then(|| v.thresholds[v.moment.index()]),
                     srv: false,
                 });
-                ctx.copy_text(link.clone());
-                self.banner("Link copied".to_string(), link);
+                // A phone or a tablet has a share sheet, and pasting into a chat is what this is
+                // for; the clipboard is the fallback for everything that does not.
+                if !crate::platform::share_link("Hook Echo-WX", &link) {
+                    ctx.copy_text(link.clone());
+                    self.banner("Link copied".to_string(), link);
+                }
             }
             PaletteAction::SaveWorkspace => {
                 let ws = self.capture_workspace();
@@ -14909,6 +14913,7 @@ impl eframe::App for HookEchoApp {
                 true
             };
             if chrome {
+                self.sync_permalink();
                 self.search_pill(ctx);
                 self.control_column(ctx);
                 self.scrubber(ctx);

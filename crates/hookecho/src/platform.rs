@@ -175,6 +175,53 @@ pub fn open_url(url: &str) -> Result<(), String> {
     }
 }
 
+/// Hand `link` to the platform's own share sheet, if it has one. Returns whether it took it —
+/// `false` means the caller should fall back to the clipboard.
+///
+/// Only the browser has one today, and only some of them: `navigator.share` is missing on desktop
+/// Firefox and outside a secure context, so the presence check is the whole design here. It also
+/// requires a user gesture, which is satisfied because this is only ever reached from a click.
+pub fn share_link(title: &str, link: &str) -> bool {
+    #[cfg(target_arch = "wasm32")]
+    {
+        use wasm_bindgen::{JsCast, JsValue};
+        let Some(nav) = web_sys::window().map(|w| w.navigator()) else {
+            return false;
+        };
+        let key = JsValue::from_str("share");
+        let Ok(f) = js_sys::Reflect::get(&nav, &key) else {
+            return false;
+        };
+        let Ok(f) = f.dyn_into::<js_sys::Function>() else {
+            return false;
+        };
+        let data = js_sys::Object::new();
+        let _ = js_sys::Reflect::set(&data, &JsValue::from_str("title"), &JsValue::from_str(title));
+        let _ = js_sys::Reflect::set(&data, &JsValue::from_str("url"), &JsValue::from_str(link));
+        match f.call1(&nav, &data) {
+            // The promise rejects when the user dismisses the sheet, which is not our problem and
+            // certainly not a reason to paste something into their clipboard after the fact.
+            Ok(p) => {
+                if let Ok(p) = p.dyn_into::<js_sys::Promise>() {
+                    wasm_bindgen_futures::spawn_local(async move {
+                        let _ = wasm_bindgen_futures::JsFuture::from(p).await;
+                    });
+                }
+                true
+            }
+            Err(e) => {
+                log::warn!("share sheet refused: {e:?}");
+                false
+            }
+        }
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let _ = (title, link);
+        false
+    }
+}
+
 /// Keep a child process from flashing its own console window on Windows.
 ///
 /// Every helper we shell out to (the PowerShell speech synthesizer, ffmpeg, the URL opener) is a
