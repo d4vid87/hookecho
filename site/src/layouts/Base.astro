@@ -6,9 +6,11 @@ interface Props {
   description: string;
   /** Absolute-from-root path to the social card image. */
   image?: string;
+  /** schema.org structured data for this page, emitted as ld+json. */
+  jsonld?: object;
 }
 
-const { title, description, image = "/shots/alltilts.jpg" } = Astro.props;
+const { title, description, image = "/shots/alltilts.jpg", jsonld } = Astro.props;
 const url = new URL(Astro.url.pathname, Astro.site);
 // Cloudflare Web Analytics: cookieless, one script tag, and only rendered when the token is set —
 // so local builds and forks stay beacon-free. The token is public by design (it identifies the
@@ -55,6 +57,8 @@ const nav = [
     <meta property="og:url" content={url} />
     <meta property="og:image" content={social} />
     <meta name="twitter:card" content="summary_large_image" />
+
+    {jsonld && <script type="application/ld+json" set:html={JSON.stringify(jsonld)} />}
 
     {
       analytics && (

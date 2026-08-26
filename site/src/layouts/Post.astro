@@ -18,9 +18,21 @@ const pretty = date.toLocaleDateString("en-GB", {
   year: "numeric",
   timeZone: "UTC",
 });
+
+const jsonld = {
+  "@context": "https://schema.org",
+  "@type": "BlogPosting",
+  headline: title,
+  description,
+  datePublished: stamp,
+  url: new URL(Astro.url.pathname, Astro.site).toString(),
+  image: new URL(image ?? "/shots/alltilts.jpg", Astro.site).toString(),
+  author: { "@type": "Person", name: "David May" },
+  publisher: { "@type": "Organization", name: "HookEcho" },
+};
 ---
 
-<Base title={`${title} — HookEcho`} description={description} image={image}>
+<Base title={`${title} — HookEcho`} description={description} image={image} jsonld={jsonld}>
   <article class="wrap post">
     <p class="eyebrow"><a href="/blog/">Blog</a> · <time datetime={stamp}>{pretty}</time></p>
     <h1>{title}</h1>

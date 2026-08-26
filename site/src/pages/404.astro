@@ -1,0 +1,33 @@
+---
+import Base from "../layouts/Base.astro";
+---
+
+<Base
+  title="Not found | HookEcho"
+  description="That page does not exist. The radar, the docs and the download are all still here."
+>
+  <section>
+    <div class="wrap">
+      <p class="eyebrow">404</p>
+      <h1>No echo there</h1>
+      <p class="lede">
+        That page does not exist — or it moved and we did not leave a forwarding address. Sorry.
+      </p>
+      <div class="cta">
+        <a class="btn btn-primary" href="https://app.hookecho.io">Open the radar</a>
+        <a class="btn" href="/">Back to the start</a>
+      </div>
+      <p class="dim">
+        Looking for a specific radar? <a href="/radar/">Every NEXRAD site has a page.</a> Or try
+        the <a href="/docs/">docs</a>, the <a href="/download/">download page</a>, or
+        <a href="/storms/">the storms</a>.
+      </p>
+    </div>
+  </section>
+</Base>
+
+<style>
+  .lede { font-size: 1.1rem; color: var(--text-dim); max-width: 56ch; }
+  .cta { display: flex; gap: 0.75rem; flex-wrap: wrap; margin: 1.4rem 0 1.6rem; }
+  .dim { color: var(--text-dim); }
+</style>

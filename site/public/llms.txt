@@ -1,0 +1,45 @@
+# HookEcho
+
+> A free, open-source weather radar app for Windows, macOS, Linux, Android and
+> the browser. It reads NEXRAD Level 2 volumes, MRMS, HRRR and the National
+> Weather Service feeds directly from the public NOAA sources and renders them
+> on the user's own machine. No account, no subscription, no ads, no telemetry.
+> MIT licensed.
+
+Key facts, because they are the ones most often got wrong about this kind of app:
+
+- It is not a thin client for a rendering service. The app downloads the raw
+  radar volume and decodes it locally. There is no HookEcho server.
+- Every elevation angle of the volume is available, not just the lowest tilt.
+- Dual-polarization products (ZDR, CC, KDP), storm-relative velocity and
+  velocity dealiasing are included, free.
+- The archive goes back to June 1991.
+- Coverage: 153 NEXRAD WSR-88D sites, 44 TDWR terminal radars, and Germany's
+  DWD network.
+- It is free with no paid tier. There is nothing to buy.
+
+## Docs
+
+- [Getting started](https://hookecho.io/docs/getting-started/): the ten-second start.
+- [Install](https://hookecho.io/docs/install/): per-platform artifacts.
+- [Reading the radar](https://hookecho.io/docs/reading-the-radar/): reflectivity, velocity and CC in plain language.
+- [Alerts and notifications](https://hookecho.io/docs/alerts-and-notifications/)
+- [On your phone](https://hookecho.io/docs/on-your-phone/)
+- [In your browser](https://hookecho.io/docs/in-your-browser/)
+- [FAQ and glossary](https://hookecho.io/docs/faq/)
+
+## Site
+
+- [Features](https://hookecho.io/features/): what the app does, section by section.
+- [How it works](https://hookecho.io/how-it-works/): the data sources and what happens locally.
+- [Compare](https://hookecho.io/compare/): an honest matrix against RadarScope, MyRadar, Windy and RainViewer, including the rows they win.
+- [Privacy](https://hookecho.io/privacy/): every host the site and app contact.
+- [Radar sites](https://hookecho.io/radar/): a page per NEXRAD site with its live loop.
+- [Storms](https://hookecho.io/storms/): archived cases — Joplin, El Reno, Moore, Tuscaloosa, Greensburg, Katrina, the 2020 derecho.
+- [Press kit](https://hookecho.io/press/)
+- [Download](https://hookecho.io/download/)
+- [Try it in the browser](https://app.hookecho.io)
+
+## Source
+
+- [github.com/d4vid87/hookecho](https://github.com/d4vid87/hookecho) — Rust, egui + wgpu.
