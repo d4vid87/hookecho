@@ -31,7 +31,7 @@ class RadarWidget : AppWidgetProvider() {
             runCatching { BitmapFactory.decodeFile(png.absolutePath) }.getOrNull()?.let {
                 views.setImageViewBitmap(R.id.widget_radar_image, it)
             }
-            views.setTextViewText(R.id.widget_radar_text, age(png.lastModified()))
+            views.setTextViewText(R.id.widget_radar_text, caption(context, png.lastModified()))
         } else {
             views.setTextViewText(R.id.widget_radar_text, "Open Hook Echo-WX to fill this in")
         }
@@ -44,6 +44,21 @@ class RadarWidget : AppWidgetProvider() {
         )
         views.setOnClickPendingIntent(R.id.widget_radar_root, tap)
         for (id in ids) manager.updateAppWidget(id, views)
+    }
+
+    /**
+     * The line under the picture: the nearest storm and how far off it is, then the age.
+     *
+     * The app writes the storm half ([CAPTION]) whenever it writes the picture, because the
+     * widget has no cell data of its own and is not going to fetch any on someone's home screen.
+     * No file means nothing is being tracked near them, and the age stands alone.
+     */
+    private fun caption(context: Context, modified: Long): String {
+        val storm = runCatching {
+            File(context.filesDir, CAPTION).takeIf { it.exists() }?.readText()?.trim()
+        }.getOrNull()
+        val age = age(modified)
+        return if (storm.isNullOrEmpty()) age else "$storm\n$age"
     }
 
     /** "4 min ago", and blunt about it once the picture is old enough to mislead. */
@@ -60,6 +75,9 @@ class RadarWidget : AppWidgetProvider() {
     companion object {
         /** Where the Rust side writes the picture, relative to `filesDir`. */
         const val SNAPSHOT = "widget-radar.png"
+
+        /** Where the Rust side writes the storm line that goes under it. */
+        const val CAPTION = "widget-radar.txt"
 
         /** Re-render every placed widget now. Called from Rust after it writes a new snapshot. */
         @JvmStatic

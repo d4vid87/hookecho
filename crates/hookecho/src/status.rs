@@ -256,7 +256,7 @@ fn status_for(
         wind_dir: o
             .as_ref()
             .and_then(|o| o.wind_dir_deg)
-            .map(|d| compass(d).to_string()),
+            .map(|d| crate::geo::compass(d).to_string()),
         pressure_in: o
             .as_ref()
             .and_then(|o| o.slp_pa.or(o.pressure_pa))
@@ -272,15 +272,6 @@ fn c_to_f(c: f32) -> f32 {
 
 fn kmh_to_kt(kmh: f32) -> f32 {
     kmh / 1.852
-}
-
-/// 16-point compass label for a wind direction in degrees.
-fn compass(deg: f32) -> &'static str {
-    const D: [&str; 16] = [
-        "N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE", "S", "SSW", "SW", "WSW", "W", "WNW",
-        "NW", "NNW",
-    ];
-    D[((deg / 22.5).round() as usize) % 16]
 }
 
 /// Conditions as one phrase: `74°F 62%rh SW 12kt`. Empty when the station reported nothing.

@@ -119,6 +119,17 @@ pub fn nearest_site_id(lon: f64, lat: f64) -> Option<String> {
     wxdata::sites::nearest_site(lat as f32, lon as f32).map(|s| s.id.to_string())
 }
 
+
+/// 16-point compass label for a bearing in degrees. Lives here rather than beside any one caller
+/// because the widget caption, the status report and the spoken scripts all want the same words.
+pub fn compass(deg: f32) -> &'static str {
+    const D: [&str; 16] = [
+        "N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE", "S", "SSW", "SW", "WSW", "W", "WNW",
+        "NW", "NNW",
+    ];
+    D[((deg.rem_euclid(360.0) / 22.5).round() as usize) % 16]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
