@@ -85,6 +85,12 @@ pub fn widget_snapshot() -> Option<PathBuf> {
     BASE.get().map(|b| b.join("widget-radar.png"))
 }
 
+/// Where the app writes the one-line storm caption the radar widget shows under its picture.
+/// Beside the PNG, in the same files dir the Kotlin side reads.
+pub fn widget_caption() -> Option<PathBuf> {
+    BASE.get().map(|b| b.join("widget-radar.txt"))
+}
+
 /// Cache root (tiles, vector tiles, climatology CSV).
 pub fn cache_dir() -> Option<PathBuf> {
     root("cache")

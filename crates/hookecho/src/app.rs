@@ -13351,8 +13351,41 @@ impl HookEchoApp {
         // Silent: nobody asked for this one, so a toast would be the app talking to itself. A
         // failed write costs the widget one stale caption.
         match small.save(path) {
-            Ok(()) => crate::platform::refresh_radar_widget(),
+            Ok(()) => {
+                self.save_widget_caption();
+                crate::platform::refresh_radar_widget();
+            }
             Err(e) => log::warn!("widget snapshot failed: {e}"),
+        }
+    }
+
+    /// Write the widget's storm line beside the picture, measured from the place the user cares
+    /// about: where they are while chasing, else their home marker. Neither one means no line —
+    /// a distance from an arbitrary map centre is a number that misleads.
+    ///
+    /// Deleted rather than left stale when there is nothing to say: the file is read on its own
+    /// clock by a widget that has no idea how old it is.
+    fn save_widget_caption(&self) {
+        let Some(path) = crate::paths::widget_caption() else {
+            return;
+        };
+        let here = self.chase_pos.or_else(|| {
+            self.settings
+                .markers
+                .iter()
+                .find(|m| m.home)
+                .map(|m| (m.lon, m.lat))
+        });
+        let line = here.and_then(|(lon, lat)| widget_storm_line(self.active_storm_cells(), lon, lat));
+        match line {
+            Some(line) => {
+                if let Err(e) = std::fs::write(&path, line) {
+                    log::warn!("widget caption failed: {e}");
+                }
+            }
+            None => {
+                let _ = std::fs::remove_file(&path);
+            }
         }
     }
 
@@ -14077,6 +14110,33 @@ fn nearest_cell(cells: &[Cell], lon: f64, lat: f64, max_km: f64) -> Option<&Cell
         .filter(|(_, km)| *km <= max_km)
         .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
         .map(|(c, _)| c)
+}
+
+/// The widget's storm line: the nearest tracked cell to `(lon, lat)`, in the words a glance can
+/// read — "R3 12 mi SSW, moving NE 35 mph". `None` when nothing is being tracked nearby, which
+/// the widget renders as no line at all rather than as "no storms" (the app may simply have been
+/// looking at another part of the country).
+fn widget_storm_line(cells: &[Cell], lon: f64, lat: f64) -> Option<String> {
+    let c = nearest_cell(cells, lon, lat, 300.0)?;
+    let (km, bearing) = crate::geo::great_circle([c.lon, c.lat], [lon, lat]);
+    // Bearing is measured from the cell to you, so the compass point is the side of you the storm
+    // sits on once it is flipped back.
+    let from = crate::geo::compass(((bearing + 180.0) % 360.0) as f32);
+    let mut line = format!(
+        "{} {:.0} mi {from}",
+        if c.id.is_empty() { &c.title } else { &c.id },
+        km * 0.621_371
+    );
+    if let (Some(dir), Some(kt)) = (c.mvt_deg, c.mvt_kt) {
+        if kt >= 1.0 {
+            line.push_str(&format!(
+                ", moving {} {:.0} mph",
+                crate::geo::compass(dir),
+                kt * 1.150_779
+            ));
+        }
+    }
+    Some(line)
 }
 
 /// The longest consecutive segment of a screen-space polyline (for placing a contour label).
@@ -16039,7 +16099,7 @@ mod place_name_tests {
 
 #[cfg(test)]
 mod follow_tests {
-    use super::nearest_cell;
+    use super::{nearest_cell, widget_storm_line};
     use wxdata::level3::Cell;
 
     fn cell(id: &str, lon: f64, lat: f64) -> Cell {
@@ -16049,6 +16109,21 @@ mod follow_tests {
             lat,
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn the_widget_line_reads_from_where_you_are() {
+        // A cell due west of the reader, moving northeast at 30 kt.
+        let mut c = cell("R3", -97.72, 35.30);
+        c.mvt_deg = Some(45.0);
+        c.mvt_kt = Some(30.0);
+        let line = widget_storm_line(&[c], -97.5, 35.3).unwrap();
+        // West of you: the compass point names the side the storm is on, not the bearing to it.
+        assert!(line.starts_with("R3 12 mi W"), "{line}");
+        assert!(line.ends_with("moving NE 35 mph"), "{line}");
+        // Nothing within 300 km is no line at all.
+        assert!(widget_storm_line(&[cell("Z1", -80.0, 35.3)], -97.5, 35.3).is_none());
+        assert!(widget_storm_line(&[], -97.5, 35.3).is_none());
     }
 
     #[test]

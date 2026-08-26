@@ -7,6 +7,7 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.widget.RemoteViews
+import java.io.File
 
 /**
  * Home-screen widget: what is currently warned at your saved locations, and a tap that opens the
@@ -34,11 +35,17 @@ class AlertWidget : AppWidgetProvider() {
                 lines.add("${a.event} — ${m.name}")
             }
         }
-        val text = when {
+        var text = when {
             watched.isEmpty() -> "No saved locations yet"
             lines.isEmpty() -> "All quiet"
             else -> lines.distinct().take(4).joinToString("\n")
         }
+        // The storm line the app last wrote for the radar widget, reused here: "all quiet" and
+        // "a cell 12 miles away" are different kinds of quiet, and this widget has no cell data
+        // of its own. Absent when the app has not run, which is simply no line.
+        runCatching {
+            File(context.filesDir, RadarWidget.CAPTION).takeIf { it.exists() }?.readText()?.trim()
+        }.getOrNull()?.takeIf { it.isNotEmpty() }?.let { text = "$text\n$it" }
         // Tapping opens the app at the first watched point (site left empty: keep the current
         // radar, just fly there), same deep-link string the notifications use.
         val intent = Intent(context, MainActivity::class.java)
