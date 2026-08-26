@@ -5,9 +5,11 @@
 @font-face {
   font-family: "Inter";
   /* The same Latin subset the app bundles (crates/hookecho/data/fonts), converted to woff2.
-     ponytail: Regular only — headings get synthetic weight. Ship a Medium face if it shows. */
+     ponytail: Regular only, declared at 400 so the browser synthesizes bold — a declared
+     400–700 range makes it draw 600 with the Regular outlines and bold stops being visible.
+     Ship a Medium/Bold face if the synthetic weight looks poor. */
   src: url("/fonts/Inter-Regular-subset.woff2") format("woff2");
-  font-weight: 400 700;
+  font-weight: 400;
   font-display: swap;
 }
 
