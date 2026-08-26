@@ -5,6 +5,8 @@
 #   ./scripts/shots/shoot.sh live        # needs real weather; run ./shoot.sh scout first
 #   ./scripts/shots/shoot.sh scout       # which radar has storms right now?
 #   ./scripts/shots/shoot.sh check       # README <-> docs/shots cross-reference + size budget
+#   ./scripts/shots/shoot.sh android     # the phone set, on a device over adb
+#   ./scripts/shots/shoot.sh android-still   # …without re-shooting its loop
 #   ./scripts/shots/shoot.sh hero        # the animated hero loop
 #   ./scripts/shots/shoot.sh reflectivity velocity ...   # named scenes
 #
@@ -455,6 +457,148 @@ scene_hero() {
   log "hero.gif $(( $(stat -c%s "$OUT/hero.gif") / 1024 ))K"
 }
 
+# ---------------------------------------------------------------- android
+#
+# The phone set, shot on a real device over adb:
+#
+#   ./scripts/shots/shoot.sh android
+#
+# On a device, not an emulator, because the chrome is laid out from real WindowInsets — the
+# status bar, the punch-hole and the gesture bar are part of what these frames are showing.
+# Staging is the same HOOKECHO_GOTO vocabulary the desktop scenes use, handed to the activity as
+# an intent instead of an environment variable.
+#
+# `pm clear` before the run is the phone's version of the desktop's scratch profile: the sheet
+# remembers which tab it was on and the map remembers its layers, so a set shot on top of
+# yesterday's state is a set of plausible-looking wrong frames.
+
+APK_ID="io.hookecho.HookEcho"
+ASHOTS="$OUT/android"
+# Fastlane wants the same five frames under its own numbered names; one shoot fills both.
+FASTLANE="$REPO/android/fastlane/metadata/android/en-US/images/phoneScreenshots"
+# Tap targets, in device pixels on a 1440x3120 screen (S24 Ultra, density 640). Every one of them
+# was read off a capture rather than guessed — see README.md in this directory.
+A_WELCOME_GO=(310 2022)   # "Show me the radar" on the first-run screen
+A_LAYERS=(1302 670)       # the stack icon in the control column
+A_TAB_DATA=(168 922)      # "Data" / "Alerts (n)" inside the sheet
+A_TAB_ALERTS=(490 922)
+A_SITE_CHIP=(235 1187)    # the "KBMX" chip that opens the site picker
+A_STEP_FWD=(432 2600)     # the scrubber's next-frame button
+# Zoom is per logical point, and the phone has about a quarter of the desktop window's points,
+# so the desktop framings arrive a stop too tight. Same events, one zoom level wider.
+A_TUSCALOOSA="KBMX,-87.55,33.20,8.3,2011-04-27T22:10:00Z"
+A_MOORE="KTLX,-97.36,35.40,8.9,2013-05-20T20:15:00Z"
+
+adb_() { adb ${ADB_SERIAL:+-s "$ADB_SERIAL"} "$@"; }
+atap() { adb_ shell input tap "$1" "$2"; sleep 1.5; }
+araw() { adb_ exec-out screencap -p; }
+
+# Same hash-stabilisation as the desktop scenes, over screencap instead of import.
+await_settle() { # await_settle [floor_secs] [cap_secs]
+  local floor="${1:-10}" cap="${2:-120}" last="" now="" stable=0 t=0
+  sleep "$floor"; t=$floor
+  while [ "$t" -lt "$cap" ]; do
+    now="$(araw | md5sum | cut -c1-16)"
+    if [ "$now" = "$last" ]; then
+      stable=$((stable + 1))
+      [ "$stable" -ge 2 ] && { log "settled after ${t}s"; return 0; }
+    else
+      stable=0
+    fi
+    last="$now"; sleep 3; t=$((t + 3))
+  done
+  log "WARNING: never settled in ${cap}s — check the frame before shipping it"
+}
+
+# Wipe, launch, dismiss the first-run picker, then stage the scene. The deep link has to come
+# *after* the picker is gone: on a cold start the first-run screen owns the site, so an intent
+# delivered underneath it sets a camera nobody is looking at and the time is dropped.
+alaunch() { # alaunch SITE,lon,lat,zoom[,RFC3339]
+  adb_ shell pm clear "$APK_ID" >/dev/null
+  adb_ shell am start -a android.intent.action.VIEW -d "hookecho://goto/$1" "$APK_ID" >/dev/null
+  sleep 20
+  atap "${A_WELCOME_GO[@]}"
+  sleep 8
+  adb_ shell am start -a android.intent.action.VIEW -d "hookecho://goto/$1" "$APK_ID" >/dev/null
+  await_settle 20 150
+}
+
+# Half size: the phone is 1440x3120 and the README renders these two-up, so the full-res frame is
+# four times the pixels anybody will ever see.
+asnap() { # asnap NAME
+  mkdir -p "$ASHOTS"
+  local f="$ASHOTS/$1.jpg" raw="$WORK/a-$1.png" kb=0
+  araw > "$raw"
+  for q in 88 82 76 70 64; do
+    magick "$raw" -resize 50% -quality "$q" "$f"
+    kb=$(( $(stat -c%s "$f") / 1024 ))
+    [ "$kb" -le 400 ] && break
+  done
+  log "saved android/$1.jpg (${kb}K)"
+}
+
+android() {
+  command -v adb >/dev/null || die "need adb"
+  [ -n "$(adb_ get-state 2>/dev/null)" ] || die "no device — plug the phone in and authorise adb"
+  adb_ shell pm path "$APK_ID" >/dev/null 2>&1 \
+    || die "$APK_ID is not installed — INSTALL=1 ./android/build.sh"
+
+  # One staging, four frames: the sheet is a layer over the map, so map.jpg is the same scene
+  # with nothing open. Tuscaloosa rather than a live radar for the same reason the desktop set
+  # uses it — a phone set shot on a quiet day is a phone set of empty panels.
+  #
+  # Four and not more because every extra frame costs another blind tap, and a blind tap that
+  # misses does not fail: it toggles a layer or jumps the timeline to live, and the shot after it
+  # looks plausible and is wrong. These four are the ones that survived that rule.
+  log "=== android: $A_TUSCALOOSA ==="
+  alaunch "$A_TUSCALOOSA"
+  asnap map
+
+  atap "${A_LAYERS[@]}"; sleep 1.5
+  atap "${A_TAB_DATA[@]}"
+  asnap layers
+
+  atap "${A_TAB_ALERTS[@]}"
+  asnap alerts
+
+  atap "${A_TAB_DATA[@]}"
+  atap "${A_SITE_CHIP[@]}"
+  await_settle 4 20
+  asnap site
+
+  # Play Store listings want their own numbered copies. Same frames, so they can never disagree.
+  mkdir -p "$FASTLANE"
+  # Cleared, not overwritten: the numbering shifts when a scene is added or cut, and the leftover
+  # 3-layers.jpg from the previous scheme is a screenshot the store would happily publish twice.
+  rm -f "$FASTLANE"/*.jpg
+  local i=1
+  for n in map layers site alerts; do
+    cp "$ASHOTS/$n.jpg" "$FASTLANE/$i-$n.jpg"
+    i=$((i + 1))
+  done
+
+  # The loop is most of the run's wall clock, and a re-shot still frame rarely needs it again.
+  [ "${SKIP_HERO:-0}" = 1 ] && { log "SKIP_HERO=1 — leaving hero.gif alone"; return 0; }
+
+  # The loop. Stepped with the transport button rather than played, for the same reason the
+  # desktop hero steps with the arrow keys: a played loop is captured at whatever moments the
+  # screencap round-trip happens to land on, and half of them are mid-fade.
+  log "=== android: hero ==="
+  alaunch "$A_MOORE"
+  local dir="$WORK/a-hero"; rm -rf "$dir"; mkdir -p "$dir"
+  for i in $(seq 0 9); do
+    await_settle 3 45
+    araw > "$dir/$(printf '%02d' "$i").png"
+    atap "${A_STEP_FWD[@]}"
+  done
+  ffmpeg -y -loglevel error -framerate 3 -pattern_type glob -i "$dir/*.png" \
+    -vf "scale=540:-1:flags=lanczos,split[a][b];[a]palettegen=max_colors=160[p];[b][p]paletteuse=dither=bayer:bayer_scale=3" \
+    -loop 0 "$ASHOTS/hero.gif"
+  log "android/hero.gif $(( $(stat -c%s "$ASHOTS/hero.gif") / 1024 ))K"
+
+  log "android set done — review every frame (see README.md in this directory)"
+}
+
 # ---------------------------------------------------------------- utility subcommands
 
 scout() {
@@ -472,10 +616,12 @@ check() {
   # noticed going stale.
   while read -r f; do
     [ -f "$REPO/$f" ] || { echo "MISSING: $f (referenced by README)"; fail=1; }
-  done < <(grep -o 'docs/shots/[a-z0-9]*\.\(jpg\|gif\)' "$REPO/README.md" | sort -u)
-  for f in "$OUT"/*.jpg "$OUT"/*.gif; do
+    # The phone set lives a directory down and was outside this cross-reference until it was
+    # scripted — which is how it went a whole release cycle showing chrome that no longer existed.
+  done < <(grep -o 'docs/shots/\(android/\)\?[a-z0-9]*\.\(jpg\|gif\)' "$REPO/README.md" | sort -u)
+  for f in "$OUT"/*.jpg "$OUT"/*.gif "$OUT"/android/*.jpg "$OUT"/android/*.gif; do
     [ -e "$f" ] || continue
-    grep -q "docs/shots/$(basename "$f")" "$REPO/README.md" \
+    grep -q "docs/shots/\(android/\)\?$(basename "$f")" "$REPO/README.md" \
       || { echo "ORPHAN: $(basename "$f") is not in the README"; fail=1; }
   done
   for f in "$OUT"/*.jpg; do
@@ -502,6 +648,9 @@ main() {
   case "${1:-}" in
     check) check; return ;;
     scout) preflight; scout; return ;;
+    # No Xvfb, no release binary, no preflight: the app under test is the APK on the phone.
+    android) mkdir -p "$WORK"; android; return ;;
+    android-still) mkdir -p "$WORK"; SKIP_HERO=1 android; return ;;
   esac
   preflight; start_xvfb
   local want=()

@@ -7,10 +7,13 @@ use egui_extras::{Column, TableBuilder};
 
 #[derive(Default, PartialEq, Clone, Copy)]
 pub enum SortCol {
-    #[default]
     Id,
     City,
     State,
+    // Nearest first, not A-to-Z. The alphabetical default was harmless while the list was
+    // WSR-88D only; adding the DWD table put ten German sites seven thousand kilometres away at
+    // the top of the picker for every user in North America.
+    #[default]
     Distance,
 }
 

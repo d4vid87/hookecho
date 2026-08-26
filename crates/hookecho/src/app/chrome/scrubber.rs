@@ -217,10 +217,20 @@ impl HookEchoApp {
                     } else {
                         let readout = match t.forecast_hour() {
                             Some(h) => format!("F+{h}h"),
+                            // The transport, the badge, the clock and the age share one row, and
+                            // on a phone that leaves the clock about a hundred points —
+                            // "5:10:35 PM CDT" ran off the edge and under the age readout. When
+                            // the room is not there the seconds and the zone go first: a phone's
+                            // zone is the one it is standing in.
                             None => t
                                 .current()
                                 .and_then(|id| id.date_time())
-                                .map(|d| crate::timefmt::fmt_clock(d, tz, true))
+                                .map(|d| match tz {
+                                    Some(tz) if ui.available_width() < 190.0 => {
+                                        d.with_timezone(&tz).format("%-I:%M %p").to_string()
+                                    }
+                                    _ => crate::timefmt::fmt_clock(d, tz, true),
+                                })
                                 .unwrap_or_default(),
                         };
                         ui.label(
@@ -231,7 +241,15 @@ impl HookEchoApp {
                         );
                     }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if let Some(age) = &age {
+                        // "15.1y ago" next to an ARCHIVE 04/27 badge is the same fact twice, and
+                        // on a phone the two of them plus the clock overrun the row and draw on
+                        // top of each other. Scrubbed to the archive, the badge already carries
+                        // the date; the age only earns its place while the timeline is live.
+                        let age = match (&age, t.following) {
+                            (Some(_), false) if ui.available_width() < 150.0 => &None,
+                            _ => &age,
+                        };
+                        if let Some(age) = age {
                             ui.label(
                                 egui::RichText::new(age)
                                     .size(crate::ui::style::FONT_SM)
