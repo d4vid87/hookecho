@@ -5,7 +5,8 @@ order: 2
 ---
 
 Every build comes from the same
-[Releases page](https://github.com/d4vid87/hookecho/releases/latest). Versioned
+[Releases page](https://github.com/d4vid87/hookecho/releases/latest), and
+[the download page](/download/) picks the right one for your machine. Versioned
 `v*` releases are the stable channel; a rolling `latest` prerelease carries the
 newest work if you don't want to wait for a tag.
 
