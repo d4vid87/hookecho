@@ -49,6 +49,7 @@ L_MRMS="National mosaic (MRMS)"
 L_MOSAIC="Seamless mosaic (single-radar)"
 L_HRRR="HRRR future radar"
 L_QPE="Rain so far, 24 hours (QPE)"
+L_TRACKS="Projected storm tracks (SCIT)"
 
 log() { printf '\033[36m▸\033[0m %s\n' "$*" >&2; }
 die() { printf '\033[31m✗ %s\033[0m\n' "$*" >&2; exit 1; }
@@ -70,7 +71,7 @@ preflight() {
   # "4 panes" is built by format!("{n} pane{}"), so it never appears literally in the source.
   grep -qF '{n} pane' "$APP" "$REGISTRY" \
     || die "palette label '$L_PANES' is not in the registry any more — update shoot.sh"
-  for l in "$L_TOUR" "$L_ALLTILTS" "$L_LINKCAM" "$L_WIND" "$L_SITES" "$L_XSECTION" "$L_FORECAST" "$L_STORMTABLE" "$L_FRONTS" "$L_GLM" \
+  for l in "$L_TRACKS" "$L_TOUR" "$L_ALLTILTS" "$L_LINKCAM" "$L_WIND" "$L_SITES" "$L_XSECTION" "$L_FORECAST" "$L_STORMTABLE" "$L_FRONTS" "$L_GLM" \
            "$L_MRMS" "$L_MOSAIC" "$L_QPE" "$L_HRRR" "$L_VERIFY" \
            "$L_VILD" "$L_MEHS" "$L_SNOW" "$L_RECON"; do
     grep -qF "$l" "$APP" "$REGISTRY" \
@@ -136,10 +137,27 @@ stop_app() { pkill -x hookecho 2>/dev/null || true; sleep 0.6; }
 key()   { DISPLAY="$DISPLAY_NUM" xdotool key --window "$WID" "$@"; sleep 0.4; }
 click() { DISPLAY="$DISPLAY_NUM" xdotool mousemove --sync "$1" "$2" click 1; sleep 0.8; }
 
+# Every palette action leaves the layers panel open over the left third of the map. Its own close
+# button is the only reliable way shut: the `l` hotkey is a toggle, and after a palette action the
+# panel's state is not knowable, so a toggle is a coin flip. Escape does not reach it either —
+# the palette leaves the keyboard focus in the panel's search field.
+close_drawer() {
+  click 307 81
+  sleep 1.2
+}
+
+# The readout card follows the pointer, so wherever the last click landed leaves a tooltip in the
+# middle of the frame. Park it in the corner the chrome already occupies before capturing.
+park_pointer() { DISPLAY="$DISPLAY_NUM" xdotool mousemove --sync 8 992; sleep 0.6; }
+
 palette() { # palette "Exact Registry Label"
   DISPLAY="$DISPLAY_NUM" xdotool key --clearmodifiers ctrl+k; sleep 0.6
   DISPLAY="$DISPLAY_NUM" xdotool type --delay 45 -- "$1"; sleep 0.8
   DISPLAY="$DISPLAY_NUM" xdotool key Return; sleep 1.2
+  # Turning a layer on leaves the panel it was turned on from sitting over the left third of the
+  # map. Every scene that reaches for the palette wants the layer, not the panel; the two scenes
+  # that do want the panel open it with the `l` key instead and never come through here.
+  close_drawer
 }
 
 # Wait for the frame to stop changing rather than sleeping a guessed number of seconds: archive
@@ -162,6 +180,7 @@ wait_settle() { # wait_settle [floor_secs] [cap_secs]
 }
 
 snap() { # snap NAME
+  park_pointer
   mkdir -p "$OUT"
   local f="$OUT/$1.jpg"
   local raw="$WORK/$1.png"
@@ -202,12 +221,6 @@ scene_derived() {
   launch "$MAYFIELD"; wait_settle 14; key 1
   palette "$L_VILD"
   wait_settle 14 90
-  # The palette leaves the keyboard in the drawer's search box, so clicking the map first is
-  # what makes the close-drawer key land at all.
-  click 1100 700
-  sleep 0.5
-  key l
-  sleep 1.5
   snap derived
 }
 
@@ -253,11 +266,12 @@ scene_alltilts() {
   palette "$L_PANES"   # four products of one storm only reads if all four look at the same place
   wait_settle 20 120
   # One product per pane, clicked on each pane's own REF/VEL/SW/ZDR/PHI/CC strip: the strip both
-  # picks the pane and sets its moment, so no separate "focus this pane" click is needed. Coords
-  # are the strip hit points at 1600x1000 — top row y=28, bottom row y=498.
-  click 1004 28    # top-right   VEL
-  click  503 498   # bottom-left CC
-  click 1085 498   # bottom-right ZDR
+  # picks the pane and sets its moment, so no separate "focus this pane" click is needed. The
+  # strips sit at the top of each pane — y=30 for the top row, y=522 for the bottom — and the
+  # labels are evenly spaced from the pane's left edge (REF +40, VEL +91, SW +142, ZDR +193).
+  click  894  30   # top-right   VEL
+  click  344 522   # bottom-left CC
+  click  996 522   # bottom-right ZDR
   # Each pane bins its own moment from the same volume, and the last one lands last — a short
   # wait here shoots half-empty panes, which is exactly the failure the old screenshot set shipped.
   wait_settle 60 240
@@ -351,6 +365,7 @@ scene_hrrr() {
   # The FORECAST banner only appears with the layer on, which is the whole point of the shot:
   # this is a model picture, not observed radar, and it says so.
   launch "KTLX,-89.5,38.5,5.4"; wait_settle 16
+  palette "$L_TRACKS"
   palette "$L_HRRR"
   wait_settle 20 160
   snap hrrr
@@ -358,7 +373,8 @@ scene_hrrr() {
 
 scene_mrms() {
   # CONUS proper, biased east: at continental zoom the frame is mostly Canada and ocean.
-  launch "KTLX,-91.0,38.2,5.1"; wait_settle 16
+  launch "KTLX,-91.0,38.2,5.6"; wait_settle 16
+  palette "$L_TRACKS"   # the T+ labels are a different shot's subject
   palette "$L_MRMS"
   wait_settle 16 120
   snap mrms
@@ -367,8 +383,9 @@ scene_mrms() {
 scene_mosaic() {
   # Regional, not continental: the point of this shot is that neighbouring radars join without a
   # seam, which you can only see at a zoom where individual storms are still storms.
-  launch "${LIVE_SITE:-KTLX},${LIVE_LON:--97.3},${LIVE_LAT:-35.3},6.2"
+  launch "${LIVE_SITE:-KTLX},${LIVE_LON:--97.3},${LIVE_LAT:-35.3},8.0"
   wait_settle 16
+  palette "$L_TRACKS"
   palette "$L_MOSAIC"
   wait_settle 20 160
   snap mosaic
@@ -376,8 +393,9 @@ scene_mosaic() {
 
 scene_qpe() {
   # Zoomed onto wherever the rain actually fell — a CONUS-wide rainfall map is mostly empty map.
-  launch "${LIVE_SITE:-KTLX},${LIVE_LON:--97.3},${LIVE_LAT:-35.3},6.4"
+  launch "${LIVE_SITE:-KTLX},${LIVE_LON:--97.3},${LIVE_LAT:-35.3},7.0"
   wait_settle 16
+  palette "$L_TRACKS"
   palette "$L_QPE"
   wait_settle 16 120
   snap qpe
@@ -398,7 +416,9 @@ scene_wind() {
   launch "${LIVE_SITE:-KTLX},-98.5,39.5,4.3"; wait_settle 16
   palette "$L_WIND"
   palette "$L_SITES"   # the 160 site rings tile the whole CONUS view and fight the streaks
-  wait_settle 20 120
+  # The HRRR wind grid is a big download and the particles seed from it: shoot too early and the
+  # streaks only exist where the grid had landed, which reads as "the feature covers half a map".
+  wait_settle 30 240
   local dir="$WORK/wind"; rm -rf "$dir"; mkdir -p "$dir"
   # No stepping and no settling here: the layer animates continuously, so frames are just taken
   # as fast as `import` can round-trip the root window.
