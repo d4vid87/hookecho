@@ -12875,13 +12875,19 @@ impl HookEchoApp {
                     }
                 });
             }
-            // Desktop streams from a local gpsd; Android polls the system LocationManager
-            // over JNI (see platform.rs). Both feed the same `gps_rx` channel.
+            // Desktop streams from a local gpsd; Android polls the system LocationManager over
+            // JNI (see platform.rs); the web watches the browser's own Geolocation. All three
+            // feed the same `gps_rx` channel.
             if self.gps_rx.is_none() {
                 let (label, tip) = if cfg!(target_os = "android") {
                     (
                         "Enable GPS (chase)",
                         "Follow your device's position (asks for the location permission)",
+                    )
+                } else if cfg!(target_arch = "wasm32") {
+                    (
+                        "Enable GPS (chase)",
+                        "Follow your position (asks the browser for the location permission)",
                     )
                 } else {
                     (
