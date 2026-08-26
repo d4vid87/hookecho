@@ -247,6 +247,58 @@ impl HookEchoApp {
             });
     }
 
+    /// Top-center chip when a newer release exists: says so, links to the download, dismisses.
+    ///
+    /// The session's one update check already toasted this, and a toast is four seconds long —
+    /// which is how a stale build stays stale. This persists for the session instead. There is no
+    /// self-update: the chip's whole job is to send you to the release page.
+    ///
+    /// ponytail: dismissal is session-only, not a settings field. Re-appearing once per launch is
+    /// the point; a "don't tell me about 0.13" preference is a preference nobody asked for.
+    pub(crate) fn update_chip(&mut self, ctx: &egui::Context) {
+        let crate::ui::about_window::UpdateState::Newer(tag) = self.update_state.clone() else {
+            return;
+        };
+        // A weather warning owns the top lane while it is up. This can wait.
+        if self.update_chip_hidden || !self.warning_banners.is_empty() {
+            return;
+        }
+        let accent = crate::theme::accent(self.settings.theme);
+        let mut hide = false;
+        egui::Area::new(egui::Id::new("update_chip"))
+            .constrain_to(self.chrome_rect)
+            .anchor(
+                egui::Align2::CENTER_TOP,
+                egui::vec2(0.0, crate::ui::style::LANE_TOP_BANNER),
+            )
+            .show(ctx, |ui| {
+                crate::ui::style::glass(ui, 236)
+                    .stroke(egui::Stroke::new(1.0, accent.gamma_multiply(0.8)))
+                    .show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            ui.label(
+                                egui::RichText::new(format!("HookEcho {tag} is available"))
+                                    .size(crate::ui::style::FONT_BASE)
+                                    .color(accent),
+                            );
+                            ui.hyperlink_to(
+                                egui::RichText::new("Download")
+                                    .size(crate::ui::style::FONT_BASE),
+                                format!("{}/releases/latest", crate::ui::about_window::REPO),
+                            );
+                            if ui
+                                .small_button(egui_phosphor::regular::X)
+                                .on_hover_text("Dismiss until next launch")
+                                .clicked()
+                            {
+                                hide = true;
+                            }
+                        });
+                    });
+            });
+        self.update_chip_hidden |= hide;
+    }
+
     /// Bottom-center error chip: the active pane's fetch error, auto-hiding after ~6 seconds.
     ///
     /// ponytail: one chip, newest error wins, no toast queue — add a queue if overlapping errors
