@@ -1,0 +1,333 @@
+---
+import Base from "../../layouts/Base.astro";
+
+// An honest matrix or none at all: every row a competitor wins is marked as won, and there are
+// four of those. Prices are tiers, not dollar amounts — those change without telling us, and a
+// stale number on this page would be the one thing readers were right to disbelieve.
+//
+// Sources, checked 2026-08: each product's own pricing/feature pages and store listings.
+// RadarScope: base.radarscope.app tier list (Pro Tier One / Tier Two).
+// MyRadar: myradar.com premium features; free tier carries ads.
+// Windy: windy.com Premium page; radar composite is not Level 2.
+// Clime and RainViewer are grouped: both are mosaic-imagery apps on a subscription.
+// HookEcho's own column comes from README.md and docs/GUIDE.md.
+const cols = ["HookEcho", "RadarScope", "MyRadar", "Windy", "Clime / RainViewer"];
+
+// v: "yes" | "no" | "part" — decides the mark; t is the qualifier that makes the mark honest.
+const rows = [
+  {
+    label: "Price",
+    cells: [
+      { v: "yes", t: "Free, MIT licensed" },
+      { v: "part", t: "Paid app, subscription tiers" },
+      { v: "part", t: "Free with ads, subscription" },
+      { v: "part", t: "Free, optional Premium" },
+      { v: "part", t: "Free trial, subscription" },
+    ],
+  },
+  {
+    label: "Ads",
+    cells: [
+      { v: "yes", t: "None" },
+      { v: "yes", t: "None" },
+      { v: "no", t: "Unless you subscribe" },
+      { v: "yes", t: "None" },
+      { v: "no", t: "Yes" },
+    ],
+  },
+  {
+    label: "Account required",
+    cells: [
+      { v: "yes", t: "Never" },
+      { v: "part", t: "For the paid tiers" },
+      { v: "part", t: "For the paid tier" },
+      { v: "yes", t: "Optional" },
+      { v: "part", t: "For the paid tier" },
+    ],
+  },
+  {
+    label: "Open source",
+    cells: [
+      { v: "yes", t: "Every line" },
+      { v: "no", t: "" },
+      { v: "no", t: "" },
+      { v: "no", t: "" },
+      { v: "no", t: "" },
+    ],
+  },
+  {
+    label: "Level 2, every tilt",
+    cells: [
+      { v: "yes", t: "All elevations, full resolution" },
+      { v: "yes", t: "All elevations" },
+      { v: "no", t: "Mosaic imagery" },
+      { v: "no", t: "Composite only" },
+      { v: "no", t: "Mosaic imagery" },
+    ],
+  },
+  {
+    label: "Dual-pol products",
+    cells: [
+      { v: "yes", t: "ZDR, CC, KDP, ΦDP" },
+      { v: "yes", t: "Full set" },
+      { v: "no", t: "" },
+      { v: "no", t: "" },
+      { v: "no", t: "" },
+    ],
+  },
+  {
+    label: "Velocity and dealiasing",
+    cells: [
+      { v: "yes", t: "With storm-relative" },
+      { v: "yes", t: "With storm-relative" },
+      { v: "no", t: "" },
+      { v: "no", t: "" },
+      { v: "no", t: "" },
+    ],
+  },
+  {
+    label: "National MRMS mosaic",
+    cells: [
+      { v: "yes", t: "Full resolution" },
+      { v: "part", t: "Paid tier" },
+      { v: "yes", t: "" },
+      { v: "yes", t: "Composite" },
+      { v: "yes", t: "" },
+    ],
+  },
+  {
+    label: "Lightning",
+    cells: [
+      { v: "yes", t: "GOES GLM" },
+      { v: "part", t: "Paid tier" },
+      { v: "part", t: "Paid tier" },
+      { v: "yes", t: "" },
+      { v: "part", t: "Paid tier" },
+    ],
+  },
+  {
+    label: "Forecast models",
+    cells: [
+      { v: "part", t: "HRRR, NAM, soundings" },
+      { v: "no", t: "" },
+      { v: "part", t: "Limited" },
+      { v: "yes", t: "The best in the field" },
+      { v: "no", t: "" },
+    ],
+  },
+  {
+    label: "Tropical tracks",
+    cells: [
+      { v: "yes", t: "NHC cones and advisories" },
+      { v: "no", t: "" },
+      { v: "yes", t: "" },
+      { v: "yes", t: "" },
+      { v: "yes", t: "" },
+    ],
+  },
+  {
+    label: "Archive playback",
+    cells: [
+      { v: "yes", t: "Back to 1991" },
+      { v: "part", t: "Paid tier, recent only" },
+      { v: "no", t: "" },
+      { v: "no", t: "" },
+      { v: "no", t: "" },
+    ],
+  },
+  {
+    label: "Works offline",
+    cells: [
+      { v: "yes", t: "Chase packs, prefetched" },
+      { v: "no", t: "" },
+      { v: "no", t: "" },
+      { v: "no", t: "" },
+      { v: "no", t: "" },
+    ],
+  },
+  {
+    label: "Coverage outside the US",
+    cells: [
+      { v: "part", t: "US plus German DWD radar" },
+      { v: "part", t: "Several countries" },
+      { v: "part", t: "Mostly US" },
+      { v: "yes", t: "Global" },
+      { v: "yes", t: "Global" },
+    ],
+  },
+  {
+    label: "Runs in a browser",
+    cells: [
+      { v: "yes", t: "The whole app, no install" },
+      { v: "no", t: "" },
+      { v: "part", t: "Cut-down web view" },
+      { v: "yes", t: "Web first" },
+      { v: "no", t: "" },
+    ],
+  },
+  {
+    label: "iPhone and iPad",
+    cells: [
+      { v: "no", t: "Not yet" },
+      { v: "yes", t: "" },
+      { v: "yes", t: "" },
+      { v: "yes", t: "" },
+      { v: "yes", t: "" },
+    ],
+  },
+  {
+    label: "Desktop app",
+    cells: [
+      { v: "yes", t: "Windows, macOS, Linux" },
+      { v: "part", t: "Windows, macOS" },
+      { v: "part", t: "Windows" },
+      { v: "no", t: "" },
+      { v: "no", t: "" },
+    ],
+  },
+  {
+    label: "Mobile polish",
+    cells: [
+      { v: "part", t: "Android only, and younger" },
+      { v: "yes", t: "The bar everyone measures against" },
+      { v: "yes", t: "" },
+      { v: "yes", t: "" },
+      { v: "yes", t: "" },
+    ],
+  },
+  {
+    label: "Telemetry",
+    cells: [
+      { v: "yes", t: "None, at all" },
+      { v: "no", t: "Analytics" },
+      { v: "no", t: "Ads and analytics" },
+      { v: "no", t: "Analytics" },
+      { v: "no", t: "Ads and analytics" },
+    ],
+  },
+];
+
+// ponytail: the marks are drawn in CSS, not typed as ●◐○ — the bundled Inter subset is Latin
+// only, so the half-filled glyph in particular falls through to whatever the system has.
+---
+
+<Base
+  title="How HookEcho compares — RadarScope, MyRadar, Windy, RainViewer"
+  description="An honest feature-by-feature comparison of HookEcho against RadarScope, MyRadar, Windy and Clime/RainViewer — including the rows where they win."
+>
+  <section class="head">
+    <span class="sweep" aria-hidden="true"></span>
+    <div class="wrap">
+      <p class="eyebrow">Comparison</p>
+      <h1>How HookEcho compares</h1>
+      <p class="lede">
+        Four apps people actually use, and the rows where each of them beats us. If you want the
+        best global model data, use Windy. If you want the most polished phone app, buy
+        RadarScope. If you want every Level 2 product, the full archive and no bill, keep reading.
+      </p>
+    </div>
+  </section>
+
+  <section class="alt">
+    <div class="wrap">
+      <div class="scroller">
+        <table>
+          <thead>
+            <tr>
+              <th scope="col">
+                <span class="sr-only">Feature</span>
+              </th>
+              {cols.map((c, i) => <th scope="col" class={i === 0 ? "us" : ""}>{c}</th>)}
+            </tr>
+          </thead>
+          <tbody>
+            {
+              rows.map((r) => (
+                <tr>
+                  <th scope="row">{r.label}</th>
+                  {r.cells.map((c, i) => (
+                    <td class:list={[c.v, { us: i === 0 }]}>
+                      <span class="mark" aria-hidden="true" />
+                      <span class="sr-only">
+                        {c.v === "yes" ? "Yes" : c.v === "part" ? "Partly" : "No"}
+                      </span>
+                      {c.t && <span class="note">{c.t}</span>}
+                    </td>
+                  ))}
+                </tr>
+              ))
+            }
+          </tbody>
+        </table>
+      </div>
+      <p class="foot">
+        Verified August 2026, from each product's own pricing and feature pages. Tiers and prices
+        move; if a row here is wrong,
+        <a href="https://github.com/d4vid87/hookecho/issues">tell us</a> and it gets fixed.
+      </p>
+    </div>
+  </section>
+
+  <section>
+    <div class="wrap">
+      <h2>What we are actually claiming</h2>
+      <p>
+        HookEcho is a chaser-grade radar viewer that reads the same public NOAA feeds the
+        professional apps read, gives away the products they charge for, and never asks for an
+        account. It is younger than the apps above, there is no iPhone build yet, and Windy's
+        model data is better than ours. Those are the trades.
+      </p>
+      <div class="ctas">
+        <a class="btn btn-primary" href="https://app.hookecho.io">Judge it yourself in the browser</a>
+        <a class="btn" href="/features/">See the features</a>
+      </div>
+    </div>
+  </section>
+</Base>
+
+<style>
+  .head { position: relative; overflow: hidden; }
+  .head .wrap { position: relative; }
+  .lede { font-size: 1.15rem; color: var(--text-dim); max-width: 62ch; }
+  .alt { background: var(--bg-deep); border-block: 1px solid var(--stroke); }
+
+  /* Nineteen rows by five columns does not fit a phone. Scroll it rather than pretend. */
+  .scroller { overflow-x: auto; }
+  table { border-collapse: collapse; width: 100%; min-width: 820px; font-size: 0.92rem; }
+  th, td {
+    text-align: left;
+    padding: 0.7rem 0.9rem;
+    border-bottom: 1px solid var(--stroke);
+    vertical-align: top;
+  }
+  thead th { font-size: 0.85rem; color: var(--text-dim); white-space: nowrap; }
+  thead th.us, td.us { background: color-mix(in srgb, var(--accent) 9%, transparent); }
+  thead th.us { color: var(--accent); }
+  tbody th { font-weight: 600; white-space: nowrap; }
+  .mark {
+    display: inline-block;
+    width: 0.72rem;
+    height: 0.72rem;
+    margin-right: 0.5rem;
+    border-radius: 50%;
+    border: 1.5px solid var(--stroke);
+    vertical-align: baseline;
+  }
+  td.yes .mark { background: var(--accent); border-color: var(--accent); }
+  td.part .mark {
+    border-color: var(--text-dim);
+    background: linear-gradient(90deg, var(--text-dim) 50%, transparent 50%);
+  }
+  .note { color: var(--text-dim); }
+  .foot { color: var(--text-dim); font-size: 0.88rem; margin-top: 1.2rem; }
+  .ctas { display: flex; gap: 0.75rem; flex-wrap: wrap; margin-top: 1.4rem; }
+
+  .sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+</style>
