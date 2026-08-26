@@ -13,6 +13,9 @@ pub struct RadarEvent {
     pub lon: f64,
     pub lat: f64,
     pub zoom: f64,
+    /// Minutes of replay centered on `time`. Every curated event has one: the interesting part of
+    /// a tornado is the twenty minutes around it, not the single volume it happened to peak on.
+    pub span_min: u16,
     pub blurb: &'static str,
 }
 
@@ -32,6 +35,7 @@ pub const EVENTS: &[RadarEvent] = &[
         lon: -97.48,
         lat: 35.34,
         zoom: 9.0,
+        span_min: 60,
         blurb: "May 20 2013 — EF5 tracks through Moore; textbook hook echo south of OKC.",
     },
     RadarEvent {
@@ -41,6 +45,7 @@ pub const EVENTS: &[RadarEvent] = &[
         lon: -97.96,
         lat: 35.53,
         zoom: 9.0,
+        span_min: 60,
         blurb: "May 31 2013 — 2.6-mi-wide EF3; violent, erratic couplet west of OKC.",
     },
     RadarEvent {
@@ -50,6 +55,7 @@ pub const EVENTS: &[RadarEvent] = &[
         lon: -94.51,
         lat: 37.06,
         zoom: 9.0,
+        span_min: 60,
         blurb: "May 22 2011 — rain-wrapped EF5 devastates Joplin.",
     },
     RadarEvent {
@@ -59,6 +65,7 @@ pub const EVENTS: &[RadarEvent] = &[
         lon: -87.57,
         lat: 33.21,
         zoom: 9.0,
+        span_min: 60,
         blurb: "Apr 27 2011 — long-track EF4 during the Super Outbreak.",
     },
     RadarEvent {
@@ -68,6 +75,7 @@ pub const EVENTS: &[RadarEvent] = &[
         lon: -88.64,
         lat: 36.74,
         zoom: 9.0,
+        span_min: 60,
         blurb: "Dec 10-11 2021 — nocturnal long-track tornado, Mayfield destroyed.",
     },
     RadarEvent {
@@ -77,6 +85,7 @@ pub const EVENTS: &[RadarEvent] = &[
         lon: -94.46,
         lat: 41.31,
         zoom: 9.0,
+        span_min: 60,
         blurb: "May 21 2024 — high-end EF4 with a striking velocity couplet.",
     },
     RadarEvent {
@@ -86,6 +95,7 @@ pub const EVENTS: &[RadarEvent] = &[
         lon: -97.05,
         lat: 28.02,
         zoom: 7.0,
+        span_min: 60,
         blurb: "Aug 26 2017 — Cat 4 landfall near Rockport, TX.",
     },
     RadarEvent {
@@ -95,6 +105,7 @@ pub const EVENTS: &[RadarEvent] = &[
         lon: -82.20,
         lat: 26.70,
         zoom: 7.0,
+        span_min: 60,
         blurb: "Sep 28 2022 — Cat 5 landfall at Cayo Costa / SW Florida.",
     },
 ];
@@ -117,6 +128,8 @@ mod tests {
                 "coords {}",
                 e.name
             );
+            // A curated event with no span is a still frame, which is not what the library is for.
+            assert!(e.span_min >= 20, "span {}", e.name);
         }
     }
 }

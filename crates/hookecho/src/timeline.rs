@@ -31,6 +31,13 @@ pub struct Timeline {
     /// After the next listing lands, snap the playhead to the frame nearest this time (event
     /// jump / archive deep-link). Cleared once applied.
     pub seek_target: Option<DateTime<Utc>>,
+    /// How long a replay bundle's window is, in minutes. Set alongside `seek_target` when an
+    /// event or a saved replay is opened; consumed when the listing lands, which is the first
+    /// moment frame indices exist to bound.
+    pub replay_span_min: u16,
+    /// Playback bounds as frame indices, inclusive. `None` = play the whole listing. Any manual
+    /// step or jump clears it: the user has taken the playhead back.
+    pub replay: Option<(usize, usize)>,
     /// Forecast hours appended after the newest observed frame (HRRR "future radar" scrub tail).
     pub forecast_hours: u8,
     last_advance: Option<Instant>,
@@ -50,6 +57,8 @@ impl Default for Timeline {
             frames_key: None,
             listing: false,
             seek_target: None,
+            replay_span_min: 0,
+            replay: None,
             forecast_hours: 6,
             last_advance: None,
         }
@@ -97,13 +106,40 @@ impl Timeline {
         self.frames = frames;
         self.frames_key = Some(key);
         self.listing = false;
-        // A pending event/deep-link seek wins: snap to the nearest frame by time.
-        if let Some(target) = self.seek_target.take() {
+        // A pending event/deep-link seek wins: snap to the nearest frame by time. The target is
+        // only consumed once a listing actually has a frame to land on — the first listing after
+        // a site switch can arrive empty, and taking the seek there dropped it on the floor and
+        // left the pane parked at the end of the day.
+        if let Some(target) = self.seek_target {
             if let Some(i) = self.nearest_frame(target) {
+                self.seek_target = None;
                 self.playhead = i;
                 self.following = false;
+                // A replay bundle brackets the event rather than starting on it: the minutes
+                // before are how you see the storm become the thing worth replaying.
+                let span = std::mem::take(&mut self.replay_span_min);
+                if span > 0 {
+                    let half = chrono::Duration::minutes(span as i64 / 2);
+                    let from = self.nearest_frame(target - half).unwrap_or(0);
+                    let to = self
+                        .nearest_frame(target + half)
+                        .unwrap_or(self.frames.len().saturating_sub(1));
+                    let (from, to) = (from.min(to), to.max(from));
+                    // A window that collapsed onto one frame is not a replay: a listing that
+                    // thin would loop the same volume forever, which reads as a frozen app.
+                    if to > from {
+                        self.replay = Some((from, to));
+                        self.playhead = from;
+                        self.playing = true;
+                        self.loop_enabled = true;
+                    }
+                }
                 return;
             }
+        }
+        // A listing for another site or day is a different axis; the old bounds mean nothing on it.
+        if switched_site {
+            self.replay = None;
         }
         // While live-looping, a fresh listing must not yank the playhead to the head — the loop
         // owns the playhead. Only clamp it back into range if it now points past the end.
@@ -175,6 +211,7 @@ impl Timeline {
     /// Step `delta` slots (observed frames + forecast tail), un-pinning and pausing playback.
     pub fn step(&mut self, delta: i32) {
         self.playing = false;
+        self.replay = None;
         let n = self.slot_count() as i32;
         if n == 0 {
             return;
@@ -186,6 +223,7 @@ impl Timeline {
 
     /// Jump to the newest frame and re-pin to live.
     pub fn go_head(&mut self) {
+        self.replay = None;
         self.following = true;
         self.playing = false;
         self.playhead = self.frames.len().saturating_sub(1);
@@ -227,6 +265,12 @@ impl Timeline {
             return false;
         }
         self.last_advance = Some(Instant::now());
+        // A replay bundle owns the playhead: it wraps inside its own window, live or not.
+        if let Some((from, to)) = self.replay {
+            let to = to.min(self.frames.len().saturating_sub(1));
+            self.playhead = if self.playhead >= to { from.min(to) } else { self.playhead + 1 };
+            return true;
+        }
         if self.playhead + 1 < self.frames.len() {
             self.playhead += 1;
             // Archive play re-pins to live at the head; a live loop stays pinned throughout.
@@ -417,5 +461,61 @@ mod tests {
             "playhead unmoved; window slides on next wrap"
         );
         assert!(t.live_looping());
+    }
+
+    #[test]
+    fn a_seek_survives_a_listing_it_cannot_land_on() {
+        let mut t = Timeline::default();
+        let day_frames = day("KTLX", 288);
+        let target = day_frames[144].date_time().expect("frame time parses");
+        t.seek_target = Some(target);
+        t.replay_span_min = 60;
+        // The first listing after a site switch can arrive empty; the seek must outlive it.
+        t.set_frames(Vec::new(), ("KTLX".into(), t.date));
+        assert_eq!(t.seek_target, Some(target));
+        assert_eq!(t.replay_span_min, 60);
+
+        t.set_frames(day_frames, ("KTLX".into(), t.date));
+        assert_eq!(t.seek_target, None);
+        assert_eq!(t.replay, Some((138, 150)));
+    }
+
+    #[test]
+    fn a_listing_too_thin_to_bracket_does_not_loop_one_frame_forever() {
+        let mut t = Timeline::default();
+        let frames = day("KTLX", 1);
+        let target = frames[0].date_time().expect("frame time parses");
+        t.seek_target = Some(target);
+        t.replay_span_min = 60;
+        t.set_frames(frames, ("KTLX".into(), t.date));
+        // A single-volume listing: both ends of the window land on it. Seek there, but do not
+        // call it a replay.
+        assert_eq!(t.replay, None);
+        assert!(!t.playing);
+    }
+
+    #[test]
+    fn a_replay_bundle_brackets_its_event_and_loops_inside_the_window() {
+        let mut t = Timeline::default();
+        let day_frames = day("KTLX", 288); // 24 h at 5-minute volumes
+        let target = day_frames[144].date_time().expect("frame time parses"); // 12:00Z
+        t.seek_target = Some(target);
+        t.replay_span_min = 60;
+        t.set_frames(day_frames, ("KTLX".into(), t.date));
+
+        // Half an hour either side of noon, at 5-minute frames: 6 frames back, 6 forward.
+        assert_eq!(t.replay, Some((138, 150)));
+        assert_eq!(t.playhead, 138, "starts before the event, not on it");
+        assert!(t.playing && t.loop_enabled);
+
+        // Playback wraps at the end of the window instead of running on into the afternoon.
+        t.playhead = 150;
+        t.last_advance = None;
+        assert!(t.tick());
+        assert_eq!(t.playhead, 138);
+
+        // Taking the playhead back by hand ends the bundle.
+        t.step(1);
+        assert_eq!(t.replay, None);
     }
 }

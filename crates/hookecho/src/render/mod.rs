@@ -425,6 +425,7 @@ pub struct RenderResources {
     camera_bgl: wgpu::BindGroupLayout,
     tile_bgl: wgpu::BindGroupLayout,
     radar_bgl: wgpu::BindGroupLayout,
+    mrms_bgl: wgpu::BindGroupLayout,
     sampler: wgpu::Sampler,
     // Shared across panes: tile image cache, vector tile geometry, and the world-space overlay
     // (severe weather + placefiles) — the overlay is camera-independent, drawn per-pane camera.
@@ -607,10 +608,54 @@ impl RenderResources {
             cache: None,
         });
 
-        // MRMS pipeline: same layout as radar (camera + radar_bgl), warps a world quad.
+        // The mosaic shares radar.wgsl's shape — uniform, index grid, LUT — but not its layout:
+        // radar_bgl has since grown a precipitation-type texture and an 80-byte uniform, and
+        // borrowing it meant the mosaic had to carry a dummy texture and dead padding that
+        // nobody remembered to keep in step. It got out of step, and every MRMS draw died in
+        // bind-group validation. Its own three-binding layout cannot drift.
+        let mrms_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("mrms_bgl"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: NonZeroU64::new(48),
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Uint,
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+            ],
+        });
+        let mrms_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("mrms_layout"),
+            bind_group_layouts: &[Some(&camera_bgl), Some(&mrms_bgl)],
+            immediate_size: 0,
+        });
         let mrms_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("mrms_pipeline"),
-            layout: Some(&radar_layout),
+            layout: Some(&mrms_layout),
             vertex: wgpu::VertexState {
                 module: &mrms_shader,
                 entry_point: Some("vs_main"),
@@ -689,6 +734,7 @@ impl RenderResources {
             camera_bgl,
             tile_bgl,
             radar_bgl,
+            mrms_bgl,
             sampler,
             tiles: HashMap::new(),
             vector_tiles: HashMap::new(),
@@ -1247,7 +1293,7 @@ impl RenderResources {
         let lut_view = lut_tex.create_view(&wgpu::TextureViewDescriptor::default());
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("mrms_bg"),
-            layout: &self.radar_bgl,
+            layout: &self.mrms_bgl,
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,

@@ -9090,7 +9090,10 @@ impl HookEchoApp {
             // scrub path displays and what it downloads until the new listing lands — i.e. the
             // wrong radar's volumes at an index that means nothing here. A scrubbed pane keeps
             // the time it was looking at; a live one just goes back to the head.
-            if !v.timeline.following {
+            // ...unless a deep link, an event or a replay bundle already asked for an instant:
+            // that target is the whole point of the jump, and overwriting it with the frame the
+            // pane happened to be showing sent every Event Library entry to the wrong day.
+            if !v.timeline.following && v.timeline.seek_target.is_none() {
                 v.timeline.seek_target = v.timeline.current().and_then(|id| id.date_time());
             }
             v.timeline.frames.clear();
@@ -13082,7 +13085,7 @@ impl HookEchoApp {
     }
 
     /// Save the active pane's current view as a named bookmark (archive time captured if scrubbed).
-    pub(crate) fn add_bookmark(&mut self, name: String) {
+    pub(crate) fn add_bookmark(&mut self, name: String, span_min: u16) {
         let v = &self.views[self.active];
         let Some(site) = v.site.clone() else { return };
         let time_secs = v
@@ -13097,6 +13100,7 @@ impl HookEchoApp {
             y: v.camera.center.1,
             zoom: v.camera.zoom,
             time_secs,
+            span_min,
         });
     }
 
@@ -15382,12 +15386,21 @@ impl eframe::App for HookEchoApp {
                     lat,
                     zoom,
                     time,
+                    span_min,
                 } => {
                     self.goto_view(&site, lon, lat, zoom, time);
+                    if span_min > 0 && time.is_some() {
+                        self.views[self.active].timeline.replay_span_min = span_min;
+                        // A replay without its warnings and its damage reports is just a loop;
+                        // both already follow the playhead once they are on.
+                        self.filters.show_alerts = true;
+                        self.show_storm_reports = true;
+                        self.rebuild_overlays();
+                    }
                 }
-                EventAction::AddBookmark => {
+                EventAction::AddBookmark(span_min) => {
                     let n = self.settings.bookmarks.len() + 1;
-                    self.add_bookmark(format!("Bookmark {n}"));
+                    self.add_bookmark(format!("Bookmark {n}"), span_min);
                 }
             }
         }

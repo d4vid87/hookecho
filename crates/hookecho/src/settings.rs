@@ -522,6 +522,10 @@ pub struct Bookmark {
     /// UTC time to seek to (Unix seconds); `None` = live/head.
     #[serde(default)]
     pub time_secs: Option<i64>,
+    /// Replay window around `time_secs`, in minutes. `0` (and any bookmark written before this
+    /// existed) means a still: jump there and stop.
+    #[serde(default)]
+    pub span_min: u16,
 }
 
 fn default_quiet_start() -> u32 {
@@ -1491,6 +1495,7 @@ mod tests {
                 y: 0.4,
                 zoom: 9.0,
                 time_secs: Some(1_600_000_000),
+                span_min: 60,
             }],
             anthropic_key: "sk-test".to_string(),
             lightning_alarm: true,

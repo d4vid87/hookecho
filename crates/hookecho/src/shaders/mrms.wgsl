@@ -9,7 +9,7 @@ struct Camera {
     scale: vec2<f32>,
 };
 
-// Grid bounds + dimensions (padded to 48 bytes to share the radar bind-group layout).
+// Grid bounds + dimensions (48 bytes, matching mrms_bgl's min_binding_size).
 struct Mrms {
     lon_west: f32,
     lat_north: f32,

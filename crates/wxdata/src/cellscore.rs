@@ -40,21 +40,36 @@ pub fn severity(cell: &Cell, prob_pct: Option<u8>, vrot_ms: Option<f32>) -> u8 {
     // Weights: the probability is the most informative single input, rotation and hail split the
     // rest. Thresholds are the operational ones — 10 m/s of Vrot is noise, 40 is a strong
     // mesocyclone; half-inch hail is the severe criterion, three inches is a destructive day.
+    // POSH — the radar's own probability of severe hail — stands in for ProbSevere where the feed
+    // has no storm object over the cell, which is most of the time: the layer is off by default.
+    // It is weaker evidence than a machine-learning severe probability, so it carries less weight.
     let parts = [
         (0.4, prob_pct.map(|p| p as f32)),
         (0.3, vrot_ms.map(|v| ramp(v, 10.0, 40.0))),
         (0.3, cell.hail_in.map(|h| ramp(h, 0.5, 3.0))),
+        (
+            0.2,
+            prob_pct
+                .is_none()
+                .then(|| cell.posh.map(|p| p as f32))
+                .flatten(),
+        ),
     ];
     let (sum, weight) = parts
         .iter()
         .filter_map(|&(w, v)| v.map(|v| (w * v, w)))
         .fold((0.0, 0.0), |(s, w), (a, b)| (s + a, w + b));
-    // Nothing to blend: fall back to reflectivity, which every cell has, so the row still ranks
-    // above an empty one instead of tying at zero.
+    // Reflectivity is the one field every cell has, and it is the weakest evidence of all: a
+    // bright echo is a storm, not a threat. So it rides alongside the hazard blend at a fixed
+    // small share rather than being renormalized with it — otherwise a cell with nothing but
+    // 57 dBZ scored its full ramp and outranked storms carrying a measured hail core, which is
+    // what a live KAMA table did. With no hazard signal at all it is halved: an unknown cell
+    // belongs in the middle of the table, not the top.
+    let dbz = cell.max_dbz.map(|d| ramp(d, 40.0, 70.0)).unwrap_or(0.0);
     let base = if weight > 0.0 {
-        sum / weight
+        0.85 * (sum / weight) + 0.15 * dbz
     } else {
-        cell.max_dbz.map(|d| ramp(d, 40.0, 70.0)).unwrap_or(0.0)
+        0.5 * dbz
     };
     // The radar's own algorithm flags are weak evidence on their own and strong confirmation on
     // top of a score, so they add rather than blend.
@@ -111,8 +126,9 @@ mod tests {
     fn missing_inputs_are_unknown_rather_than_zero() {
         let mut c = cell(-97.5, 35.0);
         c.hail_in = Some(3.0);
-        // Hail alone maxes out; adding an unknown probability must not halve it.
-        assert_eq!(severity(&c, None, None), 100);
+        // Three inches of hail alongside 55 dBZ: the hail dominates its weight, and the weak
+        // reflectivity component pulls the blend down only a little.
+        assert!(severity(&c, None, None) >= 85, "got {}", severity(&c, None, None));
         // A low probability alongside it does drag the blend down.
         assert!(severity(&c, Some(10), None) < 60);
     }
@@ -121,10 +137,25 @@ mod tests {
     fn a_bare_cell_still_ranks_on_reflectivity_and_flags() {
         let c = cell(-97.5, 35.0);
         let plain = severity(&c, None, None);
-        assert_eq!(plain, 50); // 55 dBZ, halfway up the 40–70 ramp.
+        // Nothing but a 55 dBZ echo: halfway up the 40–70 ramp, halved because that is all we
+        // know about it.
+        assert_eq!(plain, 25);
         let mut tvs = cell(-97.5, 35.0);
         tvs.tvs = Some("TVS".into());
         assert_eq!(severity(&tvs, None, None), plain + 15);
+    }
+
+    #[test]
+    fn a_measured_hail_core_outranks_a_merely_bright_echo() {
+        // The case a live KAMA table produced: a 57 dBZ cell with nothing else known was sorting
+        // above a storm carrying a 1.2 in hail estimate and POSH 40.
+        let mut bright = cell(-101.9, 35.5);
+        bright.max_dbz = Some(57.0);
+        let mut hail = cell(-101.8, 35.4);
+        hail.max_dbz = Some(59.0);
+        hail.hail_in = Some(1.2);
+        hail.posh = Some(40);
+        assert!(severity(&hail, None, None) > severity(&bright, None, None));
     }
 
     #[test]
@@ -147,8 +178,8 @@ mod tests {
         let s = score_all(&cells, &feats, &couplets);
         // Inside the polygon and next to the couplet: 90% at weight 0.4 and a maxed Vrot ramp at
         // 0.3, renormalized over the two present components.
-        assert_eq!(s[0], 94);
-        // Six hundred km away, neither claims it — reflectivity only.
-        assert_eq!(s[1], 50);
+        assert_eq!(s[0], 88);
+        // Six hundred km away, neither claims it — the halved reflectivity term only.
+        assert_eq!(s[1], 25);
     }
 }
