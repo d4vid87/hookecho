@@ -63,6 +63,29 @@ const shots = [
   },
 ];
 
+const androidShots = [
+  {
+    src: `${repoShots}/android/map.jpg`,
+    alt: "The Android app showing live radar over the map",
+    caption: "Live radar, one thumb.",
+  },
+  {
+    src: `${repoShots}/android/alerts.jpg`,
+    alt: "A warning polygon and its full text open on the Android app",
+    caption: "Warnings with their full text.",
+  },
+  {
+    src: `${repoShots}/android/layers.jpg`,
+    alt: "The layer picker open on the Android app",
+    caption: "The same layers as the desktop build.",
+  },
+  {
+    src: `${repoShots}/android/site.jpg`,
+    alt: "The radar site picker on the Android app",
+    caption: "Switch radars as you drive.",
+  },
+];
+
 const weatherdeskRepo = "https://github.com/d4vid87/weatherdesk";
 ---
 
@@ -130,6 +153,23 @@ const weatherdeskRepo = "https://github.com/d4vid87/weatherdesk";
 
   <section class="alt">
     <div class="wrap">
+      <p class="eyebrow">In the field</p>
+      <h2>It goes where the storm is</h2>
+      <p>
+        The Android build is the same app, not a companion: the same Level 2 volumes, the same
+        products, laid out for one thumb. Widgets and warning notifications for wherever you have
+        driven to.
+      </p>
+      <ShotGallery shots={androidShots} />
+      <div class="platforms">
+        <a class="btn btn-primary" href="/download/">Get it on Android</a>
+        <a class="btn" href="/features/#android">What it does</a>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="wrap">
       <p class="eyebrow">Against the field</p>
       <h2>Yes, we will tell you when to buy something else</h2>
       <p>
@@ -142,7 +182,7 @@ const weatherdeskRepo = "https://github.com/d4vid87/weatherdesk";
     </div>
   </section>
 
-  <section>
+  <section class="alt">
     <div class="wrap">
       <p class="eyebrow">More from us</p>
       <h2>WeatherDesk</h2>
