@@ -36,6 +36,9 @@ fn main() {
         })
         .collect();
     out.sort_by_key(|s| s["id"].as_str().unwrap().to_string());
+    // The registry also carries a straight duplicate row (KCCX appears twice, identical), which
+    // would give the website two pages fighting over one URL.
+    out.dedup_by_key(|s| s["id"].as_str().unwrap().to_string());
 
     println!("{}", serde_json::to_string_pretty(&out).unwrap());
 }

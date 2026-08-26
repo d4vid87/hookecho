@@ -23,7 +23,11 @@ const when = s.date.toLocaleDateString("en-US", {
 });
 ---
 
-<Base title={`${s.title} — on the radar | HookEcho`} description={s.description} image={s.image}>
+<Base
+  title={`${s.title} — on the radar | HookEcho`}
+  description={s.description}
+  image={s.image ?? `/og/storms/${storm.id}.png`}
+>
   <article>
     <div class="wrap">
       <p class="eyebrow"><a href="/storms/">Storms on the radar</a> · {when}</p>

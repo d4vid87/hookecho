@@ -17,6 +17,7 @@ const place = `${site.city}, ${site.state}`;
 <Base
   title={`${site.id} radar — ${place} | HookEcho`}
   description={`Live NEXRAD radar for ${site.id}, the WSR-88D at ${place}: the current loop, active warnings near the site, and every tilt of the Level 2 volume in HookEcho.`}
+  image={`/og/radar/${site.id.toLowerCase()}.png`}
 >
   <section>
     <div class="wrap">
