@@ -538,6 +538,12 @@ hookecho --serve             # http://127.0.0.1:8080
 hookecho --serve 9000 --bind 0.0.0.0
 ```
 
+Opening it in a browser gives a dashboard rather than a list of links: the radar
+nearest home, conditions and alerts for every saved location, and the closest
+storm being tracked — refreshing itself, so a spare monitor on the wall stays
+current with nobody touching it. Point `--web-root` at the browser build instead
+and you get the full app there.
+
 | Endpoint | What it returns |
 | --- | --- |
 | `/status.json` | conditions and nearby alerts for every saved location |
