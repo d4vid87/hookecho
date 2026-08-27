@@ -1,0 +1,103 @@
+name: Release blog post
+
+# Every stable release gets a post on hookecho.io, written from the same CHANGELOG section that
+# becomes the release body. Nobody has to remember to do it, and the blog stops being four posts
+# all dated the day the site launched.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to write a post for, e.g. v0.12.0"
+        required: true
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  post:
+    name: Draft the post
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Write it
+        id: write
+        env:
+          TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+
+          # A hyphen means a prerelease (v0.12.0-beta.1). Alphas and betas do not get a post:
+          # the blog is for people who use the app, not people who test it.
+          case "$TAG" in
+            *-*) echo "$TAG is a prerelease, no post"; exit 0;;
+          esac
+
+          VERSION="${TAG#v}"
+          SLUG="hookecho-$(echo "$VERSION" | tr . -)"
+          FILE="site/src/content/blog/${SLUG}.md"
+
+          # Re-running this is a normal thing to do, and a post that has been edited by hand must
+          # not be clobbered by the bot.
+          if [ -f "$FILE" ]; then
+            echo "$FILE already exists"
+            exit 0
+          fi
+
+          # Same extraction as release.yml, so the post and the GitHub release body cannot differ.
+          awk -v v="$VERSION" '
+            $0 ~ "^## " v " " { want = 1; next }
+            want && /^## / { exit }
+            want { print }
+          ' CHANGELOG.md > notes.md
+          test -s notes.md || { echo "::error::no CHANGELOG.md section for $VERSION"; exit 1; }
+
+          {
+            echo "---"
+            echo "title: \"HookEcho $VERSION\""
+            echo "description: \"What changed in HookEcho $VERSION.\""
+            echo "date: $(date -u +%Y-%m-%d)"
+            echo "---"
+            echo
+            echo "HookEcho $VERSION is out. [Download it](https://hookecho.io/download/), or"
+            echo "[open it in your browser](https://app.hookecho.io) — the browser build is the"
+            echo "same app on the same live data."
+            echo
+            echo "## What changed"
+            echo
+            cat notes.md
+            echo
+            echo "The full notes and every platform's build are on the"
+            echo "[release page](https://github.com/d4vid87/hookecho/releases/tag/$TAG)."
+          } > "$FILE"
+
+          cat "$FILE"
+          echo "wrote=true" >> "$GITHUB_OUTPUT"
+
+      - name: Commit it
+        if: steps.write.outputs.wrote == 'true'
+        env:
+          TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          # Only ever this directory: the token has contents:write, and a bot that can write
+          # anywhere in the tree on a tag push is a bigger thing than a blog post.
+          git add site/src/content/blog/
+          git commit -m "docs(blog): release notes for $TAG"
+          git push origin main
+
+      - name: Deploy the site
+        if: steps.write.outputs.wrote == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # A push made with GITHUB_TOKEN triggers no other workflow (see announce.yml), so
+          # site.yml has to be asked directly or the post sits in the repo unpublished.
+          gh workflow run site.yml --ref main
