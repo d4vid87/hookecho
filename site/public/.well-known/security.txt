@@ -1,0 +1,10 @@
+# HookEcho — https://hookecho.io
+# Report a vulnerability privately through GitHub security advisories. No email address is
+# published here on purpose: advisories give us a private thread, a CVE if one is warranted, and a
+# public record afterwards, which an inbox does not.
+
+Contact: https://github.com/d4vid87/hookecho/security/advisories/new
+Expires: 2027-08-26T00:00:00.000Z
+Preferred-Languages: en
+Canonical: https://hookecho.io/.well-known/security.txt
+Policy: https://github.com/d4vid87/hookecho/security/policy
