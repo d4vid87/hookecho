@@ -92,12 +92,40 @@ Every post: demo link first, download second. Then stay at the keyboard.
 
 ## Sustained
 
-- **Storm-event pages** within ~48 h of a major event: a `site/src/content/storms`
-  entry plus a short blog post, shareable in that event's threads where on-topic.
+- **Storm-event pages** within ~48 h of a major event. The window is the point:
+  after about two days the threads are dead and the searches have moved on. The
+  recipe is below so it is a fill-in job, not a design job.
 - **One explainer post a month** on the site blog, on a title the existing posts
   do not already cover.
 - **Weekly**: answering radar-app recommendation threads as they appear, on the
   venues above.
+
+### Storm-event page recipe
+
+1. **Find the volume time.** Open the app on the archive, step to the scan that
+   shows the thing the event is remembered for — the couplet at the moment of
+   damage, the eyewall at landfall. Copy the timestamp off the scrubber and
+   convert to UTC; `at:` is RFC3339 and the archive opens exactly there.
+2. **Write `site/src/content/storms/<slug>.md`.** Frontmatter fields are
+   `title`, `description`, `date`, `site`, `lon`, `lat`, `zoom`, `at`, optional
+   `extras`. `site` must be a NEXRAD id that already has a page under `/radar/`.
+   `extras` carries the moment code (`VEL`, `CC`, `ZDR`…), a tilt number and
+   `srv`, in any order. Body: what happened in two or three sentences, then a
+   **What the radar shows** paragraph explaining the product the link opens on
+   and why that product is the one to look at.
+3. **Verify the deep link.** Open the built page's link in the live app and
+   confirm it lands on the right scan with the right product — a wrong `at:` is
+   the one error nobody catches by reading.
+4. **Blog post, only if there is something to teach.** A page per event is
+   enough on its own; a post is worth it when the case shows a signature the
+   existing explainers do not already cover. Link the storm page from it.
+5. **Facts before speed.** Death tolls and ratings move for days after an event.
+   Cite the survey once it exists, and write around the number rather than
+   guessing it. A page that has to be corrected is worse than one posted a day
+   later.
+6. **Ship it**: `cd site && npm run build && npm run linkcheck`, merge, then
+   share into that event's threads *where on-topic* — the same one-venue-a-day
+   and read-the-rules conventions apply. An event page is not a launch post.
 
 ## Conventions
 
