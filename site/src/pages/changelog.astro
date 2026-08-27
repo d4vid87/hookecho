@@ -1,0 +1,56 @@
+---
+import { getCollection, render } from "astro:content";
+import Base from "../layouts/Base.astro";
+
+// One file, so take the one entry rather than hard-coding whatever id the loader derives from
+// the path.
+const [entry] = await getCollection("changelog");
+const { Content } = await render(entry);
+---
+
+<Base
+  title="Changelog | HookEcho"
+  description="Every notable change in every HookEcho release, newest first — the same text that becomes each release's notes on GitHub."
+>
+  <article class="wrap log">
+    <p class="eyebrow">Changelog</p>
+    <p class="lede">
+      This is the repository's own CHANGELOG.md, rendered at build time. It is the same text that
+      becomes each release's notes on GitHub and each
+      <a href="/blog/">release post</a>, so the three cannot disagree.
+    </p>
+    <div class="prose"><Content /></div>
+    <p class="dim">
+      <a href="https://github.com/d4vid87/hookecho/releases">Every release, with its downloads</a> ·
+      <a href="/download/">Get the current version</a> · <a href="/roadmap/">What comes next</a>
+    </p>
+  </article>
+</Base>
+
+<style>
+  .log { max-width: 820px; padding-bottom: 4rem; }
+  .lede { color: var(--text-dim); max-width: 62ch; }
+  .dim { color: var(--text-dim); margin-top: 2.5rem; }
+  /* The file opens with its own "# Changelog" heading and a note about the release workflow that
+     only means something to someone editing the file. Hide both; the page has its own. */
+  .prose :global(h1),
+  .prose :global(h1 + p),
+  .prose :global(h1 + p + p) { display: none; }
+  .prose :global(h2) {
+    margin-top: 2.6rem;
+    padding-top: 1.2rem;
+    border-top: 1px solid var(--stroke);
+    font-size: 1.35rem;
+  }
+  .prose :global(h3) { margin-top: 1.6rem; font-size: 1.02rem; color: var(--text-dim); }
+  .prose :global(ul) { padding-left: 1.2rem; max-width: var(--measure); }
+  .prose :global(li) { margin-bottom: 0.5rem; }
+  .prose :global(p) { max-width: var(--measure); }
+  .prose :global(:not(pre) > code) {
+    background: var(--faint);
+    border: 1px solid var(--stroke);
+    border-radius: 5px;
+    padding: 0.1em 0.35em;
+    font-size: 0.9em;
+  }
+</style>

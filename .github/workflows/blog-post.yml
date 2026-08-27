@@ -73,7 +73,9 @@ jobs:
             cat notes.md
             echo
             echo "The full notes and every platform's build are on the"
-            echo "[release page](https://github.com/d4vid87/hookecho/releases/tag/$TAG)."
+            echo "[release page](https://github.com/d4vid87/hookecho/releases/tag/$TAG),"
+            echo "and every release before this one is on the"
+            echo "[changelog](https://hookecho.io/changelog/)."
           } > "$FILE"
 
           cat "$FILE"
