@@ -73,6 +73,44 @@ await section("GitHub", async () => {
   ];
 });
 
+// The two directory listings that were rejected on eligibility rather than merit. Both gates are
+// dates or counters, so checking them by hand for months is exactly the chore that quietly stops
+// happening — this stays silent until one opens, then nags every Monday until it is submitted.
+//
+// ponytail: refetches the repo rather than sharing the GitHub section's response. Sections are
+// deliberately independent so one dead source cannot take the digest with it, and one extra call a
+// week is cheaper than the coupling.
+await section("Submissions now open", async () => {
+  const auth = process.env.GITHUB_TOKEN ? { authorization: `Bearer ${process.env.GITHUB_TOKEN}` } : {};
+  const repo = await get(`https://api.github.com/repos/${REPO}`, auth);
+  const releases = await get(`https://api.github.com/repos/${REPO}/releases?per_page=100`, auth);
+  const lines = [];
+
+  // awesome-rust judges on `(stars > 50 | crates.io downloads > 2000)` and explicitly on nothing
+  // else, so the star count is the whole gate.
+  if (repo.stargazers_count > 50) {
+    lines.push(
+      `• awesome-rust — ${repo.stargazers_count} stars clears the >50 gate. Applications section, alphabetical: https://github.com/rust-unofficial/awesome-rust`,
+    );
+  }
+
+  // awesome-selfhosted requires the first release to be more than 4 months old. Published dates
+  // only: a draft has none, and `demote-old` drafts superseded stables.
+  const published = releases.map((r) => r.published_at).filter(Boolean).sort();
+  const first = published[0];
+  if (first) {
+    const opensAt = new Date(first);
+    opensAt.setMonth(opensAt.getMonth() + 4);
+    if (Date.now() > opensAt.getTime()) {
+      lines.push(
+        `• awesome-selfhosted — first release ${first.slice(0, 10)} is over 4 months old. Add software/hookecho.yml to https://github.com/awesome-selfhosted/awesome-selfhosted-data`,
+      );
+    }
+  }
+
+  return lines;
+});
+
 const body = [
   `**HookEcho — last 8 days**`,
   ...sections,
