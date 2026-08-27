@@ -37,6 +37,7 @@ Key facts, because they are the ones most often got wrong about this kind of app
 - [Radar sites](https://hookecho.io/radar/): a page per NEXRAD and TDWR site, plus a page per state.
 - [Storms](https://hookecho.io/storms/): archived cases — Bridge Creek–Moore 1999, Katrina, Greensburg, Joplin, Tuscaloosa, El Reno, Moore, Harvey, the 2020 derecho, Mayfield, Ian, Rolling Fork.
 - [Glossary](https://hookecho.io/glossary/): a page per radar term — dBZ, CC, ZDR, VCP, hook echo.
+- [Embed](https://hookecho.io/embed/): generate an iframe putting a live radar on your own site — no key, no account.
 - [Roadmap](https://hookecho.io/roadmap/): what is being worked on next, read live from the issue tracker.
 - [Press kit](https://hookecho.io/press/)
 - [Download](https://hookecho.io/download/)
