@@ -1,11 +1,11 @@
-//! Emit the WSR-88D site table the website builds its per-site radar pages from:
+//! Emit the radar site table the website builds its per-site radar pages from:
 //! `cargo run -p wxdata --example nexrad_sites > site/src/data/nexrad-sites.json`.
 //!
 //! The site builds on Node alone (no Rust in .github/workflows/site.yml), so the JSON is
 //! committed and CI re-runs this to check it hasn't drifted.
 //!
 //! Separate from `sites_json.rs` on purpose: that one dumps every network in a schema WeatherDesk
-//! vendors, and this one is NEXRAD-only with the timezone folded in.
+//! vendors, and this one carries the timezone and the network the page template branches on.
 
 fn round4(v: f32) -> f64 {
     (v as f64 * 1e4).round() / 1e4
@@ -32,9 +32,25 @@ fn main() {
                 "lon": round4(s.longitude),
                 "elev_m": s.elevation_meters,
                 "tz": wxdata::tz::site_tz(s.id).map(|tz| tz.name()),
+                "network": "nexrad",
             })
         })
         .collect();
+
+    // The 44 TDWRs come from their own table (bare `sites()` is WSR-88D only). No K-alias problem
+    // here — the ids are unique — but the website renders them differently, hence the field above.
+    out.extend(wxdata::tdwr::SITES.iter().map(|s| {
+        serde_json::json!({
+            "id": s.id,
+            "city": s.city,
+            "state": s.state,
+            "lat": round4(s.latitude),
+            "lon": round4(s.longitude),
+            "elev_m": s.elevation_meters,
+            "tz": wxdata::tz::site_tz(s.id).map(|tz| tz.name()),
+            "network": "tdwr",
+        })
+    }));
     out.sort_by_key(|s| s["id"].as_str().unwrap().to_string());
     // The registry also carries a straight duplicate row (KCCX appears twice, identical), which
     // would give the website two pages fighting over one URL.

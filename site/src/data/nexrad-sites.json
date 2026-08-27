@@ -5,6 +5,7 @@
     "id": "KABR",
     "lat": 45.4558,
     "lon": -98.4131,
+    "network": "nexrad",
     "state": "SD",
     "tz": "America/Chicago"
   },
@@ -14,6 +15,7 @@
     "id": "KABX",
     "lat": 35.1497,
     "lon": -106.8239,
+    "network": "nexrad",
     "state": "NM",
     "tz": "America/Denver"
   },
@@ -23,6 +25,7 @@
     "id": "KAKQ",
     "lat": 36.9839,
     "lon": -77.0072,
+    "network": "nexrad",
     "state": "VA",
     "tz": "America/New_York"
   },
@@ -32,6 +35,7 @@
     "id": "KAMA",
     "lat": 35.2333,
     "lon": -101.7092,
+    "network": "nexrad",
     "state": "TX",
     "tz": "America/Chicago"
   },
@@ -41,6 +45,7 @@
     "id": "KAMX",
     "lat": 25.6111,
     "lon": -80.4128,
+    "network": "nexrad",
     "state": "FL",
     "tz": "America/New_York"
   },
@@ -50,6 +55,7 @@
     "id": "KAPX",
     "lat": 44.9072,
     "lon": -84.7197,
+    "network": "nexrad",
     "state": "MI",
     "tz": "America/Detroit"
   },
@@ -59,6 +65,7 @@
     "id": "KARX",
     "lat": 43.8228,
     "lon": -91.1911,
+    "network": "nexrad",
     "state": "WI",
     "tz": "America/Chicago"
   },
@@ -68,6 +75,7 @@
     "id": "KATX",
     "lat": 48.1944,
     "lon": -122.4958,
+    "network": "nexrad",
     "state": "WA",
     "tz": "America/Los_Angeles"
   },
@@ -77,6 +85,7 @@
     "id": "KBBX",
     "lat": 39.4961,
     "lon": -121.6317,
+    "network": "nexrad",
     "state": "CA",
     "tz": "America/Los_Angeles"
   },
@@ -86,6 +95,7 @@
     "id": "KBGM",
     "lat": 42.1997,
     "lon": -75.9847,
+    "network": "nexrad",
     "state": "NY",
     "tz": "America/New_York"
   },
@@ -95,6 +105,7 @@
     "id": "KBIS",
     "lat": 46.7708,
     "lon": -100.7603,
+    "network": "nexrad",
     "state": "ND",
     "tz": "America/Chicago"
   },
@@ -104,6 +115,7 @@
     "id": "KBLX",
     "lat": 45.8536,
     "lon": -108.6069,
+    "network": "nexrad",
     "state": "MT",
     "tz": "America/Denver"
   },
@@ -113,6 +125,7 @@
     "id": "KBMX",
     "lat": 33.1722,
     "lon": -86.7698,
+    "network": "nexrad",
     "state": "AL",
     "tz": "America/Chicago"
   },
@@ -122,6 +135,7 @@
     "id": "KBOX",
     "lat": 41.9558,
     "lon": -71.1369,
+    "network": "nexrad",
     "state": "MA",
     "tz": "America/New_York"
   },
@@ -131,6 +145,7 @@
     "id": "KBRO",
     "lat": 25.9158,
     "lon": -97.4189,
+    "network": "nexrad",
     "state": "TX",
     "tz": "America/Chicago"
   },
@@ -140,6 +155,7 @@
     "id": "KBUF",
     "lat": 42.9486,
     "lon": -78.7369,
+    "network": "nexrad",
     "state": "NY",
     "tz": "America/New_York"
   },
@@ -149,6 +165,7 @@
     "id": "KBYX",
     "lat": 24.5975,
     "lon": -81.7031,
+    "network": "nexrad",
     "state": "FL",
     "tz": "America/New_York"
   },
@@ -158,6 +175,7 @@
     "id": "KCAE",
     "lat": 33.9486,
     "lon": -81.1186,
+    "network": "nexrad",
     "state": "SC",
     "tz": "America/New_York"
   },
@@ -167,6 +185,7 @@
     "id": "KCBW",
     "lat": 46.0392,
     "lon": -67.8067,
+    "network": "nexrad",
     "state": "ME",
     "tz": "America/New_York"
   },
@@ -176,6 +195,7 @@
     "id": "KCBX",
     "lat": 43.4908,
     "lon": -116.2358,
+    "network": "nexrad",
     "state": "ID",
     "tz": "America/Boise"
   },
@@ -185,6 +205,7 @@
     "id": "KCCX",
     "lat": 40.9231,
     "lon": -78.0039,
+    "network": "nexrad",
     "state": "PA",
     "tz": "America/New_York"
   },
@@ -194,6 +215,7 @@
     "id": "KCLE",
     "lat": 41.4131,
     "lon": -81.8597,
+    "network": "nexrad",
     "state": "OH",
     "tz": "America/New_York"
   },
@@ -203,6 +225,7 @@
     "id": "KCLX",
     "lat": 32.6556,
     "lon": -81.0425,
+    "network": "nexrad",
     "state": "SC",
     "tz": "America/New_York"
   },
@@ -212,6 +235,7 @@
     "id": "KCRP",
     "lat": 27.7842,
     "lon": -97.5111,
+    "network": "nexrad",
     "state": "TX",
     "tz": "America/Chicago"
   },
@@ -221,6 +245,7 @@
     "id": "KCXX",
     "lat": 44.5111,
     "lon": -73.1667,
+    "network": "nexrad",
     "state": "VT",
     "tz": "America/New_York"
   },
@@ -230,6 +255,7 @@
     "id": "KCYS",
     "lat": 41.1519,
     "lon": -104.8061,
+    "network": "nexrad",
     "state": "WY",
     "tz": "America/Denver"
   },
@@ -239,6 +265,7 @@
     "id": "KDAX",
     "lat": 38.5011,
     "lon": -121.6778,
+    "network": "nexrad",
     "state": "CA",
     "tz": "America/Los_Angeles"
   },
@@ -248,6 +275,7 @@
     "id": "KDDC",
     "lat": 37.7608,
     "lon": -99.9689,
+    "network": "nexrad",
     "state": "KS",
     "tz": "America/Chicago"
   },
@@ -257,6 +285,7 @@
     "id": "KDFX",
     "lat": 29.2722,
     "lon": -100.2803,
+    "network": "nexrad",
     "state": "TX",
     "tz": "America/Chicago"
   },
@@ -266,6 +295,7 @@
     "id": "KDGX",
     "lat": 32.28,
     "lon": -89.9844,
+    "network": "nexrad",
     "state": "MS",
     "tz": "America/Chicago"
   },
@@ -275,6 +305,7 @@
     "id": "KDIX",
     "lat": 39.9469,
     "lon": -74.4108,
+    "network": "nexrad",
     "state": "PA",
     "tz": "America/New_York"
   },
@@ -284,6 +315,7 @@
     "id": "KDLH",
     "lat": 46.8369,
     "lon": -92.2097,
+    "network": "nexrad",
     "state": "MN",
     "tz": "America/Chicago"
   },
@@ -293,6 +325,7 @@
     "id": "KDMX",
     "lat": 41.7311,
     "lon": -93.7228,
+    "network": "nexrad",
     "state": "IA",
     "tz": "America/Chicago"
   },
@@ -302,6 +335,7 @@
     "id": "KDTX",
     "lat": 42.6997,
     "lon": -83.4717,
+    "network": "nexrad",
     "state": "MI",
     "tz": "America/Detroit"
   },
@@ -311,6 +345,7 @@
     "id": "KDVN",
     "lat": 41.6117,
     "lon": -90.5808,
+    "network": "nexrad",
     "state": "IA",
     "tz": "America/Chicago"
   },
@@ -320,6 +355,7 @@
     "id": "KDYX",
     "lat": 32.5386,
     "lon": -99.2544,
+    "network": "nexrad",
     "state": "TX",
     "tz": "America/Chicago"
   },
@@ -329,6 +365,7 @@
     "id": "KEAX",
     "lat": 38.8103,
     "lon": -94.2644,
+    "network": "nexrad",
     "state": "MO",
     "tz": "America/Chicago"
   },
@@ -338,6 +375,7 @@
     "id": "KEMX",
     "lat": 31.8939,
     "lon": -110.6303,
+    "network": "nexrad",
     "state": "AZ",
     "tz": "America/Phoenix"
   },
@@ -347,6 +385,7 @@
     "id": "KENX",
     "lat": 42.5864,
     "lon": -74.0639,
+    "network": "nexrad",
     "state": "NY",
     "tz": "America/New_York"
   },
@@ -356,6 +395,7 @@
     "id": "KEOX",
     "lat": 31.4606,
     "lon": -85.4592,
+    "network": "nexrad",
     "state": "AL",
     "tz": "America/Chicago"
   },
@@ -365,6 +405,7 @@
     "id": "KEPZ",
     "lat": 31.8731,
     "lon": -106.6978,
+    "network": "nexrad",
     "state": "TX",
     "tz": "America/Denver"
   },
@@ -374,6 +415,7 @@
     "id": "KESX",
     "lat": 35.7011,
     "lon": -114.8914,
+    "network": "nexrad",
     "state": "NV",
     "tz": "America/Los_Angeles"
   },
@@ -383,6 +425,7 @@
     "id": "KEVX",
     "lat": 30.5644,
     "lon": -85.9214,
+    "network": "nexrad",
     "state": "FL",
     "tz": "America/Chicago"
   },
@@ -392,6 +435,7 @@
     "id": "KEWX",
     "lat": 29.7039,
     "lon": -98.0286,
+    "network": "nexrad",
     "state": "TX",
     "tz": "America/Chicago"
   },
@@ -401,6 +445,7 @@
     "id": "KEYX",
     "lat": 35.0978,
     "lon": -117.5608,
+    "network": "nexrad",
     "state": "CA",
     "tz": "America/Los_Angeles"
   },
@@ -410,6 +455,7 @@
     "id": "KFCX",
     "lat": 37.0242,
     "lon": -80.2744,
+    "network": "nexrad",
     "state": "VA",
     "tz": "America/New_York"
   },
@@ -419,6 +465,7 @@
     "id": "KFDR",
     "lat": 34.3622,
     "lon": -98.9764,
+    "network": "nexrad",
     "state": "OK",
     "tz": "America/Chicago"
   },
@@ -428,6 +475,7 @@
     "id": "KFDX",
     "lat": 34.635,
     "lon": -103.6297,
+    "network": "nexrad",
     "state": "NM",
     "tz": "America/Denver"
   },
@@ -437,6 +485,7 @@
     "id": "KFFC",
     "lat": 33.3636,
     "lon": -84.5658,
+    "network": "nexrad",
     "state": "GA",
     "tz": "America/New_York"
   },
@@ -446,6 +495,7 @@
     "id": "KFSD",
     "lat": 43.5878,
     "lon": -96.7289,
+    "network": "nexrad",
     "state": "SD",
     "tz": "America/Chicago"
   },
@@ -455,6 +505,7 @@
     "id": "KFSX",
     "lat": 34.5744,
     "lon": -111.1983,
+    "network": "nexrad",
     "state": "AZ",
     "tz": "America/Phoenix"
   },
@@ -464,6 +515,7 @@
     "id": "KFTG",
     "lat": 39.7867,
     "lon": -104.5458,
+    "network": "nexrad",
     "state": "CO",
     "tz": "America/Denver"
   },
@@ -473,6 +525,7 @@
     "id": "KFWS",
     "lat": 32.5731,
     "lon": -97.3031,
+    "network": "nexrad",
     "state": "TX",
     "tz": "America/Chicago"
   },
@@ -482,6 +535,7 @@
     "id": "KGGW",
     "lat": 48.2064,
     "lon": -106.6253,
+    "network": "nexrad",
     "state": "MT",
     "tz": "America/Denver"
   },
@@ -491,6 +545,7 @@
     "id": "KGJX",
     "lat": 39.0622,
     "lon": -108.2139,
+    "network": "nexrad",
     "state": "CO",
     "tz": "America/Denver"
   },
@@ -500,6 +555,7 @@
     "id": "KGLD",
     "lat": 39.3669,
     "lon": -101.7003,
+    "network": "nexrad",
     "state": "KS",
     "tz": "America/Denver"
   },
@@ -509,6 +565,7 @@
     "id": "KGRB",
     "lat": 44.4986,
     "lon": -88.1111,
+    "network": "nexrad",
     "state": "WI",
     "tz": "America/Chicago"
   },
@@ -518,6 +575,7 @@
     "id": "KGRK",
     "lat": 30.7217,
     "lon": -97.3828,
+    "network": "nexrad",
     "state": "TX",
     "tz": "America/Chicago"
   },
@@ -527,6 +585,7 @@
     "id": "KGRR",
     "lat": 42.8939,
     "lon": -85.5447,
+    "network": "nexrad",
     "state": "MI",
     "tz": "America/Detroit"
   },
@@ -536,6 +595,7 @@
     "id": "KGSP",
     "lat": 34.8833,
     "lon": -82.22,
+    "network": "nexrad",
     "state": "SC",
     "tz": "America/New_York"
   },
@@ -545,6 +605,7 @@
     "id": "KGWX",
     "lat": 33.8967,
     "lon": -88.3289,
+    "network": "nexrad",
     "state": "MS",
     "tz": "America/Chicago"
   },
@@ -554,6 +615,7 @@
     "id": "KGYX",
     "lat": 43.8914,
     "lon": -70.2567,
+    "network": "nexrad",
     "state": "ME",
     "tz": "America/New_York"
   },
@@ -563,6 +625,7 @@
     "id": "KHDX",
     "lat": 33.0769,
     "lon": -106.12,
+    "network": "nexrad",
     "state": "NM",
     "tz": "America/Denver"
   },
@@ -572,6 +635,7 @@
     "id": "KHGX",
     "lat": 29.4719,
     "lon": -95.0792,
+    "network": "nexrad",
     "state": "TX",
     "tz": "America/Chicago"
   },
@@ -581,6 +645,7 @@
     "id": "KHNX",
     "lat": 36.3142,
     "lon": -119.6322,
+    "network": "nexrad",
     "state": "CA",
     "tz": "America/Los_Angeles"
   },
@@ -590,6 +655,7 @@
     "id": "KHPX",
     "lat": 36.7369,
     "lon": -87.285,
+    "network": "nexrad",
     "state": "KY",
     "tz": "America/Chicago"
   },
@@ -599,6 +665,7 @@
     "id": "KHTX",
     "lat": 34.9306,
     "lon": -86.0833,
+    "network": "nexrad",
     "state": "AL",
     "tz": "America/Chicago"
   },
@@ -608,6 +675,7 @@
     "id": "KICT",
     "lat": 37.6544,
     "lon": -97.4428,
+    "network": "nexrad",
     "state": "KS",
     "tz": "America/Chicago"
   },
@@ -617,6 +685,7 @@
     "id": "KICX",
     "lat": 37.5911,
     "lon": -112.8622,
+    "network": "nexrad",
     "state": "UT",
     "tz": "America/Denver"
   },
@@ -626,6 +695,7 @@
     "id": "KILN",
     "lat": 39.4203,
     "lon": -83.8217,
+    "network": "nexrad",
     "state": "OH",
     "tz": "America/New_York"
   },
@@ -635,6 +705,7 @@
     "id": "KILX",
     "lat": 40.1506,
     "lon": -89.3369,
+    "network": "nexrad",
     "state": "IL",
     "tz": "America/Chicago"
   },
@@ -644,6 +715,7 @@
     "id": "KIND",
     "lat": 39.7075,
     "lon": -86.2803,
+    "network": "nexrad",
     "state": "IN",
     "tz": "America/Indiana/Indianapolis"
   },
@@ -653,6 +725,7 @@
     "id": "KINX",
     "lat": 36.175,
     "lon": -95.5647,
+    "network": "nexrad",
     "state": "OK",
     "tz": "America/Chicago"
   },
@@ -662,6 +735,7 @@
     "id": "KIWA",
     "lat": 33.2892,
     "lon": -111.67,
+    "network": "nexrad",
     "state": "AZ",
     "tz": "America/Phoenix"
   },
@@ -671,6 +745,7 @@
     "id": "KIWX",
     "lat": 41.3586,
     "lon": -85.7,
+    "network": "nexrad",
     "state": "IN",
     "tz": "America/Indiana/Indianapolis"
   },
@@ -680,6 +755,7 @@
     "id": "KJAX",
     "lat": 30.4847,
     "lon": -81.7019,
+    "network": "nexrad",
     "state": "FL",
     "tz": "America/New_York"
   },
@@ -689,6 +765,7 @@
     "id": "KJGX",
     "lat": 32.6756,
     "lon": -83.3511,
+    "network": "nexrad",
     "state": "GA",
     "tz": "America/New_York"
   },
@@ -698,6 +775,7 @@
     "id": "KJKL",
     "lat": 37.5908,
     "lon": -83.3131,
+    "network": "nexrad",
     "state": "KY",
     "tz": "America/New_York"
   },
@@ -707,6 +785,7 @@
     "id": "KLBB",
     "lat": 33.6542,
     "lon": -101.8142,
+    "network": "nexrad",
     "state": "TX",
     "tz": "America/Chicago"
   },
@@ -716,6 +795,7 @@
     "id": "KLCH",
     "lat": 30.1253,
     "lon": -93.2158,
+    "network": "nexrad",
     "state": "LA",
     "tz": "America/Chicago"
   },
@@ -725,6 +805,7 @@
     "id": "KLIX",
     "lat": 30.3367,
     "lon": -89.8256,
+    "network": "nexrad",
     "state": "LA",
     "tz": "America/Chicago"
   },
@@ -734,6 +815,7 @@
     "id": "KLNX",
     "lat": 41.9578,
     "lon": -100.5761,
+    "network": "nexrad",
     "state": "NE",
     "tz": "America/Chicago"
   },
@@ -743,6 +825,7 @@
     "id": "KLOT",
     "lat": 41.6044,
     "lon": -88.0847,
+    "network": "nexrad",
     "state": "IL",
     "tz": "America/Chicago"
   },
@@ -752,6 +835,7 @@
     "id": "KLRX",
     "lat": 40.74,
     "lon": -116.8025,
+    "network": "nexrad",
     "state": "NV",
     "tz": "America/Los_Angeles"
   },
@@ -761,6 +845,7 @@
     "id": "KLSX",
     "lat": 38.6986,
     "lon": -90.6828,
+    "network": "nexrad",
     "state": "MO",
     "tz": "America/Chicago"
   },
@@ -770,6 +855,7 @@
     "id": "KLTX",
     "lat": 33.9892,
     "lon": -78.4292,
+    "network": "nexrad",
     "state": "NC",
     "tz": "America/New_York"
   },
@@ -779,6 +865,7 @@
     "id": "KLVX",
     "lat": 37.9753,
     "lon": -85.9439,
+    "network": "nexrad",
     "state": "KY",
     "tz": "America/New_York"
   },
@@ -788,6 +875,7 @@
     "id": "KLWX",
     "lat": 38.9753,
     "lon": -77.4778,
+    "network": "nexrad",
     "state": "VA",
     "tz": "America/New_York"
   },
@@ -797,6 +885,7 @@
     "id": "KLZK",
     "lat": 34.8364,
     "lon": -92.2622,
+    "network": "nexrad",
     "state": "AR",
     "tz": "America/Chicago"
   },
@@ -806,6 +895,7 @@
     "id": "KMAF",
     "lat": 31.9433,
     "lon": -102.1892,
+    "network": "nexrad",
     "state": "TX",
     "tz": "America/Chicago"
   },
@@ -815,6 +905,7 @@
     "id": "KMAX",
     "lat": 42.0811,
     "lon": -122.7167,
+    "network": "nexrad",
     "state": "OR",
     "tz": "America/Los_Angeles"
   },
@@ -824,6 +915,7 @@
     "id": "KMBX",
     "lat": 48.3925,
     "lon": -100.8644,
+    "network": "nexrad",
     "state": "ND",
     "tz": "America/Chicago"
   },
@@ -833,6 +925,7 @@
     "id": "KMHX",
     "lat": 34.7761,
     "lon": -76.8764,
+    "network": "nexrad",
     "state": "NC",
     "tz": "America/New_York"
   },
@@ -842,6 +935,7 @@
     "id": "KMKX",
     "lat": 42.9678,
     "lon": -88.5506,
+    "network": "nexrad",
     "state": "WI",
     "tz": "America/Chicago"
   },
@@ -851,6 +945,7 @@
     "id": "KMLB",
     "lat": 28.1133,
     "lon": -80.6542,
+    "network": "nexrad",
     "state": "FL",
     "tz": "America/New_York"
   },
@@ -860,6 +955,7 @@
     "id": "KMOB",
     "lat": 30.6794,
     "lon": -88.2397,
+    "network": "nexrad",
     "state": "AL",
     "tz": "America/Chicago"
   },
@@ -869,6 +965,7 @@
     "id": "KMPX",
     "lat": 44.8489,
     "lon": -93.5653,
+    "network": "nexrad",
     "state": "MN",
     "tz": "America/Chicago"
   },
@@ -878,6 +975,7 @@
     "id": "KMQT",
     "lat": 46.5314,
     "lon": -87.5486,
+    "network": "nexrad",
     "state": "MI",
     "tz": "America/Detroit"
   },
@@ -887,6 +985,7 @@
     "id": "KMRX",
     "lat": 36.1686,
     "lon": -83.4017,
+    "network": "nexrad",
     "state": "TN",
     "tz": "America/New_York"
   },
@@ -896,6 +995,7 @@
     "id": "KMSX",
     "lat": 47.0411,
     "lon": -113.9864,
+    "network": "nexrad",
     "state": "MT",
     "tz": "America/Denver"
   },
@@ -905,6 +1005,7 @@
     "id": "KMTX",
     "lat": 41.2628,
     "lon": -112.4478,
+    "network": "nexrad",
     "state": "UT",
     "tz": "America/Denver"
   },
@@ -914,6 +1015,7 @@
     "id": "KMUX",
     "lat": 37.1553,
     "lon": -121.8983,
+    "network": "nexrad",
     "state": "CA",
     "tz": "America/Los_Angeles"
   },
@@ -923,6 +1025,7 @@
     "id": "KMVX",
     "lat": 47.5281,
     "lon": -97.3256,
+    "network": "nexrad",
     "state": "ND",
     "tz": "America/Chicago"
   },
@@ -932,6 +1035,7 @@
     "id": "KMXX",
     "lat": 32.5367,
     "lon": -85.7897,
+    "network": "nexrad",
     "state": "AL",
     "tz": "America/Chicago"
   },
@@ -941,6 +1045,7 @@
     "id": "KNKX",
     "lat": 32.9189,
     "lon": -117.0419,
+    "network": "nexrad",
     "state": "CA",
     "tz": "America/Los_Angeles"
   },
@@ -950,6 +1055,7 @@
     "id": "KNQA",
     "lat": 35.3447,
     "lon": -89.8733,
+    "network": "nexrad",
     "state": "TN",
     "tz": "America/Chicago"
   },
@@ -959,6 +1065,7 @@
     "id": "KOAX",
     "lat": 41.3203,
     "lon": -96.3667,
+    "network": "nexrad",
     "state": "NE",
     "tz": "America/Chicago"
   },
@@ -968,6 +1075,7 @@
     "id": "KOHX",
     "lat": 36.2472,
     "lon": -86.5625,
+    "network": "nexrad",
     "state": "TN",
     "tz": "America/Chicago"
   },
@@ -977,6 +1085,7 @@
     "id": "KOKX",
     "lat": 40.8656,
     "lon": -72.8639,
+    "network": "nexrad",
     "state": "NY",
     "tz": "America/New_York"
   },
@@ -986,6 +1095,7 @@
     "id": "KOTX",
     "lat": 47.6806,
     "lon": -117.6267,
+    "network": "nexrad",
     "state": "WA",
     "tz": "America/Los_Angeles"
   },
@@ -995,6 +1105,7 @@
     "id": "KPAH",
     "lat": 37.0683,
     "lon": -88.7722,
+    "network": "nexrad",
     "state": "KY",
     "tz": "America/Chicago"
   },
@@ -1004,6 +1115,7 @@
     "id": "KPBZ",
     "lat": 40.5317,
     "lon": -80.0183,
+    "network": "nexrad",
     "state": "PA",
     "tz": "America/New_York"
   },
@@ -1013,6 +1125,7 @@
     "id": "KPDT",
     "lat": 45.6906,
     "lon": -118.8528,
+    "network": "nexrad",
     "state": "OR",
     "tz": "America/Los_Angeles"
   },
@@ -1022,6 +1135,7 @@
     "id": "KPOE",
     "lat": 31.1556,
     "lon": -92.9756,
+    "network": "nexrad",
     "state": "LA",
     "tz": "America/Chicago"
   },
@@ -1031,6 +1145,7 @@
     "id": "KPUX",
     "lat": 38.4594,
     "lon": -104.1817,
+    "network": "nexrad",
     "state": "CO",
     "tz": "America/Denver"
   },
@@ -1040,6 +1155,7 @@
     "id": "KRAX",
     "lat": 35.6656,
     "lon": -78.4903,
+    "network": "nexrad",
     "state": "NC",
     "tz": "America/New_York"
   },
@@ -1049,6 +1165,7 @@
     "id": "KRGX",
     "lat": 39.7542,
     "lon": -119.4622,
+    "network": "nexrad",
     "state": "NV",
     "tz": "America/Los_Angeles"
   },
@@ -1058,6 +1175,7 @@
     "id": "KRIW",
     "lat": 43.0661,
     "lon": -108.4772,
+    "network": "nexrad",
     "state": "WY",
     "tz": "America/Denver"
   },
@@ -1067,6 +1185,7 @@
     "id": "KRLX",
     "lat": 38.3111,
     "lon": -81.7231,
+    "network": "nexrad",
     "state": "WV",
     "tz": "America/New_York"
   },
@@ -1076,6 +1195,7 @@
     "id": "KRTX",
     "lat": 45.715,
     "lon": -122.9653,
+    "network": "nexrad",
     "state": "OR",
     "tz": "America/Los_Angeles"
   },
@@ -1085,6 +1205,7 @@
     "id": "KSFX",
     "lat": 43.1058,
     "lon": -112.6861,
+    "network": "nexrad",
     "state": "ID",
     "tz": "America/Boise"
   },
@@ -1094,6 +1215,7 @@
     "id": "KSGF",
     "lat": 37.2353,
     "lon": -93.4006,
+    "network": "nexrad",
     "state": "MO",
     "tz": "America/Chicago"
   },
@@ -1103,6 +1225,7 @@
     "id": "KSHV",
     "lat": 32.4508,
     "lon": -93.8411,
+    "network": "nexrad",
     "state": "LA",
     "tz": "America/Chicago"
   },
@@ -1112,6 +1235,7 @@
     "id": "KSJT",
     "lat": 31.3714,
     "lon": -100.4925,
+    "network": "nexrad",
     "state": "TX",
     "tz": "America/Chicago"
   },
@@ -1121,6 +1245,7 @@
     "id": "KSOX",
     "lat": 33.8178,
     "lon": -117.6358,
+    "network": "nexrad",
     "state": "CA",
     "tz": "America/Los_Angeles"
   },
@@ -1130,6 +1255,7 @@
     "id": "KSRX",
     "lat": 35.2906,
     "lon": -94.3619,
+    "network": "nexrad",
     "state": "AR",
     "tz": "America/Chicago"
   },
@@ -1139,6 +1265,7 @@
     "id": "KTBW",
     "lat": 27.7056,
     "lon": -82.4017,
+    "network": "nexrad",
     "state": "FL",
     "tz": "America/New_York"
   },
@@ -1148,6 +1275,7 @@
     "id": "KTFX",
     "lat": 47.4597,
     "lon": -111.3853,
+    "network": "nexrad",
     "state": "MT",
     "tz": "America/Denver"
   },
@@ -1157,6 +1285,7 @@
     "id": "KTLH",
     "lat": 30.3975,
     "lon": -84.3289,
+    "network": "nexrad",
     "state": "FL",
     "tz": "America/New_York"
   },
@@ -1166,6 +1295,7 @@
     "id": "KTLX",
     "lat": 35.3331,
     "lon": -97.2778,
+    "network": "nexrad",
     "state": "OK",
     "tz": "America/Chicago"
   },
@@ -1175,6 +1305,7 @@
     "id": "KTWX",
     "lat": 38.9969,
     "lon": -96.2325,
+    "network": "nexrad",
     "state": "KS",
     "tz": "America/Chicago"
   },
@@ -1184,6 +1315,7 @@
     "id": "KTYX",
     "lat": 43.7558,
     "lon": -75.68,
+    "network": "nexrad",
     "state": "NY",
     "tz": "America/New_York"
   },
@@ -1193,6 +1325,7 @@
     "id": "KUDX",
     "lat": 44.125,
     "lon": -102.8297,
+    "network": "nexrad",
     "state": "SD",
     "tz": "America/Denver"
   },
@@ -1202,6 +1335,7 @@
     "id": "KUEX",
     "lat": 40.3208,
     "lon": -98.4419,
+    "network": "nexrad",
     "state": "NE",
     "tz": "America/Chicago"
   },
@@ -1211,6 +1345,7 @@
     "id": "KVAX",
     "lat": 30.89,
     "lon": -83.0019,
+    "network": "nexrad",
     "state": "GA",
     "tz": "America/New_York"
   },
@@ -1220,6 +1355,7 @@
     "id": "KVBX",
     "lat": 34.8383,
     "lon": -120.3978,
+    "network": "nexrad",
     "state": "CA",
     "tz": "America/Los_Angeles"
   },
@@ -1229,6 +1365,7 @@
     "id": "KVNX",
     "lat": 36.7406,
     "lon": -98.1278,
+    "network": "nexrad",
     "state": "OK",
     "tz": "America/Chicago"
   },
@@ -1238,6 +1375,7 @@
     "id": "KVTX",
     "lat": 34.4114,
     "lon": -119.1794,
+    "network": "nexrad",
     "state": "CA",
     "tz": "America/Los_Angeles"
   },
@@ -1247,6 +1385,7 @@
     "id": "KVWX",
     "lat": 38.2603,
     "lon": -87.7247,
+    "network": "nexrad",
     "state": "IN",
     "tz": "America/Chicago"
   },
@@ -1256,6 +1395,7 @@
     "id": "KYUX",
     "lat": 32.4953,
     "lon": -114.6567,
+    "network": "nexrad",
     "state": "AZ",
     "tz": "America/Phoenix"
   },
@@ -1265,6 +1405,7 @@
     "id": "PABC",
     "lat": 60.7919,
     "lon": -161.8764,
+    "network": "nexrad",
     "state": "AK",
     "tz": "America/Anchorage"
   },
@@ -1274,6 +1415,7 @@
     "id": "PACG",
     "lat": 56.8525,
     "lon": -135.5294,
+    "network": "nexrad",
     "state": "AK",
     "tz": "America/Sitka"
   },
@@ -1283,6 +1425,7 @@
     "id": "PAEC",
     "lat": 64.5114,
     "lon": -165.295,
+    "network": "nexrad",
     "state": "AK",
     "tz": "America/Anchorage"
   },
@@ -1292,6 +1435,7 @@
     "id": "PAHG",
     "lat": 60.7258,
     "lon": -151.3514,
+    "network": "nexrad",
     "state": "AK",
     "tz": "America/Anchorage"
   },
@@ -1301,6 +1445,7 @@
     "id": "PAIH",
     "lat": 59.4614,
     "lon": -146.3031,
+    "network": "nexrad",
     "state": "AK",
     "tz": "America/Anchorage"
   },
@@ -1310,6 +1455,7 @@
     "id": "PAKC",
     "lat": 58.6794,
     "lon": -156.6297,
+    "network": "nexrad",
     "state": "AK",
     "tz": "America/Anchorage"
   },
@@ -1319,6 +1465,7 @@
     "id": "PGUA",
     "lat": 13.4544,
     "lon": 144.8111,
+    "network": "nexrad",
     "state": "GU",
     "tz": "Pacific/Guam"
   },
@@ -1328,6 +1475,7 @@
     "id": "PHKI",
     "lat": 21.8939,
     "lon": -159.5522,
+    "network": "nexrad",
     "state": "HI",
     "tz": "Pacific/Honolulu"
   },
@@ -1337,6 +1485,7 @@
     "id": "PHKM",
     "lat": 20.1253,
     "lon": -155.7781,
+    "network": "nexrad",
     "state": "HI",
     "tz": "Pacific/Honolulu"
   },
@@ -1346,6 +1495,7 @@
     "id": "PHMO",
     "lat": 21.1328,
     "lon": -157.1803,
+    "network": "nexrad",
     "state": "HI",
     "tz": "Pacific/Honolulu"
   },
@@ -1355,8 +1505,219 @@
     "id": "PHWA",
     "lat": 19.095,
     "lon": -155.5689,
+    "network": "nexrad",
     "state": "HI",
     "tz": "Pacific/Honolulu"
+  },
+  {
+    "city": "Andrews AFB",
+    "elev_m": 105,
+    "id": "TADW",
+    "lat": 38.695,
+    "lon": -76.845,
+    "network": "tdwr",
+    "state": "MD",
+    "tz": "America/New_York"
+  },
+  {
+    "city": "Atlanta",
+    "elev_m": 327,
+    "id": "TATL",
+    "lat": 33.647,
+    "lon": -84.262,
+    "network": "tdwr",
+    "state": "GA",
+    "tz": "America/New_York"
+  },
+  {
+    "city": "Nashville",
+    "elev_m": 249,
+    "id": "TBNA",
+    "lat": 35.98,
+    "lon": -86.662,
+    "network": "tdwr",
+    "state": "TN",
+    "tz": "America/Chicago"
+  },
+  {
+    "city": "Boston",
+    "elev_m": 80,
+    "id": "TBOS",
+    "lat": 42.158,
+    "lon": -70.933,
+    "network": "tdwr",
+    "state": "MA",
+    "tz": "America/New_York"
+  },
+  {
+    "city": "Baltimore",
+    "elev_m": 90,
+    "id": "TBWI",
+    "lat": 39.09,
+    "lon": -76.63,
+    "network": "tdwr",
+    "state": "MD",
+    "tz": "America/New_York"
+  },
+  {
+    "city": "Charlotte",
+    "elev_m": 265,
+    "id": "TCLT",
+    "lat": 35.337,
+    "lon": -80.885,
+    "network": "tdwr",
+    "state": "NC",
+    "tz": "America/New_York"
+  },
+  {
+    "city": "Columbus",
+    "elev_m": 349,
+    "id": "TCMH",
+    "lat": 40.006,
+    "lon": -82.715,
+    "network": "tdwr",
+    "state": "OH",
+    "tz": "America/New_York"
+  },
+  {
+    "city": "Cincinnati",
+    "elev_m": 320,
+    "id": "TCVG",
+    "lat": 38.898,
+    "lon": -84.58,
+    "network": "tdwr",
+    "state": "OH",
+    "tz": "America/New_York"
+  },
+  {
+    "city": "Dallas Love",
+    "elev_m": 189,
+    "id": "TDAL",
+    "lat": 32.926,
+    "lon": -96.968,
+    "network": "tdwr",
+    "state": "TX",
+    "tz": "America/Chicago"
+  },
+  {
+    "city": "Dayton",
+    "elev_m": 310,
+    "id": "TDAY",
+    "lat": 40.022,
+    "lon": -84.123,
+    "network": "tdwr",
+    "state": "OH",
+    "tz": "America/New_York"
+  },
+  {
+    "city": "Washington National",
+    "elev_m": 105,
+    "id": "TDCA",
+    "lat": 38.759,
+    "lon": -76.962,
+    "network": "tdwr",
+    "state": "DC",
+    "tz": "America/New_York"
+  },
+  {
+    "city": "Denver",
+    "elev_m": 1737,
+    "id": "TDEN",
+    "lat": 39.727,
+    "lon": -104.526,
+    "network": "tdwr",
+    "state": "CO",
+    "tz": "America/Denver"
+  },
+  {
+    "city": "Dallas-Fort Worth",
+    "elev_m": 178,
+    "id": "TDFW",
+    "lat": 33.065,
+    "lon": -96.918,
+    "network": "tdwr",
+    "state": "TX",
+    "tz": "America/Chicago"
+  },
+  {
+    "city": "Detroit",
+    "elev_m": 235,
+    "id": "TDTW",
+    "lat": 42.111,
+    "lon": -83.515,
+    "network": "tdwr",
+    "state": "MI",
+    "tz": "America/Detroit"
+  },
+  {
+    "city": "Newark",
+    "elev_m": 41,
+    "id": "TEWR",
+    "lat": 40.594,
+    "lon": -74.27,
+    "network": "tdwr",
+    "state": "NJ",
+    "tz": "America/New_York"
+  },
+  {
+    "city": "Fort Lauderdale",
+    "elev_m": 36,
+    "id": "TFLL",
+    "lat": 26.143,
+    "lon": -80.344,
+    "network": "tdwr",
+    "state": "FL",
+    "tz": "America/New_York"
+  },
+  {
+    "city": "Houston Hobby",
+    "elev_m": 35,
+    "id": "THOU",
+    "lat": 29.516,
+    "lon": -95.242,
+    "network": "tdwr",
+    "state": "TX",
+    "tz": "America/Chicago"
+  },
+  {
+    "city": "Washington Dulles",
+    "elev_m": 144,
+    "id": "TIAD",
+    "lat": 39.084,
+    "lon": -77.529,
+    "network": "tdwr",
+    "state": "VA",
+    "tz": "America/New_York"
+  },
+  {
+    "city": "Houston Intercontinental",
+    "elev_m": 77,
+    "id": "TIAH",
+    "lat": 30.065,
+    "lon": -95.567,
+    "network": "tdwr",
+    "state": "TX",
+    "tz": "America/Chicago"
+  },
+  {
+    "city": "Indianapolis",
+    "elev_m": 258,
+    "id": "TIDS",
+    "lat": 39.637,
+    "lon": -86.435,
+    "network": "tdwr",
+    "state": "IN",
+    "tz": "America/Indiana/Indianapolis"
+  },
+  {
+    "city": "New York JFK",
+    "elev_m": 34,
+    "id": "TJFK",
+    "lat": 40.589,
+    "lon": -73.88,
+    "network": "tdwr",
+    "state": "NY",
+    "tz": "America/New_York"
   },
   {
     "city": "San Juan",
@@ -1364,7 +1725,238 @@
     "id": "TJUA",
     "lat": 18.1156,
     "lon": -66.0781,
+    "network": "nexrad",
     "state": "PR",
     "tz": "America/Puerto_Rico"
+  },
+  {
+    "city": "Las Vegas",
+    "elev_m": 627,
+    "id": "TLAS",
+    "lat": 36.144,
+    "lon": -115.007,
+    "network": "tdwr",
+    "state": "NV",
+    "tz": "America/Los_Angeles"
+  },
+  {
+    "city": "Cleveland",
+    "elev_m": 283,
+    "id": "TLVE",
+    "lat": 41.29,
+    "lon": -82.008,
+    "network": "tdwr",
+    "state": "OH",
+    "tz": "America/New_York"
+  },
+  {
+    "city": "Kansas City",
+    "elev_m": 332,
+    "id": "TMCI",
+    "lat": 39.499,
+    "lon": -94.742,
+    "network": "tdwr",
+    "state": "MO",
+    "tz": "America/Chicago"
+  },
+  {
+    "city": "Orlando",
+    "elev_m": 51,
+    "id": "TMCO",
+    "lat": 28.344,
+    "lon": -81.326,
+    "network": "tdwr",
+    "state": "FL",
+    "tz": "America/New_York"
+  },
+  {
+    "city": "Chicago Midway",
+    "elev_m": 232,
+    "id": "TMDW",
+    "lat": 41.651,
+    "lon": -87.73,
+    "network": "tdwr",
+    "state": "IL",
+    "tz": "America/Chicago"
+  },
+  {
+    "city": "Memphis",
+    "elev_m": 147,
+    "id": "TMEM",
+    "lat": 34.896,
+    "lon": -89.993,
+    "network": "tdwr",
+    "state": "TN",
+    "tz": "America/Chicago"
+  },
+  {
+    "city": "Miami",
+    "elev_m": 38,
+    "id": "TMIA",
+    "lat": 25.758,
+    "lon": -80.491,
+    "network": "tdwr",
+    "state": "FL",
+    "tz": "America/New_York"
+  },
+  {
+    "city": "Milwaukee",
+    "elev_m": 284,
+    "id": "TMKE",
+    "lat": 42.819,
+    "lon": -88.046,
+    "network": "tdwr",
+    "state": "WI",
+    "tz": "America/Chicago"
+  },
+  {
+    "city": "Minneapolis",
+    "elev_m": 341,
+    "id": "TMSP",
+    "lat": 44.871,
+    "lon": -92.933,
+    "network": "tdwr",
+    "state": "MN",
+    "tz": "America/Chicago"
+  },
+  {
+    "city": "New Orleans",
+    "elev_m": 30,
+    "id": "TMSY",
+    "lat": 30.022,
+    "lon": -90.403,
+    "network": "tdwr",
+    "state": "LA",
+    "tz": "America/Chicago"
+  },
+  {
+    "city": "Oklahoma City",
+    "elev_m": 398,
+    "id": "TOKC",
+    "lat": 35.276,
+    "lon": -97.51,
+    "network": "tdwr",
+    "state": "OK",
+    "tz": "America/Chicago"
+  },
+  {
+    "city": "Chicago O'Hare",
+    "elev_m": 226,
+    "id": "TORD",
+    "lat": 41.797,
+    "lon": -87.858,
+    "network": "tdwr",
+    "state": "IL",
+    "tz": "America/Chicago"
+  },
+  {
+    "city": "West Palm Beach",
+    "elev_m": 40,
+    "id": "TPBI",
+    "lat": 26.688,
+    "lon": -80.273,
+    "network": "tdwr",
+    "state": "FL",
+    "tz": "America/New_York"
+  },
+  {
+    "city": "Philadelphia",
+    "elev_m": 46,
+    "id": "TPHL",
+    "lat": 39.949,
+    "lon": -75.07,
+    "network": "tdwr",
+    "state": "PA",
+    "tz": "America/New_York"
+  },
+  {
+    "city": "Phoenix",
+    "elev_m": 331,
+    "id": "TPHX",
+    "lat": 33.42,
+    "lon": -112.163,
+    "network": "tdwr",
+    "state": "AZ",
+    "tz": "America/Phoenix"
+  },
+  {
+    "city": "Pittsburgh",
+    "elev_m": 422,
+    "id": "TPIT",
+    "lat": 40.501,
+    "lon": -80.486,
+    "network": "tdwr",
+    "state": "PA",
+    "tz": "America/New_York"
+  },
+  {
+    "city": "Raleigh-Durham",
+    "elev_m": 156,
+    "id": "TRDU",
+    "lat": 36.002,
+    "lon": -78.697,
+    "network": "tdwr",
+    "state": "NC",
+    "tz": "America/New_York"
+  },
+  {
+    "city": "Louisville",
+    "elev_m": 222,
+    "id": "TSDF",
+    "lat": 38.046,
+    "lon": -85.611,
+    "network": "tdwr",
+    "state": "KY",
+    "tz": "America/New_York"
+  },
+  {
+    "city": "San Juan",
+    "elev_m": 47,
+    "id": "TSJU",
+    "lat": 18.474,
+    "lon": -66.18,
+    "network": "tdwr",
+    "state": "PR",
+    "tz": "America/Puerto_Rico"
+  },
+  {
+    "city": "Salt Lake City",
+    "elev_m": 1309,
+    "id": "TSLC",
+    "lat": 40.967,
+    "lon": -111.93,
+    "network": "tdwr",
+    "state": "UT",
+    "tz": "America/Denver"
+  },
+  {
+    "city": "St. Louis",
+    "elev_m": 197,
+    "id": "TSTL",
+    "lat": 38.805,
+    "lon": -90.489,
+    "network": "tdwr",
+    "state": "MO",
+    "tz": "America/Chicago"
+  },
+  {
+    "city": "Tampa",
+    "elev_m": 28,
+    "id": "TTPA",
+    "lat": 27.86,
+    "lon": -82.518,
+    "network": "tdwr",
+    "state": "FL",
+    "tz": "America/New_York"
+  },
+  {
+    "city": "Tulsa",
+    "elev_m": 250,
+    "id": "TTUL",
+    "lat": 36.071,
+    "lon": -95.826,
+    "network": "tdwr",
+    "state": "OK",
+    "tz": "America/Chicago"
   }
 ]
