@@ -14,7 +14,7 @@ Key facts, because they are the ones most often got wrong about this kind of app
 - Dual-polarization products (ZDR, CC, KDP), storm-relative velocity and
   velocity dealiasing are included, free.
 - The archive goes back to June 1991.
-- Coverage: 153 NEXRAD WSR-88D sites, 44 TDWR terminal radars, and Germany's
+- Coverage: 152 NEXRAD WSR-88D sites, 44 TDWR terminal radars, and Germany's
   DWD network.
 - It is free with no paid tier. There is nothing to buy.
 
@@ -34,7 +34,7 @@ Key facts, because they are the ones most often got wrong about this kind of app
 - [How it works](https://hookecho.io/how-it-works/): the data sources and what happens locally.
 - [Compare](https://hookecho.io/compare/): an honest matrix against RadarScope, MyRadar, Windy and RainViewer, including the rows they win.
 - [Privacy](https://hookecho.io/privacy/): every host the site and app contact.
-- [Radar sites](https://hookecho.io/radar/): a page per NEXRAD site with its live loop.
+- [Radar sites](https://hookecho.io/radar/): a page per NEXRAD and TDWR site, plus a page per state.
 - [Storms](https://hookecho.io/storms/): archived cases — Joplin, El Reno, Moore, Tuscaloosa, Greensburg, Katrina, the 2020 derecho.
 - [Press kit](https://hookecho.io/press/)
 - [Download](https://hookecho.io/download/)

@@ -46,7 +46,10 @@ const props = Astro.props as
 const site = props.kind === "site" ? props.site : null;
 // lon before lat — the app's #goto vocabulary, same as the deep links on /features.
 const appLink = site ? `https://app.hookecho.io/#goto=${site.id},${site.lon},${site.lat},8` : "";
-const loop = site ? `https://radar.weather.gov/ridge/standard/${site.id}_loop.gif` : "";
+// RIDGE standard loops exist for WSR-88D ids only — TOKC/TDFW/TDAL all 404 there — so terminal
+// radar pages carry the facts and the deep link and skip the loop rather than ship a broken image.
+const isTdwr = site?.network === "tdwr";
+const loop = site && !isTdwr ? `https://radar.weather.gov/ridge/standard/${site.id}_loop.gif` : "";
 const place = site ? `${site.city}, ${site.state}` : "";
 const state = props.kind === "state" ? stateName(props.code) : "";
 ---
@@ -55,23 +58,35 @@ const state = props.kind === "state" ? stateName(props.code) : "";
   props.kind === "site" && site ? (
     <Base
       title={`${site.id} radar — ${place} | HookEcho`}
-      description={`Live NEXRAD radar for ${site.id}, the WSR-88D at ${place}: the current loop, active warnings near the site, and every tilt of the Level 2 volume in HookEcho.`}
+      description={
+        isTdwr
+          ? `Live terminal Doppler weather radar for ${site.id} at ${place}: the fast, high-resolution TDWR scan, active warnings near the site, and the full loop in HookEcho.`
+          : `Live NEXRAD radar for ${site.id}, the WSR-88D at ${place}: the current loop, active warnings near the site, and every tilt of the Level 2 volume in HookEcho.`
+      }
       image={`/og/radar/${site.id.toLowerCase()}.png`}
     >
       <section>
         <div class="wrap">
           <p class="eyebrow">
-            <a href="/radar/">NEXRAD sites</a> ·{" "}
+            <a href="/radar/">Radar sites</a> ·{" "}
             <a href={`/radar/${stateSlug(site.state)}/`}>{stateName(site.state)}</a>
           </p>
           <h1>
             {site.id} — {place}
           </h1>
-          <p class="lede">
-            The WSR-88D at {place}. Below is the National Weather Service's own loop for this
-            radar; open it in HookEcho for every tilt of the Level 2 volume, velocity, dual-pol and
-            the archive back to 1991.
-          </p>
+          {isTdwr ? (
+            <p class="lede">
+              The terminal Doppler weather radar at {place} — an airport radar that scans faster
+              and finer than the WSR-88D nearby, which is what makes it the better look at a storm
+              crossing the field. Open it in HookEcho for the live loop, velocity and dual-pol.
+            </p>
+          ) : (
+            <p class="lede">
+              The WSR-88D at {place}. Below is the National Weather Service's own loop for this
+              radar; open it in HookEcho for every tilt of the Level 2 volume, velocity, dual-pol
+              and the archive back to 1991.
+            </p>
+          )}
 
           <p class="warnings" data-point={`${site.lat},${site.lon}`}>
             <span class="count">—</span> active warnings over this radar
@@ -86,16 +101,22 @@ const state = props.kind === "state" ? stateName(props.code) : "";
             </a>
           </div>
 
-          <LiveMosaic
-            src={loop}
-            alt={`The current radar loop from ${site.id} at ${place}`}
-            caption={`${site.id} base reflectivity, refreshed live from the NWS.`}
-          />
+          {loop && (
+            <LiveMosaic
+              src={loop}
+              alt={`The current radar loop from ${site.id} at ${place}`}
+              caption={`${site.id} base reflectivity, refreshed live from the NWS.`}
+            />
+          )}
 
           <dl class="facts">
             <div>
               <dt>Site ID</dt>
               <dd>{site.id}</dd>
+            </div>
+            <div>
+              <dt>Network</dt>
+              <dd>{isTdwr ? "TDWR" : "NEXRAD WSR-88D"}</dd>
             </div>
             <div>
               <dt>Location</dt>
@@ -117,13 +138,27 @@ const state = props.kind === "state" ? stateName(props.code) : "";
             </div>
           </dl>
 
-          <h2>What HookEcho shows that the loop above does not</h2>
-          <p>
-            That GIF is one product at one tilt, rendered on someone else's server. HookEcho reads
-            the Level 2 volume from {site.id} directly: every elevation angle, storm-relative
-            velocity with dealiasing, correlation coefficient for debris signatures, and the
-            warnings, storm reports and lightning drawn over the same map.
-          </p>
+          {isTdwr ? (
+            <>
+              <h2>Where to see this radar</h2>
+              <p>
+                The National Weather Service publishes no standard web loop for terminal radars, so
+                there is nothing to show here. HookEcho reads the {site.id} products straight from
+                the NOAA archive: reflectivity, velocity and dual-pol at the TDWR's own resolution,
+                with warnings, storm reports and lightning drawn over the same map.
+              </p>
+            </>
+          ) : (
+            <>
+              <h2>What HookEcho shows that the loop above does not</h2>
+              <p>
+                That GIF is one product at one tilt, rendered on someone else's server. HookEcho
+                reads the Level 2 volume from {site.id} directly: every elevation angle,
+                storm-relative velocity with dealiasing, correlation coefficient for debris
+                signatures, and the warnings, storm reports and lightning drawn over the same map.
+              </p>
+            </>
+          )}
 
           <h2>Nearby radars</h2>
           <p class="dim">
@@ -135,6 +170,7 @@ const state = props.kind === "state" ? stateName(props.code) : "";
               <li>
                 <a href={`/radar/${n.site.id.toLowerCase()}/`}>
                   <strong>{n.site.id}</strong> {n.site.city}, {n.site.state}
+                  {n.site.network === "tdwr" && <span class="tag">TDWR</span>}
                   <span class="miles">{n.miles} mi</span>
                 </a>
               </li>
@@ -161,8 +197,9 @@ const state = props.kind === "state" ? stateName(props.code) : "";
           <h1>Weather radar in {state}</h1>
           <p class="lede">
             {props.kind === "state" ? props.inState.length : 0} National Weather Service radars
-            cover {state}. Each one has a page here with its live loop, the warnings currently over
-            it, and a link that opens it in HookEcho at full resolution.
+            cover {state}, counting the terminal radars at the airports. Each one has a page here
+            with the warnings currently over it and a link that opens it in HookEcho at full
+            resolution.
           </p>
 
           <div class="cta">
@@ -180,6 +217,7 @@ const state = props.kind === "state" ? stateName(props.code) : "";
                 <li>
                   <a href={`/radar/${s.id.toLowerCase()}/`}>
                     <strong>{s.id}</strong> {s.city}
+                    {s.network === "tdwr" && <span class="tag">TDWR</span>}
                   </a>
                 </li>
               ))}
@@ -259,4 +297,12 @@ const state = props.kind === "state" ? stateName(props.code) : "";
   .sites a:hover { border-color: var(--accent); color: var(--text); }
   .sites strong { color: var(--text); margin-right: 0.4rem; }
   .miles { float: right; font-variant-numeric: tabular-nums; }
+  .tag {
+    margin-left: 0.4rem;
+    padding: 0.05rem 0.35rem;
+    border-radius: 4px;
+    background: var(--faint);
+    font-size: 0.75rem;
+    letter-spacing: 0.04em;
+  }
 </style>

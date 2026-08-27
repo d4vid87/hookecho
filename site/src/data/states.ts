@@ -2,7 +2,8 @@
 // ponytail: a plain record, not a package — the list is 46 rows and never changes.
 export const STATE_NAMES: Record<string, string> = {
   AK: "Alaska", AL: "Alabama", AR: "Arkansas", AZ: "Arizona", CA: "California",
-  CO: "Colorado", CT: "Connecticut", DE: "Delaware", FL: "Florida", GA: "Georgia",
+  CO: "Colorado", CT: "Connecticut", DC: "Washington, DC", DE: "Delaware",
+  FL: "Florida", GA: "Georgia",
   GU: "Guam", HI: "Hawaii", IA: "Iowa", ID: "Idaho", IL: "Illinois",
   IN: "Indiana", KS: "Kansas", KY: "Kentucky", LA: "Louisiana", MA: "Massachusetts",
   MD: "Maryland", ME: "Maine", MI: "Michigan", MN: "Minnesota", MO: "Missouri",
@@ -16,4 +17,10 @@ export const STATE_NAMES: Record<string, string> = {
 };
 
 export const stateName = (code: string) => STATE_NAMES[code] ?? code;
-export const stateSlug = (code: string) => stateName(code).toLowerCase().replace(/ /g, "-");
+// "Washington, D.C." has to survive the trip into a URL, so punctuation goes and runs of
+// separators collapse to one hyphen.
+export const stateSlug = (code: string) =>
+  stateName(code)
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-|-$/g, "");

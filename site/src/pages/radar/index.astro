@@ -5,8 +5,11 @@ import { stateName, stateSlug } from "../../data/states";
 
 // Grouped by state, states alphabetical — 152 links need some spine, and "which radar covers me"
 // is a geography question before it is anything else.
+const nexrad = sites.filter((s) => s.network === "nexrad");
+const tdwr = sites.filter((s) => s.network === "tdwr").sort((a, b) => a.id.localeCompare(b.id));
+
 const byState = new Map<string, typeof sites>();
-for (const site of sites) {
+for (const site of nexrad) {
   const list = byState.get(site.state) ?? [];
   list.push(site);
   byState.set(site.state, list);
@@ -15,17 +18,17 @@ const states = [...byState.keys()].sort((a, b) => stateName(a).localeCompare(sta
 ---
 
 <Base
-  title="Every NEXRAD radar site | HookEcho"
-  description="All 152 WSR-88D NEXRAD radar sites, by state: live loops, active warnings and every tilt of the Level 2 volume, opened straight in HookEcho."
+  title="Every US radar site | HookEcho"
+  description="All 152 WSR-88D NEXRAD radars and 44 TDWR terminal radars, by state: live loops, active warnings and every tilt of the Level 2 volume, opened straight in HookEcho."
 >
   <section>
     <div class="wrap">
       <p class="eyebrow">Radar sites</p>
-      <h1>Every NEXRAD radar, one page each</h1>
+      <h1>Every US radar, one page each</h1>
       <p class="lede">
-        The National Weather Service runs {sites.length} WSR-88D radars. Each has a page here with
-        its live loop, the warnings currently over it, and a link that opens that radar in HookEcho
-        at full resolution.
+        The National Weather Service runs {nexrad.length} WSR-88D radars, and {tdwr.length} faster
+        terminal radars watch the busiest airports. Each has a page here with the warnings
+        currently over it and a link that opens that radar in HookEcho at full resolution.
       </p>
 
       {
@@ -48,6 +51,23 @@ const states = [...byState.keys()].sort((a, b) => stateName(a).localeCompare(sta
           </div>
         ))
       }
+
+      <div class="state">
+        <h2 id="tdwr">Terminal radars (TDWR)</h2>
+        <p class="note">
+          Airport radars: a tighter beam and a faster scan than the WSR-88D covering the same city,
+          which is why they see a low-level circulation the big radar smears over.
+        </p>
+        <ul>
+          {tdwr.map((site) => (
+            <li>
+              <a href={`/radar/${site.id.toLowerCase()}/`}>
+                <strong>{site.id}</strong> {site.city}
+              </a>
+            </li>
+          ))}
+        </ul>
+      </div>
     </div>
   </section>
 </Base>
@@ -58,6 +78,7 @@ const states = [...byState.keys()].sort((a, b) => stateName(a).localeCompare(sta
   .state h2 { margin-bottom: 0.6rem; font-size: 1.15rem; color: var(--text-dim); }
   .state h2 a { color: inherit; text-decoration: none; }
   .state h2 a:hover { color: var(--accent); }
+  .note { color: var(--text-dim); max-width: 62ch; margin: 0 0 0.8rem; font-size: 0.95rem; }
   ul {
     list-style: none;
     padding: 0;
