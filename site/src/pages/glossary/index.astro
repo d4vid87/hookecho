@@ -1,0 +1,55 @@
+---
+import { getCollection } from "astro:content";
+import Base from "../../layouts/Base.astro";
+
+const terms = (await getCollection("glossary")).sort((a, b) =>
+  a.data.term.localeCompare(b.data.term, "en", { sensitivity: "base" }),
+);
+---
+
+<Base
+  title="Weather radar glossary | HookEcho"
+  description="Plain-language definitions of the radar words: dBZ, CC, ZDR, velocity, VCP, MESH, hook echo and the rest, each on its own page."
+>
+  <section>
+    <div class="wrap">
+      <p class="eyebrow">Glossary</p>
+      <h1>The radar words, in plain language</h1>
+      <p class="lede">
+        Radar has a vocabulary problem: the products are named after the physics rather than after
+        what you see. Here is the whole list, one page each, no meteorology degree assumed.
+      </p>
+
+      <ul class="terms">
+        {
+          terms.map((t) => (
+            <li>
+              <a href={`/glossary/${t.id}/`}>
+                <strong>{t.data.term}</strong>
+                <span>{t.data.description}</span>
+              </a>
+            </li>
+          ))
+        }
+      </ul>
+
+      <p><a href="/docs/reading-the-radar/">How to read the radar itself</a></p>
+    </div>
+  </section>
+</Base>
+
+<style>
+  .lede { font-size: 1.1rem; color: var(--text-dim); max-width: 62ch; }
+  .terms { list-style: none; padding: 0; margin: 2rem 0; display: grid; gap: 0.6rem; }
+  .terms a {
+    display: block;
+    padding: 0.8rem 1rem;
+    border: 1px solid var(--stroke);
+    border-radius: var(--radius);
+    color: var(--text-dim);
+    text-decoration: none;
+  }
+  .terms a:hover { border-color: var(--accent); }
+  .terms strong { display: block; color: var(--text); margin-bottom: 0.2rem; }
+  .terms span { font-size: 0.95rem; }
+</style>

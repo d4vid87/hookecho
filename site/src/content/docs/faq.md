@@ -1,6 +1,6 @@
 ---
 title: FAQ and glossary
-description: Common questions, common problems, and what all the abbreviations mean.
+description: Common questions, common problems, and where to find what all the abbreviations mean.
 order: 7
 ---
 
@@ -59,53 +59,26 @@ to replay it.
 
 ## Glossary
 
-**CAPE** — how much energy is available for a thunderstorm to rise. More CAPE,
-taller storms.
+Every radar word has its own page now, with the related ones linked from it:
 
-**CC (correlation coefficient)** — whether everything in the beam looks alike.
-High for rain, low for a mix — hail, melting snow, or tornado debris.
+[CAPE](/glossary/cape/),
+[CC (correlation coefficient)](/glossary/cc/),
+[dBZ](/glossary/dbz/),
+[Dealiasing](/glossary/dealiasing/),
+[Dual-pol](/glossary/dual-pol/),
+[Level 2 / Level 3](/glossary/level-2-and-level-3/),
+[MESH](/glossary/mesh/),
+[MRMS](/glossary/mrms/),
+[NEXRAD](/glossary/nexrad/),
+[Reflectivity (Z)](/glossary/reflectivity/),
+[SRH (storm-relative helicity)](/glossary/srh/),
+[Storm-relative velocity](/glossary/storm-relative-velocity/),
+[TDS (tornado debris signature)](/glossary/tds/),
+[Tilt](/glossary/tilt/),
+[VCP](/glossary/vcp/),
+[Velocity (V)](/glossary/velocity/),
+[VIL](/glossary/vil/),
+[ZDR (differential reflectivity)](/glossary/zdr/), and
+[hook echo](/glossary/hook-echo/) itself.
 
-**dBZ** — the unit of reflectivity. Roughly: how much is coming back.
-
-**Dealiasing** — undoing the fold that happens when wind is faster than the
-radar can measure directly, so a fast couplet reads correctly.
-
-**Dual-pol** — the radar sending both horizontal and vertical pulses, which is
-what makes CC and ZDR possible. Rolled out across the network around 2012.
-
-**Level 2 / Level 3** — Level 2 is the raw volume, every gate of every sweep.
-Level 3 is the smaller set of processed products the NWS publishes from it.
-
-**MESH** — maximum estimated hail size, computed from the storm's vertical
-structure.
-
-**MRMS** — the national grid that stitches every radar in the country into one
-picture, updated every couple of minutes.
-
-**NEXRAD** — the US network of 150-odd weather radars. Each has a four-letter
-ID like KTLX.
-
-**Reflectivity (Z)** — how much energy the echo sends back. Where the rain is.
-
-**SRH (storm-relative helicity)** — how much spin the low-level wind has for a
-storm to use.
-
-**Storm-relative velocity** — velocity with the storm's own travel subtracted,
-so rotation stops hiding inside the storm's motion.
-
-**TDS (tornado debris signature)** — high reflectivity, a velocity couplet, and
-a hole in CC in the same place: the radar seeing lofted debris.
-
-**Tilt** — one sweep of the radar at one elevation angle. A volume is a stack of
-them.
-
-**VCP** — the scanning pattern the radar is running. Storm modes sweep faster
-and use more tilts than clear-air modes.
-
-**Velocity (V)** — motion toward or away from the radar along the beam. Green
-toward, red away.
-
-**VIL** — how much water the storm is holding, integrated through its depth.
-
-**ZDR (differential reflectivity)** — how flat the things in the beam are.
-Positive for raindrops, near zero for tumbling hail.
+[The whole glossary is here.](/glossary/)

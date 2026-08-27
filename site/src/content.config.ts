@@ -46,4 +46,17 @@ const storms = defineCollection({
   }),
 });
 
-export const collections = { docs, blog, storms };
+// One page per term. The definitions used to live as bold lines inside the FAQ, where they were
+// unlinkable and were also being scraped into the page's FAQPage JSON-LD as if they were questions.
+const glossary = defineCollection({
+  loader: glob({ pattern: "**/*.md", base: "./src/content/glossary" }),
+  schema: z.object({
+    /** Display name, e.g. "CC (correlation coefficient)". The file name is the URL. */
+    term: z.string(),
+    description: z.string(),
+    /** Slugs of other terms worth reading next. */
+    related: z.array(z.string()).default([]),
+  }),
+});
+
+export const collections = { docs, blog, storms, glossary };
