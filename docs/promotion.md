@@ -26,15 +26,15 @@ Everything below then happens on its own:
 
 ## Launch waves
 
-One release, three waves, a few days apart. Do not do them all in one day —
-posting the same thing in six places at once is the shape spam has.
+One release, waves a few days apart. Do not do them all in one day — posting the
+same thing in six places at once is the shape spam has.
 
-**Wave 1 — technical.** r/rust and Show HN, US weekday morning (Tue–Thu, ~8am
-ET). Lead with how it is built: wgpu pipeline, Level 2 decode, one codebase on
-desktop, Android and wasm. Be at a keyboard for the next 6–12 hours; the replies
-are the post.
+**Wave 1 — technical. Skipped for the 2026-08 launch** by decision: no Show HN
+and no r/rust launch post. The Rust-ecosystem *listings* below still apply.
 
-**Wave 2 — domain.** r/meteorology, r/stormchasing, and chaser Discords. Lead
+**Wave 2 — domain.** r/tornado, r/weather, r/stormchasing, r/meteorology,
+r/TropicalWeather (only with a named storm active), plus Stormtrack's Equipment
+section, TalkWeather and chaser Discords. Lead
 with the live demo, and pick a day with active weather so it shows something.
 Lead with what it does for them — soundings, effective-layer parameters, archive
 replay, chase packs — not with the language it is written in.
@@ -67,11 +67,48 @@ Do these once, not per release:
   or the project spotlight.
 - The r/rust "What's everyone working on this week" thread.
 
+## Launch calendar
+
+Two weeks, one community per day, weather communities on days with active
+weather so the demo shows something:
+
+| Day | Where | Lead with |
+|---|---|---|
+| 1 | r/opensource | MIT, no accounts, no telemetry |
+| 2 | r/selfhosted | the ghcr.io image |
+| 3 | r/linux | one binary, AppImage/Flatpak, wgpu |
+| 4 | r/tornado | storm-replay clip |
+| 5 | r/weather | storm-replay clip |
+| 6 | r/stormchasing | archive replay, chase packs |
+| 7 | r/meteorology | Level 2 all tilts, dual-pol |
+| 8 | Stormtrack (Equipment) | free alternative to the paid Windows tools |
+| 9 | TalkWeather | same, with the live demo link |
+| 10 | Product Hunt (Tue–Thu) | tagline + maker's first comment |
+| — | r/TropicalWeather | only with a named storm active, if rules allow |
+
+Every post: demo link first, download second. Then stay at the keyboard.
+
+## Sustained
+
+- **Storm-event pages** within ~48 h of a major event: a `site/src/content/storms`
+  entry plus a short blog post, shareable in that event's threads where on-topic.
+- **One explainer post a month** on the site blog, on a title the existing posts
+  do not already cover.
+- **Weekly**: the r/rust "What's everyone working on" thread, and answering
+  radar-app recommendation threads as they appear.
+
 ## Conventions
 
 - **UTM tags** on links you paste by hand only: `?utm_source=reddit`,
   `?utm_source=hn`, and so on. The automated posts do not carry them — the
   channel is already known from the referrer.
+- **Posting.** Reddit submissions go out through the Reddit API from the
+  maintainer's own account (`scripts/announce/reddit.mjs`), one community per day
+  — the cadence, not the mechanism, is what keeps it from reading as spam.
+  **Replies are always written by hand**, and forums, Product Hunt and Discords
+  have no posting API, so those stay copy-paste from the drafts. Reddit
+  credentials live in a local gitignored env file: never committed, never a
+  GitHub secret, because posting is a local action and not CI.
 - **Analytics** is Cloudflare Web Analytics on the Pages project: server-side,
   no script and no code in the app, which is what keeps the no-telemetry claim
   true.
