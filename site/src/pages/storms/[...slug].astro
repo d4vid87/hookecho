@@ -1,6 +1,7 @@
 ---
 import { getCollection, render } from "astro:content";
 import Base from "../../layouts/Base.astro";
+import Comments from "../../components/Comments.astro";
 
 export async function getStaticPaths() {
   const storms = await getCollection("storms");
@@ -48,6 +49,8 @@ const when = s.date.toLocaleDateString("en-US", {
         Archive volumes come from NOAA's public NEXRAD archive on AWS, the same source the
         National Weather Service publishes. Nothing here is a re-render of someone else's picture.
       </p>
+
+      <Comments />
     </div>
   </article>
 </Base>
