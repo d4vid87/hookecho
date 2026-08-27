@@ -32,7 +32,7 @@ Key facts, because they are the ones most often got wrong about this kind of app
 
 - [Features](https://hookecho.io/features/): what the app does, section by section.
 - [How it works](https://hookecho.io/how-it-works/): the data sources and what happens locally.
-- [Compare](https://hookecho.io/compare/): an honest matrix against RadarScope, MyRadar, Windy and RainViewer, including the rows they win.
+- [Compare](https://hookecho.io/compare/): an honest matrix against RadarScope, MyRadar, Windy, RadarOmega and Clime/RainViewer, including the rows they win. One page each at /compare/radarscope/, /compare/myradar/, /compare/windy/, /compare/radaromega/, /compare/rainviewer/.
 - [Privacy](https://hookecho.io/privacy/): every host the site and app contact.
 - [Radar sites](https://hookecho.io/radar/): a page per NEXRAD and TDWR site, plus a page per state.
 - [Storms](https://hookecho.io/storms/): archived cases — Joplin, El Reno, Moore, Tuscaloosa, Greensburg, Katrina, the 2020 derecho.

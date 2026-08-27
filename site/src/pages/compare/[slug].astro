@@ -1,0 +1,118 @@
+---
+import Base from "../../layouts/Base.astro";
+import { COLS, ROWS, COMPETITORS } from "../../data/compare";
+
+export function getStaticPaths() {
+  return COMPETITORS.map((c) => ({ params: { slug: c.slug }, props: { c } }));
+}
+
+const { c } = Astro.props;
+// Two columns only: us and them. The full six-column matrix stays on /compare/.
+const rows = ROWS.map((r) => ({ label: r.label, us: r.cells[0], them: r.cells[c.col] }));
+const mark = (v: string) => (v === "yes" ? "Yes" : v === "part" ? "Partly" : "No");
+---
+
+<Base
+  title={`HookEcho vs ${c.name} — a free ${c.name} alternative`}
+  description={`${c.name} compared with HookEcho feature by feature, including the rows ${c.name} wins. HookEcho is free, open source, reads Level 2 directly and runs in a browser.`}
+>
+  <section class="head">
+    <span class="sweep" aria-hidden="true"></span>
+    <div class="wrap">
+      <p class="eyebrow"><a href="/compare/">Comparison</a></p>
+      <h1>HookEcho vs {c.name}</h1>
+      <p class="lede">{c.blurb}</p>
+    </div>
+  </section>
+
+  <section>
+    <div class="wrap">
+      <h2>Where {c.name} wins</h2>
+      <ul class="wins">
+        {c.theyWin.map((w) => <li>{w}</li>)}
+      </ul>
+      <p class="verdict">{c.verdict}</p>
+      <div class="ctas">
+        <a class="btn btn-primary" href="https://app.hookecho.io">Try HookEcho in your browser</a>
+        <a class="btn" href="/download/">Get the app</a>
+      </div>
+    </div>
+  </section>
+
+  <section class="alt">
+    <div class="wrap">
+      <h2>Feature by feature</h2>
+      <div class="scroller">
+        <table>
+          <thead>
+            <tr>
+              <th scope="col"><span class="sr-only">Feature</span></th>
+              <th scope="col" class="us">HookEcho</th>
+              <th scope="col">{COLS[c.col]}</th>
+            </tr>
+          </thead>
+          <tbody>
+            {
+              rows.map((r) => (
+                <tr>
+                  <th scope="row">{r.label}</th>
+                  <td class:list={[r.us.v, "us"]}>
+                    <span class="mark" aria-hidden="true" />
+                    <span class="sr-only">{mark(r.us.v)}</span>
+                    {r.us.t && <span class="note">{r.us.t}</span>}
+                  </td>
+                  <td class:list={[r.them.v]}>
+                    <span class="mark" aria-hidden="true" />
+                    <span class="sr-only">{mark(r.them.v)}</span>
+                    {r.them.t && <span class="note">{r.them.t}</span>}
+                  </td>
+                </tr>
+              ))
+            }
+          </tbody>
+        </table>
+      </div>
+      <p class="foot">
+        Verified August 2026, from each product's own pricing and feature pages. Tiers and prices
+        move; if a row here is wrong,
+        <a href="https://github.com/d4vid87/hookecho/issues">tell us</a> and it gets fixed.
+        {COLS[c.col].includes("/") && " That column covers both apps, which sell the same thing."}
+      </p>
+      <p><a href="/compare/">See all of them side by side</a></p>
+    </div>
+  </section>
+</Base>
+
+<style>
+  .head { position: relative; overflow: hidden; }
+  .head .wrap { position: relative; }
+  .eyebrow a { color: inherit; }
+  .lede { font-size: 1.15rem; color: var(--text-dim); max-width: 62ch; }
+  .alt { background: var(--bg-deep); border-block: 1px solid var(--stroke); }
+  .wins { max-width: 62ch; color: var(--text-dim); }
+  .wins li { margin-bottom: 0.4rem; }
+  .verdict { max-width: 62ch; }
+  .ctas { display: flex; gap: 0.75rem; flex-wrap: wrap; margin-top: 1.4rem; }
+  .scroller { overflow-x: auto; }
+  table { border-collapse: collapse; width: 100%; min-width: 520px; font-size: 0.92rem; }
+  th, td {
+    text-align: left;
+    padding: 0.7rem 0.9rem;
+    border-bottom: 1px solid var(--stroke);
+    vertical-align: top;
+  }
+  thead th { color: var(--text-dim); font-weight: 600; }
+  th.us, td.us { background: color-mix(in srgb, var(--accent) 8%, transparent); }
+  tbody th { color: var(--text); font-weight: 600; }
+  .note { display: block; color: var(--text-dim); font-size: 0.85rem; margin-top: 0.15rem; }
+  .mark {
+    display: inline-block;
+    width: 0.8rem;
+    height: 0.8rem;
+    border-radius: 50%;
+    border: 2px solid var(--text-dim);
+  }
+  td.yes .mark { background: var(--accent); border-color: var(--accent); }
+  td.part .mark { background: linear-gradient(90deg, var(--accent) 50%, transparent 50%); }
+  .foot { color: var(--text-dim); font-size: 0.9rem; margin-top: 1rem; }
+</style>
