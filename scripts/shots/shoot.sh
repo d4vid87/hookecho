@@ -8,6 +8,7 @@
 #   ./scripts/shots/shoot.sh android     # the phone set, on a device over adb
 #   ./scripts/shots/shoot.sh android-still   # …without re-shooting its loop
 #   ./scripts/shots/shoot.sh hero        # the animated hero loop
+#   ./scripts/shots/shoot.sh clips       # the promo MP4s, into docs/clips
 #   ./scripts/shots/shoot.sh reflectivity velocity ...   # named scenes
 #
 # The app runs on a nested Xvfb, not your desktop: xdotool key injection does not reach the
@@ -457,6 +458,46 @@ scene_hero() {
   log "hero.gif $(( $(stat -c%s "$OUT/hero.gif") / 1024 ))K"
 }
 
+# --- promo clips ------------------------------------------------------------------------------
+#
+#   ./scripts/shots/shoot.sh clips
+#
+# Half-minute MP4s for the posts, in docs/clips — social platforms want native video, and a link
+# to a live web app is not what a feed will play. Same stepped-loop trick as the hero GIF, thirty
+# frames instead of ten, encoded at one frame a second because that is roughly what a volume scan
+# is anyway. Deliberately not in docs/shots: `check` cross-references that directory against the
+# README, and these are not README assets.
+
+CLIPS="$REPO/docs/clips"
+CLIP_FRAMES=30
+
+clip() { # clip NAME GOTO
+  local name="$1" dir="$WORK/clip-$1"
+  launch "$2"; wait_settle 20 160
+  rm -rf "$dir"; mkdir -p "$dir" "$CLIPS"
+  park_pointer
+  # Rewind to the start of the window so the clip runs forwards through the event. Past the scan
+  # cache's depth every step is an S3 fetch, which is slow but not wrong — hence the long caps.
+  for _ in $(seq "$((CLIP_FRAMES - 1))"); do key Left; sleep 2; done
+  wait_settle 12 160
+  for i in $(seq 0 "$((CLIP_FRAMES - 1))"); do
+    wait_settle 3 90
+    import -display "$DISPLAY_NUM" -window root "$dir/$(printf '%02d' "$i").png"
+    key Right
+  done
+  # yuv420p and even dimensions: without both, half the platforms show a black rectangle.
+  ffmpeg -y -loglevel error -framerate 1 -pattern_type glob -i "$dir/*.png" \
+    -vf "scale=1280:-2:flags=lanczos" -c:v libx264 -preset slow -crf 20 \
+    -pix_fmt yuv420p -movflags +faststart -r 30 "$CLIPS/$name.mp4"
+  log "$name.mp4 $(( $(stat -c%s "$CLIPS/$name.mp4") / 1024 ))K"
+}
+
+clips() {
+  clip el-reno-2013-velocity "$ELRENO,VEL,srv"
+  clip moore-2013-reflectivity "$MOORE_HERO,REF"
+  clip mayfield-2021-velocity "$MAYFIELD,VEL,srv"
+}
+
 # ---------------------------------------------------------------- android
 #
 # The phone set, shot on a real device over adb:
@@ -648,6 +689,7 @@ main() {
   case "${1:-}" in
     check) check; return ;;
     scout) preflight; scout; return ;;
+    clips) preflight; start_xvfb; clips; stop_app; return ;;
     # No Xvfb, no release binary, no preflight: the app under test is the APK on the phone.
     android) mkdir -p "$WORK"; android; return ;;
     android-still) mkdir -p "$WORK"; SKIP_HERO=1 android; return ;;
