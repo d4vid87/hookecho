@@ -1,0 +1,160 @@
+---
+import Base from "../layouts/Base.astro";
+
+// The roadmap is the issue tracker, so read the issue tracker rather than keeping a second list in
+// a markdown file that goes stale the week after it is written.
+// ponytail: same shape as GitHubStats.astro — unauthenticated fetch in the visitor's browser with
+// a one-hour localStorage cache. A token would mean a build secret and a server to hold it.
+const repo = "d4vid87/hookecho";
+const ttlMs = 60 * 60 * 1000;
+---
+
+<Base
+  title="Roadmap | HookEcho"
+  description="What is being worked on in HookEcho next, read live from the GitHub issue tracker — because the tracker is the roadmap."
+>
+  <section>
+    <div class="wrap">
+      <p class="eyebrow">Roadmap</p>
+      <h1>What happens next</h1>
+      <p class="lede">
+        There is no private plan. Everything being worked on is an issue in the public repository,
+        and this page reads that repository live — so it cannot go stale, and it cannot flatter us.
+      </p>
+
+      <div class="board" data-repo={repo} data-ttl={ttlMs} hidden></div>
+
+      <noscript>
+        <p><a href={`https://github.com/${repo}/issues`}>Read the issue tracker on GitHub.</a></p>
+      </noscript>
+
+      <p class="dim">
+        Want something on this list? <a href={`https://github.com/${repo}/issues/new`}>Open an
+        issue</a> — the ones people ask for get built first. Shipped work lives in the
+        <a href="/blog/">release posts</a>.
+      </p>
+    </div>
+  </section>
+</Base>
+
+<script>
+  interface Item {
+    title: string;
+    url: string;
+    n: number;
+  }
+  interface Group {
+    name: string;
+    note: string;
+    items: Item[];
+  }
+
+  const el = document.querySelector<HTMLElement>(".board");
+  const repo = el?.dataset.repo;
+  const ttl = Number(el?.dataset.ttl ?? 0);
+  const key = "hookecho:roadmap";
+
+  function render(groups: Group[]) {
+    if (!el || groups.length === 0) return;
+    el.innerHTML = groups
+      .map(
+        (g) => `<section class="group">
+          <h2>${esc(g.name)}</h2>
+          ${g.note ? `<p class="note">${esc(g.note)}</p>` : ""}
+          <ul>${g.items
+            .map(
+              (i) =>
+                `<li><a href="${esc(i.url)}"><strong>${esc(i.title)}</strong><span>#${i.n}</span></a></li>`,
+            )
+            .join("")}</ul>
+        </section>`,
+      )
+      .join("");
+    el.hidden = false;
+  }
+
+  // Titles are other people's text going into innerHTML. Escape it.
+  function esc(s: string) {
+    return s.replace(
+      /[&<>"']/g,
+      (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!,
+    );
+  }
+
+  async function load(repo: string): Promise<Group[]> {
+    const issues: any[] = await fetch(
+      `https://api.github.com/repos/${repo}/issues?state=open&per_page=100`,
+    ).then((r) => (r.ok ? r.json() : Promise.reject(r.status)));
+    if (!Array.isArray(issues)) throw new Error("shape");
+    const open = issues.filter((i) => !i.pull_request);
+
+    // Milestones first, when there are any: they are the closest thing to a stated plan.
+    const byMilestone = new Map<string, Group>();
+    for (const i of open) {
+      const m = i.milestone;
+      if (!m) continue;
+      const g = byMilestone.get(m.title) ?? { name: m.title, note: m.description ?? "", items: [] };
+      g.items.push({ title: i.title, url: i.html_url, n: i.number });
+      byMilestone.set(m.title, g);
+    }
+    if (byMilestone.size > 0) return [...byMilestone.values()];
+
+    // No milestones on the repo today, so fall back to labels — every open issue carries one.
+    const byLabel = new Map<string, Group>();
+    for (const i of open) {
+      const name = i.labels?.[0]?.name ?? "Everything else";
+      const g = byLabel.get(name) ?? { name, note: i.labels?.[0]?.description ?? "", items: [] };
+      g.items.push({ title: i.title, url: i.html_url, n: i.number });
+      byLabel.set(name, g);
+    }
+    return [...byLabel.values()].sort((a, b) => b.items.length - a.items.length);
+  }
+
+  if (el && repo) {
+    let cached: { t: number; groups: Group[] } | null = null;
+    try {
+      cached = JSON.parse(localStorage.getItem(key) ?? "null");
+    } catch {
+      cached = null;
+    }
+
+    if (cached && Date.now() - cached.t < ttl) {
+      render(cached.groups);
+    } else {
+      load(repo)
+        .then((groups) => {
+          try {
+            localStorage.setItem(key, JSON.stringify({ t: Date.now(), groups }));
+          } catch {
+            // Private mode, quota, whatever. It still renders this once.
+          }
+          render(groups);
+        })
+        // Rate limited, offline, or GitHub having a day: the block stays hidden and the link to
+        // the tracker below it still works.
+        .catch(() => {});
+    }
+  }
+</script>
+
+<style>
+  .lede { font-size: 1.1rem; color: var(--text-dim); max-width: 62ch; }
+  .dim { color: var(--text-dim); max-width: 62ch; }
+  .board { margin: 2rem 0; display: grid; gap: 2rem; }
+  /* Label names arrive lowercase ("enhancement"); milestone titles arrive as written. */
+  .board :global(.group h2) { margin-bottom: 0.3rem; font-size: 1.15rem; text-transform: capitalize; }
+  .board :global(.note) { color: var(--text-dim); font-size: 0.95rem; margin: 0 0 0.8rem; }
+  .board :global(ul) { list-style: none; padding: 0; margin: 0; display: grid; gap: 0.5rem; }
+  .board :global(a) {
+    display: flex;
+    justify-content: space-between;
+    gap: 1rem;
+    padding: 0.7rem 0.9rem;
+    border: 1px solid var(--stroke);
+    border-radius: var(--radius);
+    color: var(--text);
+    text-decoration: none;
+  }
+  .board :global(a:hover) { border-color: var(--accent); }
+  .board :global(span) { color: var(--text-dim); font-variant-numeric: tabular-nums; }
+</style>
