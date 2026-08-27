@@ -1,8 +1,9 @@
 ---
 import Base from "../../layouts/Base.astro";
 import sites from "../../data/nexrad-sites.json";
+import { stateName, stateSlug } from "../../data/states";
 
-// Grouped by state, states alphabetical — 153 links need some spine, and "which radar covers me"
+// Grouped by state, states alphabetical — 152 links need some spine, and "which radar covers me"
 // is a geography question before it is anything else.
 const byState = new Map<string, typeof sites>();
 for (const site of sites) {
@@ -10,12 +11,12 @@ for (const site of sites) {
   list.push(site);
   byState.set(site.state, list);
 }
-const states = [...byState.keys()].sort();
+const states = [...byState.keys()].sort((a, b) => stateName(a).localeCompare(stateName(b)));
 ---
 
 <Base
   title="Every NEXRAD radar site | HookEcho"
-  description="All 153 WSR-88D NEXRAD radar sites, by state: live loops, active warnings and every tilt of the Level 2 volume, opened straight in HookEcho."
+  description="All 152 WSR-88D NEXRAD radar sites, by state: live loops, active warnings and every tilt of the Level 2 volume, opened straight in HookEcho."
 >
   <section>
     <div class="wrap">
@@ -30,7 +31,9 @@ const states = [...byState.keys()].sort();
       {
         states.map((state) => (
           <div class="state">
-            <h2 id={state.toLowerCase()}>{state}</h2>
+            <h2 id={state.toLowerCase()}>
+              <a href={`/radar/${stateSlug(state)}/`}>{stateName(state)}</a>
+            </h2>
             <ul>
               {byState
                 .get(state)!
@@ -53,6 +56,8 @@ const states = [...byState.keys()].sort();
   .lede { font-size: 1.1rem; color: var(--text-dim); max-width: 62ch; }
   .state { margin-top: 2.2rem; }
   .state h2 { margin-bottom: 0.6rem; font-size: 1.15rem; color: var(--text-dim); }
+  .state h2 a { color: inherit; text-decoration: none; }
+  .state h2 a:hover { color: var(--accent); }
   ul {
     list-style: none;
     padding: 0;
