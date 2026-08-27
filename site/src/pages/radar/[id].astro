@@ -179,7 +179,8 @@ const state = props.kind === "state" ? stateName(props.code) : "";
 
           <p>
             <a href="/features/">See what else it does</a> ·{" "}
-            <a href="/compare/">How it compares</a>
+            <a href="/compare/">How it compares</a> ·{" "}
+            <a href={`/embed/?site=${site.id}`}>Embed this radar</a>
           </p>
         </div>
       </section>

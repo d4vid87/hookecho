@@ -1,0 +1,244 @@
+---
+import Base from "../layouts/Base.astro";
+import sites from "../data/nexrad-sites.json";
+
+// Everything the picker needs, sorted the way a person reads it. The whole table is ~200 rows of
+// four fields, which is small enough to ship inline rather than fetch.
+const options = sites
+  .map((s) => ({
+    id: s.id,
+    label: `${s.id} — ${s.city}, ${s.state}${s.network === "tdwr" ? " (TDWR)" : ""}`,
+    lon: s.lon,
+    lat: s.lat,
+  }))
+  .sort((a, b) => a.label.localeCompare(b.label));
+
+const jsonld = {
+  "@context": "https://schema.org",
+  "@type": "HowTo",
+  name: "Embed a live weather radar on your website",
+  description:
+    "Generate an iframe that puts a live NEXRAD or TDWR radar, centred on any site, on your own page.",
+};
+---
+
+<Base
+  title="Embed a live radar on your site | HookEcho"
+  description="Put a live weather radar on your own website with one iframe. Pick a NEXRAD or TDWR site, copy the snippet, paste it in. Free, no key, no account."
+  jsonld={jsonld}
+>
+  <section>
+    <div class="wrap">
+      <p class="eyebrow">Embed</p>
+      <h1>Put a live radar on your own site</h1>
+      <p class="lede">
+        HookEcho runs in a browser, so it embeds like any other page: one iframe, no key, no
+        account, nothing to install. Pick a radar, copy the snippet, paste it into your page.
+      </p>
+
+      <div class="controls">
+        <label>
+          Radar site
+          <select id="site">
+            {options.map((o) => <option value={`${o.id}|${o.lon}|${o.lat}`}>{o.label}</option>)}
+          </select>
+        </label>
+        <label>
+          Zoom
+          <input id="zoom" type="range" min="5" max="11" value="8" />
+          <output id="zoomout">8</output>
+        </label>
+        <label>
+          Height
+          <input id="height" type="number" min="200" max="1200" step="20" value="480" />
+        </label>
+      </div>
+
+      <div class="stage" id="stage">
+        <img
+          class="poster"
+          src="/shots/reflectivity.jpg"
+          alt="A radar loop over an interactive map, with warnings and storm cells drawn on top"
+          width="1600"
+          height="1000"
+        />
+        <noscript
+          ><p class="dim">Turn on JavaScript to preview the embed and build the snippet.</p></noscript
+        >
+      </div>
+
+      <label class="snippet">
+        The snippet
+        <textarea id="code" rows="4" readonly></textarea>
+      </label>
+      <div class="cta">
+        <button class="btn btn-primary" type="button" id="copy">Copy the snippet</button>
+        <a class="btn" href="https://app.hookecho.io">Open the full app</a>
+      </div>
+
+      <h2>What the parameters mean</h2>
+      <p>
+        <code>?embed</code> is the app's chrome-free mode: the map, the loop and the timeline,
+        without the sidebar and the tool windows. It is a bare flag —
+        <code>?embed=1</code> does not work, because the app matches the whole parameter.
+      </p>
+      <p>
+        Everything after <code>#goto=</code> is the starting view, in the order
+        <code>SITE,longitude,latitude,zoom</code>. Longitude comes first. You can add a moment code
+        (<code>VEL</code>, <code>CC</code>, <code>ZDR</code>…) or an RFC 3339 timestamp to open on
+        an archived volume — the <a href="/storms/">storm pages</a> are built from exactly that.
+      </p>
+      <p>
+        Leave the fragment off entirely and the app centres itself on the visitor's rough location
+        instead. Every radar's own page has an embed link:
+        <a href="/radar/">pick a site</a>.
+      </p>
+      <p class="dim">
+        The embed loads from <strong>app.hookecho.io</strong> and fetches weather data from public
+        NOAA feeds directly in your visitor's browser — the same hosts listed on our
+        <a href="/privacy/">privacy page</a>. There is no HookEcho server in the middle, and
+        nothing for you to run.
+      </p>
+    </div>
+  </section>
+</Base>
+
+<script>
+  const stage = document.querySelector<HTMLElement>("#stage");
+  const site = document.querySelector<HTMLSelectElement>("#site");
+  const zoom = document.querySelector<HTMLInputElement>("#zoom");
+  const zoomOut = document.querySelector<HTMLOutputElement>("#zoomout");
+  const height = document.querySelector<HTMLInputElement>("#height");
+  const code = document.querySelector<HTMLTextAreaElement>("#code");
+  const copy = document.querySelector<HTMLButtonElement>("#copy");
+
+  function url() {
+    const [id, lon, lat] = site!.value.split("|");
+    return `https://app.hookecho.io/?embed#goto=${id},${lon},${lat},${zoom!.value}`;
+  }
+
+  function snippet() {
+    return `<iframe src="${url()}"\n  title="HookEcho live weather radar"\n  width="100%" height="${height!.value}"\n  style="border:0;border-radius:12px" loading="lazy"></iframe>`;
+  }
+
+  function refresh() {
+    zoomOut!.value = zoom!.value;
+    code!.value = snippet();
+    // Only swap the poster once someone has asked for the live app: it is a wasm radar viewer and
+    // several MB, same reasoning as the landing hero.
+    const frame = stage!.querySelector("iframe");
+    if (frame) frame.src = url();
+  }
+
+  if (stage && site && zoom && height && code) {
+    const play = document.createElement("button");
+    play.type = "button";
+    play.className = "play";
+    play.innerHTML = '<span class="dot" aria-hidden="true"></span> Preview it live';
+    play.addEventListener(
+      "click",
+      () => {
+        const frame = document.createElement("iframe");
+        frame.src = url();
+        frame.title = "HookEcho live radar";
+        frame.loading = "lazy";
+        stage.replaceChildren(frame);
+      },
+      { once: true },
+    );
+    stage.append(play);
+
+    for (const el of [site, zoom, height]) el.addEventListener("input", refresh);
+    refresh();
+
+    // The site page links here with ?site=KTLX, so the picker opens on the radar you came from.
+    const want = new URLSearchParams(location.search).get("site")?.toUpperCase();
+    if (want) {
+      const match = [...site.options].find((o) => o.value.split("|")[0] === want);
+      if (match) {
+        site.value = match.value;
+        refresh();
+      }
+    }
+
+    copy?.addEventListener("click", async () => {
+      try {
+        await navigator.clipboard.writeText(code.value);
+        copy.textContent = "Copied";
+      } catch {
+        code.select();
+        copy.textContent = "Press ctrl+C";
+      }
+      setTimeout(() => (copy.textContent = "Copy the snippet"), 2000);
+    });
+  }
+</script>
+
+<style>
+  .lede { font-size: 1.1rem; color: var(--text-dim); max-width: 62ch; }
+  .dim { color: var(--text-dim); max-width: 62ch; }
+  .controls {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+    align-items: end;
+    margin: 1.8rem 0 1.2rem;
+  }
+  .controls label,
+  .snippet {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+    color: var(--text-dim);
+    font-size: 0.9rem;
+  }
+  select,
+  input[type="number"],
+  textarea {
+    padding: 0.5rem 0.6rem;
+    border: 1px solid var(--stroke);
+    border-radius: var(--radius);
+    background: var(--bg-deep);
+    color: var(--text);
+    font: inherit;
+  }
+  textarea { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.85rem; }
+  .controls label:has(input[type="range"]) { flex-direction: row; align-items: center; gap: 0.6rem; }
+  .snippet { margin-top: 1.4rem; }
+  .cta { display: flex; gap: 0.75rem; flex-wrap: wrap; margin: 1rem 0 2rem; }
+
+  .stage {
+    position: relative;
+    aspect-ratio: 16 / 10;
+    border: 1px solid var(--stroke);
+    border-radius: var(--radius);
+    overflow: hidden;
+  }
+  .stage :global(img),
+  .stage :global(iframe) {
+    display: block;
+    width: 100%;
+    height: 100%;
+    border: 0;
+    object-fit: cover;
+  }
+  .stage :global(.play) {
+    position: absolute;
+    inset-inline: 0;
+    bottom: 1.2rem;
+    margin-inline: auto;
+    width: fit-content;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.55rem;
+    padding: 0.75rem 1.4rem;
+    border-radius: 999px;
+    border: 1px solid var(--accent);
+    background: color-mix(in srgb, var(--bg) 78%, transparent);
+    backdrop-filter: blur(8px);
+    color: var(--text);
+    font: inherit;
+    font-weight: 600;
+    cursor: pointer;
+  }
+</style>
