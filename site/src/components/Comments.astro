@@ -1,0 +1,54 @@
+---
+// Comments are GitHub Discussions, rendered by giscus. No database, no moderation queue, no
+// account we hold — people sign in with the GitHub account they already have, and every thread is
+// a discussion in the repo that can be moderated with the tools already there.
+//
+// The two ids below are public identifiers, not secrets: giscus resolves them client-side and
+// they are visible in any page that uses it. The "Comments" category is Announcement-format, so
+// only the giscus app opens threads and visitors can only reply.
+//
+// ponytail: the script tag as documented, no wrapper library. It is one element.
+const repo = "d4vid87/hookecho";
+const repoId = "R_kgDOTc8Uhg";
+const categoryId = "DIC_kwDOTc8Uhs4DERaE";
+---
+
+<section class="comments">
+  <h2>Comments</h2>
+  <p class="dim">
+    Threads live in <a href={`https://github.com/${repo}/discussions`}>GitHub Discussions</a>.
+    Signing in uses your GitHub account — we never see a password, and there is nothing to create.
+  </p>
+  <script
+    src="https://giscus.app/client.js"
+    data-repo={repo}
+    data-repo-id={repoId}
+    data-category="Comments"
+    data-category-id={categoryId}
+    data-mapping="pathname"
+    data-strict="1"
+    data-reactions-enabled="1"
+    data-emit-metadata="0"
+    data-input-position="top"
+    data-theme="dark_dimmed"
+    data-lang="en"
+    data-loading="lazy"
+    crossorigin="anonymous"
+    async
+    is:inline></script>
+  <noscript>
+    <p class="dim">
+      <a href={`https://github.com/${repo}/discussions`}>Read and reply on GitHub.</a>
+    </p>
+  </noscript>
+</section>
+
+<style>
+  .comments {
+    max-width: 780px;
+    margin: 3.5rem auto 0;
+    padding-top: 2rem;
+    border-top: 1px solid var(--stroke);
+  }
+  .dim { color: var(--text-dim); font-size: 0.92rem; }
+</style>

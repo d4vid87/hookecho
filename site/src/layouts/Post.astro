@@ -1,5 +1,6 @@
 ---
 import Base from "./Base.astro";
+import Comments from "../components/Comments.astro";
 
 interface Props {
   title: string;
@@ -39,6 +40,7 @@ const jsonld = {
     <p class="lede">{description}</p>
     {image && <img class="lede-shot" src={image} alt="" width="1600" height="1000" />}
     <slot />
+    <Comments />
   </article>
 </Base>
 
