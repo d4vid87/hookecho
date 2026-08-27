@@ -59,4 +59,12 @@ const glossary = defineCollection({
   }),
 });
 
-export const collections = { docs, blog, storms, glossary };
+// The repo's own CHANGELOG.md, loaded as a one-entry collection so Astro's markdown renderer does
+// the work. ponytail: no hand-rolled parser and no new dependency — the file has no frontmatter,
+// so the schema is empty.
+const changelog = defineCollection({
+  loader: glob({ pattern: "CHANGELOG.md", base: "../" }),
+  schema: z.object({}),
+});
+
+export const collections = { docs, blog, storms, glossary, changelog };
