@@ -26,7 +26,7 @@ Key facts, because they are the ones most often got wrong about this kind of app
 - [Alerts and notifications](https://hookecho.io/docs/alerts-and-notifications/)
 - [On your phone](https://hookecho.io/docs/on-your-phone/)
 - [In your browser](https://hookecho.io/docs/in-your-browser/)
-- [FAQ and glossary](https://hookecho.io/docs/faq/)
+- [FAQ](https://hookecho.io/docs/faq/)
 
 ## Site
 
@@ -36,6 +36,7 @@ Key facts, because they are the ones most often got wrong about this kind of app
 - [Privacy](https://hookecho.io/privacy/): every host the site and app contact.
 - [Radar sites](https://hookecho.io/radar/): a page per NEXRAD and TDWR site, plus a page per state.
 - [Storms](https://hookecho.io/storms/): archived cases — Joplin, El Reno, Moore, Tuscaloosa, Greensburg, Katrina, the 2020 derecho.
+- [Glossary](https://hookecho.io/glossary/): a page per radar term — dBZ, CC, ZDR, VCP, hook echo.
 - [Press kit](https://hookecho.io/press/)
 - [Download](https://hookecho.io/download/)
 - [Try it in the browser](https://app.hookecho.io)

@@ -1,0 +1,84 @@
+---
+import { getCollection, render } from "astro:content";
+import Base from "../../layouts/Base.astro";
+
+export async function getStaticPaths() {
+  const terms = await getCollection("glossary");
+  return terms.map((term) => ({ params: { slug: term.id }, props: { term, all: terms } }));
+}
+
+const { term, all } = Astro.props;
+const { Content } = await render(term);
+
+const related = term.data.related
+  .map((slug: string) => all.find((t) => t.id === slug))
+  .filter((t) => t !== undefined);
+
+const jsonld = {
+  "@context": "https://schema.org",
+  "@type": "DefinedTerm",
+  name: term.data.term,
+  description: term.data.description,
+  inDefinedTermSet: {
+    "@type": "DefinedTermSet",
+    name: "HookEcho weather radar glossary",
+    url: "https://hookecho.io/glossary/",
+  },
+};
+---
+
+<Base
+  title={`${term.data.term} — weather radar glossary | HookEcho`}
+  description={term.data.description}
+  jsonld={jsonld}
+>
+  <section>
+    <div class="wrap narrow">
+      <p class="eyebrow"><a href="/glossary/">Glossary</a></p>
+      <h1>{term.data.term}</h1>
+      <div class="prose"><Content /></div>
+
+      {
+        related.length > 0 && (
+          <>
+            <h2>Related</h2>
+            <ul class="terms">
+              {related.map((t) => (
+                <li>
+                  <a href={`/glossary/${t.id}/`}>
+                    <strong>{t.data.term}</strong>
+                    <span>{t.data.description}</span>
+                  </a>
+                </li>
+              ))}
+            </ul>
+          </>
+        )
+      }
+
+      <p class="dim">
+        See it on real storms: <a href="https://app.hookecho.io">open the radar</a>, or read
+        <a href="/docs/reading-the-radar/">reading the radar</a>.
+      </p>
+    </div>
+  </section>
+</Base>
+
+<style>
+  .narrow { max-width: 70ch; }
+  .eyebrow a { color: inherit; }
+  .prose { font-size: 1.05rem; }
+  .dim { color: var(--text-dim); }
+  .terms { list-style: none; padding: 0; margin: 1rem 0 2rem; display: grid; gap: 0.6rem; }
+  .terms a {
+    display: block;
+    padding: 0.7rem 0.9rem;
+    border: 1px solid var(--stroke);
+    border-radius: var(--radius);
+    color: var(--text-dim);
+    text-decoration: none;
+    font-size: 0.95rem;
+  }
+  .terms a:hover { border-color: var(--accent); }
+  .terms strong { display: block; color: var(--text); }
+</style>
