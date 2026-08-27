@@ -433,6 +433,16 @@ pub fn n0b_value(level: u8, thr: &[i16; 16]) -> Option<f32> {
     Some(min + (level as f32 - 2.0) * inc)
 }
 
+/// Decode a Digital Base Velocity (N0G, product 154) data level to m/s.
+///
+/// Same tenths layout as N0B: HW31 is the minimum value ×10, HW32 the increment ×10 (a live TLX
+/// product reads `[-635, 5, 254, …]`, i.e. −63.5 m/s in 0.5 m/s steps). Level 0 is below
+/// threshold and level 1 is range-folded — both decode to `None`; a caller that colors
+/// range-folding draws level 1 itself. Negative values are inbound (toward the radar).
+pub fn n0g_value(level: u8, thr: &[i16; 16]) -> Option<f32> {
+    n0b_value(level, thr)
+}
+
 /// Decode an Enhanced Echo Tops (product 135) data level to (kft, topped-flag), via the threshold
 /// table. Levels 0/1 are below-threshold / flagged → `None`.
 pub fn eet_value(level: u8, thr: &[i16; 16]) -> Option<(f32, bool)> {

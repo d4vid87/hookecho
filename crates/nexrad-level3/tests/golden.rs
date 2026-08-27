@@ -233,3 +233,34 @@ fn tdwr_base_reflectivity_matches_metpy_golden() {
         }
     }
 }
+
+#[test]
+fn n0g_matches_metpy_golden() {
+    let p = decode(include_bytes!("data/n0g_tlx.l3")).expect("decode N0G");
+    let g: RadialGolden = serde_json::from_str(include_str!("data/n0g_tlx.golden.json")).unwrap();
+    assert_eq!(p.code, g.prod_code, "product code");
+    assert!(
+        (p.lat - g.lat).abs() < 0.001 && (p.lon - g.lon).abs() < 0.001,
+        "radar location"
+    );
+    let r = p.radial.as_ref().expect("N0G radial array");
+    assert_eq!(r.radials.len(), g.nrad, "radial count");
+    assert_eq!(r.nbins as usize, g.nbins, "bin count");
+    assert_eq!(r.first_bin, g.first, "first bin");
+    for (i, t) in g.thresholds.iter().enumerate() {
+        assert_eq!(p.thresholds[i] as u16, *t as u16, "threshold {i}");
+    }
+    for s in &g.samples {
+        let level = r.radials[s.rad].levels[s.bin];
+        assert_eq!(level, s.level, "sampled level rad={} bin={}", s.rad, s.bin);
+        match (nexrad_level3::n0g_value(level, &p.thresholds), s.value) {
+            (Some(v), Some(want)) => assert!((v - want).abs() < 0.01, "N0G value {v} vs {want}"),
+            (None, None) => {}
+            (a, b) => panic!("N0G missing-ness mismatch: {a:?} vs {b:?}"),
+        }
+    }
+    // Below-threshold and range-folded levels carry no velocity.
+    assert_eq!(nexrad_level3::n0g_value(0, &p.thresholds), None);
+    assert_eq!(nexrad_level3::n0g_value(1, &p.thresholds), None);
+    assert_eq!(nexrad_level3::n0g_value(2, &p.thresholds), Some(-63.5));
+}
