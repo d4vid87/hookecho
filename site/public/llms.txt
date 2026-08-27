@@ -35,7 +35,7 @@ Key facts, because they are the ones most often got wrong about this kind of app
 - [Compare](https://hookecho.io/compare/): an honest matrix against RadarScope, MyRadar, Windy, RadarOmega and Clime/RainViewer, including the rows they win. One page each at /compare/radarscope/, /compare/myradar/, /compare/windy/, /compare/radaromega/, /compare/rainviewer/.
 - [Privacy](https://hookecho.io/privacy/): every host the site and app contact.
 - [Radar sites](https://hookecho.io/radar/): a page per NEXRAD and TDWR site, plus a page per state.
-- [Storms](https://hookecho.io/storms/): archived cases — Joplin, El Reno, Moore, Tuscaloosa, Greensburg, Katrina, the 2020 derecho.
+- [Storms](https://hookecho.io/storms/): archived cases — Bridge Creek–Moore 1999, Katrina, Greensburg, Joplin, Tuscaloosa, El Reno, Moore, Harvey, the 2020 derecho, Mayfield, Ian, Rolling Fork.
 - [Glossary](https://hookecho.io/glossary/): a page per radar term — dBZ, CC, ZDR, VCP, hook echo.
 - [Press kit](https://hookecho.io/press/)
 - [Download](https://hookecho.io/download/)
