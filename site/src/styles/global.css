@@ -1,49 +1,127 @@
 /*
-  Tokens lifted from the app's own palette (crates/hookecho/src/theme.rs) so the site and the
-  product read as one thing: Dark is the default, Light comes from prefers-color-scheme.
+  Radar-ramp design system. The brand gradient IS a reflectivity color ramp (green → yellow →
+  orange → red), so the site reads as the product. Dark is the default; Light comes from
+  prefers-color-scheme.
+
+  Restraint rule: the full 5-stop --ramp appears ONLY on hero display text, the storm-of-the-day
+  border, and section hairlines. Everything else uses a 2-stop slice (--ramp-cool / --ramp-hot).
 */
 @font-face {
   font-family: "Inter";
   /* The same Latin subset the app bundles (crates/hookecho/data/fonts), converted to woff2.
      ponytail: Regular only, declared at 400 so the browser synthesizes bold — a declared
      400–700 range makes it draw 600 with the Regular outlines and bold stops being visible.
-     Ship a Medium/Bold face if the synthetic weight looks poor. */
+     Replaced by InterVariable in the next wave. */
   src: url("/fonts/Inter-Regular-subset.woff2") format("woff2");
   font-weight: 400;
   font-display: swap;
 }
 
 :root {
-  --bg: #14161b;
-  --bg-deep: #0e1013;
-  --faint: #1a1d23;
-  --stroke: #2a2f38;
-  --widget: #1c1f26;
-  --text: #c8d0da;
-  --text-dim: #8b95a3;
-  --accent: #4da3ff;
-  --accent-ink: #06121f;
-  --radius: 12px;
+  /* Reflectivity ramp — the brand gradient. */
+  --ramp-1: #30d158;
+  --ramp-2: #a3e635;
+  --ramp-3: #fbbf24;
+  --ramp-4: #f97316;
+  --ramp-5: #ef4444;
+  --ramp: linear-gradient(100deg, var(--ramp-1), var(--ramp-2) 30%, var(--ramp-3) 55%, var(--ramp-4) 78%, var(--ramp-5));
+  --ramp-cool: linear-gradient(100deg, var(--ramp-1), var(--ramp-3));
+  --ramp-hot: linear-gradient(100deg, var(--ramp-3), var(--ramp-5));
+
+  /* Surfaces: neutrals tinted with the ramp's base hue (~160°) so the warm end pops. */
+  --bg-deep: #070b09;
+  --bg: #0b100d;
+  --surface-1: #111815;
+  --surface-2: #182019;
+  --stroke: #263029;
+  --stroke-strong: #36443b;
+  --text: #e4ece6;
+  --text-dim: #90a096;
+  --accent: #3fdd78;
+  --accent-ink: #062012;
+
+  /* Aliases kept so pages written against the old names keep working (retired in W7). */
+  --faint: var(--surface-1);
+  --widget: var(--surface-2);
+
   --measure: 68ch;
   --page: 1120px;
-  /* Motion + glow, matching the app's playful pass (crates/hookecho/src/ui/m3.rs DUR_*).
-     Every use goes through these so the prefers-reduced-motion block below is the one switch. */
-  --dur: 220ms;
+
+  /* Type scale, ratio 1.25. */
+  --text-sm: 0.86rem;
+  --text-base: 1rem;
+  --text-lg: 1.2rem;
+  --text-xl: 1.5rem;
+  --text-2xl: 1.9rem;
+  --text-3xl: clamp(1.9rem, 1.4rem + 2.4vw, 3rem);
+  --text-4xl: clamp(2.5rem, 1.6rem + 4vw, 4.4rem);
+  --text-display: clamp(3.5rem, 2.2rem + 7.5vw, 8.5rem);
+
+  /* Spacing. */
+  --sp-1: 0.25rem;
+  --sp-2: 0.5rem;
+  --sp-3: 0.75rem;
+  --sp-4: 1rem;
+  --sp-5: 1.5rem;
+  --sp-6: 2rem;
+  --sp-7: 3rem;
+  --sp-8: 4rem;
+  --section: clamp(4rem, 10vw, 8rem);
+
+  --radius-sm: 8px;
+  --radius: 12px;
+  --radius-lg: 18px;
+  --radius-xl: 28px;
+
+  --shadow-1: 0 1px 2px rgb(0 0 0 / 0.3), 0 4px 12px rgb(0 0 0 / 0.22);
+  --shadow-2: 0 2px 6px rgb(0 0 0 / 0.34), 0 16px 40px rgb(0 0 0 / 0.3);
+  --shadow-3: 0 4px 12px rgb(0 0 0 / 0.4), 0 32px 80px rgb(0 0 0 / 0.38);
+  --glow-green: 0 8px 32px color-mix(in srgb, var(--ramp-1) 30%, transparent);
+  --glow-hot: 0 8px 32px color-mix(in srgb, var(--ramp-4) 30%, transparent);
+
+  /* Stripe-style aurora wash. --glow is the old single-radial name, kept as an alias. */
+  --mesh:
+    radial-gradient(60% 45% at 15% 0%, color-mix(in srgb, var(--ramp-1) 16%, transparent), transparent 70%),
+    radial-gradient(55% 40% at 85% 10%, color-mix(in srgb, var(--ramp-4) 12%, transparent), transparent 70%);
+  --glow: var(--mesh);
+
+  /* Motion. Every use goes through these so the reduced-motion block below is the one switch. */
+  --dur-1: 120ms;
+  --dur-2: 220ms;
+  --dur-3: 420ms;
+  --dur: var(--dur-2);
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
   --spring: cubic-bezier(0.34, 1.56, 0.64, 1);
-  --glow: radial-gradient(60% 50% at 50% 0%, color-mix(in srgb, var(--accent) 22%, transparent), transparent 70%);
   color-scheme: dark;
 }
 
 @media (prefers-color-scheme: light) {
   :root {
-    --bg: #f6f7f9;
+    /* Ramp darkened one step so gradient text and marks keep contrast on paper. */
+    --ramp-1: #16a34a;
+    --ramp-2: #65a30d;
+    --ramp-3: #d97706;
+    --ramp-4: #ea580c;
+    --ramp-5: #dc2626;
+
     --bg-deep: #ffffff;
-    --faint: #eceef1;
-    --stroke: #d0d3d8;
-    --widget: #e8eaed;
-    --text: #1b1e24;
-    --text-dim: #5a626d;
+    --bg: #f4f7f5;
+    --surface-1: #eaefec;
+    --surface-2: #e2e9e4;
+    --stroke: #d0d9d3;
+    --stroke-strong: #b6c3bb;
+    --text: #101a14;
+    --text-dim: #55645b;
+    --accent: #15803d;
     --accent-ink: #ffffff;
+
+    --shadow-1: 0 1px 2px rgb(16 26 20 / 0.06), 0 4px 12px rgb(16 26 20 / 0.06);
+    --shadow-2: 0 2px 6px rgb(16 26 20 / 0.08), 0 16px 40px rgb(16 26 20 / 0.08);
+    --shadow-3: 0 4px 12px rgb(16 26 20 / 0.1), 0 32px 80px rgb(16 26 20 / 0.1);
+
+    --mesh:
+      radial-gradient(60% 45% at 15% 0%, color-mix(in srgb, var(--ramp-1) 8%, transparent), transparent 70%),
+      radial-gradient(55% 40% at 85% 10%, color-mix(in srgb, var(--ramp-4) 6%, transparent), transparent 70%);
     color-scheme: light;
   }
 }
@@ -70,10 +148,10 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
-h1, h2, h3 { line-height: 1.15; letter-spacing: -0.02em; margin: 0 0 0.4em; }
-h1 { font-size: clamp(2.5rem, 7vw, 4.2rem); font-weight: 700; }
-h2 { font-size: clamp(1.75rem, 4vw, 2.6rem); font-weight: 700; }
-h3 { font-size: 1.15rem; font-weight: 600; }
+h1, h2, h3 { line-height: 1.12; letter-spacing: -0.03em; margin: 0 0 0.4em; }
+h1 { font-size: var(--text-4xl); font-weight: 700; }
+h2 { font-size: var(--text-3xl); font-weight: 700; }
+h3 { font-size: var(--text-xl); font-weight: 600; letter-spacing: -0.02em; }
 p { margin: 0 0 1em; max-width: var(--measure); }
 
 a { color: var(--accent); text-decoration-thickness: 1px; text-underline-offset: 2px; }
@@ -101,17 +179,17 @@ section { padding: clamp(3rem, 8vw, 5.5rem) 0; }
   padding: 0.75rem 1.4rem;
   border-radius: 999px;
   border: 1px solid var(--stroke);
-  background: var(--widget);
+  background: var(--surface-2);
   color: var(--text);
   font-weight: 600;
   text-decoration: none;
-  transition: transform var(--dur) var(--spring), background var(--dur) ease,
-    border-color var(--dur) ease, box-shadow var(--dur) ease;
+  transition: transform var(--dur-2) var(--spring), background var(--dur-2) ease,
+    border-color var(--dur-2) ease, box-shadow var(--dur-2) ease;
 }
 .btn:hover {
   transform: translateY(-2px);
   border-color: var(--accent);
-  box-shadow: 0 8px 24px color-mix(in srgb, var(--accent) 24%, transparent);
+  box-shadow: var(--glow-green);
 }
 .btn-primary {
   background: var(--accent);
@@ -120,11 +198,11 @@ section { padding: clamp(3rem, 8vw, 5.5rem) 0; }
 }
 
 .card {
-  background: var(--faint);
+  background: var(--surface-1);
   border: 1px solid var(--stroke);
   border-radius: var(--radius);
   padding: 1.4rem;
-  transition: transform var(--dur) var(--spring), border-color var(--dur) ease;
+  transition: transform var(--dur-2) var(--spring), border-color var(--dur-2) ease;
 }
 .card:hover { transform: translateY(-3px); border-color: var(--accent); }
 
@@ -138,7 +216,7 @@ section { padding: clamp(3rem, 8vw, 5.5rem) 0; }
   border-radius: 50%;
   background: conic-gradient(
     from 0deg,
-    color-mix(in srgb, var(--accent) 20%, transparent),
+    color-mix(in srgb, var(--ramp-1) 22%, transparent),
     transparent 28%
   );
   mask-image: radial-gradient(closest-side, #000 40%, transparent 72%);
