@@ -34,6 +34,16 @@
       #range { color: #8a8a95; white-space: nowrap; min-width: 5.5em; text-align: center; }
       #warns { margin-left: auto; white-space: nowrap; color: #d8d8e2; }
       #warns b { font-weight: 600; }
+      /* Other radars in view, as real buttons rather than canvas hit-testing: they are keyboard
+         reachable and need no pointer maths. */
+      #markers { position: absolute; inset: 0; pointer-events: none; }
+      #markers button { position: absolute; transform: translate(-50%, -50%);
+        pointer-events: auto; display: flex; align-items: center; gap: 4px;
+        background: #101014c0; color: #e6e6ee; border: 1px solid #6f7080; border-radius: 999px;
+        padding: 2px 8px 2px 4px; font: 11px system-ui, sans-serif; cursor: pointer; }
+      #markers button:hover, #markers button:focus { background: #3d6fd6; border-color: #8fb3ff; }
+      #markers button::before { content: ""; width: 6px; height: 6px; border-radius: 50%;
+        background: #8fb3ff; }
       #attrib { position: absolute; right: 4px; bottom: 2px; font-size: 11px; color: #9aa;
         background: #101014b0; padding: 1px 5px; border-radius: 4px; }
       #attrib a { color: inherit; }
@@ -58,6 +68,7 @@
         <div id="tiles"></div>
         <canvas id="radar"></canvas>
         <canvas id="warn"></canvas>
+        <div id="markers"></div>
       </div>
       <div id="attrib">
         Basemap <a href="https://www.usgs.gov/programs/national-geospatial-program/national-map">USGS
