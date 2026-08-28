@@ -46,6 +46,9 @@ const props = Astro.props as
 const site = props.kind === "site" ? props.site : null;
 // lon before lat — the app's #goto vocabulary, same as the deep links on /features.
 const appLink = site ? `https://app.hookecho.io/#goto=${site.id},${site.lon},${site.lat},8` : "";
+// The lite viewer carries NEXRAD only: the Level 3 bucket has no super-res digital products for
+// the terminal radars, so a TDWR link there would open an empty loop.
+const liteLink = site && site.network !== "tdwr" ? `https://app.hookecho.io/lite/?site=${site.id}` : "";
 // RIDGE standard loops exist for WSR-88D ids only — TOKC/TDFW/TDAL all 404 there — so terminal
 // radar pages carry the facts and the deep link and skip the loop rather than ship a broken image.
 const isTdwr = site?.network === "tdwr";
@@ -96,6 +99,11 @@ const state = props.kind === "state" ? stateName(props.code) : "";
             <a class="btn btn-primary" href={appLink}>
               Open {site.id} in your browser
             </a>
+            {liteLink && (
+              <a class="btn" href={liteLink}>
+                Lite view
+              </a>
+            )}
             <a class="btn" href="/download/">
               Get the app
             </a>
@@ -206,6 +214,9 @@ const state = props.kind === "state" ? stateName(props.code) : "";
           <div class="cta">
             <a class="btn btn-primary" href="https://app.hookecho.io">
               Open the radar
+            </a>
+            <a class="btn" href="https://app.hookecho.io/lite/">
+              Lite view
             </a>
             <a class="btn" href="/download/">
               Get the app
