@@ -44,6 +44,7 @@ const state = {
   warnings: [], // [{ event, rings }] already filtered to the current view
 };
 
+let allSites = [];
 let viewer = null;
 let ctx = null;
 
@@ -90,6 +91,41 @@ function drawTiles(w, h) {
   }
 }
 
+// Every other NEXRAD in the current view, as a button that switches to it. This is the map
+// equivalent of the site picker: on a wide view you can see the neighbouring radar's storms
+// arriving and go straight to the site that has them close in.
+function drawMarkers(w, h) {
+  const host = el("markers");
+  host.textContent = "";
+  if (!allSites.length) return;
+  const z = state.zoom;
+  const left = lonToX(state.site.lon, z) - w / 2;
+  const top = latToY(state.site.lat, z) - h / 2;
+  for (const s of allSites) {
+    if (s.id === state.site.id) continue;
+    const x = lonToX(s.lon, z) - left;
+    const y = latToY(s.lat, z) - top;
+    // A margin keeps a marker from hanging half off the edge where it cannot be read.
+    if (x < 12 || y < 12 || x > w - 12 || y > h - 12) continue;
+    const b = document.createElement("button");
+    b.type = "button";
+    b.textContent = s.id;
+    b.title = `Switch to ${s.city} (${s.id})`;
+    b.style.left = `${x}px`;
+    b.style.top = `${y}px`;
+    b.addEventListener("click", () => goToSite(s));
+    host.append(b);
+  }
+}
+
+async function goToSite(site) {
+  state.site = site;
+  el("site").value = site.id;
+  applyView();
+  permalink();
+  await Promise.all([loadLoop(), loadWarnings()]);
+}
+
 function applyView() {
   const [w, h] = canvasSize();
   el("view").style.width = `${w}px`;
@@ -103,6 +139,7 @@ function applyView() {
   ctx = el("radar").getContext("2d");
   viewer.set_view(state.site.lat, state.site.lon, w, h, state.zoom);
   drawTiles(w, h);
+  drawMarkers(w, h);
 }
 
 // How wide the view actually is, which is the thing a zoom control is really setting. Web Mercator
@@ -357,6 +394,7 @@ function fillPicker(sites) {
 
 async function main() {
   const sites = await fetch("./sites.json").then((r) => r.json());
+  allSites = sites;
   fillPicker(sites);
 
   const glue = await import(globalThis.__liteGlue);
@@ -372,12 +410,7 @@ async function main() {
   tick();
   await Promise.all([loadLoop(), loadWarnings()]);
 
-  el("site").addEventListener("change", async (e) => {
-    state.site = sites.find((s) => s.id === e.target.value);
-    applyView();
-    permalink();
-    await Promise.all([loadLoop(), loadWarnings()]);
-  });
+  el("site").addEventListener("change", (e) => goToSite(sites.find((s) => s.id === e.target.value)));
   el("in").addEventListener("click", () => setZoom(state.zoom + 1));
   el("out").addEventListener("click", () => setZoom(state.zoom - 1));
   // The wheel zooms, which is what anyone who has used a map expects. Passive: false because the
