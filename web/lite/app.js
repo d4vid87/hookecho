@@ -225,13 +225,33 @@ async function loadLoop() {
   showTime();
   try {
     const keys = await listKeys();
+    // All six at once. Fetched one after another this was six round trips deep, which is most of
+    // the wait on a slow link; the decode below is the same work either way.
+    const loaded = await Promise.all(
+      keys.map((key) =>
+        fetch(`${S3}/${key}`)
+          .then((r) => (r.ok ? r.arrayBuffer() : null))
+          .then((buf) => (buf ? { key, bytes: new Uint8Array(buf) } : null))
+          .catch(() => null),
+      ),
+    );
     viewer.clear_frames();
     const times = [];
-    for (const key of keys) {
-      const res = await fetch(`${S3}/${key}`).catch(() => null);
-      if (!res || !res.ok) continue;
-      const bytes = new Uint8Array(await res.arrayBuffer());
-      if (viewer.add_frame(bytes)) times.push(keyTime(key));
+    for (const item of loaded) {
+      if (!item || !viewer.add_frame(item.bytes)) continue;
+      times.push(keyTime(item.key));
+      // Paint the oldest frame the moment it decodes rather than sitting on a blank map for the
+      // length of five more decodes.
+      if (times.length === 1 && ctx) {
+        state.frame = 0;
+        state.times = times;
+        viewer.render(ctx, 0);
+        showTime();
+      }
+      // Decoding six scans is a second of solid work on a slow machine. Yielding between them
+      // lets the browser actually put the frame above on screen, and keeps the toolbar clickable
+      // while the rest arrive.
+      await new Promise((r) => setTimeout(r, 0));
     }
     state.times = times;
     state.frame = Math.max(0, times.length - 1);

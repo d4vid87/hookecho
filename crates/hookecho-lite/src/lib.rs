@@ -30,6 +30,10 @@ struct Frame {
     nbins: usize,
     levels: Vec<u8>,
     lut: [u8; 1024],
+    /// The frame already rasterized for the current view. A loop plays the same six frames over
+    /// and over, so the second pass onward is a memcpy instead of a million table lookups — which
+    /// is the difference between smooth and stuttering on the hardware this page is for.
+    rgba: Option<Vec<u8>>,
 }
 
 /// The product being displayed. Both are super-res digital radial arrays with the same tenths
@@ -85,6 +89,9 @@ impl Viewer {
         self.slot = vec![0; width * height];
         self.bin = vec![u16::MAX; width * height];
         self.rgba = vec![0; width * height * 4];
+        for f in &mut self.frames {
+            f.rgba = None; // a cached raster belongs to the view it was drawn for
+        }
 
         let world = 256.0 * 2f64.powf(zoom);
         let (cx, cy) = merc(lat, lon, world);
@@ -180,6 +187,7 @@ impl Viewer {
             nbins,
             levels,
             lut: table.bake(&p.thresholds, folded),
+            rgba: None,
         });
         true
     }
@@ -203,26 +211,28 @@ impl Viewer {
     /// Paint frame `idx` over the whole canvas. Out-of-range indices and an unset view are a
     /// no-op — the JS side drives this from a timer and must not have to synchronize with it.
     pub fn render(&mut self, ctx: &CanvasRenderingContext2d, idx: usize) -> Result<(), JsValue> {
-        let Some(frame) = self.frames.get(idx) else {
-            return Ok(());
-        };
-        if self.width == 0 || self.height == 0 {
+        if self.width == 0 || self.height == 0 || idx >= self.frames.len() {
             return Ok(());
         }
-        let nbins = frame.nbins;
-        for i in 0..self.width * self.height {
-            let out = i * 4;
-            let bin = self.bin[i] as usize;
-            let level = if bin < nbins {
-                frame.levels[self.slot[i] as usize * nbins + bin]
-            } else {
-                0
-            };
-            let c = level as usize * 4;
-            self.rgba[out..out + 4].copy_from_slice(&frame.lut[c..c + 4]);
+        let px = self.width * self.height;
+        if self.frames[idx].rgba.is_none() {
+            let frame = &self.frames[idx];
+            let nbins = frame.nbins;
+            for i in 0..px {
+                let out = i * 4;
+                let bin = self.bin[i] as usize;
+                let level = if bin < nbins {
+                    frame.levels[self.slot[i] as usize * nbins + bin]
+                } else {
+                    0
+                };
+                let c = level as usize * 4;
+                self.rgba[out..out + 4].copy_from_slice(&frame.lut[c..c + 4]);
+            }
+            self.frames[idx].rgba = Some(self.rgba.clone());
         }
         let img = ImageData::new_with_u8_clamped_array_and_sh(
-            Clamped(&self.rgba),
+            Clamped(self.frames[idx].rgba.as_deref().unwrap_or(&self.rgba)),
             self.width as u32,
             self.height as u32,
         )?;
