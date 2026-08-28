@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>HookEcho Lite — radar loop</title>
+    <meta
+      name="description"
+      content="A lightweight NEXRAD radar loop: reflectivity and velocity, animated, on any machine. No WebGL, no account, no telemetry."
+    />
+    <meta name="theme-color" content="#101014" />
+    <link rel="icon" href="/icon-192.png" type="image/png" />
+    <link rel="preconnect" href="https://unidata-nexrad-level3.s3.amazonaws.com" crossorigin />
+    <style>
+      :root { color-scheme: dark; }
+      html, body { margin: 0; height: 100%; background: #101014; color: #e6e6ee;
+        font: 14px system-ui, sans-serif; }
+      #map { position: relative; overflow: hidden; height: calc(100% - 46px); }
+      /* The tiles, the radar and the warnings are three stacked layers in one fixed view, so
+         they need no transforms and no compositing tricks — just z-order. */
+      #tiles { position: absolute; inset: 0; }
+      #tiles img { position: absolute; width: 256px; height: 256px; }
+      canvas { position: absolute; left: 0; top: 0; }
+      #bar { display: flex; gap: 8px; align-items: center; height: 46px; padding: 0 10px;
+        background: #1a1a22; border-bottom: 1px solid #2b2b36; overflow-x: auto; }
+      #bar select, #bar button { background: #2b2b36; color: #e6e6ee; border: 0;
+        border-radius: 6px; padding: 6px 10px; font: inherit; cursor: pointer; }
+      #bar button[aria-pressed="true"] { background: #3d6fd6; }
+      #time { margin-left: auto; color: #8a8a95; white-space: nowrap; }
+      #attrib { position: absolute; right: 4px; bottom: 2px; font-size: 11px; color: #9aa;
+        background: #101014b0; padding: 1px 5px; border-radius: 4px; }
+      #attrib a { color: inherit; }
+      a { color: #8fb3ff; }
+    </style>
+  </head>
+  <body>
+    <div id="bar">
+      <select id="site" aria-label="Radar site"></select>
+      <button id="ref" type="button" aria-pressed="true">Reflectivity</button>
+      <button id="vel" type="button" aria-pressed="false">Velocity</button>
+      <select id="zoom" aria-label="Range">
+        <option value="8">Wide</option>
+        <option value="9" selected>Medium</option>
+        <option value="10">Close</option>
+      </select>
+      <button id="play" type="button" aria-pressed="true">Pause</button>
+      <span id="time">Loading…</span>
+    </div>
+    <div id="map">
+      <div id="tiles"></div>
+      <canvas id="radar"></canvas>
+      <canvas id="warn"></canvas>
+      <div id="attrib">
+        Basemap <a href="https://www.usgs.gov/programs/national-geospatial-program/national-map">USGS
+        The National Map</a> · radar NOAA/NWS ·
+        <a href="https://hookecho.io/">HookEcho</a>
+      </div>
+    </div>
+    <noscript>
+      <p style="padding: 12px">
+        HookEcho Lite needs JavaScript to animate the radar loop. The full app lives at
+        <a href="https://app.hookecho.io/">app.hookecho.io</a>.
+      </p>
+    </noscript>
+    <!-- The wasm glue is content-hashed by scripts/web/build.sh, which rewrites this line when it
+         generates index.html from this file. app.js imports whatever it names. -->
+    <script>
+      globalThis.__liteGlue = "/dist/lite.js";
+    </script>
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>

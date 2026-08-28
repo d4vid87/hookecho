@@ -98,5 +98,62 @@ if [ "$gz_bytes" -gt "$budget" ]; then
   exit 1
 fi
 
+# --- The lite viewer (web/lite, deployed at /lite/) -------------------------------------------
+#
+# A second, much smaller wasm: canvas-2D radar for machines that cannot run the app above. It ships
+# from the same origin so it can use the same /proxy, and it is hashed into web/dist so the
+# `_headers` immutable rule covers it with no new entry.
+cargo build --profile web --target wasm32-unknown-unknown -p hookecho-lite --lib
+wasm-bindgen --target web --no-typescript \
+  --out-dir web/dist --out-name lite \
+  target/wasm32-unknown-unknown/web/hookecho_lite.wasm
+
+lite_wasm="web/dist/lite_bg.wasm"
+lite_glue="web/dist/lite.js"
+if command -v wasm-opt >/dev/null; then
+  wasm-opt -Os -all "$lite_wasm" -o "$lite_wasm.opt"
+  mv "$lite_wasm.opt" "$lite_wasm"
+fi
+
+rm -f web/dist/lite_bg-*.wasm web/dist/lite-*.js
+
+lite_wasm_hash="$(hash_of "$lite_wasm")"
+cp "$lite_wasm" "web/dist/lite_bg-$lite_wasm_hash.wasm"
+sed -i "s/lite_bg\.wasm/lite_bg-$lite_wasm_hash.wasm/g" "$lite_glue"
+
+lite_glue_hash="$(hash_of "$lite_glue")"
+cp "$lite_glue" "web/dist/lite-$lite_glue_hash.js"
+sed -i "s/lite_bg-$lite_wasm_hash\.wasm/lite_bg.wasm/g" "$lite_glue"
+
+# Generated like web/index.html: the committed source keeps plain names, the deployed copy names
+# the hashed glue.
+sed -e "s#/dist/lite\.js#/dist/lite-$lite_glue_hash.js#g" \
+  web/lite/index.src.html > web/lite/index.html
+
+# The site picker's data, derived from the one committed registry (site/src/data/nexrad-sites.json,
+# itself CI drift-checked against wxdata) — not a second source of truth. TDWR sites are dropped:
+# the bucket carries no super-res digital products for them.
+if ! command -v jq >/dev/null; then
+  echo "build.sh: jq not found — it generates web/lite/sites.json" >&2
+  exit 1
+fi
+jq -c '[.[] | select(.network == "nexrad") | {id, city, state, lat, lon}]' \
+  site/src/data/nexrad-sites.json > web/lite/sites.json
+
+grep -oh 'dist/[A-Za-z0-9_.-]*' web/lite/index.html | sort -u | while read -r ref; do
+  [ -f "web/$ref" ] || { echo "build.sh: web/lite/index.html references missing web/$ref" >&2; exit 1; }
+done
+
+lite_gz="$(gzip -9 -c "web/dist/lite_bg-$lite_wasm_hash.wasm" | wc -c)"
+# Its own budget: the lite bundle exists to be small, and sharing the app's budget would hide a
+# tenfold regression here inside the app's margin.
+lite_budget="${HOOKECHO_LITE_WASM_BUDGET:-80000}"
+printf 'lite wasm: %s raw, %s gzipped (budget %s)\n' \
+  "$(stat -c%s "web/dist/lite_bg-$lite_wasm_hash.wasm")" "$lite_gz" "$lite_budget"
+if [ "$lite_gz" -gt "$lite_budget" ]; then
+  echo "build.sh: the lite wasm is over its size budget — it is the whole point of that page." >&2
+  exit 1
+fi
+
 echo "web/dist ready:"
 ls -la web/dist
