@@ -125,9 +125,18 @@ lite_glue_hash="$(hash_of "$lite_glue")"
 cp "$lite_glue" "web/dist/lite-$lite_glue_hash.js"
 sed -i "s/lite_bg-$lite_wasm_hash\.wasm/lite_bg.wasm/g" "$lite_glue"
 
+# app.js is hashed like the glue rather than served under its own name. It is generated HTML that
+# names it, and the two are a matched pair: a browser holding a cached app.js against a newer page
+# runs code that expects controls the page no longer has. Pages serves /lite/* with a four-hour
+# max-age, so that window was real.
+rm -f web/dist/lite-app-*.js
+lite_app_hash="$(hash_of web/lite/app.js)"
+cp web/lite/app.js "web/dist/lite-app-$lite_app_hash.js"
+
 # Generated like web/index.html: the committed source keeps plain names, the deployed copy names
-# the hashed glue.
+# the hashed glue and the hashed page script.
 sed -e "s#/dist/lite\.js#/dist/lite-$lite_glue_hash.js#g" \
+  -e "s#\./app\.js#/dist/lite-app-$lite_app_hash.js#g" \
   web/lite/index.src.html > web/lite/index.html
 
 # The site picker's data, derived from the one committed registry (site/src/data/nexrad-sites.json,
