@@ -76,7 +76,14 @@ const next = at >= 0 && at < pages.length - 1 ? pages[at + 1] : undefined;
     .docs { grid-template-columns: minmax(0, 1fr); }
     .side { position: static; border-bottom: 1px solid var(--stroke); padding-bottom: 1.5rem; }
   }
-  .side { position: sticky; top: 5rem; }
+  .side {
+    position: sticky;
+    top: 5rem;
+    background: var(--surface-1);
+    border: 1px solid var(--stroke);
+    border-radius: var(--radius-lg);
+    padding: var(--sp-4);
+  }
   .side ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.55rem; }
   .side a {
     color: var(--text-dim);
@@ -89,8 +96,24 @@ const next = at >= 0 && at < pages.length - 1 ? pages[at + 1] : undefined;
   .side a:hover { color: var(--text); }
   .side a[aria-current="page"] {
     color: var(--text);
-    border-left-color: var(--accent);
+    /* The rail is the ramp, so the page you are on is the one warm thing in the column. */
+    border-left-color: transparent;
+    border-image: var(--ramp-cool) 1;
     font-weight: 600;
+  }
+
+  /* Pagefind ships its own design; these are the variables it exposes, pointed at our tokens so
+     the search box is not the one un-themed widget on the site. */
+  .side :global(#search) {
+    --pagefind-ui-primary: var(--accent);
+    --pagefind-ui-text: var(--text);
+    --pagefind-ui-background: var(--surface-2);
+    --pagefind-ui-border: var(--stroke);
+    --pagefind-ui-tag: var(--surface-1);
+    --pagefind-ui-border-width: 1px;
+    --pagefind-ui-border-radius: var(--radius);
+    --pagefind-ui-font: inherit;
+    margin-bottom: var(--sp-4);
   }
 
   .prose h1 { font-size: clamp(1.9rem, 4.5vw, 2.6rem); margin-bottom: 1rem; }
@@ -102,7 +125,7 @@ const next = at >= 0 && at < pages.length - 1 ? pages[at + 1] : undefined;
   .prose :global(kbd) {
     font: inherit;
     font-size: 0.85em;
-    background: var(--widget);
+    background: var(--surface-2);
     border: 1px solid var(--stroke);
     border-radius: 5px;
     padding: 0.1em 0.4em;
@@ -117,7 +140,7 @@ const next = at >= 0 && at < pages.length - 1 ? pages[at + 1] : undefined;
   }
   .prose :global(code) { font-size: 0.9em; }
   .prose :global(:not(pre) > code) {
-    background: var(--faint);
+    background: var(--surface-1);
     border: 1px solid var(--stroke);
     border-radius: 5px;
     padding: 0.1em 0.35em;

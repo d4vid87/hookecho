@@ -260,6 +260,12 @@ const state = props.kind === "state" ? stateName(props.code) : "";
 </script>
 
 <style>
+  /* Same opening wash as the marketing pages, so 196 generated pages belong to the same site. */
+  :global(section:first-of-type) {
+    background-image: var(--mesh);
+    background-repeat: no-repeat;
+    background-size: 100% 22rem;
+  }
   .lede { font-size: 1.1rem; color: var(--text-dim); max-width: 60ch; }
   .dim { color: var(--text-dim); max-width: 60ch; }
   .eyebrow a { color: inherit; }
@@ -271,21 +277,29 @@ const state = props.kind === "state" ? stateName(props.code) : "";
     padding: 0.5rem 1rem;
     border: 1px solid var(--stroke);
     border-radius: 999px;
-    background: var(--faint);
+    background: var(--surface-1);
     color: var(--text-dim);
     font-size: 0.95rem;
   }
-  .warnings .count { font-size: 1.25rem; font-weight: 700; color: var(--text); }
-  .warnings.hot .count { color: var(--accent); }
+  .warnings .count { font-size: var(--text-lg); font-weight: 700; color: var(--text); }
+  /* An active warning is the one thing on this page that should be loud. */
+  .warnings.hot {
+    border-color: transparent;
+    background:
+      linear-gradient(var(--surface-1), var(--surface-1)) padding-box,
+      var(--ramp-hot) border-box;
+  }
+  .warnings.hot .count { color: var(--ramp-5); }
   .facts {
     display: grid;
     gap: 1rem;
     grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
     margin: 2rem 0;
-    padding: 1.2rem;
+    padding: var(--sp-5);
     border: 1px solid var(--stroke);
-    border-radius: var(--radius);
-    background: var(--bg-deep);
+    border-radius: var(--radius-lg);
+    background: var(--surface-1);
+    box-shadow: var(--shadow-1);
   }
   .facts dt { color: var(--text-dim); font-size: 0.85rem; }
   .facts dd { margin: 0.2rem 0 0; font-weight: 600; }
@@ -306,14 +320,18 @@ const state = props.kind === "state" ? stateName(props.code) : "";
     text-decoration: none;
     font-size: 0.95rem;
   }
-  .sites a:hover { border-color: var(--accent); color: var(--text); }
+  .sites a {
+    background: var(--surface-1);
+    transition: border-color var(--dur-2) ease, box-shadow var(--dur-2) var(--ease-out);
+  }
+  .sites a:hover { border-color: var(--stroke-strong); color: var(--text); box-shadow: var(--shadow-2); }
   .sites strong { color: var(--text); margin-right: 0.4rem; }
   .miles { float: right; font-variant-numeric: tabular-nums; }
   .tag {
     margin-left: 0.4rem;
     padding: 0.05rem 0.35rem;
     border-radius: 4px;
-    background: var(--faint);
+    background: var(--surface-2);
     font-size: 0.75rem;
     letter-spacing: 0.04em;
   }
