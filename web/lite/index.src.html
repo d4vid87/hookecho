@@ -48,6 +48,10 @@
         background: #101014b0; padding: 1px 5px; border-radius: 4px; }
       #attrib a { color: inherit; }
       a { color: #8fb3ff; }
+      /* Hero mode (?hero=1): the site embeds this as its landing backdrop, so only the map and
+         the basemap attribution — which USGS requires — stay on screen. */
+      body.hero #bar, body.hero #markers { display: none; }
+      body.hero #map { height: 100%; }
     </style>
   </head>
   <body>
