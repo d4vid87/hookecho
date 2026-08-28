@@ -32,6 +32,8 @@ const events = [
 </a>
 
 <script>
+  import { watchCount } from "../scripts/motion";
+
   const ticker = document.querySelector<HTMLElement>(".ticker");
   const events: string[] = JSON.parse(ticker?.dataset.events ?? "[]");
   for (const event of events) {
@@ -42,8 +44,11 @@ const events = [
       .then((d) => {
         const n = d?.features?.length ?? 0;
         slot.textContent = String(n);
-        // Hand the number to motion.ts, which counts it up when the row scrolls into view.
-        if (n > 0) (slot as HTMLElement).dataset.countup = String(n);
+        // The fetch finishes after motion.ts scanned the page, so register the slot by hand.
+        if (n > 0) {
+          (slot as HTMLElement).dataset.countup = String(n);
+          watchCount(slot as HTMLElement);
+        }
         slot.parentElement?.classList.toggle("hot", n > 0);
       })
       // A blocked or failing fetch leaves the em dash: the row still reads as a list of the

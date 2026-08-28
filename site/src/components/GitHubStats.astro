@@ -18,6 +18,8 @@ const ttlMs = 60 * 60 * 1000;
 </div>
 
 <script>
+  import { watchCount } from "../scripts/motion";
+
   const el = document.querySelector<HTMLElement>(".stats");
   const repo = el?.dataset.repo;
   const ttl = Number(el?.dataset.ttl ?? 0);
@@ -25,8 +27,15 @@ const ttlMs = 60 * 60 * 1000;
 
   function show(stars: number, downloads: number) {
     if (!el) return;
-    el.querySelector('[data-slot="stars"]')!.textContent = stars.toLocaleString();
-    el.querySelector('[data-slot="downloads"]')!.textContent = downloads.toLocaleString();
+    for (const [slot, value] of [
+      ["stars", stars],
+      ["downloads", downloads],
+    ] as const) {
+      const node = el.querySelector<HTMLElement>(`[data-slot="${slot}"]`)!;
+      node.textContent = value.toLocaleString();
+      node.dataset.countup = String(value);
+      watchCount(node); // the fetch finishes after motion.ts has already scanned the page
+    }
     el.hidden = false;
   }
 
@@ -77,12 +86,13 @@ const ttlMs = 60 * 60 * 1000;
     padding: 0.6rem 1.1rem;
     border: 1px solid var(--stroke);
     border-radius: 999px;
-    background: var(--faint);
+    background: var(--surface-1);
     text-decoration: none;
     color: var(--text-dim);
-    transition: border-color var(--dur) ease, transform var(--dur) var(--spring);
+    box-shadow: var(--shadow-1);
+    transition: border-color var(--dur-2) ease, box-shadow var(--dur-2) var(--ease-out);
   }
-  .stat:hover { border-color: var(--accent); transform: translateY(-2px); }
-  .n { font-size: 1.2rem; font-weight: 700; color: var(--text); font-variant-numeric: tabular-nums; }
+  .stat:hover { border-color: var(--stroke-strong); box-shadow: var(--shadow-2); }
+  .n { font-size: var(--text-lg); font-weight: 700; color: var(--text); font-variant-numeric: tabular-nums; }
   .l { font-size: 0.9rem; }
 </style>
