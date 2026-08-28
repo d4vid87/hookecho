@@ -4,19 +4,31 @@
 // is public data, so the whole thing is a fetch and a number.
 // ponytail: the GeoJSON carries polygons we throw away (~3 KB per alert), because the lighter
 // ld+json needs an Accept header and the API's preflight only allows API-Key and User-Agent.
-const events = ["Tornado Warning", "Severe Thunderstorm Warning", "Flash Flood Warning"];
+import Icon from "./Icon.astro";
+
+// Icon and hot colour per event, so a busy day reads at a glance instead of as three grey numbers.
+const events = [
+  { event: "Tornado Warning", icon: "warning-diamond", hot: "var(--ramp-5)" },
+  { event: "Severe Thunderstorm Warning", icon: "lightning", hot: "var(--ramp-4)" },
+  { event: "Flash Flood Warning", icon: "gauge", hot: "var(--ramp-3)" },
+] as const;
 ---
 
-<a class="ticker" href="https://app.hookecho.io" data-events={JSON.stringify(events)}>
+<a
+  class="ticker"
+  href="https://app.hookecho.io"
+  data-events={JSON.stringify(events.map((e) => e.event))}
+>
   {
-    events.map((event) => (
-      <span class="item" data-event={event}>
+    events.map(({ event, icon, hot }) => (
+      <span class="item" data-event={event} style={`--hot: ${hot}`}>
+        <Icon name={icon} size={22} />
         <span class="count">—</span>
         <span class="label">{event.replace(" Warning", "")}</span>
       </span>
     ))
   }
-  <span class="cta">See them on the map</span>
+  <span class="cta">See them on the map <Icon name="arrow-right" size={16} /></span>
 </a>
 
 <script>
@@ -30,6 +42,8 @@ const events = ["Tornado Warning", "Severe Thunderstorm Warning", "Flash Flood W
       .then((d) => {
         const n = d?.features?.length ?? 0;
         slot.textContent = String(n);
+        // Hand the number to motion.ts, which counts it up when the row scrolls into view.
+        if (n > 0) (slot as HTMLElement).dataset.countup = String(n);
         slot.parentElement?.classList.toggle("hot", n > 0);
       })
       // A blocked or failing fetch leaves the em dash: the row still reads as a list of the
@@ -47,15 +61,30 @@ const events = ["Tornado Warning", "Severe Thunderstorm Warning", "Flash Flood W
     padding: 0.85rem 1.2rem;
     border: 1px solid var(--stroke);
     border-radius: 999px;
-    background: var(--faint);
+    background: var(--surface-1);
     color: var(--text);
     text-decoration: none;
-    transition: border-color var(--dur) ease, transform var(--dur) var(--spring);
+    box-shadow: var(--shadow-1);
+    transition: border-color var(--dur-2) ease, box-shadow var(--dur-2) var(--ease-out);
   }
-  .ticker:hover { border-color: var(--accent); transform: translateY(-2px); }
-  .item { display: inline-flex; align-items: baseline; gap: 0.45rem; }
-  .count { font-size: 1.35rem; font-weight: 700; font-variant-numeric: tabular-nums; }
-  .item.hot .count { color: var(--accent); }
-  .label { color: var(--text-dim); font-size: 0.9rem; }
-  .cta { margin-left: auto; color: var(--accent); font-size: 0.9rem; font-weight: 600; }
+  .ticker:hover { border-color: var(--stroke-strong); box-shadow: var(--shadow-2); }
+  .item { display: inline-flex; align-items: center; gap: 0.5rem; color: var(--text-dim); }
+  .count {
+    font-size: var(--text-xl);
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    color: var(--text);
+  }
+  .item.hot { color: var(--hot); }
+  .item.hot .count { color: var(--hot); }
+  .label { font-size: 0.9rem; }
+  .cta {
+    margin-left: auto;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    color: var(--accent);
+    font-size: 0.9rem;
+    font-weight: 600;
+  }
 </style>
