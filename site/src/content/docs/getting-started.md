@@ -64,3 +64,5 @@ actually in force at the moment you're parked on, not today's.
 
 - [Install it](/docs/install/) on your other machines.
 - [Reading the radar](/docs/reading-the-radar/) — what the colours mean.
+- [Join the Discord](https://discord.gg/VNMW2Gyg4V) if you get stuck or want to
+  show someone what you're looking at.
