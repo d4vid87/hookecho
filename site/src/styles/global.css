@@ -8,12 +8,14 @@
 */
 @font-face {
   font-family: "Inter";
-  /* The same Latin subset the app bundles (crates/hookecho/data/fonts), converted to woff2.
-     ponytail: Regular only, declared at 400 so the browser synthesizes bold — a declared
-     400–700 range makes it draw 600 with the Regular outlines and bold stops being visible.
-     Replaced by InterVariable in the next wave. */
-  src: url("/fonts/Inter-Regular-subset.woff2") format("woff2");
-  font-weight: 400;
+  /* Inter Variable (rsms/inter v4.1, OFL — see Inter-LICENSE.txt), Latin + the punctuation the
+     site actually uses. Regenerate with:
+       pyftsubset InterVariable.ttf \
+         --unicodes="U+0000-00FF,U+2013-2014,U+2018-201D,U+2022,U+2026,U+00D7,U+2192,U+00B7,U+2212" \
+         --layout-features='*' --flavor=woff2 --output-file=InterVariable-subset.woff2
+     One file covers 100–900, so nothing is synthetically bold any more. */
+  src: url("/fonts/InterVariable-subset.woff2") format("woff2-variations");
+  font-weight: 100 900;
   font-display: swap;
 }
 
@@ -149,8 +151,8 @@ body {
 }
 
 h1, h2, h3 { line-height: 1.12; letter-spacing: -0.03em; margin: 0 0 0.4em; }
-h1 { font-size: var(--text-4xl); font-weight: 700; }
-h2 { font-size: var(--text-3xl); font-weight: 700; }
+h1 { font-size: var(--text-4xl); font-weight: 750; }
+h2 { font-size: var(--text-3xl); font-weight: 750; }
 h3 { font-size: var(--text-xl); font-weight: 600; letter-spacing: -0.02em; }
 p { margin: 0 0 1em; max-width: var(--measure); }
 
@@ -225,4 +227,48 @@ section { padding: clamp(3rem, 8vw, 5.5rem) 0; }
 }
 @keyframes sweep {
   to { transform: rotate(1turn); }
+}
+
+/* Gradient utilities. The solid color is declared first so light mode and any browser without
+   background-clip:text still shows readable text. */
+.grad-text {
+  color: var(--ramp-3);
+  background: var(--ramp);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+/* Gradient border without a mask: the padding box paints the surface, the border box the ramp. */
+.grad-border {
+  border: 1px solid transparent;
+  background:
+    linear-gradient(var(--surface-1), var(--surface-1)) padding-box,
+    var(--ramp-hot) border-box;
+}
+
+.mesh-bg { background-image: var(--mesh); }
+
+/* Bento primitive. Replaces translateY(-2px) as the site's only hover. */
+.tile {
+  background: var(--surface-1);
+  border: 1px solid var(--stroke);
+  border-radius: var(--radius-lg);
+  padding: var(--sp-5);
+  box-shadow: var(--shadow-1);
+  transition: box-shadow var(--dur-2) var(--ease-out), border-color var(--dur-2) ease,
+    transform var(--dur-2) var(--ease-out);
+}
+.tile:hover { box-shadow: var(--shadow-2); border-color: var(--stroke-strong); }
+
+/* Scroll reveals, driven by src/scripts/motion.ts. No-JS keeps everything visible. */
+[data-reveal] {
+  opacity: 0;
+  transform: translateY(14px);
+  transition: opacity var(--dur-3) var(--ease-out), transform var(--dur-3) var(--ease-out);
+}
+[data-reveal].is-in { opacity: 1; transform: none; }
+
+@media (prefers-reduced-motion: reduce) {
+  [data-reveal] { opacity: 1; transform: none; }
 }
