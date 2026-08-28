@@ -15,9 +15,13 @@
       :root { color-scheme: dark; }
       html, body { margin: 0; height: 100%; background: #101014; color: #e6e6ee;
         font: 14px system-ui, sans-serif; }
-      #map { position: relative; overflow: hidden; height: calc(100% - 46px); }
-      /* The tiles, the radar and the warnings are three stacked layers in one fixed view, so
-         they need no transforms and no compositing tricks — just z-order. */
+      /* The canvases are capped below the window on a big screen (a CPU raster of a 4K canvas is
+         not what this page is for), so the layers live in a centered box of exactly their size —
+         otherwise the tile grid would start at the window corner and the radar would not sit on
+         its own geography. */
+      #map { position: relative; overflow: hidden; height: calc(100% - 46px);
+        display: grid; place-items: center; }
+      #view { position: relative; overflow: hidden; }
       #tiles { position: absolute; inset: 0; }
       #tiles img { position: absolute; width: 256px; height: 256px; }
       canvas { position: absolute; left: 0; top: 0; }
@@ -27,6 +31,7 @@
         border-radius: 6px; padding: 6px 10px; font: inherit; cursor: pointer; }
       #bar button[aria-pressed="true"] { background: #3d6fd6; }
       #time { color: #8a8a95; white-space: nowrap; }
+      #range { color: #8a8a95; white-space: nowrap; min-width: 5.5em; text-align: center; }
       #warns { margin-left: auto; white-space: nowrap; color: #d8d8e2; }
       #warns b { font-weight: 600; }
       #attrib { position: absolute; right: 4px; bottom: 2px; font-size: 11px; color: #9aa;
@@ -40,19 +45,20 @@
       <select id="site" aria-label="Radar site"></select>
       <button id="ref" type="button" aria-pressed="true">Reflectivity</button>
       <button id="vel" type="button" aria-pressed="false">Velocity</button>
-      <select id="zoom" aria-label="Range">
-        <option value="8">Wide</option>
-        <option value="9" selected>Medium</option>
-        <option value="10">Close</option>
-      </select>
+      <button id="out" type="button" aria-label="Zoom out" title="Zoom out">−</button>
+      <span id="range" title="Width of the view">—</span>
+      <button id="in" type="button" aria-label="Zoom in" title="Zoom in">+</button>
       <button id="play" type="button" aria-pressed="true">Pause</button>
+      <button id="full" type="button" aria-pressed="false">Full screen</button>
       <span id="warns"></span>
       <span id="time">Loading…</span>
     </div>
     <div id="map">
-      <div id="tiles"></div>
-      <canvas id="radar"></canvas>
-      <canvas id="warn"></canvas>
+      <div id="view">
+        <div id="tiles"></div>
+        <canvas id="radar"></canvas>
+        <canvas id="warn"></canvas>
+      </div>
       <div id="attrib">
         Basemap <a href="https://www.usgs.gov/programs/national-geospatial-program/national-map">USGS
         The National Map</a> · radar NOAA/NWS ·
