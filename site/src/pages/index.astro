@@ -1,4 +1,5 @@
 ---
+import { DISCORD_INVITE } from "../data/community";
 import Base from "../layouts/Base.astro";
 import Hero from "../components/Hero.astro";
 import FeatureGrid from "../components/FeatureGrid.astro";
@@ -197,6 +198,21 @@ const jsonld = {
       </p>
       <div class="platforms">
         <a class="btn btn-primary" href="/compare/">See the comparison</a>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="wrap">
+      <p class="eyebrow">Community</p>
+      <h2>Come ask what you are looking at</h2>
+      <p>
+        There is a Discord for people who use HookEcho: chase reports, questions about a signature
+        on your screen, feature arguments, and the occasional bug found before we find it.
+      </p>
+      <div class="platforms">
+        <a class="btn btn-primary" href={DISCORD_INVITE}>Join the Discord</a>
+        <a class="btn" href="https://github.com/d4vid87/hookecho/discussions">GitHub Discussions</a>
       </div>
     </div>
   </section>

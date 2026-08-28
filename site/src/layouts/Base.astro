@@ -15,6 +15,8 @@ const url = new URL(Astro.url.pathname, Astro.site);
 // Cloudflare Web Analytics: cookieless, one script tag, and only rendered when the token is set —
 // so local builds and forks stay beacon-free. The token is public by design (it identifies the
 // site, not the account); it comes from the CF_ANALYTICS_TOKEN secret in site.yml.
+import { DISCORD_INVITE } from "../data/community";
+
 const analytics = import.meta.env.PUBLIC_CF_ANALYTICS_TOKEN;
 const social = new URL(image, Astro.site);
 
@@ -101,6 +103,7 @@ const nav = [
           <a href="/press/">Press</a> ·
           <a href="https://github.com/d4vid87/hookecho">Source</a> ·
           <a href="https://github.com/d4vid87/hookecho/discussions">Discussions</a> ·
+          <a href={DISCORD_INVITE}>Discord</a> ·
           <a href="https://github.com/d4vid87/hookecho/issues">Report a problem</a> ·
           <a href="/weatherdesk/">WeatherDesk</a> ·
           <a href="https://github.com/d4vid87/weatherdesk">WeatherDesk source</a>

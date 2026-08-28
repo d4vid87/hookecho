@@ -82,3 +82,9 @@ Every radar word has its own page now, with the related ones linked from it:
 [hook echo](/glossary/hook-echo/) itself.
 
 [The whole glossary is here.](/glossary/)
+
+## Still stuck?
+
+Ask in the [Discord](https://discord.gg/VNMW2Gyg4V) — someone is usually looking at the
+same storm you are. For a bug or a feature request,
+[open an issue](https://github.com/d4vid87/hookecho/issues).
