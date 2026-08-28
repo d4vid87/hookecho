@@ -42,10 +42,6 @@
   --accent: #3fdd78;
   --accent-ink: #062012;
 
-  /* Aliases kept so pages written against the old names keep working (retired in W7). */
-  --faint: var(--surface-1);
-  --widget: var(--surface-2);
-
   --measure: 68ch;
   --page: 1120px;
 

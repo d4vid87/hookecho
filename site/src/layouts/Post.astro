@@ -46,6 +46,15 @@ const jsonld = {
 
 <style>
   .post { max-width: 780px; padding: 3rem 0 4.5rem; }
+  /* One of the three sanctioned appearances of the full ramp. */
+  .post h1::before {
+    content: "";
+    display: block;
+    width: 5rem;
+    height: 2px;
+    margin-bottom: var(--sp-4);
+    background: var(--ramp);
+  }
   .eyebrow a { color: var(--text-dim); }
   .lede { font-size: 1.15rem; color: var(--text-dim); }
   .lede-shot {
@@ -60,7 +69,7 @@ const jsonld = {
   .post :global(li) { margin-bottom: 0.5rem; }
   .post :global(strong) { color: var(--text); font-weight: 600; }
   .post :global(:not(pre) > code) {
-    background: var(--faint);
+    background: var(--surface-1);
     border: 1px solid var(--stroke);
     border-radius: 5px;
     padding: 0.1em 0.35em;
