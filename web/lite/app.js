@@ -227,17 +227,18 @@ async function loadLoop() {
     const keys = await listKeys();
     // All six at once. Fetched one after another this was six round trips deep, which is most of
     // the wait on a slow link; the decode below is the same work either way.
-    const loaded = await Promise.all(
-      keys.map((key) =>
-        fetch(`${S3}/${key}`)
-          .then((r) => (r.ok ? r.arrayBuffer() : null))
-          .then((buf) => (buf ? { key, bytes: new Uint8Array(buf) } : null))
-          .catch(() => null),
-      ),
+    const inflight = keys.map((key) =>
+      fetch(`${S3}/${key}`)
+        .then((r) => (r.ok ? r.arrayBuffer() : null))
+        .then((buf) => (buf ? { key, bytes: new Uint8Array(buf) } : null))
+        .catch(() => null),
     );
     viewer.clear_frames();
     const times = [];
-    for (const item of loaded) {
+    // Awaited in order, not with Promise.all: the requests are already all in flight, and waiting
+    // for the slowest one before decoding any of them is how the first frame ends up last.
+    for (const pending of inflight) {
+      const item = await pending;
       if (!item || !viewer.add_frame(item.bytes)) continue;
       times.push(keyTime(item.key));
       // Paint the oldest frame the moment it decodes rather than sitting on a blank map for the
