@@ -1,5 +1,6 @@
 ---
 import Base from "../../layouts/Base.astro";
+import Icon from "../../components/Icon.astro";
 
 const releases = "https://github.com/d4vid87/hookecho/releases/latest";
 const asset = (name: string) => `${releases}/download/${name}`;
@@ -10,6 +11,7 @@ const asset = (name: string) => `${releases}/download/${name}`;
 const platforms = [
   {
     id: "windows",
+    icon: "windows-logo",
     name: "Windows",
     note: "Windows 10 or newer, 64-bit.",
     links: [
@@ -20,6 +22,7 @@ const platforms = [
   },
   {
     id: "linux",
+    icon: "linux-logo",
     name: "Linux",
     note: "AppImage runs anywhere; the .deb adds a menu entry on Debian and Ubuntu.",
     links: [
@@ -30,12 +33,14 @@ const platforms = [
   },
   {
     id: "mac",
+    icon: "apple-logo",
     name: "macOS",
     note: "Experimental: built and smoke-tested in CI, never run on real Apple hardware, and ad-hoc signed — Gatekeeper will ask before it opens.",
     links: [{ label: "HookEcho-macos.zip", href: asset("HookEcho-macos.zip"), primary: true }],
   },
   {
     id: "android",
+    icon: "android-logo",
     name: "Android",
     note: "arm64, Android 10 or newer. Sideload it — enable “install unknown apps” first.",
     links: [{ label: "APK (arm64-v8a)", href: asset("HookEcho-arm64-v8a.apk"), primary: true }],
@@ -64,8 +69,8 @@ const stores = ["Flathub", "Snap Store", "AUR", "Homebrew", "winget"];
 
       <div class="grid">
         {platforms.map((p) => (
-          <div class="card platform" id={`p-${p.id}`}>
-            <h2>{p.name}</h2>
+          <div class="tile platform" id={`p-${p.id}`} data-reveal data-tilt>
+            <h2><Icon name={p.icon} size={20} /> {p.name}</h2>
             <p class="note">{p.note}</p>
             <div class="links">
               {p.links.map((l) => (
@@ -134,9 +139,17 @@ const stores = ["Flathub", "Snap Store", "AUR", "Homebrew", "winget"];
     margin: 1.5rem 0 2rem;
   }
   .platform { display: flex; flex-direction: column; }
-  .platform h2 { font-size: 1.2rem; }
+  .platform h2 { font-size: var(--text-lg); display: flex; align-items: center; gap: 0.5rem; }
   .platform .note { color: var(--text-dim); font-size: 0.95rem; }
-  .platform.is-yours { border-color: var(--accent); }
+  /* The platform we think you are on is the one object on the page with the brand gradient
+     around it — the page's whole job is getting you to that one button. */
+  .platform.is-yours {
+    border-color: transparent;
+    background:
+      linear-gradient(var(--surface-1), var(--surface-1)) padding-box,
+      var(--ramp-hot) border-box;
+    box-shadow: var(--glow-hot);
+  }
   /* Push the buttons to the bottom so they line up across cards with different note lengths. */
   .links { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: auto; }
   .links .btn { padding: 0.55rem 1rem; font-size: 0.95rem; }

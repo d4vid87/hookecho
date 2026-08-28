@@ -28,6 +28,13 @@ const { Content } = await render(entry);
 </Base>
 
 <style>
+  /* A wash of the brand ramp behind the opening block, so every page starts as the same
+     product rather than a bare column of text. */
+  :global(section:first-of-type) {
+    background-image: var(--mesh);
+    background-repeat: no-repeat;
+    background-size: 100% 22rem;
+  }
   .log { max-width: 820px; padding-bottom: 4rem; }
   .lede { color: var(--text-dim); max-width: 62ch; }
   .dim { color: var(--text-dim); margin-top: 2.5rem; }
