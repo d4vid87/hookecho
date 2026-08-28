@@ -96,12 +96,15 @@ const weatherdeskRepo = "https://github.com/d4vid87/weatherdesk";
 // The four rows that decide it for most people, pulled from the same data the full matrix uses so
 // the teaser can never disagree with the page it links to.
 import { COLS, ROWS } from "../data/compare";
-const teaserLabels = ["Price", "Ads", "Level 2 all tilts", "Open source"];
+const teaserLabels = ["Price", "Ads", "Open source", "Level 2, every tilt"];
 const teaserCols = [0, 1, 2]; // HookEcho, RadarScope, MyRadar
 const teaserRows = teaserLabels
   .map((label) => ROWS.find((r) => r.label === label))
   .filter((r): r is (typeof ROWS)[number] => Boolean(r));
-const mark = (v: string) => (v === "yes" ? "Yes" : v === "no" ? "No" : "Partly");
+// The cell's own qualifier is the label — `v` only says whether the answer is good for you, so
+// rendering it as a word turns "Ads: none" into "Ads: yes".
+const say = (cell: { v: string; t: string }) =>
+  cell.t || (cell.v === "yes" ? "Yes" : cell.v === "no" ? "No" : "Partly");
 
 const jsonld = {
   "@context": "https://schema.org",
@@ -281,7 +284,7 @@ const jsonld = {
                 <th scope="row">{row.label}</th>
                 {
                   teaserCols.map((c) => (
-                    <td class={row.cells[c].v} title={row.cells[c].t}>{mark(row.cells[c].v)}</td>
+                    <td class={row.cells[c].v}>{say(row.cells[c])}</td>
                   ))
                 }
               </tr>
