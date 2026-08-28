@@ -88,6 +88,13 @@ import Base from "../layouts/Base.astro";
 </Base>
 
 <style>
+  /* A wash of the brand ramp behind the opening block, so every page starts as the same
+     product rather than a bare column of text. */
+  :global(section:first-of-type) {
+    background-image: var(--mesh);
+    background-repeat: no-repeat;
+    background-size: 100% 22rem;
+  }
   .prose { max-width: 68ch; }
   .lede { font-size: 1.1rem; color: var(--text-dim); }
   li { margin: 0.5rem 0; }

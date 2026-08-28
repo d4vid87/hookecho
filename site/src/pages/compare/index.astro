@@ -95,7 +95,7 @@ import { COLS as cols, ROWS as rows, COMPETITORS } from "../../data/compare";
 </Base>
 
 <style>
-  .head { position: relative; overflow: hidden; }
+  .head { position: relative; overflow: hidden; background-image: var(--mesh); }
   .head .wrap { position: relative; }
   .lede { font-size: 1.15rem; color: var(--text-dim); max-width: 62ch; }
   .alt { background: var(--bg-deep); border-block: 1px solid var(--stroke); }
@@ -109,7 +109,8 @@ import { COLS as cols, ROWS as rows, COMPETITORS } from "../../data/compare";
     color: var(--text-dim);
     text-decoration: none;
   }
-  .one-by-one a:hover { border-color: var(--accent); }
+  .one-by-one a { transition: border-color var(--dur-2) ease, box-shadow var(--dur-2) var(--ease-out); }
+  .one-by-one a:hover { border-color: var(--stroke-strong); box-shadow: var(--shadow-2); }
   .one-by-one strong { display: block; color: var(--text); margin-bottom: 0.2rem; }
   .one-by-one span { font-size: 0.95rem; }
 
@@ -135,10 +136,10 @@ import { COLS as cols, ROWS as rows, COMPETITORS } from "../../data/compare";
     border: 1.5px solid var(--stroke);
     vertical-align: baseline;
   }
-  td.yes .mark { background: var(--accent); border-color: var(--accent); }
+  td.yes .mark { background: var(--ramp-1); border-color: var(--ramp-1); }
   td.part .mark {
-    border-color: var(--text-dim);
-    background: linear-gradient(90deg, var(--text-dim) 50%, transparent 50%);
+    border-color: var(--ramp-3);
+    background: linear-gradient(90deg, var(--ramp-3) 50%, transparent 50%);
   }
   .note { color: var(--text-dim); }
   .foot { color: var(--text-dim); font-size: 0.88rem; margin-top: 1.2rem; }

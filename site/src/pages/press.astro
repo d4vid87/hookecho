@@ -87,6 +87,13 @@ const assets = [
 </Base>
 
 <style>
+  /* A wash of the brand ramp behind the opening block, so every page starts as the same
+     product rather than a bare column of text. */
+  :global(section:first-of-type) {
+    background-image: var(--mesh);
+    background-repeat: no-repeat;
+    background-size: 100% 22rem;
+  }
   .prose { max-width: 70ch; }
   .lede { font-size: 1.1rem; color: var(--text-dim); }
   .dim { color: var(--text-dim); }

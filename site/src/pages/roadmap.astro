@@ -138,6 +138,13 @@ const ttlMs = 60 * 60 * 1000;
 </script>
 
 <style>
+  /* A wash of the brand ramp behind the opening block, so every page starts as the same
+     product rather than a bare column of text. */
+  :global(section:first-of-type) {
+    background-image: var(--mesh);
+    background-repeat: no-repeat;
+    background-size: 100% 22rem;
+  }
   .lede { font-size: 1.1rem; color: var(--text-dim); max-width: 62ch; }
   .dim { color: var(--text-dim); max-width: 62ch; }
   .board { margin: 2rem 0; display: grid; gap: 2rem; }
