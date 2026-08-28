@@ -32,6 +32,10 @@ const MAX_ZOOM = 12;
 const el = (id) => document.getElementById(id);
 const clampZoom = (z) => Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, Math.round(z) || 9));
 const params = new URLSearchParams(location.search);
+// Hero mode: the site embeds this page as the backdrop of its landing hero, so the chrome goes
+// away and the page stops touching the parent's history. The radar itself is unchanged — it is
+// the real, current scan, which is the whole point of using it as artwork.
+const hero = params.get("hero") === "1";
 
 const state = {
   site: null, // { id, city, state, lat, lon }
@@ -163,6 +167,7 @@ function setZoom(z) {
 }
 
 function permalink() {
+  if (hero) return; // an iframe rewriting its own URL is noise nobody can see
   const u = new URL(location.href);
   u.searchParams.set("site", state.site.id);
   u.searchParams.set("prod", state.product);
@@ -423,6 +428,12 @@ async function main() {
   viewer = new glue.Viewer();
   viewer.set_product(state.product);
 
+  if (hero) {
+    document.body.classList.add("hero");
+    // Reduced motion still gets live radar, just not an animating one: the newest scan holds.
+    if (matchMedia("(prefers-reduced-motion: reduce)").matches) state.playing = false;
+  }
+
   state.site = await pickSite(sites);
   el("site").value = state.site.id;
   for (const p of ["ref", "vel"]) el(p).setAttribute("aria-pressed", String(state.product === p));
@@ -430,6 +441,12 @@ async function main() {
   permalink();
   tick();
   await Promise.all([loadLoop(), loadWarnings()]);
+
+  if (hero) {
+    // No chrome to wire up, and the wheel and keyboard belong to the page around the iframe.
+    heroRefreshers();
+    return;
+  }
 
   el("site").addEventListener("change", (e) => goToSite(sites.find((s) => s.id === e.target.value)));
   el("in").addEventListener("click", () => setZoom(state.zoom + 1));
@@ -483,7 +500,11 @@ async function main() {
     drawWarnings();
   });
 
-  // A hidden tab is a tab nobody is watching: stop asking S3 for scans, and catch up on return.
+  heroRefreshers();
+}
+
+// A hidden tab is a tab nobody is watching: stop asking S3 for scans, and catch up on return.
+function heroRefreshers() {
   setInterval(() => {
     if (document.visibilityState === "visible") loadLoop();
   }, REFRESH_MS);
