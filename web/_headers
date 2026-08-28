@@ -23,3 +23,10 @@
 # visitor ever sees a new deploy. A stale one pins them to the old bundle.
 /sw.js
   Cache-Control: public, max-age=0, must-revalidate
+
+# The lite viewer's page names the hashed lite glue, same rule as the app's index.html.
+/lite/
+  Cache-Control: public, max-age=0, must-revalidate
+
+/lite/index.html
+  Cache-Control: public, max-age=0, must-revalidate

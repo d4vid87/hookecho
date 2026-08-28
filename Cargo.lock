@@ -2610,6 +2610,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "hookecho-lite"
+version = "0.12.0-beta.1"
+dependencies = [
+ "nexrad-level3",
+ "wasm-bindgen",
+ "web-sys",
+]
+
+[[package]]
 name = "hound"
 version = "3.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"

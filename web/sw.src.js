@@ -120,6 +120,12 @@ self.addEventListener("fetch", (e) => {
   // visitor. Neither is ever served from here.
   if (url.pathname.startsWith("/proxy/") || url.pathname === "/geo.json") return;
 
+  // The lite viewer is a separate page with its own assets and its own reason to exist (a machine
+  // that cannot run the app). It stays entirely on the network: the navigate branch below caches
+  // whatever it fetched as "/", so a visit here would otherwise serve the lite page as the app's
+  // offline shell.
+  if (url.pathname.startsWith("/lite/")) return;
+
   // A navigation asks for index.html, which names the hashed assets — serving a stale one would
   // point at a deploy that is already gone. Network first, cache only as the offline answer.
   if (req.mode === "navigate") {

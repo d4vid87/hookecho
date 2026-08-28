@@ -79,6 +79,14 @@ jobs:
       - name: Smoke-test the deployed demo
         run: node scripts/web/smoke.mjs https://hookecho.pages.dev/ --expect-loop
 
+      # The lite viewer is a separate page with its own wasm; it boots without WebGL, so a failure
+      # here is its own decode or projection, not the GPU.
+      - name: Smoke-test the lite viewer
+        run: |
+          asset=$(grep -o 'dist/lite-[0-9a-f]*\.js' web/lite/index.html | head -1)
+          test "$(curl -s -o /dev/null -w '%{http_code}' "https://hookecho.pages.dev/$asset")" = 200
+          node scripts/web/smoke-lite.mjs https://hookecho.pages.dev/lite/
+
       - name: Check the proxy answers and refuses
         run: |
           curl -sf "https://hookecho.pages.dev/proxy/api.weather.gov/alerts/active/count" >/dev/null
