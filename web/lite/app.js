@@ -13,6 +13,10 @@ const S3 = "/proxy/unidata-nexrad-level3.s3.amazonaws.com";
 // under no tile-usage policy this page could violate. Carto's keyless tiles now come back
 // watermarked "API KEY REQUIRED", so they are not an option here.
 const TILES = "/proxy/basemap.nationalmap.gov/arcgis/rest/services/USGSTopo/MapServer/tile";
+const ALERTS =
+  "/proxy/api.weather.gov/alerts/active?status=actual&event=" +
+  encodeURIComponent("Tornado Warning,Severe Thunderstorm Warning,Flash Flood Warning");
+const WARN_MS = 90000;
 const FRAMES = 6; // scans in the loop, ~15 minutes of weather
 const FRAME_MS = 400;
 const DWELL_MS = 1200; // extra time on the newest frame, so the loop reads as "now"
@@ -30,6 +34,7 @@ const state = {
   times: [],
   playing: true,
   loading: false,
+  warnings: [], // [{ event, rings }] already filtered to the current view
 };
 
 let viewer = null;
@@ -170,6 +175,89 @@ async function loadLoop() {
   }
 }
 
+// --- Warnings ---------------------------------------------------------------------------------
+
+// One national query, filtered here. A per-site point query would only return warnings covering
+// the radar itself and miss every one in the corner of the view, which is most of them.
+const WARN_COLOR = {
+  "Tornado Warning": "#ff4d4d",
+  "Severe Thunderstorm Warning": "#ffd24d",
+  "Flash Flood Warning": "#4dd97a",
+};
+
+function viewBounds() {
+  const c = el("radar");
+  const z = state.zoom;
+  const w = worldPx(z);
+  const left = lonToX(state.site.lon, z) - c.width / 2;
+  const top = latToY(state.site.lat, z) - c.height / 2;
+  const lat = (y) => (Math.atan(Math.sinh(Math.PI * (1 - (2 * y) / w))) * 180) / Math.PI;
+  return {
+    west: (left / w) * 360 - 180,
+    east: ((left + c.width) / w) * 360 - 180,
+    north: lat(top),
+    south: lat(top + c.height),
+  };
+}
+
+async function loadWarnings() {
+  // No Accept header: the proxy's CORS preflight only permits API-Key and User-Agent, and adding
+  // one turns every request into a failed preflight.
+  const data = await fetch(ALERTS)
+    .then((r) => (r.ok ? r.json() : null))
+    .catch(() => null);
+  if (!data) return;
+  const b = viewBounds();
+  const kept = [];
+  for (const f of data.features ?? []) {
+    // Zone-based alerts carry no geometry; there is nothing to outline.
+    const g = f.geometry;
+    if (!g) continue;
+    const polys = g.type === "MultiPolygon" ? g.coordinates : g.type === "Polygon" ? [g.coordinates] : [];
+    const rings = [];
+    for (const poly of polys) {
+      for (const ring of poly) {
+        const hit = ring.some(
+          ([lon, lat]) => lon >= b.west && lon <= b.east && lat >= b.south && lat <= b.north,
+        );
+        if (hit) rings.push(ring);
+      }
+    }
+    if (rings.length) kept.push({ event: f.properties.event, rings });
+  }
+  state.warnings = kept;
+  drawWarnings();
+}
+
+function drawWarnings() {
+  const c = el("warn");
+  const g = c.getContext("2d");
+  g.clearRect(0, 0, c.width, c.height);
+  const z = state.zoom;
+  const left = lonToX(state.site.lon, z) - c.width / 2;
+  const top = latToY(state.site.lat, z) - c.height / 2;
+  g.lineWidth = 2;
+  for (const wrn of state.warnings) {
+    g.strokeStyle = WARN_COLOR[wrn.event] ?? "#ffffff";
+    for (const ring of wrn.rings) {
+      g.beginPath();
+      ring.forEach(([lon, lat], i) => {
+        const x = lonToX(lon, z) - left;
+        const y = latToY(lat, z) - top;
+        if (i === 0) g.moveTo(x, y);
+        else g.lineTo(x, y);
+      });
+      g.closePath();
+      g.stroke();
+    }
+  }
+  const counts = new Map();
+  for (const wrn of state.warnings) counts.set(wrn.event, (counts.get(wrn.event) ?? 0) + 1);
+  el("warns").innerHTML = [...counts]
+    .map(([event, n]) => `<b style="color:${WARN_COLOR[event] ?? "#fff"}">${n}</b> ${event.replace(" Warning", "")}`)
+    .join(" · ");
+}
+
 // --- The loop ---------------------------------------------------------------------------------
 
 function tick() {
@@ -245,19 +333,20 @@ async function main() {
   applyView();
   permalink();
   tick();
-  await loadLoop();
+  await Promise.all([loadLoop(), loadWarnings()]);
 
   el("site").addEventListener("change", async (e) => {
     state.site = sites.find((s) => s.id === e.target.value);
     applyView();
     permalink();
-    await loadLoop();
+    await Promise.all([loadLoop(), loadWarnings()]);
   });
   el("zoom").addEventListener("change", (e) => {
     state.zoom = Number(e.target.value);
     applyView();
     permalink();
     if (ctx) viewer.render(ctx, state.frame);
+    loadWarnings();
   });
   for (const p of ["ref", "vel"]) {
     el(p).addEventListener("click", async () => {
@@ -277,14 +366,20 @@ async function main() {
   addEventListener("resize", () => {
     applyView();
     if (ctx) viewer.render(ctx, state.frame);
+    drawWarnings();
   });
 
   // A hidden tab is a tab nobody is watching: stop asking S3 for scans, and catch up on return.
   setInterval(() => {
     if (document.visibilityState === "visible") loadLoop();
   }, REFRESH_MS);
+  setInterval(() => {
+    if (document.visibilityState === "visible") loadWarnings();
+  }, WARN_MS);
   document.addEventListener("visibilitychange", () => {
-    if (document.visibilityState === "visible") loadLoop();
+    if (document.visibilityState !== "visible") return;
+    loadLoop();
+    loadWarnings();
   });
 }
 

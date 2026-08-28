@@ -26,7 +26,9 @@
       #bar select, #bar button { background: #2b2b36; color: #e6e6ee; border: 0;
         border-radius: 6px; padding: 6px 10px; font: inherit; cursor: pointer; }
       #bar button[aria-pressed="true"] { background: #3d6fd6; }
-      #time { margin-left: auto; color: #8a8a95; white-space: nowrap; }
+      #time { color: #8a8a95; white-space: nowrap; }
+      #warns { margin-left: auto; white-space: nowrap; color: #d8d8e2; }
+      #warns b { font-weight: 600; }
       #attrib { position: absolute; right: 4px; bottom: 2px; font-size: 11px; color: #9aa;
         background: #101014b0; padding: 1px 5px; border-radius: 4px; }
       #attrib a { color: inherit; }
@@ -44,6 +46,7 @@
         <option value="10">Close</option>
       </select>
       <button id="play" type="button" aria-pressed="true">Pause</button>
+      <span id="warns"></span>
       <span id="time">Loading…</span>
     </div>
     <div id="map">
