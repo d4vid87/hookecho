@@ -36,14 +36,15 @@ const route = await OGImageRoute({
     description: page.description,
     logo: { path: "./public/logo.png", size: [72] },
     bgGradient: [
-      [20, 22, 27],
-      [12, 14, 18],
+      [17, 24, 21],
+      [7, 11, 9],
     ],
-    border: { color: [56, 189, 248], width: 12, side: "inline-start" },
+    // The ramp's green end, matching --ramp-1 in global.css.
+    border: { color: [48, 209, 88], width: 12, side: "inline-start" },
     padding: 60,
     font: {
-      title: { size: 62, weight: "Bold", color: [235, 238, 245] },
-      description: { size: 30, color: [150, 158, 172] },
+      title: { size: 62, weight: "Bold", color: [228, 236, 230] },
+      description: { size: 30, color: [144, 160, 150] },
     },
   }),
 });
