@@ -1,0 +1,76 @@
+---
+// Storm of the day: whichever radar is watching the most active weather in the country, with its
+// live RIDGE loop and a way straight into it. Same ranking as the hero — activeSite() memoizes
+// the query, so this costs no extra request.
+import Icon from "./Icon.astro";
+---
+
+<article class="storm tile grad-border" data-span="2x2" data-tilt data-reveal>
+  <p class="eyebrow">
+    <Icon name="broadcast" size={16} /> Storm of the day
+  </p>
+  <h3 class="where">Watching the country…</h3>
+  <p class="sub">Ranking the active warnings by the radar that can see them.</p>
+  <img class="loop" alt="" width="600" height="550" hidden />
+  <p class="links" hidden>
+    <a class="here" href="/radar/">See this radar</a> ·
+    <a class="app" href="https://app.hookecho.io">Open it in the app</a>
+  </p>
+</article>
+
+<script>
+  import { activeSite } from "../scripts/active-site";
+
+  const card = document.querySelector<HTMLElement>(".storm");
+  if (card) {
+    activeSite()
+      .then((site) => {
+        const warnings =
+          site.warnings === 1 ? "1 active warning" : `${site.warnings} active warnings`;
+        card.querySelector(".where")!.textContent = `${site.city}, ${site.state}`;
+        card.querySelector(".sub")!.textContent = site.warnings
+          ? `${site.id} · ${warnings} in range right now.`
+          : `${site.id} · quiet right now, so here is the radar nearest you.`;
+
+        const loop = card.querySelector<HTMLImageElement>(".loop")!;
+        loop.src = `https://radar.weather.gov/ridge/standard/${site.id}_loop.gif`;
+        loop.alt = `Live radar loop from ${site.id}, ${site.city}, ${site.state}`;
+        loop.hidden = false;
+
+        const links = card.querySelector<HTMLElement>(".links")!;
+        links.querySelector<HTMLAnchorElement>(".here")!.href =
+          `/radar/${site.id.toLowerCase()}/`;
+        links.querySelector<HTMLAnchorElement>(".app")!.href =
+          `https://app.hookecho.io/#goto=${site.id},${site.lon},${site.lat},8`;
+        links.hidden = false;
+      })
+      // The card keeps its opening copy, which is true either way.
+      .catch(() => {});
+  }
+</script>
+
+<style>
+  .storm {
+    display: flex;
+    flex-direction: column;
+    gap: var(--sp-2);
+    /* The pointer-follow highlight rides --mx/--my, published by the tilt handler in motion.ts. */
+    background-image: radial-gradient(
+      40% 40% at var(--mx, 50%) var(--my, 0%),
+      color-mix(in srgb, var(--ramp-4) 14%, transparent),
+      transparent 70%
+    );
+  }
+  .storm .eyebrow { display: inline-flex; align-items: center; gap: 0.4rem; margin: 0; }
+  .storm h3 { margin: 0; }
+  .sub { color: var(--text-dim); font-size: var(--text-sm); margin: 0; }
+  .loop {
+    display: block;
+    width: 100%;
+    margin-top: auto;
+    border-radius: var(--radius);
+    border: 1px solid var(--stroke);
+    background: var(--bg-deep);
+  }
+  .links { margin: var(--sp-3) 0 0; font-size: var(--text-sm); }
+</style>

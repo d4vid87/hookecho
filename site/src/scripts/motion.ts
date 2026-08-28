@@ -52,21 +52,29 @@ function countUp(el: HTMLElement): void {
   requestAnimationFrame(step);
 }
 
-function initCountups(): void {
-  const targets = document.querySelectorAll<HTMLElement>("[data-countup]");
-  if (!targets.length) return;
-  if (still || !("IntersectionObserver" in window)) return; // final value is already in the markup
-  const io = new IntersectionObserver(
+let counter: IntersectionObserver | null = null;
+
+/**
+ * Counts an element up the next time it is on screen. Exported because the live numbers (warning
+ * counts, GitHub stats) arrive from fetches that finish long after this module ran.
+ */
+export function watchCount(el: HTMLElement): void {
+  if (still || !("IntersectionObserver" in window)) return; // the final value is already rendered
+  counter ??= new IntersectionObserver(
     (entries) => {
       for (const entry of entries) {
         if (!entry.isIntersecting) continue;
         countUp(entry.target as HTMLElement);
-        io.unobserve(entry.target);
+        counter!.unobserve(entry.target);
       }
     },
     { threshold: 0.4 },
   );
-  targets.forEach((el) => io.observe(el));
+  counter.observe(el);
+}
+
+function initCountups(): void {
+  document.querySelectorAll<HTMLElement>("[data-countup]").forEach(watchCount);
 }
 
 /*

@@ -2,18 +2,20 @@
 import { DISCORD_INVITE } from "../data/community";
 import Base from "../layouts/Base.astro";
 import Hero from "../components/Hero.astro";
-import FeatureGrid from "../components/FeatureGrid.astro";
-import ShotGallery from "../components/ShotGallery.astro";
+import Bento from "../components/Bento.astro";
+import StormCard from "../components/StormCard.astro";
+import Icon from "../components/Icon.astro";
 import Ticker from "../components/Ticker.astro";
 import NearYou from "../components/NearYou.astro";
 import LiveMosaic from "../components/LiveMosaic.astro";
-import Card from "../components/Card.astro";
 import GitHubStats from "../components/GitHubStats.astro";
 
 // The three tiers are the same progressive-disclosure story the app itself tells: the first
 // screen answers "is it going to rain on me", and the depth is there when you go looking.
 const tiers = [
   {
+    icon: "broadcast",
+    shot: "reflectivity.jpg",
     eyebrow: "See the rain",
     title: "Open it and the radar is already there",
     body:
@@ -21,6 +23,7 @@ const tiers = [
       "Watch the rain move, tap anywhere for the forecast at that spot.",
   },
   {
+    icon: "warning-diamond",
     eyebrow: "Follow the storm",
     title: "Warnings, lightning and storm tracks on the map",
     body:
@@ -28,6 +31,7 @@ const tiers = [
       "look — with alerts on your phone when one is headed your way.",
   },
   {
+    icon: "stack",
     eyebrow: "Chase it",
     title: "Every tilt, every product, straight from the source",
     body:
@@ -89,6 +93,16 @@ const androidShots = [
 
 const weatherdeskRepo = "https://github.com/d4vid87/weatherdesk";
 
+// The four rows that decide it for most people, pulled from the same data the full matrix uses so
+// the teaser can never disagree with the page it links to.
+import { COLS, ROWS } from "../data/compare";
+const teaserLabels = ["Price", "Ads", "Level 2 all tilts", "Open source"];
+const teaserCols = [0, 1, 2]; // HookEcho, RadarScope, MyRadar
+const teaserRows = teaserLabels
+  .map((label) => ROWS.find((r) => r.label === label))
+  .filter((r): r is (typeof ROWS)[number] => Boolean(r));
+const mark = (v: string) => (v === "yes" ? "Yes" : v === "no" ? "No" : "Partly");
+
 const jsonld = {
   "@context": "https://schema.org",
   "@type": "SoftwareApplication",
@@ -121,19 +135,27 @@ const jsonld = {
   <section class="live">
     <div class="wrap">
       <p class="eyebrow">Right now</p>
+      <h2>The weather on this page is real</h2>
       <Ticker />
-      <div class="live-grid">
-        <div>
-          <h2>The weather on this page is real</h2>
-          <p>
-            Those counts are live warnings from the National Weather Service, and the mosaic
-            beside them is the current national radar picture. HookEcho reads the same feeds —
-            at full resolution, from your own machine, with nothing in between.
+      <Bento>
+        <StormCard />
+        <div class="tile" data-tilt data-reveal>
+          <p class="eyebrow"><Icon name="crosshair" size={16} /> Near you</p>
+          <p class="tile-copy">
+            The edge knows roughly where you are, so the radar can open on your own weather
+            without asking permission for anything.
           </p>
           <NearYou />
         </div>
-        <LiveMosaic />
-      </div>
+        <div class="tile numbers" data-tilt data-reveal data-reveal-delay="80">
+          <p class="eyebrow"><Icon name="gauge" size={16} /> The whole network</p>
+          <p class="big"><span data-countup>152</span></p>
+          <p class="tile-copy">NEXRAD sites, plus 44 terminal radars, archived back to 1991 — for $0.</p>
+        </div>
+        <div class="tile mosaic-tile" data-span="2" data-reveal data-reveal-delay="160">
+          <LiveMosaic />
+        </div>
+      </Bento>
     </div>
   </section>
 
@@ -141,16 +163,55 @@ const jsonld = {
     <div class="wrap">
       <p class="eyebrow">What you get</p>
       <h2>Simple on the surface. Deep when you need it.</h2>
-      <FeatureGrid features={tiers} />
+      <Bento>
+        {
+          tiers.map((tier, i) => (
+            <article
+              class="tile tier"
+              data-span={i === 0 ? "2" : undefined}
+              data-tilt
+              data-reveal
+              data-reveal-delay={i * 80}
+            >
+              <p class="eyebrow">
+                <Icon name={tier.icon} size={16} /> {tier.eyebrow}
+              </p>
+              <h3>{tier.title}</h3>
+              <p class="tile-copy">{tier.body}</p>
+              {tier.shot && (
+                <img
+                  src={`${repoShots}/${tier.shot}`}
+                  alt="HookEcho showing a radar loop over the map"
+                  loading="lazy"
+                  width="1600"
+                  height="1000"
+                />
+              )}
+            </article>
+          ))
+        }
+      </Bento>
     </div>
   </section>
 
-  <section class="alt">
+  <section class="alt shots">
     <div class="wrap">
       <p class="eyebrow">A look around</p>
       <h2>The same data the professionals use</h2>
-      <ShotGallery shots={shots} />
     </div>
+    {
+      shots.map((shot, i) => (
+        <div class="row" data-reveal>
+          <div class="copy">
+            <h3>{shot.caption}</h3>
+            <p>{shot.alt}.</p>
+          </div>
+          <figure class="shot">
+            <img src={shot.src} alt={shot.alt} loading="lazy" width="1600" height="1000" />
+          </figure>
+        </div>
+      ))
+    }
   </section>
 
   <section>
@@ -180,7 +241,16 @@ const jsonld = {
         products, laid out for one thumb. Widgets and warning notifications for wherever you have
         driven to.
       </p>
-      <ShotGallery shots={androidShots} />
+      <div class="fan" data-reveal>
+        {
+          androidShots.map((shot) => (
+            <figure>
+              <img src={shot.src} alt={shot.alt} loading="lazy" width="1080" height="2340" />
+              <figcaption>{shot.caption}</figcaption>
+            </figure>
+          ))
+        }
+      </div>
       <div class="platforms">
         <a class="btn btn-primary" href="/download/">Get it on Android</a>
         <a class="btn" href="/features/#android">What it does</a>
@@ -193,11 +263,34 @@ const jsonld = {
       <p class="eyebrow">Against the field</p>
       <h2>Yes, we will tell you when to buy something else</h2>
       <p>
-        We put HookEcho next to RadarScope, MyRadar, Windy, RadarOmega and RainViewer, row by row, including
-        the four rows they win. If the thing you need is global model data, Windy is better at it.
+        We put HookEcho next to RadarScope, MyRadar, Windy, RadarOmega and RainViewer, row by row,
+        including the four rows they win. If the thing you need is global model data, Windy is
+        better at it.
       </p>
+      <table class="teaser" data-reveal>
+        <thead>
+          <tr>
+            <th scope="col"></th>
+            {teaserCols.map((c) => <th scope="col">{COLS[c]}</th>)}
+          </tr>
+        </thead>
+        <tbody>
+          {
+            teaserRows.map((row) => (
+              <tr>
+                <th scope="row">{row.label}</th>
+                {
+                  teaserCols.map((c) => (
+                    <td class={row.cells[c].v} title={row.cells[c].t}>{mark(row.cells[c].v)}</td>
+                  ))
+                }
+              </tr>
+            ))
+          }
+        </tbody>
+      </table>
       <div class="platforms">
-        <a class="btn btn-primary" href="/compare/">See the comparison</a>
+        <a class="btn btn-primary" href="/compare/">See all the rows</a>
       </div>
     </div>
   </section>
@@ -206,38 +299,149 @@ const jsonld = {
     <div class="wrap">
       <p class="eyebrow">Community</p>
       <h2>Come ask what you are looking at</h2>
-      <p>
-        There is a Discord for people who use HookEcho: chase reports, questions about a signature
-        on your screen, feature arguments, and the occasional bug found before we find it.
-      </p>
-      <div class="platforms">
-        <a class="btn btn-primary" href={DISCORD_INVITE}>Join the Discord</a>
-        <a class="btn" href="https://github.com/d4vid87/hookecho/discussions">GitHub Discussions</a>
-      </div>
-    </div>
-  </section>
-
+      <Bento>
+        <a class="tile join" href={DISCORD_INVITE} data-span="2" data-tilt data-reveal>
+          <p class="eyebrow"><Icon name="discord-logo" size={16} /> Discord</p>
+          <h3>Chase reports, questions, arguments</h3>
+          <p class="tile-copy">
+            People who use HookEcho, asking each other what that signature on screen is. Bugs get
+            found here before we find them.
+          </p>
+        </a>
+        <a
+          class="tile join"
+          href="https://github.com/d4vid87/hookecho/discussions"
+          data-span="2"
+          data-tilt
+          data-reveal
+          data-reveal-delay="80"
+        >
+          <p class="eyebrow"><Icon name="github-logo" size={16} /> Discussions</p>
+          <h3>Feature ideas and the long answers</h3>
+          <p class="tile-copy">
+            The slower conversations: what the app should do next, and why it does what it does.
+          </p>
+        </a>
+      </Bento>
   <section class="alt">
     <div class="wrap">
       <p class="eyebrow">More from us</p>
       <h2>WeatherDesk</h2>
-      <!-- No href on the Card: it would wrap the whole thing in an <a>, and the two links below
-           cannot live inside one. -->
-      <Card title="Your own weather station, on your own dashboard">
-        <p>
+      <article class="tile grad-border wd" data-tilt data-reveal>
+        <h3>Your own weather station, on your own dashboard</h3>
+        <p class="tile-copy">
           A self-hosted dashboard for a Tempest weather station: live gauges, history and
           forecasts on your own hardware. The radar inside it is HookEcho.
         </p>
         <p class="wd-links">
-          <a href="/weatherdesk/">What it does</a> · <a href={weatherdeskRepo}>Source on GitHub</a>
+          <a href="/weatherdesk/">What it does</a> ·
+          <a href={weatherdeskRepo}>Source on GitHub</a>
         </p>
-      </Card>
+      </article>
     </div>
   </section>
 </Base>
 
 <style>
   .alt { background: var(--bg-deep); border-block: 1px solid var(--stroke); }
+  .tile-copy { color: var(--text-dim); font-size: var(--text-sm); }
+  .tile .eyebrow { display: inline-flex; align-items: center; gap: 0.4rem; margin: 0 0 var(--sp-3); }
+  .tier img {
+    display: block;
+    width: 100%;
+    margin-top: var(--sp-4);
+    border-radius: var(--radius);
+    border: 1px solid var(--stroke);
+  }
+  .numbers .big {
+    font-size: var(--text-3xl);
+    font-weight: 750;
+    font-variant-numeric: tabular-nums;
+    margin: 0;
+    background: var(--ramp-cool);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: var(--ramp-1);
+    -webkit-text-fill-color: transparent;
+  }
+  .mosaic-tile { display: flex; }
+  .join { display: block; color: var(--text); text-decoration: none; }
+  .join h3 { margin-bottom: var(--sp-2); }
+  .wd h3 { margin-top: 0; }
+  .wd-links { font-size: var(--text-sm); margin-bottom: 0; }
+
+  /* Phones overlapped like a hand of cards: the same four shots, one object instead of a grid. */
+  .fan { display: flex; justify-content: center; margin: var(--sp-6) 0; padding-inline: var(--sp-4); }
+  .fan figure { margin: 0 -3.5rem 0 0; width: min(22vw, 200px); transition: transform var(--dur-3) var(--ease-out); }
+  .fan figure:last-child { margin-right: 0; }
+  .fan figure:nth-child(odd) { transform: rotate(-4deg) translateY(0.6rem); }
+  .fan figure:nth-child(even) { transform: rotate(4deg); }
+  .fan figure:hover { transform: rotate(0) translateY(-0.8rem); z-index: 1; }
+  .fan img {
+    display: block;
+    width: 100%;
+    border-radius: var(--radius-lg);
+    border: 1px solid var(--stroke);
+    box-shadow: var(--shadow-3);
+    background: var(--bg-deep);
+  }
+  .fan figcaption { color: var(--text-dim); font-size: 0.8rem; margin-top: var(--sp-2); text-align: center; }
+  @media (max-width: 700px) {
+    .fan { flex-wrap: wrap; gap: var(--sp-4); }
+    .fan figure, .fan figure:nth-child(odd), .fan figure:nth-child(even) { margin: 0; width: 40%; transform: none; }
+  }
+
+  /* Editorial rows: full-bleed imagery with the copy beside it, alternating sides. */
+  .shots .row {
+    display: grid;
+    grid-template-columns: minmax(18rem, 34%) 1fr;
+    gap: clamp(1.5rem, 4vw, 3.5rem);
+    align-items: center;
+    padding-block: var(--sp-7);
+    width: min(100% - 2.5rem, 1320px);
+    margin-inline: auto;
+  }
+  .shots .row:nth-child(even) .copy { order: 2; }
+  .shots .shot { margin: 0; }
+  .shots .shot img {
+    display: block;
+    width: 100%;
+    border-radius: var(--radius-lg);
+    border: 1px solid var(--stroke);
+    box-shadow: var(--shadow-2);
+  }
+  /* The one scroll-driven flourish on the site: the image drifts against the copy. Browsers
+     without view() timelines simply get a static image. */
+  @supports (animation-timeline: view()) {
+    @media (prefers-reduced-motion: no-preference) {
+      .shots .shot img {
+        animation: drift linear both;
+        animation-timeline: view();
+        animation-range: entry 10% exit 90%;
+      }
+    }
+  }
+  @keyframes drift {
+    from { transform: translateY(20px); }
+    to { transform: translateY(-20px); }
+  }
+  @media (max-width: 760px) {
+    .shots .row { grid-template-columns: 1fr; }
+    .shots .row:nth-child(even) .copy { order: 0; }
+  }
+
+  .teaser {
+    width: 100%;
+    border-collapse: collapse;
+    margin-top: var(--sp-5);
+    font-size: var(--text-sm);
+  }
+  .teaser th, .teaser td { text-align: left; padding: 0.7rem 0.9rem; border-bottom: 1px solid var(--stroke); }
+  .teaser thead th { color: var(--text-dim); font-weight: 600; }
+  .teaser tbody th { font-weight: 600; }
+  .teaser td.yes { color: var(--ramp-1); font-weight: 600; }
+  .teaser td.part { color: var(--ramp-3); }
+  .teaser td.no { color: var(--text-dim); }
   .platforms { display: flex; gap: 0.75rem; flex-wrap: wrap; margin-top: 1.4rem; }
   .live { padding-top: clamp(2rem, 5vw, 3rem); }
   .live-grid {
