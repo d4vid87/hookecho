@@ -21,15 +21,22 @@ const FRAMES = 6; // scans in the loop, ~15 minutes of weather
 const FRAME_MS = 400;
 const DWELL_MS = 1200; // extra time on the newest frame, so the loop reads as "now"
 const REFRESH_MS = 120000;
-const MAX_CANVAS = 1024;
+// The CPU paints every pixel of every frame, so the canvas is capped well below a modern desktop
+// window. Full screen makes the map bigger up to this, then stops growing.
+const MAX_CANVAS = 1400;
+// Zoom range: 5 is most of the country, 12 is a few neighbourhoods. The radar itself runs out at
+// about 300 km, so anything wider than 6 is mostly basemap.
+const MIN_ZOOM = 5;
+const MAX_ZOOM = 12;
 
 const el = (id) => document.getElementById(id);
+const clampZoom = (z) => Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, Math.round(z) || 9));
 const params = new URLSearchParams(location.search);
 
 const state = {
   site: null, // { id, city, state, lat, lon }
   product: params.get("prod") === "vel" ? "vel" : "ref",
-  zoom: Number(params.get("zoom")) || 9,
+  zoom: clampZoom(Number(params.get("zoom")) || 9),
   frame: 0,
   times: [],
   playing: true,
@@ -85,14 +92,37 @@ function drawTiles(w, h) {
 
 function applyView() {
   const [w, h] = canvasSize();
+  el("view").style.width = `${w}px`;
+  el("view").style.height = `${h}px`;
   for (const id of ["radar", "warn"]) {
     const c = el(id);
     c.width = w;
     c.height = h;
   }
+  showRange(w);
   ctx = el("radar").getContext("2d");
   viewer.set_view(state.site.lat, state.site.lon, w, h, state.zoom);
   drawTiles(w, h);
+}
+
+// How wide the view actually is, which is the thing a zoom control is really setting. Web Mercator
+// scale is latitude-dependent, so this is computed rather than labelled per preset.
+function showRange(widthPx) {
+  const kmPerPx =
+    ((40075.017 * Math.cos((state.site.lat * Math.PI) / 180)) / worldPx(state.zoom)) * 1;
+  const km = Math.round(widthPx * kmPerPx);
+  el("range").textContent = km >= 100 ? `${Math.round(km / 10) * 10} km` : `${km} km`;
+}
+
+// The one place a zoom change happens, however it was asked for.
+function setZoom(z) {
+  const next = clampZoom(z);
+  if (next === state.zoom) return;
+  state.zoom = next;
+  applyView();
+  permalink();
+  if (ctx) viewer.render(ctx, state.frame);
+  loadWarnings();
 }
 
 function permalink() {
@@ -273,6 +303,14 @@ function tick() {
   setTimeout(tick, last ? DWELL_MS : FRAME_MS);
 }
 
+// Full screen on the whole document element, so the toolbar comes along — a radar with no site
+// picker and no timestamp is a screensaver.
+function toggleFullscreen() {
+  el("full").blur(); // otherwise the button keeps focus and eats the next space bar
+  if (document.fullscreenElement) document.exitFullscreen();
+  else document.documentElement.requestFullscreen().catch((e) => console.warn("fullscreen:", e));
+}
+
 // --- Boot -------------------------------------------------------------------------------------
 
 const haversine = (a, b) => {
@@ -328,7 +366,6 @@ async function main() {
 
   state.site = await pickSite(sites);
   el("site").value = state.site.id;
-  el("zoom").value = String(state.zoom);
   for (const p of ["ref", "vel"]) el(p).setAttribute("aria-pressed", String(state.product === p));
   applyView();
   permalink();
@@ -341,12 +378,35 @@ async function main() {
     permalink();
     await Promise.all([loadLoop(), loadWarnings()]);
   });
-  el("zoom").addEventListener("change", (e) => {
-    state.zoom = Number(e.target.value);
+  el("in").addEventListener("click", () => setZoom(state.zoom + 1));
+  el("out").addEventListener("click", () => setZoom(state.zoom - 1));
+  // The wheel zooms, which is what anyone who has used a map expects. Passive: false because the
+  // point is to stop the page scrolling underneath it.
+  el("map").addEventListener(
+    "wheel",
+    (e) => {
+      e.preventDefault();
+      setZoom(state.zoom + (e.deltaY < 0 ? 1 : -1));
+    },
+    { passive: false },
+  );
+  addEventListener("keydown", (e) => {
+    // Not while the site picker has focus: typing there jumps to a state, and stealing the keys
+    // would break it.
+    if (/^(INPUT|SELECT|TEXTAREA)$/.test(e.target.tagName)) return;
+    if (e.key === "+" || e.key === "=") setZoom(state.zoom + 1);
+    if (e.key === "-") setZoom(state.zoom - 1);
+    if (e.key === "f") toggleFullscreen();
+  });
+  el("full").addEventListener("click", toggleFullscreen);
+  document.addEventListener("fullscreenchange", () => {
+    const on = !!document.fullscreenElement;
+    el("full").textContent = on ? "Exit full screen" : "Full screen";
+    el("full").setAttribute("aria-pressed", String(on));
+    // The element resized, and on some browsers no resize event follows.
     applyView();
-    permalink();
     if (ctx) viewer.render(ctx, state.frame);
-    loadWarnings();
+    drawWarnings();
   });
   for (const p of ["ref", "vel"]) {
     el(p).addEventListener("click", async () => {

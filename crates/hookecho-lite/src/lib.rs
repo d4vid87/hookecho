@@ -144,6 +144,7 @@ impl Viewer {
         }
         let nbins = ra.nbins as usize;
         let mut levels = vec![0u8; SLOTS * nbins];
+        let mut filled = [false; SLOTS];
         for radial in &ra.radials {
             // A radial covers the wedge [start, start + delta). Fill every slot whose *center*
             // falls inside it: radials start on arbitrary fractions of a degree, and rounding the
@@ -155,8 +156,22 @@ impl Viewer {
                 let slot = (first + k).rem_euclid(SLOTS as i32) as usize;
                 let n = radial.levels.len().min(nbins);
                 levels[slot * nbins..slot * nbins + n].copy_from_slice(&radial.levels[..n]);
+                filled[slot] = true;
             }
         }
+        // Radial start angles carry jitter, so two neighbours occasionally land in the same slot
+        // and leave the next one empty — which reads as a thin wedge of nothing, most visible when
+        // zoomed in. Backfill an empty slot from the one before it: the wedge is half a degree
+        // wide, and the honest alternative (interpolating) would invent data.
+        let mut last_filled: Option<usize> = (0..SLOTS).rev().find(|&s| filled[s]);
+        for (slot, has_data) in filled.iter().enumerate() {
+            if *has_data {
+                last_filled = Some(slot);
+            } else if let Some(src) = last_filled {
+                levels.copy_within(src * nbins..src * nbins + nbins, slot * nbins);
+            }
+        }
+
         let (table, folded) = match self.product {
             Product::Reflectivity => (&self.ref_table, false),
             Product::Velocity => (&self.vel_table, true),
