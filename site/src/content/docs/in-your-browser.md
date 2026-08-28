@@ -15,6 +15,18 @@ Nearly everything. Radar products and tilts, velocity dealiasing, the panel and
 model layers, soundings, cross-sections, the 3D volume, and archive playback all
 the way back to 1991.
 
+## On an old machine
+
+[**app.hookecho.io/lite/**](https://app.hookecho.io/lite/) is a second, much
+smaller page for hardware the full app asks too much of. It needs no WebGL and
+downloads about seventy kilobytes instead of five megabytes, because it draws
+the radar on the processor rather than the graphics card.
+
+You get an animated loop of the last six scans, reflectivity or velocity, a
+picker for every NEXRAD site, three fixed zoom levels, and the tornado, severe
+thunderstorm and flash flood warnings currently in view. There's no panning, no
+archive and no other product — for those, use the full app or the desktop build.
+
 ## What's different
 
 The browser doesn't hand a web page everything a native app gets:
@@ -33,7 +45,7 @@ Settings you change in the browser stay in that browser, on that machine.
 
 ## Putting a radar on your own page
 
-Adding `?embed=1` to the URL strips the chrome and throttles the app when it
+Adding `?embed` to the URL strips the chrome and throttles the app when it
 isn't visible, which is what you want inside an `<iframe>` on a dashboard. The
 same `#goto` deep links the app uses for sharing work in the browser too, so you
 can link straight to a site, a product and a moment in time.
