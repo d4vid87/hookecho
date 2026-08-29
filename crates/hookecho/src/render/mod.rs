@@ -57,6 +57,10 @@ pub struct RadarUpload {
     /// World-space quad corners covering the disk (min/max box).
     pub world_min: [f32; 2],
     pub world_max: [f32; 2],
+    /// Only the color table changed: `data` and `precip_flag` are empty and the retained
+    /// textures keep their contents. A palette drag writes 3 KB instead of re-uploading the
+    /// ~1.3 MB gate texture it was already showing.
+    pub lut_only: bool,
 }
 
 /// A national gridded field layer (all share the MRMS warp pipeline; they differ only in data,
@@ -373,11 +377,15 @@ struct TileGpu {
 }
 
 struct RadarGpu {
-    _tex: wgpu::Texture,
-    _flag: wgpu::Texture,
-    _lut: wgpu::Texture,
-    _uni: wgpu::Buffer,
+    tex: wgpu::Texture,
+    flag: wgpu::Texture,
+    lut: wgpu::Texture,
+    uni: wgpu::Buffer,
     bind_group: wgpu::BindGroup,
+    /// (gate_count, az_bins) and the precipitation-flag grid size, so a later upload of the same
+    /// shape writes into these textures instead of building new ones with a new bind group.
+    dims: (u32, u32),
+    flag_dims: (u32, u32),
 }
 
 struct OverlayGpu {
@@ -407,6 +415,12 @@ struct PaneGpu {
     /// Ids of the tiles this frame's quads draw, in quad order. Not the same as the visible list:
     /// a missing tile is stood in for by resident children or an ancestor.
     frame_visible: Vec<TileKey>,
+    /// What the tile quads in `tile_vbuf` were built from: tile-cache generation, basemap, camera
+    /// and visible count. Unchanged means the quads are still the right ones, so a still map
+    /// re-uploads nothing.
+    // ponytail: the visible *count* rather than the list — camera plus generation already decide
+    // which tiles are asked for; compare the ids if a case ever shows a stale quad.
+    quads_key: Option<(u64, u8, u32, u32, u32, u32, usize)>,
     frame_visible_vector: Vec<TileId>,
     vector_over_raster: bool,
     frame_draw_radar: bool,
@@ -440,6 +454,9 @@ pub struct RenderResources {
     fields: HashMap<FieldLayer, MrmsGpu>,
     // One entry per live pane.
     panes: HashMap<u32, PaneGpu>,
+    /// Bumped whenever the shared tile cache gains or loses a texture, so a pane can tell that
+    /// its quad list is still current.
+    tiles_gen: u64,
     /// GPU wind particles, built on first use. `None` when the CPU path is in charge.
     wind: Option<crate::wind_gpu::WindGpu>,
     target_format: wgpu::TextureFormat,
@@ -741,6 +758,7 @@ impl RenderResources {
             overlay: None,
             fields: HashMap::new(),
             panes: HashMap::new(),
+            tiles_gen: 0,
             wind: None,
             target_format,
         }
@@ -783,6 +801,7 @@ impl RenderResources {
                 radar_vbuf,
                 radar: None,
                 frame_visible: Vec::new(),
+                quads_key: None,
                 frame_visible_vector: Vec::new(),
                 vector_over_raster: false,
                 frame_draw_radar: false,
@@ -896,7 +915,35 @@ impl RenderResources {
         );
     }
 
-    fn build_radar(&self, device: &wgpu::Device, queue: &wgpu::Queue, r: &RadarUpload) -> RadarGpu {
+    /// Upload one sweep for a pane, reusing `existing` when it is the same shape.
+    ///
+    /// Returns `None` only for a LUT-only upload with nothing retained to write into — which
+    /// the app does not ask for (it only sends one when the same key is already shown), but is
+    /// answered by leaving the pane's radar alone rather than by a panic.
+    fn build_radar(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        r: &RadarUpload,
+        existing: Option<RadarGpu>,
+    ) -> Option<RadarGpu> {
+        let flag_dims = flag_dims(r);
+        // Same shape: write into the retained textures and keep the bind group. Dimensions are
+        // the only thing a bind group depends on here, so nothing else can go stale.
+        if let Some(g) = existing {
+            if g.dims == (r.gate_count, r.az_bins) && g.flag_dims == flag_dims {
+                if !r.lut_only {
+                    write_r8(queue, &g.tex, g.dims, &r.data);
+                    write_r8(queue, &g.flag, g.flag_dims, &flag_bytes(r, g.flag_dims));
+                }
+                queue.write_buffer(&g.uni, 0, bytemuck::cast_slice(&r.uniform));
+                write_lut(queue, &g.lut, &r.lut);
+                return Some(g);
+            }
+        }
+        if r.lut_only {
+            return None;
+        }
         wxdata::stats::bump(wxdata::stats::Counter::RadarTexturesBuilt);
         let size = wgpu::Extent3d {
             width: r.gate_count,
@@ -931,7 +978,7 @@ impl RenderResources {
         let uni = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("radar_uniform"),
             contents: bytemuck::cast_slice(&r.uniform),
-            usage: wgpu::BufferUsages::UNIFORM,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
 
         // 256×3 color LUT, indexed by the sweep u8 across and the precipitation type down.
@@ -971,12 +1018,8 @@ impl RenderResources {
 
         // Precipitation-type grid. One byte per cell; 1×1 of zeroes when the tint is off, which
         // the shader never reads because the tint flag in the uniform is zero too.
-        let (fnx, fny) = (r.uniform[11] as u32, r.uniform[12] as u32);
-        let (fnx, fny, flag_data) = if r.precip_flag.len() == (fnx * fny) as usize && fnx > 0 {
-            (fnx, fny, r.precip_flag.clone())
-        } else {
-            (1, 1, vec![0u8])
-        };
+        let (fnx, fny) = flag_dims;
+        let flag_data = flag_bytes(r, flag_dims);
         let flag_size = wgpu::Extent3d {
             width: fnx,
             height: fny,
@@ -1031,13 +1074,15 @@ impl RenderResources {
                 },
             ],
         });
-        RadarGpu {
-            _tex: tex,
-            _flag: flag_tex,
-            _lut: lut_tex,
-            _uni: uni,
+        Some(RadarGpu {
+            tex,
+            flag: flag_tex,
+            lut: lut_tex,
+            uni,
             bind_group,
-        }
+            dims: (r.gate_count, r.az_bins),
+            flag_dims,
+        })
     }
 
     /// Upload camera/tiles/radar for `cb` and stage its pane's draw list. Shared caches (tiles,
@@ -1068,57 +1113,9 @@ impl RenderResources {
         }
     }
 
-    fn upload_frame(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, cb: &MapCallback) {
-        // --- Shared caches ---
-        if cb.clear_tiles {
-            self.tiles.clear();
-        }
-        if cb.clear_vector {
-            self.vector_tiles.clear();
-        }
-        for id in &cb.drop_vector_tiles {
-            self.vector_tiles.remove(id);
-        }
-        for t in &cb.new_vector_tiles {
-            self.upload_vector_tile(device, t);
-        }
-        for t in &cb.new_tiles {
-            self.upload_tile(device, queue, t);
-        }
-        if let Some(o) = &cb.overlay_upload {
-            self.upload_overlay(device, o);
-        }
-        // Grow to fit the frame before touching anything. A zoomed-out view can need more tiles
-        // than the resting cap, and promoting a visible tile into a full cache evicts another
-        // visible one — which showed up as a band of basemap with the rest of the map bare.
-        // The cap is a resting size, not a limit on what one frame may hold.
-        for id in &cb.drop_tiles {
-            self.tiles.remove(id);
-        }
-        // Touch everything this frame draws so the LRU evicts what is off screen, not what is in
-        // front of the user. Visible entries can't be evicted mid-frame: the caches only shrink
-        // here, before any drawing.
-        for (layer, up) in &cb.field_uploads {
-            let gpu = self.build_field_layer(device, queue, up);
-            self.fields.insert(*layer, gpu);
-        }
-        // Draw only the requested layers that actually have GPU data. Opacity rides in the grid
-        // uniform's first pad word, so it costs one 4-byte write per drawn layer — no LUT re-bake.
-        let mut field_draws = Vec::new();
-        for (layer, opacity) in &cb.field_draws {
-            if let Some(f) = self.fields.get(layer) {
-                queue.write_buffer(&f.uni, 24, &opacity.to_le_bytes());
-                field_draws.push(*layer);
-            }
-        }
-
-        // --- Per-pane state ---
-        let new_radar = cb
-            .radar_upload
-            .as_ref()
-            .map(|r| self.build_radar(device, queue, r));
-        // Build the tile quad list against the shared tile cache before mutably borrowing the pane
-        // — a tile with no texture yet borrows one from the tiles around it (see `tile_quads`).
+    /// The tile quads for this frame, and the tile ids they draw in quad order.
+    fn tile_verts(&self, cb: &MapCallback) -> (Vec<TileVertex>, Vec<TileKey>) {
+        wxdata::stats::bump(wxdata::stats::Counter::TileQuadsBuilt);
         let mut tverts: Vec<TileVertex> = Vec::new();
         let mut visible: Vec<TileKey> = Vec::new();
         for v in &cb.visible {
@@ -1157,6 +1154,79 @@ impl RenderResources {
                 visible.push(id);
             }
         }
+        (tverts, visible)
+    }
+
+    fn upload_frame(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, cb: &MapCallback) {
+        // --- Shared caches ---
+        if cb.clear_tiles {
+            self.tiles.clear();
+        }
+        if cb.clear_vector {
+            self.vector_tiles.clear();
+        }
+        for id in &cb.drop_vector_tiles {
+            self.vector_tiles.remove(id);
+        }
+        for t in &cb.new_vector_tiles {
+            self.upload_vector_tile(device, t);
+        }
+        for t in &cb.new_tiles {
+            self.upload_tile(device, queue, t);
+        }
+        if let Some(o) = &cb.overlay_upload {
+            self.upload_overlay(device, o);
+        }
+        // Grow to fit the frame before touching anything. A zoomed-out view can need more tiles
+        // than the resting cap, and promoting a visible tile into a full cache evicts another
+        // visible one — which showed up as a band of basemap with the rest of the map bare.
+        // The cap is a resting size, not a limit on what one frame may hold.
+        for id in &cb.drop_tiles {
+            self.tiles.remove(id);
+        }
+        if cb.clear_tiles || !cb.new_tiles.is_empty() || !cb.drop_tiles.is_empty() {
+            self.tiles_gen = self.tiles_gen.wrapping_add(1);
+        }
+        // Touch everything this frame draws so the LRU evicts what is off screen, not what is in
+        // front of the user. Visible entries can't be evicted mid-frame: the caches only shrink
+        // here, before any drawing.
+        for (layer, up) in &cb.field_uploads {
+            let gpu = self.build_field_layer(device, queue, up);
+            self.fields.insert(*layer, gpu);
+        }
+        // Draw only the requested layers that actually have GPU data. Opacity rides in the grid
+        // uniform's first pad word, so it costs one 4-byte write per drawn layer — no LUT re-bake.
+        let mut field_draws = Vec::new();
+        for (layer, opacity) in &cb.field_draws {
+            if let Some(f) = self.fields.get(layer) {
+                queue.write_buffer(&f.uni, 24, &opacity.to_le_bytes());
+                field_draws.push(*layer);
+            }
+        }
+
+        // --- Per-pane state ---
+        let new_radar = match cb.radar_upload.as_ref() {
+            Some(r) => {
+                let existing = self.panes.get_mut(&cb.pane).and_then(|p| p.radar.take());
+                self.build_radar(device, queue, r, existing)
+            }
+            None => None,
+        };
+        // Build the tile quad list against the shared tile cache before mutably borrowing the pane
+        // — a tile with no texture yet borrows one from the tiles around it (see `tile_quads`).
+        // Skipped outright when nothing it depends on moved: a still map rebuilt up to 512 tiles
+        // worth of vertices and re-uploaded them every heartbeat frame.
+        let quads_key = (
+            self.tiles_gen,
+            cb.basemap_key,
+            cb.camera_center[0].to_bits(),
+            cb.camera_center[1].to_bits(),
+            cb.camera_scale[0].to_bits(),
+            cb.camera_scale[1].to_bits(),
+            cb.visible.len(),
+        );
+        let quads = (self.panes.get(&cb.pane).map(|p| p.quads_key) != Some(Some(quads_key)))
+            .then(|| self.tile_verts(cb));
         let overlay_present = self.overlay.is_some();
 
         let pane = self.pane_mut(device, cb.pane);
@@ -1184,10 +1254,13 @@ impl RenderResources {
         if let Some(radar) = new_radar {
             pane.radar = Some(radar);
         }
-        if !tverts.is_empty() {
-            queue.write_buffer(&pane.tile_vbuf, 0, bytemuck::cast_slice(&tverts));
+        if let Some((tverts, visible)) = quads {
+            if !tverts.is_empty() {
+                queue.write_buffer(&pane.tile_vbuf, 0, bytemuck::cast_slice(&tverts));
+            }
+            pane.frame_visible = visible;
+            pane.quads_key = Some(quads_key);
         }
-        pane.frame_visible = visible;
         pane.frame_visible_vector = cb.visible_vector.clone();
         pane.vector_over_raster = cb.vector_over_raster;
         pane.frame_draw_radar = cb.draw_radar && pane.radar.is_some();
@@ -1561,4 +1634,69 @@ mod tests {
         assert_eq!(min, [0.875, 0.875]);
         assert_eq!(max, [1.0, 1.0]);
     }
+}
+
+/// The precipitation-flag grid size for an upload: the grid the uniform declares when the tint
+/// is on and the bytes match it, else the 1×1 dummy every binding needs whether or not it is read.
+fn flag_dims(r: &RadarUpload) -> (u32, u32) {
+    let (nx, ny) = (r.uniform[11] as u32, r.uniform[12] as u32);
+    match r.precip_flag.len() == (nx * ny) as usize && nx > 0 {
+        true => (nx, ny),
+        false => (1, 1),
+    }
+}
+
+/// The precipitation-flag bytes to write for `dims` (the dummy grid is a single zero).
+fn flag_bytes(r: &RadarUpload, dims: (u32, u32)) -> Vec<u8> {
+    match dims == (1, 1) && r.precip_flag.len() != 1 {
+        true => vec![0u8],
+        false => r.precip_flag.clone(),
+    }
+}
+
+/// Write a full R8 texture of `dims`.
+fn write_r8(queue: &wgpu::Queue, tex: &wgpu::Texture, dims: (u32, u32), data: &[u8]) {
+    let (width, height) = dims;
+    queue.write_texture(
+        wgpu::TexelCopyTextureInfo {
+            texture: tex,
+            mip_level: 0,
+            origin: wgpu::Origin3d::ZERO,
+            aspect: wgpu::TextureAspect::All,
+        },
+        data,
+        wgpu::TexelCopyBufferLayout {
+            offset: 0,
+            bytes_per_row: Some(width),
+            rows_per_image: Some(height),
+        },
+        wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        },
+    );
+}
+
+/// Write the 256×3 RGBA color LUT.
+fn write_lut(queue: &wgpu::Queue, tex: &wgpu::Texture, lut: &[u8]) {
+    queue.write_texture(
+        wgpu::TexelCopyTextureInfo {
+            texture: tex,
+            mip_level: 0,
+            origin: wgpu::Origin3d::ZERO,
+            aspect: wgpu::TextureAspect::All,
+        },
+        lut,
+        wgpu::TexelCopyBufferLayout {
+            offset: 0,
+            bytes_per_row: Some(256 * 4),
+            rows_per_image: Some(3),
+        },
+        wgpu::Extent3d {
+            width: 256,
+            height: 3,
+            depth_or_array_layers: 1,
+        },
+    );
 }

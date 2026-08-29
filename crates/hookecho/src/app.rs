@@ -1600,15 +1600,16 @@ impl DataMsg {
 }
 
 /// What is currently uploaded to the GPU, so we only re-bin/re-upload on a real change.
-/// The `u64` is the palette generation (a color-table reload forces a re-bake); the trailing
-/// option is the storm-motion (east, north) m/s for storm-relative velocity.
+/// The trailing option is the storm-motion (east, north) m/s for storm-relative velocity.
+///
+/// The palette generation is deliberately *not* in here — it rides alongside in `pane_lut`, so
+/// a color-table change re-bakes the 3 KB LUT without re-binning or re-uploading the sweep.
 type ShownKey = (
     String,
     Moment,
     usize,
     Option<f32>,
     bool,
-    u64,
     Option<(u32, u32)>,
     bool,
     // Precipitation-tint generation: `None` when the tint is off, else the grid revision, so a
@@ -1890,6 +1891,8 @@ pub struct HookEchoApp {
     chasepack: Option<ChasePack>,
     /// Per-pane "what's uploaded" key, so each pane re-bins/re-uploads only on a real change.
     pane_shown: std::collections::HashMap<usize, ShownKey>,
+    /// Palette generation currently baked into each pane's LUT (see [`ShownKey`]).
+    pane_lut: std::collections::HashMap<usize, u64>,
     /// Last `(theme, system_dark, density, accent)` handed to `theme::apply`.
     theme_applied: Option<(
         crate::settings::Theme,
@@ -2841,6 +2844,7 @@ impl HookEchoApp {
             ipgeo_rx,
             chasepack: None,
             pane_shown: std::collections::HashMap::new(),
+            pane_lut: std::collections::HashMap::new(),
             theme_applied: None,
             settings_checked: None,
             frame_nr: 0,
@@ -9616,6 +9620,7 @@ impl HookEchoApp {
         let has_volume = self.views[data].volume.is_some();
         if !self.views[idx].show_radar || !has_volume {
             self.pane_shown.remove(&idx);
+            self.pane_lut.remove(&idx);
             return (None, false);
         }
         let count = self.views[data].elevation_count();
@@ -9669,12 +9674,15 @@ impl HookEchoApp {
             tilt,
             threshold,
             smooth,
-            self.palettes.gen,
             uv_key,
             dealias,
             self.settings.precip_tint.then_some(self.precip_flag_gen),
         );
-        if self.pane_shown.get(&idx) == Some(&key) {
+        let lut_gen = self.palettes.gen;
+        // Same sweep already up: the only thing left that can differ is the color table, and
+        // that is a 3 KB write into the texture already bound.
+        let lut_only = self.pane_shown.get(&idx) == Some(&key);
+        if lut_only && self.pane_lut.get(&idx) == Some(&lut_gen) {
             return (None, true);
         }
         let table = self.palettes.table(moment);
@@ -9694,11 +9702,22 @@ impl HookEchoApp {
                 return (None, true);
             }
             vol.binned(moment, tilt, dealias)
-                .map(|s| to_upload(s, table, threshold, smooth, storm_uv, precip.as_deref()))
+                .map(|s| {
+                    to_upload(
+                        s,
+                        table,
+                        threshold,
+                        smooth,
+                        storm_uv,
+                        precip.as_deref(),
+                        lut_only,
+                    )
+                })
         };
         match upload {
             Ok(up) => {
                 self.pane_shown.insert(idx, key);
+                self.pane_lut.insert(idx, lut_gen);
                 (Some(up), true)
             }
             Err(e) => {
@@ -13818,6 +13837,9 @@ pub(crate) fn to_upload(
     smooth: bool,
     storm_uv: Option<(f32, f32)>,
     precip: Option<&PrecipGrid>,
+    // Only the color table changed, so the sweep and precipitation-flag bytes the GPU already
+    // holds are still correct and are not copied.
+    lut_only: bool,
 ) -> RadarUpload {
     use crate::render::mercator::lonlat_to_world;
     let max_range_km = s.first_gate_km + s.gate_count as f32 * s.gate_interval_km;
@@ -13854,7 +13876,7 @@ pub(crate) fn to_upload(
     }
     let (precip_flag, flag_nx, flag_ny, flag_w, flag_n, flag_e, flag_s) = match tint {
         Some(g) => (
-            g.classes.clone(),
+            if lut_only { Vec::new() } else { g.classes.clone() },
             g.nx,
             g.ny,
             g.west,
@@ -13868,7 +13890,7 @@ pub(crate) fn to_upload(
     RadarUpload {
         az_bins: s.az_bins as u32,
         gate_count: s.gate_count as u32,
-        data: s.data.clone(),
+        data: if lut_only { Vec::new() } else { s.data.clone() },
         uniform: [
             s.radar_lat,
             s.radar_lon,
@@ -13895,6 +13917,7 @@ pub(crate) fn to_upload(
         precip_flag,
         world_min: [wx0 as f32, wy0 as f32],
         world_max: [wx1 as f32, wy1 as f32],
+        lut_only,
     }
 }
 
@@ -16517,6 +16540,35 @@ mod field_lut_tests {
 
 #[cfg(test)]
 mod tests {
+
+    /// A palette change must not re-send the sweep. Everything the GPU keeps (the gate bytes,
+    /// the precipitation-flag grid) is left out of a LUT-only upload; the color table and the
+    /// uniform, which are what a re-bake changes, are still there in full.
+    #[test]
+    fn a_palette_change_uploads_the_table_and_nothing_else() {
+        let sweep = wxdata::level2::BinnedSweep {
+            moment: wxdata::level2::Moment::Reflectivity,
+            az_bins: 360,
+            gate_count: 200,
+            data: vec![7u8; 360 * 200],
+            first_gate_km: 2.125,
+            gate_interval_km: 0.25,
+            radar_lat: 35.0,
+            radar_lon: -97.0,
+            elevation_deg: 0.5,
+            value_min: -32.0,
+            value_max: 95.0,
+        };
+        let table = crate::colormap::default_table(wxdata::level2::Moment::Reflectivity);
+        let full = super::to_upload(&sweep, table, None, false, None, None, false);
+        let lut = super::to_upload(&sweep, table, None, false, None, None, true);
+        assert_eq!(full.data.len(), 360 * 200);
+        assert!(lut.data.is_empty(), "the gate texture is already uploaded");
+        assert_eq!(lut.lut, full.lut, "the color table is what changed");
+        assert_eq!(lut.uniform, full.uniform);
+        assert_eq!((lut.az_bins, lut.gate_count), (360, 200));
+        assert!(lut.lut_only);
+    }
 
     /// The DWD arm exists because DL-DE/BY-2.0 requires the credit; the NOAA sites must stay
     /// uncredited so the corner is empty on the maps most users open.

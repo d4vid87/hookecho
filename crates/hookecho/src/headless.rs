@@ -271,7 +271,7 @@ pub fn run(
         basemap_key: basemap.key(),
         vector_over_raster: false,
         radar_upload: Some(crate::app::to_upload(
-            &sweep, &table, None, smooth, storm_uv, None,
+            &sweep, &table, None, smooth, storm_uv, None, false,
         )),
         draw_radar: true,
         overlay_upload: None,
@@ -325,7 +325,7 @@ pub fn run_multipane(site: &str, out_a: &str, out_b: &str) -> anyhow::Result<()>
             new_tiles: Vec::new(),
             visible: Vec::new(),
             radar_upload: Some(crate::app::to_upload(
-                &sweep, &table, None, false, None, None,
+                &sweep, &table, None, false, None, None, false,
             )),
             draw_radar: true,
             overlay_upload: None,
@@ -989,7 +989,7 @@ pub fn run_live(out_path: &str, site: &str, moment: Moment) -> anyhow::Result<()
         new_tiles: Vec::new(),
         visible: Vec::new(),
         radar_upload: Some(crate::app::to_upload(
-            &sweep, &table, None, false, None, None,
+            &sweep, &table, None, false, None, None, false,
         )),
         draw_radar: true,
         overlay_upload: None,
@@ -2887,6 +2887,83 @@ mod golden_tests {
         }
     }
 
+    /// A loop frame and a palette drag must not rebuild GPU state that only ever changes shape.
+    ///
+    /// Ten renders of the same-shaped sweep plus five palette generations: one texture set and
+    /// one tile-quad list, not fifteen of each. Run under lavapipe like the golden below.
+    #[test]
+    #[ignore = "gpu"]
+    fn a_loop_and_a_palette_drag_rebuild_nothing() {
+        use wxdata::stats::Counter;
+        let sweep = synthetic_sweep();
+        let table = crate::colormap::default_table(Moment::Reflectivity).clone();
+        let camera = Camera::at_lonlat(sweep.radar_lon as f64, sweep.radar_lat as f64, 8.5);
+        let (center, scale) =
+            camera.world_to_clip_uniform((GOLDEN_SIZE as f32, GOLDEN_SIZE as f32));
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let Ok((device, queue, _adapter)) = init_gpu(&rt) else {
+            println!("SKIP: no wgpu adapter");
+            return;
+        };
+        let format = wgpu::TextureFormat::Rgba8UnormSrgb;
+        let mut res = RenderResources::new(&device, format);
+        let target = new_target(&device, format, GOLDEN_SIZE);
+        let view = target.create_view(&wgpu::TextureViewDescriptor::default());
+
+        let counter = |c: Counter| {
+            let label = wxdata::stats::Counter::LABELS[c as usize];
+            wxdata::stats::snapshot()
+                .into_iter()
+                .find(|(l, _)| *l == label)
+                .expect("counter")
+                .1
+        };
+        let before = (
+            counter(Counter::RadarTexturesBuilt),
+            counter(Counter::TileQuadsBuilt),
+        );
+
+        // Ten loop frames (a new sweep each time, same shape), then five LUT-only uploads.
+        for i in 0..15 {
+            let lut_only = i >= 10;
+            let mut cb = MapCallback {
+                pane: 0,
+                camera_center: center,
+                camera_scale: scale,
+                basemap_key: 0,
+                vector_over_raster: false,
+                new_tiles: Vec::new(),
+                visible: Vec::new(),
+                radar_upload: Some(crate::app::to_upload(
+                    &sweep, &table, None, false, None, None, lut_only,
+                )),
+                draw_radar: true,
+                overlay_upload: None,
+                draw_overlay: false,
+                field_uploads: Vec::new(),
+                field_draws: Vec::new(),
+                clear_tiles: false,
+                drop_tiles: Vec::new(),
+                new_vector_tiles: Vec::new(),
+                visible_vector: Vec::new(),
+                clear_vector: false,
+                drop_vector_tiles: Vec::new(),
+                wind_upload: None,
+                wind: None,
+            };
+            cb.draw_radar = true;
+            res.render_once(&device, &queue, &view, &cb, wgpu::Color::BLACK);
+        }
+        let built = counter(Counter::RadarTexturesBuilt) - before.0;
+        let quads = counter(Counter::TileQuadsBuilt) - before.1;
+        println!("radar_textures_built={built} tile_quads_built={quads} over 15 frames");
+        assert_eq!(built, 1, "same-shaped sweeps write into the retained textures");
+        assert_eq!(quads, 1, "a still camera keeps its tile quads");
+    }
+
     /// Golden-image test for the radar render pipeline. Run with
     /// `HOOKECHO_GPU_FALLBACK=1 cargo test -p hookecho -- --ignored gpu` so the
     /// software (lavapipe) adapter is used — the golden is authored under lavapipe.
@@ -2907,7 +2984,7 @@ mod golden_tests {
             new_tiles: Vec::new(),
             visible: Vec::new(),
             radar_upload: Some(crate::app::to_upload(
-                &sweep, &table, None, false, None, None,
+                &sweep, &table, None, false, None, None, false,
             )),
             draw_radar: true,
             overlay_upload: None,
