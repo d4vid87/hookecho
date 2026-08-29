@@ -33,6 +33,7 @@ fn main() {
                 "elev_m": s.elevation_meters,
                 "tz": wxdata::tz::site_tz(s.id).map(|tz| tz.name()),
                 "network": "nexrad",
+                "country": "US",
             })
         })
         .collect();
@@ -49,6 +50,37 @@ fn main() {
             "elev_m": s.elevation_meters,
             "tz": wxdata::tz::site_tz(s.id).map(|tz| tz.name()),
             "network": "tdwr",
+            "country": "US",
+        })
+    }));
+
+    // The two international networks. `state` means something different in each — a German Land
+    // for the DWD rows, the country itself for OPERA's — so `country` is its own field rather
+    // than something the website is left to infer from an id prefix.
+    out.extend(wxdata::dwd::SITES.iter().map(|s| {
+        serde_json::json!({
+            "id": s.id,
+            "city": s.city,
+            "state": s.state,
+            "lat": round4(s.latitude),
+            "lon": round4(s.longitude),
+            "elev_m": s.elevation_meters,
+            "tz": wxdata::tz::site_tz(s.id).map(|tz| tz.name()),
+            "network": "dwd",
+            "country": "DE",
+        })
+    }));
+    out.extend(wxdata::opera::SITES.iter().map(|s| {
+        serde_json::json!({
+            "id": s.id,
+            "city": s.city,
+            "state": s.state,
+            "lat": round4(s.latitude),
+            "lon": round4(s.longitude),
+            "elev_m": s.elevation_meters,
+            "tz": wxdata::tz::site_tz(s.id).map(|tz| tz.name()),
+            "network": "opera",
+            "country": s.state,
         })
     }));
     out.sort_by_key(|s| s["id"].as_str().unwrap().to_string());

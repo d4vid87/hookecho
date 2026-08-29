@@ -8,7 +8,7 @@
     "build": "npm run shots && astro build",
     "preview": "astro preview",
     "shots": "mkdir -p public/shots && cp ../docs/shots/reflectivity.jpg ../docs/shots/alltilts.jpg ../docs/shots/layers.jpg ../docs/shots/velocity.jpg public/shots/",
-    "linkcheck": "linkinator dist --recurse --skip \"radar.weather.gov|api.weather.gov|hookecho.io/og/\"",
+    "linkcheck": "linkinator dist --recurse --skip \"radar.weather.gov|api.weather.gov|https://hookecho.io/\"",
     "postbuild": "pagefind --site dist"
   },
   "dependencies": {

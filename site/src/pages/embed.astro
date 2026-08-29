@@ -4,7 +4,9 @@ import sites from "../data/nexrad-sites.json";
 
 // Everything the picker needs, sorted the way a person reads it. The whole table is ~200 rows of
 // four fields, which is small enough to ship inline rather than fetch.
+// US only: the embed renders the NWS's own RIDGE loop, which serves no international site.
 const options = sites
+  .filter((s) => s.country === "US")
   .map((s) => ({
     id: s.id,
     label: `${s.id} — ${s.city}, ${s.state}${s.network === "tdwr" ? " (TDWR)" : ""}`,

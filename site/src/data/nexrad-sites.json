@@ -1,6 +1,425 @@
 [
   {
+    "city": "Helchteren",
+    "country": "BE",
+    "elev_m": 144,
+    "id": "BEHEL",
+    "lat": 51.0702,
+    "lon": 5.4054,
+    "network": "opera",
+    "state": "BE",
+    "tz": "Europe/Brussels"
+  },
+  {
+    "city": "Jabbeke",
+    "country": "BE",
+    "elev_m": 50,
+    "id": "BEJAB",
+    "lat": 51.1917,
+    "lon": 3.0642,
+    "network": "opera",
+    "state": "BE",
+    "tz": "Europe/Brussels"
+  },
+  {
+    "city": "Wideumont",
+    "country": "BE",
+    "elev_m": 585,
+    "id": "BEWID",
+    "lat": 49.9136,
+    "lon": 5.5044,
+    "network": "opera",
+    "state": "BE",
+    "tz": "Europe/Brussels"
+  },
+  {
+    "city": "Brdy",
+    "country": "CZ",
+    "elev_m": 916,
+    "id": "CZBRD",
+    "lat": 49.6583,
+    "lon": 13.8178,
+    "network": "opera",
+    "state": "CZ",
+    "tz": "Europe/Prague"
+  },
+  {
+    "city": "Skalky",
+    "country": "CZ",
+    "elev_m": 767,
+    "id": "CZSKA",
+    "lat": 49.5011,
+    "lon": 16.7885,
+    "network": "opera",
+    "state": "CZ",
+    "tz": "Europe/Prague"
+  },
+  {
+    "city": "Borkum",
+    "country": "DE",
+    "elev_m": 36,
+    "id": "DEAS",
+    "lat": 53.5641,
+    "lon": 6.7483,
+    "network": "dwd",
+    "state": "NI",
+    "tz": "Europe/Berlin"
+  },
+  {
+    "city": "Boostedt",
+    "country": "DE",
+    "elev_m": 124,
+    "id": "DEBO",
+    "lat": 54.0044,
+    "lon": 10.0469,
+    "network": "dwd",
+    "state": "SH",
+    "tz": "Europe/Berlin"
+  },
+  {
+    "city": "Dresden",
+    "country": "DE",
+    "elev_m": 263,
+    "id": "DEDR",
+    "lat": 51.1246,
+    "lon": 13.7686,
+    "network": "dwd",
+    "state": "SN",
+    "tz": "Europe/Berlin"
+  },
+  {
+    "city": "Eisberg",
+    "country": "DE",
+    "elev_m": 799,
+    "id": "DEEI",
+    "lat": 49.5407,
+    "lon": 12.4028,
+    "network": "dwd",
+    "state": "BY",
+    "tz": "Europe/Berlin"
+  },
+  {
+    "city": "Essen",
+    "country": "DE",
+    "elev_m": 185,
+    "id": "DEES",
+    "lat": 51.4056,
+    "lon": 6.9671,
+    "network": "dwd",
+    "state": "NW",
+    "tz": "Europe/Berlin"
+  },
+  {
+    "city": "Feldberg",
+    "country": "DE",
+    "elev_m": 1516,
+    "id": "DEFB",
+    "lat": 47.8736,
+    "lon": 8.0036,
+    "network": "dwd",
+    "state": "BW",
+    "tz": "Europe/Berlin"
+  },
+  {
+    "city": "Flechtdorf",
+    "country": "DE",
+    "elev_m": 627,
+    "id": "DEFL",
+    "lat": 51.3112,
+    "lon": 8.802,
+    "network": "dwd",
+    "state": "HE",
+    "tz": "Europe/Berlin"
+  },
+  {
+    "city": "Hannover",
+    "country": "DE",
+    "elev_m": 97,
+    "id": "DEHN",
+    "lat": 52.4601,
+    "lon": 9.6945,
+    "network": "dwd",
+    "state": "NI",
+    "tz": "Europe/Berlin"
+  },
+  {
+    "city": "Isen",
+    "country": "DE",
+    "elev_m": 677,
+    "id": "DEIS",
+    "lat": 48.1747,
+    "lon": 12.1018,
+    "network": "dwd",
+    "state": "BY",
+    "tz": "Europe/Berlin"
+  },
+  {
+    "city": "Memmingen",
+    "country": "DE",
+    "elev_m": 724,
+    "id": "DEME",
+    "lat": 48.0421,
+    "lon": 10.2192,
+    "network": "dwd",
+    "state": "BY",
+    "tz": "Europe/Berlin"
+  },
+  {
+    "city": "Neuhaus",
+    "country": "DE",
+    "elev_m": 879,
+    "id": "DENE",
+    "lat": 50.5001,
+    "lon": 11.135,
+    "network": "dwd",
+    "state": "TH",
+    "tz": "Europe/Berlin"
+  },
+  {
+    "city": "Neuheilenbach",
+    "country": "DE",
+    "elev_m": 585,
+    "id": "DENH",
+    "lat": 50.1097,
+    "lon": 6.5483,
+    "network": "dwd",
+    "state": "RP",
+    "tz": "Europe/Berlin"
+  },
+  {
+    "city": "Offenthal",
+    "country": "DE",
+    "elev_m": 245,
+    "id": "DEOF",
+    "lat": 49.9847,
+    "lon": 8.7129,
+    "network": "dwd",
+    "state": "HE",
+    "tz": "Europe/Berlin"
+  },
+  {
+    "city": "Prötzel",
+    "country": "DE",
+    "elev_m": 193,
+    "id": "DEPR",
+    "lat": 52.6487,
+    "lon": 13.8582,
+    "network": "dwd",
+    "state": "BB",
+    "tz": "Europe/Berlin"
+  },
+  {
+    "city": "Rostock",
+    "country": "DE",
+    "elev_m": 37,
+    "id": "DERO",
+    "lat": 54.1757,
+    "lon": 12.0581,
+    "network": "dwd",
+    "state": "MV",
+    "tz": "Europe/Berlin"
+  },
+  {
+    "city": "Türkheim",
+    "country": "DE",
+    "elev_m": 767,
+    "id": "DETU",
+    "lat": 48.5854,
+    "lon": 9.7827,
+    "network": "dwd",
+    "state": "BW",
+    "tz": "Europe/Berlin"
+  },
+  {
+    "city": "Ummendorf",
+    "country": "DE",
+    "elev_m": 185,
+    "id": "DEUM",
+    "lat": 52.1601,
+    "lon": 11.1761,
+    "network": "dwd",
+    "state": "ST",
+    "tz": "Europe/Berlin"
+  },
+  {
+    "city": "Bornholm",
+    "country": "DK",
+    "elev_m": 171,
+    "id": "DKBOR",
+    "lat": 55.1127,
+    "lon": 14.8875,
+    "network": "opera",
+    "state": "DK",
+    "tz": "Europe/Copenhagen"
+  },
+  {
+    "city": "Romo",
+    "country": "DK",
+    "elev_m": 15,
+    "id": "DKROM",
+    "lat": 55.1731,
+    "lon": 8.552,
+    "network": "opera",
+    "state": "DK",
+    "tz": "Europe/Copenhagen"
+  },
+  {
+    "city": "Samso",
+    "country": "DK",
+    "elev_m": 48,
+    "id": "DKSAM",
+    "lat": 55.8119,
+    "lon": 10.5853,
+    "network": "opera",
+    "state": "DK",
+    "tz": "Europe/Copenhagen"
+  },
+  {
+    "city": "Sindal",
+    "country": "DK",
+    "elev_m": 109,
+    "id": "DKSIN",
+    "lat": 57.4893,
+    "lon": 10.1365,
+    "network": "opera",
+    "state": "DK",
+    "tz": "Europe/Copenhagen"
+  },
+  {
+    "city": "Stevns",
+    "country": "DK",
+    "elev_m": 53,
+    "id": "DKSTE",
+    "lat": 55.3262,
+    "lon": 12.4493,
+    "network": "opera",
+    "state": "DK",
+    "tz": "Europe/Copenhagen"
+  },
+  {
+    "city": "Bilogora",
+    "country": "HR",
+    "elev_m": 280,
+    "id": "HRBIL",
+    "lat": 45.8835,
+    "lon": 17.2005,
+    "network": "opera",
+    "state": "HR",
+    "tz": "Europe/Zagreb"
+  },
+  {
+    "city": "Debeljak",
+    "country": "HR",
+    "elev_m": 208,
+    "id": "HRDEB",
+    "lat": 44.0452,
+    "lon": 15.3764,
+    "network": "opera",
+    "state": "HR",
+    "tz": "Europe/Zagreb"
+  },
+  {
+    "city": "Goli",
+    "country": "HR",
+    "elev_m": 553,
+    "id": "HRGOL",
+    "lat": 45.0205,
+    "lon": 14.1223,
+    "network": "opera",
+    "state": "HR",
+    "tz": "Europe/Zagreb"
+  },
+  {
+    "city": "Gradiste",
+    "country": "HR",
+    "elev_m": 110,
+    "id": "HRGRA",
+    "lat": 45.1592,
+    "lon": 18.7033,
+    "network": "opera",
+    "state": "HR",
+    "tz": "Europe/Zagreb"
+  },
+  {
+    "city": "Puntijarka",
+    "country": "HR",
+    "elev_m": 1030,
+    "id": "HRPUN",
+    "lat": 45.9078,
+    "lon": 15.9684,
+    "network": "opera",
+    "state": "HR",
+    "tz": "Europe/Zagreb"
+  },
+  {
+    "city": "Uljenje",
+    "country": "HR",
+    "elev_m": 463,
+    "id": "HRULJ",
+    "lat": 42.8944,
+    "lon": 17.4783,
+    "network": "opera",
+    "state": "HR",
+    "tz": "Europe/Zagreb"
+  },
+  {
+    "city": "Shannon",
+    "country": "IE",
+    "elev_m": 29,
+    "id": "IESHA",
+    "lat": 52.6928,
+    "lon": -8.92,
+    "network": "opera",
+    "state": "IE",
+    "tz": "Europe/Dublin"
+  },
+  {
+    "city": "Bjolfur",
+    "country": "IS",
+    "elev_m": 1090,
+    "id": "ISBJO",
+    "lat": 65.2659,
+    "lon": -14.0618,
+    "network": "opera",
+    "state": "IS",
+    "tz": "Atlantic/Reykjavik"
+  },
+  {
+    "city": "Keflavik",
+    "country": "IS",
+    "elev_m": 48,
+    "id": "ISKEF",
+    "lat": 64.0257,
+    "lon": -22.6354,
+    "network": "opera",
+    "state": "IS",
+    "tz": "Atlantic/Reykjavik"
+  },
+  {
+    "city": "Skagi",
+    "country": "IS",
+    "elev_m": 164,
+    "id": "ISSKA",
+    "lat": 66.0557,
+    "lon": -20.268,
+    "network": "opera",
+    "state": "IS",
+    "tz": "Atlantic/Reykjavik"
+  },
+  {
+    "city": "Mobile 2",
+    "country": "IS",
+    "elev_m": 42,
+    "id": "ISX2",
+    "lat": 63.8696,
+    "lon": -20.2023,
+    "network": "opera",
+    "state": "IS",
+    "tz": "Atlantic/Reykjavik"
+  },
+  {
     "city": "Aberdeen",
+    "country": "US",
     "elev_m": 397,
     "id": "KABR",
     "lat": 45.4558,
@@ -11,6 +430,7 @@
   },
   {
     "city": "Albuquerque",
+    "country": "US",
     "elev_m": 1789,
     "id": "KABX",
     "lat": 35.1497,
@@ -21,6 +441,7 @@
   },
   {
     "city": "Wakefield",
+    "country": "US",
     "elev_m": 34,
     "id": "KAKQ",
     "lat": 36.9839,
@@ -31,6 +452,7 @@
   },
   {
     "city": "Amarillo",
+    "country": "US",
     "elev_m": 1093,
     "id": "KAMA",
     "lat": 35.2333,
@@ -41,6 +463,7 @@
   },
   {
     "city": "Miami",
+    "country": "US",
     "elev_m": 4,
     "id": "KAMX",
     "lat": 25.6111,
@@ -51,6 +474,7 @@
   },
   {
     "city": "Gaylord",
+    "country": "US",
     "elev_m": 446,
     "id": "KAPX",
     "lat": 44.9072,
@@ -61,6 +485,7 @@
   },
   {
     "city": "La Crosse",
+    "country": "US",
     "elev_m": 389,
     "id": "KARX",
     "lat": 43.8228,
@@ -71,6 +496,7 @@
   },
   {
     "city": "Seattle",
+    "country": "US",
     "elev_m": 151,
     "id": "KATX",
     "lat": 48.1944,
@@ -81,6 +507,7 @@
   },
   {
     "city": "Beale AFB",
+    "country": "US",
     "elev_m": 53,
     "id": "KBBX",
     "lat": 39.4961,
@@ -91,6 +518,7 @@
   },
   {
     "city": "Binghamton",
+    "country": "US",
     "elev_m": 490,
     "id": "KBGM",
     "lat": 42.1997,
@@ -101,6 +529,7 @@
   },
   {
     "city": "Bismarck",
+    "country": "US",
     "elev_m": 505,
     "id": "KBIS",
     "lat": 46.7708,
@@ -111,6 +540,7 @@
   },
   {
     "city": "Billings",
+    "country": "US",
     "elev_m": 1097,
     "id": "KBLX",
     "lat": 45.8536,
@@ -121,6 +551,7 @@
   },
   {
     "city": "Birmingham",
+    "country": "US",
     "elev_m": 197,
     "id": "KBMX",
     "lat": 33.1722,
@@ -131,6 +562,7 @@
   },
   {
     "city": "Boston",
+    "country": "US",
     "elev_m": 36,
     "id": "KBOX",
     "lat": 41.9558,
@@ -141,6 +573,7 @@
   },
   {
     "city": "Brownsville",
+    "country": "US",
     "elev_m": 7,
     "id": "KBRO",
     "lat": 25.9158,
@@ -151,6 +584,7 @@
   },
   {
     "city": "Buffalo",
+    "country": "US",
     "elev_m": 211,
     "id": "KBUF",
     "lat": 42.9486,
@@ -161,6 +595,7 @@
   },
   {
     "city": "Key West",
+    "country": "US",
     "elev_m": 3,
     "id": "KBYX",
     "lat": 24.5975,
@@ -171,6 +606,7 @@
   },
   {
     "city": "Columbia",
+    "country": "US",
     "elev_m": 70,
     "id": "KCAE",
     "lat": 33.9486,
@@ -181,6 +617,7 @@
   },
   {
     "city": "Caribou",
+    "country": "US",
     "elev_m": 227,
     "id": "KCBW",
     "lat": 46.0392,
@@ -191,6 +628,7 @@
   },
   {
     "city": "Boise",
+    "country": "US",
     "elev_m": 933,
     "id": "KCBX",
     "lat": 43.4908,
@@ -201,6 +639,7 @@
   },
   {
     "city": "State College",
+    "country": "US",
     "elev_m": 733,
     "id": "KCCX",
     "lat": 40.9231,
@@ -211,6 +650,7 @@
   },
   {
     "city": "Cleveland",
+    "country": "US",
     "elev_m": 233,
     "id": "KCLE",
     "lat": 41.4131,
@@ -221,6 +661,7 @@
   },
   {
     "city": "Charleston",
+    "country": "US",
     "elev_m": 30,
     "id": "KCLX",
     "lat": 32.6556,
@@ -231,6 +672,7 @@
   },
   {
     "city": "Corpus Christi",
+    "country": "US",
     "elev_m": 14,
     "id": "KCRP",
     "lat": 27.7842,
@@ -241,6 +683,7 @@
   },
   {
     "city": "Burlington",
+    "country": "US",
     "elev_m": 97,
     "id": "KCXX",
     "lat": 44.5111,
@@ -251,6 +694,7 @@
   },
   {
     "city": "Cheyenne",
+    "country": "US",
     "elev_m": 1868,
     "id": "KCYS",
     "lat": 41.1519,
@@ -261,6 +705,7 @@
   },
   {
     "city": "Sacramento",
+    "country": "US",
     "elev_m": 9,
     "id": "KDAX",
     "lat": 38.5011,
@@ -271,6 +716,7 @@
   },
   {
     "city": "Dodge City",
+    "country": "US",
     "elev_m": 790,
     "id": "KDDC",
     "lat": 37.7608,
@@ -281,6 +727,7 @@
   },
   {
     "city": "Laughlin AFB",
+    "country": "US",
     "elev_m": 345,
     "id": "KDFX",
     "lat": 29.2722,
@@ -291,6 +738,7 @@
   },
   {
     "city": "Brandon",
+    "country": "US",
     "elev_m": 149,
     "id": "KDGX",
     "lat": 32.28,
@@ -301,6 +749,7 @@
   },
   {
     "city": "Philadelphia",
+    "country": "US",
     "elev_m": 45,
     "id": "KDIX",
     "lat": 39.9469,
@@ -311,6 +760,7 @@
   },
   {
     "city": "Duluth",
+    "country": "US",
     "elev_m": 435,
     "id": "KDLH",
     "lat": 46.8369,
@@ -321,6 +771,7 @@
   },
   {
     "city": "Des Moines",
+    "country": "US",
     "elev_m": 299,
     "id": "KDMX",
     "lat": 41.7311,
@@ -331,6 +782,7 @@
   },
   {
     "city": "Detroit",
+    "country": "US",
     "elev_m": 327,
     "id": "KDTX",
     "lat": 42.6997,
@@ -341,6 +793,7 @@
   },
   {
     "city": "Davenport",
+    "country": "US",
     "elev_m": 230,
     "id": "KDVN",
     "lat": 41.6117,
@@ -351,6 +804,7 @@
   },
   {
     "city": "Dyess AFB",
+    "country": "US",
     "elev_m": 463,
     "id": "KDYX",
     "lat": 32.5386,
@@ -361,6 +815,7 @@
   },
   {
     "city": "Kansas City",
+    "country": "US",
     "elev_m": 303,
     "id": "KEAX",
     "lat": 38.8103,
@@ -371,6 +826,7 @@
   },
   {
     "city": "Tucson",
+    "country": "US",
     "elev_m": 1586,
     "id": "KEMX",
     "lat": 31.8939,
@@ -381,6 +837,7 @@
   },
   {
     "city": "Albany",
+    "country": "US",
     "elev_m": 557,
     "id": "KENX",
     "lat": 42.5864,
@@ -391,6 +848,7 @@
   },
   {
     "city": "Fort Rucker",
+    "country": "US",
     "elev_m": 132,
     "id": "KEOX",
     "lat": 31.4606,
@@ -401,6 +859,7 @@
   },
   {
     "city": "El Paso",
+    "country": "US",
     "elev_m": 1251,
     "id": "KEPZ",
     "lat": 31.8731,
@@ -411,6 +870,7 @@
   },
   {
     "city": "Las Vegas",
+    "country": "US",
     "elev_m": 1483,
     "id": "KESX",
     "lat": 35.7011,
@@ -421,6 +881,7 @@
   },
   {
     "city": "Eglin AFB",
+    "country": "US",
     "elev_m": 43,
     "id": "KEVX",
     "lat": 30.5644,
@@ -431,6 +892,7 @@
   },
   {
     "city": "San Antonio",
+    "country": "US",
     "elev_m": 193,
     "id": "KEWX",
     "lat": 29.7039,
@@ -441,6 +903,7 @@
   },
   {
     "city": "Edwards AFB",
+    "country": "US",
     "elev_m": 840,
     "id": "KEYX",
     "lat": 35.0978,
@@ -451,6 +914,7 @@
   },
   {
     "city": "Roanoke",
+    "country": "US",
     "elev_m": 874,
     "id": "KFCX",
     "lat": 37.0242,
@@ -461,6 +925,7 @@
   },
   {
     "city": "Frederick",
+    "country": "US",
     "elev_m": 386,
     "id": "KFDR",
     "lat": 34.3622,
@@ -471,6 +936,7 @@
   },
   {
     "city": "Cannon AFB",
+    "country": "US",
     "elev_m": 1417,
     "id": "KFDX",
     "lat": 34.635,
@@ -481,6 +947,7 @@
   },
   {
     "city": "Atlanta",
+    "country": "US",
     "elev_m": 262,
     "id": "KFFC",
     "lat": 33.3636,
@@ -491,6 +958,7 @@
   },
   {
     "city": "Sioux Falls",
+    "country": "US",
     "elev_m": 436,
     "id": "KFSD",
     "lat": 43.5878,
@@ -501,6 +969,7 @@
   },
   {
     "city": "Flagstaff",
+    "country": "US",
     "elev_m": 2261,
     "id": "KFSX",
     "lat": 34.5744,
@@ -511,6 +980,7 @@
   },
   {
     "city": "Denver",
+    "country": "US",
     "elev_m": 1675,
     "id": "KFTG",
     "lat": 39.7867,
@@ -521,6 +991,7 @@
   },
   {
     "city": "Dallas/Fort Worth",
+    "country": "US",
     "elev_m": 208,
     "id": "KFWS",
     "lat": 32.5731,
@@ -531,6 +1002,7 @@
   },
   {
     "city": "Glasgow",
+    "country": "US",
     "elev_m": 694,
     "id": "KGGW",
     "lat": 48.2064,
@@ -541,6 +1013,7 @@
   },
   {
     "city": "Grand Junction",
+    "country": "US",
     "elev_m": 3045,
     "id": "KGJX",
     "lat": 39.0622,
@@ -551,6 +1024,7 @@
   },
   {
     "city": "Goodland",
+    "country": "US",
     "elev_m": 1113,
     "id": "KGLD",
     "lat": 39.3669,
@@ -561,6 +1035,7 @@
   },
   {
     "city": "Green Bay",
+    "country": "US",
     "elev_m": 208,
     "id": "KGRB",
     "lat": 44.4986,
@@ -571,6 +1046,7 @@
   },
   {
     "city": "Fort Hood",
+    "country": "US",
     "elev_m": 164,
     "id": "KGRK",
     "lat": 30.7217,
@@ -581,6 +1057,7 @@
   },
   {
     "city": "Grand Rapids",
+    "country": "US",
     "elev_m": 237,
     "id": "KGRR",
     "lat": 42.8939,
@@ -591,6 +1068,7 @@
   },
   {
     "city": "Greenville",
+    "country": "US",
     "elev_m": 296,
     "id": "KGSP",
     "lat": 34.8833,
@@ -601,6 +1079,7 @@
   },
   {
     "city": "Columbus AFB",
+    "country": "US",
     "elev_m": 145,
     "id": "KGWX",
     "lat": 33.8967,
@@ -611,6 +1090,7 @@
   },
   {
     "city": "Portland",
+    "country": "US",
     "elev_m": 125,
     "id": "KGYX",
     "lat": 43.8914,
@@ -621,6 +1101,7 @@
   },
   {
     "city": "Holloman AFB",
+    "country": "US",
     "elev_m": 1287,
     "id": "KHDX",
     "lat": 33.0769,
@@ -631,6 +1112,7 @@
   },
   {
     "city": "Houston",
+    "country": "US",
     "elev_m": 5,
     "id": "KHGX",
     "lat": 29.4719,
@@ -641,6 +1123,7 @@
   },
   {
     "city": "Hanford",
+    "country": "US",
     "elev_m": 74,
     "id": "KHNX",
     "lat": 36.3142,
@@ -651,6 +1134,7 @@
   },
   {
     "city": "Fort Campbell",
+    "country": "US",
     "elev_m": 177,
     "id": "KHPX",
     "lat": 36.7369,
@@ -661,6 +1145,7 @@
   },
   {
     "city": "Huntsville",
+    "country": "US",
     "elev_m": 536,
     "id": "KHTX",
     "lat": 34.9306,
@@ -671,6 +1156,7 @@
   },
   {
     "city": "Wichita",
+    "country": "US",
     "elev_m": 407,
     "id": "KICT",
     "lat": 37.6544,
@@ -681,6 +1167,7 @@
   },
   {
     "city": "Cedar City",
+    "country": "US",
     "elev_m": 3231,
     "id": "KICX",
     "lat": 37.5911,
@@ -691,6 +1178,7 @@
   },
   {
     "city": "Wilmington",
+    "country": "US",
     "elev_m": 322,
     "id": "KILN",
     "lat": 39.4203,
@@ -701,6 +1189,7 @@
   },
   {
     "city": "Lincoln",
+    "country": "US",
     "elev_m": 177,
     "id": "KILX",
     "lat": 40.1506,
@@ -711,6 +1200,7 @@
   },
   {
     "city": "Indianapolis",
+    "country": "US",
     "elev_m": 241,
     "id": "KIND",
     "lat": 39.7075,
@@ -721,6 +1211,7 @@
   },
   {
     "city": "Tulsa",
+    "country": "US",
     "elev_m": 204,
     "id": "KINX",
     "lat": 36.175,
@@ -731,6 +1222,7 @@
   },
   {
     "city": "Phoenix",
+    "country": "US",
     "elev_m": 413,
     "id": "KIWA",
     "lat": 33.2892,
@@ -741,6 +1233,7 @@
   },
   {
     "city": "Fort Wayne",
+    "country": "US",
     "elev_m": 293,
     "id": "KIWX",
     "lat": 41.3586,
@@ -751,6 +1244,7 @@
   },
   {
     "city": "Jacksonville",
+    "country": "US",
     "elev_m": 10,
     "id": "KJAX",
     "lat": 30.4847,
@@ -761,6 +1255,7 @@
   },
   {
     "city": "Robins AFB",
+    "country": "US",
     "elev_m": 159,
     "id": "KJGX",
     "lat": 32.6756,
@@ -771,6 +1266,7 @@
   },
   {
     "city": "Jackson",
+    "country": "US",
     "elev_m": 415,
     "id": "KJKL",
     "lat": 37.5908,
@@ -781,6 +1277,7 @@
   },
   {
     "city": "Lubbock",
+    "country": "US",
     "elev_m": 993,
     "id": "KLBB",
     "lat": 33.6542,
@@ -791,6 +1288,7 @@
   },
   {
     "city": "Lake Charles",
+    "country": "US",
     "elev_m": 4,
     "id": "KLCH",
     "lat": 30.1253,
@@ -801,6 +1299,7 @@
   },
   {
     "city": "New Orleans",
+    "country": "US",
     "elev_m": 7,
     "id": "KLIX",
     "lat": 30.3367,
@@ -811,6 +1310,7 @@
   },
   {
     "city": "North Platte",
+    "country": "US",
     "elev_m": 906,
     "id": "KLNX",
     "lat": 41.9578,
@@ -821,6 +1321,7 @@
   },
   {
     "city": "Chicago",
+    "country": "US",
     "elev_m": 202,
     "id": "KLOT",
     "lat": 41.6044,
@@ -831,6 +1332,7 @@
   },
   {
     "city": "Elko",
+    "country": "US",
     "elev_m": 2056,
     "id": "KLRX",
     "lat": 40.74,
@@ -841,6 +1343,7 @@
   },
   {
     "city": "St. Louis",
+    "country": "US",
     "elev_m": 185,
     "id": "KLSX",
     "lat": 38.6986,
@@ -851,6 +1354,7 @@
   },
   {
     "city": "Wilmington",
+    "country": "US",
     "elev_m": 19,
     "id": "KLTX",
     "lat": 33.9892,
@@ -861,6 +1365,7 @@
   },
   {
     "city": "Louisville",
+    "country": "US",
     "elev_m": 219,
     "id": "KLVX",
     "lat": 37.9753,
@@ -871,6 +1376,7 @@
   },
   {
     "city": "Sterling",
+    "country": "US",
     "elev_m": 83,
     "id": "KLWX",
     "lat": 38.9753,
@@ -881,6 +1387,7 @@
   },
   {
     "city": "Little Rock",
+    "country": "US",
     "elev_m": 173,
     "id": "KLZK",
     "lat": 34.8364,
@@ -891,6 +1398,7 @@
   },
   {
     "city": "Midland/Odessa",
+    "country": "US",
     "elev_m": 874,
     "id": "KMAF",
     "lat": 31.9433,
@@ -901,6 +1409,7 @@
   },
   {
     "city": "Medford",
+    "country": "US",
     "elev_m": 2290,
     "id": "KMAX",
     "lat": 42.0811,
@@ -911,6 +1420,7 @@
   },
   {
     "city": "Minot AFB",
+    "country": "US",
     "elev_m": 455,
     "id": "KMBX",
     "lat": 48.3925,
@@ -921,6 +1431,7 @@
   },
   {
     "city": "Morehead City",
+    "country": "US",
     "elev_m": 9,
     "id": "KMHX",
     "lat": 34.7761,
@@ -931,6 +1442,7 @@
   },
   {
     "city": "Milwaukee",
+    "country": "US",
     "elev_m": 292,
     "id": "KMKX",
     "lat": 42.9678,
@@ -941,6 +1453,7 @@
   },
   {
     "city": "Melbourne",
+    "country": "US",
     "elev_m": 11,
     "id": "KMLB",
     "lat": 28.1133,
@@ -951,6 +1464,7 @@
   },
   {
     "city": "Mobile",
+    "country": "US",
     "elev_m": 63,
     "id": "KMOB",
     "lat": 30.6794,
@@ -961,6 +1475,7 @@
   },
   {
     "city": "Minneapolis",
+    "country": "US",
     "elev_m": 288,
     "id": "KMPX",
     "lat": 44.8489,
@@ -971,6 +1486,7 @@
   },
   {
     "city": "Marquette",
+    "country": "US",
     "elev_m": 430,
     "id": "KMQT",
     "lat": 46.5314,
@@ -981,6 +1497,7 @@
   },
   {
     "city": "Knoxville",
+    "country": "US",
     "elev_m": 408,
     "id": "KMRX",
     "lat": 36.1686,
@@ -991,6 +1508,7 @@
   },
   {
     "city": "Missoula",
+    "country": "US",
     "elev_m": 2394,
     "id": "KMSX",
     "lat": 47.0411,
@@ -1001,6 +1519,7 @@
   },
   {
     "city": "Salt Lake City",
+    "country": "US",
     "elev_m": 1969,
     "id": "KMTX",
     "lat": 41.2628,
@@ -1011,6 +1530,7 @@
   },
   {
     "city": "San Francisco",
+    "country": "US",
     "elev_m": 1057,
     "id": "KMUX",
     "lat": 37.1553,
@@ -1021,6 +1541,7 @@
   },
   {
     "city": "Fargo",
+    "country": "US",
     "elev_m": 301,
     "id": "KMVX",
     "lat": 47.5281,
@@ -1031,6 +1552,7 @@
   },
   {
     "city": "Maxwell AFB",
+    "country": "US",
     "elev_m": 122,
     "id": "KMXX",
     "lat": 32.5367,
@@ -1041,6 +1563,7 @@
   },
   {
     "city": "San Diego",
+    "country": "US",
     "elev_m": 291,
     "id": "KNKX",
     "lat": 32.9189,
@@ -1051,6 +1574,7 @@
   },
   {
     "city": "Memphis",
+    "country": "US",
     "elev_m": 86,
     "id": "KNQA",
     "lat": 35.3447,
@@ -1061,6 +1585,7 @@
   },
   {
     "city": "Omaha",
+    "country": "US",
     "elev_m": 350,
     "id": "KOAX",
     "lat": 41.3203,
@@ -1071,6 +1596,7 @@
   },
   {
     "city": "Nashville",
+    "country": "US",
     "elev_m": 176,
     "id": "KOHX",
     "lat": 36.2472,
@@ -1081,6 +1607,7 @@
   },
   {
     "city": "Upton",
+    "country": "US",
     "elev_m": 26,
     "id": "KOKX",
     "lat": 40.8656,
@@ -1091,6 +1618,7 @@
   },
   {
     "city": "Spokane",
+    "country": "US",
     "elev_m": 728,
     "id": "KOTX",
     "lat": 47.6806,
@@ -1101,6 +1629,7 @@
   },
   {
     "city": "Paducah",
+    "country": "US",
     "elev_m": 119,
     "id": "KPAH",
     "lat": 37.0683,
@@ -1111,6 +1640,7 @@
   },
   {
     "city": "Pittsburgh",
+    "country": "US",
     "elev_m": 361,
     "id": "KPBZ",
     "lat": 40.5317,
@@ -1121,6 +1651,7 @@
   },
   {
     "city": "Pendleton",
+    "country": "US",
     "elev_m": 462,
     "id": "KPDT",
     "lat": 45.6906,
@@ -1131,6 +1662,7 @@
   },
   {
     "city": "Fort Polk",
+    "country": "US",
     "elev_m": 124,
     "id": "KPOE",
     "lat": 31.1556,
@@ -1141,6 +1673,7 @@
   },
   {
     "city": "Pueblo",
+    "country": "US",
     "elev_m": 1600,
     "id": "KPUX",
     "lat": 38.4594,
@@ -1151,6 +1684,7 @@
   },
   {
     "city": "Raleigh",
+    "country": "US",
     "elev_m": 106,
     "id": "KRAX",
     "lat": 35.6656,
@@ -1161,6 +1695,7 @@
   },
   {
     "city": "Reno",
+    "country": "US",
     "elev_m": 2530,
     "id": "KRGX",
     "lat": 39.7542,
@@ -1171,6 +1706,7 @@
   },
   {
     "city": "Riverton",
+    "country": "US",
     "elev_m": 1697,
     "id": "KRIW",
     "lat": 43.0661,
@@ -1181,6 +1717,7 @@
   },
   {
     "city": "Charleston",
+    "country": "US",
     "elev_m": 329,
     "id": "KRLX",
     "lat": 38.3111,
@@ -1191,6 +1728,7 @@
   },
   {
     "city": "Portland",
+    "country": "US",
     "elev_m": 479,
     "id": "KRTX",
     "lat": 45.715,
@@ -1201,6 +1739,7 @@
   },
   {
     "city": "Pocatello",
+    "country": "US",
     "elev_m": 1364,
     "id": "KSFX",
     "lat": 43.1058,
@@ -1211,6 +1750,7 @@
   },
   {
     "city": "Springfield",
+    "country": "US",
     "elev_m": 390,
     "id": "KSGF",
     "lat": 37.2353,
@@ -1221,6 +1761,7 @@
   },
   {
     "city": "Shreveport",
+    "country": "US",
     "elev_m": 83,
     "id": "KSHV",
     "lat": 32.4508,
@@ -1231,6 +1772,7 @@
   },
   {
     "city": "San Angelo",
+    "country": "US",
     "elev_m": 576,
     "id": "KSJT",
     "lat": 31.3714,
@@ -1241,6 +1783,7 @@
   },
   {
     "city": "Santa Ana Mountains",
+    "country": "US",
     "elev_m": 923,
     "id": "KSOX",
     "lat": 33.8178,
@@ -1251,6 +1794,7 @@
   },
   {
     "city": "Fort Smith",
+    "country": "US",
     "elev_m": 195,
     "id": "KSRX",
     "lat": 35.2906,
@@ -1261,6 +1805,7 @@
   },
   {
     "city": "Tampa Bay",
+    "country": "US",
     "elev_m": 13,
     "id": "KTBW",
     "lat": 27.7056,
@@ -1271,6 +1816,7 @@
   },
   {
     "city": "Great Falls",
+    "country": "US",
     "elev_m": 1132,
     "id": "KTFX",
     "lat": 47.4597,
@@ -1281,6 +1827,7 @@
   },
   {
     "city": "Tallahassee",
+    "country": "US",
     "elev_m": 19,
     "id": "KTLH",
     "lat": 30.3975,
@@ -1291,6 +1838,7 @@
   },
   {
     "city": "Oklahoma City",
+    "country": "US",
     "elev_m": 370,
     "id": "KTLX",
     "lat": 35.3331,
@@ -1301,6 +1849,7 @@
   },
   {
     "city": "Topeka",
+    "country": "US",
     "elev_m": 417,
     "id": "KTWX",
     "lat": 38.9969,
@@ -1311,6 +1860,7 @@
   },
   {
     "city": "Montague",
+    "country": "US",
     "elev_m": 562,
     "id": "KTYX",
     "lat": 43.7558,
@@ -1321,6 +1871,7 @@
   },
   {
     "city": "Rapid City",
+    "country": "US",
     "elev_m": 919,
     "id": "KUDX",
     "lat": 44.125,
@@ -1331,6 +1882,7 @@
   },
   {
     "city": "Hastings",
+    "country": "US",
     "elev_m": 602,
     "id": "KUEX",
     "lat": 40.3208,
@@ -1341,6 +1893,7 @@
   },
   {
     "city": "Moody AFB",
+    "country": "US",
     "elev_m": 54,
     "id": "KVAX",
     "lat": 30.89,
@@ -1351,6 +1904,7 @@
   },
   {
     "city": "Vandenberg AFB",
+    "country": "US",
     "elev_m": 373,
     "id": "KVBX",
     "lat": 34.8383,
@@ -1361,6 +1915,7 @@
   },
   {
     "city": "Vance AFB",
+    "country": "US",
     "elev_m": 369,
     "id": "KVNX",
     "lat": 36.7406,
@@ -1371,6 +1926,7 @@
   },
   {
     "city": "Los Angeles",
+    "country": "US",
     "elev_m": 831,
     "id": "KVTX",
     "lat": 34.4114,
@@ -1381,6 +1937,7 @@
   },
   {
     "city": "Evansville",
+    "country": "US",
     "elev_m": 155,
     "id": "KVWX",
     "lat": 38.2603,
@@ -1391,6 +1948,7 @@
   },
   {
     "city": "Yuma",
+    "country": "US",
     "elev_m": 53,
     "id": "KYUX",
     "lat": 32.4953,
@@ -1400,7 +1958,30 @@
     "tz": "America/Phoenix"
   },
   {
+    "city": "Den Helder",
+    "country": "NL",
+    "elev_m": 55,
+    "id": "NLDHL",
+    "lat": 52.9528,
+    "lon": 4.7906,
+    "network": "opera",
+    "state": "NL",
+    "tz": "Europe/Amsterdam"
+  },
+  {
+    "city": "Herwijnen",
+    "country": "NL",
+    "elev_m": 25,
+    "id": "NLHRW",
+    "lat": 51.8369,
+    "lon": 5.1381,
+    "network": "opera",
+    "state": "NL",
+    "tz": "Europe/Amsterdam"
+  },
+  {
     "city": "Bethel",
+    "country": "US",
     "elev_m": 48,
     "id": "PABC",
     "lat": 60.7919,
@@ -1411,6 +1992,7 @@
   },
   {
     "city": "Sitka",
+    "country": "US",
     "elev_m": 63,
     "id": "PACG",
     "lat": 56.8525,
@@ -1421,6 +2003,7 @@
   },
   {
     "city": "Nome",
+    "country": "US",
     "elev_m": 16,
     "id": "PAEC",
     "lat": 64.5114,
@@ -1431,6 +2014,7 @@
   },
   {
     "city": "Anchorage",
+    "country": "US",
     "elev_m": 74,
     "id": "PAHG",
     "lat": 60.7258,
@@ -1441,6 +2025,7 @@
   },
   {
     "city": "Middleton Island",
+    "country": "US",
     "elev_m": 20,
     "id": "PAIH",
     "lat": 59.4614,
@@ -1451,6 +2036,7 @@
   },
   {
     "city": "King Salmon",
+    "country": "US",
     "elev_m": 19,
     "id": "PAKC",
     "lat": 58.6794,
@@ -1461,6 +2047,7 @@
   },
   {
     "city": "Andersen AFB",
+    "country": "US",
     "elev_m": 78,
     "id": "PGUA",
     "lat": 13.4544,
@@ -1471,6 +2058,7 @@
   },
   {
     "city": "South Kauai",
+    "country": "US",
     "elev_m": 55,
     "id": "PHKI",
     "lat": 21.8939,
@@ -1481,6 +2069,7 @@
   },
   {
     "city": "Kamuela",
+    "country": "US",
     "elev_m": 1161,
     "id": "PHKM",
     "lat": 20.1253,
@@ -1491,6 +2080,7 @@
   },
   {
     "city": "Molokai",
+    "country": "US",
     "elev_m": 416,
     "id": "PHMO",
     "lat": 21.1328,
@@ -1501,6 +2091,7 @@
   },
   {
     "city": "South Shore",
+    "country": "US",
     "elev_m": 421,
     "id": "PHWA",
     "lat": 19.095,
@@ -1510,7 +2101,217 @@
     "tz": "Pacific/Honolulu"
   },
   {
+    "city": "Brzuchania",
+    "country": "PL",
+    "elev_m": 434,
+    "id": "PLBRZ",
+    "lat": 50.3942,
+    "lon": 20.0832,
+    "network": "opera",
+    "state": "PL",
+    "tz": "Europe/Warsaw"
+  },
+  {
+    "city": "Gdynia",
+    "country": "PL",
+    "elev_m": 261,
+    "id": "PLGDY",
+    "lat": 54.5009,
+    "lon": 18.2718,
+    "network": "opera",
+    "state": "PL",
+    "tz": "Europe/Warsaw"
+  },
+  {
+    "city": "Gora Sw Anny",
+    "country": "PL",
+    "elev_m": 433,
+    "id": "PLGSA",
+    "lat": 50.4639,
+    "lon": 18.1532,
+    "network": "opera",
+    "state": "PL",
+    "tz": "Europe/Warsaw"
+  },
+  {
+    "city": "Legionowo",
+    "country": "PL",
+    "elev_m": 122,
+    "id": "PLLEG",
+    "lat": 52.4053,
+    "lon": 20.9611,
+    "network": "opera",
+    "state": "PL",
+    "tz": "Europe/Warsaw"
+  },
+  {
+    "city": "Pastewnik",
+    "country": "PL",
+    "elev_m": 692,
+    "id": "PLPAS",
+    "lat": 50.8925,
+    "lon": 16.0395,
+    "network": "opera",
+    "state": "PL",
+    "tz": "Europe/Warsaw"
+  },
+  {
+    "city": "Poznan",
+    "country": "PL",
+    "elev_m": 123,
+    "id": "PLPOZ",
+    "lat": 52.4133,
+    "lon": 16.797,
+    "network": "opera",
+    "state": "PL",
+    "tz": "Europe/Warsaw"
+  },
+  {
+    "city": "Ramza",
+    "country": "PL",
+    "elev_m": 357,
+    "id": "PLRAM",
+    "lat": 50.1513,
+    "lon": 18.7251,
+    "network": "opera",
+    "state": "PL",
+    "tz": "Europe/Warsaw"
+  },
+  {
+    "city": "Rzeszow",
+    "country": "PL",
+    "elev_m": 241,
+    "id": "PLRZE",
+    "lat": 50.1141,
+    "lon": 22.037,
+    "network": "opera",
+    "state": "PL",
+    "tz": "Europe/Warsaw"
+  },
+  {
+    "city": "Swidwin",
+    "country": "PL",
+    "elev_m": 147,
+    "id": "PLSWI",
+    "lat": 53.7958,
+    "lon": 15.8368,
+    "network": "opera",
+    "state": "PL",
+    "tz": "Europe/Warsaw"
+  },
+  {
+    "city": "Uzranki",
+    "country": "PL",
+    "elev_m": 237,
+    "id": "PLUZR",
+    "lat": 53.8557,
+    "lon": 21.4123,
+    "network": "opera",
+    "state": "PL",
+    "tz": "Europe/Warsaw"
+  },
+  {
+    "city": "Barnova",
+    "country": "RO",
+    "elev_m": 454,
+    "id": "ROBAR",
+    "lat": 47.0118,
+    "lon": 27.5825,
+    "network": "opera",
+    "state": "RO",
+    "tz": "Europe/Bucharest"
+  },
+  {
+    "city": "Bobohalma",
+    "country": "RO",
+    "elev_m": 567,
+    "id": "ROBOB",
+    "lat": 46.3602,
+    "lon": 24.2252,
+    "network": "opera",
+    "state": "RO",
+    "tz": "Europe/Bucharest"
+  },
+  {
+    "city": "Bucuresti",
+    "country": "RO",
+    "elev_m": 133,
+    "id": "ROBUC",
+    "lat": 44.5127,
+    "lon": 26.0773,
+    "network": "opera",
+    "state": "RO",
+    "tz": "Europe/Bucharest"
+  },
+  {
+    "city": "Craiova",
+    "country": "RO",
+    "elev_m": 218,
+    "id": "ROCRA",
+    "lat": 44.3103,
+    "lon": 23.8674,
+    "network": "opera",
+    "state": "RO",
+    "tz": "Europe/Bucharest"
+  },
+  {
+    "city": "Medgidia",
+    "country": "RO",
+    "elev_m": 112,
+    "id": "ROMED",
+    "lat": 44.2434,
+    "lon": 28.2506,
+    "network": "opera",
+    "state": "RO",
+    "tz": "Europe/Bucharest"
+  },
+  {
+    "city": "Oradea",
+    "country": "RO",
+    "elev_m": 246,
+    "id": "ROORA",
+    "lat": 47.0922,
+    "lon": 21.9429,
+    "network": "opera",
+    "state": "RO",
+    "tz": "Europe/Bucharest"
+  },
+  {
+    "city": "Timisoara",
+    "country": "RO",
+    "elev_m": 145,
+    "id": "ROTIM",
+    "lat": 45.7717,
+    "lon": 21.2577,
+    "network": "opera",
+    "state": "RO",
+    "tz": "Europe/Bucharest"
+  },
+  {
+    "city": "Lisca",
+    "country": "SI",
+    "elev_m": 950,
+    "id": "SILIS",
+    "lat": 46.0678,
+    "lon": 15.2849,
+    "network": "opera",
+    "state": "SI",
+    "tz": "Europe/Ljubljana"
+  },
+  {
+    "city": "Pasja ravan",
+    "country": "SI",
+    "elev_m": 1043,
+    "id": "SIPAS",
+    "lat": 46.098,
+    "lon": 14.2282,
+    "network": "opera",
+    "state": "SI",
+    "tz": "Europe/Ljubljana"
+  },
+  {
     "city": "Andrews AFB",
+    "country": "US",
     "elev_m": 105,
     "id": "TADW",
     "lat": 38.695,
@@ -1521,6 +2322,7 @@
   },
   {
     "city": "Atlanta",
+    "country": "US",
     "elev_m": 327,
     "id": "TATL",
     "lat": 33.647,
@@ -1531,6 +2333,7 @@
   },
   {
     "city": "Nashville",
+    "country": "US",
     "elev_m": 249,
     "id": "TBNA",
     "lat": 35.98,
@@ -1541,6 +2344,7 @@
   },
   {
     "city": "Boston",
+    "country": "US",
     "elev_m": 80,
     "id": "TBOS",
     "lat": 42.158,
@@ -1551,6 +2355,7 @@
   },
   {
     "city": "Baltimore",
+    "country": "US",
     "elev_m": 90,
     "id": "TBWI",
     "lat": 39.09,
@@ -1561,6 +2366,7 @@
   },
   {
     "city": "Charlotte",
+    "country": "US",
     "elev_m": 265,
     "id": "TCLT",
     "lat": 35.337,
@@ -1571,6 +2377,7 @@
   },
   {
     "city": "Columbus",
+    "country": "US",
     "elev_m": 349,
     "id": "TCMH",
     "lat": 40.006,
@@ -1581,6 +2388,7 @@
   },
   {
     "city": "Cincinnati",
+    "country": "US",
     "elev_m": 320,
     "id": "TCVG",
     "lat": 38.898,
@@ -1591,6 +2399,7 @@
   },
   {
     "city": "Dallas Love",
+    "country": "US",
     "elev_m": 189,
     "id": "TDAL",
     "lat": 32.926,
@@ -1601,6 +2410,7 @@
   },
   {
     "city": "Dayton",
+    "country": "US",
     "elev_m": 310,
     "id": "TDAY",
     "lat": 40.022,
@@ -1611,6 +2421,7 @@
   },
   {
     "city": "Washington National",
+    "country": "US",
     "elev_m": 105,
     "id": "TDCA",
     "lat": 38.759,
@@ -1621,6 +2432,7 @@
   },
   {
     "city": "Denver",
+    "country": "US",
     "elev_m": 1737,
     "id": "TDEN",
     "lat": 39.727,
@@ -1631,6 +2443,7 @@
   },
   {
     "city": "Dallas-Fort Worth",
+    "country": "US",
     "elev_m": 178,
     "id": "TDFW",
     "lat": 33.065,
@@ -1641,6 +2454,7 @@
   },
   {
     "city": "Detroit",
+    "country": "US",
     "elev_m": 235,
     "id": "TDTW",
     "lat": 42.111,
@@ -1651,6 +2465,7 @@
   },
   {
     "city": "Newark",
+    "country": "US",
     "elev_m": 41,
     "id": "TEWR",
     "lat": 40.594,
@@ -1661,6 +2476,7 @@
   },
   {
     "city": "Fort Lauderdale",
+    "country": "US",
     "elev_m": 36,
     "id": "TFLL",
     "lat": 26.143,
@@ -1671,6 +2487,7 @@
   },
   {
     "city": "Houston Hobby",
+    "country": "US",
     "elev_m": 35,
     "id": "THOU",
     "lat": 29.516,
@@ -1681,6 +2498,7 @@
   },
   {
     "city": "Washington Dulles",
+    "country": "US",
     "elev_m": 144,
     "id": "TIAD",
     "lat": 39.084,
@@ -1691,6 +2509,7 @@
   },
   {
     "city": "Houston Intercontinental",
+    "country": "US",
     "elev_m": 77,
     "id": "TIAH",
     "lat": 30.065,
@@ -1701,6 +2520,7 @@
   },
   {
     "city": "Indianapolis",
+    "country": "US",
     "elev_m": 258,
     "id": "TIDS",
     "lat": 39.637,
@@ -1711,6 +2531,7 @@
   },
   {
     "city": "New York JFK",
+    "country": "US",
     "elev_m": 34,
     "id": "TJFK",
     "lat": 40.589,
@@ -1721,6 +2542,7 @@
   },
   {
     "city": "San Juan",
+    "country": "US",
     "elev_m": 867,
     "id": "TJUA",
     "lat": 18.1156,
@@ -1731,6 +2553,7 @@
   },
   {
     "city": "Las Vegas",
+    "country": "US",
     "elev_m": 627,
     "id": "TLAS",
     "lat": 36.144,
@@ -1741,6 +2564,7 @@
   },
   {
     "city": "Cleveland",
+    "country": "US",
     "elev_m": 283,
     "id": "TLVE",
     "lat": 41.29,
@@ -1751,6 +2575,7 @@
   },
   {
     "city": "Kansas City",
+    "country": "US",
     "elev_m": 332,
     "id": "TMCI",
     "lat": 39.499,
@@ -1761,6 +2586,7 @@
   },
   {
     "city": "Orlando",
+    "country": "US",
     "elev_m": 51,
     "id": "TMCO",
     "lat": 28.344,
@@ -1771,6 +2597,7 @@
   },
   {
     "city": "Chicago Midway",
+    "country": "US",
     "elev_m": 232,
     "id": "TMDW",
     "lat": 41.651,
@@ -1781,6 +2608,7 @@
   },
   {
     "city": "Memphis",
+    "country": "US",
     "elev_m": 147,
     "id": "TMEM",
     "lat": 34.896,
@@ -1791,6 +2619,7 @@
   },
   {
     "city": "Miami",
+    "country": "US",
     "elev_m": 38,
     "id": "TMIA",
     "lat": 25.758,
@@ -1801,6 +2630,7 @@
   },
   {
     "city": "Milwaukee",
+    "country": "US",
     "elev_m": 284,
     "id": "TMKE",
     "lat": 42.819,
@@ -1811,6 +2641,7 @@
   },
   {
     "city": "Minneapolis",
+    "country": "US",
     "elev_m": 341,
     "id": "TMSP",
     "lat": 44.871,
@@ -1821,6 +2652,7 @@
   },
   {
     "city": "New Orleans",
+    "country": "US",
     "elev_m": 30,
     "id": "TMSY",
     "lat": 30.022,
@@ -1831,6 +2663,7 @@
   },
   {
     "city": "Oklahoma City",
+    "country": "US",
     "elev_m": 398,
     "id": "TOKC",
     "lat": 35.276,
@@ -1841,6 +2674,7 @@
   },
   {
     "city": "Chicago O'Hare",
+    "country": "US",
     "elev_m": 226,
     "id": "TORD",
     "lat": 41.797,
@@ -1851,6 +2685,7 @@
   },
   {
     "city": "West Palm Beach",
+    "country": "US",
     "elev_m": 40,
     "id": "TPBI",
     "lat": 26.688,
@@ -1861,6 +2696,7 @@
   },
   {
     "city": "Philadelphia",
+    "country": "US",
     "elev_m": 46,
     "id": "TPHL",
     "lat": 39.949,
@@ -1871,6 +2707,7 @@
   },
   {
     "city": "Phoenix",
+    "country": "US",
     "elev_m": 331,
     "id": "TPHX",
     "lat": 33.42,
@@ -1881,6 +2718,7 @@
   },
   {
     "city": "Pittsburgh",
+    "country": "US",
     "elev_m": 422,
     "id": "TPIT",
     "lat": 40.501,
@@ -1891,6 +2729,7 @@
   },
   {
     "city": "Raleigh-Durham",
+    "country": "US",
     "elev_m": 156,
     "id": "TRDU",
     "lat": 36.002,
@@ -1901,6 +2740,7 @@
   },
   {
     "city": "Louisville",
+    "country": "US",
     "elev_m": 222,
     "id": "TSDF",
     "lat": 38.046,
@@ -1911,6 +2751,7 @@
   },
   {
     "city": "San Juan",
+    "country": "US",
     "elev_m": 47,
     "id": "TSJU",
     "lat": 18.474,
@@ -1921,6 +2762,7 @@
   },
   {
     "city": "Salt Lake City",
+    "country": "US",
     "elev_m": 1309,
     "id": "TSLC",
     "lat": 40.967,
@@ -1931,6 +2773,7 @@
   },
   {
     "city": "St. Louis",
+    "country": "US",
     "elev_m": 197,
     "id": "TSTL",
     "lat": 38.805,
@@ -1941,6 +2784,7 @@
   },
   {
     "city": "Tampa",
+    "country": "US",
     "elev_m": 28,
     "id": "TTPA",
     "lat": 27.86,
@@ -1951,6 +2795,7 @@
   },
   {
     "city": "Tulsa",
+    "country": "US",
     "elev_m": 250,
     "id": "TTUL",
     "lat": 36.071,

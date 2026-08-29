@@ -29,7 +29,9 @@ const WEIGHT: Record<string, number> = {
 };
 
 // TDWR sites are terminal radars with a short range and no RIDGE loop; they never lead the page.
-const NEXRAD = sites.filter((s) => s.network !== "tdwr");
+// The international rows are out for a different reason: the ranking below is driven entirely by
+// api.weather.gov, so pairing a German radar with a US warning count would be a lie.
+const NEXRAD = sites.filter((s) => s.network === "nexrad");
 type Site = (typeof NEXRAD)[number];
 
 const fallback = () => NEXRAD.find((s) => s.id === "KTLX") ?? NEXRAD[0];
