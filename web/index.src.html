@@ -41,6 +41,12 @@
     <!-- Which radar to open on comes from the edge, and nothing about it depends on the app being
          loaded. Fired here, before the module graph is even parsed, it is almost always already
          resolved by the time Rust asks — the app's opening site costs no round trip at all. -->
+    <!-- The default font faces, hashed by scripts/web/build.sh. They are not compiled into the
+         wasm — a fifth of the bundle for fallback glyphs — so the app fetches them right after
+         boot and hot-adds them; see crates/hookecho/src/fonts.rs. -->
+    <script>
+      globalThis.__fontUrls = __FONT_URLS__;
+    </script>
     <script>
       globalThis.__geo = fetch("/geo.json").then((r) => r.text()).catch(() => null);
     </script>

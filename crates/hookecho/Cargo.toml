@@ -42,19 +42,24 @@ puffin_http = { version = "0.17", optional = true }
 # one opaque canvas, because that is all an egui window is at the OS level.
 # `accesskit` is native-only below: eframe 0.35's web runner drops the update on the floor
 # ("not currently implemented", eframe/src/web/app_runner.rs), so on wasm it is pure bundle weight.
-eframe = { version = "0.35", default-features = false, features = ["default_fonts", "wgpu_no_default_features"] }
+# `default_fonts` is native-only below for the same reason as `accesskit`: those four faces are
+# ~776 KB gzipped, a fifth of the whole web bundle, for glyphs that only ever appear as a fallback
+# behind Inter. The web build fetches them after boot instead — see `src/fonts.rs`.
+eframe = { version = "0.35", default-features = false, features = ["wgpu_no_default_features"] }
 # `serde` gives Key/Modifiers/KeyboardShortcut their Serialize/Deserialize impls, which is what
-# lets user keybinds live in settings.json.
-egui = { version = "0.35", features = ["serde"] }
+# lets user keybinds live in settings.json. egui's only default feature is `default_fonts`, which
+# is added back native-only below — every other egui in the tree already asks for it without
+# defaults, so this line was the one holding those four faces in the web bundle.
+egui = { version = "0.35", default-features = false, features = ["serde"] }
 egui_extras = "0.35"
 wgpu = { version = "29", default-features = false, features = ["wgsl", "std"] }
 bytemuck.workspace = true
 anyhow.workspace = true
 log.workspace = true
 env_logger = "0.11"
-# `ico` is added native-only below — it is only ever encoded by `--headless-icon` in main.rs.
-# `gif` stays on every target: the loop exporter is compiled (if never usefully run) on the web.
-image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif"] }
+# `ico` is added native-only below, and so is `gif`: both are encoder-only formats here — the loop
+# exporter cannot write a file from a browser tab, so its codec was pure weight on the web.
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 chrono.workspace = true
 # Deep links arrive percent-encoded from browsers and chat clients; reqwest already builds this.
 percent-encoding = "2.3"
@@ -88,7 +93,8 @@ egui_extras = { version = "0.35", features = ["datepicker"] }
 jiff = { version = "0.2", default-features = false, features = ["std"] }
 egui-wgpu = { version = "0.35", default-features = false, features = ["winit"] }
 tokio.workspace = true
-eframe = { version = "0.35", default-features = false, features = ["accesskit"] }
+eframe = { version = "0.35", default-features = false, features = ["accesskit", "default_fonts"] }
+egui = { version = "0.35", default-features = false, features = ["default_fonts"] }
 # Audio is native-only in the source already (`audio.rs` and `nwr.rs` are behind
 # `cfg(not(wasm32))`), but the deps were not — rodio and symphonia's mp3/vorbis/flac decoders were
 # compiling into the browser bundle for nothing.
@@ -96,8 +102,9 @@ rodio = { version = "0.19", default-features = false, features = ["wav", "mp3", 
 # Already compiled as rodio's mp3 backend; named directly so the weather-radio player can decode a
 # live stream, which rodio's own `Decoder` can't (it needs `Seek`).
 symphonia = { version = "0.5", default-features = false, features = ["mp3"] }
-# `--headless-icon` (main.rs) is the only ico writer, and there is no bin on the web.
-image = { version = "0.25", default-features = false, features = ["ico"] }
+# `--headless-icon` (main.rs) is the only ico writer, and there is no bin on the web; the loop
+# exporter is the only gif writer, and it needs a filesystem.
+image = { version = "0.25", default-features = false, features = ["ico", "gif"] }
 
 # The web build. wgpu's backends are feature-unioned per platform below, and wasm has to name its
 # own: without these the browser build compiles and then finds zero adapters at runtime. WebGPU

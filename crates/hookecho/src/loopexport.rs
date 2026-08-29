@@ -2,8 +2,14 @@
 //! path (GUI-only), collects them here, and encodes a looping GIF. The encoder is the testable
 //! part; the capture state machine lives in [`crate::app`].
 
+// The GIF encoder is native-only, and so is the codec behind it: an export needs a file to write,
+// `paths::data_dir()` is `None` in a browser, and so the web build's export path already returned
+// before it ever reached here. Compiling the codec in anyway was pure bundle weight.
+#[cfg(not(target_arch = "wasm32"))]
 use image::codecs::gif::{GifEncoder, Repeat};
-use image::{Delay, Frame, RgbaImage};
+#[cfg(not(target_arch = "wasm32"))]
+use image::{Delay, Frame};
+use image::RgbaImage;
 use std::path::Path;
 
 /// Output container for a loop export.
@@ -55,6 +61,7 @@ pub fn encode_mp4(frames: &[RgbaImage], fps: u32, path: &Path) -> anyhow::Result
 }
 
 /// Encode `frames` into a looping GIF at `path`, each shown for `delay_ms` milliseconds.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn encode_gif(frames: &[RgbaImage], delay_ms: u16, path: &Path) -> anyhow::Result<()> {
     if frames.is_empty() {
         anyhow::bail!("no frames captured");

@@ -61,17 +61,35 @@ cp "$glue" "web/dist/hookecho-$glue_hash.js"
 # Put the glue back the way git has it; the hashed copy is the one that ships.
 sed -i "s/hookecho_bg-$wasm_hash\.wasm/hookecho_bg.wasm/g" "$glue"
 
+# The four default font faces, which the web build fetches instead of compiling in (see
+# crates/hookecho/src/fonts.rs and web/fonts/README.md). Hashed into /dist/ like everything else,
+# so the year-long immutable `_headers` rule covers them and a face is downloaded once, ever.
+rm -f web/dist/font-*.ttf
+font_urls=""
+for face in Hack-Regular NotoEmoji-Regular Ubuntu-Light emoji-icon-font; do
+  src="web/fonts/$face.ttf"
+  [ -f "$src" ] || { echo "build.sh: missing $src" >&2; exit 1; }
+  h="$(hash_of "$src")"
+  cp "$src" "web/dist/font-$face-$h.ttf"
+  font_urls="$font_urls\"$face\":\"/dist/font-$face-$h.ttf\","
+done
+# Trailing comma trimmed: this is pasted into the page as a JS object literal.
+font_urls="{${font_urls%,}}"
+
 # web/index.html is generated (gitignored); web/index.src.html is the committed source. Generating
 # it rather than sed-ing in place keeps `git status` clean across builds.
 sed \
   -e "s#dist/hookecho\.js#dist/hookecho-$glue_hash.js#g" \
   -e "s#dist/hookecho_bg\.wasm#dist/hookecho_bg-$wasm_hash.wasm#g" \
+  -e "s#__FONT_URLS__#$font_urls#" \
   web/index.src.html > web/index.html
 
 # web/sw.js is generated the same way, from web/sw.src.js: the shell list has to name the hashed
 # assets of *this* build, and the body doubles as the worker's version — a byte-identical script is
 # a worker the browser never bothers to install.
-shell_json="[\"/\",\"/dist/hookecho-$glue_hash.js\",\"/dist/hookecho_bg-$wasm_hash.wasm\",\"/decode-worker.js\",\"/manifest.webmanifest\",\"/icon-192.png\",\"/icon-512.png\"]"
+font_shell=""
+for f in web/dist/font-*.ttf; do font_shell="$font_shell,\"/${f#web/}\""; done
+shell_json="[\"/\",\"/dist/hookecho-$glue_hash.js\",\"/dist/hookecho_bg-$wasm_hash.wasm\",\"/decode-worker.js\",\"/manifest.webmanifest\",\"/icon-192.png\",\"/icon-512.png\"$font_shell]"
 sed \
   -e "s#__SHELL__#$shell_json#" \
   -e "s#__VERSION__#\"$glue_hash-$wasm_hash\"#" \
@@ -88,10 +106,12 @@ done
 gz_bytes="$(gzip -9 -c "web/dist/hookecho_bg-$wasm_hash.wasm" | wc -c)"
 # ponytail: a regression gate, not an aspiration. It is set just above what the current build
 # produces, so a careless new dependency trips it; getting the number meaningfully lower means
-# cutting fonts (~1.9 MB of TTF) or a wgpu backend, and neither is free. Raise it deliberately.
+# cutting a wgpu backend, which is not free. The fonts already went (they are fetched at runtime
+# now — see crates/hookecho/src/fonts.rs), which is what this number dropped by. Raise it
+# deliberately.
 # The number tracks CI's build, which runs ~15 KB above a local one, so a local build has that
 # much slack; CI is the gate that matters.
-budget="${HOOKECHO_WASM_BUDGET:-4930000}"
+budget="${HOOKECHO_WASM_BUDGET:-4125000}"
 printf 'wasm: %s raw, %s gzipped (budget %s)\n' \
   "$(stat -c%s "web/dist/hookecho_bg-$wasm_hash.wasm")" "$gz_bytes" "$budget"
 if [ "$gz_bytes" -gt "$budget" ]; then

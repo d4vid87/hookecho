@@ -11,7 +11,9 @@ nexrad-level3 = { path = "../nexrad-level3" }
 hdf5lite = { path = "../hdf5lite" }
 # Vendored via [patch.crates-io] in the workspace Cargo.toml — see the note there. Its HTTP
 # client is patched to use webpki-roots TLS so AWS S3 fetches work on Android.
-nexrad-data = { version = "1.0.0-rc.7", features = ["parallel"] }
+# `parallel` is target-gated below, not set here: cargo resolves features per target, and asking
+# for it unconditionally linked rayon-core into a wasm bundle that has no threads to give it.
+nexrad-data = { version = "1.0.0-rc.7" }
 nexrad-model = "1.0.0-rc.2"
 anyhow.workspace = true
 thiserror.workspace = true
@@ -31,6 +33,7 @@ chrono-tz = "0.10"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 tokio.workspace = true
+nexrad-data = { version = "1.0.0-rc.7", features = ["parallel"] }
 # Already in the lockfile via nexrad-data's `parallel` feature — no new weight. Used on the
 # verified hot loops only (MRMS decode/decimate, HRRR regrid, L2 sweep binning). Not on wasm:
 # there are no threads there.
