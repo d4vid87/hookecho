@@ -48,6 +48,8 @@ export const ALLOWED_HOSTS = [
   "www.spotternetwork.org",
   "api.open-meteo.com",
   "gibs.earthdata.nasa.gov",
+  // European radar.
+  "opendata.dwd.de",
   // Basemap and imagery tiles.
   "api.mapbox.com",
   "api.maptiler.com",
@@ -74,6 +76,9 @@ export const MAX_BYTES = 64 * 1024 * 1024;
 export const LIVE_HOSTS = new Set([
   "unidata-nexrad-level2-chunks.s3.amazonaws.com",
   "api.weather.gov",
+  // DWD republishes every `-LATEST-` sweep on a five-minute cycle at a URL that never changes,
+  // so the default five-minute TTL can hand out the previous volume for the whole of the next one.
+  "opendata.dwd.de",
 ]);
 
 // Archived Level 2 volumes: the same four volumes are what every visitor on a given radar loads,

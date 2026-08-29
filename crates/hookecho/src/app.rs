@@ -8629,11 +8629,7 @@ impl HookEchoApp {
             let dwd = wxdata::dwd::is_dwd(&site);
             self.spawner.spawn(async move {
                 let fetched = match dwd {
-                    #[cfg(not(target_arch = "wasm32"))]
                     true => wxdata::dwd::fetch_volume(&http, &site).await,
-                    // `dwd::SITES` is empty on wasm, so no view can be holding a German site.
-                    #[cfg(target_arch = "wasm32")]
-                    true => unreachable!("the web build offers no DWD sites"),
                     false => wxdata::tdwr::fetch_volume(&http, &site).await,
                 };
                 let msg = match fetched {

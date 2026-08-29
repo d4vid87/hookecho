@@ -792,6 +792,8 @@ const ALLOWED_HOSTS: &[&str] = &[
     "www.spotternetwork.org",
     "api.open-meteo.com",
     "gibs.earthdata.nasa.gov",
+    // European radar.
+    "opendata.dwd.de",
     // Basemap and imagery tiles.
     "api.mapbox.com",
     "api.maptiler.com",

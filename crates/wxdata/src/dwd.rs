@@ -12,27 +12,23 @@
 //! Each has a `-LATEST-` symlink beside it, which is what makes this feed cheap to poll: no
 //! directory index, ten predictable URLs, fetched together.
 //!
-//! Not offered on the web build. A volume is ten unfiltered files of ~440 KB, and every browser
-//! fetch would have to run through the shared `/proxy/` edge cache — 4.4 MB per site per five
-//! minutes of someone else's bandwidth. Native and Android fetch `opendata.dwd.de` directly, so
-//! they carry it; [`SITES`] is empty on wasm and nothing offers a German radar there.
+//! Every build offers it. `opendata.dwd.de` sends no `Access-Control-Allow-Origin`, so the browser
+//! reaches it through the same `/proxy/` route as every other feed (`crate::net::fetch_url`),
+//! which puts a volume — ten unfiltered files of ~440 KB — on the shared edge cache. That is real
+//! bandwidth, and it is the price of a radar app that draws Germany in a browser.
 //!
 //! Reflectivity only. Velocity is published (`sweep_vol_v/`) but has no `-LATEST-` symlink, so
 //! reaching it means downloading a 1 MB HTML directory index per poll to learn one filename.
 //! ponytail: reflectivity-only until someone asks for velocity; the upgrade is one index fetch
 //! per volume, whose newest-per-elevation names also unlock ZDR/RHOHV/PHIDP.
 
-#[cfg(not(target_arch = "wasm32"))]
 use chrono::{DateTime, Utc};
-#[cfg(not(target_arch = "wasm32"))]
 use nexrad_model::data::{Scan, Sweep};
 use nexrad_model::meta::registry::SiteEntry;
 
-#[cfg(not(target_arch = "wasm32"))]
 const BASE: &str = "https://opendata.dwd.de/weather/radar/sites/sweep_vol_z";
 
 /// Elevations in a `vol5minng01` scan. They are numbered by publication slot, not by angle.
-#[cfg(not(target_arch = "wasm32"))]
 const TILTS: u8 = 10;
 
 const fn site(
@@ -54,17 +50,12 @@ const fn site(
 }
 
 /// Every DWD radar the build offers, as registry entries so they interchange with WSR-88Ds
-/// everywhere the app looks a site up — empty on wasm, where the feed is too heavy to proxy. `state` carries the German Land, which is what the site list shows.
+/// everywhere the app looks a site up. `state` carries the German Land, which is what the site
+/// list shows.
 ///
 /// Coordinates and heights are the ones each radar reports in its own ODIM `/where` group, read
 /// out of a live file per site rather than transcribed from a table.
-pub const SITES: &[SiteEntry] = if cfg!(target_arch = "wasm32") {
-    &[]
-} else {
-    ALL_SITES
-};
-
-const ALL_SITES: &[SiteEntry] = &[
+pub const SITES: &[SiteEntry] = &[
     site("DEAS", "Borkum", "NI", 53.5641, 6.7483, 36),
     site("DEBO", "Boostedt", "SH", 54.0044, 10.0469, 124),
     site("DEDR", "Dresden", "SN", 51.1246, 13.7686, 263),
@@ -86,7 +77,6 @@ const ALL_SITES: &[SiteEntry] = &[
 
 /// The URL path slug and WMO number each site's files are named with. Neither is derivable from
 /// the four-letter id (`DEAS` lives under `asb`), so both are carried explicitly.
-#[cfg(not(target_arch = "wasm32"))]
 const PATHS: [(&str, &str, u16); 17] = [
     ("DEAS", "asb", 10103),
     ("DEBO", "boo", 10132),
@@ -117,7 +107,6 @@ pub fn is_dwd(id: &str) -> bool {
     site_by_id(id).is_some()
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 fn path_for(id: &str) -> Option<(&'static str, u16)> {
     PATHS
         .iter()
@@ -129,7 +118,6 @@ fn path_for(id: &str) -> Option<(&'static str, u16)> {
 ///
 /// `th` is total (unfiltered) horizontal reflectivity. The clutter-filtered `dbzh` product has no
 /// `-LATEST-` symlink, so unfiltered is the only version reachable without a directory index.
-#[cfg(not(target_arch = "wasm32"))]
 fn sweep_url(slug: &str, wmo: u16, tilt: u8) -> String {
     format!(
         "{BASE}/{slug}/unfiltered/ras07-vol5minng01_sweeph5onem_th_{tilt:02}-LATEST-{slug}-{wmo}-hd5"
@@ -140,7 +128,6 @@ fn sweep_url(slug: &str, wmo: u16, tilt: u8) -> String {
 ///
 /// DWD's slot numbering is not elevation order, and everything downstream — the tilt selector,
 /// cross sections, the derived grids — assumes sweep 1 is the base tilt.
-#[cfg(not(target_arch = "wasm32"))]
 fn assemble(mut parts: Vec<(f32, Sweep)>) -> Vec<Sweep> {
     parts.sort_by(|a, b| a.0.total_cmp(&b.0));
     parts
@@ -156,7 +143,6 @@ fn assemble(mut parts: Vec<(f32, Sweep)>) -> Vec<Sweep> {
 ///
 /// Returns the scan plus a volume name and time. The URLs never change, so the name is built from
 /// the volume's own start time — that is what the app's "has this volume changed?" check compares.
-#[cfg(not(target_arch = "wasm32"))]
 pub async fn fetch_volume(
     http: &reqwest::Client,
     id: &str,
@@ -250,8 +236,8 @@ mod tests {
 
     #[test]
     fn every_site_has_a_path_and_the_two_tables_agree() {
-        assert_eq!(ALL_SITES.len(), PATHS.len());
-        for s in ALL_SITES {
+        assert_eq!(SITES.len(), PATHS.len());
+        for s in SITES {
             let (slug, wmo) = path_for(s.id).unwrap_or_else(|| panic!("{} has no path", s.id));
             assert_eq!(slug.len(), 3, "{} slug", s.id);
             assert!(slug.chars().all(|c| c.is_ascii_lowercase()), "{} slug", s.id);
