@@ -89,6 +89,15 @@ pub enum BasemapStyle {
     /// GOES-East Fire Temperature RGB (hot spots / wildfire).
     GoesEastFire,
     GoesWestFire,
+    /// Himawari-9 Band 13 clean longwave infrared (the western Pacific and Australia).
+    HimawariIR,
+    /// Himawari-9 Air Mass RGB.
+    HimawariAirMass,
+    /// Himawari-9 Band 3 red visible, 1 km.
+    HimawariVisible,
+    /// GPM IMERG half-hourly precipitation rate: global, including the oceans and everywhere
+    /// without a radar.
+    ImergRate,
     /// DWD's German radar composite: the RV product, which is the analysis followed by a
     /// two-hour nowcast, in 5-minute steps.
     DwdRadarRV,
@@ -154,7 +163,7 @@ pub enum BasemapStyle {
 
 impl BasemapStyle {
     /// Cycle order for the `z` hotkey; provider styles trail the built-ins.
-    pub const ALL: [BasemapStyle; 55] = [
+    pub const ALL: [BasemapStyle; 59] = [
         BasemapStyle::Dark,
         BasemapStyle::Light,
         BasemapStyle::Satellite,
@@ -192,6 +201,10 @@ impl BasemapStyle {
         BasemapStyle::GoesWestDust,
         BasemapStyle::GoesEastFire,
         BasemapStyle::GoesWestFire,
+        BasemapStyle::HimawariIR,
+        BasemapStyle::HimawariAirMass,
+        BasemapStyle::HimawariVisible,
+        BasemapStyle::ImergRate,
         BasemapStyle::DwdRadarRV,
         BasemapStyle::DwdRadarWN,
         BasemapStyle::EcccRadarRain,
@@ -265,6 +278,10 @@ impl BasemapStyle {
             BasemapStyle::GoesWestDust => "GOES-West (dust)",
             BasemapStyle::GoesEastFire => "GOES-East (fire temp)",
             BasemapStyle::GoesWestFire => "GOES-West (fire temp)",
+            BasemapStyle::HimawariIR => "Himawari (infrared)",
+            BasemapStyle::HimawariAirMass => "Himawari (air mass)",
+            BasemapStyle::HimawariVisible => "Himawari (visible)",
+            BasemapStyle::ImergRate => "IMERG precipitation rate",
             BasemapStyle::DwdRadarRV => "DWD radar (RV nowcast)",
             BasemapStyle::DwdRadarWN => "DWD radar (analysis)",
             BasemapStyle::EcccRadarRain => "ECCC radar (rain)",
@@ -326,6 +343,10 @@ impl BasemapStyle {
             BasemapStyle::GoesWestDust => "goes-west-dust",
             BasemapStyle::GoesEastFire => "goes-east-fire",
             BasemapStyle::GoesWestFire => "goes-west-fire",
+            BasemapStyle::HimawariIR => "himawari-ir",
+            BasemapStyle::HimawariAirMass => "himawari-air-mass",
+            BasemapStyle::HimawariVisible => "himawari-visible",
+            BasemapStyle::ImergRate => "imerg-rate",
             BasemapStyle::DwdRadarRV => "dwd-radar-rv",
             BasemapStyle::DwdRadarWN => "dwd-radar-wn",
             BasemapStyle::EcccRadarRain => "eccc-radar-rain",
@@ -432,14 +453,23 @@ impl BasemapStyle {
                 BasemapStyle::EcccRadarRain | BasemapStyle::EcccRadarSnow => {
                     "Radar data © Environment and Climate Change Canada (Open Government Licence – Canada)"
                 }
+                BasemapStyle::HimawariIR
+                | BasemapStyle::HimawariAirMass
+                | BasemapStyle::HimawariVisible => "NASA GIBS · JMA Himawari",
+                BasemapStyle::ImergRate => "NASA GIBS · NASA/JAXA GPM IMERG",
                 _ if self.goes_layer().is_some() => "NASA GIBS · NOAA GOES",
                 _ => "© OpenMapTiles © OpenStreetMap",
             },
         }
     }
 
-    /// For a GOES style, its GIBS layer id + tile-matrix level (each layer serves a fixed max
-    /// zoom). `None` for non-GOES styles.
+    /// For a GIBS-backed style, its layer id + tile-matrix level (each layer serves a fixed max
+    /// zoom). `None` for everything else.
+    ///
+    /// Named for GOES because that is all it held at first; it now carries Himawari and IMERG too,
+    /// which reach GIBS through the same WMTS URL and the same DescribeDomains call and so need no
+    /// code of their own. Every id and level below is read off the live
+    /// `epsg3857/best/1.0.0/WMTSCapabilities.xml`, not guessed — a wrong level 404s at depth.
     pub(crate) fn goes_layer(self) -> Option<(&'static str, u8)> {
         match self {
             BasemapStyle::GoesEast => Some(("GOES-East_ABI_GeoColor", 7)),
@@ -452,6 +482,10 @@ impl BasemapStyle {
             BasemapStyle::GoesWestDust => Some(("GOES-West_ABI_Dust", 7)),
             BasemapStyle::GoesEastFire => Some(("GOES-East_ABI_FireTemp", 7)),
             BasemapStyle::GoesWestFire => Some(("GOES-West_ABI_FireTemp", 7)),
+            BasemapStyle::HimawariIR => Some(("Himawari_AHI_Band13_Clean_Infrared", 6)),
+            BasemapStyle::HimawariAirMass => Some(("Himawari_AHI_Air_Mass", 6)),
+            BasemapStyle::HimawariVisible => Some(("Himawari_AHI_Band3_Red_Visible_1km", 7)),
+            BasemapStyle::ImergRate => Some(("IMERG_Precipitation_Rate_30min", 6)),
             _ => None,
         }
     }
@@ -590,6 +624,11 @@ impl BasemapStyle {
 
     /// Which group this style belongs to in the picker.
     pub fn category(self) -> Category {
+        // Satellite-derived, but what it shows is precipitation, so it belongs next to the radar
+        // composites in the picker rather than next to the imagery.
+        if self == BasemapStyle::ImergRate {
+            return Category::Weather;
+        }
         if self.goes_layer().is_some() {
             return Category::Satellite;
         }
@@ -934,7 +973,7 @@ pub fn parse_goes_domain(xml: &str, limit: usize) -> Vec<chrono::DateTime<chrono
             [s] => (*s, *s, "PT10M"), // a lone instant
             _ => continue,
         };
-        let (Ok(s), Ok(e)) = (s.parse::<DateTime<Utc>>(), e.parse::<DateTime<Utc>>()) else {
+        let (Some(s), Some(e)) = (parse_domain_instant(s), parse_domain_instant(e)) else {
             continue;
         };
         let step_min = parse_iso_minutes(period).unwrap_or(10).max(1);
@@ -950,6 +989,18 @@ pub fn parse_goes_domain(xml: &str, limit: usize) -> Vec<chrono::DateTime<chrono
         out.drain(0..out.len() - limit);
     }
     out
+}
+
+/// One bound of a domain range. GIBS writes most of them as full instants, but a layer whose
+/// range opens at midnight is written as a bare date — IMERG's reads `2026-08-29/...T11:30:00Z` —
+/// and parsing that as an instant fails, which silently dropped the whole range and left the layer
+/// with no frames at all.
+fn parse_domain_instant(s: &str) -> Option<chrono::DateTime<chrono::Utc>> {
+    use chrono::{DateTime, NaiveDate, Utc};
+    if let Ok(t) = s.parse::<DateTime<Utc>>() {
+        return Some(t);
+    }
+    Some(s.parse::<NaiveDate>().ok()?.and_hms_opt(0, 0, 0)?.and_utc())
 }
 
 /// Minutes in an ISO8601 duration like `PT10M` or `PT1H` (only the forms GIBS uses).
@@ -1983,6 +2034,65 @@ mod tests {
         assert_eq!(times[0].format("%H:%M").to_string(), "22:00");
     }
 
+    /// IMERG's range opens on a bare date rather than an instant, and a parse that only accepts
+    /// instants drops the whole range — leaving the layer with an empty frame bar instead of a
+    /// visible error.
+    #[test]
+    fn a_domain_range_may_open_on_a_bare_date() {
+        let xml = "<Domain>2026-08-29/2026-08-29T01:00:00Z/PT30M</Domain>";
+        let times = parse_goes_domain(xml, 100);
+        assert_eq!(times.len(), 3, "00:00, 00:30, 01:00");
+        assert_eq!(
+            times[0].format("%Y-%m-%dT%H:%M").to_string(),
+            "2026-08-29T00:00"
+        );
+    }
+
+    /// The non-GOES GIBS layers ride the GOES bridge unchanged, so what has to hold is that each
+    /// resolves to a real layer id and credits the agency that flies the satellite.
+    #[test]
+    fn the_gibs_table_reaches_past_goes() {
+        for (style, layer, level, credit) in [
+            (
+                BasemapStyle::HimawariIR,
+                "Himawari_AHI_Band13_Clean_Infrared",
+                6,
+                "Himawari",
+            ),
+            (
+                BasemapStyle::HimawariVisible,
+                "Himawari_AHI_Band3_Red_Visible_1km",
+                7,
+                "Himawari",
+            ),
+            (
+                BasemapStyle::ImergRate,
+                "IMERG_Precipitation_Rate_30min",
+                6,
+                "IMERG",
+            ),
+        ] {
+            assert_eq!(style.goes_layer(), Some((layer, level)), "{style:?}");
+            assert!(style.timed(), "{style:?} has a time dimension");
+            let url = style
+                .url(4, 3, 6, false, "", "", "")
+                .expect("a GIBS style resolves");
+            assert!(url.contains(&format!("/{layer}/default/default/")), "{url}");
+            assert!(
+                url.contains(&format!("GoogleMapsCompatible_Level{level}/4/6/3")),
+                "{url}"
+            );
+            assert!(
+                style.attribution().contains(credit),
+                "{style:?}: {}",
+                style.attribution()
+            );
+        }
+        // Precipitation sits with the radar composites, not with the imagery.
+        assert_eq!(BasemapStyle::ImergRate.category(), Category::Weather);
+        assert_eq!(BasemapStyle::HimawariIR.category(), Category::Satellite);
+    }
+
     #[test]
     fn goes_domain_limit_keeps_most_recent() {
         let xml = "<Domain>2026-07-18T00:00:00Z/2026-07-18T01:00:00Z/PT10M</Domain>"; // 7 instants
@@ -2178,9 +2288,10 @@ mod tests {
         ] {
             assert_eq!(s.category(), Category::Other, "{s:?}");
         }
-        // Every GOES product lands under Satellite whatever else the match says.
+        // Every GIBS imagery product lands under Satellite whatever else the match says. IMERG is
+        // the one exception, and deliberately so: it is a precipitation field, not a picture.
         for s in BasemapStyle::ALL {
-            if s.goes_layer().is_some() {
+            if s.goes_layer().is_some() && s != BasemapStyle::ImergRate {
                 assert_eq!(s.category(), Category::Satellite, "{s:?}");
             }
         }
