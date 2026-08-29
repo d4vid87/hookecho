@@ -50,6 +50,8 @@ export const ALLOWED_HOSTS = [
   "gibs.earthdata.nasa.gov",
   // European radar.
   "opendata.dwd.de",
+  // DWD's WMS: the German radar composites (RV nowcast, WN analysis) as rendered tiles.
+  "maps.dwd.de",
   // EUMETNET OpenRadarData: the ODIM volumes the OPERA network publishes, plus the
   // bucket listing that names the newest one.
   "s3.waw3-1.cloudferro.com",
@@ -93,6 +95,10 @@ export const cacheSeconds = (host, search = "") => {
   // A bucket listing is how the app finds the newest volume — cache that like a live feed or the
   // loop stops advancing.
   if (search.includes("list-type=")) return 15;
+  // A WMS GetMap with no TIME is whatever the layer's default frame happens to be, which turns
+  // over every five minutes; one naming a frame is that frame forever. Not in LIVE_HOSTS, because
+  // that would put the whole loop — every tile of which names its frame — on a 15-second TTL.
+  if (host === "maps.dwd.de") return search.includes("TIME=") ? 300 : 15;
   // ponytail: an hour, not forever. The newest archive object is re-uploaded while the radar is
   // still writing it, so a long TTL can pin a truncated volume at the edge; an hour bounds how
   // long that can last. Drop it to 600 if it is ever seen to bite.

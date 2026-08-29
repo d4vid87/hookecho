@@ -5182,11 +5182,12 @@ impl HookEchoApp {
         });
     }
 
-    /// Sub-hourly GOES scrub bar: shown when the active basemap is a GOES layer and its frame
-    /// times are loaded. Steps through recent 10-min frames; "Latest" pins to the newest.
+    /// Sub-hourly frame scrub bar: shown when the active basemap has a time dimension (GOES
+    /// imagery, a WMS radar composite) and its frame times are loaded. Steps through the recent
+    /// frames; "Latest" pins to the newest.
     fn goes_time_bar(&mut self, ctx: &egui::Context) {
-        let active_is_goes = self.views[self.active].basemap.goes_layer().is_some();
-        if !active_is_goes || self.goes_times.is_empty() {
+        let active_is_timed = self.views[self.active].basemap.timed();
+        if !active_is_timed || self.goes_times.is_empty() {
             return;
         }
         // While following, the readout is whichever frame the radar clock picked.
@@ -15948,7 +15949,7 @@ impl eframe::App for HookEchoApp {
                 .set_retina(ctx.pixels_per_point() > 1.0 && !crate::platform::is_metered());
             // GOES sub-hourly scrub: fetch the available frame times when a GOES style becomes
             // active, and apply the selected frame (None = latest).
-            if raster_style.goes_layer().is_some() {
+            if raster_style.timed() {
                 // Which hour of imagery to ask for: the pane's own clock when it is replaying an
                 // archive, otherwise the live window ending now. GIBS keeps GeoColor about two
                 // weeks and Band 13 several months, so a replayed event usually has satellite.
@@ -15967,7 +15968,7 @@ impl eframe::App for HookEchoApp {
                     let http = self.http.clone();
                     self.spawner.spawn(async move {
                         let times =
-                            crate::tiles::fetch_goes_times(&http, raster_style, from, to, 48).await;
+                            crate::tiles::fetch_frame_times(&http, raster_style, from, to, 48).await;
                         let _ = tx.send(times);
                     });
                 }
