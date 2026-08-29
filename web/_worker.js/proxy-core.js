@@ -48,6 +48,8 @@ export const ALLOWED_HOSTS = [
   "www.spotternetwork.org",
   "api.open-meteo.com",
   "gibs.earthdata.nasa.gov",
+  // MeteoAlarm: the CAP warnings every European met service publishes in common.
+  "feeds.meteoalarm.org",
   // European radar.
   "opendata.dwd.de",
   // DWD's WMS: the German radar composites (RV nowcast, WN analysis) as rendered tiles.

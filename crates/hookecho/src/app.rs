@@ -258,8 +258,9 @@ enum OverlayMsg {
 #[derive(Clone)]
 enum OverlaySource {
     /// NWS alerts; the `(lat, lon)` list scopes zone-only alert resolution to the active radar and
-    /// every saved marker.
-    Alerts(Vec<(f64, f64)>),
+    /// every saved marker. The bounds are the active pane's viewport, which is what decides
+    /// whether European warnings are worth fetching alongside them.
+    Alerts(Vec<(f64, f64)>, (f64, f64, f64, f64)),
     Mds,
     /// Winter Storm Severity Index for a day (1-3).
     Wssi(u8),
@@ -370,8 +371,19 @@ enum OverlaySource {
 impl OverlaySource {
     async fn fetch(self, http: &reqwest::Client) -> anyhow::Result<OverlayMsg> {
         Ok(match self {
-            OverlaySource::Alerts(points) => {
-                OverlayMsg::Alerts(alerts::fetch_active(http, &points).await?)
+            OverlaySource::Alerts(points, bounds) => {
+                let mut feats = alerts::fetch_active(http, &points).await?;
+                // Europe's warnings come from a different publisher on a different continent, so
+                // they are only asked for when the view is actually over one of the countries
+                // that publishes them — otherwise this is a no-op with no request at all.
+                if !wxdata::meteoalarm::countries_in_view(bounds).is_empty() {
+                    match wxdata::meteoalarm::fetch_in_view(http, bounds).await {
+                        Ok(eu) => feats.extend(eu),
+                        // A European feed being down must not cost the US alerts already fetched.
+                        Err(e) => log::warn!("meteoalarm fetch failed ({e})"),
+                    }
+                }
+                OverlayMsg::Alerts(feats)
             }
             OverlaySource::Mds => {
                 OverlayMsg::Mds(wxdata::spc::fetch_mesoscale_discussions(http).await?)
@@ -3677,7 +3689,7 @@ impl HookEchoApp {
             .into_iter()
             .collect();
         points.extend(self.settings.markers.iter().map(|m| (m.lat, m.lon)));
-        self.spawn_overlay(ctx, OverlaySource::Alerts(points));
+        self.spawn_overlay(ctx, OverlaySource::Alerts(points, self.view_bounds()));
         self.spawn_overlay(ctx, OverlaySource::Mds);
         if (1..=3).contains(&self.filters.wssi_day) {
             self.spawn_overlay(ctx, OverlaySource::Wssi(self.filters.wssi_day));
