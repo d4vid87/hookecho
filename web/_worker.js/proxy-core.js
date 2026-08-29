@@ -145,6 +145,31 @@ export function contentType(upstream) {
   }
 }
 
+// The `etag`/`last-modified` an upstream sent, if any. Passing these through is what makes a
+// proxied response revalidatable at all — without them a browser can only refetch whole.
+export const validatorsOf = (upstream) => ({
+  etag: upstream.headers.get("etag"),
+  lastModified: upstream.headers.get("last-modified"),
+});
+
+// An ETag is compared weakly: a weak validator is still a correct answer to "is this the same
+// bytes I already hold", which is the only question a 304 answers.
+const weak = (tag) => tag.trim().replace(/^W\//, "");
+
+/// Whether this request already holds what the upstream just returned.
+///
+/// The client's conditional headers are read *here* and never forwarded — the upstream call
+/// stays a fresh header-free GET, so it keeps hitting the edge cache, and the 304 is ours.
+export function notModified(request, { etag, lastModified }) {
+  const inm = request.headers.get("if-none-match");
+  if (inm) return !!etag && inm.split(",").some((t) => weak(t) === weak(etag));
+  const ims = request.headers.get("if-modified-since");
+  if (!ims || !lastModified) return false;
+  const had = Date.parse(ims);
+  const has = Date.parse(lastModified);
+  return Number.isFinite(had) && Number.isFinite(has) && has <= had;
+}
+
 const refused = (why) =>
   new Response(JSON.stringify({ error: "host not proxyable", why }), {
     status: 403,
@@ -198,10 +223,20 @@ export async function handleProxy(request, { fetchInit = () => ({}), extraHeader
   const length = Number(upstream.headers.get("content-length") || 0);
   if (length > MAX_BYTES) return refused("response over cap");
 
-  return new Response(upstream.body ? capped(upstream.body) : null, {
-    headers: {
-      "content-type": contentType(upstream.headers.get("content-type") || ""),
-      ...extraHeaders(host, url.search),
-    },
-  });
+  const validators = validatorsOf(upstream);
+  const headers = {
+    "content-type": contentType(upstream.headers.get("content-type") || ""),
+    ...(validators.etag ? { etag: validators.etag } : {}),
+    ...(validators.lastModified ? { "last-modified": validators.lastModified } : {}),
+    ...extraHeaders(host, url.search),
+  };
+
+  // Answered at the edge: the upstream fetch above was served from `cf.cacheTtl` in the common
+  // case, so this costs no origin call and no bytes on the wire back.
+  if (notModified(request, validators)) {
+    upstream.body?.cancel();
+    return new Response(null, { status: 304, headers });
+  }
+
+  return new Response(upstream.body ? capped(upstream.body) : null, { headers });
 }

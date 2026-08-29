@@ -23,6 +23,11 @@ export default {
     if (!url.pathname.startsWith("/proxy/")) return env.ASSETS.fetch(request);
     return handleProxy(request, {
       fetchInit: (host, search) => ({ cf: { cacheTtl: cacheSeconds(host, search), cacheEverything: true } }),
+      // The browser gets the same TTL the edge is holding the bytes for — one policy, stated
+      // once in `cacheSeconds`, so a proxied response can be reused without asking us again.
+      extraHeaders: (host, search) => ({
+        "cache-control": `public, max-age=${cacheSeconds(host, search)}`,
+      }),
     });
   },
 };

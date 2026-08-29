@@ -112,6 +112,11 @@ jobs:
         with:
           node-version: "20"
 
+      # Pure logic, no browser: the allowlist, the TTL table, and when a conditional request
+      # is allowed to become a 304.
+      - name: Test the proxy core
+        run: node --test web/_worker.js/proxy-core.test.mjs
+
       - name: Install puppeteer
         run: npm install --no-save puppeteer@23
 
