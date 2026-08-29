@@ -296,7 +296,12 @@ fn static_file(server: &Server, path: &str) -> (&'static str, &'static str, Vec<
         log::warn!("refused traversal attempt: {path}");
         return not_found();
     }
-    let file = root.join(rel);
+    // A directory has an index.html or it has nothing — `--web-root web` could not serve /lite/
+    // at all before this, because reading a directory is an error and that read as a 404.
+    let file = match rel.is_empty() || rel.ends_with('/') {
+        true => root.join(rel).join("index.html"),
+        false => root.join(rel),
+    };
     match std::fs::read(&file) {
         Ok(body) => ("200 OK", content_type(&file), body),
         Err(_) => not_found(),
@@ -1416,6 +1421,36 @@ mod tests {
     /// the values in `cacheSeconds` (web/_worker.js/proxy-core.js) written out — if that table
     /// moves, this fails and says so, instead of two deployments quietly disagreeing about how
     /// long a volume is good for.
+    /// `--web-root web` has to be able to serve `/lite/`, which is a directory. Reading one is an
+    /// error, and that error read as a 404 — the lite viewer was simply unreachable this way.
+    #[test]
+    fn a_directory_is_served_as_its_index() {
+        let dir = std::env::temp_dir().join(format!("hookecho-serve-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("lite")).unwrap();
+        std::fs::write(dir.join("lite/index.html"), b"<!doctype html>lite").unwrap();
+        let server = Server {
+            token: String::new(),
+            spots: Vec::new(),
+            web_root: Some(dir.clone()),
+            rt: tokio::runtime::Builder::new_current_thread()
+                .build()
+                .unwrap(),
+            http: reqwest::Client::new(),
+            cache: Mutex::new(lru::LruCache::new(
+                std::num::NonZeroUsize::new(ANSWER_CACHE).unwrap(),
+            )),
+            proxy_cache: Mutex::new(lru::LruCache::new(
+                std::num::NonZeroUsize::new(PROXY_CACHE_ENTRIES).unwrap(),
+            )),
+            render: Mutex::new(()),
+        };
+        let body = route(&server, "/lite/", "", None).body;
+        assert_eq!(String::from_utf8_lossy(&body), "<!doctype html>lite");
+        // Still no way out of the root, trailing slash or not.
+        assert_eq!(route(&server, "/../", "", None).status, "404 Not Found");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
     #[test]
     fn cache_ttls_match_the_edge_worker() {
         assert_eq!(cache_seconds(ARCHIVE_BUCKET, ""), 3600);
