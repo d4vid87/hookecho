@@ -8881,7 +8881,7 @@ impl HookEchoApp {
                     // While looping, the playhead frame owns the display; a genuinely new head is
                     // only appended, not shown. Every other case updates the displayed volume.
                     if !(looping && new_head) {
-                        v.volume = Some(Volume::new(scan, name, time));
+                        v.show_volume(scan, name, time);
                     }
                     v.loading = false;
                     v.error = None;
@@ -9243,6 +9243,7 @@ impl HookEchoApp {
             let v = &mut self.views[idx];
             v.loaded_site = v.site.clone();
             v.volume = None;
+            v.forget_recent();
             v.moments_seen = [false; Moment::ALL.len()];
             v.error = None;
             // Clear a stuck in-flight flag: if the previous site's fetch is still running when the
@@ -9428,7 +9429,7 @@ impl HookEchoApp {
                     if let Some(scan) = self.scan_cache.get(&name).map(Arc::clone) {
                         wxdata::stats::bump(wxdata::stats::Counter::ScanCacheHits);
                         let v = &mut self.views[idx];
-                        v.volume = Some(Volume::new(scan, name, time));
+                        v.show_volume(scan, name, time);
                         v.loading = false;
                         v.error = None;
                         v.clamp_tilt();

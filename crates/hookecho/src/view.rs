@@ -15,6 +15,24 @@ use wxdata::level2::{self, BinnedSweep, Moment, Scan};
 /// map's ~140 MB worst case (7 moments x ~15 tilts, all resident at once).
 const BINNED_CACHE: usize = 12;
 
+/// How many volumes a pane keeps after the playhead has moved off them.
+///
+/// `Volume::new` is called every time the playhead lands on a frame, and a fresh `Volume` starts
+/// with an empty [`BINNED_CACHE`] — so a ten-frame loop re-binned every sweep it showed, every
+/// lap, forever. Keeping the volumes themselves means each (moment, tilt) is binned once per
+/// volume instead of four times a second.
+///
+/// Sized to the loop window, because that is the working set: what a lap comes back to. The scan
+/// behind each one is an `Arc` shared with the app's decoded-volume cache, so what this actually
+/// holds is the binned sweeps that were looked at — about 1.3 MB per sweep per volume.
+const RECENT_VOLUMES: usize = if cfg!(target_os = "android") {
+    8
+} else if cfg!(target_arch = "wasm32") {
+    6
+} else {
+    12
+};
+
 /// A decoded volume plus lazily-binned sweeps for the moments/tilts the user has viewed.
 pub struct Volume {
     /// Shared with the app's decoded-volume LRU: the cache and every pane showing this volume
@@ -30,6 +48,10 @@ pub struct Volume {
     /// Which moments *this* volume carries (the pane keeps the wider union for its UI rows).
     pub moments: [bool; Moment::ALL.len()],
     binned: LruCache<(Moment, usize, bool), BinnedSweep>,
+    /// Set once a live chunk has been merged in. Such a volume is still being written — half its
+    /// tilts may not have arrived — so it must never be kept and shown again later in place of
+    /// the complete archived volume of the same name.
+    live: bool,
 }
 
 impl Volume {
@@ -45,6 +67,7 @@ impl Volume {
             elevations,
             moments,
             binned: LruCache::new(NonZeroUsize::new(BINNED_CACHE).unwrap()),
+            live: false,
         }
     }
 
@@ -88,6 +111,7 @@ impl Volume {
         self.vcp = self.scan.coverage_pattern_number().to_string();
         self.name = name;
         self.time = time;
+        self.live = true;
     }
 
     /// Bin (and cache) the sweep for `moment` at tilt index `tilt`.
@@ -129,6 +153,9 @@ pub struct MapView {
     pub thresholds: [Option<f32>; Moment::ALL.len()],
     pub threshold_enabled: [bool; Moment::ALL.len()],
     pub volume: Option<Volume>,
+    /// Volumes the playhead has moved off, with their binned sweeps intact. See
+    /// [`RECENT_VOLUMES`]; use [`MapView::show_volume`] rather than touching this.
+    recent: LruCache<String, Volume>,
     /// The site the current volume/fetch belongs to; drives site-change detection.
     pub loaded_site: Option<String>,
     /// Set when the camera was aimed deliberately (Event Library, a bookmark, `HOOKECHO_GOTO`)
@@ -174,6 +201,7 @@ impl MapView {
             thresholds: [None; Moment::ALL.len()],
             threshold_enabled: [false; Moment::ALL.len()],
             volume: None,
+            recent: LruCache::new(NonZeroUsize::new(RECENT_VOLUMES).unwrap()),
             loaded_site: None,
             camera_placed: false,
             timeline: crate::timeline::Timeline::default(),
@@ -214,6 +242,32 @@ impl MapView {
     }
 
     /// Clamp the tilt index to the loaded volume's elevation list.
+    /// Show the volume named `name`, reusing the one this pane already binned if it has it.
+    ///
+    /// The playhead moving off a volume is not the same as being done with it — a loop comes back
+    /// round. The displaced volume goes into [`Self::recent`] with its binned sweeps, and coming
+    /// back to it is a hash lookup rather than a full az x gate rebin of every sweep on display.
+    ///
+    /// `scan` is only used when this pane has never binned that volume; it is an `Arc` from the
+    /// app's decoded-volume cache either way, so the two paths hold the same allocation.
+    pub fn show_volume(&mut self, scan: Arc<Scan>, name: String, time: DateTime<Utc>) {
+        let vol = self
+            .recent
+            .pop(&name)
+            .unwrap_or_else(|| Volume::new(scan, name, time));
+        if let Some(old) = self.volume.replace(vol) {
+            // Not a volume still being written, and not a stale copy of the one just shown.
+            if !old.live && old.name != self.volume.as_ref().expect("just set").name {
+                self.recent.put(old.name.clone(), old);
+            }
+        }
+    }
+
+    /// Forget every kept volume. The site changed, so none of them is of anywhere being looked at.
+    pub fn forget_recent(&mut self) {
+        self.recent.clear();
+    }
+
     pub fn clamp_tilt(&mut self) {
         if let Some(v) = &self.volume {
             if !v.elevations.is_empty() && self.tilt >= v.elevations.len() {
@@ -312,6 +366,92 @@ mod tests {
         );
         let site = nexrad_model::meta::Site::new(*b"KTLX", 35.33, -97.28, 380, 0);
         Arc::new(Scan::with_site(site, vcp, sweeps))
+    }
+
+    /// A lap of a loop must not re-bin what it binned last lap. This is the whole wave: before it,
+    /// `Volume::new` on every playhead move meant the binned cache started empty every frame.
+    #[test]
+    fn coming_back_to_a_volume_reuses_its_binned_sweeps() {
+        let now = chrono::Utc::now();
+        let mut view = MapView::new(
+            Some("KTLX".into()),
+            crate::render::mercator::Camera::at_lonlat(-97.28, 35.33, 7.0),
+        );
+        let binned = || {
+            wxdata::stats::snapshot()
+                .into_iter()
+                .find(|(l, _)| *l == "sweeps_binned")
+                .unwrap()
+                .1
+        };
+
+        view.show_volume(scan_at(&[0.5, 1.5]), "a".into(), now);
+        let before = binned();
+        view.volume.as_mut().unwrap().binned(Moment::Reflectivity, 0, false).unwrap();
+        assert_eq!(binned() - before, 1, "the first look has to do the work");
+
+        // The playhead moves on, then comes back round.
+        view.show_volume(scan_at(&[0.5, 1.5]), "b".into(), now);
+        view.volume.as_mut().unwrap().binned(Moment::Reflectivity, 0, false).unwrap();
+        let after_b = binned();
+        view.show_volume(scan_at(&[0.5, 1.5]), "a".into(), now);
+        assert_eq!(view.volume.as_ref().unwrap().name, "a");
+        view.volume.as_mut().unwrap().binned(Moment::Reflectivity, 0, false).unwrap();
+        assert_eq!(binned(), after_b, "the second lap re-binned a sweep it already had");
+
+        // A site change is a different piece of sky: nothing kept is worth keeping.
+        view.forget_recent();
+        view.show_volume(scan_at(&[0.5, 1.5]), "b".into(), now);
+        let before = binned();
+        view.volume.as_mut().unwrap().binned(Moment::Reflectivity, 0, false).unwrap();
+        assert_eq!(binned() - before, 1);
+
+        // A volume still being written must never be kept: half its tilts may not have arrived,
+        // and showing it again later in place of the complete archive volume loses them.
+        view.forget_recent();
+        view.show_volume(scan_at(&[0.5, 1.5]), "live".into(), now);
+        view.volume
+            .as_mut()
+            .unwrap()
+            .apply_live(scan_at(&[0.5]), "live".into(), now, &[]);
+        view.show_volume(scan_at(&[0.5, 1.5]), "next".into(), now);
+        view.show_volume(scan_at(&[0.5, 1.5]), "live".into(), now);
+        assert_eq!(
+            view.volume.as_ref().unwrap().elevations,
+            vec![0.5, 1.5],
+            "the half-written live volume was kept and shown again"
+        );
+
+        // The size of it, both paths measured against each other: ten frames, three laps. The old
+        // path called `Volume::new` on every playhead move, so every frame of every lap re-ran
+        // `bin_scan_opts`. One test, not two: the counter is process-wide and the test threads
+        // share it, so a sibling reading it in parallel would see this one's work.
+        let names: Vec<String> = (0..10).map(|i| format!("frame-{i}")).collect();
+        let before = binned();
+        for _ in 0..3 {
+            for name in &names {
+                let mut vol = Volume::new(scan_at(&[0.5, 1.5]), name.clone(), now);
+                vol.binned(Moment::Reflectivity, 0, false).unwrap();
+            }
+        }
+        assert_eq!(binned() - before, 30, "the old path re-bins every frame, every lap");
+
+        let mut view = MapView::new(
+            Some("KTLX".into()),
+            crate::render::mercator::Camera::at_lonlat(-97.28, 35.33, 7.0),
+        );
+        let before = binned();
+        for _ in 0..3 {
+            for name in &names {
+                view.show_volume(scan_at(&[0.5, 1.5]), name.clone(), now);
+                view.volume
+                    .as_mut()
+                    .unwrap()
+                    .binned(Moment::Reflectivity, 0, false)
+                    .unwrap();
+            }
+        }
+        assert_eq!(binned() - before, 10, "one per volume, then two free laps");
     }
 
     /// A live volume that has only just started has no tilts in it yet. Applying it emptied the
