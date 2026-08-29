@@ -108,6 +108,7 @@ impl ChaseReplay {
         ctx: &egui::Context,
         live: &Track,
         drawer: &mut crate::ui::drawer::Drawer,
+        metric: bool,
     ) -> Option<ReplayAction> {
         let mut open = self.open;
         let mut action = None;
@@ -150,10 +151,10 @@ impl ChaseReplay {
             }
             ui.add_space(6.0);
             ui.weak(format!(
-                "{} \u{2014} {} points, {:.0} miles",
+                "{} \u{2014} {} points, {}",
                 self.source,
                 self.track.points.len(),
-                self.track.miles()
+                crate::geo::fmt_distance(self.track.km(), metric, 0)
             ));
             ui.add_space(6.0);
             ui.horizontal(|ui| {

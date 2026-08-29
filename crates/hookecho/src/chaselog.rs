@@ -65,13 +65,18 @@ impl Track {
         self.waypoints.clear();
     }
 
-    /// Distance travelled along the track, in miles.
-    pub fn miles(&self) -> f64 {
+    /// Distance travelled along the track, in kilometres.
+    pub fn km(&self) -> f64 {
         self.points
             .windows(2)
             .map(|w| haversine_m(w[0].lon, w[0].lat, w[1].lon, w[1].lat))
             .sum::<f64>()
-            / 1609.344
+            / 1000.0
+    }
+
+    /// The same distance in miles.
+    pub fn miles(&self) -> f64 {
+        self.km() * 1000.0 / 1609.344
     }
 
     /// GPX 1.1: the waypoints first (that is the order the schema wants), then one track.
