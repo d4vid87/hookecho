@@ -13,7 +13,6 @@
 // Assistant plus curl). Bring in hyper's server features if concurrency ever matters.
 
 use crate::status::{self, Spot};
-use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -24,6 +23,15 @@ use std::time::{Duration, Instant};
 const JSON_TTL: Duration = Duration::from_secs(60);
 /// How long a rendered radar PNG is reused. A volume is ~5 minutes wide, so is this.
 const SNAPSHOT_TTL: Duration = Duration::from_secs(300);
+/// How many built answers are kept. The snapshot key carries `px` and `zoom`, which the client
+/// picks, so this cannot be a map that only grows — a poller walking zoom levels would otherwise
+/// pin every render it ever asked for.
+const ANSWER_CACHE: usize = 32;
+/// How many proxied responses are kept, and how many bytes they may take between them. An archive
+/// volume is a few MB, so the byte bound is what actually binds; the entry count stops a run of
+/// tiny tiles from holding a long tail.
+const PROXY_CACHE_ENTRIES: usize = 64;
+const PROXY_CACHE_BYTES: usize = 256 * 1024 * 1024;
 
 struct Server {
     spots: Vec<Spot>,
@@ -35,7 +43,10 @@ struct Server {
     rt: tokio::runtime::Runtime,
     http: reqwest::Client,
     /// path (plus query, for the snapshot) -> when it was fetched and what it was.
-    cache: Mutex<HashMap<String, (Instant, Vec<u8>)>>,
+    cache: Mutex<lru::LruCache<String, (Instant, Vec<u8>)>>,
+    /// Proxied upstream responses, so one visitor's volume download is the next visitor's cache
+    /// hit — which is what the note in `wxdata::net` promised and this server was not doing.
+    proxy_cache: Mutex<lru::LruCache<String, ProxyHit>>,
     /// One radar render at a time; a render is seconds long and the JSON routes stay responsive.
     render: Mutex<()>,
 }
@@ -60,7 +71,12 @@ pub fn run(
             .enable_all()
             .build()?,
         http: reqwest::Client::new(),
-        cache: Mutex::new(HashMap::new()),
+        cache: Mutex::new(lru::LruCache::new(
+            std::num::NonZeroUsize::new(ANSWER_CACHE).unwrap(),
+        )),
+        proxy_cache: Mutex::new(lru::LruCache::new(
+            std::num::NonZeroUsize::new(PROXY_CACHE_ENTRIES).unwrap(),
+        )),
         render: Mutex::new(()),
     });
     log::info!("serving on http://{bind}:{port}");
@@ -98,22 +114,28 @@ fn handle(server: &Server, mut stream: TcpStream) -> anyhow::Result<()> {
         None => (target, ""),
     };
 
-    // The headers were ignored until there was a token to read out of them. Bounded: a client
-    // that never sends the blank line, or sends a header wall, is hung up on rather than humoured.
+    // The headers were ignored until there was a token to read out of them, and now a proxied
+    // response can be revalidated too. Bounded: a client that never sends the blank line, or sends
+    // a header wall, is hung up on rather than humoured.
     let mut authorized = server.token.is_empty();
-    if !authorized {
+    let mut if_none_match = None;
+    {
         let supplied = query_token(query);
         for _ in 0..64 {
             let mut h = String::new();
             if reader.read_line(&mut h)? == 0 || h.trim().is_empty() {
                 break;
             }
-            if let Some((name, value)) = h.split_once(':') {
-                if name.trim().eq_ignore_ascii_case("authorization") {
-                    if let Some(bearer) = value.trim().strip_prefix("Bearer ") {
-                        authorized |= constant_time_eq(bearer.trim(), &server.token);
-                    }
+            let Some((name, value)) = h.split_once(':') else {
+                continue;
+            };
+            let name = name.trim();
+            if name.eq_ignore_ascii_case("authorization") {
+                if let Some(bearer) = value.trim().strip_prefix("Bearer ") {
+                    authorized |= constant_time_eq(bearer.trim(), &server.token);
                 }
+            } else if name.eq_ignore_ascii_case("if-none-match") {
+                if_none_match = Some(value.trim().to_string());
             }
         }
         // A dashboard that can only put things in a URL (a picture element, a widget) has no
@@ -123,8 +145,8 @@ fn handle(server: &Server, mut stream: TcpStream) -> anyhow::Result<()> {
             authorized |= constant_time_eq(&t, &server.token);
         }
     }
-    let (status, ctype, body) = if authorized {
-        route(server, path, query)
+    let reply = if authorized {
+        route(server, path, query, if_none_match.as_deref())
     } else {
         count("denied");
         (
@@ -132,20 +154,58 @@ fn handle(server: &Server, mut stream: TcpStream) -> anyhow::Result<()> {
             "application/json",
             br#"{"error":"missing or bad bearer token"}"#.to_vec(),
         )
+            .into()
     };
-    stream.write_all(
-        format!(
-            "HTTP/1.1 {status}\r\nContent-Type: {ctype}\r\nContent-Length: {}\r\n\
-             Cache-Control: no-cache\r\nConnection: close\r\n\r\n",
-            body.len()
-        )
-        .as_bytes(),
-    )?;
+    let Reply {
+        status,
+        ctype,
+        body,
+        headers,
+    } = reply;
+    let mut head = format!(
+        "HTTP/1.1 {status}\r\nContent-Type: {ctype}\r\nContent-Length: {}\r\nConnection: close\r\n",
+        body.len()
+    );
+    // `no-cache` stays the default for everything this server builds itself — those answers speak
+    // for saved locations and go stale in a minute. A route that knows better says so.
+    if !headers.iter().any(|(n, _)| *n == "Cache-Control") {
+        head.push_str("Cache-Control: no-cache\r\n");
+    }
+    // Every name and value here is ours (a TTL, a hex digest) — no upstream text reaches a header,
+    // which is the same rule `proxy_content_type` enforces for the content type.
+    for (name, value) in &headers {
+        head.push_str(&format!("{name}: {value}\r\n"));
+    }
+    head.push_str("\r\n");
+    stream.write_all(head.as_bytes())?;
     stream.write_all(&body)?;
     Ok(())
 }
 
-fn route(server: &Server, path: &str, query: &str) -> (&'static str, &'static str, Vec<u8>) {
+/// A response, before it is written.
+///
+/// Most routes have only three things to say and stay tuples; `headers` exists because `/proxy/`
+/// has a `Cache-Control` and an `ETag` of its own, and defaulting it keeps every other arm as it
+/// was.
+struct Reply {
+    status: &'static str,
+    ctype: &'static str,
+    body: Vec<u8>,
+    headers: Vec<(&'static str, String)>,
+}
+
+impl From<(&'static str, &'static str, Vec<u8>)> for Reply {
+    fn from((status, ctype, body): (&'static str, &'static str, Vec<u8>)) -> Self {
+        Self {
+            status,
+            ctype,
+            body,
+            headers: Vec::new(),
+        }
+    }
+}
+
+fn route(server: &Server, path: &str, query: &str, if_none_match: Option<&str>) -> Reply {
     count(match path {
         "/" => "index",
         "/status.json" | "/alerts.json" | "/obs.json" | "/health.json" => "json",
@@ -157,44 +217,46 @@ fn route(server: &Server, path: &str, query: &str) -> (&'static str, &'static st
         _ => "other",
     });
     match path {
-        "/" if server.web_root.is_some() => static_file(server, "/index.html"),
+        "/" if server.web_root.is_some() => static_file(server, "/index.html").into(),
         "/" => (
             "200 OK",
             "text/html; charset=utf-8",
             index(server).into_bytes(),
-        ),
+        )
+            .into(),
         "/status.json" | "/alerts.json" | "/obs.json" => match cached_json(server, path) {
-            Ok(body) => ("200 OK", "application/json", body),
-            Err(e) => error_json(e),
+            Ok(body) => ("200 OK", "application/json", body).into(),
+            Err(e) => error_json(e).into(),
         },
         "/cells.json" => match cells_json(server, query) {
-            Ok(body) => ("200 OK", "application/json", body),
-            Err(e) => error_json(e),
+            Ok(body) => ("200 OK", "application/json", body).into(),
+            Err(e) => error_json(e).into(),
         },
         "/health.json" => match health_json(server) {
-            Ok(body) => ("200 OK", "application/json", body),
-            Err(e) => error_json(e),
+            Ok(body) => ("200 OK", "application/json", body).into(),
+            Err(e) => error_json(e).into(),
         },
         "/snapshot.png" => match snapshot(server, query) {
-            Ok(png) => ("200 OK", "image/png", png),
-            Err(e) => error_json(e),
+            Ok(png) => ("200 OK", "image/png", png).into(),
+            Err(e) => error_json(e).into(),
         },
         "/loop.gif" => match loop_clip(server, query, crate::loopexport::LoopFormat::Gif) {
-            Ok(body) => ("200 OK", "image/gif", body),
-            Err(e) => error_json(e),
+            Ok(body) => ("200 OK", "image/gif", body).into(),
+            Err(e) => error_json(e).into(),
         },
         "/loop.mp4" => match loop_clip(server, query, crate::loopexport::LoopFormat::Mp4) {
-            Ok(body) => ("200 OK", "video/mp4", body),
-            Err(e) => error_json(e),
+            Ok(body) => ("200 OK", "video/mp4", body).into(),
+            Err(e) => error_json(e).into(),
         },
         "/metrics" => (
             "200 OK",
             "text/plain; version=0.0.4; charset=utf-8",
             metrics(server).into_bytes(),
-        ),
-        _ if path.starts_with("/proxy/") => proxy(server, path, query),
-        _ if server.web_root.is_some() => static_file(server, path),
-        _ => not_found(),
+        )
+            .into(),
+        _ if path.starts_with("/proxy/") => proxy(server, path, query, if_none_match),
+        _ if server.web_root.is_some() => static_file(server, path).into(),
+        _ => not_found().into(),
     }
 }
 
@@ -304,7 +366,7 @@ fn cached_json(server: &Server, path: &str) -> anyhow::Result<Vec<u8>> {
         .cache
         .lock()
         .unwrap()
-        .insert(path.to_string(), (Instant::now(), body.clone()));
+        .put(path.to_string(), (Instant::now(), body.clone()));
     Ok(body)
 }
 
@@ -340,7 +402,7 @@ fn cells_json(server: &Server, query: &str) -> anyhow::Result<Vec<u8>> {
         .cache
         .lock()
         .unwrap()
-        .insert(key, (Instant::now(), body.clone()));
+        .put(key, (Instant::now(), body.clone()));
     Ok(body)
 }
 
@@ -382,7 +444,7 @@ fn health_json(server: &Server) -> anyhow::Result<Vec<u8>> {
             .cache
             .lock()
             .unwrap()
-            .get(path)
+            .peek(path)
             .map(|(when, _)| when.elapsed().as_secs_f64())
     };
     // Ask for a status build if nothing has yet, so a fresh container reports on real feeds
@@ -398,8 +460,8 @@ fn health_json(server: &Server) -> anyhow::Result<Vec<u8>> {
             .cache
             .lock()
             .unwrap()
-            .keys()
-            .filter(|k| k.starts_with("/snapshot.png"))
+            .iter()
+            .filter(|(k, _)| k.starts_with("/snapshot.png"))
             .count(),
     }))?;
     Ok(body)
@@ -536,7 +598,7 @@ fn snapshot(server: &Server, query: &str) -> anyhow::Result<Vec<u8>> {
         .cache
         .lock()
         .unwrap()
-        .insert(key, (Instant::now(), png.clone()));
+        .put(key, (Instant::now(), png.clone()));
     Ok(png)
 }
 
@@ -626,7 +688,7 @@ fn loop_clip(
         .cache
         .lock()
         .unwrap()
-        .insert(key, (Instant::now(), body.clone()));
+        .put(key, (Instant::now(), body.clone()));
     Ok(body)
 }
 
@@ -705,6 +767,28 @@ fn metrics(server: &Server) -> String {
         out.push_str(&format!("hookecho_stats_total{{counter=\"{label}\"}} {n}\n"));
     }
 
+    // What the proxy cache is actually saving: a hit is an upstream fetch that did not happen.
+    let (hits, misses) = (
+        PROXY_HITS.load(Ordering::Relaxed),
+        PROXY_MISSES.load(Ordering::Relaxed),
+    );
+    let (entries, bytes) = {
+        let cache = server.proxy_cache.lock().unwrap();
+        (cache.len(), cache.iter().map(|(_, h)| h.body.len()).sum::<usize>())
+    };
+    out.push_str("# HELP hookecho_proxy_cache_hits_total Proxied responses served without an upstream fetch.\n");
+    out.push_str("# TYPE hookecho_proxy_cache_hits_total counter\n");
+    out.push_str(&format!("hookecho_proxy_cache_hits_total {hits}\n"));
+    out.push_str("# HELP hookecho_proxy_cache_misses_total Proxied responses that needed an upstream fetch.\n");
+    out.push_str("# TYPE hookecho_proxy_cache_misses_total counter\n");
+    out.push_str(&format!("hookecho_proxy_cache_misses_total {misses}\n"));
+    out.push_str("# HELP hookecho_proxy_cache_bytes Bytes the proxy cache is holding.\n");
+    out.push_str("# TYPE hookecho_proxy_cache_bytes gauge\n");
+    out.push_str(&format!("hookecho_proxy_cache_bytes {bytes}\n"));
+    out.push_str("# HELP hookecho_proxy_cache_entries Responses the proxy cache is holding.\n");
+    out.push_str("# TYPE hookecho_proxy_cache_entries gauge\n");
+    out.push_str(&format!("hookecho_proxy_cache_entries {entries}\n"));
+
     let Ok(body) = cached_json(server, "/status.json") else {
         // A feed being down is not a reason to fail the scrape — the counters above still answer.
         return out;
@@ -713,7 +797,7 @@ fn metrics(server: &Server) -> String {
         .cache
         .lock()
         .unwrap()
-        .get("/status.json")
+        .peek("/status.json")
         .map(|(when, _)| when.elapsed().as_secs_f64())
         .unwrap_or(0.0);
     let Ok(report) = serde_json::from_slice::<Vec<serde_json::Value>>(&body) else {
@@ -831,6 +915,71 @@ const ALLOWED_HOSTS: &[&str] = &[
     "cwwp2.dot.ca.gov",
 ];
 
+/// The feeds that go stale in seconds. Mirrors `LIVE_HOSTS` in web/_worker.js/proxy-core.js.
+const LIVE_HOSTS: &[&str] = &[
+    "unidata-nexrad-level2-chunks.s3.amazonaws.com",
+    "api.weather.gov",
+    // DWD republishes every `-LATEST-` sweep on a five-minute cycle at a URL that never changes,
+    // so the default five-minute TTL can hand out the previous volume for the whole of the next.
+    "opendata.dwd.de",
+];
+
+/// The archived Level 2 bucket: the same handful of volumes every client on a radar asks for.
+const ARCHIVE_BUCKET: &str = "unidata-nexrad-level2.s3.amazonaws.com";
+
+/// How long a proxied response may be reused, in seconds.
+///
+/// The same policy the edge worker applies (`cacheSeconds`, web/_worker.js/proxy-core.js) — the
+/// two are kept in step by `cache_ttls_match_the_edge_worker` below, because a client that gets
+/// one answer from the Pages deployment and a different one from `--serve` is a bug that only
+/// shows up as a loop that will not advance.
+fn cache_seconds(host: &str, query: &str) -> u64 {
+    // A bucket listing is how the app finds the newest volume — cache that like a live feed or
+    // the loop stops advancing.
+    if query.contains("list-type=") {
+        return 15;
+    }
+    // A WMS GetMap with no TIME is whatever the layer's default frame happens to be, which turns
+    // over every five minutes; one naming a frame is that frame forever.
+    if host == "maps.dwd.de" || host == "geo.weather.gc.ca" {
+        return if query.contains("TIME=") { 300 } else { 15 };
+    }
+    // An hour, not forever: the newest archive object is re-uploaded while the radar is still
+    // writing it, so a long TTL can pin a truncated volume.
+    if host == ARCHIVE_BUCKET {
+        return 3600;
+    }
+    if LIVE_HOSTS.contains(&host) {
+        15
+    } else {
+        300
+    }
+}
+
+/// One proxied response, kept for its TTL.
+struct ProxyHit {
+    at: Instant,
+    ctype: &'static str,
+    /// Shared so the cache holds one copy however many requests are reading it.
+    body: std::sync::Arc<Vec<u8>>,
+    /// Hashed once at insert, so a client that already holds these bytes can be told so.
+    etag: String,
+}
+
+/// A cheap content hash. Not a checksum anyone trusts — an ETag only has to change when the bytes
+/// change, and this is compared against a value we ourselves issued.
+fn etag_of(body: &[u8]) -> String {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    body.len().hash(&mut h);
+    body.hash(&mut h);
+    format!("\"{:016x}\"", h.finish())
+}
+
+/// Counters behind the `hookecho_proxy_cache_*` metrics.
+static PROXY_HITS: AtomicU64 = AtomicU64::new(0);
+static PROXY_MISSES: AtomicU64 = AtomicU64::new(0);
+
 /// Nothing bigger than this comes back through the proxy. An archive volume is a few MB; this is
 /// generous for every feed on the list and still bounds a hostile or broken upstream.
 const PROXY_MAX_BYTES: usize = 64 * 1024 * 1024;
@@ -841,14 +990,15 @@ const PROXY_MAX_BYTES: usize = 64 * 1024 * 1024;
 /// ever issued upstream (this server never speaks another method), no client header reaches the
 /// upstream, and the response is capped and stripped down to a known content type. Same-origin by
 /// construction, so no CORS header of our own is needed.
-fn proxy(server: &Server, path: &str, query: &str) -> (&'static str, &'static str, Vec<u8>) {
-    let forbidden = |why: &str| -> (&'static str, &'static str, Vec<u8>) {
+fn proxy(server: &Server, path: &str, query: &str, if_none_match: Option<&str>) -> Reply {
+    let forbidden = |why: &str| -> Reply {
         log::warn!("proxy refused {path}: {why}");
         (
             "403 Forbidden",
             "application/json",
             br#"{"error":"host not proxyable"}"#.to_vec(),
         )
+            .into()
     };
     let Some((host, rest)) = path["/proxy/".len()..].split_once('/') else {
         return forbidden("no path after host");
@@ -861,8 +1011,48 @@ fn proxy(server: &Server, path: &str, query: &str) -> (&'static str, &'static st
     } else {
         format!("https://{host}/{rest}?{query}")
     };
+
+    let ttl = cache_seconds(host, query);
+    let fresh = |h: &ProxyHit| h.at.elapsed() < Duration::from_secs(ttl);
+    // Cloned out from under the lock: an upstream fetch must not be holding the cache shut, and
+    // the clone is an `Arc` bump, not the body.
+    let hit = {
+        let mut cache = server.proxy_cache.lock().unwrap();
+        cache
+            .get(&url)
+            .filter(|h| fresh(h))
+            .map(|h| (h.ctype, h.body.clone(), h.etag.clone()))
+    };
+    if let Some((ctype, body, etag)) = hit {
+        PROXY_HITS.fetch_add(1, Ordering::Relaxed);
+        return proxy_reply(ctype, body, etag, ttl, if_none_match);
+    }
+
+    PROXY_MISSES.fetch_add(1, Ordering::Relaxed);
     match server.rt.block_on(fetch_capped(&server.http, &url)) {
-        Ok((ctype, body)) => ("200 OK", ctype, body),
+        Ok((ctype, body)) => {
+            let body = std::sync::Arc::new(body);
+            let etag = etag_of(&body);
+            let mut cache = server.proxy_cache.lock().unwrap();
+            cache.put(
+                url,
+                ProxyHit {
+                    at: Instant::now(),
+                    ctype,
+                    body: body.clone(),
+                    etag: etag.clone(),
+                },
+            );
+            // ponytail: re-sums the held bytes per insert. At 64 entries that is 64 adds; a
+            // running total would have to be kept correct across every eviction path instead.
+            while cache.iter().map(|(_, h)| h.body.len()).sum::<usize>() > PROXY_CACHE_BYTES
+                && cache.len() > 1
+            {
+                cache.pop_lru();
+            }
+            drop(cache);
+            proxy_reply(ctype, body, etag, ttl, if_none_match)
+        }
         Err(e) => {
             log::warn!("proxy fetch of {url} failed: {e}");
             (
@@ -870,7 +1060,40 @@ fn proxy(server: &Server, path: &str, query: &str) -> (&'static str, &'static st
                 "application/json",
                 br#"{"error":"upstream fetch failed"}"#.to_vec(),
             )
+                .into()
         }
+    }
+}
+
+/// The response for a proxied body, 304 if the client already holds it.
+///
+/// The client's `If-None-Match` is compared here and never forwarded — the upstream call is the
+/// same header-free GET it has always been, which is the rule the whole proxy is built on.
+fn proxy_reply(
+    ctype: &'static str,
+    body: std::sync::Arc<Vec<u8>>,
+    etag: String,
+    ttl: u64,
+    if_none_match: Option<&str>,
+) -> Reply {
+    let headers = vec![
+        ("Cache-Control", format!("public, max-age={ttl}")),
+        ("ETag", etag.clone()),
+    ];
+    if if_none_match.is_some_and(|t| t.split(',').any(|t| t.trim() == etag)) {
+        return Reply {
+            status: "304 Not Modified",
+            ctype,
+            body: Vec::new(),
+            headers,
+        };
+    }
+    Reply {
+        status: "200 OK",
+        ctype,
+        // The bytes are handed to one socket; the cache keeps its own copy through the `Arc`.
+        body: (*body).clone(),
+        headers,
     }
 }
 
@@ -1103,7 +1326,12 @@ mod tests {
                 .build()
                 .unwrap(),
             http: reqwest::Client::new(),
-            cache: Mutex::new(HashMap::new()),
+            cache: Mutex::new(lru::LruCache::new(
+                std::num::NonZeroUsize::new(ANSWER_CACHE).unwrap(),
+            )),
+            proxy_cache: Mutex::new(lru::LruCache::new(
+                std::num::NonZeroUsize::new(PROXY_CACHE_ENTRIES).unwrap(),
+            )),
             render: Mutex::new(()),
         };
         let page = index(&server);
@@ -1126,15 +1354,22 @@ mod tests {
                 .build()
                 .unwrap(),
             http: reqwest::Client::new(),
-            cache: Mutex::new(HashMap::new()),
+            cache: Mutex::new(lru::LruCache::new(
+                std::num::NonZeroUsize::new(ANSWER_CACHE).unwrap(),
+            )),
+            proxy_cache: Mutex::new(lru::LruCache::new(
+                std::num::NonZeroUsize::new(PROXY_CACHE_ENTRIES).unwrap(),
+            )),
             render: Mutex::new(()),
         };
-        let (status, ctype, body) = route(&server, "/etc/passwd", "");
+        let Reply {
+            status, ctype, body, ..
+        } = route(&server, "/etc/passwd", "", None);
         assert_eq!(status, "404 Not Found");
         assert_eq!(ctype, "application/json");
         assert!(String::from_utf8_lossy(&body).contains("no such endpoint"));
 
-        let (status, ..) = route(&server, "/", "");
+        let status = route(&server, "/", "", None).status;
         assert_eq!(status, "200 OK");
     }
 
@@ -1148,7 +1383,12 @@ mod tests {
                 .build()
                 .unwrap(),
             http: reqwest::Client::new(),
-            cache: Mutex::new(HashMap::new()),
+            cache: Mutex::new(lru::LruCache::new(
+                std::num::NonZeroUsize::new(ANSWER_CACHE).unwrap(),
+            )),
+            proxy_cache: Mutex::new(lru::LruCache::new(
+                std::num::NonZeroUsize::new(PROXY_CACHE_ENTRIES).unwrap(),
+            )),
             render: Mutex::new(()),
         };
         for path in [
@@ -1157,7 +1397,7 @@ mod tests {
             "/..%2f..%2fetc/passwd",
             "//etc/passwd",
         ] {
-            let (status, ..) = route(&server, path, "");
+            let status = route(&server, path, "", None).status;
             assert_eq!(status, "404 Not Found", "{path} must not be served");
         }
         assert_eq!(
@@ -1172,6 +1412,70 @@ mod tests {
         );
     }
 
+    /// The TTL a proxied response gets here must be the one the edge worker gives it. These are
+    /// the values in `cacheSeconds` (web/_worker.js/proxy-core.js) written out — if that table
+    /// moves, this fails and says so, instead of two deployments quietly disagreeing about how
+    /// long a volume is good for.
+    #[test]
+    fn cache_ttls_match_the_edge_worker() {
+        assert_eq!(cache_seconds(ARCHIVE_BUCKET, ""), 3600);
+        assert_eq!(cache_seconds(ARCHIVE_BUCKET, "list-type=2"), 15);
+        assert_eq!(cache_seconds("maps.dwd.de", "LAYERS=rv&TIME=2026"), 300);
+        assert_eq!(cache_seconds("maps.dwd.de", "LAYERS=rv"), 15);
+        assert_eq!(cache_seconds("geo.weather.gc.ca", "SERVICE=WFS"), 15);
+        assert_eq!(cache_seconds("api.weather.gov", ""), 15);
+        assert_eq!(cache_seconds("opendata.dwd.de", ""), 15);
+        assert_eq!(cache_seconds("tgftp.nws.noaa.gov", ""), 300);
+        assert_eq!(cache_seconds("basemaps.cartocdn.com", ""), 300);
+    }
+
+    /// The byte bound is what stops a handful of archive volumes from being the whole heap. It has
+    /// to evict on total size, not only on entry count — 64 volumes is 64 × tens of MB.
+    #[test]
+    fn the_proxy_cache_evicts_on_bytes_not_just_entries() {
+        let mut cache =
+            lru::LruCache::new(std::num::NonZeroUsize::new(PROXY_CACHE_ENTRIES).unwrap());
+        let held =
+            |c: &lru::LruCache<String, ProxyHit>| c.iter().map(|(_, h)| h.body.len()).sum::<usize>();
+        // Ten entries of 64 MB: well inside the entry cap, well past the byte cap.
+        for i in 0..10 {
+            cache.put(
+                format!("https://example.invalid/{i}"),
+                ProxyHit {
+                    at: Instant::now(),
+                    ctype: "application/octet-stream",
+                    body: std::sync::Arc::new(vec![0u8; 64 * 1024 * 1024]),
+                    etag: String::new(),
+                },
+            );
+            while held(&cache) > PROXY_CACHE_BYTES && cache.len() > 1 {
+                cache.pop_lru();
+            }
+        }
+        assert!(held(&cache) <= PROXY_CACHE_BYTES, "byte bound not honoured");
+        assert!(cache.len() < 10, "nothing was evicted");
+        // The newest survives — the one a second client is most likely to ask for next.
+        assert!(cache.peek("https://example.invalid/9").is_some());
+    }
+
+    /// A client already holding the bytes is told so and gets no body; a stale tag gets the body.
+    #[test]
+    fn a_matching_etag_is_answered_304() {
+        let body = std::sync::Arc::new(b"hello".to_vec());
+        let etag = etag_of(&body);
+        let hit = proxy_reply("text/plain", body.clone(), etag.clone(), 15, Some(&etag));
+        assert_eq!(hit.status, "304 Not Modified");
+        assert!(hit.body.is_empty());
+        assert!(hit
+            .headers
+            .contains(&("Cache-Control", "public, max-age=15".to_string())));
+        let miss = proxy_reply("text/plain", body, etag, 15, Some("\"stale\""));
+        assert_eq!(miss.status, "200 OK");
+        assert_eq!(miss.body, b"hello");
+        // Different bytes, different tag — an ETag that never moves is worse than none.
+        assert_ne!(etag_of(b"hello"), etag_of(b"hellp"));
+    }
+
     #[test]
     fn proxy_refuses_hosts_that_are_not_on_the_list() {
         let server = Server {
@@ -1182,7 +1486,12 @@ mod tests {
                 .build()
                 .unwrap(),
             http: reqwest::Client::new(),
-            cache: Mutex::new(HashMap::new()),
+            cache: Mutex::new(lru::LruCache::new(
+                std::num::NonZeroUsize::new(ANSWER_CACHE).unwrap(),
+            )),
+            proxy_cache: Mutex::new(lru::LruCache::new(
+                std::num::NonZeroUsize::new(PROXY_CACHE_ENTRIES).unwrap(),
+            )),
             render: Mutex::new(()),
         };
         for path in [
@@ -1192,7 +1501,7 @@ mod tests {
             "/proxy/evil.example.com#api.weather.gov/alerts",
             "/proxy/api.weather.gov",
         ] {
-            let (status, ..) = route(&server, path, "");
+            let status = route(&server, path, "", None).status;
             assert_eq!(status, "403 Forbidden", "{path} must not be proxied");
         }
     }
@@ -1218,12 +1527,17 @@ mod tests {
                 .build()
                 .unwrap(),
             http: reqwest::Client::new(),
-            cache: Mutex::new(HashMap::new()),
+            cache: Mutex::new(lru::LruCache::new(
+                std::num::NonZeroUsize::new(ANSWER_CACHE).unwrap(),
+            )),
+            proxy_cache: Mutex::new(lru::LruCache::new(
+                std::num::NonZeroUsize::new(PROXY_CACHE_ENTRIES).unwrap(),
+            )),
             render: Mutex::new(()),
         };
         let i = ROUTES.iter().position(|r| *r == "index").unwrap();
         let before = REQUESTS[i].load(Ordering::Relaxed);
-        route(&server, "/", "");
+        route(&server, "/", "", None);
         // Counters are process-wide and the test threads share them, so this asserts movement
         // rather than an exact delta — another test routing "/" must not fail this one.
         assert!(REQUESTS[i].load(Ordering::Relaxed) > before);
