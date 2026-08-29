@@ -1,7 +1,7 @@
 ---
 import Base from "../../layouts/Base.astro";
 import sites from "../../data/nexrad-sites.json";
-import { stateName, stateSlug } from "../../data/states";
+import { areaName, countryName, stateName, stateSlug } from "../../data/states";
 
 // Grouped by state, states alphabetical — 152 links need some spine, and "which radar covers me"
 // is a geography question before it is anything else.
@@ -15,20 +15,36 @@ for (const site of nexrad) {
   byState.set(site.state, list);
 }
 const states = [...byState.keys()].sort((a, b) => stateName(a).localeCompare(stateName(b)));
+
+// The international networks, grouped by country rather than by network: a reader looking for
+// Bilogora is looking for Croatia, and does not need to know OPERA exists first.
+const abroad = sites.filter((s) => s.country !== "US");
+const byCountry = new Map<string, typeof sites>();
+for (const site of abroad) {
+  const list = byCountry.get(site.country) ?? [];
+  list.push(site);
+  byCountry.set(site.country, list);
+}
+const countries = [...byCountry.keys()].sort((a, b) =>
+  countryName(a).localeCompare(countryName(b)),
+);
+const countrySlug = (code: string) =>
+  countryName(code).toLowerCase().replace(/[^a-z0-9]+/g, "-");
 ---
 
 <Base
-  title="Every US radar site | HookEcho"
-  description="All 152 WSR-88D NEXRAD radars and 44 TDWR terminal radars, by state: live loops, active warnings and every tilt of the Level 2 volume, opened straight in HookEcho."
+  title="Every radar site | HookEcho"
+  description="All 152 WSR-88D NEXRAD radars, 44 TDWR terminal radars and the German and European networks, by state and country: live loops, active warnings and every tilt of the volume, opened straight in HookEcho."
 >
   <section>
     <div class="wrap">
       <p class="eyebrow">Radar sites</p>
-      <h1>Every US radar, one page each</h1>
+      <h1>Every radar, one page each</h1>
       <p class="lede">
         The National Weather Service runs {nexrad.length} WSR-88D radars, and {tdwr.length} faster
-        terminal radars watch the busiest airports. Each has a page here with the warnings
-        currently over it and a link that opens that radar in HookEcho at full resolution.
+        terminal radars watch the busiest airports. HookEcho also reads {abroad.length} radars
+        abroad — Germany's DWD network and EUMETNET's OPERA archive. Each has a page here with a
+        link that opens that radar in HookEcho at full resolution.
       </p>
 
       {
@@ -68,6 +84,37 @@ const states = [...byState.keys()].sort((a, b) => stateName(a).localeCompare(sta
           ))}
         </ul>
       </div>
+
+      <div class="state">
+        <h2 id="international">Outside the United States</h2>
+        <p class="note">
+          Germany's national network from the Deutscher Wetterdienst, and the rest from EUMETNET's
+          OPERA archive. Distances, and the app itself, switch to kilometres on these.
+        </p>
+      </div>
+
+      {
+        countries.map((code) => (
+          <div class="state">
+            <h3 id={countrySlug(code)}>
+              <a href={`/radar/${countrySlug(code)}/`}>{countryName(code)}</a>
+            </h3>
+            <ul>
+              {byCountry
+                .get(code)!
+                .sort((a, b) => a.city.localeCompare(b.city))
+                .map((site) => (
+                  <li>
+                    <a href={`/radar/${site.id.toLowerCase()}/`}>
+                      <strong>{site.id}</strong> {site.city}
+                      {areaName(site) && <span class="area">{areaName(site)}</span>}
+                    </a>
+                  </li>
+                ))}
+            </ul>
+          </div>
+        ))
+      }
     </div>
   </section>
 </Base>
@@ -78,6 +125,10 @@ const states = [...byState.keys()].sort((a, b) => stateName(a).localeCompare(sta
   .state h2 { margin-bottom: 0.6rem; font-size: 1.15rem; color: var(--text-dim); }
   .state h2 a { color: inherit; text-decoration: none; }
   .state h2 a:hover { color: var(--accent); }
+  .state h3 { margin-bottom: 0.6rem; font-size: 1.05rem; color: var(--text-dim); }
+  .state h3 a { color: inherit; text-decoration: none; }
+  .state h3 a:hover { color: var(--accent); }
+  .area { float: right; font-size: 0.8rem; color: var(--text-dim); }
   .note { color: var(--text-dim); max-width: 62ch; margin: 0 0 0.8rem; font-size: 0.95rem; }
   ul {
     list-style: none;

@@ -2,59 +2,107 @@
 import Base from "../../layouts/Base.astro";
 import LiveMosaic from "../../components/LiveMosaic.astro";
 import sites from "../../data/nexrad-sites.json";
-import { stateName, stateSlug } from "../../data/states";
-import { milesBetween } from "../../data/geo";
+import { areaName, countryName, regionName, regionSlug } from "../../data/states";
+import { kmBetween, milesBetween } from "../../data/geo";
 
 type Site = (typeof sites)[number];
 
-// One getStaticPaths for both page kinds: Astro will not allow /radar/[id] and /radar/[state] to
-// be two dynamic files in the same directory, and no state name collides with a four-letter
-// site id, so they share the namespace safely.
+// One getStaticPaths for both page kinds: Astro will not allow /radar/[id] and /radar/[region] to
+// be two dynamic files in the same directory, and no region name collides with a site id, so they
+// share the namespace safely.
 export function getStaticPaths() {
   const sitePages = sites.map((site) => ({
     params: { id: site.id.toLowerCase() },
     props: {
       kind: "site" as const,
       site,
+      // Nearest four across every network — a Dutch radar's closest neighbour is often German,
+      // and pretending otherwise would hide the site a reader actually wants.
       nearby: sites
         .filter((other) => other.id !== site.id)
-        .map((other) => ({ site: other, miles: Math.round(milesBetween(site, other)) }))
+        .map((other) => ({
+          site: other,
+          miles: Math.round(milesBetween(site, other)),
+          km: Math.round(kmBetween(site, other)),
+        }))
         .sort((a, b) => a.miles - b.miles)
         .slice(0, 4),
     },
   }));
 
-  const codes = [...new Set(sites.map((s) => s.state))];
-  const statePages = codes.map((code) => ({
-    params: { id: stateSlug(code) },
+  // Regions are keyed on the slug, not the code: `state` is a US state, a German Land or an OPERA
+  // country depending on the row, and the codes collide across those meanings (BE is both Berlin
+  // and Belgium). One page per slug, named once.
+  const regions = new Map<string, { name: string; sites: typeof sites }>();
+  for (const s of sites) {
+    const slug = regionSlug(s);
+    const entry = regions.get(slug) ?? { name: regionName(s), sites: [] };
+    entry.sites.push(s);
+    regions.set(slug, entry);
+  }
+  const regionPages = [...regions].map(([slug, entry]) => ({
+    params: { id: slug },
     props: {
-      kind: "state" as const,
-      code,
-      inState: sites
-        .filter((s) => s.state === code)
-        .sort((a, b) => a.city.localeCompare(b.city)),
+      kind: "region" as const,
+      name: entry.name,
+      country: entry.sites[0].country,
+      inRegion: entry.sites.slice().sort((a, b) => a.city.localeCompare(b.city)),
     },
   }));
 
-  return [...sitePages, ...statePages];
+  return [...sitePages, ...regionPages];
 }
 
 const props = Astro.props as
-  | { kind: "site"; site: Site; nearby: { site: Site; miles: number }[] }
-  | { kind: "state"; code: string; inState: Site[] };
+  | { kind: "site"; site: Site; nearby: { site: Site; miles: number; km: number }[] }
+  | { kind: "region"; name: string; country: string; inRegion: Site[] };
 
 const site = props.kind === "site" ? props.site : null;
 // lon before lat — the app's #goto vocabulary, same as the deep links on /features.
 const appLink = site ? `https://app.hookecho.io/#goto=${site.id},${site.lon},${site.lat},8` : "";
 // The lite viewer carries NEXRAD only: the Level 3 bucket has no super-res digital products for
-// the terminal radars, so a TDWR link there would open an empty loop.
-const liteLink = site && site.network !== "tdwr" ? `https://app.hookecho.io/lite/?site=${site.id}` : "";
-// RIDGE standard loops exist for WSR-88D ids only — TOKC/TDFW/TDAL all 404 there — so terminal
-// radar pages carry the facts and the deep link and skip the loop rather than ship a broken image.
+// the terminal radars, and the international networks are not in it at all, so either link there
+// would open an empty loop.
+const liteLink =
+  site && site.network === "nexrad" ? `https://app.hookecho.io/lite/?site=${site.id}` : "";
+// RIDGE standard loops exist for WSR-88D ids only — TOKC/TDFW/TDAL all 404 there, and it serves no
+// European site — so every other page carries the facts and the deep link and skips the loop
+// rather than ship a broken image.
 const isTdwr = site?.network === "tdwr";
-const loop = site && !isTdwr ? `https://radar.weather.gov/ridge/standard/${site.id}_loop.gif` : "";
-const place = site ? `${site.city}, ${site.state}` : "";
-const state = props.kind === "state" ? stateName(props.code) : "";
+const network = site?.network ?? "nexrad";
+const loop =
+  site && network === "nexrad" ? `https://radar.weather.gov/ridge/standard/${site.id}_loop.gif` : "";
+// Distances, warnings and the units below all turn on this one question, the same one the app
+// asks of the pane on screen.
+const metric = site ? site.country !== "US" : props.country !== "US";
+const area = site ? areaName(site) : "";
+const place = site ? (area ? `${site.city}, ${area}` : `${site.city}, ${countryName(site.country)}`) : "";
+const region = props.kind === "region" ? props.name : "";
+// What the network is called in prose, and the credit its licence asks for. NOAA's radars are
+// public domain and ask for nothing; the other two do.
+const NETWORKS: Record<string, { label: string; blurb: string; credit: string }> = {
+  nexrad: {
+    label: "NEXRAD WSR-88D",
+    blurb: "the National Weather Service's S-band radar network",
+    credit: "",
+  },
+  tdwr: {
+    label: "TDWR",
+    blurb: "an FAA terminal Doppler radar watching an airport",
+    credit: "",
+  },
+  dwd: {
+    label: "DWD",
+    blurb: "part of Germany's national radar network, run by the Deutscher Wetterdienst",
+    credit: "Radar data \u00a9 Deutscher Wetterdienst (DL-DE/BY-2.0)",
+  },
+  opera: {
+    label: "EUMETNET OPERA",
+    blurb: "part of EUMETNET's OPERA network, the shared European radar archive",
+    credit: "Radar data \u00a9 EUMETNET OPERA / OpenRadarData (CC BY 4.0)",
+  },
+};
+const net = NETWORKS[network];
 ---
 
 {
@@ -62,9 +110,11 @@ const state = props.kind === "state" ? stateName(props.code) : "";
     <Base
       title={`${site.id} radar — ${place} | HookEcho`}
       description={
-        isTdwr
+        network === "tdwr"
           ? `Live terminal Doppler weather radar for ${site.id} at ${place}: the fast, high-resolution TDWR scan, active warnings near the site, and the full loop in HookEcho.`
-          : `Live NEXRAD radar for ${site.id}, the WSR-88D at ${place}: the current loop, active warnings near the site, and every tilt of the Level 2 volume in HookEcho.`
+          : network === "nexrad"
+            ? `Live NEXRAD radar for ${site.id}, the WSR-88D at ${place}: the current loop, active warnings near the site, and every tilt of the Level 2 volume in HookEcho.`
+            : `Live weather radar for ${site.id} at ${place}, ${net.blurb} — every elevation angle of the volume, opened in HookEcho.`
       }
       image={`/og/radar/${site.id.toLowerCase()}.png`}
     >
@@ -72,28 +122,38 @@ const state = props.kind === "state" ? stateName(props.code) : "";
         <div class="wrap">
           <p class="eyebrow">
             <a href="/radar/">Radar sites</a> ·{" "}
-            <a href={`/radar/${stateSlug(site.state)}/`}>{stateName(site.state)}</a>
+            <a href={`/radar/${regionSlug(site)}/`}>{regionName(site)}</a>
           </p>
           <h1>
             {site.id} — {place}
           </h1>
-          {isTdwr ? (
+          {network === "tdwr" ? (
             <p class="lede">
               The terminal Doppler weather radar at {place} — an airport radar that scans faster
               and finer than the WSR-88D nearby, which is what makes it the better look at a storm
               crossing the field. Open it in HookEcho for the live loop, velocity and dual-pol.
             </p>
-          ) : (
+          ) : network === "nexrad" ? (
             <p class="lede">
               The WSR-88D at {place}. Below is the National Weather Service's own loop for this
               radar; open it in HookEcho for every tilt of the Level 2 volume, velocity, dual-pol
               and the archive back to 1991.
             </p>
+          ) : (
+            <p class="lede">
+              The radar at {place}, {net.blurb}. HookEcho reads its volumes straight from the
+              source: every elevation angle, velocity and dual-pol, drawn on the same map as the
+              warnings in force around it.
+            </p>
           )}
 
-          <p class="warnings" data-point={`${site.lat},${site.lon}`}>
-            <span class="count">—</span> active warnings over this radar
-          </p>
+          {/* The count comes from api.weather.gov, which knows about US warnings and nothing
+              else — so the pill is US-only rather than a permanent honest zero. */}
+          {!metric && (
+            <p class="warnings" data-point={`${site.lat},${site.lon}`}>
+              <span class="count">—</span> active warnings over this radar
+            </p>
+          )}
 
           <div class="cta">
             <a class="btn btn-primary" href={appLink}>
@@ -124,7 +184,7 @@ const state = props.kind === "state" ? stateName(props.code) : "";
             </div>
             <div>
               <dt>Network</dt>
-              <dd>{isTdwr ? "TDWR" : "NEXRAD WSR-88D"}</dd>
+              <dd>{net.label}</dd>
             </div>
             <div>
               <dt>Location</dt>
@@ -146,15 +206,15 @@ const state = props.kind === "state" ? stateName(props.code) : "";
             </div>
           </dl>
 
-          {isTdwr ? (
+          {network !== "nexrad" ? (
             <>
               <h2>Where to see this radar</h2>
               <p>
-                The National Weather Service publishes no standard web loop for terminal radars, so
-                there is nothing to show here. HookEcho reads the {site.id} products straight from
-                the NOAA archive: reflectivity, velocity and dual-pol at the TDWR's own resolution,
-                with warnings, storm reports and lightning drawn over the same map.
+                {isTdwr
+                  ? `The National Weather Service publishes no standard web loop for terminal radars, so there is nothing to show here. HookEcho reads the ${site.id} products straight from the NOAA archive: reflectivity, velocity and dual-pol at the TDWR's own resolution, with warnings, storm reports and lightning drawn over the same map.`
+                  : `There is no public web loop for this radar to embed, so this page carries the facts and the link. HookEcho fetches the ${site.id} volume itself and renders it locally — every elevation angle, velocity and dual-pol — with the warnings in force drawn over the same map.`}
               </p>
+              {net.credit && <p class="credit">{net.credit}</p>}
             </>
           ) : (
             <>
@@ -177,9 +237,10 @@ const state = props.kind === "state" ? stateName(props.code) : "";
             {props.nearby.map((n) => (
               <li>
                 <a href={`/radar/${n.site.id.toLowerCase()}/`}>
-                  <strong>{n.site.id}</strong> {n.site.city}, {n.site.state}
+                  <strong>{n.site.id}</strong> {n.site.city}
+                  {n.site.country === "US" && `, ${n.site.state}`}
                   {n.site.network === "tdwr" && <span class="tag">TDWR</span>}
-                  <span class="miles">{n.miles} mi</span>
+                  <span class="miles">{metric ? `${n.km} km` : `${n.miles} mi`}</span>
                 </a>
               </li>
             ))}
@@ -187,49 +248,58 @@ const state = props.kind === "state" ? stateName(props.code) : "";
 
           <p>
             <a href="/features/">See what else it does</a> ·{" "}
-            <a href="/compare/">How it compares</a> ·{" "}
-            <a href={`/embed/?site=${site.id}`}>Embed this radar</a>
+            <a href="/compare/">How it compares</a>
+            {network === "nexrad" && (
+              <>
+                {" · "}
+                <a href={`/embed/?site=${site.id}`}>Embed this radar</a>
+              </>
+            )}
           </p>
         </div>
       </section>
     </Base>
   ) : (
     <Base
-      title={`Weather radar in ${state} | HookEcho`}
-      description={`Every NEXRAD radar site in ${state}, with live loops, active warnings and every tilt of the Level 2 volume in HookEcho.`}
+      title={`Weather radar in ${region} | HookEcho`}
+      description={`Every weather radar site in ${region}, with live loops where they exist and every tilt of the volume in HookEcho.`}
     >
       <section>
         <div class="wrap">
           <p class="eyebrow">
-            <a href="/radar/">NEXRAD sites</a>
+            <a href="/radar/">Radar sites</a>
           </p>
-          <h1>Weather radar in {state}</h1>
+          <h1>Weather radar in {region}</h1>
           <p class="lede">
-            {props.kind === "state" ? props.inState.length : 0} National Weather Service radars
-            cover {state}, counting the terminal radars at the airports. Each one has a page here
-            with the warnings currently over it and a link that opens it in HookEcho at full
-            resolution.
+            {props.kind === "region" ? props.inRegion.length : 0}{" "}
+            {metric ? "radars cover " : "National Weather Service radars cover "}
+            {region}
+            {metric ? "" : ", counting the terminal radars at the airports"}. Each one has a page
+            here and a link that opens it in HookEcho at full resolution.
           </p>
 
           <div class="cta">
             <a class="btn btn-primary" href="https://app.hookecho.io">
               Open the radar
             </a>
-            <a class="btn" href="https://app.hookecho.io/lite/">
-              Lite view
-            </a>
+            {!metric && (
+              <a class="btn" href="https://app.hookecho.io/lite/">
+                Lite view
+              </a>
+            )}
             <a class="btn" href="/download/">
               Get the app
             </a>
           </div>
 
           <ul class="sites">
-            {props.kind === "state" &&
-              props.inState.map((s) => (
+            {props.kind === "region" &&
+              props.inRegion.map((s) => (
                 <li>
                   <a href={`/radar/${s.id.toLowerCase()}/`}>
                     <strong>{s.id}</strong> {s.city}
                     {s.network === "tdwr" && <span class="tag">TDWR</span>}
+                    {areaName(s) && s.country !== "US" && <span class="tag">{areaName(s)}</span>}
                   </a>
                 </li>
               ))}
@@ -327,6 +397,8 @@ const state = props.kind === "state" ? stateName(props.code) : "";
   .sites a:hover { border-color: var(--stroke-strong); color: var(--text); box-shadow: var(--shadow-2); }
   .sites strong { color: var(--text); margin-right: 0.4rem; }
   .miles { float: right; font-variant-numeric: tabular-nums; }
+  /* The licence line the international networks ask for, kept quiet and next to their data. */
+  .credit { color: var(--text-dim); font-size: 0.85rem; }
   .tag {
     margin-left: 0.4rem;
     padding: 0.05rem 0.35rem;

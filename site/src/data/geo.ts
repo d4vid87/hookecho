@@ -11,3 +11,7 @@ export function milesBetween(a: { lat: number; lon: number }, b: { lat: number; 
     Math.cos(a.lat * rad) * Math.cos(b.lat * rad) * Math.sin(dLon / 2) ** 2;
   return 3958.8 * 2 * Math.asin(Math.sqrt(h));
 }
+
+// The same distance in kilometres, which is what every page outside the US reads in.
+export const kmBetween = (a: { lat: number; lon: number }, b: { lat: number; lon: number }) =>
+  milesBetween(a, b) * 1.609344;
