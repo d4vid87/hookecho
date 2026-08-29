@@ -89,7 +89,9 @@ gz_bytes="$(gzip -9 -c "web/dist/hookecho_bg-$wasm_hash.wasm" | wc -c)"
 # ponytail: a regression gate, not an aspiration. It is set just above what the current build
 # produces, so a careless new dependency trips it; getting the number meaningfully lower means
 # cutting fonts (~1.9 MB of TTF) or a wgpu backend, and neither is free. Raise it deliberately.
-budget="${HOOKECHO_WASM_BUDGET:-4882000}"
+# The number tracks CI's build, which runs ~15 KB above a local one, so a local build has that
+# much slack; CI is the gate that matters.
+budget="${HOOKECHO_WASM_BUDGET:-4897000}"
 printf 'wasm: %s raw, %s gzipped (budget %s)\n' \
   "$(stat -c%s "web/dist/hookecho_bg-$wasm_hash.wasm")" "$gz_bytes" "$budget"
 if [ "$gz_bytes" -gt "$budget" ]; then
