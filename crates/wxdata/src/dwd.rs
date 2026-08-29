@@ -7,26 +7,32 @@
 //! licensed. Bytes land in [`crate::odim`] and come back out as a [`Scan`], so rendering,
 //! palettes, SRV and thresholds treat Essen exactly like they treat Oklahoma City.
 //!
-//! The five-minute volume scan is ten separate files, one per elevation, and they are *not*
-//! stored in elevation order — index 5 is the 0.5° base tilt and index 9 is the 25° bird bath.
-//! Each has a `-LATEST-` symlink beside it, which is what makes this feed cheap to poll: no
-//! directory index, ten predictable URLs, fetched together.
+//! The five-minute volume scan is ten separate files per moment, one per elevation, and they are
+//! *not* stored in elevation order — index 5 is the 0.5° base tilt and index 9 is the 25° bird
+//! bath. Reflectivity has a `-LATEST-` symlink beside each file, which is what makes this feed
+//! cheap to poll: no directory index, ten predictable URLs, fetched together.
+//!
+//! Velocity has no such symlink, and DWD's directory index is a megabyte of ungzipped HTML per
+//! moment per site. It does not need one: every product of one elevation is named after that
+//! sweep's end time, and the reflectivity file states its own end time in
+//! `/dataset1/what/endtime`. So the velocity URL falls out of a file already in hand — see
+//! [`crate::odim::end_stamp`] — and the same stamp names the dual-pol products, which are
+//! fetched the same way for the same reason (their `-LATEST-` symlinks would let a fetch straddle
+//! two volumes).
 //!
 //! Every build offers it. `opendata.dwd.de` sends no `Access-Control-Allow-Origin`, so the browser
 //! reaches it through the same `/proxy/` route as every other feed (`crate::net::fetch_url`),
-//! which puts a volume — ten unfiltered files of ~440 KB — on the shared edge cache. That is real
-//! bandwidth, and it is the price of a radar app that draws Germany in a browser.
+//! which puts a whole volume on the shared edge cache. That is real bandwidth, and it is the price
+//! of a radar app that draws Germany in a browser.
 //!
-//! Reflectivity only. Velocity is published (`sweep_vol_v/`) but has no `-LATEST-` symlink, so
-//! reaching it means downloading a 1 MB HTML directory index per poll to learn one filename.
-//! ponytail: reflectivity-only until someone asks for velocity; the upgrade is one index fetch
-//! per volume, whose newest-per-elevation names also unlock ZDR/RHOHV/PHIDP.
+//! ponytail: no per-moment toggles and no partial retry — a moment that fails to arrive is simply
+//! absent from the sweep, exactly as it was when this module fetched reflectivity alone.
 
 use chrono::{DateTime, Utc};
-use nexrad_model::data::{Scan, Sweep};
+use nexrad_model::data::{MomentData, Radial, Scan, Sweep};
 use nexrad_model::meta::registry::SiteEntry;
 
-const BASE: &str = "https://opendata.dwd.de/weather/radar/sites/sweep_vol_z";
+const BASE: &str = "https://opendata.dwd.de/weather/radar/sites";
 
 /// Elevations in a `vol5minng01` scan. They are numbered by publication slot, not by angle.
 const TILTS: u8 = 10;
@@ -114,14 +120,72 @@ fn path_for(id: &str) -> Option<(&'static str, u16)> {
         .map(|(_, slug, wmo)| (*slug, *wmo))
 }
 
-/// The `-LATEST-` symlink for one elevation slot of one site.
+/// The `-LATEST-` reflectivity symlink for one elevation slot of one site.
 ///
 /// `th` is total (unfiltered) horizontal reflectivity. The clutter-filtered `dbzh` product has no
 /// `-LATEST-` symlink, so unfiltered is the only version reachable without a directory index.
 fn sweep_url(slug: &str, wmo: u16, tilt: u8) -> String {
     format!(
-        "{BASE}/{slug}/unfiltered/ras07-vol5minng01_sweeph5onem_th_{tilt:02}-LATEST-{slug}-{wmo}-hd5"
+        "{BASE}/sweep_vol_z/{slug}/unfiltered/ras07-vol5minng01_sweeph5onem_th_{tilt:02}-LATEST-{slug}-{wmo}-hd5"
     )
+}
+
+/// The moments merged into each reflectivity sweep: the product directory under `sites/`, the
+/// subdirectory holding it, and the token its filenames use.
+///
+/// Velocity is the cheap one — DWD's filtered velocity files are ~70 KB against reflectivity's
+/// ~190 KB. The three dual-pol products are ~540 KB each, so carrying them multiplies a volume
+/// from ~2 MB to ~16 MB. Dropping them is deleting three rows.
+const MOMENTS: [(&str, &str, &str); 4] = [
+    ("sweep_vol_v", "hdf5/filter_polarimetric", "vradh"),
+    ("sweep_vol_zdr", "unfiltered", "uzdr"),
+    ("sweep_vol_rhohv", "unfiltered", "urhohv"),
+    ("sweep_vol_phidp", "unfiltered", "uphidp"),
+];
+
+/// The timestamped file for one moment of one elevation, named after that sweep's end time.
+fn moment_url(m: &(&str, &str, &str), slug: &str, wmo: u16, tilt: u8, stamp: &str) -> String {
+    let (dir, sub, name) = *m;
+    format!(
+        "{BASE}/{dir}/{slug}/{sub}/\
+         ras07-vol5minng01_sweeph5onem_{name}_{tilt:02}-{stamp}-{slug}-{wmo}-hd5"
+    )
+}
+
+/// Fold the moments of `extra` into `base`, gate arrays and all.
+///
+/// Every product of one elevation is the same scan sampled at once, so ray `i` of one file is ray
+/// `i` of the others. Callers drop any sweep whose ray count or elevation angle disagrees, which
+/// is the check that keeps that assumption honest.
+fn merge(base: &Sweep, extra: &[Sweep]) -> Sweep {
+    let radials = base
+        .radials()
+        .iter()
+        .enumerate()
+        .map(|(i, r)| {
+            let pick = |f: fn(&Radial) -> Option<&MomentData>| {
+                f(r).or_else(|| extra.iter().find_map(|s| s.radials().get(i).and_then(f)))
+                    .cloned()
+            };
+            Radial::new(
+                r.collection_timestamp(),
+                r.azimuth_number(),
+                r.azimuth_angle_degrees(),
+                r.azimuth_spacing_degrees(),
+                r.radial_status(),
+                r.elevation_number(),
+                r.elevation_angle_degrees(),
+                pick(Radial::reflectivity),
+                pick(Radial::velocity),
+                pick(Radial::spectrum_width),
+                pick(Radial::differential_reflectivity),
+                pick(Radial::differential_phase),
+                pick(Radial::correlation_coefficient),
+                None,
+            )
+        })
+        .collect();
+    Sweep::new(base.elevation_number(), radials)
 }
 
 /// Order decoded single-sweep scans into one volume, lowest tilt first.
@@ -150,8 +214,8 @@ pub async fn fetch_volume(
     let meta = site_by_id(id).ok_or_else(|| anyhow::anyhow!("{id} is not a DWD radar"))?;
     let (slug, wmo) = path_for(id).ok_or_else(|| anyhow::anyhow!("{id} has no DWD path"))?;
 
-    let jobs = (0..TILTS).map(|tilt| {
-        let (http, url) = (http.clone(), sweep_url(slug, wmo, tilt));
+    let get = |url: String| {
+        let http = http.clone();
         async move {
             let bytes = http
                 .get(crate::net::fetch_url(&url))
@@ -161,19 +225,60 @@ pub async fn fetch_volume(
                 .bytes()
                 .await
                 .ok()?;
-            match crate::odim::decode(bytes.to_vec()) {
-                // One file is one sweep; a volume with more would mean the feed changed shape.
-                Ok((time, scan)) => {
-                    let sweep = scan.sweeps().first()?;
-                    let angle = sweep.radials().first()?.elevation_angle_degrees();
-                    Some((time, angle, sweep.clone()))
-                }
+            Some((url, bytes.to_vec()))
+        }
+    };
+
+    let jobs = (0..TILTS).map(|tilt| {
+        let get = &get;
+        async move {
+            let (url, bytes) = get(sweep_url(slug, wmo, tilt)).await?;
+            // The stamp has to come off the reflectivity file before anything else is asked for:
+            // it is the only name the other moments answer to.
+            let stamp = crate::odim::end_stamp(bytes.clone());
+            let (time, scan) = match crate::odim::decode(bytes) {
+                Ok(v) => v,
                 Err(e) => {
                     // One unreadable elevation shouldn't cost the whole volume.
                     log::warn!("dwd: skipping {url}: {e}");
-                    None
+                    return None;
                 }
-            }
+            };
+            // One file is one sweep; a volume with more would mean the feed changed shape.
+            let base = scan.sweeps().first()?;
+            let angle = base.radials().first()?.elevation_angle_degrees();
+
+            let Some(stamp) = stamp else {
+                log::warn!("dwd: {url} states no sweep end time; reflectivity only");
+                return Some((time, angle, base.clone()));
+            };
+            let extras = futures_util::future::join_all(
+                MOMENTS
+                    .iter()
+                    .map(|m| get(moment_url(m, slug, wmo, tilt, &stamp))),
+            )
+            .await;
+            let extras: Vec<Sweep> = extras
+                .into_iter()
+                .flatten()
+                .filter_map(|(url, bytes)| match crate::odim::decode(bytes) {
+                    Ok((_, scan)) => scan.sweeps().first().cloned(),
+                    Err(e) => {
+                        // A moment that fails to arrive is simply absent from the sweep.
+                        log::warn!("dwd: skipping {url}: {e}");
+                        None
+                    }
+                })
+                // Merging is by ray index, so a file that disagrees about the scan it describes
+                // would smear another elevation's gates across this one.
+                .filter(|s| {
+                    s.radials().len() == base.radials().len()
+                        && s.radials()
+                            .first()
+                            .is_some_and(|r| r.elevation_angle_degrees() == angle)
+                })
+                .collect();
+            Some((time, angle, merge(base, &extras)))
         }
     });
     // `join_all` and not a JoinSet: ten independent round trips with a small decode each, and this
@@ -256,6 +361,62 @@ mod tests {
         );
     }
 
+    /// The stamp is the whole reason velocity costs no directory index, and it has to match the
+    /// filename convention exactly — one digit out and the URL 404s.
+    #[test]
+    fn the_end_stamp_names_the_sibling_files() {
+        let stamp = crate::odim::end_stamp(fixture("00")).expect("end stamp");
+        assert_eq!(stamp.len(), 16, "{stamp}");
+        assert!(stamp.chars().all(|c| c.is_ascii_digit()), "{stamp}");
+        assert!(stamp.ends_with("00"), "centiseconds: {stamp}");
+        assert_eq!(
+            moment_url(&MOMENTS[0], "boo", 10132, 5, &stamp),
+            format!(
+                "https://opendata.dwd.de/weather/radar/sites/sweep_vol_v/boo/\
+                 hdf5/filter_polarimetric/\
+                 ras07-vol5minng01_sweeph5onem_vradh_05-{stamp}-boo-10132-hd5"
+            )
+        );
+    }
+
+    /// Merging must not disturb the moments the base sweep already carries — reflectivity is the
+    /// one moment every DWD sweep has, and it is the one the map draws first.
+    #[test]
+    fn merge_adds_moments_without_replacing_the_ones_already_there() {
+        let (_, base) = decoded("05");
+        let gates = MomentData::from_fixed_point(4, 125, 250, 8, 2.0, 0.0, vec![1, 2, 3, 4]);
+        let velocity_only = Sweep::new(
+            1,
+            base.radials()
+                .iter()
+                .map(|r| {
+                    Radial::new(
+                        r.collection_timestamp(),
+                        r.azimuth_number(),
+                        r.azimuth_angle_degrees(),
+                        r.azimuth_spacing_degrees(),
+                        r.radial_status(),
+                        r.elevation_number(),
+                        r.elevation_angle_degrees(),
+                        None,
+                        Some(gates.clone()),
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
+                    )
+                })
+                .collect(),
+        );
+        let before = base.radials()[0].reflectivity().map(|m| m.values().len());
+        let merged = merge(&base, &[velocity_only]);
+        let r = &merged.radials()[0];
+        assert_eq!(r.reflectivity().map(|m| m.values().len()), before);
+        assert!(r.velocity().is_some(), "velocity came from the extra sweep");
+        assert_eq!(merged.radials().len(), base.radials().len());
+    }
+
     #[test]
     fn assemble_puts_the_base_tilt_first_whatever_order_it_arrived_in() {
         let (a0, s0) = decoded("00");
@@ -290,6 +451,11 @@ mod tests {
             .collect();
         println!("{name} at {time}: {angles:?}");
         assert_eq!(scan.sweeps().len(), TILTS as usize, "one sweep per elevation");
+        // Velocity is reached by a name derived from the reflectivity file, not by a symlink or a
+        // directory index; if DWD ever renames its timestamped files, this is what notices.
+        let base = &scan.sweeps()[0].radials()[0];
+        assert!(base.velocity().is_some(), "base tilt carries velocity");
+        assert!(base.correlation_coefficient().is_some(), "and dual-pol");
         assert!(angles.windows(2).all(|w| w[0] <= w[1]), "ascending: {angles:?}");
         assert!(angles[0] < 1.0, "base tilt is 0.5 degrees, got {}", angles[0]);
         assert!(

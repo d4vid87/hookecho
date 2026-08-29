@@ -55,9 +55,11 @@ fn moment_slot(quantity: &str) -> Option<usize> {
         "DBZH" | "DBZ" | "TH" | "DBZV" | "TV" => 0,
         "VRAD" | "VRADH" | "VRADV" | "VRADDH" => 1,
         "WRAD" | "WRADH" => 2,
-        "ZDR" => 3,
+        // The `U` forms are the same quantity before clutter filtering, which is how DWD
+        // publishes its dual-pol products.
+        "ZDR" | "UZDR" => 3,
         "PHIDP" | "UPHIDP" | "KDP" => 4,
-        "RHOHV" => 5,
+        "RHOHV" | "URHOHV" => 5,
         _ => return None,
     })
 }
@@ -70,6 +72,21 @@ struct Moment {
     scale: f32,
     offset: f32,
     word_bits: u8,
+}
+
+/// The `enddate`/`endtime` of the first sweep group, as `YYYYMMDDhhmmss00` — the stamp a DWD
+/// filename carries.
+///
+/// It reads the header only, which is what makes it worth a second open of bytes already decoded:
+/// a moment with no `-LATEST-` symlink is otherwise reachable only by downloading a megabyte of
+/// directory index to learn one name.
+pub fn end_stamp(bytes: Vec<u8>) -> Option<String> {
+    let f = hdf5lite::File::open(bytes).ok()?;
+    let what = f.attributes("dataset1/what").ok()?;
+    let (d, t) = (text(&what, "enddate")?, text(&what, "endtime")?);
+    // Anything else would name a file that cannot exist; better no velocity than a wild URL.
+    (d.len() == 8 && t.len() == 6 && d.bytes().chain(t.bytes()).all(|c| c.is_ascii_digit()))
+        .then(|| format!("{d}{t}00"))
 }
 
 /// Decode an ODIM_H5 polar volume into a [`Scan`], with the volume's nominal start time.
