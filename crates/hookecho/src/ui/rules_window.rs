@@ -35,6 +35,7 @@ pub fn show(
     ctx: &egui::Context,
     settings: &mut Settings,
     drawer: &mut crate::ui::drawer::Drawer,
+    metric: bool,
 ) -> bool {
     if !state.open {
         return false;
@@ -72,7 +73,7 @@ pub fn show(
         );
         ui.separator();
 
-        let places = place_options(settings);
+        let places = place_options(settings, metric);
         let mut remove: Option<usize> = None;
         egui::Grid::new("rules_grid")
             .num_columns(7)
@@ -181,12 +182,16 @@ pub fn show(
 }
 
 /// Every place a rule can name: anywhere, each marker, each drawn zone.
-fn place_options(settings: &Settings) -> Vec<(RulePlace, String)> {
+fn place_options(settings: &Settings, metric: bool) -> Vec<(RulePlace, String)> {
     let mut out = vec![(RulePlace::Anywhere, "Anywhere".to_string())];
     for m in &settings.markers {
         out.push((
             RulePlace::Marker { id: m.id.clone() },
-            format!("{} ({:.0} mi)", m.name, m.alert_radius_mi),
+            format!(
+                "{} ({})",
+                m.name,
+                crate::geo::fmt_distance(m.alert_radius_mi * crate::geo::KM_PER_MILE, metric, 0)
+            ),
         ));
     }
     for z in &settings.alert_polygons {
@@ -467,7 +472,7 @@ mod tests {
             name: "The valley".into(),
             ring: vec![[-98.0, 35.0], [-97.0, 35.0], [-97.0, 36.0], [-98.0, 35.0]],
         });
-        let places = place_options(&s);
+        let places = place_options(&s, false);
         assert_eq!(places[0].0, RulePlace::Anywhere);
         assert_eq!(
             places[1].0,

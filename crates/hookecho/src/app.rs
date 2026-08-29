@@ -4106,6 +4106,7 @@ impl HookEchoApp {
     /// Detect warning-tier alerts whose id we haven't seen, raising a banner + audible cue for
     /// each new one. The first fetch only seeds the known set (no alert on already-active warnings).
     fn detect_new_warnings(&mut self, feats: &[GeoFeature]) {
+        let metric = self.metric();
         let mut alerted = false;
         let mut max_esc = 0u8; // highest escalation among newly-seen warnings this pass
                                // Only banner warnings within the selected radar's coverage — a warning covering a saved
@@ -4237,7 +4238,7 @@ impl HookEchoApp {
                         let where_ = if km <= 0.05 {
                             format!("covers {name}")
                         } else {
-                            format!("{:.0} mi from {name}", km / crate::geo::KM_PER_MILE)
+                            format!("{} from {name}", crate::geo::fmt_distance(km, metric, 0))
                         };
                         (format!("⚠ {}", a.event), where_)
                     }
@@ -6129,6 +6130,7 @@ impl HookEchoApp {
     /// Same shape as the lightning alarm: a per-location cooldown, so a couplet that persists over
     /// six volumes is one alert, not six.
     fn rotation_near_you(&mut self, hits: &[wxdata::rotation::CoupletHit]) {
+        let metric = self.metric();
         const COOLDOWN: std::time::Duration = std::time::Duration::from_secs(600);
         if hits.is_empty() {
             return;
@@ -6159,14 +6161,14 @@ impl HookEchoApp {
             }
             self.rotation_alerted.insert(id, Instant::now());
             let kt = vrot_ms as f64 * 1.943_844;
-            let mi = km / crate::geo::KM_PER_MILE;
+            let away = crate::geo::fmt_distance(km, metric, 0);
             self.banner(
                 format!("\u{21bb} Rotation near {name}"),
-                format!("{kt:.0} kt couplet, {mi:.0} mi away"),
+                format!("{kt:.0} kt couplet, {away} away"),
             );
             self.notify_alert(
                 &format!("\u{21bb} Rotation near {name}"),
-                &format!("{kt:.0} kt rotational velocity, {mi:.0} mi from {name}"),
+                &format!("{kt:.0} kt rotational velocity, {away} from {name}"),
                 true,
             );
             fired = true;
@@ -6684,6 +6686,29 @@ impl HookEchoApp {
         }
     }
 
+    /// Whether distances should read in kilometres: they should everywhere the US networks do not
+    /// reach, which the active pane's radar tells us for free. No setting, because a setting here
+    /// is one more thing to get wrong — someone watching Hamburg wants kilometres, and someone
+    /// watching Oklahoma wants miles, and the pane already knows which one they are looking at.
+    ///
+    /// A pane with no site loaded reads as the US, which is what every path assumed before there
+    /// was more than one network.
+    fn metric(&self) -> bool {
+        self.metric_in(self.active)
+    }
+
+    /// The same question for a specific pane, which is what a per-pane drawing (the measure tool)
+    /// wants: split panes can show Oklahoma beside Bavaria.
+    fn metric_in(&self, idx: usize) -> bool {
+        !matches!(
+            self.views[idx]
+                .site
+                .as_deref()
+                .map_or(wxdata::sites::Network::Nexrad, wxdata::sites::network),
+            wxdata::sites::Network::Nexrad | wxdata::sites::Network::Tdwr
+        )
+    }
+
     /// Lon/lat box `±radius_km` around the active pane's radar site (its coverage area), or `None`
     /// when no site is selected. Used to scope new-warning banners to the viewed radar.
     fn active_site_bounds(&self, radius_km: f64) -> Option<(f64, f64, f64, f64)> {
@@ -6897,6 +6922,7 @@ impl HookEchoApp {
     /// is, how close it will come and when, and which way to drive to get off its path. Display
     /// only; the arrival cones and NWS warnings already own the alarms.
     fn chase_hud(&mut self, ctx: &egui::Context) {
+        let metric = self.metric();
         if !self.chase_mode {
             return;
         }
@@ -6920,12 +6946,16 @@ impl HookEchoApp {
         // changed, and never more than once a minute — a voice that repeats itself is a voice the
         // user turns off. Reported in whole miles, so a storm parked in place says nothing.
         if self.settings.speak_position && !self.settings.mute_alerts {
-            let miles = (km * 0.621_371).round() as i32;
+            let whole = if metric {
+                km.round() as i32
+            } else {
+                (km / crate::geo::KM_PER_MILE).round() as i32
+            };
             let fresh = self.spoke_pos.is_none_or(|(t, m)| {
-                m != miles && t.elapsed() >= std::time::Duration::from_secs(60)
+                m != whole && t.elapsed() >= std::time::Duration::from_secs(60)
             });
             if fresh {
-                self.spoke_pos = Some((Instant::now(), miles));
+                self.spoke_pos = Some((Instant::now(), whole));
                 crate::speech::speak(&wxdata::spoken::position_script(
                     // "Cell O7", not the bare id — a synthesizer reading "O7" alone is a noise.
                     &if c.id.is_empty() {
@@ -6936,12 +6966,13 @@ impl HookEchoApp {
                     bearing as f32,
                     km,
                     c.mvt_deg,
+                    metric,
                 ));
             }
         }
-        let mi = |km: f64| km * 0.621_371;
-        // Urgent when the storm will be on top of you soon.
-        let urgent = mi(close_km) < 5.0 && close_min < 20.0;
+        // Urgent when the storm will be on top of you soon. The threshold stays in kilometres
+        // whatever the card reads in: five miles of warning is five miles of warning in Bavaria.
+        let urgent = close_km < 8.05 && close_min < 20.0;
         let accent = crate::theme::accent(self.settings.theme);
         let red = egui::Color32::from_rgb(230, 70, 70);
         let inset_bottom = (ctx.viewport_rect().bottom() - ctx.content_rect().bottom()).max(0.0);
@@ -7002,13 +7033,21 @@ impl HookEchoApp {
                     row(
                         ui,
                         "Now",
-                        format!("{:.1} mi {} ({:.0}°)", mi(km), cardinal(bearing), bearing),
+                        format!(
+                            "{} {} ({:.0}°)",
+                            crate::geo::fmt_distance(km, metric, 1),
+                            cardinal(bearing),
+                            bearing
+                        ),
                     );
                     if kt > 1.0 {
                         row(
                             ui,
                             "Closest",
-                            format!("{:.1} mi in {close_min:.0} min", mi(close_km)),
+                            format!(
+                                "{} in {close_min:.0} min",
+                                crate::geo::fmt_distance(close_km, metric, 1)
+                            ),
                         );
                         row(
                             ui,
@@ -12557,8 +12596,10 @@ impl HookEchoApp {
                 let (a, b) = (screen(self.measure[0]), screen(self.measure[1]));
                 painter.line_segment([a, b], egui::Stroke::new(2.0, col));
                 let (km, brg) = crate::geo::great_circle(self.measure[0], self.measure[1]);
-                let mi = km * 0.621_371; // statute miles
-                let mut txt = format!("{mi:.1} mi  @ {brg:.0}°");
+                let mut txt = format!(
+                    "{}  @ {brg:.0}°",
+                    crate::geo::fmt_distance(km, self.metric_in(idx), 1)
+                );
                 // How high the beam is over the far end of the line. The number that decides
                 // whether "there's nothing on radar there" means the storm is weak or means the
                 // scan is looking over its head, and until now it lived only in the cross-section.
@@ -12901,6 +12942,7 @@ impl HookEchoApp {
     /// have no place in the action registry: view toggles, chase, capture, settings bundles.
     /// Rendered inside the drawer, and (for one more commit) inside the old More popup.
     fn app_rows(&mut self, ui: &mut egui::Ui) {
+        let metric = self.metric();
         {
             ui.label(egui::RichText::new("View").strong());
             {
@@ -12962,9 +13004,9 @@ impl HookEchoApp {
                 );
             if self.settings.chase_log && !self.chase_track.points.is_empty() {
                 ui.weak(format!(
-                    "{} points · {:.0} mi",
+                    "{} points · {}",
                     self.chase_track.points.len(),
-                    self.chase_track.miles()
+                    crate::geo::fmt_distance(self.chase_track.km(), metric, 0)
                 ));
                 ui.horizontal(|ui| {
                     if ui
@@ -13500,7 +13542,9 @@ impl HookEchoApp {
                 .map(|m| (m.lon, m.lat))
         });
         let line =
-            here.and_then(|(lon, lat)| widget_storm_line(self.active_storm_cells(), lon, lat));
+            here.and_then(|(lon, lat)| {
+                widget_storm_line(self.active_storm_cells(), lon, lat, self.metric())
+            });
         match line {
             Some(line) => {
                 if let Err(e) = std::fs::write(&path, line) {
@@ -14242,16 +14286,16 @@ fn nearest_cell(cells: &[Cell], lon: f64, lat: f64, max_km: f64) -> Option<&Cell
 /// read — "R3 12 mi SSW, moving NE 35 mph". `None` when nothing is being tracked nearby, which
 /// the widget renders as no line at all rather than as "no storms" (the app may simply have been
 /// looking at another part of the country).
-fn widget_storm_line(cells: &[Cell], lon: f64, lat: f64) -> Option<String> {
+fn widget_storm_line(cells: &[Cell], lon: f64, lat: f64, metric: bool) -> Option<String> {
     let c = nearest_cell(cells, lon, lat, 300.0)?;
     let (km, bearing) = crate::geo::great_circle([c.lon, c.lat], [lon, lat]);
     // Bearing is measured from the cell to you, so the compass point is the side of you the storm
     // sits on once it is flipped back.
     let from = crate::geo::compass(((bearing + 180.0) % 360.0) as f32);
     let mut line = format!(
-        "{} {:.0} mi {from}",
+        "{} {} {from}",
         if c.id.is_empty() { &c.title } else { &c.id },
-        km * 0.621_371
+        crate::geo::fmt_distance(km, metric, 0)
     );
     if let (Some(dir), Some(kt)) = (c.mvt_deg, c.mvt_kt) {
         if kt >= 1.0 {
@@ -15346,11 +15390,13 @@ impl eframe::App for HookEchoApp {
                 Err(e) => self.marker_window.status = Some(e),
             }
         }
+        let metric = self.metric();
         let query = self.marker_window.show(
             ctx,
             &mut self.settings,
             &self.marker_icon_tex,
             &mut self.drawer,
+            metric,
         );
         // The map popup indexes into the same list: a delete above it leaves it describing the
         // wrong marker, which is the one way this UI can lie about which place you are editing.
@@ -15634,9 +15680,10 @@ impl eframe::App for HookEchoApp {
             }
         }
 
+        let metric = self.metric();
         if let Some(act) = self
             .chase_replay
-            .show(ctx, &self.chase_track, &mut self.drawer)
+            .show(ctx, &self.chase_track, &mut self.drawer, metric)
         {
             use ui::chase_replay::ReplayAction;
             match act {
@@ -15698,11 +15745,13 @@ impl eframe::App for HookEchoApp {
                 .collect(),
             _ => std::collections::HashSet::new(),
         };
+        let metric = self.metric();
         if ui::rules_window::show(
             &mut self.rules_window,
             ctx,
             &mut self.settings,
             &mut self.drawer,
+            metric,
         ) {
             self.settings.save();
         }
@@ -16280,13 +16329,16 @@ mod follow_tests {
         let mut c = cell("R3", -97.72, 35.30);
         c.mvt_deg = Some(45.0);
         c.mvt_kt = Some(30.0);
-        let line = widget_storm_line(&[c], -97.5, 35.3).unwrap();
+        let line = widget_storm_line(&[c.clone()], -97.5, 35.3, false).unwrap();
         // West of you: the compass point names the side the storm is on, not the bearing to it.
         assert!(line.starts_with("R3 12 mi W"), "{line}");
         assert!(line.ends_with("moving NE 35 mph"), "{line}");
+        // Same cell on a German pane: the distance turns over, the speed does not.
+        let km_line = widget_storm_line(&[c], -97.5, 35.3, true).unwrap();
+        assert!(km_line.starts_with("R3 20 km W"), "{km_line}");
         // Nothing within 300 km is no line at all.
-        assert!(widget_storm_line(&[cell("Z1", -80.0, 35.3)], -97.5, 35.3).is_none());
-        assert!(widget_storm_line(&[], -97.5, 35.3).is_none());
+        assert!(widget_storm_line(&[cell("Z1", -80.0, 35.3)], -97.5, 35.3, false).is_none());
+        assert!(widget_storm_line(&[], -97.5, 35.3, false).is_none());
     }
 
     #[test]

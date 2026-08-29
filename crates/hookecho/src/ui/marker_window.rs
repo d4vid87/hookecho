@@ -36,6 +36,7 @@ impl MarkerWindow {
         settings: &mut Settings,
         icon_tex: &IconTextures,
         drawer: &mut crate::ui::drawer::Drawer,
+        metric: bool,
     ) -> Option<String> {
         let mut open = self.open;
         let mut go: Option<String> = None;
@@ -82,7 +83,8 @@ impl MarkerWindow {
                      Ctrl+K ▸ \"Tool: Drop marker\". Tap a marker on the map to rename or remove it.",
                 );
                 ui.add_space(4.0);
-                self.removed = marker_grid(ui, &mut settings.markers, icon_tex).or(self.removed);
+                self.removed =
+                    marker_grid(ui, &mut settings.markers, icon_tex, metric).or(self.removed);
                 ui.add_space(6.0);
                 if ui.button("➕ Add blank marker").clicked() {
                     let n = settings.markers.len() + 1;
@@ -110,6 +112,7 @@ pub fn marker_grid(
     ui: &mut egui::Ui,
     markers: &mut Vec<Marker>,
     icon_tex: &IconTextures,
+    metric: bool,
 ) -> Option<usize> {
     let mut remove: Option<usize> = None;
     let mut make_home: Option<usize> = None;
@@ -122,8 +125,11 @@ pub fn marker_grid(
             ui.strong("Name");
             ui.strong("Lat");
             ui.strong("Lon");
-            ui.strong("Watch")
-                .on_hover_text("Alert when a warning comes within this many miles");
+            ui.strong("Watch").on_hover_text(if metric {
+                "Alert when a warning comes within this many kilometres"
+            } else {
+                "Alert when a warning comes within this many miles"
+            });
             ui.strong("Video")
                 .on_hover_text("Live stream URL for this place (HLS/MJPEG plays in-app)");
             ui.strong("Icon");
@@ -146,14 +152,34 @@ pub fn marker_grid(
                         .speed(0.01)
                         .max_decimals(4),
                 );
-                ui.add(
-                    egui::DragValue::new(&mut m.alert_radius_mi)
-                        .range(0.0..=200.0)
-                        .speed(1.0)
-                        .max_decimals(0)
-                        .suffix(" mi"),
-                )
-                .on_hover_text("0 = only alert when the warning polygon actually covers this spot");
+                // ponytail: the field stays `alert_radius_mi` on disk whatever this box reads
+                // in — a stored unit that changes with the pane on screen is a config file that
+                // means something different tomorrow. Convert in, convert back out.
+                let mut shown = if metric {
+                    m.alert_radius_mi * crate::geo::KM_PER_MILE
+                } else {
+                    m.alert_radius_mi
+                };
+                let (max, suffix) = if metric { (320.0, " km") } else { (200.0, " mi") };
+                if ui
+                    .add(
+                        egui::DragValue::new(&mut shown)
+                            .range(0.0..=max)
+                            .speed(1.0)
+                            .max_decimals(0)
+                            .suffix(suffix),
+                    )
+                    .on_hover_text(
+                        "0 = only alert when the warning polygon actually covers this spot",
+                    )
+                    .changed()
+                {
+                    m.alert_radius_mi = if metric {
+                        shown / crate::geo::KM_PER_MILE
+                    } else {
+                        shown
+                    };
+                }
                 ui.add(
                     egui::TextEdit::singleline(&mut m.video_url)
                         .desired_width(160.0)

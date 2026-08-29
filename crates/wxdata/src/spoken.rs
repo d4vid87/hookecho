@@ -170,12 +170,15 @@ pub fn position_script(
     bearing_deg: f32,
     km: f64,
     moving_toward_deg: Option<f32>,
+    metric: bool,
 ) -> String {
-    let miles = (km * 0.621_371).round() as i32;
-    let mut s = format!(
-        "{name} is {miles} miles to your {}",
-        spoken_compass(bearing_deg)
-    );
+    // Spelled out, not abbreviated: a synthesizer reading "km" says "kay em".
+    let (n, unit) = if metric {
+        (km.round() as i32, "kilometers")
+    } else {
+        ((km * 0.621_371).round() as i32, "miles")
+    };
+    let mut s = format!("{name} is {n} {unit} to your {}", spoken_compass(bearing_deg));
     if let Some(d) = moving_toward_deg {
         s.push_str(&format!(", moving {}", spoken_compass(d)));
     }
@@ -254,7 +257,9 @@ mod tests {
     #[test]
     fn a_position_update_names_the_side_it_is_on() {
         // 225 here is a heading, not a from-bearing: cell tables give direction of travel.
-        let s = position_script("The storm", 90.0, 32.2, Some(225.0));
+        let s = position_script("The storm", 90.0, 32.2, Some(225.0), false);
         assert_eq!(s, "The storm is 20 miles to your east, moving southwest.");
+        let s = position_script("The storm", 90.0, 32.2, Some(225.0), true);
+        assert_eq!(s, "The storm is 32 kilometers to your east, moving southwest.");
     }
 }

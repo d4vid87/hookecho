@@ -18,6 +18,20 @@ pub fn great_circle(a: [f64; 2], b: [f64; 2]) -> (f64, f64) {
 /// describe how far away weather is.
 pub const KM_PER_MILE: f64 = 1.609_344;
 
+/// A distance written in the units the region on screen uses: kilometres everywhere except the
+/// two US radar networks, which is what `metric` decides (see `App::metric`). `decimals` is the
+/// precision the call site wants — most read better whole, the measure tool wants a tenth.
+///
+/// ponytail: a formatter, not a units system. Nothing here converts back, because nothing but
+/// the marker watch radius is stored in miles, and that one converts at its own editor.
+pub fn fmt_distance(km: f64, metric: bool, decimals: usize) -> String {
+    if metric {
+        format!("{km:.*} km", decimals)
+    } else {
+        format!("{:.*} mi", decimals, km / KM_PER_MILE)
+    }
+}
+
 /// Kilometers to nautical miles.
 pub fn km_to_nmi(km: f64) -> f64 {
     km / 1.852
@@ -203,5 +217,13 @@ mod tests {
         assert!(arrival_eta_min([-97.0, 35.0], 90.0, 30.0, [-98.0, 35.0], 20.0, 240.0).is_none());
         // Stationary storm.
         assert!(arrival_eta_min([-97.0, 35.0], 90.0, 0.5, [-96.0, 35.0], 20.0, 240.0).is_none());
+    }
+
+    #[test]
+    fn distances_read_in_the_units_of_the_region() {
+        assert_eq!(fmt_distance(32.18688, false, 0), "20 mi");
+        assert_eq!(fmt_distance(32.18688, true, 0), "32 km");
+        assert_eq!(fmt_distance(1.609_344, false, 1), "1.0 mi");
+        assert_eq!(fmt_distance(0.0, true, 1), "0.0 km");
     }
 }
