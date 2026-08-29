@@ -1765,6 +1765,15 @@ fn goto_link(g: &Goto) -> String {
     }
 }
 
+/// The credit line a radar network's licence asks for, or `None` for one that asks for nothing
+/// (NOAA's WSR-88Ds and TDWRs are public domain). One arm per source, added as sources are.
+///
+/// ponytail: a function, not a NOTICE file or a licence registry. Attribution belongs on the map
+/// beside the data it covers; if a distribution ever needs a bundled notice, generate it from here.
+fn data_attribution(site_id: &str) -> Option<&'static str> {
+    wxdata::dwd::is_dwd(site_id).then_some("Radar data © Deutscher Wetterdienst (DL-DE/BY-2.0)")
+}
+
 /// How a lightning flash looks at `age_secs`: bright white-hot when it just happened, fading to a
 /// dim orange ember by the end of the window. The brightness IS the recency cue — a map of
 /// same-colored dots says where lightning has been, not where it is now.
@@ -10725,6 +10734,18 @@ impl HookEchoApp {
             );
         }
 
+        // Radar-data attribution, opposite the basemap credit so neither has to know the other's
+        // width. Only sources whose licence asks for a credit line get an arm.
+        if let Some(credit) = view.site.as_deref().and_then(data_attribution) {
+            painter.text(
+                egui::pos2(prect.right() - 6.0, prect.bottom() - 4.0),
+                egui::Align2::RIGHT_BOTTOM,
+                credit,
+                egui::FontId::proportional(10.0),
+                egui::Color32::from_gray(200).gamma_multiply(0.6),
+            );
+        }
+
         // GOES lightning: one dot per flash, fading as it ages.
         if self.show_glm {
             if let Ok(feed) = self.glm.lock() {
@@ -16342,6 +16363,17 @@ mod field_lut_tests {
 
 #[cfg(test)]
 mod tests {
+
+    /// The DWD arm exists because DL-DE/BY-2.0 requires the credit; the NOAA sites must stay
+    /// uncredited so the corner is empty on the maps most users open.
+    #[test]
+    fn only_licences_that_ask_for_a_credit_get_one() {
+        assert_eq!(
+            super::data_attribution("DEBO"),
+            Some("Radar data © Deutscher Wetterdienst (DL-DE/BY-2.0)")
+        );
+        assert_eq!(super::data_attribution("KTLX"), None);
+    }
 
     /// Scrubbing reverses constantly, so the paused set has to reach backwards as well; playback
     /// only ever goes forward. Nearest frames come first either way, because the in-flight budget
