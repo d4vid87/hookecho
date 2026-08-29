@@ -275,7 +275,10 @@ mod tests {
         let north = 50 * 201 + 100;
         let east = 100 * 201 + 150;
         // One slot of slack: the projection round-trip leaves a pixel a hair off the axis.
-        assert!(v.slot[north] <= 1 || v.slot[north] >= 719, "north is azimuth 0");
+        assert!(
+            v.slot[north] <= 1 || v.slot[north] >= 719,
+            "north is azimuth 0"
+        );
         assert!(
             v.slot[east].abs_diff((SLOTS / 4) as u16) <= 1,
             "east is 90 degrees, got slot {}",

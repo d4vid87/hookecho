@@ -157,7 +157,7 @@ fn moment_url(m: &(&str, &str, &str), slug: &str, wmo: u16, tilt: u8, stamp: &st
 /// Every product of one elevation is the same scan sampled at once, so ray `i` of one file is ray
 /// `i` of the others. Callers drop any sweep whose ray count or elevation angle disagrees, which
 /// is the check that keeps that assumption honest.
-fn merge(base: &Sweep, extra: &[Sweep]) -> Sweep {
+pub(crate) fn merge(base: &Sweep, extra: &[Sweep]) -> Sweep {
     let radials = base
         .radials()
         .iter()
@@ -192,7 +192,7 @@ fn merge(base: &Sweep, extra: &[Sweep]) -> Sweep {
 ///
 /// DWD's slot numbering is not elevation order, and everything downstream — the tilt selector,
 /// cross sections, the derived grids — assumes sweep 1 is the base tilt.
-fn assemble(mut parts: Vec<(f32, Sweep)>) -> Vec<Sweep> {
+pub(crate) fn assemble(mut parts: Vec<(f32, Sweep)>) -> Vec<Sweep> {
     parts.sort_by(|a, b| a.0.total_cmp(&b.0));
     parts
         .into_iter()
@@ -293,7 +293,11 @@ pub async fn fetch_volume(
     }
     // Every file in a volume carries the same volume start time; the earliest is that time even
     // when a straggler from the next volume lands mid-fetch.
-    let time = found.iter().map(|(t, _, _)| *t).min().unwrap_or_else(Utc::now);
+    let time = found
+        .iter()
+        .map(|(t, _, _)| *t)
+        .min()
+        .unwrap_or_else(Utc::now);
     let sweeps = assemble(found.into_iter().map(|(_, a, s)| (a, s)).collect());
 
     // ODIM carries no VCP: `vol5minng01` is a free-text scan strategy. Pattern 0 says so rather
@@ -345,7 +349,11 @@ mod tests {
         for s in SITES {
             let (slug, wmo) = path_for(s.id).unwrap_or_else(|| panic!("{} has no path", s.id));
             assert_eq!(slug.len(), 3, "{} slug", s.id);
-            assert!(slug.chars().all(|c| c.is_ascii_lowercase()), "{} slug", s.id);
+            assert!(
+                slug.chars().all(|c| c.is_ascii_lowercase()),
+                "{} slug",
+                s.id
+            );
             assert!((10_000..11_000).contains(&wmo), "{} wmo {wmo}", s.id);
         }
         assert!(is_dwd("debo") && is_dwd("DEBO"));
@@ -432,7 +440,10 @@ mod tests {
         assert_eq!(angles, vec![a5, a0]);
         // Numbering must be renewed, not inherited: both files call themselves sweep 1.
         assert_eq!(
-            sweeps.iter().map(|s| s.elevation_number()).collect::<Vec<_>>(),
+            sweeps
+                .iter()
+                .map(|s| s.elevation_number())
+                .collect::<Vec<_>>(),
             vec![1, 2]
         );
     }
@@ -450,14 +461,25 @@ mod tests {
             .map(|s| s.radials()[0].elevation_angle_degrees())
             .collect();
         println!("{name} at {time}: {angles:?}");
-        assert_eq!(scan.sweeps().len(), TILTS as usize, "one sweep per elevation");
+        assert_eq!(
+            scan.sweeps().len(),
+            TILTS as usize,
+            "one sweep per elevation"
+        );
         // Velocity is reached by a name derived from the reflectivity file, not by a symlink or a
         // directory index; if DWD ever renames its timestamped files, this is what notices.
         let base = &scan.sweeps()[0].radials()[0];
         assert!(base.velocity().is_some(), "base tilt carries velocity");
         assert!(base.correlation_coefficient().is_some(), "and dual-pol");
-        assert!(angles.windows(2).all(|w| w[0] <= w[1]), "ascending: {angles:?}");
-        assert!(angles[0] < 1.0, "base tilt is 0.5 degrees, got {}", angles[0]);
+        assert!(
+            angles.windows(2).all(|w| w[0] <= w[1]),
+            "ascending: {angles:?}"
+        );
+        assert!(
+            angles[0] < 1.0,
+            "base tilt is 0.5 degrees, got {}",
+            angles[0]
+        );
         assert!(
             (Utc::now() - time).num_minutes() < 30,
             "{time} is not a live volume"

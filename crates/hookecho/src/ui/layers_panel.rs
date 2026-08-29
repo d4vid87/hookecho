@@ -60,8 +60,12 @@ pub(crate) fn glyph(e: &PaletteEntry) -> &'static str {
     let l = e.label.to_lowercase();
     let has = |w: &str| l.contains(w);
     match () {
-        _ if has("velocity") || has("azshear") || has("rotation") || has("srv")
-            || has("srh") || has("spin") =>
+        _ if has("velocity")
+            || has("azshear")
+            || has("rotation")
+            || has("srv")
+            || has("srh")
+            || has("spin") =>
         {
             ph::ARROWS_CLOCKWISE
         }
@@ -69,7 +73,11 @@ pub(crate) fn glyph(e: &PaletteEntry) -> &'static str {
         _ if has("tornado") || has("tds") => ph::TORNADO,
         _ if has("lightning") || has("glm") => ph::LIGHTNING,
         _ if has("snow") || has("winter") || has("ice") => ph::SNOWFLAKE,
-        _ if has("rain") || has("qpe") || has("precip") || has("flood") || has("vil")
+        _ if has("rain")
+            || has("qpe")
+            || has("precip")
+            || has("flood")
+            || has("vil")
             || has("moisture") =>
         {
             ph::DROP

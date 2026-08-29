@@ -178,7 +178,12 @@ pub async fn fetch_gairmet(client: &reqwest::Client) -> anyhow::Result<Vec<GeoFe
 
 /// The forecast hour back out of a feature's title, which is where [`parse_gairmet`] put it.
 fn forecast_hour(f: &GeoFeature) -> Option<i64> {
-    f.title.rsplit_once('+')?.1.trim_end_matches('h').parse().ok()
+    f.title
+        .rsplit_once('+')?
+        .1
+        .trim_end_matches('h')
+        .parse()
+        .ok()
 }
 
 /// A pilot report: what someone actually flew through, at a known altitude.
@@ -376,7 +381,11 @@ mod gairmet_tests {
           "coords":[{"lat":"40.0","lon":"-100.0"},{"lat":"41.0","lon":"-100.0"},
                     {"lat":"41.0","lon":"-99.0"}]}]"#;
         let f = parse_gairmet(json).unwrap();
-        assert!(f[0].detail.contains("FL100\u{2013}FL240"), "{}", f[0].detail);
+        assert!(
+            f[0].detail.contains("FL100\u{2013}FL240"),
+            "{}",
+            f[0].detail
+        );
 
         // Only a top: the label says so rather than inventing a floor at the surface.
         let json = json.replace(r#""base":10000,"#, "");

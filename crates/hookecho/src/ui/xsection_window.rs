@@ -41,85 +41,85 @@ pub fn show(
         return open;
     };
     window.show(ctx, |ui| {
-            ui.horizontal(|ui| {
-                ui.label(format!(
-                    "Length {:.0} km · top {:.0} km",
-                    xs.length_km, xs.max_height_km
-                ));
-                ui.separator();
-                // Velocity shows how a couplet leans with height; CC shows how deep the debris
-                // ball really is. Both were unreachable while this was hard-wired to REF.
-                for m in [
-                    Moment::Reflectivity,
-                    Moment::Velocity,
-                    Moment::CorrelationCoefficient,
-                ] {
-                    let info = crate::products::info(m);
-                    if ui
-                        .selectable_label(*moment == m, info.short)
-                        .on_hover_text(info.name)
-                        .clicked()
-                        && *moment != m
-                    {
-                        *moment = m;
-                        changed = true;
-                    }
-                }
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    crate::ui::csv_buttons(
-                        ui,
-                        "xsection.csv",
-                        "The sampled grid, top row first",
-                        || xs.to_csv(),
-                    );
-                });
-            });
+        ui.horizontal(|ui| {
+            ui.label(format!(
+                "Length {:.0} km · top {:.0} km",
+                xs.length_km, xs.max_height_km
+            ));
             ui.separator();
-            // Draw the panel stretched to a readable size (distance wide, height tall).
-            let avail = ui.available_size();
-            let w = avail.x.max(200.0);
-            let h = (w * 0.4).clamp(120.0, 260.0);
-            let img = egui::Image::new(tex)
-                .fit_to_exact_size(egui::vec2(w, h))
-                .texture_options(egui::TextureOptions::LINEAR);
-            let resp = ui.add(img);
-            // Axis captions along the drawn rect.
-            let rect = resp.rect;
-            let cap = |ui: &egui::Ui, pos, anchor, txt: &str| {
-                ui.painter().text(
-                    pos,
-                    anchor,
-                    txt,
-                    egui::FontId::proportional(10.0),
-                    egui::Color32::from_gray(200),
+            // Velocity shows how a couplet leans with height; CC shows how deep the debris
+            // ball really is. Both were unreachable while this was hard-wired to REF.
+            for m in [
+                Moment::Reflectivity,
+                Moment::Velocity,
+                Moment::CorrelationCoefficient,
+            ] {
+                let info = crate::products::info(m);
+                if ui
+                    .selectable_label(*moment == m, info.short)
+                    .on_hover_text(info.name)
+                    .clicked()
+                    && *moment != m
+                {
+                    *moment = m;
+                    changed = true;
+                }
+            }
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                crate::ui::csv_buttons(
+                    ui,
+                    "xsection.csv",
+                    "The sampled grid, top row first",
+                    || xs.to_csv(),
                 );
-            };
-            cap(
-                ui,
-                rect.left_top() + egui::vec2(2.0, 2.0),
-                egui::Align2::LEFT_TOP,
-                &format!("{:.0} km", xs.max_height_km),
-            );
-            cap(
-                ui,
-                rect.left_bottom() + egui::vec2(2.0, -2.0),
-                egui::Align2::LEFT_BOTTOM,
-                "0 km",
-            );
-            cap(
-                ui,
-                rect.left_bottom() + egui::vec2(2.0, -14.0),
-                egui::Align2::LEFT_BOTTOM,
-                "A",
-            );
-            cap(
-                ui,
-                rect.right_bottom() + egui::vec2(-2.0, -14.0),
-                egui::Align2::RIGHT_BOTTOM,
-                "B",
-            );
-            ui.weak("A→B left to right; height increases upward. Gaps = no beam coverage.");
+            });
         });
+        ui.separator();
+        // Draw the panel stretched to a readable size (distance wide, height tall).
+        let avail = ui.available_size();
+        let w = avail.x.max(200.0);
+        let h = (w * 0.4).clamp(120.0, 260.0);
+        let img = egui::Image::new(tex)
+            .fit_to_exact_size(egui::vec2(w, h))
+            .texture_options(egui::TextureOptions::LINEAR);
+        let resp = ui.add(img);
+        // Axis captions along the drawn rect.
+        let rect = resp.rect;
+        let cap = |ui: &egui::Ui, pos, anchor, txt: &str| {
+            ui.painter().text(
+                pos,
+                anchor,
+                txt,
+                egui::FontId::proportional(10.0),
+                egui::Color32::from_gray(200),
+            );
+        };
+        cap(
+            ui,
+            rect.left_top() + egui::vec2(2.0, 2.0),
+            egui::Align2::LEFT_TOP,
+            &format!("{:.0} km", xs.max_height_km),
+        );
+        cap(
+            ui,
+            rect.left_bottom() + egui::vec2(2.0, -2.0),
+            egui::Align2::LEFT_BOTTOM,
+            "0 km",
+        );
+        cap(
+            ui,
+            rect.left_bottom() + egui::vec2(2.0, -14.0),
+            egui::Align2::LEFT_BOTTOM,
+            "A",
+        );
+        cap(
+            ui,
+            rect.right_bottom() + egui::vec2(-2.0, -14.0),
+            egui::Align2::RIGHT_BOTTOM,
+            "B",
+        );
+        ui.weak("A→B left to right; height increases upward. Gaps = no beam coverage.");
+    });
     if changed {
         // Force a rebuild on the next frame with the new moment.
         ctx.request_repaint();

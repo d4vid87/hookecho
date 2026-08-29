@@ -396,8 +396,8 @@ pub async fn fetch_advisory(
         .error_for_status()?
         .text()
         .await?;
-    let text = advisory_text(&body)
-        .ok_or_else(|| anyhow::anyhow!("no product text in the NHC page"))?;
+    let text =
+        advisory_text(&body).ok_or_else(|| anyhow::anyhow!("no product text in the NHC page"))?;
     Ok(Advisory {
         title: title.to_string(),
         text,

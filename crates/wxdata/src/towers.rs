@@ -187,7 +187,10 @@ mod tests {
 
     #[test]
     fn the_table_is_sorted_and_plausible() {
-        assert!(TOWERS.windows(2).all(|w| w[0].0 < w[1].0), "binary_search needs sorted ids");
+        assert!(
+            TOWERS.windows(2).all(|w| w[0].0 < w[1].0),
+            "binary_search needs sorted ids"
+        );
         for (id, h) in TOWERS {
             assert!(*h > 5.0 && *h < 80.0, "{id}: {h} m is not a radar tower");
         }

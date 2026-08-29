@@ -1771,7 +1771,15 @@ fn goto_link(g: &Goto) -> String {
 /// ponytail: a function, not a NOTICE file or a licence registry. Attribution belongs on the map
 /// beside the data it covers; if a distribution ever needs a bundled notice, generate it from here.
 fn data_attribution(site_id: &str) -> Option<&'static str> {
-    wxdata::dwd::is_dwd(site_id).then_some("Radar data © Deutscher Wetterdienst (DL-DE/BY-2.0)")
+    match wxdata::sites::network(site_id) {
+        wxdata::sites::Network::Dwd => Some("Radar data © Deutscher Wetterdienst (DL-DE/BY-2.0)"),
+        // ORD publishes every member's data under one licence, and the credit EUMETNET asks for
+        // names the network rather than the twenty national services behind it.
+        wxdata::sites::Network::Opera => {
+            Some("Radar data © EUMETNET OPERA / OpenRadarData (CC BY 4.0)")
+        }
+        _ => None,
+    }
 }
 
 /// How a lightning flash looks at `age_secs`: bright white-hot when it just happened, fading to a
@@ -3517,9 +3525,10 @@ impl HookEchoApp {
         ];
         /// Bit positions in the mask for the two hail grids.
         const HAIL_BITS: u8 = 0b11000;
-        let mask = LAYERS.iter().enumerate().fold(0u8, |m, (i, l)| {
-            m | u8::from(self.field_wanted(*l)) << i
-        });
+        let mask = LAYERS
+            .iter()
+            .enumerate()
+            .fold(0u8, |m, (i, l)| m | u8::from(self.field_wanted(*l)) << i);
         if mask == 0 {
             self.derived_key = None;
             return;
@@ -8630,16 +8639,20 @@ impl HookEchoApp {
         ctx: egui::Context,
     ) {
         let tx = self.msg_tx.clone();
-        if !wxdata::sites::is_nexrad(&site) {
-            // Neither network has a Level 2 feed or an archive: one volume per poll, synthesized
+        let network = wxdata::sites::network(&site);
+        if network != wxdata::sites::Network::Nexrad {
+            // None of these has a Level 2 feed or an archive: one volume per poll, synthesized
             // from the newest Level 3 tilt products (TDWR) or assembled from the newest ODIM
-            // sweep files (DWD).
+            // files (DWD, OPERA).
             let http = self.http.clone();
-            let dwd = wxdata::dwd::is_dwd(&site);
             self.spawner.spawn(async move {
-                let fetched = match dwd {
-                    true => wxdata::dwd::fetch_volume(&http, &site).await,
-                    false => wxdata::tdwr::fetch_volume(&http, &site).await,
+                use wxdata::sites::Network;
+                let fetched = match network {
+                    Network::Dwd => wxdata::dwd::fetch_volume(&http, &site).await,
+                    Network::Opera => wxdata::opera::fetch_volume(&http, &site).await,
+                    Network::Tdwr | Network::Nexrad => {
+                        wxdata::tdwr::fetch_volume(&http, &site).await
+                    }
                 };
                 let msg = match fetched {
                     Ok((name, _, _)) if current_name.as_deref() == Some(name.as_str()) => {
@@ -9989,16 +10002,15 @@ impl HookEchoApp {
                     })
                     .flatten();
                 // A watch zone under the click, when nothing more specific is there.
-                let zone_hit = (marker_hit.is_none()
-                    && peer_hit.is_none()
-                    && tool == MapTool::Interrogate)
-                    .then(|| {
-                        self.settings
-                            .alert_polygons
-                            .iter()
-                            .position(|z| point_in_ring_ll(&z.ring, lon, lat))
-                    })
-                    .flatten();
+                let zone_hit =
+                    (marker_hit.is_none() && peer_hit.is_none() && tool == MapTool::Interrogate)
+                        .then(|| {
+                            self.settings
+                                .alert_polygons
+                                .iter()
+                                .position(|z| point_in_ring_ll(&z.ring, lon, lat))
+                        })
+                        .flatten();
                 // Interrogate + a click on a radar-site ring switches radars (storm features win,
                 // handled inside try_pick_site). Consumes the click so no popup opens underneath.
                 let picked_site = marker_hit.is_none()
@@ -12161,7 +12173,10 @@ impl HookEchoApp {
 
         // The difference layer reads as "they disagree here" and nothing more without a number,
         // so the cursor samples the grid it was drawn from.
-        if view.fields_on.contains(&crate::render::FieldLayer::ModelDiff) {
+        if view
+            .fields_on
+            .contains(&crate::render::FieldLayer::ModelDiff)
+        {
             if let (Some(grid), Some(hp)) = (self.diff_grid.as_ref(), response.hover_pos()) {
                 let w = cam.screen_to_world((hp.x - prect.left(), hp.y - prect.top()), vp);
                 let (lon, lat) = crate::render::mercator::world_to_lonlat(w.0, w.1);
@@ -13463,7 +13478,8 @@ impl HookEchoApp {
                 .find(|m| m.home)
                 .map(|m| (m.lon, m.lat))
         });
-        let line = here.and_then(|(lon, lat)| widget_storm_line(self.active_storm_cells(), lon, lat));
+        let line =
+            here.and_then(|(lon, lat)| widget_storm_line(self.active_storm_cells(), lon, lat));
         match line {
             Some(line) => {
                 if let Err(e) = std::fs::write(&path, line) {
@@ -13628,9 +13644,7 @@ impl HookEchoApp {
                         );
                         // The mark rides with the caption: a shared loop travels without the app
                         // around it, and the wordmark alone is not what anyone recognises.
-                        ui.add(
-                            egui::Image::new(&logo).fit_to_exact_size(egui::vec2(16.0, 16.0)),
-                        );
+                        ui.add(egui::Image::new(&logo).fit_to_exact_size(egui::vec2(16.0, 16.0)));
                         ui.label(
                             egui::RichText::new("HookEcho · data: NOAA/NWS")
                                 .size(crate::ui::style::FONT_SM)
@@ -14554,8 +14568,8 @@ impl eframe::App for HookEchoApp {
             };
             // The reflectivity tint reads the precipitation-type grid whether or not that
             // layer is being drawn, so wanting the tint counts as wanting the layer's data.
-            let wanted = self.field_wanted(layer)
-                || (layer == FL::PrecipType && self.settings.precip_tint);
+            let wanted =
+                self.field_wanted(layer) || (layer == FL::PrecipType && self.settings.precip_tint);
             let stale = wanted
                 && self.fields.get(&layer).is_none_or(|s| {
                     s.last_fetch
@@ -15147,7 +15161,10 @@ impl eframe::App for HookEchoApp {
                 // Nobody chose this site, so say which one it is and that it can be changed.
                 self.toast(
                     ToastKind::Info,
-                    format!("Nearest radar: {} — change it any time in the panel", fin.site),
+                    format!(
+                        "Nearest radar: {} — change it any time in the panel",
+                        fin.site
+                    ),
                 );
             }
             if fin.take_tour {
@@ -15308,9 +15325,12 @@ impl eframe::App for HookEchoApp {
                 Err(e) => self.marker_window.status = Some(e),
             }
         }
-        let query = self
-            .marker_window
-            .show(ctx, &mut self.settings, &self.marker_icon_tex, &mut self.drawer);
+        let query = self.marker_window.show(
+            ctx,
+            &mut self.settings,
+            &self.marker_icon_tex,
+            &mut self.drawer,
+        );
         // The map popup indexes into the same list: a delete above it leaves it describing the
         // wrong marker, which is the one way this UI can lie about which place you are editing.
         if let (Some(gone), Some(open)) = (self.marker_window.removed, self.marker_popup) {
@@ -15362,7 +15382,9 @@ impl eframe::App for HookEchoApp {
                 }
             }
         }
-        if let Some(ui::digest_window::DigestAction::Generate) = self.digest_window.show(ctx, &mut self.drawer) {
+        if let Some(ui::digest_window::DigestAction::Generate) =
+            self.digest_window.show(ctx, &mut self.drawer)
+        {
             self.generate_digest();
         }
         // Live station cards. Video keeps arriving between input events, so a playing card asks
@@ -15627,7 +15649,10 @@ impl eframe::App for HookEchoApp {
         // same destination as clicking the dot on the map.
         let entries = self.palette_entries();
         let bindings = crate::hotkeys::active(&self.settings).into_owned();
-        if self.help_hub.show(ctx, &mut self.drawer, &bindings, &entries) {
+        if self
+            .help_hub
+            .show(ctx, &mut self.drawer, &bindings, &entries)
+        {
             self.tour.start();
         }
         let cells: &[Cell] = if self.archive_bucket().is_some() {
@@ -15828,9 +15853,13 @@ impl eframe::App for HookEchoApp {
         if self.show_cappi {
             self.update_cappi(ctx);
             let open = match self.cappi_tex.clone() {
-                Some(tex) => {
-                    ui::cappi_window::show(ctx, &tex, &mut self.cappi_alt_km, 300.0, &mut self.drawer)
-                }
+                Some(tex) => ui::cappi_window::show(
+                    ctx,
+                    &tex,
+                    &mut self.cappi_alt_km,
+                    300.0,
+                    &mut self.drawer,
+                ),
                 None => ui::cappi_window::show_empty(ctx, &mut self.drawer),
             };
             self.show_cappi = open;

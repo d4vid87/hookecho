@@ -37,19 +37,19 @@ pub fn show(
         return open;
     };
     window.show(ctx, |ui| {
-            ui.horizontal(|ui| {
-                ui.label("Altitude");
-                ui.add(egui::Slider::new(alt_km, 0.5..=15.0).suffix(" km"));
-            });
-            ui.label(format!("{length:.0} km across · reflectivity · north up"));
-            ui.separator();
-            let w = ui.available_size().x.clamp(200.0, 420.0);
-            let img = egui::Image::new(tex)
-                .fit_to_exact_size(egui::vec2(w, w))
-                .texture_options(egui::TextureOptions::NEAREST);
-            ui.add(img);
-            ui.weak("Constant-altitude PPI; gaps = no beam coverage at this height.");
+        ui.horizontal(|ui| {
+            ui.label("Altitude");
+            ui.add(egui::Slider::new(alt_km, 0.5..=15.0).suffix(" km"));
         });
+        ui.label(format!("{length:.0} km across · reflectivity · north up"));
+        ui.separator();
+        let w = ui.available_size().x.clamp(200.0, 420.0);
+        let img = egui::Image::new(tex)
+            .fit_to_exact_size(egui::vec2(w, w))
+            .texture_options(egui::TextureOptions::NEAREST);
+        ui.add(img);
+        ui.weak("Constant-altitude PPI; gaps = no beam coverage at this height.");
+    });
     open
 }
 
@@ -66,7 +66,7 @@ pub fn show_empty(ctx: &egui::Context, drawer: &mut crate::ui::drawer::Drawer) -
         return open;
     };
     window.show(ctx, |ui| {
-            ui.weak("No volume loaded in the active pane.");
-        });
+        ui.weak("No volume loaded in the active pane.");
+    });
     open
 }

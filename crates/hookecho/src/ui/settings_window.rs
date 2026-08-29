@@ -1124,9 +1124,7 @@ fn alerts_tab(ui: &mut egui::Ui, settings: &mut Settings) {
         });
         ui.horizontal(|ui| {
             ui.label("Topic prefix:");
-            ui.add(
-                egui::TextEdit::singleline(&mut settings.mqtt_prefix).hint_text("home/weather"),
-            );
+            ui.add(egui::TextEdit::singleline(&mut settings.mqtt_prefix).hint_text("home/weather"));
         });
         ui.weak(
             "Publishes <prefix>/status and <prefix>/nearest every five minutes, and \

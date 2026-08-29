@@ -128,7 +128,11 @@ mod tests {
         c.hail_in = Some(3.0);
         // Three inches of hail alongside 55 dBZ: the hail dominates its weight, and the weak
         // reflectivity component pulls the blend down only a little.
-        assert!(severity(&c, None, None) >= 85, "got {}", severity(&c, None, None));
+        assert!(
+            severity(&c, None, None) >= 85,
+            "got {}",
+            severity(&c, None, None)
+        );
         // A low probability alongside it does drag the blend down.
         assert!(severity(&c, Some(10), None) < 60);
     }

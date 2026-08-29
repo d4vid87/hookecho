@@ -66,7 +66,12 @@ mod tests {
 
     fn feat(id: &str, expires: Option<chrono::DateTime<chrono::Utc>>) -> GeoFeature {
         GeoFeature {
-            rings: vec![vec![[-98.0, 35.0], [-97.0, 35.0], [-97.0, 36.0], [-98.0, 35.0]]],
+            rings: vec![vec![
+                [-98.0, 35.0],
+                [-97.0, 35.0],
+                [-97.0, 36.0],
+                [-98.0, 35.0],
+            ]],
             fill: [255, 0, 0, 60],
             stroke: [255, 0, 0, 235],
             kind: FeatureKind::Warning,

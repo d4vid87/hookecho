@@ -41,27 +41,27 @@ pub fn show(
         return open;
     };
     window.show(ctx, |ui| {
-            ui.horizontal(|ui| {
-                ui.strong(site.unwrap_or("—"));
-                ui.weak(format!("{} levels", levels.len()));
-                ui.separator();
-                ui.selectable_value(tab, Tab::Hodograph, "Hodograph");
-                ui.selectable_value(tab, Tab::TimeHeight, "Time-height");
-            });
+        ui.horizontal(|ui| {
+            ui.strong(site.unwrap_or("—"));
+            ui.weak(format!("{} levels", levels.len()));
             ui.separator();
-            match *tab {
-                Tab::Hodograph => {
-                    if levels.len() < 2 {
-                        ui.weak("Loading VAD wind profile…");
-                        return;
-                    }
-                    plot(ui, levels);
-                    ui.add_space(4.0);
-                    legend(ui, levels);
-                }
-                Tab::TimeHeight => time_height(ui, history, tz),
-            }
+            ui.selectable_value(tab, Tab::Hodograph, "Hodograph");
+            ui.selectable_value(tab, Tab::TimeHeight, "Time-height");
         });
+        ui.separator();
+        match *tab {
+            Tab::Hodograph => {
+                if levels.len() < 2 {
+                    ui.weak("Loading VAD wind profile…");
+                    return;
+                }
+                plot(ui, levels);
+                ui.add_space(4.0);
+                legend(ui, levels);
+            }
+            Tab::TimeHeight => time_height(ui, history, tz),
+        }
+    });
     open
 }
 

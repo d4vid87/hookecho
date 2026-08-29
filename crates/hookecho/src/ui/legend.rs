@@ -253,7 +253,11 @@ pub fn draw_diff(
     let (a, b) = field.pair();
     for (text, align, x) in [
         (format!("-{range:.0}"), Align2::LEFT_TOP, bar.left()),
-        ("0 (\u{2248})".to_string(), Align2::CENTER_TOP, bar.center().x),
+        (
+            "0 (\u{2248})".to_string(),
+            Align2::CENTER_TOP,
+            bar.center().x,
+        ),
         (format!("+{range:.0}"), Align2::RIGHT_TOP, bar.right()),
     ] {
         painter.text(

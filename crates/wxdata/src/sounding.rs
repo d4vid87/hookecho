@@ -12,9 +12,7 @@ const BUCKET: &str = "https://noaa-hrrr-bdp-pds.s3.amazonaws.com";
 /// top two are above the tropopause on purpose: an uncapped plains parcel is still buoyant at
 /// 200 hPa, and without an equilibrium level the effective-layer shear and STP have nothing to
 /// measure against and come back absent.
-const LEVELS_HPA: &[u32] = &[
-    1000, 925, 850, 700, 600, 500, 400, 300, 250, 200, 150, 100,
-];
+const LEVELS_HPA: &[u32] = &[1000, 925, 850, 700, 600, 500, 400, 300, 250, 200, 150, 100];
 
 /// One level of the sounding.
 #[derive(Debug, Clone, Copy)]
@@ -694,9 +692,14 @@ mod tests {
         let (top, bottom) = csv.split_once("\n\n").expect("two blocks");
         assert!(top.starts_with("index,value\n"));
         assert!(top.lines().any(|l| l.starts_with("stp,")));
-        assert!(top.lines().any(|l| l.starts_with("ebwd_kt,") && l != "ebwd_kt,"));
+        assert!(top
+            .lines()
+            .any(|l| l.starts_with("ebwd_kt,") && l != "ebwd_kt,"));
         let mut rows = bottom.lines();
-        assert_eq!(rows.next().unwrap(), "pressure_hpa,height_m,temp_c,dewpt_c,u_ms,v_ms");
+        assert_eq!(
+            rows.next().unwrap(),
+            "pressure_hpa,height_m,temp_c,dewpt_c,u_ms,v_ms"
+        );
         assert_eq!(rows.next().unwrap(), "1000,0,30.0,22.0,0.0,8.0");
         assert_eq!(rows.count(), s.levels.len() - 1);
     }

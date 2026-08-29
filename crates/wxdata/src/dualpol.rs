@@ -17,7 +17,7 @@
 //! All three are display-only context. They deliberately raise nothing.
 
 use crate::level2::{BinnedSweep, Moment};
-use crate::tds::{dest, decode};
+use crate::tds::{decode, dest};
 use crate::xsection::column_samples;
 
 /// Geographic cluster cell, ~4 km — the same lattice [`crate::tds`] clusters on, so a signature

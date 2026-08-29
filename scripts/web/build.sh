@@ -91,7 +91,7 @@ gz_bytes="$(gzip -9 -c "web/dist/hookecho_bg-$wasm_hash.wasm" | wc -c)"
 # cutting fonts (~1.9 MB of TTF) or a wgpu backend, and neither is free. Raise it deliberately.
 # The number tracks CI's build, which runs ~15 KB above a local one, so a local build has that
 # much slack; CI is the gate that matters.
-budget="${HOOKECHO_WASM_BUDGET:-4902000}"
+budget="${HOOKECHO_WASM_BUDGET:-4915000}"
 printf 'wasm: %s raw, %s gzipped (budget %s)\n' \
   "$(stat -c%s "web/dist/hookecho_bg-$wasm_hash.wasm")" "$gz_bytes" "$budget"
 if [ "$gz_bytes" -gt "$budget" ]; then

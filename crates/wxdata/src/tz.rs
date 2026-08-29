@@ -118,7 +118,23 @@ pub fn site_tz(id: &str) -> Option<Tz> {
         // asked, or every German radar falls through to `None` and reads UTC.
         _ if crate::dwd::is_dwd(id) => Europe__Berlin,
 
-        _ => return None,
+        // OPERA sites carry an ISO country code instead of a state, and every country in the
+        // table is a single zone, so the zone is a property of the country and not of the radar.
+        // `every_site_has_a_timezone` fails the moment the site table grows a country this match
+        // does not answer for.
+        _ => match crate::opera::site_by_id(id)?.state {
+            "BE" => Europe__Brussels,
+            "CZ" => Europe__Prague,
+            "DK" => Europe__Copenhagen,
+            "HR" => Europe__Zagreb,
+            "IE" => Europe__Dublin,
+            "IS" => Atlantic__Reykjavik,
+            "NL" => Europe__Amsterdam,
+            "PL" => Europe__Warsaw,
+            "RO" => Europe__Bucharest,
+            "SI" => Europe__Ljubljana,
+            _ => return None,
+        },
     })
 }
 

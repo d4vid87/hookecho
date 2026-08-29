@@ -87,7 +87,10 @@ pub fn slant_from_ground_km(ground_km: f64, elev_deg: f64) -> f64 {
 pub fn ground_from_slant_km(slant_km: f64, elev_deg: f64) -> f64 {
     let h = beam_height_km(slant_km, elev_deg);
     let e = elev_deg.to_radians();
-    R_EFF_KM * (slant_km * e.cos() / (R_EFF_KM + h)).clamp(-1.0, 1.0).asin()
+    R_EFF_KM
+        * (slant_km * e.cos() / (R_EFF_KM + h))
+            .clamp(-1.0, 1.0)
+            .asin()
 }
 
 /// Great-circle distance (km) and initial bearing (deg from north) from `(lon0,lat0)` to `(lon,lat)`.
@@ -272,7 +275,10 @@ mod tests {
         // one — at 4.3° and 230 km the old formula was two gates out, so the cross-section read
         // the wrong gate *and* drew it at the wrong height.
         let err = (slant_from_ground_km(230.0, 4.3) - flat(230.0, 4.3)).abs();
-        assert!(err > 0.5, "expected a multi-gate error at long range, got {err} km");
+        assert!(
+            err > 0.5,
+            "expected a multi-gate error at long range, got {err} km"
+        );
         // And still under a gate where most interrogation happens.
         assert!((slant_from_ground_km(100.0, 0.5) - flat(100.0, 0.5)).abs() < 0.25);
     }

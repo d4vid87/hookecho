@@ -121,11 +121,7 @@ async fn pages(
 ) -> anyhow::Result<Vec<String>> {
     let mut out = Vec::new();
     for page in 0..MAX_PAGES {
-        let url = format!(
-            "{base}{}&resultOffset={}",
-            bbox_query(bbox),
-            page * LIMIT
-        );
+        let url = format!("{base}{}&resultOffset={}", bbox_query(bbox), page * LIMIT);
         let body = get(client, url).await?;
         let more = crate::dat::exceeded_limit(&body);
         out.push(body);

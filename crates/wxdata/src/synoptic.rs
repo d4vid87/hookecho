@@ -45,7 +45,8 @@ fn station(s: &serde_json::Value) -> Option<StationOb> {
     };
     let str_num = |key: &str| -> Option<f64> {
         let v = s.get(key)?;
-        v.as_f64().or_else(|| v.as_str().and_then(|s| s.parse().ok()))
+        v.as_f64()
+            .or_else(|| v.as_str().and_then(|s| s.parse().ok()))
     };
     let temp_c = num("air_temp");
     let dewp_c = num("dew_point_temperature");

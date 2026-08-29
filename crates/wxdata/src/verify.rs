@@ -343,7 +343,10 @@ mod tests {
         let blocks: Vec<&str> = csv.split("\n\n").collect();
         assert_eq!(blocks.len(), 3, "stats, warnings, reports");
         assert!(blocks[0].contains("OUN,2013-05-20T00:00:00+00:00"));
-        assert!(blocks[1].contains("OUN,TO,24,"), "the verified tornado warning");
+        assert!(
+            blocks[1].contains("OUN,TO,24,"),
+            "the verified tornado warning"
+        );
         assert!(
             blocks[1].contains("Cleveland OK;Oklahoma OK"),
             "counties keep out of the comma columns"

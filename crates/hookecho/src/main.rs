@@ -643,7 +643,10 @@ fn main() -> eframe::Result<()> {
     // Dual-pol signature verify: `hookecho --headless-dualpol [SITE] [H0_KM]`.
     if let Some(pos) = args.iter().position(|a| a == "--headless-dualpol") {
         let site = args.get(pos + 1).map(String::as_str).unwrap_or("KTLX");
-        let h0 = args.get(pos + 2).and_then(|s| s.parse().ok()).unwrap_or(4.0);
+        let h0 = args
+            .get(pos + 2)
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(4.0);
         if let Err(e) = headless::run_dualpol(site, h0) {
             eprintln!("headless dualpol failed: {e}");
             std::process::exit(1);
@@ -1005,7 +1008,7 @@ fn hand_link_to_running_instance(link: &str) -> bool {
 #[cfg(not(target_os = "android"))]
 mod single_instance {
     use std::io::{Read, Write};
-    use std::net::{Ipv4Addr, TcpListener, TcpStream, SocketAddrV4};
+    use std::net::{Ipv4Addr, SocketAddrV4, TcpListener, TcpStream};
     use std::time::Duration;
 
     /// Registered-user range, and nothing else known claims it.

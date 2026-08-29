@@ -529,7 +529,10 @@ mod tests {
             .expect("synoptic answered");
         assert!(!obs.is_empty(), "no stations came back");
         for o in obs.iter().take(10) {
-            println!("{} {} temp={:?} gust={:?}", o.id, o.name, o.temp_c, o.gust_kt);
+            println!(
+                "{} {} temp={:?} gust={:?}",
+                o.id, o.name, o.temp_c, o.gust_kt
+            );
         }
     }
 }

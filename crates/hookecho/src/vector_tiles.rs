@@ -409,13 +409,7 @@ const POI_CLASSES: &[&str] = &[
 const MAX_POIS_PER_TILE: usize = 12;
 
 /// Pull the interesting subset of the `poi` layer. Present in the tiles from z11.
-fn extract_pois(
-    reader: &Reader,
-    names: &[String],
-    n: f64,
-    txf: f64,
-    tyf: f64,
-) -> Vec<PlaceLabel> {
+fn extract_pois(reader: &Reader, names: &[String], n: f64, txf: f64, tyf: f64) -> Vec<PlaceLabel> {
     let Some(i) = names.iter().position(|nm| nm == "poi") else {
         return Vec::new();
     };
@@ -728,7 +722,8 @@ impl VectorTileManager {
                     // gunzip + lyon tessellation is the heaviest CPU in the app after the volume
                     // decode; running it on the async worker starves every other fetch.
                     blocking.spawn_blocking(move || {
-                        let (vertices, indices, labels) = build_tile(&bytes, id, palette, tess_zoom);
+                        let (vertices, indices, labels) =
+                            build_tile(&bytes, id, palette, tess_zoom);
                         let _ = tx.send(FetchedVector {
                             id,
                             vertices,

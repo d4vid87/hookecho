@@ -106,11 +106,7 @@ fn card(
         None => swatch(&painter, img_rect, style),
     }
     if !enabled {
-        painter.rect_filled(
-            img_rect,
-            4.0,
-            egui::Color32::from_black_alpha(150),
-        );
+        painter.rect_filled(img_rect, 4.0, egui::Color32::from_black_alpha(150));
         painter.text(
             img_rect.center(),
             egui::Align2::CENTER_CENTER,

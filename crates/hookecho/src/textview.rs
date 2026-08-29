@@ -79,10 +79,7 @@ fn body(text: &str) -> String {
             out.push_str(&format!("<p>{}</p>", esc(&unwrap_lines(&lines))));
         } else {
             // The spacing is the content here: a wind table, a coordinate summary, a hazard list.
-            out.push_str(&format!(
-                "<pre>{}</pre>",
-                esc(lines.join("\n").trim_end())
-            ));
+            out.push_str(&format!("<pre>{}</pre>", esc(lines.join("\n").trim_end())));
         }
     }
     out
@@ -126,11 +123,7 @@ fn prose(lines: &[&str]) -> bool {
 
 /// Undo the teletype wrap: the line breaks were never in the sentences.
 fn unwrap_lines(lines: &[&str]) -> String {
-    lines
-        .iter()
-        .map(|l| l.trim())
-        .collect::<Vec<_>>()
-        .join(" ")
+    lines.iter().map(|l| l.trim()).collect::<Vec<_>>().join(" ")
 }
 
 fn esc(s: &str) -> String {
@@ -188,7 +181,8 @@ mod tests {
 
     #[test]
     fn wrapped_prose_becomes_one_paragraph() {
-        let text = "A line of forecaster prose that runs right out to the teletype margin and then\n\
+        let text =
+            "A line of forecaster prose that runs right out to the teletype margin and then\n\
                     keeps going onto a second line before it finally stops.";
         let html = body(text);
         assert!(html.starts_with("<p>"), "{html}");

@@ -54,100 +54,100 @@ impl VerifyWindow {
             return act;
         };
         window.show(ctx, |ui| {
-                ui.horizontal_wrapped(|ui| {
-                    ui.label("Office:");
-                    ui.add(egui::TextEdit::singleline(&mut self.wfo).desired_width(56.0));
-                    ui.label("Day (UTC):");
-                    ui.add(egui::TextEdit::singleline(&mut self.day).desired_width(96.0));
-                    if ui.button("Verify").clicked() {
-                        act.refresh = true;
-                    }
-                    if self.busy {
-                        crate::ui::loading(ui, "Scoring warnings…");
-                    }
-                });
-                if let Some(e) = &self.error {
-                    ui.colored_label(egui::Color32::from_rgb(240, 120, 120), e);
+            ui.horizontal_wrapped(|ui| {
+                ui.label("Office:");
+                ui.add(egui::TextEdit::singleline(&mut self.wfo).desired_width(56.0));
+                ui.label("Day (UTC):");
+                ui.add(egui::TextEdit::singleline(&mut self.day).desired_width(96.0));
+                if ui.button("Verify").clicked() {
+                    act.refresh = true;
                 }
-                let Some(v) = &self.data else {
-                    ui.weak(
-                        "Scored against storm reports by the Iowa Environmental Mesonet's Cow \
+                if self.busy {
+                    crate::ui::loading(ui, "Scoring warnings…");
+                }
+            });
+            if let Some(e) = &self.error {
+                ui.colored_label(egui::Color32::from_rgb(240, 120, 120), e);
+            }
+            let Some(v) = &self.data else {
+                ui.weak(
+                    "Scored against storm reports by the Iowa Environmental Mesonet's Cow \
                          service — the same arbitration the published numbers use.",
-                    );
-                    return;
-                };
-                ui.separator();
-                stats_row(ui, v);
-                ui.separator();
-                ui.checkbox(&mut self.misses_only, "Unwarned reports only");
-                egui::ScrollArea::vertical().show(ui, |ui| {
-                    if !self.misses_only {
-                        ui.strong("Warnings");
-                        for w in &v.warnings {
-                            // ASCII marks, not check/cross glyphs: the monospace face the rows
-                            // use has no coverage for those and draws tofu boxes instead.
-                            let mark = if w.verified { "+" } else { "x" };
-                            let color = if w.verified {
-                                egui::Color32::from_rgb(120, 220, 140)
-                            } else {
-                                egui::Color32::from_rgb(230, 130, 130)
-                            };
-                            let lead = w
-                                .lead_min
-                                .map(|m| format!("{m} min lead"))
-                                .unwrap_or_else(|| "no verifying report".into());
-                            let label = format!(
-                                "{mark} {}-{:04}  {}  — {lead}  ({})",
-                                w.phenomena,
-                                w.eventid,
-                                crate::timefmt::fmt_clock(w.issue, tz, true),
-                                w.counties.join(", ")
-                            );
-                            if ui
-                                .add(egui::Label::new(
-                                    egui::RichText::new(label).color(color).monospace(),
-                                ))
-                                .on_hover_text("Click to fly there at the moment it was issued")
-                                .clicked()
-                            {
-                                act.goto = Some((w.lon, w.lat, Some(w.issue)));
-                            }
-                        }
-                        ui.add_space(6.0);
-                    }
-                    ui.strong("Storm reports");
-                    for r in v.reports.iter().filter(|r| !self.misses_only || !r.warned) {
-                        let color = if r.warned {
+                );
+                return;
+            };
+            ui.separator();
+            stats_row(ui, v);
+            ui.separator();
+            ui.checkbox(&mut self.misses_only, "Unwarned reports only");
+            egui::ScrollArea::vertical().show(ui, |ui| {
+                if !self.misses_only {
+                    ui.strong("Warnings");
+                    for w in &v.warnings {
+                        // ASCII marks, not check/cross glyphs: the monospace face the rows
+                        // use has no coverage for those and draws tofu boxes instead.
+                        let mark = if w.verified { "+" } else { "x" };
+                        let color = if w.verified {
                             egui::Color32::from_rgb(120, 220, 140)
                         } else {
                             egui::Color32::from_rgb(230, 130, 130)
                         };
-                        let mag = r
-                            .magnitude
-                            .map(|m| format!(" {m}"))
-                            .unwrap_or_else(String::new);
-                        let lead = match (r.warned, r.lead_min) {
-                            (true, Some(m)) => format!("warned {m} min ahead"),
-                            (true, None) => "warned".to_string(),
-                            (false, _) => "NOT WARNED".to_string(),
-                        };
+                        let lead = w
+                            .lead_min
+                            .map(|m| format!("{m} min lead"))
+                            .unwrap_or_else(|| "no verifying report".into());
                         let label = format!(
-                            "{}  {}{mag}  {} — {lead}",
-                            crate::timefmt::fmt_clock(r.valid, tz, true),
-                            r.kind,
-                            r.city
+                            "{mark} {}-{:04}  {}  — {lead}  ({})",
+                            w.phenomena,
+                            w.eventid,
+                            crate::timefmt::fmt_clock(w.issue, tz, true),
+                            w.counties.join(", ")
                         );
                         if ui
                             .add(egui::Label::new(
                                 egui::RichText::new(label).color(color).monospace(),
                             ))
+                            .on_hover_text("Click to fly there at the moment it was issued")
                             .clicked()
                         {
-                            act.goto = Some((r.lon, r.lat, Some(r.valid)));
+                            act.goto = Some((w.lon, w.lat, Some(w.issue)));
                         }
                     }
-                });
+                    ui.add_space(6.0);
+                }
+                ui.strong("Storm reports");
+                for r in v.reports.iter().filter(|r| !self.misses_only || !r.warned) {
+                    let color = if r.warned {
+                        egui::Color32::from_rgb(120, 220, 140)
+                    } else {
+                        egui::Color32::from_rgb(230, 130, 130)
+                    };
+                    let mag = r
+                        .magnitude
+                        .map(|m| format!(" {m}"))
+                        .unwrap_or_else(String::new);
+                    let lead = match (r.warned, r.lead_min) {
+                        (true, Some(m)) => format!("warned {m} min ahead"),
+                        (true, None) => "warned".to_string(),
+                        (false, _) => "NOT WARNED".to_string(),
+                    };
+                    let label = format!(
+                        "{}  {}{mag}  {} — {lead}",
+                        crate::timefmt::fmt_clock(r.valid, tz, true),
+                        r.kind,
+                        r.city
+                    );
+                    if ui
+                        .add(egui::Label::new(
+                            egui::RichText::new(label).color(color).monospace(),
+                        ))
+                        .clicked()
+                    {
+                        act.goto = Some((r.lon, r.lat, Some(r.valid)));
+                    }
+                }
             });
+        });
         self.open = open;
         act
     }

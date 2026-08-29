@@ -409,7 +409,10 @@ mod tests {
         p.reload(&paths);
         assert_eq!(p.tables[0].stops.len(), 2);
         assert!(p.errors[0].is_none());
-        assert!(p.errors[1].is_some(), "bad inline content reports, not panics");
+        assert!(
+            p.errors[1].is_some(),
+            "bad inline content reports, not panics"
+        );
     }
 
     #[test]

@@ -76,8 +76,8 @@ impl DiffField {
     /// arrive as the model published them: pressure in Pa, height in m, wind in m/s.
     pub fn input_scale(self) -> f32 {
         match self {
-            DiffField::Global(GlobalFieldKind::Mslp) => 0.01,      // Pa → hPa
-            DiffField::Global(GlobalFieldKind::Height500) => 0.1,  // m → dam
+            DiffField::Global(GlobalFieldKind::Mslp) => 0.01, // Pa → hPa
+            DiffField::Global(GlobalFieldKind::Height500) => 0.1, // m → dam
             DiffField::Global(GlobalFieldKind::Wind10m) => 1.943_844, // m/s → kt
             // A difference of two Kelvin fields is already a difference in °C.
             _ => 1.0,
@@ -216,7 +216,11 @@ fn sample(f: &MrmsField, lon: f64, lat: f64) -> Option<f32> {
     let (tx, ty) = ((x - x0 as f64) as f32, (y - y0 as f64) as f32);
     let at = |r: usize, c: usize| {
         let v = f.values[r * f.nx + c];
-        if v.is_finite() { Some(v) } else { None }
+        if v.is_finite() {
+            Some(v)
+        } else {
+            None
+        }
     };
     // One missing corner poisons the cell rather than being treated as zero — a hole in a model
     // field is not a value of zero, and a difference against zero is a fabricated gradient.
@@ -275,7 +279,15 @@ pub fn diff_index(v: f32, range: f32) -> u8 {
 mod tests {
     use super::*;
 
-    fn grid(nx: usize, ny: usize, west: f64, east: f64, south: f64, north: f64, v: f32) -> MrmsField {
+    fn grid(
+        nx: usize,
+        ny: usize,
+        west: f64,
+        east: f64,
+        south: f64,
+        north: f64,
+        v: f32,
+    ) -> MrmsField {
         MrmsField {
             values: vec![v; nx * ny],
             nx,
@@ -333,7 +345,10 @@ mod tests {
         let alpha = |v: f32| lut[diff_index(v, 10.0) as usize * 4 + 3];
         assert_eq!(alpha(0.0), 0, "models agreeing is invisible");
         assert_eq!(alpha(0.5), 0, "inside the deadband is invisible");
-        assert!(alpha(5.0) > 0 && alpha(10.0) > alpha(5.0), "further apart, more opaque");
+        assert!(
+            alpha(5.0) > 0 && alpha(10.0) > alpha(5.0),
+            "further apart, more opaque"
+        );
         // Sign picks the side of the ramp: blue for negative, red for positive.
         let rgb = |v: f32| {
             let i = diff_index(v, 10.0) as usize * 4;

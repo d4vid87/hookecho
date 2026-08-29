@@ -67,7 +67,11 @@ mod tests {
 
     #[test]
     fn the_report_says_what_broke_and_nothing_about_who_was_running_it() {
-        let r = format_report("index out of bounds", Some("src/app.rs:12:3"), "<backtrace>");
+        let r = format_report(
+            "index out of bounds",
+            Some("src/app.rs:12:3"),
+            "<backtrace>",
+        );
         assert!(r.contains("index out of bounds"));
         assert!(r.contains("src/app.rs:12:3"));
         assert!(r.contains(env!("CARGO_PKG_VERSION")));

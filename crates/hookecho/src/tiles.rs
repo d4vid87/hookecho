@@ -471,7 +471,9 @@ impl BasemapStyle {
             BasemapStyle::CustomXyz => 22,
             BasemapStyle::OsmHot => 18,
             BasemapStyle::OsmStandard | BasemapStyle::CyclOsm => 19,
-            BasemapStyle::CartoPositron | BasemapStyle::CartoDarkMatter | BasemapStyle::CartoVoyager => 20,
+            BasemapStyle::CartoPositron
+            | BasemapStyle::CartoDarkMatter
+            | BasemapStyle::CartoVoyager => 20,
             BasemapStyle::EsriImagery | BasemapStyle::EsriStreets | BasemapStyle::EsriTopo => 20,
             _ => 20, // Mapbox and MapTiler raster both serve past 20; the vector styles never get here.
         }
@@ -483,7 +485,9 @@ impl BasemapStyle {
     fn has_2x(self) -> bool {
         matches!(
             self,
-            BasemapStyle::CartoPositron | BasemapStyle::CartoDarkMatter | BasemapStyle::CartoVoyager
+            BasemapStyle::CartoPositron
+                | BasemapStyle::CartoDarkMatter
+                | BasemapStyle::CartoVoyager
         )
     }
 
@@ -1075,7 +1079,11 @@ impl TileManager {
     /// tile. Returns `None` while it is in flight, if it failed, or if the style has no raster
     /// URL — the picker paints a palette swatch in all of those cases, so nothing ever waits on
     /// a network round trip to draw.
-    pub fn thumb(&mut self, style: BasemapStyle, ctx: &egui::Context) -> Option<egui::TextureHandle> {
+    pub fn thumb(
+        &mut self,
+        style: BasemapStyle,
+        ctx: &egui::Context,
+    ) -> Option<egui::TextureHandle> {
         while let Ok((key, fetched)) = self.thumb_rx.try_recv() {
             let state = match fetched {
                 Some(f) => {
@@ -1128,17 +1136,20 @@ impl TileManager {
         self.spawner.spawn(async move {
             let bytes = load_tile_bytes(&client, &url, path.as_deref()).await;
             blocking.spawn_blocking(move || {
-                let decoded = bytes.ok().and_then(|b| image::load_from_memory(&b).ok()).map(|img| {
-                    let rgba = img.to_rgba8();
-                    let (w, h) = rgba.dimensions();
-                    FetchedTile {
-                        id: (6, 14, 24),
-                        style: key,
-                        rgba: rgba.into_raw(),
-                        width: w,
-                        height: h,
-                    }
-                });
+                let decoded = bytes
+                    .ok()
+                    .and_then(|b| image::load_from_memory(&b).ok())
+                    .map(|img| {
+                        let rgba = img.to_rgba8();
+                        let (w, h) = rgba.dimensions();
+                        FetchedTile {
+                            id: (6, 14, 24),
+                            style: key,
+                            rgba: rgba.into_raw(),
+                            width: w,
+                            height: h,
+                        }
+                    });
                 let _ = tx.send((key, decoded));
                 if let Some(ctx) = ctx2 {
                     ctx.request_repaint();
@@ -1206,9 +1217,15 @@ impl TileManager {
                 break;
             }
             let (z, x, y) = v.id;
-            let Some(mut url) =
-                style.url(z, x, y, self.retina, &self.mapbox_key, &self.maptiler_key, &self.custom_template)
-            else {
+            let Some(mut url) = style.url(
+                z,
+                x,
+                y,
+                self.retina,
+                &self.mapbox_key,
+                &self.maptiler_key,
+                &self.custom_template,
+            ) else {
                 continue;
             };
             // GOES frame time: rewrite the `default` time slot in the GIBS URL and tag the cache
@@ -1276,7 +1293,15 @@ impl TileManager {
     pub fn packable(&self, style: BasemapStyle) -> bool {
         style.goes_layer().is_none()
             && style
-                .url(0, 0, 0, false, &self.mapbox_key, &self.maptiler_key, &self.custom_template)
+                .url(
+                    0,
+                    0,
+                    0,
+                    false,
+                    &self.mapbox_key,
+                    &self.maptiler_key,
+                    &self.custom_template,
+                )
                 .is_some()
     }
 
@@ -1302,11 +1327,21 @@ impl TileManager {
         }
         let z_hi = z_hi.min(self.max_z(style));
         // Packs are always 1x: a pack is written once and read on whatever device opens it later.
-        let dir = root.join(style.provider(false, &self.custom_template)).join("default");
+        let dir = root
+            .join(style.provider(false, &self.custom_template))
+            .join("default");
         pack_tile_ids(min_lon, min_lat, max_lon, max_lat, z_lo, z_hi)
             .into_iter()
             .filter_map(|(z, x, y)| {
-                let url = style.url(z, x, y, false, &self.mapbox_key, &self.maptiler_key, &self.custom_template)?;
+                let url = style.url(
+                    z,
+                    x,
+                    y,
+                    false,
+                    &self.mapbox_key,
+                    &self.maptiler_key,
+                    &self.custom_template,
+                )?;
                 Some((url, dir.join(format!("{z}/{x}/{y}"))))
             })
             .collect()
@@ -1856,14 +1891,22 @@ mod tests {
             );
         }
         // ArcGIS services use {z}/{y}/{x}: y before x in the path.
-        let esri = BasemapStyle::EsriImagery.url(6, 15, 25, false, "", "", "").unwrap();
+        let esri = BasemapStyle::EsriImagery
+            .url(6, 15, 25, false, "", "", "")
+            .unwrap();
         assert!(esri.ends_with("/6/25/15"), "Esri y/x order: {esri}");
         // Standard slippy tiles use {z}/{x}/{y}.
-        let osm = BasemapStyle::OsmStandard.url(6, 15, 25, false, "", "", "").unwrap();
+        let osm = BasemapStyle::OsmStandard
+            .url(6, 15, 25, false, "", "", "")
+            .unwrap();
         assert!(osm.ends_with("/6/15/25.png"), "OSM x/y order: {osm}");
         // Mapbox nav styles stay key-gated.
-        assert!(BasemapStyle::MapboxNavDay.url(6, 15, 25, false, "", "", "").is_none());
-        assert!(BasemapStyle::MapboxNavDay.url(6, 15, 25, false, "k", "", "").is_some());
+        assert!(BasemapStyle::MapboxNavDay
+            .url(6, 15, 25, false, "", "", "")
+            .is_none());
+        assert!(BasemapStyle::MapboxNavDay
+            .url(6, 15, 25, false, "k", "", "")
+            .is_some());
     }
 
     /// Retina asks for the `@2x` tile only where the provider serves one, and those tiles get
@@ -1871,12 +1914,21 @@ mod tests {
     #[test]
     fn retina_only_changes_the_sources_that_serve_2x() {
         let carto = BasemapStyle::CartoDarkMatter;
-        assert!(carto.url(6, 15, 25, true, "", "", "").unwrap().ends_with("@2x.png"));
-        assert!(carto.url(6, 15, 25, false, "", "", "").unwrap().ends_with("/25.png"));
+        assert!(carto
+            .url(6, 15, 25, true, "", "", "")
+            .unwrap()
+            .ends_with("@2x.png"));
+        assert!(carto
+            .url(6, 15, 25, false, "", "", "")
+            .unwrap()
+            .ends_with("/25.png"));
         assert_ne!(carto.provider(true, ""), carto.provider(false, ""));
         // No `@2x` upstream: the URL and the cache path are identical either way.
         let osm = BasemapStyle::OsmStandard;
-        assert_eq!(osm.url(6, 15, 25, true, "", "", ""), osm.url(6, 15, 25, false, "", "", ""));
+        assert_eq!(
+            osm.url(6, 15, 25, true, "", "", ""),
+            osm.url(6, 15, 25, false, "", "", "")
+        );
         assert_eq!(osm.provider(true, ""), osm.provider(false, ""));
     }
 
@@ -2014,7 +2066,10 @@ mod goes_window_tests {
         let (hour, from, to) = goes_window(now, Some(old));
         let h = hour.expect("three days back is an archive");
         assert_eq!(h, old.timestamp().div_euclid(3600));
-        assert!(from <= old && old <= to, "the frame we are replaying is covered");
+        assert!(
+            from <= old && old <= to,
+            "the frame we are replaying is covered"
+        );
         assert_eq!(to - from, chrono::Duration::hours(3));
         // Scrubbing a few minutes inside the same hour must not change the refetch key.
         let (again, ..) = goes_window(now, Some(old + chrono::Duration::minutes(5)));

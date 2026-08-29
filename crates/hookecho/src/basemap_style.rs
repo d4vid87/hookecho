@@ -42,7 +42,6 @@ impl Palette {
         Palette::Positron,
         Palette::Midnight,
     ];
-
 }
 
 /// The per-palette color table. One struct rather than a pile of parallel `match` arms: adding a
@@ -364,7 +363,10 @@ mod tests {
 
     #[test]
     fn dark_and_light_differ_and_resolve() {
-        assert_ne!(style(Palette::Dark).background, style(Palette::Light).background);
+        assert_ne!(
+            style(Palette::Dark).background,
+            style(Palette::Light).background
+        );
         // Every documented class resolves in both themes.
         for p in [Palette::Dark, Palette::Light] {
             assert!(fill(p, "water", "").is_some());
@@ -393,7 +395,10 @@ mod tests {
             ("landuse", "residential"),
             ("park", ""),
         ] {
-            assert!(fill(p, layer, class).is_none(), "{layer}/{class} fills over imagery");
+            assert!(
+                fill(p, layer, class).is_none(),
+                "{layer}/{class} fills over imagery"
+            );
         }
         // It still draws the roads it exists for, and thicker than the vector basemap's.
         let (_, hybrid_w) = stroke(p, "transportation", "motorway").unwrap();

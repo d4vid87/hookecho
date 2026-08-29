@@ -71,12 +71,11 @@ pub fn show(
             state: s.state.to_string(),
             // Which table it came from, not which letter it starts with: the old
             // `starts_with('T')` guess labelled TJUA (a WSR-88D) a terminal radar.
-            kind: if wxdata::tdwr::is_tdwr(s.id) {
-                "TDWR"
-            } else if wxdata::dwd::is_dwd(s.id) {
-                "DWD"
-            } else {
-                "WSR-88D"
+            kind: match wxdata::sites::network(s.id) {
+                wxdata::sites::Network::Tdwr => "TDWR",
+                wxdata::sites::Network::Dwd => "DWD",
+                wxdata::sites::Network::Opera => "OPERA",
+                wxdata::sites::Network::Nexrad => "WSR-88D",
             },
             dist_km: haversine_km(center, (s.longitude as f64, s.latitude as f64)),
             starred: settings.presets.iter().any(|p| p == s.id),
@@ -110,125 +109,125 @@ pub fn show(
         return open;
     };
     window.show(ctx, |ui| {
-            // Selectable label text senses clicks and drags of its own, and a row is made of
-            // nothing but labels — so every click on a row went into selecting the city name and
-            // `row.response().clicked()` never fired. Clicking a site did nothing at all.
-            ui.style_mut().interaction.selectable_labels = false;
-            ui.horizontal(|ui| {
-                ui.label("Filter:");
-                // The field's default width plus two buttons overflows a phone, pushing None/Home
-                // off the screen edge — size it from what's actually left in the row.
-                let w = (ui.available_width() - 130.0).max(80.0);
-                ui.add(egui::TextEdit::singleline(&mut dialog.filter).desired_width(w));
-                if ui.button("None").clicked() {
-                    clear = true;
-                }
-                if ui.button("Home").clicked() {
-                    go_home = true;
+        // Selectable label text senses clicks and drags of its own, and a row is made of
+        // nothing but labels — so every click on a row went into selecting the city name and
+        // `row.response().clicked()` never fired. Clicking a site did nothing at all.
+        ui.style_mut().interaction.selectable_labels = false;
+        ui.horizontal(|ui| {
+            ui.label("Filter:");
+            // The field's default width plus two buttons overflows a phone, pushing None/Home
+            // off the screen edge — size it from what's actually left in the row.
+            let w = (ui.available_width() - 130.0).max(80.0);
+            ui.add(egui::TextEdit::singleline(&mut dialog.filter).desired_width(w));
+            if ui.button("None").clicked() {
+                clear = true;
+            }
+            if ui.button("Home").clicked() {
+                go_home = true;
+            }
+        });
+        ui.separator();
+
+        // Android: `TableBuilder` row clicks don't register under touch (nested scroll eats
+        // them), so the user could never switch sites. Use a plain scrollable button list —
+        // buttons reliably take taps. Desktop keeps the sortable table.
+        if cfg!(target_os = "android") {
+            egui::ScrollArea::vertical().show(ui, |ui| {
+                for r in &rows {
+                    ui.horizontal(|ui| {
+                        let star = if r.starred { "★" } else { "☆" };
+                        if ui.button(star).clicked() {
+                            toggle_star = Some(r.id.clone());
+                        }
+                        let text = format!(
+                            "{}   {}, {}   ·   {:.0} km",
+                            r.id, r.city, r.state, r.dist_km
+                        );
+                        let btn = egui::Button::new(egui::RichText::new(text).size(15.0))
+                            .fill(egui::Color32::from_rgba_unmultiplied(255, 255, 255, 12))
+                            .corner_radius(8.0)
+                            .min_size(egui::vec2(ui.available_width(), 40.0));
+                        if ui.add(btn).clicked() {
+                            apply = Some(r.id.clone());
+                        }
+                    });
+                    ui.add_space(3.0);
                 }
             });
-            ui.separator();
+        } else {
+            let mut header_button = |ui: &mut egui::Ui, label: &str, col: SortCol| {
+                let active = dialog.sort == col;
+                let text = if active {
+                    format!("{label} {}", if dialog.desc { "▼" } else { "▲" })
+                } else {
+                    label.to_string()
+                };
+                if ui.button(text).clicked() {
+                    if active {
+                        dialog.desc = !dialog.desc;
+                    } else {
+                        dialog.sort = col;
+                        dialog.desc = false;
+                    }
+                }
+            };
 
-            // Android: `TableBuilder` row clicks don't register under touch (nested scroll eats
-            // them), so the user could never switch sites. Use a plain scrollable button list —
-            // buttons reliably take taps. Desktop keeps the sortable table.
-            if cfg!(target_os = "android") {
-                egui::ScrollArea::vertical().show(ui, |ui| {
+            TableBuilder::new(ui)
+                .striped(true)
+                .sense(egui::Sense::click())
+                .column(Column::exact(28.0)) // star
+                .column(Column::exact(56.0)) // id
+                .column(Column::remainder()) // city
+                .column(Column::exact(40.0)) // state
+                .column(Column::exact(70.0)) // kind
+                .column(Column::exact(80.0)) // distance
+                .min_scrolled_height(0.0)
+                .header(22.0, |mut h| {
+                    h.col(|ui| {
+                        ui.label("★");
+                    });
+                    h.col(|ui| header_button(ui, "ID", SortCol::Id));
+                    h.col(|ui| header_button(ui, "City", SortCol::City));
+                    h.col(|ui| header_button(ui, "St", SortCol::State));
+                    h.col(|ui| {
+                        ui.label("Type");
+                    });
+                    h.col(|ui| header_button(ui, "Dist", SortCol::Distance));
+                })
+                .body(|mut body| {
                     for r in &rows {
-                        ui.horizontal(|ui| {
-                            let star = if r.starred { "★" } else { "☆" };
-                            if ui.button(star).clicked() {
-                                toggle_star = Some(r.id.clone());
-                            }
-                            let text = format!(
-                                "{}   {}, {}   ·   {:.0} km",
-                                r.id, r.city, r.state, r.dist_km
-                            );
-                            let btn = egui::Button::new(egui::RichText::new(text).size(15.0))
-                                .fill(egui::Color32::from_rgba_unmultiplied(255, 255, 255, 12))
-                                .corner_radius(8.0)
-                                .min_size(egui::vec2(ui.available_width(), 40.0));
-                            if ui.add(btn).clicked() {
+                        body.row(20.0, |mut row| {
+                            let mut star_hit = false;
+                            row.col(|ui| {
+                                let star = if r.starred { "★" } else { "☆" };
+                                if ui.button(star).clicked() {
+                                    toggle_star = Some(r.id.clone());
+                                    star_hit = true;
+                                }
+                            });
+                            row.col(|ui| {
+                                ui.strong(&r.id);
+                            });
+                            row.col(|ui| {
+                                ui.label(&r.city);
+                            });
+                            row.col(|ui| {
+                                ui.label(&r.state);
+                            });
+                            row.col(|ui| {
+                                ui.label(r.kind);
+                            });
+                            row.col(|ui| {
+                                ui.label(format!("{:.0} km", r.dist_km));
+                            });
+                            if row.response().clicked() && !star_hit {
                                 apply = Some(r.id.clone());
                             }
                         });
-                        ui.add_space(3.0);
                     }
                 });
-            } else {
-                let mut header_button = |ui: &mut egui::Ui, label: &str, col: SortCol| {
-                    let active = dialog.sort == col;
-                    let text = if active {
-                        format!("{label} {}", if dialog.desc { "▼" } else { "▲" })
-                    } else {
-                        label.to_string()
-                    };
-                    if ui.button(text).clicked() {
-                        if active {
-                            dialog.desc = !dialog.desc;
-                        } else {
-                            dialog.sort = col;
-                            dialog.desc = false;
-                        }
-                    }
-                };
-
-                TableBuilder::new(ui)
-                    .striped(true)
-                    .sense(egui::Sense::click())
-                    .column(Column::exact(28.0)) // star
-                    .column(Column::exact(56.0)) // id
-                    .column(Column::remainder()) // city
-                    .column(Column::exact(40.0)) // state
-                    .column(Column::exact(70.0)) // kind
-                    .column(Column::exact(80.0)) // distance
-                    .min_scrolled_height(0.0)
-                    .header(22.0, |mut h| {
-                        h.col(|ui| {
-                            ui.label("★");
-                        });
-                        h.col(|ui| header_button(ui, "ID", SortCol::Id));
-                        h.col(|ui| header_button(ui, "City", SortCol::City));
-                        h.col(|ui| header_button(ui, "St", SortCol::State));
-                        h.col(|ui| {
-                            ui.label("Type");
-                        });
-                        h.col(|ui| header_button(ui, "Dist", SortCol::Distance));
-                    })
-                    .body(|mut body| {
-                        for r in &rows {
-                            body.row(20.0, |mut row| {
-                                let mut star_hit = false;
-                                row.col(|ui| {
-                                    let star = if r.starred { "★" } else { "☆" };
-                                    if ui.button(star).clicked() {
-                                        toggle_star = Some(r.id.clone());
-                                        star_hit = true;
-                                    }
-                                });
-                                row.col(|ui| {
-                                    ui.strong(&r.id);
-                                });
-                                row.col(|ui| {
-                                    ui.label(&r.city);
-                                });
-                                row.col(|ui| {
-                                    ui.label(&r.state);
-                                });
-                                row.col(|ui| {
-                                    ui.label(r.kind);
-                                });
-                                row.col(|ui| {
-                                    ui.label(format!("{:.0} km", r.dist_km));
-                                });
-                                if row.response().clicked() && !star_hit {
-                                    apply = Some(r.id.clone());
-                                }
-                            });
-                        }
-                    });
-            }
-        });
+        }
+    });
 
     if let Some(id) = toggle_star {
         if let Some(pos) = settings.presets.iter().position(|p| *p == id) {

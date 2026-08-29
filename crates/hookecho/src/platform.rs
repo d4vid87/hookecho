@@ -203,7 +203,11 @@ pub fn share_link(title: &str, link: &str) -> bool {
             return false;
         };
         let data = js_sys::Object::new();
-        let _ = js_sys::Reflect::set(&data, &JsValue::from_str("title"), &JsValue::from_str(title));
+        let _ = js_sys::Reflect::set(
+            &data,
+            &JsValue::from_str("title"),
+            &JsValue::from_str(title),
+        );
         let _ = js_sys::Reflect::set(&data, &JsValue::from_str("url"), &JsValue::from_str(link));
         match f.call1(&nav, &data) {
             // The promise rejects when the user dismisses the sheet, which is not our problem and
@@ -607,33 +611,39 @@ mod android_alerts {
     }
 
     fn try_set_saver(on: bool) -> jni::errors::Result<()> {
-        with_class("io.hookecho.HookEcho.AlertService", |env, class, activity| {
-            let res = env.call_static_method(
-                class,
-                "setBatterySaver",
-                "(Landroid/content/Context;Z)V",
-                &[JValue::Object(activity), JValue::Bool(on as u8)],
-            );
-            if res.is_err() {
-                let _ = env.exception_clear();
-            }
-            res.map(|_| ())
-        })
+        with_class(
+            "io.hookecho.HookEcho.AlertService",
+            |env, class, activity| {
+                let res = env.call_static_method(
+                    class,
+                    "setBatterySaver",
+                    "(Landroid/content/Context;Z)V",
+                    &[JValue::Object(activity), JValue::Bool(on as u8)],
+                );
+                if res.is_err() {
+                    let _ = env.exception_clear();
+                }
+                res.map(|_| ())
+            },
+        )
     }
 
     fn try_set(enabled: bool) -> jni::errors::Result<()> {
-        with_class("io.hookecho.HookEcho.AlertService", |env, class, activity| {
-            let res = env.call_static_method(
-                class,
-                "setEnabled",
-                "(Landroid/content/Context;Z)V",
-                &[JValue::Object(activity), JValue::Bool(enabled as u8)],
-            );
-            if res.is_err() {
-                let _ = env.exception_clear();
-            }
-            res.map(|_| ())
-        })
+        with_class(
+            "io.hookecho.HookEcho.AlertService",
+            |env, class, activity| {
+                let res = env.call_static_method(
+                    class,
+                    "setEnabled",
+                    "(Landroid/content/Context;Z)V",
+                    &[JValue::Object(activity), JValue::Bool(enabled as u8)],
+                );
+                if res.is_err() {
+                    let _ = env.exception_clear();
+                }
+                res.map(|_| ())
+            },
+        )
     }
 }
 

@@ -5,8 +5,8 @@
 //! switches. `// ponytail: no bundled font — egui's default proportional face is fine; drop an
 //! Inter/IBM-Plex TTF into data/fonts/ and install it here if a distinct face is wanted.`
 
-use crate::ui::m3::{self, Density};
 use crate::settings::Theme;
+use crate::ui::m3::{self, Density};
 use egui::{Color32, CornerRadius, Margin, Stroke, Style, Visuals};
 
 /// Default accent (matches the built-in Dark theme). Used only as a fallback where the selected

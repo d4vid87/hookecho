@@ -50,6 +50,9 @@ export const ALLOWED_HOSTS = [
   "gibs.earthdata.nasa.gov",
   // European radar.
   "opendata.dwd.de",
+  // EUMETNET OpenRadarData: the ODIM volumes the OPERA network publishes, plus the
+  // bucket listing that names the newest one.
+  "s3.waw3-1.cloudferro.com",
   // Basemap and imagery tiles.
   "api.mapbox.com",
   "api.maptiler.com",

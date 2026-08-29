@@ -61,12 +61,7 @@ pub async fn run(
         Err(e) => return finish(&out, &format!("listing {site} for {day} failed: {e}")),
     };
     // The end of the day is where the weather usually is, and the cap has to fall somewhere.
-    let ids: Vec<_> = ids
-        .into_iter()
-        .rev()
-        .take(MAX_VOLUMES)
-        .rev()
-        .collect();
+    let ids: Vec<_> = ids.into_iter().rev().take(MAX_VOLUMES).rev().collect();
     if let Ok(mut p) = out.lock() {
         p.total = ids.len();
     }
