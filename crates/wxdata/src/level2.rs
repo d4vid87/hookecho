@@ -312,10 +312,12 @@ async fn list_day(site: &str, date: chrono::NaiveDate) -> anyhow::Result<Vec<Ide
     if let Ok(map) = cache.lock() {
         if let Some((at, ids)) = map.get(&key) {
             if at.elapsed() < DAY_LIST_TTL {
+                crate::stats::bump(crate::stats::Counter::DayListHits);
                 return Ok(ids.clone());
             }
         }
     }
+    crate::stats::bump(crate::stats::Counter::DayListMisses);
     let mut ids = archive::list_files(site, &date)
         .await
         .map_err(|e| anyhow::anyhow!("list_files({site}, {date}): {e}"))?;
@@ -392,6 +394,7 @@ pub async fn download_scan(id: Identifier, cache_dir: Option<PathBuf>) -> anyhow
             let f = archive::download_file(id)
                 .await
                 .map_err(|e| anyhow::anyhow!("download_file: {e}"))?;
+            crate::stats::net(f.data().len());
             if let Some(p) = &cache_file {
                 if let Some(dir) = p.parent() {
                     let _ = std::fs::create_dir_all(dir);
@@ -498,6 +501,7 @@ pub fn bin_scan_opts(
     tilt: usize,
     dealias: bool,
 ) -> anyhow::Result<BinnedSweep> {
+    crate::stats::bump(crate::stats::Counter::SweepsBinned);
     let target = *elevation_angles(scan)
         .get(tilt)
         .ok_or_else(|| anyhow::anyhow!("tilt {tilt} out of range"))?;

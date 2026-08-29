@@ -136,6 +136,7 @@ async fn newest_key(http: &reqwest::Client, prefix: &str) -> Option<String> {
         .text()
         .await
         .ok()?;
+    crate::stats::net(xml.len());
     // Keys sort by their embedded timestamp, so the last one listed is the newest.
     let (i, _) = xml.rmatch_indices("<Key>").next()?;
     let rest = &xml[i + 5..];
@@ -248,6 +249,7 @@ pub async fn fetch_volume(
                 .await
                 .ok()?;
             let bytes = resp.bytes().await.ok()?;
+            crate::stats::net(bytes.len());
             let p = match nexrad_level3::decode(&bytes) {
                 Ok(p) => p,
                 Err(e) => {

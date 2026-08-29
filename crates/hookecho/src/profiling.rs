@@ -93,7 +93,55 @@ impl Pacing {
             Self::over(&self.gap_us, 20_000),
             self.gap_us.len(),
         );
+        #[cfg(all(feature = "profiling", not(target_arch = "wasm32")))]
+        log::info!(
+            "perf: allocs {:.0}/frame | rss {} MB",
+            counting_alloc::ALLOCS.swap(0, std::sync::atomic::Ordering::Relaxed) as f64
+                / self.cost_us.len().max(1) as f64,
+            rss_mb().unwrap_or(0),
+        );
     }
+}
+
+/// Resident set size in MB, from `/proc/self/statm` — "did that wave actually free anything" in
+/// one number. Linux only; anywhere else the report simply omits it.
+#[cfg(all(feature = "profiling", not(target_arch = "wasm32")))]
+fn rss_mb() -> Option<u64> {
+    let statm = std::fs::read_to_string("/proc/self/statm").ok()?;
+    let pages: u64 = statm.split_whitespace().nth(1)?.parse().ok()?;
+    Some(pages * 4096 / (1024 * 1024))
+}
+
+/// A `System` allocator that counts allocations, so a per-frame allocation count is a number and
+/// not a guess. Behind the `profiling` feature: every allocation in the process pays for the
+/// counter, which is exactly the kind of cost the default build must not carry.
+#[cfg(all(feature = "profiling", not(target_arch = "wasm32")))]
+pub mod counting_alloc {
+    use std::alloc::{GlobalAlloc, Layout, System};
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    /// Allocations since the last pacing report, which resets it.
+    pub static ALLOCS: AtomicU64 = AtomicU64::new(0);
+
+    pub struct Counting;
+
+    // Safety: every method forwards to `System` unchanged; the counter is the only addition.
+    unsafe impl GlobalAlloc for Counting {
+        unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+            ALLOCS.fetch_add(1, Ordering::Relaxed);
+            unsafe { System.alloc(layout) }
+        }
+        unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+            unsafe { System.dealloc(ptr, layout) }
+        }
+        unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
+            ALLOCS.fetch_add(1, Ordering::Relaxed);
+            unsafe { System.realloc(ptr, layout, new_size) }
+        }
+    }
+
+    #[global_allocator]
+    static ALLOC: Counting = Counting;
 }
 
 /// How many frames a pacing report covers. `HOOKECHO_PERF_EVERY=0` turns the reports off and

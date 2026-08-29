@@ -12,6 +12,8 @@ mod mobile;
 use crate::colormap::{ColorTable, Palettes};
 use crate::hotkeys::{self, BindableAction};
 use crate::overlay_build;
+#[cfg(not(target_arch = "wasm32"))]
+use crate::perf::PerfReadout;
 use crate::render::{mercator::Camera, MapCallback, OverlayUpload, RadarUpload, RenderResources};
 use crate::settings::Settings;
 use crate::tiles::TileManager;
@@ -2491,6 +2493,10 @@ pub struct HookEchoApp {
     embed: bool,
     /// Set by the first interaction with an embedded map: from then on it repaints normally.
     embed_live: bool,
+    /// Perf readout state: whether `HOOKECHO_PERF=1` asked for the window, the frame count and
+    /// mark the frames-per-minute number is derived from, and the last idle interval requested.
+    #[cfg(not(target_arch = "wasm32"))]
+    perf: PerfReadout,
     /// Last pane state posted to the parent frame, so only real changes cross the boundary.
     #[cfg(target_arch = "wasm32")]
     last_posted: Option<crate::workspace::PaneSnap>,
@@ -3185,6 +3191,8 @@ impl HookEchoApp {
             obs_mode: false,
             embed: is_embed(),
             embed_live: false,
+            #[cfg(not(target_arch = "wasm32"))]
+            perf: PerfReadout::new(),
             #[cfg(target_arch = "wasm32")]
             last_posted: None,
             obs_tour: false,
@@ -9404,6 +9412,7 @@ impl HookEchoApp {
                 let shown = self.views[idx].volume.as_ref().map(|v| v.name.clone());
                 if shown.as_deref() != Some(name.as_str()) {
                     if let Some(scan) = self.scan_cache.get(&name).map(Arc::clone) {
+                        wxdata::stats::bump(wxdata::stats::Counter::ScanCacheHits);
                         let v = &mut self.views[idx];
                         v.volume = Some(Volume::new(scan, name, time));
                         v.loading = false;
@@ -9412,6 +9421,7 @@ impl HookEchoApp {
                         v.clamp_moment();
                         self.pane_shown.remove(&idx);
                     } else if !self.views[idx].loading {
+                        wxdata::stats::bump(wxdata::stats::Counter::ScanCacheMisses);
                         let s = self.views[idx].site.clone().unwrap_or_default();
                         self.views[idx].loading = true;
                         self.spawn_frame_fetch(idx, s, id, ctx.clone());
@@ -14447,6 +14457,9 @@ impl eframe::App for HookEchoApp {
         // `platform::activity`). A frame that follows a gap means the app just came back, so
         // force one refresh rather than making the user wait out the poll interval.
         self.frame_nr = self.frame_nr.wrapping_add(1);
+        wxdata::stats::bump(wxdata::stats::Counter::FramesDrawn);
+        #[cfg(not(target_arch = "wasm32"))]
+        self.perf.tick(ctx);
         #[cfg(debug_assertions)]
         self.frame_time_overlay(ctx);
         let focused = ctx.input(|i| i.viewport().focused.unwrap_or(true));
@@ -16212,6 +16225,10 @@ impl eframe::App for HookEchoApp {
         } else {
             100
         };
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.perf.idle_ms = idle;
+        }
         ctx.request_repaint_after(std::time::Duration::from_millis(idle));
     }
 }

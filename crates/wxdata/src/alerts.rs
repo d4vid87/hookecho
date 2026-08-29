@@ -324,6 +324,7 @@ async fn fetch_zone_geometry(client: &reqwest::Client, url: &str) -> Vec<Vec<Vec
             .text()
             .await
             .ok()?;
+        crate::stats::net(body.len());
         let out = rings(&body)?;
         if let Some(p) = &file {
             if let Some(dir) = p.parent() {
@@ -398,7 +399,7 @@ async fn resolve_zone_alerts(
 
 /// GET an api.weather.gov alerts endpoint as a GeoJSON body.
 async fn get_alerts(client: &reqwest::Client, url: &str) -> anyhow::Result<String> {
-    Ok(client
+    let body = client
         .get(crate::net::fetch_url(url))
         .header("User-Agent", USER_AGENT)
         .header("Accept", "application/geo+json")
@@ -406,7 +407,9 @@ async fn get_alerts(client: &reqwest::Client, url: &str) -> anyhow::Result<Strin
         .await?
         .error_for_status()?
         .text()
-        .await?)
+        .await?;
+    crate::stats::net(body.len());
+    Ok(body)
 }
 
 /// How many `?point=` queries one refresh may make. Each is a round trip plus its zone

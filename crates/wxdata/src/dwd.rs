@@ -225,6 +225,7 @@ pub async fn fetch_volume(
                 .bytes()
                 .await
                 .ok()?;
+            crate::stats::net(bytes.len());
             Some((url, bytes.to_vec()))
         }
     };

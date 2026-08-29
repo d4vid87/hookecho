@@ -185,6 +185,7 @@ pub async fn fetch_volume(
                 .text()
                 .await
                 .ok()
+                .inspect(|t: &String| crate::stats::net(t.len()))
         }
     };
 
@@ -224,6 +225,7 @@ pub async fn fetch_volume(
                 .bytes()
                 .await
                 .ok()?;
+            crate::stats::net(bytes.len());
             match crate::odim::decode(bytes.to_vec()) {
                 Ok(v) => Some(v),
                 Err(e) => {

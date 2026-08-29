@@ -54,6 +54,7 @@ pub mod spc;
 pub mod spoken;
 pub mod spotters;
 pub mod stations;
+pub mod stats;
 pub mod synoptic;
 pub mod task;
 pub mod tds;

@@ -666,10 +666,12 @@ async fn fetch_latest(
             continue;
         };
         let Ok(xml) = resp.text().await else { continue };
+        crate::stats::net(xml.len());
         if let Some(key) = last_key(&xml) {
             let obj_url = format!("{BUCKET}/{key}");
             if let Ok(resp) = http.get(crate::net::fetch_url(&obj_url)).send().await {
                 if let Ok(bytes) = resp.bytes().await {
+                    crate::stats::net(bytes.len());
                     match decode(&bytes) {
                         Ok(p) => return Some((p, key_time(&key))),
                         Err(e) => log::warn!("level3 decode {key}: {e}"),
@@ -817,6 +819,7 @@ async fn fetch_tgftp(http: &reqwest::Client, site: &str, ds: &str) -> Option<Lev
         .bytes()
         .await
         .ok()?;
+    crate::stats::net(bytes.len());
     match decode(&bytes) {
         Ok(p) => Some(p),
         Err(e) => {

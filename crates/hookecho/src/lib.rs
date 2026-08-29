@@ -47,6 +47,9 @@ pub mod notify;
 pub mod nwr;
 pub mod overlay_build;
 pub mod paths;
+/// The perf counters' readout — native only, see the module docs.
+#[cfg(not(target_arch = "wasm32"))]
+pub mod perf;
 pub mod platform;
 /// External-process placefile plugins — a browser cannot spawn a process.
 #[cfg(not(target_arch = "wasm32"))]

@@ -897,6 +897,7 @@ impl RenderResources {
     }
 
     fn build_radar(&self, device: &wgpu::Device, queue: &wgpu::Queue, r: &RadarUpload) -> RadarGpu {
+        wxdata::stats::bump(wxdata::stats::Counter::RadarTexturesBuilt);
         let size = wgpu::Extent3d {
             width: r.gate_count,
             height: r.az_bins,
