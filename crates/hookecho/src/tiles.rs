@@ -35,16 +35,19 @@ pub enum Category {
     Streets,
     Satellite,
     Topo,
+    /// Rendered weather fields (national radar composites), not a map of the ground.
+    Weather,
     Other,
 }
 
 impl Category {
     /// Groups in picker order.
-    pub const ALL: [Category; 5] = [
+    pub const ALL: [Category; 6] = [
         Category::Vector,
         Category::Streets,
         Category::Satellite,
         Category::Topo,
+        Category::Weather,
         Category::Other,
     ];
 
@@ -54,6 +57,7 @@ impl Category {
             Category::Streets => "Streets",
             Category::Satellite => "Satellite",
             Category::Topo => "Terrain",
+            Category::Weather => "Weather",
             Category::Other => "Other",
         }
     }
@@ -85,6 +89,11 @@ pub enum BasemapStyle {
     /// GOES-East Fire Temperature RGB (hot spots / wildfire).
     GoesEastFire,
     GoesWestFire,
+    /// DWD's German radar composite: the RV product, which is the analysis followed by a
+    /// two-hour nowcast, in 5-minute steps.
+    DwdRadarRV,
+    /// DWD's German radar composite, analysis only (the WN product).
+    DwdRadarWN,
     MapboxStreets,
     MapboxSatellite,
     MapboxSatelliteStreets,
@@ -141,7 +150,7 @@ pub enum BasemapStyle {
 
 impl BasemapStyle {
     /// Cycle order for the `z` hotkey; provider styles trail the built-ins.
-    pub const ALL: [BasemapStyle; 51] = [
+    pub const ALL: [BasemapStyle; 53] = [
         BasemapStyle::Dark,
         BasemapStyle::Light,
         BasemapStyle::Satellite,
@@ -179,6 +188,8 @@ impl BasemapStyle {
         BasemapStyle::GoesWestDust,
         BasemapStyle::GoesEastFire,
         BasemapStyle::GoesWestFire,
+        BasemapStyle::DwdRadarRV,
+        BasemapStyle::DwdRadarWN,
         BasemapStyle::MapboxStreets,
         BasemapStyle::MapboxSatellite,
         BasemapStyle::MapboxSatelliteStreets,
@@ -248,6 +259,8 @@ impl BasemapStyle {
             BasemapStyle::GoesWestDust => "GOES-West (dust)",
             BasemapStyle::GoesEastFire => "GOES-East (fire temp)",
             BasemapStyle::GoesWestFire => "GOES-West (fire temp)",
+            BasemapStyle::DwdRadarRV => "DWD radar (RV nowcast)",
+            BasemapStyle::DwdRadarWN => "DWD radar (analysis)",
             BasemapStyle::MapboxStreets => "Mapbox Streets",
             BasemapStyle::MapboxSatellite => "Mapbox Satellite",
             BasemapStyle::MapboxSatelliteStreets => "Mapbox Satellite Streets",
@@ -305,6 +318,8 @@ impl BasemapStyle {
             BasemapStyle::GoesWestDust => "goes-west-dust",
             BasemapStyle::GoesEastFire => "goes-east-fire",
             BasemapStyle::GoesWestFire => "goes-west-fire",
+            BasemapStyle::DwdRadarRV => "dwd-radar-rv",
+            BasemapStyle::DwdRadarWN => "dwd-radar-wn",
             BasemapStyle::MapboxStreets => "mapbox-streets",
             BasemapStyle::MapboxSatellite => "mapbox-satellite",
             BasemapStyle::MapboxSatelliteStreets => "mapbox-satellite-streets",
@@ -401,6 +416,9 @@ impl BasemapStyle {
                 BasemapStyle::EsriOcean => "© Esri, GEBCO, NOAA",
                 // The template is the user's; we cannot know whose data it serves.
                 BasemapStyle::CustomXyz => "Custom tile source",
+                BasemapStyle::DwdRadarRV | BasemapStyle::DwdRadarWN => {
+                    "Radar data © Deutscher Wetterdienst (DL-DE/BY-2.0)"
+                }
                 _ if self.goes_layer().is_some() => "NASA GIBS · NOAA GOES",
                 _ => "© OpenMapTiles © OpenStreetMap",
             },
@@ -423,6 +441,24 @@ impl BasemapStyle {
             BasemapStyle::GoesWestFire => Some(("GOES-West_ABI_FireTemp", 7)),
             _ => None,
         }
+    }
+
+    /// For a WMS-backed style, its `(endpoint, layer)`. `None` for everything else.
+    ///
+    /// A WMS server renders an arbitrary bounding box rather than a fixed tile pyramid, so one
+    /// helper ([`wms_url`]) turns an XYZ tile into a GetMap and every such layer is a row here.
+    pub(crate) fn wms_layer(self) -> Option<(&'static str, &'static str)> {
+        const DWD: &str = "https://maps.dwd.de/geoserver/dwd/wms";
+        match self {
+            BasemapStyle::DwdRadarRV => Some((DWD, "Radar_rv_product_1x1km_ger")),
+            BasemapStyle::DwdRadarWN => Some((DWD, "Radar_wn-analysis_1x1km_ger")),
+            _ => None,
+        }
+    }
+
+    /// Does this style have a time dimension the frame bar can step through?
+    pub fn timed(self) -> bool {
+        self.goes_layer().is_some() || self.wms_layer().is_some()
     }
 
     /// Is this style a raster-tile source (as opposed to the vector MVT basemap or None)?
@@ -452,6 +488,11 @@ impl BasemapStyle {
     fn max_raster_z(self) -> u8 {
         if let Some((_, level)) = self.goes_layer() {
             return level;
+        }
+        // The composites are 1-km grids: past z12 the server is upscaling its own pixels, and it
+        // is cheaper for us to do that from a tile we already hold.
+        if self.wms_layer().is_some() {
+            return 12;
         }
         match self {
             // USGS ArcGIS services (imagery and topo alike) stop at 16.
@@ -531,6 +572,9 @@ impl BasemapStyle {
     pub fn category(self) -> Category {
         if self.goes_layer().is_some() {
             return Category::Satellite;
+        }
+        if self.wms_layer().is_some() {
+            return Category::Weather;
         }
         match self {
             BasemapStyle::None | BasemapStyle::Auto | BasemapStyle::CustomXyz => Category::Other,
@@ -722,12 +766,17 @@ impl BasemapStyle {
                 BasemapStyle::CyclOsm => Some(format!(
                     "https://a.tile-cyclosm.openstreetmap.fr/cyclosm/{z}/{x}/{y}.png"
                 )),
-                // NASA GIBS WMTS (web mercator), latest GOES imagery. GIBS uses `{z}/{y}/{x}`.
-                _ => self.goes_layer().map(|(layer, level)| {
-                    format!(
-                        "https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/{layer}/default/default/GoogleMapsCompatible_Level{level}/{z}/{y}/{x}.png"
-                    )
-                }),
+                _ => match self.wms_layer() {
+                    // The layer's own default time; the fetch loop appends `TIME=` for a
+                    // selected frame, the same way it rewrites the GIBS time slot.
+                    Some((base, layer)) => Some(wms_url(base, layer, z, x, y, "")),
+                    // NASA GIBS WMTS (web mercator), latest GOES imagery. GIBS uses `{z}/{y}/{x}`.
+                    None => self.goes_layer().map(|(layer, level)| {
+                        format!(
+                            "https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/{layer}/default/default/GoogleMapsCompatible_Level{level}/{z}/{y}/{x}.png"
+                        )
+                    }),
+                },
             },
             Provider::Mapbox => (!mapbox_key.is_empty()).then(|| {
                 format!(
@@ -744,6 +793,33 @@ impl BasemapStyle {
             }),
         }
     }
+}
+
+/// Web-mercator metre bounds of tile `(z, x, y)`, as `(min_x, min_y, max_x, max_y)`.
+fn tile_bbox_3857(z: u8, x: u32, y: u32) -> (f64, f64, f64, f64) {
+    // Half the side of the square web mercator projects the world into.
+    const HALF: f64 = 20_037_508.342_789_244;
+    let span = 2.0 * HALF / f64::from(1u32 << z.min(30));
+    let min_x = -HALF + f64::from(x) * span;
+    let max_y = HALF - f64::from(y) * span;
+    (min_x, max_y - span, min_x + span, max_y)
+}
+
+/// A WMS 1.3.0 GetMap URL rendering exactly the square that XYZ tile `(z, x, y)` covers.
+///
+/// `time` is an instant the server's time dimension accepts, or empty for the layer's default.
+/// Servers reject an instant that is not on their published step, so the caller picks from
+/// [`wms_frames`] rather than rounding here.
+fn wms_url(base: &str, layer: &str, z: u8, x: u32, y: u32, time: &str) -> String {
+    let (x0, y0, x1, y1) = tile_bbox_3857(z, x, y);
+    // EPSG:3857 is an easting/northing CRS, so 1.3.0's axis-order rule leaves BBOX as x,y; the
+    // swap that rule is famous for only bites on geographic CRSs like EPSG:4326.
+    let t = if time.is_empty() { String::new() } else { format!("&TIME={time}") };
+    format!(
+        "{base}?SERVICE=WMS&VERSION=1.3.0&REQUEST=GetMap&CRS=EPSG:3857\
+&BBOX={x0:.3},{y0:.3},{x1:.3},{y1:.3}&WIDTH=256&HEIGHT=256&LAYERS={layer}\
+&FORMAT=image/png&TRANSPARENT=TRUE{t}"
+    )
 }
 
 /// Is this a tile-URL template we are willing to fetch?
@@ -895,19 +971,45 @@ pub fn goes_window(
     }
 }
 
+/// The frame times a WMS composite offers, oldest first, ending at the newest one `anchor` can
+/// expect to be published.
+///
+/// ponytail: the grid is computed, not fetched. DWD publishes every 5 minutes and says so in a
+/// GetCapabilities document 850 KB long whose only useful sentence is that; downloading it every
+/// time the style changes would cost more than every tile in the loop put together. The lag is
+/// measured — the 16:05 frame was served at 16:10 and the 16:10 frame was not — and asking for one
+/// that has not landed yet costs a blank tile, not an error. A layer that ever publishes
+/// irregularly needs the capabilities parse; none of the ones here does.
+fn wms_frames(anchor: chrono::DateTime<chrono::Utc>, limit: usize) -> Vec<chrono::DateTime<chrono::Utc>> {
+    const STEP_MIN: i64 = 5;
+    const LAG_MIN: i64 = 10;
+    let step = chrono::Duration::minutes(STEP_MIN);
+    let newest = anchor - chrono::Duration::minutes(LAG_MIN);
+    // Down to the step boundary: an off-step instant is rejected outright.
+    let newest = newest
+        - chrono::Duration::seconds(newest.timestamp().rem_euclid(STEP_MIN * 60))
+        - chrono::Duration::nanoseconds(i64::from(newest.timestamp_subsec_nanos()));
+    (0..limit as i64).map(|i| newest - step * (i as i32)).rev().collect()
+}
+
 /// Fetch the available GOES frame times for `style` between `from` and `to` (best-effort; empty
 /// on any failure). Uses the GIBS REST DescribeDomains endpoint.
 ///
 /// The window is a parameter rather than "the last N hours" because the same call serves the live
 /// loop and archive replay: GIBS keeps GeoColor about two weeks back and Band 13 several months,
 /// so scrubbing the radar into last week's event can ask for that week's satellite frames.
-pub async fn fetch_goes_times(
+pub async fn fetch_frame_times(
     client: &reqwest::Client,
     style: BasemapStyle,
     from: chrono::DateTime<chrono::Utc>,
     to: chrono::DateTime<chrono::Utc>,
     limit: usize,
 ) -> Vec<chrono::DateTime<chrono::Utc>> {
+    if style.wms_layer().is_some() {
+        // `to` is the end of the window the caller wants, which is now for a live pane and the
+        // end of the replayed hour for an archived one.
+        return wms_frames(to, limit);
+    }
     let Some((layer, level)) = style.goes_layer() else {
         return Vec::new();
     };
@@ -1230,13 +1332,17 @@ impl TileManager {
             };
             // GOES frame time: rewrite the `default` time slot in the GIBS URL and tag the cache
             // dir so different frames don't collide. Latest (`None`) keeps `default`.
-            let time_tag = match (style.goes_layer(), self.goes_time) {
-                (Some(_), Some(t)) => {
+            let time_tag = match self.goes_time {
+                Some(t) if style.timed() => {
                     let iso = t.format("%Y-%m-%dT%H:%M:%SZ").to_string();
-                    url = url.replace(
-                        "/default/GoogleMapsCompatible",
-                        &format!("/{iso}/GoogleMapsCompatible"),
-                    );
+                    if style.wms_layer().is_some() {
+                        url.push_str(&format!("&TIME={iso}"));
+                    } else {
+                        url = url.replace(
+                            "/default/GoogleMapsCompatible",
+                            &format!("/{iso}/GoogleMapsCompatible"),
+                        );
+                    }
                     t.format("%Y%m%dT%H%M").to_string()
                 }
                 _ => "default".to_string(),
@@ -1288,10 +1394,10 @@ impl TileManager {
     }
 
     /// Whether `style` produces raster tiles a chase pack can pre-download (has a URL, isn't a
-    /// time-tagged GOES layer). Takes the style explicitly so it doesn't depend on which pane the
+    /// time-tagged layer). Takes the style explicitly so it doesn't depend on which pane the
     /// tile manager last rendered.
     pub fn packable(&self, style: BasemapStyle) -> bool {
-        style.goes_layer().is_none()
+        !style.timed()
             && style
                 .url(
                     0,
@@ -1306,7 +1412,7 @@ impl TileManager {
     }
 
     /// Build the `(url, cache_path)` jobs for an offline chase pack of the lon/lat bbox over
-    /// `z_lo..=z_hi` in `style`. Empty for URL-less (Dark/Light/None) and GOES styles. Cache paths
+    /// `z_lo..=z_hi` in `style`. Empty for URL-less (Dark/Light/None) and time-tagged styles. Cache paths
     /// match the live read-through cache so pre-downloads are transparent.
     #[allow(clippy::too_many_arguments)] // scalar bbox mirrors pack_tile_count's tested signature
     pub fn pack_jobs(
@@ -1322,7 +1428,7 @@ impl TileManager {
         let Some(root) = self.cache_root.as_ref() else {
             return Vec::new();
         };
-        if style.goes_layer().is_some() {
+        if style.timed() {
             return Vec::new();
         }
         let z_hi = z_hi.min(self.max_z(style));
@@ -2047,6 +2153,73 @@ mod tests {
                 assert_eq!(s.category(), Category::Satellite, "{s:?}");
             }
         }
+    }
+
+    /// The GetMap bbox has to be the exact square the XYZ tile covers, or the composite lands
+    /// offset from the ground under it — the failure mode nobody notices until a storm sits a
+    /// county to the left of where it is.
+    #[test]
+    fn a_wms_tile_asks_for_the_square_it_covers() {
+        const HALF: f64 = 20_037_508.342_789_244;
+        let (x0, y0, x1, y1) = tile_bbox_3857(0, 0, 0);
+        assert!((x0 + HALF).abs() < 1e-6 && (y1 - HALF).abs() < 1e-6);
+        assert!((x1 - HALF).abs() < 1e-6 && (y0 + HALF).abs() < 1e-6);
+        // Tile (1, 1, 0) is the north-east quadrant: east of the meridian, north of the equator.
+        let (x0, y0, x1, y1) = tile_bbox_3857(1, 1, 0);
+        assert!(x0.abs() < 1e-6 && y0.abs() < 1e-6);
+        assert!((x1 - HALF).abs() < 1e-6 && (y1 - HALF).abs() < 1e-6);
+        // Neighbours share an edge, so tiles neither overlap nor leave a seam. Within a
+        // nanometre: the URL rounds to millimetres and the pixel is a kilometre wide.
+        assert!((tile_bbox_3857(5, 16, 10).2 - tile_bbox_3857(5, 17, 10).0).abs() < 1e-6);
+        assert!((tile_bbox_3857(5, 16, 10).1 - tile_bbox_3857(5, 16, 11).3).abs() < 1e-6);
+    }
+
+    /// The DWD composites are one URL flavour, not a subsystem: the style resolves to a GetMap on
+    /// the allowlisted host, with no TIME until a frame is picked.
+    #[test]
+    fn the_dwd_composite_resolves_to_a_getmap() {
+        let url = BasemapStyle::DwdRadarRV
+            .url(6, 33, 21, false, "", "", "")
+            .expect("a WMS style must resolve to a URL");
+        assert!(url.starts_with("https://maps.dwd.de/geoserver/dwd/wms?"), "{url}");
+        for want in [
+            "SERVICE=WMS",
+            "VERSION=1.3.0",
+            "REQUEST=GetMap",
+            "CRS=EPSG:3857",
+            "LAYERS=Radar_rv_product_1x1km_ger",
+            "FORMAT=image/png",
+            "TRANSPARENT=TRUE",
+        ] {
+            assert!(url.contains(want), "{want} missing from {url}");
+        }
+        // The layer's own default frame until the fetch loop appends one.
+        assert!(!url.contains("TIME="), "{url}");
+        assert!(BasemapStyle::DwdRadarRV.timed());
+        assert_eq!(BasemapStyle::DwdRadarRV.category(), Category::Weather);
+        // A time-tagged style has no fixed pyramid to pre-download into a chase pack.
+        assert!(BasemapStyle::DwdRadarWN.timed());
+    }
+
+    /// DWD rejects a TIME that is not on its 5-minute step outright, so every frame the bar can
+    /// select has to land on one — and none of them may be newer than the publisher.
+    #[test]
+    fn wms_frames_land_on_the_publishers_step() {
+        // 12:03:17Z, deliberately off-step and off-second.
+        let anchor = chrono::DateTime::from_timestamp(1_700_000_597, 0).unwrap();
+        let f = wms_frames(anchor, 12);
+        assert_eq!(f.len(), 12);
+        assert!(f.windows(2).all(|w| w[0] < w[1]), "oldest first");
+        for t in &f {
+            assert_eq!(t.timestamp() % 300, 0, "{t} is off the 5-minute step");
+            assert!(*t <= anchor - chrono::Duration::minutes(10), "{t} is ahead of the publisher");
+        }
+        let last = *f.last().unwrap();
+        assert!(
+            anchor - last < chrono::Duration::minutes(15),
+            "the newest frame is the newest one there is"
+        );
+        assert_eq!(last - f[f.len() - 2], chrono::Duration::minutes(5));
     }
 }
 
