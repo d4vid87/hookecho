@@ -1909,7 +1909,7 @@ pub struct HookEchoApp {
     #[allow(clippy::type_complexity)]
     vlabel_cache: Option<(
         (Vec<crate::render::TileId>, u64),
-        Vec<crate::vector_tiles::PlaceLabel>,
+        std::sync::Arc<[crate::vector_tiles::PlaceLabel]>,
     )>,
     /// Last result of each per-volume detector, keyed by what it depends on (see `volume_key`).
     #[allow(clippy::type_complexity)]
@@ -8520,47 +8520,45 @@ impl HookEchoApp {
     /// is the paint order the Layer Manager reorders.
     fn visible_placefile_items(&self) -> Vec<(&wxdata::placefile::PlaceItem, f32, usize)> {
         crate::prof_scope!("visible_placefile_items");
+        self.visible_placefile_iter().collect()
+    }
+
+    /// The same set, lazily — so a caller that only asks whether there *are* any does not build
+    /// the whole list to find out.
+    fn visible_placefile_iter(
+        &self,
+    ) -> impl Iterator<Item = (&wxdata::placefile::PlaceItem, f32, usize)> {
         let range = self.view_range_nmi();
         let now = Utc::now();
-        let mut out = Vec::new();
         // Configured placefiles in Layer-Manager order, then plugin output on top of them: a
         // plugin is something the user wrote for this session, so it should not be buried.
         let sources = self
             .settings
             .placefiles
             .iter()
-            .map(|c| (c.url.clone(), c.opacity))
-            .chain(
-                self.settings
-                    .plugins
-                    .iter()
-                    .map(|p| (format!("plugin:{}", p.name), 1.0)),
-            );
-        for (url, opacity) in sources {
-            let Some((li, lp)) = self
-                .placefiles
+            .map(|c| (std::borrow::Cow::Borrowed(c.url.as_str()), c.opacity))
+            .chain(self.settings.plugins.iter().map(|p| {
+                (
+                    std::borrow::Cow::Owned(format!("plugin:{}", p.name)),
+                    1.0f32,
+                )
+            }));
+        sources.flat_map(move |(url, opacity)| {
+            self.placefiles
                 .iter()
                 .enumerate()
                 .find(|(_, lp)| lp.url == url)
-            else {
-                continue;
-            };
-            if !lp.enabled {
-                continue;
-            }
-            for it in &lp.pf.items {
-                if it.threshold_nmi > 0.0 && range > it.threshold_nmi {
-                    continue;
-                }
-                if let Some((a, b)) = it.time {
-                    if now < a || now > b {
-                        continue;
-                    }
-                }
-                out.push((it, opacity, li));
-            }
-        }
-        out
+                .filter(|(_, lp)| lp.enabled)
+                .into_iter()
+                .flat_map(move |(li, lp)| {
+                    lp.pf
+                        .items
+                        .iter()
+                        .filter(move |it| !(it.threshold_nmi > 0.0 && range > it.threshold_nmi))
+                        .filter(move |it| it.time.is_none_or(|(a, b)| now >= a && now <= b))
+                        .map(move |it| (it, opacity, li))
+                })
+        })
     }
 
     /// Owned labels/markers for the visible placefile items (drawn by the egui painter).
@@ -8681,8 +8679,10 @@ impl HookEchoApp {
     /// Re-tessellate the overlay when its set or the zoom bucket changed.
     fn sync_overlay(&mut self) {
         crate::prof_scope!("sync_overlay");
-        let items = self.visible_placefile_items();
-        if self.overlays.is_empty() && items.is_empty() {
+        // Asked lazily: on a frame with nothing to rebuild — which is most of them — this is the
+        // only question, and building the whole visible list a second time to answer it was the
+        // second-largest per-frame allocation in the pane.
+        if self.overlays.is_empty() && self.visible_placefile_iter().next().is_none() {
             self.overlay_ready = false;
             return;
         }
@@ -8690,8 +8690,10 @@ impl HookEchoApp {
         let bucket = (zoom * 2.0).round() as i32;
         if self.overlay_gen != self.built_gen || bucket != self.built_zoom_bucket {
             let mut geom = overlay_build::build(&self.overlays, zoom);
-            let pf: Vec<(&wxdata::placefile::PlaceItem, f32)> =
-                items.iter().map(|(it, op, _)| (*it, *op)).collect();
+            let pf: Vec<(&wxdata::placefile::PlaceItem, f32)> = self
+                .visible_placefile_iter()
+                .map(|(it, op, _)| (it, op))
+                .collect();
             overlay_build::append_placefiles(&mut geom, &pf, zoom);
             self.overlay_ready = !geom.indices.is_empty();
             self.pending_overlay = Some(OverlayUpload {
@@ -10492,21 +10494,29 @@ impl HookEchoApp {
             // Deep-copying every visible place name every frame (for every pane) showed up at the
             // 4-10 fps the phone runs at. The set only changes when the visible tiles do, or when
             // a tile's labels finish tessellating — both bump the key below.
-            let key = (ids.clone(), self.vtiles.label_generation());
-            if self.vlabel_cache.as_ref().is_none_or(|(k, _)| *k != key) {
-                let labels: Vec<crate::vector_tiles::PlaceLabel> = self
+            // Compared before it is built: the key holds a `Vec` of every visible tile id, and
+            // cloning it to ask "did this change" was itself a per-pane, per-frame allocation.
+            let gen = self.vtiles.label_generation();
+            let stale = self
+                .vlabel_cache
+                .as_ref()
+                .is_none_or(|((k_ids, k_gen), _)| *k_gen != gen || *k_ids != ids);
+            if stale {
+                let labels: std::sync::Arc<[crate::vector_tiles::PlaceLabel]> = self
                     .vtiles
                     .labels_for(ids.iter())
                     .into_iter()
                     .cloned()
                     .collect();
-                self.vlabel_cache = Some((key, labels));
+                self.vlabel_cache = Some(((ids.clone(), gen), labels));
             }
+            // An `Arc` handle, not a deep copy of every visible place name — the cache existed to
+            // stop the *lookup* running every frame, but the copy it returned survived it.
             let labels = self
                 .vlabel_cache
                 .as_ref()
                 .map(|(_, l)| l.clone())
-                .unwrap_or_default();
+                .unwrap_or_else(|| Vec::new().into());
             (if is_vector { ids } else { Vec::new() }, labels, vis)
         };
         // Drain finished fetches once (on the first pane) — they upload into the shared cache.
@@ -11021,8 +11031,11 @@ impl HookEchoApp {
             if self.filters.show_arrival_cones {
                 const LEAD_MIN: f64 = 60.0;
                 const HALF_ANGLE: f64 = 18.0;
-                let mut etas: Vec<(f64, String)> = Vec::new();
-                for c in self.active_storm_cells() {
+                // Indices, not strings: every marker inside every cone used to be formatted and
+                // then thrown away by the `take(6)` below.
+                let mut etas: Vec<(f64, usize, usize)> = Vec::new();
+                let cells = self.active_storm_cells();
+                for (ci, c) in cells.iter().enumerate() {
                     let (Some(dir), Some(kt)) = (c.mvt_deg, c.mvt_kt) else {
                         continue;
                     };
@@ -11060,7 +11073,7 @@ impl HookEchoApp {
                         ),
                     );
                     // ETA to each watched marker inside this cone.
-                    for m in &self.settings.markers {
+                    for (mi, m) in self.settings.markers.iter().enumerate() {
                         if let Some(min) = crate::geo::arrival_eta_min(
                             [c.lon, c.lat],
                             dir,
@@ -11069,7 +11082,7 @@ impl HookEchoApp {
                             HALF_ANGLE,
                             LEAD_MIN,
                         ) {
-                            etas.push((min, format!("{} — {} in {:.0} min", m.name, c.id, min)));
+                            etas.push((min, mi, ci));
                         }
                     }
                 }
@@ -11077,31 +11090,27 @@ impl HookEchoApp {
                     etas.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
                     let font = egui::FontId::proportional(12.0);
                     let mut y = prect.top() + 40.0;
-                    for (_, line) in etas.iter().take(6) {
-                        let text = format!("⏱ {line}");
-                        let galley = painter.layout_no_wrap(
-                            text.clone(),
-                            font.clone(),
-                            egui::Color32::WHITE,
-                        );
+                    for (min, mi, ci) in etas.iter().take(6) {
+                        let (m, c) = (&self.settings.markers[*mi], &cells[*ci]);
+                        let text = format!("⏱ {} — {} in {:.0} min", m.name, c.id, min);
+                        let galley =
+                            painter.layout_no_wrap(text, font.clone(), egui::Color32::WHITE);
                         let anchor = egui::pos2(prect.left() + 8.0, y);
-                        let bg = egui::Rect::from_min_size(
-                            anchor,
-                            galley.size() + egui::vec2(10.0, 4.0),
-                        );
+                        let size = galley.size();
+                        let bg =
+                            egui::Rect::from_min_size(anchor, size + egui::vec2(10.0, 4.0));
                         painter.rect_filled(
                             bg,
                             3.0,
                             egui::Color32::from_rgba_unmultiplied(150, 30, 30, 210),
                         );
-                        painter.text(
+                        // The galley just measured, drawn — one layout, not two.
+                        painter.galley(
                             anchor + egui::vec2(5.0, 2.0),
-                            egui::Align2::LEFT_TOP,
-                            &text,
-                            font.clone(),
+                            galley,
                             egui::Color32::WHITE,
                         );
-                        y += galley.size().y + 6.0;
+                        y += size.y + 6.0;
                     }
                 }
             }
@@ -11845,7 +11854,9 @@ impl HookEchoApp {
                 egui::pos2(prect.left() + sx, prect.top() + sy)
             };
             let mut any_escalated = false;
-            let mut etas: Vec<(f64, String)> = Vec::new();
+            // Indices, not strings: the `take(6)` below drew six of them however many marker ×
+            // warning pairs were formatted.
+            let mut etas: Vec<(f64, usize, usize)> = Vec::new();
             let time = ctx.input(|i| i.time);
             // Viewport-center lon/lat: a polygon with every vertex off-screen can still fill the
             // whole pane (zoomed inside it) — the primary chase case for an escalated warning.
@@ -11853,7 +11864,8 @@ impl HookEchoApp {
                 let w = cam.screen_to_world((vp.0 * 0.5, vp.1 * 0.5), vp);
                 crate::render::mercator::world_to_lonlat(w.0, w.1)
             };
-            for f in self.active_alert_features() {
+            let features = self.active_alert_features();
+            for (fi, f) in features.iter().enumerate() {
                 let Some(a) = &f.alert else { continue };
                 // Pulsing outline for escalated warnings only — watches can carry PDS wording,
                 // but pulsing a state-sized watch polygon would drown the map (and `escalation`
@@ -11907,7 +11919,7 @@ impl HookEchoApp {
                     prev = p;
                 }
                 // ETA to any watched marker along the storm's heading.
-                for mk in &self.settings.markers {
+                for (mi, mk) in self.settings.markers.iter().enumerate() {
                     if let Some(t) = crate::geo::arrival_eta_min(
                         origin,
                         heading as f32,
@@ -11916,7 +11928,7 @@ impl HookEchoApp {
                         22.5,
                         90.0,
                     ) {
-                        etas.push((t, format!("⚠ {} — {} in {:.0} min", mk.name, a.event, t)));
+                        etas.push((t, mi, fi));
                     }
                 }
             }
@@ -11924,9 +11936,16 @@ impl HookEchoApp {
                 etas.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
                 let font = egui::FontId::proportional(12.0);
                 let mut y = prect.top() + 64.0;
-                for (_, line) in etas.iter().take(6) {
+                for (t, mi, fi) in etas.iter().take(6) {
+                    let mk = &self.settings.markers[*mi];
+                    let event = features[*fi]
+                        .alert
+                        .as_ref()
+                        .map(|a| a.event.as_str())
+                        .unwrap_or_default();
+                    let line = format!("⚠ {} — {} in {:.0} min", mk.name, event, t);
                     let galley =
-                        painter.layout_no_wrap(line.clone(), font.clone(), egui::Color32::WHITE);
+                        painter.layout_no_wrap(line, font.clone(), egui::Color32::WHITE);
                     let anchor = egui::pos2(prect.left() + 8.0, y);
                     let bg =
                         egui::Rect::from_min_size(anchor, galley.size() + egui::vec2(10.0, 4.0));
@@ -11935,14 +11954,11 @@ impl HookEchoApp {
                         3.0,
                         egui::Color32::from_rgba_unmultiplied(150, 30, 30, 210),
                     );
-                    painter.text(
-                        anchor + egui::vec2(5.0, 2.0),
-                        egui::Align2::LEFT_TOP,
-                        line,
-                        font.clone(),
-                        egui::Color32::WHITE,
-                    );
-                    y += galley.size().y + 6.0;
+                    // The galley just measured, drawn — `painter.text` would lay the same string
+                    // out a second time.
+                    let size = galley.size();
+                    painter.galley(anchor + egui::vec2(5.0, 2.0), galley, egui::Color32::WHITE);
+                    y += size.y + 6.0;
                 }
             }
             if any_escalated {
@@ -11961,9 +11977,20 @@ impl HookEchoApp {
                 "LIFR" => egui::Color32::from_rgb(220, 60, 200),
                 _ => egui::Color32::from_gray(180),
             };
+            // Projected and clipped before either sort: everything off screen is skipped by the
+            // loop below anyway, and the whole national set was being sorted twice to get there.
+            let mut obs: Vec<(egui::Pos2, &wxdata::metar::SurfaceOb)> = self
+                .metars
+                .iter()
+                .filter_map(|ob| {
+                    let w = crate::render::mercator::lonlat_to_world(ob.lon, ob.lat);
+                    let (sx, sy) = cam.world_to_screen(w, vp);
+                    let p = egui::pos2(prect.left() + sx, prect.top() + sy);
+                    prect.contains(p).then_some((p, ob))
+                })
+                .collect();
             // Windiest-first so the strongest stations survive decluttering.
-            let mut obs: Vec<&wxdata::metar::SurfaceOb> = self.metars.iter().collect();
-            obs.sort_by(|a, b| {
+            obs.sort_by(|(_, a), (_, b)| {
                 b.wspd_kt
                     .partial_cmp(&a.wspd_kt)
                     .unwrap_or(std::cmp::Ordering::Equal)
@@ -11971,14 +11998,8 @@ impl HookEchoApp {
             let temp_unit = self.settings.temp_unit;
             // Same stickiness rule as the place names: a station already plotted keeps its cell
             // ahead of a windier one that has only just come into view.
-            obs.sort_by_key(|ob| !self.labels.was_shown(crate::labelplace::key(&ob.icao)));
-            for ob in obs {
-                let w = crate::render::mercator::lonlat_to_world(ob.lon, ob.lat);
-                let (sx, sy) = cam.world_to_screen(w, vp);
-                let p = egui::pos2(prect.left() + sx, prect.top() + sy);
-                if !prect.contains(p) {
-                    continue;
-                }
+            obs.sort_by_key(|(_, ob)| !self.labels.was_shown(crate::labelplace::key(&ob.icao)));
+            for (p, ob) in obs {
                 // Shared declutter: this also sees the place names drawn above it.
                 let cell = egui::Rect::from_center_size(p, egui::vec2(44.0, 34.0));
                 if !self.labels.place(
@@ -12363,10 +12384,8 @@ impl HookEchoApp {
             let accent = crate::theme::accent(self.settings.theme);
             let current = self.views[idx].site.as_deref();
             let show_labels = cam.zoom >= 5.0;
-            for s in wxdata::sites::all() {
-                let w =
-                    crate::render::mercator::lonlat_to_world(s.longitude as f64, s.latitude as f64);
-                let (sx, sy) = cam.world_to_screen(w, vp);
+            for (s, w) in sites_in_world() {
+                let (sx, sy) = cam.world_to_screen(*w, vp);
                 let p = egui::pos2(prect.left() + sx, prect.top() + sy);
                 if !prect.contains(p) {
                     continue;
@@ -13919,6 +13938,28 @@ pub(crate) fn to_upload(
         world_max: [wx1 as f32, wy1 as f32],
         lut_only,
     }
+}
+
+/// Every radar site with its world-space position, projected once.
+///
+/// The table is static and the projection is a `ln(tan(...))` per site; ~350 of them ran every
+/// frame, per pane, for a set of points that cannot move.
+fn sites_in_world() -> &'static [(&'static wxdata::sites::SiteEntry, (f64, f64))] {
+    static SITES: std::sync::OnceLock<Vec<(&'static wxdata::sites::SiteEntry, (f64, f64))>> =
+        std::sync::OnceLock::new();
+    SITES.get_or_init(|| {
+        wxdata::sites::all()
+            .map(|s| {
+                (
+                    s,
+                    crate::render::mercator::lonlat_to_world(
+                        s.longitude as f64,
+                        s.latitude as f64,
+                    ),
+                )
+            })
+            .collect()
+    })
 }
 
 /// MRMS surface precipitation classes on their own lat/lon grid, ready for the GPU.
