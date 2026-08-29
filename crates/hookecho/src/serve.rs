@@ -799,6 +799,8 @@ const ALLOWED_HOSTS: &[&str] = &[
     "opendata.dwd.de",
     // DWD's WMS: the German radar composites (RV nowcast, WN analysis) as rendered tiles.
     "maps.dwd.de",
+    // ECCC's GeoMet WMS: the Canadian 1-km radar composites (rain, snow).
+    "geo.weather.gc.ca",
     // EUMETNET OpenRadarData: the ODIM volumes the OPERA network publishes, plus the
     // bucket listing that names the newest one.
     "s3.waw3-1.cloudferro.com",

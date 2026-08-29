@@ -94,6 +94,10 @@ pub enum BasemapStyle {
     DwdRadarRV,
     /// DWD's German radar composite, analysis only (the WN product).
     DwdRadarWN,
+    /// ECCC's North American 1-km radar composite, rain field.
+    EcccRadarRain,
+    /// ECCC's North American 1-km radar composite, snow field.
+    EcccRadarSnow,
     MapboxStreets,
     MapboxSatellite,
     MapboxSatelliteStreets,
@@ -150,7 +154,7 @@ pub enum BasemapStyle {
 
 impl BasemapStyle {
     /// Cycle order for the `z` hotkey; provider styles trail the built-ins.
-    pub const ALL: [BasemapStyle; 53] = [
+    pub const ALL: [BasemapStyle; 55] = [
         BasemapStyle::Dark,
         BasemapStyle::Light,
         BasemapStyle::Satellite,
@@ -190,6 +194,8 @@ impl BasemapStyle {
         BasemapStyle::GoesWestFire,
         BasemapStyle::DwdRadarRV,
         BasemapStyle::DwdRadarWN,
+        BasemapStyle::EcccRadarRain,
+        BasemapStyle::EcccRadarSnow,
         BasemapStyle::MapboxStreets,
         BasemapStyle::MapboxSatellite,
         BasemapStyle::MapboxSatelliteStreets,
@@ -261,6 +267,8 @@ impl BasemapStyle {
             BasemapStyle::GoesWestFire => "GOES-West (fire temp)",
             BasemapStyle::DwdRadarRV => "DWD radar (RV nowcast)",
             BasemapStyle::DwdRadarWN => "DWD radar (analysis)",
+            BasemapStyle::EcccRadarRain => "ECCC radar (rain)",
+            BasemapStyle::EcccRadarSnow => "ECCC radar (snow)",
             BasemapStyle::MapboxStreets => "Mapbox Streets",
             BasemapStyle::MapboxSatellite => "Mapbox Satellite",
             BasemapStyle::MapboxSatelliteStreets => "Mapbox Satellite Streets",
@@ -320,6 +328,8 @@ impl BasemapStyle {
             BasemapStyle::GoesWestFire => "goes-west-fire",
             BasemapStyle::DwdRadarRV => "dwd-radar-rv",
             BasemapStyle::DwdRadarWN => "dwd-radar-wn",
+            BasemapStyle::EcccRadarRain => "eccc-radar-rain",
+            BasemapStyle::EcccRadarSnow => "eccc-radar-snow",
             BasemapStyle::MapboxStreets => "mapbox-streets",
             BasemapStyle::MapboxSatellite => "mapbox-satellite",
             BasemapStyle::MapboxSatelliteStreets => "mapbox-satellite-streets",
@@ -419,6 +429,9 @@ impl BasemapStyle {
                 BasemapStyle::DwdRadarRV | BasemapStyle::DwdRadarWN => {
                     "Radar data © Deutscher Wetterdienst (DL-DE/BY-2.0)"
                 }
+                BasemapStyle::EcccRadarRain | BasemapStyle::EcccRadarSnow => {
+                    "Radar data © Environment and Climate Change Canada (Open Government Licence – Canada)"
+                }
                 _ if self.goes_layer().is_some() => "NASA GIBS · NOAA GOES",
                 _ => "© OpenMapTiles © OpenStreetMap",
             },
@@ -443,15 +456,22 @@ impl BasemapStyle {
         }
     }
 
-    /// For a WMS-backed style, its `(endpoint, layer)`. `None` for everything else.
+    /// For a WMS-backed style, its `(endpoint, layer, step, lag)`. `None` for everything else.
     ///
     /// A WMS server renders an arbitrary bounding box rather than a fixed tile pyramid, so one
     /// helper ([`wms_url`]) turns an XYZ tile into a GetMap and every such layer is a row here.
-    pub(crate) fn wms_layer(self) -> Option<(&'static str, &'static str)> {
+    ///
+    /// `step` and `lag` are minutes: the publishing interval a `TIME=` must land on, and how far
+    /// behind the clock the newest published frame is. Both are per-publisher — DWD runs on 5
+    /// minutes and ECCC on 6 — and both are measured against the live servers, not guessed.
+    pub(crate) fn wms_layer(self) -> Option<(&'static str, &'static str, i64, i64)> {
         const DWD: &str = "https://maps.dwd.de/geoserver/dwd/wms";
+        const GEOMET: &str = "https://geo.weather.gc.ca/geomet";
         match self {
-            BasemapStyle::DwdRadarRV => Some((DWD, "Radar_rv_product_1x1km_ger")),
-            BasemapStyle::DwdRadarWN => Some((DWD, "Radar_wn-analysis_1x1km_ger")),
+            BasemapStyle::DwdRadarRV => Some((DWD, "Radar_rv_product_1x1km_ger", 5, 10)),
+            BasemapStyle::DwdRadarWN => Some((DWD, "Radar_wn-analysis_1x1km_ger", 5, 10)),
+            BasemapStyle::EcccRadarRain => Some((GEOMET, "RADAR_1KM_RRAI", 6, 6)),
+            BasemapStyle::EcccRadarSnow => Some((GEOMET, "RADAR_1KM_RSNO", 6, 6)),
             _ => None,
         }
     }
@@ -769,7 +789,7 @@ impl BasemapStyle {
                 _ => match self.wms_layer() {
                     // The layer's own default time; the fetch loop appends `TIME=` for a
                     // selected frame, the same way it rewrites the GIBS time slot.
-                    Some((base, layer)) => Some(wms_url(base, layer, z, x, y, "")),
+                    Some((base, layer, ..)) => Some(wms_url(base, layer, z, x, y, "")),
                     // NASA GIBS WMTS (web mercator), latest GOES imagery. GIBS uses `{z}/{y}/{x}`.
                     None => self.goes_layer().map(|(layer, level)| {
                         format!(
@@ -814,7 +834,11 @@ fn wms_url(base: &str, layer: &str, z: u8, x: u32, y: u32, time: &str) -> String
     let (x0, y0, x1, y1) = tile_bbox_3857(z, x, y);
     // EPSG:3857 is an easting/northing CRS, so 1.3.0's axis-order rule leaves BBOX as x,y; the
     // swap that rule is famous for only bites on geographic CRSs like EPSG:4326.
-    let t = if time.is_empty() { String::new() } else { format!("&TIME={time}") };
+    let t = if time.is_empty() {
+        String::new()
+    } else {
+        format!("&TIME={time}")
+    };
     format!(
         "{base}?SERVICE=WMS&VERSION=1.3.0&REQUEST=GetMap&CRS=EPSG:3857\
 &BBOX={x0:.3},{y0:.3},{x1:.3},{y1:.3}&WIDTH=256&HEIGHT=256&LAYERS={layer}\
@@ -974,22 +998,29 @@ pub fn goes_window(
 /// The frame times a WMS composite offers, oldest first, ending at the newest one `anchor` can
 /// expect to be published.
 ///
-/// ponytail: the grid is computed, not fetched. DWD publishes every 5 minutes and says so in a
-/// GetCapabilities document 850 KB long whose only useful sentence is that; downloading it every
-/// time the style changes would cost more than every tile in the loop put together. The lag is
-/// measured — the 16:05 frame was served at 16:10 and the 16:10 frame was not — and asking for one
-/// that has not landed yet costs a blank tile, not an error. A layer that ever publishes
-/// irregularly needs the capabilities parse; none of the ones here does.
-fn wms_frames(anchor: chrono::DateTime<chrono::Utc>, limit: usize) -> Vec<chrono::DateTime<chrono::Utc>> {
-    const STEP_MIN: i64 = 5;
-    const LAG_MIN: i64 = 10;
-    let step = chrono::Duration::minutes(STEP_MIN);
-    let newest = anchor - chrono::Duration::minutes(LAG_MIN);
+/// ponytail: the grid is computed, not fetched. Both publishers run a fixed interval — DWD 5
+/// minutes, ECCC 6 — and each says so in a GetCapabilities document whose only useful sentence is
+/// that; DWD's is 850 KB, so downloading it every time the style changes would cost more than every
+/// tile in the loop put together. The lags are measured (DWD served the 16:05 frame at 16:10 and not
+/// 16:10; GeoMet served 16:30 by 16:33), and asking for one that has not landed yet costs a blank
+/// tile, not an error. A layer that ever publishes irregularly needs the capabilities parse; none of
+/// the ones here does.
+fn wms_frames(
+    anchor: chrono::DateTime<chrono::Utc>,
+    limit: usize,
+    step_min: i64,
+    lag_min: i64,
+) -> Vec<chrono::DateTime<chrono::Utc>> {
+    let step = chrono::Duration::minutes(step_min);
+    let newest = anchor - chrono::Duration::minutes(lag_min);
     // Down to the step boundary: an off-step instant is rejected outright.
     let newest = newest
-        - chrono::Duration::seconds(newest.timestamp().rem_euclid(STEP_MIN * 60))
+        - chrono::Duration::seconds(newest.timestamp().rem_euclid(step_min * 60))
         - chrono::Duration::nanoseconds(i64::from(newest.timestamp_subsec_nanos()));
-    (0..limit as i64).map(|i| newest - step * (i as i32)).rev().collect()
+    (0..limit as i64)
+        .map(|i| newest - step * (i as i32))
+        .rev()
+        .collect()
 }
 
 /// Fetch the available GOES frame times for `style` between `from` and `to` (best-effort; empty
@@ -1005,10 +1036,10 @@ pub async fn fetch_frame_times(
     to: chrono::DateTime<chrono::Utc>,
     limit: usize,
 ) -> Vec<chrono::DateTime<chrono::Utc>> {
-    if style.wms_layer().is_some() {
+    if let Some((_, _, step, lag)) = style.wms_layer() {
         // `to` is the end of the window the caller wants, which is now for a live pane and the
         // end of the replayed hour for an archived one.
-        return wms_frames(to, limit);
+        return wms_frames(to, limit, step, lag);
     }
     let Some((layer, level)) = style.goes_layer() else {
         return Vec::new();
@@ -2181,7 +2212,10 @@ mod tests {
         let url = BasemapStyle::DwdRadarRV
             .url(6, 33, 21, false, "", "", "")
             .expect("a WMS style must resolve to a URL");
-        assert!(url.starts_with("https://maps.dwd.de/geoserver/dwd/wms?"), "{url}");
+        assert!(
+            url.starts_with("https://maps.dwd.de/geoserver/dwd/wms?"),
+            "{url}"
+        );
         for want in [
             "SERVICE=WMS",
             "VERSION=1.3.0",
@@ -2199,6 +2233,23 @@ mod tests {
         assert_eq!(BasemapStyle::DwdRadarRV.category(), Category::Weather);
         // A time-tagged style has no fixed pyramid to pre-download into a chase pack.
         assert!(BasemapStyle::DwdRadarWN.timed());
+
+        // The Canadian composites ride the same bridge, on their own endpoint and cadence.
+        let url = BasemapStyle::EcccRadarSnow
+            .url(6, 18, 22, false, "", "", "")
+            .expect("a WMS style must resolve to a URL");
+        assert!(
+            url.starts_with("https://geo.weather.gc.ca/geomet?"),
+            "{url}"
+        );
+        assert!(url.contains("LAYERS=RADAR_1KM_RSNO"), "{url}");
+        assert!(!url.contains("TIME="), "{url}");
+        assert_eq!(BasemapStyle::EcccRadarRain.category(), Category::Weather);
+        assert_eq!(
+            BasemapStyle::EcccRadarRain.wms_layer().map(|w| (w.2, w.3)),
+            Some((6, 6)),
+            "GeoMet publishes on 6 minutes, not DWD's 5"
+        );
     }
 
     /// DWD rejects a TIME that is not on its 5-minute step outright, so every frame the bar can
@@ -2207,12 +2258,25 @@ mod tests {
     fn wms_frames_land_on_the_publishers_step() {
         // 12:03:17Z, deliberately off-step and off-second.
         let anchor = chrono::DateTime::from_timestamp(1_700_000_597, 0).unwrap();
-        let f = wms_frames(anchor, 12);
+        let f = wms_frames(anchor, 12, 5, 10);
         assert_eq!(f.len(), 12);
         assert!(f.windows(2).all(|w| w[0] < w[1]), "oldest first");
         for t in &f {
             assert_eq!(t.timestamp() % 300, 0, "{t} is off the 5-minute step");
-            assert!(*t <= anchor - chrono::Duration::minutes(10), "{t} is ahead of the publisher");
+            assert!(
+                *t <= anchor - chrono::Duration::minutes(10),
+                "{t} is ahead of the publisher"
+            );
+        }
+        // GeoMet runs on 6 minutes, so the same grid has to move with the publisher, not with a
+        // constant baked in for the first one.
+        let g = wms_frames(anchor, 12, 6, 6);
+        for t in &g {
+            assert_eq!(t.timestamp() % 360, 0, "{t} is off the 6-minute step");
+            assert!(
+                *t <= anchor - chrono::Duration::minutes(6),
+                "{t} is ahead of the publisher"
+            );
         }
         let last = *f.last().unwrap();
         assert!(
