@@ -37,6 +37,18 @@ use wxdata::overlay::{self, GeoFeature};
 /// Frames to let a stepped archive volume load before grabbing it for the loop GIF.
 const LOOP_SETTLE_FRAMES: u8 = 12;
 
+/// How long with no input at all before the idle heartbeat slows to [`IDLE_QUIET_MS`]. Long
+/// enough that it never fires between two deliberate actions — reading a detail window and then
+/// reaching for the mouse is not "idle" — and short enough that a window left alone stops costing
+/// a core within a couple of seconds.
+const QUIET_AFTER: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// The heartbeat in a window nobody is touching. Two frames a second: the clocks the heartbeat
+/// exists for (volume age, countdowns) are minute- and second-resolution, so the visible cost is
+/// a reading up to 0.4 s stale. Everything that actually moves asks for its own repaint and is
+/// unaffected — see the comment at the use site.
+const IDLE_QUIET_MS: u64 = 500;
+
 /// Even-odd point-in-ring test on a `[lon, lat]` ring — the click test for watch zones.
 fn point_in_ring_ll(ring: &[[f64; 2]], lon: f64, lat: f64) -> bool {
     wxdata::overlay::rings_intersect(
@@ -2493,6 +2505,9 @@ pub struct HookEchoApp {
     embed: bool,
     /// Set by the first interaction with an embedded map: from then on it repaints normally.
     embed_live: bool,
+    /// When the user last did anything — the input the idle heartbeat listens for. Also what
+    /// "a gesture is in progress" is read from.
+    last_input: Instant,
     /// Perf readout state: whether `HOOKECHO_PERF=1` asked for the window, the frame count and
     /// mark the frames-per-minute number is derived from, and the last idle interval requested.
     #[cfg(not(target_arch = "wasm32"))]
@@ -3177,6 +3192,7 @@ impl HookEchoApp {
             obs_mode: false,
             embed: is_embed(),
             embed_live: false,
+            last_input: Instant::now(),
             #[cfg(not(target_arch = "wasm32"))]
             perf: PerfReadout::new(),
             #[cfg(target_arch = "wasm32")]
@@ -16198,6 +16214,10 @@ impl eframe::App for HookEchoApp {
         // An untouched embed is a still picture on someone else's dashboard: one frame a minute
         // keeps the clocks honest without spending the host's CPU. The first interaction wakes it
         // for good; data arrivals still request their own repaints either way.
+        let busy = ctx.input(|i| !i.events.is_empty() || i.pointer.any_down() || i.any_touches());
+        if busy {
+            self.last_input = Instant::now();
+        }
         if self.embed && !self.embed_live && ctx.input(|i| i.pointer.any_down() || i.any_touches())
         {
             self.embed_live = true;
@@ -16211,6 +16231,16 @@ impl eframe::App for HookEchoApp {
             // that actually moves (a banner, a play head, an arriving volume) asks for its own
             // repaint and is unaffected.
             1_000
+        } else if self.last_input.elapsed() > QUIET_AFTER {
+            // Nobody has touched it for a while. This is a floor, not a schedule: egui takes the
+            // *minimum* of every repaint request in a frame, so playback, the warning pulse, the
+            // wind field and every arriving volume all still outbid it and animate at their own
+            // rate. What it changes is the cost of a window nothing is happening in — ten wasted
+            // full passes a second, each re-walking thirty poll clocks and re-projecting every
+            // label, becomes two. The first event of any kind snaps it back the same frame.
+            //
+            // The visible price is that a clock can read up to 0.4 s stale in a still window.
+            IDLE_QUIET_MS
         } else if cfg!(target_os = "android") {
             250
         } else {
