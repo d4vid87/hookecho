@@ -41,6 +41,8 @@ pub enum Counter {
     SweepsBinned,
     /// Radar GPU textures built from scratch.
     RadarTexturesBuilt,
+    /// Tile-quad vertex lists rebuilt and re-uploaded.
+    TileQuadsBuilt,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -48,7 +50,7 @@ impl Counter {
     const COUNT: usize = Self::LABELS.len();
 
     /// Prometheus/log names, in declaration order.
-    pub const LABELS: [&'static str; 11] = [
+    pub const LABELS: [&'static str; 12] = [
         "net_requests",
         "net_bytes",
         "net_not_modified",
@@ -60,6 +62,7 @@ impl Counter {
         "frames_drawn",
         "sweeps_binned",
         "radar_textures_built",
+        "tile_quads_built",
     ];
 }
 
