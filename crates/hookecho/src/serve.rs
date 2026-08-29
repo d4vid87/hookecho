@@ -698,6 +698,13 @@ fn metrics(server: &Server) -> String {
         ));
     }
 
+    out.push_str("# HELP hookecho_stats_total Perf counters (wxdata::stats).\n");
+    out.push_str("# TYPE hookecho_stats_total counter\n");
+    for (label, n) in wxdata::stats::snapshot() {
+        let label = escape_label(label);
+        out.push_str(&format!("hookecho_stats_total{{counter=\"{label}\"}} {n}\n"));
+    }
+
     let Ok(body) = cached_json(server, "/status.json") else {
         // A feed being down is not a reason to fail the scrape — the counters above still answer.
         return out;
