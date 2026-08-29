@@ -7,11 +7,18 @@
 //! look". Decoding it lands on the same [`Scan`] the NEXRAD path produces, so rendering, palettes,
 //! SRV and thresholds treat a European radar exactly like a WSR-88D.
 //!
-//! **This is decode only — nothing fetches ODIM yet.** There is no open volume-scan feed to point
-//! it at: Environment Canada publishes only rendered GIF/CAPPI imagery on Datamart and keeps its
-//! ODIM volumes behind HTTP basic auth, and OPERA's own archive is licensed. Germany's
-//! `opendata.dwd.de` is the likely first real consumer — it publishes single-sweep ODIM files
-//! without registration — and when that fetcher is written this module is what it hands bytes to.
+//! [`crate::dwd`] is the live consumer: `opendata.dwd.de` publishes single-sweep ODIM files
+//! without registration, one per elevation, and hands the bytes here. Other European volumes are
+//! harder to reach — Environment Canada publishes only rendered GIF/CAPPI imagery on Datamart and
+//! keeps its ODIM volumes behind HTTP basic auth, and OPERA's own archive is licensed.
+//!
+//! # Azimuth registration
+//!
+//! Rays are decoded in file order, azimuth `(i + 0.5) × 360/nrays`, and `a1gate` is deliberately
+//! ignored. ODIM's `a1gate` names the ray radiated *first in time*, not the ray pointing north:
+//! DWD files carry values like 55 or 247 while `/dataset<n>/how/startazA[0]` is ~0.01°, so ray 0
+//! already starts at north. Rotating the sweep by `a1gate` would misregister it by that many
+//! degrees. Verified against live DWD volumes; do not "fix" this without checking `startazA`.
 
 use chrono::{DateTime, NaiveDate, NaiveTime, TimeZone, Utc};
 use hdf5lite::Value;
