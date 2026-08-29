@@ -592,8 +592,9 @@ pub fn bin_sweep_opts(
 ) -> anyhow::Result<BinnedSweep> {
     let radials = sweep.radials();
     // Azimuth resolution: 0.5-degree (720 bins) covers both super-res and legacy;
-    // legacy 1-degree radials just fill two adjacent bins.
+    // legacy 1-degree radials fill the two adjacent bins they span.
     const AZ_BINS: usize = 720;
+    const BIN_DEG: f32 = 360.0 / AZ_BINS as f32;
 
     // Gate geometry from the first radial that carries this moment.
     let sample = radials
@@ -626,9 +627,20 @@ pub fn bin_sweep_opts(
         if m.gate_count() as usize != gate_count {
             continue;
         }
+        // A radial covers its azimuth spacing, not a point. At 720 bins a 0.5-degree super-res
+        // radial lands in one bin, but a 1-degree legacy or ODIM radial spans two — filling only
+        // the bin under its centre leaves every other row transparent, which draws a sweep of
+        // stripes rather than a field.
         let az = radial.azimuth_angle_degrees().rem_euclid(360.0);
-        let bin = ((az / 360.0 * AZ_BINS as f32) as usize) % AZ_BINS;
-        by_bin[bin].push(radial);
+        // Divide by the bin width rather than scaling by 720/360: BIN_DEG is a power of two, so
+        // this is exact, and a centre landing a bit-width short of its own bin was leaving gaps.
+        let bin = ((az / BIN_DEG) as usize) % AZ_BINS;
+        // The bins below `bin` are the rest of the beam: an azimuth is the radial's centre, so a
+        // 1-degree radial reaches back half a degree into the preceding bin.
+        let bins = ((radial.azimuth_spacing_degrees() / BIN_DEG).round() as usize).max(1);
+        for k in 0..bins {
+            by_bin[(bin + AZ_BINS - k) % AZ_BINS].push(radial);
+        }
     }
 
     // Gather one radial's worth of raw f32 values into `row`. Below-threshold and range-folded
@@ -933,6 +945,39 @@ mod tests {
         // 20 dBZ in range [-32, 95]: t = (20+32)/127 = 0.409 -> 2 + 0.409*253 = 105
         let expected = 2 + (((20.0f32 + 32.0) / 127.0) * 253.0) as u8;
         assert_eq!(binned.data[row + 2], expected, "20 dBZ normalization");
+    }
+
+    /// A 1-degree sweep (ODIM, and legacy WSR-88D cuts) must fill all 720 bins, not every other
+    /// one. Half-empty azimuth rows drew DWD volumes as a spiral of stripes.
+    #[test]
+    fn one_degree_radials_leave_no_empty_azimuth_rows() {
+        let radials = (0..360)
+            .map(|i| {
+                let raw = vec![106u8];
+                let data = MomentData::from_fixed_point(1, 2125, 250, 8, 2.0, 66.0, raw);
+                Radial::new(
+                    0,
+                    i as u16,
+                    (i as f32 + 0.5) * 1.0,
+                    1.0,
+                    nexrad_model::data::RadialStatus::ScanStart,
+                    1,
+                    0.5,
+                    Some(data),
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                )
+            })
+            .collect();
+        let binned = bin_sweep(&Sweep::new(1, radials), Moment::Reflectivity, 35.33, -97.28)
+            .unwrap();
+        assert_eq!(binned.gate_count, 1);
+        let empty = binned.data.iter().filter(|&&c| c == 0).count();
+        assert_eq!(empty, 0, "every azimuth bin should carry the 20 dBZ value");
     }
 
     // A radial carrying only the given moment (others None).
