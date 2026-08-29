@@ -91,3 +91,16 @@ jobs:
         run: |
           curl -sf "https://hookecho.pages.dev/proxy/api.weather.gov/alerts/active/count" >/dev/null
           test "$(curl -s -o /dev/null -w '%{http_code}' https://hookecho.pages.dev/proxy/evil.example/x)" = 403
+
+      # A proxied response has to be cacheable and revalidatable, or every repeat poll pays for
+      # the whole body again. The two calls land inside the 15 s edge TTL, so the second sees the
+      # same cached upstream response — which is the point: the 304 is answered at the edge.
+      - name: Check the proxy caches and revalidates
+        run: |
+          url="https://hookecho.pages.dev/proxy/api.weather.gov/alerts/active/count"
+          curl -sD - -o /dev/null "$url" | tr -d '\r' > /tmp/h.txt
+          grep -qi '^cache-control: public, max-age=15$' /tmp/h.txt
+          etag=$(grep -i '^etag:' /tmp/h.txt | cut -d' ' -f2-)
+          test -n "$etag"
+          code=$(curl -s -o /dev/null -w '%{http_code}' -H "If-None-Match: $etag" "$url")
+          test "$code" = 304

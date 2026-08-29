@@ -154,17 +154,13 @@ pub mod validators {
         }
     }
 
-    /// Forget everything. Tests only — the store is process-wide.
-    #[cfg(test)]
-    pub fn clear() {
-        if let Ok(mut s) = store().lock() {
-            s.clear();
-        }
-    }
 }
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod validator_tests {
+    // The store is process-wide and these run in parallel, so every test owns its own URL and
+    // nothing here resets shared state — a `clear()` between tests would wipe a sibling's entry
+    // mid-run, which is exactly the flake this arrangement avoids.
     use super::validators;
 
     fn headers(pairs: &[(&str, &str)]) -> reqwest::header::HeaderMap {
@@ -182,7 +178,6 @@ mod validator_tests {
     /// the tag is the whole reason a 304 can be trusted to mean "you are up to date".
     #[test]
     fn remembers_validators_and_the_tag() {
-        validators::clear();
         let url = "https://example.invalid/one";
         validators::remember_headers(
             url,
@@ -200,7 +195,6 @@ mod validator_tests {
     /// have been unconditional — and the app stops seeing new data with nothing to show for it.
     #[test]
     fn a_response_without_validators_forgets_the_old_ones() {
-        validators::clear();
         let url = "https://example.invalid/two";
         validators::remember_headers(url, &headers(&[("etag", "\"abc\"")]), Some("VOL-1".into()));
         assert!(validators::get(url).is_some());
@@ -214,7 +208,6 @@ mod validator_tests {
     /// Nothing remembered means the request goes out exactly as it would have.
     #[test]
     fn an_unknown_url_adds_no_headers() {
-        validators::clear();
         let client = reqwest::Client::new();
         let req = validators::apply(
             client.get("https://example.invalid/three"),
