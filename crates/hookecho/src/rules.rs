@@ -65,14 +65,16 @@ pub fn meets_threshold(rule: &AlertRule, hit: &Detection) -> bool {
 pub fn place_contains(place: &RulePlace, hit: &Detection, settings: &Settings) -> bool {
     match place {
         RulePlace::Anywhere => true,
-        RulePlace::Marker { id } => settings
-            .markers
-            .iter()
-            .find(|m| &m.id == id)
-            .is_some_and(|m| {
-                let (km, _) = crate::geo::great_circle([m.lon, m.lat], [hit.lon, hit.lat]);
-                km <= m.alert_radius_mi * crate::geo::KM_PER_MILE
-            }),
+        RulePlace::Marker { id } => {
+            settings
+                .markers
+                .iter()
+                .find(|m| &m.id == id)
+                .is_some_and(|m| {
+                    let (km, _) = crate::geo::great_circle([m.lon, m.lat], [hit.lon, hit.lat]);
+                    km <= m.alert_radius_mi * crate::geo::KM_PER_MILE
+                })
+        }
         RulePlace::Zone { name } => settings
             .alert_polygons
             .iter()
@@ -260,10 +262,22 @@ mod tests {
         let s = Settings::default();
         let mut r = rule(RuleTrigger::Rotation, RulePlace::Anywhere);
         r.threshold = Some(45.0);
-        assert!(matches(&r, &Detection::with_strength(-97.5, 35.3, 52.0), &s));
-        assert!(!matches(&r, &Detection::with_strength(-97.5, 35.3, 30.0), &s));
+        assert!(matches(
+            &r,
+            &Detection::with_strength(-97.5, 35.3, 52.0),
+            &s
+        ));
+        assert!(!matches(
+            &r,
+            &Detection::with_strength(-97.5, 35.3, 30.0),
+            &s
+        ));
         // Exactly at the threshold counts — the user asked for "45 and up".
-        assert!(matches(&r, &Detection::with_strength(-97.5, 35.3, 45.0), &s));
+        assert!(matches(
+            &r,
+            &Detection::with_strength(-97.5, 35.3, 45.0),
+            &s
+        ));
         // A measured trigger with nothing measured stays quiet.
         assert!(!matches(&r, &Detection::at(-97.5, 35.3), &s));
         // A trigger that takes no threshold ignores one that got set anyway.
@@ -365,7 +379,10 @@ mod tests {
         assert!(warning_matches(&tor, "Tornado Warning"));
         assert!(!warning_matches(&tor, "Severe Thunderstorm Warning"));
         // A non-warning trigger is not a warning match, whatever the text says.
-        assert!(!warning_matches(&AlertRule::new(RuleTrigger::Tds), "Tornado Warning"));
+        assert!(!warning_matches(
+            &AlertRule::new(RuleTrigger::Tds),
+            "Tornado Warning"
+        ));
     }
 
     #[test]

@@ -87,17 +87,16 @@ pub(crate) fn csv_buttons(
 pub mod a11y;
 pub mod about_window;
 pub mod afd_window;
-pub mod tropical_window;
 pub mod alert_panel;
-pub mod drawer;
 pub mod basemap_picker;
 pub mod cappi_window;
 pub mod cell_window;
 pub mod cells_window;
+pub mod chase_replay;
 pub mod cheatsheet;
 pub mod detail_window;
 pub mod digest_window;
-pub mod chase_replay;
+pub mod drawer;
 pub mod event_window;
 pub mod firstrun;
 pub mod forecast_window;
@@ -111,9 +110,9 @@ pub mod legend;
 /// Material 3 design tokens for the mobile chrome.
 pub mod m3;
 pub mod marker_popup;
+pub mod marker_window;
 /// Easing and the reduced-motion brake.
 pub mod motion;
-pub mod marker_window;
 pub mod palette_editor;
 pub mod placefile_window;
 pub mod popover;
@@ -127,6 +126,7 @@ pub mod station_card;
 pub mod style;
 /// The optional spotlight tour of the live chrome.
 pub mod tour;
+pub mod tropical_window;
 pub mod verify_window;
 pub mod video_window;
 pub mod volume3d_window;

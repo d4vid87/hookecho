@@ -52,7 +52,11 @@ pub async fn decode_volume(bytes: Vec<u8>) -> Result<Vec<u8>, Error> {
         Err(e) => {
             let msg = e
                 .as_string()
-                .or_else(|| js_sys::Reflect::get(&e, &"message".into()).ok()?.as_string())
+                .or_else(|| {
+                    js_sys::Reflect::get(&e, &"message".into())
+                        .ok()?
+                        .as_string()
+                })
                 .unwrap_or_else(|| "worker rejected".into());
             // The bridge rejects with this exact string once it has terminated a dead worker, so
             // the caller falls back inline instead of reporting a broken volume.

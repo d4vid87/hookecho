@@ -21,107 +21,106 @@ impl HookEchoApp {
             return;
         };
         window.show(ctx, |ui| {
-                if let Some((lon, lat)) = self.climo_center {
-                    ui.label(format!("Within 25 mi of {lat:.3}, {lon:.3}"));
+            if let Some((lon, lat)) = self.climo_center {
+                ui.label(format!("Within 25 mi of {lat:.3}, {lon:.3}"));
+            }
+            if self.climo_loading {
+                ui.horizontal(|ui| {
+                    ui.spinner();
+                    ui.label("Loading SPC tornado database (1950–2022)…");
+                });
+            } else if let Some(e) = &self.climo_error {
+                ui.colored_label(
+                    egui::Color32::from_rgb(230, 90, 90),
+                    format!("Load failed: {e}"),
+                );
+            } else {
+                ui.horizontal(|ui| {
+                    ui.strong(format!("{} tornadoes on record", self.climo_hits.len()));
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        let hits = &self.climo_hits;
+                        crate::ui::csv_buttons(
+                            ui,
+                            "tornadoes.csv",
+                            "Every tornado on record here, not just the first 50",
+                            || {
+                                let mut s =
+                                    String::from("year,mag,start_lat,start_lon,end_lat,end_lon\n");
+                                for t in hits {
+                                    s.push_str(&format!(
+                                        "{},{},{:.4},{:.4},{:.4},{:.4}\n",
+                                        t.year, t.mag, t.slat, t.slon, t.elat, t.elon
+                                    ));
+                                }
+                                s
+                            },
+                        );
+                    });
+                });
+                let hist = wxdata::torclimo::mag_histogram(&self.climo_hits);
+                ui.horizontal_wrapped(|ui| {
+                    for (i, label) in ["EF0", "EF1", "EF2", "EF3", "EF4", "EF5", "Unk"]
+                        .iter()
+                        .enumerate()
+                    {
+                        crate::theme::stat_card(ui, label, &hist[i].to_string());
+                    }
+                });
+                ui.separator();
+                egui::ScrollArea::vertical()
+                    .max_height(240.0)
+                    .show(ui, |ui| {
+                        for t in self.climo_hits.iter().take(50) {
+                            let mag = if t.mag < 0 {
+                                "EF?".to_string()
+                            } else {
+                                format!("EF{}", t.mag)
+                            };
+                            ui.label(format!(
+                                "{}  {}  start {:.2},{:.2}",
+                                t.year, mag, t.slat, t.slon
+                            ));
+                        }
+                        if self.climo_hits.len() > 50 {
+                            ui.weak(format!("… and {} more", self.climo_hits.len() - 50));
+                        }
+                    });
+            }
+            ui.separator();
+            ui.strong("Warning history");
+            ui.weak("How often this spot's county has been warned (IEM, 1986–present).");
+            match (&self.climo_warn, self.climo_warn_rx.is_some()) {
+                (Some(s), _) if s.total == 0 => {
+                    ui.label("No warnings on record here.");
                 }
-                if self.climo_loading {
+                (Some(s), _) => {
+                    ui.horizontal_wrapped(|ui| {
+                        crate::theme::stat_card(ui, "Warnings", &s.total.to_string());
+                        if let Some(y) = s.first_year {
+                            crate::theme::stat_card(ui, "Since", &y.to_string());
+                        }
+                        if let Some((y, n)) = s.busiest_year {
+                            crate::theme::stat_card(ui, "Busiest year", &format!("{y} ({n})"));
+                        }
+                        if let Some((d, n)) = s.worst_day {
+                            crate::theme::stat_card(ui, "Worst day", &format!("{d} ({n})"));
+                        }
+                    });
+                    for (name, n) in s.by_name.iter().take(8) {
+                        ui.label(format!("{n} × {name}"));
+                    }
+                }
+                (None, true) => {
                     ui.horizontal(|ui| {
                         ui.spinner();
-                        ui.label("Loading SPC tornado database (1950–2022)…");
+                        ui.label("Loading warning history…");
                     });
-                } else if let Some(e) = &self.climo_error {
-                    ui.colored_label(
-                        egui::Color32::from_rgb(230, 90, 90),
-                        format!("Load failed: {e}"),
-                    );
-                } else {
-                    ui.horizontal(|ui| {
-                        ui.strong(format!("{} tornadoes on record", self.climo_hits.len()));
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            let hits = &self.climo_hits;
-                            crate::ui::csv_buttons(
-                                ui,
-                                "tornadoes.csv",
-                                "Every tornado on record here, not just the first 50",
-                                || {
-                                    let mut s = String::from(
-                                        "year,mag,start_lat,start_lon,end_lat,end_lon\n",
-                                    );
-                                    for t in hits {
-                                        s.push_str(&format!(
-                                            "{},{},{:.4},{:.4},{:.4},{:.4}\n",
-                                            t.year, t.mag, t.slat, t.slon, t.elat, t.elon
-                                        ));
-                                    }
-                                    s
-                                },
-                            );
-                        });
-                    });
-                    let hist = wxdata::torclimo::mag_histogram(&self.climo_hits);
-                    ui.horizontal_wrapped(|ui| {
-                        for (i, label) in ["EF0", "EF1", "EF2", "EF3", "EF4", "EF5", "Unk"]
-                            .iter()
-                            .enumerate()
-                        {
-                            crate::theme::stat_card(ui, label, &hist[i].to_string());
-                        }
-                    });
-                    ui.separator();
-                    egui::ScrollArea::vertical()
-                        .max_height(240.0)
-                        .show(ui, |ui| {
-                            for t in self.climo_hits.iter().take(50) {
-                                let mag = if t.mag < 0 {
-                                    "EF?".to_string()
-                                } else {
-                                    format!("EF{}", t.mag)
-                                };
-                                ui.label(format!(
-                                    "{}  {}  start {:.2},{:.2}",
-                                    t.year, mag, t.slat, t.slon
-                                ));
-                            }
-                            if self.climo_hits.len() > 50 {
-                                ui.weak(format!("… and {} more", self.climo_hits.len() - 50));
-                            }
-                        });
                 }
-                ui.separator();
-                ui.strong("Warning history");
-                ui.weak("How often this spot's county has been warned (IEM, 1986–present).");
-                match (&self.climo_warn, self.climo_warn_rx.is_some()) {
-                    (Some(s), _) if s.total == 0 => {
-                        ui.label("No warnings on record here.");
-                    }
-                    (Some(s), _) => {
-                        ui.horizontal_wrapped(|ui| {
-                            crate::theme::stat_card(ui, "Warnings", &s.total.to_string());
-                            if let Some(y) = s.first_year {
-                                crate::theme::stat_card(ui, "Since", &y.to_string());
-                            }
-                            if let Some((y, n)) = s.busiest_year {
-                                crate::theme::stat_card(ui, "Busiest year", &format!("{y} ({n})"));
-                            }
-                            if let Some((d, n)) = s.worst_day {
-                                crate::theme::stat_card(ui, "Worst day", &format!("{d} ({n})"));
-                            }
-                        });
-                        for (name, n) in s.by_name.iter().take(8) {
-                            ui.label(format!("{n} × {name}"));
-                        }
-                    }
-                    (None, true) => {
-                        ui.horizontal(|ui| {
-                            ui.spinner();
-                            ui.label("Loading warning history…");
-                        });
-                    }
-                    (None, false) => {
-                        ui.weak("Warning history unavailable.");
-                    }
+                (None, false) => {
+                    ui.weak("Warning history unavailable.");
                 }
-            });
+            }
+        });
         self.climo_open = open;
     }
 

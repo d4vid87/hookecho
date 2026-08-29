@@ -67,13 +67,7 @@ pub fn ease_out_cubic(t: f32) -> f32 {
 /// A 0..1 progress for `on`, eased, or a hard 0/1 when motion is off.
 ///
 /// `ease` is the shape; pass [`ease_out_back`] for arrivals and [`ease_out_cubic`] for the rest.
-pub fn rise(
-    ctx: &egui::Context,
-    id: egui::Id,
-    on: bool,
-    secs: f32,
-    ease: fn(f32) -> f32,
-) -> f32 {
+pub fn rise(ctx: &egui::Context, id: egui::Id, on: bool, secs: f32, ease: fn(f32) -> f32) -> f32 {
     if reduced() {
         return if on { 1.0 } else { 0.0 };
     }

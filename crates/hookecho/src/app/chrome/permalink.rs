@@ -71,7 +71,8 @@ impl HookEchoApp {
             moment: Some(v.moment),
             tilt: Some(v.tilt),
             basemap: None,
-            threshold: v.threshold_enabled[v.moment.index()].then(|| v.thresholds[v.moment.index()]),
+            threshold: v.threshold_enabled[v.moment.index()]
+                .then(|| v.thresholds[v.moment.index()]),
             srv: false,
         });
         link.find('#').map(|i| link[i..].to_string())

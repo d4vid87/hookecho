@@ -72,7 +72,9 @@ impl Table {
 }
 
 fn lerp(a: u8, b: u8, t: f32) -> u8 {
-    (a as f32 + (b as f32 - a as f32) * t).round().clamp(0.0, 255.0) as u8
+    (a as f32 + (b as f32 - a as f32) * t)
+        .round()
+        .clamp(0.0, 255.0) as u8
 }
 
 /// Parse a GRLevelX `.pal` v2 file. Only the keys the two built-in tables use are recognized;

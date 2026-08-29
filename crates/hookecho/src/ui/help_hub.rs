@@ -46,7 +46,13 @@ impl HelpHub {
         self.open = true;
         self.query = crate::ui::glossary::ENTRIES
             .get(entry)
-            .map(|e| e.term.split([' ', '\u{2014}']).next().unwrap_or(e.term).to_string())
+            .map(|e| {
+                e.term
+                    .split([' ', '\u{2014}'])
+                    .next()
+                    .unwrap_or(e.term)
+                    .to_string()
+            })
             .unwrap_or_default();
     }
 
@@ -156,11 +162,7 @@ fn terms_empty(q: &str) -> bool {
 
 /// Live bindings as `(key, what it does)`, labelled from the registry so a renamed action renames
 /// its shortcut row too.
-fn shortcut_rows(
-    bindings: &[Binding],
-    entries: &[PaletteEntry],
-    q: &str,
-) -> Vec<(String, String)> {
+fn shortcut_rows(bindings: &[Binding], entries: &[PaletteEntry], q: &str) -> Vec<(String, String)> {
     bindings
         .iter()
         .filter_map(|b| {
@@ -217,7 +219,10 @@ mod tests {
     fn shortcuts_filter_by_label_and_by_key() {
         let bindings = crate::hotkeys::defaults();
         let all = shortcut_rows(&bindings, &[], "");
-        assert!(!all.is_empty(), "app-level bindings always label themselves");
+        assert!(
+            !all.is_empty(),
+            "app-level bindings always label themselves"
+        );
         // No registry passed, so every palette-bound row drops out and only `hotkeys::label` rows
         // remain — which is exactly what a caller with no entries should see.
         assert!(all.iter().any(|(_, l)| l == "Fullscreen"));

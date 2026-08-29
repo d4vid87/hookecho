@@ -364,5 +364,4 @@ impl super::HookEchoApp {
             self.set_basemap(s);
         }
     }
-
 }

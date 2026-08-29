@@ -79,90 +79,90 @@ pub fn show(
         return;
     };
     window.show(ctx, |ui| {
-            ui.weak("Drag to orbit · scroll to zoom · max-intensity projection");
-            ui.horizontal(|ui| {
-                let mut on = st.threshold_dbz.is_finite();
+        ui.weak("Drag to orbit · scroll to zoom · max-intensity projection");
+        ui.horizontal(|ui| {
+            let mut on = st.threshold_dbz.is_finite();
+            if ui
+                .checkbox(&mut on, "Only above")
+                .on_hover_text("Hide everything weaker, so cores stand alone")
+                .changed()
+            {
+                st.threshold_dbz = if on { 45.0 } else { f32::NEG_INFINITY };
+            }
+            if on {
+                let mut dbz = st.threshold_dbz;
                 if ui
-                    .checkbox(&mut on, "Only above")
-                    .on_hover_text("Hide everything weaker, so cores stand alone")
+                    .add(egui::Slider::new(&mut dbz, range.0..=range.1).suffix(" dBZ"))
                     .changed()
                 {
-                    st.threshold_dbz = if on { 45.0 } else { f32::NEG_INFINITY };
+                    st.threshold_dbz = dbz;
                 }
-                if on {
-                    let mut dbz = st.threshold_dbz;
-                    if ui
-                        .add(egui::Slider::new(&mut dbz, range.0..=range.1).suffix(" dBZ"))
-                        .changed()
-                    {
-                        st.threshold_dbz = dbz;
-                    }
-                    if ui
-                        .button("Hail core")
-                        .on_hover_text("45 dBZ — the usual floor for a hail core")
-                        .clicked()
-                    {
-                        st.threshold_dbz = 45.0;
-                    }
-                }
-            });
-            ui.horizontal(|ui| {
-                ui.label("Quality");
-                for (label, steps) in STEP_PRESETS {
-                    ui.selectable_value(&mut st.steps, steps, label)
-                        .on_hover_text(format!("{steps} samples per pixel"));
-                }
-            });
-            egui::CollapsingHeader::new("Slice")
-                .default_open(false)
-                .show(ui, |ui| {
-                    let [x0, x1, y0, y1, z0, z1] = &mut st.clip;
-                    axis_slice(ui, "E–W", x0, x1);
-                    axis_slice(ui, "N–S", y0, y1);
-                    axis_slice(ui, "Up ", z0, z1);
-                    if ui.button("Whole volume").clicked() {
-                        st.clip = [0.0, 1.0, 0.0, 1.0, 0.0, 1.0];
-                    }
-                });
-            let (rect, resp) = ui.allocate_exact_size(ui.available_size(), egui::Sense::drag());
-            if resp.dragged() {
-                let d = resp.drag_delta();
-                st.az -= d.x * 0.4;
-                st.el = (st.el + d.y * 0.3).clamp(2.0, 88.0);
-            }
-            // Wheel dollies the orbit camera; a trackpad pinch arrives as `zoom_delta` instead
-            // (scale factor, >1 is fingers apart = closer) and has to move `dist` the other way.
-            let (scroll, zoom) = ctx.input(|i| (i.smooth_scroll_delta.y, i.zoom_delta()));
-            if resp.hovered() {
-                if scroll != 0.0 {
-                    st.dist = (st.dist - scroll * 0.003).clamp(1.3, 6.0);
-                }
-                if (zoom - 1.0).abs() > f32::EPSILON {
-                    st.dist = (st.dist / zoom).clamp(1.3, 6.0);
+                if ui
+                    .button("Hail core")
+                    .on_hover_text("45 dBZ — the usual floor for a hail core")
+                    .clicked()
+                {
+                    st.threshold_dbz = 45.0;
                 }
             }
-            let aspect = rect.width() / rect.height().max(1.0);
-            // The threshold is a uniform, not a re-upload: dragging the slider never rebuilds the
-            // texture.
-            let view = View3d {
-                threshold_idx: if st.threshold_dbz.is_finite() {
-                    threshold_index(st.threshold_dbz, range)
-                } else {
-                    2.0
-                },
-                clip: st.clip,
-            };
-            let uniform = orbit_uniform(st.az, st.el, st.dist, aspect, n, nz, st.steps, view);
-            // On the window's first frame egui may hand us a zero-area rect (auto-size pass);
-            // the paint callback would be culled and the one-shot upload lost, leaving the view
-            // black until reopened. Hold the upload until the rect is real.
-            let upload = (rect.height() >= 1.0 && rect.width() >= 1.0)
-                .then(|| pending.take())
-                .flatten();
-            let cb = Volume3dCallback { upload, uniform };
-            ui.painter()
-                .add(egui_wgpu::Callback::new_paint_callback(rect, cb));
         });
+        ui.horizontal(|ui| {
+            ui.label("Quality");
+            for (label, steps) in STEP_PRESETS {
+                ui.selectable_value(&mut st.steps, steps, label)
+                    .on_hover_text(format!("{steps} samples per pixel"));
+            }
+        });
+        egui::CollapsingHeader::new("Slice")
+            .default_open(false)
+            .show(ui, |ui| {
+                let [x0, x1, y0, y1, z0, z1] = &mut st.clip;
+                axis_slice(ui, "E–W", x0, x1);
+                axis_slice(ui, "N–S", y0, y1);
+                axis_slice(ui, "Up ", z0, z1);
+                if ui.button("Whole volume").clicked() {
+                    st.clip = [0.0, 1.0, 0.0, 1.0, 0.0, 1.0];
+                }
+            });
+        let (rect, resp) = ui.allocate_exact_size(ui.available_size(), egui::Sense::drag());
+        if resp.dragged() {
+            let d = resp.drag_delta();
+            st.az -= d.x * 0.4;
+            st.el = (st.el + d.y * 0.3).clamp(2.0, 88.0);
+        }
+        // Wheel dollies the orbit camera; a trackpad pinch arrives as `zoom_delta` instead
+        // (scale factor, >1 is fingers apart = closer) and has to move `dist` the other way.
+        let (scroll, zoom) = ctx.input(|i| (i.smooth_scroll_delta.y, i.zoom_delta()));
+        if resp.hovered() {
+            if scroll != 0.0 {
+                st.dist = (st.dist - scroll * 0.003).clamp(1.3, 6.0);
+            }
+            if (zoom - 1.0).abs() > f32::EPSILON {
+                st.dist = (st.dist / zoom).clamp(1.3, 6.0);
+            }
+        }
+        let aspect = rect.width() / rect.height().max(1.0);
+        // The threshold is a uniform, not a re-upload: dragging the slider never rebuilds the
+        // texture.
+        let view = View3d {
+            threshold_idx: if st.threshold_dbz.is_finite() {
+                threshold_index(st.threshold_dbz, range)
+            } else {
+                2.0
+            },
+            clip: st.clip,
+        };
+        let uniform = orbit_uniform(st.az, st.el, st.dist, aspect, n, nz, st.steps, view);
+        // On the window's first frame egui may hand us a zero-area rect (auto-size pass);
+        // the paint callback would be culled and the one-shot upload lost, leaving the view
+        // black until reopened. Hold the upload until the rect is real.
+        let upload = (rect.height() >= 1.0 && rect.width() >= 1.0)
+            .then(|| pending.take())
+            .flatten();
+        let cb = Volume3dCallback { upload, uniform };
+        ui.painter()
+            .add(egui_wgpu::Callback::new_paint_callback(rect, cb));
+    });
     *open = keep;
 }
 

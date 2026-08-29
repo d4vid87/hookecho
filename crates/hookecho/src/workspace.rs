@@ -90,7 +90,8 @@ pub struct PaneSnap {
 impl PaneSnap {
     /// Snapshot a live pane.
     pub fn capture(v: &MapView) -> Self {
-        let (lon, lat) = crate::render::mercator::world_to_lonlat(v.camera.center.0, v.camera.center.1);
+        let (lon, lat) =
+            crate::render::mercator::world_to_lonlat(v.camera.center.0, v.camera.center.1);
         Self {
             site: v.site.clone(),
             moment: v.moment,
@@ -208,7 +209,9 @@ pub fn starters() -> Vec<Workspace> {
             name: "Analysis".into(),
             // The same storm at four heights: how a couplet leans with height, which is the
             // layout people rebuild by hand every time.
-            panes: (0..4).map(|t| pane(Moment::Reflectivity, t, false)).collect(),
+            panes: (0..4)
+                .map(|t| pane(Moment::Reflectivity, t, false))
+                .collect(),
             active: 0,
             link_cameras: true,
             overlays_on: vec!["Alerts".into(), "Cells".into(), "RangeRings".into()],
@@ -235,7 +238,10 @@ mod tests {
         v.basemap = crate::tiles::BasemapStyle::from_slug("satellite");
 
         let snap = PaneSnap::capture(&v);
-        let mut fresh = MapView::new(None, crate::render::mercator::Camera::at_lonlat(0.0, 0.0, 3.0));
+        let mut fresh = MapView::new(
+            None,
+            crate::render::mercator::Camera::at_lonlat(0.0, 0.0, 3.0),
+        );
         snap.apply(&mut fresh);
 
         assert_eq!(fresh.site.as_deref(), Some("KTLX"));
@@ -252,7 +258,10 @@ mod tests {
     #[test]
     fn per_pane_thresholds_and_layers_survive_the_round_trip() {
         use wxdata::level2::Moment;
-        let mut v = MapView::new(None, crate::render::mercator::Camera::at_lonlat(0.0, 0.0, 3.0));
+        let mut v = MapView::new(
+            None,
+            crate::render::mercator::Camera::at_lonlat(0.0, 0.0, 3.0),
+        );
         v.fields_on.insert(crate::render::FieldLayer::Mrms);
         v.thresholds[Moment::Reflectivity.index()] = Some(35.0);
         v.threshold_enabled[Moment::Reflectivity.index()] = true;
@@ -263,7 +272,10 @@ mod tests {
         assert_eq!(snap.fields_on, vec!["mrms"]);
         assert_eq!(snap.thresholds, vec![(Moment::Reflectivity, 35.0)]);
 
-        let mut fresh = MapView::new(None, crate::render::mercator::Camera::at_lonlat(0.0, 0.0, 3.0));
+        let mut fresh = MapView::new(
+            None,
+            crate::render::mercator::Camera::at_lonlat(0.0, 0.0, 3.0),
+        );
         // A leftover filter from whatever this pane was showing before must not survive a restore.
         fresh.thresholds[Moment::SpectrumWidth.index()] = Some(4.0);
         fresh.threshold_enabled[Moment::SpectrumWidth.index()] = true;

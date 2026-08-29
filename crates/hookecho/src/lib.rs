@@ -36,13 +36,13 @@ pub mod gps;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod headless;
 pub mod hotkeys;
-pub mod labelplace;
 pub mod icon;
+pub mod labelplace;
 pub mod loopexport;
-pub mod notify;
 /// MQTT publishing for home automation; native only (no TCP socket in a browser).
 #[cfg(not(any(target_os = "android", target_arch = "wasm32")))]
 pub mod mqtt;
+pub mod notify;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod nwr;
 pub mod overlay_build;
@@ -68,13 +68,12 @@ pub mod share;
 pub mod speech;
 /// Live station markers and their telemetry cards.
 pub mod stationlayer;
-pub mod wind_gpu;
-/// Cache sizes and the buttons that clear them; needs a filesystem, so not on the web.
-#[cfg(not(target_arch = "wasm32"))]
-pub mod storage;
 /// The `--status` report; native only — it builds its own runtime.
 #[cfg(not(target_arch = "wasm32"))]
 pub mod status;
+/// Cache sizes and the buttons that clear them; needs a filesystem, so not on the web.
+#[cfg(not(target_arch = "wasm32"))]
+pub mod storage;
 pub mod textview;
 pub mod theme;
 pub mod tiles;
@@ -84,8 +83,9 @@ pub mod tray;
 pub mod ui;
 pub mod vector_tiles;
 pub mod view;
-pub mod workspace;
 pub mod wind_draw;
+pub mod wind_gpu;
+pub mod workspace;
 
 pub use app::HookEchoApp;
 

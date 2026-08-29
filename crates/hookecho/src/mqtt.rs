@@ -181,9 +181,12 @@ mod tests {
 
     #[test]
     fn an_alert_publishes_its_fields_apart() {
-        let v: serde_json::Value =
-            serde_json::from_str(&alert_payload("Tornado Warning", "Norman until 21:15", true))
-                .unwrap();
+        let v: serde_json::Value = serde_json::from_str(&alert_payload(
+            "Tornado Warning",
+            "Norman until 21:15",
+            true,
+        ))
+        .unwrap();
         assert_eq!(v["title"], "Tornado Warning");
         assert_eq!(v["body"], "Norman until 21:15");
         assert_eq!(v["urgent"], true);

@@ -534,7 +534,7 @@ impl RenderResources {
                         view_dimension: wgpu::TextureViewDimension::D2,
                         multisampled: false,
                     },
-                    count: None
+                    count: None,
                 },
             ],
         });

@@ -143,7 +143,10 @@ mod tests {
     fn quantiles_and_the_over_budget_count_read_the_right_frames() {
         // 1..=100 ms in microseconds.
         let v: Vec<i64> = (1..=100).map(|ms| ms * 1_000).collect();
-        assert_eq!(Pacing::quantiles(&v), "p50 51.00 p90 90.00 p99 99.00 max 100.00");
+        assert_eq!(
+            Pacing::quantiles(&v),
+            "p50 51.00 p90 90.00 p99 99.00 max 100.00"
+        );
         // 80 of them are over 20 ms, and the budget is exclusive: 20 ms itself is not late.
         assert_eq!(Pacing::over(&v, 20_000), 80);
         assert_eq!(Pacing::quantiles(&[]), "n/a");

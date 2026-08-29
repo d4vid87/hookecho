@@ -133,10 +133,7 @@ impl ChaseReplay {
                     action = Some(ReplayAction::OpenFile);
                 }
                 if ui
-                    .add_enabled(
-                        live.points.len() > 1,
-                        egui::Button::new("This session"),
-                    )
+                    .add_enabled(live.points.len() > 1, egui::Button::new("This session"))
                     .on_hover_text("Replay the track being logged right now")
                     .clicked()
                 {

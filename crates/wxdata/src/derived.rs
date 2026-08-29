@@ -172,7 +172,9 @@ pub fn derive(sweeps: &[BinnedSweep], opts: &DerivedOpts) -> Option<Derived> {
             if let Some(max) = samples
                 .iter()
                 .map(|(_, dbz)| *dbz)
-                .fold(None, |acc: Option<f32>, d| Some(acc.map_or(d, |a| a.max(d))))
+                .fold(None, |acc: Option<f32>, d| {
+                    Some(acc.map_or(d, |a| a.max(d)))
+                })
             {
                 composite[i] = max;
             }
@@ -376,7 +378,10 @@ mod tests {
         let gy = ((d.composite.lat_north - 35.3) / RES_DEG) as usize;
         let v = d.composite.values[gy * d.composite.nx + gx];
         // Quantization through the u8 band costs a fraction of a dBZ.
-        assert!((v - 58.0).abs() < 0.6, "column max read {v}, wanted the 58 dBZ tilt");
+        assert!(
+            (v - 58.0).abs() < 0.6,
+            "column max read {v}, wanted the 58 dBZ tilt"
+        );
     }
 
     #[test]

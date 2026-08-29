@@ -393,7 +393,10 @@ mod tests {
             Some("https://www.spc.noaa.gov/products/md/md2032.txt")
         );
         assert_eq!(md_text_url(""), None);
-        assert_eq!(md_text_url("www.spc.noaa.gov/products/md/md2032.html"), None);
+        assert_eq!(
+            md_text_url("www.spc.noaa.gov/products/md/md2032.html"),
+            None
+        );
         assert_eq!(
             md_text_url("https://www.spc.noaa.gov/products/md/md2032"),
             None

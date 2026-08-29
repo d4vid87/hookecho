@@ -208,7 +208,10 @@ impl Drawer {
         }
         ctx.request_repaint();
         let off = (1.0 - crate::ui::motion::ease_out_back(t as f32)) * (head.width() + X);
-        (head.translate(vec2(-off, 0.0)), body.translate(vec2(-off, 0.0)))
+        (
+            head.translate(vec2(-off, 0.0)),
+            body.translate(vec2(-off, 0.0)),
+        )
     }
 }
 

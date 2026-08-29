@@ -430,9 +430,7 @@ mod tests {
     /// to survive both without producing an item.
     #[test]
     fn a_polygon_with_no_usable_ring_is_dropped() {
-        let pf = parse(
-            "Color: 255 0 0\nPolygon:\n\n 35.0, -97.0\n 35.1, -97.0\nEnd:\n",
-        );
+        let pf = parse("Color: 255 0 0\nPolygon:\n\n 35.0, -97.0\n 35.1, -97.0\nEnd:\n");
         assert!(pf.items.is_empty(), "two points is not a polygon");
     }
 

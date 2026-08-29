@@ -27,65 +27,70 @@ pub fn show(
     accent: egui::Color32,
     drawer: &mut crate::ui::drawer::Drawer,
 ) {
-    let Some(window) = drawer.page(ctx, "About HookEcho", open, false, egui::Window::new("About HookEcho"))
-    else {
+    let Some(window) = drawer.page(
+        ctx,
+        "About HookEcho",
+        open,
+        false,
+        egui::Window::new("About HookEcho"),
+    ) else {
         return;
     };
     let logo = crate::icon::texture(ctx, 128);
     window.show(ctx, |ui| {
-            // The mark beside the name, which is the one place in the app the logo is looked at
-            // rather than glanced at in a taskbar.
-            ui.horizontal(|ui| {
-                ui.add(egui::Image::new(&logo).fit_to_exact_size(egui::vec2(64.0, 64.0)));
-                ui.vertical(|ui| {
-                    ui.label(
-                        egui::RichText::new("HookEcho")
-                            .size(style::FONT_TITLE)
-                            .color(accent)
-                            .strong(),
-                    );
-                    ui.label(egui::RichText::new(format!("Version {VERSION}")).weak());
-                });
+        // The mark beside the name, which is the one place in the app the logo is looked at
+        // rather than glanced at in a taskbar.
+        ui.horizontal(|ui| {
+            ui.add(egui::Image::new(&logo).fit_to_exact_size(egui::vec2(64.0, 64.0)));
+            ui.vertical(|ui| {
+                ui.label(
+                    egui::RichText::new("HookEcho")
+                        .size(style::FONT_TITLE)
+                        .color(accent)
+                        .strong(),
+                );
+                ui.label(egui::RichText::new(format!("Version {VERSION}")).weak());
             });
-            ui.add_space(8.0);
-            ui.label("An advanced NEXRAD weather radar viewer. Free and MIT licensed.");
-            ui.add_space(8.0);
-            ui.hyperlink_to("Source, releases and issues", REPO);
-            ui.add_space(10.0);
-            ui.separator();
-            match update {
-                UpdateState::Idle | UpdateState::Checking => {
-                    crate::ui::loading(ui, "Checking for updates…")
-                }
-                UpdateState::UpToDate => {
-                    ui.label(egui::RichText::new("You're on the latest release.").weak());
-                }
-                UpdateState::Newer(tag) => {
-                    ui.horizontal(|ui| {
-                        ui.label(
-                            egui::RichText::new(format!("Version {tag} is available"))
-                                .color(style::OMEGA_GREEN),
-                        );
-                        ui.hyperlink_to("Download", format!("{REPO}/releases/latest"));
-                    });
-                }
-                UpdateState::NoRelease => {
-                    ui.label(egui::RichText::new("No published release to compare against.").weak());
-                }
-                UpdateState::Failed => {
-                    ui.label(egui::RichText::new("Couldn't check for updates.").weak());
-                }
-            }
-            ui.add_space(6.0);
-            ui.label(
-                egui::RichText::new(
-                    "Radar and warning data from NOAA/NWS and Iowa State's IEM archive. Built \
-                     with egui and wgpu.",
-                )
-                .size(style::FONT_SM)
-                .weak(),
-            );
         });
+        ui.add_space(8.0);
+        ui.label("An advanced NEXRAD weather radar viewer. Free and MIT licensed.");
+        ui.add_space(8.0);
+        ui.hyperlink_to("Source, releases and issues", REPO);
+        ui.add_space(10.0);
+        ui.separator();
+        match update {
+            UpdateState::Idle | UpdateState::Checking => {
+                crate::ui::loading(ui, "Checking for updates…")
+            }
+            UpdateState::UpToDate => {
+                ui.label(egui::RichText::new("You're on the latest release.").weak());
+            }
+            UpdateState::Newer(tag) => {
+                ui.horizontal(|ui| {
+                    ui.label(
+                        egui::RichText::new(format!("Version {tag} is available"))
+                            .color(style::OMEGA_GREEN),
+                    );
+                    ui.hyperlink_to("Download", format!("{REPO}/releases/latest"));
+                });
+            }
+            UpdateState::NoRelease => {
+                ui.label(egui::RichText::new("No published release to compare against.").weak());
+            }
+            UpdateState::Failed => {
+                ui.label(egui::RichText::new("Couldn't check for updates.").weak());
+            }
+        }
+        ui.add_space(6.0);
+        ui.label(
+            egui::RichText::new(
+                "Radar and warning data from NOAA/NWS and Iowa State's IEM archive. Built \
+                     with egui and wgpu.",
+            )
+            .size(style::FONT_SM)
+            .weak(),
+        );
+    });
 }
 
 /// `(major, minor, patch)` from a release tag like `v0.5.0`. `None` if it isn't one.
@@ -119,7 +124,10 @@ pub fn pick_latest_tag(json: &str) -> Option<String> {
         .iter()
         .filter(|r| {
             !r.get("draft").and_then(|v| v.as_bool()).unwrap_or(false)
-                && !r.get("prerelease").and_then(|v| v.as_bool()).unwrap_or(false)
+                && !r
+                    .get("prerelease")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false)
         })
         .filter_map(|r| r.get("tag_name")?.as_str())
         .filter_map(|tag| Some((parse_version(tag)?, tag.to_string())))

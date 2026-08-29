@@ -15,7 +15,8 @@
 /// have no reason to know about settings, and this is one string pair that changes when the user
 /// edits it.
 #[cfg(not(target_arch = "wasm32"))]
-static PIPER: std::sync::RwLock<(String, String)> = std::sync::RwLock::new((String::new(), String::new()));
+static PIPER: std::sync::RwLock<(String, String)> =
+    std::sync::RwLock::new((String::new(), String::new()));
 
 /// Point the speech path at a Piper binary and voice model. Called at startup and whenever the
 /// user edits either field.
@@ -60,7 +61,11 @@ static WANT_VOICE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool
 
 #[cfg(not(target_arch = "wasm32"))]
 pub fn voice_status() -> VoiceStatus {
-    VOICE.read().ok().and_then(|g| g.clone()).unwrap_or_default()
+    VOICE
+        .read()
+        .ok()
+        .and_then(|g| g.clone())
+        .unwrap_or_default()
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -196,7 +201,11 @@ mod imp {
         if voice.is_empty() || !std::path::Path::new(&voice).exists() {
             return Ok(false);
         }
-        let bin = if bin.is_empty() { "piper".to_string() } else { bin };
+        let bin = if bin.is_empty() {
+            "piper".to_string()
+        } else {
+            bin
+        };
         let mut cmd = Command::new(&bin);
         crate::platform::no_window(&mut cmd);
         // `--output_file -` gives a WAV on stdout, which rodio decodes directly. Writing to a

@@ -128,14 +128,12 @@ pub(crate) fn explains(label: &str) -> Option<usize> {
         let key = e.term.split([' ', '\u{2014}']).next().unwrap_or("");
         key.len() >= 3
             && key.chars().all(|c| c.is_ascii_uppercase())
-            && up
-                .match_indices(key)
-                .any(|(i, _)| {
-                    let before = up[..i].chars().next_back();
-                    let after = up[i + key.len()..].chars().next();
-                    !before.is_some_and(|c| c.is_ascii_alphanumeric())
-                        && !after.is_some_and(|c| c.is_ascii_alphanumeric())
-                })
+            && up.match_indices(key).any(|(i, _)| {
+                let before = up[..i].chars().next_back();
+                let after = up[i + key.len()..].chars().next();
+                !before.is_some_and(|c| c.is_ascii_alphanumeric())
+                    && !after.is_some_and(|c| c.is_ascii_alphanumeric())
+            })
     })
 }
 

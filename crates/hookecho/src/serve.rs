@@ -158,7 +158,11 @@ fn route(server: &Server, path: &str, query: &str) -> (&'static str, &'static st
     });
     match path {
         "/" if server.web_root.is_some() => static_file(server, "/index.html"),
-        "/" => ("200 OK", "text/html; charset=utf-8", index(server).into_bytes()),
+        "/" => (
+            "200 OK",
+            "text/html; charset=utf-8",
+            index(server).into_bytes(),
+        ),
         "/status.json" | "/alerts.json" | "/obs.json" => match cached_json(server, path) {
             Ok(body) => ("200 OK", "application/json", body),
             Err(e) => error_json(e),
@@ -205,7 +209,10 @@ fn constant_time_eq(a: &str, b: &str) -> bool {
     if a.len() != b.len() {
         return false;
     }
-    a.bytes().zip(b.bytes()).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
+    a.bytes()
+        .zip(b.bytes())
+        .fold(0u8, |acc, (x, y)| acc | (x ^ y))
+        == 0
 }
 
 fn not_found() -> (&'static str, &'static str, Vec<u8>) {
@@ -589,11 +596,7 @@ fn loop_clip(
     let mut last: Option<Vec<u8>> = None;
     for k in (0..count as i64).rev() {
         let at = now - chrono::Duration::minutes(k * LOOP_STEP_MIN);
-        let out = dir.join(format!(
-            "loop-{}-{}.png",
-            f.tag(),
-            at.format("%Y%m%d-%H%M")
-        ));
+        let out = dir.join(format!("loop-{}-{}.png", f.tag(), at.format("%Y%m%d-%H%M")));
         // An archived frame never changes, so one already on disk is the answer. Only the newest
         // step is rendered on a repeat poll.
         let png = match std::fs::read(&out) {
@@ -794,6 +797,9 @@ const ALLOWED_HOSTS: &[&str] = &[
     "gibs.earthdata.nasa.gov",
     // European radar.
     "opendata.dwd.de",
+    // EUMETNET OpenRadarData: the ODIM volumes the OPERA network publishes, plus the
+    // bucket listing that names the newest one.
+    "s3.waw3-1.cloudferro.com",
     // Basemap and imagery tiles.
     "api.mapbox.com",
     "api.maptiler.com",
@@ -1050,10 +1056,13 @@ mod tests {
         assert_eq!(f.px, 512);
         assert_eq!(f.tilt, 2);
         // Two renders that differ in any knob must not share a cache key or a filename.
-        let other = Frame::parse("site=KOUN&product=vel&size=512&zoom=8&tilt=3&basemap=light")
-            .unwrap();
+        let other =
+            Frame::parse("site=KOUN&product=vel&size=512&zoom=8&tilt=3&basemap=light").unwrap();
         assert_ne!(f.tag(), other.tag());
-        assert!(!f.tag().contains(['/', '\\', ' ']), "tag becomes a filename");
+        assert!(
+            !f.tag().contains(['/', '\\', ' ']),
+            "tag becomes a filename"
+        );
 
         // Defaults are the dashboard case: latest reflectivity on the dark vector map.
         let d = Frame::parse("").unwrap();

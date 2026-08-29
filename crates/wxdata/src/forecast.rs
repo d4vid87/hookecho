@@ -45,7 +45,9 @@ fn parse_wind_mph(s: &str) -> Option<f32> {
     s.split(|c: char| !c.is_ascii_digit())
         .filter(|t| !t.is_empty())
         .filter_map(|t| t.parse::<f32>().ok())
-        .fold(None, |acc: Option<f32>, v| Some(acc.map_or(v, |a| a.max(v))))
+        .fold(None, |acc: Option<f32>, v| {
+            Some(acc.map_or(v, |a| a.max(v)))
+        })
 }
 
 /// A compass point ("NNW") as degrees the wind blows from.

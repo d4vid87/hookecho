@@ -31,7 +31,10 @@ pub fn set_output(px: Option<u32>, zoom: Option<f64>) {
         SIZE_PX.store(px.clamp(256, 2048), std::sync::atomic::Ordering::Relaxed);
     }
     if let Some(z) = zoom {
-        ZOOM_OVERRIDE.store(z.clamp(1.0, 14.0).to_bits(), std::sync::atomic::Ordering::Relaxed);
+        ZOOM_OVERRIDE.store(
+            z.clamp(1.0, 14.0).to_bits(),
+            std::sync::atomic::Ordering::Relaxed,
+        );
     }
 }
 
@@ -92,8 +95,8 @@ fn national_basemap(
                 camera.zoom,
                 &vis,
             )
-                .await
-                .0,
+            .await
+            .0,
         )
     });
     match tiles {
@@ -321,7 +324,9 @@ pub fn run_multipane(site: &str, out_a: &str, out_b: &str) -> anyhow::Result<()>
             vector_over_raster: false,
             new_tiles: Vec::new(),
             visible: Vec::new(),
-            radar_upload: Some(crate::app::to_upload(&sweep, &table, None, false, None, None)),
+            radar_upload: Some(crate::app::to_upload(
+                &sweep, &table, None, false, None, None,
+            )),
             draw_radar: true,
             overlay_upload: None,
             draw_overlay: false,
@@ -547,7 +552,9 @@ pub fn run_dualpol(site: &str, h0_km: f64) -> anyhow::Result<()> {
         let z0 = level2::bin_scan(&scan, Moment::Reflectivity, 0)?;
         let cc0 = level2::bin_scan(&scan, Moment::CorrelationCoefficient, 0)?;
         let take = |m: Moment| -> Vec<wxdata::level2::BinnedSweep> {
-            (0..n).filter_map(|t| level2::bin_scan(&scan, m, t).ok()).collect()
+            (0..n)
+                .filter_map(|t| level2::bin_scan(&scan, m, t).ok())
+                .collect()
         };
         anyhow::Ok((
             z0,
@@ -565,7 +572,11 @@ pub fn run_dualpol(site: &str, h0_km: f64) -> anyhow::Result<()> {
     );
 
     let spikes = wxdata::dualpol::tbss(&z0, &cc0, 60.0, 20.0, 0.8, 4.0, 150.0);
-    println!("TBSS (hail spikes) at {:.2}deg: {}", z0.elevation_deg, spikes.len());
+    println!(
+        "TBSS (hail spikes) at {:.2}deg: {}",
+        z0.elevation_deg,
+        spikes.len()
+    );
     for h in spikes.iter().take(8) {
         println!(
             "  {:.3},{:.3}  core {:.0} dBZ  spike {:.1} km  min CC {:.2}",
@@ -574,7 +585,10 @@ pub fn run_dualpol(site: &str, h0_km: f64) -> anyhow::Result<()> {
     }
 
     let columns = wxdata::dualpol::zdr_columns(&zdr_tilts, &z_tilts, h0_km, 1.0, 1.0, 40.0, 100.0);
-    println!("ZDR columns (>1 dB, >=1 km above the freezing level): {}", columns.len());
+    println!(
+        "ZDR columns (>1 dB, >=1 km above the freezing level): {}",
+        columns.len()
+    );
     for h in columns.iter().take(8) {
         println!(
             "  {:.3},{:.3}  depth {:.1} km  top {:.1} km  max {:.1} dB",
@@ -641,7 +655,11 @@ pub fn run_rules(site: &str) -> anyhow::Result<()> {
             take(Moment::Reflectivity),
         ))
     })?;
-    println!("{site}: {} tilts, lowest {:.2}°", z_tilts.len(), z.elevation_deg);
+    println!(
+        "{site}: {} tilts, lowest {:.2}°",
+        z_tilts.len(),
+        z.elevation_deg
+    );
 
     let d = &settings.detectors;
     let tds = wxdata::tds::detect(&z, &cc, 0.80, 40.0, 150.0, 4);
@@ -696,10 +714,7 @@ pub fn run_rules(site: &str) -> anyhow::Result<()> {
             .find(|h| crate::rules::matches(rule, h, &settings))
         {
             Some(h) => {
-                let strength = h
-                    .strength
-                    .map(|v| format!(" ({v:.0})"))
-                    .unwrap_or_default();
+                let strength = h.strength.map(|v| format!(" ({v:.0})")).unwrap_or_default();
                 println!(
                     "  {label}: FIRES at {:.3},{:.3}{strength} — {place}",
                     h.lat, h.lon
@@ -973,7 +988,9 @@ pub fn run_live(out_path: &str, site: &str, moment: Moment) -> anyhow::Result<()
         vector_over_raster: false,
         new_tiles: Vec::new(),
         visible: Vec::new(),
-        radar_upload: Some(crate::app::to_upload(&sweep, &table, None, false, None, None)),
+        radar_upload: Some(crate::app::to_upload(
+            &sweep, &table, None, false, None, None,
+        )),
         draw_radar: true,
         overlay_upload: None,
         draw_overlay: false,
@@ -2889,7 +2906,9 @@ mod golden_tests {
             vector_over_raster: false,
             new_tiles: Vec::new(),
             visible: Vec::new(),
-            radar_upload: Some(crate::app::to_upload(&sweep, &table, None, false, None, None)),
+            radar_upload: Some(crate::app::to_upload(
+                &sweep, &table, None, false, None, None,
+            )),
             draw_radar: true,
             overlay_upload: None,
             draw_overlay: false,

@@ -84,40 +84,40 @@ impl VideoPlayer {
             return open;
         };
         window.vscroll(false).show(ctx, |ui| {
-                let w = ui.available_width();
-                match &self.tex {
-                    Some(tex) => {
-                        let size = tex.size_vec2();
-                        let h = if size.x > 0.0 {
-                            w * size.y / size.x
-                        } else {
-                            270.0
-                        };
-                        ui.add(egui::Image::new(tex).fit_to_exact_size(egui::vec2(w, h)));
-                    }
-                    None => {
-                        let (rect, _) =
-                            ui.allocate_exact_size(egui::vec2(w, 200.0), egui::Sense::hover());
-                        ui.painter()
-                            .rect_filled(rect, 4.0, egui::Color32::from_gray(24));
-                        ui.painter().text(
-                            rect.center(),
-                            egui::Align2::CENTER_CENTER,
-                            self.status_text(),
-                            egui::FontId::proportional(12.0),
-                            egui::Color32::from_gray(190),
-                        );
+            let w = ui.available_width();
+            match &self.tex {
+                Some(tex) => {
+                    let size = tex.size_vec2();
+                    let h = if size.x > 0.0 {
+                        w * size.y / size.x
+                    } else {
+                        270.0
+                    };
+                    ui.add(egui::Image::new(tex).fit_to_exact_size(egui::vec2(w, h)));
+                }
+                None => {
+                    let (rect, _) =
+                        ui.allocate_exact_size(egui::vec2(w, 200.0), egui::Sense::hover());
+                    ui.painter()
+                        .rect_filled(rect, 4.0, egui::Color32::from_gray(24));
+                    ui.painter().text(
+                        rect.center(),
+                        egui::Align2::CENTER_CENTER,
+                        self.status_text(),
+                        egui::FontId::proportional(12.0),
+                        egui::Color32::from_gray(190),
+                    );
+                }
+            }
+            ui.horizontal(|ui| {
+                if ui.button("Open in browser").clicked() {
+                    if let Err(e) = crate::platform::open_url(&self.url) {
+                        log::warn!("open stream URL failed: {e}");
                     }
                 }
-                ui.horizontal(|ui| {
-                    if ui.button("Open in browser").clicked() {
-                        if let Err(e) = crate::platform::open_url(&self.url) {
-                            log::warn!("open stream URL failed: {e}");
-                        }
-                    }
-                    ui.weak(&self.url);
-                });
+                ui.weak(&self.url);
             });
+        });
         open
     }
 

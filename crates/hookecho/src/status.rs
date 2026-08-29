@@ -509,7 +509,12 @@ mod tests {
         let mut sparse = sparse;
         sparse.rh = None;
         sparse.wind_kmh = None;
-        let s = status_for(&spot("Home", true), Some(("KXYZ".into(), sparse)), vec![], None);
+        let s = status_for(
+            &spot("Home", true),
+            Some(("KXYZ".into(), sparse)),
+            vec![],
+            None,
+        );
         assert_eq!(conditions(&s), "50°F");
     }
 
@@ -517,7 +522,7 @@ mod tests {
     fn explicit_point_beats_markers() {
         let mut settings = crate::settings::Settings::default();
         settings.markers.push(crate::settings::Marker {
-                id: crate::settings::new_marker_id(),
+            id: crate::settings::new_marker_id(),
             name: "Home".into(),
             lat: 1.0,
             lon: 2.0,

@@ -910,7 +910,12 @@ impl HookEchoApp {
                 "Historical tornado tracks for this area",
                 false,
             ),
-            (W::Setup, "Set up again…", "Pick your home radar again", false),
+            (
+                W::Setup,
+                "Set up again…",
+                "Pick your home radar again",
+                false,
+            ),
             (
                 W::Tour,
                 "Take the tour…",

@@ -23,46 +23,46 @@ pub fn show(
         return false;
     };
     window.show(ctx, |ui| {
-            ui.horizontal(|ui| {
-                match afd {
-                    Some(a) => {
-                        ui.strong(format!("AFD {}", a.office));
-                        ui.weak(&a.issued);
-                    }
-                    None => {
-                        ui.strong("AFD");
-                    }
+        ui.horizontal(|ui| {
+            match afd {
+                Some(a) => {
+                    ui.strong(format!("AFD {}", a.office));
+                    ui.weak(&a.issued);
                 }
-                if busy {
-                    crate::ui::loading(ui, "Fetching discussion…");
+                None => {
+                    ui.strong("AFD");
                 }
-                if ui.button("⟳ Refresh").clicked() {
-                    refresh = true;
+            }
+            if busy {
+                crate::ui::loading(ui, "Fetching discussion…");
+            }
+            if ui.button("⟳ Refresh").clicked() {
+                refresh = true;
+            }
+            if let Some(a) = afd {
+                crate::ui::reader_button(ui, &format!("AFD {}", a.office), &a.issued, &a.text);
+            }
+        });
+        if let Some(e) = error {
+            ui.colored_label(egui::Color32::from_rgb(230, 90, 90), e);
+        }
+        ui.separator();
+        egui::ScrollArea::vertical()
+            .auto_shrink([false, false])
+            .show(ui, |ui| match afd {
+                Some(a) => {
+                    ui.add(
+                        egui::Label::new(egui::RichText::new(&a.text).monospace().size(12.0))
+                            .wrap(),
+                    );
                 }
-                if let Some(a) = afd {
-                    crate::ui::reader_button(ui, &format!("AFD {}", a.office), &a.issued, &a.text);
+                None if busy => {
+                    ui.weak("Fetching the discussion…");
+                }
+                None => {
+                    ui.weak("No discussion loaded.");
                 }
             });
-            if let Some(e) = error {
-                ui.colored_label(egui::Color32::from_rgb(230, 90, 90), e);
-            }
-            ui.separator();
-            egui::ScrollArea::vertical()
-                .auto_shrink([false, false])
-                .show(ui, |ui| match afd {
-                    Some(a) => {
-                        ui.add(
-                            egui::Label::new(egui::RichText::new(&a.text).monospace().size(12.0))
-                                .wrap(),
-                        );
-                    }
-                    None if busy => {
-                        ui.weak("Fetching the discussion…");
-                    }
-                    None => {
-                        ui.weak("No discussion loaded.");
-                    }
-                });
-        });
+    });
     refresh
 }

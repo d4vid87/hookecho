@@ -147,7 +147,9 @@ pub(crate) fn show(
             // The two models rarely share a cycle, and a difference between two instants is only
             // honest if it says which two.
             Some((va, vb)) if va != vb => {
-                ui.weak(format!("⚠ {a} valid {va}, {b} valid {vb} — not the same time."));
+                ui.weak(format!(
+                    "⚠ {a} valid {va}, {b} valid {vb} — not the same time."
+                ));
             }
             Some((va, _)) => {
                 ui.weak(format!("Both valid {va}."));
@@ -338,8 +340,13 @@ pub(crate) fn show(
         ui.horizontal(|ui| {
             ui.label("Window:");
             let mut dur = false;
-            for (m, label) in [(30u16, "30m"), (60, "1h"), (120, "2h"), (360, "6h"), (1440, "24h")]
-            {
+            for (m, label) in [
+                (30u16, "30m"),
+                (60, "1h"),
+                (120, "2h"),
+                (360, "6h"),
+                (1440, "24h"),
+            ] {
                 dur |= ui.selectable_value(hail_minutes, m, label).changed();
             }
             if dur {

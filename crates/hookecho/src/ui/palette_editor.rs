@@ -66,112 +66,109 @@ impl PaletteEditor {
             return;
         };
         window.show(ctx, |ui| {
-                ui.horizontal(|ui| {
-                    ui.label("Moment");
-                    egui::ComboBox::from_id_salt("pal_moment")
-                        .selected_text(moment.short_name())
-                        .show_ui(ui, |ui| {
-                            for (i, m) in Moment::ALL.iter().enumerate() {
-                                if ui
-                                    .selectable_value(&mut self.moment_idx, i, m.short_name())
-                                    .clicked()
-                                {
-                                    self.loaded_for = None; // force reload for the new moment
+            ui.horizontal(|ui| {
+                ui.label("Moment");
+                egui::ComboBox::from_id_salt("pal_moment")
+                    .selected_text(moment.short_name())
+                    .show_ui(ui, |ui| {
+                        for (i, m) in Moment::ALL.iter().enumerate() {
+                            if ui
+                                .selectable_value(&mut self.moment_idx, i, m.short_name())
+                                .clicked()
+                            {
+                                self.loaded_for = None; // force reload for the new moment
+                            }
+                        }
+                    });
+            });
+            ui.separator();
+
+            let Some(table) = self.table.as_mut() else {
+                return;
+            };
+
+            // Live gradient preview across the moment's value range.
+            preview_bar(ui, table, moment.value_range());
+            ui.add_space(6.0);
+
+            let mut remove = None;
+            egui::ScrollArea::vertical()
+                .max_height(280.0)
+                .show(ui, |ui| {
+                    egui::Grid::new("stops")
+                        .num_columns(5)
+                        .spacing([8.0, 4.0])
+                        .show(ui, |ui| {
+                            ui.strong("Value");
+                            ui.strong("Color");
+                            ui.strong("End");
+                            ui.strong("Solid");
+                            ui.end_row();
+                            for (i, s) in table.stops.iter_mut().enumerate() {
+                                ui.add(
+                                    egui::DragValue::new(&mut s.value)
+                                        .speed(0.5)
+                                        .max_decimals(2),
+                                );
+                                color_edit(ui, &mut s.rgba);
+                                // Optional second color (hard break).
+                                let mut has_end = s.end.is_some();
+                                if ui.checkbox(&mut has_end, "").changed() {
+                                    s.end = if has_end { Some(s.rgba) } else { None };
                                 }
+                                if let Some(end) = s.end.as_mut() {
+                                    color_edit(ui, end);
+                                } else {
+                                    ui.label("");
+                                }
+                                ui.checkbox(&mut s.solid, "");
+                                if ui.button("✖").clicked() {
+                                    remove = Some(i);
+                                }
+                                ui.end_row();
                             }
                         });
                 });
-                ui.separator();
+            if let Some(i) = remove {
+                table.stops.remove(i);
+            }
 
-                let Some(table) = self.table.as_mut() else {
-                    return;
-                };
-
-                // Live gradient preview across the moment's value range.
-                preview_bar(ui, table, moment.value_range());
-                ui.add_space(6.0);
-
-                let mut remove = None;
-                egui::ScrollArea::vertical()
-                    .max_height(280.0)
-                    .show(ui, |ui| {
-                        egui::Grid::new("stops")
-                            .num_columns(5)
-                            .spacing([8.0, 4.0])
-                            .show(ui, |ui| {
-                                ui.strong("Value");
-                                ui.strong("Color");
-                                ui.strong("End");
-                                ui.strong("Solid");
-                                ui.end_row();
-                                for (i, s) in table.stops.iter_mut().enumerate() {
-                                    ui.add(
-                                        egui::DragValue::new(&mut s.value)
-                                            .speed(0.5)
-                                            .max_decimals(2),
-                                    );
-                                    color_edit(ui, &mut s.rgba);
-                                    // Optional second color (hard break).
-                                    let mut has_end = s.end.is_some();
-                                    if ui.checkbox(&mut has_end, "").changed() {
-                                        s.end = if has_end { Some(s.rgba) } else { None };
-                                    }
-                                    if let Some(end) = s.end.as_mut() {
-                                        color_edit(ui, end);
-                                    } else {
-                                        ui.label("");
-                                    }
-                                    ui.checkbox(&mut s.solid, "");
-                                    if ui.button("✖").clicked() {
-                                        remove = Some(i);
-                                    }
-                                    ui.end_row();
-                                }
-                            });
+            ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                if ui.button("➕ Add stop").clicked() {
+                    let value = table.stops.last().map(|s| s.value + 5.0).unwrap_or(0.0);
+                    table.stops.push(PalStop {
+                        value,
+                        rgba: [255, 255, 255, 255],
+                        end: None,
+                        solid: false,
                     });
-                if let Some(i) = remove {
-                    table.stops.remove(i);
                 }
-
-                ui.add_space(4.0);
-                ui.horizontal(|ui| {
-                    if ui.button("➕ Add stop").clicked() {
-                        let value = table.stops.last().map(|s| s.value + 5.0).unwrap_or(0.0);
-                        table.stops.push(PalStop {
-                            value,
-                            rgba: [255, 255, 255, 255],
-                            end: None,
-                            solid: false,
-                        });
-                    }
-                    if ui.button("Sort by value").clicked() {
-                        table.stops.sort_by(|a, b| {
-                            a.value
-                                .partial_cmp(&b.value)
-                                .unwrap_or(std::cmp::Ordering::Equal)
-                        });
-                    }
-                });
-
-                ui.separator();
-                ui.horizontal(|ui| {
-                    if ui.button("💾 Save & apply").clicked() {
-                        save_and_apply(table, moment, settings);
-                    }
-                    if ui.button("Import .pal…").clicked() {
-                        crate::dialog::request_open(
-                            crate::dialog::ImportKind::Palette,
-                            EDITOR_TAG,
-                        );
-                    }
-                    if ui.button("Export .pal…").clicked() {
-                        export_pal(table);
-                    }
-                    if ui.button("Revert to default").clicked() {
-                        *table = crate::colormap::default_table(moment).clone();
-                    }
-                });
+                if ui.button("Sort by value").clicked() {
+                    table.stops.sort_by(|a, b| {
+                        a.value
+                            .partial_cmp(&b.value)
+                            .unwrap_or(std::cmp::Ordering::Equal)
+                    });
+                }
             });
+
+            ui.separator();
+            ui.horizontal(|ui| {
+                if ui.button("💾 Save & apply").clicked() {
+                    save_and_apply(table, moment, settings);
+                }
+                if ui.button("Import .pal…").clicked() {
+                    crate::dialog::request_open(crate::dialog::ImportKind::Palette, EDITOR_TAG);
+                }
+                if ui.button("Export .pal…").clicked() {
+                    export_pal(table);
+                }
+                if ui.button("Revert to default").clicked() {
+                    *table = crate::colormap::default_table(moment).clone();
+                }
+            });
+        });
         self.open = open;
     }
 }
@@ -217,7 +214,9 @@ fn save_and_apply(table: &ColorTable, moment: Moment, settings: &mut Settings) {
         settings
             .web_files
             .insert(name.clone(), crate::colormap::to_pal_string(table));
-        settings.palettes.insert(moment.short_name().to_string(), name);
+        settings
+            .palettes
+            .insert(moment.short_name().to_string(), name);
         return;
     };
     let path = dir.join(&name);
@@ -234,7 +233,8 @@ fn save_and_apply(table: &ColorTable, moment: Moment, settings: &mut Settings) {
 
 fn export_pal(table: &ColorTable) {
     let pal = crate::colormap::to_pal_string(table);
-    if let crate::dialog::Saved::Failed(e) = crate::dialog::save_bytes("palette.pal", "pal", pal.as_bytes())
+    if let crate::dialog::Saved::Failed(e) =
+        crate::dialog::save_bytes("palette.pal", "pal", pal.as_bytes())
     {
         log::warn!("palette export failed: {e}");
     }

@@ -100,11 +100,11 @@ impl Moment {
     /// 0 = below-threshold (transparent), 1 = range-folded.
     pub fn value_range(&self) -> (f32, f32) {
         match self {
-            Moment::Reflectivity => (-32.0, 95.0),           // dBZ
-            Moment::Velocity => (-127.0, 127.0),             // m/s (pre-dealias)
-            Moment::SpectrumWidth => (0.0, 63.0),            // m/s
-            Moment::DifferentialReflectivity => (-7.9, 7.9), // dB
-            Moment::DifferentialPhase => (0.0, 360.0),       // deg
+            Moment::Reflectivity => (-32.0, 95.0),            // dBZ
+            Moment::Velocity => (-127.0, 127.0),              // m/s (pre-dealias)
+            Moment::SpectrumWidth => (0.0, 63.0),             // m/s
+            Moment::DifferentialReflectivity => (-7.9, 7.9),  // dB
+            Moment::DifferentialPhase => (0.0, 360.0),        // deg
             Moment::SpecificDifferentialPhase => (-2.0, 8.0), // deg/km
             Moment::CorrelationCoefficient => (0.0, 1.05),
         }
@@ -137,11 +137,10 @@ pub struct BinnedSweep {
 /// Nothing before this exists to be asked for, so it is where a date picker has to stop. The
 /// early years are legacy pre-dual-pol Type-1 messages, which decode but carry reflectivity
 /// and velocity only.
-pub const ARCHIVE_START: chrono::NaiveDate =
-    match chrono::NaiveDate::from_ymd_opt(1991, 6, 5) {
-        Some(d) => d,
-        None => panic!("1991-06-05 is a real date"),
-    };
+pub const ARCHIVE_START: chrono::NaiveDate = match chrono::NaiveDate::from_ymd_opt(1991, 6, 5) {
+    Some(d) => d,
+    None => panic!("1991-06-05 is a real date"),
+};
 
 /// What a [`BinnedSweep`] holds at one gate, and where that gate is.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -169,15 +168,11 @@ impl BinnedSweep {
     /// interpolation — the question a readout answers is "what did the radar record *here*",
     /// and a blend of neighbouring gates is a number the radar never produced.
     pub fn sample_at(&self, lon: f64, lat: f64) -> Option<GateSample> {
-        let (ground_km, bearing) = crate::xsection::dist_bearing(
-            self.radar_lon as f64,
-            self.radar_lat as f64,
-            lon,
-            lat,
-        );
+        let (ground_km, bearing) =
+            crate::xsection::dist_bearing(self.radar_lon as f64, self.radar_lat as f64, lon, lat);
         let slant = crate::xsection::slant_from_ground_km(ground_km, self.elevation_deg as f64);
-        let gate = ((slant - self.first_gate_km as f64) / self.gate_interval_km.max(1e-6) as f64)
-            .floor();
+        let gate =
+            ((slant - self.first_gate_km as f64) / self.gate_interval_km.max(1e-6) as f64).floor();
         if gate < 0.0 || gate >= self.gate_count as f64 {
             return None;
         }
@@ -288,8 +283,10 @@ fn with_previous_tail(
 ///
 /// ponytail: a flat map with a short TTL and no eviction — a session touches a handful of
 /// site/day pairs. Bound it if that ever stops being true.
-type DayListCache =
-    std::collections::HashMap<(String, chrono::NaiveDate), (crate::clock::Instant, Vec<Identifier>)>;
+type DayListCache = std::collections::HashMap<
+    (String, chrono::NaiveDate),
+    (crate::clock::Instant, Vec<Identifier>),
+>;
 static DAY_LIST_CACHE: std::sync::OnceLock<std::sync::Mutex<DayListCache>> =
     std::sync::OnceLock::new();
 
@@ -713,8 +710,13 @@ pub fn bin_sweep_opts(
             .min()
             .unwrap_or(0);
         let reference = take_dealias_reference(&key, at);
-        let unfolded =
-            crate::dealias::dealias_with_reference(&vel, AZ_BINS, gate_count, nyq, reference.as_deref());
+        let unfolded = crate::dealias::dealias_with_reference(
+            &vel,
+            AZ_BINS,
+            gate_count,
+            nyq,
+            reference.as_deref(),
+        );
         put_dealias_reference(key, at, &unfolded);
         for (i, v) in unfolded.iter().enumerate() {
             if let Some(v) = v {
@@ -800,11 +802,19 @@ mod tests {
         let ground = crate::xsection::ground_from_slant_km(slant, 0.5);
         let (lon, lat) = destination(-97.0, 35.0, want_az, ground);
 
-        let got = sweep.sample_at(lon, lat).expect("point is inside the sweep");
+        let got = sweep
+            .sample_at(lon, lat)
+            .expect("point is inside the sweep");
         assert_eq!(got.gate, want_gate, "gate index");
-        assert!((got.azimuth_deg as f64 - want_az).abs() < 0.5, "azimuth {got:?}");
+        assert!(
+            (got.azimuth_deg as f64 - want_az).abs() < 0.5,
+            "azimuth {got:?}"
+        );
         let want_value = -32.0 + (code - 2) as f32 / 253.0 * (95.0 - -32.0);
-        assert!((got.value.unwrap() - want_value).abs() < 0.01, "value {got:?}");
+        assert!(
+            (got.value.unwrap() - want_value).abs() < 0.01,
+            "value {got:?}"
+        );
     }
 
     /// The two sentinel codes are not values, and must not be reported as one.
@@ -830,7 +840,10 @@ mod tests {
 
         let (lon, lat) = destination(-97.0, 35.0, 0.0, 3.5);
         let got = sweep.sample_at(lon, lat).unwrap();
-        assert!(!got.folded && got.value.is_none(), "below threshold is not folded");
+        assert!(
+            !got.folded && got.value.is_none(),
+            "below threshold is not folded"
+        );
     }
 
     /// Past the last gate there is no reading — not a clamped one at the edge of the sweep.
@@ -859,8 +872,7 @@ mod tests {
         let (b, d) = (bearing_deg.to_radians(), km / r);
         let (p0, l0) = (lat.to_radians(), lon.to_radians());
         let p = (p0.sin() * d.cos() + p0.cos() * d.sin() * b.cos()).asin();
-        let l = l0
-            + (b.sin() * d.sin() * p0.cos()).atan2(d.cos() - p0.sin() * p.sin());
+        let l = l0 + (b.sin() * d.sin() * p0.cos()).atan2(d.cos() - p0.sin() * p.sin());
         (l.to_degrees(), p.to_degrees())
     }
 
@@ -883,14 +895,21 @@ mod tests {
     #[test]
     fn short_day_borrows_the_previous_evening() {
         let ids = |names: &[&str]| -> Vec<Identifier> {
-            names.iter().map(|n| Identifier::new(n.to_string())).collect()
+            names
+                .iter()
+                .map(|n| Identifier::new(n.to_string()))
+                .collect()
         };
         let older = ids(&["a1", "a2", "a3", "a4"]);
         let today = ids(&["b1", "b2"]);
 
         let merged = with_previous_tail(older.clone(), today.clone(), 4);
         let names: Vec<&str> = merged.iter().map(|i| i.name()).collect();
-        assert_eq!(names, ["a3", "a4", "b1", "b2"], "newest of yesterday, then today");
+        assert_eq!(
+            names,
+            ["a3", "a4", "b1", "b2"],
+            "newest of yesterday, then today"
+        );
 
         // Enough frames already: yesterday contributes nothing.
         let merged = with_previous_tail(older, today, 2);
@@ -973,8 +992,8 @@ mod tests {
                 )
             })
             .collect();
-        let binned = bin_sweep(&Sweep::new(1, radials), Moment::Reflectivity, 35.33, -97.28)
-            .unwrap();
+        let binned =
+            bin_sweep(&Sweep::new(1, radials), Moment::Reflectivity, 35.33, -97.28).unwrap();
         assert_eq!(binned.gate_count, 1);
         let empty = binned.data.iter().filter(|&&c| c == 0).count();
         assert_eq!(empty, 0, "every azimuth bin should carry the 20 dBZ value");
@@ -1123,7 +1142,10 @@ mod tests {
             ..key
         };
         assert_eq!(take_dealias_reference(&other_tilt, 400_000), None);
-        let other_site = DealiasKey { lat_e2: 4_100, ..key };
+        let other_site = DealiasKey {
+            lat_e2: 4_100,
+            ..key
+        };
         assert_eq!(take_dealias_reference(&other_site, 400_000), None);
     }
 }

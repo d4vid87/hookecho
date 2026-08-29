@@ -44,7 +44,11 @@ pub fn report() -> Vec<Entry> {
     [
         ("Map tiles", "tiles", Some(tiles)),
         ("Vector tiles", "vector", Some(tiles)),
-        ("Radar volumes", "volumes", Some(crate::tiles::volume_cache_bytes())),
+        (
+            "Radar volumes",
+            "volumes",
+            Some(crate::tiles::volume_cache_bytes()),
+        ),
         ("Zone geometry", "zones", Some(small)),
         ("Soundings (RAOB)", "raob", Some(small)),
         ("Server snapshots", "snapshots", Some(small)),
@@ -121,7 +125,11 @@ mod tests {
         assert_eq!(dir_size(&root), 300);
 
         clear(&root).unwrap();
-        assert_eq!(dir_size(&root), 0, "cleared, and the directory still exists");
+        assert_eq!(
+            dir_size(&root),
+            0,
+            "cleared, and the directory still exists"
+        );
         assert!(root.is_dir());
         std::fs::remove_dir_all(&root).ok();
     }

@@ -36,65 +36,65 @@ pub(crate) fn show(
         return false;
     };
     window.show(ctx, |ui| {
-            if !active.is_empty() {
-                ui.label(egui::RichText::new("Field layers").strong());
-                for (layer, name) in active {
-                    let op = settings.field_opacity.entry(*layer).or_insert(1.0);
-                    ui.horizontal(|ui| {
-                        ui.label(name);
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            changed |= ui
-                                .add(egui::Slider::new(op, 0.05..=1.0).show_value(false))
-                                .on_hover_text(format!("Opacity {:.0}%", *op * 100.0))
-                                .changed();
-                        });
-                    });
-                }
-                ui.separator();
-            }
-            if settings.placefiles.is_empty() {
-                ui.weak("No placefiles configured — add one from Layers ▸ Placefile manager.");
-                return;
-            }
-            ui.weak("Top of the list paints first (underneath).");
-            ui.separator();
-            let n = settings.placefiles.len();
-            let mut swap: Option<(usize, usize)> = None;
-            for i in 0..n {
-                let cfg = &mut settings.placefiles[i];
+        if !active.is_empty() {
+            ui.label(egui::RichText::new("Field layers").strong());
+            for (layer, name) in active {
+                let op = settings.field_opacity.entry(*layer).or_insert(1.0);
                 ui.horizontal(|ui| {
-                    changed |= ui.checkbox(&mut cfg.enabled, "").changed();
-                    // The URL's file name is the readable part; the full URL is the tooltip.
-                    let name = cfg.url.rsplit('/').next().unwrap_or(&cfg.url).to_string();
-                    ui.label(egui::RichText::new(name).strong())
-                        .on_hover_text(&cfg.url);
+                    ui.label(name);
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui
-                            .add_enabled(i + 1 < n, egui::Button::new("▼"))
-                            .on_hover_text("Paint later (on top)")
-                            .clicked()
-                        {
-                            swap = Some((i, i + 1));
-                        }
-                        if ui
-                            .add_enabled(i > 0, egui::Button::new("▲"))
-                            .on_hover_text("Paint earlier (underneath)")
-                            .clicked()
-                        {
-                            swap = Some((i, i - 1));
-                        }
                         changed |= ui
-                            .add(egui::Slider::new(&mut cfg.opacity, 0.05..=1.0).show_value(false))
-                            .on_hover_text(format!("Opacity {:.0}%", cfg.opacity * 100.0))
+                            .add(egui::Slider::new(op, 0.05..=1.0).show_value(false))
+                            .on_hover_text(format!("Opacity {:.0}%", *op * 100.0))
                             .changed();
                     });
                 });
             }
-            if let Some((a, b)) = swap {
-                settings.placefiles.swap(a, b);
-                changed = true;
-            }
-        });
+            ui.separator();
+        }
+        if settings.placefiles.is_empty() {
+            ui.weak("No placefiles configured — add one from Layers ▸ Placefile manager.");
+            return;
+        }
+        ui.weak("Top of the list paints first (underneath).");
+        ui.separator();
+        let n = settings.placefiles.len();
+        let mut swap: Option<(usize, usize)> = None;
+        for i in 0..n {
+            let cfg = &mut settings.placefiles[i];
+            ui.horizontal(|ui| {
+                changed |= ui.checkbox(&mut cfg.enabled, "").changed();
+                // The URL's file name is the readable part; the full URL is the tooltip.
+                let name = cfg.url.rsplit('/').next().unwrap_or(&cfg.url).to_string();
+                ui.label(egui::RichText::new(name).strong())
+                    .on_hover_text(&cfg.url);
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui
+                        .add_enabled(i + 1 < n, egui::Button::new("▼"))
+                        .on_hover_text("Paint later (on top)")
+                        .clicked()
+                    {
+                        swap = Some((i, i + 1));
+                    }
+                    if ui
+                        .add_enabled(i > 0, egui::Button::new("▲"))
+                        .on_hover_text("Paint earlier (underneath)")
+                        .clicked()
+                    {
+                        swap = Some((i, i - 1));
+                    }
+                    changed |= ui
+                        .add(egui::Slider::new(&mut cfg.opacity, 0.05..=1.0).show_value(false))
+                        .on_hover_text(format!("Opacity {:.0}%", cfg.opacity * 100.0))
+                        .changed();
+                });
+            });
+        }
+        if let Some((a, b)) = swap {
+            settings.placefiles.swap(a, b);
+            changed = true;
+        }
+    });
     *open = win_open;
     changed
 }

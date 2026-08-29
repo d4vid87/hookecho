@@ -113,7 +113,9 @@ pub fn dealias_with_reference(
             while let Some((caz, cg)) = stack.pop() {
                 // A labelled cell always has a velocity (that is what labelling means); skip
                 // rather than assert it, so a future labelling change degrades instead of panics.
-                let Some(cv) = vel[idx(caz, cg)] else { continue };
+                let Some(cv) = vel[idx(caz, cg)] else {
+                    continue;
+                };
                 for (naz, ng) in neighbors(caz, cg) {
                     let ni = idx(naz, ng);
                     let Some(nv) = vel[ni] else { continue };
@@ -334,9 +336,10 @@ mod tests {
         }
         let folded = fold(&truth, nyq);
         assert!(
-            folded.iter().enumerate().any(|(i, v)| {
-                (v.unwrap() - truth[i]).abs() > 1.0
-            }),
+            folded
+                .iter()
+                .enumerate()
+                .any(|(i, v)| { (v.unwrap() - truth[i]).abs() > 1.0 }),
             "fixture should actually fold"
         );
         let out = dealias(&folded, az_bins, gates, nyq);

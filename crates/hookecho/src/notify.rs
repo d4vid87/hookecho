@@ -152,7 +152,9 @@ static RETRYING: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize
 fn worth_retrying(res: &Result<reqwest::Response, reqwest::Error>) -> bool {
     match res {
         Err(_) => true,
-        Ok(r) => r.status().is_server_error() || r.status() == reqwest::StatusCode::TOO_MANY_REQUESTS,
+        Ok(r) => {
+            r.status().is_server_error() || r.status() == reqwest::StatusCode::TOO_MANY_REQUESTS
+        }
     }
 }
 
@@ -274,7 +276,11 @@ mod tests {
         // returns without ever sleeping, which is what makes this assertion immediate.
         let (url, hits) = mock_sink(vec![404]);
         rt.block_on(send_retrying("test", || http.post(&url).body("x")));
-        assert_eq!(hits.load(Ordering::SeqCst), 1, "a 404 should not be retried");
+        assert_eq!(
+            hits.load(Ordering::SeqCst),
+            1,
+            "a 404 should not be retried"
+        );
     }
 
     #[test]

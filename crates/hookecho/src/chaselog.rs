@@ -257,7 +257,10 @@ mod tests {
         assert!((back.points[0].lon + 97.5).abs() < 1e-6);
         assert_eq!(back.points[1].ts, 1_700_000_300);
         // The mark was on the newest point and lands there again, with its text unescaped.
-        assert_eq!(back.waypoints, vec![(1, "wall cloud & \"hook\"".to_string())]);
+        assert_eq!(
+            back.waypoints,
+            vec![(1, "wall cloud & \"hook\"".to_string())]
+        );
         // Distance survives the round trip.
         assert!((back.miles() - t.miles()).abs() < 0.01);
     }

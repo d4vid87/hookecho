@@ -565,7 +565,11 @@ mod tests {
     fn a_snow_squall_gets_its_own_color_and_its_impact_tag_escalates() {
         let (kind, rgb) = event_style("Snow Squall Warning");
         assert_eq!(kind, FeatureKind::Warning);
-        assert_ne!(rgb, event_style("Winter Storm Warning").1, "not generic red");
+        assert_ne!(
+            rgb,
+            event_style("Winter Storm Warning").1,
+            "not generic red"
+        );
 
         let mut a = AlertInfo {
             id: "urn:x".into(),
@@ -583,7 +587,11 @@ mod tests {
             motion: None,
             vtec: None,
         };
-        assert_eq!(escalation(&a), 1, "a tagged squall sorts above plain warnings");
+        assert_eq!(
+            escalation(&a),
+            1,
+            "a tagged squall sorts above plain warnings"
+        );
         a.damage_threat = None;
         assert_eq!(escalation(&a), 0);
     }

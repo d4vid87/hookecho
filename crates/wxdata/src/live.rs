@@ -212,12 +212,7 @@ const SAME_PASS_MS: i64 = 90_000;
 /// sweep assembled there is missing its own beginning. Replacing wholesale threw the early
 /// radials away and drew the volume with a wedge of empty azimuths: the seam.
 fn stitch(base: &Sweep, partial: &Sweep) -> Sweep {
-    let start = |s: &Sweep| {
-        s.radials()
-            .iter()
-            .map(|r| r.collection_timestamp())
-            .min()
-    };
+    let start = |s: &Sweep| s.radials().iter().map(|r| r.collection_timestamp()).min();
     let same_pass = match (start(base), start(partial)) {
         (Some(b), Some(p)) => (p - b).abs() < SAME_PASS_MS,
         _ => false,

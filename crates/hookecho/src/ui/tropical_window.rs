@@ -81,66 +81,66 @@ pub fn show(
         return None;
     };
     window.show(ctx, |ui| {
-            if storms.is_empty() {
-                ui.weak("No active tropical cyclones.");
-                ui.small("The NHC publishes these only while a storm is being advised on.");
-                return;
+        if storms.is_empty() {
+            ui.weak("No active tropical cyclones.");
+            ui.small("The NHC publishes these only while a storm is being advised on.");
+            return;
+        }
+        ui.horizontal_wrapped(|ui| {
+            for s in storms {
+                let selected = w.storm_id.as_deref() == Some(s.id.as_str());
+                if ui
+                    .selectable_label(selected, format!("{} {}", s.classification, s.name))
+                    .clicked()
+                    && !selected
+                {
+                    w.storm_id = Some(s.id.clone());
+                    want = Some((s.id.clone(), w.product));
+                }
             }
-            ui.horizontal_wrapped(|ui| {
-                for s in storms {
-                    let selected = w.storm_id.as_deref() == Some(s.id.as_str());
-                    if ui
-                        .selectable_label(selected, format!("{} {}", s.classification, s.name))
-                        .clicked()
-                        && !selected
-                    {
-                        w.storm_id = Some(s.id.clone());
-                        want = Some((s.id.clone(), w.product));
-                    }
-                }
-            });
-            ui.horizontal(|ui| {
-                for p in [Product::Discussion, Product::Advisory] {
-                    if ui.selectable_label(w.product == p, p.label()).clicked() && w.product != p {
-                        w.product = p;
-                        if let Some(id) = w.storm_id.clone() {
-                            want = Some((id, p));
-                        }
-                    }
-                }
-                if w.busy {
-                    crate::ui::loading(ui, "Fetching…");
-                } else if ui.button("⟳ Refresh").clicked() {
-                    if let Some(id) = w.storm_id.clone() {
-                        want = Some((id, w.product));
-                    }
-                }
-                if let Some(a) = &w.text {
-                    crate::ui::reader_button(ui, &a.title, w.product.label(), &a.text);
-                }
-            });
-            if let Some(e) = &w.error {
-                ui.colored_label(egui::Color32::from_rgb(230, 90, 90), e);
-            }
-            ui.separator();
-            egui::ScrollArea::vertical()
-                .auto_shrink([false, false])
-                .show(ui, |ui| match &w.text {
-                    // The products are column-formatted plain text; monospace or they lose it.
-                    Some(a) => {
-                        ui.add(
-                            egui::Label::new(egui::RichText::new(&a.text).monospace().size(12.0))
-                                .wrap(),
-                        );
-                    }
-                    None if w.busy => {
-                        ui.weak("Fetching…");
-                    }
-                    None => {
-                        ui.weak("Pick a storm to read its latest product.");
-                    }
-                });
         });
+        ui.horizontal(|ui| {
+            for p in [Product::Discussion, Product::Advisory] {
+                if ui.selectable_label(w.product == p, p.label()).clicked() && w.product != p {
+                    w.product = p;
+                    if let Some(id) = w.storm_id.clone() {
+                        want = Some((id, p));
+                    }
+                }
+            }
+            if w.busy {
+                crate::ui::loading(ui, "Fetching…");
+            } else if ui.button("⟳ Refresh").clicked() {
+                if let Some(id) = w.storm_id.clone() {
+                    want = Some((id, w.product));
+                }
+            }
+            if let Some(a) = &w.text {
+                crate::ui::reader_button(ui, &a.title, w.product.label(), &a.text);
+            }
+        });
+        if let Some(e) = &w.error {
+            ui.colored_label(egui::Color32::from_rgb(230, 90, 90), e);
+        }
+        ui.separator();
+        egui::ScrollArea::vertical()
+            .auto_shrink([false, false])
+            .show(ui, |ui| match &w.text {
+                // The products are column-formatted plain text; monospace or they lose it.
+                Some(a) => {
+                    ui.add(
+                        egui::Label::new(egui::RichText::new(&a.text).monospace().size(12.0))
+                            .wrap(),
+                    );
+                }
+                None if w.busy => {
+                    ui.weak("Fetching…");
+                }
+                None => {
+                    ui.weak("Pick a storm to read its latest product.");
+                }
+            });
+    });
     w.open = open;
     want
 }

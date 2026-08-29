@@ -268,7 +268,11 @@ impl Timeline {
         // A replay bundle owns the playhead: it wraps inside its own window, live or not.
         if let Some((from, to)) = self.replay {
             let to = to.min(self.frames.len().saturating_sub(1));
-            self.playhead = if self.playhead >= to { from.min(to) } else { self.playhead + 1 };
+            self.playhead = if self.playhead >= to {
+                from.min(to)
+            } else {
+                self.playhead + 1
+            };
             return true;
         }
         if self.playhead + 1 < self.frames.len() {

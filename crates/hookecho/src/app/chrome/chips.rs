@@ -282,8 +282,7 @@ impl HookEchoApp {
                                     .color(accent),
                             );
                             ui.hyperlink_to(
-                                egui::RichText::new("Download")
-                                    .size(crate::ui::style::FONT_BASE),
+                                egui::RichText::new("Download").size(crate::ui::style::FONT_BASE),
                                 format!("{}/releases/latest", crate::ui::about_window::REPO),
                             );
                             if ui

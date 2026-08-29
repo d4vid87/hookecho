@@ -15,20 +15,25 @@ pub fn show(
     drawer: &mut crate::ui::drawer::Drawer,
 ) -> bool {
     let mut open = true;
-    let Some(window) = drawer.page(ctx, "Sensors", &mut open, false, egui::Window::new("Sensors"))
-    else {
+    let Some(window) = drawer.page(
+        ctx,
+        "Sensors",
+        &mut open,
+        false,
+        egui::Window::new("Sensors"),
+    ) else {
         return open;
     };
     window.show(ctx, |ui| match data {
-            None => {
-                ui.weak("Loading nearest station…");
-            }
-            Some(Err(e)) => {
-                ui.colored_label(egui::Color32::from_rgb(220, 120, 120), "No nearby station");
-                ui.weak(e);
-            }
-            Some(Ok(station)) => dashboard(ui, station, tz),
-        });
+        None => {
+            ui.weak("Loading nearest station…");
+        }
+        Some(Err(e)) => {
+            ui.colored_label(egui::Color32::from_rgb(220, 120, 120), "No nearby station");
+            ui.weak(e);
+        }
+        Some(Ok(station)) => dashboard(ui, station, tz),
+    });
     open
 }
 

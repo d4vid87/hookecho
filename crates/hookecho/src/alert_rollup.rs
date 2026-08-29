@@ -106,7 +106,12 @@ mod tests {
         let mut r = Rollup::default();
         let t0 = Instant::now();
         for i in 0..4 {
-            let d = r.offer(t0 + Duration::from_secs(i * 10), "Severe Thunderstorm", 5, win());
+            let d = r.offer(
+                t0 + Duration::from_secs(i * 10),
+                "Severe Thunderstorm",
+                5,
+                win(),
+            );
             assert_eq!(d, Decision::Send, "alert {i}");
         }
     }
@@ -116,9 +121,15 @@ mod tests {
         let mut r = Rollup::default();
         let t0 = Instant::now();
         for i in 0..4 {
-            r.offer(t0 + Duration::from_secs(i * 10), "Severe Thunderstorm", 5, win());
+            r.offer(
+                t0 + Duration::from_secs(i * 10),
+                "Severe Thunderstorm",
+                5,
+                win(),
+            );
         }
-        let Decision::Rollup(text) = r.offer(t0 + Duration::from_secs(50), "Tornado Warning", 5, win())
+        let Decision::Rollup(text) =
+            r.offer(t0 + Duration::from_secs(50), "Tornado Warning", 5, win())
         else {
             panic!("fifth alert inside the window should roll up");
         };
@@ -126,11 +137,17 @@ mod tests {
         assert!(text.contains("Tornado Warning"));
         // Same minute: the summary is current, so nothing goes out.
         assert_eq!(
-            r.offer(t0 + Duration::from_secs(60), "Flash Flood Warning", 5, win()),
+            r.offer(
+                t0 + Duration::from_secs(60),
+                "Flash Flood Warning",
+                5,
+                win()
+            ),
             Decision::Hold
         );
         // A minute later it refreshes, now carrying the held one too.
-        let Decision::Rollup(text) = r.offer(t0 + Duration::from_secs(120), "Special Marine", 5, win())
+        let Decision::Rollup(text) =
+            r.offer(t0 + Duration::from_secs(120), "Special Marine", 5, win())
         else {
             panic!("summary should refresh after a minute");
         };
@@ -142,10 +159,20 @@ mod tests {
         let mut r = Rollup::default();
         let t0 = Instant::now();
         for i in 0..5 {
-            r.offer(t0 + Duration::from_secs(i * 10), "Severe Thunderstorm", 5, win());
+            r.offer(
+                t0 + Duration::from_secs(i * 10),
+                "Severe Thunderstorm",
+                5,
+                win(),
+            );
         }
         // Eleven minutes later the window holds only this one.
-        let d = r.offer(t0 + Duration::from_secs(11 * 60), "Tornado Warning", 5, win());
+        let d = r.offer(
+            t0 + Duration::from_secs(11 * 60),
+            "Tornado Warning",
+            5,
+            win(),
+        );
         assert_eq!(d, Decision::Send);
     }
 }

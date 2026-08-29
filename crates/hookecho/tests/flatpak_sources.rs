@@ -32,11 +32,9 @@ fn locked_registry_crates(lock: &str) -> Vec<String> {
                 .find_map(|l| l.strip_prefix(key)?.split('"').nth(1))
                 .map(str::to_string)
         };
-        if let (Some(name), Some(version), Some(_)) = (
-            field("name = "),
-            field("version = "),
-            field("source = "),
-        ) {
+        if let (Some(name), Some(version), Some(_)) =
+            (field("name = "), field("version = "), field("source = "))
+        {
             out.push(format!("{name}-{version}"));
         }
     }
@@ -64,8 +62,8 @@ fn cargo_sources_covers_the_lockfile() {
         return;
     }
     let lock = std::fs::read_to_string(root.join("Cargo.lock")).expect("Cargo.lock");
-    let sources =
-        std::fs::read_to_string(root.join("packaging/flatpak/cargo-sources.json")).expect("sources");
+    let sources = std::fs::read_to_string(root.join("packaging/flatpak/cargo-sources.json"))
+        .expect("sources");
 
     let missing: Vec<String> = locked_registry_crates(&lock)
         .into_iter()
