@@ -62,14 +62,20 @@ pub struct WindGpu {
     fade: wgpu::RenderPipeline,
     points: wgpu::RenderPipeline,
     composite: wgpu::RenderPipeline,
-    main_bgl: wgpu::BindGroupLayout,
     src_bgl: wgpu::BindGroupLayout,
     uni: wgpu::Buffer,
-    sampler: wgpu::Sampler,
-    lut: wgpu::Texture,
     wind: wgpu::Texture,
-    /// Particle positions, ping-ponged: `pos[cur]` is read, `pos[1 - cur]` written.
+    /// Particle positions, ping-ponged: `pos[cur]` is read, `pos[1 - cur]` written. Reached
+    /// through `pos_view` now — the textures are kept because the seeding test writes into them,
+    /// and because owning them here says where they live.
+    #[allow(dead_code)]
     pos: [wgpu::Texture; 2],
+    /// Views and bind groups for both ping-pong slots, built once. Nothing they name is ever
+    /// recreated — the grid and the LUT are written into, not rebuilt — so a frame indexes by
+    /// `cur` instead of creating three bind groups and two views per pane.
+    pos_view: [wgpu::TextureView; 2],
+    main_bg: [wgpu::BindGroup; 2],
+    pos_src_bg: [wgpu::BindGroup; 2],
     cur: usize,
     /// Per-pane trail buffers, ping-ponged the same way, keyed by pane id.
     trails: std::collections::HashMap<u32, Trails>,
@@ -77,12 +83,16 @@ pub struct WindGpu {
 }
 
 struct Trails {
+    /// The trail buffers themselves. Held rather than dropped in favour of the views below: a
+    /// view outliving its texture is not a thing to find out about from a driver.
+    #[allow(dead_code)]
     tex: [wgpu::Texture; 2],
+    /// Same as the position slots: both views and both source bind groups, built with the
+    /// textures they name.
+    view: [wgpu::TextureView; 2],
+    src_bg: [wgpu::BindGroup; 2],
     cur: usize,
     size: (u32, u32),
-    /// Bind groups for the composite pass, built during `step` — the paint phase has a render
-    /// pass but no device, so nothing can be created there.
-    composite: Option<(wgpu::BindGroup, wgpu::BindGroup)>,
 }
 
 const POS_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
@@ -213,6 +223,55 @@ impl WindGpu {
             &lut_rgba,
         );
 
+        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("wind_sampler"),
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        });
+        let wind = rgba8_target(device, "wind_grid", GRID, GRID);
+        let pos = [
+            rgba8_target(device, "wind_pos_a", SIDE, SIDE),
+            rgba8_target(device, "wind_pos_b", SIDE, SIDE),
+        ];
+        let pos_view = [
+            pos[0].create_view(&Default::default()),
+            pos[1].create_view(&Default::default()),
+        ];
+        let wind_view = wind.create_view(&Default::default());
+        let lut_view = lut.create_view(&Default::default());
+        let main_bg = std::array::from_fn(|i| {
+            device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("wind_bg"),
+                layout: &main_bgl,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: uni.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::TextureView(&pos_view[i]),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: wgpu::BindingResource::TextureView(&wind_view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 3,
+                        resource: wgpu::BindingResource::Sampler(&sampler),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 4,
+                        resource: wgpu::BindingResource::TextureView(&lut_view),
+                    },
+                ],
+            })
+        });
+        let pos_src_bg = std::array::from_fn(|i| src_bind_group(device, &src_bgl, &pos_view[i]));
+
         Self {
             advect: pipeline(
                 "wind_advect",
@@ -230,23 +289,13 @@ impl WindGpu {
                 target_format,
                 alpha,
             ),
-            main_bgl,
             src_bgl,
             uni,
-            sampler: device.create_sampler(&wgpu::SamplerDescriptor {
-                label: Some("wind_sampler"),
-                address_mode_u: wgpu::AddressMode::ClampToEdge,
-                address_mode_v: wgpu::AddressMode::ClampToEdge,
-                mag_filter: wgpu::FilterMode::Linear,
-                min_filter: wgpu::FilterMode::Linear,
-                ..Default::default()
-            }),
-            lut,
-            wind: rgba8_target(device, "wind_grid", GRID, GRID),
-            pos: [
-                rgba8_target(device, "wind_pos_a", SIDE, SIDE),
-                rgba8_target(device, "wind_pos_b", SIDE, SIDE),
-            ],
+            wind,
+            pos,
+            pos_view,
+            main_bg,
+            pos_src_bg,
             cur: 0,
             trails: std::collections::HashMap::new(),
             frames: 0,
@@ -325,52 +374,51 @@ impl WindGpu {
         );
 
         // Advect: read the current positions, write the next ones.
-        let main = self.main_bind_group(device);
         {
-            let next = self.pos[1 - self.cur].create_view(&Default::default());
-            let mut pass = color_pass(encoder, "wind_advect", &next, None);
+            let mut pass = color_pass(encoder, "wind_advect", &self.pos_view[1 - self.cur], None);
             pass.set_pipeline(&self.advect);
-            pass.set_bind_group(0, &main, &[]);
-            pass.set_bind_group(1, &self.src_bind_group(device, &self.pos[self.cur]), &[]);
+            pass.set_bind_group(0, &self.main_bg[self.cur], &[]);
+            pass.set_bind_group(1, &self.pos_src_bg[self.cur], &[]);
             pass.draw(0..3, 0..1);
         }
+        let read = self.cur;
         self.cur = 1 - self.cur;
 
         // Trails: fade what was there, then stamp this frame's particles on top.
-        let trails = self.ensure_trails(device, pane, f.viewport);
+        self.ensure_trails(device, pane, f.viewport);
+        let trails = &self.trails[&pane];
         let (a, b) = (trails.cur, 1 - trails.cur);
-        let fade_src = self.src_bind_group(device, &self.trails[&pane].tex[a]);
-        let dst = self.trails[&pane].tex[b].create_view(&Default::default());
-        let pos_src = self.src_bind_group(device, &self.pos[self.cur]);
         {
-            let mut pass = color_pass(encoder, "wind_trails", &dst, Some(wgpu::Color::TRANSPARENT));
+            let mut pass = color_pass(
+                encoder,
+                "wind_trails",
+                &trails.view[b],
+                Some(wgpu::Color::TRANSPARENT),
+            );
             pass.set_pipeline(&self.fade);
-            pass.set_bind_group(0, &main, &[]);
-            pass.set_bind_group(1, &fade_src, &[]);
+            pass.set_bind_group(0, &self.main_bg[read], &[]);
+            pass.set_bind_group(1, &trails.src_bg[a], &[]);
             pass.draw(0..3, 0..1);
 
             pass.set_pipeline(&self.points);
-            pass.set_bind_group(1, &pos_src, &[]);
+            pass.set_bind_group(1, &self.pos_src_bg[self.cur], &[]);
             pass.draw(0..6, 0..COUNT);
         }
-        let composite = (
-            self.main_bind_group(device),
-            self.src_bind_group(device, &self.trails[&pane].tex[b]),
-        );
         if let Some(t) = self.trails.get_mut(&pane) {
             t.cur = b;
-            t.composite = Some(composite);
         }
     }
 
     /// Draw a pane's trail buffer over it. Called from the paint phase, inside egui's pass.
     pub fn draw(&self, pane: u32, pass: &mut wgpu::RenderPass<'_>) {
-        let Some((main, src)) = self.trails.get(&pane).and_then(|t| t.composite.as_ref()) else {
+        let Some(t) = self.trails.get(&pane) else {
             return;
         };
         pass.set_pipeline(&self.composite);
-        pass.set_bind_group(0, main, &[]);
-        pass.set_bind_group(1, src, &[]);
+        // Group 0 is here for the uniform; `fs_composite` reads the trail texture and the opacity
+        // word, never the position texture, so which ping-pong slot it names does not reach a pixel.
+        pass.set_bind_group(0, &self.main_bg[self.cur], &[]);
+        pass.set_bind_group(1, &t.src_bg[t.cur], &[]);
         pass.draw(0..3, 0..1);
     }
 
@@ -379,7 +427,7 @@ impl WindGpu {
         self.trails.retain(|k, _| keep(*k));
     }
 
-    fn ensure_trails(&mut self, device: &wgpu::Device, pane: u32, size: (u32, u32)) -> &Trails {
+    fn ensure_trails(&mut self, device: &wgpu::Device, pane: u32, size: (u32, u32)) {
         let stale = self
             .trails
             .get(&pane)
@@ -387,66 +435,43 @@ impl WindGpu {
         if stale {
             self.trails.insert(
                 pane,
-                Trails {
-                    tex: [
+                {
+                    let tex = [
                         rgba8_target(device, "wind_trail_a", size.0, size.1),
                         rgba8_target(device, "wind_trail_b", size.0, size.1),
-                    ],
-                    cur: 0,
-                    size: (size.0.max(1), size.1.max(1)),
-                    composite: None,
+                    ];
+                    let view: [wgpu::TextureView; 2] =
+                        std::array::from_fn(|i| tex[i].create_view(&Default::default()));
+                    let src_bg =
+                        std::array::from_fn(|i| src_bind_group(device, &self.src_bgl, &view[i]));
+                    Trails {
+                        tex,
+                        view,
+                        src_bg,
+                        cur: 0,
+                        size: (size.0.max(1), size.1.max(1)),
+                    }
                 },
             );
         }
-        &self.trails[&pane]
     }
 
-    /// `// ponytail:` bind groups are rebuilt each frame rather than cached per ping-pong slot.
-    /// Two texture views and a descriptor is nothing next to the four passes they set up; cache
-    /// them if a profile ever says otherwise.
-    fn main_bind_group(&self, device: &wgpu::Device) -> wgpu::BindGroup {
-        let pos = self.pos[self.cur].create_view(&Default::default());
-        let wind = self.wind.create_view(&Default::default());
-        let lut = self.lut.create_view(&Default::default());
-        device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("wind_bg"),
-            layout: &self.main_bgl,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: self.uni.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::TextureView(&pos),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: wgpu::BindingResource::TextureView(&wind),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 3,
-                    resource: wgpu::BindingResource::Sampler(&self.sampler),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 4,
-                    resource: wgpu::BindingResource::TextureView(&lut),
-                },
-            ],
-        })
-    }
+}
 
-    fn src_bind_group(&self, device: &wgpu::Device, tex: &wgpu::Texture) -> wgpu::BindGroup {
-        let view = tex.create_view(&Default::default());
-        device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("wind_src_bg"),
-            layout: &self.src_bgl,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: wgpu::BindingResource::TextureView(&view),
-            }],
-        })
-    }
+/// The single-texture bind group both the fade and the composite passes read through.
+fn src_bind_group(
+    device: &wgpu::Device,
+    layout: &wgpu::BindGroupLayout,
+    view: &wgpu::TextureView,
+) -> wgpu::BindGroup {
+    device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("wind_src_bg"),
+        layout,
+        entries: &[wgpu::BindGroupEntry {
+            binding: 0,
+            resource: wgpu::BindingResource::TextureView(view),
+        }],
+    })
 }
 
 /// A wind field warped onto the mercator-uniform texture the shader samples.
