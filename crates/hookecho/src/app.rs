@@ -2597,27 +2597,13 @@ fn pane_rects(r: egui::Rect, n: usize) -> Vec<egui::Rect> {
 
 impl HookEchoApp {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
-        // Bundle Phosphor icon glyphs into the proportional font family so the mobile
-        // RadarOmega-style chrome (tool dock, menu rows) can draw line icons — egui's default
-        // face has none. Cheap; desktop uses them too (no-op if unreferenced).
-        let mut fonts = egui::FontDefinitions::default();
-        egui_phosphor::add_to_fonts(&mut fonts, egui_phosphor::Variant::Regular);
-        // Inter as the proportional face on every platform, ahead of egui's default. A Latin +
-        // punctuation + symbol subset (SIL OFL, see data/fonts/Inter-LICENSE.txt) — ~26 KB
-        // gzipped. egui's defaults stay in the list behind it as the fallback for anything the
-        // subset dropped, so a missing glyph is a fallback, not a box.
-        fonts.font_data.insert(
-            "Inter".to_owned(),
-            std::sync::Arc::new(egui::FontData::from_static(include_bytes!(
-                "../data/fonts/Inter-Regular-subset.ttf"
-            ))),
-        );
-        fonts
-            .families
-            .entry(egui::FontFamily::Proportional)
-            .or_default()
-            .insert(0, "Inter".to_owned());
-        cc.egui_ctx.set_fonts(fonts);
+        // Inter in front, Phosphor's icon glyphs behind it (the mobile chrome draws line icons
+        // egui's default face has none of), and on native egui's own faces behind both as the
+        // fallback for anything Inter's subset dropped. The browser build starts without those
+        // fallbacks and fetches them a moment later — see `crate::fonts`.
+        cc.egui_ctx.set_fonts(crate::fonts::base());
+        #[cfg(target_arch = "wasm32")]
+        crate::fonts::spawn_load(cc.egui_ctx.clone());
 
         #[cfg(not(target_arch = "wasm32"))]
         let rt = tokio::runtime::Builder::new_multi_thread()
@@ -13472,7 +13458,12 @@ impl HookEchoApp {
             let le = self.loop_export.take().unwrap();
             use crate::loopexport::LoopFormat;
             let res = match le.format {
+                #[cfg(not(target_arch = "wasm32"))]
                 LoopFormat::Gif => crate::loopexport::encode_gif(&le.frames, 200, &le.dest),
+                // Unreachable on the web: an export needs a destination path and there is none in
+                // a browser, so `start_loop_export` returns before a capture ever begins.
+                #[cfg(target_arch = "wasm32")]
+                LoopFormat::Gif => Err(anyhow::anyhow!("GIF export needs a filesystem")),
                 LoopFormat::Mp4 => crate::loopexport::encode_mp4(&le.frames, 5, &le.dest),
             };
             match res {

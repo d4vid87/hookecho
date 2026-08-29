@@ -29,6 +29,7 @@ pub mod digest;
 pub mod elevation;
 pub mod events;
 pub mod fielddiff;
+pub mod fonts;
 pub mod fronts_draw;
 pub mod geo;
 pub mod gps;
