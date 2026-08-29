@@ -383,6 +383,14 @@ impl OverlaySource {
                         Err(e) => log::warn!("meteoalarm fetch failed ({e})"),
                     }
                 }
+                // Canada's the same story one border north: gated on the view, and its own
+                // failure, so an outage there costs neither the US nor the European alerts.
+                if wxdata::eccc::in_view(bounds) {
+                    match wxdata::eccc::fetch_in_view(http, bounds).await {
+                        Ok(ca) => feats.extend(ca),
+                        Err(e) => log::warn!("eccc alerts fetch failed ({e})"),
+                    }
+                }
                 OverlayMsg::Alerts(feats)
             }
             OverlaySource::Mds => {

@@ -15,6 +15,7 @@ pub mod derived;
 pub mod dotcams;
 pub mod dualpol;
 pub mod dwd;
+pub mod eccc;
 pub mod efield;
 pub mod ero;
 pub mod forecast;
