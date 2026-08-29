@@ -281,8 +281,8 @@ fn with_previous_tail(
 /// Recent day listings, so a site switch doesn't LIST the same S3 prefix two or three times over
 /// (the head poll and the timeline listing both want today's).
 ///
-/// ponytail: a flat map with a short TTL and no eviction — a session touches a handful of
-/// site/day pairs. Bound it if that ever stops being true.
+/// ponytail: a flat map with a short TTL, swept of expired entries on insert — a session touches
+/// a handful of site/day pairs at a time. Bound it by count if that ever stops being true.
 type DayListCache = std::collections::HashMap<
     (String, chrono::NaiveDate),
     (crate::clock::Instant, Vec<Identifier>),
@@ -324,6 +324,9 @@ async fn list_day(site: &str, date: chrono::NaiveDate) -> anyhow::Result<Vec<Ide
     ids.retain(|id| is_volume(id.name()));
     ids.sort_by_key(|id| id.date_time());
     if let Ok(mut map) = cache.lock() {
+        // Scrubbing a week of dates across a few sites left every one of those listings here for
+        // the life of the process; an expired entry can never be read, so drop it as we pass.
+        map.retain(|_, (at, _)| at.elapsed() < DAY_LIST_TTL);
         map.insert(key, (crate::clock::Instant::now(), ids.clone()));
     }
     Ok(ids)
@@ -555,21 +558,25 @@ const DEALIAS_REF_MAX_AGE_MS: i64 = 15 * 60 * 1000;
 /// ~7 MB field, and one of them is cheap where six would not be. Key it into a small map if
 /// flipping tilts on a folded storm turns out to matter.
 #[allow(clippy::type_complexity)]
-static DEALIAS_REF: std::sync::Mutex<Option<(DealiasKey, i64, Vec<Option<f32>>)>> =
+// The field is shared, never edited: an `Arc` so keeping it and handing it back both cost a
+// pointer instead of a ~10 MB copy each.
+static DEALIAS_REF: std::sync::Mutex<Option<(DealiasKey, i64, DealiasField)>> =
     std::sync::Mutex::new(None);
+
+type DealiasField = std::sync::Arc<Vec<Option<f32>>>;
 
 /// The previous pass over this tilt, if there is one and it is recent enough to mean anything.
 /// A reference from *later* than this sweep is a scrub backwards through the timeline: skipped,
 /// because "previous" is the only relationship the dealiaser can use.
-fn take_dealias_reference(key: &DealiasKey, at: i64) -> Option<Vec<Option<f32>>> {
+fn take_dealias_reference(key: &DealiasKey, at: i64) -> Option<DealiasField> {
     let guard = DEALIAS_REF.lock().ok()?;
     let (k, t, field) = guard.as_ref()?;
     (k == key && at > *t && at - *t <= DEALIAS_REF_MAX_AGE_MS).then(|| field.clone())
 }
 
-fn put_dealias_reference(key: DealiasKey, at: i64, field: &[Option<f32>]) {
+fn put_dealias_reference(key: DealiasKey, at: i64, field: DealiasField) {
     if let Ok(mut guard) = DEALIAS_REF.lock() {
-        *guard = Some((key, at, field.to_vec()));
+        *guard = Some((key, at, field));
     }
 }
 
@@ -719,9 +726,10 @@ pub fn bin_sweep_opts(
             AZ_BINS,
             gate_count,
             nyq,
-            reference.as_deref(),
+            reference.as_ref().map(|r| r.as_slice()),
         );
-        put_dealias_reference(key, at, &unfolded);
+        let unfolded: DealiasField = std::sync::Arc::new(unfolded);
+        put_dealias_reference(key, at, unfolded.clone());
         for (i, v) in unfolded.iter().enumerate() {
             if let Some(v) = v {
                 data[i] = normalize(*v);
@@ -1131,7 +1139,8 @@ mod tests {
             gate_count: 2,
         };
         let field = vec![Some(1.0), Some(2.0)];
-        put_dealias_reference(key, 100_000, &field);
+        let field = std::sync::Arc::new(field);
+        put_dealias_reference(key, 100_000, field.clone());
 
         assert_eq!(take_dealias_reference(&key, 400_000), Some(field.clone()));
         assert_eq!(take_dealias_reference(&key, 100_000), None, "same instant");

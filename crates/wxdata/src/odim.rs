@@ -81,7 +81,12 @@ struct Moment {
 /// a moment with no `-LATEST-` symlink is otherwise reachable only by downloading a megabyte of
 /// directory index to learn one name.
 pub fn end_stamp(bytes: Vec<u8>) -> Option<String> {
-    let f = hdf5lite::File::open(bytes).ok()?;
+    stamp_of(&hdf5lite::File::open(bytes).ok()?)
+}
+
+/// The sweep end stamp from an already-open file, so a caller that is decoding anyway does not
+/// open and parse the same ~190 KB a second time to read two attributes.
+fn stamp_of(f: &hdf5lite::File) -> Option<String> {
     let what = f.attributes("dataset1/what").ok()?;
     let (d, t) = (text(&what, "enddate")?, text(&what, "endtime")?);
     // Anything else would name a file that cannot exist; better no velocity than a wild URL.
@@ -93,7 +98,28 @@ pub fn end_stamp(bytes: Vec<u8>) -> Option<String> {
 ///
 /// Sweeps come out in file order, which ODIM requires to be ascending elevation.
 pub fn decode(bytes: Vec<u8>) -> anyhow::Result<(DateTime<Utc>, Scan)> {
+    let (time, scan, _) = decode_with_stamp(bytes)?;
+    Ok((time, scan))
+}
+
+/// The volume's nominal start time, without decoding a single ray.
+///
+/// The DWD probe only wants to know *which* volume a file belongs to; reading the root `what`
+/// group answers that for the cost of an open, where a full decode allocates a `Vec` per ray per
+/// moment for a scan it is about to throw away.
+pub fn start_time(bytes: Vec<u8>) -> anyhow::Result<DateTime<Utc>> {
     let f = hdf5lite::File::open(bytes).map_err(|e| anyhow::anyhow!("odim: {e}"))?;
+    let root_what = f.attributes("what").map_err(|e| anyhow::anyhow!("{e}"))?;
+    timestamp(&root_what, "date", "time")
+        .ok_or_else(|| anyhow::anyhow!("odim: no usable /what/date and /what/time"))
+}
+
+/// [`decode`], plus the sweep end stamp the DWD feed names its dual-pol files by.
+pub fn decode_with_stamp(
+    bytes: Vec<u8>,
+) -> anyhow::Result<(DateTime<Utc>, Scan, Option<String>)> {
+    let f = hdf5lite::File::open(bytes).map_err(|e| anyhow::anyhow!("odim: {e}"))?;
+    let stamp = stamp_of(&f);
 
     let root_what = f.attributes("what").map_err(|e| anyhow::anyhow!("{e}"))?;
     let object = text(&root_what, "object").unwrap_or_default();
@@ -152,7 +178,7 @@ pub fn decode(bytes: Vec<u8>) -> anyhow::Result<(DateTime<Utc>, Scan)> {
         false,
         Vec::new(),
     );
-    Ok((time, Scan::with_site(site, vcp, sweeps)))
+    Ok((time, Scan::with_site(site, vcp, sweeps), stamp))
 }
 
 /// The four-letter id from an ODIM `source` string, which is comma-separated `KEY:value` pairs.

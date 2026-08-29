@@ -262,9 +262,9 @@ pub async fn fetch_volume(
                 None => get(sweep_url(slug, wmo, tilt)).await?,
             };
             // The stamp has to come off the reflectivity file before anything else is asked for:
-            // it is the only name the other moments answer to.
-            let stamp = crate::odim::end_stamp(bytes.clone());
-            let (time, scan) = match crate::odim::decode(bytes) {
+            // it is the only name the other moments answer to — and it comes out of the same
+            // decode, rather than a second open and parse of the same ~190 KB.
+            let (time, scan, stamp) = match crate::odim::decode_with_stamp(bytes) {
                 Ok(v) => v,
                 Err(e) => {
                     // One unreadable elevation shouldn't cost the whole volume.
@@ -428,7 +428,8 @@ async fn finish_probe(
     };
     crate::stats::net(bytes.len());
     let bytes = bytes.to_vec();
-    let Ok((time, _)) = crate::odim::decode(bytes.clone()) else {
+    // Header only: the probe asks which volume this is, not what is in it.
+    let Ok(time) = crate::odim::start_time(bytes.clone()) else {
         return Probe::Unreadable;
     };
     let name = volume_name(id, time);
@@ -517,6 +518,11 @@ mod tests {
     #[test]
     fn the_end_stamp_names_the_sibling_files() {
         let stamp = crate::odim::end_stamp(fixture("00")).expect("end stamp");
+        // The decode reads it out of the file it is already holding; the two must agree, or a
+        // volume's dual-pol moments would be asked for under a name that does not exist.
+        let (_, _, from_decode) =
+            crate::odim::decode_with_stamp(fixture("00")).expect("decode with stamp");
+        assert_eq!(from_decode.as_deref(), Some(stamp.as_str()));
         assert_eq!(stamp.len(), 16, "{stamp}");
         assert!(stamp.chars().all(|c| c.is_ascii_digit()), "{stamp}");
         assert!(stamp.ends_with("00"), "centiseconds: {stamp}");
