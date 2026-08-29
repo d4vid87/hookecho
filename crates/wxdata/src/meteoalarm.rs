@@ -139,7 +139,7 @@ fn level_style(level: u8) -> ([u8; 3], FeatureKind, Option<&'static str>) {
 /// Every alert repeats itself once per language. English is not guaranteed to be present — a few
 /// services publish only their own — so the fallback keeps the warning on the map with a headline
 /// the reader may not be able to read, which beats no warning at all.
-fn english<'a>(infos: &'a [serde_json::Value]) -> Option<&'a serde_json::Value> {
+fn english(infos: &[serde_json::Value]) -> Option<&serde_json::Value> {
     infos
         .iter()
         .find(|i| {

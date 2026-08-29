@@ -102,6 +102,8 @@ export const cacheSeconds = (host, search = "") => {
   // A WMS GetMap with no TIME is whatever the layer's default frame happens to be, which turns
   // over every five minutes; one naming a frame is that frame forever. Not in LIVE_HOSTS, because
   // that would put the whole loop — every tile of which names its frame — on a 15-second TTL.
+  // The Canadian alerts ride the same rule: a WFS GetFeature carries no TIME and wants the short
+  // TTL, since what it returns is the set of alerts in force this minute.
   if (host === "maps.dwd.de" || host === "geo.weather.gc.ca") {
     return search.includes("TIME=") ? 300 : 15;
   }
