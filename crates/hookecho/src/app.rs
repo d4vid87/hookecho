@@ -15968,7 +15968,8 @@ impl eframe::App for HookEchoApp {
                     let http = self.http.clone();
                     self.spawner.spawn(async move {
                         let times =
-                            crate::tiles::fetch_frame_times(&http, raster_style, from, to, 48).await;
+                            crate::tiles::fetch_frame_times(&http, raster_style, from, to, 48)
+                                .await;
                         let _ = tx.send(times);
                     });
                 }
