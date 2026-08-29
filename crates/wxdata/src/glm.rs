@@ -163,10 +163,19 @@ impl GlmFeed {
     /// has to be cheap, so it's an extend and a re-sort rather than a re-poll.
     pub fn absorb(&mut self, other: GlmFeed) {
         self.last_keys.extend(other.last_keys);
+        // Both sides are already in time order, and a granule that just landed is normally newer
+        // than everything held — so the usual merge is an append. Only an out-of-order granule
+        // pays for a re-sort of the whole 15-minute window, under the painter's mutex.
+        let ordered = match (self.flashes.back(), other.flashes.front()) {
+            (Some(last), Some(first)) => first.time >= last.time,
+            _ => true,
+        };
         self.flashes.extend(other.flashes);
-        self.flashes
-            .make_contiguous()
-            .sort_by_key(|f| f.time.timestamp_millis());
+        if !ordered {
+            self.flashes
+                .make_contiguous()
+                .sort_by_key(|f| f.time.timestamp_millis());
+        }
         self.expire(Utc::now());
     }
 
@@ -474,6 +483,42 @@ mod density_tests {
 
 #[cfg(test)]
 mod tests {
+    /// A merge must leave the window in time order — that is what lets `expire` pop the front —
+    /// but the ordinary case (a granule newer than everything held) has to reach it without
+    /// re-sorting a quarter-hour of flashes under the painter's mutex.
+    #[test]
+    fn absorbing_keeps_the_window_in_time_order() {
+        use chrono::Utc;
+        // Inside the window: `absorb` expires as it goes, and a fixed epoch would be dropped.
+        let base = Utc::now() - chrono::Duration::seconds(120);
+        let flash = |secs: i64| super::Flash {
+            lon: -97.0,
+            lat: 35.0,
+            energy: 1.0,
+            time: base + chrono::Duration::seconds(secs),
+        };
+        let offsets = |f: &super::GlmFeed| -> Vec<i64> {
+            f.flashes()
+                .iter()
+                .map(|x| (x.time - base).num_seconds())
+                .collect()
+        };
+
+        let mut held = super::GlmFeed::new(15);
+        held.flashes.extend([flash(10), flash(20)]);
+
+        let mut newer = super::GlmFeed::new(15);
+        newer.flashes.extend([flash(30), flash(40)]);
+        held.absorb(newer);
+        assert_eq!(offsets(&held), vec![10, 20, 30, 40]);
+
+        // A granule that arrives late still lands in the right place.
+        let mut late = super::GlmFeed::new(15);
+        late.flashes.extend([flash(25), flash(50)]);
+        held.absorb(late);
+        assert_eq!(offsets(&held), vec![10, 20, 25, 30, 40, 50]);
+    }
+
     use super::*;
 
     fn flash(min_ago: i64) -> Flash {
