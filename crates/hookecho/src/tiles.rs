@@ -679,19 +679,19 @@ impl BasemapStyle {
                 BasemapStyle::HybridSatellite => Some(format!(
                     "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
                 )),
-                // The extra Esri services live on `services.` rather than `server.`; both hosts
-                // are already in the proxy allowlist.
+                // These four also answer on `services.arcgisonline.com`, but only `server.` is in
+                // the proxy allowlist, so the web build 403s on that host. Same tiles either way.
                 BasemapStyle::EsriDarkGray => Some(format!(
-                    "https://services.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}"
+                    "https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}"
                 )),
                 BasemapStyle::EsriLightGray => Some(format!(
-                    "https://services.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Base/MapServer/tile/{z}/{y}/{x}"
+                    "https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Base/MapServer/tile/{z}/{y}/{x}"
                 )),
                 BasemapStyle::EsriNatGeo => Some(format!(
-                    "https://services.arcgisonline.com/ArcGIS/rest/services/NatGeo_World_Map/MapServer/tile/{z}/{y}/{x}"
+                    "https://server.arcgisonline.com/ArcGIS/rest/services/NatGeo_World_Map/MapServer/tile/{z}/{y}/{x}"
                 )),
                 BasemapStyle::EsriOcean => Some(format!(
-                    "https://services.arcgisonline.com/ArcGIS/rest/services/Ocean/World_Ocean_Base/MapServer/tile/{z}/{y}/{x}"
+                    "https://server.arcgisonline.com/ArcGIS/rest/services/Ocean/World_Ocean_Base/MapServer/tile/{z}/{y}/{x}"
                 )),
                 BasemapStyle::CustomXyz => valid_xyz_template(custom)
                     .then(|| crate::vector_tiles::fill_template(custom, z, x, y)),
