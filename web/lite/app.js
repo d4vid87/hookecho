@@ -43,10 +43,16 @@ const state = {
   zoom: clampZoom(Number(params.get("zoom")) || 9),
   frame: 0,
   times: [],
+  keys: [], // the loop's S3 keys, so a refresh can tell what it already has
   playing: true,
   loading: false,
   warnings: [], // [{ event, rings }] already filtered to the current view
 };
+
+// The bytes behind `state.keys`. A new scan lands every four to six minutes and the loop
+// refreshes every two, so five of the six frames a refresh wants are the five it is already
+// holding — refetching all of them was most of this page's traffic.
+const held = new Map(); // key -> Uint8Array
 
 let allSites = [];
 let viewer = null;
@@ -71,27 +77,45 @@ function canvasSize() {
   return [Math.max(w, 1), Math.max(h, 1)];
 }
 
+// The tile grid is diffed rather than rebuilt. Emptying the host dropped every loaded <img> on
+// the floor, so a resize, a fullscreen toggle or the same zoom returned to refetched the lot; the
+// tiles that are still wanted are almost always the ones already on screen.
 function drawTiles(w, h) {
   const z = state.zoom;
   const host = el("tiles");
-  host.textContent = "";
   const cx = lonToX(state.site.lon, z);
   const cy = latToY(state.site.lat, z);
   const left = cx - w / 2;
   const top = cy - h / 2;
   const n = 2 ** z;
+  const want = new Map(); // src -> [left, top]
   for (let ty = Math.floor(top / 256); ty <= Math.floor((top + h) / 256); ty++) {
     for (let tx = Math.floor(left / 256); tx <= Math.floor((left + w) / 256); tx++) {
       if (ty < 0 || ty >= n) continue;
-      const img = new Image();
-      img.loading = "lazy";
-      img.alt = "";
       // ArcGIS tile URLs are z/y/x, not z/x/y.
-      img.src = `${TILES}/${z}/${ty}/${((tx % n) + n) % n}`;
-      img.style.left = `${tx * 256 - left}px`;
-      img.style.top = `${ty * 256 - top}px`;
-      host.append(img);
+      const src = `${TILES}/${z}/${ty}/${((tx % n) + n) % n}`;
+      want.set(src, [`${tx * 256 - left}px`, `${ty * 256 - top}px`]);
     }
+  }
+  // `getAttribute`, not `.src`: the property resolves to an absolute URL and would never match
+  // the same-origin path written above.
+  for (const img of [...host.children]) {
+    const pos = want.get(img.getAttribute("src"));
+    if (!pos) {
+      img.remove();
+      continue;
+    }
+    [img.style.left, img.style.top] = pos;
+    want.delete(img.getAttribute("src"));
+  }
+  for (const [src, [x, y]] of want) {
+    const img = new Image();
+    img.loading = "lazy";
+    img.alt = "";
+    img.src = src;
+    img.style.left = x;
+    img.style.top = y;
+    host.append(img);
   }
 }
 
@@ -230,21 +254,35 @@ async function loadLoop() {
   showTime();
   try {
     const keys = await listKeys();
-    // All six at once. Fetched one after another this was six round trips deep, which is most of
-    // the wait on a slow link; the decode below is the same work either way.
+    // Nothing new has landed and every frame is still in hand: the loop already shows this.
+    if (
+      keys.length &&
+      keys.length === state.keys.length &&
+      keys.every((k, i) => k === state.keys[i] && held.has(k))
+    ) {
+      return;
+    }
+    // A frame already held is not fetched again. All the rest at once: fetched one after another
+    // this was six round trips deep, which is most of the wait on a slow link; the decode below is
+    // the same work either way.
     const inflight = keys.map((key) =>
-      fetch(`${S3}/${key}`)
-        .then((r) => (r.ok ? r.arrayBuffer() : null))
-        .then((buf) => (buf ? { key, bytes: new Uint8Array(buf) } : null))
-        .catch(() => null),
+      held.has(key)
+        ? Promise.resolve({ key, bytes: held.get(key) })
+        : fetch(`${S3}/${key}`)
+            .then((r) => (r.ok ? r.arrayBuffer() : null))
+            .then((buf) => (buf ? { key, bytes: new Uint8Array(buf) } : null))
+            .catch(() => null),
     );
     viewer.clear_frames();
     const times = [];
+    const loaded = [];
     // Awaited in order, not with Promise.all: the requests are already all in flight, and waiting
     // for the slowest one before decoding any of them is how the first frame ends up last.
     for (const pending of inflight) {
       const item = await pending;
       if (!item || !viewer.add_frame(item.bytes)) continue;
+      held.set(item.key, item.bytes);
+      loaded.push(item.key);
       times.push(keyTime(item.key));
       // Paint the oldest frame the moment it decodes rather than sitting on a blank map for the
       // length of five more decodes.
@@ -260,6 +298,12 @@ async function loadLoop() {
       await new Promise((r) => setTimeout(r, 0));
     }
     state.times = times;
+    state.keys = loaded;
+    // Anything that slid out of the window, or belongs to the site or product just switched away
+    // from, stops being held — six scans is the whole budget.
+    for (const key of [...held.keys()]) {
+      if (!loaded.includes(key)) held.delete(key);
+    }
     state.frame = Math.max(0, times.length - 1);
     if (ctx) viewer.render(ctx, state.frame);
   } finally {
