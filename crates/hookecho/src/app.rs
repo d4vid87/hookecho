@@ -8717,21 +8717,33 @@ impl HookEchoApp {
             let http = self.http.clone();
             self.spawner.spawn(async move {
                 use wxdata::sites::Network;
+                // Each of these asks its feed what the newest volume is *before* downloading it,
+                // and answers `None` when that is what we are already showing. The NEXRAD path
+                // below has always worked this way — it lists, then compares, then downloads;
+                // these three used to download the whole volume and compare afterwards, which on
+                // DWD meant ~50 requests and ~2 MB discarded on nine polls out of ten.
+                let cur = current_name.as_deref();
                 let fetched = match network {
-                    Network::Dwd => wxdata::dwd::fetch_volume(&http, &site).await,
-                    Network::Opera => wxdata::opera::fetch_volume(&http, &site).await,
+                    Network::Dwd => wxdata::dwd::fetch_volume(&http, &site, cur).await,
+                    Network::Opera => wxdata::opera::fetch_volume(&http, &site, cur).await,
                     Network::Tdwr | Network::Nexrad => {
-                        wxdata::tdwr::fetch_volume(&http, &site).await
+                        wxdata::tdwr::fetch_volume(&http, &site, cur).await
                     }
                 };
                 let msg = match fetched {
-                    Ok((name, _, _)) if current_name.as_deref() == Some(name.as_str()) => {
+                    Ok(None) => DataMsg::UpToDate {
+                        view: view_idx,
+                        site,
+                    },
+                    // A feed that hands back the name we already hold anyway — a probe that could
+                    // not decode, say — is still up to date.
+                    Ok(Some((name, _, _))) if current_name.as_deref() == Some(name.as_str()) => {
                         DataMsg::UpToDate {
                             view: view_idx,
                             site,
                         }
                     }
-                    Ok((name, time, scan)) => DataMsg::Volume {
+                    Ok(Some((name, time, scan))) => DataMsg::Volume {
                         view: view_idx,
                         site,
                         name,

@@ -230,19 +230,40 @@ fn sweep_from(
 pub async fn fetch_volume(
     http: &reqwest::Client,
     id: &str,
-) -> anyhow::Result<(String, DateTime<Utc>, Scan)> {
+    current_name: Option<&str>,
+) -> anyhow::Result<Option<(String, DateTime<Utc>, Scan)>> {
     let meta = site_by_id(id).ok_or_else(|| anyhow::anyhow!("{id} is not a TDWR"))?;
     let short = &meta.id[1..];
     let day = Utc::now().format("%Y_%m_%d").to_string();
 
-    // Six products, twelve round trips. Serially that was most of the wait for a TDWR site;
-    // they're independent, so fetch and decode them all at once.
-    let mut jobs = Vec::new();
-    for (n, (product, gate_len)) in PRODUCTS.iter().enumerate() {
+    // The listings first, on their own. This volume's name *is* the newest contributing key, so
+    // six listings of a few KB each answer "has anything been published since last time?" exactly
+    // — and answering it before the six product bodies is the difference between a poll that
+    // costs a few KB and one that costs megabytes, on a feed that turns over every few minutes.
+    let keys = futures_util::future::join_all(PRODUCTS.iter().map(|(product, _)| {
         let (http, prefix) = (http.clone(), format!("{short}_{product}_{day}"));
+        async move { newest_key(&http, &prefix).await }
+    }))
+    .await;
+    let newest_listed = keys
+        .iter()
+        .flatten()
+        .filter_map(|k| key_time(k).map(|t| (k, t)))
+        .max_by_key(|(_, t)| *t)
+        .map(|(k, _)| k.clone());
+    if newest_listed.is_some() && current_name == newest_listed.as_deref() {
+        crate::stats::bump(crate::stats::Counter::FetchSkipped);
+        return Ok(None);
+    }
+
+    // Six products. Serially that was most of the wait for a TDWR site; they're independent, so
+    // fetch and decode them all at once.
+    let mut jobs = Vec::new();
+    for ((n, (product, gate_len)), key) in PRODUCTS.iter().enumerate().zip(keys) {
+        let http = http.clone();
         let (product, gate_len) = (*product, *gate_len);
         jobs.push(async move {
-            let key = newest_key(&http, &prefix).await?;
+            let key = key?;
             let resp = http
                 .get(crate::net::fetch_url(&format!("{BUCKET}/{key}")))
                 .send()
@@ -309,7 +330,7 @@ pub async fn fetch_volume(
         false,
         Vec::new(),
     );
-    Ok((name, time, Scan::with_site(site, vcp, sweeps)))
+    Ok(Some((name, time, Scan::with_site(site, vcp, sweeps))))
 }
 
 #[cfg(test)]
@@ -340,6 +361,25 @@ mod tests {
         let t = key_time("OKC_TZ0_2026_08_01_17_27_13").unwrap();
         assert_eq!(t.to_rfc3339(), "2026-08-01T17:27:13+00:00");
         assert!(key_time("OKC_TZ0_garbage").is_none());
+    }
+
+    /// The name a TDWR volume is known by is the newest contributing key, and that is exactly
+    /// what the listings hand back — which is what lets six cheap listings decide whether the six
+    /// product bodies are worth fetching at all. This pins the "newest wins" rule that decision
+    /// rests on: keys sort by their embedded timestamp, not lexically and not by product order.
+    #[test]
+    fn the_newest_listed_key_is_the_volume_name() {
+        let keys = [
+            "OKC_TZ0_2026_08_01_17_27_13",
+            "OKC_TV0_2026_08_01_17_28_02",
+            "OKC_TZ1_2026_08_01_17_26_44",
+        ];
+        let newest = keys
+            .iter()
+            .filter_map(|k| key_time(k).map(|t| (*k, t)))
+            .max_by_key(|(_, t)| *t)
+            .map(|(k, _)| k);
+        assert_eq!(newest, Some("OKC_TV0_2026_08_01_17_28_02"));
     }
 
     /// A synthetic tilt product round-trips through the fixed-point packing back to its own dBZ.
@@ -411,7 +451,10 @@ mod tests {
     #[ignore = "network"]
     async fn fetches_a_live_tdwr_volume() {
         let http = reqwest::Client::new();
-        let (name, _time, scan) = fetch_volume(&http, "TOKC").await.expect("TOKC volume");
+        let (name, _time, scan) = fetch_volume(&http, "TOKC", None)
+            .await
+            .expect("TOKC volume")
+            .expect("a fresh fetch is never up to date");
         assert!(name.starts_with("OKC_"), "{name}");
         let tilts = crate::level2::elevation_angles(&scan);
         assert!(!tilts.is_empty(), "at least one tilt");

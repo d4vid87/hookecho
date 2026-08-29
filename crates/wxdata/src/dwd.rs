@@ -210,7 +210,8 @@ pub(crate) fn assemble(mut parts: Vec<(f32, Sweep)>) -> Vec<Sweep> {
 pub async fn fetch_volume(
     http: &reqwest::Client,
     id: &str,
-) -> anyhow::Result<(String, DateTime<Utc>, Scan)> {
+    current_name: Option<&str>,
+) -> anyhow::Result<Option<(String, DateTime<Utc>, Scan)>> {
     let meta = site_by_id(id).ok_or_else(|| anyhow::anyhow!("{id} is not a DWD radar"))?;
     let (slug, wmo) = path_for(id).ok_or_else(|| anyhow::anyhow!("{id} has no DWD path"))?;
 
@@ -230,10 +231,36 @@ pub async fn fetch_volume(
         }
     };
 
+    // Is there anything new? DWD republishes every `-LATEST-` sweep on a five-minute cycle at a
+    // URL that never changes, so there is nothing to list and nothing to compare but the data
+    // itself. The lowest tilt's reflectivity is the cheapest thing that answers: ~190 KB against
+    // the ~2 MB and ~50 requests a whole volume costs, and every file in a volume carries the
+    // same start time, so its stamp names the volume.
+    //
+    // A GET and not a HEAD: the proxies the browser build goes through are GET-only, and a probe
+    // that behaved differently per platform would be a second code path to be wrong in. The bytes
+    // are handed to the sweep job below rather than thrown away, so when the volume *has* moved
+    // on, the probe costs nothing at all.
+    let probe = get(sweep_url(slug, wmo, 0)).await;
+    if let Some((_, bytes)) = &probe {
+        if let Ok((time, _)) = crate::odim::decode(bytes.clone()) {
+            if current_name == Some(volume_name(id, time).as_str()) {
+                crate::stats::bump(crate::stats::Counter::FetchSkipped);
+                return Ok(None);
+            }
+        }
+    }
+    let mut probe = probe;
+
     let jobs = (0..TILTS).map(|tilt| {
         let get = &get;
+        // Tilt 0 was already fetched by the probe above; the rest go over the wire now.
+        let prefetched = (tilt == 0).then(|| probe.take()).flatten();
         async move {
-            let (url, bytes) = get(sweep_url(slug, wmo, tilt)).await?;
+            let (url, bytes) = match prefetched {
+                Some(pair) => pair,
+                None => get(sweep_url(slug, wmo, tilt)).await?,
+            };
             // The stamp has to come off the reflectivity file before anything else is asked for:
             // it is the only name the other moments answer to.
             let stamp = crate::odim::end_stamp(bytes.clone());
@@ -319,13 +346,37 @@ pub async fn fetch_volume(
         false,
         Vec::new(),
     );
-    let name = format!("{id}-{}", time.format("%Y%m%d%H%M%S"));
-    Ok((name, time, Scan::with_site(meta.to_site(), vcp, sweeps)))
+    Ok(Some((
+        volume_name(id, time),
+        time,
+        Scan::with_site(meta.to_site(), vcp, sweeps),
+    )))
+}
+
+/// The name a DWD volume is known by: the site and the volume's start time.
+///
+/// One function because the probe above has to predict exactly what a full fetch would return —
+/// two spellings of this format that drifted apart would mean a volume that never looks up to
+/// date, and a poll that downloads two megabytes every thirty seconds forever.
+fn volume_name(id: &str, time: DateTime<Utc>) -> String {
+    format!("{id}-{}", time.format("%Y%m%d%H%M%S"))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The probe skips a poll by predicting the name a full fetch would return. If the two ever
+    /// spell it differently, every poll downloads a whole volume forever and nothing looks wrong
+    /// — so the format lives in one function, and this is the check that it is the one the caller
+    /// compares against.
+    #[test]
+    fn volume_name_is_the_site_and_the_volume_time() {
+        let t = chrono::DateTime::parse_from_rfc3339("2026-08-29T15:31:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        assert_eq!(volume_name("DEBO", t), "DEBO-20260829153100");
+    }
 
     /// Two real sweeps of Boostedt, saved from the live feed: publication slot 0 is 5.5° and slot
     /// 5 is the 0.5° base tilt, which is the ordering [`assemble`] exists to fix.
@@ -451,11 +502,39 @@ mod tests {
 
     /// The `-LATEST-` symlinks are DWD's convention, not a standard, and they are what makes this
     /// feed pollable at all. Run with `--ignored` when a German site stops updating.
+    /// The point of the probe, against the live feed: a second poll that is already showing the
+    /// newest volume must cost one request instead of ~50, and must say so rather than handing
+    /// back a volume the caller then throws away.
+    #[tokio::test]
+    #[ignore = "network"]
+    async fn a_second_poll_of_an_unchanged_volume_costs_one_request() {
+        let client = reqwest::Client::new();
+        let (name, _, _) = fetch_volume(&client, "DEBO", None)
+            .await
+            .unwrap()
+            .expect("first fetch returns a volume");
+        let before = crate::stats::snapshot();
+        let again = fetch_volume(&client, "DEBO", Some(&name)).await.unwrap();
+        let after = crate::stats::snapshot();
+        let requests = |v: &Vec<(&'static str, u64)>| {
+            v.iter().find(|(l, _)| *l == "net_requests").unwrap().1
+        };
+        assert!(again.is_none(), "unchanged volume should be skipped");
+        assert_eq!(
+            requests(&after) - requests(&before),
+            1,
+            "the probe is one request, not a whole volume"
+        );
+    }
+
     #[tokio::test]
     #[ignore]
     async fn live_dwd_volume_assembles() {
         let client = reqwest::Client::new();
-        let (name, time, scan) = fetch_volume(&client, "DEBO").await.unwrap();
+        let (name, time, scan) = fetch_volume(&client, "DEBO", None)
+            .await
+            .unwrap()
+            .expect("a fresh fetch is never up to date");
         let angles: Vec<f32> = scan
             .sweeps()
             .iter()

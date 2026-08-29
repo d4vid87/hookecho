@@ -171,7 +171,8 @@ fn newest_group<'a>(xml: &'a str, nod: &str) -> Vec<&'a str> {
 pub async fn fetch_volume(
     http: &reqwest::Client,
     id: &str,
-) -> anyhow::Result<(String, DateTime<Utc>, Scan)> {
+    current_name: Option<&str>,
+) -> anyhow::Result<Option<(String, DateTime<Utc>, Scan)>> {
     let meta = site_by_id(id).ok_or_else(|| anyhow::anyhow!("{id} is not an OPERA radar"))?;
     let nod = id.to_ascii_lowercase();
 
@@ -213,7 +214,7 @@ pub async fn fetch_volume(
         anyhow::bail!("no OPERA volume published for {id} in the last two hours");
     }
 
-    let files = futures_util::future::join_all(group.iter().map(|key| {
+    let fetch = |key: String| {
         let http = http.clone();
         let url = format!("{BUCKET}/{key}");
         async move {
@@ -235,13 +236,24 @@ pub async fn fetch_volume(
                 }
             }
         }
-    }))
-    .await;
+    };
 
-    let mut files = files.into_iter().flatten();
-    let (time, base) = files
-        .next()
+    // Reflectivity first, alone, and then ask whether the rest is worth fetching. The key carries
+    // a timestamp, but only to the minute, and the name this returns is built from the decoded
+    // volume time — so comparing keys would be comparing something subtly different from what the
+    // caller holds. Decoding the one object the volume is anchored on answers exactly, and it is
+    // the object every other moment gets folded into, so nothing is wasted when the answer is
+    // "yes, this is new".
+    let (time, base) = fetch(group[0].clone())
+        .await
         .ok_or_else(|| anyhow::anyhow!("no decodable OPERA volume for {id}"))?;
+    if current_name == Some(volume_name(id, time).as_str()) {
+        crate::stats::bump(crate::stats::Counter::FetchSkipped);
+        return Ok(None);
+    }
+
+    let files = futures_util::future::join_all(group[1..].iter().cloned().map(&fetch)).await;
+    let files = files.into_iter().flatten();
     // Every object in the group is the same scan sampled at once, so sweep `i` of one is sweep `i`
     // of the others; a file that disagrees about the scan it describes is dropped rather than
     // smeared across it.
@@ -280,9 +292,8 @@ pub async fn fetch_volume(
         })
         .collect();
 
-    let name = format!("{id}-{}", time.format("%Y%m%d%H%M%S"));
-    Ok((
-        name,
+    Ok(Some((
+        volume_name(id, time),
         time,
         // The decoder already built the pattern-0 placeholder ODIM's free-text scan strategy
         // deserves; there is nothing better to say about it here.
@@ -291,7 +302,13 @@ pub async fn fetch_volume(
             base.coverage_pattern().clone(),
             crate::dwd::assemble(ordered),
         ),
-    ))
+    )))
+}
+
+/// The name an OPERA volume is known by. Same shape as the DWD one and for the same reason: the
+/// probe above has to predict exactly what a full fetch returns.
+fn volume_name(id: &str, time: DateTime<Utc>) -> String {
+    format!("{id}-{}", time.format("%Y%m%d%H%M%S"))
 }
 
 /// The elevation a sweep was cut at, or `NaN` for an empty one — which no decoded sweep is.
@@ -305,6 +322,16 @@ fn angle(sweep: &Sweep) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Same contract as the DWD one: the probe's predicted name and the fetched volume's name are
+    /// the same function, or the "already showing it" comparison never fires.
+    #[test]
+    fn volume_name_is_the_site_and_the_volume_time() {
+        let t = chrono::DateTime::parse_from_rfc3339("2026-08-29T15:31:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        assert_eq!(volume_name("HRBIL", t), "HRBIL-20260829153100");
+    }
 
     const LISTING: &str = "<ListBucketResult>\
         <Contents><Key>2026/08/29/PL/plgsa/PVOL/plgsa@20260829T1531@0.5_1.5@DBZH.h5</Key></Contents>\
@@ -384,7 +411,10 @@ mod tests {
     #[ignore]
     async fn live_opera_volume_assembles() {
         let http = reqwest::Client::new();
-        let (name, _, scan) = fetch_volume(&http, "HRBIL").await.expect("volume");
+        let (name, _, scan) = fetch_volume(&http, "HRBIL", None)
+            .await
+            .expect("volume")
+            .expect("a fresh fetch is never up to date");
         assert!(name.starts_with("HRBIL-"), "{name}");
         assert!(scan.sweeps().len() >= 5, "{} sweeps", scan.sweeps().len());
         let base = &scan.sweeps()[0].radials()[0];
