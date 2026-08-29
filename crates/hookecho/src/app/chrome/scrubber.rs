@@ -30,6 +30,13 @@ impl HookEchoApp {
             format!("\u{b7} {} ago", humanize(secs))
         });
         let loading = self.views[self.active].loading;
+        // TDWR and DWD radars publish no archive, so their timeline is empty by design and stays
+        // live. Saying "(no volumes)" there reads as a failed fetch while a live volume is on
+        // screen; only a site that HAS an archive can be genuinely missing one.
+        let archived = self.views[self.active]
+            .site
+            .as_deref()
+            .is_some_and(wxdata::sites::is_nexrad);
         let mut go_head = false;
         // Soonest rain arrival and the DVR buffer depth ride the pill: both are about time, and
         // both used to sit in an always-on chip in the opposite corner.
@@ -211,8 +218,10 @@ impl HookEchoApp {
                     if observed == 0 {
                         ui.weak(if t.listing {
                             "listing volumes\u{2026}"
-                        } else {
+                        } else if archived {
                             "(no volumes)"
+                        } else {
+                            "live only"
                         });
                     } else {
                         let readout = match t.forecast_hour() {
