@@ -241,15 +241,15 @@ pub async fn fetch_volume(
     // that behaved differently per platform would be a second code path to be wrong in. The bytes
     // are handed to the sweep job below rather than thrown away, so when the volume *has* moved
     // on, the probe costs nothing at all.
-    let probe = get(sweep_url(slug, wmo, 0)).await;
-    if let Some((_, bytes)) = &probe {
-        if let Ok((time, _)) = crate::odim::decode(bytes.clone()) {
-            if current_name == Some(volume_name(id, time).as_str()) {
-                crate::stats::bump(crate::stats::Counter::FetchSkipped);
-                return Ok(None);
-            }
+    let probe_url = sweep_url(slug, wmo, 0);
+    let probe = match probe_sweep(http, &probe_url, id, current_name).await {
+        Probe::UpToDate => {
+            crate::stats::bump(crate::stats::Counter::FetchSkipped);
+            return Ok(None);
         }
-    }
+        Probe::Fresh(bytes) => Some((probe_url, bytes)),
+        Probe::Unreadable => None,
+    };
     let mut probe = probe;
 
     let jobs = (0..TILTS).map(|tilt| {
@@ -351,6 +351,97 @@ pub async fn fetch_volume(
         time,
         Scan::with_site(meta.to_site(), vcp, sweeps),
     )))
+}
+
+/// What the probe learned about the newest volume.
+enum Probe {
+    /// The feed still holds the volume the caller is already showing.
+    UpToDate,
+    /// A newer volume — here are the reflectivity bytes for its lowest tilt, already paid for.
+    Fresh(Vec<u8>),
+    /// The probe could not be fetched or could not be decoded. Not an answer; carry on and let
+    /// the full fetch report whatever is really wrong.
+    Unreadable,
+}
+
+/// Ask the feed whether the volume has moved on, as cheaply as it can be asked.
+///
+/// Two layers, and the second is why the first is safe. `opendata.dwd.de` honours both `ETag` and
+/// `If-Modified-Since` on these files, so an unchanged poll can be a header exchange with no body
+/// at all — but a 304 says only "this file has not changed since *you* last read it", which means
+/// "you are up to date" only if what the caller holds is what that read produced. So the volume
+/// name is remembered next to the validators and checked against the caller's; when they disagree
+/// the request is reissued unconditionally, which is exactly the behaviour of not having the
+/// store at all.
+///
+/// Without a 304 the probe still pays for one ~190 KB file rather than a ~2 MB volume, and those
+/// bytes are handed back to be used as the tilt-0 sweep.
+async fn probe_sweep(
+    http: &reqwest::Client,
+    url: &str,
+    id: &str,
+    current_name: Option<&str>,
+) -> Probe {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        // Only ever conditional when the caller has something to be up to date *with*.
+        if current_name.is_some() {
+            let remembered = crate::net::validators::get(url);
+            let req = crate::net::validators::apply(http.get(crate::net::fetch_url(url)), url);
+            if let Ok(resp) = req.send().await {
+                if resp.status() == reqwest::StatusCode::NOT_MODIFIED {
+                    crate::stats::bump(crate::stats::Counter::NetNotModified);
+                    crate::stats::net(0);
+                    // The file is unchanged; is it the volume the caller holds?
+                    if remembered.and_then(|e| e.tag).as_deref() == current_name {
+                        return Probe::UpToDate;
+                    }
+                    // It is not — fall through and fetch it for real, unconditionally.
+                } else if resp.status().is_success() {
+                    return finish_probe(url, id, current_name, resp).await;
+                } else {
+                    return Probe::Unreadable;
+                }
+            } else {
+                return Probe::Unreadable;
+            }
+        }
+    }
+    match http.get(crate::net::fetch_url(url)).send().await {
+        Ok(resp) if resp.status().is_success() => finish_probe(url, id, current_name, resp).await,
+        _ => Probe::Unreadable,
+    }
+}
+
+/// Read a probe response's body, remember its validators against the volume it turned out to be,
+/// and say whether the caller already has that volume.
+async fn finish_probe(
+    url: &str,
+    id: &str,
+    current_name: Option<&str>,
+    resp: reqwest::Response,
+) -> Probe {
+    #[cfg(not(target_arch = "wasm32"))]
+    let validators = (resp.headers().clone(), url.to_string());
+    let Ok(bytes) = resp.bytes().await else {
+        return Probe::Unreadable;
+    };
+    crate::stats::net(bytes.len());
+    let bytes = bytes.to_vec();
+    let Ok((time, _)) = crate::odim::decode(bytes.clone()) else {
+        return Probe::Unreadable;
+    };
+    let name = volume_name(id, time);
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let (headers, url) = validators;
+        crate::net::validators::remember_headers(&url, &headers, Some(name.clone()));
+    }
+    let _ = url;
+    if current_name == Some(name.as_str()) {
+        return Probe::UpToDate;
+    }
+    Probe::Fresh(bytes)
 }
 
 /// The name a DWD volume is known by: the site and the volume's start time.
@@ -504,7 +595,8 @@ mod tests {
     /// feed pollable at all. Run with `--ignored` when a German site stops updating.
     /// The point of the probe, against the live feed: a second poll that is already showing the
     /// newest volume must cost one request instead of ~50, and must say so rather than handing
-    /// back a volume the caller then throws away.
+    /// back a volume the caller then throws away. With validators remembered from the first
+    /// fetch, that one request carries no body at all.
     #[tokio::test]
     #[ignore = "network"]
     async fn a_second_poll_of_an_unchanged_volume_costs_one_request() {
@@ -519,11 +611,18 @@ mod tests {
         let requests = |v: &Vec<(&'static str, u64)>| {
             v.iter().find(|(l, _)| *l == "net_requests").unwrap().1
         };
+        let bytes =
+            |v: &Vec<(&'static str, u64)>| v.iter().find(|(l, _)| *l == "net_bytes").unwrap().1;
         assert!(again.is_none(), "unchanged volume should be skipped");
         assert_eq!(
             requests(&after) - requests(&before),
             1,
             "the probe is one request, not a whole volume"
+        );
+        assert_eq!(
+            bytes(&after) - bytes(&before),
+            0,
+            "an unchanged probe is answered 304, with no body"
         );
     }
 
