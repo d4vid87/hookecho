@@ -192,14 +192,11 @@ const sections = [
     transition: border-color var(--dur-2) ease, color var(--dur-2) ease;
   }
   .jump a:hover { border-color: var(--accent); color: var(--text); }
-  .copy .eyebrow {
-    background: var(--ramp-cool);
-    -webkit-background-clip: text;
-    background-clip: text;
-    color: var(--ramp-1);
-    -webkit-text-fill-color: transparent;
-  }
-  .alt .copy .eyebrow { background: var(--ramp-hot); color: var(--ramp-3); }
+  /* Solid rather than gradient-clipped text: these rows fade in on reveal, and Chromium
+     leaves a clipped gradient unpainted in the composited layer that fade creates — the
+     eyebrow comes out as transparent glyphs. Same fix as the landing page's big number. */
+  .copy .eyebrow { color: var(--ramp-1); }
+  .alt .copy .eyebrow { color: var(--ramp-3); }
 
   /* Anchored sections land under the sticky header without this. */
   section[id] { scroll-margin-top: 4.5rem; }
