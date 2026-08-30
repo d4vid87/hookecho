@@ -59,10 +59,11 @@ import Icon from "./Icon.astro";
           loop.src = `https://img.hookecho.io/loop.gif?site=${site.id}&t=${t}`;
           loop.hidden = false;
         } else {
-          clip.addEventListener("loadeddata", () => {
-            clip.hidden = false;
-            loop.hidden = true;
-          });
+          // The poster is the current still, already rendered and cached, so the card shows this
+          // radar straight away rather than an empty box while a cold /loop.mp4 spends its twenty
+          // seconds rendering six frames.
+          clip.poster = `https://img.hookecho.io/snapshot.png?site=${site.id}&t=${t}`;
+          clip.hidden = false;
           clip.addEventListener(
             "error",
             () => {
@@ -102,6 +103,10 @@ import Icon from "./Icon.astro";
   .storm .eyebrow { display: inline-flex; align-items: center; gap: 0.4rem; margin: 0; }
   .storm h3 { margin: 0; }
   .sub { color: var(--text-dim); font-size: var(--text-sm); margin: 0; }
+  /* Author `display: block` beats the browser's `[hidden] { display: none }`, so without this
+     the hidden element of the pair is still painted: a black video box, or the image's alt text
+     in an empty frame. */
+  .loop[hidden] { display: none; }
   .loop {
     display: block;
     width: 100%;
