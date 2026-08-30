@@ -41,17 +41,20 @@ fn extras() -> bool {
 }
 
 /// Ask for a different output size (256..=2048 px) and/or zoom for the renders that follow.
-/// `None` leaves that knob where it was.
+///
+/// `px: None` leaves the size where it was, but **`zoom: None` clears the override** rather than
+/// leaving it: the caller is saying "frame this the way the site deserves", and on a server the
+/// previous caller was somebody else's request. The national mosaic asks for a continental zoom
+/// every four minutes, and a sticky override handed that framing to every site snapshot after it
+/// — a radar page showing the whole continent with a `KFWS · REF 0.5°` caption on it.
 pub fn set_output(px: Option<u32>, zoom: Option<f64>) {
     if let Some(px) = px {
         SIZE_PX.store(px.clamp(256, 2048), std::sync::atomic::Ordering::Relaxed);
     }
-    if let Some(z) = zoom {
-        ZOOM_OVERRIDE.store(
-            z.clamp(1.0, 14.0).to_bits(),
-            std::sync::atomic::Ordering::Relaxed,
-        );
-    }
+    ZOOM_OVERRIDE.store(
+        zoom.map_or(u64::MAX, |z| z.clamp(1.0, 14.0).to_bits()),
+        std::sync::atomic::Ordering::Relaxed,
+    );
 }
 
 /// `HOOKECHO_CAM=lon,lat,zoom` overrides any headless camera — framing knob for screenshots.
