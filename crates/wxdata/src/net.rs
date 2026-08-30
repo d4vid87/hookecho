@@ -102,9 +102,7 @@ pub mod validators {
     fn store() -> &'static Mutex<lru::LruCache<String, Entry>> {
         static STORE: std::sync::OnceLock<Mutex<lru::LruCache<String, Entry>>> =
             std::sync::OnceLock::new();
-        STORE.get_or_init(|| {
-            Mutex::new(lru::LruCache::new(NonZeroUsize::new(256).unwrap()))
-        })
+        STORE.get_or_init(|| Mutex::new(lru::LruCache::new(NonZeroUsize::new(256).unwrap())))
     }
 
     /// What is remembered for `url`, if anything.
@@ -153,7 +151,6 @@ pub mod validators {
             }
         }
     }
-
 }
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
@@ -181,12 +178,18 @@ mod validator_tests {
         let url = "https://example.invalid/one";
         validators::remember_headers(
             url,
-            &headers(&[("etag", "\"abc\""), ("last-modified", "Sat, 29 Aug 2026 10:00:00 GMT")]),
+            &headers(&[
+                ("etag", "\"abc\""),
+                ("last-modified", "Sat, 29 Aug 2026 10:00:00 GMT"),
+            ]),
             Some("VOL-1".into()),
         );
         let e = validators::get(url).expect("remembered");
         assert_eq!(e.etag.as_deref(), Some("\"abc\""));
-        assert_eq!(e.last_modified.as_deref(), Some("Sat, 29 Aug 2026 10:00:00 GMT"));
+        assert_eq!(
+            e.last_modified.as_deref(),
+            Some("Sat, 29 Aug 2026 10:00:00 GMT")
+        );
         assert_eq!(e.tag.as_deref(), Some("VOL-1"));
     }
 
@@ -214,7 +217,10 @@ mod validator_tests {
             "https://example.invalid/three",
         );
         let built = req.build().unwrap();
-        assert!(built.headers().get(reqwest::header::IF_NONE_MATCH).is_none());
+        assert!(built
+            .headers()
+            .get(reqwest::header::IF_NONE_MATCH)
+            .is_none());
         assert!(built
             .headers()
             .get(reqwest::header::IF_MODIFIED_SINCE)

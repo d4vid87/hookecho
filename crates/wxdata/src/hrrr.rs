@@ -455,10 +455,8 @@ async fn fetch_run_field(
         .await?;
 
     // gribberish can panic on some packings; contain it (see mrms::fetch_latest).
-    crate::task::guarded(|| {
-        decode_regrid(&bytes, model, min_valid)
-    })
-    .unwrap_or_else(|_| anyhow::bail!("{} grib decode panicked", model.label()))
+    crate::task::guarded(|| decode_regrid(&bytes, model, min_valid))
+        .unwrap_or_else(|_| anyhow::bail!("{} grib decode panicked", model.label()))
 }
 
 /// Find the `[start, end)` byte range of the message matching `var` (field 3) and `level`

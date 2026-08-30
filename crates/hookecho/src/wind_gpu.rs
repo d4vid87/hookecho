@@ -727,7 +727,10 @@ mod tests {
         let mut out = Vec::with_capacity((SIDE * SIDE) as usize);
         for row in 0..SIDE {
             let start = (row * padded) as usize;
-            for px in mapped[start..start + (SIDE * 4) as usize].as_chunks::<4>().0 {
+            for px in mapped[start..start + (SIDE * 4) as usize]
+                .as_chunks::<4>()
+                .0
+            {
                 out.push((
                     px[0] as f32 / 255.0 + px[1] as f32 / 255.0 / 255.0,
                     px[2] as f32 / 255.0 + px[3] as f32 / 255.0 / 255.0,

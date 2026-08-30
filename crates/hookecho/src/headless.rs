@@ -165,9 +165,8 @@ fn cached_warnings(
     rt: &tokio::runtime::Runtime,
     client: &reqwest::Client,
 ) -> Option<Vec<wxdata::overlay::GeoFeature>> {
-    static CACHE: std::sync::Mutex<
-        Option<(std::time::Instant, Vec<wxdata::overlay::GeoFeature>)>,
-    > = std::sync::Mutex::new(None);
+    static CACHE: std::sync::Mutex<Option<(std::time::Instant, Vec<wxdata::overlay::GeoFeature>)>> =
+        std::sync::Mutex::new(None);
     let mut slot = CACHE.lock().unwrap_or_else(|e| e.into_inner());
     if let Some((at, warned)) = slot.as_ref() {
         if at.elapsed() < WARNING_TTL {
@@ -221,8 +220,7 @@ fn screen_labels(
     cities
         .iter()
         .map(|l| {
-            let (x, y) =
-                camera.world_to_screen((l.world[0] as f64, l.world[1] as f64), vp);
+            let (x, y) = camera.world_to_screen((l.world[0] as f64, l.world[1] as f64), vp);
             (x, y, l.name.clone())
         })
         .filter(|(x, y, _)| *x > 0.0 && *y > 0.0 && *x < vp.0 && *y < vp.1)
@@ -458,6 +456,7 @@ pub fn run(
         field_draws: Vec::new(),
         clear_tiles: false,
         drop_tiles: Vec::new(),
+        drop_fields: Vec::new(),
         new_vector_tiles,
         visible_vector,
         clear_vector: false,
@@ -512,6 +511,7 @@ pub fn run_multipane(site: &str, out_a: &str, out_b: &str) -> anyhow::Result<()>
             field_draws: Vec::new(),
             clear_tiles: false,
             drop_tiles: Vec::new(),
+            drop_fields: Vec::new(),
             new_vector_tiles: Vec::new(),
             visible_vector: Vec::new(),
             clear_vector: false,
@@ -1176,6 +1176,7 @@ pub fn run_live(out_path: &str, site: &str, moment: Moment) -> anyhow::Result<()
         field_draws: Vec::new(),
         clear_tiles: false,
         drop_tiles: Vec::new(),
+        drop_fields: Vec::new(),
         new_vector_tiles: Vec::new(),
         visible_vector: Vec::new(),
         clear_vector: false,
@@ -1260,6 +1261,7 @@ pub fn run_placefile(path: &str, out_path: &str) -> anyhow::Result<()> {
         field_draws: Vec::new(),
         clear_tiles: false,
         drop_tiles: Vec::new(),
+        drop_fields: Vec::new(),
         new_vector_tiles: Vec::new(),
         visible_vector: Vec::new(),
         clear_vector: false,
@@ -1292,7 +1294,8 @@ pub fn run_overlay(out_path: &str) -> anyhow::Result<()> {
 
     let zoom = 4.0;
     let camera = cam_or_env(-97.0, 38.0, zoom); // CONUS center
-    let (new_tiles, visible, new_vector_tiles, visible_vector, _place_labels) = national_basemap(&rt, &camera);
+    let (new_tiles, visible, new_vector_tiles, visible_vector, _place_labels) =
+        national_basemap(&rt, &camera);
     let geom = overlay_build::build(&features, zoom);
     println!(
         "tessellated {} verts / {} indices",
@@ -1320,6 +1323,7 @@ pub fn run_overlay(out_path: &str) -> anyhow::Result<()> {
         field_draws: Vec::new(),
         clear_tiles: false,
         drop_tiles: Vec::new(),
+        drop_fields: Vec::new(),
         new_vector_tiles,
         visible_vector,
         clear_vector: false,
@@ -1438,6 +1442,7 @@ pub fn run_mrms(out_path: &str) -> anyhow::Result<()> {
         field_draws: vec![(crate::render::FieldLayer::Mrms, 1.0)],
         clear_tiles: false,
         drop_tiles: Vec::new(),
+        drop_fields: Vec::new(),
         new_vector_tiles,
         visible_vector,
         clear_vector: false,
@@ -1475,7 +1480,8 @@ pub fn run_lightning(out_path: &str) -> anyhow::Result<()> {
 
     let upload = crate::app::lightning_upload(&field);
     let camera = cam_or_env(-97.0, 38.0, 4.0);
-    let (new_tiles, visible, new_vector_tiles, visible_vector, _place_labels) = national_basemap(&rt, &camera);
+    let (new_tiles, visible, new_vector_tiles, visible_vector, _place_labels) =
+        national_basemap(&rt, &camera);
     let (center, scale) = camera.world_to_clip_uniform((size() as f32, size() as f32));
     let cb = MapCallback {
         pane: 0,
@@ -1493,6 +1499,7 @@ pub fn run_lightning(out_path: &str) -> anyhow::Result<()> {
         field_draws: vec![(crate::render::FieldLayer::Lightning, 1.0)],
         clear_tiles: false,
         drop_tiles: Vec::new(),
+        drop_fields: Vec::new(),
         new_vector_tiles,
         visible_vector,
         clear_vector: false,
@@ -1546,7 +1553,8 @@ pub fn run_field(slug: &str, out_path: &str) -> anyhow::Result<()> {
     let field = field.decimated(8192); // fit oversized (14000×7000) rotation/AzShear grids
     let upload = crate::app::field_upload_indexed(layer, &field);
     let camera = cam_or_env(-97.0, 38.0, 4.0);
-    let (new_tiles, visible, new_vector_tiles, visible_vector, _place_labels) = national_basemap(&rt, &camera);
+    let (new_tiles, visible, new_vector_tiles, visible_vector, _place_labels) =
+        national_basemap(&rt, &camera);
     let (center, scale) = camera.world_to_clip_uniform((size() as f32, size() as f32));
     let cb = MapCallback {
         pane: 0,
@@ -1564,6 +1572,7 @@ pub fn run_field(slug: &str, out_path: &str) -> anyhow::Result<()> {
         field_draws: vec![(layer, 1.0)],
         clear_tiles: false,
         drop_tiles: Vec::new(),
+        drop_fields: Vec::new(),
         new_vector_tiles,
         visible_vector,
         clear_vector: false,
@@ -1645,7 +1654,8 @@ pub fn run_global(model: &str, slug: &str, out_path: &str) -> anyhow::Result<()>
 
     let upload = crate::app::field_upload_indexed(layer, &field);
     let camera = cam_or_env(0.0, 20.0, 2.0);
-    let (new_tiles, visible, new_vector_tiles, visible_vector, _place_labels) = national_basemap(&rt, &camera);
+    let (new_tiles, visible, new_vector_tiles, visible_vector, _place_labels) =
+        national_basemap(&rt, &camera);
     let (center, scale) = camera.world_to_clip_uniform((size() as f32, size() as f32));
     let cb = MapCallback {
         pane: 0,
@@ -1663,6 +1673,7 @@ pub fn run_global(model: &str, slug: &str, out_path: &str) -> anyhow::Result<()>
         field_draws: vec![(layer, 1.0)],
         clear_tiles: false,
         drop_tiles: Vec::new(),
+        drop_fields: Vec::new(),
         new_vector_tiles,
         visible_vector,
         clear_vector: false,
@@ -1759,7 +1770,8 @@ pub fn run_diff(slug: &str, out_path: &str) -> anyhow::Result<()> {
         crate::fielddiff::diverging_lut(range, deadband),
     );
     let camera = cam_or_env(-97.0, 38.0, 4.0);
-    let (new_tiles, visible, new_vector_tiles, visible_vector, _place_labels) = national_basemap(&rt, &camera);
+    let (new_tiles, visible, new_vector_tiles, visible_vector, _place_labels) =
+        national_basemap(&rt, &camera);
     let (center, scale) = camera.world_to_clip_uniform((size() as f32, size() as f32));
     let cb = MapCallback {
         pane: 0,
@@ -1777,6 +1789,7 @@ pub fn run_diff(slug: &str, out_path: &str) -> anyhow::Result<()> {
         field_draws: vec![(FL::ModelDiff, 1.0)],
         clear_tiles: false,
         drop_tiles: Vec::new(),
+        drop_fields: Vec::new(),
         new_vector_tiles,
         visible_vector,
         clear_vector: false,
@@ -2078,7 +2091,8 @@ pub fn run_l3grid(kind: &str, site: &str, out_path: &str) -> anyhow::Result<()> 
     );
     let upload = crate::app::field_upload_indexed(layer, &field);
     let camera = cam_or_env(clon, clat, 7.0);
-    let (new_tiles, visible, new_vector_tiles, visible_vector, _place_labels) = national_basemap(&rt, &camera);
+    let (new_tiles, visible, new_vector_tiles, visible_vector, _place_labels) =
+        national_basemap(&rt, &camera);
     let (center, scale) = camera.world_to_clip_uniform((size() as f32, size() as f32));
     let cb = MapCallback {
         pane: 0,
@@ -2096,6 +2110,7 @@ pub fn run_l3grid(kind: &str, site: &str, out_path: &str) -> anyhow::Result<()> 
         field_draws: vec![(layer, 1.0)],
         clear_tiles: false,
         drop_tiles: Vec::new(),
+        drop_fields: Vec::new(),
         new_vector_tiles,
         visible_vector,
         clear_vector: false,
@@ -2151,7 +2166,8 @@ pub fn run_env(slug: &str, out_path: &str) -> anyhow::Result<()> {
 
     let upload = crate::app::field_upload_indexed(layer, f);
     let camera = cam_or_env(-97.0, 38.0, 4.0);
-    let (new_tiles, visible, new_vector_tiles, visible_vector, _place_labels) = national_basemap(&rt, &camera);
+    let (new_tiles, visible, new_vector_tiles, visible_vector, _place_labels) =
+        national_basemap(&rt, &camera);
     let (center, scale) = camera.world_to_clip_uniform((size() as f32, size() as f32));
     let cb = MapCallback {
         pane: 0,
@@ -2169,6 +2185,7 @@ pub fn run_env(slug: &str, out_path: &str) -> anyhow::Result<()> {
         field_draws: vec![(layer, 1.0)],
         clear_tiles: false,
         drop_tiles: Vec::new(),
+        drop_fields: Vec::new(),
         new_vector_tiles,
         visible_vector,
         clear_vector: false,
@@ -2333,7 +2350,8 @@ pub fn run_hrrr_layer(
         lut: crate::colormap::bake_lut(table, (vmin, vspan_max), None).to_vec(),
     };
     let camera = cam_or_env(-97.0, 38.0, 4.0);
-    let (new_tiles, visible, new_vector_tiles, visible_vector, _place_labels) = national_basemap(&rt, &camera);
+    let (new_tiles, visible, new_vector_tiles, visible_vector, _place_labels) =
+        national_basemap(&rt, &camera);
     let (center, scale) = camera.world_to_clip_uniform((size() as f32, size() as f32));
     let cb = MapCallback {
         pane: 0,
@@ -2351,6 +2369,7 @@ pub fn run_hrrr_layer(
         field_draws: vec![(FieldLayer::Hrrr, 1.0)],
         clear_tiles: false,
         drop_tiles: Vec::new(),
+        drop_fields: Vec::new(),
         new_vector_tiles,
         visible_vector,
         clear_vector: false,
@@ -2369,7 +2388,8 @@ fn render_field_png(
     out_path: &str,
 ) -> anyhow::Result<()> {
     let camera = cam_or_env(-97.0, 38.0, 4.0);
-    let (new_tiles, visible, new_vector_tiles, visible_vector, _place_labels) = national_basemap(rt, &camera);
+    let (new_tiles, visible, new_vector_tiles, visible_vector, _place_labels) =
+        national_basemap(rt, &camera);
     let (center, scale) = camera.world_to_clip_uniform((size() as f32, size() as f32));
     let cb = MapCallback {
         pane: 0,
@@ -2387,6 +2407,7 @@ fn render_field_png(
         field_draws: vec![(layer, 1.0)],
         clear_tiles: false,
         drop_tiles: Vec::new(),
+        drop_fields: Vec::new(),
         new_vector_tiles,
         visible_vector,
         clear_vector: false,
@@ -3162,6 +3183,7 @@ mod golden_tests {
                 field_draws: Vec::new(),
                 clear_tiles: false,
                 drop_tiles: Vec::new(),
+                drop_fields: Vec::new(),
                 new_vector_tiles: Vec::new(),
                 visible_vector: Vec::new(),
                 clear_vector: false,
@@ -3211,6 +3233,7 @@ mod golden_tests {
             field_draws: Vec::new(),
             clear_tiles: false,
             drop_tiles: Vec::new(),
+            drop_fields: Vec::new(),
             new_vector_tiles: Vec::new(),
             visible_vector: Vec::new(),
             clear_vector: false,
