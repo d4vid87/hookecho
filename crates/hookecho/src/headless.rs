@@ -210,6 +210,13 @@ fn screen_labels(
 ) -> Vec<(f32, f32, String)> {
     let mut cities: Vec<_> = labels.iter().filter(|l| l.city).collect();
     cities.sort_by_key(|l| l.rank);
+    // One name, one label. A place sits in every tile that overlaps it, and a frame covers
+    // dozens of tiles, so the same city arrives many times over — and since they are all at the
+    // same pixel, the copies collided with each other and ate the budget. Dallas, Houston and
+    // Oklahoma City were the only names surviving on a frame that had five thousand labels to
+    // choose from.
+    let mut seen = std::collections::HashSet::new();
+    cities.retain(|l| seen.insert(l.name.clone()));
     cities
         .iter()
         .map(|l| {
@@ -218,7 +225,7 @@ fn screen_labels(
             (x, y, l.name.clone())
         })
         .filter(|(x, y, _)| *x > 0.0 && *y > 0.0 && *x < vp.0 && *y < vp.1)
-        .take(10)
+        .take(25)
         .collect()
 }
 
