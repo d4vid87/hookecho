@@ -1485,6 +1485,10 @@ struct LoopExport {
 }
 
 /// A placefile the app has fetched and is tracking (mirrors a `PlacefileConfig` by URL).
+/// What the memoised placefile labels depend on: (placefile item/enabled/icon fingerprint,
+/// minute, view range in nmi).
+type PlaceLabelKey = (usize, i64, i32);
+
 struct LoadedPlacefile {
     /// A URL, or the synthetic `plugin:<name>` key for a plugin-produced overlay.
     url: String,
@@ -2093,6 +2097,8 @@ pub struct HookEchoApp {
     paste_target: Option<egui::Id>,
     /// Loaded placefile overlays (reconciled from `settings.placefiles` by URL).
     placefiles: Vec<LoadedPlacefile>,
+    /// [`App::placefile_labels`] memoised, keyed by [`PlaceLabelKey`].
+    placefile_label_cache: Option<(PlaceLabelKey, std::sync::Arc<[PlaceLabel]>)>,
     placefile_window: ui::placefile_window::PlacefileWindow,
     /// Last map viewport size (px), used to estimate the view range for placefile thresholds.
     last_viewport: (f32, f32),
@@ -2968,6 +2974,7 @@ impl HookEchoApp {
             pending_paste: None,
             paste_target: None,
             placefiles: Vec::new(),
+            placefile_label_cache: None,
             placefile_window: Default::default(),
             last_viewport: (1000.0, 800.0),
             tool: MapTool::default(),
@@ -8576,6 +8583,36 @@ impl HookEchoApp {
                         .map(move |it| (it, opacity, li))
                 })
         })
+    }
+
+    /// [`Self::placefile_labels`] memoised for the frame's inputs — it deep-clones every item's
+    /// strings, and ran once per frame over every enabled placefile.
+    fn placefile_labels_cached(&mut self) -> std::sync::Arc<[PlaceLabel]> {
+        // Time is in the inputs because items have on/off windows and thresholds; a minute's
+        // granularity is finer than any placefile's own cadence.
+        let fingerprint: usize = self
+            .placefiles
+            .iter()
+            .map(|p| p.pf.items.len() + usize::from(p.enabled))
+            .sum::<usize>()
+            + self.pf_icon_tex.len();
+        let key = (
+            fingerprint,
+            chrono::Utc::now().timestamp() / 60,
+            self.view_range_nmi() as i32,
+        );
+        if self
+            .placefile_label_cache
+            .as_ref()
+            .is_none_or(|(k, _)| *k != key)
+        {
+            let labels: std::sync::Arc<[PlaceLabel]> = self.placefile_labels().into();
+            self.placefile_label_cache = Some((key, labels));
+        }
+        self.placefile_label_cache
+            .as_ref()
+            .map(|(_, l)| l.clone())
+            .unwrap_or_else(|| Vec::new().into())
     }
 
     /// Owned labels/markers for the visible placefile items (drawn by the egui painter).
@@ -15030,7 +15067,10 @@ impl eframe::App for HookEchoApp {
             // vector basemap) every frame instead of sitting idle. Measured on an S24 Ultra:
             // 7% CPU idle, 78% animating at 20 fps, so the cadence is the battery knob. 10 fps on
             // a phone reads fine because the trail is itself the motion blur.
-            if crate::platform::activity::is_active() {
+            // An unfocused window animating particles nobody is looking at is the whole cost
+            // for none of the value; the idle heartbeat carries it until focus returns, and the
+            // `wind_dt` clamp above absorbs the jump.
+            if crate::platform::activity::is_active() && ctx.input(|i| i.focused) {
                 let ms = if cfg!(target_os = "android") { 100 } else { 33 };
                 ctx.request_repaint_after(std::time::Duration::from_millis(ms));
             }
@@ -16130,7 +16170,7 @@ impl eframe::App for HookEchoApp {
                 });
         }
 
-        let placefile_labels = self.placefile_labels();
+        let placefile_labels = self.placefile_labels_cached();
         // One occupancy set for the whole frame, across every pane and every label layer. Panes
         // occupy disjoint screen rects, so sharing it between them costs nothing and saves
         // resetting it per pane.
