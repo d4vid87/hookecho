@@ -1,7 +1,11 @@
 ---
 // Storm of the day: whichever radar is watching the most active weather in the country, with its
-// live RIDGE loop and a way straight into it. Same ranking as the hero — activeSite() memoizes
-// the query, so this costs no extra request.
+// live loop and a way straight into it. Same ranking as the hero — activeSite() memoizes the
+// query, so this costs no extra request.
+//
+// The loop is our own render (img.hookecho.io), warnings and caption included; the NWS's RIDGE
+// GIF is the one-shot fallback, which always exists here because activeSite() only ever returns
+// WSR-88Ds.
 import Icon from "./Icon.astro";
 ---
 
@@ -34,7 +38,17 @@ import Icon from "./Icon.astro";
           : `${site.id} · quiet right now, so here is the radar nearest you.`;
 
         const loop = card.querySelector<HTMLImageElement>(".loop")!;
-        loop.src = `https://radar.weather.gov/ridge/standard/${site.id}_loop.gif`;
+        loop.addEventListener(
+          "error",
+          () => {
+            loop.src = `https://radar.weather.gov/ridge/standard/${site.id}_loop.gif`;
+          },
+          { once: true },
+        );
+        // Quantized to five minutes: every visitor in a window asks for the same URL, so the
+        // second one is an edge hit rather than another render.
+        const t = Math.floor(Date.now() / (5 * 60 * 1000));
+        loop.src = `https://img.hookecho.io/loop.gif?site=${site.id}&t=${t}`;
         loop.alt = `Live radar loop from ${site.id}, ${site.city}, ${site.state}`;
         loop.hidden = false;
 
