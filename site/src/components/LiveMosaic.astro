@@ -115,6 +115,10 @@ const everyMs = 5 * 60 * 1000;
 
 <style>
   .mosaic { margin: 0; }
+  /* Same trap as the storm card: this `display: block` outranks the browser's
+     `[hidden] { display: none }`, and the pair takes turns being hidden. */
+  .mosaic img[hidden],
+  .mosaic video[hidden] { display: none; }
   .mosaic img,
   .mosaic video {
     display: block;
