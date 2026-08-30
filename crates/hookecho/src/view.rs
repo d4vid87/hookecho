@@ -387,23 +387,43 @@ mod tests {
 
         view.show_volume(scan_at(&[0.5, 1.5]), "a".into(), now);
         let before = binned();
-        view.volume.as_mut().unwrap().binned(Moment::Reflectivity, 0, false).unwrap();
+        view.volume
+            .as_mut()
+            .unwrap()
+            .binned(Moment::Reflectivity, 0, false)
+            .unwrap();
         assert_eq!(binned() - before, 1, "the first look has to do the work");
 
         // The playhead moves on, then comes back round.
         view.show_volume(scan_at(&[0.5, 1.5]), "b".into(), now);
-        view.volume.as_mut().unwrap().binned(Moment::Reflectivity, 0, false).unwrap();
+        view.volume
+            .as_mut()
+            .unwrap()
+            .binned(Moment::Reflectivity, 0, false)
+            .unwrap();
         let after_b = binned();
         view.show_volume(scan_at(&[0.5, 1.5]), "a".into(), now);
         assert_eq!(view.volume.as_ref().unwrap().name, "a");
-        view.volume.as_mut().unwrap().binned(Moment::Reflectivity, 0, false).unwrap();
-        assert_eq!(binned(), after_b, "the second lap re-binned a sweep it already had");
+        view.volume
+            .as_mut()
+            .unwrap()
+            .binned(Moment::Reflectivity, 0, false)
+            .unwrap();
+        assert_eq!(
+            binned(),
+            after_b,
+            "the second lap re-binned a sweep it already had"
+        );
 
         // A site change is a different piece of sky: nothing kept is worth keeping.
         view.forget_recent();
         view.show_volume(scan_at(&[0.5, 1.5]), "b".into(), now);
         let before = binned();
-        view.volume.as_mut().unwrap().binned(Moment::Reflectivity, 0, false).unwrap();
+        view.volume
+            .as_mut()
+            .unwrap()
+            .binned(Moment::Reflectivity, 0, false)
+            .unwrap();
         assert_eq!(binned() - before, 1);
 
         // A volume still being written must never be kept: half its tilts may not have arrived,
@@ -434,7 +454,11 @@ mod tests {
                 vol.binned(Moment::Reflectivity, 0, false).unwrap();
             }
         }
-        assert_eq!(binned() - before, 30, "the old path re-bins every frame, every lap");
+        assert_eq!(
+            binned() - before,
+            30,
+            "the old path re-bins every frame, every lap"
+        );
 
         let mut view = MapView::new(
             Some("KTLX".into()),

@@ -141,6 +141,31 @@ pub fn run(
     };
 
     let sweep = rt.block_on(async {
+        // Only NEXRAD has a volume archive to scrub; every other network publishes its current
+        // volume and nothing else. Saying so is better than quietly rendering "now" for a request
+        // that asked for last Tuesday.
+        if !wxdata::sites::is_nexrad(site) && (date.is_some() || hhmm.is_some()) {
+            anyhow::bail!("{site} has no volume archive — only the current scan is available");
+        }
+        // The live path for those networks: one call assembles the newest volume from the site's
+        // own files, and it feeds the same binner the Level 2 path uses.
+        if !wxdata::sites::is_nexrad(site) {
+            let http = reqwest::Client::builder()
+                .user_agent(wxdata::alerts::USER_AGENT)
+                .build()?;
+            let fetched = match wxdata::sites::network(site) {
+                wxdata::sites::Network::Tdwr => wxdata::tdwr::fetch_volume(&http, site, None).await,
+                wxdata::sites::Network::Dwd => wxdata::dwd::fetch_volume(&http, site, None).await,
+                wxdata::sites::Network::Opera => {
+                    wxdata::opera::fetch_volume(&http, site, None).await
+                }
+                wxdata::sites::Network::Nexrad => unreachable!("guarded above"),
+            }?;
+            let (name, _time, scan) =
+                fetched.ok_or_else(|| anyhow::anyhow!("no current volume for {site}"))?;
+            eprintln!("live volume: {name}");
+            return level2::bin_scan_opts(&scan, moment, tilt, dealias);
+        }
         // Archive mode: list a specific UTC day and pick the volume nearest `hhmm` — the exact
         // path the timeline uses when scrubbing (list_volumes -> download_scan by identifier).
         if let Some(day) = date {
@@ -2960,7 +2985,10 @@ mod golden_tests {
         let built = counter(Counter::RadarTexturesBuilt) - before.0;
         let quads = counter(Counter::TileQuadsBuilt) - before.1;
         println!("radar_textures_built={built} tile_quads_built={quads} over 15 frames");
-        assert_eq!(built, 1, "same-shaped sweeps write into the retained textures");
+        assert_eq!(
+            built, 1,
+            "same-shaped sweeps write into the retained textures"
+        );
         assert_eq!(quads, 1, "a still camera keeps its tile quads");
     }
 

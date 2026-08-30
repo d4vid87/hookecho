@@ -433,29 +433,25 @@ impl WindGpu {
             .get(&pane)
             .is_none_or(|t| t.size != (size.0.max(1), size.1.max(1)));
         if stale {
-            self.trails.insert(
-                pane,
-                {
-                    let tex = [
-                        rgba8_target(device, "wind_trail_a", size.0, size.1),
-                        rgba8_target(device, "wind_trail_b", size.0, size.1),
-                    ];
-                    let view: [wgpu::TextureView; 2] =
-                        std::array::from_fn(|i| tex[i].create_view(&Default::default()));
-                    let src_bg =
-                        std::array::from_fn(|i| src_bind_group(device, &self.src_bgl, &view[i]));
-                    Trails {
-                        tex,
-                        view,
-                        src_bg,
-                        cur: 0,
-                        size: (size.0.max(1), size.1.max(1)),
-                    }
-                },
-            );
+            self.trails.insert(pane, {
+                let tex = [
+                    rgba8_target(device, "wind_trail_a", size.0, size.1),
+                    rgba8_target(device, "wind_trail_b", size.0, size.1),
+                ];
+                let view: [wgpu::TextureView; 2] =
+                    std::array::from_fn(|i| tex[i].create_view(&Default::default()));
+                let src_bg =
+                    std::array::from_fn(|i| src_bind_group(device, &self.src_bgl, &view[i]));
+                Trails {
+                    tex,
+                    view,
+                    src_bg,
+                    cur: 0,
+                    size: (size.0.max(1), size.1.max(1)),
+                }
+            });
         }
     }
-
 }
 
 /// The single-texture bind group both the fade and the composite passes read through.
