@@ -1547,6 +1547,8 @@ enum DataMsg {
     LiveEnded {
         view: usize,
         site: String,
+        /// Stream generation — a stale end must not clear a newer stream's handle.
+        gen: u64,
     },
     /// The archive volume listing for a site+date (timeline frames).
     Frames {
@@ -8851,11 +8853,11 @@ impl HookEchoApp {
             let idx = msg.view();
             // LiveEnded must be handled even after a site change (to drop the stream handle).
             if matches!(msg, DataMsg::LiveEnded { .. }) {
-                if let DataMsg::LiveEnded { view, .. } = msg {
+                if let DataMsg::LiveEnded { view, gen, .. } = msg {
                     if self
                         .live_stream
                         .as_ref()
-                        .is_some_and(|(v, _, _)| *v == view)
+                        .is_some_and(|(v, _, g)| *v == view && *g == gen)
                     {
                         self.live_stream = None; // interval polling resumes automatically
                     }
@@ -8931,6 +8933,9 @@ impl HookEchoApp {
                     ..
                 } => {
                     let v = &mut self.views[view];
+                    if v.timeline.playing {
+                        continue; // looping pane owns its displayed frame (cf. Volume above)
+                    }
                     match &mut v.volume {
                         Some(vol) => vol.apply_live(scan, name, time, &changed),
                         None => v.volume = Some(Volume::new(scan, name, time)),
@@ -8983,7 +8988,7 @@ impl HookEchoApp {
             // Only WSR-88Ds have a Level 2 chunk stream to merge — asking for one downloads a
             // WSR-88D-shaped file that isn't there and decodes garbage.
             let want = v.timeline.following
-                && !v.timeline.live_looping()
+                && !v.timeline.playing
                 && v.site.as_deref().is_some_and(wxdata::sites::is_nexrad)
                 && v.volume.is_some();
             (
@@ -9005,6 +9010,8 @@ impl HookEchoApp {
                 self.live_gen
                     .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 self.live_stream = None;
+                // A new site shouldn't inherit the old one's 60 s retry gate.
+                self.last_stream_attempt = None;
             }
         }
 
@@ -9044,6 +9051,7 @@ impl HookEchoApp {
             let cb_tx = tx.clone();
             let cb_ctx = ctx.clone();
             let cb_site = site.clone();
+            log::info!("live stream started for {end_site}");
             let res = live::stream(site, base, active, move |u| {
                 let _ = cb_tx.send(DataMsg::Live {
                     view: view_idx,
@@ -9062,6 +9070,7 @@ impl HookEchoApp {
             let _ = tx.send(DataMsg::LiveEnded {
                 view: view_idx,
                 site: end_site,
+                gen,
             });
             ctx.request_repaint();
         });

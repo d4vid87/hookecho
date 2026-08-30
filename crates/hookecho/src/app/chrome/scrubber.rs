@@ -30,6 +30,12 @@ impl HookEchoApp {
             format!("\u{b7} {} ago", humanize(secs))
         });
         let loading = self.views[self.active].loading;
+        // Which mechanism is actually feeding the pane: the sweep-by-sweep chunk stream, or the
+        // interval poller it falls back to when the stream can't run.
+        let streaming = self
+            .live_stream
+            .as_ref()
+            .is_some_and(|(v, _, _)| *v == self.active);
         // TDWR and DWD radars publish no archive, so their timeline is empty by design and stays
         // live. Saying "(no volumes)" there reads as a failed fetch while a live volume is on
         // screen; only a site that HAS an archive can be genuinely missing one.
@@ -123,7 +129,12 @@ impl HookEchoApp {
                         (
                             mobile::OMEGA_GREEN,
                             "LIVE".to_string(),
-                            "Following the newest volume.",
+                            if streaming {
+                                "Following the newest volume, sweep by sweep (live stream)."
+                            } else {
+                                "Following the newest volume, polling for new ones (no live \
+                                 stream — this site has none, or it is retrying)."
+                            },
                         )
                     } else if t.following {
                         (
