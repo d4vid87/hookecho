@@ -15,6 +15,7 @@ import Icon from "./Icon.astro";
   </p>
   <h3 class="where">Watching the country…</h3>
   <p class="sub">Ranking the active warnings by the radar that can see them.</p>
+  <video class="loop clip" width="600" height="550" autoplay muted loop playsinline hidden></video>
   <img class="loop" alt="" width="600" height="550" hidden />
   <p class="links" hidden>
     <a class="here" href="/radar/">See this radar</a> ·
@@ -37,7 +38,8 @@ import Icon from "./Icon.astro";
           ? `${site.id} · ${warnings} in range right now.`
           : `${site.id} · quiet right now, so here is the radar nearest you.`;
 
-        const loop = card.querySelector<HTMLImageElement>(".loop")!;
+        const loop = card.querySelector<HTMLImageElement>("img.loop")!;
+        const clip = card.querySelector<HTMLVideoElement>("video.loop")!;
         loop.addEventListener(
           "error",
           () => {
@@ -48,9 +50,30 @@ import Icon from "./Icon.astro";
         // Quantized to five minutes: every visitor in a window asks for the same URL, so the
         // second one is an edge hit rather than another render.
         const t = Math.floor(Date.now() / (5 * 60 * 1000));
-        loop.src = `https://img.hookecho.io/loop.gif?site=${site.id}&t=${t}`;
         loop.alt = `Live radar loop from ${site.id}, ${site.city}, ${site.state}`;
-        loop.hidden = false;
+        // The MP4 is about 40% smaller than the GIF for the same half hour (measured on KTLX:
+        // 230 KB against 375 KB). If it does not play — reduced motion, an origin that is down —
+        // the image chain underneath is untouched.
+        if (matchMedia("(prefers-reduced-motion: reduce)").matches) {
+          clip.remove();
+          loop.src = `https://img.hookecho.io/loop.gif?site=${site.id}&t=${t}`;
+          loop.hidden = false;
+        } else {
+          clip.addEventListener("loadeddata", () => {
+            clip.hidden = false;
+            loop.hidden = true;
+          });
+          clip.addEventListener(
+            "error",
+            () => {
+              clip.remove();
+              loop.src = `https://img.hookecho.io/loop.gif?site=${site.id}&t=${t}`;
+              loop.hidden = false;
+            },
+            { once: true },
+          );
+          clip.src = `https://img.hookecho.io/loop.mp4?site=${site.id}&t=${t}`;
+        }
 
         const links = card.querySelector<HTMLElement>(".links")!;
         links.querySelector<HTMLAnchorElement>(".here")!.href =
