@@ -363,11 +363,10 @@ const jsonld = {
     font-weight: 750;
     font-variant-numeric: tabular-nums;
     margin: 0;
-    background: var(--ramp-cool);
-    -webkit-background-clip: text;
-    background-clip: text;
+    /* Solid, not gradient-clipped text: this tile animates its opacity in on reveal, and
+       Chromium leaves the clipped gradient unpainted in that composited layer — the number
+       came out invisible-grey. One colour, no repaint to lose. */
     color: var(--ramp-1);
-    -webkit-text-fill-color: transparent;
   }
   .mosaic-tile { display: flex; }
   .join { display: block; color: var(--text); text-decoration: none; }
