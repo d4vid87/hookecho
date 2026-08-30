@@ -589,8 +589,9 @@ place to put a header.
 
 `--public` is the middle setting between "token or nothing" and an open image
 API: callers with no token get exactly the frames hookecho.io embeds —
-`/snapshot.png?site=`, `/loop.gif?site=` for NEXRAD sites, `/national.png` and
-`/health.json`, each with no other parameter — and a `403 {"error":"presets
+`/snapshot.png?site=`, `/loop.gif?site=` and `/loop.mp4?site=` for NEXRAD sites,
+`/national.png` and `/health.json`, each with no parameter but an optional
+`&product=REF|VEL` on the renders — and a `403 {"error":"presets
 only"}` for everything else. The site registry is the allowlist, so there is no
 preset file to maintain. A valid token still opens the full surface, which is
 how the owner keeps `&size=2048` and `/status.json` on the same process.

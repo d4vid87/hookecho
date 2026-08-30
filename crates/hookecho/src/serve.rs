@@ -248,9 +248,16 @@ fn is_preset(path: &str, query: &str) -> bool {
         .collect();
     match path {
         "/health.json" | "/national.png" => keys.is_empty(),
-        "/snapshot.png" | "/loop.gif" => {
-            if keys != ["site"] {
+        "/snapshot.png" | "/loop.gif" | "/loop.mp4" => {
+            // `product` is the one knob the site actually turns, and only between the two
+            // moments a viewer reads: what it looks like, and which way it's moving.
+            if keys != ["site"] && keys != ["site", "product"] && keys != ["product", "site"] {
                 return false;
+            }
+            if let Some(product) = crate::cloud::param(query, "product") {
+                if !matches!(product.as_str(), "REF" | "VEL") {
+                    return false;
+                }
             }
             let Some(site) = crate::cloud::param(query, "site") else {
                 return false;
@@ -259,7 +266,7 @@ fn is_preset(path: &str, query: &str) -> bool {
                 return false;
             }
             // A loop steps the volume archive, which only NEXRAD has.
-            if path == "/loop.gif" && !wxdata::sites::is_nexrad(&site) {
+            if path.starts_with("/loop.") && !wxdata::sites::is_nexrad(&site) {
                 return false;
             }
             true
@@ -1823,13 +1830,17 @@ mod preset_gate_tests {
         assert!(is_preset("/snapshot.png", "site=KTLX&t=123"));
         assert!(is_preset("/snapshot.png", "site=TOKC")); // TDWR — a still, not a loop
         assert!(is_preset("/loop.gif", "site=KTLX"));
+        assert!(is_preset("/loop.mp4", "site=KTLX"));
+        assert!(is_preset("/snapshot.png", "site=KTLX&product=VEL"));
+        assert!(is_preset("/loop.mp4", "product=VEL&site=KTLX"));
         assert!(is_preset("/national.png", ""));
         assert!(is_preset("/national.png", "t=99"));
         assert!(is_preset("/health.json", ""));
 
         // Refused: any other knob, however harmless it looks.
         assert!(!is_preset("/snapshot.png", "site=KTLX&size=2048"));
-        assert!(!is_preset("/snapshot.png", "site=KTLX&product=VEL"));
+        assert!(!is_preset("/snapshot.png", "site=KTLX&product=CC"));
+        assert!(!is_preset("/snapshot.png", "product=VEL"));
         assert!(!is_preset("/snapshot.png", "site=KTLX&zoom=12"));
         assert!(!is_preset("/snapshot.png", "site=KTLX&basemap=satellite"));
         assert!(!is_preset("/loop.gif", "site=KTLX&frames=12"));
@@ -1838,11 +1849,11 @@ mod preset_gate_tests {
         // Refused: a site nobody has heard of, and a loop of a radar with no archive to step.
         assert!(!is_preset("/snapshot.png", "site=ZZZZ"));
         assert!(!is_preset("/loop.gif", "site=TOKC"));
+        assert!(!is_preset("/loop.mp4", "site=TOKC"));
         assert!(!is_preset("/snapshot.png", ""));
 
         // Refused: everything that is not an image the site embeds.
         assert!(!is_preset("/status.json", ""));
-        assert!(!is_preset("/loop.mp4", "site=KTLX"));
         assert!(!is_preset("/metrics", ""));
         assert!(!is_preset("/proxy/https://example.invalid/x", ""));
         assert!(!is_preset("/", ""));
