@@ -25,6 +25,7 @@ import Icon from "./Icon.astro";
   if (card) {
     activeSite()
       .then((site) => {
+        if (!site) return;
         const warnings =
           site.warnings === 1 ? "1 active warning" : `${site.warnings} active warnings`;
         card.querySelector(".where")!.textContent = `${site.city}, ${site.state}`;

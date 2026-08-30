@@ -50,6 +50,7 @@ const LITE = "https://app.hookecho.io/lite/";
   if (backdrop && lite) {
     activeSite()
       .then((site) => {
+        if (!site) return;
         const frame = document.createElement("iframe");
         frame.src = `${lite}?site=${site.id}&hero=1`;
         frame.title = "";
