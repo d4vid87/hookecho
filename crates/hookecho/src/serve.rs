@@ -247,7 +247,7 @@ fn is_preset(path: &str, query: &str) -> bool {
         .filter(|k| *k != "t")
         .collect();
     match path {
-        "/health.json" | "/national.png" => keys.is_empty(),
+        "/health.json" | "/national.png" | "/national.mp4" => keys.is_empty(),
         "/snapshot.png" | "/loop.gif" | "/loop.mp4" => {
             // `product` is the one knob the site actually turns, and only between the two
             // moments a viewer reads: what it looks like, and which way it's moving.
@@ -298,7 +298,7 @@ fn route(server: &Server, path: &str, query: &str, if_none_match: Option<&str>) 
         "/status.json" | "/alerts.json" | "/obs.json" | "/health.json" => "json",
         "/cells.json" => "cells",
         "/snapshot.png" => "snapshot",
-        "/national.png" => "national",
+        "/national.png" | "/national.mp4" => "national",
         "/loop.gif" | "/loop.mp4" => "loop",
         "/metrics" => "metrics",
         _ if path.starts_with("/proxy/") => "proxy",
@@ -330,6 +330,10 @@ fn route(server: &Server, path: &str, query: &str, if_none_match: Option<&str>) 
         },
         "/national.png" => match national(server) {
             Ok(png) => image_reply("image/png", png),
+            Err(e) => error_json(e).into(),
+        },
+        "/national.mp4" => match national_clip(server) {
+            Ok(body) => image_reply("video/mp4", body),
             Err(e) => error_json(e).into(),
         },
         "/loop.gif" => match loop_clip(server, query, crate::loopexport::LoopFormat::Gif) {
@@ -772,6 +776,7 @@ fn national(server: &Server) -> anyhow::Result<Vec<u8>> {
                 crate::headless::set_output(Some(NATIONAL_PX), Some(NATIONAL_ZOOM));
                 crate::headless::set_extras(true);
                 crate::headless::run_mrms(out.to_string_lossy().as_ref())?;
+                archive_national_frame(&out);
                 std::fs::read(&out)?
             }
             None => std::fs::read(&out)?,
@@ -783,6 +788,83 @@ fn national(server: &Server) -> anyhow::Result<Vec<u8>> {
         .unwrap()
         .put(key, (Instant::now(), png.clone()));
     Ok(png)
+}
+
+/// How many national renders the ring keeps. The warm timer runs every four minutes, so fifteen
+/// is about an hour of weather — long enough to see a line move, short enough to encode quickly.
+const NATIONAL_FRAMES: usize = 15;
+
+fn national_frame_dir() -> anyhow::Result<std::path::PathBuf> {
+    let dir = snapshot_dir()?.join("national-frames");
+    std::fs::create_dir_all(&dir)?;
+    Ok(dir)
+}
+
+/// The sorted ring, oldest first. Names carry the UTC minute, so sorting them is sorting by time.
+fn national_frames() -> anyhow::Result<Vec<std::path::PathBuf>> {
+    let mut frames: Vec<_> = std::fs::read_dir(national_frame_dir()?)?
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| p.extension().is_some_and(|e| e == "png"))
+        .collect();
+    frames.sort();
+    Ok(frames)
+}
+
+/// Keep a copy of a freshly rendered mosaic, and drop the oldest once the ring is full.
+///
+/// Best effort on purpose: the mosaic itself is already on disk and answered, and a full disk or
+/// a racing render must not turn `/national.png` into an error page.
+fn archive_national_frame(rendered: &std::path::Path) {
+    let stamp = chrono::Utc::now().format("%Y%m%d-%H%M");
+    let copy = || -> anyhow::Result<()> {
+        let dir = national_frame_dir()?;
+        std::fs::copy(rendered, dir.join(format!("national-{stamp}.png")))?;
+        let frames = national_frames()?;
+        for old in frames.iter().rev().skip(NATIONAL_FRAMES) {
+            let _ = std::fs::remove_file(old);
+        }
+        Ok(())
+    };
+    if let Err(e) = copy() {
+        log::warn!("national frame not archived: {e}");
+    }
+}
+
+/// The national mosaic as an hour of motion — the same renders `/national.png` already made,
+/// muxed rather than re-rendered, so the loop costs a video encode and nothing else.
+fn national_clip(server: &Server) -> anyhow::Result<Vec<u8>> {
+    let key = "/national.mp4".to_string();
+    if let Some(hit) = server
+        .cache
+        .lock()
+        .unwrap()
+        .get(&key)
+        .filter(|(when, _)| when.elapsed() < SNAPSHOT_TTL)
+    {
+        return Ok(hit.1.clone());
+    }
+    let frames = national_frames()?;
+    if frames.len() < 2 {
+        anyhow::bail!("not enough national frames yet");
+    }
+    let out = snapshot_dir()?.join("national.mp4");
+    // Re-encode only when the ring has moved on since the last one.
+    let newest = frames.last().and_then(|p| p.metadata().ok()?.modified().ok());
+    let encoded = out.metadata().ok().and_then(|m| m.modified().ok());
+    if !matches!((encoded, newest), (Some(e), Some(n)) if e >= n) {
+        let images: Vec<_> = frames
+            .iter()
+            .filter_map(|p| Some(image::load_from_memory(&std::fs::read(p).ok()?).ok()?.to_rgba8()))
+            .collect();
+        crate::loopexport::encode_mp4(&images, 6, &out)?;
+    }
+    let body = std::fs::read(&out)?;
+    server
+        .cache
+        .lock()
+        .unwrap()
+        .put(key, (Instant::now(), body.clone()));
+    Ok(body)
 }
 
 /// How far apart the frames of a loop are asked for. A volume is about five minutes wide; a site
@@ -1835,6 +1917,7 @@ mod preset_gate_tests {
         assert!(is_preset("/loop.mp4", "product=VEL&site=KTLX"));
         assert!(is_preset("/national.png", ""));
         assert!(is_preset("/national.png", "t=99"));
+        assert!(is_preset("/national.mp4", ""));
         assert!(is_preset("/health.json", ""));
 
         // Refused: any other knob, however harmless it looks.
@@ -1845,6 +1928,7 @@ mod preset_gate_tests {
         assert!(!is_preset("/snapshot.png", "site=KTLX&basemap=satellite"));
         assert!(!is_preset("/loop.gif", "site=KTLX&frames=12"));
         assert!(!is_preset("/national.png", "size=2048"));
+        assert!(!is_preset("/national.mp4", "frames=30"));
 
         // Refused: a site nobody has heard of, and a loop of a radar with no archive to step.
         assert!(!is_preset("/snapshot.png", "site=ZZZZ"));
