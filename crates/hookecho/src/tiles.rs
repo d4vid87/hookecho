@@ -1792,7 +1792,8 @@ fn janitor_delay() -> std::time::Duration {
 struct SweepJob(std::path::PathBuf, &'static str, u64);
 
 #[cfg(not(target_arch = "wasm32"))]
-static JANITOR: std::sync::Mutex<(Vec<SweepJob>, bool)> = std::sync::Mutex::new((Vec::new(), false));
+static JANITOR: std::sync::Mutex<(Vec<SweepJob>, bool)> =
+    std::sync::Mutex::new((Vec::new(), false));
 
 /// Queue a cache sweep for the shared janitor: one thread, started once, running every queued
 /// sweep in turn after [`janitor_delay`].

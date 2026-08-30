@@ -7,9 +7,9 @@
 // before it ever reached here. Compiling the codec in anyway was pure bundle weight.
 #[cfg(not(target_arch = "wasm32"))]
 use image::codecs::gif::{GifEncoder, Repeat};
+use image::RgbaImage;
 #[cfg(not(target_arch = "wasm32"))]
 use image::{Delay, Frame};
-use image::RgbaImage;
 use std::path::Path;
 
 /// Output container for a loop export.

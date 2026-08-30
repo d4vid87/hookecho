@@ -604,7 +604,12 @@ fn snapshot_dir() -> anyhow::Result<std::path::PathBuf> {
 /// Anything unreadable, empty, or without a usable modified time is treated as absent — a missing
 /// cache entry is a re-render, never an error.
 fn fresh_on_disk(path: &std::path::Path) -> Option<Vec<u8>> {
-    let age = std::fs::metadata(path).ok()?.modified().ok()?.elapsed().ok()?;
+    let age = std::fs::metadata(path)
+        .ok()?
+        .modified()
+        .ok()?
+        .elapsed()
+        .ok()?;
     if age >= SNAPSHOT_TTL {
         return None;
     }
@@ -804,7 +809,9 @@ fn metrics(server: &Server) -> String {
     out.push_str("# TYPE hookecho_stats_total counter\n");
     for (label, n) in wxdata::stats::snapshot() {
         let label = escape_label(label);
-        out.push_str(&format!("hookecho_stats_total{{counter=\"{label}\"}} {n}\n"));
+        out.push_str(&format!(
+            "hookecho_stats_total{{counter=\"{label}\"}} {n}\n"
+        ));
     }
 
     // What the proxy cache is actually saving: a hit is an upstream fetch that did not happen.
@@ -814,7 +821,10 @@ fn metrics(server: &Server) -> String {
     );
     let (entries, bytes) = {
         let cache = server.proxy_cache.lock().unwrap();
-        (cache.len(), cache.iter().map(|(_, h)| h.body.len()).sum::<usize>())
+        (
+            cache.len(),
+            cache.iter().map(|(_, h)| h.body.len()).sum::<usize>(),
+        )
     };
     out.push_str("# HELP hookecho_proxy_cache_hits_total Proxied responses served without an upstream fetch.\n");
     out.push_str("# TYPE hookecho_proxy_cache_hits_total counter\n");
@@ -1403,7 +1413,10 @@ mod tests {
             render: Mutex::new(()),
         };
         let Reply {
-            status, ctype, body, ..
+            status,
+            ctype,
+            body,
+            ..
         } = route(&server, "/etc/passwd", "", None);
         assert_eq!(status, "404 Not Found");
         assert_eq!(ctype, "application/json");
@@ -1505,8 +1518,9 @@ mod tests {
     fn the_proxy_cache_evicts_on_bytes_not_just_entries() {
         let mut cache =
             lru::LruCache::new(std::num::NonZeroUsize::new(PROXY_CACHE_ENTRIES).unwrap());
-        let held =
-            |c: &lru::LruCache<String, ProxyHit>| c.iter().map(|(_, h)| h.body.len()).sum::<usize>();
+        let held = |c: &lru::LruCache<String, ProxyHit>| {
+            c.iter().map(|(_, h)| h.body.len()).sum::<usize>()
+        };
         // Ten entries of 64 MB: well inside the entry cap, well past the byte cap.
         for i in 0..10 {
             cache.put(

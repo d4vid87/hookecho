@@ -11,9 +11,9 @@
 //! and then applies the app's own two faces on top the same way [`base`] does. What differs is
 //! only *when* the fallbacks arrive.
 
-use egui::{FontData, FontDefinitions, FontFamily};
 #[cfg(target_arch = "wasm32")]
 use egui::FontTweak;
+use egui::{FontData, FontDefinitions, FontFamily};
 use std::sync::Arc;
 
 /// Inter, subsetted (SIL OFL, see `data/fonts/Inter-LICENSE.txt`) — ~26 KB gzipped, and the face
@@ -39,10 +39,9 @@ pub fn base() -> FontDefinitions {
 /// egui's defaults that yields `[Inter, Ubuntu-Light, phosphor, …]`, which is what native has had
 /// all along — so the web build reaching the same list is a matter of feeding this the same input.
 fn decorate(mut fonts: FontDefinitions) -> FontDefinitions {
-    fonts.font_data.insert(
-        "Inter".to_owned(),
-        Arc::new(FontData::from_static(INTER)),
-    );
+    fonts
+        .font_data
+        .insert("Inter".to_owned(), Arc::new(FontData::from_static(INTER)));
     let prop = fonts.families.entry(FontFamily::Proportional).or_default();
     prop.insert(0, "Inter".to_owned());
     // `add_to_fonts` does `insert(1, …)`, which panics on a list shorter than that — on the web,
@@ -93,9 +92,10 @@ pub fn full(fetched: Fetched) -> FontDefinitions {
     fonts
         .font_data
         .insert("NotoEmoji-Regular".to_owned(), tweaked(noto, 0.81));
-    fonts
-        .font_data
-        .insert("Ubuntu-Light".to_owned(), Arc::new(FontData::from_owned(ubuntu)));
+    fonts.font_data.insert(
+        "Ubuntu-Light".to_owned(),
+        Arc::new(FontData::from_owned(ubuntu)),
+    );
     fonts
         .font_data
         .insert("emoji-icon-font".to_owned(), tweaked(emoji, 0.90));

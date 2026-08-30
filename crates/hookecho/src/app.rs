@@ -9716,18 +9716,17 @@ impl HookEchoApp {
             if vol.elevations.is_empty() {
                 return (None, true);
             }
-            vol.binned(moment, tilt, dealias)
-                .map(|s| {
-                    to_upload(
-                        s,
-                        table,
-                        threshold,
-                        smooth,
-                        storm_uv,
-                        precip.as_deref(),
-                        lut_only,
-                    )
-                })
+            vol.binned(moment, tilt, dealias).map(|s| {
+                to_upload(
+                    s,
+                    table,
+                    threshold,
+                    smooth,
+                    storm_uv,
+                    precip.as_deref(),
+                    lut_only,
+                )
+            })
         };
         match upload {
             Ok(up) => {
@@ -11110,19 +11109,14 @@ impl HookEchoApp {
                             painter.layout_no_wrap(text, font.clone(), egui::Color32::WHITE);
                         let anchor = egui::pos2(prect.left() + 8.0, y);
                         let size = galley.size();
-                        let bg =
-                            egui::Rect::from_min_size(anchor, size + egui::vec2(10.0, 4.0));
+                        let bg = egui::Rect::from_min_size(anchor, size + egui::vec2(10.0, 4.0));
                         painter.rect_filled(
                             bg,
                             3.0,
                             egui::Color32::from_rgba_unmultiplied(150, 30, 30, 210),
                         );
                         // The galley just measured, drawn — one layout, not two.
-                        painter.galley(
-                            anchor + egui::vec2(5.0, 2.0),
-                            galley,
-                            egui::Color32::WHITE,
-                        );
+                        painter.galley(anchor + egui::vec2(5.0, 2.0), galley, egui::Color32::WHITE);
                         y += size.y + 6.0;
                     }
                 }
@@ -11957,8 +11951,7 @@ impl HookEchoApp {
                         .map(|a| a.event.as_str())
                         .unwrap_or_default();
                     let line = format!("⚠ {} — {} in {:.0} min", mk.name, event, t);
-                    let galley =
-                        painter.layout_no_wrap(line, font.clone(), egui::Color32::WHITE);
+                    let galley = painter.layout_no_wrap(line, font.clone(), egui::Color32::WHITE);
                     let anchor = egui::pos2(prect.left() + 8.0, y);
                     let bg =
                         egui::Rect::from_min_size(anchor, galley.size() + egui::vec2(10.0, 4.0));
@@ -13622,10 +13615,9 @@ impl HookEchoApp {
                 .find(|m| m.home)
                 .map(|m| (m.lon, m.lat))
         });
-        let line =
-            here.and_then(|(lon, lat)| {
-                widget_storm_line(self.active_storm_cells(), lon, lat, self.metric())
-            });
+        let line = here.and_then(|(lon, lat)| {
+            widget_storm_line(self.active_storm_cells(), lon, lat, self.metric())
+        });
         match line {
             Some(line) => {
                 if let Err(e) = std::fs::write(&path, line) {
@@ -13908,7 +13900,11 @@ pub(crate) fn to_upload(
     }
     let (precip_flag, flag_nx, flag_ny, flag_w, flag_n, flag_e, flag_s) = match tint {
         Some(g) => (
-            if lut_only { Vec::new() } else { g.classes.clone() },
+            if lut_only {
+                Vec::new()
+            } else {
+                g.classes.clone()
+            },
             g.nx,
             g.ny,
             g.west,
@@ -13972,10 +13968,7 @@ fn sites_in_world() -> &'static [(&'static wxdata::sites::SiteEntry, (f64, f64))
             .map(|s| {
                 (
                     s,
-                    crate::render::mercator::lonlat_to_world(
-                        s.longitude as f64,
-                        s.latitude as f64,
-                    ),
+                    crate::render::mercator::lonlat_to_world(s.longitude as f64, s.latitude as f64),
                 )
             })
             .collect()
@@ -16608,14 +16601,20 @@ mod tests {
     #[test]
     fn a_pinch_defers_the_retessellation_but_new_geometry_never_waits() {
         use super::should_retess;
-        assert!(should_retess(false, false, true), "quiet: rebuild on a bucket change");
+        assert!(
+            should_retess(false, false, true),
+            "quiet: rebuild on a bucket change"
+        );
         assert!(!should_retess(true, false, true), "mid-gesture: wait");
         assert!(
             should_retess(true, true, true),
             "new geometry mid-gesture is data arriving, not the camera moving"
         );
         assert!(!should_retess(true, false, false));
-        assert!(!should_retess(false, false, false), "nothing changed, nothing to do");
+        assert!(
+            !should_retess(false, false, false),
+            "nothing changed, nothing to do"
+        );
     }
 
     /// A palette change must not re-send the sweep. Everything the GPU keeps (the gate bytes,

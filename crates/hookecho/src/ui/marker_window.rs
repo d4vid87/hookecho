@@ -160,7 +160,11 @@ pub fn marker_grid(
                 } else {
                     m.alert_radius_mi
                 };
-                let (max, suffix) = if metric { (320.0, " km") } else { (200.0, " mi") };
+                let (max, suffix) = if metric {
+                    (320.0, " km")
+                } else {
+                    (200.0, " mi")
+                };
                 if ui
                     .add(
                         egui::DragValue::new(&mut shown)
