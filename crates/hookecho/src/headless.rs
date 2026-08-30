@@ -139,16 +139,7 @@ fn warnings_overlay(
     client: &reqwest::Client,
     zoom: f64,
 ) -> Option<OverlayUpload> {
-    let features = rt.block_on(wxdata::alerts::fetch_polygon_alerts(client));
-    let features = match features {
-        Ok(f) => f,
-        // A picture with no warnings on it is worth more than no picture.
-        Err(e) => {
-            log::warn!("alerts for render unavailable: {e}");
-            return None;
-        }
-    };
-    let warned: Vec<_> = features.into_iter().filter(is_lead_warning).collect();
+    let warned = cached_warnings(rt, client)?;
     if warned.is_empty() {
         return None;
     }
@@ -157,6 +148,37 @@ fn warnings_overlay(
         vertices: geom.vertices,
         indices: geom.indices,
     })
+}
+
+/// How long one alerts fetch serves every render that follows. A server rendering a wall of
+/// sites otherwise asks api.weather.gov once per picture for a feed that changes once a minute.
+const WARNING_TTL: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// The lead warnings, from cache when they are fresh enough. `None` means "nothing to draw",
+/// whether that is because nothing is warned or because the feed could not be reached — a picture
+/// with no warnings on it is worth more than no picture.
+fn cached_warnings(
+    rt: &tokio::runtime::Runtime,
+    client: &reqwest::Client,
+) -> Option<Vec<wxdata::overlay::GeoFeature>> {
+    static CACHE: std::sync::Mutex<
+        Option<(std::time::Instant, Vec<wxdata::overlay::GeoFeature>)>,
+    > = std::sync::Mutex::new(None);
+    let mut slot = CACHE.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some((at, warned)) = slot.as_ref() {
+        if at.elapsed() < WARNING_TTL {
+            return (!warned.is_empty()).then(|| warned.clone());
+        }
+    }
+    let warned = match rt.block_on(wxdata::alerts::fetch_polygon_alerts(client)) {
+        Ok(f) => f.into_iter().filter(is_lead_warning).collect::<Vec<_>>(),
+        Err(e) => {
+            log::warn!("alerts for render unavailable: {e}");
+            return None;
+        }
+    };
+    *slot = Some((std::time::Instant::now(), warned.clone()));
+    (!warned.is_empty()).then_some(warned)
 }
 
 /// Tornado, severe thunderstorm and flash flood warnings — the three the app's overlay leads with.

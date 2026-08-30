@@ -23,6 +23,12 @@ use std::time::{Duration, Instant};
 const JSON_TTL: Duration = Duration::from_secs(60);
 /// How long a rendered radar PNG is reused. A volume is ~5 minutes wide, so is this.
 const SNAPSHOT_TTL: Duration = Duration::from_secs(300);
+/// Edge length of the national mosaic. Wider than a site frame because it carries the whole
+/// country, and it is the one image on the landing page.
+const NATIONAL_PX: u32 = 1400;
+/// Zoom for that frame. The verifier's 4.0 frames CONUS at 1000 px; a wider image at the same
+/// zoom just adds ocean, so this buys the extra pixels back as detail.
+const NATIONAL_ZOOM: f64 = 4.5;
 /// How many built answers are kept. The snapshot key carries `px` and `zoom`, which the client
 /// picks, so this cannot be a map that only grows — a poller walking zoom levels would otherwise
 /// pin every render it ever asked for.
@@ -38,6 +44,9 @@ struct Server {
     /// Bearer token every request must carry, or empty for the open behaviour. A user secret:
     /// it lives in settings.json (or the flag) and is never committed.
     token: String,
+    /// Whether unauthenticated callers may have the preset frames (`--public`). Off by default:
+    /// a server with a token answers nothing without it.
+    public: bool,
     /// Directory of static files to serve (the browser build), if this was started with one.
     web_root: Option<std::path::PathBuf>,
     rt: tokio::runtime::Runtime,
@@ -58,12 +67,14 @@ pub fn run(
     port: u16,
     web_root: Option<std::path::PathBuf>,
     token: String,
+    public: bool,
 ) -> anyhow::Result<()> {
     let _ = STARTED.set(Instant::now());
     let listener = TcpListener::bind((bind, port))?;
     let server = Arc::new(Server {
         spots,
         token,
+        public,
         web_root,
         // One runtime and one client for the process, not one per request like the headless
         // verifiers build — this one stays up.
@@ -147,6 +158,21 @@ fn handle(server: &Server, mut stream: TcpStream) -> anyhow::Result<()> {
     }
     let reply = if authorized {
         route(server, path, query, if_none_match.as_deref())
+    } else if server.public {
+        // The public hostname serves the fixed frames the site embeds and nothing else. Anything
+        // else — another size, another product, a status page — needs the token, which is how the
+        // owner keeps the full parameter surface without handing it to the internet.
+        if is_preset(path, query) {
+            route(server, path, query, if_none_match.as_deref())
+        } else {
+            count("denied");
+            (
+                "403 Forbidden",
+                "application/json",
+                br#"{"error":"presets only"}"#.to_vec(),
+            )
+                .into()
+        }
     } else {
         count("denied");
         (
@@ -205,6 +231,43 @@ impl From<(&'static str, &'static str, Vec<u8>)> for Reply {
     }
 }
 
+/// Whether an unauthenticated request on a `--public` server is one of the frames the site
+/// embeds.
+///
+/// The site registry is the allowlist: one default frame per known radar, plus the national
+/// mosaic and the health page. There is no preset file to keep in step, and no way to ask for a
+/// 2048 px render of an arbitrary product by guessing a URL — every knob but `site` has to be
+/// absent, and `site` has to be a radar we know.
+fn is_preset(path: &str, query: &str) -> bool {
+    // `t=` is the cache-buster the page appends; it changes no pixel and is ignored everywhere.
+    let keys: Vec<&str> = query
+        .split('&')
+        .filter(|p| !p.is_empty())
+        .map(|p| p.split_once('=').map_or(p, |(k, _)| k))
+        .filter(|k| *k != "t")
+        .collect();
+    match path {
+        "/health.json" | "/national.png" => keys.is_empty(),
+        "/snapshot.png" | "/loop.gif" => {
+            if keys != ["site"] {
+                return false;
+            }
+            let Some(site) = crate::cloud::param(query, "site") else {
+                return false;
+            };
+            if wxdata::sites::site_by_id(&site).is_none() {
+                return false;
+            }
+            // A loop steps the volume archive, which only NEXRAD has.
+            if path == "/loop.gif" && !wxdata::sites::is_nexrad(&site) {
+                return false;
+            }
+            true
+        }
+        _ => false,
+    }
+}
+
 /// A rendered image, with the one header that lets a CDN in front of this server do its job.
 ///
 /// The default is `no-cache` (see `respond`), which is right for the JSON routes and wrong for a
@@ -228,6 +291,7 @@ fn route(server: &Server, path: &str, query: &str, if_none_match: Option<&str>) 
         "/status.json" | "/alerts.json" | "/obs.json" | "/health.json" => "json",
         "/cells.json" => "cells",
         "/snapshot.png" => "snapshot",
+        "/national.png" => "national",
         "/loop.gif" | "/loop.mp4" => "loop",
         "/metrics" => "metrics",
         _ if path.starts_with("/proxy/") => "proxy",
@@ -254,6 +318,10 @@ fn route(server: &Server, path: &str, query: &str, if_none_match: Option<&str>) 
             Err(e) => error_json(e).into(),
         },
         "/snapshot.png" => match snapshot(server, query) {
+            Ok(png) => image_reply("image/png", png),
+            Err(e) => error_json(e).into(),
+        },
+        "/national.png" => match national(server) {
             Ok(png) => image_reply("image/png", png),
             Err(e) => error_json(e).into(),
         },
@@ -641,6 +709,41 @@ fn snapshot(server: &Server, query: &str) -> anyhow::Result<Vec<u8>> {
     let png = match fresh_on_disk(&out) {
         Some(bytes) => bytes,
         None => render_png(server, &f, None, &out)?,
+    };
+    server
+        .cache
+        .lock()
+        .unwrap()
+        .put(key, (Instant::now(), png.clone()));
+    Ok(png)
+}
+
+/// The MRMS national mosaic, rendered here rather than hotlinked from the NWS.
+///
+/// One frame for everybody — there is nothing to vary — so the key, the file and the TTL are all
+/// fixed. MRMS publishes every couple of minutes and this holds a render for five, which is still
+/// fresher than the ten-minute GIF it replaces.
+fn national(server: &Server) -> anyhow::Result<Vec<u8>> {
+    let key = "/national.png".to_string();
+    if let Some(hit) = server
+        .cache
+        .lock()
+        .unwrap()
+        .get(&key)
+        .filter(|(when, _)| when.elapsed() < SNAPSHOT_TTL)
+    {
+        return Ok(hit.1.clone());
+    }
+    let out = snapshot_dir()?.join("national.png");
+    let png = match fresh_on_disk(&out) {
+        Some(bytes) => bytes,
+        None => {
+            let _one_at_a_time = server.render.lock().unwrap();
+            crate::headless::set_output(Some(NATIONAL_PX), Some(NATIONAL_ZOOM));
+            crate::headless::set_extras(true);
+            crate::headless::run_mrms(out.to_string_lossy().as_ref())?;
+            std::fs::read(&out)?
+        }
     };
     server
         .cache
@@ -1367,6 +1470,7 @@ mod tests {
     fn the_dashboard_points_at_the_radar_nearest_home() {
         let server = Server {
             token: String::new(),
+            public: false,
             spots: vec![Spot {
                 name: "home".to_string(),
                 lat: 35.22,
@@ -1401,6 +1505,7 @@ mod tests {
         // A server with no spots: routing is independent of what it would report.
         let server = Server {
             token: String::new(),
+            public: false,
             spots: Vec::new(),
             web_root: None,
             rt: tokio::runtime::Builder::new_current_thread()
@@ -1433,6 +1538,7 @@ mod tests {
     fn static_serving_refuses_to_walk_out_of_the_web_root() {
         let server = Server {
             token: String::new(),
+            public: false,
             spots: Vec::new(),
             web_root: Some(std::path::PathBuf::from("/var/empty")),
             rt: tokio::runtime::Builder::new_current_thread()
@@ -1481,6 +1587,7 @@ mod tests {
         std::fs::write(dir.join("lite/index.html"), b"<!doctype html>lite").unwrap();
         let server = Server {
             token: String::new(),
+            public: false,
             spots: Vec::new(),
             web_root: Some(dir.clone()),
             rt: tokio::runtime::Builder::new_current_thread()
@@ -1567,6 +1674,7 @@ mod tests {
     fn proxy_refuses_hosts_that_are_not_on_the_list() {
         let server = Server {
             token: String::new(),
+            public: false,
             spots: Vec::new(),
             web_root: None,
             rt: tokio::runtime::Builder::new_current_thread()
@@ -1608,6 +1716,7 @@ mod tests {
     fn requests_are_counted_by_route() {
         let server = Server {
             token: String::new(),
+            public: false,
             spots: Vec::new(),
             web_root: None,
             rt: tokio::runtime::Builder::new_current_thread()
@@ -1673,5 +1782,44 @@ mod cache_hygiene_tests {
         assert!(fresh_on_disk(&path).is_none(), "stale file was reused");
 
         std::fs::remove_dir_all(&dir).ok();
+    }
+}
+
+#[cfg(test)]
+mod preset_gate_tests {
+    use super::*;
+
+    /// The frames the site embeds are served without a token; everything else is not. This is the
+    /// whole public surface of the origin, so it is worth spelling out.
+    #[test]
+    fn only_the_site_frames_are_public() {
+        // Allowed: a known radar's default frame, with or without the page's cache-buster.
+        assert!(is_preset("/snapshot.png", "site=KTLX"));
+        assert!(is_preset("/snapshot.png", "site=KTLX&t=123"));
+        assert!(is_preset("/snapshot.png", "site=TOKC")); // TDWR — a still, not a loop
+        assert!(is_preset("/loop.gif", "site=KTLX"));
+        assert!(is_preset("/national.png", ""));
+        assert!(is_preset("/national.png", "t=99"));
+        assert!(is_preset("/health.json", ""));
+
+        // Refused: any other knob, however harmless it looks.
+        assert!(!is_preset("/snapshot.png", "site=KTLX&size=2048"));
+        assert!(!is_preset("/snapshot.png", "site=KTLX&product=VEL"));
+        assert!(!is_preset("/snapshot.png", "site=KTLX&zoom=12"));
+        assert!(!is_preset("/snapshot.png", "site=KTLX&basemap=satellite"));
+        assert!(!is_preset("/loop.gif", "site=KTLX&frames=12"));
+        assert!(!is_preset("/national.png", "size=2048"));
+
+        // Refused: a site nobody has heard of, and a loop of a radar with no archive to step.
+        assert!(!is_preset("/snapshot.png", "site=ZZZZ"));
+        assert!(!is_preset("/loop.gif", "site=TOKC"));
+        assert!(!is_preset("/snapshot.png", ""));
+
+        // Refused: everything that is not an image the site embeds.
+        assert!(!is_preset("/status.json", ""));
+        assert!(!is_preset("/loop.mp4", "site=KTLX"));
+        assert!(!is_preset("/metrics", ""));
+        assert!(!is_preset("/proxy/https://example.invalid/x", ""));
+        assert!(!is_preset("/", ""));
     }
 }

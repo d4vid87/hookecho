@@ -94,7 +94,10 @@ fn main() -> eframe::Result<()> {
         // A headless box on a shelf is exactly where MQTT earns its keep — this is the process
         // that is always up.
         hookecho::mqtt::spawn(&saved);
-        if let Err(e) = hookecho::serve::run(spots, bind, port, web_root, token) {
+        // `--public` serves the site's preset frames to callers with no token, and 403s
+        // everything else. Without it a token still means "all or nothing".
+        let public = args.iter().any(|a| a == "--public");
+        if let Err(e) = hookecho::serve::run(spots, bind, port, web_root, token, public) {
             eprintln!("serve failed: {e}");
             std::process::exit(1);
         }
