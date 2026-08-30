@@ -1157,7 +1157,9 @@ pub struct TileManager {
     /// Tiles believed to be live on the GPU, newest-touched first. This mirrors the renderer's
     /// tile map exactly: the CPU side decides what gets evicted and tells the renderer, so the
     /// two can never disagree about whether a tile still exists.
-    uploaded: LruCache<crate::render::TileKey, ()>,
+    /// Value is the tile's GPU byte size — 512-px providers cost four times what the 256-px
+    /// entry count assumed, so eviction weighs bytes as well as entries.
+    uploaded: LruCache<crate::render::TileKey, u32>,
     /// Ids evicted by the last `touch_visible`, handed to the renderer to drop.
     evicted: Vec<crate::render::TileKey>,
     /// Tiles counted visible across all panes this frame; drives the eviction high-water mark.
@@ -1579,7 +1581,8 @@ impl TileManager {
             self.failed.remove(&key);
             // `push` (not `put`) hands back whatever it evicted, so the renderer can free the
             // texture instead of leaking it.
-            let evicted = self.uploaded.push(key, ());
+            let bytes = t.width * t.height * 4;
+            let evicted = self.uploaded.push(key, bytes);
             if let Some((id, _)) = evicted.filter(|(id, _)| *id != key) {
                 self.requested.remove(&id);
                 self.evicted.push(id);
@@ -1621,7 +1624,22 @@ impl TileManager {
         // limit. An evicted tile also drops out of `requested`, so revisiting that area re-fetches
         // it (from disk, usually) instead of leaving a black square.
         let want = RASTER_TILE_CACHE.max(self.frame_visible + 16);
+        // What this frame drew must survive the byte sweep, exactly as it survives the entry cap.
+        let floor = self.frame_visible;
         self.frame_visible = 0;
+        // Entry count alone let a 512-px provider (Mapbox/MapTiler, Carto @2x) hold four times
+        // the intended GPU memory. Cheap to total: at most `want` entries.
+        while self.uploaded.len() > floor.max(1)
+            && self.uploaded.iter().map(|(_, b)| *b as u64).sum::<u64>() > RASTER_TILE_BYTES
+        {
+            match self.uploaded.pop_lru() {
+                Some((id, _)) => {
+                    self.requested.remove(&id);
+                    self.evicted.push(id);
+                }
+                None => break,
+            }
+        }
         // Pop down to size FIRST: shrinking an `LruCache` evicts silently, and a silently evicted
         // tile is a texture the renderer never hears about again.
         while self.uploaded.len() > want {
@@ -1715,10 +1733,18 @@ pub(crate) async fn load_tile_bytes(
     Ok(bytes)
 }
 
-/// How many uploaded raster tiles to keep. A 256x256 RGBA tile is ~256 KB on the GPU, so 512 is
-/// ~134 MB on a desktop and 128 keeps a phone near 34 MB. In a browser — especially an iframe on
-/// Safari, where a Retina raster_bias quadruples the tile count — a desktop budget gets the whole
-/// device recycled out from under us, so wasm gets ~50 MB.
+/// How much GPU memory the uploaded raster tiles may rest at. This is the budget the entry cap
+/// below was always *meant* to express; entries alone under-counted a 512-px provider fourfold.
+const RASTER_TILE_BYTES: u64 = if cfg!(target_os = "android") {
+    34 * 1024 * 1024
+} else if cfg!(target_arch = "wasm32") {
+    50 * 1024 * 1024
+} else {
+    134 * 1024 * 1024
+};
+
+/// How many uploaded raster tiles to keep, whatever their size. Still a hard ceiling because
+/// `MAX_TILE_VERTS` sizes the vertex buffer to it; [`RASTER_TILE_BYTES`] is the memory budget.
 const RASTER_TILE_CACHE: usize = if cfg!(target_os = "android") {
     128
 } else if cfg!(target_arch = "wasm32") {
@@ -2003,6 +2029,30 @@ pub fn start_pack_download(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 512-px providers made the 512-entry cache four times the memory the entry count assumed.
+    /// Eviction has to weigh bytes, and has to leave the frame's own tiles alone.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn eviction_weighs_bytes() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .expect("runtime");
+        let mut m = TileManager::new(crate::rt::Spawner::new(rt.handle().clone()));
+        // 512-px tiles: 1 MB each, so well under 512 entries busts the byte budget.
+        let per = 512u32 * 512 * 4;
+        let n = (RASTER_TILE_BYTES / per as u64) as usize + 20;
+        for i in 0..n {
+            m.uploaded.push((0, (6, i as u32, 0)), per);
+        }
+        let dropped = m.evict_excess();
+        assert!(!dropped.is_empty(), "byte budget must evict");
+        let total: u64 = m.uploaded.iter().map(|(_, b)| *b as u64).sum();
+        assert!(
+            total <= RASTER_TILE_BYTES,
+            "{total} over {RASTER_TILE_BYTES}"
+        );
+    }
 
     /// The shipped default. A fresh install with no settings file and no API key anywhere lands
     /// here, so it has to be keyless, reachable on the web build, and offered on a phone.

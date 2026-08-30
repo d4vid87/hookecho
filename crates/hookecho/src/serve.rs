@@ -851,12 +851,20 @@ fn national_clip(server: &Server) -> anyhow::Result<Vec<u8>> {
     }
     let out = snapshot_dir()?.join("national.mp4");
     // Re-encode only when the ring has moved on since the last one.
-    let newest = frames.last().and_then(|p| p.metadata().ok()?.modified().ok());
+    let newest = frames
+        .last()
+        .and_then(|p| p.metadata().ok()?.modified().ok());
     let encoded = out.metadata().ok().and_then(|m| m.modified().ok());
     if !matches!((encoded, newest), (Some(e), Some(n)) if e >= n) {
         let images: Vec<_> = frames
             .iter()
-            .filter_map(|p| Some(image::load_from_memory(&std::fs::read(p).ok()?).ok()?.to_rgba8()))
+            .filter_map(|p| {
+                Some(
+                    image::load_from_memory(&std::fs::read(p).ok()?)
+                        .ok()?
+                        .to_rgba8(),
+                )
+            })
             .collect();
         crate::loopexport::encode_mp4(&images, 6, &out)?;
     }

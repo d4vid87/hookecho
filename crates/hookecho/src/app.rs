@@ -1427,7 +1427,15 @@ type ZdrCache = (
 pub(crate) struct FieldState {
     pub pending: Option<crate::render::MrmsUpload>,
     pub last_fetch: Option<Instant>,
+    /// Since when no pane has drawn this layer. Its GPU texture (up to 8192 px of R8) is freed
+    /// after [`FIELD_EVICT`]; before this, thirty-five layers could stay resident until exit.
+    pub off_since: Option<Instant>,
 }
+
+/// How long a field layer stays uploaded after the last pane turns it off. Long enough that
+/// toggling a layer to compare it against another doesn't re-fetch, short enough that an
+/// afternoon of browsing doesn't end with every layer's texture still on the GPU.
+const FIELD_EVICT: std::time::Duration = std::time::Duration::from_secs(300);
 
 /// What a settings-sync worker reports back. Everything network lives on the runtime; the app
 /// thread only ever applies the outcome.
@@ -4116,7 +4124,8 @@ impl HookEchoApp {
             Err(_) => return,
         };
         for (feed, err) in queued {
-            let due = self.feed_errors_told
+            let due = self
+                .feed_errors_told
                 .get(feed)
                 .is_none_or(|t| t.elapsed().as_secs() >= 1800);
             if due {
@@ -10583,6 +10592,35 @@ impl HookEchoApp {
 
         // Field layers: upload freshly-fetched grids on the first pane; every pane draws the
         // currently-enabled layers.
+        // Field textures are evicted the way tiles are: decided here, where the state that knows
+        // whether a re-upload will follow lives, and handed to the renderer to free.
+        let drop_fields: Vec<crate::render::FieldLayer> = if first {
+            let now = Instant::now();
+            let on: std::collections::HashSet<crate::render::FieldLayer> = self
+                .views
+                .iter()
+                .flat_map(|v| v.fields_on.iter().copied())
+                .collect();
+            let mut drop = Vec::new();
+            for (layer, st) in self.fields.iter_mut() {
+                if on.contains(layer) {
+                    st.off_since = None;
+                } else if let Some(since) = st.off_since {
+                    if now.duration_since(since) >= FIELD_EVICT {
+                        st.off_since = None;
+                        // The grid is gone from the GPU, so the next enable must re-fetch it
+                        // rather than trust its refresh cadence.
+                        st.last_fetch = None;
+                        drop.push(*layer);
+                    }
+                } else {
+                    st.off_since = Some(now);
+                }
+            }
+            drop
+        } else {
+            Vec::new()
+        };
         let field_uploads: Vec<(crate::render::FieldLayer, crate::render::MrmsUpload)> = if first {
             self.fields
                 .iter_mut()
@@ -10623,6 +10661,7 @@ impl HookEchoApp {
             draw_overlay: self.overlay_ready,
             field_uploads,
             field_draws,
+            drop_fields,
             clear_tiles,
             drop_tiles,
             new_vector_tiles,

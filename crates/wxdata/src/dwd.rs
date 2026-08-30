@@ -614,9 +614,8 @@ mod tests {
         let before = crate::stats::snapshot();
         let again = fetch_volume(&client, "DEBO", Some(&name)).await.unwrap();
         let after = crate::stats::snapshot();
-        let requests = |v: &Vec<(&'static str, u64)>| {
-            v.iter().find(|(l, _)| *l == "net_requests").unwrap().1
-        };
+        let requests =
+            |v: &Vec<(&'static str, u64)>| v.iter().find(|(l, _)| *l == "net_requests").unwrap().1;
         let bytes =
             |v: &Vec<(&'static str, u64)>| v.iter().find(|(l, _)| *l == "net_bytes").unwrap().1;
         assert!(again.is_none(), "unchanged volume should be skipped");

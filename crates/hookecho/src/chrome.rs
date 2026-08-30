@@ -204,12 +204,7 @@ fn text(c: &mut Canvas<'_>, fonts: &mut Fonts, s: &str, px: f32, x: f32, y: f32,
                         if px_x < 0.0 || px_y < 0.0 {
                             continue;
                         }
-                        c.blend(
-                            px_x as u32,
-                            px_y as u32,
-                            [ink.r(), ink.g(), ink.b()],
-                            alpha,
-                        );
+                        c.blend(px_x as u32, px_y as u32, [ink.r(), ink.g(), ink.b()], alpha);
                     }
                 }
             }

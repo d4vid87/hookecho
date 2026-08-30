@@ -178,7 +178,10 @@ pub fn position_script(
     } else {
         ((km * 0.621_371).round() as i32, "miles")
     };
-    let mut s = format!("{name} is {n} {unit} to your {}", spoken_compass(bearing_deg));
+    let mut s = format!(
+        "{name} is {n} {unit} to your {}",
+        spoken_compass(bearing_deg)
+    );
     if let Some(d) = moving_toward_deg {
         s.push_str(&format!(", moving {}", spoken_compass(d)));
     }
@@ -260,6 +263,9 @@ mod tests {
         let s = position_script("The storm", 90.0, 32.2, Some(225.0), false);
         assert_eq!(s, "The storm is 20 miles to your east, moving southwest.");
         let s = position_script("The storm", 90.0, 32.2, Some(225.0), true);
-        assert_eq!(s, "The storm is 32 kilometers to your east, moving southwest.");
+        assert_eq!(
+            s,
+            "The storm is 32 kilometers to your east, moving southwest."
+        );
     }
 }

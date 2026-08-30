@@ -115,9 +115,7 @@ pub fn start_time(bytes: Vec<u8>) -> anyhow::Result<DateTime<Utc>> {
 }
 
 /// [`decode`], plus the sweep end stamp the DWD feed names its dual-pol files by.
-pub fn decode_with_stamp(
-    bytes: Vec<u8>,
-) -> anyhow::Result<(DateTime<Utc>, Scan, Option<String>)> {
+pub fn decode_with_stamp(bytes: Vec<u8>) -> anyhow::Result<(DateTime<Utc>, Scan, Option<String>)> {
     let f = hdf5lite::File::open(bytes).map_err(|e| anyhow::anyhow!("odim: {e}"))?;
     let stamp = stamp_of(&f);
 

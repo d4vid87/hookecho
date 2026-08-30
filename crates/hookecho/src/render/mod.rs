@@ -337,6 +337,9 @@ pub struct MapCallback {
     pub field_uploads: Vec<(FieldLayer, MrmsUpload)>,
     /// Which field layers to paint this frame, with their opacity (0..1).
     pub field_draws: Vec<(FieldLayer, f32)>,
+    /// Field layers the app has stopped drawing for long enough to free; same contract as
+    /// `drop_tiles` — the app decides, we free, and it re-uploads on the next enable.
+    pub drop_fields: Vec<FieldLayer>,
     /// Newly tessellated vector basemap tiles to upload this frame.
     pub new_vector_tiles: Vec<PendingVectorTile>,
     /// Vector tile ids to draw this frame (drawn first, under the raster/radar layers).
@@ -1190,6 +1193,9 @@ impl RenderResources {
         // Touch everything this frame draws so the LRU evicts what is off screen, not what is in
         // front of the user. Visible entries can't be evicted mid-frame: the caches only shrink
         // here, before any drawing.
+        for layer in &cb.drop_fields {
+            self.fields.remove(layer);
+        }
         for (layer, up) in &cb.field_uploads {
             let gpu = self.build_field_layer(device, queue, up);
             self.fields.insert(*layer, gpu);

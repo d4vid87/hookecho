@@ -77,25 +77,26 @@ pub async fn fetch_in_view(
 ) -> anyhow::Result<Vec<GeoFeature>> {
     // Up to eleven countries can be in view, and they were fetched one after another — eleven
     // round trips deep instead of one wide, on a 120 s refresh.
-    let bodies = futures_util::future::join_all(countries_in_view(bounds).into_iter().map(|slug| {
-        let url = crate::net::fetch_url(&format!("{FEED}{slug}"));
-        async move {
-            match client.get(&url).send().await {
-                Ok(resp) => match resp.text().await {
-                    Ok(body) => Some(body),
+    let bodies =
+        futures_util::future::join_all(countries_in_view(bounds).into_iter().map(|slug| {
+            let url = crate::net::fetch_url(&format!("{FEED}{slug}"));
+            async move {
+                match client.get(&url).send().await {
+                    Ok(resp) => match resp.text().await {
+                        Ok(body) => Some(body),
+                        Err(e) => {
+                            log::warn!("meteoalarm {slug}: body read failed ({e})");
+                            None
+                        }
+                    },
                     Err(e) => {
-                        log::warn!("meteoalarm {slug}: body read failed ({e})");
+                        log::warn!("meteoalarm {slug}: fetch failed ({e})");
                         None
                     }
-                },
-                Err(e) => {
-                    log::warn!("meteoalarm {slug}: fetch failed ({e})");
-                    None
                 }
             }
-        }
-    }))
-    .await;
+        }))
+        .await;
     let mut out = Vec::new();
     for body in bodies.into_iter().flatten() {
         out.extend(parse(&body));
