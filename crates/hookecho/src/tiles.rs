@@ -1869,10 +1869,13 @@ pub(crate) fn sweep_cache_dir(root: &std::path::Path, label: &str, cap: u64) {
             freed += n;
         }
     }
+    // Was "{n} MB over cap, freed {n} MB" with the same number twice (they are equal by
+    // construction) and MB-as-1e6 against MiB caps, which read as a sweep that had done nothing.
     log::info!(
-        "{label}: {:.0} MB over cap, freed {:.0} MB",
-        (total - cap) as f64 / 1e6,
-        freed as f64 / 1e6
+        "{label}: {:.0} MB (cap {:.0} MB), freed {:.0} MB",
+        total as f64 / (1024.0 * 1024.0),
+        cap as f64 / (1024.0 * 1024.0),
+        freed as f64 / (1024.0 * 1024.0)
     );
 }
 
@@ -1885,9 +1888,9 @@ pub(crate) const VOLUME_CACHE_BYTES: u64 = if cfg!(target_os = "android") {
     2 * 1024 * 1024 * 1024
 };
 
-/// Largest the small caches — zone geometry, RAOB soundings, server snapshots — may get between
-/// them. Each is a few MB in normal use; the cap is a tripwire for a cache that has started
-/// growing without bound, not a budget anyone is meant to run into.
+/// Cap applied to each of the small caches — zone geometry, RAOB soundings, server snapshots,
+/// placefile icons — separately (see the sweep loop in `App::new`). Zone and RAOB data is a few MB
+/// in normal use; snapshots on a long-lived box are not, which is what the tripwire is for.
 pub(crate) const SMALL_CACHE_BYTES: u64 = 50 * 1024 * 1024;
 
 /// A chase-pack download job: the tile URL and the disk path to cache it at.

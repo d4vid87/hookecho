@@ -736,7 +736,9 @@ fn snapshot(server: &Server, query: &str) -> anyhow::Result<Vec<u8>> {
     {
         return Ok(hit.1.clone());
     }
-    let out = snapshot_dir()?.join(format!("snapshot-{}.png", f.tag()));
+    let dir = snapshot_dir()?;
+    prune_snapshots_hourly(&dir);
+    let out = dir.join(format!("snapshot-{}.png", f.tag()));
     // Disk is the cache that survives a restart, and the loop path already reuses frames off it.
     // Without this a process that has just started — or one whose LRU dropped this key — re-renders
     // a file written seconds ago, which is the expensive half of the request.
@@ -940,6 +942,7 @@ fn loop_clip(
         last = Some(png);
     }
     prune_loop_frames(&dir);
+    prune_stale(&dir, "snapshot-", SNAPSHOT_FILE_TTL);
 
     let clip = dir.join(format!("loop-{}.{ext}", f.tag()));
     match format {
@@ -957,20 +960,45 @@ fn loop_clip(
     Ok(body)
 }
 
+/// How long a rendered snapshot stays on disk. Longer than a loop frame's TTL because a snapshot
+/// URL is shareable and may be fetched again; short enough that a headless box does not keep every
+/// render it has ever served (186 MB observed).
+const SNAPSHOT_FILE_TTL: std::time::Duration = std::time::Duration::from_secs(24 * 3600);
+
 /// Drop loop frames that have slid out of every window. Without this the cache directory grows by
 /// a render every five minutes for as long as the box is up.
 fn prune_loop_frames(dir: &std::path::Path) {
+    prune_stale(dir, "loop-", LOOP_FRAME_TTL);
+}
+
+/// Sweep stale snapshot renders, at most once an hour. Reading the directory on every request
+/// would be the wrong shape for a route this hot.
+fn prune_snapshots_hourly(dir: &std::path::Path) {
+    static LAST: std::sync::Mutex<Option<Instant>> = std::sync::Mutex::new(None);
+    let Ok(mut last) = LAST.lock() else { return };
+    if last.is_some_and(|t| t.elapsed() < Duration::from_secs(3600)) {
+        return;
+    }
+    *last = Some(Instant::now());
+    prune_stale(dir, "snapshot-", SNAPSHOT_FILE_TTL);
+}
+
+/// Remove files in `dir` named `prefix*` last modified more than `ttl` ago.
+///
+/// Snapshots needed this too: only the GUI ever swept that directory, so a `--serve` box with no
+/// window grew without bound.
+fn prune_stale(dir: &std::path::Path, prefix: &str, ttl: std::time::Duration) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
     };
     for e in entries.flatten() {
-        if !e.file_name().to_string_lossy().starts_with("loop-") {
+        if !e.file_name().to_string_lossy().starts_with(prefix) {
             continue;
         }
         let stale = e
             .metadata()
             .and_then(|m| m.modified())
-            .map(|t| t.elapsed().unwrap_or_default() > LOOP_FRAME_TTL)
+            .map(|t| t.elapsed().unwrap_or_default() > ttl)
             .unwrap_or(false);
         if stale {
             let _ = std::fs::remove_file(e.path());
