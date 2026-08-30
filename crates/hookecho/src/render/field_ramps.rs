@@ -590,7 +590,7 @@ const fn ramp_smoke() -> FieldRamp {
 /// Shared by the GPU upload path and the headless verifiers.
 pub fn bake_ramp_lut(stops: &[(f32, [u8; 3])], alpha: u8) -> Vec<u8> {
     let mut lut = vec![0u8; 256 * 4];
-    for (i, slot) in lut.chunks_exact_mut(4).enumerate().skip(2) {
+    for (i, slot) in lut.as_chunks_mut::<4>().0.iter_mut().enumerate().skip(2) {
         let t = (i - 2) as f32 / 253.0;
         let mut rgb = stops[0].1;
         for w in stops.windows(2) {
