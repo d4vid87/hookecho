@@ -573,6 +573,9 @@ fn render_png(
         let _one_at_a_time = server.render.lock().unwrap();
         // Global knobs on the renderer, set under the same lock that serializes the render.
         crate::headless::set_output(Some(f.px), f.zoom);
+        // Anything this server hands out is a picture someone will look at away from the app, so
+        // it carries its warnings, its caption and its scale. The CLI verifiers do not.
+        crate::headless::set_extras(true);
         crate::headless::run(
             out.to_string_lossy().as_ref(),
             &f.site,

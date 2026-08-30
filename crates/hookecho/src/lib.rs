@@ -19,6 +19,9 @@ pub mod cam;
 /// Dead reckoning ahead of the car, for the next radar handoff.
 pub mod chase;
 pub mod chaselog;
+/// Caption, color bar and city labels blitted onto an off-screen render.
+#[cfg(not(target_arch = "wasm32"))]
+pub mod chrome;
 pub mod cloud;
 pub mod colormap;
 #[cfg(not(target_arch = "wasm32"))]
