@@ -73,6 +73,11 @@ pub fn draw(rgba: &mut [u8], w: u32, h: u32, stamp: &Stamp) {
         let box_ = [x0, y0, x0 + size.0, y0 + size.1];
         // Greedy: first label in wins its space, later ones that would collide are dropped. A
         // proper label solver is a different project; ten names on a radar picture is the job.
+        // A name the canvas cuts in half ("Lafayett") reads as a rendering fault rather than a
+        // place, so a label that does not fit whole is not drawn at all.
+        if x0 < 0.0 || y0 < 0.0 || box_[2] > w as f32 || box_[3] > h as f32 {
+            continue;
+        }
         if taken.iter().any(|t| overlaps(t, &box_)) {
             continue;
         }
