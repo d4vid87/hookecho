@@ -97,6 +97,11 @@ struct Gpu {
 ///
 /// The pipeline is built the first time a 3D volume is uploaded, not at startup: compiling the
 /// raymarch shader costs real time on a phone's driver, and most sessions never open the 3D view.
+/// The target format the 3D pipeline must be compiled against, parked in the callback resources
+/// so the first 3D frame can build [`Volume3dResources`] itself.
+#[derive(Clone, Copy)]
+pub struct Volume3dFormat(pub wgpu::TextureFormat);
+
 pub struct Volume3dResources {
     format: wgpu::TextureFormat,
     pipeline: Option<wgpu::RenderPipeline>,
@@ -362,6 +367,14 @@ impl egui_wgpu::CallbackTrait for Volume3dCallback {
         _encoder: &mut wgpu::CommandEncoder,
         resources: &mut egui_wgpu::CallbackResources,
     ) -> Vec<wgpu::CommandBuffer> {
+        // Built on first use rather than at startup: the raymarch pipeline is a few hundred ms
+        // of shader compilation in front of the first frame, for a window most sessions never
+        // open. `Volume3dFormat` is inserted at startup so we know what to compile against.
+        if resources.get::<Volume3dResources>().is_none() {
+            if let Some(Volume3dFormat(fmt)) = resources.get::<Volume3dFormat>().copied() {
+                resources.insert(Volume3dResources::new(device, fmt));
+            }
+        }
         if let Some(res) = resources.get_mut::<Volume3dResources>() {
             if let Some(up) = &self.upload {
                 res.upload(device, queue, up);

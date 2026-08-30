@@ -176,6 +176,10 @@ const TFR_BATCH: usize = 25;
 /// Background overlay fetch results.
 enum OverlayMsg {
     Alerts(Vec<GeoFeature>),
+    /// Last run's alert overlay, read from disk off the launch path. Applied only if no live
+    /// fetch has landed yet; it seeds the known-warning ids either way, so a restart mid-event
+    /// doesn't re-banner and re-speak warnings already on the map.
+    AlertSeed(Vec<GeoFeature>),
     /// WPC coded surface analysis (fronts + pressure centers).
     Fronts(wxdata::fronts::SurfaceAnalysis),
     Outlook(u8, Vec<GeoFeature>),
@@ -2288,7 +2292,10 @@ pub struct HookEchoApp {
     /// True while the HRRR layer is being driven by a forecast-tail scrub (vs. the manual toggle).
     hrrr_by_timeline: bool,
     /// Tray-menu command channel (Linux StatusNotifier); `None` if no tray host is available.
-    tray_rx: Option<std::sync::mpsc::Receiver<crate::tray::TrayCmd>>,
+    tray_rx: std::sync::mpsc::Receiver<crate::tray::TrayCmd>,
+    /// True once a StatusNotifier host has taken the tray item; registration is async, so this
+    /// can flip after the first frames.
+    tray_present: std::sync::Arc<std::sync::atomic::AtomicBool>,
     /// Set by the tray "Quit" item so the close-to-tray handler lets the window actually close.
     really_quit: bool,
     /// Local storm-report markers (live IEM LSR feed, trailing 6 h) + toggle + refresh clock.
@@ -2708,17 +2715,20 @@ impl HookEchoApp {
                 &render_state.device,
                 render_state.target_format,
             ));
+            // The 3D volume pipeline is NOT compiled here — see `Volume3dCallback::prepare`.
+            // Most sessions never open that window, and it was paying for it at every launch.
             w.callback_resources
-                .insert(crate::render3d::Volume3dResources::new(
-                    &render_state.device,
-                    render_state.target_format,
-                ));
+                .insert(crate::render3d::Volume3dFormat(render_state.target_format));
             #[cfg(not(target_arch = "wasm32"))]
             log::info!(
                 "perf: pipelines compiled in {} ms",
                 pipelines_at.elapsed().as_millis()
             );
         }
+
+        // Registering with the StatusNotifier host is a blocking D-Bus round trip; started here
+        // so it overlaps the rest of construction instead of sitting in front of the first frame.
+        let (tray_rx_init, tray_present_init) = crate::tray::spawn();
 
         let mut settings = Settings::load();
         // Three arrangements worth having before you have built any of your own. Once only: the
@@ -2746,11 +2756,8 @@ impl HookEchoApp {
         // The alert overlay from the last run, minus anything that has expired since. Also seeds
         // the known-warning ids, so a restart during an event doesn't re-banner and re-speak
         // every warning already on the map.
-        let seeded_alerts = crate::alert_snapshot::load();
-        let known_warning_ids: std::collections::HashSet<String> = seeded_alerts
-            .iter()
-            .filter_map(|f| f.alert.as_ref().map(|a| a.dedupe_key()))
-            .collect();
+        let seeded_alerts: Vec<GeoFeature> = Vec::new();
+        let known_warning_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
         // Zone geometry (county and forecast-zone shapes) never changes, so it outlives the run.
         if let Some(dir) = crate::paths::cache_dir() {
             wxdata::alerts::set_zone_cache_dir(dir);
@@ -2790,6 +2797,20 @@ impl HookEchoApp {
         vtiles.ensure_template();
         let (msg_tx, msg_rx) = std::sync::mpsc::channel();
         let (overlay_tx, overlay_rx) = std::sync::mpsc::channel();
+        // Loaded off the launch path: the snapshot is a few MB of JSON, and parsing it before
+        // the first paint bought nothing — it is applied as `OverlayMsg::AlertSeed`, and dropped
+        // if the live fetch has already landed by then.
+        {
+            let tx = overlay_tx.clone();
+            spawner.spawn(async move {
+                let feats = wxdata::task::blocking(crate::alert_snapshot::load)
+                    .await
+                    .unwrap_or_default();
+                if !feats.is_empty() {
+                    let _ = tx.send(OverlayMsg::AlertSeed(feats));
+                }
+            });
+        }
         let (update_tx, update_rx) = std::sync::mpsc::channel();
         let (geocode_tx, geocode_rx) = std::sync::mpsc::channel();
         let (ipgeo_tx, ipgeo_rx) = std::sync::mpsc::channel::<(f64, f64)>();
@@ -3086,7 +3107,8 @@ impl HookEchoApp {
             hrrr_valid: None,
             hrrr_last_fetch: None,
             hrrr_by_timeline: false,
-            tray_rx: crate::tray::spawn(),
+            tray_rx: tray_rx_init,
+            tray_present: tray_present_init,
             really_quit: false,
             show_storm_reports: false,
             storm_reports: Vec::new(),
@@ -7381,6 +7403,17 @@ impl HookEchoApp {
         let mut changed = false;
         while let Ok(msg) = self.overlay_rx.try_recv() {
             match msg {
+                OverlayMsg::AlertSeed(f) => {
+                    for id in f
+                        .iter()
+                        .filter_map(|f| f.alert.as_ref().map(|a| a.dedupe_key()))
+                    {
+                        self.known_warning_ids.insert(id);
+                    }
+                    if self.alert_features.is_empty() {
+                        self.alert_features = f;
+                    }
+                }
                 OverlayMsg::Alerts(f) => {
                     self.detect_new_warnings(&f);
                     crate::alert_snapshot::save(&f);
@@ -14694,7 +14727,8 @@ impl eframe::App for HookEchoApp {
         }
 
         // Tray menu commands (Linux StatusNotifier): restore the window or quit for real.
-        if let Some(rx) = &self.tray_rx {
+        {
+            let rx = &self.tray_rx;
             while let Ok(cmd) = rx.try_recv() {
                 match cmd {
                     crate::tray::TrayCmd::Show => {
@@ -14718,7 +14752,7 @@ impl eframe::App for HookEchoApp {
             && ctx.input(|i| i.viewport().close_requested())
         {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-            let cmd = if self.tray_rx.is_some() {
+            let cmd = if self.tray_present.load(std::sync::atomic::Ordering::Relaxed) {
                 egui::ViewportCommand::Visible(false) // hide fully; the tray restores it
             } else {
                 egui::ViewportCommand::Minimized(true) // no tray → keep a taskbar entry
