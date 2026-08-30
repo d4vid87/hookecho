@@ -28,9 +28,26 @@ pub struct PerfReadout {
     /// The idle repaint interval the app last asked for, in ms — the number the heartbeat work
     /// moves, and the one that explains the frame rate above it.
     pub idle_ms: u64,
-    /// Process start, for the startup line.
+    /// Process start, for the startup line — the real one when `mark_start` was called, else
+    /// this struct's construction, which is as early as a library-only build can see.
     start: Instant,
     first_frame: Option<Duration>,
+}
+
+/// Process start, for the startup line.
+///
+/// Set from `main` before anything else runs. Without it the startup number would begin at app
+/// construction and miss the window, the adapter and the pipeline compile — which is most of what
+/// a launch costs and the whole reason to measure it.
+static START: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
+
+/// Stamp the start of the process. Idempotent; the first call wins.
+pub fn mark_start() {
+    let _ = START.set(Instant::now());
+}
+
+fn process_start() -> Instant {
+    *START.get_or_init(Instant::now)
 }
 
 impl Default for PerfReadout {
@@ -47,7 +64,7 @@ impl PerfReadout {
             base: wxdata::stats::snapshot(),
             rates: Vec::new(),
             idle_ms: 0,
-            start: Instant::now(),
+            start: process_start(),
             first_frame: None,
         }
     }

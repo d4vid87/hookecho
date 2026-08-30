@@ -34,6 +34,7 @@ fn main() -> eframe::Result<()> {
         );
     }
 
+    hookecho::perf::mark_start();
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
     // A panic on the desktop goes to a terminal nobody launched the app from; leave a report the
     // next start can offer back instead.

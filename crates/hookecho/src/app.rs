@@ -2683,6 +2683,10 @@ impl HookEchoApp {
         // 4096. Field grids (MRMS rotation/AzShear reach 14000 px) are decimated to fit this.
         let max_texture_dim = render_state.device.limits().max_texture_dimension_2d;
         {
+            // Shaders and pipelines are compiled here, synchronously, before the first paint —
+            // the suspected dominant term in a cold launch. Timed so the guess is a number.
+            #[cfg(not(target_arch = "wasm32"))]
+            let pipelines_at = std::time::Instant::now();
             let mut w = render_state.renderer.write();
             w.callback_resources.insert(RenderResources::new(
                 &render_state.device,
@@ -2693,6 +2697,11 @@ impl HookEchoApp {
                     &render_state.device,
                     render_state.target_format,
                 ));
+            #[cfg(not(target_arch = "wasm32"))]
+            log::info!(
+                "perf: pipelines compiled in {} ms",
+                pipelines_at.elapsed().as_millis()
+            );
         }
 
         let mut settings = Settings::load();
@@ -2737,31 +2746,19 @@ impl HookEchoApp {
         // Archived volumes are kept on disk forever within a cap; same startup sweep the tile
         // caches get, for the same reason (mid-session deletion would race the fetch tasks).
         if let Some(root) = crate::paths::cache_dir().map(|d| d.join("volumes")) {
-            std::thread::spawn(move || {
-                crate::tiles::sweep_cache_dir(
-                    &root,
-                    "volume cache",
-                    crate::tiles::volume_cache_bytes(),
-                )
-            });
+            crate::tiles::sweep_later(root, "volume cache", crate::tiles::volume_cache_bytes());
         }
         // The small caches had no sweep at all: zone geometry and archived RAOB soundings grew
         // for the life of the install. They are small enough that the cap is a tripwire.
         if let Some(dir) = crate::paths::cache_dir() {
-            std::thread::spawn(move || {
-                for (sub, label) in [
-                    ("zones", "zone cache"),
-                    ("raob", "RAOB cache"),
-                    ("snapshots", "snapshot cache"),
-                    ("pficons", "placefile icon cache"),
-                ] {
-                    crate::tiles::sweep_cache_dir(
-                        &dir.join(sub),
-                        label,
-                        crate::tiles::SMALL_CACHE_BYTES,
-                    );
-                }
-            });
+            for (sub, label) in [
+                ("zones", "zone cache"),
+                ("raob", "RAOB cache"),
+                ("snapshots", "snapshot cache"),
+                ("pficons", "placefile icon cache"),
+            ] {
+                crate::tiles::sweep_later(dir.join(sub), label, crate::tiles::SMALL_CACHE_BYTES);
+            }
         }
         let mut tiles = TileManager::new(spawner.clone());
         let mut vtiles = crate::vector_tiles::VectorTileManager::new(spawner.clone());

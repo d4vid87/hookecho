@@ -583,7 +583,7 @@ impl VectorTileManager {
         let cache_root = crate::paths::cache_dir().map(|d| d.join("vector"));
         // The vector cache grew forever; the raster one has been swept at startup all along.
         if let Some(root) = cache_root.clone() {
-            std::thread::spawn(move || crate::tiles::sweep_tile_cache(&root));
+            crate::tiles::sweep_later(root, "vector tile cache", crate::tiles::tile_cache_bytes());
         }
         Self {
             spawner,
