@@ -563,6 +563,7 @@ and you get the full app there.
 | `/snapshot.png?site=KTLX` | a radar render — `&product=VEL`, `&basemap=none`, `&size=512` (256–2048), `&zoom=6.5`, `&tilt=1` |
 | `/loop.gif?site=KTLX` | the last half hour animating — same render knobs, plus `&frames=6` (2–12) and `&fps=2` |
 | `/loop.mp4?site=KTLX` | the same loop as H.264, if ffmpeg is installed |
+| `/national.png` | the MRMS national mosaic, rendered here rather than hotlinked |
 
 JSON answers are cached for a minute, snapshots and loops for five, so polling it
 every 30 seconds costs the upstream services nothing extra. A loop reuses the
@@ -583,6 +584,40 @@ curl 'http://boxname:8080/snapshot.png?site=KTLX&token=hunter2'
 Every route is behind it, `/metrics` and the CORS proxy included. The
 `?token=` form is there for dashboards that can only fetch a URL and have no
 place to put a header.
+
+#### Publishing the pictures and nothing else
+
+`--public` is the middle setting between "token or nothing" and an open image
+API: callers with no token get exactly the frames hookecho.io embeds —
+`/snapshot.png?site=`, `/loop.gif?site=` for NEXRAD sites, `/national.png` and
+`/health.json`, each with no other parameter — and a `403 {"error":"presets
+only"}` for everything else. The site registry is the allowlist, so there is no
+preset file to maintain. A valid token still opens the full surface, which is
+how the owner keeps `&size=2048` and `/status.json` on the same process.
+
+Those renders carry warning polygons, a caption with the volume's own time, the
+colour scale and city labels — a picture that travels to somebody else's timeline
+has to say what it is.
+
+This is what serves the imagery on hookecho.io. The origin stays on loopback and
+Cloudflare reaches it through a tunnel, so nothing is exposed on the box itself:
+
+```sh
+# on the box: the origin, loopback only, presets public
+hookecho --serve 8080 --public --serve-token "$(cat ~/.config/hookecho/img-token)"
+
+# the tunnel, once
+cloudflared tunnel create hookecho-img
+cloudflared tunnel route dns hookecho-img img.hookecho.io
+# ingress: img.hookecho.io -> http://127.0.0.1:8080
+cloudflared tunnel run hookecho-img
+```
+
+The images ship `Cache-Control: public, max-age=300`, so Cloudflare answers the
+repeat views and the box renders roughly one frame per site per five minutes.
+`HOOKECHO_GPU_FALLBACK=1` forces the lavapipe software renderer, for a box with
+no usable Vulkan device; leave it off where there's a GPU, the national mosaic is
+7000×3500 and notices.
 
 For a desktop widget rather than a server, `--snapshot` writes the same render
 straight to a file:
