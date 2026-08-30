@@ -1189,7 +1189,7 @@ impl TileManager {
                 .expect("build reqwest client");
         let cache_root = crate::paths::cache_dir().map(|d| d.join("tiles"));
         if let Some(root) = cache_root.clone() {
-            std::thread::spawn(move || sweep_tile_cache(&root));
+            sweep_later(root, "tile cache", tile_cache_bytes());
         }
         Self {
             spawner,
@@ -1682,7 +1682,7 @@ pub async fn fetch_visible(
 /// Read-through disk cache: return the cached PNG if present, else fetch and store it.
 ///
 /// A corrupt/partial cache file just fails to decode upstream and gets re-fetched next view,
-/// so no locking or temp-rename dance is needed. Bounded by [`sweep_tile_cache`] at startup.
+/// so no locking or temp-rename dance is needed. Bounded by the startup sweep (see [`sweep_later`]).
 pub(crate) async fn load_tile_bytes(
     client: &reqwest::Client,
     url: &str,
@@ -1735,11 +1735,6 @@ pub(crate) const DISK_CACHE_BYTES: u64 = if cfg!(target_os = "android") {
     500 * 1024 * 1024
 };
 
-/// Trim the on-disk tile cache to [`tile_cache_bytes`], oldest-touched first.
-pub(crate) fn sweep_tile_cache(root: &std::path::Path) {
-    sweep_cache_dir(root, "tile cache", tile_cache_bytes());
-}
-
 /// User overrides for the two disk caps, in bytes; 0 means "use the platform default".
 ///
 /// Globals because the sweeps run from three places that construct before — and without — the
@@ -1777,6 +1772,68 @@ pub(crate) fn volume_cache_bytes() -> u64 {
 /// writing into it, and a file deleted out from under a read just gets re-fetched anyway. Chase
 /// packs live under the tile root and are deliberately not spared — they are re-downloadable, and
 /// a pack the user still cares about is a pack they have been looking at recently.
+/// How long a cache sweep waits before it starts.
+///
+/// Four janitor threads used to walk four cache trees while the app was still opening its window,
+/// reading its settings and asking for its first tiles — competing for the same disk with the
+/// reads a launch is actually waiting on. Nothing here is urgent: these caps are tripwires
+/// against a cache that grew for weeks.
+#[cfg(not(target_arch = "wasm32"))]
+fn janitor_delay() -> std::time::Duration {
+    // Tests want the same thread, spawn and drain, not the wait.
+    match cfg!(test) {
+        true => std::time::Duration::from_millis(50),
+        false => std::time::Duration::from_secs(20),
+    }
+}
+
+/// One sweep job: the directory, what to call it in the log, and its cap.
+#[cfg(not(target_arch = "wasm32"))]
+struct SweepJob(std::path::PathBuf, &'static str, u64);
+
+#[cfg(not(target_arch = "wasm32"))]
+static JANITOR: std::sync::Mutex<(Vec<SweepJob>, bool)> = std::sync::Mutex::new((Vec::new(), false));
+
+/// Queue a cache sweep for the shared janitor: one thread, started once, running every queued
+/// sweep in turn after [`janitor_delay`].
+///
+/// ponytail: a `Vec` and a `bool` rather than a channel — the queue is four entries deep at
+/// startup and empty forever after.
+pub(crate) fn sweep_later(root: std::path::PathBuf, label: &'static str, cap: u64) {
+    // The browser has no cache directory to sweep and no threads to sweep it with; the callers
+    // are the same on both targets so the caps have one definition, not two.
+    #[cfg(target_arch = "wasm32")]
+    let _ = (root, label, cap);
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let Ok(mut j) = JANITOR.lock() else { return };
+        j.0.push(SweepJob(root, label, cap));
+        if j.1 {
+            return;
+        }
+        j.1 = true;
+        std::thread::spawn(|| {
+            std::thread::sleep(janitor_delay());
+            loop {
+                // The flag is cleared under the same lock the queue is popped from, so a sweep
+                // queued after this thread gives up starts a new one rather than being forgotten.
+                let job = {
+                    let Ok(mut j) = JANITOR.lock() else { return };
+                    match j.0.pop() {
+                        Some(job) => job,
+                        None => {
+                            j.1 = false;
+                            return;
+                        }
+                    }
+                };
+                sweep_cache_dir(&job.0, job.1, job.2);
+            }
+        });
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn sweep_cache_dir(root: &std::path::Path, label: &str, cap: u64) {
     fn walk(
         dir: &std::path::Path,
@@ -2001,6 +2058,26 @@ mod tests {
             pack_tile_ids(-99.0, 34.0, -96.0, 36.0, 7, 9).len() as u64,
             pack_tile_count(-99.0, 34.0, -96.0, 36.0, 7, 9)
         );
+    }
+
+    /// The janitor really does run: one thread, spawned once, sweeping every queued directory
+    /// after its delay. Without this the sweeps could stop happening and nothing would say so —
+    /// `sweep_cache_dir` is silent when a cache is under its cap.
+    #[test]
+    fn the_janitor_thread_sweeps_what_is_queued() {
+        let root = std::env::temp_dir().join(format!("hookecho-janitor-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&root);
+        let file = root.join("big.bin");
+        std::fs::write(&file, vec![0u8; 4096]).expect("write");
+        super::sweep_later(root.clone(), "janitor test", 1024);
+        for _ in 0..100 {
+            if !file.exists() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        assert!(!file.exists(), "the queued sweep never ran");
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

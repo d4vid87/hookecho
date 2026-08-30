@@ -69,7 +69,7 @@ pub fn tile_url(x: u32, y: u32) -> String {
 }
 
 /// Disk path a DEM tile caches at. Mirrors the basemap layout (`<root>/<provider>/default/z/x/y`)
-/// so `sweep_tile_cache` and the chase-pack downloader need no special case.
+/// so the tile-cache sweep and the chase-pack downloader need no special case.
 pub fn tile_path(root: &std::path::Path, x: u32, y: u32) -> std::path::PathBuf {
     root.join(DEM_PROVIDER)
         .join("default")
