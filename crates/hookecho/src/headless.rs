@@ -71,19 +71,20 @@ fn cam_or_env(lon: f64, lat: f64, zoom: f64) -> Camera {
     Camera::at_lonlat(lon, lat, asked.unwrap_or(zoom))
 }
 
-/// Basemap for the national-layer renders, so field mosaics sit over a real map instead of
-/// the bare clear color. Default: dark vector tiles (same fetch path as `run`).
-/// `HOOKECHO_BASEMAP=<slug>` switches to any raster style, e.g. `mapbox-satellite-streets`
-/// (provider keys come from the saved Settings — never logged).
-fn national_basemap(
-    rt: &tokio::runtime::Runtime,
-    camera: &Camera,
-) -> (
+/// Raster tiles, vector tiles and the place names that came with them.
+type Basemap = (
     Vec<crate::render::PendingTile>,
     Vec<crate::render::VisibleTile>,
     Vec<crate::render::PendingVectorTile>,
     Vec<crate::render::TileId>,
-) {
+    Vec<crate::vector_tiles::PlaceLabel>,
+);
+
+/// Basemap for the national-layer renders, so field mosaics sit over a real map instead of
+/// the bare clear color. Default: dark vector tiles (same fetch path as `run`).
+/// `HOOKECHO_BASEMAP=<slug>` switches to any raster style, e.g. `mapbox-satellite-streets`
+/// (provider keys come from the saved Settings — never logged).
+fn national_basemap(rt: &tokio::runtime::Runtime, camera: &Camera) -> Basemap {
     let vp = (size() as f32, size() as f32);
     let client = reqwest::Client::new();
     if let Ok(slug) = std::env::var("HOOKECHO_BASEMAP") {
@@ -100,7 +101,7 @@ fn national_basemap(
                 &settings.maptiler_key,
             ));
             println!("basemap {}: {} raster tiles", style.label(), tiles.len());
-            return (tiles, vis, Vec::new(), Vec::new());
+            return (tiles, vis, Vec::new(), Vec::new(), Vec::new());
         }
     }
     let vis = crate::tiles::tile_cover(camera, vp, 14, 0.0);
@@ -114,21 +115,21 @@ fn national_basemap(
                 camera.zoom,
                 &vis,
             )
-            .await
-            .0,
+            .await,
         )
     });
     match tiles {
-        Some(t) => {
+        Some((t, labels)) => {
             println!("basemap: {} vector tiles", t.len());
             (
                 Vec::new(),
                 Vec::new(),
                 t,
                 vis.iter().map(|v| v.id).collect(),
+                labels,
             )
         }
-        None => (Vec::new(), Vec::new(), Vec::new(), Vec::new()),
+        None => (Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new()),
     }
 }
 
@@ -1291,7 +1292,7 @@ pub fn run_overlay(out_path: &str) -> anyhow::Result<()> {
 
     let zoom = 4.0;
     let camera = cam_or_env(-97.0, 38.0, zoom); // CONUS center
-    let (new_tiles, visible, new_vector_tiles, visible_vector) = national_basemap(&rt, &camera);
+    let (new_tiles, visible, new_vector_tiles, visible_vector, _place_labels) = national_basemap(&rt, &camera);
     let geom = overlay_build::build(&features, zoom);
     println!(
         "tessellated {} verts / {} indices",
@@ -1399,7 +1400,8 @@ pub fn run_mrms(out_path: &str) -> anyhow::Result<()> {
     };
 
     let camera = cam_or_env(-97.0, 38.0, 4.0);
-    let (new_tiles, visible, new_vector_tiles, visible_vector) = national_basemap(&rt, &camera);
+    let (new_tiles, visible, new_vector_tiles, visible_vector, place_labels) =
+        national_basemap(&rt, &camera);
     let (center, scale) = camera.world_to_clip_uniform((size() as f32, size() as f32));
     // Same opt-in as the site renders: bare mosaic for the CLI verifier, warnings and a caption
     // for the one the server publishes.
@@ -1416,7 +1418,9 @@ pub fn run_mrms(out_path: &str) -> anyhow::Result<()> {
             table: table.clone(),
             unit: Moment::Reflectivity.units(),
         }),
-        labels: Vec::new(),
+        // The same city names the site frames carry — a continental mosaic with no place on it
+        // is a shape, not a map.
+        labels: screen_labels(&place_labels, &camera, (size() as f32, size() as f32)),
     });
     let cb = MapCallback {
         pane: 0,
@@ -1471,7 +1475,7 @@ pub fn run_lightning(out_path: &str) -> anyhow::Result<()> {
 
     let upload = crate::app::lightning_upload(&field);
     let camera = cam_or_env(-97.0, 38.0, 4.0);
-    let (new_tiles, visible, new_vector_tiles, visible_vector) = national_basemap(&rt, &camera);
+    let (new_tiles, visible, new_vector_tiles, visible_vector, _place_labels) = national_basemap(&rt, &camera);
     let (center, scale) = camera.world_to_clip_uniform((size() as f32, size() as f32));
     let cb = MapCallback {
         pane: 0,
@@ -1542,7 +1546,7 @@ pub fn run_field(slug: &str, out_path: &str) -> anyhow::Result<()> {
     let field = field.decimated(8192); // fit oversized (14000×7000) rotation/AzShear grids
     let upload = crate::app::field_upload_indexed(layer, &field);
     let camera = cam_or_env(-97.0, 38.0, 4.0);
-    let (new_tiles, visible, new_vector_tiles, visible_vector) = national_basemap(&rt, &camera);
+    let (new_tiles, visible, new_vector_tiles, visible_vector, _place_labels) = national_basemap(&rt, &camera);
     let (center, scale) = camera.world_to_clip_uniform((size() as f32, size() as f32));
     let cb = MapCallback {
         pane: 0,
@@ -1641,7 +1645,7 @@ pub fn run_global(model: &str, slug: &str, out_path: &str) -> anyhow::Result<()>
 
     let upload = crate::app::field_upload_indexed(layer, &field);
     let camera = cam_or_env(0.0, 20.0, 2.0);
-    let (new_tiles, visible, new_vector_tiles, visible_vector) = national_basemap(&rt, &camera);
+    let (new_tiles, visible, new_vector_tiles, visible_vector, _place_labels) = national_basemap(&rt, &camera);
     let (center, scale) = camera.world_to_clip_uniform((size() as f32, size() as f32));
     let cb = MapCallback {
         pane: 0,
@@ -1755,7 +1759,7 @@ pub fn run_diff(slug: &str, out_path: &str) -> anyhow::Result<()> {
         crate::fielddiff::diverging_lut(range, deadband),
     );
     let camera = cam_or_env(-97.0, 38.0, 4.0);
-    let (new_tiles, visible, new_vector_tiles, visible_vector) = national_basemap(&rt, &camera);
+    let (new_tiles, visible, new_vector_tiles, visible_vector, _place_labels) = national_basemap(&rt, &camera);
     let (center, scale) = camera.world_to_clip_uniform((size() as f32, size() as f32));
     let cb = MapCallback {
         pane: 0,
@@ -2074,7 +2078,7 @@ pub fn run_l3grid(kind: &str, site: &str, out_path: &str) -> anyhow::Result<()> 
     );
     let upload = crate::app::field_upload_indexed(layer, &field);
     let camera = cam_or_env(clon, clat, 7.0);
-    let (new_tiles, visible, new_vector_tiles, visible_vector) = national_basemap(&rt, &camera);
+    let (new_tiles, visible, new_vector_tiles, visible_vector, _place_labels) = national_basemap(&rt, &camera);
     let (center, scale) = camera.world_to_clip_uniform((size() as f32, size() as f32));
     let cb = MapCallback {
         pane: 0,
@@ -2147,7 +2151,7 @@ pub fn run_env(slug: &str, out_path: &str) -> anyhow::Result<()> {
 
     let upload = crate::app::field_upload_indexed(layer, f);
     let camera = cam_or_env(-97.0, 38.0, 4.0);
-    let (new_tiles, visible, new_vector_tiles, visible_vector) = national_basemap(&rt, &camera);
+    let (new_tiles, visible, new_vector_tiles, visible_vector, _place_labels) = national_basemap(&rt, &camera);
     let (center, scale) = camera.world_to_clip_uniform((size() as f32, size() as f32));
     let cb = MapCallback {
         pane: 0,
@@ -2329,7 +2333,7 @@ pub fn run_hrrr_layer(
         lut: crate::colormap::bake_lut(table, (vmin, vspan_max), None).to_vec(),
     };
     let camera = cam_or_env(-97.0, 38.0, 4.0);
-    let (new_tiles, visible, new_vector_tiles, visible_vector) = national_basemap(&rt, &camera);
+    let (new_tiles, visible, new_vector_tiles, visible_vector, _place_labels) = national_basemap(&rt, &camera);
     let (center, scale) = camera.world_to_clip_uniform((size() as f32, size() as f32));
     let cb = MapCallback {
         pane: 0,
@@ -2365,7 +2369,7 @@ fn render_field_png(
     out_path: &str,
 ) -> anyhow::Result<()> {
     let camera = cam_or_env(-97.0, 38.0, 4.0);
-    let (new_tiles, visible, new_vector_tiles, visible_vector) = national_basemap(rt, &camera);
+    let (new_tiles, visible, new_vector_tiles, visible_vector, _place_labels) = national_basemap(rt, &camera);
     let (center, scale) = camera.world_to_clip_uniform((size() as f32, size() as f32));
     let cb = MapCallback {
         pane: 0,
