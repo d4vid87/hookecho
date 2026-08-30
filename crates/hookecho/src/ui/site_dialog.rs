@@ -22,6 +22,10 @@ pub struct SiteDialog {
     pub filter: String,
     pub sort: SortCol,
     pub desc: bool,
+    /// Show only this network; `None` is everything. Distance sort is the right default, but it
+    /// also means a user in North America never scrolls far enough to learn that the DWD and
+    /// OPERA radars exist.
+    pub network: Option<wxdata::sites::Network>,
 }
 
 struct Row {
@@ -59,6 +63,11 @@ pub fn show(
     // from which table it is in — the old `starts_with('T')` guess labelled TJUA (a WSR-88D) a
     // terminal radar.
     let mut rows: Vec<Row> = wxdata::sites::all()
+        .filter(|s| {
+            dialog
+                .network
+                .is_none_or(|n| wxdata::sites::network(s.id) == n)
+        })
         .filter(|s| {
             needle.is_empty()
                 || s.id.to_ascii_uppercase().contains(&needle)
@@ -125,6 +134,21 @@ pub fn show(
             if ui.button("Home").clicked() {
                 go_home = true;
             }
+        });
+        // Network chips: the picker's only route to the non-US radars, since distance sort buries
+        // them behind every site on the user's own continent.
+        ui.horizontal_wrapped(|ui| {
+            use wxdata::sites::Network;
+            let mut chip = |ui: &mut egui::Ui, label: &str, net: Option<Network>| {
+                if ui.selectable_label(dialog.network == net, label).clicked() {
+                    dialog.network = net;
+                }
+            };
+            chip(ui, "All", None);
+            chip(ui, "WSR-88D", Some(Network::Nexrad));
+            chip(ui, "TDWR", Some(Network::Tdwr));
+            chip(ui, "DWD", Some(Network::Dwd));
+            chip(ui, "OPERA", Some(Network::Opera));
         });
         ui.separator();
 
