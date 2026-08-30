@@ -603,15 +603,17 @@ This is what serves the imagery on hookecho.io. The origin stays on loopback and
 Cloudflare reaches it through a tunnel, so nothing is exposed on the box itself:
 
 ```sh
-# on the box: the origin, loopback only, presets public
-hookecho --serve 8080 --public --serve-token "$(cat ~/.config/hookecho/img-token)"
-
-# the tunnel, once
-cloudflared tunnel create hookecho-img
-cloudflared tunnel route dns hookecho-img img.hookecho.io
-# ingress: img.hookecho.io -> http://127.0.0.1:8080
-cloudflared tunnel run hookecho-img
+cargo build --release
+cloudflared tunnel login          # opens a browser, once per machine
+scripts/img-origin/bootstrap.sh   # --port 8087 --hostname img.hookecho.io
 ```
+
+That script is the whole recipe: it generates the token if there isn't one (0600, and
+mirrored into settings.json), creates the tunnel and points the DNS record at it, writes
+the four systemd user units — the origin, the tunnel, and a four-minute timer that keeps
+the national mosaic warm — turns on lingering so they survive logout, and health-checks
+the result. Every step checks before it acts, so running it again after a rebuild or a
+reinstall is the supported way to use it rather than a thing to be careful about.
 
 The images ship `Cache-Control: public, max-age=300`, so Cloudflare answers the
 repeat views and the box renders roughly one frame per site per five minutes.
