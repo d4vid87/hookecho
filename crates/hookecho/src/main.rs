@@ -35,7 +35,12 @@ fn main() -> eframe::Result<()> {
     }
 
     hookecho::perf::mark_start();
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
+    // zbus (via ksni, notify-rust, ashpd, accesskit) logs every D-Bus dispatch at INFO through
+    // tracing-log, which buried this app's own lines. RUST_LOG still overrides the lot.
+    env_logger::Builder::from_env(
+        env_logger::Env::default().default_filter_or("info,zbus=warn,tracing=warn,ksni=warn"),
+    )
+    .init();
     // A panic on the desktop goes to a terminal nobody launched the app from; leave a report the
     // next start can offer back instead.
     hookecho::crash::install_hook();
