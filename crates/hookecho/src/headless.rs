@@ -24,6 +24,22 @@ fn size() -> u32 {
     SIZE_PX.load(std::sync::atomic::Ordering::Relaxed)
 }
 
+/// Whether the renders that follow carry warning polygons, a caption, a color bar and city
+/// labels. Off for the CLI verifiers and the golden tests, which want the bare pipeline; on for
+/// the server, whose renders are shared as pictures and have to say what they are.
+///
+/// Process-global for the same reason as the two knobs above, and set under the same lock.
+static EXTRAS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Ask for warnings + chrome (or not) on the renders that follow.
+pub fn set_extras(on: bool) {
+    EXTRAS.store(on, std::sync::atomic::Ordering::Relaxed);
+}
+
+fn extras() -> bool {
+    EXTRAS.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 /// Ask for a different output size (256..=2048 px) and/or zoom for the renders that follow.
 /// `None` leaves that knob where it was.
 pub fn set_output(px: Option<u32>, zoom: Option<f64>) {
@@ -113,6 +129,79 @@ fn national_basemap(
     }
 }
 
+/// The active warning polygons, tessellated for the overlay layer — or `None` when nothing is
+/// warned and there is nothing to draw.
+///
+/// Only the three polygon warnings the app leads with: watches and advisories are county-sized
+/// wash that hides the radar underneath, which is the thing the picture is of.
+fn warnings_overlay(
+    rt: &tokio::runtime::Runtime,
+    client: &reqwest::Client,
+    zoom: f64,
+) -> Option<OverlayUpload> {
+    let features = rt.block_on(wxdata::alerts::fetch_polygon_alerts(client));
+    let features = match features {
+        Ok(f) => f,
+        // A picture with no warnings on it is worth more than no picture.
+        Err(e) => {
+            log::warn!("alerts for render unavailable: {e}");
+            return None;
+        }
+    };
+    let warned: Vec<_> = features.into_iter().filter(is_lead_warning).collect();
+    if warned.is_empty() {
+        return None;
+    }
+    let geom = overlay_build::build(&warned, zoom);
+    Some(OverlayUpload {
+        vertices: geom.vertices,
+        indices: geom.indices,
+    })
+}
+
+/// Tornado, severe thunderstorm and flash flood warnings — the three the app's overlay leads with.
+fn is_lead_warning(f: &wxdata::overlay::GeoFeature) -> bool {
+    f.kind == wxdata::overlay::FeatureKind::Warning
+        && matches!(
+            f.title.as_str(),
+            "Tornado Warning" | "Severe Thunderstorm Warning" | "Flash Flood Warning"
+        )
+}
+
+/// The one line under the picture: what radar, what product, what tilt, when, and whose render.
+fn caption(site: &str, moment: Moment, elevation_deg: f32, at: Option<&str>) -> String {
+    let when = at.unwrap_or("latest");
+    format!(
+        "{site} · {} {elevation_deg:.1}° · {when} · hookecho.io",
+        moment.short_name()
+    )
+}
+
+/// City names, projected to pixels, biggest places first so the collision pass keeps those.
+fn screen_labels(
+    labels: &[crate::vector_tiles::PlaceLabel],
+    camera: &Camera,
+    vp: (f32, f32),
+) -> Vec<(f32, f32, String)> {
+    let mut cities: Vec<_> = labels.iter().filter(|l| l.city).collect();
+    cities.sort_by_key(|l| l.rank);
+    cities
+        .iter()
+        .map(|l| {
+            let (x, y) =
+                camera.world_to_screen((l.world[0] as f64, l.world[1] as f64), vp);
+            (x, y, l.name.clone())
+        })
+        .filter(|(x, y, _)| *x > 0.0 && *y > 0.0 && *x < vp.0 && *y < vp.1)
+        .take(10)
+        .collect()
+}
+
+/// A volume time as it appears in a caption: `2026-08-29 20:32Z`, always UTC.
+fn stamp_time(t: &chrono::DateTime<chrono::Utc>) -> String {
+    t.format("%Y-%m-%d %H:%MZ").to_string()
+}
+
 /// Render one real radar sweep for `site` to a PNG.
 ///
 /// `pal` optionally overrides the moment's colormap with a GRLevelX `.pal` file (verifies the
@@ -140,7 +229,9 @@ pub fn run(
         None => crate::colormap::default_table(moment).clone(),
     };
 
-    let sweep = rt.block_on(async {
+    // The volume's own time, formatted, for the caption — carried as a string because each
+    // network hands back a different chrono type for it and the caption is all any of them feed.
+    let (sweep, scan_time) = rt.block_on(async {
         // Only NEXRAD has a volume archive to scrub; every other network publishes its current
         // volume and nothing else. Saying so is better than quietly rendering "now" for a request
         // that asked for last Tuesday.
@@ -161,10 +252,13 @@ pub fn run(
                 }
                 wxdata::sites::Network::Nexrad => unreachable!("guarded above"),
             }?;
-            let (name, _time, scan) =
+            let (name, time, scan) =
                 fetched.ok_or_else(|| anyhow::anyhow!("no current volume for {site}"))?;
             eprintln!("live volume: {name}");
-            return level2::bin_scan_opts(&scan, moment, tilt, dealias);
+            return Ok((
+                level2::bin_scan_opts(&scan, moment, tilt, dealias)?,
+                Some(stamp_time(&time)),
+            ));
         }
         // Archive mode: list a specific UTC day and pick the volume nearest `hhmm` — the exact
         // path the timeline uses when scrubbing (list_volumes -> download_scan by identifier).
@@ -190,16 +284,27 @@ pub fn run(
                 None => frames.into_iter().next_back().unwrap(),
             };
             eprintln!("archive frame: {}", id.name());
+            let at = id.date_time().map(|t| stamp_time(&t));
             let scan = level2::download_scan(id, None).await?;
-            return level2::bin_scan_opts(&scan, moment, tilt, dealias);
+            return Ok((level2::bin_scan_opts(&scan, moment, tilt, dealias)?, at));
         }
 
         let mut day = chrono::Utc::now().date_naive();
         for _ in 0..3 {
-            match level2::download_latest_scan(site, day).await {
-                Ok(scan) => return level2::bin_scan_opts(&scan, moment, tilt, dealias),
-                Err(e) => {
-                    eprintln!("{day}: {e}");
+            // `download_latest_scan` throws the volume identifier away, and the identifier is
+            // where the volume's time lives — so the same two calls are made here by hand.
+            let latest = level2::list_volumes(site, day)
+                .await
+                .map(|mut v| v.pop())
+                .unwrap_or_default();
+            match latest {
+                Some(id) => {
+                    let at = id.date_time().map(|t| stamp_time(&t));
+                    let scan = level2::download_scan(id, None).await?;
+                    return Ok((level2::bin_scan_opts(&scan, moment, tilt, dealias)?, at));
+                }
+                None => {
+                    eprintln!("{day}: no volumes");
                     day = day.pred_opt().unwrap();
                 }
             }
@@ -246,6 +351,7 @@ pub fn run(
     } else {
         (Vec::new(), Vec::new())
     };
+    let mut place_labels: Vec<crate::vector_tiles::PlaceLabel> = Vec::new();
     let (new_vector_tiles, visible_vector) = if is_vector {
         let dark = basemap == BasemapStyle::Dark;
         let tess_zoom = camera.zoom;
@@ -282,10 +388,24 @@ pub fn run(
             println!("  label: {} (rank {}, city {})", l.name, l.rank, l.city);
         }
         let ids: Vec<crate::render::TileId> = vis.iter().map(|v| v.id).collect();
+        place_labels = labels;
         (tiles, ids)
     } else {
         (Vec::new(), Vec::new())
     };
+
+    // Warnings and chrome, when the caller asked for them (the server does; the verifiers do not).
+    let overlay = extras()
+        .then(|| warnings_overlay(&rt, &client, camera.zoom))
+        .flatten();
+    let stamp = extras().then(|| crate::chrome::Stamp {
+        caption: caption(site, moment, sweep.elevation_deg, scan_time.as_deref()),
+        bar: Some(crate::chrome::Bar {
+            table: table.clone(),
+            unit: moment.units(),
+        }),
+        labels: screen_labels(&place_labels, &camera, vp),
+    });
 
     let cb = MapCallback {
         pane: 0,
@@ -299,8 +419,8 @@ pub fn run(
             &sweep, &table, None, smooth, storm_uv, None, false,
         )),
         draw_radar: true,
-        overlay_upload: None,
-        draw_overlay: false,
+        draw_overlay: overlay.is_some(),
+        overlay_upload: overlay,
         field_uploads: Vec::new(),
         field_draws: Vec::new(),
         clear_tiles: false,
@@ -312,7 +432,7 @@ pub fn run(
         wind_upload: None,
         wind: None,
     };
-    render_to_png(&rt, cb, out_path)
+    render_to_png_stamped(&rt, cb, out_path, stamp.as_ref())
 }
 
 /// Verify the multi-pane render path: prepare two panes with different cameras (pane 1 last),
@@ -1249,6 +1369,23 @@ pub fn run_mrms(out_path: &str) -> anyhow::Result<()> {
     let camera = cam_or_env(-97.0, 38.0, 4.0);
     let (new_tiles, visible, new_vector_tiles, visible_vector) = national_basemap(&rt, &camera);
     let (center, scale) = camera.world_to_clip_uniform((size() as f32, size() as f32));
+    // Same opt-in as the site renders: bare mosaic for the CLI verifier, warnings and a caption
+    // for the one the server publishes.
+    let client = reqwest::Client::new();
+    let overlay = extras()
+        .then(|| warnings_overlay(&rt, &client, camera.zoom))
+        .flatten();
+    let stamp = extras().then(|| crate::chrome::Stamp {
+        caption: format!(
+            "MRMS composite reflectivity · {} · hookecho.io",
+            stamp_time(&field.time)
+        ),
+        bar: Some(crate::chrome::Bar {
+            table: table.clone(),
+            unit: Moment::Reflectivity.units(),
+        }),
+        labels: Vec::new(),
+    });
     let cb = MapCallback {
         pane: 0,
         camera_center: center,
@@ -1259,8 +1396,8 @@ pub fn run_mrms(out_path: &str) -> anyhow::Result<()> {
         visible,
         radar_upload: None,
         draw_radar: false,
-        overlay_upload: None,
-        draw_overlay: false,
+        draw_overlay: overlay.is_some(),
+        overlay_upload: overlay,
         field_uploads: vec![(crate::render::FieldLayer::Mrms, upload)],
         field_draws: vec![(crate::render::FieldLayer::Mrms, 1.0)],
         clear_tiles: false,
@@ -1272,7 +1409,7 @@ pub fn run_mrms(out_path: &str) -> anyhow::Result<()> {
         wind_upload: None,
         wind: None,
     };
-    render_to_png(&rt, cb, out_path)
+    render_to_png_stamped(&rt, cb, out_path, stamp.as_ref())
 }
 
 /// Fetch the latest MRMS lightning-density mosaic, print stats, and render it over CONUS.
@@ -2777,6 +2914,18 @@ fn render_to_png(
     cb: MapCallback,
     out_path: &str,
 ) -> anyhow::Result<()> {
+    render_to_png_stamped(rt, cb, out_path, None)
+}
+
+/// As [`render_to_png`], with `stamp` painted onto the pixels after readback and before the file
+/// is written. The chrome is drawn on the CPU precisely so it cannot vary with the adapter — see
+/// `chrome.rs`.
+fn render_to_png_stamped(
+    rt: &tokio::runtime::Runtime,
+    cb: MapCallback,
+    out_path: &str,
+    stamp: Option<&crate::chrome::Stamp>,
+) -> anyhow::Result<()> {
     let (device, queue, adapter) = init_gpu(rt)?;
     println!("adapter: {}", adapter.get_info().name);
 
@@ -2863,6 +3012,9 @@ fn render_to_png(
     drop(mapped);
     buffer.unmap();
 
+    if let Some(stamp) = stamp {
+        crate::chrome::draw(&mut rgba, size(), size(), stamp);
+    }
     image::save_buffer(out_path, &rgba, size(), size(), image::ColorType::Rgba8)?;
     println!("wrote {out_path}");
     Ok(())

@@ -426,6 +426,15 @@ const MAX_POINTS: usize = 8;
 ///
 /// `// ponytail: capped at MAX_POINTS queries; a state or bbox query if someone saves more
 /// locations than that and misses advisories at the ones past the cap.`
+/// The active alerts that carry their own polygon, and nothing else.
+///
+/// [`fetch_active`] follows every zone-only alert to the zone geometry service, which is dozens of
+/// extra requests for shapes a rendered picture does not use — the warnings worth drawing over
+/// radar all ship a polygon in the feed itself.
+pub async fn fetch_polygon_alerts(client: &reqwest::Client) -> anyhow::Result<Vec<GeoFeature>> {
+    parse_alerts(&get_alerts(client, ALERTS_URL).await?)
+}
+
 pub async fn fetch_active(
     client: &reqwest::Client,
     points: &[(f64, f64)],
