@@ -2511,6 +2511,9 @@ pub struct HookEchoApp {
     /// When the user last did anything — the input the idle heartbeat listens for. Also what
     /// "a gesture is in progress" is read from.
     last_input: Instant,
+    /// A pointer or finger is down this frame. Read once at the top of `ui`, because the overlay
+    /// tessellation asks it before any pane has drawn.
+    gesture_live: bool,
     /// Perf readout state: whether `HOOKECHO_PERF=1` asked for the window, the frame count and
     /// mark the frames-per-minute number is derived from, and the last idle interval requested.
     #[cfg(not(target_arch = "wasm32"))]
@@ -3197,6 +3200,7 @@ impl HookEchoApp {
             embed: is_embed(),
             embed_live: false,
             last_input: Instant::now(),
+            gesture_live: false,
             #[cfg(not(target_arch = "wasm32"))]
             perf: PerfReadout::new(),
             #[cfg(target_arch = "wasm32")]
@@ -8688,7 +8692,19 @@ impl HookEchoApp {
         }
         let zoom = self.views[self.active].camera.zoom;
         let bucket = (zoom * 2.0).round() as i32;
-        if self.overlay_gen != self.built_gen || bucket != self.built_zoom_bucket {
+        // A pinch crosses several half-zoom buckets, and each crossing used to re-run lyon over
+        // every overlay ring on the UI thread, mid-gesture. Deferred while a finger is down: the
+        // frame after the release rebuilds to whatever bucket the gesture landed on, so the
+        // resting state is the same one and the intermediate tessellations were never seen for
+        // more than a frame anyway.
+        //
+        // A geometry change (`overlay_gen`) is not deferred — that is new data arriving, not the
+        // camera moving, and it should appear when it lands.
+        if should_retess(
+            self.gesture_live,
+            self.overlay_gen != self.built_gen,
+            bucket != self.built_zoom_bucket,
+        ) {
             let mut geom = overlay_build::build(&self.overlays, zoom);
             let pf: Vec<(&wxdata::placefile::PlaceItem, f32)> = self
                 .visible_placefile_iter()
@@ -13940,6 +13956,13 @@ pub(crate) fn to_upload(
     }
 }
 
+/// Whether the overlay geometry should be re-tessellated this frame.
+///
+/// A zoom-bucket crossing waits for the gesture to end; new geometry does not.
+fn should_retess(gesture_live: bool, geometry_changed: bool, bucket_changed: bool) -> bool {
+    geometry_changed || (bucket_changed && !gesture_live)
+}
+
 /// Every radar site with its world-space position, projected once.
 ///
 /// The table is static and the projection is a `ln(tan(...))` per site; ~350 of them ran every
@@ -14542,6 +14565,7 @@ impl eframe::App for HookEchoApp {
         // force one refresh rather than making the user wait out the poll interval.
         self.frame_nr = self.frame_nr.wrapping_add(1);
         wxdata::stats::bump(wxdata::stats::Counter::FramesDrawn);
+        self.gesture_live = ctx.input(|i| i.pointer.any_down() || i.any_touches());
         #[cfg(not(target_arch = "wasm32"))]
         self.perf.tick(ctx);
         #[cfg(debug_assertions)]
@@ -16581,6 +16605,21 @@ mod field_lut_tests {
 
 #[cfg(test)]
 mod tests {
+
+    /// New geometry appears when it lands; a zoom-bucket crossing waits for the finger to lift,
+    /// so a pinch across three buckets tessellates once instead of three times.
+    #[test]
+    fn a_pinch_defers_the_retessellation_but_new_geometry_never_waits() {
+        use super::should_retess;
+        assert!(should_retess(false, false, true), "quiet: rebuild on a bucket change");
+        assert!(!should_retess(true, false, true), "mid-gesture: wait");
+        assert!(
+            should_retess(true, true, true),
+            "new geometry mid-gesture is data arriving, not the camera moving"
+        );
+        assert!(!should_retess(true, false, false));
+        assert!(!should_retess(false, false, false), "nothing changed, nothing to do");
+    }
 
     /// A palette change must not re-send the sweep. Everything the GPU keeps (the gate bytes,
     /// the precipitation-flag grid) is left out of a LUT-only upload; the color table and the
