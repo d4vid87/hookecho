@@ -619,6 +619,22 @@ repeat views and the box renders roughly one frame per site per five minutes.
 no usable Vulkan device; leave it off where there's a GPU, the national mosaic is
 7000×3500 and notices.
 
+A request that arrives while a render is already running does not queue behind
+it — it serves the copy on disk, however old, and returns immediately. That is
+what a crawler walking a few hundred site pages does to a machine that renders
+one frame at a time, and waiting politely in line is how one crawl becomes an
+error page for everyone. The one case that has no answer is a frame that has
+never been rendered, so warm the disk once after a deploy:
+
+```sh
+scripts/warm-presets.sh                       # ~255 stills, serial, ~20 minutes
+scripts/warm-presets.sh https://img.hookecho.io
+```
+
+A four-minute timer re-fetching `/national.png` keeps the landing image warm at
+the edge; the per-site frames are left to render on demand, which is one render
+per site per five minutes at worst.
+
 For a desktop widget rather than a server, `--snapshot` writes the same render
 straight to a file:
 
