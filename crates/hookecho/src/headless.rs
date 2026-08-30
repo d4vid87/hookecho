@@ -2575,7 +2575,9 @@ pub fn run_3d(site: &str, out_path: &str, threshold_dbz: Option<f32>) -> anyhow:
     image::save_buffer(out_path, &rgba, size(), size(), image::ColorType::Rgba8)?;
     // Echo pixels = those differing from the uniform sRGB background clear (~48,48,63).
     let echo = rgba
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .filter(|p| {
             (p[0] as i16 - 48).abs() + (p[1] as i16 - 48).abs() + (p[2] as i16 - 63).abs() > 30
         })
@@ -3265,8 +3267,10 @@ mod golden_tests {
         // letting a real render regression through.
         let bad = expected
             .as_raw()
-            .chunks_exact(4)
-            .zip(actual.chunks_exact(4))
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .zip(actual.as_chunks::<4>().0)
             .filter(|(e, a)| {
                 e.iter()
                     .zip(a.iter())

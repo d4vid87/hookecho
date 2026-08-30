@@ -61,7 +61,7 @@ mod imp {
     fn logo_icon() -> ksni::Icon {
         let size = 64usize;
         let mut data = crate::icon::rgba(size); // RGBA
-        for px in data.chunks_exact_mut(4) {
+        for px in data.as_chunks_mut::<4>().0 {
             px.rotate_right(1); // RGBA -> ARGB
         }
         ksni::Icon {
