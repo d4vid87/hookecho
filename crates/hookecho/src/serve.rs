@@ -638,7 +638,9 @@ fn render_png(
     // through to "the latest volume" — which is a loop of the same frame six times.
     let hhmm = at.map(|t| t.format("%H:%M").to_string());
     {
-        let _one_at_a_time = server.render.lock().unwrap();
+        let Some(_one_at_a_time) = try_render(server, out)? else {
+            return Ok(std::fs::read(out)?);
+        };
         // Global knobs on the renderer, set under the same lock that serializes the render.
         crate::headless::set_output(Some(f.px), f.zoom);
         // Anything this server hands out is a picture someone will look at away from the app, so
@@ -659,6 +661,27 @@ fn render_png(
         )?;
     }
     Ok(std::fs::read(out)?)
+}
+
+/// The render lock, or `None` when somebody else has it and this frame already exists on disk.
+///
+/// A crawler walking the site directory asks for a few hundred renders at once. Queued on one
+/// mutex the last of them waits an hour — long past the point where the CDN in front gives up, so
+/// one crawl turns into an error page for everybody. A request that finds the renderer busy
+/// therefore does not wait: it serves whatever is on disk, however old, and is fast about it. A
+/// frame that has never been rendered at all is the only case left that can fail.
+fn try_render<'a>(
+    server: &'a Server,
+    out: &std::path::Path,
+) -> anyhow::Result<Option<std::sync::MutexGuard<'a, ()>>> {
+    match server.render.try_lock() {
+        Ok(guard) => Ok(Some(guard)),
+        Err(_) if out.is_file() => {
+            log::debug!("renderer busy; serving stale {}", out.display());
+            Ok(None)
+        }
+        Err(_) => anyhow::bail!("renderer busy, and this frame has never been rendered"),
+    }
 }
 
 /// Where rendered frames are kept between requests.
@@ -737,13 +760,15 @@ fn national(server: &Server) -> anyhow::Result<Vec<u8>> {
     let out = snapshot_dir()?.join("national.png");
     let png = match fresh_on_disk(&out) {
         Some(bytes) => bytes,
-        None => {
-            let _one_at_a_time = server.render.lock().unwrap();
-            crate::headless::set_output(Some(NATIONAL_PX), Some(NATIONAL_ZOOM));
-            crate::headless::set_extras(true);
-            crate::headless::run_mrms(out.to_string_lossy().as_ref())?;
-            std::fs::read(&out)?
-        }
+        None => match try_render(server, &out)? {
+            Some(_one_at_a_time) => {
+                crate::headless::set_output(Some(NATIONAL_PX), Some(NATIONAL_ZOOM));
+                crate::headless::set_extras(true);
+                crate::headless::run_mrms(out.to_string_lossy().as_ref())?;
+                std::fs::read(&out)?
+            }
+            None => std::fs::read(&out)?,
+        },
     };
     server
         .cache
