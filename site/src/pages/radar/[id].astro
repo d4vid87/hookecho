@@ -158,9 +158,12 @@ const net = NETWORKS[network];
           {/* The count comes from api.weather.gov, which knows about US warnings and nothing
               else — so the pill is US-only rather than a permanent honest zero. */}
           {!metric && (
-            <p class="warnings" data-point={`${site.lat},${site.lon}`}>
-              <span class="count">—</span> active warnings over this radar
-            </p>
+            <div class="warnbox">
+              <p class="warnings" data-point={`${site.lat},${site.lon}`} data-tz={site.tz}>
+                <span class="count">—</span> active warnings over this radar
+              </p>
+              <ul class="warnlist" hidden />
+            </div>
           )}
 
           <div class="cta">
@@ -178,12 +181,27 @@ const net = NETWORKS[network];
           </div>
 
           {loop && (
-            <LiveMosaic
-              src={loop}
-              fallback={loopFallback}
-              alt={`The current radar scan from ${site.id} at ${place}`}
-              caption={`${site.id} base reflectivity, the current volume, rendered by HookEcho.`}
-            />
+            <div class="view" data-site={site.id} data-nexrad={network === "nexrad" ? "1" : ""}>
+              <div class="chips">
+                <button type="button" class="chip on" data-product="REF">
+                  Reflectivity
+                </button>
+                <button type="button" class="chip" data-product="VEL">
+                  Velocity
+                </button>
+                {network === "nexrad" && (
+                  <button type="button" class="chip play" data-play>
+                    ▶ Play the last half hour
+                  </button>
+                )}
+              </div>
+              <LiveMosaic
+                src={loop}
+                fallback={loopFallback}
+                alt={`The current radar scan from ${site.id} at ${place}`}
+                caption={`${site.id} base reflectivity, the current volume, rendered by HookEcho.`}
+              />
+            </div>
           )}
 
           <dl class="facts">
@@ -330,11 +348,97 @@ const net = NETWORKS[network];
     fetch(`https://api.weather.gov/alerts/active?point=${point}`)
       .then((r) => (r.ok ? r.json() : Promise.reject(r.status)))
       .then((d) => {
-        const n = d?.features?.length ?? 0;
-        slot.textContent = String(n);
-        el.classList.toggle("hot", n > 0);
+        const features = d?.features ?? [];
+        slot.textContent = String(features.length);
+        el.classList.toggle("hot", features.length > 0);
+
+        // The same response the count came from already carries every warning in force. Naming
+        // them costs no extra request and answers the question the number only raises.
+        const list = document.querySelector<HTMLElement>(".warnlist");
+        if (!list || !features.length) return;
+        const tz = el.dataset.tz ?? undefined;
+        const when = (iso: string) => {
+          const d = new Date(iso);
+          return Number.isNaN(+d)
+            ? ""
+            : d.toLocaleString(undefined, {
+                timeZone: tz,
+                weekday: "short",
+                hour: "numeric",
+                minute: "2-digit",
+              });
+        };
+        list.innerHTML = "";
+        for (const f of features.slice(0, 8)) {
+          const p = f.properties ?? {};
+          const li = document.createElement("li");
+          const head = document.createElement("strong");
+          head.textContent = p.event ?? "Alert";
+          li.append(head);
+          const rest = document.createElement("span");
+          const until = p.ends || p.expires;
+          rest.textContent = [p.areaDesc, until && `until ${when(until)}`]
+            .filter(Boolean)
+            .join(" · ");
+          li.append(rest);
+          list.append(li);
+        }
+        list.hidden = false;
       })
       .catch(() => {});
+  }
+
+  // Reflectivity or velocity, and the loop only when somebody asks for it. Six hundred crawled
+  // pages each auto-playing a six-render loop is how one crawl becomes an outage; the still is
+  // the default and a click is the gate.
+  const view = document.querySelector<HTMLElement>(".view");
+  const fig = view?.querySelector<HTMLElement>(".mosaic");
+  const shot = fig?.querySelector("img");
+  const id = view?.dataset.site;
+  if (view && fig && shot && id) {
+    let product = "REF";
+    let playing = false;
+    const origin = "https://img.hookecho.io";
+    const t = () => Math.floor(Date.now() / (5 * 60 * 1000));
+    const draw = () => {
+      const path = playing ? "loop.gif" : "snapshot.png";
+      const url = `${origin}/${path}?site=${id}&product=${product}`;
+      const caption = fig.querySelector("figcaption");
+      if (caption) {
+        const what = product === "VEL" ? "base velocity" : "base reflectivity";
+        caption.textContent = playing
+          ? `${id} ${what}, the last half hour, rendered by HookEcho.`
+          : `${id} ${what}, the current volume, rendered by HookEcho.`;
+      }
+      // dataset.src is what LiveMosaic's refresh timer reads, so it has to follow.
+      fig.dataset.src = url;
+      shot.src = `${url}&t=${t()}`;
+    };
+    view.querySelectorAll<HTMLButtonElement>(".chip[data-product]").forEach((chip) =>
+      chip.addEventListener("click", () => {
+        product = chip.dataset.product!;
+        view
+          .querySelectorAll(".chip[data-product]")
+          .forEach((c) => c.classList.toggle("on", c === chip));
+        draw();
+      }),
+    );
+    view.querySelector<HTMLButtonElement>("[data-play]")?.addEventListener("click", (e) => {
+      playing = !playing;
+      (e.currentTarget as HTMLElement).textContent = playing
+        ? "■ Back to the current scan"
+        : "▶ Play the last half hour";
+      draw();
+    });
+
+    // Somewhere to come back to. Written here, read by /radar/.
+    try {
+      const seen: string[] = JSON.parse(localStorage.getItem("hookecho:recent") ?? "[]");
+      localStorage.setItem(
+        "hookecho:recent",
+        JSON.stringify([id, ...seen.filter((s) => s !== id)].slice(0, 5)),
+      );
+    } catch {}
   }
 </script>
 
@@ -349,6 +453,36 @@ const net = NETWORKS[network];
   .dim { color: var(--text-dim); max-width: 60ch; }
   .eyebrow a { color: inherit; }
   .cta { display: flex; gap: 0.75rem; flex-wrap: wrap; margin: 1.4rem 0 2rem; }
+  .warnlist {
+    list-style: none;
+    padding: 0;
+    margin: 0.6rem 0 1.4rem;
+    display: grid;
+    gap: 0.4rem;
+    max-width: 60ch;
+  }
+  .warnlist li {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    align-items: baseline;
+    border-left: 3px solid var(--ramp-4);
+    padding-left: 0.7rem;
+  }
+  .warnlist span { color: var(--text-dim); font-size: var(--text-sm); }
+  .chips { display: flex; gap: 0.5rem; flex-wrap: wrap; margin-bottom: 0.8rem; }
+  .chip {
+    font: inherit;
+    font-size: var(--text-sm);
+    color: var(--text-dim);
+    background: transparent;
+    border: 1px solid var(--stroke);
+    border-radius: 999px;
+    padding: 0.35rem 0.9rem;
+    cursor: pointer;
+  }
+  .chip.on { color: var(--text); border-color: var(--ramp-4); }
+  .chip:hover { color: var(--text); }
   .warnings {
     display: inline-flex;
     align-items: baseline;
