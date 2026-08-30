@@ -12,12 +12,38 @@ pub fn severity_rank(event: &str) -> u8 {
         5
     } else if e.contains("severe thunderstorm") && e.contains("warning") {
         4
+    // MeteoAlarm synthesizes its events as "{colour} {hazard} Warning" (see wxdata::meteoalarm),
+    // so the awareness level is right there in the string — without this a Red (level 4) event
+    // ranked exactly with a Yellow one, and Europe's worst day sorted like a drizzle advisory.
+    } else if e.contains("red") && e.contains("warning") {
+        5
+    } else if e.contains("orange") && e.contains("warning") {
+        4
     } else if e.contains("warning") {
         3
     } else if e.contains("watch") {
         2
     } else {
         1 // advisories, statements, etc.
+    }
+}
+
+#[cfg(test)]
+mod severity_tests {
+    use super::severity_rank;
+
+    #[test]
+    fn european_alerts_rank_by_colour() {
+        // MeteoAlarm's synthesized events, in the shape wxdata::meteoalarm produces them.
+        assert_eq!(severity_rank("Red wind Warning"), 5);
+        assert_eq!(severity_rank("Orange rain Warning"), 4);
+        assert_eq!(severity_rank("Yellow snow-ice Warning"), 3);
+        // US events keep their own order, and tornado still outranks everything.
+        assert_eq!(severity_rank("Tornado Warning"), 6);
+        assert_eq!(severity_rank("Flash Flood Warning"), 5);
+        assert_eq!(severity_rank("Severe Thunderstorm Warning"), 4);
+        assert_eq!(severity_rank("Tornado Watch"), 2);
+        assert_eq!(severity_rank("Special Weather Statement"), 1);
     }
 }
 

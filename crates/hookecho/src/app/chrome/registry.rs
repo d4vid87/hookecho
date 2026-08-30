@@ -394,7 +394,7 @@ impl HookEchoApp {
             (
                 T::Alerts,
                 "Severe",
-                "NWS alerts",
+                "Alerts (NWS · EU · Canada)",
                 "Official warning and watch polygons",
                 true,
             ),
