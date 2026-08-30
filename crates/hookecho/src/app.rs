@@ -2296,6 +2296,8 @@ pub struct HookEchoApp {
     hrrr_by_timeline: bool,
     /// Tray-menu command channel (Linux StatusNotifier); `None` if no tray host is available.
     tray_rx: std::sync::mpsc::Receiver<crate::tray::TrayCmd>,
+    /// Last state pushed to the tray, so an unchanged frame sends nothing.
+    tray_state: crate::tray::TrayState,
     /// True once a StatusNotifier host has taken the tray item; registration is async, so this
     /// can flip after the first frames.
     tray_present: std::sync::Arc<std::sync::atomic::AtomicBool>,
@@ -3111,6 +3113,7 @@ impl HookEchoApp {
             hrrr_last_fetch: None,
             hrrr_by_timeline: false,
             tray_rx: tray_rx_init,
+            tray_state: crate::tray::TrayState::default(),
             tray_present: tray_present_init,
             really_quit: false,
             show_storm_reports: false,
@@ -14741,9 +14744,23 @@ impl eframe::App for HookEchoApp {
         }
 
         // Tray menu commands (Linux StatusNotifier): restore the window or quit for real.
+        // Keep the tray menu telling the truth: alert count, mute state, starred sites. Sent only
+        // when it changes — every send is a D-Bus round trip on the tray thread.
         {
-            let rx = &self.tray_rx;
-            while let Ok(cmd) = rx.try_recv() {
+            let want = crate::tray::TrayState {
+                alerts: self.active_alert_features().len(),
+                muted: self.settings.mute_alerts,
+                starred: self.settings.presets.clone(),
+            };
+            if self.tray_state != want {
+                self.tray_state = want.clone();
+                crate::tray::set_state(want);
+            }
+        }
+        {
+            // Drained first: the handlers below need `&mut self`, and the receiver lives in it.
+            let cmds: Vec<crate::tray::TrayCmd> = self.tray_rx.try_iter().collect();
+            for cmd in cmds {
                 match cmd {
                     crate::tray::TrayCmd::Show => {
                         ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
@@ -14753,6 +14770,15 @@ impl eframe::App for HookEchoApp {
                     crate::tray::TrayCmd::Quit => {
                         self.really_quit = true;
                         ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                    }
+                    crate::tray::TrayCmd::Mute => {
+                        self.apply_action(BindableAction::ToggleMute, ctx);
+                    }
+                    crate::tray::TrayCmd::Site(id) => {
+                        // Same path the site dialog uses: `sync_pane` does the rest next frame.
+                        self.views[self.active].site = Some(id);
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
                     }
                 }
             }
