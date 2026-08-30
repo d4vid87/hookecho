@@ -26,7 +26,7 @@ const SNAPSHOT_TTL: Duration = Duration::from_secs(300);
 /// How many built answers are kept. The snapshot key carries `px` and `zoom`, which the client
 /// picks, so this cannot be a map that only grows — a poller walking zoom levels would otherwise
 /// pin every render it ever asked for.
-const ANSWER_CACHE: usize = 32;
+const ANSWER_CACHE: usize = 64;
 /// How many proxied responses are kept, and how many bytes they may take between them. An archive
 /// volume is a few MB, so the byte bound is what actually binds; the entry count stops a run of
 /// tiny tiles from holding a long tail.
@@ -205,6 +205,23 @@ impl From<(&'static str, &'static str, Vec<u8>)> for Reply {
     }
 }
 
+/// A rendered image, with the one header that lets a CDN in front of this server do its job.
+///
+/// The default is `no-cache` (see `respond`), which is right for the JSON routes and wrong for a
+/// render: the same frame is reused for `SNAPSHOT_TTL` here, so saying so out loud costs nothing
+/// and keeps repeat views off the box entirely.
+fn image_reply(ctype: &'static str, body: Vec<u8>) -> Reply {
+    Reply {
+        status: "200 OK",
+        ctype,
+        body,
+        headers: vec![(
+            "Cache-Control",
+            format!("public, max-age={}", SNAPSHOT_TTL.as_secs()),
+        )],
+    }
+}
+
 fn route(server: &Server, path: &str, query: &str, if_none_match: Option<&str>) -> Reply {
     count(match path {
         "/" => "index",
@@ -237,15 +254,15 @@ fn route(server: &Server, path: &str, query: &str, if_none_match: Option<&str>) 
             Err(e) => error_json(e).into(),
         },
         "/snapshot.png" => match snapshot(server, query) {
-            Ok(png) => ("200 OK", "image/png", png).into(),
+            Ok(png) => image_reply("image/png", png),
             Err(e) => error_json(e).into(),
         },
         "/loop.gif" => match loop_clip(server, query, crate::loopexport::LoopFormat::Gif) {
-            Ok(body) => ("200 OK", "image/gif", body).into(),
+            Ok(body) => image_reply("image/gif", body),
             Err(e) => error_json(e).into(),
         },
         "/loop.mp4" => match loop_clip(server, query, crate::loopexport::LoopFormat::Mp4) {
-            Ok(body) => ("200 OK", "video/mp4", body).into(),
+            Ok(body) => image_reply("video/mp4", body),
             Err(e) => error_json(e).into(),
         },
         "/metrics" => (
@@ -582,6 +599,18 @@ fn snapshot_dir() -> anyhow::Result<std::path::PathBuf> {
     Ok(dir)
 }
 
+/// The bytes of a rendered file that is younger than `SNAPSHOT_TTL`, if there is one.
+///
+/// Anything unreadable, empty, or without a usable modified time is treated as absent — a missing
+/// cache entry is a re-render, never an error.
+fn fresh_on_disk(path: &std::path::Path) -> Option<Vec<u8>> {
+    let age = std::fs::metadata(path).ok()?.modified().ok()?.elapsed().ok()?;
+    if age >= SNAPSHOT_TTL {
+        return None;
+    }
+    std::fs::read(path).ok().filter(|b| !b.is_empty())
+}
+
 /// A radar PNG through the same off-screen renderer the `--headless` verifier uses.
 ///
 // ponytail: one render at a time; the palette is still fixed. Add it when someone asks.
@@ -598,7 +627,13 @@ fn snapshot(server: &Server, query: &str) -> anyhow::Result<Vec<u8>> {
         return Ok(hit.1.clone());
     }
     let out = snapshot_dir()?.join(format!("snapshot-{}.png", f.tag()));
-    let png = render_png(server, &f, None, &out)?;
+    // Disk is the cache that survives a restart, and the loop path already reuses frames off it.
+    // Without this a process that has just started — or one whose LRU dropped this key — re-renders
+    // a file written seconds ago, which is the expensive half of the request.
+    let png = match fresh_on_disk(&out) {
+        Some(bytes) => bytes,
+        None => render_png(server, &f, None, &out)?,
+    };
     server
         .cache
         .lock()
@@ -1576,5 +1611,50 @@ mod tests {
         // Counters are process-wide and the test threads share them, so this asserts movement
         // rather than an exact delta — another test routing "/" must not fail this one.
         assert!(REQUESTS[i].load(Ordering::Relaxed) > before);
+    }
+}
+
+#[cfg(test)]
+mod cache_hygiene_tests {
+    use super::*;
+
+    /// A render is reusable for its whole TTL, and the answer says so — without this header a CDN
+    /// in front of the server treats every view as a fresh origin request.
+    #[test]
+    fn image_answers_are_cacheable() {
+        let reply = image_reply("image/png", vec![1, 2, 3]);
+        assert_eq!(reply.status, "200 OK");
+        assert!(reply
+            .headers
+            .contains(&("Cache-Control", "public, max-age=300".to_string())));
+    }
+
+    /// A file just written is reused; one backdated past the TTL is not; a missing one is absent.
+    #[test]
+    fn only_young_files_are_reused() {
+        let dir = std::env::temp_dir().join(format!("hookecho-fresh-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("snapshot.png");
+
+        assert!(fresh_on_disk(&path).is_none(), "no file is no answer");
+        std::fs::write(&path, b"pixels").unwrap();
+        assert_eq!(fresh_on_disk(&path).as_deref(), Some(&b"pixels"[..]));
+
+        // An empty file is what a half-finished render leaves behind, and it is not an answer.
+        std::fs::write(&path, b"").unwrap();
+        assert!(fresh_on_disk(&path).is_none());
+
+        // Backdated past the TTL: the volume has moved on, so the pixels have to be rebuilt.
+        std::fs::write(&path, b"pixels").unwrap();
+        let old = std::time::SystemTime::now() - SNAPSHOT_TTL - Duration::from_secs(1);
+        std::fs::File::options()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_modified(old)
+            .unwrap();
+        assert!(fresh_on_disk(&path).is_none(), "stale file was reused");
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 }
