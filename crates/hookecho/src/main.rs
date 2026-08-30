@@ -142,12 +142,13 @@ fn main() -> eframe::Result<()> {
 
     // Tray self-check: `hookecho --tray-test` spawns the tray and reports availability.
     if args.iter().any(|a| a == "--tray-test") {
-        match tray::spawn() {
-            Some(_rx) => {
-                println!("tray: StatusNotifier host present, tray icon spawned");
-                std::thread::sleep(std::time::Duration::from_millis(500));
-            }
-            None => println!("tray: no StatusNotifier host (would fall back to taskbar)"),
+        let (_rx, present) = tray::spawn();
+        // Registration is on its own thread now, so give it a moment before asking.
+        std::thread::sleep(std::time::Duration::from_millis(500));
+        if present.load(std::sync::atomic::Ordering::Relaxed) {
+            println!("tray: StatusNotifier host present, tray icon spawned");
+        } else {
+            println!("tray: no StatusNotifier host (would fall back to taskbar)");
         }
         return Ok(());
     }

@@ -13,7 +13,9 @@ pub enum TrayCmd {
 #[cfg(target_os = "linux")]
 mod imp {
     use super::TrayCmd;
+    use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::mpsc::{Receiver, Sender};
+    use std::sync::Arc;
 
     struct HookEchoTray {
         tx: Sender<TrayCmd>,
@@ -71,37 +73,48 @@ mod imp {
         }
     }
 
-    /// Spawn the tray service. Returns the command receiver, or `None` if no StatusNotifier host
-    /// is available (the app falls back to minimize-to-taskbar). The service `Handle` is leaked so
-    /// the tray lives for the process lifetime.
-    pub fn spawn() -> Option<Receiver<TrayCmd>> {
+    /// Spawn the tray service. Returns the command receiver and a flag that becomes true once a
+    /// StatusNotifier host has accepted the item (it stays false when there is none, and the app
+    /// falls back to minimize-to-taskbar).
+    ///
+    /// The registration itself is a blocking D-Bus round trip, so it happens on its own thread:
+    /// on the main thread it sat in front of the first frame, and a wedged host stalled launch
+    /// outright. The service `Handle` is leaked so the tray lives for the process lifetime.
+    pub fn spawn() -> (Receiver<TrayCmd>, Arc<AtomicBool>) {
         use ksni::blocking::TrayMethods;
         let (tx, rx) = std::sync::mpsc::channel();
-        let tray = HookEchoTray {
-            tx,
-            icon: logo_icon(),
-        };
-        match tray.spawn() {
-            Ok(handle) => {
-                std::mem::forget(handle);
-                Some(rx)
+        let present = Arc::new(AtomicBool::new(false));
+        let flag = Arc::clone(&present);
+        std::thread::spawn(move || {
+            let tray = HookEchoTray {
+                tx,
+                icon: logo_icon(),
+            };
+            match tray.spawn() {
+                Ok(handle) => {
+                    flag.store(true, Ordering::Relaxed);
+                    std::mem::forget(handle);
+                }
+                Err(e) => log::warn!("tray icon unavailable ({e}); using taskbar fallback"),
             }
-            Err(e) => {
-                log::warn!("tray icon unavailable ({e}); using taskbar fallback");
-                None
-            }
-        }
+        });
+        (rx, present)
     }
 }
 
 #[cfg(not(target_os = "linux"))]
 mod imp {
     use super::TrayCmd;
+    use std::sync::atomic::AtomicBool;
     use std::sync::mpsc::Receiver;
+    use std::sync::Arc;
 
-    /// No native tray on this platform yet (Windows would use `tray-icon`).
-    pub fn spawn() -> Option<Receiver<TrayCmd>> {
-        None
+    /// No native tray on this platform yet (Windows would use `tray-icon`). The receiver is a
+    /// live-but-empty channel so the call site needs no `cfg`.
+    pub fn spawn() -> (Receiver<TrayCmd>, Arc<AtomicBool>) {
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::mem::forget(tx); // keep the channel open rather than hand back a disconnected one
+        (rx, Arc::new(AtomicBool::new(false)))
     }
 }
 
