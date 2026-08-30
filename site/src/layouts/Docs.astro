@@ -55,7 +55,15 @@ const next = at >= 0 && at < pages.length - 1 ? pages[at + 1] : undefined;
 <!-- Pagefind builds its bundle from dist after astro build (the postbuild script), so these two
      files do not exist during dev and 404 there. is:inline keeps Vite from trying to resolve a
      path that is not on disk yet. Failing quietly is right: the sidebar is the fallback. -->
-<link rel="stylesheet" href="/pagefind/pagefind-ui.css" />
+<!-- Loaded without blocking the render: the search box is one widget on a documentation page,
+     and its stylesheet was holding up the text people came for. `media="print"` makes it a
+     non-blocking fetch; onload flips it back to every medium. -->
+<link
+  rel="stylesheet"
+  href="/pagefind/pagefind-ui.css"
+  media="print"
+  onload="this.media='all'"
+/>
 <script is:inline type="module">
   import("/pagefind/pagefind-ui.js")
     .then(({ PagefindUI }) => {

@@ -32,7 +32,13 @@ const everyMs = 5 * 60 * 1000;
     setInterval(() => {
       // Only while the tab is visible: a backgrounded tab refreshing a national radar image all
       // day is exactly the kind of thing that gets a hotlink blocked.
-      if (document.visibilityState === "visible") img.src = `${src}?t=${Date.now()}`;
+      // Quantized to the refresh cycle rather than `Date.now()`: a unique URL per tab per
+      // refresh is uncacheable by construction, so every tab pulled the whole GIF from the NWS
+      // every five minutes. Every tab in a cycle now asks for the same URL, and the second one
+      // is a cache hit.
+      if (document.visibilityState === "visible") {
+        img.src = `${src}?t=${Math.floor(Date.now() / every)}`;
+      }
     }, every);
   }
 </script>
