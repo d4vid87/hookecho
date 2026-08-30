@@ -1,24 +1,31 @@
 ---
-// The national mosaic, hotlinked live from the NWS's own RIDGE image server and re-fetched on a
-// timer. It is the cheapest possible proof that the page is looking at real weather right now.
+// A live radar image, re-fetched on a timer. It is the cheapest possible proof that the page is
+// looking at real weather right now.
+//
+// The source is our own origin (img.hookecho.io), which renders the frame the way the app does.
+// `fallback` is where to go if that render is not there: the NWS's RIDGE image for the frames it
+// publishes, and nothing at all for the ones it never did (TDWR, DWD, OPERA) — an empty fallback
+// hides the figure rather than leaving a broken image on the page.
 // ponytail: a cache-busting query on an <img> is the whole refresh mechanism — no canvas, no
 // preloading, no fade. The server updates roughly every 10 minutes; we ask every 5.
 interface Props {
   src?: string;
   alt?: string;
   caption?: string;
+  fallback?: string;
 }
 
 const {
-  src = "https://radar.weather.gov/ridge/standard/CONUS_0.gif",
+  src = "https://img.hookecho.io/national.png",
   alt = "The national radar mosaic across the United States, updated live",
   caption =
-    "Live national mosaic, straight from the NWS. HookEcho draws this from MRMS at full resolution.",
+    "Live national mosaic. HookEcho draws this from MRMS at full resolution, warnings and all.",
+  fallback = "https://radar.weather.gov/ridge/standard/CONUS_0.gif",
 } = Astro.props;
 const everyMs = 5 * 60 * 1000;
 ---
 
-<figure class="mosaic" data-src={src} data-every={everyMs}>
+<figure class="mosaic" data-src={src} data-every={everyMs} data-fallback={fallback}>
   <img src={src} alt={alt} />
   <figcaption>{caption}</figcaption>
 </figure>
@@ -28,6 +35,25 @@ const everyMs = 5 * 60 * 1000;
   const img = fig?.querySelector("img");
   const src = fig?.dataset.src;
   const every = Number(fig?.dataset.every ?? 0);
+
+  // One swap, never a loop: if our origin is down the NWS image takes over, and if there is no
+  // NWS image for this radar the figure leaves the page. A second failure is left alone.
+  if (fig && img) {
+    img.addEventListener(
+      "error",
+      () => {
+        const fallback = fig.dataset.fallback;
+        if (fallback) {
+          fig.dataset.src = fallback;
+          img.src = fallback;
+        } else {
+          fig.hidden = true;
+        }
+      },
+      { once: true },
+    );
+  }
+
   if (img && src && every > 0) {
     setInterval(() => {
       // Only while the tab is visible: a backgrounded tab refreshing a national radar image all
@@ -37,7 +63,11 @@ const everyMs = 5 * 60 * 1000;
       // every five minutes. Every tab in a cycle now asks for the same URL, and the second one
       // is a cache hit.
       if (document.visibilityState === "visible") {
-        img.src = `${src}?t=${Math.floor(Date.now() / every)}`;
+        // The current source, not the prop: after a fallback swap the timer has to keep
+        // refreshing whatever is actually on the page.
+        const url = fig?.dataset.src ?? src;
+        const join = url.includes("?") ? "&" : "?";
+        img.src = `${url}${join}t=${Math.floor(Date.now() / every)}`;
       }
     }, every);
   }

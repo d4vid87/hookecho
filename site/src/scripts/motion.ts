@@ -39,7 +39,10 @@ function format(value: number, template: string): string {
 
 function countUp(el: HTMLElement): void {
   const text = el.textContent ?? "";
-  const target = Number(el.dataset.countup ?? text.replace(/[^0-9.]/g, ""));
+  // `||`, not `??`: a bare `data-countup` is the empty string, which is present as far as `??`
+  // is concerned and `Number("")` is 0 — so the tile animated 0 -> 0 over the number in the
+  // markup. Every bare user wants the number it already shipped with.
+  const target = Number(el.dataset.countup || text.replace(/[^0-9.]/g, ""));
   if (!Number.isFinite(target)) return;
   const start = performance.now();
   const step = (now: number) => {
