@@ -10,6 +10,9 @@
 // preloading, no fade. The server updates roughly every 10 minutes; we ask every 5.
 interface Props {
   src?: string;
+  /// An MP4 of the same view. Shown instead of the still where it plays; the <img> below is the
+  /// poster, the reduced-motion answer and the fallback, so nothing depends on the video.
+  video?: string;
   alt?: string;
   caption?: string;
   fallback?: string;
@@ -17,6 +20,7 @@ interface Props {
 
 const {
   src = "https://img.hookecho.io/national.png",
+  video,
   alt = "The national radar mosaic across the United States, updated live",
   caption =
     "Live national mosaic. HookEcho draws this from MRMS at full resolution, warnings and all.",
@@ -26,6 +30,11 @@ const everyMs = 5 * 60 * 1000;
 ---
 
 <figure class="mosaic" data-src={src} data-every={everyMs} data-fallback={fallback}>
+  {
+    video && (
+      <video class="clip" src={video} poster={src} autoplay muted loop playsinline hidden />
+    )
+  }
   <img src={src} alt={alt} />
   <figcaption>{caption}</figcaption>
 </figure>
@@ -33,6 +42,7 @@ const everyMs = 5 * 60 * 1000;
 <script>
   const fig = document.querySelector<HTMLElement>(".mosaic");
   const img = fig?.querySelector("img");
+  const clip = fig?.querySelector<HTMLVideoElement>(".clip");
   const src = fig?.dataset.src;
   const every = Number(fig?.dataset.every ?? 0);
 
@@ -54,6 +64,23 @@ const everyMs = 5 * 60 * 1000;
     );
   }
 
+  // The video is opt-in twice over: the visitor has to not have asked for less motion, and the
+  // origin has to actually answer. Either no and the still stays exactly as it is today.
+  if (clip && img && !matchMedia("(prefers-reduced-motion: reduce)").matches) {
+    clip.addEventListener(
+      "error",
+      () => {
+        clip.remove();
+        img.hidden = false;
+      },
+      { once: true },
+    );
+    clip.addEventListener("loadeddata", () => {
+      clip.hidden = false;
+      img.hidden = true;
+    });
+  }
+
   if (img && src && every > 0) {
     setInterval(() => {
       // Only while the tab is visible: a backgrounded tab refreshing a national radar image all
@@ -67,7 +94,9 @@ const everyMs = 5 * 60 * 1000;
         // refreshing whatever is actually on the page.
         const url = fig?.dataset.src ?? src;
         const join = url.includes("?") ? "&" : "?";
-        img.src = `${url}${join}t=${Math.floor(Date.now() / every)}`;
+        const t = Math.floor(Date.now() / every);
+        img.src = `${url}${join}t=${t}`;
+        if (clip && !clip.hidden) clip.src = `${clip.src.split("?")[0]}?t=${t}`;
       }
     }, every);
   }
@@ -75,7 +104,8 @@ const everyMs = 5 * 60 * 1000;
 
 <style>
   .mosaic { margin: 0; }
-  .mosaic img {
+  .mosaic img,
+  .mosaic video {
     display: block;
     width: 100%;
     border: 1px solid var(--stroke);
