@@ -1486,6 +1486,9 @@ struct LoopExport {
     settle: u8,
     /// A screenshot has been requested; waiting for its event.
     capturing: bool,
+    /// Playback speed the scrubber was set to when the export started — the exported clip plays
+    /// at the speed the user was watching, instead of a hardcoded 5 fps.
+    fps: f32,
 }
 
 /// A placefile the app has fetched and is tracking (mirrors a `PlacefileConfig` by URL).
@@ -13601,6 +13604,7 @@ impl HookEchoApp {
             );
             return;
         }
+        let speed = v.timeline.speed;
         v.timeline.go_begin();
         self.loop_export = Some(LoopExport {
             dest: path,
@@ -13609,6 +13613,7 @@ impl HookEchoApp {
             remaining: slots,
             settle: LOOP_SETTLE_FRAMES,
             capturing: false,
+            fps: speed,
         });
     }
 
@@ -13655,12 +13660,21 @@ impl HookEchoApp {
             use crate::loopexport::LoopFormat;
             let res = match le.format {
                 #[cfg(not(target_arch = "wasm32"))]
-                LoopFormat::Gif => crate::loopexport::encode_gif(&le.frames, 200, &le.dest),
+                LoopFormat::Gif => crate::loopexport::encode_gif(
+                    &le.frames,
+                    (1000.0 / le.fps.max(0.1)) as u16,
+                    &le.dest,
+                ),
                 // Unreachable on the web: an export needs a destination path and there is none in
                 // a browser, so `start_loop_export` returns before a capture ever begins.
                 #[cfg(target_arch = "wasm32")]
                 LoopFormat::Gif => Err(anyhow::anyhow!("GIF export needs a filesystem")),
-                LoopFormat::Mp4 => crate::loopexport::encode_mp4(&le.frames, 5, &le.dest),
+                // The scrubber's slider is 1..=15 fps, which is also what the encoder accepts.
+                LoopFormat::Mp4 => crate::loopexport::encode_mp4(
+                    &le.frames,
+                    le.fps.round().clamp(1.0, 15.0) as u32,
+                    &le.dest,
+                ),
             };
             match res {
                 Ok(()) => {
