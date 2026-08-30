@@ -89,3 +89,36 @@ mod tests {
         assert!(sleep_while(Duration::from_secs(3), || true).await);
     }
 }
+
+thread_local! {
+    static PANIC_GUARDED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Run `f` under `catch_unwind`, marking the thread so a panic hook can tell a *handled* panic
+/// (a malformed GRIB this crate decodes defensively) from a real crash. Without the mark the app
+/// writes a "the app crashed" report for a decode it recovered from perfectly.
+pub fn guarded<T>(f: impl FnOnce() -> T) -> std::thread::Result<T> {
+    PANIC_GUARDED.with(|g| g.set(true));
+    let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f));
+    PANIC_GUARDED.with(|g| g.set(false));
+    r
+}
+
+/// Whether the current thread is inside [`guarded`].
+pub fn panic_guarded() -> bool {
+    PANIC_GUARDED.with(|g| g.get())
+}
+
+#[cfg(test)]
+mod guard_tests {
+    #[test]
+    fn guard_is_set_only_inside() {
+        assert!(!super::panic_guarded());
+        let r = super::guarded(|| {
+            assert!(super::panic_guarded());
+            7
+        });
+        assert_eq!(r.unwrap(), 7);
+        assert!(!super::panic_guarded());
+    }
+}

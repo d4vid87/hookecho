@@ -455,9 +455,9 @@ async fn fetch_run_field(
         .await?;
 
     // gribberish can panic on some packings; contain it (see mrms::fetch_latest).
-    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+    crate::task::guarded(|| {
         decode_regrid(&bytes, model, min_valid)
-    }))
+    })
     .unwrap_or_else(|_| anyhow::bail!("{} grib decode panicked", model.label()))
 }
 

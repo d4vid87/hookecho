@@ -43,7 +43,11 @@ pub fn spawn() -> Option<Receiver<(f64, f64)>> {
         {
             return;
         }
-        let reader = BufReader::new(stream.try_clone().expect("clone gpsd stream"));
+        let Ok(cloned) = stream.try_clone() else {
+            log::warn!("gpsd: cannot clone stream");
+            return;
+        };
+        let reader = BufReader::new(cloned);
         for line in reader.lines() {
             let Ok(line) = line else { break };
             if let Some(pos) = parse_tpv(&line) {

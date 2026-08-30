@@ -27,6 +27,13 @@ pub fn install_hook() {
             .location()
             .map(|l| format!("{}:{}:{}", l.file(), l.line(), l.column()));
         let report = format_report(&msg, location.as_deref(), &Backtrace::capture().to_string());
+        // wxdata decodes malformed GRIB defensively, catching the panics gribberish throws on
+        // odd packings. Those are handled, not crashes — leaving a "the app crashed" report for
+        // one is a lie the user then reports as a bug.
+        if wxdata::task::panic_guarded() {
+            previous(info);
+            return;
+        }
         if let Some(p) = crate::paths::crash_file() {
             if let Some(dir) = p.parent() {
                 let _ = std::fs::create_dir_all(dir);
