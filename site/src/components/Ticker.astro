@@ -50,6 +50,14 @@ const events = [
           watchCount(slot as HTMLElement);
         }
         slot.parentElement?.classList.toggle("hot", n > 0);
+        // Storm mode: the page already knows whether the country is under warnings, so say so
+        // in the palette. Tornado outranks severe; the CSS does the rest.
+        if (n > 0 && event !== "Flash Flood Warning") {
+          const storm = event === "Tornado Warning" ? "tor" : "svr";
+          if (storm === "tor" || !document.documentElement.dataset.storm) {
+            document.documentElement.dataset.storm = storm;
+          }
+        }
       })
       // A blocked or failing fetch leaves the em dash: the row still reads as a list of the
       // warning types the app tracks, which is the point of it being on the page.

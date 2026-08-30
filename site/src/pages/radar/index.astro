@@ -47,6 +47,12 @@ const countrySlug = (code: string) =>
         link that opens that radar in HookEcho at full resolution.
       </p>
 
+      <div class="yours" hidden>
+        <h2>Start here</h2>
+        <ul class="near" hidden />
+        <ul class="recent" hidden />
+      </div>
+
       {
         states.map((state) => (
           <div class="state">
@@ -117,6 +123,67 @@ const countrySlug = (code: string) =>
       }
     </div>
   </section>
+<script>
+  import sites from "../../data/nexrad-sites.json";
+  import { milesBetween } from "../../data/geo";
+
+  // Two questions a 600-link index cannot answer on its own: which radar covers me, and which one
+  // was I just looking at. Both are answered in the browser — the page stays static.
+  const box = document.querySelector<HTMLElement>(".yours");
+  const link = (id: string, tail: string) => {
+    const site = sites.find((s) => s.id === id);
+    if (!site) return null;
+    const li = document.createElement("li");
+    const a = document.createElement("a");
+    a.href = `/radar/${site.id.toLowerCase()}/`;
+    a.setAttribute("data-astro-prefetch", "viewport");
+    a.innerHTML = `<strong>${site.id}</strong> ${site.city}`;
+    const note = document.createElement("span");
+    note.className = "note";
+    note.textContent = tail;
+    a.append(note);
+    li.append(a);
+    return li;
+  };
+
+  if (box) {
+    try {
+      const recent: string[] = JSON.parse(localStorage.getItem("hookecho:recent") ?? "[]");
+      const list = box.querySelector<HTMLElement>(".recent")!;
+      for (const id of recent) {
+        const li = link(id, "recently viewed");
+        if (li) list.append(li);
+      }
+      if (list.children.length) {
+        list.hidden = false;
+        box.hidden = false;
+      }
+    } catch {}
+
+    // /geo.json is the edge worker reading request.cf — no permission prompt, no coordinates
+    // leaving the page.
+    fetch("/geo.json")
+      .then((r) => (r.ok ? r.json() : Promise.reject(r.status)))
+      .then((geo) => {
+        if (typeof geo?.lat !== "number" || typeof geo?.lon !== "number") return;
+        const near = sites
+          .map((s) => ({ s, miles: Math.round(milesBetween(geo, s)) }))
+          .sort((a, b) => a.miles - b.miles)
+          .slice(0, 3);
+        const list = box.querySelector<HTMLElement>(".near")!;
+        for (const { s, miles } of near) {
+          const li = link(s.id, `${miles} mi away`);
+          if (li) list.append(li);
+        }
+        if (list.children.length) {
+          list.hidden = false;
+          box.hidden = false;
+        }
+      })
+      .catch(() => {});
+  }
+</script>
+
 </Base>
 
 <style>
@@ -148,5 +215,7 @@ const countrySlug = (code: string) =>
     font-size: 0.95rem;
   }
   li a:hover { border-color: var(--accent); color: var(--text); }
+  .yours ul { list-style: none; padding: 0; display: flex; gap: 0.6rem; flex-wrap: wrap; }
+  .yours .note { color: var(--text-dim); margin-left: 0.5rem; font-size: 0.85rem; }
   li strong { color: var(--text); margin-right: 0.4rem; }
 </style>
