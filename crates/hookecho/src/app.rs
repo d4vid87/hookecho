@@ -2544,7 +2544,7 @@ pub struct HookEchoApp {
     /// lane, distinct from the warning banners (weather) and the error chip (radar feed).
     toasts: Vec<Toast>,
     /// Auxiliary feeds already reported to the user; see [`HookEchoApp::drain_feed_errors`].
-    feed_errors_told: std::collections::HashSet<&'static str>,
+    feed_errors_told: std::collections::HashMap<&'static str, Instant>,
     /// Right-dock active-alerts panel toggle.
     show_alert_panel: bool,
     /// Cross-section tool: clicked endpoints `[lon,lat]` (max 2), the built section + its texture.
@@ -3214,7 +3214,7 @@ impl HookEchoApp {
             rot_active: false,
             warning_banners: Vec::new(),
             toasts: Vec::new(),
-            feed_errors_told: std::collections::HashSet::new(),
+            feed_errors_told: std::collections::HashMap::new(),
             show_alert_panel: false,
             xsection_pts: Vec::new(),
             xsection: None,
@@ -4104,17 +4104,23 @@ impl HookEchoApp {
         self.settings.in_quiet_hours(chrono::Local::now().hour())
     }
 
-    /// Surface auxiliary-feed failures queued by [`note_feed_error`], once per feed per session.
+    /// Surface auxiliary-feed failures queued by [`note_feed_error`], at most once per feed per
+    /// half hour.
     ///
-    /// Once, deliberately: a feed that is down stays down, and a toast every refresh would be the
-    /// nag this app does not do. The log keeps every occurrence.
+    /// Rate-limited rather than silenced: a feed that is down stays down, and a toast every
+    /// refresh would be the nag this app does not do — but told-once-forever also swallowed a
+    /// genuine second outage hours after the feed had recovered. The log keeps every occurrence.
     fn drain_feed_errors(&mut self) {
         let queued: Vec<(&'static str, String)> = match FEED_ERRORS.lock() {
             Ok(mut q) => std::mem::take(&mut *q),
             Err(_) => return,
         };
         for (feed, err) in queued {
-            if self.feed_errors_told.insert(feed) {
+            let due = self.feed_errors_told
+                .get(feed)
+                .is_none_or(|t| t.elapsed().as_secs() >= 1800);
+            if due {
+                self.feed_errors_told.insert(feed, Instant::now());
                 self.toast(ToastKind::Error, format!("{feed} unavailable — {err}"));
             }
         }
@@ -4919,8 +4925,7 @@ impl HookEchoApp {
             .filter(|s| to_screen_hit(s.longitude as f64, s.latitude as f64) <= tap_r2(12.0))
             .min_by(|a, b| {
                 to_screen_hit(a.longitude as f64, a.latitude as f64)
-                    .partial_cmp(&to_screen_hit(b.longitude as f64, b.latitude as f64))
-                    .unwrap()
+                    .total_cmp(&to_screen_hit(b.longitude as f64, b.latitude as f64))
             });
         match hit {
             Some(s) if self.views[idx].site.as_deref() != Some(s.id) => {
@@ -14531,9 +14536,11 @@ impl eframe::App for HookEchoApp {
         }
         // Anything quiet hours is still holding: it is owed to the user when the window ends, and
         // that can be after a restart.
+        // A poisoned lock still holds the data; dropping it here would silently lose
+        // notifications the user is owed.
         self.settings.quiet_pending = match self.quiet_queue.lock() {
             Ok(q) => q.clone(),
-            Err(_) => Vec::new(),
+            Err(p) => p.into_inner().clone(),
         };
         if self.settings != self.saved {
             self.settings.save();

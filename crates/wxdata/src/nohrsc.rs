@@ -56,7 +56,7 @@ pub async fn fetch(http: &reqwest::Client, hours: u16) -> anyhow::Result<MrmsFie
             continue;
         };
         // Same containment as the MRMS decode: a bad packing must not abort the process.
-        let decoded = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| decode(&raw)));
+        let decoded = crate::task::guarded(|| decode(&raw));
         match decoded {
             Ok(Ok(f)) => return Ok(f),
             Ok(Err(e)) => log::warn!("nohrsc decode {url}: {e}"),

@@ -287,7 +287,7 @@ pub async fn fetch_latest(http: &reqwest::Client, product: &str) -> anyhow::Resu
     let raw = gunzip(&gz)?;
     // gribberish can panic on some MRMS product packings (a slice off-by-one on rotation-track /
     // AzShear grids). Contain it so a bad product surfaces as an error, never a process abort.
-    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| decode_grib2(&raw)))
+    crate::task::guarded(|| decode_grib2(&raw))
         .unwrap_or_else(|_| anyhow::bail!("grib decode panicked for {product}"))
 }
 

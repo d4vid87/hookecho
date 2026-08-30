@@ -498,9 +498,9 @@ async fn sample_message(
     // Off the async worker: each of these decodes a full HRRR level and scans ~1.9M grid points,
     // so leaving them here made forty concurrent fetches finish one decode at a time.
     crate::task::blocking(move || {
-        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        crate::task::guarded(|| {
             sample_nearest(&bytes, lon, lat)
-        }))
+        })
         .unwrap_or_else(|_| anyhow::bail!("grib decode panicked"))
     })
     .await?
