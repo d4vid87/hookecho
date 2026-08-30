@@ -104,6 +104,7 @@ where
     chunks.push(init.latest_chunk.chunk);
 
     let mut merged = base;
+    let mut volume = init.latest_chunk.identifier.volume().as_number();
     // First emit assembles the whole backfilled volume; after that only the chunks since the last
     // sweep boundary are re-assembled (plus the start chunk, which carries the VCP and site
     // metadata assembly needs). Re-decoding every accumulated chunk at every boundary was O(n^2)
@@ -111,6 +112,7 @@ where
     emit(&it, &chunks, &mut merged, &mut on_update);
     let mut window_start = chunks.len();
 
+    let mut fails = 0u32;
     loop {
         let wait = it
             .time_until_next()
@@ -129,12 +131,18 @@ where
 
         match it.try_next().await {
             Ok(Some(dc)) => {
+                fails = 0;
                 let seq = dc.identifier.sequence();
                 let ctype = dc.identifier.chunk_type();
-                if ctype == ChunkType::Start {
+                let vol = dc.identifier.volume().as_number();
+                // Start chunk is the normal rollover marker, but a stream that joins mid-volume
+                // (or misses the Start) would otherwise keep assembling the previous volume's
+                // chunks alongside the new one's.
+                if ctype == ChunkType::Start || vol != volume {
                     chunks.clear(); // volume rollover: start a fresh accumulator
                     window_start = 0;
                 }
+                volume = vol;
                 chunks.push(dc.chunk);
                 let sweep_done = it.chunk_metadata(seq).is_some_and(|m| m.is_last_in_sweep());
                 // The fetch itself can outlast the cancellation: a sweep assembled for a site the
@@ -152,9 +160,28 @@ where
                 }
             }
             Ok(None) => { /* not available yet; loop and wait again */ }
-            Err(e) => return Err(anyhow::anyhow!("chunk stream: {e}")),
+            Err(e) => {
+                fails += 1;
+                if !tolerate_failure(fails) {
+                    return Err(anyhow::anyhow!("chunk stream: {e}"));
+                }
+                // A blip (S3 hiccup, laptop lid, Wi-Fi handover) used to kill the stream for
+                // good: the caller fell back to polling and its restart re-downloaded the whole
+                // ~53-chunk backfill. Retrying in place keeps the iterator and the accumulator.
+                log::debug!("chunk stream error ({fails}), retrying: {e}");
+                if !crate::task::sleep_while(Duration::from_secs(2), &active).await {
+                    return Ok(());
+                }
+            }
         }
     }
+}
+
+/// Whether a chunk fetch error at `consecutive` failures in a row should be retried rather than
+/// ending the stream. Transient network trouble is the common case; a sustained run of failures
+/// means the fallback poller should take over.
+fn tolerate_failure(consecutive: u32) -> bool {
+    consecutive < 5
 }
 
 /// Assemble `chunks`, merge into `merged`, and emit if anything changed. Assembly failure
@@ -428,5 +455,18 @@ mod tests {
         let r = merged.sweeps()[0].radials();
         assert_eq!(r.len(), 180, "overlap must dedupe, not duplicate");
         assert_eq!(r[60].collection_timestamp(), 9_000);
+    }
+}
+
+#[cfg(test)]
+mod retry_tests {
+    use super::tolerate_failure;
+
+    #[test]
+    fn transient_failures_retry_then_give_up() {
+        assert!(tolerate_failure(1));
+        assert!(tolerate_failure(4));
+        assert!(!tolerate_failure(5));
+        assert!(!tolerate_failure(9));
     }
 }
