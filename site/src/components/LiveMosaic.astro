@@ -32,10 +32,21 @@ const everyMs = 5 * 60 * 1000;
 <figure class="mosaic" data-src={src} data-every={everyMs} data-fallback={fallback}>
   {
     video && (
-      <video class="clip" src={video} poster={src} autoplay muted loop playsinline hidden />
+      <video
+        class="clip"
+        src={video}
+        poster={src}
+        width="1400"
+        height="1400"
+        autoplay
+        muted
+        loop
+        playsinline
+        hidden
+      />
     )
   }
-  <img src={src} alt={alt} />
+  <img src={src} alt={alt} width="1400" height="1400" fetchpriority="high" />
   <figcaption>{caption}</figcaption>
 </figure>
 
@@ -108,6 +119,9 @@ const everyMs = 5 * 60 * 1000;
   .mosaic video {
     display: block;
     width: 100%;
+    /* Dimensions are the national mosaic's; the box is reserved either way, so the RIDGE
+       fallback (a different shape entirely) cannot shove the page down when it swaps in. */
+    height: auto;
     border: 1px solid var(--stroke);
     border-radius: var(--radius);
     background: var(--bg-deep);
