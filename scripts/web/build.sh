@@ -109,9 +109,10 @@ gz_bytes="$(gzip -9 -c "web/dist/hookecho_bg-$wasm_hash.wasm" | wc -c)"
 # cutting a wgpu backend, which is not free. The fonts already went (they are fetched at runtime
 # now — see crates/hookecho/src/fonts.rs), which is what this number dropped by. Raise it
 # deliberately.
-# The number tracks CI's build, which runs ABOVE a local one — ~134 KB as of the R18 batch, not
-# the ~15 KB this comment claimed for a year. A local build therefore has that much slack and
-# passing locally proves little; CI is the gate that matters.
+# The number tracks CI's build, and a local build without binaryen does not reproduce it: wasm-opt
+# leaves a SMALLER raw module that GZIPS LARGER (11.8 MB raw / 4.15 MB gz in CI against 12.9 MB
+# raw / 4.01 MB gz here), so skipping it makes a local build look ~130 KB under the gate while CI
+# is over it. Install binaryen and the two agree; the warning above is not cosmetic.
 #
 # Raised deliberately for the offline chase packs (IndexedDB via web-sys) — the one budget raise
 # the R18 batch reserved for itself.
