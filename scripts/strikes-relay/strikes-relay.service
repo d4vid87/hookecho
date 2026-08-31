@@ -1,0 +1,15 @@
+[Unit]
+Description=Blitzortung to MQTT strikes relay for HookEcho
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/strikes-relay --broker 127.0.0.1:1883
+# Credentials, if the broker wants them. Keep the file mode 600 — it holds a password.
+EnvironmentFile=-%h/.config/strikes-relay.env
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=default.target
