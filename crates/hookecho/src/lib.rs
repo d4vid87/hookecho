@@ -86,6 +86,7 @@ pub mod tiles;
 pub mod timefmt;
 pub mod timeline;
 pub mod tray;
+pub mod tropical_draw;
 pub mod ui;
 pub mod vector_tiles;
 pub mod view;

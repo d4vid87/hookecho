@@ -178,8 +178,10 @@ pub async fn fetch_active_opts(
                     for poly in polygons_of(&f.0) {
                         data.cones.push(GeoFeature {
                             rings: poly,
-                            fill: [255, 255, 255, 40],
-                            stroke: [230, 230, 230, 200],
+                            // The outline is drawn dashed by the painter (`tropical_draw`);
+                            // a solid tessellated stroke underneath would fill the gaps back in.
+                            fill: [255, 255, 255, 28],
+                            stroke: [255, 255, 255, 0],
                             kind: FeatureKind::TropicalCone,
                             title: format!("{name} cone"),
                             detail: detail.clone(),

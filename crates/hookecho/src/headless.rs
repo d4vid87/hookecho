@@ -1843,18 +1843,23 @@ pub fn run_tropical() -> anyhow::Result<()> {
     );
     for s in &data.storms {
         let (cat, _) = wxdata::tropical::saffir_simpson(s.intensity_kt);
+        let mb = s
+            .pressure_mb
+            .map(|p| format!("{p:.0} mb"))
+            .unwrap_or_else(|| "no pressure".into());
         let cone_verts: usize = data
             .cones
             .iter()
             .flat_map(|c| c.rings.iter().map(|r| r.len()))
             .sum();
         println!(
-            "  {} ({}) {} — {:.0} kt {} at {:.1},{:.1}  {} track pts, {} cone verts",
+            "  {} ({}) {} — {:.0} kt {} {} at {:.1},{:.1}  {} track pts, {} cone verts",
             s.name,
             s.id,
             s.classification,
             s.intensity_kt,
             cat,
+            mb,
             s.lat,
             s.lon,
             s.points.len(),

@@ -12552,80 +12552,14 @@ impl HookEchoApp {
             }
         }
 
-        // NHC tropical suite: forecast track polyline + category-colored points + storm name.
+        // NHC tropical suite: dashed cone edge, forecast track, and per-point callouts.
         if self.show_tropical {
             if let Some(t) = &self.tropical {
-                let to_screen = |lon: f64, lat: f64| {
+                crate::tropical_draw::draw(&painter, t, prect, cam.zoom as f32, |lon, lat| {
                     let w = crate::render::mercator::lonlat_to_world(lon, lat);
                     let (sx, sy) = cam.world_to_screen(w, vp);
                     egui::pos2(prect.left() + sx, prect.top() + sy)
-                };
-                for storm in &t.storms {
-                    // Forecast track: white polyline through the points.
-                    if storm.points.len() >= 2 {
-                        let pts: Vec<egui::Pos2> = storm
-                            .points
-                            .iter()
-                            .map(|p| to_screen(p.lon, p.lat))
-                            .collect();
-                        painter.add(egui::Shape::line(
-                            pts,
-                            egui::Stroke::new(1.5, egui::Color32::from_rgb(235, 235, 235)),
-                        ));
-                    }
-                    for p in &storm.points {
-                        let sp = to_screen(p.lon, p.lat);
-                        if !prect.contains(sp) {
-                            continue;
-                        }
-                        let (cat, rgb) = wxdata::tropical::saffir_simpson(p.kt);
-                        let col = egui::Color32::from_rgb(rgb[0], rgb[1], rgb[2]);
-                        painter.circle_filled(sp, 4.0, col);
-                        if cam.zoom >= 5.0 {
-                            painter.text(
-                                sp + egui::vec2(6.0, -2.0),
-                                egui::Align2::LEFT_CENTER,
-                                cat,
-                                egui::FontId::proportional(10.0),
-                                col,
-                            );
-                        }
-                    }
-                    // Current position: bold storm name with a dark halo.
-                    let cp = to_screen(storm.lon, storm.lat);
-                    if prect.contains(cp) {
-                        let (_, rgb) = wxdata::tropical::saffir_simpson(storm.intensity_kt);
-                        let col = egui::Color32::from_rgb(rgb[0], rgb[1], rgb[2]);
-                        painter.circle_filled(cp, 5.0, col);
-                        painter.circle_stroke(
-                            cp,
-                            5.0,
-                            egui::Stroke::new(1.5, egui::Color32::BLACK),
-                        );
-                        let font = egui::FontId::proportional(13.0);
-                        for off in [
-                            egui::vec2(1.0, 1.0),
-                            egui::vec2(-1.0, -1.0),
-                            egui::vec2(1.0, -1.0),
-                            egui::vec2(-1.0, 1.0),
-                        ] {
-                            painter.text(
-                                cp + egui::vec2(8.0, -8.0) + off,
-                                egui::Align2::LEFT_BOTTOM,
-                                &storm.name,
-                                font.clone(),
-                                egui::Color32::BLACK,
-                            );
-                        }
-                        painter.text(
-                            cp + egui::vec2(8.0, -8.0),
-                            egui::Align2::LEFT_BOTTOM,
-                            &storm.name,
-                            font,
-                            egui::Color32::WHITE,
-                        );
-                    }
-                }
+                });
             }
         }
 
