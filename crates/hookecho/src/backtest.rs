@@ -8,8 +8,12 @@
 //! already a couple of hundred megabytes and a minute of CPU. Parallelising it would finish
 //! sooner and make the progress readout a lie about what is downloading.
 //!
-//! ponytail: capped at 24 volumes and one rule at a time. Both are one constant and one loop away
-//! if anyone actually wants a whole outbreak day scored at once.
+//! Runs in the browser too — it is plain async, and the archive list and download both have wasm
+//! paths. The only difference there is the cap (see [`MAX_VOLUMES`]) and that decoding happens on
+//! the main thread, so a run is a series of brief hitches rather than a background hum.
+//!
+//! ponytail: one rule at a time, and decoding on the main thread on the web. Both are one loop
+//! away if anyone actually wants a whole outbreak day scored at once.
 
 use crate::rules::Detection;
 use crate::settings::{AlertRule, RuleTrigger as T, Settings};
@@ -17,7 +21,15 @@ use std::sync::{Arc, Mutex};
 use wxdata::level2::{self, Moment};
 
 /// Most volumes one backtest will pull. About two hours at a severe-weather VCP.
+#[cfg(not(target_arch = "wasm32"))]
 pub const MAX_VOLUMES: usize = 24;
+
+/// Half that in the browser. Each volume is tens of megabytes and every one of them crosses a
+/// shared proxy on its way in — and decoding happens on the main thread there, so a long run is
+/// also a long series of visible hitches. An hour of weather is enough to answer "would this rule
+/// have fired", which is the question a backtest is for.
+#[cfg(target_arch = "wasm32")]
+pub const MAX_VOLUMES: usize = 12;
 
 /// Shared with the UI thread: what the run is doing and what it found.
 #[derive(Default)]
