@@ -171,8 +171,7 @@ pub async fn send_retrying(what: &str, make: impl Fn() -> reqwest::RequestBuilde
     if log_outcome(what, "delivery", &first) {
         return;
     }
-    // On the web there is no timer and no runtime to wait on, so one attempt is the whole story.
-    if cfg!(target_arch = "wasm32") || !worth_retrying(&first) {
+    if !worth_retrying(&first) {
         return;
     }
     // Taking a retry slot is what the cap counts; the first attempt is always free.
@@ -217,16 +216,11 @@ fn log_outcome(what: &str, stage: &str, res: &Result<reqwest::Response, reqwest:
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
+/// Both targets have a timer: tokio natively, `setTimeout` in the browser. `wxdata::task::sleep`
+/// is already the thing that knows which.
 async fn sleep_secs(secs: u64) {
-    tokio::time::sleep(std::time::Duration::from_secs(secs)).await;
+    wxdata::task::sleep(std::time::Duration::from_secs(secs)).await;
 }
-
-/// No tokio in the browser, and no timer worth pulling a crate for: the web build gets the one
-/// attempt it had before.
-// ponytail: web sends once; wire a `gloo-timers` sleep here if web push ever matters.
-#[cfg(target_arch = "wasm32")]
-async fn sleep_secs(_secs: u64) {}
 
 #[cfg(test)]
 mod tests {

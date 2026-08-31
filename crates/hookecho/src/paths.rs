@@ -25,8 +25,9 @@ fn root(kind: &str) -> Option<PathBuf> {
     // the web build keeps everything in memory. Settings are the exception: they persist through
     // `localStorage` instead, entirely inside `settings.rs` (nothing here returns a path for it).
     //
-    // ponytail: caches stay in memory on the web; IndexedDB/OPFS is the upgrade path if
-    // offline-web ever becomes real.
+    // Tiles are the exception, and they are cached outside Rust entirely: the service worker
+    // keeps them in Cache Storage (`web/sw.src.js`, the `tiles-v1` bucket). Radar volumes are
+    // deliberately left out of that bucket — they are large, per-scan, and would evict the map.
     #[cfg(target_arch = "wasm32")]
     {
         let _ = kind;
