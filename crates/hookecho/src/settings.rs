@@ -282,6 +282,13 @@ pub struct Settings {
     /// Topic prefix everything is published under, e.g. `home/weather`.
     #[serde(default = "default_mqtt_prefix")]
     pub mqtt_prefix: String,
+    /// Topic the broker republishes lightning strikes on, e.g. `blitzortung/1.1/#`. Empty is off.
+    ///
+    /// The app never talks to a strike network itself — Blitzortung's terms ask third-party apps
+    /// to run their own relay rather than point clients at theirs, and this is the subscriber end
+    /// of that arrangement (see `scripts/strikes-relay/`).
+    #[serde(default)]
+    pub strikes_topic: String,
     /// Publish retained Home Assistant discovery configs so it creates the device by itself.
     ///
     /// Off by default, and deliberately: retained config topics on a broker that is not running
@@ -1091,6 +1098,7 @@ impl Default for Settings {
             mqtt_user: String::new(),
             mqtt_pass: String::new(),
             mqtt_prefix: default_mqtt_prefix(),
+            strikes_topic: String::new(),
             mqtt_discovery: false,
             background_alerts: false,
             pack_hires_dem: false,
@@ -1569,6 +1577,7 @@ mod tests {
             mqtt_user: String::new(),
             mqtt_pass: String::new(),
             mqtt_prefix: default_mqtt_prefix(),
+            strikes_topic: String::new(),
             mqtt_discovery: false,
             background_alerts: false,
             pack_hires_dem: false,

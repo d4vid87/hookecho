@@ -1134,6 +1134,19 @@ fn alerts_tab(ui: &mut egui::Ui, settings: &mut Settings) {
                      this broker has no Home Assistant on it.",
                 );
         });
+        ui.horizontal(|ui| {
+            ui.label("Strikes topic:");
+            ui.add(
+                egui::TextEdit::singleline(&mut settings.strikes_topic)
+                    .hint_text("blitzortung/1.1/#"),
+            )
+            .on_hover_text(
+                "Subscribe to lightning strikes someone else is already publishing to this \
+                 broker \u{2014} a Home Assistant Blitzortung integration, or the relay in \
+                 scripts/strikes-relay. Empty is off. HookEcho never connects to a strike \
+                 network itself.",
+            );
+        });
         ui.weak(
             "Publishes <prefix>/status and <prefix>/nearest every five minutes, and \
              <prefix>/alerts as warnings arrive. Takes effect on restart.",
