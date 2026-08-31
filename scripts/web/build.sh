@@ -109,9 +109,14 @@ gz_bytes="$(gzip -9 -c "web/dist/hookecho_bg-$wasm_hash.wasm" | wc -c)"
 # cutting a wgpu backend, which is not free. The fonts already went (they are fetched at runtime
 # now — see crates/hookecho/src/fonts.rs), which is what this number dropped by. Raise it
 # deliberately.
-# The number tracks CI's build, which runs ~15 KB above a local one, so a local build has that
-# much slack; CI is the gate that matters.
-budget="${HOOKECHO_WASM_BUDGET:-4125000}"
+# The number tracks CI's build, and a local build without binaryen does not reproduce it: wasm-opt
+# leaves a SMALLER raw module that GZIPS LARGER (11.8 MB raw / 4.15 MB gz in CI against 12.9 MB
+# raw / 4.01 MB gz here), so skipping it makes a local build look ~130 KB under the gate while CI
+# is over it. Install binaryen and the two agree; the warning above is not cosmetic.
+#
+# Raised deliberately for the offline chase packs (IndexedDB via web-sys) — the one budget raise
+# the R18 batch reserved for itself.
+budget="${HOOKECHO_WASM_BUDGET:-4150000}"
 printf 'wasm: %s raw, %s gzipped (budget %s)\n' \
   "$(stat -c%s "web/dist/hookecho_bg-$wasm_hash.wasm")" "$gz_bytes" "$budget"
 if [ "$gz_bytes" -gt "$budget" ]; then
