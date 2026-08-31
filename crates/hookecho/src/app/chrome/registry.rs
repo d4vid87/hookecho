@@ -471,6 +471,15 @@ impl HookEchoApp {
                 false,
             ),
             (
+                T::LocalTracks,
+                "Severe",
+                "Local cell tracks (radar-derived)",
+                "Cell motion computed here from reflectivity, with 15- and 30-minute \
+                 extrapolation \u{2014} for sites and networks with no Level 3 storm-cell table. \
+                 Needs a few volumes in the loop before it has motion to show.",
+                false,
+            ),
+            (
                 T::Watches,
                 "Severe",
                 "Watch boxes",

@@ -1133,6 +1133,8 @@ pub(crate) enum OverlayToggle {
     Fronts,
     /// SPC tornado and severe thunderstorm watches in effect.
     Watches,
+    /// Cell tracks computed here from reflectivity, for sites with no Level 3 SCIT product.
+    LocalTracks,
     GlmLightning,
     /// Ground strikes republished onto the user's own MQTT broker (see `strikes_topic`).
     Strikes,
@@ -1158,7 +1160,7 @@ pub(crate) struct BlockageKey {
 impl OverlayToggle {
     /// Every toggle, for the persistence sweep. A new variant belongs here too, or it silently
     /// stops being remembered across restarts.
-    pub(crate) const ALL: [OverlayToggle; 39] = [
+    pub(crate) const ALL: [OverlayToggle; 40] = [
         Self::AlertPanel,
         Self::StormReports,
         Self::Spotters,
@@ -1192,6 +1194,7 @@ impl OverlayToggle {
         Self::Recon,
         Self::Fronts,
         Self::Watches,
+        Self::LocalTracks,
         Self::GlmLightning,
         Self::Strikes,
         Self::Wind,
@@ -1984,6 +1987,12 @@ pub struct HookEchoApp {
     /// over every tilt, so they share one cache and are computed together.
     zdr_cache: Option<ZdrCache>,
     couplet_cache: Option<((usize, String, usize), Vec<wxdata::rotation::CoupletHit>)>,
+    /// Cells found per decoded volume, so a track built over a dozen frames flood-fills each
+    /// sweep once rather than once a frame.
+    celltrack_cache: LruCache<String, Vec<wxdata::celltrack::Blob>>,
+    /// The tracks themselves, with the frame list they were built from.
+    tracks_cache: Option<((usize, String, usize), Vec<wxdata::celltrack::Track>)>,
+    show_local_tracks: bool,
     site_dialog: Option<ui::site_dialog::SiteDialog>,
     firstrun: ui::firstrun::FirstRun,
     /// The optional spotlight tour, and where the chrome drew the things it points at this frame.
@@ -2943,6 +2952,9 @@ impl HookEchoApp {
             tbss_cache: None,
             zdr_cache: None,
             couplet_cache: None,
+            celltrack_cache: LruCache::new(NonZeroUsize::new(48).unwrap()),
+            tracks_cache: None,
+            show_local_tracks: false,
             site_dialog: None,
             firstrun: {
                 let mut w = ui::firstrun::FirstRun::default();
@@ -6201,6 +6213,64 @@ impl HookEchoApp {
         out
     }
 
+    /// Cell tracks for the active pane, computed here from reflectivity rather than read from a
+    /// Level 3 storm-cell table — the point of the layer is the sites that have no such table.
+    ///
+    /// Built by folding [`wxdata::celltrack::associate`] over the timeline frames still in the
+    /// decode cache, so it needs no extra downloads and silently produces nothing on a fresh boot
+    /// with one volume in hand.
+    fn compute_local_tracks(&mut self) -> Vec<wxdata::celltrack::Track> {
+        let key = self.volume_key(self.active);
+        if let Some((k, v)) = &self.tracks_cache {
+            if *k == key {
+                return v.clone();
+            }
+        }
+        let frames: Vec<_> = self.views[self.active]
+            .timeline
+            .frames
+            .iter()
+            .take(self.views[self.active].timeline.playhead + 1)
+            .filter_map(|id| id.date_time().map(|t| (id.name().to_string(), t)))
+            .filter(|(name, _)| self.scan_cache.contains(name))
+            .collect();
+        let mut tracks: Vec<wxdata::celltrack::Track> = Vec::new();
+        for (name, at) in frames {
+            let cells = match self.celltrack_cache.get(&name) {
+                Some(c) => c.clone(),
+                None => {
+                    let Some(scan) = self.scan_cache.get(&name).map(Arc::clone) else {
+                        continue;
+                    };
+                    // Lowest tilt: the cell a chaser is driving toward is the one at the ground.
+                    let cells = match level2::bin_scan(&scan, Moment::Reflectivity, 0) {
+                        Ok(sweep) => wxdata::celltrack::find_cells(&sweep, 45.0),
+                        Err(e) => {
+                            log::debug!("celltrack: skipping {name}: {e}");
+                            Vec::new()
+                        }
+                    };
+                    self.celltrack_cache.put(name.clone(), cells.clone());
+                    cells
+                }
+            };
+            tracks = wxdata::celltrack::associate(&tracks, &cells, at, 30.0);
+        }
+        // A track whose last point is older than the newest frame stopped being seen; drop it
+        // rather than leave a stale arrow pointing at empty sky.
+        if let Some(newest) = tracks
+            .iter()
+            .filter_map(|t| t.points.last())
+            .map(|p| p.2)
+            .max()
+        {
+            tracks
+                .retain(|t| t.points.last().is_some_and(|p| p.2 == newest) && t.points.len() >= 2);
+        }
+        self.tracks_cache = Some((key, tracks.clone()));
+        tracks
+    }
+
     fn compute_couplets_uncached(&mut self, idx: usize) -> Vec<wxdata::rotation::CoupletHit> {
         // Lowest tilt = closest to the ground; dealiased so folded gates don't fake huge shear.
         let vel = match self.views[idx]
@@ -7242,6 +7312,7 @@ impl HookEchoApp {
             T::Alerts => &mut self.filters.show_alerts,
             T::Mds => &mut self.filters.show_mds,
             T::Watches => &mut self.filters.show_watches,
+            T::LocalTracks => &mut self.show_local_tracks,
             T::Mping => &mut self.show_mping,
             T::Pireps => &mut self.show_pireps,
             T::Recon => &mut self.show_recon,
@@ -10877,6 +10948,11 @@ impl HookEchoApp {
         } else {
             Vec::new()
         };
+        let local_tracks = if self.show_local_tracks && idx == self.active {
+            self.compute_local_tracks()
+        } else {
+            Vec::new()
+        };
         if idx == self.active {
             self.check_rain_arrival();
             self.evaluate_scan_rules(idx, &tds_hits, &tbss_hits, &zdr_hits, &couplets);
@@ -11505,6 +11581,69 @@ impl HookEchoApp {
                     egui::FontId::proportional(11.0),
                     col,
                 );
+            }
+
+            // Locally-computed cell tracks, in cyan so they never read as the Level 3 storm-cell
+            // table drawn below in white and red. Same grammar: past polyline, dots, `T+NNm` labels.
+            if !local_tracks.is_empty() {
+                let cyan = egui::Color32::from_rgb(80, 220, 255);
+                for tr in &local_tracks {
+                    let pts: Vec<egui::Pos2> = tr
+                        .points
+                        .iter()
+                        .map(|&(lon, lat, _)| to_screen(lon, lat))
+                        .collect();
+                    painter.add(egui::Shape::line(
+                        pts.clone(),
+                        egui::Stroke::new(1.5, cyan.gamma_multiply(0.6)),
+                    ));
+                    let Some(&head) = pts.last() else { continue };
+                    if !prect.contains(head) {
+                        continue;
+                    }
+                    painter.circle_stroke(head, 6.0, egui::Stroke::new(2.0, cyan));
+                    for minutes in [15.0, 30.0] {
+                        let Some((lon, lat)) = tr.extrapolate(minutes) else {
+                            continue;
+                        };
+                        let p = to_screen(lon, lat);
+                        painter.line_segment(
+                            [head, p],
+                            egui::Stroke::new(1.0, cyan.gamma_multiply(0.5)),
+                        );
+                        painter.circle_filled(p, 3.0, cyan);
+                        if cam.zoom >= 7.0 {
+                            painter.text(
+                                p + egui::vec2(5.0, -2.0),
+                                egui::Align2::LEFT_CENTER,
+                                format!("T+{minutes:.0}m"),
+                                egui::FontId::proportional(10.0),
+                                cyan,
+                            );
+                        }
+                    }
+                    // With a GPS fix, the number a chaser actually wants: how close this cell comes
+                    // to where they are standing, and in how many minutes.
+                    if let Some((lon, lat)) = self.chase_pos {
+                        let last = tr.points[tr.points.len() - 1];
+                        let (km, min) = crate::geo::closest_approach(
+                            [last.0, last.1],
+                            tr.dir_deg,
+                            tr.speed_kt,
+                            [lon, lat],
+                            60.0,
+                        );
+                        if min >= 1.0 {
+                            painter.text(
+                                head + egui::vec2(0.0, 9.0),
+                                egui::Align2::CENTER_TOP,
+                                format!("\u{2248}{min:.0} min / {km:.0} km"),
+                                egui::FontId::proportional(10.0),
+                                cyan,
+                            );
+                        }
+                    }
+                }
             }
 
             let label_tracks = self.filters.show_tracks && cam.zoom >= 7.0;
