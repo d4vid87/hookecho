@@ -177,8 +177,10 @@ pub fn dealias_with_reference(
     // order. The old greedy BFS took whatever edge it happened to reach first, which is why a
     // multi-fold field could come apart at a seam: one thin boundary early in the walk fixed a
     // region, and every region behind it inherited the mistake.
-    let mut pair_votes: std::collections::HashMap<(usize, usize), std::collections::HashMap<i32, u32>> =
-        std::collections::HashMap::new();
+    let mut pair_votes: std::collections::HashMap<
+        (usize, usize),
+        std::collections::HashMap<i32, u32>,
+    > = std::collections::HashMap::new();
     for (ra, list) in edges.iter().enumerate() {
         for &(rb, v_self, v_nb) in list {
             if ra >= rb {

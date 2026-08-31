@@ -1630,7 +1630,10 @@ mod tests {
         assert_eq!(f.palette.as_deref(), Some(name));
         // The palette changes the pixels, so it has to change the filename too.
         assert_ne!(f.tag(), Frame::parse("site=KTLX").unwrap().tag());
-        assert!(!f.tag().contains(['/', '\\', ' ']), "tag becomes a filename");
+        assert!(
+            !f.tag().contains(['/', '\\', ' ']),
+            "tag becomes a filename"
+        );
 
         // Not a name of a table this product has, not a path, not a near miss.
         assert!(Frame::parse("site=KTLX&palette=viridis").is_err());

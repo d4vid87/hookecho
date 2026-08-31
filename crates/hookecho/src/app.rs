@@ -5204,14 +5204,18 @@ impl HookEchoApp {
     // files are validated (the JSON parses, the model is the size of a model); pinning a digest
     // means pinning a version, and I could not verify one offline to pin.
     #[cfg(not(target_arch = "wasm32"))]
-    fn download_voice(&self) {
-        let Some(path) = crate::speech::default_voice_path() else {
+    fn download_voice(&self, id: String) {
+        let Some(path) = crate::speech::voice_path(&id) else {
             crate::speech::set_voice_status(false, "no data directory to download into");
+            return;
+        };
+        let Some(url) = crate::speech::voice_url(&id) else {
+            crate::speech::set_voice_status(false, "that is not a Piper voice id");
             return;
         };
         let http = self.http.clone();
         self.spawner.spawn(async move {
-            let cfg_url = format!("{}.json", crate::speech::VOICE_URL);
+            let cfg_url = format!("{url}.json");
             let cfg_path = path.with_extension("onnx.json");
             if let Some(dir) = path.parent() {
                 if let Err(e) = std::fs::create_dir_all(dir) {
@@ -5245,7 +5249,7 @@ impl HookEchoApp {
                 crate::speech::set_voice_status(false, "voice config was not JSON; refusing it");
                 return;
             }
-            let model = match get(crate::speech::VOICE_URL.to_string()).await {
+            let model = match get(url).await {
                 Ok(b) => b,
                 Err(e) => {
                     crate::speech::set_voice_status(false, format!("voice download failed: {e}"));
@@ -14730,8 +14734,8 @@ impl eframe::App for HookEchoApp {
         // The settings window has no HTTP client or runtime, so the voice-download button raises
         // a flag and the work happens here, on the same spawner everything else fetches on.
         #[cfg(not(target_arch = "wasm32"))]
-        if crate::speech::take_voice_request() {
-            self.download_voice();
+        if let Some(id) = crate::speech::take_voice_request() {
+            self.download_voice(id);
         }
         // A file the user picked, from any of the import buttons. Routed here rather than at the
         // button, because on Android the picker is an activity result that lands long after the
