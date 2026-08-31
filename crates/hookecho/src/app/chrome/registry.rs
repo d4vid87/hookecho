@@ -471,6 +471,13 @@ impl HookEchoApp {
                 false,
             ),
             (
+                T::Watches,
+                "Severe",
+                "Watch boxes",
+                "SPC tornado and severe thunderstorm watches in effect",
+                false,
+            ),
+            (
                 T::Mds,
                 "Severe",
                 "Mesoscale discussions",

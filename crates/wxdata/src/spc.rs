@@ -15,6 +15,11 @@ const OUTLOOK_BASE: &str = "https://www.spc.noaa.gov/products/outlook";
 const OUTLOOK_EXPER_BASE: &str = "https://www.spc.noaa.gov/products/exper/day4-8";
 const MD_URL: &str = "https://mapservices.weather.noaa.gov/vector/rest/services/outlooks/spc_mesoscale_discussion/MapServer/0/query?where=1%3D1&outFields=*&f=geojson";
 
+/// Watch polygons (tornado and severe thunderstorm) from the same map service the MDs come from,
+/// so this needs no proxy-allowlist change. Layer 1 is the county-resolution watch/warning layer;
+/// filtering to the two watch products server-side keeps the payload to the boxes in effect.
+const WATCH_URL: &str = "https://mapservices.weather.noaa.gov/eventdriven/rest/services/WWA/watch_warn_adv/MapServer/1/query?where=prod_type+IN+%28%27Tornado+Watch%27%2C%27Severe+Thunderstorm+Watch%27%29&outFields=*&f=geojson";
+
 /// Fill color for a categorical risk label, when the GeoJSON doesn't supply one.
 pub(crate) fn risk_color(label: &str) -> [u8; 3] {
     match label.to_ascii_uppercase().as_str() {
@@ -239,6 +244,70 @@ pub fn parse_md(json: &str) -> anyhow::Result<Vec<(GeoFeature, Option<String>)>>
         }
     })?;
     Ok(out)
+}
+
+/// Parse the watch layer's GeoJSON into features.
+///
+/// Tornado watches are red and severe thunderstorm watches yellow, the colors SPC itself uses,
+/// and both are drawn faint: a watch covers whole states for hours and must not compete with the
+/// warning polygons inside it.
+pub fn parse_watches(json: &str) -> anyhow::Result<Vec<GeoFeature>> {
+    let mut out = Vec::new();
+    for_each_feature(json, |geom, props| {
+        let str_of = |k: &str| props.get(k).and_then(|v| v.as_str()).unwrap_or("");
+        let prod = str_of("prod_type");
+        let tornado = prod.starts_with("Tornado");
+        // The service returns one row per county in a watch, so a single watch arrives as dozens
+        // of features. They keep their own polygons — merging them would need a union — but they
+        // share a title, and the number is what identifies the watch to a chaser.
+        let number = str_of("event");
+        let title = if number.is_empty() {
+            prod.to_string()
+        } else {
+            format!("{prod} {number}")
+        };
+        let mut detail = String::new();
+        for (label, key) in [("Until", "ends"), ("Issued", "issuance"), ("Office", "wfo")] {
+            let v = str_of(key);
+            if !v.is_empty() {
+                detail.push_str(&format!("{label}: {v}\n"));
+            }
+        }
+        detail.push_str(str_of("url"));
+        for poly in polygons_of(geom) {
+            out.push(GeoFeature {
+                rings: poly,
+                fill: if tornado {
+                    [230, 40, 40, 20]
+                } else {
+                    [230, 200, 30, 18]
+                },
+                stroke: if tornado {
+                    [230, 40, 40, 235]
+                } else {
+                    [230, 200, 30, 235]
+                },
+                kind: FeatureKind::WatchBox,
+                title: title.clone(),
+                detail: detail.clone(),
+                alert: None,
+            });
+        }
+    })?;
+    Ok(out)
+}
+
+/// Fetch the watches in effect.
+pub async fn fetch_watches(client: &reqwest::Client) -> anyhow::Result<Vec<GeoFeature>> {
+    let body = client
+        .get(crate::net::fetch_url(WATCH_URL))
+        .header("User-Agent", USER_AGENT)
+        .send()
+        .await?
+        .error_for_status()?
+        .text()
+        .await?;
+    parse_watches(&body)
 }
 
 /// Fetch the categorical outlook for `day` (1–3), or the severe probability for a Day 4–8.
@@ -467,5 +536,28 @@ mod tests {
     fn hex_parse() {
         assert_eq!(hex_rgb("#ff8800"), Some([255, 136, 0]));
         assert_eq!(hex_rgb("bad"), None);
+    }
+
+    #[test]
+    fn watches_parse_with_spc_colors_and_a_watch_number() {
+        // Trimmed from a live response: one row per county, product name and number in props.
+        let json = r#"{"type":"FeatureCollection","features":[
+          {"type":"Feature",
+           "geometry":{"type":"Polygon","coordinates":[[[-100.0,48.0],[-101.0,48.0],[-101.0,49.0],[-100.0,48.0]]]},
+           "properties":{"prod_type":"Tornado Watch","event":"0638","wfo":"KOUN",
+                         "ends":"2026-08-30T23:00:00-05:00","url":"https://api.weather.gov/alerts/x"}},
+          {"type":"Feature",
+           "geometry":{"type":"Polygon","coordinates":[[[-90.0,38.0],[-91.0,38.0],[-91.0,39.0],[-90.0,38.0]]]},
+           "properties":{"prod_type":"Severe Thunderstorm Watch","event":"0637","wfo":"KBIS"}}]}"#;
+        let f = parse_watches(json).unwrap();
+        assert_eq!(f.len(), 2);
+        assert_eq!(f[0].title, "Tornado Watch 0638");
+        assert_eq!(f[0].kind, FeatureKind::WatchBox);
+        assert_eq!(f[0].stroke, [230, 40, 40, 235]);
+        assert!(f[0].detail.contains("Until: 2026-08-30T23:00:00-05:00"));
+        assert_eq!(f[1].title, "Severe Thunderstorm Watch 0637");
+        assert_eq!(f[1].stroke, [230, 200, 30, 235]);
+        // A watch is a backdrop for the warnings inside it, so both fills stay nearly clear.
+        assert!(f.iter().all(|x| x.fill[3] < 30));
     }
 }

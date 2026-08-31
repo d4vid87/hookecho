@@ -118,6 +118,8 @@ pub struct OverlayFilters {
     /// Day-1 outlook hazard: categorical risk, or a tornado/wind/hail probability grid.
     pub outlook_kind: wxdata::spc::OutlookKind,
     pub show_mds: bool,
+    /// SPC tornado and severe thunderstorm watches in effect.
+    pub show_watches: bool,
     /// WPC Winter Storm Severity Index day (0 = off, else 1-3).
     pub wssi_day: u8,
     /// WPC Excessive Rainfall Outlook day (0 = off, else 1-3).
@@ -153,6 +155,7 @@ impl Default for OverlayFilters {
             ero_day: 0,
 
             show_mds: true,
+            show_watches: true,
             show_cells: true,
             show_tracks: true,
             show_arrival_cones: false,
@@ -184,6 +187,7 @@ enum OverlayMsg {
     Fronts(wxdata::fronts::SurfaceAnalysis),
     Outlook(u8, Vec<GeoFeature>),
     Mds(Vec<GeoFeature>),
+    Watches(Vec<GeoFeature>),
     /// WPC Winter Storm Severity Index polygons for a day.
     Wssi(u8, Vec<GeoFeature>),
     /// WPC Excessive Rainfall Outlook polygons for a day.
@@ -280,6 +284,8 @@ enum OverlaySource {
     /// whether European warnings are worth fetching alongside them.
     Alerts(Vec<(f64, f64)>, (f64, f64, f64, f64)),
     Mds,
+    /// Tornado and severe thunderstorm watch polygons in effect.
+    Watches,
     /// Winter Storm Severity Index for a day (1-3).
     Wssi(u8),
     /// Excessive Rainfall Outlook for a day (1-3).
@@ -414,6 +420,7 @@ impl OverlaySource {
             OverlaySource::Mds => {
                 OverlayMsg::Mds(wxdata::spc::fetch_mesoscale_discussions(http).await?)
             }
+            OverlaySource::Watches => OverlayMsg::Watches(wxdata::spc::fetch_watches(http).await?),
             OverlaySource::Wssi(day) => {
                 OverlayMsg::Wssi(day, wxdata::wssi::fetch(http, day).await?)
             }
@@ -1124,6 +1131,8 @@ pub(crate) enum OverlayToggle {
     Pireps,
     Recon,
     Fronts,
+    /// SPC tornado and severe thunderstorm watches in effect.
+    Watches,
     GlmLightning,
     /// Ground strikes republished onto the user's own MQTT broker (see `strikes_topic`).
     Strikes,
@@ -1149,7 +1158,7 @@ pub(crate) struct BlockageKey {
 impl OverlayToggle {
     /// Every toggle, for the persistence sweep. A new variant belongs here too, or it silently
     /// stops being remembered across restarts.
-    pub(crate) const ALL: [OverlayToggle; 38] = [
+    pub(crate) const ALL: [OverlayToggle; 39] = [
         Self::AlertPanel,
         Self::StormReports,
         Self::Spotters,
@@ -1182,6 +1191,7 @@ impl OverlayToggle {
         Self::Pireps,
         Self::Recon,
         Self::Fronts,
+        Self::Watches,
         Self::GlmLightning,
         Self::Strikes,
         Self::Wind,
@@ -2023,6 +2033,8 @@ pub struct HookEchoApp {
     /// One slot per SPC outlook day, 1..=8 (Days 4–8 are the experimental probability layer).
     outlook_features: [Vec<GeoFeature>; 8],
     md_features: Vec<GeoFeature>,
+    /// Watch boxes in effect, one feature per county row the service returns.
+    watch_features: Vec<GeoFeature>,
     /// Winter Storm Severity Index polygons for the selected day.
     wssi_features: Vec<GeoFeature>,
     /// Excessive Rainfall Outlook polygons for the selected day.
@@ -2975,6 +2987,7 @@ impl HookEchoApp {
             arch_lsr_shown: None,
             outlook_features: std::array::from_fn(|_| Vec::new()),
             md_features: Vec::new(),
+            watch_features: Vec::new(),
             wssi_features: Vec::new(),
             ero_features: Vec::new(),
             show_mping: false,
@@ -3796,6 +3809,7 @@ impl HookEchoApp {
         points.extend(self.settings.markers.iter().map(|m| (m.lat, m.lon)));
         self.spawn_overlay(ctx, OverlaySource::Alerts(points, self.view_bounds()));
         self.spawn_overlay(ctx, OverlaySource::Mds);
+        self.spawn_overlay(ctx, OverlaySource::Watches);
         if (1..=3).contains(&self.filters.wssi_day) {
             self.spawn_overlay(ctx, OverlaySource::Wssi(self.filters.wssi_day));
         }
@@ -7227,6 +7241,7 @@ impl HookEchoApp {
             T::Couplets => &mut self.filters.show_couplets,
             T::Alerts => &mut self.filters.show_alerts,
             T::Mds => &mut self.filters.show_mds,
+            T::Watches => &mut self.filters.show_watches,
             T::Mping => &mut self.show_mping,
             T::Pireps => &mut self.show_pireps,
             T::Recon => &mut self.show_recon,
@@ -7467,6 +7482,7 @@ impl HookEchoApp {
                     self.alert_features = f;
                 }
                 OverlayMsg::Mds(f) => self.md_features = f,
+                OverlayMsg::Watches(f) => self.watch_features = f,
                 OverlayMsg::Mping(r) => self.mping_reports = r,
                 OverlayMsg::Pireps(p) => self.pireps = p,
                 OverlayMsg::Recon(o) => self.recon = o,
@@ -8563,6 +8579,9 @@ impl HookEchoApp {
         }
         if self.filters.show_mds {
             v.extend(self.md_features.iter().cloned());
+        }
+        if self.filters.show_watches {
+            v.extend(self.watch_features.iter().cloned());
         }
         if (1..=3).contains(&self.filters.wssi_day) {
             v.extend(self.wssi_features.iter().cloned());
