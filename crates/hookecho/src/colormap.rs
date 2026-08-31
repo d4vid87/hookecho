@@ -318,6 +318,11 @@ pub fn alt_names(moment: Moment) -> impl Iterator<Item = &'static str> {
 }
 
 /// Parse the built-in alternate `name`, or `None` if there is no such alternate.
+pub fn builtin_alt(name: &str) -> Option<ColorTable> {
+    resolve_builtin(name)
+}
+
+/// Parse the built-in alternate `name`, or `None` if there is no such alternate.
 fn resolve_builtin(name: &str) -> Option<ColorTable> {
     let (_, _, src) = ALT_SRC.iter().find(|(n, _, _)| *n == name)?;
     parse_pal(src).ok()
