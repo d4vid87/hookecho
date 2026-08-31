@@ -560,7 +560,7 @@ and you get the full app there.
 | `/obs.json` | conditions only |
 | `/cells.json?site=KTLX` | every storm cell the radar's algorithms track — hail size, tops, VIL, TVS, forecast track |
 | `/health.json` | version, uptime and how stale the answers are, for a container health check |
-| `/snapshot.png?site=KTLX` | a radar render — `&product=VEL`, `&basemap=none`, `&size=512` (256–2048), `&zoom=6.5`, `&tilt=1` |
+| `/snapshot.png?site=KTLX` | a radar render — `&product=VEL`, `&basemap=none`, `&size=512` (256–2048), `&zoom=6.5`, `&tilt=1`, `&palette=` (a built-in alternate's exact name, e.g. `Colorblind-safe (viridis)`) |
 | `/loop.gif?site=KTLX` | the last half hour animating — same render knobs, plus `&frames=6` (2–12) and `&fps=2` |
 | `/loop.mp4?site=KTLX` | the same loop as H.264, if ffmpeg is installed |
 | `/national.png` | the MRMS national mosaic, rendered here rather than hotlinked |

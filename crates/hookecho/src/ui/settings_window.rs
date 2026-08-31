@@ -1126,6 +1126,27 @@ fn alerts_tab(ui: &mut egui::Ui, settings: &mut Settings) {
             ui.label("Topic prefix:");
             ui.add(egui::TextEdit::singleline(&mut settings.mqtt_prefix).hint_text("home/weather"));
         });
+        ui.horizontal(|ui| {
+            ui.checkbox(&mut settings.mqtt_discovery, "Home Assistant discovery")
+                .on_hover_text(
+                    "Publish retained config topics so Home Assistant creates the device itself, \
+                     with a mute switch that publishes back to <prefix>/cmd/mute. Leave off if \
+                     this broker has no Home Assistant on it.",
+                );
+        });
+        ui.horizontal(|ui| {
+            ui.label("Strikes topic:");
+            ui.add(
+                egui::TextEdit::singleline(&mut settings.strikes_topic)
+                    .hint_text("blitzortung/1.1/#"),
+            )
+            .on_hover_text(
+                "Subscribe to lightning strikes someone else is already publishing to this \
+                 broker \u{2014} a Home Assistant Blitzortung integration, or the relay in \
+                 scripts/strikes-relay. Empty is off. HookEcho never connects to a strike \
+                 network itself.",
+            );
+        });
         ui.weak(
             "Publishes <prefix>/status and <prefix>/nearest every five minutes, and \
              <prefix>/alerts as warnings arrive. Takes effect on restart.",
@@ -1265,22 +1286,53 @@ fn piper_row(ui: &mut egui::Ui, settings: &mut Settings) {
     if edited {
         crate::speech::set_piper(&settings.piper_path, &settings.piper_voice);
     }
+    // The picker downloads; the field above is what actually gets spoken with. Picking a voice
+    // that is already on disk switches to it without touching the network.
     ui.horizontal(|ui| {
         let status = crate::speech::voice_status();
-        if settings.piper_voice.is_empty()
-            && !status.busy
-            && ui.button("Download a voice").clicked()
-        {
-            crate::speech::request_voice_download();
+        let mut want = settings.piper_download_voice.clone();
+        if want.is_empty() {
+            want = crate::speech::DEFAULT_VOICE.to_string();
+        }
+        egui::ComboBox::from_id_salt("piper-voice-pick")
+            .selected_text(&want)
+            .show_ui(ui, |ui| {
+                for id in crate::speech::VOICES {
+                    if ui.selectable_label(want == *id, *id).clicked() {
+                        settings.piper_download_voice = (*id).to_string();
+                    }
+                }
+            });
+        let on_disk = crate::speech::voice_path(&want).filter(|p| p.exists());
+        match on_disk {
+            Some(p) if settings.piper_voice != p.to_string_lossy() => {
+                if ui.button("Use this voice").clicked() {
+                    settings.piper_voice = p.to_string_lossy().into_owned();
+                    crate::speech::set_piper(&settings.piper_path, &settings.piper_voice);
+                }
+            }
+            Some(_) => {
+                ui.weak("in use");
+            }
+            None => {
+                if !status.busy && ui.button("Download").clicked() {
+                    crate::speech::request_voice_download(&want);
+                }
+            }
         }
         if !status.text.is_empty() {
             ui.weak(&status.text);
         }
     });
-    // The download writes the model to a known path, so filling the field in for the user is the
-    // whole handoff — there is nothing else to configure.
+    // A finished download is only useful once something points at it, and the user asking for a
+    // voice is the whole configuration step — so adopt it as soon as it lands.
     if settings.piper_voice.is_empty() {
-        if let Some(p) = crate::speech::default_voice_path().filter(|p| p.exists()) {
+        let want = if settings.piper_download_voice.is_empty() {
+            crate::speech::DEFAULT_VOICE.to_string()
+        } else {
+            settings.piper_download_voice.clone()
+        };
+        if let Some(p) = crate::speech::voice_path(&want).filter(|p| p.exists()) {
             settings.piper_voice = p.to_string_lossy().into_owned();
             crate::speech::set_piper(&settings.piper_path, &settings.piper_voice);
         }

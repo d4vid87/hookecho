@@ -103,6 +103,7 @@ pub(crate) fn show(
         FL::GlobalMslp,
         FL::GlobalHeight500,
         FL::GlobalTemp2m,
+        FL::GlobalDewpoint2m,
         FL::GlobalWind10m,
         FL::GlobalPrecip,
     ]

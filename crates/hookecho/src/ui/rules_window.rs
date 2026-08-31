@@ -14,13 +14,10 @@ pub struct RulesWindow {
     pub open: bool,
     /// A backtest the user asked for, picked up by the app (which owns the runtime) on its next
     /// frame: rule index, and the UTC day to replay.
-    #[cfg(not(target_arch = "wasm32"))]
     pub backtest_request: Option<(usize, chrono::NaiveDate)>,
     /// The run in flight or the last one's result.
-    #[cfg(not(target_arch = "wasm32"))]
     pub backtest: Option<crate::backtest::Shared>,
     /// The day the buttons replay, edited as text because a date picker is a dependency.
-    #[cfg(not(target_arch = "wasm32"))]
     pub backtest_day: String,
 }
 
@@ -154,7 +151,6 @@ pub fn show(
             changed = true;
         }
 
-        #[cfg(not(target_arch = "wasm32"))]
         backtest_bar(ui, state, settings);
 
         ui.add_space(6.0);
@@ -290,7 +286,6 @@ fn place_combo(
 ///
 /// The window has no tokio runtime and no HTTP client, so the button records a request the app
 /// picks up on its next frame — the same handover the voice download and the file picker use.
-#[cfg(not(target_arch = "wasm32"))]
 fn backtest_bar(ui: &mut egui::Ui, state: &mut RulesWindow, settings: &Settings) {
     ui.add_space(6.0);
     ui.separator();

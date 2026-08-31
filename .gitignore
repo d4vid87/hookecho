@@ -51,3 +51,6 @@ docs/clips/
 # Local wrangler dev state (scripts/web smoke runs).
 /.wrangler/
 /node_modules/
+
+# Build output of the excluded strikes relay (it is its own workspace root).
+/scripts/strikes-relay/target/

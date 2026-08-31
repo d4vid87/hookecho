@@ -13,15 +13,174 @@
 //!
 //! Credentials are a user secret — settings.json only, never the shots template, never logged.
 //
-// ponytail: one broker, one publisher thread, publish-only — no subscribe side and no Home
-// Assistant discovery config. The ceiling is "a house automates on this"; if someone wants
-// commands back (change site, start a loop) that is a subscribe loop on the same client.
+// ponytail: one broker, one thread each way. Commands are three verbs (site, product, mute), not
+// a remote-control protocol — anything richer belongs behind the HTTP server, which already
+// answers questions.
 
 use crate::settings::Settings;
 use crate::status::Spot;
 use rumqttc::{Client, MqttOptions, QoS, Transport};
 use std::sync::OnceLock;
 use std::time::Duration;
+
+/// A command that arrived from the broker. The app drains these once a frame and applies them,
+/// so a house automation can point the window at the storm it just noticed.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Cmd {
+    /// Show this radar site in the active pane.
+    Site(String),
+    /// Switch the active pane to this product code (`REF`, `VEL`, …).
+    Product(String),
+    /// Mute or unmute alert sound.
+    Mute(bool),
+    /// One lightning strike, republished by the user's own relay.
+    Strike {
+        lon: f64,
+        lat: f64,
+        time: chrono::DateTime<chrono::Utc>,
+    },
+}
+
+/// Parse a strike off the strikes topic.
+///
+/// The payload shape is the one the Home Assistant Blitzortung component republishes — JSON with
+/// `lat`, `lon` and a nanosecond-epoch `time` — but leniently: a relay that sends seconds,
+/// milliseconds, or no time at all still produces a usable strike, because a strike with a
+/// plausible position and a slightly wrong age is worth more than a dropped one.
+pub fn parse_strike(payload: &str) -> Option<Cmd> {
+    let v: serde_json::Value = serde_json::from_str(payload).ok()?;
+    let lon = v["lon"].as_f64()?;
+    let lat = v["lat"].as_f64()?;
+    if !(-180.0..=180.0).contains(&lon) || !(-90.0..=90.0).contains(&lat) {
+        return None;
+    }
+    let now = chrono::Utc::now();
+    let time = match v["time"].as_i64() {
+        // Nanoseconds is what the component publishes; the other two are what a hand-rolled
+        // relay usually sends. They are orders of magnitude apart, so the magnitude tells them
+        // apart without the relay having to say.
+        Some(t) if t > 1_000_000_000_000_000 => chrono::DateTime::from_timestamp_nanos(t),
+        Some(t) if t > 1_000_000_000_000 => chrono::DateTime::from_timestamp_millis(t)?,
+        Some(t) if t > 1_000_000_000 => chrono::DateTime::from_timestamp(t, 0)?,
+        _ => now,
+    };
+    // A strike from the future, or from last week, is a clock problem somewhere upstream. Treat
+    // it as "now" rather than dropping it: the position is still real.
+    let time = if (time - now).num_seconds().abs() > 3600 {
+        now
+    } else {
+        time
+    };
+    Some(Cmd::Strike { lon, lat, time })
+}
+
+/// Parse one command from its topic suffix and payload.
+///
+/// Everything arriving here came off a broker, which is a trust boundary even when the broker is
+/// on the same machine: a payload is whatever anyone with publish rights felt like sending. Site
+/// ids are validated to the shape a site id has, products go through `Moment::from_code`, and
+/// anything else is `None` rather than a guess.
+pub fn parse_cmd(suffix: &str, payload: &str) -> Option<Cmd> {
+    let payload = payload.trim();
+    match suffix {
+        "site" => {
+            let id = payload.to_ascii_uppercase();
+            let ok = (3..=5).contains(&id.len()) && id.chars().all(|c| c.is_ascii_alphanumeric());
+            ok.then_some(Cmd::Site(id))
+        }
+        "product" => {
+            let code = payload.to_ascii_uppercase();
+            wxdata::level2::Moment::from_code(&code).map(|_| Cmd::Product(code))
+        }
+        "mute" => match payload.to_ascii_lowercase().as_str() {
+            "on" | "1" | "true" | "mute" => Some(Cmd::Mute(true)),
+            "off" | "0" | "false" | "unmute" => Some(Cmd::Mute(false)),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// Commands parked by the event loop for the app to drain. A bounded channel would drop the
+/// command a user is waiting on; an unbounded one grows only if nobody drains it, which is
+/// exactly why [`spawn`] takes `subscribe`.
+static CMD_RX: std::sync::Mutex<Option<std::sync::mpsc::Receiver<Cmd>>> =
+    std::sync::Mutex::new(None);
+
+/// Take everything the broker has sent since the last frame.
+pub fn drain() -> Vec<Cmd> {
+    CMD_RX
+        .lock()
+        .ok()
+        .and_then(|g| g.as_ref().map(|rx| rx.try_iter().collect()))
+        .unwrap_or_default()
+}
+
+/// The Home Assistant discovery configs, as `(topic, payload)` pairs.
+///
+/// Published retained so Home Assistant finds the device whenever it restarts, and republished on
+/// every reconnect — which is idempotent, since a retained config is overwritten rather than
+/// appended.
+fn discovery(prefix: &str) -> Vec<(String, String)> {
+    let device = serde_json::json!({
+        "identifiers": ["hookecho"],
+        "name": "HookEcho",
+        "manufacturer": "HookEcho",
+        "model": "radar",
+    });
+    vec![
+        (
+            "homeassistant/sensor/hookecho_status/config".to_string(),
+            serde_json::json!({
+                "name": "HookEcho status",
+                "unique_id": "hookecho_status",
+                "state_topic": format!("{prefix}/status"),
+                "value_template": "{{ value_json | length }}",
+                "json_attributes_topic": format!("{prefix}/nearest"),
+                "device": device,
+            })
+            .to_string(),
+        ),
+        (
+            "homeassistant/sensor/hookecho_nearest/config".to_string(),
+            serde_json::json!({
+                "name": "HookEcho nearest cell",
+                "unique_id": "hookecho_nearest",
+                "state_topic": format!("{prefix}/nearest"),
+                // A cell that is not there is `null`, which has no distance — the sensor goes
+                // unavailable rather than reporting a made-up zero.
+                "value_template": "{{ value_json.distance_km | default('unavailable') }}",
+                "unit_of_measurement": "km",
+                "device": device,
+            })
+            .to_string(),
+        ),
+        (
+            "homeassistant/sensor/hookecho_alerts/config".to_string(),
+            serde_json::json!({
+                "name": "HookEcho last alert",
+                "unique_id": "hookecho_alerts",
+                "state_topic": format!("{prefix}/alerts"),
+                "value_template": "{{ value_json.title }}",
+                "device": device,
+            })
+            .to_string(),
+        ),
+        (
+            "homeassistant/switch/hookecho_mute/config".to_string(),
+            serde_json::json!({
+                "name": "HookEcho mute",
+                "unique_id": "hookecho_mute",
+                "command_topic": format!("{prefix}/cmd/mute"),
+                "payload_on": "on",
+                "payload_off": "off",
+                "optimistic": true,
+                "device": device,
+            })
+            .to_string(),
+        ),
+    ]
+}
 
 /// How often the retained status/nearest topics are refreshed. A volume is ~5 minutes wide and
 /// the observation feeds update slower than that, so anything quicker only spends network.
@@ -65,7 +224,7 @@ fn alert_payload(title: &str, body: &str, urgent: bool) -> String {
 ///
 /// Two threads: rumqttc's event loop must be driven by someone, and the status poll blocks on
 /// feeds for seconds at a time, so it cannot be the same one.
-pub fn spawn(settings: &Settings) {
+pub fn spawn(settings: &Settings, subscribe: bool) {
     let host = settings.mqtt_host.trim().to_string();
     if host.is_empty() || CLIENT.get().is_some() {
         return;
@@ -93,13 +252,76 @@ pub fn spawn(settings: &Settings) {
     }
     log::info!("mqtt: publishing under {prefix}/");
 
+    let discovery_on = settings.mqtt_discovery;
+    let (tx, rx) = std::sync::mpsc::channel();
+    if subscribe {
+        if let Ok(mut g) = CMD_RX.lock() {
+            *g = Some(rx);
+        }
+    }
+    let cmd_prefix = format!("{prefix}/cmd/");
+    // Empty means off, and it stays off in a `--serve` process for the same reason commands do:
+    // nothing there drains the channel.
+    let strikes_topic = if subscribe {
+        settings.strikes_topic.trim().to_string()
+    } else {
+        String::new()
+    };
+    let sub_client = client.clone();
+    let sub_prefix = prefix.clone();
     std::thread::spawn(move || {
         // Iterating the connection *is* the reconnect loop — rumqttc yields the error and then
         // tries again, so this only ends when the process does.
         for event in conn.iter() {
-            if let Err(e) = event {
-                log::debug!("mqtt: {e}");
-                std::thread::sleep(Duration::from_secs(5));
+            match event {
+                // A fresh connection is where subscriptions and retained configs go: this fires
+                // again after every reconnect, and both are idempotent.
+                Ok(rumqttc::Event::Incoming(rumqttc::Packet::ConnAck(_))) => {
+                    if subscribe {
+                        let topic = format!("{sub_prefix}/cmd/#");
+                        if let Err(e) = sub_client.subscribe(&topic, QoS::AtLeastOnce) {
+                            log::warn!("mqtt: subscribing to {topic} failed: {e}");
+                        }
+                    }
+                    if !strikes_topic.is_empty() {
+                        // At most once: a strike that arrives late is worth less than the
+                        // bandwidth of redelivering it, and there are thousands an hour.
+                        if let Err(e) = sub_client.subscribe(&strikes_topic, QoS::AtMostOnce) {
+                            log::warn!("mqtt: subscribing to {strikes_topic} failed: {e}");
+                        }
+                    }
+                    if discovery_on {
+                        for (topic, payload) in discovery(&sub_prefix) {
+                            publish(&sub_client, &topic, payload, true);
+                        }
+                    }
+                }
+                Ok(rumqttc::Event::Incoming(rumqttc::Packet::Publish(p))) => {
+                    let payload = String::from_utf8_lossy(&p.payload);
+                    let Some(suffix) = p.topic.strip_prefix(&cmd_prefix) else {
+                        // Anything else on this connection is a strike, since the strikes topic
+                        // is the only other thing subscribed. Unparseable ones are silent: a
+                        // wildcard topic carries the network's own housekeeping messages too,
+                        // and warning per message would be thousands of lines an hour.
+                        if !strikes_topic.is_empty() {
+                            if let Some(cmd) = parse_strike(&payload) {
+                                let _ = tx.send(cmd);
+                            }
+                        }
+                        continue;
+                    };
+                    match parse_cmd(suffix, &payload) {
+                        Some(cmd) => {
+                            let _ = tx.send(cmd);
+                        }
+                        None => log::warn!("mqtt: ignoring {} = {payload:?}", p.topic),
+                    }
+                }
+                Ok(_) => {}
+                Err(e) => {
+                    log::debug!("mqtt: {e}");
+                    std::thread::sleep(Duration::from_secs(5));
+                }
             }
         }
     });
@@ -165,6 +387,58 @@ pub fn publish_alert(settings: &Settings, title: &str, body: &str, urgent: bool)
 mod tests {
     use super::*;
 
+    /// A payload off a broker is whatever anyone with publish rights sent, so the parser is a
+    /// trust boundary and not a convenience.
+    #[test]
+    fn commands_are_validated_before_they_are_believed() {
+        assert_eq!(parse_cmd("site", "ktlx"), Some(Cmd::Site("KTLX".into())));
+        assert_eq!(
+            parse_cmd("site", " kfws \n"),
+            Some(Cmd::Site("KFWS".into()))
+        );
+        assert_eq!(parse_cmd("site", "../../etc"), None);
+        assert_eq!(parse_cmd("site", "K"), None);
+        assert_eq!(parse_cmd("site", "KTLX; DROP"), None);
+
+        assert_eq!(
+            parse_cmd("product", "vel"),
+            Some(Cmd::Product("VEL".into()))
+        );
+        assert_eq!(parse_cmd("product", "nope"), None);
+
+        assert_eq!(parse_cmd("mute", "ON"), Some(Cmd::Mute(true)));
+        assert_eq!(parse_cmd("mute", "0"), Some(Cmd::Mute(false)));
+        assert_eq!(parse_cmd("mute", "maybe"), None);
+
+        // An unknown verb is silence, not a guess.
+        assert_eq!(parse_cmd("reboot", "on"), None);
+    }
+
+    /// Home Assistant keys entities by `unique_id` and the configs are retained, so a collision
+    /// or a stray topic is a mess in somebody's house that outlives the app.
+    #[test]
+    fn discovery_configs_are_distinct_and_point_at_our_prefix() {
+        let configs = discovery("home/weather");
+        assert_eq!(configs.len(), 4);
+        let mut ids: Vec<String> = Vec::new();
+        for (topic, payload) in &configs {
+            assert!(topic.starts_with("homeassistant/"), "{topic}");
+            let v: serde_json::Value = serde_json::from_str(payload).expect("config is JSON");
+            let id = v["unique_id"].as_str().expect("unique_id").to_string();
+            assert!(!ids.contains(&id), "duplicate unique_id {id}");
+            ids.push(id);
+            let points_at_us = v["state_topic"]
+                .as_str()
+                .or_else(|| v["command_topic"].as_str())
+                .expect("a topic");
+            assert!(points_at_us.starts_with("home/weather/"), "{points_at_us}");
+            assert_eq!(v["device"]["identifiers"][0], "hookecho");
+        }
+        // The switch commands the topic the subscribe loop actually listens on.
+        let (_, mute) = configs.last().unwrap();
+        assert!(mute.contains("home/weather/cmd/mute"));
+    }
+
     #[test]
     fn a_prefix_cannot_carry_a_wildcard_into_a_publish() {
         assert_eq!(clean_prefix("home/weather"), "home/weather");
@@ -191,5 +465,38 @@ mod tests {
         assert_eq!(v["body"], "Norman until 21:15");
         assert_eq!(v["urgent"], true);
         assert!(v["time"].as_str().unwrap().contains('T'));
+    }
+
+    #[test]
+    fn strikes_parse_the_shape_the_blitzortung_relay_publishes() {
+        // Captured payload shape: nanosecond epoch, degrees.
+        let cmd = parse_strike(r#"{"time":1756500000000000000,"lat":35.2,"lon":-97.4}"#);
+        let Some(Cmd::Strike { lon, lat, time }) = cmd else {
+            panic!("expected a strike, got {cmd:?}");
+        };
+        assert!((lon + 97.4).abs() < 1e-9 && (lat - 35.2).abs() < 1e-9);
+        // Well outside the hour window, so it is clamped to now rather than dropped.
+        assert!((chrono::Utc::now() - time).num_seconds().abs() < 5);
+    }
+
+    #[test]
+    fn a_recent_second_epoch_keeps_its_own_time() {
+        let then = chrono::Utc::now() - chrono::Duration::seconds(120);
+        let json = format!(
+            r#"{{"time":{},"lat":51.5,"lon":-0.1}}"#,
+            then.timestamp_millis()
+        );
+        let Some(Cmd::Strike { time, .. }) = parse_strike(&json) else {
+            panic!("expected a strike");
+        };
+        assert!((time - then).num_seconds().abs() <= 1);
+    }
+
+    #[test]
+    fn junk_on_the_strikes_topic_is_dropped() {
+        // Housekeeping messages and out-of-range positions both share the wildcard topic.
+        assert_eq!(parse_strike("hello"), None);
+        assert_eq!(parse_strike(r#"{"lat":35.2}"#), None);
+        assert_eq!(parse_strike(r#"{"lat":935.2,"lon":-97.4}"#), None);
     }
 }

@@ -1,0 +1,20 @@
+[package]
+name = "strikes-relay"
+version = "0.1.0"
+edition = "2021"
+description = "Republish Blitzortung lightning strikes onto your own MQTT broker for HookEcho"
+license = "MIT OR Apache-2.0"
+publish = false
+
+# Deliberately outside the HookEcho workspace (see the root Cargo.toml `exclude`): it is a
+# standalone daemon a user runs on their own box, it is not built by any of the app's gates, and
+# it owns its own lockfile so its dependencies can never move the app's.
+
+[dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "signal"] }
+tokio-tungstenite = { version = "0.24", default-features = false, features = ["connect", "rustls-tls-webpki-roots"] }
+futures-util = { version = "0.3", default-features = false, features = ["sink"] }
+rumqttc = "0.24"
+serde_json = "1"
+# Already in the graph via both TLS users; named so the process-level provider can be chosen.
+rustls = { version = "0.23", default-features = false, features = ["ring"] }

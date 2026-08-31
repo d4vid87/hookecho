@@ -289,6 +289,13 @@ impl HookEchoApp {
                 false,
             ),
             (
+                FL::GlobalDewpoint2m,
+                "Models",
+                "Surface dewpoint (2 m)",
+                "How much moisture the air is carrying, worldwide",
+                false,
+            ),
+            (
                 FL::GlobalWind10m,
                 "Models",
                 "Surface wind (10 m)",
@@ -464,6 +471,22 @@ impl HookEchoApp {
                 false,
             ),
             (
+                T::LocalTracks,
+                "Severe",
+                "Local cell tracks (radar-derived)",
+                "Cell motion computed here from reflectivity, with 15- and 30-minute \
+                 extrapolation \u{2014} for sites and networks with no Level 3 storm-cell table. \
+                 Needs a few volumes in the loop before it has motion to show.",
+                false,
+            ),
+            (
+                T::Watches,
+                "Severe",
+                "Watch boxes",
+                "SPC tornado and severe thunderstorm watches in effect",
+                false,
+            ),
+            (
                 T::Mds,
                 "Severe",
                 "Mesoscale discussions",
@@ -617,6 +640,15 @@ impl HookEchoApp {
                 "Satellite lightning (GLM)",
                 "Total lightning (optical) — every flash the GOES mapper sees, in-cloud included, \
                  fading as it ages. The CG density layer is the ground-strike half.",
+                true,
+            ),
+            (
+                T::Strikes,
+                "Severe",
+                "Lightning strikes (MQTT)",
+                "Ground strikes republished onto your own MQTT broker \u{2014} needs a relay or a \
+                 Home Assistant rebroadcast and the strikes topic set in Settings. Nothing is \
+                 fetched from a strike network by the app itself.",
                 true,
             ),
             (

@@ -57,6 +57,21 @@ pub fn set_output(px: Option<u32>, zoom: Option<f64>) {
     );
 }
 
+/// Built-in alternate palette for the renders that follow, or `None` for each moment's default.
+///
+/// Same process-global shape as [`set_output`], and set under the same render lock — and for the
+/// same reason it clears rather than persists: the next render is somebody else's request, and a
+/// sticky palette would hand one caller's colorblind-safe table to every snapshot after it.
+static PALETTE_NAME: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+
+/// Ask for a built-in alternate palette (by its [`crate::colormap::alt_names`] name) on the
+/// renders that follow. `None` restores the moment's default table.
+pub fn set_palette(name: Option<String>) {
+    if let Ok(mut p) = PALETTE_NAME.lock() {
+        *p = name;
+    }
+}
+
 /// `HOOKECHO_CAM=lon,lat,zoom` overrides any headless camera — framing knob for screenshots.
 /// An explicit `--zoom`/`?zoom=` beats both, since it was typed for this render.
 fn cam_or_env(lon: f64, lat: f64, zoom: f64) -> Camera {
@@ -255,9 +270,16 @@ pub fn run(
         .enable_all()
         .build()?;
 
+    // A `.pal` file on the command line beats everything: it is the caller holding the table in
+    // their hand. Otherwise an alternate may have been requested by name — never by path, so a
+    // request can never name a file.
     let table = match pal {
         Some(path) => crate::colormap::parse_pal(&std::fs::read_to_string(path)?)?,
-        None => crate::colormap::default_table(moment).clone(),
+        None => PALETTE_NAME
+            .lock()
+            .ok()
+            .and_then(|p| p.as_deref().and_then(crate::colormap::builtin_alt))
+            .unwrap_or_else(|| crate::colormap::default_table(moment).clone()),
     };
 
     // The volume's own time, formatted, for the caption — carried as a string because each
@@ -1615,6 +1637,7 @@ pub fn run_global(model: &str, slug: &str, out_path: &str) -> anyhow::Result<()>
         GlobalField::Mslp => FL::GlobalMslp,
         GlobalField::Height500 => FL::GlobalHeight500,
         GlobalField::Temp2m => FL::GlobalTemp2m,
+        GlobalField::Dewpoint2m => FL::GlobalDewpoint2m,
         GlobalField::Wind10m => FL::GlobalWind10m,
         GlobalField::Precip => FL::GlobalPrecip,
     };

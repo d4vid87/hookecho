@@ -580,6 +580,8 @@ struct Frame {
     zoom: Option<f64>,
     zoom_tag: String,
     tilt: usize,
+    /// Built-in alternate palette by name, or `None` for the product's default table.
+    palette: Option<String>,
 }
 
 impl Frame {
@@ -607,6 +609,19 @@ impl Frame {
             .and_then(|v| v.parse().ok())
             .unwrap_or(0)
             .min(30);
+        // Palettes are chosen by exact name from the built-in alternates for this product, and
+        // an unknown one is a 400 rather than a silent fallback — the caller asked for a specific
+        // picture. A name is never a path: this must not become a way to read a file off the
+        // server, so nothing here touches the filesystem.
+        let palette = match crate::cloud::param(query, "palette") {
+            Some(name) => {
+                if !crate::colormap::alt_names(moment).any(|n| n == name) {
+                    anyhow::bail!("unknown palette '{name}' for {}", moment.short_name());
+                }
+                Some(name)
+            }
+            None => None,
+        };
         Ok(Frame {
             site,
             moment,
@@ -615,6 +630,7 @@ impl Frame {
             zoom,
             zoom_tag: zoom.map_or_else(|| "auto".to_string(), |z| format!("{z:.2}")),
             tilt,
+            palette,
         })
     }
 
@@ -622,14 +638,22 @@ impl Frame {
     /// have to carry all of it. The basemap used to be missing from the filename, so two styles
     /// of the same site raced over one file on disk.
     fn tag(&self) -> String {
+        // The palette belongs here for the same reason the basemap does: two callers asking for
+        // the same site with different tables would otherwise race over one file on disk.
+        let palette = self.palette.as_deref().map_or("std".to_string(), |p| {
+            p.chars()
+                .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+                .collect()
+        });
         format!(
-            "{}-{}-{}-{}-{}-{}",
+            "{}-{}-{}-{}-{}-{}-{}",
             self.site,
             self.moment.short_name(),
             self.basemap.slug(),
             self.px,
             self.zoom_tag,
-            self.tilt
+            self.tilt,
+            palette
         )
     }
 }
@@ -657,6 +681,9 @@ fn render_png(
         // Anything this server hands out is a picture someone will look at away from the app, so
         // it carries its warnings, its caption and its scale. The CLI verifiers do not.
         crate::headless::set_extras(true);
+        // Set on every render, `Some` or `None`: an unset palette has to clear whatever the
+        // previous caller left behind, exactly like the zoom override.
+        crate::headless::set_palette(f.palette.clone());
         crate::headless::run(
             out.to_string_lossy().as_ref(),
             &f.site,
@@ -723,7 +750,8 @@ fn fresh_on_disk(path: &std::path::Path) -> Option<Vec<u8>> {
 
 /// A radar PNG through the same off-screen renderer the `--headless` verifier uses.
 ///
-// ponytail: one render at a time; the palette is still fixed. Add it when someone asks.
+// ponytail: one render at a time. `palette=` selects a built-in alternate by name; a caller's
+// own `.pal` file is not accepted, because a name can never become a path.
 fn snapshot(server: &Server, query: &str) -> anyhow::Result<Vec<u8>> {
     let f = Frame::parse(query)?;
     let key = format!("/snapshot.png?{}", f.tag());
@@ -777,6 +805,7 @@ fn national(server: &Server) -> anyhow::Result<Vec<u8>> {
             Some(_one_at_a_time) => {
                 crate::headless::set_output(Some(NATIONAL_PX), Some(NATIONAL_ZOOM));
                 crate::headless::set_extras(true);
+                crate::headless::set_palette(None);
                 crate::headless::run_mrms(out.to_string_lossy().as_ref())?;
                 archive_national_frame(&out);
                 std::fs::read(&out)?
@@ -1589,6 +1618,28 @@ mod tests {
         // A dashboard's `?token=` form.
         assert_eq!(query_token("site=KTLX&token=abc"), Some("abc".to_string()));
         assert_eq!(query_token("site=KTLX"), None);
+    }
+
+    #[test]
+    fn a_palette_is_an_exact_alternate_name_or_a_refusal() {
+        let name = crate::colormap::alt_names(wxdata::level2::Moment::Reflectivity)
+            .next()
+            .expect("reflectivity has an alternate");
+        let q = format!("site=KTLX&palette={}", crate::cloud::urlencode(name));
+        let f = Frame::parse(&q).unwrap();
+        assert_eq!(f.palette.as_deref(), Some(name));
+        // The palette changes the pixels, so it has to change the filename too.
+        assert_ne!(f.tag(), Frame::parse("site=KTLX").unwrap().tag());
+        assert!(
+            !f.tag().contains(['/', '\\', ' ']),
+            "tag becomes a filename"
+        );
+
+        // Not a name of a table this product has, not a path, not a near miss.
+        assert!(Frame::parse("site=KTLX&palette=viridis").is_err());
+        assert!(Frame::parse("site=KTLX&palette=../../etc/passwd").is_err());
+        // The alternate belongs to reflectivity; spectrum width has none at all.
+        assert!(Frame::parse(&format!("site=KTLX&product=SW&palette={name}")).is_err());
     }
 
     #[test]

@@ -118,6 +118,8 @@ pub struct OverlayFilters {
     /// Day-1 outlook hazard: categorical risk, or a tornado/wind/hail probability grid.
     pub outlook_kind: wxdata::spc::OutlookKind,
     pub show_mds: bool,
+    /// SPC tornado and severe thunderstorm watches in effect.
+    pub show_watches: bool,
     /// WPC Winter Storm Severity Index day (0 = off, else 1-3).
     pub wssi_day: u8,
     /// WPC Excessive Rainfall Outlook day (0 = off, else 1-3).
@@ -153,6 +155,7 @@ impl Default for OverlayFilters {
             ero_day: 0,
 
             show_mds: true,
+            show_watches: true,
             show_cells: true,
             show_tracks: true,
             show_arrival_cones: false,
@@ -184,6 +187,7 @@ enum OverlayMsg {
     Fronts(wxdata::fronts::SurfaceAnalysis),
     Outlook(u8, Vec<GeoFeature>),
     Mds(Vec<GeoFeature>),
+    Watches(Vec<GeoFeature>),
     /// WPC Winter Storm Severity Index polygons for a day.
     Wssi(u8, Vec<GeoFeature>),
     /// WPC Excessive Rainfall Outlook polygons for a day.
@@ -280,6 +284,8 @@ enum OverlaySource {
     /// whether European warnings are worth fetching alongside them.
     Alerts(Vec<(f64, f64)>, (f64, f64, f64, f64)),
     Mds,
+    /// Tornado and severe thunderstorm watch polygons in effect.
+    Watches,
     /// Winter Storm Severity Index for a day (1-3).
     Wssi(u8),
     /// Excessive Rainfall Outlook for a day (1-3).
@@ -414,6 +420,7 @@ impl OverlaySource {
             OverlaySource::Mds => {
                 OverlayMsg::Mds(wxdata::spc::fetch_mesoscale_discussions(http).await?)
             }
+            OverlaySource::Watches => OverlayMsg::Watches(wxdata::spc::fetch_watches(http).await?),
             OverlaySource::Wssi(day) => {
                 OverlayMsg::Wssi(day, wxdata::wssi::fetch(http, day).await?)
             }
@@ -1124,7 +1131,13 @@ pub(crate) enum OverlayToggle {
     Pireps,
     Recon,
     Fronts,
+    /// SPC tornado and severe thunderstorm watches in effect.
+    Watches,
+    /// Cell tracks computed here from reflectivity, for sites with no Level 3 SCIT product.
+    LocalTracks,
     GlmLightning,
+    /// Ground strikes republished onto the user's own MQTT broker (see `strikes_topic`).
+    Strikes,
     Wind,
     LinkCameras,
     /// The always-on-top mini-loop window (desktop only).
@@ -1147,7 +1160,7 @@ pub(crate) struct BlockageKey {
 impl OverlayToggle {
     /// Every toggle, for the persistence sweep. A new variant belongs here too, or it silently
     /// stops being remembered across restarts.
-    pub(crate) const ALL: [OverlayToggle; 37] = [
+    pub(crate) const ALL: [OverlayToggle; 40] = [
         Self::AlertPanel,
         Self::StormReports,
         Self::Spotters,
@@ -1180,7 +1193,10 @@ impl OverlayToggle {
         Self::Pireps,
         Self::Recon,
         Self::Fronts,
+        Self::Watches,
+        Self::LocalTracks,
         Self::GlmLightning,
+        Self::Strikes,
         Self::Wind,
         Self::LinkCameras,
         Self::MiniLoop,
@@ -1378,6 +1394,7 @@ fn field_refresh_secs(layer: crate::render::FieldLayer) -> u64 {
         FL::GlobalMslp
         | FL::GlobalHeight500
         | FL::GlobalTemp2m
+        | FL::GlobalDewpoint2m
         | FL::GlobalWind10m
         | FL::GlobalPrecip
         // Two global cycles behind it, so the same half hour.
@@ -1841,6 +1858,31 @@ fn data_attribution(site_id: &str) -> Option<&'static str> {
 /// How a lightning flash looks at `age_secs`: bright white-hot when it just happened, fading to a
 /// dim orange ember by the end of the window. The brightness IS the recency cue — a map of
 /// same-colored dots says where lightning has been, not where it is now.
+/// Most strikes kept at once. A continent-wide topic on an active night runs tens of thousands
+/// an hour, and the painter walks the whole deque every frame.
+const STRIKE_CAP: usize = 20_000;
+
+/// How long a strike stays on the map. Same window as the GLM feed, so the two layers age alike.
+const STRIKE_WINDOW_SECS: i64 = 900;
+
+/// Cyan-white for a fresh strike fading to deep blue, deliberately nothing like [`glm_style`]'s
+/// white-to-orange: with both layers on, colour is the only thing telling optical flashes from
+/// ground strikes.
+fn strike_style(age_secs: f32) -> (egui::Color32, f32) {
+    let t = (age_secs / STRIKE_WINDOW_SECS as f32).clamp(0.0, 1.0);
+    let r = 3.4 - 1.4 * t;
+    let lerp = |a: f32, b: f32| (a + (b - a) * t) as u8;
+    (
+        egui::Color32::from_rgba_unmultiplied(
+            lerp(225.0, 40.0),
+            lerp(250.0, 90.0),
+            lerp(255.0, 220.0),
+            lerp(255.0, 70.0),
+        ),
+        r,
+    )
+}
+
 fn glm_style(age_secs: f32) -> (egui::Color32, f32) {
     const WINDOW: f32 = 900.0; // 15 minutes, matching the feed
     let t = (age_secs / WINDOW).clamp(0.0, 1.0);
@@ -1945,6 +1987,12 @@ pub struct HookEchoApp {
     /// over every tilt, so they share one cache and are computed together.
     zdr_cache: Option<ZdrCache>,
     couplet_cache: Option<((usize, String, usize), Vec<wxdata::rotation::CoupletHit>)>,
+    /// Cells found per decoded volume, so a track built over a dozen frames flood-fills each
+    /// sweep once rather than once a frame.
+    celltrack_cache: LruCache<String, Vec<wxdata::celltrack::Blob>>,
+    /// The tracks themselves, with the frame list they were built from.
+    tracks_cache: Option<((usize, String, usize), Vec<wxdata::celltrack::Track>)>,
+    show_local_tracks: bool,
     site_dialog: Option<ui::site_dialog::SiteDialog>,
     firstrun: ui::firstrun::FirstRun,
     /// The optional spotlight tour, and where the chrome drew the things it points at this frame.
@@ -1994,6 +2042,8 @@ pub struct HookEchoApp {
     /// One slot per SPC outlook day, 1..=8 (Days 4–8 are the experimental probability layer).
     outlook_features: [Vec<GeoFeature>; 8],
     md_features: Vec<GeoFeature>,
+    /// Watch boxes in effect, one feature per county row the service returns.
+    watch_features: Vec<GeoFeature>,
     /// Winter Storm Severity Index polygons for the selected day.
     wssi_features: Vec<GeoFeature>,
     /// Excessive Rainfall Outlook polygons for the selected day.
@@ -2502,6 +2552,11 @@ pub struct HookEchoApp {
     glm: std::sync::Arc<std::sync::Mutex<wxdata::glm::GlmFeed>>,
     glm_last_poll: Option<Instant>,
     glm_polling: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    /// Ground strikes as they arrive over MQTT, oldest first. Nothing fills this unless the user
+    /// points `strikes_topic` at a broker that carries them — the app never talks to a strike
+    /// network itself.
+    show_strikes: bool,
+    strikes: std::collections::VecDeque<(f64, f64, chrono::DateTime<chrono::Utc>)>,
     /// Animated wind particles. The grids are shared; the particle sets are per pane, because each
     /// pane has its own camera. Nothing here persists to settings — neither do fronts or GLM.
     show_wind: bool,
@@ -2897,6 +2952,9 @@ impl HookEchoApp {
             tbss_cache: None,
             zdr_cache: None,
             couplet_cache: None,
+            celltrack_cache: LruCache::new(NonZeroUsize::new(48).unwrap()),
+            tracks_cache: None,
+            show_local_tracks: false,
             site_dialog: None,
             firstrun: {
                 let mut w = ui::firstrun::FirstRun::default();
@@ -2941,6 +2999,7 @@ impl HookEchoApp {
             arch_lsr_shown: None,
             outlook_features: std::array::from_fn(|_| Vec::new()),
             md_features: Vec::new(),
+            watch_features: Vec::new(),
             wssi_features: Vec::new(),
             ero_features: Vec::new(),
             show_mping: false,
@@ -3222,6 +3281,8 @@ impl HookEchoApp {
             fronts: None,
             fronts_last_fetch: None,
             show_glm: false,
+            show_strikes: false,
+            strikes: std::collections::VecDeque::new(),
             glm: std::sync::Arc::new(std::sync::Mutex::new(wxdata::glm::GlmFeed::new(15))),
             glm_last_poll: None,
             glm_polling: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -3306,7 +3367,7 @@ impl HookEchoApp {
         // The broker is publish-only and reconnects on its own, so it starts here and is never
         // stopped; changing the setting takes a restart, same as the tray.
         #[cfg(not(any(target_os = "android", target_arch = "wasm32")))]
-        crate::mqtt::spawn(&app.settings);
+        crate::mqtt::spawn(&app.settings, true);
         // Point the speech path at Piper before anything can speak.
         #[cfg(not(target_arch = "wasm32"))]
         crate::speech::set_piper(&app.settings.piper_path, &app.settings.piper_voice);
@@ -3656,6 +3717,7 @@ impl HookEchoApp {
         let opts = wxdata::derived::DerivedOpts {
             etop_dbz: self.settings.etop_dbz,
             time: vol.time,
+            ..Default::default()
         };
         self.derived_key = Some(key);
         let tx = self.overlay_tx.clone();
@@ -3759,6 +3821,7 @@ impl HookEchoApp {
         points.extend(self.settings.markers.iter().map(|m| (m.lat, m.lon)));
         self.spawn_overlay(ctx, OverlaySource::Alerts(points, self.view_bounds()));
         self.spawn_overlay(ctx, OverlaySource::Mds);
+        self.spawn_overlay(ctx, OverlaySource::Watches);
         if (1..=3).contains(&self.filters.wssi_day) {
             self.spawn_overlay(ctx, OverlaySource::Wssi(self.filters.wssi_day));
         }
@@ -4559,7 +4622,6 @@ impl HookEchoApp {
     /// The site is whichever radar the active pane is on: a rule about a place is only replayable
     /// against a radar that can see it, and the pane the user is looking at is the best guess
     /// anyone can make without asking.
-    #[cfg(not(target_arch = "wasm32"))]
     fn start_backtest(&mut self, rule_idx: usize, day: chrono::NaiveDate) {
         let Some(rule) = self.settings.alert_rules.get(rule_idx).cloned() else {
             return;
@@ -5202,14 +5264,18 @@ impl HookEchoApp {
     // files are validated (the JSON parses, the model is the size of a model); pinning a digest
     // means pinning a version, and I could not verify one offline to pin.
     #[cfg(not(target_arch = "wasm32"))]
-    fn download_voice(&self) {
-        let Some(path) = crate::speech::default_voice_path() else {
+    fn download_voice(&self, id: String) {
+        let Some(path) = crate::speech::voice_path(&id) else {
             crate::speech::set_voice_status(false, "no data directory to download into");
+            return;
+        };
+        let Some(url) = crate::speech::voice_url(&id) else {
+            crate::speech::set_voice_status(false, "that is not a Piper voice id");
             return;
         };
         let http = self.http.clone();
         self.spawner.spawn(async move {
-            let cfg_url = format!("{}.json", crate::speech::VOICE_URL);
+            let cfg_url = format!("{url}.json");
             let cfg_path = path.with_extension("onnx.json");
             if let Some(dir) = path.parent() {
                 if let Err(e) = std::fs::create_dir_all(dir) {
@@ -5243,7 +5309,7 @@ impl HookEchoApp {
                 crate::speech::set_voice_status(false, "voice config was not JSON; refusing it");
                 return;
             }
-            let model = match get(crate::speech::VOICE_URL.to_string()).await {
+            let model = match get(url).await {
                 Ok(b) => b,
                 Err(e) => {
                     crate::speech::set_voice_status(false, format!("voice download failed: {e}"));
@@ -6145,6 +6211,115 @@ impl HookEchoApp {
         let out = self.compute_couplets_uncached(idx);
         self.couplet_cache = Some((key, out.clone()));
         out
+    }
+
+    /// Packs saved in this browser, refreshed in the background whenever one is written.
+    #[cfg(target_arch = "wasm32")]
+    fn packs(&self) -> Vec<crate::webcache::Pack> {
+        crate::webcache::known_packs()
+    }
+
+    /// The last thing the pack machinery has to say — a progress line or an error.
+    #[cfg(target_arch = "wasm32")]
+    fn pack_status(&self) -> Option<String> {
+        crate::webcache::status()
+    }
+
+    /// Save the active timeline's archived frames into an offline pack.
+    ///
+    /// The live head is skipped on purpose: the newest object can still be uploading, and half a
+    /// volume kept forever is worse than one frame missing from a saved loop.
+    #[cfg(target_arch = "wasm32")]
+    fn save_offline_pack(&mut self, ctx: &egui::Context) {
+        let tl = &self.views[self.active].timeline;
+        let ids: Vec<_> = tl.frames.iter().take(tl.playhead + 1).cloned().collect();
+        let site = self.views[self.active].site.clone().unwrap_or_default();
+        let date = tl.date.format("%Y-%m-%d").to_string();
+        let ctx = ctx.clone();
+        self.spawner.spawn(async move {
+            crate::webcache::save_timeline(site, date, ids).await;
+            ctx.request_repaint();
+        });
+    }
+
+    /// Point the active pane at a saved pack: its site and day, and its frames, without listing
+    /// anything over the network. Playback then reads each volume back out of IndexedDB.
+    #[cfg(target_arch = "wasm32")]
+    fn load_offline_pack(&mut self, pack: &crate::webcache::Pack) {
+        let Ok(date) = chrono::NaiveDate::parse_from_str(&pack.date, "%Y-%m-%d") else {
+            return;
+        };
+        self.views[self.active].site = Some(pack.site.clone());
+        let tl = &mut self.views[self.active].timeline;
+        tl.date = date;
+        tl.following = false;
+        tl.listing = false;
+        tl.frames = pack
+            .volumes
+            .iter()
+            .map(|n| Identifier::new(n.clone()))
+            .collect();
+        tl.playhead = 0;
+        tl.playing = true;
+        tl.loop_enabled = true;
+    }
+
+    /// Cell tracks for the active pane, computed here from reflectivity rather than read from a
+    /// Level 3 storm-cell table — the point of the layer is the sites that have no such table.
+    ///
+    /// Built by folding [`wxdata::celltrack::associate`] over the timeline frames still in the
+    /// decode cache, so it needs no extra downloads and silently produces nothing on a fresh boot
+    /// with one volume in hand.
+    fn compute_local_tracks(&mut self) -> Vec<wxdata::celltrack::Track> {
+        let key = self.volume_key(self.active);
+        if let Some((k, v)) = &self.tracks_cache {
+            if *k == key {
+                return v.clone();
+            }
+        }
+        let frames: Vec<_> = self.views[self.active]
+            .timeline
+            .frames
+            .iter()
+            .take(self.views[self.active].timeline.playhead + 1)
+            .filter_map(|id| id.date_time().map(|t| (id.name().to_string(), t)))
+            .filter(|(name, _)| self.scan_cache.contains(name))
+            .collect();
+        let mut tracks: Vec<wxdata::celltrack::Track> = Vec::new();
+        for (name, at) in frames {
+            let cells = match self.celltrack_cache.get(&name) {
+                Some(c) => c.clone(),
+                None => {
+                    let Some(scan) = self.scan_cache.get(&name).map(Arc::clone) else {
+                        continue;
+                    };
+                    // Lowest tilt: the cell a chaser is driving toward is the one at the ground.
+                    let cells = match level2::bin_scan(&scan, Moment::Reflectivity, 0) {
+                        Ok(sweep) => wxdata::celltrack::find_cells(&sweep, 45.0),
+                        Err(e) => {
+                            log::debug!("celltrack: skipping {name}: {e}");
+                            Vec::new()
+                        }
+                    };
+                    self.celltrack_cache.put(name.clone(), cells.clone());
+                    cells
+                }
+            };
+            tracks = wxdata::celltrack::associate(&tracks, &cells, at, 30.0);
+        }
+        // A track whose last point is older than the newest frame stopped being seen; drop it
+        // rather than leave a stale arrow pointing at empty sky.
+        if let Some(newest) = tracks
+            .iter()
+            .filter_map(|t| t.points.last())
+            .map(|p| p.2)
+            .max()
+        {
+            tracks
+                .retain(|t| t.points.last().is_some_and(|p| p.2 == newest) && t.points.len() >= 2);
+        }
+        self.tracks_cache = Some((key, tracks.clone()));
+        tracks
     }
 
     fn compute_couplets_uncached(&mut self, idx: usize) -> Vec<wxdata::rotation::CoupletHit> {
@@ -7173,6 +7348,7 @@ impl HookEchoApp {
             T::RangeRings => &mut self.show_range_rings,
             T::Fronts => &mut self.show_fronts,
             T::GlmLightning => &mut self.show_glm,
+            T::Strikes => &mut self.show_strikes,
             T::Wind => &mut self.show_wind,
             T::Sensors => &mut self.show_sensors,
             T::Hodo => &mut self.show_hodo,
@@ -7186,6 +7362,8 @@ impl HookEchoApp {
             T::Couplets => &mut self.filters.show_couplets,
             T::Alerts => &mut self.filters.show_alerts,
             T::Mds => &mut self.filters.show_mds,
+            T::Watches => &mut self.filters.show_watches,
+            T::LocalTracks => &mut self.show_local_tracks,
             T::Mping => &mut self.show_mping,
             T::Pireps => &mut self.show_pireps,
             T::Recon => &mut self.show_recon,
@@ -7426,6 +7604,7 @@ impl HookEchoApp {
                     self.alert_features = f;
                 }
                 OverlayMsg::Mds(f) => self.md_features = f,
+                OverlayMsg::Watches(f) => self.watch_features = f,
                 OverlayMsg::Mping(r) => self.mping_reports = r,
                 OverlayMsg::Pireps(p) => self.pireps = p,
                 OverlayMsg::Recon(o) => self.recon = o,
@@ -8523,6 +8702,9 @@ impl HookEchoApp {
         if self.filters.show_mds {
             v.extend(self.md_features.iter().cloned());
         }
+        if self.filters.show_watches {
+            v.extend(self.watch_features.iter().cloned());
+        }
         if (1..=3).contains(&self.filters.wssi_day) {
             v.extend(self.wssi_features.iter().cloned());
         }
@@ -8891,7 +9073,7 @@ impl HookEchoApp {
                         let time = id.date_time().unwrap_or_else(Utc::now);
                         // No cache at the live head: the newest object can still be uploading, and a
                         // half-written volume is not something to keep.
-                        let fetched = match level2::download_scan(id, None).await {
+                        let fetched = match crate::volume::fetch(id, None).await {
                             Ok(scan) => Ok((name.clone(), time, scan)),
                             Err(e) => match prev {
                                 // Only worth retrying when there IS an older volume and we're not
@@ -8902,7 +9084,7 @@ impl HookEchoApp {
                                     log::debug!(
                                         "newest volume unusable ({e}); falling back to {pname}"
                                     );
-                                    level2::download_scan(p, None)
+                                    crate::volume::fetch(p, None)
                                         .await
                                         .map(|scan| (pname, ptime, scan))
                                         .map_err(|_| e)
@@ -9341,6 +9523,7 @@ impl HookEchoApp {
             | FL::GlobalMslp
             | FL::GlobalHeight500
             | FL::GlobalTemp2m
+            | FL::GlobalDewpoint2m
             | FL::GlobalWind10m
             | FL::GlobalPrecip
             | FL::ModelDiff
@@ -9637,7 +9820,7 @@ impl HookEchoApp {
         let view = idx;
         self.spawner.spawn(async move {
             let name = id.name().to_string();
-            if let Ok(scan) = level2::download_scan(id, crate::paths::cache_dir()).await {
+            if let Ok(scan) = crate::volume::fetch(id, crate::paths::cache_dir()).await {
                 let _ = tx.send(DataMsg::Prefetched {
                     view,
                     site,
@@ -9682,7 +9865,7 @@ impl HookEchoApp {
         self.spawner.spawn(async move {
             let name = id.name().to_string();
             let time = id.date_time().unwrap_or_else(Utc::now);
-            let msg = match level2::download_scan(id, crate::paths::cache_dir()).await {
+            let msg = match crate::volume::fetch(id, crate::paths::cache_dir()).await {
                 Ok(scan) => DataMsg::Volume {
                     view: view_idx,
                     site,
@@ -10816,6 +10999,11 @@ impl HookEchoApp {
         } else {
             Vec::new()
         };
+        let local_tracks = if self.show_local_tracks && idx == self.active {
+            self.compute_local_tracks()
+        } else {
+            Vec::new()
+        };
         if idx == self.active {
             self.check_rain_arrival();
             self.evaluate_scan_rules(idx, &tds_hits, &tbss_hits, &zdr_hits, &couplets);
@@ -11040,6 +11228,33 @@ impl HookEchoApp {
                     let (col, r) = glm_style(age);
                     painter.circle_filled(p, r, col);
                 }
+            }
+        }
+
+        // Ground strikes off the broker. Same shape as the GLM block above, including the
+        // lon/lat prefilter, because the deque is just as long and the pane just as small.
+        if self.show_strikes && !self.strikes.is_empty() {
+            let now = chrono::Utc::now();
+            let corner = |px: (f32, f32)| {
+                let w = cam.screen_to_world(px, vp);
+                crate::render::mercator::world_to_lonlat(w.0, w.1)
+            };
+            let (c0, c1) = (corner((0.0, 0.0)), corner((vp.0, vp.1)));
+            let (lon_lo, lon_hi) = (c0.0.min(c1.0), c0.0.max(c1.0));
+            let (lat_lo, lat_hi) = (c0.1.min(c1.1), c0.1.max(c1.1));
+            for &(lon, lat, time) in &self.strikes {
+                if lon < lon_lo || lon > lon_hi || lat < lat_lo || lat > lat_hi {
+                    continue;
+                }
+                let w = crate::render::mercator::lonlat_to_world(lon, lat);
+                let (sx, sy) = cam.world_to_screen(w, vp);
+                let p = egui::pos2(prect.left() + sx, prect.top() + sy);
+                if !prect.contains(p) {
+                    continue;
+                }
+                let age = (now - time).num_seconds().max(0) as f32;
+                let (col, r) = strike_style(age);
+                painter.circle_filled(p, r, col);
             }
         }
 
@@ -11417,6 +11632,69 @@ impl HookEchoApp {
                     egui::FontId::proportional(11.0),
                     col,
                 );
+            }
+
+            // Locally-computed cell tracks, in cyan so they never read as the Level 3 storm-cell
+            // table drawn below in white and red. Same grammar: past polyline, dots, `T+NNm` labels.
+            if !local_tracks.is_empty() {
+                let cyan = egui::Color32::from_rgb(80, 220, 255);
+                for tr in &local_tracks {
+                    let pts: Vec<egui::Pos2> = tr
+                        .points
+                        .iter()
+                        .map(|&(lon, lat, _)| to_screen(lon, lat))
+                        .collect();
+                    painter.add(egui::Shape::line(
+                        pts.clone(),
+                        egui::Stroke::new(1.5, cyan.gamma_multiply(0.6)),
+                    ));
+                    let Some(&head) = pts.last() else { continue };
+                    if !prect.contains(head) {
+                        continue;
+                    }
+                    painter.circle_stroke(head, 6.0, egui::Stroke::new(2.0, cyan));
+                    for minutes in [15.0, 30.0] {
+                        let Some((lon, lat)) = tr.extrapolate(minutes) else {
+                            continue;
+                        };
+                        let p = to_screen(lon, lat);
+                        painter.line_segment(
+                            [head, p],
+                            egui::Stroke::new(1.0, cyan.gamma_multiply(0.5)),
+                        );
+                        painter.circle_filled(p, 3.0, cyan);
+                        if cam.zoom >= 7.0 {
+                            painter.text(
+                                p + egui::vec2(5.0, -2.0),
+                                egui::Align2::LEFT_CENTER,
+                                format!("T+{minutes:.0}m"),
+                                egui::FontId::proportional(10.0),
+                                cyan,
+                            );
+                        }
+                    }
+                    // With a GPS fix, the number a chaser actually wants: how close this cell comes
+                    // to where they are standing, and in how many minutes.
+                    if let Some((lon, lat)) = self.chase_pos {
+                        let last = tr.points[tr.points.len() - 1];
+                        let (km, min) = crate::geo::closest_approach(
+                            [last.0, last.1],
+                            tr.dir_deg,
+                            tr.speed_kt,
+                            [lon, lat],
+                            60.0,
+                        );
+                        if min >= 1.0 {
+                            painter.text(
+                                head + egui::vec2(0.0, 9.0),
+                                egui::Align2::CENTER_TOP,
+                                format!("\u{2248}{min:.0} min / {km:.0} km"),
+                                egui::FontId::proportional(10.0),
+                                cyan,
+                            );
+                        }
+                    }
+                }
             }
 
             let label_tracks = self.filters.show_tracks && cam.zoom >= 7.0;
@@ -14727,8 +15005,8 @@ impl eframe::App for HookEchoApp {
         // The settings window has no HTTP client or runtime, so the voice-download button raises
         // a flag and the work happens here, on the same spawner everything else fetches on.
         #[cfg(not(target_arch = "wasm32"))]
-        if crate::speech::take_voice_request() {
-            self.download_voice();
+        if let Some(id) = crate::speech::take_voice_request() {
+            self.download_voice(id);
         }
         // A file the user picked, from any of the import buttons. Routed here rather than at the
         // button, because on Android the picker is an activity result that lands long after the
@@ -14779,6 +15057,50 @@ impl eframe::App for HookEchoApp {
                         self.views[self.active].site = Some(id);
                         ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
                         ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+                    }
+                }
+            }
+        }
+
+        // Strikes age out on their own clock: the deque only shrinks here, so a quiet topic
+        // still empties the map rather than freezing the last minute of a storm on it.
+        if !self.strikes.is_empty() {
+            let cutoff = chrono::Utc::now() - chrono::Duration::seconds(STRIKE_WINDOW_SECS);
+            while self.strikes.front().is_some_and(|&(_, _, t)| t < cutoff) {
+                self.strikes.pop_front();
+            }
+        }
+
+        // Commands off the broker, drained the same way and applied through the same paths the
+        // tray uses. They land on the next repaint rather than instantly, which for "point at the
+        // storm" is close enough and keeps every state change on one thread.
+        #[cfg(not(any(target_os = "android", target_arch = "wasm32")))]
+        for cmd in crate::mqtt::drain() {
+            match cmd {
+                crate::mqtt::Cmd::Mute(want) => {
+                    if self.settings.mute_alerts != want {
+                        self.apply_action(BindableAction::ToggleMute, ctx);
+                    }
+                }
+                crate::mqtt::Cmd::Site(id) => {
+                    if wxdata::sites::site_by_id(&id).is_some() {
+                        self.views[self.active].site = Some(id);
+                    } else {
+                        log::warn!("mqtt: no such site {id}");
+                    }
+                }
+                crate::mqtt::Cmd::Product(code) => {
+                    if let Some(m) = Moment::from_code(&code) {
+                        let srv = self.views[self.active].srv;
+                        self.apply_palette(PaletteAction::SetMoment(m, srv), ctx);
+                    }
+                }
+                crate::mqtt::Cmd::Strike { lon, lat, time } => {
+                    self.strikes.push_back((lon, lat, time));
+                    // A busy night over a whole continent is a lot of strikes, and the painter
+                    // walks the whole deque. Cap it and let the oldest fall off early.
+                    while self.strikes.len() > STRIKE_CAP {
+                        self.strikes.pop_front();
                     }
                 }
             }
@@ -14959,6 +15281,10 @@ impl eframe::App for HookEchoApp {
             (FL::GlobalMslp, wxdata::global::GlobalField::Mslp),
             (FL::GlobalHeight500, wxdata::global::GlobalField::Height500),
             (FL::GlobalTemp2m, wxdata::global::GlobalField::Temp2m),
+            (
+                FL::GlobalDewpoint2m,
+                wxdata::global::GlobalField::Dewpoint2m,
+            ),
             (FL::GlobalWind10m, wxdata::global::GlobalField::Wind10m),
             (FL::GlobalPrecip, wxdata::global::GlobalField::Precip),
         ] {
@@ -15037,6 +15363,17 @@ impl eframe::App for HookEchoApp {
             }
         }
         self.was_quiet = now_quiet;
+        // Hold the queue on disk as it changes, not only on a clean exit. A crash or a kill
+        // during quiet hours used to lose the whole night's held alerts; the queue is a handful
+        // of short strings, so comparing it every tick and writing only on a real change costs
+        // nothing worth measuring.
+        if let Ok(q) = self.quiet_queue.lock() {
+            if *q != self.settings.quiet_pending {
+                self.settings.quiet_pending = q.clone();
+                drop(q);
+                self.settings.save();
+            }
+        }
 
         // GOES lightning: granules land every 20 s, so poll about that often. One in flight at a
         // time — a slow fetch must not queue up behind itself.
@@ -15979,7 +16316,6 @@ impl eframe::App for HookEchoApp {
             }
         }
 
-        #[cfg(not(target_arch = "wasm32"))]
         if let Some((i, day)) = self.rules_window.backtest_request.take() {
             self.start_backtest(i, day);
         }

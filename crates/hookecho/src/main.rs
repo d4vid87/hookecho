@@ -98,7 +98,9 @@ fn main() -> eframe::Result<()> {
         let spots = hookecho::status::spots(&saved, None);
         // A headless box on a shelf is exactly where MQTT earns its keep — this is the process
         // that is always up.
-        hookecho::mqtt::spawn(&saved);
+        // No `subscribe` here: a `--serve` process has no frame loop to drain commands, and a
+        // channel nobody reads is a slow leak.
+        hookecho::mqtt::spawn(&saved, false);
         // `--public` serves the site's preset frames to callers with no token, and 403s
         // everything else. Without it a token still means "all or nothing".
         let public = args.iter().any(|a| a == "--public");

@@ -282,6 +282,19 @@ pub struct Settings {
     /// Topic prefix everything is published under, e.g. `home/weather`.
     #[serde(default = "default_mqtt_prefix")]
     pub mqtt_prefix: String,
+    /// Topic the broker republishes lightning strikes on, e.g. `blitzortung/1.1/#`. Empty is off.
+    ///
+    /// The app never talks to a strike network itself — Blitzortung's terms ask third-party apps
+    /// to run their own relay rather than point clients at theirs, and this is the subscriber end
+    /// of that arrangement (see `scripts/strikes-relay/`).
+    #[serde(default)]
+    pub strikes_topic: String,
+    /// Publish retained Home Assistant discovery configs so it creates the device by itself.
+    ///
+    /// Off by default, and deliberately: retained config topics on a broker that is not running
+    /// Home Assistant are litter somebody else has to clear up.
+    #[serde(default)]
+    pub mqtt_discovery: bool,
     /// Fetch terrain at z12 (~40 m/px) instead of z10. Sixteen times the tiles, so it is off by
     /// default and meant for chase packs you download deliberately.
     #[serde(default)]
@@ -338,6 +351,10 @@ pub struct Settings {
     /// nothing to say. Never committed: it is a ~60 MB download or a file the user already has.
     #[serde(default)]
     pub piper_voice: String,
+    /// Which curated voice the picker has selected for download. Only the picker reads it;
+    /// `piper_voice` above is still what actually speaks.
+    #[serde(default)]
+    pub piper_download_voice: String,
     /// While chase mode is on, speak the nearest storm's bearing and distance as it changes.
     #[serde(default)]
     pub speak_position: bool,
@@ -1081,6 +1098,8 @@ impl Default for Settings {
             mqtt_user: String::new(),
             mqtt_pass: String::new(),
             mqtt_prefix: default_mqtt_prefix(),
+            strikes_topic: String::new(),
+            mqtt_discovery: false,
             background_alerts: false,
             pack_hires_dem: false,
             pack_include_vector: true,
@@ -1094,6 +1113,7 @@ impl Default for Settings {
             speak_warnings: false,
             piper_path: String::new(),
             piper_voice: String::new(),
+            piper_download_voice: String::new(),
             speak_position: false,
             rain_alerts: false,
             rain_sound: AlertSound::default(),
@@ -1557,6 +1577,8 @@ mod tests {
             mqtt_user: String::new(),
             mqtt_pass: String::new(),
             mqtt_prefix: default_mqtt_prefix(),
+            strikes_topic: String::new(),
+            mqtt_discovery: false,
             background_alerts: false,
             pack_hires_dem: false,
             pack_include_vector: true,
@@ -1578,6 +1600,7 @@ mod tests {
             speak_warnings: true,
             piper_path: String::new(),
             piper_voice: String::new(),
+            piper_download_voice: String::new(),
             speak_position: false,
             rain_alerts: true,
             rain_sound: AlertSound::Ding,

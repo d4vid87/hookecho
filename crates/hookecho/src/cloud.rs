@@ -244,7 +244,7 @@ fn pkce_challenge(verifier: &str) -> String {
 }
 
 /// Percent-encode a query parameter value. Only the characters Google's URLs actually need.
-fn urlencode(s: &str) -> String {
+pub(crate) fn urlencode(s: &str) -> String {
     s.chars()
         .map(|c| match c {
             'A'..='Z' | 'a'..='z' | '0'..='9' | '-' | '.' | '_' | '~' => c.to_string(),

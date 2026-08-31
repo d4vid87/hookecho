@@ -376,6 +376,33 @@ pub fn scan_from_wire(bytes: &[u8]) -> anyhow::Result<Scan> {
     postcard::from_bytes(bytes).map_err(|e| anyhow::anyhow!("decode scan wire: {e}"))
 }
 
+/// Raw Archive II bytes for one volume, straight from the bucket.
+pub async fn volume_bytes(id: Identifier) -> anyhow::Result<Vec<u8>> {
+    let f = nexrad_data::aws::archive::download_file(id)
+        .await
+        .map_err(|e| anyhow::anyhow!("download_file: {e}"))?;
+    crate::stats::net(f.data().len());
+    Ok(f.data().to_vec())
+}
+
+/// Decode raw Archive II bytes that came from somewhere other than the bucket — a browser's
+/// offline pack, say. Same decode path (and the same Web Worker hop) `download_scan` uses.
+pub async fn scan_from_volume_bytes(name: &str, bytes: Vec<u8>) -> anyhow::Result<Scan> {
+    let file = nexrad_data::volume::File::new(bytes);
+    #[cfg(not(target_arch = "wasm32"))]
+    let scan = crate::task::blocking(move || decode_file(file)).await??;
+    #[cfg(target_arch = "wasm32")]
+    let scan = match crate::wasm_worker::decode_volume(file.data().to_vec()).await {
+        Ok(wire) => scan_from_wire(&wire)?,
+        Err(crate::wasm_worker::Error::Unavailable) => decode_file(file)?,
+        Err(e) => anyhow::bail!("{e}"),
+    };
+    Ok(match scan.site() {
+        Some(_) => scan,
+        None => with_registry_site(scan, &name[..4.min(name.len())]),
+    })
+}
+
 /// Download and decode a specific volume to a [`Scan`].
 ///
 /// With `cache_dir` set the raw Archive II bytes are kept on disk, exactly as the bucket served

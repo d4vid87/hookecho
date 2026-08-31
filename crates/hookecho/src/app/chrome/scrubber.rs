@@ -44,6 +44,13 @@ impl HookEchoApp {
             .as_deref()
             .is_some_and(wxdata::sites::is_nexrad);
         let mut go_head = false;
+        // Offline chase packs are a browser-only idea: on desktop the volumes are already on disk.
+        #[cfg(target_arch = "wasm32")]
+        let mut save_pack = false;
+        #[cfg(target_arch = "wasm32")]
+        let mut load_pack: Option<crate::webcache::Pack> = None;
+        #[cfg(target_arch = "wasm32")]
+        let (packs, pack_status) = (self.packs(), self.pack_status());
         // Soonest rain arrival and the DVR buffer depth ride the pill: both are about time, and
         // both used to sit in an always-on chip in the opposite corner.
         let rain = self
@@ -222,6 +229,36 @@ impl HookEchoApp {
                             .on_hover_text(
                                 "How many of the newest volumes ▶ cycles through when live",
                             );
+                            #[cfg(target_arch = "wasm32")]
+                            {
+                                ui.separator();
+                                if ui
+                                    .button("Save this loop offline")
+                                    .on_hover_text(
+                                        "Keep this loop's volumes in the browser so it plays \
+                                         with no signal. Archived volumes only \u{2014} the live \
+                                         head is still being written.",
+                                    )
+                                    .clicked()
+                                {
+                                    save_pack = true;
+                                }
+                                for p in &packs {
+                                    ui.horizontal(|ui| {
+                                        if ui.button(p.label()).clicked() {
+                                            load_pack = Some(p.clone());
+                                        }
+                                        if ui.small_button("\u{d7}").on_hover_text("Delete").clicked()
+                                        {
+                                            load_pack = None;
+                                            crate::webcache::spawn_remove(p.key());
+                                        }
+                                    });
+                                }
+                                if let Some(msg) = &pack_status {
+                                    ui.weak(msg);
+                                }
+                            }
                         });
                     // The clock and the two status readouts ride the top row with the
                     // transport; the track gets a row to itself underneath.
@@ -308,6 +345,15 @@ impl HookEchoApp {
                 });
             });
         self.settings.live_loop_frames = loop_frames;
+        #[cfg(target_arch = "wasm32")]
+        {
+            if save_pack {
+                self.save_offline_pack(ctx);
+            }
+            if let Some(p) = load_pack {
+                self.load_offline_pack(&p);
+            }
+        }
         if let Some(r) = scrub_rect {
             // The scrubber swallows two-finger gestures on the phone like any other surface.
             self.mobile_occlusion.push(r);
