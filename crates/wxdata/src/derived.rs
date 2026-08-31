@@ -28,6 +28,10 @@ pub struct DerivedOpts {
     /// Stamped onto the output fields — the volume's time, so a scrubbed archive frame doesn't
     /// claim to be current.
     pub time: DateTime<Utc>,
+    /// Fill the column down from the lowest beam to the surface before integrating, when that
+    /// beam is low enough for the extension to be an extrapolation rather than a guess. See
+    /// [`FILL_DOWN_CAP_KM`].
+    pub extrapolate: bool,
 }
 
 impl Default for DerivedOpts {
@@ -35,6 +39,7 @@ impl Default for DerivedOpts {
         Self {
             etop_dbz: 18.5,
             time: Utc::now(),
+            extrapolate: true,
         }
     }
 }
@@ -112,6 +117,12 @@ impl Grid {
     }
 }
 
+/// How high the lowest beam may sit and still have its value carried down to the surface.
+/// Under this height the beam is close enough that the air beneath it is the same air; above it,
+/// at a 0.5° tilt roughly 200 km out, the layer being invented is most of the column and the
+/// value carried into it is a guess dressed as a measurement.
+const FILL_DOWN_CAP_KM: f64 = 2.0;
+
 /// dBZ → linear reflectivity factor Z (mm⁶/m³), capped at [`Z_CAP_DBZ`].
 fn z_linear(dbz: f32) -> f64 {
     10f64.powf(dbz.min(Z_CAP_DBZ) as f64 / 10.0)
@@ -120,8 +131,11 @@ fn z_linear(dbz: f32) -> f64 {
 /// VIL (kg/m²) of one vertical profile: Σ 3.44×10⁻⁶ · Z̄^(4/7) · Δh, over the layers between
 /// consecutive beams.
 ///
-/// ponytail: no extrapolation below the lowest beam or above the highest — the classic
-/// definition, and inventing a layer under a 0.5° beam 100 km out invents most of the answer.
+/// The profile is taken as given: this integrates between the samples it is handed and does not
+/// invent layers at either end. The layer below the lowest beam is handled by the caller, which
+/// knows how high that beam actually is (see [`FILL_DOWN_CAP_KM`]); nothing is added above the
+/// highest beam, because a storm's top is the one place the classic definition is right — there
+/// is no water up there to integrate.
 fn vil_of(samples: &[(f64, f32)]) -> f32 {
     let mut vil = 0.0;
     for w in samples.windows(2) {
@@ -180,6 +194,18 @@ pub fn derive(sweeps: &[BinnedSweep], opts: &DerivedOpts) -> Option<Derived> {
             }
             if samples.len() < 2 {
                 continue;
+            }
+            // The beam leaves the radar at an angle, so every column more than a few kilometres
+            // out has its lowest sample somewhere above the ground, and the classic VIL simply
+            // discards that layer. Near the radar that is throwing away the wettest part of the
+            // column. Carry the lowest observed value down to the surface — but only while the
+            // beam is low enough that the air below it is the same air.
+            if opts.extrapolate {
+                if let Some(&(h_lowest, v_lowest)) = samples.first() {
+                    if h_lowest > 0.0 && h_lowest <= FILL_DOWN_CAP_KM {
+                        samples.insert(0, (0.0, v_lowest));
+                    }
+                }
             }
             let v = vil_of(&samples);
             if v > 0.0 {
@@ -309,6 +335,39 @@ mod tests {
         let mut s = Vec::new();
         column_samples(sweeps, ground_km, 0.0, &mut s);
         s
+    }
+
+    /// Filling down adds the layer between the lowest beam and the ground, so VIL near the radar
+    /// has to come out larger — and only near the radar, where the cap allows it.
+    #[test]
+    fn filling_down_adds_liquid_only_under_a_low_beam() {
+        let sweeps = uniform_sweeps(45.0, &[0.5, 1.5, 2.4, 3.4, 4.3, 6.0, 9.9]);
+        let on = derive(&sweeps, &DerivedOpts::default()).expect("grid");
+        let off = derive(
+            &sweeps,
+            &DerivedOpts {
+                extrapolate: false,
+                ..Default::default()
+            },
+        )
+        .expect("grid");
+        let pairs: Vec<(f32, f32)> = on
+            .vil
+            .values
+            .iter()
+            .zip(&off.vil.values)
+            .filter(|(a, b)| a.is_finite() && b.is_finite())
+            .map(|(a, b)| (*a, *b))
+            .collect();
+        assert!(!pairs.is_empty(), "some column integrated");
+        assert!(
+            pairs.iter().all(|(a, b)| a >= b),
+            "filling down never removes liquid"
+        );
+        assert!(
+            pairs.iter().any(|(a, b)| *a > b + 0.01),
+            "some column near the radar gained its surface layer"
+        );
     }
 
     #[test]

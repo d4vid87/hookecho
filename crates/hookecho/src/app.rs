@@ -3656,6 +3656,7 @@ impl HookEchoApp {
         let opts = wxdata::derived::DerivedOpts {
             etop_dbz: self.settings.etop_dbz,
             time: vol.time,
+            ..Default::default()
         };
         self.derived_key = Some(key);
         let tx = self.overlay_tx.clone();

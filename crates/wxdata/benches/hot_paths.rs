@@ -39,6 +39,7 @@ fn bench_derived(c: &mut Criterion) {
     let opts = DerivedOpts {
         etop_dbz: 18.0,
         time: chrono::Utc::now(),
+        ..Default::default()
     };
     let mut g = c.benchmark_group("derived");
     g.sample_size(10);
