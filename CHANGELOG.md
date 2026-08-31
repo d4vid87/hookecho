@@ -6,6 +6,104 @@ so **write the section before pushing the tag**, or the release job fails.
 
 The rolling `latest` release tracks `main` and is not listed here.
 
+## 0.12.0-beta.2 - 2026-08-30
+
+Third R18 checkpoint, and the biggest one: the app stops being a US radar
+viewer. Germany, Europe and Canada get their own radars, composites and
+warnings; the whole render and data path got measured and made faster; and the
+site, the Lite viewer and the headless server all grew up. Still a prerelease —
+0.12.0 waits on RRFS and the remaining store submissions.
+
+### The world, not just the States
+
+- German DWD radars decode natively, velocity and dual-pol moments included,
+  and the DWD national composites are a basemap layer.
+- The OPERA network via EUMETNET OpenRadarData puts European radars on the
+  map, with a generic WMS bridge behind them for composite layers.
+- Canada: ECCC GeoMet radar composites and ECCC public alerts.
+- MeteoAlarm European warnings, ranked by their own severity scale rather than
+  forced through the US one — Red now outranks Yellow, which it did not.
+- GIBS Himawari and IMERG basemaps for the rest of the planet.
+- Distances read in the units of the region on screen. A radar in Germany
+  measures in kilometres without being asked.
+- Site pages for the German and European networks, and a radar-data
+  attribution surface that names whose data you are looking at.
+
+### Faster
+
+A measured pass end to end, not a guess:
+
+- The decode path stops allocating per sweep, binned sweeps survive the
+  playhead, and the wasm build lost weight (fonts fetched, rayon and gif
+  degated).
+- The renderer reuses radar GPU state, wind particle bind groups and a
+  palette-only LUT; field textures get evicted; the tile cache weighs bytes
+  instead of counting entries (it was 512 MB while claiming 134 MB).
+- Overlay re-tessellation comes off the gesture, one janitor thread replaces
+  several, and an idle window slows its own heartbeat.
+- Every data feed asks before downloading (conditional requests), the proxy
+  caches, and neither cache can grow forever.
+- The Lite viewer fetches frames in parallel, decodes them as they arrive, and
+  a refresh only fetches what it does not already have.
+
+### Serve and headless
+
+- Every network renders headlessly, with warnings and chrome in the output.
+- `/national.png`, mp4 loops and velocity presets; the national mosaic moves.
+- A busy renderer serves a stale image rather than queueing, and the image
+  cache prunes itself.
+- One command stands the image origin back up (`scripts/img-origin`).
+
+### Analysis and data (R18 batch)
+
+- Dealiasing solves the whole sweep at once — a maximum spanning tree over
+  region-boundary votes — so a couplet folded twice comes back right.
+- Derived products extrapolate down to the surface under a low beam, so VIL
+  near the radar stops reading low.
+- 2 m dewpoint joins the global layers and the model-diff readout.
+- SPC watch boxes, tornado and severe thunderstorm, drawn under the warnings.
+- Local cell tracking computed from reflectivity, with 15- and 30-minute
+  extrapolation and a closest-approach ETA — for sites and networks with no
+  Level 3 storm-cell table.
+- Level 3 Digital Base Velocity (N0G) decodes.
+
+### Integrations and quality of life
+
+- MQTT gained a command topic (point the app at a site, a product, or mute it
+  from an automation) and optional Home Assistant discovery, so HA creates the
+  device itself.
+- A lightning-strikes layer fed from your own broker, plus a standalone relay
+  in `scripts/strikes-relay` that fills it. The app never connects to a strike
+  network itself.
+- A curated Piper voice picker instead of one hardcoded voice.
+- `?palette=` on snapshot renders.
+- Web retries actually back off now, and the quiet-hours queue is written as it
+  changes rather than only on exit.
+
+### The web build
+
+- Alert-rule backtests run in the browser.
+- Offline chase packs: save a loop into the browser and play it with no signal.
+- Zoom controls, full screen, a warnings overlay and neighbouring-radar
+  switching in the Lite viewer, whose app bundle is now content-hashed.
+
+### The site
+
+hookecho.io grew from a landing page into the product's front door: docs with
+search, a blog with RSS, per-site and per-state radar pages, TDWR and
+international pages, historic storm pages, a glossary, an honest comparison
+section, a live roadmap, an embed generator, comments, and OG cards built at
+build time. Live radar renders on the pages themselves.
+
+### Fixes
+
+- Archive-less sites (TDWR, DWD) no longer claim "(no volumes)" while showing a
+  live volume.
+- 1-degree sweeps filled every other azimuth bin.
+- Crash reports are honest: a caught decode panic is not a crash.
+- The live stream survives a network drop instead of restarting its backfill
+  every minute.
+
 ## 0.12.0-beta.1 - 2026-08-26
 
 Second R18 checkpoint. The phone gets the same chrome the desktop got in
