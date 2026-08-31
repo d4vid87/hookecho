@@ -1615,6 +1615,7 @@ pub fn run_global(model: &str, slug: &str, out_path: &str) -> anyhow::Result<()>
         GlobalField::Mslp => FL::GlobalMslp,
         GlobalField::Height500 => FL::GlobalHeight500,
         GlobalField::Temp2m => FL::GlobalTemp2m,
+        GlobalField::Dewpoint2m => FL::GlobalDewpoint2m,
         GlobalField::Wind10m => FL::GlobalWind10m,
         GlobalField::Precip => FL::GlobalPrecip,
     };

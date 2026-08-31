@@ -124,6 +124,8 @@ pub enum FieldLayer {
     GlobalHeight500,
     /// Global model 2 m temperature.
     GlobalTemp2m,
+    /// Global model 2 m dewpoint.
+    GlobalDewpoint2m,
     /// Global model 10 m wind speed.
     GlobalWind10m,
     /// Global model precipitable water / total precipitation.
@@ -156,6 +158,7 @@ impl FieldLayer {
                 | FieldLayer::GlobalMslp
                 | FieldLayer::GlobalHeight500
                 | FieldLayer::GlobalTemp2m
+                | FieldLayer::GlobalDewpoint2m
                 | FieldLayer::GlobalWind10m
                 | FieldLayer::GlobalPrecip
                 | FieldLayer::ModelDiff
@@ -163,12 +166,13 @@ impl FieldLayer {
     }
 
     /// Fixed bottom-to-top paint order within each band.
-    pub const DRAW_ORDER: [FieldLayer; 37] = [
+    pub const DRAW_ORDER: [FieldLayer; 38] = [
         // Below-radar context band (bottom to top). The global models sit at the very bottom:
         // they are the synoptic backdrop everything else is drawn against.
         FieldLayer::GlobalMslp,
         FieldLayer::GlobalHeight500,
         FieldLayer::GlobalTemp2m,
+        FieldLayer::GlobalDewpoint2m,
         FieldLayer::GlobalWind10m,
         FieldLayer::GlobalPrecip,
         FieldLayer::ModelDiff,
@@ -243,6 +247,7 @@ impl FieldLayer {
             FieldLayer::GlobalMslp => "global-mslp",
             FieldLayer::GlobalHeight500 => "global-height500",
             FieldLayer::GlobalTemp2m => "global-temp2m",
+            FieldLayer::GlobalDewpoint2m => "global-dewpoint2m",
             FieldLayer::GlobalWind10m => "global-wind10m",
             FieldLayer::GlobalPrecip => "global-precip",
             FieldLayer::ModelDiff => "model-diff",

@@ -289,6 +289,13 @@ impl HookEchoApp {
                 false,
             ),
             (
+                FL::GlobalDewpoint2m,
+                "Models",
+                "Surface dewpoint (2 m)",
+                "How much moisture the air is carrying, worldwide",
+                false,
+            ),
+            (
                 FL::GlobalWind10m,
                 "Models",
                 "Surface wind (10 m)",

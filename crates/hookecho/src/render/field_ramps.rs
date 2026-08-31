@@ -376,6 +376,28 @@ static GLOBAL_HEIGHT_500: FieldRamp = FieldRamp {
 };
 
 /// Global 2 m temperature, in the units most of the planet reads.
+static GLOBAL_DEWPOINT_2M: FieldRamp = FieldRamp {
+    // Kelvin like the temperature ramp, but a moisture scale rather than a thermal one: brown
+    // and dry at the bottom, green and soupy at the top, with the 15 °C / 288 K "muggy" mark
+    // near the middle where severe forecasters look.
+    input_scale: 1.0,
+    ..ramp!(
+        "2 m dewpoint",
+        "K",
+        243.0,
+        300.0,
+        RampScale::Linear,
+        170,
+        &[
+            (0.0, [120, 90, 60]),
+            (0.35, [210, 200, 170]),
+            (0.6, [110, 190, 130]),
+            (0.8, [30, 140, 90]),
+            (1.0, [20, 80, 110]),
+        ]
+    )
+};
+
 static GLOBAL_TEMP_2M: FieldRamp = FieldRamp {
     // Kelvin → °C is an offset, not a scale, so the ramp is expressed in Kelvin and labelled °C
     // by the legend's own offset handling would be a lie — keep it in Kelvin-derived °C here.
@@ -648,6 +670,7 @@ pub fn ramp_for(layer: FieldLayer) -> Option<&'static FieldRamp> {
         FL::GlobalMslp => &GLOBAL_MSLP,
         FL::GlobalHeight500 => &GLOBAL_HEIGHT_500,
         FL::GlobalTemp2m => &GLOBAL_TEMP_2M,
+        FL::GlobalDewpoint2m => &GLOBAL_DEWPOINT_2M,
         FL::GlobalWind10m => &GLOBAL_WIND_10M,
         FL::GlobalPrecip => &GLOBAL_PRECIP,
         FL::Hca => &HCA,
