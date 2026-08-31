@@ -36,6 +36,7 @@ pub enum GlobalFieldKind {
     Mslp,
     Height500,
     Temp2m,
+    Dewpoint2m,
     Wind10m,
     Precip,
 }
@@ -46,6 +47,7 @@ impl From<GlobalFieldKind> for GlobalField {
             GlobalFieldKind::Mslp => GlobalField::Mslp,
             GlobalFieldKind::Height500 => GlobalField::Height500,
             GlobalFieldKind::Temp2m => GlobalField::Temp2m,
+            GlobalFieldKind::Dewpoint2m => GlobalField::Dewpoint2m,
             GlobalFieldKind::Wind10m => GlobalField::Wind10m,
             GlobalFieldKind::Precip => GlobalField::Precip,
         }
@@ -59,14 +61,15 @@ impl Default for DiffField {
 }
 
 impl DiffField {
-    /// ponytail: no moisture row. GFS publishes precipitable water and ECMWF publishes total
-    /// precipitation — subtracting them is subtracting two different quantities, and a plausible
-    /// looking map of nonsense is worse than no map. Add it when both sides read the same
-    /// variable.
-    pub const ALL: [DiffField; 6] = [
+    /// Moisture is here as 2 m dewpoint: both models publish it as the same quantity in the same
+    /// units, so the subtraction means something. Column moisture still is not — GFS publishes
+    /// precipitable water and ECMWF total precipitation, and subtracting them subtracts two
+    /// different things. A plausible looking map of nonsense is worse than no map.
+    pub const ALL: [DiffField; 7] = [
         DiffField::Global(GlobalFieldKind::Mslp),
         DiffField::Global(GlobalFieldKind::Height500),
         DiffField::Global(GlobalFieldKind::Temp2m),
+        DiffField::Global(GlobalFieldKind::Dewpoint2m),
         DiffField::Global(GlobalFieldKind::Wind10m),
         DiffField::Cape,
         DiffField::Srh,
@@ -116,6 +119,7 @@ impl DiffField {
             DiffField::Global(GlobalFieldKind::Mslp) => (8.0, 0.5),
             DiffField::Global(GlobalFieldKind::Height500) => (12.0, 1.0),
             DiffField::Global(GlobalFieldKind::Temp2m) => (6.0, 0.5),
+            DiffField::Global(GlobalFieldKind::Dewpoint2m) => (6.0, 0.5),
             DiffField::Global(GlobalFieldKind::Wind10m) => (20.0, 2.0),
             DiffField::Global(GlobalFieldKind::Precip) => (20.0, 1.0),
             DiffField::Cape => (1500.0, 200.0),
@@ -129,6 +133,7 @@ impl DiffField {
             DiffField::Global(GlobalFieldKind::Mslp) => "hPa",
             DiffField::Global(GlobalFieldKind::Height500) => "dam",
             DiffField::Global(GlobalFieldKind::Temp2m) => "°C",
+            DiffField::Global(GlobalFieldKind::Dewpoint2m) => "°C",
             DiffField::Global(GlobalFieldKind::Wind10m) => "kt",
             DiffField::Global(GlobalFieldKind::Precip) => "mm",
 

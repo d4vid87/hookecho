@@ -54,15 +54,17 @@ pub enum GlobalField {
     Mslp,
     Height500,
     Temp2m,
+    Dewpoint2m,
     Wind10m,
     Precip,
 }
 
 impl GlobalField {
-    pub const ALL: [GlobalField; 5] = [
+    pub const ALL: [GlobalField; 6] = [
         GlobalField::Mslp,
         GlobalField::Height500,
         GlobalField::Temp2m,
+        GlobalField::Dewpoint2m,
         GlobalField::Wind10m,
         GlobalField::Precip,
     ];
@@ -72,6 +74,7 @@ impl GlobalField {
             GlobalField::Mslp => "MSLP",
             GlobalField::Height500 => "500 hPa height",
             GlobalField::Temp2m => "2 m temp",
+            GlobalField::Dewpoint2m => "2 m dewpoint",
             GlobalField::Wind10m => "10 m wind",
             GlobalField::Precip => "Total precip",
         }
@@ -83,6 +86,7 @@ impl GlobalField {
             GlobalField::Mslp => "mslp",
             GlobalField::Height500 => "gh500",
             GlobalField::Temp2m => "t2m",
+            GlobalField::Dewpoint2m => "td2m",
             GlobalField::Wind10m => "wind10m",
             GlobalField::Precip => "precip",
         }
@@ -98,6 +102,7 @@ impl GlobalField {
             GlobalField::Mslp => ("PRMSL", "mean sea level"),
             GlobalField::Height500 => ("HGT", "500 mb"),
             GlobalField::Temp2m => ("TMP", "2 m above ground"),
+            GlobalField::Dewpoint2m => ("DPT", "2 m above ground"),
             GlobalField::Wind10m => ("UGRD", "10 m above ground"),
             GlobalField::Precip => ("PWAT", "entire atmosphere (considered as a single layer)"),
         }
@@ -109,6 +114,7 @@ impl GlobalField {
             GlobalField::Mslp => ("msl", "sfc", None),
             GlobalField::Height500 => ("gh", "pl", Some("500")),
             GlobalField::Temp2m => ("2t", "sfc", None),
+            GlobalField::Dewpoint2m => ("2d", "sfc", None),
             GlobalField::Wind10m => ("10u", "sfc", None),
             GlobalField::Precip => ("tp", "sfc", None),
         }
@@ -309,7 +315,8 @@ mod tests {
     fn ecmwf_index_lines_resolve_to_ranges() {
         let idx = "{\"domain\": \"g\", \"param\": \"msl\", \"levtype\": \"sfc\", \"_offset\": 100, \"_length\": 250}\n\
                    {\"domain\": \"g\", \"param\": \"gh\", \"levtype\": \"pl\", \"levelist\": \"850\", \"_offset\": 400, \"_length\": 60}\n\
-                   {\"domain\": \"g\", \"param\": \"gh\", \"levtype\": \"pl\", \"levelist\": \"500\", \"_offset\": 500, \"_length\": 75}\n";
+                   {\"domain\": \"g\", \"param\": \"gh\", \"levtype\": \"pl\", \"levelist\": \"500\", \"_offset\": 500, \"_length\": 75}\n\
+                   {\"domain\": \"g\", \"param\": \"2d\", \"levtype\": \"sfc\", \"_offset\": 700, \"_length\": 90}\n";
         assert_eq!(
             ecmwf_byte_range(idx, GlobalField::Mslp),
             Some((100, Some(350)))
@@ -318,6 +325,10 @@ mod tests {
         assert_eq!(
             ecmwf_byte_range(idx, GlobalField::Height500),
             Some((500, Some(575)))
+        );
+        assert_eq!(
+            ecmwf_byte_range(idx, GlobalField::Dewpoint2m),
+            Some((700, Some(790)))
         );
         assert_eq!(ecmwf_byte_range(idx, GlobalField::Temp2m), None);
     }

@@ -1378,6 +1378,7 @@ fn field_refresh_secs(layer: crate::render::FieldLayer) -> u64 {
         FL::GlobalMslp
         | FL::GlobalHeight500
         | FL::GlobalTemp2m
+        | FL::GlobalDewpoint2m
         | FL::GlobalWind10m
         | FL::GlobalPrecip
         // Two global cycles behind it, so the same half hour.
@@ -9342,6 +9343,7 @@ impl HookEchoApp {
             | FL::GlobalMslp
             | FL::GlobalHeight500
             | FL::GlobalTemp2m
+            | FL::GlobalDewpoint2m
             | FL::GlobalWind10m
             | FL::GlobalPrecip
             | FL::ModelDiff
@@ -14960,6 +14962,10 @@ impl eframe::App for HookEchoApp {
             (FL::GlobalMslp, wxdata::global::GlobalField::Mslp),
             (FL::GlobalHeight500, wxdata::global::GlobalField::Height500),
             (FL::GlobalTemp2m, wxdata::global::GlobalField::Temp2m),
+            (
+                FL::GlobalDewpoint2m,
+                wxdata::global::GlobalField::Dewpoint2m,
+            ),
             (FL::GlobalWind10m, wxdata::global::GlobalField::Wind10m),
             (FL::GlobalPrecip, wxdata::global::GlobalField::Precip),
         ] {
