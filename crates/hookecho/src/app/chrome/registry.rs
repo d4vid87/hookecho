@@ -627,6 +627,15 @@ impl HookEchoApp {
                 true,
             ),
             (
+                T::Strikes,
+                "Severe",
+                "Lightning strikes (MQTT)",
+                "Ground strikes republished onto your own MQTT broker \u{2014} needs a relay or a \
+                 Home Assistant rebroadcast and the strikes topic set in Settings. Nothing is \
+                 fetched from a strike network by the app itself.",
+                true,
+            ),
+            (
                 T::Fronts,
                 "Reference",
                 "Surface fronts (H/L)",

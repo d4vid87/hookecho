@@ -25,7 +25,7 @@ use std::time::Duration;
 
 /// A command that arrived from the broker. The app drains these once a frame and applies them,
 /// so a house automation can point the window at the storm it just noticed.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Cmd {
     /// Show this radar site in the active pane.
     Site(String),
@@ -33,6 +33,45 @@ pub enum Cmd {
     Product(String),
     /// Mute or unmute alert sound.
     Mute(bool),
+    /// One lightning strike, republished by the user's own relay.
+    Strike {
+        lon: f64,
+        lat: f64,
+        time: chrono::DateTime<chrono::Utc>,
+    },
+}
+
+/// Parse a strike off the strikes topic.
+///
+/// The payload shape is the one the Home Assistant Blitzortung component republishes — JSON with
+/// `lat`, `lon` and a nanosecond-epoch `time` — but leniently: a relay that sends seconds,
+/// milliseconds, or no time at all still produces a usable strike, because a strike with a
+/// plausible position and a slightly wrong age is worth more than a dropped one.
+pub fn parse_strike(payload: &str) -> Option<Cmd> {
+    let v: serde_json::Value = serde_json::from_str(payload).ok()?;
+    let lon = v["lon"].as_f64()?;
+    let lat = v["lat"].as_f64()?;
+    if !(-180.0..=180.0).contains(&lon) || !(-90.0..=90.0).contains(&lat) {
+        return None;
+    }
+    let now = chrono::Utc::now();
+    let time = match v["time"].as_i64() {
+        // Nanoseconds is what the component publishes; the other two are what a hand-rolled
+        // relay usually sends. They are orders of magnitude apart, so the magnitude tells them
+        // apart without the relay having to say.
+        Some(t) if t > 1_000_000_000_000_000 => chrono::DateTime::from_timestamp_nanos(t),
+        Some(t) if t > 1_000_000_000_000 => chrono::DateTime::from_timestamp_millis(t)?,
+        Some(t) if t > 1_000_000_000 => chrono::DateTime::from_timestamp(t, 0)?,
+        _ => now,
+    };
+    // A strike from the future, or from last week, is a clock problem somewhere upstream. Treat
+    // it as "now" rather than dropping it: the position is still real.
+    let time = if (time - now).num_seconds().abs() > 3600 {
+        now
+    } else {
+        time
+    };
+    Some(Cmd::Strike { lon, lat, time })
 }
 
 /// Parse one command from its topic suffix and payload.
@@ -221,6 +260,13 @@ pub fn spawn(settings: &Settings, subscribe: bool) {
         }
     }
     let cmd_prefix = format!("{prefix}/cmd/");
+    // Empty means off, and it stays off in a `--serve` process for the same reason commands do:
+    // nothing there drains the channel.
+    let strikes_topic = if subscribe {
+        settings.strikes_topic.trim().to_string()
+    } else {
+        String::new()
+    };
     let sub_client = client.clone();
     let sub_prefix = prefix.clone();
     std::thread::spawn(move || {
@@ -237,6 +283,13 @@ pub fn spawn(settings: &Settings, subscribe: bool) {
                             log::warn!("mqtt: subscribing to {topic} failed: {e}");
                         }
                     }
+                    if !strikes_topic.is_empty() {
+                        // At most once: a strike that arrives late is worth less than the
+                        // bandwidth of redelivering it, and there are thousands an hour.
+                        if let Err(e) = sub_client.subscribe(&strikes_topic, QoS::AtMostOnce) {
+                            log::warn!("mqtt: subscribing to {strikes_topic} failed: {e}");
+                        }
+                    }
                     if discovery_on {
                         for (topic, payload) in discovery(&sub_prefix) {
                             publish(&sub_client, &topic, payload, true);
@@ -244,10 +297,19 @@ pub fn spawn(settings: &Settings, subscribe: bool) {
                     }
                 }
                 Ok(rumqttc::Event::Incoming(rumqttc::Packet::Publish(p))) => {
+                    let payload = String::from_utf8_lossy(&p.payload);
                     let Some(suffix) = p.topic.strip_prefix(&cmd_prefix) else {
+                        // Anything else on this connection is a strike, since the strikes topic
+                        // is the only other thing subscribed. Unparseable ones are silent: a
+                        // wildcard topic carries the network's own housekeeping messages too,
+                        // and warning per message would be thousands of lines an hour.
+                        if !strikes_topic.is_empty() {
+                            if let Some(cmd) = parse_strike(&payload) {
+                                let _ = tx.send(cmd);
+                            }
+                        }
                         continue;
                     };
-                    let payload = String::from_utf8_lossy(&p.payload);
                     match parse_cmd(suffix, &payload) {
                         Some(cmd) => {
                             let _ = tx.send(cmd);
@@ -403,5 +465,38 @@ mod tests {
         assert_eq!(v["body"], "Norman until 21:15");
         assert_eq!(v["urgent"], true);
         assert!(v["time"].as_str().unwrap().contains('T'));
+    }
+
+    #[test]
+    fn strikes_parse_the_shape_the_blitzortung_relay_publishes() {
+        // Captured payload shape: nanosecond epoch, degrees.
+        let cmd = parse_strike(r#"{"time":1756500000000000000,"lat":35.2,"lon":-97.4}"#);
+        let Some(Cmd::Strike { lon, lat, time }) = cmd else {
+            panic!("expected a strike, got {cmd:?}");
+        };
+        assert!((lon + 97.4).abs() < 1e-9 && (lat - 35.2).abs() < 1e-9);
+        // Well outside the hour window, so it is clamped to now rather than dropped.
+        assert!((chrono::Utc::now() - time).num_seconds().abs() < 5);
+    }
+
+    #[test]
+    fn a_recent_second_epoch_keeps_its_own_time() {
+        let then = chrono::Utc::now() - chrono::Duration::seconds(120);
+        let json = format!(
+            r#"{{"time":{},"lat":51.5,"lon":-0.1}}"#,
+            then.timestamp_millis()
+        );
+        let Some(Cmd::Strike { time, .. }) = parse_strike(&json) else {
+            panic!("expected a strike");
+        };
+        assert!((time - then).num_seconds().abs() <= 1);
+    }
+
+    #[test]
+    fn junk_on_the_strikes_topic_is_dropped() {
+        // Housekeeping messages and out-of-range positions both share the wildcard topic.
+        assert_eq!(parse_strike("hello"), None);
+        assert_eq!(parse_strike(r#"{"lat":35.2}"#), None);
+        assert_eq!(parse_strike(r#"{"lat":935.2,"lon":-97.4}"#), None);
     }
 }

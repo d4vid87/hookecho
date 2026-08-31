@@ -1125,6 +1125,8 @@ pub(crate) enum OverlayToggle {
     Recon,
     Fronts,
     GlmLightning,
+    /// Ground strikes republished onto the user's own MQTT broker (see `strikes_topic`).
+    Strikes,
     Wind,
     LinkCameras,
     /// The always-on-top mini-loop window (desktop only).
@@ -1147,7 +1149,7 @@ pub(crate) struct BlockageKey {
 impl OverlayToggle {
     /// Every toggle, for the persistence sweep. A new variant belongs here too, or it silently
     /// stops being remembered across restarts.
-    pub(crate) const ALL: [OverlayToggle; 37] = [
+    pub(crate) const ALL: [OverlayToggle; 38] = [
         Self::AlertPanel,
         Self::StormReports,
         Self::Spotters,
@@ -1181,6 +1183,7 @@ impl OverlayToggle {
         Self::Recon,
         Self::Fronts,
         Self::GlmLightning,
+        Self::Strikes,
         Self::Wind,
         Self::LinkCameras,
         Self::MiniLoop,
@@ -1842,6 +1845,31 @@ fn data_attribution(site_id: &str) -> Option<&'static str> {
 /// How a lightning flash looks at `age_secs`: bright white-hot when it just happened, fading to a
 /// dim orange ember by the end of the window. The brightness IS the recency cue — a map of
 /// same-colored dots says where lightning has been, not where it is now.
+/// Most strikes kept at once. A continent-wide topic on an active night runs tens of thousands
+/// an hour, and the painter walks the whole deque every frame.
+const STRIKE_CAP: usize = 20_000;
+
+/// How long a strike stays on the map. Same window as the GLM feed, so the two layers age alike.
+const STRIKE_WINDOW_SECS: i64 = 900;
+
+/// Cyan-white for a fresh strike fading to deep blue, deliberately nothing like [`glm_style`]'s
+/// white-to-orange: with both layers on, colour is the only thing telling optical flashes from
+/// ground strikes.
+fn strike_style(age_secs: f32) -> (egui::Color32, f32) {
+    let t = (age_secs / STRIKE_WINDOW_SECS as f32).clamp(0.0, 1.0);
+    let r = 3.4 - 1.4 * t;
+    let lerp = |a: f32, b: f32| (a + (b - a) * t) as u8;
+    (
+        egui::Color32::from_rgba_unmultiplied(
+            lerp(225.0, 40.0),
+            lerp(250.0, 90.0),
+            lerp(255.0, 220.0),
+            lerp(255.0, 70.0),
+        ),
+        r,
+    )
+}
+
 fn glm_style(age_secs: f32) -> (egui::Color32, f32) {
     const WINDOW: f32 = 900.0; // 15 minutes, matching the feed
     let t = (age_secs / WINDOW).clamp(0.0, 1.0);
@@ -2503,6 +2531,11 @@ pub struct HookEchoApp {
     glm: std::sync::Arc<std::sync::Mutex<wxdata::glm::GlmFeed>>,
     glm_last_poll: Option<Instant>,
     glm_polling: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    /// Ground strikes as they arrive over MQTT, oldest first. Nothing fills this unless the user
+    /// points `strikes_topic` at a broker that carries them — the app never talks to a strike
+    /// network itself.
+    show_strikes: bool,
+    strikes: std::collections::VecDeque<(f64, f64, chrono::DateTime<chrono::Utc>)>,
     /// Animated wind particles. The grids are shared; the particle sets are per pane, because each
     /// pane has its own camera. Nothing here persists to settings — neither do fronts or GLM.
     show_wind: bool,
@@ -3223,6 +3256,8 @@ impl HookEchoApp {
             fronts: None,
             fronts_last_fetch: None,
             show_glm: false,
+            show_strikes: false,
+            strikes: std::collections::VecDeque::new(),
             glm: std::sync::Arc::new(std::sync::Mutex::new(wxdata::glm::GlmFeed::new(15))),
             glm_last_poll: None,
             glm_polling: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -7178,6 +7213,7 @@ impl HookEchoApp {
             T::RangeRings => &mut self.show_range_rings,
             T::Fronts => &mut self.show_fronts,
             T::GlmLightning => &mut self.show_glm,
+            T::Strikes => &mut self.show_strikes,
             T::Wind => &mut self.show_wind,
             T::Sensors => &mut self.show_sensors,
             T::Hodo => &mut self.show_hodo,
@@ -11049,6 +11085,33 @@ impl HookEchoApp {
             }
         }
 
+        // Ground strikes off the broker. Same shape as the GLM block above, including the
+        // lon/lat prefilter, because the deque is just as long and the pane just as small.
+        if self.show_strikes && !self.strikes.is_empty() {
+            let now = chrono::Utc::now();
+            let corner = |px: (f32, f32)| {
+                let w = cam.screen_to_world(px, vp);
+                crate::render::mercator::world_to_lonlat(w.0, w.1)
+            };
+            let (c0, c1) = (corner((0.0, 0.0)), corner((vp.0, vp.1)));
+            let (lon_lo, lon_hi) = (c0.0.min(c1.0), c0.0.max(c1.0));
+            let (lat_lo, lat_hi) = (c0.1.min(c1.1), c0.1.max(c1.1));
+            for &(lon, lat, time) in &self.strikes {
+                if lon < lon_lo || lon > lon_hi || lat < lat_lo || lat > lat_hi {
+                    continue;
+                }
+                let w = crate::render::mercator::lonlat_to_world(lon, lat);
+                let (sx, sy) = cam.world_to_screen(w, vp);
+                let p = egui::pos2(prect.left() + sx, prect.top() + sy);
+                if !prect.contains(p) {
+                    continue;
+                }
+                let age = (now - time).num_seconds().max(0) as f32;
+                let (col, r) = strike_style(age);
+                painter.circle_filled(p, r, col);
+            }
+        }
+
         // Animated wind particles, when they are being drawn on the CPU. The GPU path draws
         // inside the map callback instead (see `wind_gpu_frame`), which is also what puts it
         // under the warning polygons rather than over them.
@@ -14790,6 +14853,15 @@ impl eframe::App for HookEchoApp {
             }
         }
 
+        // Strikes age out on their own clock: the deque only shrinks here, so a quiet topic
+        // still empties the map rather than freezing the last minute of a storm on it.
+        if !self.strikes.is_empty() {
+            let cutoff = chrono::Utc::now() - chrono::Duration::seconds(STRIKE_WINDOW_SECS);
+            while self.strikes.front().is_some_and(|&(_, _, t)| t < cutoff) {
+                self.strikes.pop_front();
+            }
+        }
+
         // Commands off the broker, drained the same way and applied through the same paths the
         // tray uses. They land on the next repaint rather than instantly, which for "point at the
         // storm" is close enough and keeps every state change on one thread.
@@ -14812,6 +14884,14 @@ impl eframe::App for HookEchoApp {
                     if let Some(m) = Moment::from_code(&code) {
                         let srv = self.views[self.active].srv;
                         self.apply_palette(PaletteAction::SetMoment(m, srv), ctx);
+                    }
+                }
+                crate::mqtt::Cmd::Strike { lon, lat, time } => {
+                    self.strikes.push_back((lon, lat, time));
+                    // A busy night over a whole continent is a lot of strikes, and the painter
+                    // walks the whole deque. Cap it and let the oldest fall off early.
+                    while self.strikes.len() > STRIKE_CAP {
+                        self.strikes.pop_front();
                     }
                 }
             }
