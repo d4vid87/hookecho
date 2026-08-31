@@ -15044,6 +15044,17 @@ impl eframe::App for HookEchoApp {
             }
         }
         self.was_quiet = now_quiet;
+        // Hold the queue on disk as it changes, not only on a clean exit. A crash or a kill
+        // during quiet hours used to lose the whole night's held alerts; the queue is a handful
+        // of short strings, so comparing it every tick and writing only on a real change costs
+        // nothing worth measuring.
+        if let Ok(q) = self.quiet_queue.lock() {
+            if *q != self.settings.quiet_pending {
+                self.settings.quiet_pending = q.clone();
+                drop(q);
+                self.settings.save();
+            }
+        }
 
         // GOES lightning: granules land every 20 s, so poll about that often. One in flight at a
         // time — a slow fetch must not queue up behind itself.
