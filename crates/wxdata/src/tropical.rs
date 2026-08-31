@@ -22,6 +22,10 @@ pub struct TrackPoint {
     pub kt: f32,
     /// Short label (valid time / development stage).
     pub label: String,
+    /// Minimum central pressure (mb) at this point, when the forecast carries one.
+    pub mb: Option<f32>,
+    /// Forecast hour this point is valid at (+0/+12/+24 …), when present.
+    pub tau: Option<f32>,
 }
 
 /// One active tropical cyclone.
@@ -35,6 +39,8 @@ pub struct TropicalStorm {
     pub intensity_kt: f32,
     pub lat: f64,
     pub lon: f64,
+    /// Minimum central pressure (mb) as issued, when the feed carries one.
+    pub pressure_mb: Option<f32>,
     pub points: Vec<TrackPoint>,
     /// Public advisory (TCP) page for this storm, straight from the feed.
     pub advisory_url: Option<String>,
@@ -53,6 +59,20 @@ pub struct TropicalData {
     pub wind_radii: Vec<GeoFeature>,
     /// Potential storm surge flooding polygons (NHC P-Surge), when requested.
     pub surge: Vec<GeoFeature>,
+}
+
+/// A JSON number that NHC sometimes ships as a string.
+fn number(v: Option<&serde_json::Value>) -> Option<f64> {
+    let v = v?;
+    v.as_f64().or_else(|| v.as_str()?.trim().parse().ok())
+}
+
+/// A sea-level pressure in mb, or `None` for a missing value. The feeds use sentinels (`0`,
+/// `-9999`) rather than nulls, so anything off the physical scale is missing, not data.
+fn mb_value(v: Option<&serde_json::Value>) -> Option<f32> {
+    number(v)
+        .filter(|p| (850.0..=1050.0).contains(p))
+        .map(|p| p as f32)
 }
 
 /// Fill for a wind threshold: tropical-storm force through hurricane force.
@@ -181,13 +201,14 @@ pub async fn fetch_active_opts(
                             points.push(TrackPoint {
                                 lon: c[0],
                                 lat: c[1],
-                                kt: props.get("maxwind").and_then(|v| v.as_f64()).unwrap_or(0.0)
-                                    as f32,
+                                kt: number(props.get("maxwind")).unwrap_or(0.0) as f32,
                                 label: props
                                     .get("datelbl")
                                     .and_then(|v| v.as_str())
                                     .unwrap_or("")
                                     .to_string(),
+                                mb: mb_value(props.get("mslp")),
+                                tau: number(props.get("tau")).map(|t| t as f32),
                             });
                         }
                     }
@@ -201,10 +222,7 @@ pub async fn fetch_active_opts(
                 if let Ok(gj) = query_layer(client, id).await {
                     let rgb = wind_color(kt);
                     for (geom, props) in features(&gj) {
-                        let radii = props
-                            .get("radii")
-                            .and_then(|v| v.as_f64().or_else(|| v.as_str()?.parse().ok()))
-                            .unwrap_or(0.0);
+                        let radii = number(props.get("radii")).unwrap_or(0.0);
                         if (radii - f64::from(kt)).abs() > 0.5 {
                             continue;
                         }
@@ -241,6 +259,7 @@ pub async fn fetch_active_opts(
             intensity_kt,
             lat,
             lon,
+            pressure_mb: mb_value(s.get("pressure")),
             points,
             advisory_url: product_url("publicAdvisory"),
             discussion_url: product_url("forecastDiscussion"),
@@ -474,6 +493,18 @@ mod tests {
             advisory_text("<pre>winds &gt; 50 kt &amp; rising</pre>").unwrap(),
             "winds > 50 kt & rising"
         );
+    }
+
+    #[test]
+    fn pressure_takes_numbers_and_strings_but_not_sentinels() {
+        let v: serde_json::Value =
+            serde_json::from_str(r#"{"a":985,"b":"1004.5","c":-9999,"d":0,"e":"n/a"}"#).unwrap();
+        assert_eq!(mb_value(v.get("a")), Some(985.0));
+        assert_eq!(mb_value(v.get("b")), Some(1004.5));
+        for k in ["c", "d", "e"] {
+            assert_eq!(mb_value(v.get(k)), None, "{k} is missing, not a pressure");
+        }
+        assert_eq!(mb_value(None), None);
     }
 
     #[test]
