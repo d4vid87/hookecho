@@ -6213,6 +6213,57 @@ impl HookEchoApp {
         out
     }
 
+    /// Packs saved in this browser, refreshed in the background whenever one is written.
+    #[cfg(target_arch = "wasm32")]
+    fn packs(&self) -> Vec<crate::webcache::Pack> {
+        crate::webcache::known_packs()
+    }
+
+    /// The last thing the pack machinery has to say — a progress line or an error.
+    #[cfg(target_arch = "wasm32")]
+    fn pack_status(&self) -> Option<String> {
+        crate::webcache::status()
+    }
+
+    /// Save the active timeline's archived frames into an offline pack.
+    ///
+    /// The live head is skipped on purpose: the newest object can still be uploading, and half a
+    /// volume kept forever is worse than one frame missing from a saved loop.
+    #[cfg(target_arch = "wasm32")]
+    fn save_offline_pack(&mut self, ctx: &egui::Context) {
+        let tl = &self.views[self.active].timeline;
+        let ids: Vec<_> = tl.frames.iter().take(tl.playhead + 1).cloned().collect();
+        let site = self.views[self.active].site.clone().unwrap_or_default();
+        let date = tl.date.format("%Y-%m-%d").to_string();
+        let ctx = ctx.clone();
+        self.spawner.spawn(async move {
+            crate::webcache::save_timeline(site, date, ids).await;
+            ctx.request_repaint();
+        });
+    }
+
+    /// Point the active pane at a saved pack: its site and day, and its frames, without listing
+    /// anything over the network. Playback then reads each volume back out of IndexedDB.
+    #[cfg(target_arch = "wasm32")]
+    fn load_offline_pack(&mut self, pack: &crate::webcache::Pack) {
+        let Ok(date) = chrono::NaiveDate::parse_from_str(&pack.date, "%Y-%m-%d") else {
+            return;
+        };
+        self.views[self.active].site = Some(pack.site.clone());
+        let tl = &mut self.views[self.active].timeline;
+        tl.date = date;
+        tl.following = false;
+        tl.listing = false;
+        tl.frames = pack
+            .volumes
+            .iter()
+            .map(|n| Identifier::new(n.clone()))
+            .collect();
+        tl.playhead = 0;
+        tl.playing = true;
+        tl.loop_enabled = true;
+    }
+
     /// Cell tracks for the active pane, computed here from reflectivity rather than read from a
     /// Level 3 storm-cell table — the point of the layer is the sites that have no such table.
     ///
@@ -9022,7 +9073,7 @@ impl HookEchoApp {
                         let time = id.date_time().unwrap_or_else(Utc::now);
                         // No cache at the live head: the newest object can still be uploading, and a
                         // half-written volume is not something to keep.
-                        let fetched = match level2::download_scan(id, None).await {
+                        let fetched = match crate::volume::fetch(id, None).await {
                             Ok(scan) => Ok((name.clone(), time, scan)),
                             Err(e) => match prev {
                                 // Only worth retrying when there IS an older volume and we're not
@@ -9033,7 +9084,7 @@ impl HookEchoApp {
                                     log::debug!(
                                         "newest volume unusable ({e}); falling back to {pname}"
                                     );
-                                    level2::download_scan(p, None)
+                                    crate::volume::fetch(p, None)
                                         .await
                                         .map(|scan| (pname, ptime, scan))
                                         .map_err(|_| e)
@@ -9769,7 +9820,7 @@ impl HookEchoApp {
         let view = idx;
         self.spawner.spawn(async move {
             let name = id.name().to_string();
-            if let Ok(scan) = level2::download_scan(id, crate::paths::cache_dir()).await {
+            if let Ok(scan) = crate::volume::fetch(id, crate::paths::cache_dir()).await {
                 let _ = tx.send(DataMsg::Prefetched {
                     view,
                     site,
@@ -9814,7 +9865,7 @@ impl HookEchoApp {
         self.spawner.spawn(async move {
             let name = id.name().to_string();
             let time = id.date_time().unwrap_or_else(Utc::now);
-            let msg = match level2::download_scan(id, crate::paths::cache_dir()).await {
+            let msg = match crate::volume::fetch(id, crate::paths::cache_dir()).await {
                 Ok(scan) => DataMsg::Volume {
                     view: view_idx,
                     site,

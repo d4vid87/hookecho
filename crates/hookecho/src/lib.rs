@@ -89,6 +89,8 @@ pub mod tray;
 pub mod ui;
 pub mod vector_tiles;
 pub mod view;
+pub mod volume;
+pub mod webcache;
 pub mod wind_draw;
 pub mod wind_gpu;
 pub mod workspace;
