@@ -27,22 +27,73 @@ pub fn set_piper(bin: &str, voice: &str) {
     }
 }
 
-/// Where a downloaded voice lands. One slot: a second voice is a preference, not a capability.
-// ponytail: one voice slot; a picker if anyone actually wants two.
+/// Where a downloaded voice lands. One file per voice id, so downloading a second voice does not
+/// destroy the first — but only one is ever active, which is what `settings.piper_voice` says.
 #[cfg(not(target_arch = "wasm32"))]
-pub fn default_voice_path() -> Option<std::path::PathBuf> {
-    crate::paths::data_dir().map(|d| d.join("voices").join(VOICE_FILE))
+pub fn voice_path(id: &str) -> Option<std::path::PathBuf> {
+    crate::paths::data_dir().map(|d| d.join("voices").join(format!("{id}.onnx")))
 }
 
-/// The voice the download button fetches — a mid-quality US English model, the smallest one that
+/// Where the default voice lands — the one the old single-slot download wrote, so an install that
+/// already has it keeps working without downloading anything.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn default_voice_path() -> Option<std::path::PathBuf> {
+    voice_path(DEFAULT_VOICE)
+}
+
+/// The voice preselected in the picker: a mid-quality US English model, the smallest one that
 /// does not sound worse than espeak.
 #[cfg(not(target_arch = "wasm32"))]
-pub const VOICE_FILE: &str = "en_US-lessac-medium.onnx";
+pub const DEFAULT_VOICE: &str = "en_US-lessac-medium";
 
-/// Upstream for that model. Piper's own voice repository; the `.onnx.json` beside it is required,
-/// since Piper reads its sample rate and phoneme table from there.
+/// The voices the picker offers, by Piper id (`{lang}_{REGION}-{name}-{quality}`).
+///
+/// ponytail: a curated handful, not the whole repository. Piper publishes hundreds across dozens
+/// of languages, and listing them means shipping (and refreshing) an index of a repository that
+/// is not ours. Anything not here is still reachable — the voice field takes a path to any
+/// `.onnx` the user downloaded themselves.
 #[cfg(not(target_arch = "wasm32"))]
-pub const VOICE_URL: &str = "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/lessac/medium/en_US-lessac-medium.onnx";
+pub const VOICES: &[&str] = &[
+    "en_US-lessac-medium",
+    "en_US-amy-medium",
+    "en_US-ryan-high",
+    "en_US-joe-medium",
+    "en_US-kusal-medium",
+    "en_US-hfc_female-medium",
+    "en_US-hfc_male-medium",
+    "en_GB-alba-medium",
+    "en_GB-jenny_dioco-medium",
+    "en_GB-northern_english_male-medium",
+    "es_ES-davefx-medium",
+    "de_DE-thorsten-medium",
+    "fr_FR-siwis-medium",
+    "it_IT-riccardo-x_low",
+    "pt_BR-faber-medium",
+];
+
+/// Upstream `.onnx` for a voice id, in Piper's own voice repository. The layout is derived from
+/// the id itself — `en_US-lessac-medium` lives at `en/en_US/lessac/medium/` — and the
+/// `.onnx.json` beside it is required, since Piper reads its sample rate and phoneme table
+/// from there.
+///
+/// `None` for an id that is not shaped like a Piper id, which is how a hand-typed value is
+/// refused before it becomes a URL.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn voice_url(id: &str) -> Option<String> {
+    let mut parts = id.split('-');
+    let (lang, name, quality) = (parts.next()?, parts.next()?, parts.next()?);
+    if parts.next().is_some()
+        || !id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+    {
+        return None;
+    }
+    let base = lang.split('_').next()?;
+    Some(format!(
+        "https://huggingface.co/rhasspy/piper-voices/resolve/main/{base}/{lang}/{name}/{quality}/{id}.onnx"
+    ))
+}
 
 /// What the settings row shows about the voice download.
 #[cfg(not(target_arch = "wasm32"))]
@@ -57,7 +108,7 @@ pub struct VoiceStatus {
 #[cfg(not(target_arch = "wasm32"))]
 static VOICE: std::sync::RwLock<Option<VoiceStatus>> = std::sync::RwLock::new(None);
 #[cfg(not(target_arch = "wasm32"))]
-static WANT_VOICE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static WANT_VOICE: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
 
 #[cfg(not(target_arch = "wasm32"))]
 pub fn voice_status() -> VoiceStatus {
@@ -78,18 +129,20 @@ pub fn set_voice_status(busy: bool, text: impl Into<String>) {
     }
 }
 
-/// Ask for the voice download. The settings window has no HTTP client or runtime of its own, so
-/// it raises this flag and the app's frame loop does the work on the shared spawner.
+/// Ask for a voice download by id. The settings window has no HTTP client or runtime of its own,
+/// so it parks the request here and the app's frame loop does the work on the shared spawner.
 #[cfg(not(target_arch = "wasm32"))]
-pub fn request_voice_download() {
-    WANT_VOICE.store(true, std::sync::atomic::Ordering::Relaxed);
+pub fn request_voice_download(id: &str) {
+    if let Ok(mut g) = WANT_VOICE.lock() {
+        *g = Some(id.to_string());
+    }
     set_voice_status(true, "starting…");
 }
 
 /// Drained once per frame by the app.
 #[cfg(not(target_arch = "wasm32"))]
-pub fn take_voice_request() -> bool {
-    WANT_VOICE.swap(false, std::sync::atomic::Ordering::Relaxed)
+pub fn take_voice_request() -> Option<String> {
+    WANT_VOICE.lock().ok().and_then(|mut g| g.take())
 }
 
 /// Speak `text` aloud, if the platform can. Returns immediately.
@@ -242,5 +295,38 @@ mod imp {
     /// Android's TextToSpeech is JNI, and all JNI lives in `platform`.
     pub fn speak_blocking(text: &str) -> Result<(), String> {
         crate::platform::speak(text)
+    }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod tests {
+    use super::*;
+
+    /// The repository layout is derived from the id rather than listed, so the derivation is the
+    /// thing that can be wrong. Every id in [`VOICES`] was checked live when it was added.
+    #[test]
+    fn a_voice_id_derives_its_own_download_url() {
+        assert_eq!(
+            voice_url("en_US-lessac-medium").as_deref(),
+            Some("https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/lessac/medium/en_US-lessac-medium.onnx")
+        );
+        assert_eq!(
+            voice_url("pt_BR-faber-medium").as_deref(),
+            Some("https://huggingface.co/rhasspy/piper-voices/resolve/main/pt/pt_BR/faber/medium/pt_BR-faber-medium.onnx")
+        );
+        // Underscores are part of names and qualities both, and must survive.
+        assert!(voice_url("en_US-hfc_female-medium")
+            .unwrap()
+            .ends_with("/en/en_US/hfc_female/medium/en_US-hfc_female-medium.onnx"));
+        assert!(voice_url("it_IT-riccardo-x_low")
+            .unwrap()
+            .ends_with("/it/it_IT/riccardo/x_low/it_IT-riccardo-x_low.onnx"));
+
+        // Anything not shaped like a Piper id is refused before it becomes a URL.
+        assert_eq!(voice_url("lessac"), None);
+        assert_eq!(voice_url("en_US-lessac-medium-extra"), None);
+        assert_eq!(voice_url("en_US-../../etc-medium"), None);
+        assert!(VOICES.iter().all(|id| voice_url(id).is_some()));
+        assert!(VOICES.contains(&DEFAULT_VOICE));
     }
 }

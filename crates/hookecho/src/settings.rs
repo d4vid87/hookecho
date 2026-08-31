@@ -338,6 +338,10 @@ pub struct Settings {
     /// nothing to say. Never committed: it is a ~60 MB download or a file the user already has.
     #[serde(default)]
     pub piper_voice: String,
+    /// Which curated voice the picker has selected for download. Only the picker reads it;
+    /// `piper_voice` above is still what actually speaks.
+    #[serde(default)]
+    pub piper_download_voice: String,
     /// While chase mode is on, speak the nearest storm's bearing and distance as it changes.
     #[serde(default)]
     pub speak_position: bool,
@@ -1094,6 +1098,7 @@ impl Default for Settings {
             speak_warnings: false,
             piper_path: String::new(),
             piper_voice: String::new(),
+            piper_download_voice: String::new(),
             speak_position: false,
             rain_alerts: false,
             rain_sound: AlertSound::default(),
@@ -1578,6 +1583,7 @@ mod tests {
             speak_warnings: true,
             piper_path: String::new(),
             piper_voice: String::new(),
+            piper_download_voice: String::new(),
             speak_position: false,
             rain_alerts: true,
             rain_sound: AlertSound::Ding,
