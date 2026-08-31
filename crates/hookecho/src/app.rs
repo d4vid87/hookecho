@@ -4561,7 +4561,6 @@ impl HookEchoApp {
     /// The site is whichever radar the active pane is on: a rule about a place is only replayable
     /// against a radar that can see it, and the pane the user is looking at is the best guess
     /// anyone can make without asking.
-    #[cfg(not(target_arch = "wasm32"))]
     fn start_backtest(&mut self, rule_idx: usize, day: chrono::NaiveDate) {
         let Some(rule) = self.settings.alert_rules.get(rule_idx).cloned() else {
             return;
@@ -16001,7 +16000,6 @@ impl eframe::App for HookEchoApp {
             }
         }
 
-        #[cfg(not(target_arch = "wasm32"))]
         if let Some((i, day)) = self.rules_window.backtest_request.take() {
             self.start_backtest(i, day);
         }
