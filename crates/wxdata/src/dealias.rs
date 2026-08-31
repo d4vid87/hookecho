@@ -6,12 +6,18 @@
 //! regions of internally-continuous velocity (neighbors within half a Nyquist interval),
 //! then unfold each region by an integer number of 2·V_ny steps so that velocity is
 //! continuous across region boundaries. The largest region anchors at zero folds; every
-//! other region is unfolded greedily from its already-solved neighbors.
+//! other region is unfolded relative to the anchor.
 //!
-//! Simplifications vs. full Py-ART (ponytail): greedy BFS region-merge instead of the
-//! global edge-cost optimization, and no second (sequential) pass. Sound and deterministic
-//! for typical single-fold storms; upgrade to the graph optimizer if multi-fold cases
-//! (very high-shear tornadic couplets past 2·V_ny) show seams.
+//! Region offsets are solved globally rather than by traversal order. Each pair of touching
+//! regions is collapsed to a single voted fold difference plus a confidence — the number of
+//! boundary gate pairs that backed it — and the sweep is solved along a maximum spanning tree
+//! over those edges, strongest constraint first, followed by a bounded refinement pass that
+//! re-checks every region against *all* its neighbours rather than just its tree parent. Folds
+//! past a single interval fall out of the arithmetic, so multi-fold fields (very high-shear
+//! tornadic couplets past 2·V_ny) no longer come apart at a thin early boundary the way the
+//! previous greedy BFS could.
+//!
+//! ponytail: still one sweep at a time, no sequential second pass over the volume.
 //!
 //! Two things it does do beyond the simplest version of that idea. Region folds are chosen by a
 //! *vote* over the gate pairs along a boundary rather than by averaging them: one stray pair on a
@@ -161,7 +167,42 @@ pub fn dealias_with_reference(
         }
     }
 
-    // --- 3. Greedy BFS unfold from the largest region (anchor = 0 folds). ---
+    // --- 3. Global fold optimizer. ---
+    // Every pair of touching regions votes, over all their shared gate pairs, for the integer
+    // fold difference that would make the boundary continuous. That gives one weighted edge per
+    // region pair, and the weight is evidence: a boundary of four hundred agreeing gates is a far
+    // better constraint than one of three. Solving the sweep is then a matter of believing the
+    // strongest constraints first — a maximum spanning tree over the region graph, rooted at the
+    // anchor — and letting the weak ones fall out of the arithmetic instead of the traversal
+    // order. The old greedy BFS took whatever edge it happened to reach first, which is why a
+    // multi-fold field could come apart at a seam: one thin boundary early in the walk fixed a
+    // region, and every region behind it inherited the mistake.
+    let mut pair_votes: std::collections::HashMap<(usize, usize), std::collections::HashMap<i32, u32>> =
+        std::collections::HashMap::new();
+    for (ra, list) in edges.iter().enumerate() {
+        for &(rb, v_self, v_nb) in list {
+            if ra >= rb {
+                continue; // each pair recorded once, oriented low -> high
+            }
+            // fold = unfold[rb] - unfold[ra] that makes this gate pair continuous.
+            let fold = ((v_self as f64 - v_nb as f64) / interval as f64).round() as i32;
+            *pair_votes
+                .entry((ra, rb))
+                .or_default()
+                .entry(fold)
+                .or_insert(0) += 1;
+        }
+    }
+    // Collapse each pair to its winning fold plus a confidence = how many gate pairs backed it.
+    // adjacency[r] = (neighbor, fold applied as unfold[neighbor] - unfold[r], confidence).
+    let mut adjacency: Vec<Vec<(usize, i32, u32)>> = vec![Vec::new(); region_count];
+    for ((ra, rb), votes) in pair_votes {
+        let confidence = votes.values().copied().max().unwrap_or(0);
+        let fold = winning_fold(votes);
+        adjacency[ra].push((rb, fold, confidence));
+        adjacency[rb].push((ra, -fold, confidence));
+    }
+
     let mut unfold = vec![0i32; region_count];
     let mut solved = vec![false; region_count];
     let Some(anchor) = (0..region_count).max_by_key(|&r| sizes[r]) else {
@@ -186,48 +227,66 @@ pub fn dealias_with_reference(
             winning_fold(votes)
         })
         .unwrap_or(0);
+
+    // Maximum spanning tree by confidence, grown Prim-style from the anchor. Region ids break
+    // ties so the result does not depend on hash iteration order.
+    let mut frontier: Vec<(u32, usize, usize, i32)> = Vec::new(); // (confidence, from, to, fold)
+    let push_edges = |frontier: &mut Vec<(u32, usize, usize, i32)>, r: usize| {
+        for &(nb, fold, confidence) in &adjacency[r] {
+            frontier.push((confidence, r, nb, fold));
+        }
+    };
     solved[anchor] = true;
-    let mut queue = std::collections::VecDeque::new();
-    for &(nb, _, _) in &edges[anchor] {
-        if !solved[nb] {
-            queue.push_back(nb);
-        }
-    }
-    while let Some(r) = queue.pop_front() {
-        if solved[r] {
-            continue;
-        }
-        // Fold count that best aligns this region with its already-solved neighbours. Each
-        // boundary gate pair votes for the integer fold that would make it continuous, and the
-        // fold with the most votes wins.
-        //
-        // This used to average the per-pair ideal folds and round the mean. On a long boundary
-        // that is fragile: the pairs cluster tightly around the right integer, but a handful of
-        // pairs sitting on a genuine shear line contribute values half a fold away, and a mean
-        // near x.5 rounds the whole region the wrong way. A vote cannot be dragged like that —
-        // the outliers have to outnumber the rest, not merely outweigh them.
-        let mut votes: std::collections::HashMap<i32, u32> = std::collections::HashMap::new();
-        for &(nb, v_self, v_nb) in &edges[r] {
-            if solved[nb] {
-                let target = v_nb as f64 + unfold[nb] as f64 * interval as f64;
-                let fold = ((target - v_self as f64) / interval as f64).round() as i32;
-                *votes.entry(fold).or_insert(0) += 1;
-            }
-        }
-        if votes.is_empty() {
-            // Not yet reachable from the solved set; requeue later.
-            queue.push_back(r);
-            continue;
-        }
-        unfold[r] = winning_fold(votes);
-        solved[r] = true;
-        for &(nb, _, _) in &edges[r] {
-            if !solved[nb] {
-                queue.push_back(nb);
-            }
-        }
+    push_edges(&mut frontier, anchor);
+    while !frontier.is_empty() {
+        // Best remaining edge into an unsolved region.
+        let best = frontier
+            .iter()
+            .enumerate()
+            .filter(|(_, &(_, _, to, _))| !solved[to])
+            .max_by_key(|(_, &(confidence, from, to, _))| {
+                (confidence, std::cmp::Reverse(from), std::cmp::Reverse(to))
+            })
+            .map(|(i, &e)| (i, e));
+        let Some((_, (_, from, to, fold))) = best else {
+            break; // nothing reachable left; disconnected regions keep their zero offset
+        };
+        unfold[to] = unfold[from] + fold;
+        solved[to] = true;
+        frontier.retain(|&(_, _, t, _)| !solved[t]);
+        push_edges(&mut frontier, to);
     }
 
+    // Bounded refinement. The tree used one edge per region; every other boundary is now evidence
+    // that region's offset can be checked against. Re-vote each region against all its solved
+    // neighbours, weighted by boundary confidence, and stop as soon as a pass changes nothing.
+    // ponytail: ten passes, not to convergence — a field that is still moving after ten passes is
+    // oscillating between two equally-supported answers, and picking one is as good as the other.
+    for _ in 0..10 {
+        let mut changed = false;
+        for r in 0..region_count {
+            if r == anchor || !solved[r] {
+                continue;
+            }
+            let mut votes: std::collections::HashMap<i32, u32> = std::collections::HashMap::new();
+            for &(nb, fold, confidence) in &adjacency[r] {
+                if solved[nb] {
+                    *votes.entry(unfold[nb] - fold).or_insert(0) += confidence;
+                }
+            }
+            if votes.is_empty() {
+                continue;
+            }
+            let best = winning_fold(votes);
+            if best != unfold[r] {
+                unfold[r] = best;
+                changed = true;
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
     // --- 4. Apply per-region fold offsets. ---
     let mut out = vel.to_vec();
     for (i, o) in out.iter_mut().enumerate() {
@@ -401,6 +460,52 @@ mod tests {
         let out = dealias_with_reference(&folded, az_bins, gates, nyq, Some(&reference));
         for v in out.iter().flatten() {
             assert!((v - 60.0).abs() < 0.5, "expected 60 m/s, got {v}");
+        }
+    }
+
+    /// Multi-fold recovery: velocity climbing past two whole Nyquist intervals, so neighbouring
+    /// regions differ by two folds rather than one. This is what the greedy walk was documented
+    /// as unable to hold.
+    #[test]
+    fn unfolds_a_field_that_folds_more_than_once() {
+        let nyq = 20.0f32;
+        let (az_bins, gates) = (16, 24);
+        let mut truth = vec![0.0f32; az_bins * gates];
+        for az in 0..az_bins {
+            for g in 0..gates {
+                // 0 to 95 m/s outbound: nearly three Nyquist intervals from end to end.
+                truth[az * gates + g] = (g as f32 / (gates - 1) as f32) * 95.0;
+            }
+        }
+        let folded = fold(&truth, nyq);
+        assert!(
+            folded.iter().any(|v| v.unwrap() < 0.0),
+            "fixture should fold"
+        );
+        let out = dealias(&folded, az_bins, gates, nyq);
+        assert!(
+            matches_up_to_a_constant_fold(&out, &truth, nyq),
+            "multi-fold ramp not recovered"
+        );
+    }
+
+    /// The optimizer walks a hash map of region pairs; the answer must not depend on the order
+    /// that map happens to iterate in.
+    #[test]
+    fn the_same_sweep_dealiases_the_same_way_every_time() {
+        let nyq = 22.0f32;
+        let (az_bins, gates) = (24, 16);
+        let mut truth = vec![0.0f32; az_bins * gates];
+        for az in 0..az_bins {
+            for g in 0..gates {
+                let a = az as f32 / az_bins as f32 * std::f32::consts::TAU;
+                truth[az * gates + g] = a.sin() * 48.0 + g as f32 * 1.7;
+            }
+        }
+        let folded = fold(&truth, nyq);
+        let first = dealias(&folded, az_bins, gates, nyq);
+        for _ in 0..8 {
+            assert_eq!(dealias(&folded, az_bins, gates, nyq), first);
         }
     }
 
