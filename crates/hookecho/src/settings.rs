@@ -282,6 +282,12 @@ pub struct Settings {
     /// Topic prefix everything is published under, e.g. `home/weather`.
     #[serde(default = "default_mqtt_prefix")]
     pub mqtt_prefix: String,
+    /// Publish retained Home Assistant discovery configs so it creates the device by itself.
+    ///
+    /// Off by default, and deliberately: retained config topics on a broker that is not running
+    /// Home Assistant are litter somebody else has to clear up.
+    #[serde(default)]
+    pub mqtt_discovery: bool,
     /// Fetch terrain at z12 (~40 m/px) instead of z10. Sixteen times the tiles, so it is off by
     /// default and meant for chase packs you download deliberately.
     #[serde(default)]
@@ -1085,6 +1091,7 @@ impl Default for Settings {
             mqtt_user: String::new(),
             mqtt_pass: String::new(),
             mqtt_prefix: default_mqtt_prefix(),
+            mqtt_discovery: false,
             background_alerts: false,
             pack_hires_dem: false,
             pack_include_vector: true,
@@ -1562,6 +1569,7 @@ mod tests {
             mqtt_user: String::new(),
             mqtt_pass: String::new(),
             mqtt_prefix: default_mqtt_prefix(),
+            mqtt_discovery: false,
             background_alerts: false,
             pack_hires_dem: false,
             pack_include_vector: true,

@@ -3307,7 +3307,7 @@ impl HookEchoApp {
         // The broker is publish-only and reconnects on its own, so it starts here and is never
         // stopped; changing the setting takes a restart, same as the tray.
         #[cfg(not(any(target_os = "android", target_arch = "wasm32")))]
-        crate::mqtt::spawn(&app.settings);
+        crate::mqtt::spawn(&app.settings, true);
         // Point the speech path at Piper before anything can speak.
         #[cfg(not(target_arch = "wasm32"))]
         crate::speech::set_piper(&app.settings.piper_path, &app.settings.piper_voice);
@@ -14785,6 +14785,33 @@ impl eframe::App for HookEchoApp {
                         self.views[self.active].site = Some(id);
                         ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
                         ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+                    }
+                }
+            }
+        }
+
+        // Commands off the broker, drained the same way and applied through the same paths the
+        // tray uses. They land on the next repaint rather than instantly, which for "point at the
+        // storm" is close enough and keeps every state change on one thread.
+        #[cfg(not(any(target_os = "android", target_arch = "wasm32")))]
+        for cmd in crate::mqtt::drain() {
+            match cmd {
+                crate::mqtt::Cmd::Mute(want) => {
+                    if self.settings.mute_alerts != want {
+                        self.apply_action(BindableAction::ToggleMute, ctx);
+                    }
+                }
+                crate::mqtt::Cmd::Site(id) => {
+                    if wxdata::sites::site_by_id(&id).is_some() {
+                        self.views[self.active].site = Some(id);
+                    } else {
+                        log::warn!("mqtt: no such site {id}");
+                    }
+                }
+                crate::mqtt::Cmd::Product(code) => {
+                    if let Some(m) = Moment::from_code(&code) {
+                        let srv = self.views[self.active].srv;
+                        self.apply_palette(PaletteAction::SetMoment(m, srv), ctx);
                     }
                 }
             }

@@ -1126,6 +1126,14 @@ fn alerts_tab(ui: &mut egui::Ui, settings: &mut Settings) {
             ui.label("Topic prefix:");
             ui.add(egui::TextEdit::singleline(&mut settings.mqtt_prefix).hint_text("home/weather"));
         });
+        ui.horizontal(|ui| {
+            ui.checkbox(&mut settings.mqtt_discovery, "Home Assistant discovery")
+                .on_hover_text(
+                    "Publish retained config topics so Home Assistant creates the device itself, \
+                     with a mute switch that publishes back to <prefix>/cmd/mute. Leave off if \
+                     this broker has no Home Assistant on it.",
+                );
+        });
         ui.weak(
             "Publishes <prefix>/status and <prefix>/nearest every five minutes, and \
              <prefix>/alerts as warnings arrive. Takes effect on restart.",
