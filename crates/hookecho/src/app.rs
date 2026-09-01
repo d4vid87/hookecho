@@ -270,6 +270,8 @@ enum OverlayMsg {
     ),
     /// NHC tropical cyclones: cones + per-storm tracks (feature V).
     Tropical(wxdata::tropical::TropicalData),
+    /// County power outages from ODIN.
+    Outages(Vec<overlay::GeoFeature>),
     /// Aviation SIGMET/AIRMET hazard polygons (feature GG).
     Aviation(Vec<GeoFeature>),
     /// Newly-fetched TFR shapes keyed by NOTAM id, and how many are still unfetched.
@@ -385,6 +387,8 @@ enum OverlaySource {
     /// Model contours for a field kind (surface f00, contoured off-thread), from HRRR or the RAP
     /// analysis.
     Contours(ContourKind, wxdata::hrrr::Model),
+    /// County power outages by county, from ODIN (DOE/ORNL).
+    Outages,
     /// NHC tropical cyclones (feature V).
     /// NHC tropical suite: `(wind-field threshold in kt, include storm surge)`.
     Tropical(Option<u8>, bool),
@@ -836,6 +840,7 @@ impl OverlaySource {
                     valid,
                 )
             }
+            OverlaySource::Outages => OverlayMsg::Outages(wxdata::outages::fetch(http).await?),
             OverlaySource::Tropical(wind_kt, surge) => OverlayMsg::Tropical(
                 wxdata::tropical::fetch_active_opts(http, wind_kt, surge).await?,
             ),
@@ -1111,6 +1116,8 @@ pub(crate) enum OverlayToggle {
     Dat,
     Gauges,
     Tropical,
+    /// County power outages (ODIN).
+    Outages,
     ProbSevere,
     Aviation,
     Tfr,
@@ -1160,7 +1167,7 @@ pub(crate) struct BlockageKey {
 impl OverlayToggle {
     /// Every toggle, for the persistence sweep. A new variant belongs here too, or it silently
     /// stops being remembered across restarts.
-    pub(crate) const ALL: [OverlayToggle; 40] = [
+    pub(crate) const ALL: [OverlayToggle; 41] = [
         Self::AlertPanel,
         Self::StormReports,
         Self::Spotters,
@@ -1173,6 +1180,7 @@ impl OverlayToggle {
         Self::Dat,
         Self::Gauges,
         Self::Tropical,
+        Self::Outages,
         Self::ProbSevere,
         Self::Aviation,
         Self::Tfr,
@@ -2331,6 +2339,11 @@ pub struct HookEchoApp {
     show_tropical: bool,
     tropical: Option<wxdata::tropical::TropicalData>,
     tropical_last_fetch: Option<Instant>,
+    /// County power outages (ODIN): on by default like the tropical suite — it draws nothing
+    /// until a county is significantly dark, so a quiet day costs one fetch and no pixels.
+    show_outages: bool,
+    outage_features: Vec<overlay::GeoFeature>,
+    outages_last_fetch: Option<Instant>,
     /// CAPPI slice window (feature AA): toggle, selected altitude (km), rendered texture, and the
     /// key `(volume name, altitude bits)` the texture was built for (re-slice on change).
     show_cappi: bool,
@@ -3162,6 +3175,9 @@ impl HookEchoApp {
             show_tropical: true,
             tropical: None,
             tropical_last_fetch: None,
+            show_outages: true,
+            outage_features: Vec::new(),
+            outages_last_fetch: None,
             show_cappi: false,
             cappi_alt_km: 3.0,
             cappi_tex: None,
@@ -3345,7 +3361,14 @@ impl HookEchoApp {
             use OverlayToggle as T;
             matches!(
                 t,
-                T::Tropical | T::ProbSevere | T::Aviation | T::Tfr | T::Alerts | T::Mds | T::Fires
+                T::Tropical
+                    | T::Outages
+                    | T::ProbSevere
+                    | T::Aviation
+                    | T::Tfr
+                    | T::Alerts
+                    | T::Mds
+                    | T::Fires
             )
         });
         for t in restore {
@@ -7343,6 +7366,7 @@ impl HookEchoApp {
             T::Dat => &mut self.show_dat,
             T::Gauges => &mut self.show_gauges,
             T::Tropical => &mut self.show_tropical,
+            T::Outages => &mut self.show_outages,
             T::ProbSevere => &mut self.show_probsevere,
             T::Aviation => &mut self.show_aviation,
             T::Tfr => &mut self.show_tfr,
@@ -7399,6 +7423,7 @@ impl HookEchoApp {
                 if matches!(
                     t,
                     T::Tropical
+                        | T::Outages
                         | T::ProbSevere
                         | T::Aviation
                         | T::Tfr
@@ -7823,6 +7848,7 @@ impl HookEchoApp {
                     }
                 }
                 OverlayMsg::Tropical(data) => self.tropical = Some(data),
+                OverlayMsg::Outages(f) => self.outage_features = f,
                 OverlayMsg::Wind(w) => {
                     self.wind_inflight = None;
                     // Keep only if the selection didn't change while the fetch was in flight.
@@ -8711,6 +8737,9 @@ impl HookEchoApp {
         }
         if (1..=3).contains(&self.filters.ero_day) {
             v.extend(self.ero_features.iter().cloned());
+        }
+        if self.show_outages {
+            v.extend(self.outage_features.iter().cloned());
         }
         if self.filters.show_alerts {
             for f in self.active_alert_features() {
@@ -15123,6 +15152,16 @@ impl eframe::App for HookEchoApp {
         {
             self.recon_last_fetch = Some(Instant::now());
             self.spawn_overlay(ctx, OverlaySource::Recon);
+        }
+        // County outages: ODIN's upstream updates about every 15 min; 5 min keeps a fast-moving
+        // event current without asking much of a free, keyless API.
+        if self.show_outages
+            && self
+                .outages_last_fetch
+                .is_none_or(|t| t.elapsed().as_secs() >= 300)
+        {
+            self.outages_last_fetch = Some(Instant::now());
+            self.spawn_overlay(ctx, OverlaySource::Outages);
         }
         // NHC tropical suite: refresh every 15 min while enabled.
         if self.show_tropical
