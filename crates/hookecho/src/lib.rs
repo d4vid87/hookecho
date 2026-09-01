@@ -48,6 +48,7 @@ pub mod mqtt;
 pub mod notify;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod nwr;
+pub mod outage_draw;
 pub mod overlay_build;
 pub mod paths;
 /// The perf counters' readout — native only, see the module docs.

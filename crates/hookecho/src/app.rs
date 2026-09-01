@@ -12582,6 +12582,14 @@ impl HookEchoApp {
             }
         }
 
+        // County power outages: hatching, not a fill — see `outage_draw`.
+        if self.show_outages && !self.outage_features.is_empty() {
+            crate::outage_draw::draw(&painter, &self.outage_features, prect, |lon, lat| {
+                let w = crate::render::mercator::lonlat_to_world(lon, lat);
+                let (sx, sy) = cam.world_to_screen(w, vp);
+                egui::pos2(prect.left() + sx, prect.top() + sy)
+            });
+        }
         // NHC tropical suite: dashed cone edge, forecast track, and per-point callouts.
         if self.show_tropical {
             if let Some(t) = &self.tropical {

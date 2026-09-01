@@ -126,7 +126,10 @@ pub fn parse(json: &str) -> anyhow::Result<Vec<GeoFeature>> {
         for rings in c.rings {
             out.push(GeoFeature {
                 rings,
-                fill: [rgb[0], rgb[1], rgb[2], 70],
+                // No fill: the app cross-hatches these instead (`hookecho::outage_draw`). A
+                // translucent fill is how outlooks and warnings are drawn, and an outage that
+                // looks like a warning is worse than one that is harder to see.
+                fill: [rgb[0], rgb[1], rgb[2], 0],
                 stroke: [rgb[0], rgb[1], rgb[2], 200],
                 kind: FeatureKind::Outlook,
                 title: title.clone(),
