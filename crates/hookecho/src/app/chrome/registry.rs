@@ -579,6 +579,14 @@ impl HookEchoApp {
                 false,
             ),
             (
+                T::Outages,
+                "Severe",
+                "Power outages (ODIN)",
+                "Customers without power by county, from DOE/ORNL \u{2014} participating \
+                 utilities only, so a blank county may just be an unreporting one",
+                false,
+            ),
+            (
                 T::Mping,
                 "Obs",
                 "Crowd reports (mPING)",
