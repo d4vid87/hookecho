@@ -2326,7 +2326,8 @@ pub struct HookEchoApp {
     contour_valid: Option<DateTime<Utc>>,
     contour_last_fetch: Option<Instant>,
     contour_fetched_kind: Option<(ContourKind, wxdata::hrrr::Model)>,
-    /// NHC tropical suite (feature V): toggle, fetched data, refresh clock.
+    /// NHC tropical suite (feature V): toggle, fetched data, refresh clock. On by default like
+    /// the other severe layers — an active hurricane is not something to have to go and enable.
     show_tropical: bool,
     tropical: Option<wxdata::tropical::TropicalData>,
     tropical_last_fetch: Option<Instant>,
@@ -3158,7 +3159,7 @@ impl HookEchoApp {
             contour_last_fetch: None,
             contour_fetched_kind: None,
             env_model: wxdata::hrrr::Model::Hrrr,
-            show_tropical: false,
+            show_tropical: true,
             tropical: None,
             tropical_last_fetch: None,
             show_cappi: false,
