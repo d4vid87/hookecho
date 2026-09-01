@@ -42,6 +42,7 @@ pub mod obs;
 pub mod odim;
 pub mod openmeteo;
 pub mod opera;
+pub mod outages;
 pub mod overlay;
 pub mod placefile;
 pub mod probsevere;

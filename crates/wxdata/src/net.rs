@@ -29,6 +29,9 @@ pub const CORS_OK: &[&str] = &[
     // Same reason as the tile providers: the request carries the user's Synoptic token, and the
     // proxy is a shared cache. Synoptic sends `Access-Control-Allow-Origin: *`, so this works.
     "api.synopticdata.com",
+    // ODIN county outages: Opendatasoft sends `Access-Control-Allow-Origin: *`, so the browser
+    // build asks ORNL directly and the proxy allowlist stays untouched.
+    "ornl.opendatasoft.com",
     "unidata-nexrad-level2-chunks.s3.amazonaws.com",
 ];
 
