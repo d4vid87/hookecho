@@ -99,11 +99,10 @@ fn palette(theme: Theme, system_dark: bool) -> Palette {
             accent: c(0x3dffb0),
         },
         // High contrast — black, white and one saturated yellow, for low vision and for direct
-        // sunlight, which is the same problem from a different direction.
-        //
-        // `// ponytail:` the chrome only. Radar colormaps, alert polygon fills and stroke widths
-        // are unchanged, because a reflectivity ramp that is legible and still means what NWS
-        // means by it is its own piece of work. Revisit when someone who needs it says so.
+        // sunlight, which is the same problem from a different direction. In this theme the
+        // overlay and vector stroke widths are scaled via `overlay_stroke_scale` / `vector_stroke_scale`
+        // and radar colormaps switch to the high-contrast alternates in `colormap.rs` (see
+        // `high_contrast_alt_name`), so the information layers respond, not just the chrome.
         Theme::HighContrast => Palette {
             is_dark: true,
             bg: c(0x000000),
@@ -240,6 +239,46 @@ pub fn apply(
             egui::ThemePreference::Light
         }
     });
+}
+
+/// Does `theme` request the high-contrast information layers (thicker strokes, high-contrast ramps)?
+pub fn is_high_contrast(theme: Theme) -> bool {
+    matches!(theme, Theme::HighContrast)
+}
+
+/// Stroke-width multiplier for geographic overlay polygons (warnings, outlooks, etc.).
+/// High contrast roughly doubles the outline so it stays legible in direct sunlight and for
+/// low-vision users — the chrome uses `palette` instead, this is purely for map geometry.
+pub fn overlay_stroke_scale(theme: Theme) -> f32 {
+    if is_high_contrast(theme) { 2.2 } else { 1.0 }
+}
+
+/// Stroke-width multiplier for vector basemap strokes (roads, boundaries, waterways).
+pub fn vector_stroke_scale(theme: Theme) -> f32 {
+    if is_high_contrast(theme) { 1.8 } else { 1.0 }
+}
+
+/// Boost fill/stroke alphas for warning polygons under high contrast so the polygon remains
+/// legible against both dark satellite imagery and bright radar. Returns `(fill_alpha, stroke_alpha)` 0..255.
+pub fn warning_alpha_for(theme: Theme) -> (u8, u8) {
+    if is_high_contrast(theme) {
+        (90, 255)
+    } else {
+        (45, 235)
+    }
+}
+
+/// Which built-in colormap alternate to prefer when `theme` is high contrast, if the user
+/// hasn't chosen a custom `.pal`. `None` means keep the default. The alternates live in
+/// `colormap.rs` (`REF-HC.pal`, `VEL-HC.pal`) and are exposed via `colormap::high_contrast_alt_name`.
+pub fn high_contrast_alt_name(moment: wxdata::level2::Moment) -> Option<&'static str> {
+    if moment == wxdata::level2::Moment::Reflectivity {
+        Some("High contrast (reflectivity)")
+    } else if moment == wxdata::level2::Moment::Velocity {
+        Some("High contrast (velocity)")
+    } else {
+        None
+    }
 }
 
 /// Generic tuning shared by every theme. Backgrounds/strokes/text come from the palette; the

@@ -1,0 +1,16 @@
+; HookEcho high-contrast velocity — vivid diverging with white zero
+product: BV
+units: KTS
+step: 10
+scale: 1.9426
+solidcolor: -120 0 20 160
+solidcolor: -80 0 60 255
+solidcolor: -40 0 140 255
+solidcolor: -20 80 200 255
+solidcolor: -10 180 220 255
+color: 0 255 255 255
+solidcolor: 10 255 200 80
+solidcolor: 20 255 140 0
+solidcolor: 40 255 60 0
+solidcolor: 80 200 0 0
+solidcolor: 120 120 0 0

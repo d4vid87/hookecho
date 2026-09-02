@@ -288,16 +288,26 @@ static BUILTINS: LazyLock<[ColorTable; Moment::ALL.len()]> = LazyLock::new(|| {
 ///
 /// ponytail: the alternates are `.pal` text like every other table, so they cost one array entry
 /// and no new code path — no `enum PaletteSource`, no migration.
-const ALT_SRC: [(&str, usize, &str); 2] = [
+const ALT_SRC: [(&str, usize, &str); 4] = [
     (
         "Colorblind-safe (viridis)",
         0, // Moment::Reflectivity
         include_str!("../data/colortables/REF-CVD.pal"),
     ),
     (
+        "High contrast (reflectivity)",
+        0, // Moment::Reflectivity
+        include_str!("../data/colortables/REF-HC.pal"),
+    ),
+    (
         "Colorblind-safe (blue/orange)",
         1, // Moment::Velocity
         include_str!("../data/colortables/VEL-CVD.pal"),
+    ),
+    (
+        "High contrast (velocity)",
+        1, // Moment::Velocity
+        include_str!("../data/colortables/VEL-HC.pal"),
     ),
 ];
 
@@ -331,6 +341,27 @@ fn resolve_builtin(name: &str) -> Option<ColorTable> {
 /// The built-in default table for `moment`.
 pub fn default_table(moment: Moment) -> &'static ColorTable {
     &BUILTINS[moment.index()]
+}
+
+/// High-contrast-aware table selection: when `theme` is `HighContrast` and the user has not
+/// chosen a custom palette for `moment`, return the high-contrast alternate (if one exists);
+/// otherwise return the active table. Driven from `crate::theme::high_contrast_alt_name` so
+/// `theme.rs` remains the single source of which moments have a high-contrast ramp.
+pub fn effective_table(
+    palettes: &Palettes,
+    moment: Moment,
+    theme: crate::settings::Theme,
+) -> ColorTable {
+    if crate::theme::is_high_contrast(theme)
+        && palettes.table(moment) == default_table(moment)
+    {
+        if let Some(name) = crate::theme::high_contrast_alt_name(moment) {
+            if let Some(hc) = builtin_alt(name) {
+                return hc;
+            }
+        }
+    }
+    palettes.table(moment).clone()
 }
 
 /// App-owned color-table registry: one active table per moment, plus per-moment load errors.
@@ -435,7 +466,8 @@ mod tests {
         // The hardcoded moment indices in ALT_SRC have to match Moment::index().
         assert_eq!(Moment::Reflectivity.index(), 0);
         assert_eq!(Moment::Velocity.index(), 1);
-        assert_eq!(alt_names(Moment::Reflectivity).count(), 1);
+        assert_eq!(alt_names(Moment::Reflectivity).count(), 2);
+        assert_eq!(alt_names(Moment::Velocity).count(), 2);
         assert_eq!(alt_names(Moment::SpectrumWidth).count(), 0);
 
         let mut p = Palettes::default();

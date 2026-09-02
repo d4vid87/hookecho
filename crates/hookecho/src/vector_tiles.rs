@@ -162,6 +162,17 @@ pub fn build_tile(
     palette: basemap_style::Palette,
     tess_zoom: f64,
 ) -> (Vec<OverlayVertex>, Vec<u32>, Vec<PlaceLabel>) {
+    build_tile_with_theme(bytes, id, palette, tess_zoom, crate::settings::Theme::Dark)
+}
+
+/// Theme-aware variant: high-contrast scales stroke widths via `crate::theme::vector_stroke_scale`.
+pub fn build_tile_with_theme(
+    bytes: &[u8],
+    id: TileId,
+    palette: basemap_style::Palette,
+    tess_zoom: f64,
+    theme: crate::settings::Theme,
+) -> (Vec<OverlayVertex>, Vec<u32>, Vec<PlaceLabel>) {
     let (z, tx, ty) = id;
     let n = (1u64 << z) as f64;
     let (txf, tyf) = (tx as f64, ty as f64);
@@ -208,6 +219,7 @@ pub fn build_tile(
     let mut fill_t = FillTessellator::new();
     let mut stroke_t = StrokeTessellator::new();
     let px_to_world = 1.0 / (256.0 * 2f64.powf(tess_zoom));
+    let theme_scale = crate::theme::vector_stroke_scale(theme);
 
     // Fills.
     for (layer, key) in FILL_LAYERS {
@@ -284,7 +296,7 @@ pub fn build_tile(
             let Some((c, wpx)) = styled else {
                 continue;
             };
-            let w = (wpx as f64 * px_to_world) as f32;
+            let w = (wpx as f64 * px_to_world * theme_scale as f64) as f32;
             let mut b = Path::builder();
             let mut any = false;
             match &f.geometry {
@@ -562,6 +574,7 @@ pub struct VectorTileManager {
     /// Bumped on every change to `labels` (see [`Self::label_generation`]).
     label_gen: u64,
     palette: basemap_style::Palette,
+    theme: crate::settings::Theme,
     tess_zoom: i32,
     /// Candidate new tessellation zoom and when it was first seen — see [`Self::note_zoom`].
     zoom_settled: Option<(i32, wxdata::clock::Instant)>,
@@ -597,6 +610,7 @@ impl VectorTileManager {
             labels: HashMap::new(),
             label_gen: 0,
             palette: basemap_style::Palette::Dark,
+            theme: crate::settings::Theme::Dark,
             tess_zoom: 7,
             zoom_settled: None,
             cache_root,
@@ -622,6 +636,19 @@ impl VectorTileManager {
             return false;
         }
         self.palette = palette;
+        self.requested.clear();
+        self.uploaded.clear();
+        self.labels.clear();
+        self.label_gen += 1;
+        true
+    }
+
+    /// Switch theme-driven stroke scale (high contrast). Returns true if changed.
+    pub fn set_theme(&mut self, theme: crate::settings::Theme) -> bool {
+        if self.theme == theme {
+            return false;
+        }
+        self.theme = theme;
         self.requested.clear();
         self.uploaded.clear();
         self.labels.clear();
@@ -701,6 +728,7 @@ impl VectorTileManager {
             return;
         };
         let palette = self.palette;
+        let theme = self.theme;
         let tess_zoom = self.tess_zoom as f64;
         for v in visible {
             if !self.requested.insert(v.id) {
@@ -723,7 +751,7 @@ impl VectorTileManager {
                     // decode; running it on the async worker starves every other fetch.
                     blocking.spawn_blocking(move || {
                         let (vertices, indices, labels) =
-                            build_tile(&bytes, id, palette, tess_zoom);
+                            build_tile_with_theme(&bytes, id, palette, tess_zoom, theme);
                         let _ = tx.send(FetchedVector {
                             id,
                             vertices,

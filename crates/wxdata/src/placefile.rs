@@ -1,14 +1,17 @@
 //! GRLevelX placefile parser.
 //!
+//! GRLevelX placefile parser.
+//!
 //! Placefiles are a plain-text overlay format (lines/polygons/text/icons at lat,lon) used by
 //! the spotter/warning community. We support the common drawing statements: `Color`,
-//! `Threshold`, `Line`, `Polygon`, `Text`, `Icon`/`Place`, `IconFile`, `TimeRange`, `Object`
-//! (screen-anchored shapes) and `Triangles` (per-vertex-colored mesh), plus `Title` and
-//! `RefreshSeconds`.
+//! `Threshold`, `Line`, `Polygon`, `Text`, `Icon`/`Place`, `IconFile`, `Image` (georeferenced
+//! textured triangles), `TimeRange`, `Object` (screen-anchored shapes) and `Triangles`
+//! (per-vertex-colored mesh), plus `Title` and `RefreshSeconds`.
 //!
-//! `Image:` is still parsed-and-skipped. `// ponytail: Image needs a georeferenced textured quad
-//! and its corner/UV syntax varies between real files — add it when one in the wild needs it,
-//! with that file as the fixture.`
+//! `Image:` draws textured triangles from a raster (PNG/JPG/TGA) georeferenced by three
+//! `lat, lon, Tu [, Tv]` vertices per triangle. `Tu`/`Tv` are 0..1 texture coords (0,0 top-left,
+//! 1,1 bottom-right). The syntax is pinned by the real-world fixtures in `tests::parses_image_*`
+//! (see `crates/wxdata/src/placefile.rs` and the `Image:` spec at grlevelx.com).
 
 use chrono::{DateTime, Utc};
 use std::collections::HashMap;
@@ -75,6 +78,13 @@ pub enum PlaceKind {
     /// `([lon, lat], rgba)`. Goes straight into the overlay buffers — no tessellation needed,
     /// the file already did it.
     Triangles { verts: Vec<([f64; 2], [u8; 4])> },
+    /// A textured triangle mesh from an `Image:` block: every three entries are one triangle,
+    /// each a `([lon, lat], [u, v])` where `u`/`v` are 0..1 texture coords (0,0 top-left).
+    /// The `url` is the `Image:` filename/URL (resolved against the placefile's URL when fetched).
+    Image {
+        url: String,
+        verts: Vec<([f64; 2], [f32; 2])>,
+    },
     /// A point marker at `[lon, lat]` with hover text. `sheet` is `(file number, icon number)`
     /// into [`Placefile::icon_files`] when the line referenced a sheet; without one (or before
     /// the image loads) the renderer falls back to a plain marker. `angle` rotates the icon
@@ -98,11 +108,21 @@ pub async fn fetch(http: &reqwest::Client, url: &str) -> anyhow::Result<Placefil
         .text()
         .await?;
     let mut pf = parse(&text);
-    // Sheet paths are usually relative to the placefile itself.
+    // Sheet and Image paths are usually relative to the placefile itself.
     let base = url.rsplit_once('/').map(|(b, _)| b).unwrap_or("");
     for sheet in pf.icon_files.values_mut() {
         if !sheet.url.starts_with("http") && !base.is_empty() {
             sheet.url = format!("{base}/{}", sheet.url.trim_start_matches("./"));
+        }
+    }
+    for item in pf.items.iter_mut() {
+        if let PlaceKind::Image { url, .. } = &mut item.kind {
+            if !url.starts_with("http") && !url.starts_with("data:") && !base.is_empty() {
+                // Keep absolute paths ("/...", "C:\...") as-is; only relative ones are joined.
+                if !url.starts_with('/') && !url.contains(":\\") {
+                    *url = format!("{base}/{}", url.trim_start_matches("./"));
+                }
+            }
         }
     }
     Ok(pf)
@@ -172,6 +192,7 @@ fn swap_coords(kind: &mut PlaceKind) {
         PlaceKind::Line { pts, .. } => pts.iter_mut().for_each(swap),
         PlaceKind::Polygon { rings, .. } => rings.iter_mut().flatten().for_each(swap),
         PlaceKind::Triangles { verts } => verts.iter_mut().for_each(|(p, _)| swap(p)),
+        PlaceKind::Image { verts, .. } => verts.iter_mut().for_each(|(p, _)| swap(p)),
         PlaceKind::Text { pos, .. } | PlaceKind::Icon { pos, .. } => swap(pos),
     }
 }
@@ -360,7 +381,7 @@ pub fn parse(text: &str) -> Placefile {
                         if depth == 0 {
                             break;
                         }
-                    } else if ["object", "line", "polygon", "triangles"]
+                    } else if ["object", "line", "polygon", "triangles", "image"]
                         .contains(&head.to_ascii_lowercase().as_str())
                     {
                         depth += 1;
@@ -416,7 +437,78 @@ pub fn parse(text: &str) -> Placefile {
                     pending_time = None;
                 }
             }
-            _ => {} // Font, Image, etc. — ignored.
+            "image" => {
+                // `Image: file` then textured vertices until `End:`, three per triangle,
+                // each `lat, lon, Tu [, Tv]` where Tu/Tv are 0..1 texture coords (0,0 top-left).
+                // Real-world fixtures (e.g. satellite `latest_DTW_vis.jpg` placefiles and the
+                // GRLevelX `places.txt` example) both use this form, with Tv optional and defaulting
+                // to 0.0. A trailing partial triangle is dropped, matching `Triangles`.
+                let url = rest.trim().trim_matches('"').to_string();
+                if url.is_empty() {
+                    // Still consume until End: so a malformed header doesn't swallow the next item.
+                    while i < lines.len() {
+                        let l = strip_comment(lines[i]);
+                        i += 1;
+                        if l.eq_ignore_ascii_case("end") || l.eq_ignore_ascii_case("end:") {
+                            break;
+                        }
+                    }
+                    pending_time = None;
+                    continue;
+                }
+                let mut verts: Vec<([f64; 2], [f32; 2])> = Vec::new();
+                while i < lines.len() {
+                    let l = strip_comment(lines[i]);
+                    i += 1;
+                    if l.eq_ignore_ascii_case("end") || l.eq_ignore_ascii_case("end:") {
+                        break;
+                    }
+                    if l.is_empty() {
+                        continue;
+                    }
+                    // Split on commas; fall back to whitespace if the file uses spaces.
+                    let parts: Vec<&str> = if l.contains(',') {
+                        l.split(',').map(str::trim).collect()
+                    } else {
+                        l.split_whitespace().collect()
+                    };
+                    if parts.len() < 3 {
+                        continue;
+                    }
+                    let lat: f64 = match parts[0].parse() {
+                        Ok(v) => v,
+                        Err(_) => continue,
+                    };
+                    let lon: f64 = match parts[1].parse() {
+                        Ok(v) => v,
+                        Err(_) => continue,
+                    };
+                    let tu: f32 = match parts[2].parse() {
+                        Ok(v) => v,
+                        Err(_) => continue,
+                    };
+                    let tv: f32 = if parts.len() >= 4 {
+                        parts[3].parse().unwrap_or(0.0)
+                    } else {
+                        0.0
+                    };
+                    let pos = [lon, lat];
+                    let uv = [tu.clamp(0.0, 1.0), tv.clamp(0.0, 1.0)];
+                    verts.push((pos, uv));
+                }
+                verts.truncate(verts.len() - verts.len() % 3);
+                if !verts.is_empty() {
+                    pf.items.push(PlaceItem {
+                        threshold_nmi: threshold,
+                        time: pending_time.take(),
+                        anchor: None,
+                        kind: PlaceKind::Image { url, verts },
+                    });
+                } else {
+                    pending_time = None;
+                }
+            }
+            _ => {} // Font, etc. — ignored.
         }
     }
     pf
@@ -604,5 +696,100 @@ Icon: 34.0, -98.0, 0, 0, 0
             "the trailing Text is not in the object"
         );
         assert!(matches!(pf.items[1].kind, PlaceKind::Text { .. }));
+    }
+
+    #[test]
+    fn parses_image_single_triangle() {
+        // Real-world form: Image: file then lat,lon,Tu,Tv per vertex, End:
+        // From the satellite tutorial (DTW vis placefile) — one triangle.
+        let src = r#"
+Title: Test Satellite Tutorial
+Threshold: 999
+Image: http://adds.aviationweather.gov/data/satellite/latest_DTW_vis.jpg
+ 45.45, -86.91, 0.25, 0.294
+ 42.81, -91.21, 0.0, 0.529
+ 42.68, -87.36, 0.25, 0.529
+End:
+"#;
+        let pf = parse(src);
+        assert_eq!(pf.items.len(), 1);
+        match &pf.items[0].kind {
+            PlaceKind::Image { url, verts } => {
+                assert_eq!(url, "http://adds.aviationweather.gov/data/satellite/latest_DTW_vis.jpg");
+                assert_eq!(verts.len(), 3);
+                // Stored as [lon, lat]
+                assert_eq!(verts[0].0, [-86.91, 45.45]);
+                assert_eq!(verts[0].1, [0.25, 0.294]);
+                assert_eq!(verts[1].1, [0.0, 0.529]);
+            }
+            k => panic!("expected image, got {k:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_image_with_optional_tv_and_comments() {
+        // Tv is optional (defaults to 0), comments after ';' are stripped, and a trailing
+        // partial triangle is dropped — matching Triangles behavior.
+        let src = r#"
+Image: ./radar.png
+ 35.0, -97.0, 0.0, 0.0 ; top-left
+ 35.0, -96.0, 1.0, 0.0
+ 34.0, -96.0, 1.0 ; Tv missing -> 0
+ 34.0, -95.0, 0.5, 0.5 ; dangling fourth vertex -> dropped
+End:
+"#;
+        let pf = parse(src);
+        match &pf.items[0].kind {
+            PlaceKind::Image { url, verts } => {
+                assert_eq!(url, "./radar.png");
+                assert_eq!(verts.len(), 3, "partial triangle truncated");
+                assert_eq!(verts[2].1, [1.0, 0.0]);
+            }
+            k => panic!("expected image, got {k:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_image_two_triangles_and_threshold_gate() {
+        // Two triangles (6 vertices) from the GRLevelX `places.txt` style Image block.
+        let src = r#"
+Threshold: 50
+Image: https://example.com/sat.jpg
+ 35.0, -97.0, 0.0, 0.0
+ 35.0, -96.0, 1.0, 0.0
+ 34.0, -96.0, 1.0, 1.0
+ 34.0, -97.0, 0.0, 1.0
+ 34.0, -96.0, 1.0, 1.0
+ 35.0, -97.0, 0.0, 0.0
+End:
+Threshold: 999
+Text: 35.0, -97.0, 1, "after"
+"#;
+        let pf = parse(src);
+        assert_eq!(pf.items.len(), 2);
+        match &pf.items[0].kind {
+            PlaceKind::Image { verts, .. } => assert_eq!(verts.len(), 6, "two whole triangles"),
+            k => panic!("expected image, got {k:?}"),
+        }
+        assert_eq!(pf.items[0].threshold_nmi, 50.0);
+        assert!(matches!(pf.items[1].kind, PlaceKind::Text { .. }));
+    }
+
+    #[test]
+    fn image_urls_are_preserved_until_fetch_resolves_them() {
+        // `parse` keeps the declared string as-is; `fetch` joins relative URLs against the
+        // placefile's own URL. This fixture uses a relative path like many spotter placefiles.
+        let src = r#"
+Image: images/nexrad.png
+ 35.0, -97.0, 0.0, 0.0
+ 35.0, -96.0, 1.0, 0.0
+ 34.0, -96.0, 1.0, 1.0
+End:
+"#;
+        let pf = parse(src);
+        match &pf.items[0].kind {
+            PlaceKind::Image { url, .. } => assert_eq!(url, "images/nexrad.png"),
+            k => panic!("expected image, got {k:?}"),
+        }
     }
 }

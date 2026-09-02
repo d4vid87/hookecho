@@ -39,13 +39,27 @@ fn color(rgba: [u8; 4]) -> [f32; 4] {
     ]
 }
 
-/// Build tessellated fills + outlines for `features` at `zoom`.
+/// Build tessellated fills + outlines for `features` at `zoom` (normal theme).
 pub fn build(features: &[GeoFeature], zoom: f64) -> OverlayGeom {
+    build_with_theme(features, zoom, crate::settings::Theme::Dark)
+}
+
+/// Build tessellated fills + outlines for `features` at `zoom`, scaled by `theme`.
+///
+/// High-contrast (`Theme::HighContrast`) doubles the outline width and boosts fill/stroke
+/// alphas via `crate::theme` so warning polygons remain legible against both imagery and
+/// bright radar — driven from `theme.rs`, not hardcoded in the overlay.
+pub fn build_with_theme(
+    features: &[GeoFeature],
+    zoom: f64,
+    theme: crate::settings::Theme,
+) -> OverlayGeom {
     let mut geom = OverlayGeom::default();
     let mut fill_tess = FillTessellator::new();
     let mut stroke_tess = StrokeTessellator::new();
-    // ~1.6 px outline in world units at this zoom.
-    let stroke_w = (1.6 / (256.0 * 2f64.powf(zoom))) as f32;
+    let scale = crate::theme::overlay_stroke_scale(theme);
+    // ~1.6 px outline in world units at this zoom, scaled for high contrast.
+    let stroke_w = (1.6 * scale as f64 / (256.0 * 2f64.powf(zoom))) as f32;
     let fill_opts = FillOptions::default().with_tolerance(stroke_w * 0.5);
     let stroke_opts = StrokeOptions::default()
         .with_line_width(stroke_w)
@@ -53,8 +67,9 @@ pub fn build(features: &[GeoFeature], zoom: f64) -> OverlayGeom {
 
     for f in features {
         let path = feature_path(f);
-        let fill = color(f.fill);
-        let stroke = color(f.stroke);
+        let (fill_rgba, stroke_rgba) = high_contrast_feature_colors(f.fill, f.stroke, theme);
+        let fill = color(fill_rgba);
+        let stroke = color(stroke_rgba);
 
         let mut buf: VertexBuffers<OverlayVertex, u32> = VertexBuffers::new();
         let _ = fill_tess.tessellate_path(
@@ -82,8 +97,19 @@ pub fn build(features: &[GeoFeature], zoom: f64) -> OverlayGeom {
 /// egui painter). Items must be pre-filtered by threshold/time, and come paired with their
 /// placefile's opacity (the Layer Manager's per-file dimmer). Line widths honor `zoom`.
 pub fn append_placefiles(geom: &mut OverlayGeom, items: &[(&PlaceItem, f32)], zoom: f64) {
+    append_placefiles_with_theme(geom, items, zoom, crate::settings::Theme::Dark)
+}
+
+/// Theme-aware variant: high-contrast doubles placefile line widths via `theme.rs`.
+pub fn append_placefiles_with_theme(
+    geom: &mut OverlayGeom,
+    items: &[(&PlaceItem, f32)],
+    zoom: f64,
+    theme: crate::settings::Theme,
+) {
     let mut fill_tess = FillTessellator::new();
     let mut stroke_tess = StrokeTessellator::new();
+    let scale = crate::theme::overlay_stroke_scale(theme);
     let px = |w: f32| (w as f64 / (256.0 * 2f64.powf(zoom))) as f32;
 
     // World units per screen pixel at this zoom. `Object:` bodies are in pixels, and this is
@@ -128,7 +154,7 @@ pub fn append_placefiles(geom: &mut OverlayGeom, items: &[(&PlaceItem, f32)], zo
                 }
                 let path = b.build();
                 let opts = StrokeOptions::default()
-                    .with_line_width(px(*width).max(px(1.0)))
+                    .with_line_width(px(*width * scale).max(px(1.0 * scale)))
                     .with_line_cap(lyon::path::LineCap::Round)
                     .with_line_join(lyon::path::LineJoin::Round);
                 let mut buf: VertexBuffers<OverlayVertex, u32> = VertexBuffers::new();
@@ -189,6 +215,30 @@ pub fn append_placefiles(geom: &mut OverlayGeom, items: &[(&PlaceItem, f32)], zo
                     .take(verts.len())
                     .for_each(|i| *i += base);
             }
+            PlaceKind::Image { verts, .. } => {
+                // Fallback until the textured path lands: translucent white triangles so the
+                // placement is visible and hit-testable. The full textured quad will sample the
+                // image via its UVs; this path only proves the geometry survived the parse.
+                let base = geom.vertices.len() as u32;
+                let col = {
+                    let mut c = color([255, 255, 255, 160]);
+                    c[3] *= *opacity;
+                    c
+                };
+                for (p, _uv) in verts {
+                    let (wx, wy) = project(*p);
+                    geom.vertices.push(OverlayVertex {
+                        world: [wx as f32, wy as f32],
+                        color: col,
+                    });
+                }
+                geom.indices.extend(0..verts.len() as u32);
+                geom.indices
+                    .iter_mut()
+                    .rev()
+                    .take(verts.len())
+                    .for_each(|i| *i += base);
+            }
             PlaceKind::Text { .. } | PlaceKind::Icon { .. } => {} // painter pass
         }
     }
@@ -218,4 +268,22 @@ fn append(geom: &mut OverlayGeom, buf: VertexBuffers<OverlayVertex, u32>) {
     geom.vertices.extend(buf.vertices);
     geom.indices
         .extend(buf.indices.into_iter().map(|i| i + base));
+}
+
+fn high_contrast_feature_colors(
+    fill: [u8; 4],
+    stroke: [u8; 4],
+    theme: crate::settings::Theme,
+) -> ([u8; 4], [u8; 4]) {
+    if crate::theme::is_high_contrast(theme) {
+        let (fill_a, stroke_a) = crate::theme::warning_alpha_for(theme);
+        // Keep the original RGB, but boost alphas to the high-contrast targets.
+        // Fill is boosted by blending the stored alpha toward the target (original 45 -> 90).
+        let boosted_fill_a = (fill[3] as u16 * fill_a as u16 / 45).min(255) as u8;
+        let boosted_fill = [fill[0], fill[1], fill[2], boosted_fill_a.max(fill_a)];
+        let boosted_stroke = [stroke[0], stroke[1], stroke[2], stroke_a];
+        (boosted_fill, boosted_stroke)
+    } else {
+        (fill, stroke)
+    }
 }

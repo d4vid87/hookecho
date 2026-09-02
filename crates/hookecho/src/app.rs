@@ -2081,6 +2081,7 @@ pub struct HookEchoApp {
     overlay_gen: u64,
     built_gen: u64,
     built_zoom_bucket: i32,
+    built_theme: crate::settings::Theme,
     pending_overlay: Option<OverlayUpload>,
     overlay_ready: bool,
     overlay_last_fetch: Option<Instant>,
@@ -3034,6 +3035,7 @@ impl HookEchoApp {
             overlay_gen: 0,
             built_gen: u64::MAX,
             built_zoom_bucket: i32::MIN,
+            built_theme: crate::settings::Theme::Dark,
             pending_overlay: None,
             overlay_ready: false,
             overlay_last_fetch: None,
@@ -4938,7 +4940,8 @@ impl HookEchoApp {
             return;
         }
         self.vol3d_key = Some(key);
-        let table = self.palettes.table(Moment::Reflectivity).clone();
+        let table =
+            crate::colormap::effective_table(&self.palettes, Moment::Reflectivity, self.settings.theme);
         let (tx, rx) = std::sync::mpsc::channel();
         self.vol3d_rx = Some(rx);
         self.spawner.spawn(async move {
@@ -5013,7 +5016,9 @@ impl HookEchoApp {
         let Some(c) = wxdata::volume3d::cappi(&sweeps, self.cappi_alt_km, N, HALF_KM) else {
             return;
         };
-        let img = ui::cappi_window::to_image(&c, self.palettes.table(Moment::Reflectivity));
+        let hc_table =
+            crate::colormap::effective_table(&self.palettes, Moment::Reflectivity, self.settings.theme);
+        let img = ui::cappi_window::to_image(&c, &hc_table);
         self.cappi_tex = Some(ctx.load_texture("cappi", img, egui::TextureOptions::NEAREST));
         self.cappi_key = Some(key);
     }
@@ -5109,7 +5114,9 @@ impl HookEchoApp {
         else {
             return;
         };
-        let img = ui::xsection_window::to_image(&xs, self.palettes.table(moment));
+        let hc_table =
+            crate::colormap::effective_table(&self.palettes, moment, self.settings.theme);
+        let img = ui::xsection_window::to_image(&xs, &hc_table);
         self.xsection_tex = Some(ctx.load_texture("xsection", img, egui::TextureOptions::LINEAR));
         self.xsection = Some(xs);
     }
@@ -9001,17 +9008,24 @@ impl HookEchoApp {
         //
         // A geometry change (`overlay_gen`) is not deferred — that is new data arriving, not the
         // camera moving, and it should appear when it lands.
+        let theme_changed = self.settings.theme != self.built_theme;
         if should_retess(
             self.gesture_live,
-            self.overlay_gen != self.built_gen,
-            bucket != self.built_zoom_bucket,
+            self.overlay_gen != self.built_gen || theme_changed,
+            bucket != self.built_zoom_bucket || theme_changed,
         ) {
-            let mut geom = overlay_build::build(&self.overlays, zoom);
+            let mut geom =
+                overlay_build::build_with_theme(&self.overlays, zoom, self.settings.theme);
             let pf: Vec<(&wxdata::placefile::PlaceItem, f32)> = self
                 .visible_placefile_iter()
                 .map(|(it, op, _)| (it, op))
                 .collect();
-            overlay_build::append_placefiles(&mut geom, &pf, zoom);
+            overlay_build::append_placefiles_with_theme(
+                &mut geom,
+                &pf,
+                zoom,
+                self.settings.theme,
+            );
             self.overlay_ready = !geom.indices.is_empty();
             self.pending_overlay = Some(OverlayUpload {
                 vertices: geom.vertices,
@@ -9019,6 +9033,7 @@ impl HookEchoApp {
             });
             self.built_gen = self.overlay_gen;
             self.built_zoom_bucket = bucket;
+            self.built_theme = self.settings.theme;
         }
     }
 
@@ -10005,14 +10020,23 @@ impl HookEchoApp {
             dealias,
             self.settings.precip_tint.then_some(self.precip_flag_gen),
         );
-        let lut_gen = self.palettes.gen;
+        let lut_gen = self
+            .palettes
+            .gen
+            .wrapping_add(if crate::theme::is_high_contrast(self.settings.theme) {
+                0x9e37_79b9_7f4a_7c15
+            } else {
+                0
+            });
         // Same sweep already up: the only thing left that can differ is the color table, and
         // that is a 3 KB write into the texture already bound.
         let lut_only = self.pane_shown.get(&idx) == Some(&key);
         if lut_only && self.pane_lut.get(&idx) == Some(&lut_gen) {
             return (None, true);
         }
-        let table = self.palettes.table(moment);
+        let table_owned =
+            crate::colormap::effective_table(&self.palettes, moment, self.settings.theme);
+        let table = &table_owned;
         // Cheap handle taken before the volume is borrowed mutably below.
         let precip = self
             .settings
@@ -16672,6 +16696,7 @@ impl eframe::App for HookEchoApp {
                 clear_vector |= self
                     .vtiles
                     .set_style(style.vector_palette().unwrap_or_default());
+                clear_vector |= self.vtiles.set_theme(self.settings.theme);
                 clear_vector |= self
                     .vtiles
                     .note_zoom(self.views[self.active.min(n - 1)].camera.zoom);

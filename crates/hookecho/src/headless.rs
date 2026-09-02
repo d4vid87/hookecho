@@ -1242,6 +1242,7 @@ pub fn run_placefile(path: &str, out_path: &str) -> anyhow::Result<()> {
         match &it.kind {
             PlaceKind::Line { pts, .. } => pts.iter().for_each(|p| acc(p[0], p[1])),
             PlaceKind::Triangles { verts } => verts.iter().for_each(|(p, _)| acc(p[0], p[1])),
+            PlaceKind::Image { verts, .. } => verts.iter().for_each(|(p, _)| acc(p[0], p[1])),
             PlaceKind::Polygon { rings, .. } => {
                 rings.iter().flatten().for_each(|p| acc(p[0], p[1]))
             }

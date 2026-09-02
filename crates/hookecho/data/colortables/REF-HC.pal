@@ -1,0 +1,16 @@
+; HookEcho high-contrast reflectivity — stark solid bands for low vision / direct sun
+; Each band is a solid, maximally distinct hue with no interpolation, so boundaries stay crisp.
+product: BR
+units: dBZ
+step: 5
+color: 10 20 20 20
+solidcolor: 20 0 0 255
+solidcolor: 30 0 200 255
+solidcolor: 35 0 255 0
+solidcolor: 40 255 255 0
+solidcolor: 45 255 128 0
+solidcolor: 50 255 0 0
+solidcolor: 55 200 0 200
+solidcolor: 60 255 0 255
+solidcolor: 65 255 255 255
+solidcolor: 70 220 220 220
