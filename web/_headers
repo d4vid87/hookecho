@@ -19,6 +19,10 @@
 /decode-worker.js
   Cache-Control: public, max-age=0, must-revalidate
 
+# Imported by index.html, and it names the unhashed worker path — revalidate for the same reason.
+/decode-bridge.js
+  Cache-Control: public, max-age=0, must-revalidate
+
 # Generated per build (it names the hashed shell), and it is the file that decides whether a
 # visitor ever sees a new deploy. A stale one pins them to the old bundle.
 /sw.js

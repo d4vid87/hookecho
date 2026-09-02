@@ -117,6 +117,12 @@ jobs:
       - name: Test the proxy core
         run: node --test web/_worker.js/proxy-core.test.mjs
 
+      # Also pure logic: what the page does when the decode worker dies. A trap is not something
+      # the browser smoke test can ask for on demand, so the bridge takes its spawn as a callback
+      # and this drives it with a stub.
+      - name: Test the decode bridge
+        run: node --test web/decode-bridge.test.mjs
+
       - name: Install puppeteer
         run: npm install --no-save puppeteer@23
 
