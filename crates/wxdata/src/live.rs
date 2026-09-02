@@ -109,7 +109,7 @@ where
     // sweep boundary are re-assembled (plus the start chunk, which carries the VCP and site
     // metadata assembly needs). Re-decoding every accumulated chunk at every boundary was O(n^2)
     // over a volume, and the chunk count grows to ~55.
-    emit(&it, &chunks, &mut merged, &mut on_update);
+    emit(&it, &chunks, &mut merged, &mut on_update).await;
     let mut window_start = chunks.len();
 
     let mut fails = 0u32;
@@ -155,7 +155,7 @@ where
                         .chain(chunks[window_start..].iter())
                         .cloned()
                         .collect();
-                    emit(&it, &window, &mut merged, &mut on_update);
+                    emit(&it, &window, &mut merged, &mut on_update).await;
                     window_start = chunks.len();
                 }
             }
@@ -177,6 +177,59 @@ where
     }
 }
 
+/// Pack a chunk window into one buffer: a `u32` little-endian length in front of each payload.
+///
+/// The Web Worker bridge moves one `ArrayBuffer` per job, and a chunk window is several buffers.
+/// A length-prefixed concatenation is the whole protocol — both sides are the same build of the
+/// same module, so there is no version to negotiate, exactly as with the postcard `Scan` coming
+/// back.
+pub fn frame<'a>(payloads: impl Iterator<Item = &'a [u8]>) -> Vec<u8> {
+    let mut out = Vec::new();
+    for data in payloads {
+        out.extend_from_slice(&(data.len() as u32).to_le_bytes());
+        out.extend_from_slice(data);
+    }
+    out
+}
+
+/// Unpack [`frame_chunks`], assemble, and re-encode the partial [`Scan`] as postcard.
+///
+/// The worker's half of the live path, mirroring `level2::decode_and_encode`. Exported to JS by
+/// `hookecho::assemble_live_chunks`; public and target-independent so the framing has a test that
+/// runs in CI. (`postcard` is a wasm-only dependency, so this half is too.)
+#[cfg(target_arch = "wasm32")]
+pub fn assemble_and_encode(framed: &[u8]) -> anyhow::Result<Vec<u8>> {
+    let mut chunks = Vec::new();
+    for data in split_framed(framed)? {
+        chunks.push(Chunk::new(data.to_vec()).map_err(|e| anyhow::anyhow!("chunk: {e}"))?);
+    }
+    let scan = assemble_volume(chunks).map_err(|e| anyhow::anyhow!("assemble: {e}"))?;
+    postcard::to_allocvec(&scan).map_err(|e| anyhow::anyhow!("encode scan: {e}"))
+}
+
+/// The inverse of [`frame`]: the chunk payloads, borrowed out of `framed`.
+///
+/// A truncated buffer is an error rather than a short read — the two sides of this are one
+/// `postMessage`, so a length that runs off the end means the framing is wrong, not that more is
+/// coming.
+pub fn split_framed(framed: &[u8]) -> anyhow::Result<Vec<&[u8]>> {
+    let mut out = Vec::new();
+    let mut at = 0usize;
+    while at < framed.len() {
+        let len = framed
+            .get(at..at + 4)
+            .map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]) as usize)
+            .ok_or_else(|| anyhow::anyhow!("framed chunks: truncated length"))?;
+        at += 4;
+        let data = framed
+            .get(at..at + len)
+            .ok_or_else(|| anyhow::anyhow!("framed chunks: truncated chunk"))?;
+        at += len;
+        out.push(data);
+    }
+    Ok(out)
+}
+
 /// Whether a chunk fetch error at `consecutive` failures in a row should be retried rather than
 /// ending the stream. Transient network trouble is the common case; a sustained run of failures
 /// means the fallback poller should take over.
@@ -186,7 +239,7 @@ fn tolerate_failure(consecutive: u32) -> bool {
 
 /// Assemble `chunks`, merge into `merged`, and emit if anything changed. Assembly failure
 /// (e.g. a still-incomplete volume) is skipped; the next sweep boundary self-heals.
-fn emit<F: FnMut(Update)>(
+async fn emit<F: FnMut(Update)>(
     it: &ChunkIterator,
     chunks: &[Chunk<'static>],
     merged: &mut Arc<Scan>,
@@ -196,7 +249,21 @@ fn emit<F: FnMut(Update)>(
     // task; `block_in_place` moves it off the async worker so chunk polling and every other
     // fetch on that thread keep running. (Requires the multi-threaded runtime, which is what the
     // app and the headless harness both build.)
-    let assembled = crate::task::in_place(|| assemble_volume(chunks.iter().cloned()));
+    #[cfg(not(target_arch = "wasm32"))]
+    let assembled = crate::task::in_place(|| assemble_volume(chunks.iter().cloned()))
+        .map_err(|e| anyhow::anyhow!("{e}"));
+    // In the browser there is no other thread to move it to: "off the async worker" would be the
+    // thread drawing the map, once per sweep boundary for as long as the tab is open. Send the
+    // window to the same Web Worker the archive decode uses, and assemble inline only if there
+    // is no worker to send it to.
+    #[cfg(target_arch = "wasm32")]
+    let assembled = match crate::wasm_worker::assemble_chunks(frame(chunks.iter().map(|c| c.data()))).await {
+        Ok(wire) => crate::level2::scan_from_wire(&wire),
+        Err(crate::wasm_worker::Error::Unavailable) => {
+            assemble_volume(chunks.iter().cloned()).map_err(|e| anyhow::anyhow!("{e}"))
+        }
+        Err(e) => Err(anyhow::anyhow!("{e}")),
+    };
     let partial = match assembled {
         Ok(s) => s,
         Err(e) => {
@@ -460,7 +527,7 @@ mod tests {
 
 #[cfg(test)]
 mod retry_tests {
-    use super::tolerate_failure;
+    use super::{frame, split_framed, tolerate_failure};
 
     #[test]
     fn transient_failures_retry_then_give_up() {
@@ -468,5 +535,22 @@ mod retry_tests {
         assert!(tolerate_failure(4));
         assert!(!tolerate_failure(5));
         assert!(!tolerate_failure(9));
+    }
+
+    /// The framing carries a chunk window across `postMessage` and back. Chunk *contents* are
+    /// opaque to it — what has to hold is that n buffers in are the same n buffers out, including
+    /// an empty one, which a naive "read until the end" split gets wrong.
+    #[test]
+    fn framing_round_trips_a_chunk_window() {
+        let payloads: Vec<Vec<u8>> = vec![b"AR2V0006.001".to_vec(), vec![], vec![0xff; 300]];
+        let framed = frame(payloads.iter().map(|p| p.as_slice()));
+        let out = split_framed(&framed).expect("well-formed framing splits");
+        assert_eq!(out.len(), payloads.len());
+        for (got, want) in out.iter().zip(&payloads) {
+            assert_eq!(*got, want.as_slice());
+        }
+        assert!(split_framed(&framed[..framed.len() - 1]).is_err());
+        assert!(split_framed(&framed[..2]).is_err());
+        assert!(split_framed(&[]).expect("empty framing is an empty window").is_empty());
     }
 }
