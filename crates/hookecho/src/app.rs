@@ -10368,7 +10368,7 @@ impl HookEchoApp {
                         .zoom_at(-d.y as f64 * 0.01, cursor, vp);
                 }
                 None => {
-                    self.views[idx].camera.pan_pixels(d.x, d.y);
+                    self.views[idx].camera.pan_pixels(d.x, d.y, vp);
                     self.follow_cell = None; // a manual pan takes over the camera
                 }
             }
@@ -10414,7 +10414,7 @@ impl HookEchoApp {
             }
             if scroll.x.abs() > 0.0 {
                 self.active = idx;
-                self.views[idx].camera.pan_pixels(scroll.x, 0.0);
+                self.views[idx].camera.pan_pixels(scroll.x, 0.0, vp);
                 self.follow_cell = None; // a manual pan takes over the camera
             }
         }
@@ -10460,7 +10460,7 @@ impl HookEchoApp {
                 }
                 let t = mt.translation_delta;
                 if t != egui::Vec2::ZERO {
-                    self.views[idx].camera.pan_pixels(t.x, t.y);
+                    self.views[idx].camera.pan_pixels(t.x, t.y, vp);
                     self.follow_cell = None; // a manual pan takes over the camera (pinch-zoom does not)
                 }
             }
