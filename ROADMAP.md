@@ -13,8 +13,6 @@ upgrade path out of it (`grep -rn "ponytail:" crates/`).
   are in the repo and build; none of them is published, which is an account and
   a review queue away rather than a code change. The order and the per-store
   steps are in [packaging/SUBMITTING.md](packaging/SUBMITTING.md).
-- **Placefile `Image:` support**: parsed and skipped today, waiting on a real
-  file in the wild to use as a fixture.
 
 ## Next
 
@@ -25,27 +23,23 @@ upgrade path out of it (`grep -rn "ponytail:" crates/`).
 - Blending surface observations into the effective-layer analysis, which is the
   remaining difference from SPC's mesoanalysis now that the vertical resolution
   is there.
-- Per-pane thresholds and field layers, saved with the workspace. The difference
-  layer would rather be two panes than one subtraction, but field layers are
-  app-global, so that waits on this.
+- The difference layer as two panes rather than one subtraction. Per-pane field
+  layers landed, so the thing this was waiting on is done; what is left is the
+  comparison UI itself.
 
 ## Later
 
-Restocked from `grep -rn "ponytail:" crates/` — 88 of them at the moment, each
+Restocked from `grep -rn "ponytail:" crates/` — 161 of them at the moment, each
 naming its own upgrade path.
 
 - A valid-time alignment for the difference layer: it labels the two cycles
   today rather than interpolating either onto the other's instant.
-- Colormaps and stroke widths that respond to the high-contrast theme, not just
-  the chrome (`theme.rs`).
 - Web persistence: caches live in memory in the browser, so a reload refetches
   everything. IndexedDB or OPFS is the upgrade (`paths.rs`).
 - A tablet layout for Android — the phone chrome is what a tablet gets today
   (`ui/m3.rs`).
 - Background alerts that test real polygon intersection instead of sampling
   points around a marker's radius (`Nws.kt`).
-- Placefile `Image:`, which needs a georeferenced textured quad — and a real
-  file in the wild to pin the corner syntax.
 - Snap positions for the mobile sheets; they dismiss on a drag today but have no
   half-open state.
 - Temperature units for the gridded contour labels, which still do their own
