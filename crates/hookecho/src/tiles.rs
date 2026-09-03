@@ -1135,7 +1135,26 @@ type TileResult = Result<FetchedTile, crate::render::TileKey>;
 /// How many tile fetches may be in flight at once. A screenful is ~28 tiles, and firing all of
 /// them at a CDN at once means 28 TLS handshakes competing for the same radio: the first tile
 /// lands later than it would have with a queue behind it.
-const MAX_INFLIGHT: usize = 6;
+/// Tile fetches allowed out at once.
+///
+/// Lower in the browser than on the desktop, and not for bandwidth. Chrome allows six connections
+/// per origin, and the web build talks to exactly one origin: every tile, every feed and every
+/// radar volume goes to the page's own `/proxy/`. At six this manager could hold all of them by
+/// itself, so a provider that stalls does not just stop the basemap — it stops the radar too.
+/// Four leaves room for the things the visitor actually came for.
+const MAX_INFLIGHT: usize = if cfg!(target_arch = "wasm32") { 4 } else { 6 };
+
+/// How long one tile fetch may take before its slot is taken back.
+const TILE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// How much later than the request's own deadline the outer one fires.
+///
+/// The two are not interchangeable and the order matters. `reqwest`'s per-request timeout is the
+/// one that *aborts*: on wasm it drives an `AbortController`, which is the only thing that tells
+/// the browser to stop. `task::timeout` only drops our future, which frees our bookkeeping and
+/// nothing else. Set to the same duration, the outer one can win the race and drop the future
+/// before the abort ever fires, so the abort is given a head start and this is the margin.
+pub(crate) const BACKSTOP: std::time::Duration = std::time::Duration::from_secs(10);
 
 /// How long a failed tile is left alone before the next visibility pass retries it.
 const RETRY_AFTER: std::time::Duration = std::time::Duration::from_secs(5);
@@ -1444,7 +1463,15 @@ impl TileManager {
             let blocking = self.spawner.clone();
             self.inflight.fetch_add(1, Ordering::Relaxed);
             self.spawner.spawn(async move {
-                let bytes = load_tile_bytes(&client, &url, path.as_deref()).await;
+                // Finite on purpose. A tile fetch that is neither answered nor refused — a
+                // captive portal, a proxy that swallows the connection — used to hold its slot
+                // for the life of the tab, and six of them meant the basemap simply stopped.
+                let bytes = wxdata::task::timeout(
+                    TILE_TIMEOUT + BACKSTOP,
+                    load_tile_bytes(&client, &url, path.as_deref()),
+                )
+                .await
+                .unwrap_or_else(|e| Err(anyhow::anyhow!("{e}")));
                 // PNG/JPEG decode is pure CPU and would otherwise run on the async worker, where
                 // it stalls every other fetch sharing that thread.
                 blocking.spawn_blocking(move || {
@@ -1720,6 +1747,9 @@ pub(crate) async fn load_tile_bytes(
     // user's API key in a shared cache. Native builds get the URL back unchanged.
     let resp = client
         .get(wxdata::net::fetch_url(url))
+        // Aborts the fetch, which dropping the future does not: an un-aborted request keeps one
+        // of the browser's six connections to this origin until the tab closes.
+        .timeout(TILE_TIMEOUT)
         .send()
         .await?
         .error_for_status()?;

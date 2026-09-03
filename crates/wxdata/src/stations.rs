@@ -203,6 +203,7 @@ pub async fn tempest_stations(
 ) -> anyhow::Result<Vec<TempestStation>> {
     let body = client
         .get(crate::net::fetch_url(&format!("{TEMPEST_API}/stations")))
+        .timeout(crate::net::FEED_TIMEOUT)
         .query(&[("token", token)])
         .header("User-Agent", USER_AGENT)
         .send()
@@ -224,6 +225,7 @@ pub async fn tempest_ob(
             "{TEMPEST_API}/observations/station/{}",
             station.id
         )))
+        .timeout(crate::net::FEED_TIMEOUT)
         .query(&[("token", token)])
         .header("User-Agent", USER_AGENT)
         .send()
@@ -317,6 +319,7 @@ pub async fn wu_stations_near(
     let geocode = format!("{lat:.4},{lon:.4}");
     let body = client
         .get(crate::net::fetch_url(&format!("{WU_API}/v3/location/near")))
+        .timeout(crate::net::FEED_TIMEOUT)
         .query(&[
             ("geocode", geocode.as_str()),
             ("product", "pws"),
@@ -342,6 +345,7 @@ pub async fn wu_ob(
         .get(crate::net::fetch_url(&format!(
             "{WU_API}/v2/pws/observations/current"
         )))
+        .timeout(crate::net::FEED_TIMEOUT)
         .query(&[
             ("stationId", station_id),
             ("format", "json"),

@@ -71,6 +71,7 @@ pub async fn fetch(client: &reqwest::Client, day: u8) -> anyhow::Result<Vec<GeoF
     let day = day.clamp(1, 3);
     let meta = client
         .get(crate::net::fetch_url(&format!("{SERVICE}?f=json")))
+        .timeout(crate::net::FEED_TIMEOUT)
         .header("User-Agent", USER_AGENT)
         .send()
         .await?
@@ -83,6 +84,7 @@ pub async fn fetch(client: &reqwest::Client, day: u8) -> anyhow::Result<Vec<GeoF
         .get(crate::net::fetch_url(&format!(
             "{SERVICE}/{id}/query?where=1%3D1&outFields=impact,valid_time&f=geojson"
         )))
+        .timeout(crate::net::FEED_TIMEOUT)
         .header("User-Agent", USER_AGENT)
         .send()
         .await?

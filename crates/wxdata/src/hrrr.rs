@@ -431,6 +431,7 @@ async fn fetch_run_field(
     // The .idx sidecar lists each message's start byte; find the one for this var+level.
     let idx = http
         .get(crate::net::fetch_url(&format!("{base}.idx")))
+        .timeout(crate::net::FEED_TIMEOUT)
         .header("User-Agent", USER_AGENT)
         .send()
         .await?
@@ -446,6 +447,7 @@ async fn fetch_run_field(
     };
     let bytes = http
         .get(crate::net::fetch_url(&base))
+        .timeout(crate::net::FEED_TIMEOUT)
         .header("User-Agent", USER_AGENT)
         .header("Range", range)
         .send()

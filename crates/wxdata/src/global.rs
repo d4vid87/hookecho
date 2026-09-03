@@ -200,6 +200,7 @@ async fn fetch_run(
     };
     let bytes = http
         .get(crate::net::fetch_url(&base))
+        .timeout(crate::net::FEED_TIMEOUT)
         .header("User-Agent", USER_AGENT)
         .header("Range", http_range)
         .send()
@@ -225,6 +226,7 @@ fn strip_ext(url: &str) -> &str {
 async fn get_text(http: &reqwest::Client, url: &str) -> anyhow::Result<String> {
     Ok(http
         .get(crate::net::fetch_url(url))
+        .timeout(crate::net::FEED_TIMEOUT)
         .header("User-Agent", USER_AGENT)
         .send()
         .await?

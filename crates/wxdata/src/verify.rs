@@ -267,6 +267,7 @@ pub async fn fetch(
 ) -> anyhow::Result<Verification> {
     let body = client
         .get(crate::net::fetch_url(API))
+        .timeout(crate::net::FEED_TIMEOUT)
         .query(&[
             ("wfo", wfo),
             ("phenomena", "TO"),

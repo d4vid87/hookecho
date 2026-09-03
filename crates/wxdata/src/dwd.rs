@@ -220,6 +220,7 @@ pub async fn fetch_volume(
         async move {
             let bytes = http
                 .get(crate::net::fetch_url(&url))
+                .timeout(crate::net::FEED_TIMEOUT)
                 .send()
                 .await
                 .ok()?
@@ -387,7 +388,8 @@ async fn probe_sweep(
         // Only ever conditional when the caller has something to be up to date *with*.
         if current_name.is_some() {
             let remembered = crate::net::validators::get(url);
-            let req = crate::net::validators::apply(http.get(crate::net::fetch_url(url)), url);
+            let req = crate::net::validators::apply(http.get(crate::net::fetch_url(url))
+            .timeout(crate::net::FEED_TIMEOUT), url);
             if let Ok(resp) = req.send().await {
                 if resp.status() == reqwest::StatusCode::NOT_MODIFIED {
                     crate::stats::bump(crate::stats::Counter::NetNotModified);
@@ -407,7 +409,8 @@ async fn probe_sweep(
             }
         }
     }
-    match http.get(crate::net::fetch_url(url)).send().await {
+    match http.get(crate::net::fetch_url(url))
+    .timeout(crate::net::FEED_TIMEOUT).send().await {
         Ok(resp) if resp.status().is_success() => finish_probe(url, id, current_name, resp).await,
         _ => Probe::Unreadable,
     }

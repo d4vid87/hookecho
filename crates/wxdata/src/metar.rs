@@ -97,6 +97,7 @@ pub async fn fetch_bbox(
     let bbox = format!("{lat0},{lon0},{lat1},{lon1}");
     let body = client
         .get(crate::net::fetch_url(METAR_URL))
+        .timeout(crate::net::FEED_TIMEOUT)
         .query(&[("bbox", bbox.as_str()), ("format", "json")])
         .header("User-Agent", USER_AGENT)
         .send()
@@ -124,6 +125,7 @@ pub async fn fetch_tafs(
     let bbox = format!("{lat0},{lon0},{lat1},{lon1}");
     let body = client
         .get(crate::net::fetch_url(TAF_URL))
+        .timeout(crate::net::FEED_TIMEOUT)
         .query(&[("bbox", bbox.as_str()), ("format", "json")])
         .header("User-Agent", USER_AGENT)
         .send()

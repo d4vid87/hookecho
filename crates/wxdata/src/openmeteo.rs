@@ -168,6 +168,7 @@ wind_speed_10m_max,wind_direction_10m_dominant&forecast_days=7"
     );
     let body = http
         .get(crate::net::fetch_url(&url))
+        .timeout(crate::net::FEED_TIMEOUT)
         .send()
         .await?
         .error_for_status()?

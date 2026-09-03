@@ -16,6 +16,7 @@ pub async fn search(client: &reqwest::Client, query: &str) -> Result<(String, f6
         .get(crate::net::fetch_url(
             "https://nominatim.openstreetmap.org/search",
         ))
+        .timeout(crate::net::FEED_TIMEOUT)
         .query(&[("q", q), ("format", "json"), ("limit", "1")])
         .header("User-Agent", crate::alerts::USER_AGENT)
         .header("Accept", "application/json")

@@ -192,6 +192,7 @@ async fn fetch_layer(
         let offset = (page * PAGE).to_string();
         let body = client
             .get(crate::net::fetch_url(&format!("{SERVER}/{layer}/query")))
+            .timeout(crate::net::FEED_TIMEOUT)
             .query(&[
                 ("where", where_clause.as_str()),
                 ("geometry", envelope.as_str()),

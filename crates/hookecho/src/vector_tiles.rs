@@ -537,6 +537,24 @@ pub async fn fetch_visible_vector(
     (out, labels)
 }
 
+/// Vector tile fetches allowed out at once.
+///
+/// Two in the browser, for the reason spelled out on the raster manager's copy: the six
+/// connections Chrome allows to this origin are shared with the radar and every feed, and street
+/// labels are the least important thing competing for them.
+const MAX_INFLIGHT: usize = if cfg!(target_arch = "wasm32") { 2 } else { 6 };
+
+/// How long a tile fetch may take before the slot is taken back. Generous — a slow tile is still
+/// worth having — but finite, which on wasm it otherwise is not.
+const TILE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// How long a failed tile is left alone before the next visibility pass retries it.
+///
+/// Not optional. A failure now takes its id out of `requested` so it *can* be retried, and
+/// `request_missing` runs every frame — without a cooldown a provider answering 404 turns into
+/// hundreds of requests a second. Same number, same reason, as the raster manager's.
+const RETRY_AFTER: std::time::Duration = std::time::Duration::from_secs(5);
+
 struct FetchedVector {
     id: TileId,
     vertices: Vec<OverlayVertex>,
@@ -548,8 +566,12 @@ struct FetchedVector {
 pub struct VectorTileManager {
     spawner: crate::rt::Spawner,
     client: reqwest::Client,
-    tx: Sender<FetchedVector>,
-    rx: Receiver<FetchedVector>,
+    tx: Sender<Result<FetchedVector, TileId>>,
+    rx: Receiver<Result<FetchedVector, TileId>>,
+    /// Fetches out. Bounded by `MAX_INFLIGHT`, and given back on every path including a timeout.
+    inflight: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    /// Tiles whose fetch failed, and when. Retried after [`RETRY_AFTER`].
+    failed: HashMap<TileId, wxdata::clock::Instant>,
     /// Repaint handle, so a finished tile draws now instead of at the next idle heartbeat.
     ctx: Option<egui::Context>,
     requested: HashSet<TileId>,
@@ -592,6 +614,8 @@ impl VectorTileManager {
             rx,
             ctx: None,
             requested: HashSet::new(),
+            inflight: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            failed: HashMap::new(),
             uploaded: LruCache::new(NonZeroUsize::new(VECTOR_TILE_CACHE).unwrap()),
             vevicted: Vec::new(),
             labels: HashMap::new(),
@@ -623,6 +647,7 @@ impl VectorTileManager {
         }
         self.palette = palette;
         self.requested.clear();
+        self.failed.clear();
         self.uploaded.clear();
         self.labels.clear();
         self.label_gen += 1;
@@ -660,6 +685,7 @@ impl VectorTileManager {
         // something else happened to clear them. The 700 ms settle above is what makes doing this
         // unconditionally affordable.
         self.requested.clear();
+        self.failed.clear();
         self.uploaded.clear();
         self.labels.clear();
         self.label_gen += 1;
@@ -703,6 +729,18 @@ impl VectorTileManager {
         let palette = self.palette;
         let tess_zoom = self.tess_zoom as f64;
         for v in visible {
+            // Same reason the raster manager caps itself: a pan at low zoom asks for a screenful
+            // at once, and without a ceiling they all leave together and answer together.
+            if self
+                .failed
+                .get(&v.id)
+                .is_some_and(|t| t.elapsed() < RETRY_AFTER)
+            {
+                continue;
+            }
+            if self.inflight.load(std::sync::atomic::Ordering::Relaxed) >= MAX_INFLIGHT {
+                break;
+            }
             if !self.requested.insert(v.id) {
                 continue;
             }
@@ -717,24 +755,40 @@ impl VectorTileManager {
             let id = v.id;
             let ctx = self.ctx.clone();
             let blocking = self.spawner.clone();
+            let inflight = self.inflight.clone();
+            self.inflight.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             self.spawner.spawn(async move {
-                if let Ok(bytes) = load_tile_bytes(&client, &url, path.as_deref()).await {
-                    // gunzip + lyon tessellation is the heaviest CPU in the app after the volume
-                    // decode; running it on the async worker starves every other fetch.
-                    blocking.spawn_blocking(move || {
-                        let (vertices, indices, labels) =
-                            build_tile(&bytes, id, palette, tess_zoom);
-                        let _ = tx.send(FetchedVector {
-                            id,
-                            vertices,
-                            indices,
-                            labels,
-                        });
-                        if let Some(ctx) = ctx {
-                            ctx.request_repaint();
-                        }
-                    });
-                }
+                let bytes = wxdata::task::timeout(
+                    TILE_TIMEOUT + crate::tiles::BACKSTOP,
+                    load_tile_bytes(&client, &url, path.as_deref()),
+                )
+                .await
+                .unwrap_or_else(|e| Err(anyhow::anyhow!("{e}")));
+                let Ok(bytes) = bytes else {
+                    // Say so rather than going quiet: an id that stays in `requested` with nothing
+                    // coming is a permanently missing tile, and a slot that is never given back.
+                    let _ = tx.send(Err(id));
+                    inflight.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+                    if let Some(ctx) = ctx {
+                        ctx.request_repaint();
+                    }
+                    return;
+                };
+                // gunzip + lyon tessellation is the heaviest CPU in the app after the volume
+                // decode; running it on the async worker starves every other fetch.
+                blocking.spawn_blocking(move || {
+                    let (vertices, indices, labels) = build_tile(&bytes, id, palette, tess_zoom);
+                    let _ = tx.send(Ok(FetchedVector {
+                        id,
+                        vertices,
+                        indices,
+                        labels,
+                    }));
+                    inflight.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+                    if let Some(ctx) = ctx {
+                        ctx.request_repaint();
+                    }
+                });
             });
         }
     }
@@ -782,6 +836,16 @@ impl VectorTileManager {
     pub fn drain_ready(&mut self) -> Vec<PendingVectorTile> {
         let mut ready = Vec::new();
         while let Ok(f) = self.rx.try_recv() {
+            let f = match f {
+                Ok(f) => f,
+                // Out of `requested` so the next visibility pass is the retry, and into `failed`
+                // so that pass is not the very next frame.
+                Err(id) => {
+                    self.requested.remove(&id);
+                    self.failed.insert(id, wxdata::clock::Instant::now());
+                    continue;
+                }
+            };
             match self.uploaded.push(f.id, ()) {
                 Some((id, _)) if id == f.id => continue, // already resident
                 Some((id, _)) => {
@@ -792,6 +856,7 @@ impl VectorTileManager {
                 }
                 None => {}
             }
+            self.failed.remove(&f.id);
             self.labels.insert(f.id, f.labels);
             self.label_gen += 1;
             ready.push(PendingVectorTile {
