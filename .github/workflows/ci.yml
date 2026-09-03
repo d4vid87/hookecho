@@ -52,11 +52,16 @@ jobs:
           cargo run -q -p wxdata --example nexrad_sites > /tmp/nexrad-sites.json
           diff -u site/src/data/nexrad-sites.json /tmp/nexrad-sites.json
 
-      # Advisory: clippy lints are surfaced but don't fail the build (the tree is tuned for a
-      # custom hand-format, and some pedantic lints are intentionally left).
-      - name: Clippy (advisory)
-        continue-on-error: true
-        run: cargo clippy --workspace --all-targets
+      # A hard gate. This was advisory, on the grounds that the tree is hand-formatted and some
+      # pedantic lints are left on purpose — but neither of those is what `-D warnings` catches:
+      # the default lint set is dead code, unused imports, and the correctness lints. Every change
+      # in the tree already has to pass this locally, so making CI agree costs nothing and stops
+      # the one that does not from landing.
+      #
+      # Deliberately not `cargo fmt --check`: the hand-format is real, and running rustfmt over
+      # this tree rewrites files nobody touched.
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
 
   # Same idea for the browser build: catch a native-only dep (or an ungated std::thread/fs call)
   # leaking into the wasm target. Library only — the binary is desktop-only by design.
