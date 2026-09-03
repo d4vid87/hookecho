@@ -1,0 +1,16 @@
+# Only the timezones this app names are compiled in.
+#
+# `chrono-tz` embeds the whole IANA database by default — every zone on earth, with every
+# historical transition. `wxdata::tz` answers one question ("what time is it at this radar site")
+# from a hand-written table, and `wxdata::meteoalarm` and friends name a handful of European
+# zones. That is 25 zones out of nearly 600, and carrying the rest cost 119403 bytes gzipped in
+# the browser bundle — measured, not estimated.
+#
+# This lives here rather than in a build script so that every cargo invocation gets it: a plain
+# `cargo test`, CI, `scripts/web/build.sh`, and anyone's editor.
+#
+# Keeping it in sync needs no discipline. Name a zone the filter does not match and the build
+# fails with "cannot find value `Europe__Somewhere` in this scope" — a compile error, not a
+# wrong answer at runtime. Add it to the list and rebuild.
+[env]
+CHRONO_TZ_TIMEZONE_FILTER = "(America/(Anchorage|Boise|Chicago|Denver|Detroit|Indiana/Indianapolis|Los_Angeles|New_York|Phoenix|Puerto_Rico|Sitka)|Atlantic/Reykjavik|Europe/(Amsterdam|Berlin|Brussels|Bucharest|Copenhagen|Dublin|Ljubljana|Prague|Warsaw|Zagreb)|Pacific/(Guam|Honolulu)|UTC)"
