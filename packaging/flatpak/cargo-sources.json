@@ -9399,6 +9399,58 @@
         "dest-filename": ".cargo-checksum.json"
     },
     {
+        "type": "archive",
+        "archive-type": "tar-gzip",
+        "url": "https://static.crates.io/crates/chrono-tz-build/chrono-tz-build-0.5.0.crate",
+        "sha256": "c7d8d1efd5109b9c1cd3b7966bd071cdfb53bb6eb0b22a473a68c2f70a11a1eb",
+        "dest": "cargo/vendor/chrono-tz-build-0.5.0"
+    },
+    {
+        "type": "inline",
+        "contents": "{\"package\": \"c7d8d1efd5109b9c1cd3b7966bd071cdfb53bb6eb0b22a473a68c2f70a11a1eb\", \"files\": {}}",
+        "dest": "cargo/vendor/chrono-tz-build-0.5.0",
+        "dest-filename": ".cargo-checksum.json"
+    },
+    {
+        "type": "archive",
+        "archive-type": "tar-gzip",
+        "url": "https://static.crates.io/crates/parse-zoneinfo/parse-zoneinfo-0.4.1.crate",
+        "sha256": "e3c406c9e2aa74554e662d2c2ee11cd3e73756988800be7e6f5eddb16fed4699",
+        "dest": "cargo/vendor/parse-zoneinfo-0.4.1"
+    },
+    {
+        "type": "inline",
+        "contents": "{\"package\": \"e3c406c9e2aa74554e662d2c2ee11cd3e73756988800be7e6f5eddb16fed4699\", \"files\": {}}",
+        "dest": "cargo/vendor/parse-zoneinfo-0.4.1",
+        "dest-filename": ".cargo-checksum.json"
+    },
+    {
+        "type": "archive",
+        "archive-type": "tar-gzip",
+        "url": "https://static.crates.io/crates/phf_codegen/phf_codegen-0.12.1.crate",
+        "sha256": "efbdcb6f01d193b17f0b9c3360fa7e0e620991b193ff08702f78b3ce365d7e61",
+        "dest": "cargo/vendor/phf_codegen-0.12.1"
+    },
+    {
+        "type": "inline",
+        "contents": "{\"package\": \"efbdcb6f01d193b17f0b9c3360fa7e0e620991b193ff08702f78b3ce365d7e61\", \"files\": {}}",
+        "dest": "cargo/vendor/phf_codegen-0.12.1",
+        "dest-filename": ".cargo-checksum.json"
+    },
+    {
+        "type": "archive",
+        "archive-type": "tar-gzip",
+        "url": "https://static.crates.io/crates/phf_generator/phf_generator-0.12.1.crate",
+        "sha256": "2cbb1126afed61dd6368748dae63b1ee7dc480191c6262a3b4ff1e29d86a6c5b",
+        "dest": "cargo/vendor/phf_generator-0.12.1"
+    },
+    {
+        "type": "inline",
+        "contents": "{\"package\": \"2cbb1126afed61dd6368748dae63b1ee7dc480191c6262a3b4ff1e29d86a6c5b\", \"files\": {}}",
+        "dest": "cargo/vendor/phf_generator-0.12.1",
+        "dest-filename": ".cargo-checksum.json"
+    },
+    {
         "type": "inline",
         "contents": "[source.vendored-sources]\ndirectory = \"cargo/vendor\"\n\n[source.crates-io]\nreplace-with = \"vendored-sources\"\n",
         "dest": "cargo",
