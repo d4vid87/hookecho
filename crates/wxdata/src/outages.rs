@@ -97,6 +97,14 @@ pub fn parse(json: &str) -> anyhow::Result<Vec<GeoFeature>> {
         }
     })?;
 
+    // Biggest draws last, so a county with a hundred thousand customers out is not hidden under
+    // the cross-hatch of a neighbour with six hundred. This used to sort the *finished* features
+    // by title, which is a stable order and nothing else — it put Alabama on top of Wyoming,
+    // which is not what the comment there claimed and not what anyone wanted. Place breaks ties,
+    // so repeat renders still do not shuffle.
+    let mut by_county: Vec<_> = by_county.into_iter().collect();
+    by_county.sort_by(|(ka, a), (kb, b)| a.meters.cmp(&b.meters).then_with(|| ka.cmp(kb)));
+
     let mut out = Vec::new();
     for ((state, county), c) in by_county {
         let Some((rgb, label)) = tier(c.meters) else {
@@ -107,13 +115,17 @@ pub fn parse(json: &str) -> anyhow::Result<Vec<GeoFeature>> {
         } else {
             format!("{county}, {state}")
         };
+        // A record with no `utility_id` still happened, so the count floors at one — and the
+        // plural has to agree with the number actually printed. Reading `utilities.len()` twice
+        // meant an empty set printed "1 utilities".
+        let utilities = c.utilities.len().max(1);
         let mut detail = format!(
             "{where_}\n{} customers without power ({label})\n{} incident{}, {} utilit{}",
             thousands(c.meters),
             c.incidents,
             if c.incidents == 1 { "" } else { "s" },
-            c.utilities.len().max(1),
-            if c.utilities.len() == 1 { "y" } else { "ies" },
+            utilities,
+            if utilities == 1 { "y" } else { "ies" },
         );
         if let Some(cause) = &c.cause {
             detail.push_str(&format!("\nCause: {cause}"));
@@ -138,8 +150,6 @@ pub fn parse(json: &str) -> anyhow::Result<Vec<GeoFeature>> {
             });
         }
     }
-    // Stable order so the biggest outage draws last (on top) and repeat renders don't shuffle.
-    out.sort_by(|a, b| a.title.cmp(&b.title));
     Ok(out)
 }
 
@@ -190,6 +200,34 @@ mod tests {
             r#"{{"type":"FeatureCollection","features":[{}]}}"#,
             feats.join(",")
         )
+    }
+
+    #[test]
+    fn the_biggest_outage_draws_last_and_one_utility_is_singular() {
+        // Three counties, deliberately in an order where alphabetical and by-size disagree:
+        // "Ashtabula" is alphabetically first and the largest, so a title sort would have drawn it
+        // first and buried it under the two smaller ones.
+        let json = format!(
+            r#"{{"type":"FeatureCollection","features":[{},{},{}]}}"#,
+            feature("Ashtabula", 90_000.0, "u1", "storm", true),
+            feature("Wyandot", 3_000.0, "u2", "storm", true),
+            feature("Lorain", 700.0, "u3", "storm", true),
+        );
+        let f = parse(&json).unwrap();
+        assert_eq!(f.len(), 3);
+        let order: Vec<&str> = f.iter().map(|x| x.title.split(':').next().unwrap()).collect();
+        assert_eq!(
+            order,
+            ["Lorain, OH", "Wyandot, OH", "Ashtabula, OH"],
+            "smallest first"
+        );
+        // One utility is one utility. `len().max(1)` and `len() == 1` were read separately, so a
+        // record with no utility id printed "1 utilities".
+        assert!(
+            f[0].detail.contains("1 utility"),
+            "expected a singular utility in {}",
+            f[0].detail
+        );
     }
 
     #[test]
