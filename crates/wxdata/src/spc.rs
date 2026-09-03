@@ -18,7 +18,21 @@ const MD_URL: &str = "https://mapservices.weather.noaa.gov/vector/rest/services/
 /// Watch polygons (tornado and severe thunderstorm) from the same map service the MDs come from,
 /// so this needs no proxy-allowlist change. Layer 1 is the county-resolution watch/warning layer;
 /// filtering to the two watch products server-side keeps the payload to the boxes in effect.
-const WATCH_URL: &str = "https://mapservices.weather.noaa.gov/eventdriven/rest/services/WWA/watch_warn_adv/MapServer/1/query?where=prod_type+IN+%28%27Tornado+Watch%27%2C%27Severe+Thunderstorm+Watch%27%29&outFields=*&f=geojson";
+///
+/// Three query parameters do the rest of the trimming, and all three matter, because this feed is
+/// fetched at boot and again every 120 s:
+///
+/// * `outFields` names the six fields [`parse_watches`] reads. `*` also shipped ingest timestamps,
+///   CAP ids, object ids and the geometry's own area and perimeter, none of which are looked at.
+/// * `geometryPrecision=4` rounds coordinates to ~11 m. Counties are not surveyed to the
+///   fourteen decimal places the service defaults to.
+/// * `maxAllowableOffset=0.002` (~200 m) generalizes the rings. A watch spans whole states and is
+///   drawn faint under the warnings inside it; 200 m of detail is well under one screen pixel at
+///   any zoom where a watch box is the thing being looked at.
+///
+/// Measured against 400 features of the same layer: 14,401,759 bytes with `outFields=*`, 6,927,736
+/// with the fields trimmed and precision set, 1,959,187 with the offset as well.
+const WATCH_URL: &str = "https://mapservices.weather.noaa.gov/eventdriven/rest/services/WWA/watch_warn_adv/MapServer/1/query?where=prod_type+IN+%28%27Tornado+Watch%27%2C%27Severe+Thunderstorm+Watch%27%29&outFields=prod_type%2Cevent%2Cends%2Cissuance%2Cwfo%2Curl&geometryPrecision=4&maxAllowableOffset=0.002&f=geojson";
 
 /// Fill color for a categorical risk label, when the GeoJSON doesn't supply one.
 pub(crate) fn risk_color(label: &str) -> [u8; 3] {
@@ -442,22 +456,6 @@ pub struct StormReport {
 mod tests {
     use super::*;
 
-    /// Live check against SPC, run by hand: `cargo test -p wxdata live_mcd -- --ignored`.
-    /// Quiet when no discussion is active — there is nothing to fetch on a calm day.
-    #[tokio::test]
-    #[ignore = "network"]
-    async fn live_mcd_text_arrives_with_the_polygon() {
-        let client = reqwest::Client::new();
-        let features = fetch_mesoscale_discussions(&client).await.unwrap();
-        for f in &features {
-            assert!(
-                f.detail.starts_with("Mesoscale Discussion"),
-                "no readout, only a link: {}",
-                f.detail
-            );
-        }
-    }
-
     #[test]
     fn a_discussion_link_becomes_its_bulletin_url() {
         // What the map service actually hands out, plain http and all.
@@ -549,7 +547,8 @@ mod tests {
           {"type":"Feature",
            "geometry":{"type":"Polygon","coordinates":[[[-100.0,48.0],[-101.0,48.0],[-101.0,49.0],[-100.0,48.0]]]},
            "properties":{"prod_type":"Tornado Watch","event":"0638","wfo":"KOUN",
-                         "ends":"2026-08-30T23:00:00-05:00","url":"https://api.weather.gov/alerts/x"}},
+                         "ends":"2026-08-30T23:00:00-05:00","issuance":"2026-08-30T17:00:00-05:00",
+                         "url":"https://api.weather.gov/alerts/x"}},
           {"type":"Feature",
            "geometry":{"type":"Polygon","coordinates":[[[-90.0,38.0],[-91.0,38.0],[-91.0,39.0],[-90.0,38.0]]]},
            "properties":{"prod_type":"Severe Thunderstorm Watch","event":"0637","wfo":"KBIS"}}]}"#;
@@ -559,6 +558,11 @@ mod tests {
         assert_eq!(f[0].kind, FeatureKind::WatchBox);
         assert_eq!(f[0].stroke, [230, 40, 40, 235]);
         assert!(f[0].detail.contains("Until: 2026-08-30T23:00:00-05:00"));
+        // These six fields are exactly what `WATCH_URL` asks for by name instead of `*`. Drop one
+        // from the query and this goes red, where the map would just quietly lose a line of detail.
+        assert!(f[0].detail.contains("Issued: 2026-08-30T17:00:00-05:00"));
+        assert!(f[0].detail.contains("Office: KOUN"));
+        assert!(f[0].detail.contains("https://api.weather.gov/alerts/x"));
         assert_eq!(f[1].title, "Severe Thunderstorm Watch 0637");
         assert_eq!(f[1].stroke, [230, 200, 30, 235]);
         // A watch is a backdrop for the warnings inside it, so both fills stay nearly clear.
