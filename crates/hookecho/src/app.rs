@@ -3389,32 +3389,26 @@ impl HookEchoApp {
             vol3d_pending: None,
             max_texture_dim,
         };
-        // Restore the overlays that were on last time. Unknown names (an older build reading a
-        // newer file) are skipped rather than treated as an error.
-        let restore: Vec<OverlayToggle> = app
-            .settings
-            .overlays_on
-            .iter()
-            .filter_map(|s| OverlayToggle::from_slug(s))
-            .collect();
-        let needs_rebuild = restore.iter().any(|t| {
-            use OverlayToggle as T;
-            matches!(
-                t,
-                T::Tropical
-                    | T::Outages
-                    | T::ProbSevere
-                    | T::Aviation
-                    | T::Tfr
-                    | T::Alerts
-                    | T::Mds
-                    | T::Fires
-            )
-        });
-        for t in restore {
-            *app.overlay_flag(t) = true;
-        }
-        if needs_rebuild {
+        // Restore the overlays from last time, assigning rather than only ever switching on: the
+        // additive version could never turn a default-on layer off, so unchecking one lasted until
+        // the next restart and then came back. `None` is "no run has recorded this yet", where the
+        // built-in defaults still stand; a recorded list is the whole truth about every layer.
+        //
+        // Unknown names (an older build reading a newer file) are skipped rather than treated as
+        // an error.
+        if let Some(saved) = app.settings.overlays_on.clone() {
+            let restore: Vec<OverlayToggle> = saved
+                .iter()
+                .filter_map(|s| OverlayToggle::from_slug(s))
+                .collect();
+            for t in OverlayToggle::ALL {
+                if t.session_only() {
+                    continue;
+                }
+                *app.overlay_flag(t) = restore.contains(&t);
+            }
+            // Whatever the outcome, the overlay set now differs from the one the constructor built,
+            // so the derived features have to be rebuilt from it once.
             app.rebuild_overlays();
         }
         app.palettes.reload(&app.settings.palette_paths());
@@ -16813,7 +16807,7 @@ impl eframe::App for HookEchoApp {
                 .filter(|t| !t.session_only() && *self.overlay_flag(*t))
                 .map(|t| t.slug())
                 .collect();
-            self.settings.overlays_on = on;
+            self.settings.overlays_on = Some(on);
         }
         if due && self.settings != self.saved {
             // A palette-map change reloads the color tables (bumps gen -> LUT re-bake).

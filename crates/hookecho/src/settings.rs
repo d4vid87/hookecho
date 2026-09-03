@@ -450,8 +450,12 @@ pub struct Settings {
     /// Overlay toggles that were on when the app last ran, by name (see `OverlayToggle::slug`).
     /// Names rather than the enum on purpose: a name this build doesn't know is skipped, where an
     /// unknown enum variant would fail the parse and reset every other setting with it.
+    ///
+    /// `None` means no run has recorded its layers yet — a fresh install, or a file written before
+    /// this key existed — and the app's built-in defaults stand. An empty list is a different
+    /// statement: someone turned everything off, and it has to survive a restart.
     #[serde(default)]
-    pub overlays_on: Vec<String>,
+    pub overlays_on: Option<Vec<String>>,
     /// Saved pane layouts (see `crate::workspace`), applied from the command palette. Distinct
     /// from `presets`, which is the starred-radar-site list.
     #[serde(default)]
@@ -1140,7 +1144,7 @@ impl Default for Settings {
             alert_volume: default_volume(),
             live_loop_frames: default_live_loop_frames(),
             basemap: String::new(),
-            overlays_on: Vec::new(),
+            overlays_on: None,
             workspaces: Vec::new(),
             seeded_workspaces: false,
             last_view: None,
@@ -1626,7 +1630,7 @@ mod tests {
             alert_volume: 0.7,
             live_loop_frames: 12,
             basemap: "carto-dark".to_string(),
-            overlays_on: vec!["Alerts".to_string(), "Wind".to_string()],
+            overlays_on: Some(vec!["Alerts".to_string(), "Wind".to_string()]),
             last_view: Some(StartView {
                 site: "KOUN".to_string(),
                 x: 0.2,
@@ -1698,7 +1702,20 @@ mod tests {
         let json = r#"{"default_site":"KDMX","overlays_on":["Alerts","Teleportation"]}"#;
         let s: Settings = serde_json::from_str(json).unwrap();
         assert_eq!(s.default_site, "KDMX");
-        assert_eq!(s.overlays_on, vec!["Alerts", "Teleportation"]);
+        assert_eq!(s.overlays_on.unwrap(), vec!["Alerts", "Teleportation"]);
+    }
+
+    #[test]
+    fn no_layers_and_no_record_of_layers_are_different_things() {
+        // The whole reason `overlays_on` is an Option. An empty list is a user who turned
+        // everything off and expects it to stay off; a missing key is a fresh install, where the
+        // app's own defaults have to win. Collapsing the two booted every new user with a blank
+        // map, or resurrected a layer they had just switched off.
+        let none: Settings = serde_json::from_str(r#"{"default_site":"KDMX"}"#).unwrap();
+        assert_eq!(none.overlays_on, None);
+        let empty: Settings =
+            serde_json::from_str(r#"{"default_site":"KDMX","overlays_on":[]}"#).unwrap();
+        assert_eq!(empty.overlays_on, Some(Vec::new()));
     }
 
     #[test]
