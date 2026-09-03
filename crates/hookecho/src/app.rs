@@ -4983,8 +4983,11 @@ impl HookEchoApp {
             return;
         }
         self.vol3d_key = Some(key);
-        let table =
-            crate::colormap::effective_table(&self.palettes, Moment::Reflectivity, self.settings.theme);
+        let table = crate::colormap::effective_table(
+            &self.palettes,
+            Moment::Reflectivity,
+            self.settings.theme,
+        );
         let (tx, rx) = std::sync::mpsc::channel();
         self.vol3d_rx = Some(rx);
         self.spawner.spawn(async move {
@@ -5059,8 +5062,11 @@ impl HookEchoApp {
         let Some(c) = wxdata::volume3d::cappi(&sweeps, self.cappi_alt_km, N, HALF_KM) else {
             return;
         };
-        let hc_table =
-            crate::colormap::effective_table(&self.palettes, Moment::Reflectivity, self.settings.theme);
+        let hc_table = crate::colormap::effective_table(
+            &self.palettes,
+            Moment::Reflectivity,
+            self.settings.theme,
+        );
         let img = ui::cappi_window::to_image(&c, &hc_table);
         self.cappi_tex = Some(ctx.load_texture("cappi", img, egui::TextureOptions::NEAREST));
         self.cappi_key = Some(key);
@@ -7730,7 +7736,8 @@ impl HookEchoApp {
                         // Cell ids churn every volume, and the map only ever grew — an entry
                         // per cell the radar has ever named, for as long as the site is the same.
                         // Keep the ones this volume still has.
-                        self.cell_trends.retain(|id, _| cells.iter().any(|c| &c.id == id));
+                        self.cell_trends
+                            .retain(|id, _| cells.iter().any(|c| &c.id == id));
                         self.storm_cells = cells;
                         self.cells_site = Some(site);
                         self.update_follow();
@@ -9067,12 +9074,7 @@ impl HookEchoApp {
                 .visible_placefile_iter()
                 .map(|(it, op, _)| (it, op))
                 .collect();
-            overlay_build::append_placefiles_with_theme(
-                &mut geom,
-                &pf,
-                zoom,
-                self.settings.theme,
-            );
+            overlay_build::append_placefiles_with_theme(&mut geom, &pf, zoom, self.settings.theme);
             self.overlay_ready = !geom.indices.is_empty();
             self.pending_overlay = Some(OverlayUpload {
                 vertices: geom.vertices,
@@ -9316,7 +9318,6 @@ impl HookEchoApp {
                 }
                 DataMsg::UpToDate { view, .. } => self.views[view].loading = false,
                 DataMsg::Prefetched { name, scan, .. } => {
-
                     self.scan_cache.put(name, Arc::new(scan));
                 }
                 DataMsg::Error { view, err, .. } => {
@@ -10091,14 +10092,13 @@ impl HookEchoApp {
             dealias,
             self.settings.precip_tint.then_some(self.precip_flag_gen),
         );
-        let lut_gen = self
-            .palettes
-            .gen
-            .wrapping_add(if crate::theme::is_high_contrast(self.settings.theme) {
+        let lut_gen = self.palettes.gen.wrapping_add(
+            if crate::theme::is_high_contrast(self.settings.theme) {
                 0x9e37_79b9_7f4a_7c15
             } else {
                 0
-            });
+            },
+        );
         // Same sweep already up: the only thing left that can differ is the color table, and
         // that is a 3 KB write into the texture already bound.
         let lut_only = self.pane_shown.get(&idx) == Some(&key);
@@ -12636,43 +12636,58 @@ impl HookEchoApp {
                 FloodCat::NoFlooding => "no flooding",
                 FloodCat::Unknown => "no current reading",
             };
-            crate::prof_scope!("river_gauges");
-            for g in &self.gauges {
-                let w = crate::render::mercator::lonlat_to_world(g.lon, g.lat);
-                let (sx, sy) = cam.world_to_screen(w, vp);
-                let p = egui::pos2(prect.left() + sx, prect.top() + sy);
-                if !prect.contains(p) {
-                    continue;
-                }
-                // Shared declutter: gauges are the lowest tier, so they fill what is left.
-                let cell = egui::Rect::from_center_size(p, egui::vec2(15.0, 15.0));
-                if !self.labels.place(
-                    crate::labelplace::key(&g.lid),
-                    cell,
-                    crate::labelplace::Priority::Minor,
-                ) {
-                    continue;
-                }
-                let s = 6.0;
-                painter.add(egui::Shape::convex_polygon(
-                    vec![
-                        p + egui::vec2(-s * 0.85, -s * 0.6),
-                        p + egui::vec2(s * 0.85, -s * 0.6),
-                        p + egui::vec2(0.0, s),
-                    ],
-                    gcolor(g.cat).gamma_multiply(0.85),
-                    egui::Stroke::new(1.2, egui::Color32::from_gray(20)),
-                ));
-                let hit = egui::Rect::from_center_size(p, egui::vec2(16.0, 16.0));
-                if response.hover_pos().is_some_and(|hp| hit.contains(hp)) {
-                    let stage = g
-                        .stage_ft
-                        .map_or_else(|| "n/a".to_string(), |v| format!("{v:.1} ft"));
-                    let mut tip = format!("{} ({})\n{stage} — {}", g.name, g.lid, glabel(g.cat));
-                    if let Some(f) = g.forecast_ft {
-                        tip.push_str(&format!("\nFcst: {f:.1} ft ({})", glabel(g.forecast_cat)));
+            // Already-drawn gauges get their slot back before a newcomer takes it, the same way
+            // the METAR and place-name layers already do. Without it a gauge at the edge of a
+            // collision wins and loses on alternate frames, which reads as flicker while panning.
+            //
+            // Two passes — returning labels, then the rest — rather than sorting into a vector
+            // that would be allocated and thrown away on every frame.
+            for returning in [true, false] {
+                crate::prof_scope!("river_gauges");
+                for g in &self.gauges {
+                    if self.labels.was_shown(crate::labelplace::key(&g.lid)) != returning {
+                        continue;
                     }
-                    response.clone().show_tooltip_text(tip);
+                    let w = crate::render::mercator::lonlat_to_world(g.lon, g.lat);
+                    let (sx, sy) = cam.world_to_screen(w, vp);
+                    let p = egui::pos2(prect.left() + sx, prect.top() + sy);
+                    if !prect.contains(p) {
+                        continue;
+                    }
+                    // Shared declutter: gauges are the lowest tier, so they fill what is left.
+                    let cell = egui::Rect::from_center_size(p, egui::vec2(15.0, 15.0));
+                    if !self.labels.place(
+                        crate::labelplace::key(&g.lid),
+                        cell,
+                        crate::labelplace::Priority::Minor,
+                    ) {
+                        continue;
+                    }
+                    let s = 6.0;
+                    painter.add(egui::Shape::convex_polygon(
+                        vec![
+                            p + egui::vec2(-s * 0.85, -s * 0.6),
+                            p + egui::vec2(s * 0.85, -s * 0.6),
+                            p + egui::vec2(0.0, s),
+                        ],
+                        gcolor(g.cat).gamma_multiply(0.85),
+                        egui::Stroke::new(1.2, egui::Color32::from_gray(20)),
+                    ));
+                    let hit = egui::Rect::from_center_size(p, egui::vec2(16.0, 16.0));
+                    if response.hover_pos().is_some_and(|hp| hit.contains(hp)) {
+                        let stage = g
+                            .stage_ft
+                            .map_or_else(|| "n/a".to_string(), |v| format!("{v:.1} ft"));
+                        let mut tip =
+                            format!("{} ({})\n{stage} — {}", g.name, g.lid, glabel(g.cat));
+                        if let Some(f) = g.forecast_ft {
+                            tip.push_str(&format!(
+                                "\nFcst: {f:.1} ft ({})",
+                                glabel(g.forecast_cat)
+                            ));
+                        }
+                        response.clone().show_tooltip_text(tip);
+                    }
                 }
             }
         }
@@ -12863,44 +12878,51 @@ impl HookEchoApp {
         if self.show_radar_sites {
             let accent = crate::theme::accent(self.settings.theme);
             let current = self.views[idx].site.as_deref();
-            let show_labels = cam.zoom >= 5.0;
-            for (s, w) in sites_in_world() {
-                let (sx, sy) = cam.world_to_screen(*w, vp);
-                let p = egui::pos2(prect.left() + sx, prect.top() + sy);
-                if !prect.contains(p) {
-                    continue;
-                }
-                let is_current = current == Some(s.id);
-                let col = if is_current {
-                    accent
-                } else {
-                    egui::Color32::from_rgb(120, 190, 255)
-                };
-                let r = if is_current { 5.0 } else { 3.5 };
-                painter.circle_stroke(p, r, egui::Stroke::new(1.5, col));
-                painter.circle_filled(p, 1.5, col);
-                // The dot always draws — it is the click target, and it is small enough not to
-                // matter. Only the four-letter id competes for space, and it loses to city names:
-                // "TDAL" sitting across "Grapevine" is the exact overlap this pass exists for.
-                let id_rect = egui::Rect::from_min_size(
-                    p + egui::vec2(6.0, -6.0),
-                    egui::vec2(s.id.len() as f32 * 6.5, 12.0),
-                )
-                .expand(1.0);
-                if show_labels
-                    && self.labels.place(
-                        crate::labelplace::key(s.id),
-                        id_rect,
-                        crate::labelplace::Priority::Minor,
+            // Sticky, for the same reason as the gauges above: a site id that wins and loses the
+            // same collision on alternate frames is the flicker, not the collision.
+            for returning in [true, false] {
+                let show_labels = cam.zoom >= 5.0;
+                for (s, w) in sites_in_world() {
+                    if self.labels.was_shown(crate::labelplace::key(s.id)) != returning {
+                        continue;
+                    }
+                    let (sx, sy) = cam.world_to_screen(*w, vp);
+                    let p = egui::pos2(prect.left() + sx, prect.top() + sy);
+                    if !prect.contains(p) {
+                        continue;
+                    }
+                    let is_current = current == Some(s.id);
+                    let col = if is_current {
+                        accent
+                    } else {
+                        egui::Color32::from_rgb(120, 190, 255)
+                    };
+                    let r = if is_current { 5.0 } else { 3.5 };
+                    painter.circle_stroke(p, r, egui::Stroke::new(1.5, col));
+                    painter.circle_filled(p, 1.5, col);
+                    // The dot always draws — it is the click target, and it is small enough not to
+                    // matter. Only the four-letter id competes for space, and it loses to city names:
+                    // "TDAL" sitting across "Grapevine" is the exact overlap this pass exists for.
+                    let id_rect = egui::Rect::from_min_size(
+                        p + egui::vec2(6.0, -6.0),
+                        egui::vec2(s.id.len() as f32 * 6.5, 12.0),
                     )
-                {
-                    painter.text(
-                        p + egui::vec2(6.0, 0.0),
-                        egui::Align2::LEFT_CENTER,
-                        s.id,
-                        egui::FontId::monospace(10.0),
-                        col,
-                    );
+                    .expand(1.0);
+                    if show_labels
+                        && self.labels.place(
+                            crate::labelplace::key(s.id),
+                            id_rect,
+                            crate::labelplace::Priority::Minor,
+                        )
+                    {
+                        painter.text(
+                            p + egui::vec2(6.0, 0.0),
+                            egui::Align2::LEFT_CENTER,
+                            s.id,
+                            egui::FontId::monospace(10.0),
+                            col,
+                        );
+                    }
                 }
             }
         }
