@@ -342,9 +342,43 @@ const MAX_ALERTS: usize = 60;
 #[cfg(not(target_arch = "wasm32"))]
 const MAX_COUNTRIES: usize = 8;
 
-/// How long to leave the API alone after it says we are asking for too much.
+/// Shortest gap between two EDR fetches, whatever the overlay's own cadence is.
+///
+/// The overlays refresh every 120 s. That is 720 refreshes a day and, at up to [`MAX_COUNTRIES`]
+/// requests each, comfortably past a daily quota before lunch — the limit here is per day, not
+/// per minute, so the usual "it is only a few requests" reasoning does not apply. European
+/// warnings are issued hours ahead and updated in tens of minutes, so five is well inside the
+/// resolution anyone can use.
 #[cfg(not(target_arch = "wasm32"))]
-const RATE_LIMIT_COOLDOWN: std::time::Duration = std::time::Duration::from_secs(15 * 60);
+const EDR_MIN_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5 * 60);
+
+/// The last EDR answer, reused until [`EDR_MIN_INTERVAL`] is up.
+///
+/// Keyed by the bounds it was fetched for: panning inside them is served from here, and panning
+/// outside is a real question that has to be asked again.
+#[cfg(not(target_arch = "wasm32"))]
+#[allow(clippy::type_complexity)]
+static LAST_EDR: std::sync::Mutex<
+    Option<((f64, f64, f64, f64), std::time::Instant, Vec<GeoFeature>)>,
+> = std::sync::Mutex::new(None);
+
+/// Whether `bounds` is inside what the cached answer covers.
+#[cfg(not(target_arch = "wasm32"))]
+fn covers(cached: (f64, f64, f64, f64), bounds: (f64, f64, f64, f64)) -> bool {
+    cached.0 <= bounds.0 && cached.1 <= bounds.1 && cached.2 >= bounds.2 && cached.3 >= bounds.3
+}
+
+/// How long to leave the API alone after a 429 that does not say when to come back.
+///
+/// Only a fallback. The server does say, and [`reset_after`] reads it — this is for the day it
+/// stops sending the header.
+#[cfg(not(target_arch = "wasm32"))]
+const RATE_LIMIT_COOLDOWN: std::time::Duration = std::time::Duration::from_secs(60 * 60);
+
+/// Longest cooldown honoured, so a nonsense `X-RateLimit-Reset` cannot turn the layer off for a
+/// week. The quota is daily, so a day and a bit is the most that can be legitimate.
+#[cfg(not(target_arch = "wasm32"))]
+const MAX_COOLDOWN: std::time::Duration = std::time::Duration::from_secs(25 * 60 * 60);
 
 /// When the EDR path may be used again. Set on a 429; until then `fetch_in_view` falls back to
 /// the open feeds, so Europe keeps whatever warnings it can still draw.
@@ -361,15 +395,46 @@ fn edr_ready() -> bool {
     }
 }
 
+/// How long a 429 response asks us to wait, from its `X-RateLimit-Reset` (epoch seconds).
+///
+/// Split out from [`back_off`] so the arithmetic can be tested without a live 429 — which is not
+/// a hypothetical convenience, since earning one costs a day.
 #[cfg(not(target_arch = "wasm32"))]
-fn back_off() {
+fn reset_after(header: Option<&str>, now_epoch: i64) -> Option<std::time::Duration> {
+    let reset: i64 = header?.trim().parse().ok()?;
+    let secs = reset.checked_sub(now_epoch)?;
+    // A reset in the past is a clock disagreement, not an instruction to hammer the API.
+    (secs > 0).then(|| std::time::Duration::from_secs(secs as u64).min(MAX_COOLDOWN))
+}
+
+/// Stand down until the server says the quota is back.
+///
+/// The limit is **daily** — the body reads "Daily rate limit exceeded. Please try again
+/// tomorrow." — and the first version of this waited a flat fifteen minutes, which against a
+/// daily quota means retrying about ninety-six times a day, every one of them spending a request
+/// that is already gone and failing. `X-RateLimit-Reset` is sent for exactly this.
+#[cfg(not(target_arch = "wasm32"))]
+fn back_off(reset_header: Option<&str>) {
+    let wait = reset_after(reset_header, chrono::Utc::now().timestamp())
+        .unwrap_or(RATE_LIMIT_COOLDOWN);
     if let Ok(mut g) = COOLDOWN_UNTIL.lock() {
-        *g = Some(std::time::Instant::now() + RATE_LIMIT_COOLDOWN);
+        // Never shorten a cooldown already in force: several requests fly at once, and the last
+        // one to land must not talk the others back into trying.
+        let until = std::time::Instant::now() + wait;
+        if g.is_none_or(|t| until > t) {
+            *g = Some(until);
+        }
     }
     log::warn!(
         "meteoalarm: rate limited, using the open feeds for {} minutes",
-        RATE_LIMIT_COOLDOWN.as_secs() / 60
+        wait.as_secs() / 60
     );
+}
+
+/// One response header as a string, when it is present and is text.
+#[cfg(not(target_arch = "wasm32"))]
+fn header_str<'a>(resp: &'a reqwest::Response, name: &str) -> Option<&'a str> {
+    resp.headers().get(name)?.to_str().ok()
 }
 
 /// The API key, from the environment. Never from a file in this repo and never compiled in: it is
@@ -401,21 +466,17 @@ async fn countries_from_metadata(
     if let Some(body) = cache.lock().ok().and_then(|c| c.clone()) {
         return Ok(regions_in_view(&body, bounds));
     }
-    let body = client
+    let resp = client
         .get(REGIONS)
         .timeout(crate::net::FEED_TIMEOUT)
         .header("Authorization", format!("Bearer {key}"))
         .header("User-Agent", crate::alerts::USER_AGENT)
         .send()
-        .await?
-        .error_for_status()
-        .inspect_err(|e| {
-            if e.status() == Some(reqwest::StatusCode::TOO_MANY_REQUESTS) {
-                back_off();
-            }
-        })?
-        .text()
         .await?;
+    if resp.status() == reqwest::StatusCode::TOO_MANY_REQUESTS {
+        back_off(header_str(&resp, "x-ratelimit-reset"));
+    }
+    let body = resp.error_for_status()?.text().await?;
     if let Ok(mut c) = cache.lock() {
         *c = Some(body.clone());
     }
@@ -562,6 +623,15 @@ async fn fetch_edr(
     bounds: (f64, f64, f64, f64),
     key: &str,
 ) -> anyhow::Result<Vec<GeoFeature>> {
+    // Served from the last answer while it is fresh and still covers the screen. See
+    // `EDR_MIN_INTERVAL`: the quota is daily, and the overlay cadence alone would exhaust it.
+    if let Some(hit) = LAST_EDR.lock().ok().and_then(|c| {
+        c.as_ref()
+            .filter(|(b, at, _)| at.elapsed() < EDR_MIN_INTERVAL && covers(*b, bounds))
+            .map(|(_, _, f)| f.clone())
+    }) {
+        return Ok(hit);
+    }
     let mut countries = countries_from_metadata(client, key, bounds).await?;
     if countries.is_empty() {
         return Ok(Vec::new());
@@ -605,7 +675,7 @@ async fn fetch_edr(
                 return None;
             }
             if resp.status() == reqwest::StatusCode::TOO_MANY_REQUESTS {
-                back_off();
+                back_off(header_str(&resp, "x-ratelimit-reset"));
                 return None;
             }
             if !resp.status().is_success() {
@@ -669,6 +739,9 @@ async fn fetch_edr(
     let mut out = Vec::new();
     for cap in caps.into_iter().flatten() {
         out.extend(parse(&cap_envelope(&cap)));
+    }
+    if let Ok(mut c) = LAST_EDR.lock() {
+        *c = Some((bounds, std::time::Instant::now(), out.clone()));
     }
     Ok(out)
 }
@@ -833,6 +906,44 @@ mod edr_tests {
 
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
+    fn the_cached_answer_is_reused_only_where_it_actually_answers() {
+        // Panning inside the fetched box is served from the last answer; panning outside it is a
+        // question that was never asked, and must not be answered from a cache that has no
+        // warnings for the new ground.
+        let cached = (0.0, 45.0, 20.0, 55.0);
+        assert!(covers(cached, (5.0, 47.0, 15.0, 53.0)), "well inside");
+        assert!(covers(cached, cached), "the same view");
+        assert!(!covers(cached, (-5.0, 47.0, 15.0, 53.0)), "panned west");
+        assert!(!covers(cached, (5.0, 47.0, 15.0, 60.0)), "zoomed out north");
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn a_rate_limit_is_honoured_for_as_long_as_the_server_says() {
+        // The real 429, headers and body, recorded 2026-09-03:
+        //   X-RateLimit-Reset: 1788563205
+        //   {"error":"Daily rate limit exceeded. Please try again tomorrow."}
+        // 1788476805 is that response's own `date` header as epoch, so this is the exact 24-hour
+        // wait the server asked for. A flat fifteen-minute cooldown against a *daily* quota means
+        // retrying ninety-six times on a budget that is already spent.
+        let wait = reset_after(Some("1788563205"), 1_788_476_805).unwrap();
+        assert_eq!(wait.as_secs(), 86_400);
+
+        // No header: the fallback, not "retry immediately".
+        assert_eq!(reset_after(None, 1_788_476_805), None);
+        // Garbage, and a reset already in the past (a clock disagreement), are both "no answer"
+        // rather than an instruction to hammer the API.
+        assert_eq!(reset_after(Some("tomorrow"), 1_788_476_805), None);
+        assert_eq!(reset_after(Some("1788476800"), 1_788_476_805), None);
+        // A nonsense far-future value cannot switch the layer off for a week.
+        assert_eq!(
+            reset_after(Some("9999999999"), 1_788_476_805).unwrap(),
+            MAX_COOLDOWN
+        );
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
     fn the_aggregate_region_is_skipped_but_its_members_are_not() {
         // `ALL` is a box around the whole continent. Querying it as well as its members would
         // fetch every warning in Europe twice.
@@ -858,8 +969,27 @@ mod edr_tests {
         // Central Europe, which the open feeds cannot draw at all: Germany, Austria, Poland and
         // the Czech Republic are geocode-only and are not in `COUNTRIES`.
         let bounds = (6.0, 45.0, 20.0, 55.0);
-        let f = fetch_edr(&client, bounds, &key).await.unwrap();
+        // Not `unwrap`: the quota is daily, so the ordinary way for this to fail is "you already
+        // ran it today", and a backtrace is the wrong way to say that. The 429 body reads
+        // "Daily rate limit exceeded. Please try again tomorrow." and `X-RateLimit-Reset` names
+        // the hour.
+        let f = match fetch_edr(&client, bounds, &key).await {
+            Ok(f) => f,
+            Err(e) => {
+                eprintln!("EDR unavailable: {e}");
+                eprintln!("if this is a 429, the quota is daily — check X-RateLimit-Reset:");
+                eprintln!(
+                    "  curl -sI -H \"Authorization: Bearer $HOOKECHO_METEOALARM_KEY\" \\\n    https://api.meteoalarm.org/metadata/v1/regions"
+                );
+                panic!("EDR request failed: {e}");
+            }
+        };
         eprintln!("EDR returned {} features", f.len());
+        assert!(
+            !f.is_empty(),
+            "central Europe with nothing in force at all is possible but unusual — check the \
+             warning before believing it"
+        );
         for x in f.iter().take(5) {
             eprintln!("  {} — {} rings", x.title, x.rings.len());
         }
