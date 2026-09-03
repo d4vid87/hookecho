@@ -54,3 +54,6 @@ docs/clips/
 
 # Build output of the excluded strikes relay (it is its own workspace root).
 /scripts/strikes-relay/target/
+
+# Local editor/agent tooling config, not part of the project.
+/.serena/
