@@ -197,6 +197,7 @@ pub async fn fetch(
 ) -> anyhow::Result<(Vec<(String, GeoFeature)>, usize)> {
     let body = client
         .get(crate::net::fetch_url(LIST_URL))
+        .timeout(crate::net::FEED_TIMEOUT)
         .header("User-Agent", USER_AGENT)
         .send()
         .await?
@@ -215,6 +216,7 @@ pub async fn fetch(
         // One restriction's detail failing is not the layer failing: skip it and keep the rest.
         let Ok(resp) = client
             .get(crate::net::fetch_url(&url))
+            .timeout(crate::net::FEED_TIMEOUT)
             .header("User-Agent", USER_AGENT)
             .send()
             .await

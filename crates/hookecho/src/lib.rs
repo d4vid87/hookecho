@@ -177,6 +177,18 @@ pub fn decode_archive2(bytes: Vec<u8>) -> Result<Vec<u8>, wasm_bindgen::JsValue>
     wxdata::level2::decode_and_encode(bytes).map_err(|e| e.to_string().into())
 }
 
+/// Assemble a live chunk window, returning the partial `Scan` as postcard bytes.
+///
+/// The live stream's version of [`decode_archive2`], and the reason it exists: assembling the
+/// accumulated chunks is the same bzip2-and-decode work, it happens at every sweep boundary
+/// rather than once a volume, and on the page's thread that is a hitch every twenty seconds for
+/// as long as the tab is open. `framed` is `wxdata::live::frame_chunks`' output.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen::prelude::wasm_bindgen]
+pub fn assemble_live_chunks(framed: Vec<u8>) -> Result<Vec<u8>, wasm_bindgen::JsValue> {
+    wxdata::live::assemble_and_encode(&framed).map_err(|e| e.to_string().into())
+}
+
 /// Web entry point, called from `web/index.html` with the id of a `<canvas>`.
 ///
 /// Same `HookEchoApp` as every other platform — eframe's `WebRunner` takes the identical creation

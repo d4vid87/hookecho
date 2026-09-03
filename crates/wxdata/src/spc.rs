@@ -301,6 +301,7 @@ pub fn parse_watches(json: &str) -> anyhow::Result<Vec<GeoFeature>> {
 pub async fn fetch_watches(client: &reqwest::Client) -> anyhow::Result<Vec<GeoFeature>> {
     let body = client
         .get(crate::net::fetch_url(WATCH_URL))
+        .timeout(crate::net::FEED_TIMEOUT)
         .header("User-Agent", USER_AGENT)
         .send()
         .await?
@@ -329,6 +330,7 @@ pub async fn fetch_outlook_kind(
     };
     let body = client
         .get(crate::net::fetch_url(&url))
+        .timeout(crate::net::FEED_TIMEOUT)
         .header("User-Agent", USER_AGENT)
         .send()
         .await?
@@ -343,6 +345,7 @@ pub async fn fetch_outlook_kind(
 async fn fetch_md_text(client: &reqwest::Client, url: &str) -> Option<String> {
     let body = client
         .get(crate::net::fetch_url(url))
+        .timeout(crate::net::FEED_TIMEOUT)
         .header("User-Agent", USER_AGENT)
         .send()
         .await
@@ -365,6 +368,7 @@ pub async fn fetch_mesoscale_discussions(
 ) -> anyhow::Result<Vec<GeoFeature>> {
     let body = client
         .get(crate::net::fetch_url(MD_URL))
+        .timeout(crate::net::FEED_TIMEOUT)
         .header("User-Agent", USER_AGENT)
         .send()
         .await?

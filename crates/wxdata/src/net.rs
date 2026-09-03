@@ -35,6 +35,21 @@ pub const CORS_OK: &[&str] = &[
     "unidata-nexrad-level2-chunks.s3.amazonaws.com",
 ];
 
+/// How long any one feed request may take.
+///
+/// Every fetch in this crate carries it, and it is not the same thing as
+/// [`crate::task::timeout`] — both are needed. `task::timeout` bounds *our* bookkeeping by
+/// abandoning the future; it does not stop the request. In the browser a dropped future leaves
+/// `fetch` running and holding one of the six connections Chrome allows per origin, and since the
+/// whole web build talks to one origin through `/proxy/`, a handful of abandoned requests starve
+/// everything else — the map included. This is what actually cancels: reqwest's wasm backend
+/// implements a per-request timeout with an `AbortController`.
+///
+/// Native has client-level timeouts too (`hookecho::platform::http_timeouts`). Carrying this as
+/// well costs nothing, covers a body that dribbles rather than stalls, and keeps both targets
+/// reading the same.
+pub const FEED_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(45);
+
 // ponytail: string surgery over a URL crate, and a short known-good list rather than a preflight
 // probe; the ceiling is "the app's own feeds", and any host it cannot parse just goes unproxied.
 pub fn fetch_url(url: &str) -> String {

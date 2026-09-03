@@ -15,11 +15,18 @@ pub async fn download_object(
     key: &str,
 ) -> crate::result::Result<DownloadedBucketObject> {
     debug!("Downloading object key \"{key}\" from bucket \"{bucket}\"");
+    // hookecho patch: volumes are the biggest thing the app fetches; be patient, not infinite.
+    const REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(90);
     // hookecho patch: see `client::set_url_rewriter`. Identity on native.
     let path = crate::aws::client::rewrite_url(format!("https://{bucket}.s3.amazonaws.com/{key}"));
 
+    // hookecho patch: a per-request deadline. On wasm this is the only one there is (the client
+    // builder's timeouts are native-only above), and it is what aborts the underlying `fetch` —
+    // dropping the future does not, and an un-aborted fetch keeps one of the browser's six
+    // connections to this origin for as long as the tab lives.
     let response = client()
         .get(&path)
+        .timeout(REQUEST_TIMEOUT)
         .send()
         .await
         .map_err(S3GetObjectRequest)?;

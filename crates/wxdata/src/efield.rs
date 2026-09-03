@@ -151,6 +151,7 @@ pub fn parse_ppef(html: &str) -> Ppef {
 pub async fn fetch_ppef(client: &reqwest::Client) -> anyhow::Result<Ppef> {
     let body = client
         .get(crate::net::fetch_url(PPEF_URL))
+        .timeout(crate::net::FEED_TIMEOUT)
         .header("User-Agent", USER_AGENT)
         .send()
         .await?
@@ -207,6 +208,7 @@ pub fn parse_mill(json: &str) -> Vec<MillReading> {
 pub async fn fetch_mill(client: &reqwest::Client, url: &str) -> anyhow::Result<Vec<MillReading>> {
     let body = client
         .get(crate::net::fetch_url(url))
+        .timeout(crate::net::FEED_TIMEOUT)
         .header("User-Agent", USER_AGENT)
         .send()
         .await?

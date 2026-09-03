@@ -154,6 +154,7 @@ pub fn parse_caltrans(json: &str, agency: &str) -> Vec<DotCam> {
 pub async fn fetch_source(client: &reqwest::Client, s: &Source) -> anyhow::Result<Vec<DotCam>> {
     let body = client
         .get(crate::net::fetch_url(s.url))
+        .timeout(crate::net::FEED_TIMEOUT)
         .header("User-Agent", USER_AGENT)
         .send()
         .await?

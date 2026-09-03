@@ -12,8 +12,10 @@
 /// winit lifecycle events into every one of them, the UI stamps each frame here and the workers
 /// ask whether a frame happened recently and the window still has focus.
 ///
-/// Off-Android this is always "active": desktop background windows are cheap and users expect a
-/// tiled radar pane to keep updating.
+/// Desktop is always "active": background windows are cheap and users expect a tiled radar pane
+/// to keep updating. The browser is gated like Android — a hidden tab stops being animated, so
+/// the same "has there been a frame lately" test catches it — because there the timers driving
+/// the pollers keep running behind a page nobody can see.
 pub mod activity {
     use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
     use std::sync::OnceLock;
@@ -35,16 +37,34 @@ pub mod activity {
     pub fn mark_frame(focused: bool) -> bool {
         let last = LAST_FRAME_MS.swap(now_ms(), Ordering::Relaxed);
         let was_active = FOCUSED.swap(focused, Ordering::Relaxed);
-        focused && (!was_active || now_ms().saturating_sub(last) > STALE_MS)
+        let after_gap = now_ms().saturating_sub(last) > STALE_MS;
+        // In a browser, focus is the wrong question: a visible tab behind another window is not
+        // focused and should keep updating. The gap is the whole signal there.
+        if cfg!(target_arch = "wasm32") {
+            return after_gap;
+        }
+        focused && (!was_active || after_gap)
     }
 
     /// Whether background workers should do anything right now.
     pub fn is_active() -> bool {
+        let fresh_frame =
+            now_ms().saturating_sub(LAST_FRAME_MS.load(Ordering::Relaxed)) <= STALE_MS;
+        // A hidden tab stops getting animation frames, so the same staleness rule Android uses
+        // for a torn-down surface answers this for free — no `visibilitychange` listener, and
+        // nothing that can disagree with what the renderer is actually doing. It matters because
+        // the timers do *not* stop: a backgrounded tab kept polling volumes, streaming live
+        // chunks and refreshing feeds behind a page nobody was looking at, and every one of those
+        // holds memory a 32-bit heap never gives back.
+        if cfg!(target_arch = "wasm32") {
+            return fresh_frame;
+        }
+        // Desktop background windows are cheap, and a tiled radar pane is expected to keep
+        // updating whether or not it has focus.
         if !cfg!(target_os = "android") {
             return true;
         }
-        FOCUSED.load(Ordering::Relaxed)
-            && now_ms().saturating_sub(LAST_FRAME_MS.load(Ordering::Relaxed)) <= STALE_MS
+        FOCUSED.load(Ordering::Relaxed) && fresh_frame
     }
 }
 
@@ -1374,6 +1394,30 @@ pub fn http_timeouts(b: reqwest::ClientBuilder) -> reqwest::ClientBuilder {
         .timeout(std::time::Duration::from_secs(30))
         .connect_timeout(std::time::Duration::from_secs(10));
     b
+}
+
+#[cfg(test)]
+mod activity_tests {
+    use super::activity;
+
+    /// The gate answers three different questions on three platforms, and the browser's answer is
+    /// new. This pins the desktop one, which must not change: a window that has not drawn for a
+    /// while is still expected to keep polling, because on a desktop it is probably just behind
+    /// another window.
+    #[test]
+    fn a_desktop_window_is_always_active() {
+        assert!(activity::is_active());
+        // Even long after the last frame — there is no frame stamp in a test at all.
+        assert!(activity::is_active());
+    }
+
+    /// A resume is what re-arms the pollers, so it has to be reported exactly once per gap.
+    #[test]
+    fn the_first_frame_is_not_a_resume_but_a_later_gap_is() {
+        // Two frames back to back: no gap between them, so nothing to catch up on.
+        activity::mark_frame(true);
+        assert!(!activity::mark_frame(true), "consecutive frames are not a resume");
+    }
 }
 
 #[cfg(test)]

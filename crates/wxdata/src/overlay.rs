@@ -323,11 +323,47 @@ pub fn polygons_of(value: &GeometryValue) -> Vec<Vec<Vec<[f64; 2]>>> {
     }
 }
 
+/// The message from a body that is an error report rather than GeoJSON, if it is one.
+///
+/// ArcGIS REST — which is behind the watch boxes, the mesoscale discussions, WSSI, the ERO, the
+/// fire perimeters and the damage surveys — reports failure as **HTTP 200 with an error object**:
+///
+/// ```json
+/// {"error":{"code":404,"message":"Layer or Table not found","details":[]}}
+/// ```
+///
+/// `error_for_status()` sees a 200 and passes it straight to the parser, so a renumbered layer or
+/// an expired token surfaced as `geojson parse: missing field 'type' at line 1 column 72` — the
+/// length of that exact body, and a message that sends you looking at the parser instead of at
+/// the service. Checked here rather than at twelve call sites, because every one of them arrives
+/// through this function.
+fn upstream_error(json: &str) -> Option<String> {
+    let v: serde_json::Value = serde_json::from_str(json).ok()?;
+    let err = v.get("error")?;
+    // Both shapes seen in the wild: an object with a message, or a bare string.
+    let msg = match err {
+        serde_json::Value::String(s) => s.clone(),
+        _ => {
+            let text = err.get("message").and_then(|m| m.as_str()).unwrap_or("");
+            match err.get("code").and_then(|c| c.as_i64()) {
+                Some(code) if !text.is_empty() => format!("{text} ({code})"),
+                Some(code) => format!("code {code}"),
+                None if !text.is_empty() => text.to_string(),
+                None => return None,
+            }
+        }
+    };
+    Some(msg)
+}
+
 /// Iterate the features of a GeoJSON document, yielding (geometry value, properties).
 pub fn for_each_feature<F>(json: &str, mut f: F) -> anyhow::Result<()>
 where
     F: FnMut(&GeometryValue, &serde_json::Map<String, serde_json::Value>),
 {
+    if let Some(msg) = upstream_error(json) {
+        anyhow::bail!("upstream error: {msg}");
+    }
     let gj: GeoJson = json
         .parse()
         .map_err(|e| anyhow::anyhow!("geojson parse: {e}"))?;
@@ -491,5 +527,38 @@ mod dedupe_tests {
         let mut a = alert("urn:z", "");
         a.vtec = None;
         assert_eq!(a.dedupe_key(), "urn:z");
+    }
+
+    /// The body that sent someone looking at the parser: ArcGIS reports failure with HTTP 200 and
+    /// an error object, so it must be named as an upstream failure, not as malformed GeoJSON.
+    #[test]
+    fn an_error_body_is_reported_as_the_service_failing() {
+        let body = r#"{"error":{"code":404,"message":"Layer or Table not found","details":[]}}"#;
+        let err = super::for_each_feature(body, |_, _| {})
+            .expect_err("an error body is not a feature collection");
+        let msg = err.to_string();
+        assert!(msg.contains("upstream error"), "{msg}");
+        assert!(msg.contains("Layer or Table not found"), "{msg}");
+        assert!(msg.contains("404"), "{msg}");
+        // A bare-string `error` is the other shape these services use.
+        let bare = super::for_each_feature(r#"{"error":"Token Required"}"#, |_, _| {})
+            .expect_err("a string error body is still an error");
+        assert!(bare.to_string().contains("Token Required"));
+    }
+
+    /// Real GeoJSON must be unaffected — including a feature whose *properties* happen to carry an
+    /// `error` key, which is a shape the DAT damage surveys actually publish.
+    #[test]
+    fn ordinary_geojson_still_parses() {
+        let body = r#"{"type":"FeatureCollection","features":[
+            {"type":"Feature","properties":{"error":"none"},
+             "geometry":{"type":"Point","coordinates":[-97.0,35.0]}}]}"#;
+        let mut seen = 0;
+        super::for_each_feature(body, |_, props| {
+            seen += 1;
+            assert_eq!(props.get("error").and_then(|v| v.as_str()), Some("none"));
+        })
+        .expect("a feature collection parses");
+        assert_eq!(seen, 1);
     }
 }

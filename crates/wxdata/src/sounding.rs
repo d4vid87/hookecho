@@ -403,6 +403,7 @@ async fn fetch_run(
     );
     let idx = http
         .get(crate::net::fetch_url(&format!("{base}.idx")))
+        .timeout(crate::net::FEED_TIMEOUT)
         .header("User-Agent", USER_AGENT)
         .send()
         .await?
@@ -488,6 +489,7 @@ async fn sample_message(
     };
     let bytes = http
         .get(crate::net::fetch_url(base))
+        .timeout(crate::net::FEED_TIMEOUT)
         .header("User-Agent", USER_AGENT)
         .header("Range", range)
         .send()

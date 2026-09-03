@@ -72,6 +72,7 @@ pub async fn fetch(client: &reqwest::Client, day: u8) -> anyhow::Result<Vec<GeoF
             "{SERVICE}/{}/query?where=1%3D1&outFields=outlook,valid_time&f=geojson",
             day - 1
         )))
+        .timeout(crate::net::FEED_TIMEOUT)
         .header("User-Agent", USER_AGENT)
         .send()
         .await?

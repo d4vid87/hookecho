@@ -148,6 +148,7 @@ pub async fn fetch(http: &reqwest::Client, max_age_hours: i64) -> anyhow::Result
     for name in BULLETINS {
         let Ok(resp) = http
             .get(crate::net::fetch_url(&format!("{BASE}/{name}")))
+            .timeout(crate::net::FEED_TIMEOUT)
             .header("User-Agent", crate::alerts::USER_AGENT)
             .send()
             .await

@@ -24,7 +24,7 @@ use chrono::{DateTime, NaiveDate, Utc};
 use lru::LruCache;
 use std::num::NonZeroUsize;
 use std::sync::mpsc::{Receiver, Sender};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 #[cfg(not(target_arch = "wasm32"))]
 use tokio::runtime::Runtime;
 use wxdata::alerts::{self};
@@ -48,6 +48,32 @@ const QUIET_AFTER: std::time::Duration = std::time::Duration::from_secs(2);
 /// a reading up to 0.4 s stale. Everything that actually moves asks for its own repaint and is
 /// unaffected — see the comment at the use site.
 const IDLE_QUIET_MS: u64 = 500;
+
+/// How long any one overlay or field fetch may run before it is abandoned.
+///
+/// Shorter than the cadences that drive them (120 s for the alert/watch/MD burst, 60 s at the
+/// fastest for a gridded field), which is what keeps a stalled feed from stacking a second copy
+/// of itself on every tick. Deliberately *longer* than `wxdata::net::FEED_TIMEOUT`, which is the
+/// deadline that actually aborts the request: this one only drops our future, and dropping it
+/// first would leave the browser's `fetch` running with its connection held.
+const OVERLAY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(55);
+
+/// The same, for a Level 2 volume: bigger file, more patience, still finite. A volume fetch that
+/// never returns leaves its pane marked loading, and a pane marked loading never polls again.
+/// Again longer than the request's own 90 s deadline in the vendored S3 client, so the abort
+/// happens before we stop listening for it.
+const VOLUME_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(100);
+
+/// Loop frames in flight, keyed by volume name, with when each was kicked off.
+type PrefetchBook = std::collections::HashMap<String, Instant>;
+
+/// Take the prefetch book, recovering from poisoning.
+///
+/// A panic elsewhere while this is held must not take the loop down with it: the book is a list
+/// of names in flight, not an invariant. Losing track of one of them costs a duplicate download.
+fn book(b: &Mutex<PrefetchBook>) -> std::sync::MutexGuard<'_, PrefetchBook> {
+    b.lock().unwrap_or_else(|e| e.into_inner())
+}
 
 /// Even-odd point-in-ring test on a `[lon, lat]` ring — the click test for watch zones.
 fn point_in_ring_ll(ring: &[[f64; 2]], lon: f64, lat: f64) -> bool {
@@ -1344,6 +1370,10 @@ pub(crate) enum ToastKind {
 static FEED_ERRORS: std::sync::Mutex<Vec<(&'static str, String)>> =
     std::sync::Mutex::new(Vec::new());
 
+/// How many undrained feed errors are kept. More than fits on screen, far less than a failing
+/// network produces over an afternoon.
+const MAX_FEED_ERRORS: usize = 64;
+
 /// Log an auxiliary feed's failure and queue it for the user.
 ///
 /// "Auxiliary" means a feed whose failure leaves the rest of its layer standing — buoys inside
@@ -1352,6 +1382,12 @@ static FEED_ERRORS: std::sync::Mutex<Vec<(&'static str, String)>> =
 pub(crate) fn note_feed_error(feed: &'static str, err: impl std::fmt::Display) {
     log::warn!("{feed}: {err}");
     if let Ok(mut q) = FEED_ERRORS.lock() {
+        // Bounded because the drain is per frame and frames are not guaranteed: a hidden browser
+        // tab does not draw, and a network that is failing produces one of these per feed per
+        // refresh. The newest are the ones worth showing when the frames come back.
+        if q.len() >= MAX_FEED_ERRORS {
+            q.remove(0);
+        }
         q.push((feed, err.to_string()));
     }
 }
@@ -2020,10 +2056,14 @@ pub struct HookEchoApp {
     /// Decoded-volume LRU keyed by AWS object name, so scrubbing back and forth on the
     /// timeline doesn't re-download. ~10 volumes; each ~a few MB.
     scan_cache: LruCache<String, Arc<Scan>>,
-    /// Loop frames being fetched ahead of the playhead, with when they were kicked off. A fetch
-    /// whose result never arrives (it failed, or the site changed under it) ages out rather than
-    /// blocking a retry — nothing here is ever waited on indefinitely.
-    prefetching: std::collections::HashMap<String, Instant>,
+    /// Loop frames being fetched ahead of the playhead, with when they were kicked off.
+    ///
+    /// Shared with the fetch tasks so each one gives its slot back when it ends, however it ends.
+    /// The book used to be main-thread-only and expire on a timer, which meant a download slower
+    /// than the timer lost its entry while still running — and the next tick started it again,
+    /// and the one after that, without bound. The age-out survives as a backstop for a task that
+    /// is genuinely gone.
+    prefetching: Arc<Mutex<PrefetchBook>>,
     /// Browser only: the opening loop has not started yet. Cleared the moment it does, or when a
     /// deep link says the visitor asked for one specific moment rather than "show me now".
     autoplay_pending: bool,
@@ -2995,7 +3035,7 @@ impl HookEchoApp {
             // On Android the cap used to be 6 against a 10-frame loop window, so every wrap of the
             // loop missed on every frame and re-downloaded the whole thing, forever. It has to
             // hold the window plus the head and the frame being fetched.
-            prefetching: std::collections::HashMap::new(),
+            prefetching: Arc::new(Mutex::new(PrefetchBook::new())),
             autoplay_pending: cfg!(target_arch = "wasm32"),
             boot_at: Instant::now(),
             scan_cache: LruCache::new(NonZeroUsize::new(scan_cache_cap).unwrap()),
@@ -3591,10 +3631,13 @@ impl HookEchoApp {
 
     /// Largest edge a national field grid may keep. Bounded by what the GPU will accept, and
     /// then hard-capped: at 8192 a single f32 grid is ~268 MB of RAM before it is ever indexed,
-    /// which no phone should be asked to hold — and the Adreno 750 reports 16384, so the device
-    /// limit alone never bit. 4096 on Android is still finer than the screen can show.
+    /// which neither a phone nor a browser tab should be asked to hold — and the Adreno 750
+    /// reports 16384, so the device limit alone never bit. 4096 is still finer than either
+    /// screen can show.
     fn field_texture_cap(&self) -> usize {
-        let ceiling = if cfg!(target_os = "android") {
+        let ceiling = if cfg!(target_os = "android") || cfg!(target_arch = "wasm32") {
+            // The browser is in the phone's bracket here, not the desktop's: an 8192 f32 grid is
+            // ~268 MB staged before it is ever indexed, and a wasm heap only grows.
             4096
         } else {
             8192
@@ -3805,7 +3848,13 @@ impl HookEchoApp {
         let ctx = ctx.clone();
         let cap = self.field_texture_cap();
         self.spawner.spawn(async move {
-            match source.fetch(&http).await {
+            // Deliberately shorter than the 120 s refresh that drives this: a fetch that cannot
+            // outlive its own cadence cannot stack. Before, a feed the network swallowed left a
+            // task alive forever and the next tick started another one on top of it.
+            match wxdata::task::timeout(OVERLAY_TIMEOUT, source.fetch(&http))
+                .await
+                .unwrap_or_else(Err)
+            {
                 Ok(msg) => {
                     // Max-pool oversized grids here, on the fetch task: MRMS rotation tracks and
                     // AzShear arrive 14000x7000, and doing this on the UI thread stalled a frame
@@ -7684,6 +7733,10 @@ impl HookEchoApp {
                                 }
                             }
                         }
+                        // Cell ids churn every volume, and the map only ever grew — an entry
+                        // per cell the radar has ever named, for as long as the site is the same.
+                        // Keep the ones this volume still has.
+                        self.cell_trends.retain(|id, _| cells.iter().any(|c| &c.id == id));
                         self.storm_cells = cells;
                         self.cells_site = Some(site);
                         self.update_follow();
@@ -9269,7 +9322,6 @@ impl HookEchoApp {
                 }
                 DataMsg::UpToDate { view, .. } => self.views[view].loading = false,
                 DataMsg::Prefetched { name, scan, .. } => {
-                    self.prefetching.remove(&name);
 
                     self.scan_cache.put(name, Arc::new(scan));
                 }
@@ -9684,7 +9736,7 @@ impl HookEchoApp {
                     .map(|id| id.name().to_string())
                     .is_some_and(|n| {
                         !self.scan_cache.contains(&n)
-                            && self.prefetching.get(&n).is_some_and(|at| {
+                            && book(&self.prefetching).get(&n).is_some_and(|at| {
                                 // Bounded: a fetch that never answers must not park the loop.
                                 at.elapsed() < std::time::Duration::from_secs(8)
                             })
@@ -9828,12 +9880,15 @@ impl HookEchoApp {
     }
 
     /// Fetch the two frames after the playhead into the scan cache, so playback isn't a serial
-    /// download-per-frame. At most two are in flight, and an entry that never comes back (its
-    /// site changed under it) ages out after a minute.
+    /// download-per-frame. At most two are in flight; each task gives its slot back when it ends,
+    /// and anything still booked well past the fetch deadline is aged out.
     fn prefetch_frames(&mut self, idx: usize, ctx: &egui::Context) {
-        self.prefetching
-            .retain(|_, at| at.elapsed() < std::time::Duration::from_secs(15));
-        if self.prefetching.len() >= MAX_PREFETCH_INFLIGHT {
+        // Longer than a volume fetch is allowed to take, so this only ever reaps entries whose
+        // task is genuinely gone. At 15 s it reaped entries whose download was still running,
+        // and every tick after that started the same download again.
+        book(&self.prefetching)
+            .retain(|_, at| at.elapsed() < VOLUME_TIMEOUT + std::time::Duration::from_secs(15));
+        if book(&self.prefetching).len() >= MAX_PREFETCH_INFLIGHT {
             return;
         }
         let Some(site) = self.views[idx].site.clone() else {
@@ -9846,7 +9901,7 @@ impl HookEchoApp {
             .cloned()
             .collect();
         for id in wanted {
-            if self.prefetching.len() >= MAX_PREFETCH_INFLIGHT {
+            if book(&self.prefetching).len() >= MAX_PREFETCH_INFLIGHT {
                 break;
             }
             self.spawn_prefetch(idx, id, &site, ctx);
@@ -9856,24 +9911,37 @@ impl HookEchoApp {
     /// Start one frame download into the scan cache, unless it is already cached or in flight.
     fn spawn_prefetch(&mut self, idx: usize, id: Identifier, site: &str, ctx: &egui::Context) {
         let name = id.name().to_string();
-        if self.scan_cache.contains(&name) || self.prefetching.contains_key(&name) {
+        if self.scan_cache.contains(&name) || book(&self.prefetching).contains_key(&name) {
             return;
         }
-        self.prefetching.insert(name, Instant::now());
+        book(&self.prefetching).insert(name, Instant::now());
         let tx = self.msg_tx.clone();
         let (site, ctx) = (site.to_string(), ctx.clone());
         let view = idx;
+        let slot = self.prefetching.clone();
         self.spawner.spawn(async move {
             let name = id.name().to_string();
-            if let Ok(scan) = crate::volume::fetch(id, crate::paths::cache_dir()).await {
-                let _ = tx.send(DataMsg::Prefetched {
-                    view,
-                    site,
-                    name,
-                    scan,
-                });
-                ctx.request_repaint();
+            let fetched = wxdata::task::timeout(
+                VOLUME_TIMEOUT,
+                crate::volume::fetch(id, crate::paths::cache_dir()),
+            )
+            .await
+            .unwrap_or_else(Err);
+            match fetched {
+                Ok(scan) => {
+                    let _ = tx.send(DataMsg::Prefetched {
+                        view,
+                        site,
+                        name: name.clone(),
+                        scan,
+                    });
+                }
+                Err(e) => log::debug!("prefetch failed: {e}"),
             }
+            // Whatever happened, this slot is free: the message above may be dropped as stale
+            // (the site changed under it) and the book must not depend on it arriving.
+            book(&slot).remove(&name);
+            ctx.request_repaint();
         });
     }
 
@@ -9884,9 +9952,9 @@ impl HookEchoApp {
     /// back from the newest frame instead, under the same in-flight budget, so the visitor's first
     /// volume is the current one and the recent past fills in behind it.
     fn backfill_loop_frames(&mut self, idx: usize, ctx: &egui::Context) {
-        self.prefetching
-            .retain(|_, at| at.elapsed() < std::time::Duration::from_secs(15));
-        if self.prefetching.len() >= MAX_PREFETCH_INFLIGHT {
+        book(&self.prefetching)
+            .retain(|_, at| at.elapsed() < VOLUME_TIMEOUT + std::time::Duration::from_secs(15));
+        if book(&self.prefetching).len() >= MAX_PREFETCH_INFLIGHT {
             return;
         }
         let Some(site) = self.views[idx].site.clone() else {
@@ -9897,7 +9965,7 @@ impl HookEchoApp {
         let start = tl.frames.len().saturating_sub(window);
         let tail: Vec<Identifier> = tl.frames[start..].iter().rev().cloned().collect();
         for id in tail {
-            if self.prefetching.len() >= MAX_PREFETCH_INFLIGHT {
+            if book(&self.prefetching).len() >= MAX_PREFETCH_INFLIGHT {
                 break;
             }
             self.spawn_prefetch(idx, id, &site, ctx);
@@ -9910,7 +9978,16 @@ impl HookEchoApp {
         self.spawner.spawn(async move {
             let name = id.name().to_string();
             let time = id.date_time().unwrap_or_else(Utc::now);
-            let msg = match crate::volume::fetch(id, crate::paths::cache_dir()).await {
+            // The `Err` arm is what matters here: it clears the pane's `loading` flag. Without a
+            // deadline a swallowed request never took either arm, and a pane stuck on `loading`
+            // stops polling for the rest of the session.
+            let fetched = wxdata::task::timeout(
+                VOLUME_TIMEOUT,
+                crate::volume::fetch(id, crate::paths::cache_dir()),
+            )
+            .await
+            .unwrap_or_else(Err);
+            let msg = match fetched {
                 Ok(scan) => DataMsg::Volume {
                     view: view_idx,
                     site,

@@ -29,6 +29,7 @@ pub struct Spotter {
 pub async fn fetch_spotters(client: &reqwest::Client) -> anyhow::Result<Vec<Spotter>> {
     let body = client
         .get(crate::net::fetch_url(SPOTTERS_URL))
+        .timeout(crate::net::FEED_TIMEOUT)
         .header("User-Agent", crate::alerts::USER_AGENT)
         .send()
         .await?

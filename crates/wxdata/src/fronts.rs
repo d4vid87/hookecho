@@ -229,6 +229,7 @@ pub async fn fetch(http: &reqwest::Client) -> anyhow::Result<SurfaceAnalysis> {
         .get(crate::net::fetch_url(&format!(
             "{API}/products/types/COD/locations/SUS"
         )))
+        .timeout(crate::net::FEED_TIMEOUT)
         .header("User-Agent", USER_AGENT)
         .header("Accept", "application/ld+json")
         .send()
@@ -244,6 +245,7 @@ pub async fn fetch(http: &reqwest::Client) -> anyhow::Result<SurfaceAnalysis> {
 
     let body = http
         .get(crate::net::fetch_url(&format!("{API}/products/{id}")))
+        .timeout(crate::net::FEED_TIMEOUT)
         .header("User-Agent", USER_AGENT)
         .header("Accept", "application/ld+json")
         .send()

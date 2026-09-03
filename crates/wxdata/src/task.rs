@@ -45,6 +45,28 @@ pub async fn sleep(d: std::time::Duration) {
     gloo_timers::future::TimeoutFuture::new(d.as_millis() as u32).await;
 }
 
+/// Run `fut`, giving up after `d`.
+///
+/// The reason this exists rather than `reqwest`'s own timeout: on wasm reqwest has no timeout to
+/// set. The browser's `fetch` owns the request and exposes no deadline, so a connection a captive
+/// portal or a corporate proxy accepts and then never answers hangs forever — and every caller
+/// here holds something while it waits. A tile slot, the "still loading" flag on a pane, a place
+/// in an in-flight set. One hung request is a permanently blank basemap or a radar that never
+/// polls again, which is why the deadline belongs at this level and on both targets: native has
+/// reqwest's timeouts, but they do not cover a body that dribbles in a byte at a time either.
+pub async fn timeout<T>(
+    d: std::time::Duration,
+    fut: impl std::future::Future<Output = T>,
+) -> anyhow::Result<T> {
+    use futures_util::future::{select, Either};
+    let fut = std::pin::pin!(fut);
+    let timer = std::pin::pin!(sleep(d));
+    match select(fut, timer).await {
+        Either::Left((v, _)) => Ok(v),
+        Either::Right(_) => Err(anyhow::anyhow!("timed out after {}s", d.as_secs())),
+    }
+}
+
 /// Yield for `d`, but give up early once `active` goes false.
 ///
 /// Returns whether the wait ran to completion. Sleeping the whole interval in one go left a
@@ -87,6 +109,19 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn sleep_while_runs_the_whole_wait_when_active() {
         assert!(sleep_while(Duration::from_secs(3), || true).await);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn timeout_returns_a_ready_future_and_gives_up_on_a_stuck_one() {
+        assert_eq!(
+            timeout(Duration::from_secs(5), async { 7 })
+                .await
+                .expect("a future that finishes is not a timeout"),
+            7
+        );
+        // The shape of the bug this is for: a request that is neither answered nor refused.
+        let stuck = timeout(Duration::from_secs(5), std::future::pending::<()>()).await;
+        assert!(stuck.is_err(), "a future that never finishes times out");
     }
 }
 

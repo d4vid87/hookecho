@@ -102,6 +102,7 @@ pub enum PlaceKind {
 pub async fn fetch(http: &reqwest::Client, url: &str) -> anyhow::Result<Placefile> {
     let text = http
         .get(crate::net::fetch_url(url))
+        .timeout(crate::net::FEED_TIMEOUT)
         .send()
         .await?
         .error_for_status()?
