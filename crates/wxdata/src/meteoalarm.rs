@@ -75,6 +75,18 @@ pub async fn fetch_in_view(
     client: &reqwest::Client,
     bounds: (f64, f64, f64, f64),
 ) -> anyhow::Result<Vec<GeoFeature>> {
+    // With a key, every European country is reachable and carries real geometry; without one,
+    // only the eleven feeds that publish inline polygons are. See the EDR section at the bottom
+    // of this file, and the module header for why the keyless path is as narrow as it is.
+    #[cfg(not(target_arch = "wasm32"))]
+    if let Some(key) = api_key().filter(|_| edr_ready()) {
+        match fetch_edr(client, bounds, &key).await {
+            Ok(f) => return Ok(f),
+            // A key that has expired or a service having a bad day must not take European
+            // warnings off the map entirely when the open feeds would still have answered.
+            Err(e) => log::warn!("meteoalarm EDR failed, falling back to the open feeds: {e}"),
+        }
+    }
     // Up to eleven countries can be in view, and they were fetched one after another — eleven
     // round trips deep instead of one wide, on a 120 s refresh.
     let bodies =
@@ -292,6 +304,376 @@ pub fn parse(body: &str) -> Vec<GeoFeature> {
     out
 }
 
+// ---------------------------------------------------------------------------------------------
+// EDR: every European warning, not just the ones that carry their own polygon.
+// ---------------------------------------------------------------------------------------------
+
+/// MeteoAlarm's OGC EDR API, which answers the question the module header above says is
+/// unanswerable — and it is answerable now because MeteoAlarm resolves the geocodes itself.
+///
+/// The shape is a two-step. `locations/{country}` returns one GeoJSON feature per warning *area*,
+/// carrying only that area's bounding box inline plus the `alertId` it belongs to; the alert's
+/// full CAP document, polygons and all, is a separate link. So a view is served by listing the
+/// countries it touches, throwing away every area whose bbox misses the screen, and then fetching
+/// the handful of CAP documents that are left. Those CAP links are pre-signed and public — the
+/// key is needed for the index, not for the payload.
+///
+/// This is gated on a key being present, and the key comes from the environment. Without one the
+/// [`FEED`] path above still runs, so the app is unchanged for everyone who has not got one.
+#[cfg(not(target_arch = "wasm32"))]
+const EDR: &str = "https://api.meteoalarm.org/edr/v1/collections/warnings/locations";
+
+/// The country bounding boxes, which the metadata API serves so this crate does not have to
+/// hand-maintain 33 of them.
+#[cfg(not(target_arch = "wasm32"))]
+const REGIONS: &str = "https://api.meteoalarm.org/metadata/v1/regions";
+
+/// One busy country can publish thousands of warnings in a day; Germany warns per WARNCELLID and
+/// runs to sixty-three pages. The "active right now" window is the reason this is tractable at
+/// all — it cuts Germany to about 136 — and these caps are the backstop for the day it is not.
+#[cfg(not(target_arch = "wasm32"))]
+const MAX_PAGES: usize = 4;
+#[cfg(not(target_arch = "wasm32"))]
+const MAX_ALERTS: usize = 60;
+
+/// Countries queried per refresh. A view zoomed out to the whole continent touches every one of
+/// them, and firing thirty-odd requests at once earns a 429 — which is not a hypothetical: the
+/// first version of this did exactly that and the API locked the key out for over ten minutes.
+#[cfg(not(target_arch = "wasm32"))]
+const MAX_COUNTRIES: usize = 8;
+
+/// How long to leave the API alone after it says we are asking for too much.
+#[cfg(not(target_arch = "wasm32"))]
+const RATE_LIMIT_COOLDOWN: std::time::Duration = std::time::Duration::from_secs(15 * 60);
+
+/// When the EDR path may be used again. Set on a 429; until then `fetch_in_view` falls back to
+/// the open feeds, so Europe keeps whatever warnings it can still draw.
+#[cfg(not(target_arch = "wasm32"))]
+static COOLDOWN_UNTIL: std::sync::Mutex<Option<std::time::Instant>> = std::sync::Mutex::new(None);
+
+/// Whether the EDR path is allowed right now.
+#[cfg(not(target_arch = "wasm32"))]
+fn edr_ready() -> bool {
+    match COOLDOWN_UNTIL.lock() {
+        Ok(g) => g.is_none_or(|t| std::time::Instant::now() >= t),
+        // A poisoned lock is not a reason to stop drawing warnings.
+        Err(_) => true,
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn back_off() {
+    if let Ok(mut g) = COOLDOWN_UNTIL.lock() {
+        *g = Some(std::time::Instant::now() + RATE_LIMIT_COOLDOWN);
+    }
+    log::warn!(
+        "meteoalarm: rate limited, using the open feeds for {} minutes",
+        RATE_LIMIT_COOLDOWN.as_secs() / 60
+    );
+}
+
+/// The API key, from the environment. Never from a file in this repo and never compiled in: it is
+/// a personal credential, and a build that carries one publishes it to everyone who downloads it.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn api_key() -> Option<String> {
+    std::env::var("HOOKECHO_METEOALARM_KEY")
+        .ok()
+        .map(|k| k.trim().to_string())
+        .filter(|k| !k.is_empty())
+}
+
+/// Country codes whose bounding box overlaps `bounds`, from the metadata API.
+///
+/// `ALL` is in that list as a box around the whole continent and is deliberately skipped: it is
+/// the aggregate feed, and querying it as well as its members would fetch everything twice.
+#[cfg(not(target_arch = "wasm32"))]
+async fn countries_from_metadata(
+    client: &reqwest::Client,
+    key: &str,
+    bounds: (f64, f64, f64, f64),
+) -> anyhow::Result<Vec<String>> {
+    // Country outlines do not move, and the overlay refreshes every 120 s. Fetched once per run
+    // and kept: without this it was a request per refresh on a rate-limited API, spent to learn
+    // where Denmark is.
+    static REGIONS_CACHE: std::sync::OnceLock<std::sync::Mutex<Option<String>>> =
+        std::sync::OnceLock::new();
+    let cache = REGIONS_CACHE.get_or_init(|| std::sync::Mutex::new(None));
+    if let Some(body) = cache.lock().ok().and_then(|c| c.clone()) {
+        return Ok(regions_in_view(&body, bounds));
+    }
+    let body = client
+        .get(REGIONS)
+        .timeout(crate::net::FEED_TIMEOUT)
+        .header("Authorization", format!("Bearer {key}"))
+        .header("User-Agent", crate::alerts::USER_AGENT)
+        .send()
+        .await?
+        .error_for_status()
+        .inspect_err(|e| {
+            if e.status() == Some(reqwest::StatusCode::TOO_MANY_REQUESTS) {
+                back_off();
+            }
+        })?
+        .text()
+        .await?;
+    if let Ok(mut c) = cache.lock() {
+        *c = Some(body.clone());
+    }
+    Ok(regions_in_view(&body, bounds))
+}
+
+/// The overlap test, split out from the fetch so it can be tested against a recorded response.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn regions_in_view(body: &str, bounds: (f64, f64, f64, f64)) -> Vec<String> {
+    let (x0, y0, x1, y1) = bounds;
+    let Ok(doc) = serde_json::from_str::<serde_json::Value>(body) else {
+        return Vec::new();
+    };
+    let Some(regions) = doc.get("regions").and_then(|r| r.as_array()) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for r in regions {
+        let Some(code) = r.get("code").and_then(|c| c.as_str()) else {
+            continue;
+        };
+        if code == "ALL" || r.get("active").and_then(|a| a.as_bool()) == Some(false) {
+            continue;
+        }
+        // `bb` is a closed ring of [lon, lat] corners, not a [minx, miny, maxx, maxy] tuple.
+        let Some(ring) = r.get("bb").and_then(|b| b.as_array()) else {
+            continue;
+        };
+        let pts: Vec<(f64, f64)> = ring
+            .iter()
+            .filter_map(|p| {
+                let a = p.as_array()?;
+                Some((a.first()?.as_f64()?, a.get(1)?.as_f64()?))
+            })
+            .collect();
+        if pts.is_empty() {
+            continue;
+        }
+        let (mut a0, mut b0, mut a1, mut b1) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
+        for (x, y) in pts {
+            a0 = a0.min(x);
+            a1 = a1.max(x);
+            b0 = b0.min(y);
+            b1 = b1.max(y);
+        }
+        if a0 <= x1 && a1 >= x0 && b0 <= y1 && b1 >= y0 {
+            out.push(code.to_string());
+        }
+    }
+    out
+}
+
+/// The alert ids whose area bounding box is on screen, and the CAP link for each.
+///
+/// Deduplicated by alert: one warning explodes into an area per region it covers — a hundred
+/// features for four alerts is an ordinary ratio — and the CAP document behind all of them is the
+/// same file.
+pub fn alerts_in_view(body: &str, bounds: (f64, f64, f64, f64)) -> Vec<(String, String)> {
+    let (x0, y0, x1, y1) = bounds;
+    let Ok(doc) = serde_json::from_str::<serde_json::Value>(body) else {
+        return Vec::new();
+    };
+    let Some(features) = doc.get("features").and_then(|f| f.as_array()) else {
+        return Vec::new();
+    };
+    let mut seen = std::collections::HashSet::new();
+    let mut out = Vec::new();
+    for f in features.iter().take(MAX_WARNINGS) {
+        let Some(id) = f
+            .get("properties")
+            .and_then(|p| p.get("alertId"))
+            .and_then(|v| v.as_str())
+        else {
+            continue;
+        };
+        if seen.contains(id) {
+            continue;
+        }
+        let Some(coords) = f
+            .get("geometry")
+            .and_then(|g| g.get("coordinates"))
+            .and_then(|c| c.as_array())
+            .and_then(|c| c.first())
+            .and_then(|r| r.as_array())
+        else {
+            continue;
+        };
+        let (mut a0, mut b0, mut a1, mut b1) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
+        for p in coords {
+            let Some(pt) = p.as_array() else { continue };
+            let (Some(x), Some(y)) = (
+                pt.first().and_then(|v| v.as_f64()),
+                pt.get(1).and_then(|v| v.as_f64()),
+            ) else {
+                continue;
+            };
+            a0 = a0.min(x);
+            a1 = a1.max(x);
+            b0 = b0.min(y);
+            b1 = b1.max(y);
+        }
+        if !(a0 <= x1 && a1 >= x0 && b0 <= y1 && b1 >= y0) {
+            continue;
+        }
+        let Some(link) = f
+            .get("links")
+            .and_then(|l| l.as_array())
+            .and_then(|ls| ls.iter().find(|l| l.get("rel").and_then(|r| r.as_str()) == Some("json")))
+            .and_then(|l| l.get("href"))
+            .and_then(|h| h.as_str())
+        else {
+            continue;
+        };
+        seen.insert(id.to_string());
+        out.push((id.to_string(), link.to_string()));
+    }
+    out
+}
+
+/// How many pages a locations response says it has. One when it does not say.
+fn total_pages(body: &str) -> usize {
+    serde_json::from_str::<serde_json::Value>(body)
+        .ok()
+        .and_then(|d| d.get("metadata")?.get("total_pages")?.as_u64())
+        .unwrap_or(1) as usize
+}
+
+/// Wrap a bare CAP alert document in the envelope [`parse`] reads.
+///
+/// The Atom feeds hand out `{"warnings": [{"alert": …}]}`; the EDR API hands out the alert on its
+/// own. One line here means the whole level, colour, language and polygon reading below is shared
+/// by both paths instead of written twice.
+pub fn cap_envelope(cap: &str) -> String {
+    format!("{{\"warnings\":[{{\"alert\":{cap}}}]}}")
+}
+
+/// Every warning in view, through the EDR API.
+///
+/// One country failing does not fail the overlay, same as the feed path: a met service can have a
+/// bad afternoon without taking the rest of Europe off the map.
+#[cfg(not(target_arch = "wasm32"))]
+async fn fetch_edr(
+    client: &reqwest::Client,
+    bounds: (f64, f64, f64, f64),
+    key: &str,
+) -> anyhow::Result<Vec<GeoFeature>> {
+    let mut countries = countries_from_metadata(client, key, bounds).await?;
+    if countries.is_empty() {
+        return Ok(Vec::new());
+    }
+    countries.truncate(MAX_COUNTRIES);
+    // "What is in force right now", not "what was issued today". A warning in force started
+    // before now, so the window has to reach backwards; a day-wide window instead returns
+    // thousands of expired ones — 6272 for Germany alone against 136 for this.
+    let now = chrono::Utc::now();
+    let window = format!(
+        "{}/{}",
+        (now - chrono::Duration::hours(1)).format("%Y-%m-%dT%H:%M:%SZ"),
+        (now + chrono::Duration::hours(1)).format("%Y-%m-%dT%H:%M:%SZ"),
+    );
+
+    // Page 1 of each country first, then only the extra pages the response says exist.
+    //
+    // Asking for `MAX_PAGES` of every country up front is what a `flat_map` wants to write, and
+    // it earns an immediate 429: most countries have one page or none, so it is dozens of
+    // requests to learn nothing. The first version did exactly that and the whole overlay came
+    // back empty, because the rate-limit response was being swallowed by an `.ok()?`.
+    let get = |url: String| {
+        let key = key.to_string();
+        async move {
+            let resp = match client
+                .get(&url)
+                .timeout(crate::net::FEED_TIMEOUT)
+                .header("Authorization", format!("Bearer {key}"))
+                .header("User-Agent", crate::alerts::USER_AGENT)
+                .send()
+                .await
+            {
+                Ok(r) => r,
+                Err(e) => {
+                    log::warn!("meteoalarm EDR {url}: {e}");
+                    return None;
+                }
+            };
+            // 204 is "nothing in force here", which is the common answer and not a failure.
+            if resp.status() == reqwest::StatusCode::NO_CONTENT {
+                return None;
+            }
+            if resp.status() == reqwest::StatusCode::TOO_MANY_REQUESTS {
+                back_off();
+                return None;
+            }
+            if !resp.status().is_success() {
+                // Said out loud on purpose: a 401 is an expired key and a 429 is asking for too
+                // much, and both used to look exactly like a quiet continent.
+                log::warn!("meteoalarm EDR {}: HTTP {}", url, resp.status());
+                return None;
+            }
+            resp.text().await.ok()
+        }
+    };
+
+    let firsts = futures_util::future::join_all(
+        countries
+            .iter()
+            .map(|code| get(format!("{EDR}/{code}?datetime={window}&page=1"))),
+    )
+    .await;
+
+    let mut bodies: Vec<String> = Vec::new();
+    let mut more: Vec<String> = Vec::new();
+    for (code, body) in countries.iter().zip(firsts) {
+        let Some(body) = body else { continue };
+        let total = total_pages(&body).min(MAX_PAGES);
+        for p in 2..=total {
+            more.push(format!("{EDR}/{code}?datetime={window}&page={p}"));
+        }
+        bodies.push(body);
+    }
+    bodies.extend(
+        futures_util::future::join_all(more.into_iter().map(get))
+            .await
+            .into_iter()
+            .flatten(),
+    );
+
+    let mut links: Vec<(String, String)> = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for body in &bodies {
+        for (id, link) in alerts_in_view(body, bounds) {
+            if seen.insert(id.clone()) {
+                links.push((id, link));
+            }
+        }
+    }
+    links.truncate(MAX_ALERTS);
+
+    // The CAP links are pre-signed and public, so these carry no key — and must not, since they
+    // point at object storage rather than at the API.
+    let caps = futures_util::future::join_all(links.into_iter().map(|(id, url)| async move {
+        match client.get(&url).timeout(crate::net::FEED_TIMEOUT).send().await {
+            Ok(r) => r.error_for_status().ok()?.text().await.ok(),
+            Err(e) => {
+                log::warn!("meteoalarm alert {id}: fetch failed ({e})");
+                None
+            }
+        }
+    }))
+    .await;
+
+    let mut out = Vec::new();
+    for cap in caps.into_iter().flatten() {
+        out.extend(parse(&cap_envelope(&cap)));
+    }
+    Ok(out)
+}
+
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -406,6 +788,80 @@ mod tests {
             r#"{"warnings":[{"alert":{"info":[{"language":"en","parameter":[{"valueName":"awareness_level","value":"4"}],"area":[{"polygon":["oops"]}]}]}}]}"#,
         ] {
             assert!(parse(bad).is_empty(), "{bad}");
+        }
+    }
+}
+
+#[cfg(test)]
+mod edr_tests {
+    use super::*;
+
+    #[test]
+    fn a_bare_cap_alert_reads_the_same_as_a_feed_one() {
+        // The EDR API hands out the alert on its own; the Atom feeds wrap it. One envelope, and
+        // every level, colour, language and polygon rule below is shared rather than duplicated.
+        let cap = r#"{"identifier":"x-1","info":[{"language":"en-GB","senderName":"Met Test",
+            "headline":"Strong wind","description":"d","instruction":"i",
+            "expires":"2026-09-04T00:00:00Z",
+            "parameter":[{"valueName":"awareness_level","value":"3; orange; Severe"},
+                         {"valueName":"awareness_type","value":"1; Wind"}],
+            "area":[{"areaDesc":"Somewhere","polygon":["55.0,10.0 55.0,11.0 56.0,11.0 55.0,10.0"]}]}]}"#;
+        let f = parse(&cap_envelope(cap));
+        assert_eq!(f.len(), 1);
+        assert_eq!(f[0].title, "Orange Wind Warning");
+        // CAP writes latitude first and every ring here is [lon, lat]; getting that backwards puts
+        // Denmark in Somalia rather than failing.
+        assert_eq!(f[0].rings[0][0], [10.0, 55.0]);
+    }
+
+    #[test]
+    fn only_the_alerts_on_screen_are_fetched_and_each_only_once() {
+        // Two areas of one alert plus one area of another, all with a bbox geometry — the shape
+        // the locations query really returns. The off-screen one must not cost a CAP fetch, and
+        // the repeated alert must not cost two.
+        let body = r#"{"type":"FeatureCollection","features":[
+          {"properties":{"alertId":"a"},"geometry":{"type":"Polygon","coordinates":[[[10.0,55.0],[11.0,55.0],[11.0,56.0],[10.0,55.0]]]},
+           "links":[{"rel":"json","href":"https://example.invalid/a.json"}]},
+          {"properties":{"alertId":"a"},"geometry":{"type":"Polygon","coordinates":[[[10.5,55.5],[11.5,55.5],[11.5,56.5],[10.5,55.5]]]},
+           "links":[{"rel":"json","href":"https://example.invalid/a.json"}]},
+          {"properties":{"alertId":"b"},"geometry":{"type":"Polygon","coordinates":[[[-8.0,40.0],[-7.0,40.0],[-7.0,41.0],[-8.0,40.0]]]},
+           "links":[{"rel":"json","href":"https://example.invalid/b.json"}]}]}"#;
+        let got = alerts_in_view(body, (9.0, 54.0, 12.0, 57.0));
+        assert_eq!(got.len(), 1, "one alert, not two areas and not Portugal");
+        assert_eq!(got[0].0, "a");
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn the_aggregate_region_is_skipped_but_its_members_are_not() {
+        // `ALL` is a box around the whole continent. Querying it as well as its members would
+        // fetch every warning in Europe twice.
+        let body = r#"{"regions":[
+          {"active":true,"code":"ALL","name":"All of Europe","bb":[[-25.0,35.0],[45.0,35.0],[45.0,75.0],[-25.0,75.0],[-25.0,35.0]]},
+          {"active":true,"code":"DK","name":"Denmark","bb":[[8.0,54.5],[8.0,57.8],[15.2,57.8],[15.2,54.5],[8.0,54.5]]},
+          {"active":true,"code":"MT","name":"Malta","bb":[[14.1,35.8],[14.1,36.1],[14.6,36.1],[14.6,35.8],[14.1,35.8]]}]}"#;
+        assert_eq!(regions_in_view(body, (9.0, 54.0, 12.0, 57.0)), ["DK"]);
+        // And a view over Malta gets Malta, so the box test is not simply always false.
+        assert_eq!(regions_in_view(body, (14.2, 35.9, 14.4, 36.0)), ["MT"]);
+    }
+    /// Live check against MeteoAlarm's EDR API. Needs `HOOKECHO_METEOALARM_KEY`:
+    /// `HOOKECHO_METEOALARM_KEY=… cargo test -p wxdata live_edr -- --ignored --nocapture`
+    #[cfg(not(target_arch = "wasm32"))]
+    #[tokio::test]
+    #[ignore]
+    async fn live_edr() {
+        let Some(key) = api_key() else {
+            eprintln!("no HOOKECHO_METEOALARM_KEY set");
+            return;
+        };
+        let client = reqwest::Client::new();
+        // Central Europe, which the open feeds cannot draw at all: Germany, Austria, Poland and
+        // the Czech Republic are geocode-only and are not in `COUNTRIES`.
+        let bounds = (6.0, 45.0, 20.0, 55.0);
+        let f = fetch_edr(&client, bounds, &key).await.unwrap();
+        eprintln!("EDR returned {} features", f.len());
+        for x in f.iter().take(5) {
+            eprintln!("  {} — {} rings", x.title, x.rings.len());
         }
     }
 }
