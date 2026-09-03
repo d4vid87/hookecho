@@ -143,9 +143,15 @@ pub fn os_decorated() -> bool {
 /// dispatched any `--headless-*` verifier.
 #[cfg(not(any(target_os = "android", target_arch = "wasm32")))]
 pub fn run_desktop() -> eframe::Result<()> {
+    // Reopen at the size you left it. Read from the settings file this app already writes rather
+    // than eframe's `persistence` feature, which would pull a whole key-value store in to remember
+    // two floats and a bool.
+    let saved = crate::settings::Settings::load().window;
+    let size = saved.map_or([1280.0, 800.0], |w| [w.width, w.height]);
     let mut native_options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_inner_size([1280.0, 800.0])
+            .with_inner_size(size)
+            .with_maximized(saved.is_some_and(|w| w.maximized))
             // The floating chrome has fixed-width cards; below this they stack on top of the map
             // and each other.
             .with_min_inner_size([800.0, 500.0])
