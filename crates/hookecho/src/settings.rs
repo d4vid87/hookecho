@@ -104,6 +104,17 @@ fn default_live_loop_frames() -> usize {
     10
 }
 
+/// Where the desktop window was last time. Size only, not position: a saved position is wrong the
+/// moment a monitor is unplugged or a laptop is docked, and a window that opens off-screen is a
+/// worse bug than one that opens in the wrong place.
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct WindowGeom {
+    pub width: f32,
+    pub height: f32,
+    #[serde(default)]
+    pub maximized: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
@@ -456,6 +467,14 @@ pub struct Settings {
     /// statement: someone turned everything off, and it has to survive a restart.
     #[serde(default)]
     pub overlays_on: Option<Vec<String>>,
+    /// Desktop window size in logical points, and whether it was maximized, as of the last run.
+    /// `None` on a first run, where the built-in 1280x800 stands.
+    ///
+    /// Kept here rather than turning on eframe's `persistence` feature: that pulls in a whole
+    /// key-value store and its serialization to remember two floats and a bool that this file is
+    /// already being written for.
+    #[serde(default)]
+    pub window: Option<WindowGeom>,
     /// Saved pane layouts (see `crate::workspace`), applied from the command palette. Distinct
     /// from `presets`, which is the starred-radar-site list.
     #[serde(default)]
@@ -1145,6 +1164,7 @@ impl Default for Settings {
             live_loop_frames: default_live_loop_frames(),
             basemap: String::new(),
             overlays_on: None,
+            window: None,
             workspaces: Vec::new(),
             seeded_workspaces: false,
             last_view: None,
@@ -1631,6 +1651,7 @@ mod tests {
             live_loop_frames: 12,
             basemap: "carto-dark".to_string(),
             overlays_on: Some(vec!["Alerts".to_string(), "Wind".to_string()]),
+            window: None,
             last_view: Some(StartView {
                 site: "KOUN".to_string(),
                 x: 0.2,
@@ -1716,6 +1737,21 @@ mod tests {
         let empty: Settings =
             serde_json::from_str(r#"{"default_site":"KDMX","overlays_on":[]}"#).unwrap();
         assert_eq!(empty.overlays_on, Some(Vec::new()));
+    }
+
+    #[test]
+    fn a_window_size_is_remembered_and_an_old_file_still_loads() {
+        // Written by a build that predates the key: no window, so the built-in 1280x800 stands.
+        let old: Settings = serde_json::from_str(r#"{"default_site":"KDMX"}"#).unwrap();
+        assert_eq!(old.window, None);
+        // `maximized` has its own default, so a file written before that field existed is fine too.
+        let s: Settings =
+            serde_json::from_str(r#"{"window":{"width":1600.0,"height":900.0}}"#).unwrap();
+        let w = s.window.unwrap();
+        assert_eq!((w.width, w.height, w.maximized), (1600.0, 900.0, false));
+        // And it round-trips, which is what the save path relies on.
+        let back: Settings = serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
+        assert_eq!(back.window, s.window);
     }
 
     #[test]

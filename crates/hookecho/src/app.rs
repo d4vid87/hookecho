@@ -16833,6 +16833,38 @@ impl eframe::App for HookEchoApp {
                 .map(|t| t.slug())
                 .collect();
             self.settings.overlays_on = Some(on);
+            // Same trick for the window: fold the live size in, and the ordinary diff-and-save
+            // below persists it.
+            //
+            // Measured from the root `Ui`, not `ViewportInfo::inner_rect`: on Wayland the
+            // compositor never tells a client where its window is, so `inner_rect` is `None`
+            // there and this silently saved nothing at all. The root ui covers the whole
+            // viewport, in egui points — logical points divided by the ui-scale zoom — so
+            // multiplying the zoom back gives the units `with_inner_size` wants.
+            //
+            // While maximized the size on screen is the screen's, not the one to restore to, so
+            // the previous size is kept and only the flag moves.
+            #[cfg(not(any(target_os = "android", target_arch = "wasm32")))]
+            {
+                let (maximized, minimized) = root.ctx().input(|i| {
+                    (
+                        i.viewport().maximized.unwrap_or(false),
+                        i.viewport().minimized.unwrap_or(false),
+                    )
+                });
+                let size = root.max_rect().size() * root.ctx().zoom_factor();
+                if !minimized && size.x > 1.0 && size.y > 1.0 {
+                    let (width, height) = match self.settings.window {
+                        Some(w) if maximized => (w.width, w.height),
+                        _ => (size.x, size.y),
+                    };
+                    self.settings.window = Some(crate::settings::WindowGeom {
+                        width,
+                        height,
+                        maximized,
+                    });
+                }
+            }
         }
         if due && self.settings != self.saved {
             // A palette-map change reloads the color tables (bumps gen -> LUT re-bake).
