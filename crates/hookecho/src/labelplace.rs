@@ -147,6 +147,33 @@ mod tests {
         assert!(p.place(key("b"), r(0.0, 0.0), Priority::Place));
     }
 
+    /// The call-site half of stickiness, which is where it is actually implemented: every layer
+    /// that competes for space has to sort returning labels first. Without the sort, two labels
+    /// that overlap trade the slot every frame — the flicker. With it, whichever one won first
+    /// keeps winning until it leaves the screen.
+    #[test]
+    fn sorting_returning_labels_first_stops_them_alternating() {
+        let mut p = Placer::default();
+        // Two overlapping candidates, and the input order flips each frame the way a sort by
+        // distance or wind speed would as the data updates.
+        let mut winners = Vec::new();
+        for frame in 0..4 {
+            p.begin();
+            let mut cands = if frame % 2 == 0 {
+                vec![("a", r(0.0, 0.0)), ("b", r(4.0, 4.0))]
+            } else {
+                vec![("b", r(4.0, 4.0)), ("a", r(0.0, 0.0))]
+            };
+            cands.sort_by_key(|(id, _)| !p.was_shown(key(id)));
+            for (id, rect) in cands {
+                if p.place(key(id), rect, Priority::Minor) {
+                    winners.push(id);
+                }
+            }
+        }
+        assert_eq!(winners, ["a", "a", "a", "a"], "the slot must not alternate");
+    }
+
     #[test]
     #[should_panic(expected = "priority order")]
     fn reserving_out_of_priority_order_is_a_bug() {
