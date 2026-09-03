@@ -277,13 +277,49 @@ fn high_contrast_feature_colors(
 ) -> ([u8; 4], [u8; 4]) {
     if crate::theme::is_high_contrast(theme) {
         let (fill_a, stroke_a) = crate::theme::warning_alpha_for(theme);
-        // Keep the original RGB, but boost alphas to the high-contrast targets.
-        // Fill is boosted by blending the stored alpha toward the target (original 45 -> 90).
-        let boosted_fill_a = (fill[3] as u16 * fill_a as u16 / 45).min(255) as u8;
-        let boosted_fill = [fill[0], fill[1], fill[2], boosted_fill_a.max(fill_a)];
+        // Keep the original RGB and scale the fill alpha by the same factor the warning fill gets
+        // (45 -> 90, so 2x). Scaling rather than raising to a floor, because the fills are not all
+        // meant to be equally visible: a watch box is stored at alpha 18 precisely so it reads as
+        // a backdrop to the warnings drawn inside it. A floor of 90 erased that ordering and put
+        // the watch at the same weight as the tornado warning on top of it.
+        let scale = |a: u8, target: u8, from: u8| {
+            (a as u16 * target as u16 / from as u16).min(255) as u8
+        };
+        let boosted_fill = [fill[0], fill[1], fill[2], scale(fill[3], fill_a, 45)];
+        // Outlines are the one thing high contrast does raise outright — an edge is either legible
+        // or it is not, and every feature here already stores its stroke near-opaque.
         let boosted_stroke = [stroke[0], stroke[1], stroke[2], stroke_a];
         (boosted_fill, boosted_stroke)
     } else {
         (fill, stroke)
+    }
+}
+
+#[cfg(test)]
+mod high_contrast_tests {
+    use super::*;
+    use crate::settings::Theme;
+
+    #[test]
+    fn high_contrast_brightens_fills_without_flattening_them() {
+        // A watch box (alpha 18) and a warning polygon (alpha 45) as they are stored. High
+        // contrast has to make both more visible and still leave the watch behind the warning —
+        // raising every fill to a floor made them the same weight, which is the one thing a
+        // backdrop must never do.
+        let watch = high_contrast_feature_colors([230, 200, 30, 18], [230, 200, 30, 235], Theme::HighContrast);
+        let warning = high_contrast_feature_colors([230, 40, 40, 45], [230, 40, 40, 235], Theme::HighContrast);
+        assert_eq!(warning.0[3], 90, "the warning fill hits its high-contrast target");
+        assert_eq!(watch.0[3], 36, "the watch fill is scaled by the same factor, not floored");
+        assert!(watch.0[3] < warning.0[3]);
+        // Outlines are raised outright, and the RGB is never touched.
+        assert_eq!(watch.1[3], 255);
+        assert_eq!(watch.0[..3], [230, 200, 30]);
+    }
+
+    #[test]
+    fn an_ordinary_theme_changes_nothing() {
+        let f = [230, 40, 40, 45];
+        let s = [230, 40, 40, 235];
+        assert_eq!(high_contrast_feature_colors(f, s, Theme::Dark), (f, s));
     }
 }

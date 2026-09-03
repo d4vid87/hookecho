@@ -1,7 +1,5 @@
 //! GRLevelX placefile parser.
 //!
-//! GRLevelX placefile parser.
-//!
 //! Placefiles are a plain-text overlay format (lines/polygons/text/icons at lat,lon) used by
 //! the spotter/warning community. We support the common drawing statements: `Color`,
 //! `Threshold`, `Line`, `Polygon`, `Text`, `Icon`/`Place`, `IconFile`, `Image` (georeferenced
@@ -11,7 +9,7 @@
 //! `Image:` draws textured triangles from a raster (PNG/JPG/TGA) georeferenced by three
 //! `lat, lon, Tu [, Tv]` vertices per triangle. `Tu`/`Tv` are 0..1 texture coords (0,0 top-left,
 //! 1,1 bottom-right). The syntax is pinned by the real-world fixtures in `tests::parses_image_*`
-//! (see `crates/wxdata/src/placefile.rs` and the `Image:` spec at grlevelx.com).
+//! and by the `Image:` spec at grlevelx.com.
 
 use chrono::{DateTime, Utc};
 use std::collections::HashMap;
@@ -494,6 +492,10 @@ pub fn parse(text: &str) -> Placefile {
                         0.0
                     };
                     let pos = [lon, lat];
+                    // Out-of-range coordinates are clamped rather than dropped. GR itself samples
+                    // with the texture clamped to its edge, so a file that writes 1.02 gets the
+                    // edge texel either way, and refusing the vertex would take its whole triangle
+                    // with it — a visible hole where GR draws a slightly stretched edge.
                     let uv = [tu.clamp(0.0, 1.0), tv.clamp(0.0, 1.0)];
                     verts.push((pos, uv));
                 }

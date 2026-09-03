@@ -2,6 +2,8 @@
 product: BV
 units: KTS
 step: 10
+; The thresholds above are knots (`units: KTS`); internal velocity is m/s, so the file carries
+; the GRLevelX conversion factor, the same 1.9426 kt/(m/s) GRLevel2 writes into its own tables.
 scale: 1.9426
 solidcolor: -120 0 20 160
 solidcolor: -80 0 60 255
