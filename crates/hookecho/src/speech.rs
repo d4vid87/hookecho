@@ -78,6 +78,18 @@ pub const VOICES: &[&str] = &[
 ///
 /// `None` for an id that is not shaped like a Piper id, which is how a hand-typed value is
 /// refused before it becomes a URL.
+/// The `rhasspy/piper-voices` revision voices are fetched from.
+///
+/// A commit, not `main`. These files are ONNX models this app downloads and then runs, and
+/// `resolve/main` means whatever is at the head of someone else's repository at the moment the
+/// button is pressed — a different model tomorrow, and a different one for two users on the same
+/// build. Pinning makes the download reproducible and makes a change to it a change to this file.
+///
+/// Bumping it is deliberate: pick a commit from
+/// `https://huggingface.co/api/models/rhasspy/piper-voices` and paste its `sha` here.
+#[cfg(not(target_arch = "wasm32"))]
+const VOICES_REVISION: &str = "39ab474be869e9181350af6a65e4953eef67aaa0";
+
 #[cfg(not(target_arch = "wasm32"))]
 pub fn voice_url(id: &str) -> Option<String> {
     let mut parts = id.split('-');
@@ -91,7 +103,7 @@ pub fn voice_url(id: &str) -> Option<String> {
     }
     let base = lang.split('_').next()?;
     Some(format!(
-        "https://huggingface.co/rhasspy/piper-voices/resolve/main/{base}/{lang}/{name}/{quality}/{id}.onnx"
+        "https://huggingface.co/rhasspy/piper-voices/resolve/{VOICES_REVISION}/{base}/{lang}/{name}/{quality}/{id}.onnx"
     ))
 }
 
@@ -307,12 +319,17 @@ mod tests {
     #[test]
     fn a_voice_id_derives_its_own_download_url() {
         assert_eq!(
-            voice_url("en_US-lessac-medium").as_deref(),
-            Some("https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/lessac/medium/en_US-lessac-medium.onnx")
+            voice_url("en_US-lessac-medium"),
+            Some(format!("https://huggingface.co/rhasspy/piper-voices/resolve/{VOICES_REVISION}/en/en_US/lessac/medium/en_US-lessac-medium.onnx"))
         );
         assert_eq!(
-            voice_url("pt_BR-faber-medium").as_deref(),
-            Some("https://huggingface.co/rhasspy/piper-voices/resolve/main/pt/pt_BR/faber/medium/pt_BR-faber-medium.onnx")
+            voice_url("pt_BR-faber-medium"),
+            Some(format!("https://huggingface.co/rhasspy/piper-voices/resolve/{VOICES_REVISION}/pt/pt_BR/faber/medium/pt_BR-faber-medium.onnx"))
+        );
+        // A commit, never a branch: `resolve/main` is whatever someone else's head happens to be.
+        assert!(
+            VOICES_REVISION.len() == 40 && VOICES_REVISION.chars().all(|c| c.is_ascii_hexdigit()),
+            "VOICES_REVISION must be a full commit sha, got {VOICES_REVISION}"
         );
         // Underscores are part of names and qualities both, and must survive.
         assert!(voice_url("en_US-hfc_female-medium")
