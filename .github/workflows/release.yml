@@ -98,6 +98,11 @@ jobs:
         run: |
           bash packaging/build-deb.sh
           cp target/debian/*.deb dist/
+          # A second copy under a name that does not move, kept out of `dist/` so the tagged
+          # upload's `dist/*.deb` still means exactly one versioned file. The rolling release
+          # uploads this one, so each push replaces the previous build instead of adding to a pile.
+          mkdir -p dist/rolling
+          cp target/debian/*.deb dist/rolling/HookEcho-amd64.deb
           dpkg -c dist/*.deb
 
       - name: Upload artifact
@@ -135,7 +140,28 @@ jobs:
             is always the newest code. Older releases are kept as drafts.
           files: |
             dist/HookEcho-x86_64.AppImage
-            dist/*.deb
+            dist/rolling/HookEcho-amd64.deb
+
+      # The rolling release is supposed to hold one build, and it held eighteen assets: seven
+      # .debs going back to 0.8.0, because `cargo-deb` puts the version in the filename and
+      # `--clobber` cannot clobber a name that changes every release. A stable name for the
+      # rolling copy fixes that going forward; the step below clears what has already piled up.
+      #
+      # Tagged releases keep the versioned filename, which is correct — a tag *is* a version.
+      - name: Prune stale rolling assets
+        if: github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Two patterns, both provably dead, so this can never delete a live asset:
+          #   hookecho_<version>_amd64.deb   the versioned debs, superseded by HookEcho-amd64.deb
+          #   Hook_Echo-WX-*                 the old product name, last built 2026-08-26
+          gh release view latest --json assets -q '.assets[].name' \
+            | grep -E '^(hookecho_.*_amd64\.deb|Hook_Echo-WX-.*)$' \
+            | while read -r name; do
+                echo "removing stale asset $name"
+                gh release delete-asset latest "$name" --yes
+              done
 
   windows:
     name: Windows zip
