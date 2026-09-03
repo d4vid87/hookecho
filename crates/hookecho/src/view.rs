@@ -23,6 +23,25 @@ use wxdata::level2::{self, BinnedSweep, Moment, Scan};
 /// holding the volumes themselves.
 const BINNED_CACHE: usize = if cfg!(target_arch = "wasm32") { 16 } else { 32 };
 
+/// Whether `new` is `old` with tilts only added on the end, so every existing tilt index still
+/// points at the same elevation.
+///
+/// This is the ordinary shape of a live volume: chunks arrive every ten or twenty seconds and each
+/// one appends the next sweep. Treating that as "the tilt set changed" threw away every binned
+/// sweep in the volume, and the UI thread re-binned all of them on the next frame — a visible hitch
+/// once per chunk, for the whole life of the volume. A VCP restart or a re-ordered merge really
+/// does shift the indices, and still clears.
+///
+/// Compared with the same 0.15 degree tolerance the caller uses to match a changed tilt: the angles
+/// are recomputed from the merged scan each time and need not be bit-identical.
+fn tilts_only_grew(old: &[f32], new: &[f32]) -> bool {
+    new.len() >= old.len()
+        && old
+            .iter()
+            .zip(new)
+            .all(|(a, b)| (a - b).abs() < 0.15)
+}
+
 /// How many volumes a pane keeps after the playhead has moved off them.
 ///
 /// `Volume::new` is called every time the playhead lands on a frame, and a fresh `Volume` starts
@@ -101,7 +120,7 @@ impl Volume {
             return;
         }
         self.scan = scan;
-        if new_elev != self.elevations {
+        if !tilts_only_grew(&self.elevations, &new_elev) {
             self.binned.clear(); // tilt indices may have shifted
         } else {
             for angle in changed {
@@ -328,6 +347,25 @@ impl MapView {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_growing_live_volume_keeps_its_binned_tilts() {
+        use super::tilts_only_grew;
+        // The ordinary case: a chunk lands and appends the next sweep. Every index that already
+        // has a binned sweep still means the same elevation, so the cache survives.
+        assert!(tilts_only_grew(&[0.5, 0.5, 0.9], &[0.5, 0.5, 0.9, 1.3]));
+        // Nothing new yet is still "only grew".
+        assert!(tilts_only_grew(&[0.5, 0.9], &[0.5, 0.9]));
+        // A fresh volume from an empty list.
+        assert!(tilts_only_grew(&[], &[0.5]));
+        // Recomputed angles wobble slightly; that is not a re-order.
+        assert!(tilts_only_grew(&[0.5, 0.9], &[0.52, 0.88, 1.3]));
+        // A VCP change re-orders the prefix — index 1 now means a different tilt, so every binned
+        // sweep at an index is suspect and the cache has to go.
+        assert!(!tilts_only_grew(&[0.5, 0.9, 1.3], &[0.5, 1.3, 0.9]));
+        // Tilts disappearing is not growth either.
+        assert!(!tilts_only_grew(&[0.5, 0.9, 1.3], &[0.5, 0.9]));
+    }
+
     use super::*;
     use crate::render::mercator::Camera;
 
