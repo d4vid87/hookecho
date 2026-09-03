@@ -51,12 +51,32 @@ impl Camera {
     }
 
     /// Pan by a screen-pixel delta (drag). Positive dx/dy move content right/down.
-    pub fn pan_pixels(&mut self, dx: f32, dy: f32) {
+    pub fn pan_pixels(&mut self, dx: f32, dy: f32, viewport_px: (f32, f32)) {
         let wpp = self.world_per_pixel();
         self.center.0 -= dx as f64 * wpp;
         self.center.1 -= dy as f64 * wpp;
-        self.center.1 = self.center.1.clamp(0.0, 1.0);
+        self.settle(viewport_px);
+    }
+
+    /// Put the camera back somewhere legal after a pan or a zoom.
+    ///
+    /// The two axes are not symmetric, because the world is not. Longitude wraps: pan east past
+    /// the antimeridian and you arrive from the west, so `center.0` is taken modulo one world.
+    /// Latitude does not — mercator stops at about 85 degrees and there is nothing beyond it — so
+    /// `center.1` is clamped, and clamped by *half a viewport* rather than to the world's edge.
+    /// Clamping the center to `0..=1` let the top or bottom half of the screen fill with nothing
+    /// at low zoom, which is where "the map slid off the screen" came from.
+    ///
+    /// Zoomed far enough out that the whole world is shorter than the viewport, there is no
+    /// legal range left and the world is simply centered.
+    fn settle(&mut self, viewport_px: (f32, f32)) {
         self.center.0 = self.center.0.rem_euclid(1.0);
+        let half = viewport_px.1 as f64 / 2.0 * self.world_per_pixel();
+        self.center.1 = if half >= 0.5 {
+            0.5
+        } else {
+            self.center.1.clamp(half, 1.0 - half)
+        };
     }
 
     /// Zoom toward a screen point (cursor) so that world point stays under the cursor.
@@ -69,7 +89,10 @@ impl Camera {
         let after = self.screen_to_world(cursor_px, viewport_px);
         self.center.0 += before.0 - after.0;
         self.center.1 += before.1 - after.1;
-        self.center.1 = self.center.1.clamp(0.0, 1.0);
+        // The same settling a pan gets. Zooming used to clamp latitude and leave longitude alone,
+        // so a zoom near the antimeridian walked `center.0` outside `0..1` and left it there until
+        // the next drag happened to wrap it.
+        self.settle(viewport_px);
     }
 
     /// Screen pixel (origin top-left) -> world coord.
@@ -103,6 +126,55 @@ impl Camera {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn the_map_cannot_be_pushed_off_the_top_of_the_screen() {
+        // Zoom 3, 800 px tall: half a viewport is 400 px, and one world is 256 * 2^3 = 2048 px,
+        // so the legal band for the center is 0.195..=0.805.
+        let vp = (800.0, 800.0);
+        let mut c = Camera {
+            center: (0.5, 0.5),
+            zoom: 3.0,
+        };
+        c.pan_pixels(0.0, 100_000.0, vp);
+        let half = 400.0 / (256.0 * 8.0);
+        assert!(
+            (c.center.1 - half).abs() < 1e-9,
+            "dragged to the top edge and stopped there, got {}",
+            c.center.1
+        );
+        c.pan_pixels(0.0, -100_000.0, vp);
+        assert!((c.center.1 - (1.0 - half)).abs() < 1e-9);
+    }
+
+    #[test]
+    fn zoomed_out_past_the_whole_world_the_world_is_centered() {
+        // At zoom 2 a world is 1024 px and the viewport is 2000: there is no legal band left, so
+        // there is nothing to choose but the middle.
+        let mut c = Camera {
+            center: (0.5, 0.1),
+            zoom: 2.0,
+        };
+        c.pan_pixels(0.0, 300.0, (2000.0, 2000.0));
+        assert_eq!(c.center.1, 0.5);
+    }
+
+    #[test]
+    fn zooming_near_the_antimeridian_wraps_like_panning_does() {
+        // Longitude is a cylinder and both gestures have to agree about that. Zooming only ever
+        // clamped latitude, so a zoom out here left `center.0` above 1.0 until the next drag.
+        let vp = (800.0, 800.0);
+        let mut c = Camera {
+            center: (0.999, 0.5),
+            zoom: 8.0,
+        };
+        c.zoom_at(-1.0, (799.0, 400.0), vp);
+        assert!(
+            (0.0..1.0).contains(&c.center.0),
+            "center.0 left the world: {}",
+            c.center.0
+        );
+    }
     use super::*;
 
     #[test]
