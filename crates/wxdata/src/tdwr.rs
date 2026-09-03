@@ -130,6 +130,7 @@ async fn newest_key(http: &reqwest::Client, prefix: &str) -> Option<String> {
     let url = format!("{BUCKET}/?list-type=2&prefix={prefix}");
     let xml = http
         .get(crate::net::fetch_url(&url))
+        .timeout(crate::net::FEED_TIMEOUT)
         .send()
         .await
         .ok()?
@@ -266,6 +267,7 @@ pub async fn fetch_volume(
             let key = key?;
             let resp = http
                 .get(crate::net::fetch_url(&format!("{BUCKET}/{key}")))
+                .timeout(crate::net::FEED_TIMEOUT)
                 .send()
                 .await
                 .ok()?;

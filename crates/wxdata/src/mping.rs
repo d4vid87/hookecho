@@ -131,6 +131,7 @@ pub async fn fetch(http: &reqwest::Client, key: &str, minutes: i64) -> anyhow::R
     let since = (Utc::now() - Duration::minutes(minutes)).format("%Y-%m-%d %H:%M:%S");
     let body = http
         .get(crate::net::fetch_url(API))
+        .timeout(crate::net::FEED_TIMEOUT)
         .query(&[
             ("category", "Rain/Snow"),
             ("obtime_gte", &since.to_string()),

@@ -219,6 +219,7 @@ pub async fn fetch_bbox(
     let bounds = format!("{min_lat},{min_lon}|{max_lat},{max_lon}");
     let body = client
         .get(crate::net::fetch_url(&format!("{API}/sites")))
+        .timeout(crate::net::FEED_TIMEOUT)
         .query(&[("zoom", "10"), ("bounds", bounds.as_str())])
         .header("User-Agent", USER_AGENT)
         .header("Referer", REFERER)
@@ -249,6 +250,7 @@ pub async fn fetch_windy_bbox(
     let bbox = format!("{max_lat},{max_lon},{min_lat},{min_lon}");
     let body = client
         .get(crate::net::fetch_url(WINDY_API))
+        .timeout(crate::net::FEED_TIMEOUT)
         .query(&[
             ("bbox", bbox.as_str()),
             ("include", "images,location,urls"),
@@ -276,6 +278,7 @@ pub async fn latest_image(
         .get(crate::net::fetch_url(&format!(
             "{API}/cameras/{camera_id}/images/last/1"
         )))
+        .timeout(crate::net::FEED_TIMEOUT)
         .header("User-Agent", USER_AGENT)
         .header("Referer", REFERER)
         .header("Accept", "application/json")

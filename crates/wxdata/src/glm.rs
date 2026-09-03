@@ -93,7 +93,8 @@ async fn list_hour(http: &reqwest::Client, bucket: &str, t: DateTime<Utc>) -> Ve
         t.format("%H")
     );
     let url = format!("{bucket}/?list-type=2&prefix={prefix}&max-keys=1000");
-    let Ok(resp) = http.get(crate::net::fetch_url(&url)).send().await else {
+    let Ok(resp) = http.get(crate::net::fetch_url(&url))
+    .timeout(crate::net::FEED_TIMEOUT).send().await else {
         return Vec::new();
     };
     let Ok(xml) = resp.text().await else {
@@ -236,7 +237,8 @@ impl GlmFeed {
         // A burst of granules after a pause shouldn't stall the app; take the newest handful.
         for key in fresh.iter().rev().take(10).rev() {
             let url = format!("{bucket}/{key}");
-            let bytes = match http.get(crate::net::fetch_url(&url)).send().await {
+            let bytes = match http.get(crate::net::fetch_url(&url))
+            .timeout(crate::net::FEED_TIMEOUT).send().await {
                 Ok(r) => match r.error_for_status() {
                     Ok(r) => r.bytes().await?,
                     Err(e) => {

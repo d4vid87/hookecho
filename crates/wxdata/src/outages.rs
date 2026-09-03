@@ -160,6 +160,7 @@ fn thousands(n: u32) -> String {
 pub async fn fetch(client: &reqwest::Client) -> anyhow::Result<Vec<GeoFeature>> {
     let body = client
         .get(crate::net::fetch_url(URL))
+        .timeout(crate::net::FEED_TIMEOUT)
         .header("User-Agent", USER_AGENT)
         .send()
         .await?

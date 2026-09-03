@@ -24,6 +24,7 @@ pub struct TornadoTrack {
 pub async fn fetch_tracks(client: &reqwest::Client) -> anyhow::Result<Vec<TornadoTrack>> {
     let body = client
         .get(crate::net::fetch_url(TRACKS_URL))
+        .timeout(crate::net::FEED_TIMEOUT)
         .header("User-Agent", crate::alerts::USER_AGENT)
         .send()
         .await?

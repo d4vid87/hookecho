@@ -25,7 +25,14 @@ pub async fn list_objects(
     let path = crate::aws::client::rewrite_url(path);
     debug!("Listing objects in bucket \"{bucket}\" with prefix \"{prefix}\"");
 
-    let response = client().get(&path).send().await.map_err(S3ListObjects)?;
+    // hookecho patch: same deadline, same reason as `download_object` — and a listing that never
+    // answers is worse, because the timeline never gains a frame to fetch in the first place.
+    let response = client()
+        .get(&path)
+        .timeout(std::time::Duration::from_secs(30))
+        .send()
+        .await
+        .map_err(S3ListObjects)?;
     trace!("  List objects response status: {}", response.status());
 
     let body = response.text().await.map_err(S3ListObjects)?;

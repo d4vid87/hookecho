@@ -83,6 +83,7 @@ pub async fn fetch(
 ) -> anyhow::Result<Vec<StormReport>> {
     let mut req = client
         .get(crate::net::fetch_url(LSR_URL))
+        .timeout(crate::net::FEED_TIMEOUT)
         .header("User-Agent", USER_AGENT);
     req = match window {
         Some((sts, ets)) => req.query(&[("sts", sts), ("ets", ets)]),

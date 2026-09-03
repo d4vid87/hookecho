@@ -89,6 +89,7 @@ pub fn parse(json: &str) -> anyhow::Result<Vec<GeoFeature>> {
 pub async fn fetch(client: &reqwest::Client, ts: &str) -> anyhow::Result<Vec<GeoFeature>> {
     let body = client
         .get(crate::net::fetch_url(SBW_URL))
+        .timeout(crate::net::FEED_TIMEOUT)
         .query(&[("ts", ts)])
         .header("User-Agent", alerts::USER_AGENT)
         .send()
@@ -187,6 +188,7 @@ pub async fn fetch_point_events(
 ) -> anyhow::Result<Vec<PointEvent>> {
     let body = client
         .get(crate::net::fetch_url(BYPOINT_URL))
+        .timeout(crate::net::FEED_TIMEOUT)
         .query(&[
             ("lon", lon.to_string().as_str()),
             ("lat", lat.to_string().as_str()),

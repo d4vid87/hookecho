@@ -15,6 +15,7 @@ pub async fn fetch_probsevere(client: &reqwest::Client) -> anyhow::Result<Vec<Ge
     // The directory index lists timestamped files; the last one is newest.
     let index = client
         .get(crate::net::fetch_url(PROBSEVERE_DIR))
+        .timeout(crate::net::FEED_TIMEOUT)
         .header("User-Agent", crate::alerts::USER_AGENT)
         .send()
         .await?
@@ -25,6 +26,7 @@ pub async fn fetch_probsevere(client: &reqwest::Client) -> anyhow::Result<Vec<Ge
         .ok_or_else(|| anyhow::anyhow!("no ProbSevere file in directory index"))?;
     let body = client
         .get(crate::net::fetch_url(&format!("{PROBSEVERE_DIR}{file}")))
+        .timeout(crate::net::FEED_TIMEOUT)
         .header("User-Agent", crate::alerts::USER_AGENT)
         .send()
         .await?

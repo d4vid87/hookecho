@@ -111,6 +111,7 @@ pub async fn fetch_active_opts(
 ) -> anyhow::Result<TropicalData> {
     let cs = client
         .get(crate::net::fetch_url(CURRENT_STORMS))
+        .timeout(crate::net::FEED_TIMEOUT)
         .header("User-Agent", USER_AGENT)
         .send()
         .await?
@@ -130,6 +131,7 @@ pub async fn fetch_active_opts(
     // Discover the per-bin layer ids by name prefix (ids drift; names are stable).
     let layers_json = client
         .get(crate::net::fetch_url(&format!("{MAPSERVER}/layers?f=json")))
+        .timeout(crate::net::FEED_TIMEOUT)
         .header("User-Agent", USER_AGENT)
         .send()
         .await?
@@ -297,6 +299,7 @@ pub async fn fetch_surge(client: &reqwest::Client) -> anyhow::Result<Vec<GeoFeat
     let url = format!("{SURGE_SERVICE}/2/query?where=1%3D1&outFields=name,snippet&f=geojson");
     let body = client
         .get(crate::net::fetch_url(&url))
+        .timeout(crate::net::FEED_TIMEOUT)
         .header("User-Agent", USER_AGENT)
         .send()
         .await?
@@ -344,6 +347,7 @@ async fn query_layer(client: &reqwest::Client, id: u64) -> anyhow::Result<GeoJso
     let url = format!("{MAPSERVER}/{id}/query?where=1%3D1&outFields=*&f=geojson");
     let body = client
         .get(crate::net::fetch_url(&url))
+        .timeout(crate::net::FEED_TIMEOUT)
         .header("User-Agent", USER_AGENT)
         .send()
         .await?
@@ -411,6 +415,7 @@ pub async fn fetch_advisory(
 ) -> anyhow::Result<Advisory> {
     let body = client
         .get(crate::net::fetch_url(url))
+        .timeout(crate::net::FEED_TIMEOUT)
         .header("User-Agent", USER_AGENT)
         .send()
         .await?

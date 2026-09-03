@@ -119,6 +119,7 @@ pub async fn fetch_bbox(
     );
     let body = client
         .get(crate::net::fetch_url(&url))
+        .timeout(crate::net::FEED_TIMEOUT)
         .header("User-Agent", USER_AGENT)
         .send()
         .await?

@@ -54,6 +54,7 @@ pub async fn fetch_in_view(
     }
     let body = client
         .get(crate::net::fetch_url(FEED))
+        .timeout(crate::net::FEED_TIMEOUT)
         .send()
         .await?
         .error_for_status()?

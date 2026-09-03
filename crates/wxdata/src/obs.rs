@@ -112,6 +112,7 @@ pub async fn fetch_nearest(
         let http = http.clone();
         async move {
             http.get(crate::net::fetch_url(&url))
+            .timeout(crate::net::FEED_TIMEOUT)
                 .header("User-Agent", USER_AGENT)
                 .header("Accept", "application/geo+json")
                 .send()

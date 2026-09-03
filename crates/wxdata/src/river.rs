@@ -118,6 +118,7 @@ pub async fn fetch_bbox(
 ) -> anyhow::Result<Vec<Gauge>> {
     let body = client
         .get(crate::net::fetch_url(GAUGES_URL))
+        .timeout(crate::net::FEED_TIMEOUT)
         .query(&[
             ("bbox.xmin", lon0.to_string()),
             ("bbox.ymin", lat0.to_string()),

@@ -314,6 +314,7 @@ async fn fetch_zone_geometry(client: &reqwest::Client, url: &str) -> Vec<Vec<Vec
     let polys = async {
         let body = client
             .get(crate::net::fetch_url(url))
+            .timeout(crate::net::FEED_TIMEOUT)
             .header("User-Agent", USER_AGENT)
             .header("Accept", "application/geo+json")
             .send()
@@ -401,6 +402,7 @@ async fn resolve_zone_alerts(
 async fn get_alerts(client: &reqwest::Client, url: &str) -> anyhow::Result<String> {
     let body = client
         .get(crate::net::fetch_url(url))
+        .timeout(crate::net::FEED_TIMEOUT)
         .header("User-Agent", USER_AGENT)
         .header("Accept", "application/geo+json")
         .send()
