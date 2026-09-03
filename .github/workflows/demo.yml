@@ -50,7 +50,17 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-        run: npx --yes wrangler@3 pages deploy web --project-name=hookecho --branch=main
+        # Keep the deployment's own URL. Every check below runs against *this* deploy rather
+        # than the production alias, because the alias can still be serving the previous one:
+        # on 2026-09-03 a deploy went green while app.hookecho.io answered with the bundle from
+        # two merges earlier, and nothing here noticed.
+        run: |
+          npx --yes wrangler@3 pages deploy web --project-name=hookecho --branch=main \
+            | tee /tmp/deploy.log
+          url=$(grep -oE 'https://[0-9a-f]+\.hookecho\.pages\.dev' /tmp/deploy.log | tail -1)
+          test -n "$url" || { echo "::error::wrangler printed no deployment URL"; exit 1; }
+          echo "DEPLOY_URL=$url" >> "$GITHUB_ENV"
+          echo "deployment: $url"
 
       - uses: actions/setup-node@v4
         with:
@@ -68,7 +78,7 @@ jobs:
           asset=$(grep -o 'dist/hookecho_bg-[0-9a-f]*\.wasm' web/index.html | head -1)
           echo "waiting for /$asset"
           for _ in $(seq 1 20); do
-            code=$(curl -s -o /dev/null -w '%{http_code}' "https://hookecho.pages.dev/$asset")
+            code=$(curl -s -o /dev/null -w '%{http_code}' "$DEPLOY_URL/$asset")
             [ "$code" = 200 ] && exit 0
             sleep 10
           done
@@ -77,27 +87,42 @@ jobs:
 
       # The same boot check CI runs against a local server, now against the deployed origin.
       - name: Smoke-test the deployed demo
-        run: node scripts/web/smoke.mjs https://hookecho.pages.dev/ --expect-loop
+        run: node scripts/web/smoke.mjs "$DEPLOY_URL/" --expect-loop
 
       # The lite viewer is a separate page with its own wasm; it boots without WebGL, so a failure
       # here is its own decode or projection, not the GPU.
       - name: Smoke-test the lite viewer
         run: |
           asset=$(grep -o 'dist/lite-[0-9a-f]*\.js' web/lite/index.html | head -1)
-          test "$(curl -s -o /dev/null -w '%{http_code}' "https://hookecho.pages.dev/$asset")" = 200
-          node scripts/web/smoke-lite.mjs https://hookecho.pages.dev/lite/
+          test "$(curl -s -o /dev/null -w '%{http_code}' "$DEPLOY_URL/$asset")" = 200
+          node scripts/web/smoke-lite.mjs "$DEPLOY_URL/lite/"
 
       - name: Check the proxy answers and refuses
         run: |
-          curl -sf "https://hookecho.pages.dev/proxy/api.weather.gov/alerts/active/count" >/dev/null
-          test "$(curl -s -o /dev/null -w '%{http_code}' https://hookecho.pages.dev/proxy/evil.example/x)" = 403
+          curl -sf "$DEPLOY_URL/proxy/api.weather.gov/alerts/active/count" >/dev/null
+          test "$(curl -s -o /dev/null -w '%{http_code}' "$DEPLOY_URL/proxy/evil.example/x")" = 403
 
       # A proxied response has to be cacheable and revalidatable, or every repeat poll pays for
       # the whole body again. The two calls land inside the 15 s edge TTL, so the second sees the
       # same cached upstream response — which is the point: the 304 is answered at the edge.
+      # Deploying is not shipping. Pages promotes a `--branch=main` deployment to the production
+      # alias itself, and when that lags (or silently does not happen) every check above still
+      # passes against the deployment URL while visitors keep getting the old bundle. Ask the
+      # alias which wasm it names and wait for it to be this one.
+      - name: Wait for the deployment to become the live site
+        run: |
+          asset=$(grep -o 'dist/hookecho_bg-[0-9a-f]*\.wasm' web/index.html | head -1)
+          for _ in $(seq 1 30); do
+            live=$(curl -s https://hookecho.pages.dev/ | grep -o 'dist/hookecho_bg-[0-9a-f]*\.wasm' | head -1)
+            [ "$live" = "$asset" ] && { echo "live: $live"; exit 0; }
+            sleep 20
+          done
+          echo "::error::the alias still serves $live, not $asset — this deploy did not go live"
+          exit 1
+
       - name: Check the proxy caches and revalidates
         run: |
-          url="https://hookecho.pages.dev/proxy/api.weather.gov/alerts/active/count"
+          url="$DEPLOY_URL/proxy/api.weather.gov/alerts/active/count"
           curl -sD - -o /dev/null "$url" | tr -d '\r' > /tmp/h.txt
           grep -qi '^cache-control: public, max-age=15$' /tmp/h.txt
           etag=$(grep -i '^etag:' /tmp/h.txt | cut -d' ' -f2-)

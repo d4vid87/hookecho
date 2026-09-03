@@ -39,6 +39,15 @@ page.on("console", (m) => {
   const text = m.text();
   // A Rust panic reaches the console as a warning or a log depending on the panic hook.
   if (/panicked at|RuntimeError: unreachable/.test(text)) errors.push(`panic: ${text}`);
+  // A feed whose body does not parse is either a shape change upstream or a bug here, and both
+  // want a red build. It is not the same thing as a feed being *unreachable*, which is expected
+  // against a local server with no `/proxy/` and is why this is narrower than "any warning".
+  //
+  // Deliberately not caught: `upstream error: …`, which is a service having a bad day and says so
+  // in its own words. That distinction is the whole point of the check that produces it — before
+  // it existed, an ArcGIS error body reached the parser and read as malformed GeoJSON, and this
+  // line would have been failing builds for something no one here could fix.
+  if (/geojson parse:|placefile parse:/.test(text)) errors.push(`feed parse: ${text}`);
   // The app logs this once, from `sync_timeline`, when the opening loop starts playing.
   if (/loop: playing \d+\/\d+ frames/.test(text)) {
     loopStarted = true;
