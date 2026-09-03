@@ -2704,6 +2704,9 @@ pub struct HookEchoApp {
     vol3d_pending: Option<crate::render3d::Volume3dUpload>,
     /// GPU 2D texture-size cap (device limit), used to clamp field-grid decimation on mobile GPUs.
     max_texture_dim: u32,
+    /// Whether this device can hold the 3D texture the raymarch window needs. See its assignment
+    /// in `new` — it is a property of the adapter that turned up, not of the platform.
+    volume3d_supported: bool,
 }
 
 /// Split `r` into `n` pane rects: 1 full, 2 side-by-side, 3–4 in a 2×2 grid.
@@ -2820,6 +2823,13 @@ impl HookEchoApp {
         // The GPU's 2D texture-size cap: desktop/Adreno do 16384, but many mobile GPUs cap at
         // 4096. Field grids (MRMS rotation/AzShear reach 14000 px) are decimated to fit this.
         let max_texture_dim = render_state.device.limits().max_texture_dimension_2d;
+        // The raymarched volume is one `VOL3D_N` cubed 3D texture, and not every backend can hold
+        // one. Asked once, from the device's own limit, rather than from the target: WebGPU can do
+        // this and the WebGL2 fallback cannot, and which of the two a browser gives you is a
+        // runtime fact, not a compile-time one. A desktop GL driver old enough to say no gets the
+        // same honest answer instead of an empty window.
+        let volume3d_supported =
+            render_state.device.limits().max_texture_dimension_3d as usize >= VOL3D_N;
         {
             // Shaders and pipelines are compiled here, synchronously, before the first paint —
             // the suspected dominant term in a cold launch. Timed so the guess is a number.
@@ -3390,6 +3400,7 @@ impl HookEchoApp {
             vol3d_range: (-30.0, 80.0),
             vol3d_pending: None,
             max_texture_dim,
+            volume3d_supported,
         };
         // Restore the overlays from last time, assigning rather than only ever switching on: the
         // additive version could never turn a default-on layer off, so unchecking one lasted until
@@ -4969,6 +4980,13 @@ impl HookEchoApp {
 
     /// Build the 3D reflectivity volume from the active pane and open the raymarch window.
     fn build_volume3d(&mut self) {
+        if !self.volume3d_supported {
+            self.toast(
+                ToastKind::Error,
+                "3D needs WebGPU — this browser fell back to WebGL, which has no 3D textures",
+            );
+            return;
+        }
         self.show_3d = true;
         let Some(vol) = self.views[self.active].volume.as_mut() else {
             return;
