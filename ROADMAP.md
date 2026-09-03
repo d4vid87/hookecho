@@ -16,10 +16,14 @@ upgrade path out of it (`grep -rn "ponytail:" crates/`).
 
 ## Next
 
-- **GOES satellite imagery** — ABI Level 2 CMIP from the `noaa-goes19`/`-18`
-  buckets, CONUS to start, three bands (visible, clean IR, mid-level water
-  vapor), animated on the timeline the radar already uses. The GIBS basemap
-  layer shows the latest image; this is the archive and the loop.
+- **GOES from the source.** The outcome this entry described — satellite
+  imagery animated on the timeline the radar already uses — is shipped, but
+  through GIBS' time dimension rather than the `noaa-goes19`/`-18` buckets:
+  fifteen timed layers (GeoColor, clean IR, air mass, dust, fire temperature,
+  plus Himawari and IMERG), a frame bar, and a "follow the radar clock" mode
+  that scrubs the imagery with the volume. Reading ABI Level 2 CMIP directly
+  would still buy native resolution, bands GIBS does not publish, and imagery
+  inside an offline chase pack — which is what is actually left.
 - Blending surface observations into the effective-layer analysis, which is the
   remaining difference from SPC's mesoanalysis now that the vertical resolution
   is there.
