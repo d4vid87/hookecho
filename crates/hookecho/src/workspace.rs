@@ -77,10 +77,15 @@ pub struct PaneSnap {
     pub lat: f64,
     pub zoom: f64,
     /// Field layers this pane drew, by slug. Same forward-compatibility rule as the overlays: a
-    /// slug this build does not have is skipped. Empty on a snapshot written before per-pane
-    /// layers existed, which is read as "fall back to the workspace-wide list".
+    /// slug this build does not have is skipped.
+    ///
+    /// `None` is a snapshot written before per-pane layers existed, which falls back to the
+    /// workspace-wide list so an old file still restores what it meant. `Some([])` is a pane that
+    /// deliberately had no layers on, and has to come back that way — as a plain `Vec` the two
+    /// were the same value, so a pane you had cleared came back wearing the union of every other
+    /// pane's layers.
     #[serde(default)]
-    pub fields_on: Vec<String>,
+    pub fields_on: Option<Vec<String>>,
     /// Enabled display thresholds, as `(moment, physical value)`. Only the enabled ones are
     /// stored: a threshold that was set but switched off is not part of the arrangement.
     #[serde(default)]
@@ -101,11 +106,13 @@ impl PaneSnap {
             lon,
             lat,
             zoom: v.camera.zoom,
-            fields_on: crate::render::FieldLayer::DRAW_ORDER
-                .iter()
-                .filter(|l| v.fields_on.contains(l))
-                .map(|l| l.slug().to_string())
-                .collect(),
+            fields_on: Some(
+                crate::render::FieldLayer::DRAW_ORDER
+                    .iter()
+                    .filter(|l| v.fields_on.contains(l))
+                    .map(|l| l.slug().to_string())
+                    .collect(),
+            ),
             thresholds: wxdata::level2::Moment::ALL
                 .iter()
                 .enumerate()
@@ -152,7 +159,9 @@ fn pane(moment: wxdata::level2::Moment, tilt: usize, srv: bool) -> PaneSnap {
         lon: -97.5,
         lat: 35.5,
         zoom: 7.5,
-        fields_on: Vec::new(),
+        // `None`, not an empty list: a starter describes an arrangement, and its panes take the
+        // workspace-wide layers rather than asserting that every pane is bare.
+        fields_on: None,
         thresholds: Vec::new(),
     }
 }
@@ -195,7 +204,7 @@ pub fn starters() -> Vec<Workspace> {
                 lon: -97.0,
                 lat: 38.5,
                 zoom: 4.0,
-                fields_on: vec!["mrms".into()],
+                fields_on: Some(vec!["mrms".into()]),
                 thresholds: Vec::new(),
             }],
             active: 0,
@@ -269,7 +278,7 @@ mod tests {
         v.thresholds[Moment::Velocity.index()] = Some(20.0);
 
         let snap = PaneSnap::capture(&v);
-        assert_eq!(snap.fields_on, vec!["mrms"]);
+        assert_eq!(snap.fields_on.as_deref(), Some(["mrms".to_string()].as_slice()));
         assert_eq!(snap.thresholds, vec![(Moment::Reflectivity, 35.0)]);
 
         let mut fresh = MapView::new(
@@ -287,6 +296,16 @@ mod tests {
     }
 
     #[test]
+    fn a_pane_with_no_layers_says_so_rather_than_saying_nothing() {
+        // The distinction the `Option` exists for. Capturing a bare pane must record "no layers",
+        // not "no opinion" — as a plain `Vec` both were `[]`, and a pane you had cleared came back
+        // wearing the union of every other pane's layers when the workspace was applied.
+        let v = MapView::new(None, crate::render::mercator::Camera::at_lonlat(-97.3, 35.3, 8.0));
+        let snap = PaneSnap::capture(&v);
+        assert_eq!(snap.fields_on, Some(Vec::new()));
+    }
+
+    #[test]
     fn a_pane_written_before_per_pane_layers_still_loads() {
         // No `fields_on`, no `thresholds` — exactly what an older build wrote.
         let snap: PaneSnap = serde_json::from_str(
@@ -294,7 +313,11 @@ mod tests {
                 "lon":-97.3,"lat":35.3,"zoom":8.0}"#,
         )
         .expect("old pane snapshots still parse");
-        assert!(snap.fields_on.is_empty() && snap.thresholds.is_empty());
+        // `None`, not an empty list: this file predates per-pane layers and says nothing about
+        // them, so the restore falls back to the workspace-wide list. A pane that really had its
+        // layers off captures `Some([])`, which is a different instruction.
+        assert_eq!(snap.fields_on, None);
+        assert!(snap.thresholds.is_empty());
     }
 
     #[test]
@@ -310,7 +333,7 @@ mod tests {
                 lon: -93.72,
                 lat: 41.73,
                 zoom: 7.25,
-                fields_on: Vec::new(),
+                fields_on: None,
                 thresholds: Vec::new(),
             }],
             active: 0,

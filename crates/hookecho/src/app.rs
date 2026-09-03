@@ -13467,13 +13467,10 @@ impl HookEchoApp {
         // Same rule for the national field layers: an unknown slug is a layer this build
         // doesn't have, which is a thing to skip rather than an error.
         for (v, snap) in self.views.iter_mut().zip(&ws.panes) {
-            // A pane snapshot written before per-pane layers existed carries none, and falls back
-            // to the workspace-wide list so an old file still restores what it meant.
-            let list = if snap.fields_on.is_empty() {
-                &ws.fields_on
-            } else {
-                &snap.fields_on
-            };
+            // A pane snapshot written before per-pane layers existed carries `None`, and falls
+            // back to the workspace-wide list so an old file still restores what it meant. An
+            // empty list is a pane that had its layers off, which is a decision, not a gap.
+            let list = snap.fields_on.as_ref().unwrap_or(&ws.fields_on);
             v.fields_on = crate::render::FieldLayer::DRAW_ORDER
                 .iter()
                 .copied()
