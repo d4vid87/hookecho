@@ -10,10 +10,18 @@ use std::sync::Arc;
 use wxdata::clock::Instant;
 use wxdata::level2::{self, BinnedSweep, Moment, Scan};
 
-/// How many binned sweeps one volume keeps. A sweep is ~1.3 MB, and the working set while
-/// flipping through moments and tilts is a handful — 12 covers it without the old unbounded
-/// map's ~140 MB worst case (7 moments x ~15 tilts, all resident at once).
-const BINNED_CACHE: usize = 12;
+/// How many binned sweeps one volume keeps. A sweep is ~1.3 MB.
+///
+/// Twelve was below the number of tilts in a volume, which is the one size it must not be: VCP
+/// 212 has 14 unique elevations and VCP 215 has 15, and anything that walks the tilts in order —
+/// the derived products, CAPPI, a cross-section, the three dual-pol passes — evicted each entry
+/// just before coming back to it. A sequential scan through an LRU shorter than the scan is the
+/// textbook miss-every-time case, and it ran on the UI thread once per volume.
+///
+/// 32 holds two moments' worth of a full volume, which is what flipping between reflectivity and
+/// velocity actually asks for. The browser keeps half that: its heap is 32-bit and it is already
+/// holding the volumes themselves.
+const BINNED_CACHE: usize = if cfg!(target_arch = "wasm32") { 16 } else { 32 };
 
 /// How many volumes a pane keeps after the playhead has moved off them.
 ///
@@ -28,7 +36,11 @@ const BINNED_CACHE: usize = 12;
 const RECENT_VOLUMES: usize = if cfg!(target_os = "android") {
     8
 } else if cfg!(target_arch = "wasm32") {
-    6
+    // Two, not six. These overlap the app's own scan cache by design — both hold the same
+    // `Arc<Scan>` — but the binned sweeps hanging off them are this pane's alone, and in a
+    // 32-bit heap that never shrinks, six volumes' worth of them is the difference between a
+    // tab that runs all day and one that has to be closed.
+    2
 } else {
     12
 };

@@ -1370,6 +1370,10 @@ pub(crate) enum ToastKind {
 static FEED_ERRORS: std::sync::Mutex<Vec<(&'static str, String)>> =
     std::sync::Mutex::new(Vec::new());
 
+/// How many undrained feed errors are kept. More than fits on screen, far less than a failing
+/// network produces over an afternoon.
+const MAX_FEED_ERRORS: usize = 64;
+
 /// Log an auxiliary feed's failure and queue it for the user.
 ///
 /// "Auxiliary" means a feed whose failure leaves the rest of its layer standing — buoys inside
@@ -1378,6 +1382,12 @@ static FEED_ERRORS: std::sync::Mutex<Vec<(&'static str, String)>> =
 pub(crate) fn note_feed_error(feed: &'static str, err: impl std::fmt::Display) {
     log::warn!("{feed}: {err}");
     if let Ok(mut q) = FEED_ERRORS.lock() {
+        // Bounded because the drain is per frame and frames are not guaranteed: a hidden browser
+        // tab does not draw, and a network that is failing produces one of these per feed per
+        // refresh. The newest are the ones worth showing when the frames come back.
+        if q.len() >= MAX_FEED_ERRORS {
+            q.remove(0);
+        }
         q.push((feed, err.to_string()));
     }
 }
@@ -3619,10 +3629,13 @@ impl HookEchoApp {
 
     /// Largest edge a national field grid may keep. Bounded by what the GPU will accept, and
     /// then hard-capped: at 8192 a single f32 grid is ~268 MB of RAM before it is ever indexed,
-    /// which no phone should be asked to hold — and the Adreno 750 reports 16384, so the device
-    /// limit alone never bit. 4096 on Android is still finer than the screen can show.
+    /// which neither a phone nor a browser tab should be asked to hold — and the Adreno 750
+    /// reports 16384, so the device limit alone never bit. 4096 is still finer than either
+    /// screen can show.
     fn field_texture_cap(&self) -> usize {
-        let ceiling = if cfg!(target_os = "android") {
+        let ceiling = if cfg!(target_os = "android") || cfg!(target_arch = "wasm32") {
+            // The browser is in the phone's bracket here, not the desktop's: an 8192 f32 grid is
+            // ~268 MB staged before it is ever indexed, and a wasm heap only grows.
             4096
         } else {
             8192
@@ -7713,6 +7726,10 @@ impl HookEchoApp {
                                 }
                             }
                         }
+                        // Cell ids churn every volume, and the map only ever grew — an entry
+                        // per cell the radar has ever named, for as long as the site is the same.
+                        // Keep the ones this volume still has.
+                        self.cell_trends.retain(|id, _| cells.iter().any(|c| &c.id == id));
                         self.storm_cells = cells;
                         self.cells_site = Some(site);
                         self.update_follow();
