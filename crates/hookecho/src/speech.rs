@@ -327,7 +327,9 @@ pub fn set_volume(v: f32) {
 #[cfg(target_arch = "wasm32")]
 pub fn set_volume(_v: f32) {}
 
-#[cfg(not(target_arch = "wasm32"))]
+/// Only the desktop arm plays its own audio; Android hands the words to TextToSpeech, which owns
+/// the level itself.
+#[cfg(not(any(target_os = "android", target_arch = "wasm32")))]
 fn speech_volume() -> f32 {
     f32::from_bits(VOLUME.load(std::sync::atomic::Ordering::Relaxed))
 }

@@ -1324,6 +1324,9 @@ fn piper_row(ui: &mut egui::Ui, settings: &mut Settings) {
         crate::speech::set_piper(&settings.piper_path, &settings.piper_voice);
     }
     // Only once a voice is chosen: until then Piper is off on purpose and there is nothing wrong.
+    // Android speaks through its own TextToSpeech and has no Piper to diagnose — and the runtime
+    // `if !cfg!(android)` at the call site still compiles this body, so the gate has to be here.
+    #[cfg(not(target_os = "android"))]
     if !settings.piper_voice.is_empty() {
         if let Some(problem) = crate::speech::piper_problem() {
             ui.colored_label(ui.visuals().warn_fg_color, problem);
