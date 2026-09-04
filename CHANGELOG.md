@@ -6,6 +6,34 @@ so **write the section before pushing the tag**, or the release job fails.
 
 The rolling `latest` release tracks `main` and is not listed here.
 
+## Unreleased
+
+### Warnings say where, and what to do
+
+- Spoken warnings are on by default and now say something the tone cannot.
+  The script leads with the hazard, then where the warning sits against a
+  place you saved ("covering Home", "12 miles northeast of Home"), then the
+  counties with the state spoken in full, the towns from the bulletin's own
+  "Locations impacted include..." list, the motion, and the office's call to
+  action. Previously a warning that covered a saved marker was announced as
+  "Tornado warning for covers Home" and never named a county at all.
+- The tone plays first and the voice follows it, one announcement at a time.
+  Every cue used to open its own audio stream on its own thread, so the alert
+  tone played over the opening words and a squall line warning four counties
+  in one refresh produced four voices at once.
+- Spoken warnings honour quiet hours the way the tone always has. Escalated
+  warnings still go past it. The voice previously ignored quiet hours
+  entirely.
+- Speech follows the alert volume slider. Piper's output ignored it, so the
+  voice was louder than the tone introducing it.
+- Settings grows a "Speak a test warning" button that runs the whole chain on
+  a made-up warning, and tells you when a configured Piper cannot run — on
+  Arch the text-to-speech Piper is `piper-tts-bin` in the AUR, while
+  `extra/piper` is a mouse-configuration tool that installs the same binary
+  name.
+- An audio device unplugged mid-playback no longer strands the thread waiting
+  on it forever.
+
 ## 0.12.0-beta.2 - 2026-08-30
 
 Third R18 checkpoint, and the biggest one: the app stops being a US radar

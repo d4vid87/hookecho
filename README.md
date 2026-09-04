@@ -254,8 +254,13 @@ layer draws its own scale and units.
 - Escalation tiers (CONSIDERABLE → DESTRUCTIVE/observed tornado → **Tornado
   Emergency / PDS**) drive a pulsing polygon outline, priority sorting with red
   threat chips, a dedicated emergency siren, and `urgent`-priority phone push.
-- Warnings are read aloud through the system voice — the desktop speech engine,
-  or Android's own TTS on the phone.
+- Warnings are read aloud after the tone, on by default: which counties (with
+  the state said in full), the towns in the path from the bulletin's own
+  "Locations impacted" list, how far and which way it lies from your saved
+  place, and the office's call to action. Piper's neural voice on the desktop
+  when it is installed, otherwise the system speech engine, or Android's own TTS
+  on the phone. One warning at a time — the tone finishes before the words
+  start, and a pass that brings four warnings reads them in turn.
 - Watched-location monitoring, a lightning proximity alarm (a strike within
   ~15 km of a saved spot), rain-arrival alerts ("rain in about 20 minutes"), and
   live NWS Local Storm Reports, minutes fresh.

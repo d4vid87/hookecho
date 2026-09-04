@@ -151,7 +151,7 @@ pub fn spawn_load(ctx: egui::Context) {
 
 /// `setTimeout` as a future. The browser build has no runtime timer of its own — see `rt.rs`.
 #[cfg(target_arch = "wasm32")]
-async fn sleep_ms(ms: u32) {
+pub(crate) async fn sleep_ms(ms: u32) {
     let promise = js_sys::Promise::new(&mut |resolve, _| {
         if let Some(w) = web_sys::window() {
             let _ = w.set_timeout_with_callback_and_timeout_and_arguments_0(&resolve, ms as i32);

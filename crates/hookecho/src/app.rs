@@ -4319,6 +4319,9 @@ impl HookEchoApp {
         let metric = self.metric();
         let mut alerted = false;
         let mut max_esc = 0u8; // highest escalation among newly-seen warnings this pass
+        // Collected, not spoken here: the tone has to play first, and it plays once for the whole
+        // pass rather than once per warning.
+        let mut to_speak: Vec<String> = Vec::new();
                                // Only banner warnings within the selected radar's coverage — a warning covering a saved
                                // location still banners + pushes regardless (that's a watched place, not the viewed site).
         let site_box = self.active_site_bounds(250.0);
@@ -4334,6 +4337,16 @@ impl HookEchoApp {
             if self.known_warning_ids.insert(a.dedupe_key()) && self.warnings_seeded {
                 let esc = wxdata::alerts::escalation(a);
                 let urgent = esc >= 2;
+                // The polygon's middle, computed once: the rule pass below uses it as the
+                // warning's stand-in detection, and the spoken line uses it to say which way the
+                // warning lies from a watched place.
+                let centroid: Option<[f64; 2]> = f.rings.first().filter(|r| !r.is_empty()).map(|ring| {
+                    let n = ring.len() as f64;
+                    let (x, y) = ring
+                        .iter()
+                        .fold((0.0, 0.0), |(x, y), p| (x + p[0], y + p[1]));
+                    [x / n, y / n]
+                });
                 // Severity floor: below the tier the user set, the warning still banners and
                 // still joins the alert list — it just doesn't push, speak or make noise.
                 let notify_ok = esc >= self.settings.alert_min_escalation;
@@ -4342,20 +4355,26 @@ impl HookEchoApp {
                 // saved places should name the one you sleep in.
                 // Owned, not borrowed: the rule pass below needs `&mut self` while this is
                 // still in hand.
-                let hit: Option<(String, f64)> = self
+                let hit: Option<(String, f64, Option<f32>)> = self
                     .settings
                     .markers
                     .iter()
                     .filter_map(|m| {
                         let km = f.distance_km(m.lon, m.lat);
-                        (km <= m.alert_radius_mi * crate::geo::KM_PER_MILE)
-                            .then(|| (m.name.clone(), m.home, km))
+                        (km <= m.alert_radius_mi * crate::geo::KM_PER_MILE).then(|| {
+                            // Distance to the nearest edge, bearing to the middle: the edge is
+                            // what "how far" means for a polygon, and the middle is what "which
+                            // way" means. Mixing them is fine at the scale of one sentence.
+                            let bearing = centroid
+                                .map(|c| crate::geo::great_circle([m.lon, m.lat], c).1 as f32);
+                            (m.name.clone(), m.home, km, bearing)
+                        })
                     })
-                    .min_by(|(_, ha, ka), (_, hb, kb)| {
+                    .min_by(|(_, ha, ka, _), (_, hb, kb, _)| {
                         hb.cmp(ha)
                             .then(ka.partial_cmp(kb).unwrap_or(std::cmp::Ordering::Equal))
                     })
-                    .map(|(name, _, km)| (name, km));
+                    .map(|(name, _, km, bearing)| (name, km, bearing));
                 // A drawn watch zone the warning polygon touches. Independent of the markers: a
                 // zone is an area you care about, not a point with a radius around it.
                 let zone: Option<String> = self
@@ -4413,17 +4432,8 @@ impl HookEchoApp {
                         // The warning's own centroid stands in for a detection, so a warning rule
                         // can carry extra conditions like every other rule ("a tornado warning,
                         // and also rotation within 20 km").
-                        let hit = f
-                            .rings
-                            .first()
-                            .filter(|r| !r.is_empty())
-                            .map(|ring| {
-                                let n = ring.len() as f64;
-                                let (x, y) = ring
-                                    .iter()
-                                    .fold((0.0, 0.0), |(x, y), p| (x + p[0], y + p[1]));
-                                crate::rules::Detection::at(x / n, y / n)
-                            })
+                        let hit = centroid
+                            .map(|c| crate::rules::Detection::at(c[0], c[1]))
                             .unwrap_or(crate::rules::Detection::at(0.0, 0.0));
                         if crate::rules::compound_ok(&rule, &hit, &self.recent_for_rules()) {
                             self.fire_rule_named(&rule, &hit, Some(a.event.clone()));
@@ -4431,8 +4441,10 @@ impl HookEchoApp {
                     }
                 }
                 let zone_name = zone;
-                let (label, area) = match hit {
-                    Some((name, km)) => {
+                // `area` is banner text and `relation` is speech: "5 mi from Home" reads as
+                // "five em eye", and "covers Home" reads as a verb the sentence already had.
+                let (label, area, relation) = match hit {
+                    Some((name, km, bearing)) => {
                         // Watched location covered → push to the phone (opt-in ntfy topic).
                         if notify_ok {
                             self.notify_alert(
@@ -4450,51 +4462,51 @@ impl HookEchoApp {
                         } else {
                             format!("{} from {name}", crate::geo::fmt_distance(km, metric, 0))
                         };
-                        (format!("⚠ {}", a.event), where_)
+                        (
+                            format!("⚠ {}", a.event),
+                            where_,
+                            wxdata::spoken::relation(&name, km, bearing, metric),
+                        )
                     }
                     // A zone hit banners on its own terms, wherever the radar happens to be
                     // pointed — that is the whole point of drawing one.
-                    None if zone_name.is_some() => (
-                        format!("⚠ {}", a.event),
-                        format!("touches {}", zone_name.expect("checked Some")),
-                    ),
+                    None if zone_name.is_some() => {
+                        let zone = zone_name.expect("checked Some");
+                        (
+                            format!("⚠ {}", a.event),
+                            format!("touches {zone}"),
+                            format!("touching {zone}"),
+                        )
+                    }
                     None => {
                         // No watched location: banner only if it's near the selected radar.
                         if site_box.is_none_or(|bx| !feature_in_box(f, bx)) {
                             continue;
                         }
-                        (a.event.clone(), a.area.clone())
+                        // Nowhere of the user's own to relate it to; the counties carry it.
+                        (a.event.clone(), a.area.clone(), String::new())
                     }
                 };
                 if notify_ok {
                     max_esc = max_esc.max(esc);
                 }
-                // Read it out before the banner text is moved into the queue: chasing is an
+                // Queued, not spoken: the tone leads, and the whole pass is announced together
+                // below so two warnings in one fetch cannot talk over each other. Chasing is an
                 // eyes-on-the-road activity, and a warning you have to read is one you read late.
                 if self.settings.speak_warnings && notify_ok {
                     let until = a
                         .expires
                         .map(|t| {
-                            format!(
-                                " until {}",
-                                crate::timefmt::fmt_clock(
-                                    t,
-                                    self.settings
-                                        .tz_for(self.views[self.active].site.as_deref()),
-                                    false,
-                                )
+                            crate::timefmt::fmt_clock(
+                                t,
+                                self.settings.tz_for(self.views[self.active].site.as_deref()),
+                                false,
                             )
                         })
                         .unwrap_or_default();
-                    if !self.settings.mute_alerts {
-                        // Hazard, place and heading first — see `wxdata::spoken`. `until` here
-                        // still carries its leading " until ", which the script builder adds.
-                        crate::speech::speak(&wxdata::spoken::warning_script(
-                            a,
-                            &area,
-                            until.trim_start_matches(" until "),
-                        ));
-                    }
+                    // Hazard, then where it sits against a place you know, then the counties, the
+                    // towns in its path and what to do — see `wxdata::spoken`.
+                    to_speak.push(wxdata::spoken::warning_script(a, &relation, &until));
                 }
                 if notify_ok && self.settings.ntfy_snapshot {
                     // Newest wins: one picture per pass, of whatever last warned.
@@ -4509,14 +4521,30 @@ impl HookEchoApp {
             print!("\x07"); // free terminal bell alongside the chime
             use std::io::Write;
             let _ = std::io::stdout().flush();
-            if self.settings.alert_sound {
-                // Escalated (Tornado Emergency / PDS / destructive) warnings use the emergency sound.
-                if max_esc >= 2 {
-                    // Escalated (Tornado Emergency / PDS / destructive): past quiet hours too.
-                    self.play_alert_urgent(&self.settings.emergency_sound.clone());
-                } else {
-                    self.play_alert(&self.settings.warn_sound.clone());
+            // Escalated (Tornado Emergency / PDS / destructive) warnings use the emergency sound
+            // and go past quiet hours — which is now true of the words as well as the tone. The
+            // voice used to ignore quiet hours entirely, so a 3 a.m. warning too minor to chime
+            // for still read itself out in the dark.
+            let urgent = max_esc >= 2;
+            if !self.settings.mute_alerts && (urgent || !self.in_quiet_hours()) {
+                let tone = self.settings.alert_sound.then(|| {
+                    (
+                        if urgent {
+                            self.settings.emergency_sound.clone()
+                        } else {
+                            self.settings.warn_sound.clone()
+                        },
+                        self.settings.alert_volume,
+                    )
+                });
+                if tone.is_some() {
+                    crate::platform::haptic(crate::platform::Haptic::Alert);
                 }
+                // The voice tracks the same slider the tones do; Piper's output has no level of
+                // its own, so without this the words arrived louder than the tone.
+                crate::speech::set_volume(self.settings.alert_volume);
+                // One announcement for the whole pass: tone, then every new warning in turn.
+                crate::speech::announce(tone, to_speak);
             }
         }
     }
