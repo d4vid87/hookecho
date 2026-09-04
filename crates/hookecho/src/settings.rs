@@ -351,8 +351,12 @@ pub struct Settings {
     /// Chime + push when cloud-to-ground lightning strikes within ~15 km of a saved location.
     #[serde(default)]
     pub lightning_alarm: bool,
-    /// Read new warnings aloud (system speech engine). Off by default — speech is intrusive.
-    #[serde(default)]
+    /// Read new warnings aloud after the alert tone.
+    ///
+    /// On by default. The tone says a warning exists and nothing else: not which counties, not
+    /// which towns are in the path, not whether it is coming at you, not what to do. Someone
+    /// driving cannot read the banner that carries all of that.
+    #[serde(default = "default_true")]
     pub speak_warnings: bool,
     /// Path to a Piper binary, or blank to look on `PATH`. Piper is a local neural voice; when it
     /// and a voice model are both present, spoken warnings go through it instead of espeak.
@@ -1133,7 +1137,7 @@ impl Default for Settings {
             bookmarks: Vec::new(),
             anthropic_key: String::new(),
             lightning_alarm: false,
-            speak_warnings: false,
+            speak_warnings: true,
             piper_path: String::new(),
             piper_voice: String::new(),
             piper_download_voice: String::new(),

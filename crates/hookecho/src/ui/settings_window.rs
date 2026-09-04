@@ -1232,10 +1232,20 @@ fn alerts_tab(ui: &mut egui::Ui, settings: &mut Settings) {
     ui.strong("Spoken warnings");
     ui.checkbox(&mut settings.speak_warnings, "Read new warnings aloud")
         .on_hover_text(
-            "Speaks the event, area and expiry through the system speech engine \u{2014} for when \
-             your eyes are on the road",
+            "The tone first, then the words: which counties, the towns in the path, where it sits \
+             from your saved place, and what to do \u{2014} for when your eyes are on the road",
         );
-    ui.weak("Linux needs spd-say or espeak installed; Android uses its built-in voice.");
+    ui.weak("Piper below is the good voice; without it Linux uses spd-say or espeak, macOS and \
+             Windows their own, Android its own.");
+    // Hearing it once beats reading three settings and waiting for weather to find out that the
+    // engine was never installed.
+    if ui
+        .button("\u{1f50a} Speak a test warning")
+        .on_hover_text("Plays the emergency tone and reads a made-up tornado warning")
+        .clicked()
+    {
+        speak_test(settings);
+    }
     #[cfg(not(target_arch = "wasm32"))]
     if !cfg!(target_os = "android") {
         piper_row(ui, settings);
@@ -1254,6 +1264,33 @@ fn alerts_tab(ui: &mut egui::Ui, settings: &mut Settings) {
     );
     ui.checkbox(&mut settings.lightning_alarm, "Lightning within ~15 km of a saved location")
         .on_hover_text("Chime + push when CG lightning strikes near a marker. Requires the Lightning layer (National) to be on.");
+}
+
+/// Speak a warning that never happened, through the whole chain the real ones use.
+///
+/// Deliberately the escalated path: the emergency tone and a catastrophic tornado warning, which
+/// is the one worth knowing works. The home marker's name is borrowed so the relation clause
+/// sounds like it will on the night.
+fn speak_test(settings: &Settings) {
+    let home = settings
+        .markers
+        .iter()
+        .find(|m| m.home)
+        .or_else(|| settings.markers.first())
+        .map(|m| m.name.as_str())
+        .unwrap_or("Home");
+    crate::speech::set_volume(settings.alert_volume);
+    // Imperial, because the demo is an Oklahoma tornado warning. Real ones follow the pane's
+    // radar network, which Settings has no pane to ask.
+    let script = wxdata::spoken::warning_script(
+        &wxdata::spoken::demo_alert(),
+        &wxdata::spoken::relation(home, 19.3, Some(45.0), false),
+        "7 15 PM",
+    );
+    let tone = settings
+        .alert_sound
+        .then(|| (settings.emergency_sound.clone(), settings.alert_volume));
+    crate::speech::announce(tone, vec![script]);
 }
 
 /// Piper: the local neural voice, and the one download this app ever offers.
@@ -1285,6 +1322,12 @@ fn piper_row(ui: &mut egui::Ui, settings: &mut Settings) {
     });
     if edited {
         crate::speech::set_piper(&settings.piper_path, &settings.piper_voice);
+    }
+    // Only once a voice is chosen: until then Piper is off on purpose and there is nothing wrong.
+    if !settings.piper_voice.is_empty() {
+        if let Some(problem) = crate::speech::piper_problem() {
+            ui.colored_label(ui.visuals().warn_fg_color, problem);
+        }
     }
     // The picker downloads; the field above is what actually gets spoken with. Picking a voice
     // that is already on disk switches to it without touching the network.

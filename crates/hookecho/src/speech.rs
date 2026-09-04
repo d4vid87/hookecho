@@ -322,6 +322,11 @@ pub fn set_volume(v: f32) {
     VOLUME.store(v.clamp(0.0, 1.0).to_bits(), std::sync::atomic::Ordering::Relaxed);
 }
 
+/// The browser mixes speech itself and `SpeechSynthesisUtterance` carries its own volume, so
+/// there is nothing here to set. A stub rather than a `cfg` at every call site.
+#[cfg(target_arch = "wasm32")]
+pub fn set_volume(_v: f32) {}
+
 #[cfg(not(target_arch = "wasm32"))]
 fn speech_volume() -> f32 {
     f32::from_bits(VOLUME.load(std::sync::atomic::Ordering::Relaxed))
