@@ -197,9 +197,11 @@ const REGIONS: &[(&str, &str)] = &[
 ];
 
 /// Codes whose divisions are not counties. Louisiana has parishes; Alaska has boroughs and census
-/// areas, which `areaDesc` already spells out; DC and the Canadian provinces have neither.
+/// areas, which `areaDesc` already spells out; DC, the territories (Puerto Rico has municipios,
+/// the islands have districts) and the Canadian provinces have neither.
 const NOT_COUNTY: &[&str] = &[
-    "AK", "DC", "AB", "BC", "MB", "NB", "NL", "NS", "NT", "NU", "ON", "PE", "QC", "SK", "YT",
+    "AK", "DC", "PR", "VI", "GU", "AS", "MP", "AB", "BC", "MB", "NB", "NL", "NS", "NT", "NU", "ON",
+    "PE", "QC", "SK", "YT",
 ];
 
 /// At most this many county names before the rest become "and N more". Past four the listener has
@@ -305,20 +307,24 @@ fn join_and(items: &[&str]) -> String {
 /// column the office's software chose, so it is unwrapped before splitting, and it ends at the
 /// blank line.
 pub fn cities(description: &str) -> Vec<String> {
+    const KEY: &str = "include...";
     let mut lines = description.lines();
-    // `include...` may be followed by trailing spaces; nothing else follows it on the line.
-    if !lines.any(|l| l.trim_end().to_ascii_lowercase().ends_with("include...")) {
+    // Whatever follows the key on its own line is the start of the list. Usually nothing — the
+    // list begins on the next line — but an office that puts the first town on the same line
+    // used to get no towns read at all.
+    let Some(first) = lines.find_map(|l| {
+        let at = l.to_ascii_lowercase().find(KEY)?;
+        Some(l[at + KEY.len()..].trim())
+    }) else {
         return Vec::new();
-    }
-    let block: Vec<&str> = lines
-        .take_while(|l| !l.trim().is_empty())
-        .map(|l| l.trim())
-        .collect();
-    if block.is_empty() {
-        return Vec::new();
-    }
+    };
+    let mut block: Vec<&str> = vec![first];
+    block.extend(lines.take_while(|l| !l.trim().is_empty()).map(|l| l.trim()));
     let joined = block.join(" ");
     let joined = joined.trim().trim_end_matches('.');
+    if joined.is_empty() {
+        return Vec::new();
+    }
     joined
         .split(',')
         // A serial "and" arrives with or without the comma before it, so both are split here.
@@ -477,8 +483,10 @@ pub fn warning_script(a: &AlertInfo, relation: &str, until: &str) -> String {
         .unwrap_or_else(|| a.event.to_lowercase());
     s.push_str(&capitalize(&lead));
     if !relation.is_empty() {
+        // Not expanded: every word here is ours except the marker's name, and a marker called
+        // "NW Farm" or "HQ" is a name, not shorthand. `expand` turned "IN" into "inch".
         s.push(' ');
-        s.push_str(&expand(relation));
+        s.push_str(relation);
     }
     let area = spoken_area(&a.area);
     if !area.is_empty() {
@@ -582,6 +590,18 @@ mod tests {
     }
 
     #[test]
+    fn a_marker_name_is_a_name_not_shorthand() {
+        let mut a = demo_alert();
+        a.description = String::new();
+        a.instruction = String::new();
+        a.motion = None;
+        a.max_hail_in = None;
+        a.damage_threat = None;
+        let s = warning_script(&a, "covering NW Farm", "");
+        assert!(s.starts_with("Tornado warning covering NW Farm, for "), "{s}");
+    }
+
+    #[test]
     fn a_plain_warning_still_reads_cleanly() {
         let mut a = demo_alert();
         a.area = "Cleveland County".into();
@@ -617,6 +637,8 @@ mod tests {
             spoken_area("Ottawa North - Kanata - Orléans, ON"),
             "Ottawa North - Kanata - Orléans, Ontario"
         );
+        // Puerto Rico has municipios. "San Juan County" is a place in Utah.
+        assert_eq!(spoken_area("San Juan, PR"), "San Juan, Puerto Rico");
         // Not a `Name, XX` list at all: read it as written rather than guess.
         assert_eq!(spoken_area("Bayern"), "Bayern");
         assert_eq!(
@@ -647,6 +669,12 @@ mod tests {
             ["Canton", "Salem", "Columbiana", "Boardman", "Alliance"]
         );
         assert!(cities("No such block here.").is_empty());
+        // The first town on the same line as the key, which used to read as no towns at all.
+        assert_eq!(
+            cities("Locations impacted include... Norman, Moore\nand Noble.\n\nHAIL...1 IN"),
+            ["Norman", "Moore", "Noble"]
+        );
+        assert!(cities("Locations impacted include...\n\nNothing listed.").is_empty());
     }
 
     #[test]
