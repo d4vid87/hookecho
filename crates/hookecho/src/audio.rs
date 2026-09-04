@@ -22,56 +22,80 @@ use std::time::Duration;
 #[cfg(not(target_arch = "wasm32"))]
 pub fn play(sound: &AlertSound, volume: f32) {
     let sound = sound.clone();
-    std::thread::spawn(move || {
-        let (_stream, handle) = match rodio::OutputStream::try_default() {
-            Ok(s) => s,
-            Err(e) => {
-                log::warn!("no audio output for alert sound: {e}");
-                return;
-            }
-        };
-        let sink = match Sink::try_new(&handle) {
-            Ok(s) => s,
-            Err(e) => {
-                log::warn!("audio sink failed: {e}");
-                return;
-            }
-        };
-        sink.set_volume(volume.clamp(0.0, 1.0));
-        match &sound {
-            AlertSound::Custom(path) => {
-                if !append_file(&sink, path) {
-                    // Fall back to the default chime so the alert is never silent.
-                    append_builtin(&sink, &AlertSound::Chime);
-                }
-            }
-            builtin => append_builtin(&sink, builtin),
-        }
-        sink.sleep_until_end(); // keep the stream alive until playback finishes
-    });
+    std::thread::spawn(move || play_blocking(&sound, volume));
 }
 
-/// Play WAV bytes that some other part of the app just produced (today: Piper's stdout).
-/// Non-blocking, same detached-thread shape as [`play`].
+/// [`play`], but on the calling thread: returns when the sound has finished.
+///
+/// This is what lets the tone come *before* the voice instead of on top of it — see
+/// `speech::announce`, which owns the one thread both of them run on.
 #[cfg(not(target_arch = "wasm32"))]
-pub fn play_wav(bytes: Vec<u8>) {
-    std::thread::spawn(move || {
-        let Ok((_stream, handle)) = rodio::OutputStream::try_default() else {
-            log::warn!("no audio output for speech");
+pub fn play_blocking(sound: &AlertSound, volume: f32) {
+    let (_stream, handle) = match rodio::OutputStream::try_default() {
+        Ok(s) => s,
+        Err(e) => {
+            log::warn!("no audio output for alert sound: {e}");
             return;
-        };
-        let Ok(sink) = Sink::try_new(&handle) else {
+        }
+    };
+    let sink = match Sink::try_new(&handle) {
+        Ok(s) => s,
+        Err(e) => {
+            log::warn!("audio sink failed: {e}");
             return;
-        };
-        match rodio::Decoder::new(std::io::Cursor::new(bytes)) {
-            Ok(src) => sink.append(src),
-            Err(e) => {
-                log::warn!("speech audio decode failed: {e}");
-                return;
+        }
+    };
+    sink.set_volume(volume.clamp(0.0, 1.0));
+    match sound {
+        AlertSound::Custom(path) => {
+            if !append_file(&sink, path) {
+                // Fall back to the default chime so the alert is never silent.
+                append_builtin(&sink, &AlertSound::Chime);
             }
         }
-        sink.sleep_until_end();
-    });
+        builtin => append_builtin(&sink, builtin),
+    }
+    drain(&sink, Duration::from_secs(30));
+}
+
+/// Play WAV bytes that some other part of the app just produced (today: Piper's stdout), and
+/// return when they have finished.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn play_wav_blocking(bytes: Vec<u8>, volume: f32) {
+    let Ok((_stream, handle)) = rodio::OutputStream::try_default() else {
+        log::warn!("no audio output for speech");
+        return;
+    };
+    let Ok(sink) = Sink::try_new(&handle) else {
+        return;
+    };
+    sink.set_volume(volume.clamp(0.0, 1.0));
+    match rodio::Decoder::new(std::io::Cursor::new(bytes)) {
+        Ok(src) => sink.append(src),
+        Err(e) => {
+            log::warn!("speech audio decode failed: {e}");
+            return;
+        }
+    }
+    // A spoken warning runs longer than any tone, and a long instruction longer still.
+    drain(&sink, Duration::from_secs(120));
+}
+
+/// Wait for the sink to empty, but not forever.
+///
+/// `Sink::sleep_until_end` is a channel receive that never returns if the device disappears
+/// mid-stream — unplug a USB headset and the thread is gone for the life of the process. That was
+/// survivable when every playback owned a throwaway thread; now that one thread serializes the
+/// tone and the speech behind a lock, a wedged wait would silence every warning after it.
+#[cfg(not(target_arch = "wasm32"))]
+fn drain(sink: &Sink, cap: Duration) {
+    let start = std::time::Instant::now();
+    while !sink.empty() && start.elapsed() < cap {
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    if !sink.empty() {
+        log::warn!("audio device stopped draining after {cap:?}; giving up on this cue");
+    }
 }
 
 /// Try to queue a user audio file (wav/mp3/ogg/flac). Returns false (logged) on any failure.
@@ -180,6 +204,15 @@ pub fn play(sound: &AlertSound, volume: f32) {
         }
         Err(e) => log::warn!("alert sound element failed: {e:?}"),
     }
+}
+
+/// How long [`play`] will be making noise for, in milliseconds.
+///
+/// The browser gives no completion callback worth having on a throwaway `<audio>` element, so the
+/// web build waits out the tone by the clock before it starts speaking.
+#[cfg(target_arch = "wasm32")]
+pub fn duration_ms(sound: &AlertSound) -> u32 {
+    segments(sound).iter().map(|(_, ms)| *ms as u32).sum()
 }
 
 /// The built-in cues as `(hz, ms)` runs, `0.0` meaning silence. Mirrors `append_builtin`'s
