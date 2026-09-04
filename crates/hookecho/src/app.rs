@@ -5877,8 +5877,9 @@ impl HookEchoApp {
         // failures are logged rather than surfaced — a dead relay must not break chase mode.
         let tx = share.sender();
         let id = share.id.clone();
+        let client = self.http.clone();
         self.spawner.spawn(async move {
-            let client = reqwest::Client::new();
+            let timeout = std::time::Duration::from_secs(Self::SHARE_SECS - 2);
             let body = match serde_json::to_string(&me) {
                 Ok(b) => b,
                 Err(e) => {
@@ -5890,24 +5891,36 @@ impl HookEchoApp {
                 .post(&relay)
                 .header("content-type", "application/json")
                 .body(body)
+                .timeout(timeout)
                 .send()
                 .await
+                .and_then(reqwest::Response::error_for_status)
             {
                 log::warn!("share relay post failed: {e}");
                 return;
             }
-            match client.get(&relay).send().await {
-                Ok(r) => match r.text().await.map_err(|e| e.to_string()).and_then(|t| {
-                    serde_json::from_str::<Vec<crate::share::Peer>>(&t).map_err(|e| e.to_string())
-                }) {
-                    Ok(list) => {
-                        for p in list.into_iter().filter(|p| p.id != id) {
-                            let _ = tx.send(p);
-                        }
+            let response = match client
+                .get(&relay)
+                .timeout(timeout)
+                .send()
+                .await
+                .and_then(reqwest::Response::error_for_status)
+            {
+                Ok(r) => r,
+                Err(e) => {
+                    log::warn!("share relay get failed: {e}");
+                    return;
+                }
+            };
+            match response.text().await.map_err(|e| e.to_string()).and_then(|t| {
+                serde_json::from_str::<Vec<crate::share::Peer>>(&t).map_err(|e| e.to_string())
+            }) {
+                Ok(list) => {
+                    for p in list.into_iter().filter(|p| p.id != id) {
+                        let _ = tx.send(p);
                     }
-                    Err(e) => log::warn!("share relay list unreadable: {e}"),
-                },
-                Err(e) => log::warn!("share relay get failed: {e}"),
+                }
+                Err(e) => log::warn!("share relay list unreadable: {e}"),
             }
         });
     }
@@ -6721,7 +6734,7 @@ impl HookEchoApp {
         // Dark and Light pack the same vector tiles (the `.pbf` cache is palette-agnostic), so
         // resolving `Auto` either way gives the same pack.
         let style = self.views[self.active].basemap.resolve(true);
-        let packable = if style.is_raster() {
+        let packable = !cfg!(target_arch = "wasm32") && if style.is_raster() {
             self.tiles.packable(style)
         } else if matches!(style, BasemapStyle::Dark | BasemapStyle::Light) {
             self.vtiles.packable()
@@ -6784,6 +6797,7 @@ impl HookEchoApp {
     }
 
     /// Kick off an offline chase-pack download of the current view's basemap tiles (4 workers).
+    #[cfg(not(target_arch = "wasm32"))]
     fn start_chasepack(&mut self) {
         use crate::tiles::BasemapStyle;
         if self.chasepack.is_some() {
@@ -6838,7 +6852,6 @@ impl HookEchoApp {
         let total = jobs.len() as u64;
         let (tx, rx) = std::sync::mpsc::channel();
         let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-        #[cfg(not(target_arch = "wasm32"))]
         crate::tiles::start_pack_download(self._rt.handle(), jobs, cancel.clone(), tx);
         self.chasepack = Some(ChasePack {
             rx,
@@ -6864,6 +6877,7 @@ impl HookEchoApp {
         if actions.instant_replay {
             self.instant_replay();
         }
+        #[cfg(not(target_arch = "wasm32"))]
         if actions.download_chasepack {
             self.start_chasepack();
         }
@@ -7008,7 +7022,11 @@ impl HookEchoApp {
             // Offline chase pack: pre-cache this view's basemap tiles so it renders with no signal.
             ui.separator();
             if !chasepack.packable {
-                ui.weak("Offline pack: pick a raster or vector basemap");
+                if cfg!(target_arch = "wasm32") {
+                    ui.weak("Offline packs are available in the desktop and Android apps");
+                } else {
+                    ui.weak("Offline pack: pick a raster or vector basemap");
+                }
             } else {
                 ui.weak(format!(
                     "Offline pack: {} tiles ≈ {:.0} MB (z{}–{}, current view)",
