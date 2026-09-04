@@ -258,10 +258,16 @@ static PROBE: std::sync::Mutex<Option<(String, Option<String>)>> = std::sync::Mu
 /// Named for Arch on purpose: `extra/piper` is a GTK mouse-configuration tool that installs
 /// `/usr/bin/piper`, so "install piper" is advice that leads to a program for setting DPI on a
 /// gaming mouse. The text-to-speech one is in the AUR.
-#[cfg(not(any(target_os = "android", target_arch = "wasm32")))]
+#[cfg(target_os = "linux")]
 pub const NOT_FOUND: &str = "Piper is not installed — on Arch: `yay -S piper-tts-bin` \
                             (not `extra/piper`, which is a mouse tool). Or point the field above \
                             at the binary.";
+
+/// The same nudge where there is no package manager to name.
+#[cfg(not(any(target_os = "linux", target_os = "android", target_arch = "wasm32")))]
+pub const NOT_FOUND: &str = "Piper is not installed — download piper-tts from \
+                            github.com/rhasspy/piper/releases and point the field above at the \
+                            binary.";
 
 #[cfg(not(any(target_os = "android", target_arch = "wasm32")))]
 fn set_piper_problem(problem: Option<String>) {
@@ -403,7 +409,13 @@ mod imp {
             .read()
             .map(|g| g.clone())
             .map_err(|_| "piper config poisoned")?;
-        if voice.is_empty() || !std::path::Path::new(&voice).exists() {
+        if voice.is_empty() {
+            return Ok(false);
+        }
+        if !std::path::Path::new(&voice).exists() {
+            // Configured and gone: a cleaned cache, a moved data directory. Without this the
+            // fallback voice takes over and nothing says why the good one stopped.
+            super::set_piper_problem(Some(format!("voice model not found: {voice}")));
             return Ok(false);
         }
         let bin = if bin.is_empty() {
