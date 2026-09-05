@@ -1312,7 +1312,19 @@ mod android_tts {
         let deadline = wxdata::clock::Instant::now() + Duration::from_secs(6);
         loop {
             match try_speak(text) {
-                Ok(true) => return Ok(()),
+                Ok(true) => {
+                    // `speak` only queues. The cross-platform speech worker needs this call to
+                    // finish at the utterance boundary so an emergency can run next.
+                    std::thread::sleep(Duration::from_millis(20));
+                    let speech_deadline = wxdata::clock::Instant::now() + Duration::from_secs(120);
+                    while is_speaking().map_err(|e| format!("{e:?}"))? {
+                        if wxdata::clock::Instant::now() >= speech_deadline {
+                            return Err("TTS utterance did not finish".into());
+                        }
+                        std::thread::sleep(Duration::from_millis(50));
+                    }
+                    return Ok(());
+                }
                 Ok(false) => {
                     if wxdata::clock::Instant::now() >= deadline {
                         return Err("TTS engine never became ready".into());
@@ -1367,6 +1379,18 @@ mod android_tts {
                 Err(e)
             }
         }
+    }
+
+    fn is_speaking() -> jni::errors::Result<bool> {
+        let Some(app) = super::android::app() else {
+            return Ok(false);
+        };
+        let Some(tts) = TTS.get() else {
+            return Ok(false);
+        };
+        let vm = unsafe { jni::JavaVM::from_raw(app.vm_as_ptr() as *mut jni::sys::JavaVM) }?;
+        let mut env = vm.attach_current_thread()?;
+        env.call_method(tts.as_obj(), "isSpeaking", "()Z", &[])?.z()
     }
 }
 

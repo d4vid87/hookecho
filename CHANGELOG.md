@@ -21,6 +21,9 @@ The rolling `latest` release tracks `main` and is not listed here.
   Every cue used to open its own audio stream on its own thread, so the alert
   tone played over the opening words and a squall line warning four counties
   in one refresh produced four voices at once.
+- An emergency now runs immediately after the sentence already being spoken,
+  discarding queued ordinary warnings and chase updates. Warnings delivered
+  together are spoken from highest to lowest escalation.
 - Spoken warnings honour quiet hours the way the tone always has. Escalated
   warnings still go past it. The voice previously ignored quiet hours
   entirely.
