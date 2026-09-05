@@ -72,7 +72,9 @@ pub fn reduced() -> bool {
 /// start. Sustained badness is the thing worth reacting to.
 pub fn frame(ctx: &egui::Context, user_reduce: bool) {
     USER_OFF.store(user_reduce, Ordering::Relaxed);
-    let dt = ctx.input(|i| i.unstable_dt);
+    // `stable_dt` substitutes the predicted frame interval after reactive-mode sleep. The raw
+    // delta counts an idle 100 ms heartbeat as a slow frame and degrades a perfectly idle app.
+    let dt = ctx.input(|i| i.stable_dt);
     let (slow, changed) = ctx.data_mut(|d| {
         let id = egui::Id::new("visual_quality_guard");
         let mut guard: Guard = d.get_temp(id).unwrap_or_default();
