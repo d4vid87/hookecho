@@ -4451,9 +4451,9 @@ impl HookEchoApp {
         let mut max_esc = 0u8; // highest escalation among newly-seen warnings this pass
         // Collected, not spoken here: the tone has to play first, and it plays once for the whole
         // pass rather than once per warning.
-        let mut to_speak: Vec<String> = Vec::new();
-                               // Only banner warnings within the selected radar's coverage — a warning covering a saved
-                               // location still banners + pushes regardless (that's a watched place, not the viewed site).
+        let mut to_speak: Vec<(u8, String)> = Vec::new();
+        // Only banner warnings within the selected radar's coverage — a warning covering a saved
+        // location still banners + pushes regardless (that's a watched place, not the viewed site).
         let site_box = self.active_site_bounds(250.0);
         for f in feats {
             if f.kind != overlay::FeatureKind::Warning {
@@ -4636,7 +4636,7 @@ impl HookEchoApp {
                         .unwrap_or_default();
                     // Hazard, then where it sits against a place you know, then the counties, the
                     // towns in its path and what to do — see `wxdata::spoken`.
-                    to_speak.push(wxdata::spoken::warning_script(a, &relation, &until));
+                    to_speak.push((esc, wxdata::spoken::warning_script(a, &relation, &until)));
                 }
                 if notify_ok && self.settings.ntfy_snapshot {
                     // Newest wins: one picture per pass, of whatever last warned.
@@ -4673,8 +4673,17 @@ impl HookEchoApp {
                 // The voice tracks the same slider the tones do; Piper's output has no level of
                 // its own, so without this the words arrived louder than the tone.
                 crate::speech::set_volume(self.settings.alert_volume);
-                // One announcement for the whole pass: tone, then every new warning in turn.
-                crate::speech::announce(tone, to_speak);
+                // One announcement for the whole pass: highest escalation first, then the rest.
+                to_speak.sort_by_key(|(esc, _)| std::cmp::Reverse(*esc));
+                crate::speech::announce(
+                    if urgent {
+                        crate::speech::Priority::Emergency
+                    } else {
+                        crate::speech::Priority::Warning
+                    },
+                    tone,
+                    to_speak.into_iter().map(|(_, line)| line).collect(),
+                );
             }
         }
     }

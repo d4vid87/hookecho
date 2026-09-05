@@ -5,7 +5,7 @@
 //! one is configured, otherwise the platform's own synthesizer.
 //!
 //! Chasing is an eyes-on-the-road activity: a warning you have to read is a warning you read at
-//! the wrong moment. Every call is fire-and-forget on a background thread and every failure is
+//! the wrong moment. Every call is fire-and-forget on one background worker and every failure is
 //! logged and dropped — a machine with no speech engine is a normal machine, not a broken one.
 
 /// Piper binary and voice model, as configured. Empty binary means "look on PATH"; empty voice
@@ -157,41 +157,155 @@ pub fn take_voice_request() -> Option<String> {
     WANT_VOICE.lock().ok().and_then(|mut g| g.take())
 }
 
-/// Held for the length of one announcement, so the next one waits its turn.
-///
-/// Before this, every cue opened its own output stream on its own thread: the tone played over
-/// the first word, and a squall line that warned four counties in one fetch pass had four voices
-/// talking at once. None of it was audible and all of it was alarming.
-#[cfg(not(target_arch = "wasm32"))]
-static SPEAKING: std::sync::Mutex<()> = std::sync::Mutex::new(());
+/// Internal urgency of queued speech. Only an emergency may discard anything already waiting.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Priority {
+    Background,
+    Warning,
+    Emergency,
+}
 
-/// The tone, then the words — one announcement at a time.
-///
-/// Returns immediately; everything happens on one detached thread that holds [`SPEAKING`] for the
-/// whole sequence. `tone` is `None` when the user has alert sounds off, and `lines` is empty when
-/// they have speech off, so a run with both is a no-op rather than a silent thread.
-#[cfg(not(target_arch = "wasm32"))]
-pub fn announce(tone: Option<(crate::settings::AlertSound, f32)>, lines: Vec<String>) {
-    if tone.is_none() && lines.is_empty() {
-        return;
+struct SpeechJob {
+    priority: Priority,
+    tone: Option<(crate::settings::AlertSound, f32)>,
+    lines: Vec<String>,
+}
+
+impl SpeechJob {
+    fn new(
+        priority: Priority,
+        tone: Option<(crate::settings::AlertSound, f32)>,
+        lines: Vec<String>,
+    ) -> Self {
+        Self {
+            priority,
+            tone,
+            lines: lines
+                .into_iter()
+                .flat_map(|line| split_sentences(&line))
+                .collect(),
+        }
     }
-    std::thread::spawn(move || {
-        // A panic elsewhere in the audio path must not silence every later warning, so a poisoned
-        // lock is taken anyway — there is no shared state behind it to corrupt.
-        let _guard = SPEAKING
+
+    fn is_empty(&self) -> bool {
+        self.tone.is_none() && self.lines.is_empty()
+    }
+}
+
+/// Break generated scripts at sentence endings so an emergency never waits behind a whole
+/// multi-sentence warning after the voice reaches a natural stopping point.
+fn split_sentences(text: &str) -> Vec<String> {
+    let bytes = text.as_bytes();
+    let mut out = Vec::new();
+    let mut start = 0;
+    for (i, b) in bytes.iter().enumerate() {
+        if matches!(b, b'.' | b'!' | b'?') && bytes.get(i + 1).is_none_or(u8::is_ascii_whitespace) {
+            let sentence = text[start..=i].trim();
+            if !sentence.is_empty() {
+                out.push(sentence.to_string());
+            }
+            start = i + 1;
+        }
+    }
+    let tail = text[start..].trim();
+    if !tail.is_empty() {
+        out.push(tail.to_string());
+    }
+    out
+}
+
+fn enqueue(queue: &mut std::collections::VecDeque<SpeechJob>, job: SpeechJob) {
+    if job.priority == Priority::Emergency {
+        queue.retain(|queued| queued.priority == Priority::Emergency);
+    }
+    queue.push_back(job);
+}
+
+fn emergency_waiting(queue: &std::collections::VecDeque<SpeechJob>) -> bool {
+    queue.iter().any(|job| job.priority == Priority::Emergency)
+}
+
+fn should_preempt(current: Priority, queue: &std::collections::VecDeque<SpeechJob>) -> bool {
+    current != Priority::Emergency && emergency_waiting(queue)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+struct SpeechQueue {
+    jobs: std::sync::Mutex<std::collections::VecDeque<SpeechJob>>,
+    ready: std::sync::Condvar,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn speech_queue() -> &'static std::sync::Arc<SpeechQueue> {
+    static QUEUE: std::sync::OnceLock<std::sync::Arc<SpeechQueue>> = std::sync::OnceLock::new();
+    QUEUE.get_or_init(|| {
+        let queue = std::sync::Arc::new(SpeechQueue {
+            jobs: std::sync::Mutex::new(std::collections::VecDeque::new()),
+            ready: std::sync::Condvar::new(),
+        });
+        let worker = std::sync::Arc::clone(&queue);
+        std::thread::spawn(move || speech_worker(&worker));
+        queue
+    })
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn speech_worker(queue: &SpeechQueue) {
+    loop {
+        let mut jobs = queue
+            .jobs
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if let Some((sound, volume)) = tone {
+        while jobs.is_empty() {
+            jobs = queue
+                .ready
+                .wait(jobs)
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+        }
+        let job = jobs.pop_front().expect("queue was not empty");
+        drop(jobs);
+
+        if let Some((sound, volume)) = job.tone {
             crate::audio::play_blocking(&sound, volume);
         }
-        for line in lines {
+        for line in job.lines {
+            let jobs = queue
+                .jobs
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let preempt = should_preempt(job.priority, &jobs);
+            drop(jobs);
+            if preempt {
+                break;
+            }
             if let Err(e) = imp::speak_blocking(&line) {
                 log::warn!("speech failed: {e}");
-                // One dead engine will be dead for the rest of them too.
                 break;
             }
         }
-    });
+    }
+}
+
+/// The tone, then the words — one announcement at a time.
+///
+/// Returns immediately; one process-wide worker owns the queue and all platform speech calls.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn announce(
+    priority: Priority,
+    tone: Option<(crate::settings::AlertSound, f32)>,
+    lines: Vec<String>,
+) {
+    let job = SpeechJob::new(priority, tone, lines);
+    if job.is_empty() {
+        return;
+    }
+    let queue = speech_queue();
+    let mut jobs = queue
+        .jobs
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    enqueue(&mut jobs, job);
+    queue.ready.notify_one();
 }
 
 /// Speak `text` aloud, if the platform can. Returns immediately.
@@ -199,34 +313,82 @@ pub fn announce(tone: Option<(crate::settings::AlertSound, f32)>, lines: Vec<Str
 /// Goes through [`announce`], so a chase position update waits for a warning to finish rather
 /// than interrupting it.
 pub fn speak(text: &str) {
-    announce(None, vec![text.to_string()]);
+    announce(Priority::Background, None, vec![text.to_string()]);
 }
 
-/// The tone, then the words. The browser queues utterances itself, so the only thing to arrange
-/// is that the first one does not start underneath the tone.
-///
-// ponytail: no lock on the web. A second announcement's tone can overlap the tail of the first,
-// which needs an outstanding-count to fix; the browser build is not the one anyone chases with.
 #[cfg(target_arch = "wasm32")]
-pub fn announce(tone: Option<(crate::settings::AlertSound, f32)>, lines: Vec<String>) {
-    if tone.is_none() && lines.is_empty() {
+#[derive(Default)]
+struct WebQueue {
+    jobs: std::collections::VecDeque<SpeechJob>,
+    running: bool,
+}
+
+#[cfg(target_arch = "wasm32")]
+std::thread_local! {
+    static WEB_QUEUE: std::cell::RefCell<WebQueue> = std::cell::RefCell::new(WebQueue::default());
+}
+
+/// The same single FIFO on the browser's one thread. Only one utterance is handed to
+/// `speechSynthesis` at a time, so its `speaking` state is the completion signal and the next
+/// sentence is a preemption boundary.
+#[cfg(target_arch = "wasm32")]
+pub(crate) fn announce(
+    priority: Priority,
+    tone: Option<(crate::settings::AlertSound, f32)>,
+    lines: Vec<String>,
+) {
+    let job = SpeechJob::new(priority, tone, lines);
+    if job.is_empty() {
         return;
     }
-    let wait = tone
-        .map(|(sound, volume)| {
-            crate::audio::play(&sound, volume);
-            crate::audio::duration_ms(&sound)
-        })
-        .unwrap_or(0);
-    wasm_bindgen_futures::spawn_local(async move {
-        crate::fonts::sleep_ms(wait).await;
-        for line in lines {
+    let start = WEB_QUEUE.with(|queue| {
+        let mut queue = queue.borrow_mut();
+        enqueue(&mut queue.jobs, job);
+        if queue.running {
+            false
+        } else {
+            queue.running = true;
+            true
+        }
+    });
+    if start {
+        wasm_bindgen_futures::spawn_local(web_speech_worker());
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+async fn web_speech_worker() {
+    loop {
+        let Some(job) = WEB_QUEUE.with(|queue| queue.borrow_mut().jobs.pop_front()) else {
+            WEB_QUEUE.with(|queue| queue.borrow_mut().running = false);
+            return;
+        };
+        if let Some((sound, volume)) = &job.tone {
+            crate::audio::play(sound, *volume);
+            crate::fonts::sleep_ms(crate::audio::duration_ms(sound)).await;
+        }
+        for line in job.lines {
+            let preempt =
+                WEB_QUEUE.with(|queue| should_preempt(job.priority, &queue.borrow().jobs));
+            if preempt {
+                break;
+            }
             if let Err(e) = imp::speak_blocking(&line) {
                 log::warn!("speech failed: {e}");
                 break;
             }
+            // Let the browser start the queued utterance before observing its state.
+            crate::fonts::sleep_ms(20).await;
+            let mut polls = 0;
+            while imp::is_speaking() && polls < 4_800 {
+                crate::fonts::sleep_ms(25).await;
+                polls += 1;
+            }
+            if polls == 4_800 {
+                log::warn!("browser speech did not finish after 120 seconds");
+            }
         }
-    });
+    }
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -243,6 +405,12 @@ mod imp {
             .map_err(|_| "utterance failed")?;
         synth.speak(&utter);
         Ok(())
+    }
+
+    pub fn is_speaking() -> bool {
+        web_sys::window()
+            .and_then(|w| w.speech_synthesis().ok())
+            .is_some_and(|s| s.speaking())
     }
 }
 
@@ -478,6 +646,44 @@ mod imp {
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
     use super::*;
+
+    fn job(priority: Priority, text: &str) -> SpeechJob {
+        SpeechJob::new(priority, None, vec![text.to_string()])
+    }
+
+    #[test]
+    fn an_emergency_discards_pending_lower_priority_speech() {
+        let mut queue = std::collections::VecDeque::new();
+        enqueue(&mut queue, job(Priority::Background, "chase update"));
+        enqueue(&mut queue, job(Priority::Warning, "ordinary warning"));
+        enqueue(&mut queue, job(Priority::Emergency, "tornado emergency"));
+
+        assert_eq!(queue.len(), 1);
+        assert_eq!(queue.front().unwrap().priority, Priority::Emergency);
+        assert!(emergency_waiting(&queue));
+        assert!(should_preempt(Priority::Warning, &queue));
+        assert!(should_preempt(Priority::Background, &queue));
+        assert!(!should_preempt(Priority::Emergency, &queue));
+    }
+
+    #[test]
+    fn ordinary_speech_stays_fifo_and_scripts_split_at_sentences() {
+        let mut queue = std::collections::VecDeque::new();
+        enqueue(&mut queue, job(Priority::Background, "first"));
+        enqueue(
+            &mut queue,
+            job(
+                Priority::Warning,
+                "Hail to 1.75 inches. Take cover now! Stay there?",
+            ),
+        );
+
+        assert_eq!(queue.pop_front().unwrap().priority, Priority::Background);
+        assert_eq!(
+            queue.pop_front().unwrap().lines,
+            ["Hail to 1.75 inches.", "Take cover now!", "Stay there?"]
+        );
+    }
 
     /// The repository layout is derived from the id rather than listed, so the derivation is the
     /// thing that can be wrong. Every id in [`VOICES`] was checked live when it was added.

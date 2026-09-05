@@ -33,7 +33,9 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Install wasm-bindgen-cli
-        run: cargo install wasm-bindgen-cli --locked
+        run: |
+          version="$(sed -n '/^name = "wasm-bindgen"$/,/^$/s/^version = "\(.*\)"/\1/p' Cargo.lock)"
+          cargo install wasm-bindgen-cli --version "$version" --locked
 
       # build.sh runs wasm-opt when it is on PATH and warns when it is not; the deployed bundle
       # should always be the optimized one.

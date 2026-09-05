@@ -1290,7 +1290,7 @@ fn speak_test(settings: &Settings) {
     let tone = settings
         .alert_sound
         .then(|| (settings.emergency_sound.clone(), settings.alert_volume));
-    crate::speech::announce(tone, vec![script]);
+    crate::speech::announce(crate::speech::Priority::Emergency, tone, vec![script]);
 }
 
 /// Piper: the local neural voice, and the one download this app ever offers.
