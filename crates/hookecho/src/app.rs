@@ -443,24 +443,157 @@ impl RequestLane {
             Self::Feed(label) => (*label).into(),
         }
     }
+
+    fn cadence(&self) -> std::time::Duration {
+        let secs = match self {
+            Self::Field(layer) => field_refresh_secs(*layer),
+            Self::Placefile(_) => 120,
+            Self::Feed(label) => match *label {
+                "Spotter Network" | "Live stations" | "Field mill" | "Derived radar fields" => 60,
+                "Surface observations" => 75,
+                "mPING reports" | "Power outages" | "River gauges" | "Electric field"
+                | "VAD profile" | "Archived warnings" => 300,
+                "Webcams" => 480,
+                "Hurricane reconnaissance" | "Aviation advisories" | "Radar observations" => 600,
+                "Tropical cyclones" | "Wildfires" | "Air quality"
+                | "Temporary flight restrictions" | "Wind particles" | "Freezing levels"
+                | "Model contours" => 900,
+                "Surface analysis" | "Archived storm reports" => 1800,
+                "Highway cameras" | "Damage surveys" => 3600,
+                _ => 120,
+            },
+        };
+        std::time::Duration::from_secs(secs)
+    }
 }
 
-/// Latest generation started in each result lane.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum HealthState {
+    Fetching,
+    Fresh,
+    Stale,
+    Failed,
+    Waiting,
+}
+
+/// Read-only request state copied into an enabled Layers row.
+#[derive(Clone)]
+pub(crate) struct SourceHealth {
+    pub source: String,
+    pub fetching: bool,
+    pub last_attempt: Option<std::time::Duration>,
+    pub last_success: Option<std::time::Duration>,
+    pub last_failure: Option<std::time::Duration>,
+    pub error: Option<String>,
+    pub cadence: std::time::Duration,
+}
+
+impl SourceHealth {
+    pub(crate) fn state(&self) -> HealthState {
+        if self.fetching {
+            HealthState::Fetching
+        } else if self
+            .last_failure
+            .is_some_and(|failed| self.last_success.is_none_or(|success| failed <= success))
+        {
+            HealthState::Failed
+        } else if self.last_success.is_some_and(|age| age <= self.cadence) {
+            HealthState::Fresh
+        } else if self.last_success.is_some() {
+            HealthState::Stale
+        } else {
+            HealthState::Waiting
+        }
+    }
+
+    pub(crate) fn next_retry(&self) -> Option<std::time::Duration> {
+        self.last_attempt.map(|age| self.cadence.saturating_sub(age))
+    }
+}
+
+struct RequestStatus {
+    fetching: bool,
+    last_attempt: Instant,
+    last_success: Option<Instant>,
+    last_failure: Option<(Instant, String)>,
+    cadence: std::time::Duration,
+}
+
+/// Latest generation and fetch health in each result lane.
 #[derive(Default)]
 struct RequestBook {
     next: u64,
     latest: std::collections::HashMap<RequestLane, u64>,
+    status: std::collections::HashMap<RequestLane, RequestStatus>,
 }
 
 impl RequestBook {
     fn start(&mut self, lane: RequestLane) -> u64 {
         self.next = self.next.wrapping_add(1);
-        self.latest.insert(lane, self.next);
+        self.latest.insert(lane.clone(), self.next);
+        let now = Instant::now();
+        let cadence = lane.cadence();
+        self.status
+            .entry(lane)
+            .and_modify(|s| {
+                s.fetching = true;
+                s.last_attempt = now;
+                s.cadence = cadence;
+            })
+            .or_insert(RequestStatus {
+                fetching: true,
+                last_attempt: now,
+                last_success: None,
+                last_failure: None,
+                cadence,
+            });
         self.next
     }
 
     fn is_current(&self, lane: &RequestLane, generation: u64) -> bool {
         self.latest.get(lane) == Some(&generation)
+    }
+
+    /// Finish only the newest generation. An old failure cannot poison a newer success.
+    fn finish(&mut self, lane: &RequestLane, generation: u64, error: Option<&str>) -> bool {
+        if !self.is_current(lane, generation) {
+            return false;
+        }
+        if let Some(s) = self.status.get_mut(lane) {
+            s.fetching = false;
+            match error {
+                Some(e) => s.last_failure = Some((Instant::now(), e.to_string())),
+                None => s.last_success = Some(Instant::now()),
+            }
+        }
+        true
+    }
+
+    fn health(&self, lane: &RequestLane) -> SourceHealth {
+        let now = Instant::now();
+        let Some(s) = self.status.get(lane) else {
+            return SourceHealth {
+                source: lane.label(),
+                fetching: false,
+                last_attempt: None,
+                last_success: None,
+                last_failure: None,
+                error: None,
+                cadence: lane.cadence(),
+            };
+        };
+        SourceHealth {
+            source: lane.label(),
+            fetching: s.fetching,
+            last_attempt: Some(now.saturating_duration_since(s.last_attempt)),
+            last_success: s.last_success.map(|t| now.saturating_duration_since(t)),
+            last_failure: s
+                .last_failure
+                .as_ref()
+                .map(|(t, _)| now.saturating_duration_since(*t)),
+            error: s.last_failure.as_ref().map(|(_, e)| e.clone()),
+            cadence: s.cadence,
+        }
     }
 }
 
@@ -1541,6 +1674,8 @@ pub(crate) struct PaletteEntry {
     /// The key bound to this action, if any — drawn as a chip on the row so the shortcut is
     /// learnable from the place you already click.
     pub key: Option<String>,
+    /// Current network health. Disabled, static and local-only rows deliberately carry none.
+    pub health: Option<SourceHealth>,
 }
 
 /// Refresh cadence (seconds) for a national field layer's product.
@@ -7903,7 +8038,7 @@ impl HookEchoApp {
                         .overlay_requests
                         .lock()
                         .unwrap_or_else(std::sync::PoisonError::into_inner)
-                        .is_current(&lane, generation);
+                        .finish(&lane, generation, result.as_ref().err().map(|e| e.as_str()));
                     if !current {
                         log::debug!("discarding stale {} reply", lane.label());
                         continue;
@@ -17903,7 +18038,7 @@ mod nowcast_tests {
 
 #[cfg(test)]
 mod request_book_tests {
-    use super::{RequestBook, RequestLane};
+    use super::{HealthState, RequestBook, RequestLane, SourceHealth};
     use crate::render::FieldLayer;
 
     #[test]
@@ -17911,7 +18046,6 @@ mod request_book_tests {
         let mut book = RequestBook::default();
         let cape = RequestLane::Field(FieldLayer::Cape);
         let srh = RequestLane::Field(FieldLayer::Srh);
-
         let old_cape = book.start(cape.clone());
         let current_srh = book.start(srh.clone());
         let current_cape = book.start(cape.clone());
@@ -17920,5 +18054,41 @@ mod request_book_tests {
         assert!(!book.is_current(&cape, old_cape));
         assert!(book.is_current(&cape, current_cape));
         assert!(book.is_current(&srh, current_srh));
+        assert!(book.finish(&cape, current_cape, None));
+        assert!(!book.finish(&cape, old_cape, Some("old failure")));
+        let health = book.health(&cape);
+        assert_eq!(health.state(), HealthState::Fresh);
+        assert!(health.error.is_none());
+        assert_eq!(book.health(&srh).state(), HealthState::Fetching);
+    }
+
+    #[test]
+    fn health_classifies_every_visible_state() {
+        let cadence = std::time::Duration::from_secs(60);
+        let health = |
+            fetching: bool,
+            success: Option<u64>,
+            failure: Option<u64>,
+            error: Option<String>,
+        | SourceHealth {
+            source: "test".into(),
+            fetching,
+            last_attempt: Some(std::time::Duration::from_secs(1)),
+            last_success: success.map(std::time::Duration::from_secs),
+            last_failure: failure.map(std::time::Duration::from_secs),
+            error,
+            cadence,
+        };
+        assert_eq!(health(true, None, None, None).state(), HealthState::Fetching);
+        assert_eq!(health(false, Some(5), None, None).state(), HealthState::Fresh);
+        assert_eq!(health(false, Some(61), None, None).state(), HealthState::Stale);
+        assert_eq!(
+            health(false, Some(20), Some(5), Some("offline".into())).state(),
+            HealthState::Failed
+        );
+        assert_eq!(
+            health(false, None, None, None).state(),
+            HealthState::Waiting
+        );
     }
 }

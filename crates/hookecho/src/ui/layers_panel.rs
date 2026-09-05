@@ -3,7 +3,7 @@
 //! hosts the same body in a bottom sheet. Both read the one action registry
 //! (`HookEchoApp::palette_entries`), so they can never drift apart.
 
-use crate::app::{PaletteAction, PaletteEntry};
+use crate::app::{HealthState, PaletteAction, PaletteEntry, SourceHealth};
 use egui::{vec2, Color32, RichText, Stroke};
 
 /// Category order in the panel (anything else falls to the bottom, in registry order).
@@ -135,6 +135,70 @@ struct Hit {
     resp: egui::Response,
 }
 
+fn compact_age(age: std::time::Duration) -> String {
+    let seconds = age.as_secs();
+    match seconds {
+        0..=4 => "now".into(),
+        5..=59 => format!("{seconds}s"),
+        60..=3599 => format!("{}m", seconds / 60),
+        3600..=86_399 => format!("{}h", seconds / 3600),
+        _ => format!("{}d", seconds / 86_400),
+    }
+}
+
+fn health_look(state: HealthState) -> (&'static str, Color32) {
+    match state {
+        HealthState::Fresh => ("Fresh", Color32::from_rgb(70, 200, 120)),
+        HealthState::Fetching => ("Fetching", Color32::from_rgb(80, 160, 240)),
+        HealthState::Stale => ("Stale", Color32::from_rgb(235, 180, 70)),
+        HealthState::Failed => ("Failed", Color32::from_rgb(230, 90, 90)),
+        HealthState::Waiting => ("Waiting", Color32::from_gray(110)),
+    }
+}
+
+fn age_line(age: Option<std::time::Duration>) -> String {
+    age.map_or_else(|| "never".into(), |d| format!("{} ago", compact_age(d)))
+}
+
+fn health_popup(ui: &mut egui::Ui, health: &SourceHealth) {
+    let state = health.state();
+    let (label, color) = health_look(state);
+    ui.set_min_width(250.0);
+    ui.strong(&health.source);
+    ui.colored_label(
+        color,
+        if state == HealthState::Failed && health.last_success.is_some() {
+            "Failed — showing previous data (degraded)"
+        } else {
+            label
+        },
+    );
+    egui::Grid::new(("source_health", &health.source))
+        .num_columns(2)
+        .show(ui, |ui| {
+            ui.weak("Last success");
+            ui.label(age_line(health.last_success));
+            ui.end_row();
+            ui.weak("Last attempt");
+            ui.label(age_line(health.last_attempt));
+            ui.end_row();
+            ui.weak("Next retry");
+            ui.label(if health.fetching {
+                "in progress".into()
+            } else {
+                health
+                    .next_retry()
+                    .map_or_else(|| "waiting".into(), |d| format!("in {}", compact_age(d)))
+            });
+            ui.end_row();
+        });
+    if let Some(error) = &health.error {
+        ui.separator();
+        ui.weak("Last error");
+        ui.colored_label(Color32::from_rgb(230, 120, 120), error);
+    }
+}
+
 fn row(ui: &mut egui::Ui, e: &PaletteEntry, accent: Color32, draggable: bool) -> Hit {
     let on = e.on.unwrap_or(false);
     let (fg, bg) = if on {
@@ -200,13 +264,14 @@ fn row(ui: &mut egui::Ui, e: &PaletteEntry, accent: Color32, draggable: bool) ->
     // drop is tested on, and it covers everything but the grip.
     let resp = outer;
     // Binding chip, left of where the state dot goes: the shortcut stays learnable from the row.
+    let health_w = if e.health.is_some() { 88.0 } else { 0.0 };
     if let Some(key) = &e.key {
         let info_w = if crate::ui::glossary::explains(&e.label).is_some() {
             14.0
         } else {
             0.0
         };
-        let dx = if e.on.is_some() { -22.0 } else { -8.0 } - info_w;
+        let dx = if e.on.is_some() { -22.0 } else { -8.0 } - info_w - health_w;
         ui.painter().text(
             resp.rect.right_center() + vec2(dx, 0.0),
             egui::Align2::RIGHT_CENTER,
@@ -220,7 +285,11 @@ fn row(ui: &mut egui::Ui, e: &PaletteEntry, accent: Color32, draggable: bool) ->
     // person who doesn't know what MESH is is not the person who wants it turned on yet.
     let mut explain = None;
     if let Some(term) = crate::ui::glossary::explains(&e.label) {
-        let at = resp.rect.right_center() + vec2(if e.on.is_some() { -34.0 } else { -20.0 }, 0.0);
+        let at = resp.rect.right_center()
+            + vec2(
+                if e.on.is_some() { -34.0 } else { -20.0 } - health_w,
+                0.0,
+            );
         ui.painter().text(
             at,
             egui::Align2::CENTER_CENTER,
@@ -239,8 +308,44 @@ fn row(ui: &mut egui::Ui, e: &PaletteEntry, accent: Color32, draggable: bool) ->
             explain = Some(term);
         }
     }
-    // State dot, drawn over the button's right edge (a nested layout inside a Button isn't a thing).
-    if let Some(on) = e.on {
+    // Network health replaces the ordinary on-dot while a layer is enabled. Its age stays visible;
+    // the details are one small click target rather than another permanent panel.
+    if let Some(health) = &e.health {
+        let state = health.state();
+        let (_, color) = health_look(state);
+        let age = health
+            .last_success
+            .or(health.last_attempt)
+            .map_or_else(|| "--".into(), compact_age);
+        let text = if state == HealthState::Failed && health.last_success.is_some() {
+            format!("{age} degraded")
+        } else {
+            age
+        };
+        let dot = resp.rect.right_center() + vec2(-10.0, 0.0);
+        ui.painter().circle_filled(dot, 3.5, color);
+        ui.painter().text(
+            dot + vec2(-8.0, 0.0),
+            egui::Align2::RIGHT_CENTER,
+            text,
+            egui::FontId::monospace(9.0),
+            Color32::from_gray(155),
+        );
+        let hit_rect = egui::Rect::from_min_max(
+            egui::pos2(resp.rect.right() - health_w, resp.rect.top()),
+            resp.rect.right_bottom(),
+        );
+        let health_resp = ui
+            .interact(hit_rect, resp.id.with("health"), egui::Sense::click())
+            .on_hover_cursor(egui::CursorIcon::PointingHand)
+            .on_hover_text("Source freshness — click for details");
+        if health_resp.clicked() {
+            clicked = false;
+        }
+        egui::Popup::menu(&health_resp).show(|ui| health_popup(ui, health));
+    } else if let Some(on) = e.on {
+        // State dot, drawn over the button's right edge (a nested layout inside a Button isn't a
+        // thing).
         ui.painter().circle_filled(
             resp.rect.right_center() + vec2(-10.0, 0.0),
             3.5,
@@ -444,6 +549,7 @@ mod tests {
                 desc: "How tall the storm is",
                 common: false,
                 key: None,
+                health: None,
             },
             PaletteEntry {
                 label: "MRMS Mosaic".into(),
@@ -453,6 +559,7 @@ mod tests {
                 desc: "Every radar stitched together",
                 common: true,
                 key: None,
+                health: None,
             },
         ];
         // Empty query = the full list, common or not.
@@ -473,6 +580,7 @@ mod tests {
             desc: "",
             common: true,
             key: None,
+            health: None,
         };
         let entries = [
             e("Storm-Relative Velocity"),

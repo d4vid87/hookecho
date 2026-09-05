@@ -3,6 +3,113 @@
 use super::*;
 
 impl HookEchoApp {
+    fn request_health(&self, lane: RequestLane) -> SourceHealth {
+        self.overlay_requests
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .health(&lane)
+    }
+
+    fn radar_health(&self) -> SourceHealth {
+        let v = &self.views[self.active];
+        let age = v.volume.as_ref().map(|volume| {
+            (chrono::Utc::now() - volume.time)
+                .to_std()
+                .unwrap_or_default()
+        });
+        SourceHealth {
+            source: v
+                .site
+                .as_deref()
+                .map_or_else(|| "Radar".to_string(), |site| format!("{site} radar")),
+            fetching: v.loading,
+            last_attempt: v.last_poll.map(|t| t.elapsed()),
+            last_success: age,
+            last_failure: v.error.as_ref().map(|_| std::time::Duration::ZERO),
+            error: v.error.clone(),
+            cadence: std::time::Duration::from_secs(120),
+        }
+    }
+
+    fn palette_health(&self, action: PaletteAction) -> Option<SourceHealth> {
+        use crate::render::FieldLayer as FL;
+        use OverlayToggle as T;
+        let lane = match action {
+            PaletteAction::SetMoment(..) => return Some(self.radar_health()),
+            PaletteAction::SetContours(k) if k != ContourKind::Off => {
+                RequestLane::Feed("Model contours")
+            }
+            PaletteAction::ToggleField(layer)
+                if matches!(
+                    layer,
+                    FL::Mrms
+                        | FL::Mosaic
+                        | FL::Rotation
+                        | FL::Mesh
+                        | FL::Lightning
+                        | FL::AzShear
+                        | FL::PrecipRate
+                        | FL::Qpe1h
+                        | FL::Qpe24h
+                        | FL::PrecipType
+                        | FL::FlashFlood
+                        | FL::SnowBands
+                        | FL::Vil
+                        | FL::EchoTops
+                        | FL::HailSwath
+                        | FL::Hca
+                        | FL::Hrrr
+                        | FL::UpdraftHelicity
+                        | FL::SnowAnalysis
+                        | FL::Snowfall
+                        | FL::Smoke
+                        | FL::Cape
+                        | FL::Srh
+                        | FL::GlobalMslp
+                        | FL::GlobalHeight500
+                        | FL::GlobalTemp2m
+                        | FL::GlobalDewpoint2m
+                        | FL::GlobalWind10m
+                        | FL::GlobalPrecip
+                        | FL::ThunderProb
+                        | FL::GlmFed
+                        | FL::ModelDiff
+                ) => RequestLane::Field(layer),
+            PaletteAction::ToggleOverlay(toggle) => match toggle {
+                T::AlertPanel | T::Alerts => RequestLane::Feed("Weather alerts"),
+                T::StormReports => RequestLane::Feed("Storm reports"),
+                T::Spotters => RequestLane::Feed("Spotter Network"),
+                T::Metar => RequestLane::Feed("Surface observations"),
+                T::Webcams => RequestLane::Feed("Webcams"),
+                T::Fires => RequestLane::Feed("Wildfires"),
+                T::Aqi => RequestLane::Feed("Air quality"),
+                T::Stations => RequestLane::Feed("Live stations"),
+                T::Dat => RequestLane::Feed("Damage surveys"),
+                T::Gauges => RequestLane::Feed("River gauges"),
+                T::Tropical => RequestLane::Feed("Tropical cyclones"),
+                T::Outages => RequestLane::Feed("Power outages"),
+                T::ProbSevere => RequestLane::Feed("ProbSevere"),
+                T::Aviation => RequestLane::Feed("Aviation advisories"),
+                T::Tfr => RequestLane::Feed("Temporary flight restrictions"),
+                T::Sensors => RequestLane::Feed("Radar observations"),
+                T::Hodo => RequestLane::Feed("VAD profile"),
+                T::Cells | T::Tracks | T::ArrivalCones => {
+                    RequestLane::Feed("Storm cells")
+                }
+                T::Mds => RequestLane::Feed("Mesoscale discussions"),
+                T::Mping => RequestLane::Feed("mPING reports"),
+                T::Pireps => RequestLane::Feed("Pilot reports"),
+                T::Recon => RequestLane::Feed("Hurricane reconnaissance"),
+                T::Fronts => RequestLane::Feed("Surface analysis"),
+                T::Watches => RequestLane::Feed("Watch boxes"),
+                T::Wind => RequestLane::Feed("Wind particles"),
+                _ => return None,
+            },
+            _ => return None,
+        };
+        Some(self.request_health(lane))
+    }
+
     /// Every layer/product/tool/window as a searchable, categorized row. Consumed by the layers
     /// panel (desktop slide-in + mobile sheet) and the Ctrl+K command palette.
     /// The action registry, rebuilt at most once a frame.
@@ -59,6 +166,7 @@ impl HookEchoApp {
                     .iter()
                     .find(|(a, _)| *a == action)
                     .map(|(_, k)| k.clone()),
+                health: None,
             })
         };
 
@@ -1022,6 +1130,11 @@ impl HookEchoApp {
             PaletteAction::InstantReplay,
             None,
         );
+        for entry in &mut out {
+            if entry.on == Some(true) {
+                entry.health = self.palette_health(entry.action);
+            }
+        }
         out
     }
 }
