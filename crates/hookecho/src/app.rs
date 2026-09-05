@@ -422,7 +422,114 @@ enum OverlaySource {
     Wind(wxdata::hrrr::WindLevel, u8),
 }
 
+/// One independently-refreshing result lane.
+///
+/// A second request in the same lane makes the first one's eventual reply stale. Field layers
+/// need separate lanes because they fetch concurrently; placefiles need one per URL; everything
+/// else has one stable feed name. This is request identity only — the health UI builds on the
+/// same book later rather than inventing a parallel tracker.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+enum RequestLane {
+    Field(crate::render::FieldLayer),
+    Placefile(String),
+    Feed(&'static str),
+}
+
+impl RequestLane {
+    fn label(&self) -> String {
+        match self {
+            Self::Field(layer) => format!("field {}", layer.slug()),
+            Self::Placefile(source) => format!("Placefile {source}"),
+            Self::Feed(label) => (*label).into(),
+        }
+    }
+}
+
+/// Latest generation started in each result lane.
+#[derive(Default)]
+struct RequestBook {
+    next: u64,
+    latest: std::collections::HashMap<RequestLane, u64>,
+}
+
+impl RequestBook {
+    fn start(&mut self, lane: RequestLane) -> u64 {
+        self.next = self.next.wrapping_add(1);
+        self.latest.insert(lane, self.next);
+        self.next
+    }
+
+    fn is_current(&self, lane: &RequestLane, generation: u64) -> bool {
+        self.latest.get(lane) == Some(&generation)
+    }
+}
+
+/// A background result plus the identity of the request that produced it.
+enum OverlayDelivery {
+    /// Work that is inline or already carries enough identity to reject itself at the receiver.
+    Immediate(OverlayMsg),
+    Fetched {
+        lane: RequestLane,
+        generation: u64,
+        result: Result<OverlayMsg, String>,
+    },
+}
+
 impl OverlaySource {
+    fn lane(&self) -> RequestLane {
+        use crate::render::FieldLayer as FL;
+        match self {
+            Self::Alerts(..) => RequestLane::Feed("Weather alerts"),
+            Self::Mds => RequestLane::Feed("Mesoscale discussions"),
+            Self::Watches => RequestLane::Feed("Watch boxes"),
+            Self::Wssi(..) => RequestLane::Feed("Winter storm severity"),
+            Self::Ero(..) => RequestLane::Feed("Excessive rainfall outlook"),
+            Self::Mping(..) => RequestLane::Feed("mPING reports"),
+            Self::Pireps(..) => RequestLane::Feed("Pilot reports"),
+            Self::Recon => RequestLane::Feed("Hurricane reconnaissance"),
+            Self::Outlook(..) => RequestLane::Feed("SPC outlook"),
+            Self::Cells(..) => RequestLane::Feed("Storm cells"),
+            Self::Placefile(url) => RequestLane::Placefile(url.clone()),
+            #[cfg(not(target_arch = "wasm32"))]
+            Self::Plugin(key, ..) => RequestLane::Placefile(key.clone()),
+            Self::Field(layer, ..)
+            | Self::Env(layer, ..)
+            | Self::HrrrLayer(layer, ..)
+            | Self::Global(layer, ..)
+            | Self::L3Grid(layer, ..) => RequestLane::Field(*layer),
+            Self::ModelDiff(..) => RequestLane::Field(FL::ModelDiff),
+            Self::Mosaic(..) => RequestLane::Field(FL::Mosaic),
+            Self::Hrrr(..) => RequestLane::Field(FL::Hrrr),
+            Self::Snow(..) => RequestLane::Field(FL::SnowAnalysis),
+            Self::SnowBands => RequestLane::Field(FL::SnowBands),
+            Self::StormReports(Some(_)) => RequestLane::Feed("Archived storm reports"),
+            Self::StormReports(None) => RequestLane::Feed("Storm reports"),
+            Self::Spotters => RequestLane::Feed("Spotter Network"),
+            Self::ProbSevere => RequestLane::Feed("ProbSevere"),
+            Self::Fronts => RequestLane::Feed("Surface analysis"),
+            Self::FreezingLevels(..) => RequestLane::Feed("Freezing levels"),
+            Self::Obs { .. } => RequestLane::Feed("Radar observations"),
+            Self::Vwp(..) => RequestLane::Feed("VAD profile"),
+            Self::ArchiveWarnings(..) => RequestLane::Feed("Archived warnings"),
+            Self::Aviation => RequestLane::Feed("Aviation advisories"),
+            Self::Tfr(..) => RequestLane::Feed("Temporary flight restrictions"),
+            Self::Metar(..) => RequestLane::Feed("Surface observations"),
+            Self::Webcams(..) => RequestLane::Feed("Webcams"),
+            Self::Fires(..) => RequestLane::Feed("Wildfires"),
+            Self::Aqi(..) => RequestLane::Feed("Air quality"),
+            Self::Stations { .. } => RequestLane::Feed("Live stations"),
+            Self::Ppef => RequestLane::Feed("Electric field"),
+            Self::DotCams(..) => RequestLane::Feed("Highway cameras"),
+            Self::Mill(..) => RequestLane::Feed("Field mill"),
+            Self::Dat(..) => RequestLane::Feed("Damage surveys"),
+            Self::Gauges(..) => RequestLane::Feed("River gauges"),
+            Self::Contours(..) => RequestLane::Feed("Model contours"),
+            Self::Outages => RequestLane::Feed("Power outages"),
+            Self::Tropical(..) => RequestLane::Feed("Tropical cyclones"),
+            Self::Wind(..) => RequestLane::Feed("Wind particles"),
+        }
+    }
+
     async fn fetch(self, http: &reqwest::Client) -> anyhow::Result<OverlayMsg> {
         Ok(match self {
             OverlaySource::Alerts(points, bounds) => {
@@ -1367,8 +1474,7 @@ pub(crate) enum ToastKind {
 /// ponytail: unbounded and process-wide, which is fine for something drained every frame and
 /// gated to one toast per feed. A sender per task is the upgrade if it ever needs ordering
 /// against the other messages.
-static FEED_ERRORS: std::sync::Mutex<Vec<(&'static str, String)>> =
-    std::sync::Mutex::new(Vec::new());
+static FEED_ERRORS: std::sync::Mutex<Vec<(String, String)>> = std::sync::Mutex::new(Vec::new());
 
 /// How many undrained feed errors are kept. More than fits on screen, far less than a failing
 /// network produces over an afternoon.
@@ -1379,7 +1485,8 @@ const MAX_FEED_ERRORS: usize = 64;
 /// "Auxiliary" means a feed whose failure leaves the rest of its layer standing — buoys inside
 /// the station plot, Windy inside the webcams. Those used to fail into the log alone, which is
 /// indistinguishable from the feed simply having nothing to show.
-pub(crate) fn note_feed_error(feed: &'static str, err: impl std::fmt::Display) {
+pub(crate) fn note_feed_error(feed: impl Into<String>, err: impl std::fmt::Display) {
+    let feed = feed.into();
     log::warn!("{feed}: {err}");
     if let Ok(mut q) = FEED_ERRORS.lock() {
         // Bounded because the drain is per frame and frames are not guaranteed: a hidden browser
@@ -2071,8 +2178,10 @@ pub struct HookEchoApp {
     boot_at: Instant,
     // --- Overlays (severe-weather layers; geographic, shared across views) ---
     http: reqwest::Client,
-    overlay_rx: Receiver<OverlayMsg>,
-    overlay_tx: Sender<OverlayMsg>,
+    overlay_rx: Receiver<OverlayDelivery>,
+    overlay_tx: Sender<OverlayDelivery>,
+    /// Rejects a background reply once a newer request in its lane has started.
+    overlay_requests: std::sync::Mutex<RequestBook>,
     filters: OverlayFilters,
     alert_features: Vec<GeoFeature>,
     /// Archived storm-based warnings (feature W) keyed by 5-min UTC bucket (ts/300); shown while
@@ -2680,7 +2789,7 @@ pub struct HookEchoApp {
     /// lane, distinct from the warning banners (weather) and the error chip (radar feed).
     toasts: Vec<Toast>,
     /// Auxiliary feeds already reported to the user; see [`HookEchoApp::drain_feed_errors`].
-    feed_errors_told: std::collections::HashMap<&'static str, Instant>,
+    feed_errors_told: std::collections::HashMap<String, Instant>,
     /// Right-dock active-alerts panel toggle.
     show_alert_panel: bool,
     /// Cross-section tool: clicked endpoints `[lon,lat]` (max 2), the built section + its texture.
@@ -2932,7 +3041,7 @@ impl HookEchoApp {
                     .await
                     .unwrap_or_default();
                 if !feats.is_empty() {
-                    let _ = tx.send(OverlayMsg::AlertSeed(feats));
+                    let _ = tx.send(OverlayDelivery::Immediate(OverlayMsg::AlertSeed(feats)));
                 }
             });
         }
@@ -3052,6 +3161,7 @@ impl HookEchoApp {
             http,
             overlay_rx,
             overlay_tx,
+            overlay_requests: std::sync::Mutex::new(RequestBook::default()),
             filters: OverlayFilters::default(),
             // Seeded from the last run so a restart mid-outbreak draws the warnings that are
             // already on the ground, and doesn't re-banner them as new (see `alert_snapshot`).
@@ -3795,6 +3905,12 @@ impl HookEchoApp {
         };
         self.derived_key = Some(key);
         let tx = self.overlay_tx.clone();
+        let lane = RequestLane::Feed("Derived radar fields");
+        let generation = self
+            .overlay_requests
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .start(lane.clone());
         let cap = self.field_texture_cap();
         let ctx = ctx.clone();
         self.spawner.spawn_blocking(move || {
@@ -3818,7 +3934,11 @@ impl HookEchoApp {
             for (layer, f) in out {
                 let bit = LAYERS.iter().position(|l| *l == layer).unwrap_or(0);
                 if mask & (1 << bit) != 0 {
-                    let _ = tx.send(OverlayMsg::Field(layer, f.decimated(cap)));
+                    let _ = tx.send(OverlayDelivery::Fetched {
+                        lane: lane.clone(),
+                        generation,
+                        result: Ok(OverlayMsg::Field(layer, f.decimated(cap))),
+                    });
                 }
             }
             ctx.request_repaint();
@@ -3848,6 +3968,12 @@ impl HookEchoApp {
     }
 
     fn spawn_overlay(&self, ctx: &egui::Context, source: OverlaySource) {
+        let lane = source.lane();
+        let generation = self
+            .overlay_requests
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .start(lane.clone());
         let http = self.http.clone();
         let tx = self.overlay_tx.clone();
         let ctx = ctx.clone();
@@ -3856,7 +3982,7 @@ impl HookEchoApp {
             // Deliberately shorter than the 120 s refresh that drives this: a fetch that cannot
             // outlive its own cadence cannot stack. Before, a feed the network swallowed left a
             // task alive forever and the next tick started another one on top of it.
-            match wxdata::task::timeout(OVERLAY_TIMEOUT, source.fetch(&http))
+            let result = match wxdata::task::timeout(OVERLAY_TIMEOUT, source.fetch(&http))
                 .await
                 .unwrap_or_else(Err)
             {
@@ -3864,15 +3990,19 @@ impl HookEchoApp {
                     // Max-pool oversized grids here, on the fetch task: MRMS rotation tracks and
                     // AzShear arrive 14000x7000, and doing this on the UI thread stalled a frame
                     // for the whole pool.
-                    let msg = match msg {
+                    Ok(match msg {
                         OverlayMsg::Field(layer, f) => OverlayMsg::Field(layer, f.decimated(cap)),
                         other => other,
-                    };
-                    let _ = tx.send(msg);
-                    ctx.request_repaint();
+                    })
                 }
-                Err(e) => note_feed_error("Overlay", e),
-            }
+                Err(e) => Err(e.to_string()),
+            };
+            let _ = tx.send(OverlayDelivery::Fetched {
+                lane,
+                generation,
+                result,
+            });
+            ctx.request_repaint();
         });
     }
 
@@ -4297,18 +4427,18 @@ impl HookEchoApp {
     /// refresh would be the nag this app does not do — but told-once-forever also swallowed a
     /// genuine second outage hours after the feed had recovered. The log keeps every occurrence.
     fn drain_feed_errors(&mut self) {
-        let queued: Vec<(&'static str, String)> = match FEED_ERRORS.lock() {
+        let queued: Vec<(String, String)> = match FEED_ERRORS.lock() {
             Ok(mut q) => std::mem::take(&mut *q),
             Err(_) => return,
         };
         for (feed, err) in queued {
             let due = self
                 .feed_errors_told
-                .get(feed)
+                .get(&feed)
                 .is_none_or(|t| t.elapsed().as_secs() >= 1800);
             if due {
-                self.feed_errors_told.insert(feed, Instant::now());
                 self.toast(ToastKind::Error, format!("{feed} unavailable — {err}"));
+                self.feed_errors_told.insert(feed, Instant::now());
             }
         }
     }
@@ -7731,7 +7861,32 @@ impl HookEchoApp {
     fn poll_overlays(&mut self) {
         crate::prof_scope!("poll_overlays");
         let mut changed = false;
-        while let Ok(msg) = self.overlay_rx.try_recv() {
+        while let Ok(delivery) = self.overlay_rx.try_recv() {
+            let msg = match delivery {
+                OverlayDelivery::Immediate(msg) => msg,
+                OverlayDelivery::Fetched {
+                    lane,
+                    generation,
+                    result,
+                } => {
+                    let current = self
+                        .overlay_requests
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .is_current(&lane, generation);
+                    if !current {
+                        log::debug!("discarding stale {} reply", lane.label());
+                        continue;
+                    }
+                    match result {
+                        Ok(msg) => msg,
+                        Err(err) => {
+                            note_feed_error(lane.label(), err);
+                            continue;
+                        }
+                    }
+                }
+            };
             match msg {
                 OverlayMsg::AlertSeed(f) => {
                     for id in f
@@ -9736,14 +9891,7 @@ impl HookEchoApp {
                 self.cell_trends.clear();
                 self.cell_popup = None;
                 if let Some(site) = self.views[idx].site.clone() {
-                    let http = self.http.clone();
-                    let tx = self.overlay_tx.clone();
-                    let ctx2 = ctx.clone();
-                    self.spawner.spawn(async move {
-                        let cells = level3::fetch_cells(&http, &site).await;
-                        let _ = tx.send(OverlayMsg::Cells(site, cells));
-                        ctx2.request_repaint();
-                    });
+                    self.spawn_overlay(ctx, OverlaySource::Cells(site));
                 }
             }
         }
@@ -15615,7 +15763,10 @@ impl eframe::App for HookEchoApp {
                 let cap = self.field_texture_cap();
                 let _ = self
                     .overlay_tx
-                    .send(OverlayMsg::Field(FL::GlmFed, field.decimated(cap)));
+                    .send(OverlayDelivery::Immediate(OverlayMsg::Field(
+                        FL::GlmFed,
+                        field.decimated(cap),
+                    )));
             }
         }
 
@@ -17682,5 +17833,27 @@ mod nowcast_tests {
         for lead in 0u8..=255 {
             assert!(nowcast_confidence(lead) >= 0.35, "{lead} min");
         }
+    }
+}
+
+#[cfg(test)]
+mod request_book_tests {
+    use super::{RequestBook, RequestLane};
+    use crate::render::FieldLayer;
+
+    #[test]
+    fn only_the_latest_request_in_each_lane_is_current() {
+        let mut book = RequestBook::default();
+        let cape = RequestLane::Field(FieldLayer::Cape);
+        let srh = RequestLane::Field(FieldLayer::Srh);
+
+        let old_cape = book.start(cape.clone());
+        let current_srh = book.start(srh.clone());
+        let current_cape = book.start(cape.clone());
+
+        // A late success or failure has the same identity check: neither may mutate state.
+        assert!(!book.is_current(&cape, old_cape));
+        assert!(book.is_current(&cape, current_cape));
+        assert!(book.is_current(&srh, current_srh));
     }
 }
