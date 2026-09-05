@@ -31,6 +31,7 @@ jobs:
           PUBLIC_CF_ANALYTICS_TOKEN: ${{ secrets.CF_ANALYTICS_TOKEN }}
         run: |
           npm ci
+          npm test
           npm run build
 
       # Advisory only. These are mostly external links, and a weather agency having a bad morning
@@ -39,6 +40,19 @@ jobs:
         continue-on-error: true
         working-directory: site
         run: npm run linkcheck
+
+      - name: Configure CTA analytics
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          curl --silent --show-error --fail-with-body \
+            --request PATCH \
+            --header "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
+            --header "Content-Type: application/json" \
+            --data '{"deployment_configs":{"production":{"analytics_engine_datasets":{"CTA_ANALYTICS":{"dataset":"hookecho_cta"}}},"preview":{"analytics_engine_datasets":{"CTA_ANALYTICS":{"dataset":"hookecho_cta"}}}}}' \
+            "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/pages/projects/hookecho-site" \
+            | jq -e '.success == true' >/dev/null
 
       - name: Deploy
         env:

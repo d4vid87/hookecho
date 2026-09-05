@@ -1,5 +1,12 @@
 node_modules/
 dist/
 .astro/
-# Copied from ../docs/shots by `npm run shots`; one copy in git is enough.
-public/shots/
+# Copied source screenshots stay ignored; optimized site-only assets are committed here.
+public/shots/*
+!public/shots/reflectivity-640.webp
+!public/shots/reflectivity-1280.webp
+!public/shots/weatherdesk-wide-800.webp
+!public/shots/weatherdesk-wide-1600.webp
+!public/shots/weatherdesk-dashboard-800.webp
+!public/shots/weatherdesk-dashboard-1200.webp
+!public/shots/weatherdesk-social.jpg

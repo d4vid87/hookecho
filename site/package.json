@@ -2,13 +2,14 @@
   "name": "hookecho-site",
   "private": true,
   "type": "module",
-  "_comment": "shots copies only the four images this site serves itself -- the hero poster and the social cards. Every other screenshot is hotlinked from the repo at a tag, so GitHub carries the bandwidth. Social cards have to be same-origin: scrapers do not follow hotlinks reliably.",
+  "_comment": "The build copies HookEcho source shots; optimized HookEcho and WeatherDesk WebP assets live in public/shots.",
   "scripts": {
     "dev": "npm run shots && astro dev",
     "build": "npm run shots && astro build",
     "preview": "astro preview",
+    "test": "node --test",
     "shots": "mkdir -p public/shots && cp ../docs/shots/reflectivity.jpg ../docs/shots/alltilts.jpg ../docs/shots/layers.jpg ../docs/shots/velocity.jpg public/shots/",
-    "linkcheck": "linkinator dist --recurse --skip \"radar.weather.gov|api.weather.gov|img.hookecho.io|https://hookecho.io/\"",
+    "linkcheck": "linkinator dist --recurse --skip \"radar.weather.gov|api.weather.gov|img.hookecho.io|https://hookecho.io/|/go/\"",
     "postbuild": "pagefind --site dist"
   },
   "dependencies": {

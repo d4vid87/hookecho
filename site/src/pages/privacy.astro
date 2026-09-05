@@ -4,16 +4,16 @@ import Base from "../layouts/Base.astro";
 
 <Base
   title="Privacy | HookEcho"
-  description="What this website loads, what the app sends, and what neither of them collects. No accounts, no telemetry, no ad network."
+  description="What this website loads, what the apps send, and what we measure. No accounts, app telemetry, ad network or personal click tracking."
 >
   <section>
     <div class="wrap prose">
       <p class="eyebrow">Privacy</p>
       <h1>What we collect: nothing you would call data</h1>
       <p class="lede">
-        There is no account system, no telemetry, no ad network and no analytics product that
-        follows you between sites. This page is the specific version of that claim, because the
-        vague version is worth nothing.
+        There is no account system, app telemetry, ad network or analytics product that follows
+        you between sites. We count a few website button clicks in aggregate. This page is the
+        specific version of that claim, because the vague version is worth nothing.
       </p>
 
       <h2>The app</h2>
@@ -38,8 +38,8 @@ import Base from "../layouts/Base.astro";
       <p>Loading a page here contacts, and only ever contacts:</p>
       <ul>
         <li>
-          <strong>api.weather.gov</strong> — the live warning counts on the landing page and the
-          per-radar pages. Public data, no key, requested by your browser directly.
+          <strong>api.weather.gov</strong> — warnings and forecasts on radar and reference pages.
+          Public data, no key, requested by your browser directly.
         </li>
         <li>
           <strong>radar.weather.gov</strong> — the live radar loops. Images, hotlinked from the
@@ -47,12 +47,12 @@ import Base from "../layouts/Base.astro";
         </li>
         <li>
           <strong>raw.githubusercontent.com</strong> — the screenshots, served from our repository
-          at a fixed tag so GitHub carries the bandwidth rather than us.
+          on feature and comparison pages at a fixed tag so later changes cannot replace them.
         </li>
         <li>
-          <strong>api.github.com</strong> — the star and download counts on the landing page and
-          the live roadmap. Public, unauthenticated requests made by your browser; GitHub sees
-          them the same way it sees you browsing the repository.
+          <strong>api.github.com</strong> — release information and the live roadmap. Public,
+          unauthenticated requests made by your browser; GitHub sees them the same way it sees you
+          browsing the repository.
         </li>
         <li>
           <strong>giscus.app</strong> — the comments on blog posts and storm pages, and only on
@@ -70,6 +70,12 @@ import Base from "../layouts/Base.astro";
         city and coordinates our host already derived from your IP address, so the page can say
         which radar is nearest without asking your browser for location permission. It is computed
         per request and never stored, logged or associated with anything.
+      </p>
+      <p>
+        Product buttons pass through a same-site <code>/go/</code> redirect. We record only the
+        destination product, the button's placement and a count, plus Cloudflare's automatic
+        event timestamp. The aggregate events are retained for three months. We do not store an
+        IP address, location, referrer, user agent, cookie or identifier with them.
       </p>
       <p>
         We set no cookies. There is no login, no newsletter, no form and no comment box, so there

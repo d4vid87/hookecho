@@ -3,8 +3,8 @@
   orange → red), so the site reads as the product. Dark is the default; Light comes from
   prefers-color-scheme.
 
-  Restraint rule: the full 5-stop --ramp appears ONLY on hero display text, the storm-of-the-day
-  border, and section hairlines. Everything else uses a 2-stop slice (--ramp-cool / --ramp-hot).
+  Restraint rule: the full 5-stop --ramp appears only on hero display text and section hairlines.
+  Everything else uses a 2-stop slice (--ramp-cool / --ramp-hot).
 */
 @font-face {
   font-family: "Inter";
@@ -268,23 +268,6 @@ section { padding: clamp(3rem, 8vw, 5.5rem) 0; }
 @media (prefers-reduced-motion: reduce) {
   [data-reveal] { opacity: 1; transform: none; }
 }
-
-/* Storm mode. The ticker's own fetch sets data-storm on <html> when the country is under
-   warnings, and the page warms to match: the wash takes the hot end of the ramp and the storm
-   card is outlined rather than merely present. Colour only — nothing here moves, so
-   prefers-reduced-motion has nothing to switch off. */
-:root[data-storm="svr"] {
-  --mesh:
-    radial-gradient(60% 45% at 15% 0%, color-mix(in srgb, var(--ramp-4) 18%, transparent), transparent 70%),
-    radial-gradient(55% 40% at 85% 10%, color-mix(in srgb, var(--ramp-3) 14%, transparent), transparent 70%);
-}
-:root[data-storm="tor"] {
-  --mesh:
-    radial-gradient(60% 45% at 15% 0%, color-mix(in srgb, var(--ramp-5) 22%, transparent), transparent 70%),
-    radial-gradient(55% 40% at 85% 10%, color-mix(in srgb, var(--ramp-4) 16%, transparent), transparent 70%);
-}
-:root[data-storm] .storm { border-color: color-mix(in srgb, var(--ramp-4) 55%, var(--stroke)); }
-:root[data-storm="tor"] .storm { box-shadow: var(--glow-hot); }
 
 /* Cross-document view transitions: a browser that has them cross-fades between pages, and one
    that does not ignores the rule. No JavaScript either way. */

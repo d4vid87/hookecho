@@ -1,5 +1,6 @@
 ---
 import "../styles/global.css";
+import { DISCORD_INVITE } from "../data/community";
 
 interface Props {
   title: string;
@@ -12,27 +13,52 @@ interface Props {
 
 const { title, description, image = "/shots/alltilts.jpg", jsonld } = Astro.props;
 const url = new URL(Astro.url.pathname, Astro.site);
-// Cloudflare Web Analytics: cookieless, one script tag, and only rendered when the token is set —
-// so local builds and forks stay beacon-free. The token is public by design (it identifies the
-// site, not the account); it comes from the CF_ANALYTICS_TOKEN secret in site.yml.
-import { DISCORD_INVITE } from "../data/community";
-
-const analytics = import.meta.env.PUBLIC_CF_ANALYTICS_TOKEN;
 const social = new URL(image, Astro.site);
+const analytics = import.meta.env.PUBLIC_CF_ANALYTICS_TOKEN;
+const path = Astro.url.pathname;
 
-// A link is only listed once the page exists, so the build's link check stays meaningful.
 const nav = [
   { href: "/features/", label: "Features" },
   { href: "/compare/", label: "Compare" },
-  { href: "/docs/", label: "Docs" },
-  { href: "/blog/", label: "Blog" },
-  { href: "/radar/", label: "Radar sites" },
-  { href: "/storms/", label: "Storms" },
-  { href: "https://app.hookecho.io", label: "Open in browser" },
-  { href: "https://app.hookecho.io/lite/", label: "Lite" },
-  { href: "/download/", label: "Download" },
-  { href: "https://github.com/d4vid87/hookecho", label: "GitHub" },
+  { href: "/docs/", label: "Learn" },
+  { href: "/weatherdesk/", label: "WeatherDesk" },
 ];
+
+const footer = [
+  {
+    title: "Product",
+    links: [
+      { href: "/features/", label: "Features" },
+      { href: "/compare/", label: "Compare" },
+      { href: "/download/", label: "Download" },
+      { href: "https://app.hookecho.io/lite/", label: "HookEcho Lite" },
+      { href: "/weatherdesk/", label: "WeatherDesk" },
+    ],
+  },
+  {
+    title: "Learn",
+    links: [
+      { href: "/docs/", label: "Documentation" },
+      { href: "/blog/", label: "Blog" },
+      { href: "/radar/", label: "Radar sites" },
+      { href: "/storms/", label: "Historic storms" },
+      { href: "/glossary/", label: "Glossary" },
+    ],
+  },
+  {
+    title: "Project",
+    links: [
+      { href: "https://github.com/d4vid87/hookecho", label: "GitHub" },
+      { href: "/roadmap/", label: "Roadmap" },
+      { href: "/changelog/", label: "Changelog" },
+      { href: DISCORD_INVITE, label: "Discord" },
+      { href: "https://github.com/d4vid87/hookecho/issues", label: "Report a problem" },
+      { href: "/privacy/", label: "Privacy" },
+    ],
+  },
+];
+
+const current = (href: string) => href.startsWith("/") && (path === href || path.startsWith(href));
 ---
 
 <!doctype html>
@@ -61,6 +87,9 @@ const nav = [
     <meta property="og:url" content={url} />
     <meta property="og:image" content={social} />
     <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content={title} />
+    <meta name="twitter:description" content={description} />
+    <meta name="twitter:image" content={social} />
 
     {jsonld && <script type="application/ld+json" set:html={JSON.stringify(jsonld)} />}
 
@@ -77,42 +106,77 @@ const nav = [
   <body>
     <header class="site-head">
       <div class="wrap head-inner">
-        <a class="brand" href="/">
+        <a class="brand" href="/" aria-label="HookEcho home">
           <img src="/logo.png" alt="" width="28" height="28" />
           <span>HookEcho</span>
         </a>
-        <nav aria-label="Main">
-          {nav.map((item) => <a href={item.href}>{item.label}</a>)}
+
+        <nav class="desktop-nav" aria-label="Main">
+          {
+            nav.map((item) => (
+              <a href={item.href} aria-current={current(item.href) ? "page" : undefined}>
+                {item.label}
+              </a>
+            ))
+          }
         </nav>
+
+        <a
+          class="btn btn-primary header-cta"
+          href="/go/web/nav"
+          data-smart-primary
+          data-placement="nav"
+        >Open radar</a>
+
+        <details class="site-menu">
+          <summary aria-label="Navigation menu">Menu</summary>
+          <nav aria-label="Main">
+            {
+              nav.map((item) => (
+                <a href={item.href} aria-current={current(item.href) ? "page" : undefined}>
+                  {item.label}
+                </a>
+              ))
+            }
+          </nav>
+        </details>
       </div>
     </header>
 
     <main><slot /></main>
 
     <footer class="site-foot">
-      <div class="wrap foot-inner">
-        <p>
-          HookEcho is free and open source, MIT licensed. Weather data comes from NOAA, the
-          National Weather Service and other public feeds — no account, no telemetry.
-        </p>
-        <p class="dim">
-          <a href="/how-it-works/">How it works</a> ·
-          <a href="/glossary/">Glossary</a> ·
-          <a href="/roadmap/">Roadmap</a> ·
-          <a href="/changelog/">Changelog</a> ·
-          <a href="/privacy/">Privacy</a> ·
-          <a href="/press/">Press</a> ·
-          <a href="https://github.com/d4vid87/hookecho">Source</a> ·
-          <a href="https://github.com/d4vid87/hookecho/discussions">Discussions</a> ·
-          <a href={DISCORD_INVITE}>Discord</a> ·
-          <a href="https://github.com/d4vid87/hookecho/issues">Report a problem</a> ·
-          <a href="/weatherdesk/">WeatherDesk</a> ·
-          <a href="https://github.com/d4vid87/weatherdesk">WeatherDesk source</a>
-        </p>
+      <div class="wrap foot-grid">
+        <div class="foot-about">
+          <a class="brand" href="/">
+            <img src="/logo.png" alt="" width="28" height="28" />
+            <span>HookEcho</span>
+          </a>
+          <p>
+            HookEcho and WeatherDesk are free, open-source weather tools built on public data,
+            with no accounts, ads or app telemetry.
+          </p>
+        </div>
+        {
+          footer.map((group) => (
+            <div class="foot-group">
+              <h2>{group.title}</h2>
+              <ul>
+                {group.links.map((item) => (
+                  <li><a href={item.href}>{item.label}</a></li>
+                ))}
+              </ul>
+            </div>
+          ))
+        }
       </div>
     </footer>
+
     <script>
+      import { applySmartCtas } from "../scripts/smart-cta.js";
       import "../scripts/motion";
+
+      applySmartCtas(navigator.userAgent);
     </script>
   </body>
 </html>
@@ -121,39 +185,113 @@ const nav = [
   .site-head {
     position: sticky;
     top: 0;
-    z-index: 10;
-    background: color-mix(in srgb, var(--bg) 88%, transparent);
-    backdrop-filter: blur(10px);
+    z-index: 20;
+    background: color-mix(in srgb, var(--bg) 92%, transparent);
+    backdrop-filter: blur(12px);
     border-bottom: 1px solid var(--stroke);
   }
-  .head-inner,
-  .foot-inner {
+  .head-inner {
+    min-height: 3.75rem;
     display: flex;
     align-items: center;
-    justify-content: space-between;
-    gap: 1rem;
-    flex-wrap: wrap;
+    gap: var(--sp-5);
   }
-  .head-inner { padding: 0.7rem 0; }
   .brand {
-    display: flex;
+    display: inline-flex;
     align-items: center;
     gap: 0.5rem;
-    font-weight: 700;
+    flex: none;
+    font-weight: 750;
     color: var(--text);
     text-decoration: none;
     letter-spacing: -0.01em;
   }
-  nav { display: flex; gap: 1.25rem; flex-wrap: wrap; }
-  nav a { color: var(--text-dim); text-decoration: none; font-size: 0.95rem; }
-  nav a:hover { color: var(--text); }
-  .site-foot {
-    border-top: 1px solid var(--stroke);
-    padding: 2.5rem 0;
-    color: var(--text-dim);
-    font-size: 0.9rem;
+  .desktop-nav {
+    display: flex;
+    align-items: center;
+    gap: clamp(0.8rem, 2vw, 1.4rem);
+    margin-left: auto;
   }
-  .foot-inner { align-items: flex-start; }
-  .site-foot p { margin: 0; max-width: 52ch; }
-  .dim a { color: var(--text-dim); }
+  .site-menu { display: none; }
+  .site-menu summary { display: none; }
+  .site-menu nav { display: flex; align-items: center; gap: clamp(0.8rem, 2vw, 1.4rem); }
+  .desktop-nav a,
+  .site-menu nav a {
+    color: var(--text-dim);
+    text-decoration: none;
+    font-size: 0.94rem;
+    white-space: nowrap;
+  }
+  .desktop-nav a:hover,
+  .desktop-nav a[aria-current="page"],
+  .site-menu nav a:hover,
+  .site-menu nav a[aria-current="page"] { color: var(--text); }
+  .desktop-nav a[aria-current="page"],
+  .site-menu nav a[aria-current="page"] { text-decoration: underline; text-underline-offset: 0.35rem; }
+  .header-cta { flex: none; padding: 0.55rem 1rem; font-size: 0.9rem; }
+
+  .site-foot { border-top: 1px solid var(--stroke); padding: var(--sp-7) 0; }
+  .foot-grid {
+    display: grid;
+    grid-template-columns: minmax(16rem, 2fr) repeat(3, minmax(8rem, 1fr));
+    gap: var(--sp-7);
+    align-items: start;
+  }
+  .foot-about p { color: var(--text-dim); font-size: var(--text-sm); margin-top: var(--sp-4); }
+  .foot-group h2 {
+    color: var(--text);
+    font-size: var(--text-sm);
+    letter-spacing: 0.02em;
+    margin-bottom: var(--sp-3);
+  }
+  .foot-group ul { list-style: none; padding: 0; margin: 0; }
+  .foot-group li + li { margin-top: var(--sp-2); }
+  .foot-group a { color: var(--text-dim); font-size: var(--text-sm); text-decoration: none; }
+  .foot-group a:hover { color: var(--text); text-decoration: underline; }
+
+  @media (max-width: 900px) {
+    .head-inner { gap: var(--sp-3); }
+    .desktop-nav { display: none; }
+    .site-menu { display: block; order: 3; position: relative; margin-left: 0; }
+    .site-menu summary {
+      display: inline-flex;
+      align-items: center;
+      min-height: 2.5rem;
+      padding: 0.45rem 0.65rem;
+      border: 1px solid var(--stroke);
+      border-radius: var(--radius-sm);
+      color: var(--text);
+      font-size: 0.85rem;
+      cursor: pointer;
+      list-style: none;
+    }
+    .site-menu summary::-webkit-details-marker { display: none; }
+    .site-menu nav {
+      display: none;
+      position: absolute;
+      top: calc(100% + 0.65rem);
+      right: 0;
+      width: min(18rem, calc(100vw - 2.5rem));
+      padding: var(--sp-3);
+      border: 1px solid var(--stroke-strong);
+      border-radius: var(--radius);
+      background: var(--surface-1);
+      box-shadow: var(--shadow-2);
+    }
+    .site-menu[open] nav { display: grid; gap: 0; }
+    .site-menu nav a { padding: 0.65rem 0.75rem; border-radius: var(--radius-sm); }
+    .site-menu nav a:hover { background: var(--surface-2); }
+    .header-cta { margin-left: auto; padding-inline: 0.8rem; }
+    .foot-grid { grid-template-columns: repeat(2, 1fr); gap: var(--sp-6); }
+    .foot-about { grid-column: 1 / -1; }
+  }
+  @media (max-width: 360px) {
+    .head-inner { gap: var(--sp-2); }
+    .brand > span { display: none; }
+    .header-cta { font-size: 0.82rem; }
+  }
+  @media (max-width: 430px) {
+    .foot-grid { grid-template-columns: 1fr; }
+    .foot-about { grid-column: auto; }
+  }
 </style>

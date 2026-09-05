@@ -1,8 +1,51 @@
-// Advanced-mode Pages worker. Two jobs: the www redirect, and a /geo.json that hands the page the
-// visitor's rough location so the landing page can say which radar is nearest without asking the
-// browser for a permission the visitor has no reason to grant yet.
-// ponytail: a _redirects rule cannot do the redirect — Pages matches those on the path only,
-// hostnames are a Netlify feature. Everything else falls straight through to the static assets.
+export const GO_TARGETS = Object.freeze({
+  web: "https://app.hookecho.io/",
+  download: "/download/",
+  android: "/download/#p-android",
+  weatherdesk: "/weatherdesk/",
+  "weatherdesk-release": "https://github.com/d4vid87/weatherdesk/releases/latest",
+  "weatherdesk-source": "https://github.com/d4vid87/weatherdesk",
+});
+
+export const GO_PLACEMENTS = new Set([
+  "nav",
+  "hero",
+  "homepage",
+  "weatherdesk-hero",
+  "weatherdesk-final",
+  "final",
+]);
+
+export function trackedRedirect(request, env) {
+  const url = new URL(request.url);
+  const [, route, target, placement, extra] = url.pathname.split("/");
+  if (route !== "go" || extra || !GO_TARGETS[target] || !GO_PLACEMENTS.has(placement)) {
+    return new Response("Not found", { status: 404 });
+  }
+  if (request.method !== "GET" && request.method !== "HEAD") {
+    return new Response("Method not allowed", { status: 405, headers: { allow: "GET, HEAD" } });
+  }
+
+  if (request.method === "GET") {
+    try {
+      env.CTA_ANALYTICS?.writeDataPoint({ blobs: [target, placement], doubles: [1] });
+    } catch {
+      // Measurement must never stand between someone and the product.
+    }
+  }
+
+  return new Response(null, {
+    status: 302,
+    headers: {
+      location: new URL(GO_TARGETS[target], url).toString(),
+      "cache-control": "private, no-store",
+      "referrer-policy": "no-referrer",
+    },
+  });
+}
+
+// Advanced-mode Pages worker. Host redirects, aggregate CTA counts and rough location for the
+// nearest-radar label live here; every other request falls through to the static site.
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
@@ -10,8 +53,7 @@ export default {
       url.hostname = url.hostname.slice(4);
       return Response.redirect(url.toString(), 301);
     }
-    // Same shape as the app's own /geo.json (web/_worker.js/index.js), plus the city name the
-    // chip prints. Free and exact enough: request.cf is the edge's own geo-IP lookup.
+    if (url.pathname.startsWith("/go/")) return trackedRedirect(request, env);
     if (url.pathname === "/geo.json") {
       const { latitude, longitude, city } = request.cf ?? {};
       const body =

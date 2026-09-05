@@ -1,73 +1,79 @@
 ---
 interface Props {
-  /** Everything before the gradient word: the headline reads "{title} NOW". */
   title: string;
+  accent: string;
   tagline: string;
 }
-const { title, tagline } = Astro.props;
 
-// The backdrop is the lite viewer (app.hookecho.io/lite/) in its chrome-free hero mode, pointed at
-// whichever radar is watching the most active weather in the country right now. It is a real,
-// current scan rather than a screenshot of one — which is the entire argument for the product.
-// A poster holds the frame until the ranking resolves, and stays put with JavaScript off.
-const LITE = "https://app.hookecho.io/lite/";
+const { title, accent, tagline } = Astro.props;
+const lite = "https://app.hookecho.io/lite/";
 ---
 
 <section class="hero">
-  <div class="backdrop" data-lite={LITE} aria-hidden="true">
-    <img
-      class="poster"
-      src="/shots/reflectivity.jpg"
-      alt=""
-      width="1600"
-      height="1000"
-    />
+  <div class="backdrop" data-lite={lite} aria-hidden="true">
+    <picture class="poster">
+      <source
+        type="image/webp"
+        srcset="/shots/reflectivity-640.webp 640w, /shots/reflectivity-1280.webp 1280w"
+        sizes="100vw"
+      />
+      <img
+        src="/shots/reflectivity.jpg"
+        alt=""
+        width="1600"
+        height="1000"
+        fetchpriority="high"
+      />
+    </picture>
     <span class="scrim"></span>
   </div>
 
-  <div class="wrap">
-    <p class="chip" hidden>
+  <div class="wrap hero-copy">
+    <p class="chip">
       <span class="dot" aria-hidden="true"></span>
-      <span class="chip-text"></span>
+      <span class="chip-text">Live radar</span>
     </p>
-    <h1>{title} <span class="grad-text">NOW</span></h1>
+    <h1>{title} <span class="grad-text">{accent}</span></h1>
     <p class="tagline">{tagline}</p>
     <div class="ctas">
-      <a class="btn btn-primary" href="https://app.hookecho.io">Open in your browser</a>
-      <a class="btn" href="/download/">Download the app</a>
+      <a class="btn btn-primary" href="/go/web/hero" data-smart-primary data-placement="hero">
+        Open live radar
+      </a>
+      <a class="btn" href="/go/download/hero" data-smart-secondary data-placement="hero">
+        Download
+      </a>
     </div>
-    <p class="fineprint">Free, open source, no account. Windows, macOS, Linux and Android.</p>
+    <p class="fineprint">
+      Free and open source. No account or ads.
+      <span data-android-note hidden>Android beta · sideloaded APK.</span>
+    </p>
   </div>
 </section>
 
 <script>
-  import { activeSite } from "../scripts/active-site";
+  import { nearbySite } from "../scripts/nearby-site";
 
   const backdrop = document.querySelector<HTMLElement>(".hero .backdrop");
-  const lite = backdrop?.dataset.lite;
-  const chip = document.querySelector<HTMLElement>(".hero .chip");
+  const chip = document.querySelector<HTMLElement>(".hero .chip-text");
 
-  if (backdrop && lite) {
-    activeSite()
+  if (backdrop?.dataset.lite && !matchMedia("(prefers-reduced-motion: reduce)").matches) {
+    nearbySite()
       .then((site) => {
         if (!site) return;
         const frame = document.createElement("iframe");
-        frame.src = `${lite}?site=${site.id}&hero=1`;
+        frame.src = `${backdrop.dataset.lite}?site=${site.id}&hero=1`;
         frame.title = "";
         frame.loading = "eager";
         frame.tabIndex = -1;
-        backdrop.prepend(frame);
+        frame.addEventListener("load", () => backdrop.classList.add("has-live"), { once: true });
+        backdrop.insertBefore(frame, backdrop.querySelector(".scrim"));
 
         if (chip) {
-          const warnings =
-            site.warnings === 1 ? "1 warning" : `${site.warnings} warnings`;
-          chip.querySelector(".chip-text")!.textContent =
-            `LIVE · ${site.id} — ${site.city}, ${site.state}` +
-            (site.warnings ? ` · ${warnings}` : "");
-          chip.hidden = false;
+          chip.textContent = site.visitorCity
+            ? `Live near ${site.visitorCity}`
+            : `Live radar · ${site.city}`;
         }
       })
-      // The poster is already on screen, so a failure here is simply nothing happening.
       .catch(() => {});
   }
 </script>
@@ -75,74 +81,95 @@ const LITE = "https://app.hookecho.io/lite/";
 <style>
   .hero {
     position: relative;
-    min-height: 90vh;
+    min-height: clamp(36rem, calc(100svh - 3.75rem), 54rem);
     display: flex;
     align-items: flex-end;
     overflow: hidden;
-    padding-block: clamp(4rem, 12vw, 9rem) var(--sp-8);
+    padding-block: clamp(4rem, 12vw, 8rem) var(--sp-8);
+    color: #f4f7f5;
   }
-
-  .backdrop { position: absolute; inset: 0; pointer-events: none; }
+  .backdrop,
+  .backdrop :global(picture),
   .backdrop :global(img),
   .backdrop :global(iframe) {
     position: absolute;
     inset: 0;
     width: 100%;
     height: 100%;
+  }
+  .backdrop :global(img),
+  .backdrop :global(iframe) {
     border: 0;
     object-fit: cover;
   }
-  /* Three layers of darkening, because the headline sits over live weather and cannot pick its
-     own background: a bottom fade into the page, a side vignette, and the ramp's aurora wash. */
+  .backdrop :global(.poster) { z-index: 0; }
+  .backdrop :global(iframe) {
+    z-index: 1;
+    opacity: 0;
+    transition: opacity var(--dur-3) var(--ease-out);
+  }
+  .backdrop.has-live :global(iframe) { opacity: 1; }
   .scrim {
     position: absolute;
+    z-index: 2;
     inset: 0;
     background:
-      linear-gradient(transparent 25%, color-mix(in srgb, var(--bg) 80%, transparent) 62%, var(--bg)),
-      radial-gradient(120% 90% at 50% 40%, transparent 30%, color-mix(in srgb, var(--bg-deep) 85%, transparent)),
-      var(--mesh);
+      linear-gradient(transparent 15%, rgb(7 11 9 / 0.45) 48%, rgb(7 11 9 / 0.96)),
+      linear-gradient(90deg, rgb(7 11 9 / 0.62), transparent 72%),
+      radial-gradient(80% 55% at 12% 15%, rgb(48 209 88 / 0.12), transparent 70%);
   }
-
-  .hero .wrap { position: relative; }
-
+  .hero-copy { position: relative; z-index: 3; }
   .chip {
     display: inline-flex;
     align-items: center;
     gap: 0.5rem;
     margin: 0 0 var(--sp-4);
-    padding: 0.4rem 0.9rem;
-    border: 1px solid var(--stroke-strong);
+    padding: 0.4rem 0.8rem;
+    border: 1px solid rgb(255 255 255 / 0.25);
     border-radius: 999px;
-    background: color-mix(in srgb, var(--bg-deep) 70%, transparent);
-    backdrop-filter: blur(8px);
+    background: rgb(7 11 9 / 0.7);
     font-size: var(--text-sm);
     letter-spacing: 0.04em;
-    font-variant-numeric: tabular-nums;
   }
   .dot {
     width: 0.5rem;
     height: 0.5rem;
     border-radius: 50%;
     background: var(--ramp-1);
-    box-shadow: var(--glow-green);
-    animation: pulse 1.8s ease-in-out infinite;
+    box-shadow: 0 0 1rem rgb(48 209 88 / 0.75);
   }
-  @keyframes pulse {
-    50% { opacity: 0.25; transform: scale(0.7); }
-  }
-
   .hero h1 {
-    font-size: var(--text-display);
-    font-weight: 750;
-    line-height: 0.95;
-    letter-spacing: -0.04em;
-    max-width: 14ch;
+    color: #f4f7f5;
+    font-size: clamp(3.3rem, 2rem + 6vw, 7rem);
+    font-weight: 760;
+    line-height: 0.96;
+    letter-spacing: -0.045em;
+    max-width: 12ch;
   }
   .tagline {
-    font-size: clamp(1.05rem, 2.4vw, 1.35rem);
-    color: var(--text);
-    max-width: 46ch;
+    color: rgb(244 247 245 / 0.88);
+    font-size: clamp(1.05rem, 2vw, 1.3rem);
+    max-width: 44ch;
   }
-  .ctas { display: flex; gap: 0.75rem; flex-wrap: wrap; margin: var(--sp-5) 0 var(--sp-3); }
-  .fineprint { color: var(--text-dim); font-size: 0.9rem; margin: 0; }
+  .ctas {
+    display: flex;
+    gap: 0.75rem;
+    flex-wrap: wrap;
+    margin: var(--sp-5) 0 var(--sp-3);
+  }
+  .hero .btn:not(.btn-primary) {
+    background: rgb(17 24 21 / 0.88);
+    border-color: rgb(255 255 255 / 0.2);
+    color: #f4f7f5;
+  }
+  .fineprint { color: rgb(244 247 245 / 0.68); font-size: 0.9rem; margin: 0; }
+  @media (prefers-reduced-motion: reduce) {
+    .dot { box-shadow: none; }
+  }
+  @media (max-width: 560px) {
+    .hero { min-height: calc(100svh - 3.75rem); padding-bottom: var(--sp-7); }
+    .hero h1 { font-size: clamp(3.1rem, 15vw, 4.25rem); }
+    .ctas { align-items: stretch; flex-direction: column; }
+    .ctas .btn { justify-content: center; }
+  }
 </style>

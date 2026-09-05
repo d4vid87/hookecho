@@ -1,110 +1,26 @@
 ---
-import { DISCORD_INVITE } from "../data/community";
 import Base from "../layouts/Base.astro";
 import Hero from "../components/Hero.astro";
-import Bento from "../components/Bento.astro";
-import StormCard from "../components/StormCard.astro";
 import Icon from "../components/Icon.astro";
-import Ticker from "../components/Ticker.astro";
-import NearYou from "../components/NearYou.astro";
-import LiveMosaic from "../components/LiveMosaic.astro";
-import GitHubStats from "../components/GitHubStats.astro";
+import { DISCORD_INVITE } from "../data/community";
 
-// The three tiers are the same progressive-disclosure story the app itself tells: the first
-// screen answers "is it going to rain on me", and the depth is there when you go looking.
-const tiers = [
+const benefits = [
   {
     icon: "broadcast",
-    shot: "reflectivity.jpg",
-    eyebrow: "See the rain",
-    title: "Open it and the radar is already there",
-    body:
-      "It finds your nearest radar and starts the loop. No account, no setup questions, no ads. " +
-      "Watch the rain move, tap anywhere for the forecast at that spot.",
+    title: "See the rain move",
+    body: "Your nearest radar opens already running, so you can see what is coming without setting anything up.",
   },
   {
     icon: "warning-diamond",
-    eyebrow: "Follow the storm",
-    title: "Warnings, lightning and storm tracks on the map",
-    body:
-      "Live watches and warnings, storm reports, lightning, and cells ranked by how nasty they " +
-      "look — with alerts on your phone when one is headed your way.",
+    title: "Follow serious weather",
+    body: "Warnings, lightning and storm tracks stay on the map, with the full bulletin one tap away.",
   },
   {
     icon: "stack",
-    eyebrow: "Chase it",
-    title: "Every tilt, every product, straight from the source",
-    body:
-      "Level 2 volumes at all tilts, velocity and dual-pol, the national MRMS mosaic, HRRR and " +
-      "NAM fields, soundings, cross-sections, archive playback to 1991, and offline chase packs.",
+    title: "Go deeper when you need to",
+    body: "Every tilt, velocity, dual-pol, forecast fields and archive playback are there when the simple view is not enough.",
   },
 ];
-
-// Hotlinked from the repo at a tag, same as /features and /weatherdesk: GitHub carries the
-// bytes, and a later commit on main cannot change what the page shows. Only the hero poster and
-// the social card stay local — those two have to be there on first paint and for scrapers.
-const repoShots = "https://raw.githubusercontent.com/d4vid87/hookecho/v0.12.0-beta.1/docs/shots";
-
-const shots = [
-  {
-    src: `${repoShots}/alerts.jpg`,
-    alt: "Warning polygons, storm reports and spotter positions on the map",
-    caption: "Warnings, storm reports and spotters, live.",
-  },
-  {
-    src: `${repoShots}/alltilts.jpg`,
-    alt: "Four radar tilts of the same storm side by side",
-    caption: "Every tilt of the volume, side by side.",
-  },
-  {
-    src: `${repoShots}/velocity.jpg`,
-    alt: "Storm-relative velocity showing a rotation couplet in a supercell",
-    caption: "Velocity and dual-pol, dealiased.",
-  },
-  {
-    src: `${repoShots}/hrrr.jpg`,
-    alt: "HRRR model fields drawn over the map with severe composite parameters",
-    caption: "HRRR and NAM fields, with the severe parameters.",
-  },
-];
-
-const androidShots = [
-  {
-    src: `${repoShots}/android/map.jpg`,
-    alt: "The Android app showing live radar over the map",
-    caption: "Live radar, one thumb.",
-  },
-  {
-    src: `${repoShots}/android/alerts.jpg`,
-    alt: "A warning polygon and its full text open on the Android app",
-    caption: "Warnings with their full text.",
-  },
-  {
-    src: `${repoShots}/android/layers.jpg`,
-    alt: "The layer picker open on the Android app",
-    caption: "The same layers as the desktop build.",
-  },
-  {
-    src: `${repoShots}/android/site.jpg`,
-    alt: "The radar site picker on the Android app",
-    caption: "Switch radars as you drive.",
-  },
-];
-
-const weatherdeskRepo = "https://github.com/d4vid87/weatherdesk";
-
-// The four rows that decide it for most people, pulled from the same data the full matrix uses so
-// the teaser can never disagree with the page it links to.
-import { COLS, ROWS } from "../data/compare";
-const teaserLabels = ["Price", "Ads", "Open source", "Level 2, every tilt"];
-const teaserCols = [0, 1, 2]; // HookEcho, RadarScope, MyRadar
-const teaserRows = teaserLabels
-  .map((label) => ROWS.find((r) => r.label === label))
-  .filter((r): r is (typeof ROWS)[number] => Boolean(r));
-// The cell's own qualifier is the label — `v` only says whether the answer is good for you, so
-// rendering it as a word turns "Ads: none" into "Ads: yes".
-const say = (cell: { v: string; t: string }) =>
-  cell.t || (cell.v === "yes" ? "Yes" : cell.v === "no" ? "No" : "Partly");
 
 const jsonld = {
   "@context": "https://schema.org",
@@ -114,345 +30,189 @@ const jsonld = {
   operatingSystem: "Windows, macOS, Linux, Android, Web",
   url: "https://hookecho.io",
   downloadUrl: "https://hookecho.io/download/",
-  softwareVersion: "0.12.0-beta.1",
   license: "https://opensource.org/licenses/MIT",
   isAccessibleForFree: true,
   offers: { "@type": "Offer", price: "0", priceCurrency: "USD" },
   author: { "@type": "Person", name: "David May" },
   description:
-    "A free, open-source weather radar app reading NEXRAD Level 2, MRMS, HRRR and the National " +
-    "Weather Service feeds directly from the public NOAA sources.",
+    "A free, open-source weather radar app reading NEXRAD, MRMS, forecast and National Weather Service feeds directly from public sources.",
 };
 ---
 
 <Base
-  title="HookEcho — weather radar for everyone"
-  description="A free, open-source weather radar app for Windows, macOS, Linux, Android and the browser. Live NEXRAD radar, warnings and storm tracking, straight from the public NOAA feeds."
+  title="HookEcho — live weather radar, free and open source"
+  description="See rain move, follow warnings and open the radar nearest you. HookEcho is free, open source and available in your browser or as an app."
   jsonld={jsonld}
 >
   <Hero
-    title="Where weather is"
-    tagline="Live NEXRAD radar, warnings and storm tracking — straight from the public NOAA feeds to your own machine. Free, open source, yours."
+    title="See what’s coming."
+    accent="Right now."
+    tagline="Watch rain move, follow warnings, and tap anywhere for the forecast. Free, with no account or ads."
   />
 
-  <section class="live">
+  <section class="benefits" aria-labelledby="benefits-title">
     <div class="wrap">
-      <p class="eyebrow">Right now</p>
-      <h2>The weather on this page is real</h2>
-      <Ticker />
-      <Bento>
-        <StormCard />
-        <div class="tile" data-tilt data-reveal>
-          <p class="eyebrow"><Icon name="crosshair" size={16} /> Near you</p>
-          <p class="tile-copy">
-            The edge knows roughly where you are, so the radar can open on your own weather
-            without asking permission for anything.
-          </p>
-          <NearYou />
-        </div>
-        <div class="tile numbers" data-tilt data-reveal data-reveal-delay="80">
-          <p class="eyebrow"><Icon name="gauge" size={16} /> The whole network</p>
-          <p class="big"><span data-countup>152</span></p>
-          <p class="tile-copy">NEXRAD sites, plus 44 terminal radars, archived back to 1991 — for $0.</p>
-        </div>
-        <div class="tile mosaic-tile" data-span="2" data-reveal data-reveal-delay="160">
-          <LiveMosaic video="https://img.hookecho.io/national.mp4" />
-        </div>
-      </Bento>
-    </div>
-  </section>
-
-  <section>
-    <div class="wrap">
-      <p class="eyebrow">What you get</p>
-      <h2>Simple on the surface. Deep when you need it.</h2>
-      <Bento>
-        {
-          tiers.map((tier, i) => (
-            <article
-              class="tile tier"
-              data-span={i === 0 ? "2" : undefined}
-              data-tilt
-              data-reveal
-              data-reveal-delay={i * 80}
-            >
-              <p class="eyebrow">
-                <Icon name={tier.icon} size={16} /> {tier.eyebrow}
-              </p>
-              <h3>{tier.title}</h3>
-              <p class="tile-copy">{tier.body}</p>
-              {tier.shot && (
-                <img
-                  {/* The hero already loaded this one from /shots; asking GitHub for the same
-                      picture again is 380 KB for a byte-identical file. */}
-                  src={tier.shot === "reflectivity.jpg" ? "/shots/reflectivity.jpg" : `${repoShots}/${tier.shot}`}
-                  alt="HookEcho showing a radar loop over the map"
-                  loading="lazy"
-                  width="1600"
-                  height="1000"
-                />
-              )}
-            </article>
-          ))
-        }
-      </Bento>
-    </div>
-  </section>
-
-  <section class="alt shots">
-    <div class="wrap">
-      <p class="eyebrow">A look around</p>
-      <h2>The same data the professionals use</h2>
-    </div>
-    {
-      shots.map((shot, i) => (
-        <div class="row" data-reveal>
-          <div class="copy">
-            <h3>{shot.caption}</h3>
-            <p>{shot.alt}.</p>
-          </div>
-          <figure class="shot">
-            <img src={shot.src} alt={shot.alt} loading="lazy" width="1600" height="1000" />
-          </figure>
-        </div>
-      ))
-    }
-  </section>
-
-  <section>
-    <div class="wrap">
-      <p class="eyebrow">Everywhere you are</p>
-      <h2>One app, all your screens</h2>
-      <p>
-        Native builds for Windows, macOS and Linux, an Android app for the field, and a full
-        browser version with nothing to install.
-      </p>
-      <div class="platforms">
-        <a class="btn btn-primary" href="https://app.hookecho.io">Try it in the browser</a>
-        <a class="btn" href="/download/">
-          Windows · macOS · Linux · Android
-        </a>
-      </div>
-      <GitHubStats />
-    </div>
-  </section>
-
-  <section class="alt">
-    <div class="wrap">
-      <p class="eyebrow">In the field</p>
-      <h2>It goes where the storm is</h2>
-      <p>
-        The Android build is the same app, not a companion: the same Level 2 volumes, the same
-        products, laid out for one thumb. Widgets and warning notifications for wherever you have
-        driven to.
-      </p>
-      <div class="fan" data-reveal>
-        {
-          androidShots.map((shot) => (
-            <figure>
-              <img src={shot.src} alt={shot.alt} loading="lazy" width="1080" height="2340" />
-              <figcaption>{shot.caption}</figcaption>
-            </figure>
-          ))
-        }
-      </div>
-      <div class="platforms">
-        <a class="btn btn-primary" href="/download/">Get it on Android</a>
-        <a class="btn" href="/features/#android">What it does</a>
+      <p class="eyebrow">Weather without the runaround</p>
+      <h2 id="benefits-title">Start simple. Go as deep as the storm demands.</h2>
+      <div class="benefit-grid">
+        {benefits.map((benefit) => (
+          <article class="benefit">
+            <span class="benefit-icon"><Icon name={benefit.icon} size={22} /></span>
+            <h3>{benefit.title}</h3>
+            <p>{benefit.body}</p>
+          </article>
+        ))}
       </div>
     </div>
   </section>
 
-  <section>
-    <div class="wrap">
-      <p class="eyebrow">Against the field</p>
-      <h2>Yes, we will tell you when to buy something else</h2>
-      <p>
-        We put HookEcho next to RadarScope, MyRadar, Windy, RadarOmega and RainViewer, row by row,
-        including the four rows they win. If the thing you need is global model data, Windy is
-        better at it.
-      </p>
-      <table class="teaser" data-reveal>
-        <thead>
-          <tr>
-            <th scope="col"></th>
-            {teaserCols.map((c) => <th scope="col">{COLS[c]}</th>)}
-          </tr>
-        </thead>
-        <tbody>
-          {
-            teaserRows.map((row) => (
-              <tr>
-                <th scope="row">{row.label}</th>
-                {
-                  teaserCols.map((c) => (
-                    <td class={row.cells[c].v}>{say(row.cells[c])}</td>
-                  ))
-                }
-              </tr>
-            ))
-          }
-        </tbody>
-      </table>
-      <div class="platforms">
-        <a class="btn btn-primary" href="/compare/">See all the rows</a>
+  <section class="trust" aria-labelledby="trust-title">
+    <div class="wrap trust-inner">
+      <div>
+        <p class="eyebrow">Built in the open</p>
+        <h2 id="trust-title">Public weather data. Private by design.</h2>
       </div>
+      <ul aria-label="HookEcho promises">
+        <li>Direct NOAA and NWS data</li>
+        <li>MIT licensed</li>
+        <li>No account or ads</li>
+        <li>No app telemetry</li>
+      </ul>
     </div>
   </section>
 
-  <section>
-    <div class="wrap">
-      <p class="eyebrow">Community</p>
-      <h2>Come ask what you are looking at</h2>
-      <Bento>
-        <a class="tile join" href={DISCORD_INVITE} data-span="2" data-tilt data-reveal>
-          <p class="eyebrow"><Icon name="discord-logo" size={16} /> Discord</p>
-          <h3>Chase reports, questions, arguments</h3>
-          <p class="tile-copy">
-            People who use HookEcho, asking each other what that signature on screen is. Bugs get
-            found here before we find them.
-          </p>
-        </a>
-        <a
-          class="tile join"
-          href="https://github.com/d4vid87/hookecho/discussions"
-          data-span="2"
-          data-tilt
-          data-reveal
-          data-reveal-delay="80"
-        >
-          <p class="eyebrow"><Icon name="github-logo" size={16} /> Discussions</p>
-          <h3>Feature ideas and the long answers</h3>
-          <p class="tile-copy">
-            The slower conversations: what the app should do next, and why it does what it does.
-          </p>
-        </a>
-      </Bento>
-  <section class="alt">
-    <div class="wrap">
-      <p class="eyebrow">More from us</p>
-      <h2>WeatherDesk</h2>
-      <article class="tile grad-border wd" data-tilt data-reveal>
-        <h3>Your own weather station, on your own dashboard</h3>
-        <p class="tile-copy">
-          A self-hosted dashboard for a Tempest weather station: live gauges, history and
-          forecasts on your own hardware. The radar inside it is HookEcho.
+  <section class="weatherdesk" aria-labelledby="weatherdesk-title">
+    <div class="wrap weatherdesk-card">
+      <div class="weatherdesk-copy">
+        <p class="eyebrow">Also from us</p>
+        <h2 id="weatherdesk-title">Your weather station deserves a better screen.</h2>
+        <p>
+          WeatherDesk turns Tempest, Ecowitt, Ambient, Davis and more into a whole-home
+          dashboard—with HookEcho radar built in.
         </p>
-        <p class="wd-links">
-          <a href="/weatherdesk/">What it does</a> ·
-          <a href={weatherdeskRepo}>Source on GitHub</a>
-        </p>
-      </article>
+        <p class="station-list">Tempest · Ecowitt · Ambient · Davis · AcuRite · La Crosse</p>
+        <a class="btn weatherdesk-button" href="/go/weatherdesk/homepage">Explore WeatherDesk</a>
+      </div>
+      <picture>
+        <source
+          type="image/webp"
+          srcset="/shots/weatherdesk-wide-800.webp 800w, /shots/weatherdesk-wide-1600.webp 1600w"
+          sizes="(max-width: 760px) calc(100vw - 2.5rem), 55vw"
+        />
+        <img
+          src="/shots/weatherdesk-wide-1600.webp"
+          alt="WeatherDesk showing a personal weather dashboard with HookEcho radar"
+          width="1600"
+          height="670"
+          loading="lazy"
+        />
+      </picture>
+    </div>
+  </section>
+
+  <section class="final-cta" aria-labelledby="final-title">
+    <div class="wrap">
+      <p class="eyebrow">Your radar is ready</p>
+      <h2 id="final-title">Open the weather near you.</h2>
+      <p>No signup and no setup questions. The map opens on your area and starts moving.</p>
+      <div class="actions">
+        <a class="btn btn-primary" href="/go/web/final" data-smart-primary data-placement="final">
+          Open live radar
+        </a>
+        <a class="btn" href="/go/download/final" data-smart-secondary data-placement="final">
+          Download
+        </a>
+      </div>
+      <p class="android-note" data-android-note hidden>Android beta · sideloaded APK.</p>
+      <p class="community-link">
+        Questions, ideas, or storm reports? <a href={DISCORD_INVITE}>Join the Discord server.</a>
+        If you find our projects useful, please star
+        <a href="https://github.com/d4vid87/hookecho">HookEcho</a> or
+        <a href="https://github.com/d4vid87/weatherdesk">WeatherDesk</a> on GitHub.
+      </p>
     </div>
   </section>
 </Base>
 
 <style>
-  .alt { background: var(--bg-deep); border-block: 1px solid var(--stroke); }
-  .tile-copy { color: var(--text-dim); font-size: var(--text-sm); }
-  .tile .eyebrow { display: inline-flex; align-items: center; gap: 0.4rem; margin: 0 0 var(--sp-3); }
-  .tier img {
-    display: block;
-    width: 100%;
-    margin-top: var(--sp-4);
-    border-radius: var(--radius);
-    border: 1px solid var(--stroke);
-  }
-  .numbers .big {
-    font-size: var(--text-3xl);
-    font-weight: 750;
-    font-variant-numeric: tabular-nums;
-    margin: 0;
-    /* Solid, not gradient-clipped text: this tile animates its opacity in on reveal, and
-       Chromium leaves the clipped gradient unpainted in that composited layer — the number
-       came out invisible-grey. One colour, no repaint to lose. */
-    color: var(--ramp-1);
-  }
-  .mosaic-tile { display: flex; }
-  .join { display: block; color: var(--text); text-decoration: none; }
-  .join h3 { margin-bottom: var(--sp-2); }
-  .wd h3 { margin-top: 0; }
-  .wd-links { font-size: var(--text-sm); margin-bottom: 0; }
-
-  /* Phones overlapped like a hand of cards: the same four shots, one object instead of a grid. */
-  .fan { display: flex; justify-content: center; margin: var(--sp-6) 0; padding-inline: var(--sp-4); }
-  .fan figure { margin: 0 -3.5rem 0 0; width: min(22vw, 200px); transition: transform var(--dur-3) var(--ease-out); }
-  .fan figure:last-child { margin-right: 0; }
-  .fan figure:nth-child(odd) { transform: rotate(-4deg) translateY(0.6rem); }
-  .fan figure:nth-child(even) { transform: rotate(4deg); }
-  .fan figure:hover { transform: rotate(0) translateY(-0.8rem); z-index: 1; }
-  .fan img {
-    display: block;
-    width: 100%;
-    border-radius: var(--radius-lg);
-    border: 1px solid var(--stroke);
-    box-shadow: var(--shadow-3);
-    background: var(--bg-deep);
-  }
-  .fan figcaption { color: var(--text-dim); font-size: 0.8rem; margin-top: var(--sp-2); text-align: center; }
-  @media (max-width: 700px) {
-    .fan { flex-wrap: wrap; gap: var(--sp-4); }
-    .fan figure, .fan figure:nth-child(odd), .fan figure:nth-child(even) { margin: 0; width: 40%; transform: none; }
-  }
-
-  /* Editorial rows: full-bleed imagery with the copy beside it, alternating sides. */
-  .shots .row {
+  .benefits .wrap > h2 { max-width: 18ch; }
+  .benefit-grid {
     display: grid;
-    grid-template-columns: minmax(18rem, 34%) 1fr;
-    gap: clamp(1.5rem, 4vw, 3.5rem);
-    align-items: center;
-    padding-block: var(--sp-7);
-    width: min(100% - 2.5rem, 1320px);
-    margin-inline: auto;
+    grid-template-columns: repeat(3, 1fr);
+    gap: var(--sp-4);
+    margin-top: var(--sp-7);
   }
-  .shots .row:nth-child(even) .copy { order: 2; }
-  .shots .shot { margin: 0; }
-  .shots .shot img {
-    display: block;
-    width: 100%;
+  .benefit { border-top: 1px solid var(--stroke-strong); padding-top: var(--sp-5); }
+  .benefit-icon {
+    display: grid;
+    place-items: center;
+    width: 2.75rem;
+    height: 2.75rem;
+    margin-bottom: var(--sp-5);
+    border-radius: 50%;
+    background: color-mix(in srgb, var(--accent) 12%, var(--surface-1));
+    color: var(--accent);
+  }
+  .benefit p { color: var(--text-dim); margin: 0; }
+  .trust {
+    padding-block: clamp(2.5rem, 6vw, 4rem);
+    background: var(--bg-deep);
+    border-block: 1px solid var(--stroke);
+  }
+  .trust-inner {
+    display: grid;
+    grid-template-columns: minmax(16rem, 1fr) minmax(20rem, 1.2fr);
+    gap: var(--sp-7);
+    align-items: center;
+  }
+  .trust h2 { margin: 0; }
+  .trust ul {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: var(--sp-3) var(--sp-6);
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+  .trust li::before { content: "✓"; color: var(--accent); margin-right: 0.55rem; }
+  .weatherdesk { background: color-mix(in srgb, #1678c8 6%, var(--bg)); }
+  .weatherdesk-card {
+    display: grid;
+    grid-template-columns: minmax(18rem, 0.85fr) minmax(24rem, 1.4fr);
+    gap: clamp(2rem, 5vw, 4.5rem);
+    align-items: center;
+  }
+  .weatherdesk-copy h2 { max-width: 14ch; }
+  .weatherdesk-copy > p:not(.eyebrow, .station-list) {
+    color: var(--text-dim);
+    font-size: var(--text-lg);
+  }
+  .station-list { color: #2497e3; font-size: var(--text-sm); font-weight: 650; }
+  .weatherdesk-button { background: #1678c8; border-color: #1678c8; color: #fff; }
+  .weatherdesk picture,
+  .weatherdesk img { display: block; width: 100%; }
+  .weatherdesk img {
+    border: 1px solid color-mix(in srgb, #2497e3 35%, var(--stroke));
     border-radius: var(--radius-lg);
-    border: 1px solid var(--stroke);
     box-shadow: var(--shadow-2);
   }
-  /* The one scroll-driven flourish on the site: the image drifts against the copy. Browsers
-     without view() timelines simply get a static image. */
-  @supports (animation-timeline: view()) {
-    @media (prefers-reduced-motion: no-preference) {
-      .shots .shot img {
-        animation: drift linear both;
-        animation-timeline: view();
-        animation-range: entry 10% exit 90%;
-      }
-    }
-  }
-  @keyframes drift {
-    from { transform: translateY(20px); }
-    to { transform: translateY(-20px); }
-  }
+  .final-cta { text-align: center; background-image: var(--mesh); }
+  .final-cta h2,
+  .final-cta p { margin-inline: auto; }
+  .final-cta > .wrap > p:not(.eyebrow, .android-note) { color: var(--text-dim); }
+  .actions { display: flex; justify-content: center; gap: var(--sp-3); flex-wrap: wrap; }
+  .android-note { color: var(--text-dim); font-size: var(--text-sm); margin-top: var(--sp-3); }
+  .community-link { color: var(--text-dim); font-size: var(--text-sm); margin-top: var(--sp-5); }
   @media (max-width: 760px) {
-    .shots .row { grid-template-columns: 1fr; }
-    .shots .row:nth-child(even) .copy { order: 0; }
+    .benefit-grid,
+    .trust-inner,
+    .weatherdesk-card { grid-template-columns: 1fr; }
+    .benefit-grid { gap: var(--sp-6); }
+    .trust ul { grid-template-columns: 1fr; }
+    .weatherdesk-copy h2 { max-width: 18ch; }
   }
-
-  .teaser {
-    width: 100%;
-    border-collapse: collapse;
-    margin-top: var(--sp-5);
-    font-size: var(--text-sm);
-  }
-  .teaser th, .teaser td { text-align: left; padding: 0.7rem 0.9rem; border-bottom: 1px solid var(--stroke); }
-  .teaser thead th { color: var(--text-dim); font-weight: 600; }
-  .teaser tbody th { font-weight: 600; }
-  .teaser td.yes { color: var(--ramp-1); font-weight: 600; }
-  .teaser td.part { color: var(--ramp-3); }
-  .teaser td.no { color: var(--text-dim); }
-  .platforms { display: flex; gap: 0.75rem; flex-wrap: wrap; margin-top: 1.4rem; }
-  .live { padding-top: clamp(2rem, 5vw, 3rem); }
-  .live-grid {
-    display: grid;
-    gap: 2rem;
-    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-    align-items: center;
-    margin-top: 2.2rem;
+  @media (max-width: 560px) {
+    .actions { align-items: stretch; flex-direction: column; }
+    .actions .btn { justify-content: center; }
   }
 </style>
