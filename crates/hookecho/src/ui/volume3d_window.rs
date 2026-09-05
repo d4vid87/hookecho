@@ -65,6 +65,7 @@ pub fn show(
     nz: u32,
     range: (f32, f32),
     drawer: &mut crate::ui::drawer::Drawer,
+    degraded: bool,
 ) {
     let mut keep = *open;
     let Some(window) = drawer.page_sized(
@@ -152,7 +153,16 @@ pub fn show(
             },
             clip: st.clip,
         };
-        let uniform = orbit_uniform(st.az, st.el, st.dist, aspect, n, nz, st.steps, view);
+        let uniform = orbit_uniform(
+            st.az,
+            st.el,
+            st.dist,
+            aspect,
+            n,
+            nz,
+            effective_steps(st.steps, degraded),
+            view,
+        );
         // On the window's first frame egui may hand us a zero-area rect (auto-size pass);
         // the paint callback would be culled and the one-shot upload lost, leaving the view
         // black until reopened. Hold the upload until the rect is real.
@@ -166,6 +176,14 @@ pub fn show(
     *open = keep;
 }
 
+fn effective_steps(chosen: u32, degraded: bool) -> u32 {
+    if degraded {
+        chosen.min(96)
+    } else {
+        chosen
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::render3d::threshold_index;
@@ -175,6 +193,13 @@ mod tests {
         // Otherwise no button reads as selected and the row looks broken on first open.
         let d = super::Volume3dState::default();
         assert!(super::STEP_PRESETS.iter().any(|&(_, s)| s == d.steps));
+    }
+
+    #[test]
+    fn visual_guard_caps_ray_marching_without_changing_the_choice() {
+        assert_eq!(super::effective_steps(256, true), 96);
+        assert_eq!(super::effective_steps(96, true), 96);
+        assert_eq!(super::effective_steps(256, false), 256);
     }
 
     #[test]

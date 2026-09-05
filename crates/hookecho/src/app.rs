@@ -15830,7 +15830,11 @@ impl eframe::App for HookEchoApp {
             // for none of the value; the idle heartbeat carries it until focus returns, and the
             // `wind_dt` clamp above absorbs the jump.
             if crate::platform::activity::is_active() && ctx.input(|i| i.focused) {
-                let ms = if cfg!(target_os = "android") { 100 } else { 33 };
+                let ms = if cfg!(target_os = "android") || ui::motion::degraded() {
+                    100
+                } else {
+                    33
+                };
                 ctx.request_repaint_after(std::time::Duration::from_millis(ms));
             }
 
@@ -16125,6 +16129,7 @@ impl eframe::App for HookEchoApp {
                 self.info_chip(ctx);
                 self.error_chip(ctx);
                 self.update_chip(ctx);
+                self.quality_chip(ctx);
             }
         }
 
@@ -16881,6 +16886,7 @@ impl eframe::App for HookEchoApp {
                 VOL3D_NZ as u32,
                 self.vol3d_range,
                 &mut self.drawer,
+                ui::motion::degraded(),
             );
             self.show_3d = open;
         }
