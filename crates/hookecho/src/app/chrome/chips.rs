@@ -3,6 +3,34 @@
 use super::*;
 
 impl HookEchoApp {
+    /// Persistent, session-only notice while the automatic performance guard is active.
+    pub(crate) fn quality_chip(&self, ctx: &egui::Context) {
+        if !crate::ui::motion::degraded() {
+            return;
+        }
+        egui::Area::new(egui::Id::new("quality_chip"))
+            .constrain_to(self.chrome_rect)
+            .anchor(
+                egui::Align2::RIGHT_BOTTOM,
+                egui::vec2(-14.0, crate::ui::style::LANE_BOTTOM_CHIP),
+            )
+            .interactable(false)
+            .show(ctx, |ui| {
+                crate::ui::style::glass(ui, 236)
+                    .stroke(egui::Stroke::new(
+                        1.0,
+                        egui::Color32::from_rgb(235, 180, 70),
+                    ))
+                    .show(ui, |ui| {
+                        ui.label(
+                            egui::RichText::new("Visual quality reduced")
+                                .size(crate::ui::style::FONT_SM)
+                                .color(egui::Color32::from_rgb(245, 205, 105)),
+                        );
+                    });
+            });
+    }
+
     /// Show a warning banner, or refresh the matching one already on screen — a repeated event
     /// bumps its clock instead of stacking a duplicate card over the radar.
     pub(crate) fn banner(&mut self, event: String, area: String) {

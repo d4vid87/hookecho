@@ -252,7 +252,7 @@ impl Timeline {
     }
 
     fn frame_interval(&self) -> std::time::Duration {
-        std::time::Duration::from_secs_f32((1.0 / self.speed).clamp(0.05, 10.0))
+        frame_interval(self.speed, crate::ui::motion::degraded())
     }
 
     /// Advance playback if a frame interval has elapsed. Returns true if the playhead moved.
@@ -296,6 +296,11 @@ impl Timeline {
     }
 }
 
+fn frame_interval(speed: f32, degraded: bool) -> std::time::Duration {
+    let speed = if degraded { speed.min(8.0) } else { speed };
+    std::time::Duration::from_secs_f32((1.0 / speed).clamp(0.05, 10.0))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -310,6 +315,13 @@ mod tests {
         // Still nothing to pace with an empty frame list, even once "playing".
         t.playing = true;
         assert!(t.time_to_next_frame().is_none());
+    }
+
+    #[test]
+    fn visual_guard_caps_playback_at_eight_fps() {
+        assert_eq!(super::frame_interval(16.0, true).as_millis(), 125);
+        assert!(super::frame_interval(16.0, false).as_millis() < 125);
+        assert_eq!(super::frame_interval(4.0, true).as_millis(), 250);
     }
 
     /// A day of volumes for `site`, one every five minutes from 00Z.

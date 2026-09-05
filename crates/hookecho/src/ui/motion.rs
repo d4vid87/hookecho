@@ -8,16 +8,57 @@
 //! Two things turn motion off, and they share one switch. The user's `reduce_motion` setting is
 //! the honest one. The other is the machine: a Pi drawing a 4-pane radar loop does not have the
 //! frames to spare for a springy drawer, and an animation that stutters reads worse than no
-//! animation at all. [`frame`] watches the frame time and latches the brake when the app is
-//! visibly struggling.
+//! animation at all. [`frame`] watches the frame time, engages the brake while the app is visibly
+//! struggling, and releases it only after a sustained recovery.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
 /// Set by [`frame`] from the user's setting; read by everything that animates.
 static USER_OFF: AtomicBool = AtomicBool::new(false);
-/// Latched when frames get slow. Never unlatches: a machine that fell behind once will do it
-/// again, and a brake that flickers on and off is worse than either state.
+/// Set while sustained slow frames have the automatic visual-quality guard engaged.
 static SLOW: AtomicBool = AtomicBool::new(false);
+
+const SLOW_FRAME: f32 = 0.033;
+const FAST_FRAME: f32 = 0.028;
+const ENGAGE_FRAMES: u16 = 30;
+const RECOVER_FRAMES: u16 = 300;
+
+#[derive(Clone, Copy, Default)]
+struct Guard {
+    degraded: bool,
+    run: u16,
+}
+
+impl Guard {
+    fn observe(&mut self, dt: f32) -> Option<bool> {
+        let qualifying = if self.degraded {
+            dt < FAST_FRAME
+        } else {
+            dt > SLOW_FRAME
+        };
+        self.run = if qualifying {
+            self.run.saturating_add(1)
+        } else {
+            0
+        };
+        let threshold = if self.degraded {
+            RECOVER_FRAMES
+        } else {
+            ENGAGE_FRAMES
+        };
+        if self.run < threshold {
+            return None;
+        }
+        self.degraded = !self.degraded;
+        self.run = 0;
+        Some(self.degraded)
+    }
+}
+
+/// Whether the automatic visual-quality guard is engaged (independent of the user's setting).
+pub fn degraded() -> bool {
+    SLOW.load(Ordering::Relaxed)
+}
 
 /// Is motion off, for either reason?
 pub fn reduced() -> bool {
@@ -31,21 +72,19 @@ pub fn reduced() -> bool {
 /// start. Sustained badness is the thing worth reacting to.
 pub fn frame(ctx: &egui::Context, user_reduce: bool) {
     USER_OFF.store(user_reduce, Ordering::Relaxed);
-    if SLOW.load(Ordering::Relaxed) {
-        return;
-    }
     let dt = ctx.input(|i| i.unstable_dt);
-    // A frame budget of 33 ms is 30 fps: below that the springs stop reading as springs.
-    let run: u32 = ctx.data_mut(|d| {
-        let id = egui::Id::new("motion_slow_run");
-        let n: u32 = d.get_temp(id).unwrap_or(0);
-        let n = if dt > 1.0 / 30.0 { n + 1 } else { 0 };
-        d.insert_temp(id, n);
-        n
+    let (slow, changed) = ctx.data_mut(|d| {
+        let id = egui::Id::new("visual_quality_guard");
+        let mut guard: Guard = d.get_temp(id).unwrap_or_default();
+        let changed = guard.observe(dt);
+        d.insert_temp(id, guard);
+        (guard.degraded, changed)
     });
-    if run >= 30 {
-        SLOW.store(true, Ordering::Relaxed);
-        log::info!("motion: frames sustained under 30 fps, reducing animation");
+    SLOW.store(slow, Ordering::Relaxed);
+    match changed {
+        Some(true) => log::info!("performance: sustained slow frames, reducing visual quality"),
+        Some(false) => log::info!("performance: frame rate recovered, restoring visual quality"),
+        None => {}
     }
 }
 
@@ -139,5 +178,40 @@ mod tests {
             .map(|i| ease_out_cubic(i as f32 / 100.0))
             .fold(0.0_f32, f32::max);
         assert!(peak <= 1.0, "cubic overshot: {peak}");
+    }
+
+    #[test]
+    fn guard_engages_and_recovers_with_hysteresis() {
+        let mut guard = Guard::default();
+        for _ in 0..ENGAGE_FRAMES - 1 {
+            assert_eq!(guard.observe(0.040), None);
+        }
+        assert_eq!(guard.observe(0.040), Some(true));
+        assert!(guard.degraded);
+
+        for _ in 0..RECOVER_FRAMES - 1 {
+            assert_eq!(guard.observe(0.020), None);
+        }
+        assert_eq!(guard.observe(0.020), Some(false));
+        assert!(!guard.degraded);
+    }
+
+    #[test]
+    fn one_nonqualifying_frame_resets_each_run() {
+        let mut guard = Guard::default();
+        for _ in 0..ENGAGE_FRAMES - 1 {
+            guard.observe(0.040);
+        }
+        guard.observe(0.030);
+        assert_eq!(guard.observe(0.040), None);
+
+        guard.degraded = true;
+        guard.run = 0;
+        for _ in 0..RECOVER_FRAMES - 1 {
+            guard.observe(0.020);
+        }
+        guard.observe(0.030);
+        assert_eq!(guard.observe(0.020), None);
+        assert!(guard.degraded);
     }
 }
