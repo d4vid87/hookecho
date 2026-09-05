@@ -103,7 +103,9 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Install wasm-bindgen-cli
-        run: cargo install wasm-bindgen-cli --locked
+        run: |
+          version="$(sed -n '/^name = "wasm-bindgen"$/,/^$/s/^version = "\(.*\)"/\1/p' Cargo.lock)"
+          cargo install wasm-bindgen-cli --version "$version" --locked
 
       # Without this, build.sh skips wasm-opt with a warning and the size gate measures a bundle
       # nobody ships.
