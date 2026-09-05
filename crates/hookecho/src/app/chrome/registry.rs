@@ -377,7 +377,7 @@ impl HookEchoApp {
             );
         }
         for k in ContourKind::ALL {
-            let label = format!("Contours: {}", k.label());
+            let label = format!("Contours: {}", k.display_label(self.settings.temp_unit));
             let on = self.contour_kind == k;
             push(
                 &label,

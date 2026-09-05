@@ -412,7 +412,7 @@ enum OverlaySource {
     Gauges(f64, f64, f64, f64),
     /// Model contours for a field kind (surface f00, contoured off-thread), from HRRR or the RAP
     /// analysis.
-    Contours(ContourKind, wxdata::hrrr::Model),
+    Contours(ContourKind, wxdata::hrrr::Model, crate::settings::TempUnit),
     /// County power outages by county, from ODIN (DOE/ORNL).
     Outages,
     /// NHC tropical cyclones (feature V).
@@ -946,7 +946,7 @@ impl OverlaySource {
             OverlaySource::Gauges(lat0, lon0, lat1, lon1) => {
                 OverlayMsg::Gauges(wxdata::river::fetch_bbox(http, lat0, lon0, lat1, lon1).await?)
             }
-            OverlaySource::Contours(kind, model) => {
+            OverlaySource::Contours(kind, model, temp_unit) => {
                 // Composite parameters (STP/SCP/EHI) combine several same-run HRRR fields.
                 if let Some(sk) = kind.severe() {
                     let fc = wxdata::severe::fetch_grid(http, model, sk).await?;
@@ -954,16 +954,17 @@ impl OverlaySource {
                     let lines = wxdata::contour::contour_lines(&fc.field, kind.severe_interval());
                     return Ok(OverlayMsg::Contours(kind, lines, valid));
                 }
-                let (var, level, interval) = kind
+                let (var, level, _) = kind
                     .params()
                     .ok_or_else(|| anyhow::anyhow!("contour Off"))?;
+                let interval = kind.interval(temp_unit);
                 let mut fc =
                     wxdata::hrrr::fetch_field(http, model, var, level, 0, f64::NEG_INFINITY)
                         .await?;
                 // Convert to display units so the interval is in hPa / °F / etc, then contour off-thread.
                 for v in &mut fc.field.values {
                     if v.is_finite() {
-                        *v = kind.to_display(*v);
+                        *v = kind.to_display(*v, temp_unit);
                     }
                 }
                 let valid = fc.valid();
@@ -1204,12 +1205,32 @@ impl ContourKind {
         }
     }
 
+    pub(crate) fn interval(self, temp_unit: crate::settings::TempUnit) -> f32 {
+        match (self, temp_unit) {
+            (ContourKind::T2m | ContourKind::Td2m, crate::settings::TempUnit::Celsius) => 2.0,
+            _ => self
+                .params()
+                .map_or_else(|| self.severe_interval(), |(_, _, interval)| interval),
+        }
+    }
+
     /// Convert a raw GRIB value to the display unit the interval is expressed in.
-    pub(crate) fn to_display(self, raw: f32) -> f32 {
+    pub(crate) fn to_display(self, raw: f32, temp_unit: crate::settings::TempUnit) -> f32 {
         match self {
             ContourKind::Mslp => raw / 100.0, // Pa → hPa
-            ContourKind::T2m | ContourKind::Td2m => raw * 9.0 / 5.0 - 459.67, // K → °F
-            _ => raw,                         // CAPE / SRH as-is
+            ContourKind::T2m | ContourKind::Td2m => temp_unit.from_c(raw - 273.15), // K → selected unit
+            _ => raw, // CAPE / SRH as-is
+        }
+    }
+
+    fn unit(self, temp_unit: crate::settings::TempUnit) -> Option<&'static str> {
+        matches!(self, ContourKind::T2m | ContourKind::Td2m).then(|| temp_unit.label())
+    }
+
+    fn display_label(self, temp_unit: crate::settings::TempUnit) -> String {
+        match self.unit(temp_unit) {
+            Some(unit) => format!("{} {unit}", self.label()),
+            None => self.label().into(),
         }
     }
 
@@ -2483,7 +2504,7 @@ pub struct HookEchoApp {
     contours: Vec<wxdata::contour::ContourLine>,
     contour_valid: Option<DateTime<Utc>>,
     contour_last_fetch: Option<Instant>,
-    contour_fetched_kind: Option<(ContourKind, wxdata::hrrr::Model)>,
+    contour_fetched_kind: Option<(ContourKind, wxdata::hrrr::Model, crate::settings::TempUnit)>,
     /// NHC tropical suite (feature V): toggle, fetched data, refresh clock. On by default like
     /// the other severe layers — an active hurricane is not something to have to go and enable.
     show_tropical: bool,
@@ -8870,7 +8891,8 @@ impl HookEchoApp {
             self.contour_fetched_kind = None;
             return;
         }
-        let changed = self.contour_fetched_kind != Some((self.contour_kind, self.env_model));
+        let key = (self.contour_kind, self.env_model, self.settings.temp_unit);
+        let changed = self.contour_fetched_kind != Some(key);
         let stale = self
             .contour_last_fetch
             .is_none_or(|t| t.elapsed().as_secs() >= 900);
@@ -8880,10 +8902,10 @@ impl HookEchoApp {
         }
         if changed || stale {
             self.contour_last_fetch = Some(Instant::now());
-            self.contour_fetched_kind = Some((self.contour_kind, self.env_model));
+            self.contour_fetched_kind = Some(key);
             self.spawn_overlay(
                 ctx,
-                OverlaySource::Contours(self.contour_kind, self.env_model),
+                OverlaySource::Contours(self.contour_kind, self.env_model, self.settings.temp_unit),
             );
         }
     }
@@ -11678,7 +11700,10 @@ impl HookEchoApp {
                 if let Some((a, b)) = seg {
                     if a.distance(b) > 60.0 {
                         let mid = a + (b - a) * 0.5;
-                        let txt = format!("{:.0}", line.level);
+                        let txt = match self.contour_kind.unit(self.settings.temp_unit) {
+                            Some(unit) => format!("{:.0}{unit}", line.level),
+                            None => format!("{:.0}", line.level),
+                        };
                         let font = egui::FontId::proportional(11.0);
                         for dx in [-1.0, 1.0] {
                             for dy in [-1.0, 1.0] {
@@ -11700,7 +11725,10 @@ impl HookEchoApp {
                     .contour_valid
                     .map(|t| crate::timefmt::fmt_clock(t, self.active_tz(), false))
                     .unwrap_or_default();
-                let text = format!("HRRR {} contours — valid {vt}", self.contour_kind.label());
+                let text = format!(
+                    "HRRR {} contours — valid {vt}",
+                    self.contour_kind.display_label(self.settings.temp_unit)
+                );
                 let font = egui::FontId::proportional(12.0);
                 let anchor = egui::pos2(prect.left() + 8.0, prect.top() + 40.0);
                 let galley =
@@ -17560,6 +17588,28 @@ mod tests {
         let far = Utc.with_ymd_and_hms(2026, 5, 1, 22, 0, 0).unwrap();
         assert_eq!(super::nearest_goes(&times, far), None);
         assert_eq!(super::nearest_goes(&[], t(0)), None);
+    }
+
+    #[test]
+    fn temperature_contours_follow_the_selected_unit() {
+        use crate::settings::TempUnit;
+
+        for kind in [ContourKind::T2m, ContourKind::Td2m] {
+            assert_eq!(kind.interval(TempUnit::Fahrenheit), 5.0);
+            assert_eq!(kind.interval(TempUnit::Celsius), 2.0);
+            assert!((kind.to_display(273.15, TempUnit::Fahrenheit) - 32.0).abs() < 1e-4);
+            assert!(kind.to_display(273.15, TempUnit::Celsius).abs() < 1e-4);
+            assert!(kind.display_label(TempUnit::Fahrenheit).ends_with("°F"));
+            assert!(kind.display_label(TempUnit::Celsius).ends_with("°C"));
+        }
+
+        let model = wxdata::hrrr::Model::Hrrr;
+        assert_ne!(
+            (ContourKind::T2m, model, TempUnit::Fahrenheit),
+            (ContourKind::T2m, model, TempUnit::Celsius),
+            "the fetch key must change with units"
+        );
+        assert_eq!(ContourKind::Mslp.interval(TempUnit::Celsius), 2.0);
     }
 
     #[test]
