@@ -2032,9 +2032,8 @@ pub fn run_contours(kind_token: &str) -> anyhow::Result<()> {
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()?;
-    let interval = kind
-        .params()
-        .map_or_else(|| kind.severe_interval(), |(_, _, i)| i);
+    let temp_unit = crate::settings::TempUnit::Fahrenheit;
+    let interval = kind.interval(temp_unit);
     let (lines, valid) = rt.block_on(async {
         let client = reqwest::Client::new();
         // Composite parameters are built from several same-run fields; single fields fetch directly.
@@ -2055,7 +2054,7 @@ pub fn run_contours(kind_token: &str) -> anyhow::Result<()> {
         };
         for v in &mut fc.field.values {
             if v.is_finite() {
-                *v = kind.to_display(*v);
+                *v = kind.to_display(*v, temp_unit);
             }
         }
         let valid = fc.valid();
