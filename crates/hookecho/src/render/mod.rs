@@ -729,7 +729,11 @@ impl RenderResources {
             },
             fragment: Some(wgpu::FragmentState {
                 module: &overlay_shader,
-                entry_point: Some("fs_main"),
+                entry_point: Some(if target_format.is_srgb() {
+                    "fs_main"
+                } else {
+                    "fs_main_gamma"
+                }),
                 compilation_options: Default::default(),
                 targets: &[Some(wgpu::ColorTargetState {
                     format: target_format,

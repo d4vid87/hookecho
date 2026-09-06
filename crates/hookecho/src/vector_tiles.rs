@@ -1,5 +1,5 @@
 //! Vector (MVT) basemap: fetch OpenFreeMap `.pbf` tiles, tessellate to GPU triangles via the
-//! shared overlay pipeline, and extract city/town labels for the egui text pass.
+//! shared overlay pipeline, and extract place/road labels for the egui text pass.
 //!
 //! The tile template comes from the OpenFreeMap TileJSON at runtime (its snapshot segment
 //! rotates, so it can't be hardcoded). Tiles are gzip-compressed; we sniff `0x1f 0x8b` and
@@ -59,17 +59,27 @@ enum StrokePass {
     Road,
 }
 
-/// A city/town label to draw with the egui painter (never appears in GPU/headless PNGs).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RoadShield {
+    None,
+    Interstate,
+    Us,
+    State,
+    Other,
+}
+
+/// A map label to draw with the egui painter (never appears in GPU/headless PNGs).
 #[derive(Clone, Debug)]
 pub struct PlaceLabel {
     pub world: [f32; 2],
     pub name: String,
     /// OpenMapTiles `rank` (lower = more important); used for collision priority.
     pub rank: i64,
-    /// True for `city` class (always shown); towns only appear when zoomed in.
+    /// True for `city` class (always shown); other labels only appear when zoomed in.
     pub city: bool,
-    /// Camera zoom below which this label is not worth the screen space. Cities are 0 (always),
-    /// towns 9, points of interest 13 — a POI at CONUS zoom is noise.
+    /// Standard road-sign shape for a route reference; street names use `None`.
+    pub shield: RoadShield,
+    /// Camera zoom below which this label is not worth the screen space.
     pub min_zoom: f32,
 }
 
@@ -110,20 +120,21 @@ fn tw(lx: f32, ly: f32, n: f64, tx: f64, ty: f64, extent: f64) -> lyon::math::Po
     lyon::math::point(wx as f32, wy as f32)
 }
 
+fn tile_point(lx: f32, ly: f32, extent: f64) -> lyon::math::Point {
+    lyon::math::point(lx / extent as f32, ly / extent as f32)
+}
+
 fn add_ring(
     b: &mut lyon::path::path::Builder,
     ring: &geo_types::LineString<f32>,
     closed: bool,
-    n: f64,
-    tx: f64,
-    ty: f64,
     extent: f64,
 ) {
     let mut it = ring.0.iter();
     if let Some(c0) = it.next() {
-        b.begin(tw(c0.x, c0.y, n, tx, ty, extent));
+        b.begin(tile_point(c0.x, c0.y, extent));
         for c in it {
-            b.line_to(tw(c.x, c.y, n, tx, ty, extent));
+            b.line_to(tile_point(c.x, c.y, extent));
         }
         b.end(closed);
     }
@@ -218,7 +229,7 @@ pub fn build_tile_with_theme(
 
     let mut fill_t = FillTessellator::new();
     let mut stroke_t = StrokeTessellator::new();
-    let px_to_world = 1.0 / (256.0 * 2f64.powf(tess_zoom));
+    let px_to_tile = n / (256.0 * 2f64.powf(tess_zoom));
     let theme_scale = crate::theme::vector_stroke_scale(theme);
 
     // Fills.
@@ -237,17 +248,17 @@ pub fn build_tile_with_theme(
             let mut any = false;
             match &f.geometry {
                 geo_types::Geometry::Polygon(p) => {
-                    add_ring(&mut b, p.exterior(), true, n, txf, tyf, extent);
+                    add_ring(&mut b, p.exterior(), true, extent);
                     for r in p.interiors() {
-                        add_ring(&mut b, r, true, n, txf, tyf, extent);
+                        add_ring(&mut b, r, true, extent);
                     }
                     any = true;
                 }
                 geo_types::Geometry::MultiPolygon(mp) => {
                     for p in &mp.0 {
-                        add_ring(&mut b, p.exterior(), true, n, txf, tyf, extent);
+                        add_ring(&mut b, p.exterior(), true, extent);
                         for r in p.interiors() {
-                            add_ring(&mut b, r, true, n, txf, tyf, extent);
+                            add_ring(&mut b, r, true, extent);
                         }
                         any = true;
                     }
@@ -264,9 +275,15 @@ pub fn build_tile_with_theme(
             let _ = fill_t.tessellate_path(
                 &path,
                 &opts,
-                &mut BuffersBuilder::new(&mut buf, |v: FillVertex| OverlayVertex {
-                    world: [v.position().x, v.position().y],
-                    color: fill,
+                &mut BuffersBuilder::new(&mut buf, |v: FillVertex| {
+                    let p = v.position();
+                    OverlayVertex {
+                        world: [
+                            ((txf + p.x as f64) / n) as f32,
+                            ((tyf + p.y as f64) / n) as f32,
+                        ],
+                        color: fill,
+                    }
                 }),
             );
             append(&mut verts, &mut indices, buf);
@@ -296,17 +313,17 @@ pub fn build_tile_with_theme(
             let Some((c, wpx)) = styled else {
                 continue;
             };
-            let w = (wpx as f64 * px_to_world * theme_scale as f64) as f32;
+            let w = (wpx as f64 * px_to_tile * theme_scale as f64) as f32;
             let mut b = Path::builder();
             let mut any = false;
             match &f.geometry {
                 geo_types::Geometry::LineString(ls) => {
-                    add_ring(&mut b, ls, false, n, txf, tyf, extent);
+                    add_ring(&mut b, ls, false, extent);
                     any = true;
                 }
                 geo_types::Geometry::MultiLineString(mls) => {
                     for ls in &mls.0 {
-                        add_ring(&mut b, ls, false, n, txf, tyf, extent);
+                        add_ring(&mut b, ls, false, extent);
                         any = true;
                     }
                 }
@@ -318,6 +335,7 @@ pub fn build_tile_with_theme(
             let path = b.build();
             let stroke = color(c);
             let opts = StrokeOptions::default()
+                .with_tolerance((px_to_tile * 0.25) as f32)
                 .with_line_width(w)
                 .with_line_cap(lyon::path::LineCap::Round)
                 .with_line_join(lyon::path::LineJoin::Round);
@@ -325,9 +343,15 @@ pub fn build_tile_with_theme(
             let _ = stroke_t.tessellate_path(
                 &path,
                 &opts,
-                &mut BuffersBuilder::new(&mut buf, |v: StrokeVertex| OverlayVertex {
-                    world: [v.position().x, v.position().y],
-                    color: stroke,
+                &mut BuffersBuilder::new(&mut buf, |v: StrokeVertex| {
+                    let p = v.position();
+                    OverlayVertex {
+                        world: [
+                            ((txf + p.x as f64) / n) as f32,
+                            ((tyf + p.y as f64) / n) as f32,
+                        ],
+                        color: stroke,
+                    }
                 }),
             );
             append(&mut verts, &mut indices, buf);
@@ -338,7 +362,7 @@ pub fn build_tile_with_theme(
     (verts, indices, labels)
 }
 
-/// Pull city/town point labels from the `place` layer.
+/// Pull place, road, and selected POI labels from the vector tile.
 fn extract_labels(
     reader: &Reader,
     names: &[String],
@@ -356,11 +380,9 @@ fn extract_labels(
         .unwrap_or(4096.0);
     let mut out = Vec::new();
     for f in reader.get_features(i).unwrap_or_default() {
-        let cls = prop(&f.properties, "class");
-        let city = cls == "city";
-        if !city && cls != "town" {
+        let Some((city, min_zoom)) = place_visibility(&prop(&f.properties, "class")) else {
             continue;
-        }
+        };
         let name = {
             let en = prop(&f.properties, "name:en");
             if en.is_empty() {
@@ -390,11 +412,169 @@ fn extract_labels(
                 name,
                 rank,
                 city,
-                min_zoom: if city { 0.0 } else { 9.0 },
+                shield: RoadShield::None,
+                min_zoom,
             });
         }
     }
+    out.extend(extract_airport_labels(reader, names, n, txf, tyf));
+    out.extend(extract_road_labels(reader, names, n, txf, tyf));
     out.extend(extract_pois(reader, names, n, txf, tyf));
+    out
+}
+
+fn extract_airport_labels(
+    reader: &Reader,
+    names: &[String],
+    n: f64,
+    txf: f64,
+    tyf: f64,
+) -> Vec<PlaceLabel> {
+    let Some(i) = names.iter().position(|nm| nm == "aerodrome_label") else {
+        return Vec::new();
+    };
+    let extent = reader
+        .get_layer_metadata()
+        .ok()
+        .and_then(|m| m.get(i).map(|l| l.extent as f64))
+        .unwrap_or(4096.0);
+    reader
+        .get_features(i)
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|f| {
+            if prop(&f.properties, "iata").is_empty() {
+                return None;
+            }
+            let name = ["name:en", "name_en", "name"]
+                .into_iter()
+                .map(|key| prop(&f.properties, key))
+                .find(|name| !name.is_empty())?;
+            let (px, py) = match &f.geometry {
+                geo_types::Geometry::Point(p) => Some((p.x(), p.y())),
+                geo_types::Geometry::MultiPoint(mp) => mp.0.first().map(|p| (p.x(), p.y())),
+                _ => None,
+            }?;
+            let p = tw(px, py, n, txf, tyf, extent);
+            Some(PlaceLabel {
+                world: [p.x, p.y],
+                name: format!("✈ {name}"),
+                rank: 80,
+                city: false,
+                shield: RoadShield::None,
+                min_zoom: 10.0,
+            })
+        })
+        .collect()
+}
+
+fn place_visibility(cls: &str) -> Option<(bool, f32)> {
+    match cls {
+        "city" => Some((true, 0.0)),
+        "town" => Some((false, 7.0)),
+        "village" => Some((false, 8.5)),
+        "suburb" | "neighbourhood" => Some((false, 11.5)),
+        _ => None,
+    }
+}
+
+fn road_label(
+    cls: &str,
+    network: &str,
+    name: String,
+    reference: String,
+) -> Option<(String, f32, i64, RoadShield)> {
+    let (min_zoom, rank, prefer_ref): (f32, i64, bool) = match cls {
+        "motorway" => (6.0, 100, true),
+        "trunk" => (7.0, 110, true),
+        "primary" => (8.0, 120, true),
+        "secondary" => (9.5, 130, true),
+        "tertiary" => (12.0, 140, false),
+        "minor" | "service" => (14.0, 160, false),
+        _ => (13.0, 150, false),
+    };
+    let shield = match network {
+        "us-interstate" => RoadShield::Interstate,
+        "us-highway" => RoadShield::Us,
+        "us-state" => RoadShield::State,
+        _ if !reference.is_empty() => RoadShield::Other,
+        _ => RoadShield::None,
+    };
+    let min_zoom = match shield {
+        RoadShield::Us => min_zoom.max(6.5),
+        RoadShield::State => min_zoom.max(7.5),
+        RoadShield::Other => min_zoom.max(9.0),
+        _ => min_zoom,
+    };
+    let label = if shield != RoadShield::None || prefer_ref && !reference.is_empty() {
+        reference
+    } else if !name.is_empty() {
+        name
+    } else {
+        reference
+    };
+    (!label.is_empty()).then_some((label, min_zoom, rank, shield))
+}
+
+fn road_anchor(geometry: &geo_types::Geometry<f32>) -> Option<(f32, f32)> {
+    let line = match geometry {
+        geo_types::Geometry::LineString(line) => Some(line),
+        geo_types::Geometry::MultiLineString(lines) => {
+            lines.0.iter().max_by_key(|line| line.0.len())
+        }
+        _ => None,
+    }?;
+    line.0.get(line.0.len() / 2).map(|p| (p.x, p.y))
+}
+
+/// OpenMapTiles supplies pre-selected road-name geometry in `transportation_name`, so labels use
+/// the same request/cache/collision path as place names.
+fn extract_road_labels(
+    reader: &Reader,
+    names: &[String],
+    n: f64,
+    txf: f64,
+    tyf: f64,
+) -> Vec<PlaceLabel> {
+    let Some(i) = names.iter().position(|nm| nm == "transportation_name") else {
+        return Vec::new();
+    };
+    let extent = reader
+        .get_layer_metadata()
+        .ok()
+        .and_then(|m| m.get(i).map(|l| l.extent as f64))
+        .unwrap_or(4096.0);
+    let mut out = Vec::new();
+    for f in reader.get_features(i).unwrap_or_default() {
+        let name = {
+            let en = prop(&f.properties, "name:en");
+            if en.is_empty() {
+                prop(&f.properties, "name")
+            } else {
+                en
+            }
+        };
+        let Some((name, min_zoom, rank, shield)) = road_label(
+            &prop(&f.properties, "class"),
+            &prop(&f.properties, "network"),
+            name,
+            prop(&f.properties, "ref"),
+        ) else {
+            continue;
+        };
+        let Some((px, py)) = road_anchor(&f.geometry) else {
+            continue;
+        };
+        let p = tw(px, py, n, txf, tyf, extent);
+        out.push(PlaceLabel {
+            world: [p.x, p.y],
+            name,
+            rank,
+            city: false,
+            shield,
+            min_zoom,
+        });
+    }
     out
 }
 
@@ -460,6 +640,7 @@ fn extract_pois(reader: &Reader, names: &[String], n: f64, txf: f64, tyf: f64) -
                 // Below every town: the collision pass drops these first when space runs out.
                 rank: 500,
                 city: false,
+                shield: RoadShield::None,
                 min_zoom: 14.0,
             });
         }
@@ -805,7 +986,8 @@ impl VectorTileManager {
                 // gunzip + lyon tessellation is the heaviest CPU in the app after the volume
                 // decode; running it on the async worker starves every other fetch.
                 blocking.spawn_blocking(move || {
-                    let (vertices, indices, labels) = build_tile_with_theme(&bytes, id, palette, tess_zoom, theme);
+                    let (vertices, indices, labels) =
+                        build_tile_with_theme(&bytes, id, palette, tess_zoom, theme);
                     let _ = tx.send(Ok(FetchedVector {
                         id,
                         vertices,
@@ -962,4 +1144,37 @@ mod tests {
             "https://x/planet/SNAP/7/30/49.pbf"
         );
     }
+
+    #[test]
+    fn road_labels_prefer_highway_refs_and_keep_street_names() {
+        assert_eq!(place_visibility("town"), Some((false, 7.0)));
+        assert_eq!(place_visibility("village"), Some((false, 8.5)));
+        assert_eq!(
+            road_label(
+                "motorway",
+                "us-interstate",
+                "Stemmons Freeway".into(),
+                "35E".into()
+            ),
+            Some(("35E".into(), 6.0, 100, RoadShield::Interstate))
+        );
+        assert_eq!(
+            road_label("trunk", "us-highway", String::new(), "281".into()),
+            Some(("281".into(), 7.0, 110, RoadShield::Us))
+        );
+        assert_eq!(
+            road_label("primary", "us-state", String::new(), "171".into()),
+            Some(("171".into(), 8.0, 120, RoadShield::State))
+        );
+        assert_eq!(
+            road_label("minor", "", "Main Street".into(), String::new()),
+            Some((
+                "Main Street".into(),
+                14.0,
+                160,
+                RoadShield::None
+            ))
+        );
+    }
+
 }

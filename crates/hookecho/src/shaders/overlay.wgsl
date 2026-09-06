@@ -30,3 +30,12 @@ fn vs_main(in: VsIn) -> VsOut {
 fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     return in.color;
 }
+
+fn gamma_from_linear(c: vec3<f32>) -> vec3<f32> {
+    return select(12.92 * c, 1.055 * pow(c, vec3<f32>(1.0 / 2.4)) - 0.055, c > vec3<f32>(0.0031308));
+}
+
+@fragment
+fn fs_main_gamma(in: VsOut) -> @location(0) vec4<f32> {
+    return vec4<f32>(gamma_from_linear(in.color.rgb), in.color.a);
+}

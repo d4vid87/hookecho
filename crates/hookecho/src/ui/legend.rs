@@ -49,15 +49,19 @@ pub fn draw_vertical(
     disp_factor: f32,
     disp_label: &str,
 ) {
-    const W: f32 = 16.0;
+    const W: f32 = 14.0;
+    const HEAD_H: f32 = 18.0;
     let (vmin, vmax) = match (table.stops.first(), table.stops.last()) {
         (Some(a), Some(b)) if b.value > a.value => (a.value, b.value),
         _ => moment.value_range(),
     };
     let span = (vmax - vmin).max(f32::EPSILON);
-    let bar = Rect::from_min_max(
-        egui::pos2(rect.right() - W - INSET, rect.top() + INSET + 32.0),
-        egui::pos2(rect.right() - INSET, rect.bottom() - INSET),
+    let bar = Rect::from_min_size(
+        egui::pos2(rect.right() - W - INSET, rect.top() + INSET + HEAD_H),
+        Vec2::new(
+            W,
+            (rect.height() - INSET * 2.0 - HEAD_H).min(300.0).max(1.0),
+        ),
     );
     let y_of = |value: f32| bar.bottom() - ((value - vmin) / span).clamp(0.0, 1.0) * bar.height();
     let col = |c: [u8; 4]| Color32::from_rgb(c[0], c[1], c[2]);
@@ -147,7 +151,7 @@ pub fn draw_vertical(
     match table.step.filter(|s| *s > 0.0) {
         Some(step) => {
             let tick_px = (step / span) * bar.height();
-            let label_stride = (18.0 / tick_px.max(0.1)).ceil().max(1.0) as i32;
+            let label_stride = (40.0 / tick_px.max(0.1)).ceil().max(1.0) as i32;
             let mut v = (vmin / step).ceil() * step;
             let mut n = 0;
             while v <= vmax && n < 128 {
@@ -169,29 +173,21 @@ pub fn draw_vertical(
             label(vmax, bar.top());
         }
     }
-    // Caption above the bar: product then units, small — the bar itself is the legend. Above,
-    // because the bottom end carries the busiest tick labels.
-    for (i, (text, size, color)) in [
-        (moment.short_name(), 10.0, Color32::WHITE),
-        (disp_label, 9.0, Color32::from_gray(200)),
-    ]
-    .into_iter()
-    .enumerate()
-    {
-        let at = egui::pos2(bar.center().x, bar.top() - 32.0 + i as f32 * 11.0);
-        for d in [Vec2::new(1.0, 1.0), Vec2::ZERO] {
-            painter.text(
-                at + d,
-                Align2::CENTER_TOP,
-                text,
-                FontId::proportional(size),
-                if d == Vec2::ZERO {
-                    color
-                } else {
-                    Color32::BLACK
-                },
-            );
-        }
+    // One compact caption; the bar and its labels carry the rest of the explanation.
+    let caption = format!("{} {}", moment.short_name(), disp_label);
+    let at = egui::pos2(bar.center().x, bar.top() - 15.0);
+    for d in [Vec2::new(1.0, 1.0), Vec2::ZERO] {
+        painter.text(
+            at + d,
+            Align2::CENTER_TOP,
+            &caption,
+            FontId::proportional(9.0),
+            if d == Vec2::ZERO {
+                Color32::WHITE
+            } else {
+                Color32::BLACK
+            },
+        );
     }
 }
 

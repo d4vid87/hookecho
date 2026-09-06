@@ -25,9 +25,7 @@ impl HookEchoApp {
             .unwrap_or_else(|| "no site".to_string());
         let age = self.views[self.active].volume.as_ref().map(|v| {
             let secs = (Utc::now() - v.time).num_seconds().max(0);
-            // A separator, not brackets: this label is laid out from the right edge and butts
-            // straight up against the clock, which is laid out from the left.
-            format!("\u{b7} {} ago", humanize(secs))
+            format!("Latest scan \u{b7} {} ago", humanize(secs))
         });
         let loading = self.views[self.active].loading;
         // Which mechanism is actually feeding the pane: the sweep-by-sweep chunk stream, or the
@@ -61,12 +59,13 @@ impl HookEchoApp {
         let dvr = self.dvr_depth();
         // Edited through a local so the pill closure keeps its single `&mut self.views` borrow.
         let mut loop_frames = self.settings.live_loop_frames;
+        let compact_live = self.views[self.active].timeline.following;
         // Where the scrubber lands, for the tour's spotlight (same reason: no `self` in there).
         let mut scrub_rect = None;
         // Wide enough for the track to be worth scrubbing, never so wide it spans a 4K map — and
         // never wider than the screen, which on a phone the 420 pt floor would otherwise be.
         let width = (self.chrome_rect.width() - 160.0)
-            .clamp(420.0, 900.0)
+            .clamp(420.0, if compact_live { 600.0 } else { 900.0 })
             .min(self.chrome_rect.width() - 16.0);
         // The phone's pill drops the two extras: the readouts fit a desktop row, not a 400 pt one,
         // and rain arrival has its own chip lane.
@@ -83,10 +82,21 @@ impl HookEchoApp {
                 egui::vec2(0.0, crate::ui::style::LANE_BOTTOM_CHIP),
             )
             .show(ctx, |ui| {
-                crate::ui::style::glass(ui, 238).show(ui, |ui| {
+                crate::ui::style::glass(ui, 238)
+                    .inner_margin(egui::Margin::symmetric(
+                        if compact_live { 10 } else { 12 },
+                        if compact_live { 4 } else { 9 },
+                    ))
+                    .show(ui, |ui| {
                 ui.set_width(width);
+                if compact_live {
+                    ui.spacing_mut().item_spacing = egui::vec2(4.0, 0.0);
+                }
                 let t = &mut self.views[self.active].timeline;
-                ui.horizontal(|ui| {
+                if t.slot_count() > 0 {
+                    scrub_rect = Some(track(ui, t, tz, accent, live_window, compact_live));
+                }
+                let row = ui.horizontal(|ui| {
                     // The phone says the site in its search pill; a second copy here is 60 pt of
                     // a 400 pt row spent saying it twice, and the clock loses that argument.
                     if !cfg!(target_os = "android") {
@@ -104,8 +114,11 @@ impl HookEchoApp {
                             egui::Color32::from_gray(225)
                         };
                         ui.add(
-                            egui::Button::new(egui::RichText::new(glyph).size(18.0).color(fg))
-                                .min_size(egui::vec2(30.0, 30.0))
+                            egui::Button::new(egui::RichText::new(glyph).size(16.0).color(fg))
+                                .min_size(egui::vec2(
+                                    if compact_live { 24.0 } else { 30.0 },
+                                    if compact_live { 24.0 } else { 30.0 },
+                                ))
                                 .fill(egui::Color32::TRANSPARENT)
                                 .stroke(egui::Stroke::NONE),
                         )
@@ -172,9 +185,11 @@ impl HookEchoApp {
                     if badge.clicked() {
                         go_head = true;
                     }
-                    // Right-click the badge for the knobs that used to sit in the toolbox's
-                    // Timeline section: which archive day, and how playback loops.
+                    // Right-click the badge, or use the calendar button, for archive and playback
+                    // settings. Both open this one existing menu.
+                    let timeline_popup = egui::Popup::default_response_id(&badge);
                     egui::Popup::context_menu(&badge)
+                        .anchor(&badge)
                         .align(egui::RectAlign::TOP_START)
                         .show(|ui| {
                             ui.set_min_width(240.0);
@@ -260,8 +275,7 @@ impl HookEchoApp {
                                 }
                             }
                         });
-                    // The clock and the two status readouts ride the top row with the
-                    // transport; the track gets a row to itself underneath.
+                    // The clock and status readouts share the broadcast row beneath the track.
                     let observed = t.frames.len();
                     if observed == 0 {
                         ui.weak(if t.listing {
@@ -292,12 +306,31 @@ impl HookEchoApp {
                         };
                         ui.label(
                             egui::RichText::new(readout)
-                                .size(12.0)
+                                .size(15.0)
+                                .strong()
                                 .monospace()
-                                .color(egui::Color32::from_gray(215)),
+                                .color(egui::Color32::from_gray(238)),
                         );
                     }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        let archive = ui
+                            .add(
+                                egui::Button::new(
+                                    egui::RichText::new(ph::CALENDAR_DOTS)
+                                        .size(18.0)
+                                        .color(egui::Color32::from_gray(225)),
+                                )
+                                .min_size(egui::vec2(
+                                    if compact_live { 24.0 } else { 30.0 },
+                                    if compact_live { 24.0 } else { 30.0 },
+                                ))
+                                .fill(egui::Color32::TRANSPARENT)
+                                .stroke(egui::Stroke::NONE),
+                            )
+                            .named("Archive and playback settings");
+                        if archive.clicked() {
+                            egui::Popup::toggle_id(ui.ctx(), timeline_popup);
+                        }
                         // "15.1y ago" next to an ARCHIVE 04/27 badge is the same fact twice, and
                         // on a phone the two of them plus the clock overrun the row and draw on
                         // top of each other. Scrubbed to the archive, the badge already carries
@@ -339,8 +372,8 @@ impl HookEchoApp {
                         }
                     });
                 });
-                if t.slot_count() > 0 {
-                    scrub_rect = Some(track(ui, t, tz, accent, live_window));
+                if let Some(rect) = &mut scrub_rect {
+                    *rect = rect.union(row.response.rect);
                 }
                 });
             });
@@ -373,17 +406,22 @@ fn track(
     tz: Option<wxdata::tz::Tz>,
     accent: egui::Color32,
     live_window: usize,
+    compact: bool,
 ) -> egui::Rect {
     let slots = t.slot_count();
     let (rect, resp) = ui.allocate_exact_size(
-        egui::vec2(ui.available_width(), 34.0),
+        egui::vec2(ui.available_width(), if compact { 10.0 } else { 34.0 }),
         egui::Sense::click_and_drag(),
     );
     let p = ui.painter_at(rect);
-    let bar = egui::Rect::from_min_max(
-        egui::pos2(rect.left(), rect.bottom() - 12.0),
-        egui::pos2(rect.right(), rect.bottom() - 6.0),
-    );
+    let bar = if compact {
+        egui::Rect::from_center_size(rect.center(), egui::vec2(rect.width(), 3.0))
+    } else {
+        egui::Rect::from_min_max(
+            egui::pos2(rect.left(), rect.bottom() - 12.0),
+            egui::pos2(rect.right(), rect.bottom() - 6.0),
+        )
+    };
     // Slot centres, so the first and last frames sit inside the track instead of half off it.
     let x_of = |i: usize| bar.left() + (i as f32 + 0.5) / slots as f32 * bar.width();
     p.rect_filled(bar, 3.0, egui::Color32::from_gray(60));
@@ -400,10 +438,12 @@ fn track(
             3.0,
             egui::Color32::from_rgba_unmultiplied(120, 170, 240, 90),
         );
-        p.line_segment(
-            [egui::pos2(x, rect.top() + 6.0), egui::pos2(x, bar.bottom())],
-            egui::Stroke::new(1.0, egui::Color32::from_rgb(120, 170, 240)),
-        );
+        if !compact {
+            p.line_segment(
+                [egui::pos2(x, rect.top() + 6.0), egui::pos2(x, bar.bottom())],
+                egui::Stroke::new(1.0, egui::Color32::from_rgb(120, 170, 240)),
+            );
+        }
     }
     // The live loop window: the stretch ▶ actually cycles through when pinned to live. Without
     // it, pressing play on a day of frames looks like it jumped backwards for no reason.
@@ -425,46 +465,57 @@ fn track(
         3.0,
         accent.gamma_multiply(0.8),
     );
-    let mut last_hour = None;
-    let mut last_label_x = f32::NEG_INFINITY;
-    for (i, id) in t.frames.iter().enumerate() {
-        let x = x_of(i);
-        p.line_segment(
-            [
-                egui::pos2(x, bar.top() - 3.0),
-                egui::pos2(x, bar.top() - 1.0),
-            ],
-            egui::Stroke::new(1.0, egui::Color32::from_gray(120)),
-        );
-        let Some(dt) = id.date_time() else { continue };
-        let hour = hour_key(dt, tz);
-        let turned = last_hour != Some(hour);
-        last_hour = Some(hour);
-        // Label the hour, not the volume: a five-minute clock on every tick is a smear. 96 px of
-        // clearance, and both ends have to fit inside the track or the pill clips them.
-        let half = 26.0;
-        if !turned || x - last_label_x < 96.0 || x - half < rect.left() || x + half > rect.right() {
-            continue;
+    if !compact {
+        let mut last_hour = None;
+        let mut last_label_x = f32::NEG_INFINITY;
+        for (i, id) in t.frames.iter().enumerate() {
+            let x = x_of(i);
+            p.line_segment(
+                [
+                    egui::pos2(x, bar.top() - 3.0),
+                    egui::pos2(x, bar.top() - 1.0),
+                ],
+                egui::Stroke::new(1.0, egui::Color32::from_gray(120)),
+            );
+            let Some(dt) = id.date_time() else { continue };
+            let hour = hour_key(dt, tz);
+            let turned = last_hour != Some(hour);
+            last_hour = Some(hour);
+            // Label the hour, not the volume: a five-minute clock on every tick is a smear. 96 px
+            // of clearance, and both ends have to fit inside the track or the pill clips them.
+            let half = 26.0;
+            if !turned
+                || x - last_label_x < 96.0
+                || x - half < rect.left()
+                || x + half > rect.right()
+            {
+                continue;
+            }
+            p.text(
+                egui::pos2(x, rect.top() + 1.0),
+                egui::Align2::CENTER_TOP,
+                hour_label(dt, tz),
+                egui::FontId::proportional(crate::ui::style::FONT_SM),
+                egui::Color32::from_gray(170),
+            );
+            p.line_segment(
+                [
+                    egui::pos2(x, bar.top() - 6.0),
+                    egui::pos2(x, bar.top() - 1.0),
+                ],
+                egui::Stroke::new(1.0, egui::Color32::from_gray(150)),
+            );
+            last_label_x = x;
         }
-        p.text(
-            egui::pos2(x, rect.top() + 1.0),
-            egui::Align2::CENTER_TOP,
-            hour_label(dt, tz),
-            egui::FontId::proportional(crate::ui::style::FONT_SM),
-            egui::Color32::from_gray(170),
-        );
-        p.line_segment(
-            [
-                egui::pos2(x, bar.top() - 6.0),
-                egui::pos2(x, bar.top() - 1.0),
-            ],
-            egui::Stroke::new(1.0, egui::Color32::from_gray(150)),
-        );
-        last_label_x = x;
     }
     let knob = egui::pos2(x_of(t.playhead), bar.center().y);
-    p.circle_filled(knob, 7.0, accent);
-    p.circle_stroke(knob, 7.0, egui::Stroke::new(1.0, egui::Color32::BLACK));
+    let knob_radius = if compact { 4.0 } else { 7.0 };
+    p.circle_filled(knob, knob_radius, accent);
+    p.circle_stroke(
+        knob,
+        knob_radius,
+        egui::Stroke::new(1.0, egui::Color32::BLACK),
+    );
 
     // Click anywhere on the track, or drag the knob: both are the same "put the playhead here".
     if resp.dragged() || resp.clicked() {

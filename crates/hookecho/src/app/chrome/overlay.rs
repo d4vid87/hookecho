@@ -7,10 +7,10 @@
 use super::*;
 use crate::ui::a11y::Named as _;
 
-/// The floating panel's geometry: left margin, top offset (clear of the search pill), width.
+/// The floating panel's geometry: left margin, top offset, width.
 const PANEL_X: f32 = 10.0;
-const PANEL_TOP: f32 = 58.0;
-const PANEL_W: f32 = 300.0;
+const PANEL_TOP: f32 = 10.0;
+const PANEL_W: f32 = 332.0;
 /// The control column sits inboard of the pane's color scale (`ui::legend`: a 16 px bar, its
 /// inset, and the value labels to its left), so the two never share pixels.
 const CONTROLS: egui::Vec2 = egui::vec2(-70.0, 44.0);
@@ -100,34 +100,14 @@ impl HookEchoApp {
         let sheets_layout = sheets(ctx);
         let mut sheet_close = false;
         let mut body = |ui: &mut egui::Ui| {
-            // Title on the same line as the tabs: the name is branding, not a section, and
-            // its own row plus separator cost 30 px of every screen height.
+            // One title and one way out. The previous brand + Data/Alerts tab row looked like
+            // three unrelated navigation systems before the actual layer controls even began.
             ui.horizontal(|ui| {
-                if !phone() {
-                    ui.label(
-                        egui::RichText::new("HookEcho")
-                            .size(13.0)
-                            .strong()
-                            .color(accent),
-                    );
-                    ui.add_space(4.0);
-                }
-                // Data | Alerts. `show_alert_panel` is the same flag the bell and the A hotkey
-                // flip, so every entry point lands on the same tab.
-                if ui.selectable_label(!alerts_tab, "Data").clicked() {
-                    alerts_tab = false;
-                }
-                let label = if alert_count == 0 {
-                    "Alerts".to_string()
-                } else {
-                    format!("Alerts ({alert_count})")
-                };
-                if ui.selectable_label(alerts_tab, label).clicked() {
-                    alerts_tab = true;
-                }
-                // Collapse, on the row it collapses. The floating button that brings the
-                // panel back lands in the same corner this one sits in. The sheet has a
-                // ✕ of its own, so the phone does not draw a second one.
+                ui.label(
+                    egui::RichText::new(if alerts_tab { "Alerts" } else { "Layers" })
+                        .size(crate::ui::style::FONT_LG)
+                        .strong(),
+                );
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if !phone()
                         && ui
@@ -143,15 +123,25 @@ impl HookEchoApp {
                     {
                         hide = true;
                     }
+                    let switch = if alerts_tab {
+                        format!("{}  Layers", egui_phosphor::regular::STACK)
+                    } else if alert_count == 0 {
+                        format!("{}  Alerts", egui_phosphor::regular::BELL)
+                    } else {
+                        format!("{}  Alerts  {alert_count}", egui_phosphor::regular::BELL)
+                    };
+                    if ui.small_button(switch).clicked() {
+                        alerts_tab = !alerts_tab;
+                    }
                 });
             });
-            ui.separator();
+            ui.add_space(6.0);
             if alerts_tab {
                 alert_hit = ui::alert_panel::body(ui, &feats, bounds, &mut muted);
                 return;
             }
             self.product_section(ui, &mut opts);
-            ui.separator();
+            ui.add_space(8.0);
             // A drag rewrites the order in place, so persist it when it moves.
             let order_was = self.settings.layer_order.clone();
             chosen = ui::layers_panel::body(
@@ -172,7 +162,7 @@ impl HookEchoApp {
                 |ui| {
                     // Knobs for the layers that are already on, drawn between the Radar group
                     // and the rest. Collapsed by default: the list is still the panel's job.
-                    egui::CollapsingHeader::new("Layer options")
+                    egui::CollapsingHeader::new("Active layer settings")
                         .default_open(false)
                         .show(ui, |ui| {
                             let glm_options = self.show_glm
@@ -245,10 +235,10 @@ impl HookEchoApp {
             }
             ui.add_space(4.0);
             // The set-once map knobs, and the app's own commands.
-            egui::CollapsingHeader::new("Map")
+            egui::CollapsingHeader::new("Map settings")
                 .default_open(false)
                 .show(ui, |ui| self.map_rows(ui, &mut opts));
-            egui::CollapsingHeader::new("App")
+            egui::CollapsingHeader::new("Application")
                 .default_open(false)
                 .show(ui, |ui| self.app_rows(ui));
         };
@@ -332,6 +322,9 @@ impl HookEchoApp {
     /// ponytail: the pill is a button, not a second search field. One query lives in the panel;
     /// two would need two states to keep in sync for no extra reach.
     pub(crate) fn search_pill(&mut self, ctx: &egui::Context) {
+        if self.panel_open {
+            return;
+        }
         let accent = crate::theme::accent(self.settings.theme);
         let mut anchor = None;
         // The phone's pill also carries the radar context — site and VCP — which the desktop keeps

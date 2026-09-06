@@ -48,8 +48,33 @@ pub(crate) fn matches(entries: &[PaletteEntry], query: &str) -> Vec<usize> {
     hits.into_iter().map(|(_, i)| i).collect()
 }
 
-/// Row height: one line, tall enough to stay a touch target on Android.
-const ROW_H: f32 = 28.0;
+/// Row height: one line, tall enough to scan without turning the panel into a wall.
+const ROW_H: f32 = 32.0;
+
+fn category_name(category: &str) -> &'static str {
+    match category {
+        "Radar" => "Radar products",
+        "National" => "National weather",
+        "Severe" => "Severe weather",
+        "Obs" => "Observations",
+        "Models" => "Forecast models",
+        "Reference" => "Map reference",
+        _ => "Tools",
+    }
+}
+
+fn category_glyph(category: &str) -> &'static str {
+    use egui_phosphor::regular as ph;
+    match category {
+        "Radar" => ph::BROADCAST,
+        "National" => ph::GLOBE,
+        "Severe" => ph::WARNING,
+        "Obs" => ph::THERMOMETER,
+        "Models" => ph::CHART_LINE,
+        "Reference" => ph::MAP_TRIFOLD,
+        _ => ph::WRENCH,
+    }
+}
 
 /// The row's icon, picked from the label and falling back to the category.
 ///
@@ -202,17 +227,16 @@ fn health_popup(ui: &mut egui::Ui, health: &SourceHealth) {
 fn row(ui: &mut egui::Ui, e: &PaletteEntry, accent: Color32, draggable: bool) -> Hit {
     let on = e.on.unwrap_or(false);
     let (fg, bg) = if on {
-        (accent, Color32::from_rgba_unmultiplied(255, 255, 255, 22))
-    } else {
         (
-            Color32::from_gray(216),
-            Color32::from_rgba_unmultiplied(255, 255, 255, 8),
+            accent,
+            Color32::from_rgba_unmultiplied(accent.r(), accent.g(), accent.b(), 24),
         )
+    } else {
+        (ui.visuals().text_color(), ui.visuals().faint_bg_color)
     };
-    let icon =
-        RichText::new(glyph(e))
-            .size(14.0)
-            .color(if on { accent } else { Color32::from_gray(150) });
+    let icon = RichText::new(glyph(e))
+        .size(14.0)
+        .color(if on { accent } else { ui.visuals().weak_text_color() });
     let mut clicked = false;
     let outer = ui
         .horizontal(|ui| {
@@ -253,7 +277,9 @@ fn row(ui: &mut egui::Ui, e: &PaletteEntry, accent: Color32, draggable: bool) ->
                     },
                 )
                 .inner;
-            if !e.desc.is_empty() {
+            if let Some(key) = &e.key {
+                resp = resp.on_hover_text(format!("{}\nShortcut: {key}", e.desc));
+            } else if !e.desc.is_empty() {
                 resp = resp.on_hover_text(e.desc);
             }
             clicked = resp.clicked();
@@ -263,33 +289,13 @@ fn row(ui: &mut egui::Ui, e: &PaletteEntry, accent: Color32, draggable: bool) ->
     // The button's rect, not the whole strip: it's what the chips are drawn against and what a
     // drop is tested on, and it covers everything but the grip.
     let resp = outer;
-    // Binding chip, left of where the state dot goes: the shortcut stays learnable from the row.
-    let health_w = if e.health.is_some() { 88.0 } else { 0.0 };
-    if let Some(key) = &e.key {
-        let info_w = if crate::ui::glossary::explains(&e.label).is_some() {
-            14.0
-        } else {
-            0.0
-        };
-        let dx = if e.on.is_some() { -22.0 } else { -8.0 } - info_w - health_w;
-        ui.painter().text(
-            resp.rect.right_center() + vec2(dx, 0.0),
-            egui::Align2::RIGHT_CENTER,
-            key,
-            egui::FontId::monospace(10.0),
-            Color32::from_gray(140),
-        );
-    }
     // ⓘ for a row whose label names a term the glossary defines, drawn over the button the same
-    // way the key chip and the state dot are. Clicking it explains instead of toggling: the
+    // way the state dot is. Clicking it explains instead of toggling: the
     // person who doesn't know what MESH is is not the person who wants it turned on yet.
     let mut explain = None;
     if let Some(term) = crate::ui::glossary::explains(&e.label) {
-        let at = resp.rect.right_center()
-            + vec2(
-                if e.on.is_some() { -34.0 } else { -20.0 } - health_w,
-                0.0,
-            );
+        let has_state = e.on.is_some() || e.health.is_some();
+        let at = resp.rect.right_center() + vec2(if has_state { -30.0 } else { -12.0 }, 0.0);
         ui.painter().text(
             at,
             egui::Align2::CENTER_CENTER,
@@ -308,31 +314,15 @@ fn row(ui: &mut egui::Ui, e: &PaletteEntry, accent: Color32, draggable: bool) ->
             explain = Some(term);
         }
     }
-    // Network health replaces the ordinary on-dot while a layer is enabled. Its age stays visible;
-    // the details are one small click target rather than another permanent panel.
+    // Network health replaces the ordinary on-dot. Age and errors live in the click popup instead
+    // of making every row carry a miniature status report.
     if let Some(health) = &e.health {
         let state = health.state();
         let (_, color) = health_look(state);
-        let age = health
-            .last_success
-            .or(health.last_attempt)
-            .map_or_else(|| "--".into(), compact_age);
-        let text = if state == HealthState::Failed && health.last_success.is_some() {
-            format!("{age} degraded")
-        } else {
-            age
-        };
         let dot = resp.rect.right_center() + vec2(-10.0, 0.0);
         ui.painter().circle_filled(dot, 3.5, color);
-        ui.painter().text(
-            dot + vec2(-8.0, 0.0),
-            egui::Align2::RIGHT_CENTER,
-            text,
-            egui::FontId::monospace(9.0),
-            Color32::from_gray(155),
-        );
         let hit_rect = egui::Rect::from_min_max(
-            egui::pos2(resp.rect.right() - health_w, resp.rect.top()),
+            egui::pos2(resp.rect.right() - 24.0, resp.rect.top()),
             resp.rect.right_bottom(),
         );
         let health_resp = ui
@@ -343,13 +333,12 @@ fn row(ui: &mut egui::Ui, e: &PaletteEntry, accent: Color32, draggable: bool) ->
             clicked = false;
         }
         egui::Popup::menu(&health_resp).show(|ui| health_popup(ui, health));
-    } else if let Some(on) = e.on {
-        // State dot, drawn over the button's right edge (a nested layout inside a Button isn't a
-        // thing).
+    } else if on {
+        // Only enabled rows need a state dot; gray dots on every disabled row were visual noise.
         ui.painter().circle_filled(
             resp.rect.right_center() + vec2(-10.0, 0.0),
             3.5,
-            if on { accent } else { Color32::from_gray(90) },
+            accent,
         );
     }
     Hit {
@@ -385,14 +374,20 @@ pub(crate) fn body(
         );
         let field = ui.add(
             egui::TextEdit::singleline(query)
-                .hint_text("Search layers, tools, places…")
+                .hint_text("Search layers, tools, or places")
                 .desired_width(ui.available_width() - 4.0),
         );
         if focus_search {
             field.request_focus();
         }
     });
-    ui.add_space(4.0);
+    ui.add_space(8.0);
+    ui.label(
+        RichText::new("BROWSE")
+            .size(10.0)
+            .color(ui.visuals().weak_text_color()),
+    );
+    ui.add_space(3.0);
     let order = matches(entries, query);
     // Enter runs the top-ranked match. Type-and-Enter was the whole point of the command palette
     // this drawer replaced; without it the search box is a filter, not a launcher.
@@ -425,10 +420,8 @@ pub(crate) fn body(
                 }
                 return;
             }
-            // Not searching: one collapsible group per category, only Radar open. Seven headers
-            // fit on screen at once, so the whole app is visible as an outline instead of as a
-            // scroll. This replaces the category pills *and* the per-category "Show all"
-            // expander — three scoping controls were two too many.
+            // Not searching: one collapsed group per category. Seven headers fit on screen at
+            // once, so the whole app is visible as an outline instead of a wall of controls.
             for cat in CATEGORIES {
                 let mut in_cat: Vec<usize> = order
                     .iter()
@@ -445,13 +438,26 @@ pub(crate) fn body(
                     (dragged.unwrap_or(usize::MAX), !entries[*i].common)
                 });
                 let seq: Vec<String> = in_cat.iter().map(|i| entries[*i].label.clone()).collect();
-                let head = RichText::new(format!("{cat}  ({})", in_cat.len()))
-                    .size(12.0)
-                    .strong()
-                    .color(accent);
+                let active = in_cat
+                    .iter()
+                    .filter(|i| entries[**i].on == Some(true))
+                    .count();
+                let status = if active == 0 {
+                    String::new()
+                } else {
+                    format!("  ·  {active} on")
+                };
+                let head = RichText::new(format!(
+                    "{}  {}{}",
+                    category_glyph(cat),
+                    category_name(cat),
+                    status
+                ))
+                .size(13.0)
+                .strong();
                 egui::CollapsingHeader::new(head)
                     .id_salt(("cat", cat))
-                    .default_open(cat == "Radar")
+                    .default_open(false)
                     .show_unindented(ui, |ui| {
                         for i in in_cat {
                             let Hit {
@@ -536,8 +542,7 @@ fn fade_out_bottom(ui: &mut egui::Ui, out: &egui::scroll_area::ScrollAreaOutput<
 mod tests {
     use super::*;
 
-    /// Tiering must never hide a row for good: the "Show all" expander and the search box both
-    /// read the same registry, so every non-common entry has to still be in it.
+    /// Grouping must never hide a row for good: every specialist entry remains searchable.
     #[test]
     fn every_entry_is_reachable_from_the_registry() {
         let entries = [

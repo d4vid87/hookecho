@@ -68,6 +68,7 @@ impl Category {
 /// are provider raster tiles, available only when the matching Settings API key is set.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum BasemapStyle {
+    #[default]
     Dark,
     Light,
     Satellite,
@@ -131,10 +132,7 @@ pub enum BasemapStyle {
     EsriStreets,
     EsriTopo,
     UsgsTopo,
-    /// USGS aerial imagery with the topographic map drawn over it. The shipped default: keyless,
-    /// so it works on a fresh install with no account anywhere, and it reads as terrain rather
-    /// than as an abstraction, which is what a radar echo needs to sit on top of.
-    #[default]
+    /// USGS aerial imagery with the topographic map drawn over it.
     UsgsImageryTopo,
     OsmHot,
     CyclOsm,
@@ -231,8 +229,8 @@ impl BasemapStyle {
     pub const COMMON: [BasemapStyle; 8] = [
         // The shipped default leads: a phone's quick chips are the only basemap UI most people
         // will use, and a default they cannot get back to from there is not much of a default.
-        BasemapStyle::UsgsImageryTopo,
         BasemapStyle::Dark,
+        BasemapStyle::UsgsImageryTopo,
         BasemapStyle::Light,
         BasemapStyle::EsriImagery,
         BasemapStyle::OsmStandard,
@@ -264,7 +262,7 @@ impl BasemapStyle {
 
     pub fn label(self) -> &'static str {
         match self {
-            BasemapStyle::Dark => "Dark",
+            BasemapStyle::Dark => "Dark Streets",
             BasemapStyle::Light => "Light",
             BasemapStyle::Satellite => "USGS Imagery",
             BasemapStyle::None => "None",
@@ -2089,18 +2087,18 @@ mod tests {
     #[test]
     fn the_default_basemap_ships_usable() {
         let d = BasemapStyle::default();
-        assert_eq!(d, BasemapStyle::UsgsImageryTopo);
-        assert_eq!(d.slug(), "usgs-imagery-topo");
+        assert_eq!(d, BasemapStyle::Dark);
+        assert_eq!(d.slug(), "dark");
         // Keyless: `available` says yes with no Mapbox key, no MapTiler key, no custom template.
         assert!(d.available(false, false, false));
-        // It draws something. `url` returning None would mean the vector path, which this is not.
-        let url = d
-            .url(6, 14, 24, false, "", "", "")
-            .expect("the default basemap must resolve to a tile URL");
-        // The host the browser build fetches through must be one the proxy will pass.
-        assert!(url.starts_with("https://basemap.nationalmap.gov/"), "{url}");
+        // One vector source supplies the dark ground, streets and labels; no second raster layer.
+        assert!(!d.is_raster());
+        assert_eq!(
+            d.vector_palette(),
+            Some(crate::basemap_style::Palette::Dark)
+        );
         // Reachable from the phone's quick chips, and named short enough to fit one.
-        assert!(BasemapStyle::COMMON.contains(&d));
+        assert_eq!(BasemapStyle::COMMON[0], d);
         assert!(d.short_label().len() <= 14, "{}", d.short_label());
     }
 

@@ -69,14 +69,14 @@ const C_DARK: Colors = Colors {
     park: 0x152018,
     residential: 0x16181d,
     building: 0x1d2028,
-    motorway: 0x3d4450,
-    primary: 0x353c47,
-    secondary: 0x2c323b,
-    minor: 0x23282f,
-    rail: 0x2a2f36,
-    admin2: 0x5a6470,
-    admin4: 0x3a424c,
-    county: 0x2f353d,
+    motorway: 0x89939f,
+    primary: 0x737e8a,
+    secondary: 0x626d79,
+    minor: 0x596571,
+    rail: 0x343b44,
+    admin2: 0x707b88,
+    admin4: 0x4b5561,
+    county: 0x3b434d,
     casing: 0x0d1015,
 };
 const C_LIGHT: Colors = Colors {
@@ -308,9 +308,9 @@ pub fn stroke(p: Palette, layer: &str, class: &str) -> Option<([u8; 4], f32)> {
         // a city into a white smear.
         let (c, w) = match layer {
             "transportation" => match class {
-                "motorway" | "trunk" => (0xffe9a8, 2.6),
-                "primary" => (0xfff4d2, 2.0),
-                "secondary" | "tertiary" => (0xf0f0f0, 1.4),
+                "motorway" | "trunk" => (0xffe9a8, 4.6),
+                "primary" => (0xfff4d2, 3.8),
+                "secondary" | "tertiary" => (0xf0f0f0, 3.0),
                 _ => return None,
             },
             "boundary" => match class {
@@ -330,15 +330,15 @@ pub fn stroke(p: Palette, layer: &str, class: &str) -> Option<([u8; 4], f32)> {
     let water = k.water;
     let (c, w) = match layer {
         "transportation" => match class {
-            "motorway" => (motorway, 2.2),
-            "trunk" => (motorway, 1.9),
-            "primary" => (primary, 1.6),
-            "secondary" => (secondary, 1.3),
-            "tertiary" => (secondary, 1.05),
-            "minor" | "street" => (minor, 0.85),
-            "service" | "track" => (minor, 0.55),
-            "path" | "footway" | "cycleway" | "pedestrian" => (minor, 0.4),
-            "rail" | "transit" => (rail, 0.8),
+            "motorway" => (motorway, 4.0),
+            "trunk" => (motorway, 3.6),
+            "primary" => (primary, 3.2),
+            "secondary" => (secondary, 2.8),
+            "tertiary" => (secondary, 2.4),
+            "minor" | "street" => (minor, 2.0),
+            "service" | "track" => (minor, 1.5),
+            "path" | "footway" | "cycleway" | "pedestrian" => (minor, 0.9),
+            "rail" | "transit" => (rail, 0.9),
             _ => return None,
         },
         "aeroway" => (rail, 1.4),

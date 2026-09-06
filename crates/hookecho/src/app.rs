@@ -1669,10 +1669,9 @@ pub(crate) struct PaletteEntry {
     pub on: Option<bool>,
     /// One line of plain English. Jargon labels ("AzShear (0–2 km)") mean nothing on their own.
     pub desc: &'static str,
-    /// Shown before the "Show all" expander. Everything else is one click further in — never gone.
+    /// Everyday entries sort before specialist entries inside their group.
     pub common: bool,
-    /// The key bound to this action, if any — drawn as a chip on the row so the shortcut is
-    /// learnable from the place you already click.
+    /// The key bound to this action, if any — included in the row's hover help.
     pub key: Option<String>,
     /// Current network health. Disabled, static and local-only rows deliberately carry none.
     pub health: Option<SourceHealth>,
@@ -4423,76 +4422,6 @@ impl HookEchoApp {
         let elev = *v.volume.as_ref()?.elevations.get(v.tilt)? as f64;
         let (km, _) = crate::geo::great_circle([site.longitude as f64, site.latitude as f64], ll);
         Some(wxdata::xsection::beam_height_km(km, elev) * 3280.84)
-    }
-
-    /// Every moment this volume carries, at the gate under `(lon, lat)`, plus where that gate
-    /// is: azimuth and range from the radar, and how high the beam is there.
-    ///
-    /// The height is the part people forget. A 60 dBZ reading 90 km out on the 0.5 degree cut is
-    /// 1.5 km up, so it is not what is reaching the ground, and a velocity couplet is only a
-    /// low-level couplet if the beam is low. Showing the number without the height invites the
-    /// wrong reading of it.
-    ///
-    /// Returns `None` when the pointer is off the sweep entirely, so hovering empty map says
-    /// nothing rather than flashing an empty tooltip.
-    fn gate_readout(&mut self, idx: usize, lon: f64, lat: f64) -> Option<String> {
-        let tilt = self.views[idx].tilt;
-        let active = self.views[idx].moment;
-        let dealias = self.settings.dealias_velocity;
-        let carried = self.views[idx].volume.as_ref()?.moments;
-        let vol = self.views[idx].volume.as_mut()?;
-
-        // The active moment leads — it is the one being looked at — then the rest in the usual
-        // product order, skipping any this volume does not carry.
-        let order = std::iter::once(active)
-            .chain(Moment::ALL.into_iter().filter(|m| *m != active))
-            .filter(|m| carried[m.index()]);
-
-        let mut lines: Vec<String> = Vec::new();
-        let mut where_at: Option<String> = None;
-        for m in order {
-            // Velocity is read dealiased when the display is dealiased, or the number under the
-            // cursor would disagree with the colour over it.
-            let want_dealias = dealias && m == Moment::Velocity;
-            let Ok(sweep) = vol.binned(m, tilt, want_dealias) else {
-                continue;
-            };
-            let Some(g) = sweep.sample_at(lon, lat) else {
-                continue;
-            };
-            if where_at.is_none() {
-                where_at = Some(format!(
-                    "{:.0}\u{b0} at {:.0} km \u{b7} beam {:.0} ft",
-                    g.azimuth_deg,
-                    g.range_km,
-                    sweep.beam_height_ft(g.range_km)
-                ));
-            }
-            let name = crate::products::info(m).short;
-            let units = m.units();
-            let value = match (g.value, g.folded) {
-                (Some(v), _) => {
-                    let precision = if m == Moment::CorrelationCoefficient {
-                        3
-                    } else {
-                        1
-                    };
-                    if units.is_empty() {
-                        format!("{v:.*}", precision)
-                    } else {
-                        format!("{v:.*} {units}", precision)
-                    }
-                }
-                // "Range folded" and "nothing here" look identical on the map and mean opposite
-                // things, so the readout is where the difference gets said out loud.
-                (None, true) => "range folded".to_string(),
-                (None, false) => "\u{2014}".to_string(),
-            };
-            let marker = if m == active { "\u{25b8} " } else { "  " };
-            lines.push(format!("{marker}{name:<4}{value}"));
-        }
-        let where_at = where_at?;
-        Some(format!("{where_at}\n{}", lines.join("\n")))
     }
 
     /// Chime when a new volume lands on the live pane you are watching — the "look up" cue for
@@ -7424,12 +7353,10 @@ impl HookEchoApp {
     /// Sidebar header: the site, what you're looking at, its tilt, and the per-product knobs.
     ///
     /// The product list itself is the tree's Radar category (with a plain-English blurb per row);
-    /// this section owns everything about the *current* product — the tilt strip and the expert
+    /// this section owns everything about the *current* product — the tilt picker and the expert
     /// options that used to hide in the toolbox. All of it writes the same fields the hotkeys do.
     fn product_section(&mut self, ui: &mut egui::Ui, actions: &mut ui::layer_options::UiActions) {
         use crate::ui::style;
-        /// Height reserved for the tilt row whether or not a volume is loaded.
-        const TILT_ROW_H: f32 = 24.0;
         let (moment, srv, tilt) = {
             let v = &self.views[self.active];
             (v.moment, v.srv, v.tilt)
@@ -7461,42 +7388,49 @@ impl HookEchoApp {
         let mut thr = self.views[self.active].thresholds[mi];
         let (vmin, vmax) = moment.value_range();
         let (unit_factor, unit_label) = display_units(moment, &self.settings);
-        let head_rect = ui
-            .horizontal(|ui| {
-                if ui
-                    .button(format!("{}  {site}", egui_phosphor::regular::BROADCAST))
-                    .on_hover_text("Choose the radar site")
-                    .clicked()
-                {
-                    actions.open_site_dialog = true;
-                }
-                ui.label(
-                    egui::RichText::new(crate::products::name(moment, srv))
-                        .size(style::FONT_BASE)
-                        .strong(),
-                );
-            })
-            .response
-            .rect;
-        // Always one line, always present: a wrapping row reflowed between 9- and 14-tilt VCPs and
-        // vanished entirely between volumes, which slid the whole layer tree below it up and down.
-        // A fixed-height horizontal scroll keeps the sidebar still and scrolls the extra tilts.
-        let tilt_rect = ui
-            .scope(|ui| {
-                ui.set_height(TILT_ROW_H);
-                egui::ScrollArea::horizontal()
-                    .id_salt("tilt_row")
-                    .show(ui, |ui| {
-                        ui.horizontal(|ui| {
-                            ui.label(
-                                egui::RichText::new("Tilt")
-                                    .size(style::FONT_SM)
-                                    .color(egui::Color32::from_gray(150)),
-                            )
-                            .on_hover_text("How high above the ground the beam is looking");
-                            if elevations.is_empty() {
-                                ui.weak("\u{2014}");
-                            }
+        let product_rect = egui::Frame::new()
+            .fill(ui.visuals().faint_bg_color)
+            .corner_radius(style::RADIUS_SM)
+            .inner_margin(egui::Margin::symmetric(10, 8))
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.vertical(|ui| {
+                        ui.label(
+                            egui::RichText::new("CURRENT RADAR")
+                                .size(style::FONT_SM)
+                                .color(ui.visuals().weak_text_color()),
+                        );
+                        ui.label(
+                            egui::RichText::new(crate::products::name(moment, srv))
+                                .size(style::FONT_LG)
+                                .strong(),
+                        );
+                    });
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui
+                            .button(format!("{}  {site}", egui_phosphor::regular::BROADCAST))
+                            .on_hover_text("Choose the radar site")
+                            .clicked()
+                        {
+                            actions.open_site_dialog = true;
+                        }
+                    });
+                });
+                ui.add_space(6.0);
+                ui.horizontal(|ui| {
+                    ui.label(
+                        egui::RichText::new("Elevation")
+                            .size(style::FONT_SM)
+                            .color(ui.visuals().weak_text_color()),
+                    )
+                    .on_hover_text("How high above the ground the beam is looking");
+                    let selected = elevations
+                        .get(tilt)
+                        .map_or_else(|| "Loading…".to_string(), |a| format!("{a:.1}\u{b0}"));
+                    egui::ComboBox::from_id_salt("tilt_picker")
+                        .selected_text(selected)
+                        .width(78.0)
+                        .show_ui(ui, |ui| {
                             for (i, angle) in elevations.iter().enumerate() {
                                 if ui
                                     .selectable_label(i == tilt, format!("{angle:.1}\u{b0}"))
@@ -7506,69 +7440,72 @@ impl HookEchoApp {
                                 }
                             }
                         });
+                });
+                egui::CollapsingHeader::new("Product settings")
+                    .default_open(false)
+                    .show(ui, |ui| {
+                        if moment == wxdata::level2::Moment::Reflectivity {
+                            ui.checkbox(&mut precip_tint, "Tint by precipitation type")
+                                .on_hover_text(
+                                    "Colour the echo blue where it is falling as snow and pink \
+                                     where it is freezing rain or sleet, from the MRMS surface \
+                                     type. Reflectivity alone cannot tell them apart.",
+                                );
+                        }
+                        if moment == wxdata::level2::Moment::Velocity {
+                            ui.checkbox(&mut dealias, "Dealias").on_hover_text(
+                                "Unfold aliased velocity (region-based dealiasing)",
+                            );
+                            ui.checkbox(&mut srv_on, "Storm-relative");
+                            if srv_on {
+                                ui.horizontal(|ui| {
+                                    ui.label("Motion:");
+                                    ui.add(
+                                        egui::DragValue::new(&mut dir_deg)
+                                            .range(0.0..=359.0)
+                                            .suffix("\u{b0}"),
+                                    );
+                                    ui.add(
+                                        egui::DragValue::new(&mut speed_kt)
+                                            .range(0.0..=150.0)
+                                            .suffix(" kt"),
+                                    );
+                                });
+                                if ui
+                                    .button("From storm cells")
+                                    .on_hover_text(
+                                        "Set motion to the SCIT storm-cell mean (needs L3 storm cells)",
+                                    )
+                                    .clicked()
+                                {
+                                    srv_from_cells = true;
+                                }
+                            }
+                        }
+                        // Threshold for the active moment. The slider value stays internal (m/s
+                        // for velocity); display honors the Units setting.
+                        let f = unit_factor as f64;
+                        ui.horizontal(|ui| {
+                            ui.checkbox(&mut thr_on, "Threshold").on_hover_text(
+                                "Hide everything below a value \u{2014} cuts light rain out of the picture",
+                            );
+                            if thr_on {
+                                let t = thr.get_or_insert((vmin + vmax) * 0.5);
+                                ui.add(
+                                    egui::Slider::new(t, vmin..=vmax)
+                                        .custom_formatter(move |v, _| format!("{:.0}", v * f))
+                                        .custom_parser(move |s| {
+                                            s.parse::<f64>().ok().map(|x| x / f)
+                                        })
+                                        .suffix(unit_label),
+                                );
+                            }
+                        });
                     });
             })
             .response
             .rect;
-        self.tour_anchors.product = Some(head_rect.union(tilt_rect));
-        egui::CollapsingHeader::new("Product options")
-            .default_open(false)
-            .show(ui, |ui| {
-                if moment == wxdata::level2::Moment::Reflectivity {
-                    ui.checkbox(&mut precip_tint, "Tint by precipitation type")
-                        .on_hover_text(
-                            "Colour the echo blue where it is falling as snow and pink where \
-                             it is freezing rain or sleet, from the MRMS surface type. \
-                             Reflectivity alone cannot tell them apart.",
-                        );
-                }
-                if moment == wxdata::level2::Moment::Velocity {
-                    ui.checkbox(&mut dealias, "Dealias")
-                        .on_hover_text("Unfold aliased velocity (region-based dealiasing)");
-                    ui.checkbox(&mut srv_on, "Storm-relative");
-                    if srv_on {
-                        ui.horizontal(|ui| {
-                            ui.label("Motion:");
-                            ui.add(
-                                egui::DragValue::new(&mut dir_deg)
-                                    .range(0.0..=359.0)
-                                    .suffix("\u{b0}"),
-                            );
-                            ui.add(
-                                egui::DragValue::new(&mut speed_kt)
-                                    .range(0.0..=150.0)
-                                    .suffix(" kt"),
-                            );
-                        });
-                        if ui
-                            .button("From storm cells")
-                            .on_hover_text(
-                                "Set motion to the SCIT storm-cell mean (needs L3 storm cells)",
-                            )
-                            .clicked()
-                        {
-                            srv_from_cells = true;
-                        }
-                    }
-                }
-                // Threshold for the active moment. The slider value stays internal (m/s for
-                // velocity); display honors the Units setting.
-                let f = unit_factor as f64;
-                ui.horizontal(|ui| {
-                    ui.checkbox(&mut thr_on, "Threshold").on_hover_text(
-                        "Hide everything below a value \u{2014} cuts light rain out of the picture",
-                    );
-                    if thr_on {
-                        let t = thr.get_or_insert((vmin + vmax) * 0.5);
-                        ui.add(
-                            egui::Slider::new(t, vmin..=vmax)
-                                .custom_formatter(move |v, _| format!("{:.0}", v * f))
-                                .custom_parser(move |s| s.parse::<f64>().ok().map(|x| x / f))
-                                .suffix(unit_label),
-                        );
-                    }
-                });
-            });
+        self.tour_anchors.product = Some(product_rect);
 
         if let Some(i) = pick_tilt {
             self.views[self.active].tilt = i;
@@ -11533,19 +11470,6 @@ impl HookEchoApp {
             Vec::new()
         };
 
-        // Radar values under the cursor. Computed here, before the long immutable borrow of the
-        // pane below, because sampling the volume needs it mutably — the binned sweeps are
-        // cached on it as they are asked for.
-        let gate_tooltip = (self.tool == MapTool::Interrogate && self.views[idx].show_radar)
-            .then(|| {
-                let hp = response.hover_pos().filter(|p| prect.contains(*p))?;
-                let cam = self.views[idx].camera;
-                let w = cam.screen_to_world((hp.x - prect.left(), hp.y - prect.top()), vp);
-                let (lon, lat) = crate::render::mercator::world_to_lonlat(w.0, w.1);
-                self.gate_readout(idx, lon, lat)
-            })
-            .flatten();
-
         // --- Painter overlays (clipped to this pane) ---
         let painter = ui.painter_at(prect);
         let view = &self.views[idx];
@@ -11613,14 +11537,23 @@ impl HookEchoApp {
                 )
             };
             let z = cam.zoom;
+            let repeat_shields = z >= 8.0;
             let mut labels: Vec<&crate::vector_tiles::PlaceLabel> =
                 vlabels.iter().filter(|l| z >= l.min_zoom as f64).collect();
+            let label_key = |l: &crate::vector_tiles::PlaceLabel| {
+                let key = crate::labelplace::key(&l.name);
+                if repeat_shields && l.shield != crate::vector_tiles::RoadShield::None {
+                    key ^ ((l.world[0].to_bits() as u64) << 32) ^ l.world[1].to_bits() as u64
+                } else {
+                    key
+                }
+            };
             // Labels already on screen are offered their slot before newcomers of the same
             // importance; without that a name at the edge of a collision wins and loses on
             // alternate frames, which is exactly the flicker you see while panning.
             labels.sort_by_key(|l| {
                 (
-                    !self.labels.was_shown(crate::labelplace::key(&l.name)),
+                    !self.labels.was_shown(label_key(l)),
                     !l.city,
                     l.rank,
                 )
@@ -11638,7 +11571,9 @@ impl HookEchoApp {
                 egui::vec2(-1.0, -1.0),
             ];
             for l in labels {
-                if !seen.insert(l.name.as_str()) {
+                if (l.shield == crate::vector_tiles::RoadShield::None || !repeat_shields)
+                    && !seen.insert(l.name.as_str())
+                {
                     continue;
                 }
                 let (sx, sy) = cam.world_to_screen((l.world[0] as f64, l.world[1] as f64), vp);
@@ -11646,11 +11581,134 @@ impl HookEchoApp {
                 if !prect.contains(p) {
                     continue;
                 }
+                if l.shield != crate::vector_tiles::RoadShield::None {
+                    use crate::vector_tiles::RoadShield;
+                    let (height, pad, text_color) = match l.shield {
+                        RoadShield::Interstate => (25.0, 10.0, egui::Color32::WHITE),
+                        RoadShield::Us => (22.0, 11.0, egui::Color32::BLACK),
+                        RoadShield::State => (19.0, 9.0, egui::Color32::BLACK),
+                        RoadShield::Other => (17.0, 7.0, egui::Color32::BLACK),
+                        RoadShield::None => unreachable!(),
+                    };
+                    let galley = painter.layout_no_wrap(
+                        l.name.clone(),
+                        egui::FontId::proportional(big - 2.5),
+                        text_color,
+                    );
+                    let r = egui::Rect::from_center_size(
+                        p,
+                        egui::vec2((galley.size().x + pad).max(height), height),
+                    );
+                    if !self.labels.place(
+                        label_key(l),
+                        r.expand(3.0),
+                        crate::labelplace::Priority::Place,
+                    ) {
+                        continue;
+                    }
+                    match l.shield {
+                        RoadShield::Interstate => {
+                            let shield = |rect: egui::Rect| {
+                                vec![
+                                    egui::pos2(rect.left() + 3.0, rect.top() + 2.0),
+                                    egui::pos2(rect.center().x, rect.top()),
+                                    egui::pos2(rect.right() - 3.0, rect.top() + 2.0),
+                                    egui::pos2(rect.right(), rect.top() + 7.0),
+                                    egui::pos2(rect.right() - 1.0, rect.bottom() - 7.0),
+                                    egui::pos2(rect.right() - 4.0, rect.bottom() - 3.0),
+                                    egui::pos2(rect.center().x, rect.bottom()),
+                                    egui::pos2(rect.left() + 4.0, rect.bottom() - 3.0),
+                                    egui::pos2(rect.left() + 1.0, rect.bottom() - 7.0),
+                                    egui::pos2(rect.left(), rect.top() + 7.0),
+                                ]
+                            };
+                            painter.add(egui::Shape::convex_polygon(
+                                shield(r),
+                                egui::Color32::WHITE,
+                                egui::Stroke::NONE,
+                            ));
+                            let inner = r.shrink(1.2);
+                            painter.add(egui::Shape::convex_polygon(
+                                shield(inner),
+                                egui::Color32::from_rgb(38, 67, 145),
+                                egui::Stroke::NONE,
+                            ));
+                            painter.add(egui::Shape::convex_polygon(
+                                vec![
+                                    egui::pos2(inner.left() + 1.0, inner.top() + 6.5),
+                                    egui::pos2(inner.left() + 3.0, inner.top() + 2.0),
+                                    egui::pos2(inner.center().x, inner.top()),
+                                    egui::pos2(inner.right() - 3.0, inner.top() + 2.0),
+                                    egui::pos2(inner.right() - 1.0, inner.top() + 6.5),
+                                ],
+                                egui::Color32::from_rgb(190, 37, 48),
+                                egui::Stroke::NONE,
+                            ));
+                            painter.line_segment(
+                                [
+                                    egui::pos2(inner.left() + 1.0, inner.top() + 7.0),
+                                    egui::pos2(inner.right() - 1.0, inner.top() + 7.0),
+                                ],
+                                egui::Stroke::new(1.2, egui::Color32::WHITE),
+                            );
+                        }
+                        RoadShield::Us => {
+                            let badge = |rect: egui::Rect| {
+                                vec![
+                                    egui::pos2(rect.left() + 4.0, rect.top()),
+                                    egui::pos2(rect.right() - 4.0, rect.top()),
+                                    egui::pos2(rect.right(), rect.top() + 5.0),
+                                    egui::pos2(rect.right() - 2.0, rect.bottom() - 4.0),
+                                    egui::pos2(rect.center().x, rect.bottom()),
+                                    egui::pos2(rect.left() + 2.0, rect.bottom() - 4.0),
+                                    egui::pos2(rect.left(), rect.top() + 5.0),
+                                ]
+                            };
+                            painter.add(egui::Shape::convex_polygon(
+                                badge(r),
+                                egui::Color32::BLACK,
+                                egui::Stroke::NONE,
+                            ));
+                            painter.add(egui::Shape::convex_polygon(
+                                badge(r.shrink(1.3)),
+                                egui::Color32::WHITE,
+                                egui::Stroke::NONE,
+                            ));
+                        }
+                        RoadShield::State => {
+                            painter.rect_filled(r, height * 0.5, egui::Color32::BLACK);
+                            painter.rect_filled(
+                                r.shrink(1.2),
+                                height * 0.5,
+                                egui::Color32::WHITE,
+                            );
+                        }
+                        RoadShield::Other => {
+                            painter.rect_filled(r, 2.0, egui::Color32::BLACK);
+                            painter.rect_filled(r.shrink(1.0), 1.5, egui::Color32::WHITE);
+                        }
+                        RoadShield::None => unreachable!(),
+                    }
+                    painter.galley_with_override_text_color(
+                        egui::pos2(
+                            r.center().x - galley.size().x * 0.5,
+                            r.center().y - galley.size().y * 0.5
+                                + if l.shield == RoadShield::Interstate {
+                                    2.8
+                                } else {
+                                    0.0
+                                },
+                        ),
+                        galley,
+                        text_color,
+                    );
+                    continue;
+                }
                 let font = egui::FontId::proportional(if l.city { big } else { big - 2.5 });
                 let galley = painter.layout_no_wrap(l.name.clone(), font, text_col);
                 let r = egui::Rect::from_min_size(p, galley.size()).expand(4.0);
                 if !self.labels.place(
-                    crate::labelplace::key(&l.name),
+                    label_key(l),
                     r,
                     crate::labelplace::Priority::Place,
                 ) {
@@ -13166,13 +13224,6 @@ impl HookEchoApp {
                     response.clone().show_tooltip_text(&label.hover);
                 }
             }
-        }
-
-        // The inspector readout, sampled above. Every competitor has one and this had none: the
-        // app could draw a 68 dBZ core and a velocity couplet and never tell you a single number
-        // behind either.
-        if let Some(text) = &gate_tooltip {
-            response.clone().show_tooltip_text(text);
         }
 
         // The difference layer reads as "they disagree here" and nothing more without a number,
