@@ -78,6 +78,9 @@ jobs:
           else
             node scripts/announce/post.mjs prepare-scheduled campaign.json
           fi
+      - name: Install media tools
+        if: steps.prepare.outputs.has_campaign == 'true'
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg fonts-dejavu-core
       - name: Render vertical video
         if: steps.prepare.outputs.has_campaign == 'true'
         run: scripts/announce/render-social.sh campaign.json social.mp4
@@ -211,6 +214,9 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: node scripts/announce/post.mjs prepare-latest-release campaign.json weatherdesk
+      - name: Install media tools
+        if: steps.prepare.outputs.has_campaign == 'true'
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg fonts-dejavu-core
       - name: Render vertical video
         if: steps.prepare.outputs.has_campaign == 'true'
         run: scripts/announce/render-social.sh campaign.json social.mp4
