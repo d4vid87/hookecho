@@ -682,7 +682,7 @@ pub async fn fetch_tilejson(
         }
     }
     let body = client
-        .get(TILEJSON_URL)
+        .get(wxdata::net::fetch_url(TILEJSON_URL))
         .send()
         .await
         .ok()?
