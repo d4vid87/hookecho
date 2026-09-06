@@ -60,7 +60,7 @@ pub fn draw_vertical(
         egui::pos2(rect.right() - W - INSET, rect.top() + INSET + HEAD_H),
         Vec2::new(
             W,
-            (rect.height() - INSET * 2.0 - HEAD_H).min(300.0).max(1.0),
+            (rect.height() - INSET * 2.0 - HEAD_H).clamp(1.0, 300.0),
         ),
     );
     let y_of = |value: f32| bar.bottom() - ((value - vmin) / span).clamp(0.0, 1.0) * bar.height();
