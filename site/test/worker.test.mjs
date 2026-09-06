@@ -7,6 +7,7 @@ const placements = {
   web: "hero",
   download: "final",
   android: "nav",
+  "hookecho-source": "footer",
   weatherdesk: "homepage",
   "weatherdesk-release": "weatherdesk-hero",
   "weatherdesk-source": "weatherdesk-final",
@@ -25,6 +26,19 @@ test("allowlisted CTA redirects keep working and record only aggregate fields", 
     assert.equal(response.headers.get("location"), new URL(destination, "https://hookecho.io").href);
     assert.deepEqual(points, [{ blobs: [target, placement], doubles: [1] }]);
   }
+});
+
+test("promotion channel placements are allowlisted without opening arbitrary targets", () => {
+  for (const placement of ["bluesky", "mastodon", "discord", "facebook", "instagram", "youtube", "footer"]) {
+    assert.equal(
+      trackedRedirect(new Request(`https://hookecho.io/go/hookecho-source/${placement}`), {}).status,
+      302,
+    );
+  }
+  assert.equal(
+    trackedRedirect(new Request("https://hookecho.io/go/hookecho-source/reddit"), {}).status,
+    404,
+  );
 });
 
 test("invalid routes are blocked and analytics is optional", async () => {

@@ -2,6 +2,7 @@ export const GO_TARGETS = Object.freeze({
   web: "https://app.hookecho.io/",
   download: "/download/",
   android: "/download/#p-android",
+  "hookecho-source": "https://github.com/d4vid87/hookecho",
   weatherdesk: "/weatherdesk/",
   "weatherdesk-release": "https://github.com/d4vid87/weatherdesk/releases/latest",
   "weatherdesk-source": "https://github.com/d4vid87/weatherdesk",
@@ -14,6 +15,13 @@ export const GO_PLACEMENTS = new Set([
   "weatherdesk-hero",
   "weatherdesk-final",
   "final",
+  "footer",
+  "bluesky",
+  "mastodon",
+  "discord",
+  "facebook",
+  "instagram",
+  "youtube",
 ]);
 
 export function trackedRedirect(request, env) {

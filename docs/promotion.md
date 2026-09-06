@@ -1,153 +1,131 @@
 # Releasing and promoting
 
-How a release goes out, and what happens by hand afterwards. This doubles as the
-release checklist — there isn't a separate one.
+HookEcho owns the promotion automation for both HookEcho and WeatherDesk. It uses GitHub Actions,
+the platform APIs and real product captures; there is no marketing service, paid media, LLM or
+audience database.
 
-## Releasing
+The 90-day run starts on 2026-09-08. The recorded baseline is 98 combined GitHub stars (HookEcho
+56, WeatherDesk 42), with checkpoints of 132 on day 30, 166 on day 60 and 200 on day 90. The
+machine-readable baseline is [`scripts/announce/baseline.json`](../scripts/announce/baseline.json).
 
-1. Bump `version` in `Cargo.toml`.
-2. Write the version's section in [`CHANGELOG.md`](../CHANGELOG.md). **Not
-   optional** — `release.yml` extracts it as the release body and fails the job
-   if it is missing.
-3. Commit, then `git tag vX.Y.Z && git push origin main --tags`.
+## Schedule
 
-Everything below then happens on its own:
-
-| Workflow | Trigger | Does |
+| UTC time | Campaign | Destinations |
 |---|---|---|
-| `release.yml` | tag `v*`, and every push to main | builds AppImage / Windows / macOS / Android / container, attaches them, and uses the CHANGELOG section as the notes |
-| `demo.yml` | push to main | rebuilds and deploys <https://app.hookecho.io/>, then smoke-tests it |
-| `site.yml` | push to main touching `site/**` | builds and deploys the website, <https://hookecho.io/> |
-| `announce.yml` | tag `v*` | posts to Bluesky, Mastodon, X and Discord, and attaches `announce-drafts.md` to the release |
-| `digest.yml` | Mondays | mentions and metrics into Discord |
+| Tuesday 16:00 | HookEcho feature or radar education | Bluesky, Mastodon, HookEcho YouTube/Facebook/Instagram |
+| Thursday 16:00 | WeatherDesk integration or whole-home use | Bluesky, Mastodon, WeatherDesk YouTube/Facebook/Instagram |
+| Saturday 16:00 | Open-source, privacy, contributor or archive proof | Bluesky, Mastodon and the selected product accounts |
+| Every 30 minutes | Qualifying official weather | Bluesky, Mastodon and HookEcho Facebook |
+| Monday 14:00 | Metrics and opportunity report | Discord |
+| Stable release | Relevant product release | Its owned accounts plus Discord |
 
-4. Download `announce-drafts.md` from the release and post it by hand, in wave
-   order.
+The 13-week catalog is in [`scripts/announce/campaigns.mjs`](../scripts/announce/campaigns.mjs).
+Saturday and stable-release copy contains the restrained GitHub-star request. Routine Tuesday and
+Thursday posts and every safety post do not. Once the combined total reaches 200, only stable
+releases retain the request.
 
-## Launch waves
+Discord receives releases, weekly reports, failures and noteworthy mentions, not every scheduled
+post. X stays disabled while its API requires paid credits. The system does not post or reply in
+forums, Reddit, DMs or third-party communities; the Monday report surfaces opportunities for a
+person to assess.
 
-One release, waves a few days apart. Do not do them all in one day — posting the
-same thing in six places at once is the shape spam has.
+## Safety weather rules
 
-**Wave 1 — technical. Skipped for the 2026-08 launch** by decision: no Show HN
-and no r/rust launch post. The Rust-ecosystem *listings* below still apply.
+The monitor reads the NWS active-alerts service and the three NHC RSS feeds. A post is eligible only
+for an Actual/Extreme NWS alert, a Tornado Emergency or Flash Flood Emergency, or a recent named
+tropical-cyclone item carrying a US watch or warning.
 
-**Wave 2 — domain.** Stormtrack's Equipment section, TalkWeather and chaser
-Discords. Lead
-with the live demo, and pick a day with active weather so it shows something.
-Lead with what it does for them — soundings, effective-layer parameters, archive
-replay, chase packs — not with the language it is written in.
+Copy is restricted to the official headline, affected area, issue/expiry times and official link.
+It always says HookEcho is not an official warning source. It never contains a forecast
+interpretation, casualty or damage estimate, or star request. The publisher allows at most one new
+event in six hours and two per rolling day. A repeat event needs a changed official headline or
+severity. Missing, expired or malformed input produces no public post; workflow failures are sent
+to Discord.
 
-**Wave 3 — broad.** Product Hunt, DevHunt, Uneed. Lead with MIT, no accounts, no telemetry, no hosted service.
+Seven different successful monitor days are required before the first live-weather post. The
+monitor runs while general publishing is disabled, so this observation period can happen during
+account setup.
 
-Rules that keep this from backfiring:
+## Media
 
-- Read the venue's self-promotion rule before posting. Some require prior
-  participation, some ban it outright.
-- One community per day, maximum.
-- Answer every question, including the hostile ones, including "why not just use
-  RadarScope".
-- Never ask for stars.
-- Keep the positioning honest: local-first, no telemetry, free. It is the actual
-  differentiator against the paid Windows tools, and it stops being one the day
-  it stops being true.
+[`scripts/announce/render-social.sh`](../scripts/announce/render-social.sh) turns the selected real
+HookEcho capture or WeatherDesk v4 demo-data screenshot into a 20-second, 1080×1920 H.264 video. It
+burns in the campaign caption, product identity and `LIVE`, `ARCHIVE` or `DEMO DATA`, includes a
+silent AAC track, emits `yuv420p`, and validates the result with `ffprobe`.
 
-## One-time submissions
+YouTube and Meta receive the bytes through their resumable upload APIs; no temporary public media
+host is used. YouTube uploads remain disabled until the Google Cloud project passes its API audit.
 
-Do these once, not per release:
+## One-time authorization
 
-- [awesome-rust](https://github.com/rust-unofficial/awesome-rust) — Applications.
-  Gated on `stars > 50 | crates.io downloads > 2000`; at 48 stars on 2026-08-27,
-  so this waits. They judge on the metric and nothing else.
-- [awesome-selfhosted](https://github.com/awesome-selfhosted/awesome-selfhosted) —
-  the ghcr.io image is the qualifier, but their checklist requires the first
-  release to be **more than 4 months old**: first release was 2026-07-29, so the
-  earliest valid submission is ~2026-11-29. Entries go to the
-  `awesome-selfhosted-data` repo as `software/<slug>.yml`, not the README.
-- [AlternativeTo](https://alternativeto.net/) — listed against RadarScope,
-  GR2Analyst and Supercell-Wx.
-- [This Week in Rust](https://this-week-in-rust.org/) — Project/Tooling Updates
-  no longer takes PRs (editors pull those from r/rust). Call for Participation
-  does: submitted as
-  [#8671](https://github.com/rust-lang/this-week-in-rust/pull/8671) against the
-  2026-09-02 draft. Their guidelines want the linked issue to state a difficulty
-  and link CONTRIBUTING.md — issue #12 was edited to do both.
+Create separate HookEcho and WeatherDesk YouTube channels, Facebook Pages and Instagram
+professional accounts. One Google Cloud project and one Meta developer app may authorize both
+sets. Complete the provider reviews, then add these GitHub Actions secrets:
 
-## Launch calendar
+- Existing: `BSKY_HANDLE`, `BSKY_APP_PASSWORD`, `MASTODON_URL`, `MASTODON_TOKEN`,
+  `DISCORD_WEBHOOK_URL`, `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_API_TOKEN`.
+- GitHub metrics: optional `PROMOTION_GITHUB_TOKEN` with read access to traffic for both
+  repositories. The workflow token remains the fallback.
+- Google: `GOOGLE_OAUTH_CLIENT_ID`, `GOOGLE_OAUTH_CLIENT_SECRET`,
+  `YOUTUBE_HOOKECHO_REFRESH_TOKEN`, `YOUTUBE_WEATHERDESK_REFRESH_TOKEN`.
+- Meta: `META_HOOKECHO_PAGE_ID`, `META_HOOKECHO_PAGE_TOKEN`,
+  `META_HOOKECHO_IG_USER_ID`, `META_HOOKECHO_IG_TOKEN`, and the four equivalent
+  `META_WEATHERDESK_*` secrets.
 
-One venue per day, weather venues on days with active weather so the demo shows
-something. **No Reddit** — dropped for this launch, so the sub rows are gone
-rather than left as drafts:
+Repository variables are the controls:
 
-| Day | Where | Lead with |
-|---|---|---|
-| 1 | Stormtrack (Equipment) | free alternative to the paid Windows tools |
-| 2 | TalkWeather | same, with the live demo link |
-| 3 | Chaser Discords | storm-replay clip |
-| 4 | Product Hunt (Tue–Thu) | tagline + maker's first comment |
-| 5 | DevHunt, Uneed | MIT, no accounts, no telemetry |
-| 6 | Bluesky / Mastodon / X | storm-replay clip, demo link |
+- `PROMOTION_ENABLED=false` is the master safety switch for scheduled and weather posts.
+- `LIVE_WEATHER_ENABLED=true` permits weather posts after the seven-day observation gate.
+- `YOUTUBE_PUBLIC_UPLOADS=false` keeps uploads private until the API audit is complete.
+- `META_GRAPH_VERSION=v25.0` pins the reviewed Meta API version.
+- `SATURDAY_PRODUCT=hookecho` is the fallback until the first two-week allocation is recorded.
 
-Every post: demo link first, download second. Then stay at the keyboard.
+Run Promotion manually with its default `dry_run=true` for each campaign kind before enabling the
+master switch. A deliberate manual run with `dry_run=false` bypasses the master switch for test
+accounts and keeps YouTube private until `YOUTUBE_PUBLIC_UPLOADS=true`.
 
-## Sustained
+## Publishing and recovery
 
-- **Storm-event pages** within ~48 h of a major event. The window is the point:
-  after about two days the threads are dead and the searches have moved on. The
-  recipe is below so it is a fill-in job, not a design job.
-- **One explainer post a month** on the site blog, on a title the existing posts
-  do not already cover.
-- **Weekly**: answering radar-app recommendation threads as they appear, on the
-  venues above.
+[`scripts/announce/post.mjs`](../scripts/announce/post.mjs) is the one product-aware publisher.
+Every publication has a deterministic product/content/platform ID. A successful destination writes
+a 90-day Actions artifact, so a rerun skips it. Network throttles and server failures use bounded
+exponential backoff. One provider failure does not fail other destinations.
 
-### Storm-event page recipe
+Failure artifacts feed the Monday controller. Three authentication failures pause only that
+channel. Four successful posts with no tracked click also pause it for two weeks.
+Saturday's product is reassigned to the better repository-click rate every two weeks; Tuesday and
+Thursday never move. Allocation and pause decisions are short-lived Actions artifacts, not an
+external database.
 
-1. **Find the volume time.** Open the app on the archive, step to the scan that
-   shows the thing the event is remembered for — the couplet at the moment of
-   damage, the eyewall at landfall. Copy the timestamp off the scrubber and
-   convert to UTC; `at:` is RFC3339 and the archive opens exactly there.
-2. **Write `site/src/content/storms/<slug>.md`.** Frontmatter fields are
-   `title`, `description`, `date`, `site`, `lon`, `lat`, `zoom`, `at`, optional
-   `extras`. `site` must be a NEXRAD id that already has a page under `/radar/`.
-   `extras` carries the moment code (`VEL`, `CC`, `ZDR`…), a tilt number and
-   `srv`, in any order. Body: what happened in two or three sentences, then a
-   **What the radar shows** paragraph explaining the product the link opens on
-   and why that product is the one to look at.
-3. **Verify the deep link.** Open the built page's link in the live app and
-   confirm it lands on the right scan with the right product — a wrong `at:` is
-   the one error nobody catches by reading.
-4. **Blog post, only if there is something to teach.** A page per event is
-   enough on its own; a post is worth it when the case shows a signature the
-   existing explainers do not already cover. Link the storm page from it.
-5. **Facts before speed.** Death tolls and ratings move for days after an event.
-   Cite the survey once it exists, and write around the number rather than
-   guessing it. A page that has to be corrected is worse than one posted a day
-   later.
-6. **Ship it**: `cd site && npm run build && npm run linkcheck`, merge, then
-   share into that event's threads *where on-topic* — the same one-venue-a-day
-   and read-the-rules conventions apply. An event page is not a launch post.
+To rehearse locally:
 
-## Conventions
+```sh
+node --test scripts/announce/promotion.test.mjs
+node scripts/announce/post.mjs prepare-scheduled /tmp/campaign.json 2026-09-08T16:00:00Z hookecho
+scripts/announce/render-social.sh /tmp/campaign.json /tmp/social.mp4
+DRY_RUN=true node scripts/announce/post.mjs publish /tmp/campaign.json bluesky /tmp/social.mp4
+```
 
-- **UTM tags** on links you paste by hand only: `?utm_source=stormtrack`,
-  `?utm_source=producthunt`, and so on. The automated posts do not carry them — the
-  channel is already known from the referrer.
-- **Posting.** Reddit is out for the 2026-08 launch — no API rig, no submissions.
-  Everything else has no posting API either, so forums, Product Hunt, the
-  directories and the Discords are copy-paste from the drafts, and **replies are
-  always written by hand**. The automated channels stay what `announce.yml`
-  already does: Bluesky, Mastodon, X, Discord, on a tag.
-- **Analytics** is Cloudflare Web Analytics on the Pages project: server-side,
-  no script and no code in the app, which is what keeps the no-telemetry claim
-  true.
-- **Secrets** the workflows expect, in repo Settings → Secrets → Actions:
-  `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`, `BSKY_HANDLE`,
-  `BSKY_APP_PASSWORD`, `MASTODON_URL`, `MASTODON_TOKEN`, `X_API_KEY`,
-  `X_API_SECRET`, `X_ACCESS_TOKEN`, `X_ACCESS_SECRET`, `DISCORD_WEBHOOK_URL`.
-  Any that are unset simply skip that channel.
-- **Social preview image** in repo settings: it is the link card every channel
-  renders, and the announce posts deliberately carry no uploaded media because
-  of it. A crop of `docs/shots/hero.gif` does the job.
-- **Assets** — `scripts/shots/shoot.sh` regenerates every screenshot and GIF in
-  the README headlessly, so a stale asset is one command, not a screen-recording
-  session.
+## Releases
+
+For HookEcho, bump `Cargo.toml`, add the matching `CHANGELOG.md` section, commit, then push a stable
+`vX.Y.Z` tag. `release.yml` creates the packages; `announce.yml` waits for that release and uses the
+shared publisher. Prerelease tags containing `-` are not announced automatically.
+
+WeatherDesk stable releases are detected hourly from its latest GitHub release, so its application
+repository needs no duplicated platform credentials or publishing code.
+
+## Measurement
+
+Tracked links use the site's allowlisted `/go/.../{placement}` redirects. Cloudflare Analytics
+Engine stores only target, channel placement, count and its automatic timestamp—never an IP,
+location, referrer, user-agent, cookie or identifier.
+
+The Monday report includes stars and seven-day change, checkpoint progress, tracked source/product
+clicks, available GitHub traffic and downloads, YouTube views/watch duration/shares/subscribers,
+aggregate Meta reach/plays/tracked-link clicks, failures and public GitHub/HN/Bluesky mentions.
+Missing optional data is reported without blocking the rest.
+
+The website sitemap, RSS, press kit, glossary, comparison pages and storm archive remain the long-
+term discovery surfaces. Do not mass-generate search pages or add a newsletter. Human community
+participation stays human: read each venue's rules, identify yourself, and never automate replies.

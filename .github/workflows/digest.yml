@@ -11,13 +11,53 @@ on:
 jobs:
   digest:
     runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "24"
       - name: Collect and post
+        id: metrics
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.PROMOTION_GITHUB_TOKEN || github.token }}
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          BSKY_HANDLE: ${{ secrets.BSKY_HANDLE }}
+          BSKY_APP_PASSWORD: ${{ secrets.BSKY_APP_PASSWORD }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          GOOGLE_OAUTH_CLIENT_ID: ${{ secrets.GOOGLE_OAUTH_CLIENT_ID }}
+          GOOGLE_OAUTH_CLIENT_SECRET: ${{ secrets.GOOGLE_OAUTH_CLIENT_SECRET }}
+          YOUTUBE_HOOKECHO_REFRESH_TOKEN: ${{ secrets.YOUTUBE_HOOKECHO_REFRESH_TOKEN }}
+          YOUTUBE_WEATHERDESK_REFRESH_TOKEN: ${{ secrets.YOUTUBE_WEATHERDESK_REFRESH_TOKEN }}
+          META_HOOKECHO_PAGE_ID: ${{ secrets.META_HOOKECHO_PAGE_ID }}
+          META_HOOKECHO_PAGE_TOKEN: ${{ secrets.META_HOOKECHO_PAGE_TOKEN }}
+          META_HOOKECHO_IG_USER_ID: ${{ secrets.META_HOOKECHO_IG_USER_ID }}
+          META_HOOKECHO_IG_TOKEN: ${{ secrets.META_HOOKECHO_IG_TOKEN }}
+          META_WEATHERDESK_PAGE_ID: ${{ secrets.META_WEATHERDESK_PAGE_ID }}
+          META_WEATHERDESK_PAGE_TOKEN: ${{ secrets.META_WEATHERDESK_PAGE_TOKEN }}
+          META_WEATHERDESK_IG_USER_ID: ${{ secrets.META_WEATHERDESK_IG_USER_ID }}
+          META_WEATHERDESK_IG_TOKEN: ${{ secrets.META_WEATHERDESK_IG_TOKEN }}
+          META_GRAPH_VERSION: ${{ vars.META_GRAPH_VERSION }}
+          SATURDAY_PRODUCT: ${{ vars.SATURDAY_PRODUCT }}
         run: node scripts/announce/digest.mjs
+      - name: Write allocation marker
+        if: steps.metrics.outputs.should_rebalance == 'true'
+        run: echo "${{ steps.metrics.outputs.saturday_product }}" > promotion-control.txt
+      - uses: actions/upload-artifact@v4
+        if: steps.metrics.outputs.should_rebalance == 'true'
+        with:
+          name: "promotion-saturday-${{ steps.metrics.outputs.saturday_product }}-${{ github.run_id }}"
+          path: promotion-control.txt
+          retention-days: 16
+      - name: Write pause marker
+        if: steps.metrics.outputs.paused_channels != ''
+        run: echo "${{ steps.metrics.outputs.paused_channels }}" > promotion-pause.txt
+      - uses: actions/upload-artifact@v4
+        if: steps.metrics.outputs.paused_channels != ''
+        with:
+          name: "promotion-pauses-${{ steps.metrics.outputs.paused_channels }}-${{ github.run_id }}"
+          path: promotion-pause.txt
+          retention-days: 14

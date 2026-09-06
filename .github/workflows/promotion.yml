@@ -1,0 +1,262 @@
+name: Promotion
+
+on:
+  schedule:
+    - cron: "0 16 * * 2,4,6"
+    - cron: "*/30 * * * *"
+    - cron: "17 * * * *"
+  workflow_dispatch:
+    inputs:
+      kind:
+        description: Campaign to prepare
+        type: choice
+        options: [scheduled, weather, weatherdesk-release]
+        default: scheduled
+      date:
+        description: UTC date for a scheduled-campaign rehearsal
+        required: false
+      dry_run:
+        description: Build and print without posting
+        type: boolean
+        default: true
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: promotion-${{ github.event.schedule || inputs.kind || github.run_id }}
+  cancel-in-progress: false
+
+env:
+  GITHUB_TOKEN: ${{ github.token }}
+  PROMOTION_ENABLED: ${{ vars.PROMOTION_ENABLED }}
+  MANUAL_TEST: ${{ github.event_name == 'workflow_dispatch' && !inputs.dry_run }}
+  PROMOTION_PAUSES: ${{ vars.PROMOTION_PAUSES }}
+  DRY_RUN: ${{ (github.event_name == 'workflow_dispatch' && inputs.dry_run) || vars.PROMOTION_ENABLED != 'true' }}
+  BSKY_HANDLE: ${{ secrets.BSKY_HANDLE }}
+  BSKY_APP_PASSWORD: ${{ secrets.BSKY_APP_PASSWORD }}
+  MASTODON_URL: ${{ secrets.MASTODON_URL }}
+  MASTODON_TOKEN: ${{ secrets.MASTODON_TOKEN }}
+  DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+  GOOGLE_OAUTH_CLIENT_ID: ${{ secrets.GOOGLE_OAUTH_CLIENT_ID }}
+  GOOGLE_OAUTH_CLIENT_SECRET: ${{ secrets.GOOGLE_OAUTH_CLIENT_SECRET }}
+  YOUTUBE_HOOKECHO_REFRESH_TOKEN: ${{ secrets.YOUTUBE_HOOKECHO_REFRESH_TOKEN }}
+  YOUTUBE_WEATHERDESK_REFRESH_TOKEN: ${{ secrets.YOUTUBE_WEATHERDESK_REFRESH_TOKEN }}
+  YOUTUBE_PUBLIC_UPLOADS: ${{ vars.YOUTUBE_PUBLIC_UPLOADS }}
+  YOUTUBE_TEST_UPLOADS: ${{ github.event_name == 'workflow_dispatch' && !inputs.dry_run && vars.YOUTUBE_PUBLIC_UPLOADS != 'true' }}
+  META_GRAPH_VERSION: ${{ vars.META_GRAPH_VERSION }}
+  META_HOOKECHO_PAGE_ID: ${{ secrets.META_HOOKECHO_PAGE_ID }}
+  META_HOOKECHO_PAGE_TOKEN: ${{ secrets.META_HOOKECHO_PAGE_TOKEN }}
+  META_HOOKECHO_IG_USER_ID: ${{ secrets.META_HOOKECHO_IG_USER_ID }}
+  META_HOOKECHO_IG_TOKEN: ${{ secrets.META_HOOKECHO_IG_TOKEN }}
+  META_WEATHERDESK_PAGE_ID: ${{ secrets.META_WEATHERDESK_PAGE_ID }}
+  META_WEATHERDESK_PAGE_TOKEN: ${{ secrets.META_WEATHERDESK_PAGE_TOKEN }}
+  META_WEATHERDESK_IG_USER_ID: ${{ secrets.META_WEATHERDESK_IG_USER_ID }}
+  META_WEATHERDESK_IG_TOKEN: ${{ secrets.META_WEATHERDESK_IG_TOKEN }}
+
+jobs:
+  prepare-scheduled:
+    if: github.event.schedule == '0 16 * * 2,4,6' || (github.event_name == 'workflow_dispatch' && inputs.kind == 'scheduled')
+    runs-on: ubuntu-latest
+    outputs:
+      has_campaign: ${{ steps.prepare.outputs.has_campaign }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: "24" }
+      - name: Test promotion logic
+        run: node --test scripts/announce/promotion.test.mjs
+      - id: prepare
+        name: Select campaign
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          DATE: ${{ inputs.date }}
+        run: |
+          if [ -n "$DATE" ]; then
+            node scripts/announce/post.mjs prepare-scheduled campaign.json "$DATE"
+          else
+            node scripts/announce/post.mjs prepare-scheduled campaign.json
+          fi
+      - name: Render vertical video
+        if: steps.prepare.outputs.has_campaign == 'true'
+        run: scripts/announce/render-social.sh campaign.json social.mp4
+      - uses: actions/upload-artifact@v4
+        if: steps.prepare.outputs.has_campaign == 'true'
+        with:
+          name: promotion-package-${{ github.run_id }}
+          path: |
+            campaign.json
+            social.mp4
+          retention-days: 1
+
+  publish-scheduled:
+    needs: prepare-scheduled
+    if: needs.prepare-scheduled.outputs.has_campaign == 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        channel: [bluesky, mastodon, youtube, facebook, instagram]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with: { name: "promotion-package-${{ github.run_id }}" }
+      - id: post
+        continue-on-error: true
+        run: node scripts/announce/post.mjs publish campaign.json "${{ matrix.channel }}" social.mp4
+      - name: Save success marker
+        if: steps.post.outputs.posted == 'true'
+        run: echo "${{ steps.post.outputs.marker }}" > promotion-marker.txt
+      - uses: actions/upload-artifact@v4
+        if: steps.post.outputs.posted == 'true'
+        with:
+          name: ${{ steps.post.outputs.marker }}
+          path: promotion-marker.txt
+          retention-days: 90
+      - uses: actions/upload-artifact@v4
+        if: steps.post.outcome == 'failure'
+        with:
+          name: ${{ steps.post.outputs.failure_marker }}
+          path: promotion-failure.txt
+          retention-days: 14
+      - name: Notify and fail
+        if: steps.post.outcome == 'failure'
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+        run: |
+          node scripts/announce/post.mjs notify "Promotion failed for ${{ matrix.channel }}: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          exit 1
+
+  prepare-weather:
+    if: github.event.schedule == '*/30 * * * *' || (github.event_name == 'workflow_dispatch' && inputs.kind == 'weather')
+    runs-on: ubuntu-latest
+    outputs:
+      has_campaign: ${{ steps.prepare.outputs.has_campaign }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: prepare
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: node scripts/announce/post.mjs prepare-weather campaign.json
+      - name: Create daily monitor marker
+        if: steps.prepare.outputs.monitor_marker != ''
+        run: echo "${{ steps.prepare.outputs.monitor_days }} successful monitoring days" > weather-monitor.txt
+      - uses: actions/upload-artifact@v4
+        if: steps.prepare.outputs.monitor_marker != ''
+        with:
+          name: ${{ steps.prepare.outputs.monitor_marker }}
+          path: weather-monitor.txt
+          retention-days: 14
+      - uses: actions/upload-artifact@v4
+        if: steps.prepare.outputs.has_campaign == 'true'
+        with:
+          name: weather-package-${{ github.run_id }}
+          path: campaign.json
+          retention-days: 1
+      - name: Report monitor failure
+        if: failure()
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+        run: |
+          node scripts/announce/post.mjs notify "Official-weather monitor failed: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
+  publish-weather:
+    needs: prepare-weather
+    if: needs.prepare-weather.outputs.has_campaign == 'true' && vars.LIVE_WEATHER_ENABLED != 'false'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        channel: [bluesky, mastodon, facebook]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with: { name: "weather-package-${{ github.run_id }}" }
+      - id: post
+        continue-on-error: true
+        run: node scripts/announce/post.mjs publish campaign.json "${{ matrix.channel }}"
+      - name: Save success marker
+        if: steps.post.outputs.posted == 'true'
+        run: echo "${{ steps.post.outputs.marker }}" > promotion-marker.txt
+      - uses: actions/upload-artifact@v4
+        if: steps.post.outputs.posted == 'true'
+        with:
+          name: ${{ steps.post.outputs.marker }}
+          path: promotion-marker.txt
+          retention-days: 90
+      - uses: actions/upload-artifact@v4
+        if: steps.post.outcome == 'failure'
+        with:
+          name: ${{ steps.post.outputs.failure_marker }}
+          path: promotion-failure.txt
+          retention-days: 14
+      - name: Notify and fail
+        if: steps.post.outcome == 'failure'
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+        run: |
+          node scripts/announce/post.mjs notify "Weather post failed for ${{ matrix.channel }}: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          exit 1
+
+  prepare-weatherdesk-release:
+    if: github.event.schedule == '17 * * * *' || (github.event_name == 'workflow_dispatch' && inputs.kind == 'weatherdesk-release')
+    runs-on: ubuntu-latest
+    outputs:
+      has_campaign: ${{ steps.prepare.outputs.has_campaign }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: prepare
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node scripts/announce/post.mjs prepare-latest-release campaign.json weatherdesk
+      - name: Render vertical video
+        if: steps.prepare.outputs.has_campaign == 'true'
+        run: scripts/announce/render-social.sh campaign.json social.mp4
+      - uses: actions/upload-artifact@v4
+        if: steps.prepare.outputs.has_campaign == 'true'
+        with:
+          name: weatherdesk-release-${{ github.run_id }}
+          path: |
+            campaign.json
+            social.mp4
+          retention-days: 1
+
+  publish-weatherdesk-release:
+    needs: prepare-weatherdesk-release
+    if: needs.prepare-weatherdesk-release.outputs.has_campaign == 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        channel: [bluesky, mastodon, discord, youtube, facebook, instagram]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with: { name: "weatherdesk-release-${{ github.run_id }}" }
+      - id: post
+        continue-on-error: true
+        run: node scripts/announce/post.mjs publish campaign.json "${{ matrix.channel }}" social.mp4
+      - name: Save success marker
+        if: steps.post.outputs.posted == 'true'
+        run: echo "${{ steps.post.outputs.marker }}" > promotion-marker.txt
+      - uses: actions/upload-artifact@v4
+        if: steps.post.outputs.posted == 'true'
+        with:
+          name: ${{ steps.post.outputs.marker }}
+          path: promotion-marker.txt
+          retention-days: 90
+      - uses: actions/upload-artifact@v4
+        if: steps.post.outcome == 'failure'
+        with:
+          name: ${{ steps.post.outputs.failure_marker }}
+          path: promotion-failure.txt
+          retention-days: 14
+      - name: Notify and fail
+        if: steps.post.outcome == 'failure'
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+        run: |
+          node scripts/announce/post.mjs notify "WeatherDesk release post failed for ${{ matrix.channel }}: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          exit 1

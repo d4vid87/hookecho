@@ -1,9 +1,7 @@
 name: Announce
 
-# Fires on the tag push, NOT on `release: published` — release.yml creates the release with the
-# default GITHUB_TOKEN, and GitHub suppresses workflow triggers from that token's events, so a
-# release trigger here would never run at all. Instead: wait for release.yml to create the release,
-# then post.
+# Stable HookEcho releases use the same publisher as scheduled and WeatherDesk campaigns. The tag
+# event is retained because releases created by GITHUB_TOKEN do not trigger release workflows.
 on:
   push:
     tags: ["v*"]
@@ -13,36 +11,52 @@ on:
         description: Tag to announce
         required: true
       dry_run:
-        description: Print the payloads instead of posting
+        description: Build and print without posting
         type: boolean
         default: true
 
 permissions:
-  contents: write
+  actions: read
+  contents: read
+
+env:
+  GITHUB_TOKEN: ${{ github.token }}
+  DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
+  PROMOTION_PAUSES: ${{ vars.PROMOTION_PAUSES }}
+  BSKY_HANDLE: ${{ secrets.BSKY_HANDLE }}
+  BSKY_APP_PASSWORD: ${{ secrets.BSKY_APP_PASSWORD }}
+  MASTODON_URL: ${{ secrets.MASTODON_URL }}
+  MASTODON_TOKEN: ${{ secrets.MASTODON_TOKEN }}
+  DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+  GOOGLE_OAUTH_CLIENT_ID: ${{ secrets.GOOGLE_OAUTH_CLIENT_ID }}
+  GOOGLE_OAUTH_CLIENT_SECRET: ${{ secrets.GOOGLE_OAUTH_CLIENT_SECRET }}
+  YOUTUBE_HOOKECHO_REFRESH_TOKEN: ${{ secrets.YOUTUBE_HOOKECHO_REFRESH_TOKEN }}
+  YOUTUBE_PUBLIC_UPLOADS: ${{ vars.YOUTUBE_PUBLIC_UPLOADS }}
+  META_GRAPH_VERSION: ${{ vars.META_GRAPH_VERSION }}
+  META_HOOKECHO_PAGE_ID: ${{ secrets.META_HOOKECHO_PAGE_ID }}
+  META_HOOKECHO_PAGE_TOKEN: ${{ secrets.META_HOOKECHO_PAGE_TOKEN }}
+  META_HOOKECHO_IG_USER_ID: ${{ secrets.META_HOOKECHO_IG_USER_ID }}
+  META_HOOKECHO_IG_TOKEN: ${{ secrets.META_HOOKECHO_IG_TOKEN }}
 
 jobs:
-  announce:
+  prepare:
+    if: github.event_name == 'workflow_dispatch' || !contains(github.ref_name, '-')
     runs-on: ubuntu-latest
-    # Prereleases are checkpoints, not releases: `v0.12.0-alpha.1` is for people already following
-    # the work, and broadcasting one to Bluesky/Mastodon/X/Discord announces a version most
-    # readers cannot sensibly install. A hyphen in the tag is the same prerelease test
-    # `release.yml` uses. A manual dispatch is exempt — asking for it by hand, tag and all, is
-    # saying you meant it (and its `dry_run` default is still true).
-    if: ${{ github.event_name == 'workflow_dispatch' || !contains(github.ref_name, '-') }}
+    outputs:
+      tag: ${{ steps.tag.outputs.value }}
     steps:
-      # On a tag push this is the tag itself; a manual dispatch takes the default branch, so a
-      # rehearsal works for a version that has not been tagged yet.
       - uses: actions/checkout@v4
-
       - uses: actions/setup-node@v4
-        with:
-          node-version: "20"
-
-      - name: Wait for the release to exist
-        if: ${{ inputs.dry_run != true }}
+        with: { node-version: "24" }
+      - id: tag
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ inputs.tag || github.ref_name }}
+        run: echo "value=$TAG" >> "$GITHUB_OUTPUT"
+      - name: Wait for the release to exist
+        if: env.DRY_RUN != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.tag.outputs.value }}
         run: |
           for _ in $(seq 1 60); do
             gh release view "$TAG" >/dev/null 2>&1 && exit 0
@@ -50,27 +64,51 @@ jobs:
           done
           echo "::error::release $TAG never appeared (30 min)"
           exit 1
+      - name: Test promotion logic
+        run: node --test scripts/announce/promotion.test.mjs
+      - name: Prepare release campaign
+        run: node scripts/announce/post.mjs prepare-release campaign.json hookecho "${{ steps.tag.outputs.value }}" CHANGELOG.md
+      - name: Render vertical video
+        run: scripts/announce/render-social.sh campaign.json social.mp4
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-promotion-${{ github.run_id }}
+          path: |
+            campaign.json
+            social.mp4
+          retention-days: 1
 
-      - name: Post
-        env:
-          BSKY_HANDLE: ${{ secrets.BSKY_HANDLE }}
-          BSKY_APP_PASSWORD: ${{ secrets.BSKY_APP_PASSWORD }}
-          MASTODON_URL: ${{ secrets.MASTODON_URL }}
-          MASTODON_TOKEN: ${{ secrets.MASTODON_TOKEN }}
-          X_API_KEY: ${{ secrets.X_API_KEY }}
-          X_API_SECRET: ${{ secrets.X_API_SECRET }}
-          X_ACCESS_TOKEN: ${{ secrets.X_ACCESS_TOKEN }}
-          X_ACCESS_SECRET: ${{ secrets.X_ACCESS_SECRET }}
-          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
-          TAG: ${{ inputs.tag || github.ref_name }}
+  publish:
+    needs: prepare
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        channel: [bluesky, mastodon, discord, youtube, facebook, instagram]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with: { name: "release-promotion-${{ github.run_id }}" }
+      - id: post
+        continue-on-error: true
+        run: node scripts/announce/post.mjs publish campaign.json "${{ matrix.channel }}" social.mp4
+      - name: Save success marker
+        if: steps.post.outputs.posted == 'true'
+        run: echo "${{ steps.post.outputs.marker }}" > promotion-marker.txt
+      - uses: actions/upload-artifact@v4
+        if: steps.post.outputs.posted == 'true'
+        with:
+          name: ${{ steps.post.outputs.marker }}
+          path: promotion-marker.txt
+          retention-days: 90
+      - uses: actions/upload-artifact@v4
+        if: steps.post.outcome == 'failure'
+        with:
+          name: ${{ steps.post.outputs.failure_marker }}
+          path: promotion-failure.txt
+          retention-days: 14
+      - name: Notify and fail
+        if: steps.post.outcome == 'failure'
         run: |
-          node scripts/announce/post.mjs "$TAG" ${{ inputs.dry_run == true && '--dry-run' || '' }}
-
-      # The Reddit and HN drafts ride along on the release, so they are one click away when the
-      # launch waves in docs/promotion.md say to post them.
-      - name: Attach the drafts to the release
-        if: ${{ always() && inputs.dry_run != true }}
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ inputs.tag || github.ref_name }}
-        run: gh release upload "$TAG" announce-drafts.md --clobber
+          node scripts/announce/post.mjs notify "Release announcement failed for ${{ matrix.channel }}: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          exit 1

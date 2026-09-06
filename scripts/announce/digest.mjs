@@ -1,18 +1,15 @@
-// Weekly digest: who mentioned the project, and what the numbers did. One Discord message.
-//
-//   DISCORD_WEBHOOK_URL=… GITHUB_TOKEN=… node scripts/announce/digest.mjs
-//
-// The point is a reply queue, not a dashboard: a mention nobody answers within a day is a mention
-// wasted. Every source is optional — Reddit rate-limits unauthenticated search often enough that
-// one dead source must not cost the whole digest, so each is caught and named instead.
-//
-// ponytail: no stored state. The window is 8 days against a weekly cron, so clock skew produces a
-// repeat rather than a gap.
-const REPO = "d4vid87/hookecho";
-const QUERY = "hookecho OR \"HookEcho\"";
-const SINCE = Date.now() - 8 * 24 * 3600 * 1000;
-const UA = "hookecho-digest (github.com/d4vid87/hookecho)";
+import { appendFileSync } from "node:fs";
+import { promotionPauses } from "./campaigns.mjs";
 
+// Weekly aggregate promotion report and the two small feedback controls used by Saturday posts.
+// No usernames, IPs, referrers tied to people, or other identifiers are stored or emitted.
+const PRODUCTS = [
+  { id: "hookecho", repo: "d4vid87/hookecho", youtube: "YOUTUBE_HOOKECHO_REFRESH_TOKEN", page: "META_HOOKECHO_PAGE_ID", pageToken: "META_HOOKECHO_PAGE_TOKEN", ig: "META_HOOKECHO_IG_USER_ID", igToken: "META_HOOKECHO_IG_TOKEN" },
+  { id: "weatherdesk", repo: "d4vid87/weatherdesk", youtube: "YOUTUBE_WEATHERDESK_REFRESH_TOKEN", page: "META_WEATHERDESK_PAGE_ID", pageToken: "META_WEATHERDESK_PAGE_TOKEN", ig: "META_WEATHERDESK_IG_USER_ID", igToken: "META_WEATHERDESK_IG_TOKEN" },
+];
+const SOCIAL_CHANNELS = new Set(["bluesky", "mastodon", "youtube", "facebook", "instagram"]);
+const SINCE = Date.now() - 7 * 86_400_000;
+const UA = "HookEcho promotion digest (https://github.com/d4vid87/hookecho)";
 const sections = [];
 const failures = [];
 
@@ -20,117 +17,260 @@ async function section(name, fn) {
   try {
     const lines = await fn();
     if (lines.length) sections.push(`**${name}**\n${lines.join("\n")}`);
-  } catch (e) {
-    failures.push(`${name}: ${e.message}`);
+  } catch (error) {
+    failures.push(`${name}: ${error.message}`);
   }
 }
 
-const get = async (url, headers = {}) => {
-  const resp = await fetch(url, { headers: { "user-agent": UA, ...headers } });
-  if (!resp.ok) throw new Error(`${resp.status}`);
-  return resp.json();
-};
+async function fetchText(url, init = {}) {
+  const response = await fetch(url, { ...init, headers: { "user-agent": UA, ...(init.headers || {}) } });
+  const text = await response.text();
+  if (!response.ok) throw new Error(`${response.status}`);
+  return text;
+}
 
-await section("Hacker News", async () => {
-  const data = await get(
-    `https://hn.algolia.com/api/v1/search_by_date?query=${encodeURIComponent("hookecho")}&numericFilters=created_at_i>${Math.floor(SINCE / 1000)}`,
-  );
-  return data.hits.slice(0, 5).map((h) => `• ${h.title || h.story_title} — https://news.ycombinator.com/item?id=${h.objectID}`);
+const get = async (url, init = {}) => JSON.parse(await fetchText(url, init));
+const github = (accept = "application/vnd.github+json") => ({
+  headers: { accept, ...(process.env.GITHUB_TOKEN ? { authorization: `Bearer ${process.env.GITHUB_TOKEN}` } : {}) },
 });
 
-await section("Reddit", async () => {
-  const data = await get(
-    `https://www.reddit.com/search.json?q=${encodeURIComponent(QUERY)}&sort=new&limit=25`,
-  );
-  return data.data.children
-    .filter((c) => c.data.created_utc * 1000 > SINCE)
-    .slice(0, 5)
-    .map((c) => `• r/${c.data.subreddit}: ${c.data.title} — https://reddit.com${c.data.permalink}`);
-});
+async function repoMetrics(product) {
+  const [repo, releases, views, clones, referrers, stars] = await Promise.all([
+    get(`https://api.github.com/repos/${product.repo}`, github()),
+    get(`https://api.github.com/repos/${product.repo}/releases?per_page=100`, github()),
+    get(`https://api.github.com/repos/${product.repo}/traffic/views`, github()).catch(() => ({})),
+    get(`https://api.github.com/repos/${product.repo}/traffic/clones`, github()).catch(() => ({})),
+    get(`https://api.github.com/repos/${product.repo}/traffic/popular/referrers`, github()).catch(() => []),
+    getStars(product.repo).catch(() => []),
+  ]);
+  return {
+    id: product.id,
+    stars: repo.stargazers_count,
+    starDelta: stars.filter((star) => new Date(star.starred_at).valueOf() > SINCE).length,
+    downloads: releases.flatMap((release) => release.assets || []).reduce((sum, asset) => sum + asset.download_count, 0),
+    visitors: views.uniques || 0,
+    cloners: clones.uniques || 0,
+    referrers: (referrers || []).slice(0, 3).map((row) => `${row.referrer} ${row.uniques}`).join(", "),
+  };
+}
 
-await section("Bluesky", async () => {
-  const data = await get(
-    `https://public.api.bsky.app/xrpc/app.bsky.feed.searchPosts?q=${encodeURIComponent("hookecho")}&limit=25`,
-  );
-  return (data.posts || [])
-    .filter((p) => new Date(p.indexedAt).getTime() > SINCE)
-    .slice(0, 5)
-    .map((p) => `• @${p.author.handle}: ${(p.record.text || "").replace(/\s+/g, " ").slice(0, 120)}`);
-});
-
-await section("GitHub", async () => {
-  // Authenticated: `demote-old` in release.yml drafts old releases, and drafts are invisible to an
-  // anonymous call — so historical download counts would silently vanish without the token.
-  const auth = process.env.GITHUB_TOKEN ? { authorization: `Bearer ${process.env.GITHUB_TOKEN}` } : {};
-  const repo = await get(`https://api.github.com/repos/${REPO}`, auth);
-  const releases = await get(`https://api.github.com/repos/${REPO}/releases?per_page=100`, auth);
-  const downloads = releases
-    .flatMap((r) => r.assets)
-    .reduce((sum, a) => sum + a.download_count, 0);
-  return [
-    `• ${repo.stargazers_count} stars, ${repo.forks_count} forks, ${repo.open_issues_count} open issues`,
-    `• ${downloads} release-asset downloads all time`,
-  ];
-});
-
-// The two directory listings that were rejected on eligibility rather than merit. Both gates are
-// dates or counters, so checking them by hand for months is exactly the chore that quietly stops
-// happening — this stays silent until one opens, then nags every Monday until it is submitted.
-//
-// ponytail: refetches the repo rather than sharing the GitHub section's response. Sections are
-// deliberately independent so one dead source cannot take the digest with it, and one extra call a
-// week is cheaper than the coupling.
-await section("Submissions now open", async () => {
-  const auth = process.env.GITHUB_TOKEN ? { authorization: `Bearer ${process.env.GITHUB_TOKEN}` } : {};
-  const repo = await get(`https://api.github.com/repos/${REPO}`, auth);
-  const releases = await get(`https://api.github.com/repos/${REPO}/releases?per_page=100`, auth);
-  const lines = [];
-
-  // awesome-rust judges on `(stars > 50 | crates.io downloads > 2000)` and explicitly on nothing
-  // else, so the star count is the whole gate.
-  if (repo.stargazers_count > 50) {
-    lines.push(
-      `• awesome-rust — ${repo.stargazers_count} stars clears the >50 gate. Applications section, alphabetical: https://github.com/rust-unofficial/awesome-rust`,
-    );
+async function getStars(repo) {
+  const all = [];
+  for (let page = 1; page <= 5; page++) {
+    const rows = await get(`https://api.github.com/repos/${repo}/stargazers?per_page=100&page=${page}`, github("application/vnd.github.star+json"));
+    all.push(...rows);
+    if (rows.length < 100) break;
   }
+  return all;
+}
 
-  // awesome-selfhosted requires the first release to be more than 4 months old. Published dates
-  // only: a draft has none, and `demote-old` drafts superseded stables.
-  const published = releases.map((r) => r.published_at).filter(Boolean).sort();
-  const first = published[0];
-  if (first) {
-    const opensAt = new Date(first);
-    opensAt.setMonth(opensAt.getMonth() + 4);
-    if (Date.now() > opensAt.getTime()) {
-      lines.push(
-        `• awesome-selfhosted — first release ${first.slice(0, 10)} is over 4 months old. Add software/hookecho.yml to https://github.com/awesome-selfhosted/awesome-selfhosted-data`,
-      );
+await section("Mentions", async () => {
+  const hits = [];
+  for (const query of ["hookecho", "weatherdesk"]) {
+    const data = await get(`https://hn.algolia.com/api/v1/search_by_date?query=${query}&numericFilters=created_at_i>${Math.floor(SINCE / 1000)}`);
+    hits.push(...data.hits.slice(0, 3).map((hit) => `• HN: ${hit.title || hit.story_title} — https://news.ycombinator.com/item?id=${hit.objectID}`));
+    const githubMentions = await get(`https://api.github.com/search/issues?q=${query}+in:title,body+-repo:d4vid87/hookecho+-repo:d4vid87/weatherdesk+updated:>${new Date(SINCE).toISOString().slice(0, 10)}&per_page=3`, github());
+    hits.push(...(githubMentions.items || []).map((item) => `• GitHub: ${item.title} — ${item.html_url}`));
+  }
+  if (process.env.BSKY_HANDLE && process.env.BSKY_APP_PASSWORD) {
+    const session = await get("https://bsky.social/xrpc/com.atproto.server.createSession", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ identifier: process.env.BSKY_HANDLE, password: process.env.BSKY_APP_PASSWORD }),
+    });
+    for (const query of ["hookecho", "weatherdesk"]) {
+      const data = await get(`https://public.api.bsky.app/xrpc/app.bsky.feed.searchPosts?q=${query}&limit=25`, {
+        headers: { authorization: `Bearer ${session.accessJwt}` },
+      });
+      hits.push(...(data.posts || [])
+        .filter((post) => new Date(post.indexedAt).valueOf() > SINCE)
+        .slice(0, 3)
+        .map((post) => `• Bluesky @${post.author.handle}: ${(post.record.text || "").replace(/\s+/g, " ").slice(0, 100)}`));
     }
   }
+  return [...new Set(hits)];
+});
 
+const productMetrics = [];
+await section("GitHub", async () => {
+  productMetrics.push(...await Promise.all(PRODUCTS.map(repoMetrics)));
+  return productMetrics.map((item) =>
+    `• ${item.id === "hookecho" ? "HookEcho" : "WeatherDesk"}: ${item.stars} stars (+${item.starDelta}), ${item.visitors} visitors, ${item.cloners} cloners, ${item.downloads} downloads; refs: ${item.referrers || "none"}`,
+  );
+});
+
+const cta = await ctaMetrics().catch((error) => {
+  failures.push(`CTA analytics: ${error.message}`);
+  return [];
+});
+await section("Tracked clicks", async () => cta.slice(0, 12).map((row) => `• ${row.target}/${row.placement}: ${Math.round(row.clicks)}`));
+
+await section("YouTube", async () => {
+  const lines = [];
+  for (const product of PRODUCTS) {
+    if (!process.env[product.youtube]) continue;
+    const token = await googleToken(process.env[product.youtube]);
+    const startDate = new Date(SINCE).toISOString().slice(0, 10);
+    const endDate = new Date().toISOString().slice(0, 10);
+    const url = new URL("https://youtubeanalytics.googleapis.com/v2/reports");
+    url.search = new URLSearchParams({
+      ids: "channel==MINE",
+      startDate,
+      endDate,
+      metrics: "views,averageViewDuration,shares,subscribersGained",
+    });
+    const report = await get(url, { headers: { authorization: `Bearer ${token}` } });
+    const values = Object.fromEntries((report.columnHeaders || []).map((column, i) => [column.name, report.rows?.[0]?.[i] || 0]));
+    lines.push(`• ${product.id}: ${values.views || 0} views, ${Math.round(values.averageViewDuration || 0)}s average, ${values.shares || 0} shares, +${values.subscribersGained || 0} subscribers`);
+  }
   return lines;
 });
 
+await section("Meta", async () => {
+  const lines = [];
+  for (const product of PRODUCTS) {
+    const pageId = process.env[product.page];
+    const pageToken = process.env[product.pageToken];
+    const igId = process.env[product.ig];
+    const igToken = process.env[product.igToken] || pageToken;
+    if (pageId && pageToken) {
+      const page = await get(`https://graph.facebook.com/${process.env.META_GRAPH_VERSION || "v25.0"}/${pageId}?fields=followers_count,fan_count&access_token=${encodeURIComponent(pageToken)}`);
+      const activity = await metaActivity(pageId, pageToken, "facebook").catch(() => null);
+      lines.push(`• ${product.id} Facebook: ${page.followers_count || page.fan_count || 0} followers${activity ? `, ${activity.reach} reach, ${activity.plays} plays, ${channelClicks("facebook", product.id)} tracked link clicks` : ""}`);
+    }
+    if (igId && igToken) {
+      const instagram = await get(`https://graph.facebook.com/${process.env.META_GRAPH_VERSION || "v25.0"}/${igId}?fields=followers_count,media_count&access_token=${encodeURIComponent(igToken)}`);
+      const activity = await metaActivity(igId, igToken, "instagram").catch(() => null);
+      lines.push(`• ${product.id} Instagram: ${instagram.followers_count || 0} followers, ${instagram.media_count || 0} posts${activity ? `, ${activity.reach} reach, ${activity.plays} plays, ${channelClicks("instagram", product.id)} tracked link clicks` : ""}`);
+    }
+  }
+  return lines;
+});
+
+const totalStars = productMetrics.reduce((sum, item) => sum + item.stars, 0);
+const elapsed = Math.max(0, Math.min(90, Math.floor((Date.now() - new Date("2026-09-05T00:00:00Z")) / 86_400_000)));
+const expected = 98 + Math.floor(102 * elapsed / 90);
+sections.unshift(`**90-day goal**\n• ${totalStars}/200 combined stars; day ${elapsed}, linear checkpoint ${expected}\n• checkpoints: day 30 = 132 · day 60 = 166 · day 90 = 200`);
+
+const artifacts = await actionArtifacts().catch(() => []);
+await section("Publishing", async () => {
+  const succeeded = artifacts.filter(({ name }) => name.startsWith("promo-") && !name.includes("failure")).length;
+  const counts = new Map();
+  for (const { name } of artifacts) {
+    const match = name.match(/^promo-(auth-)?failure-([a-z]+)-/);
+    if (match) counts.set(`${match[2]}${match[1] ? " auth" : ""}`, (counts.get(`${match[2]}${match[1] ? " auth" : ""}`) || 0) + 1);
+  }
+  return [`• ${succeeded} successful destination posts`, ...[...counts].map(([channel, count]) => `• ${channel}: ${count} failures`)];
+});
+const sourceClicks = Object.fromEntries(["hookecho", "weatherdesk"].map((product) => [
+  product,
+  cta.filter((row) => row.target === `${product}-source` && SOCIAL_CHANNELS.has(row.placement)).reduce((sum, row) => sum + Number(row.clicks || 0), 0),
+]));
+const deltas = Object.fromEntries(productMetrics.map((item) => [item.id, item.starDelta]));
+const sourcePosts = Object.fromEntries(["hookecho", "weatherdesk"].map((product) => [
+  product,
+  artifacts.filter(({ name }) => name.includes(`-open-source-${product}-`) && !name.includes("failure")).length,
+]));
+const rates = Object.fromEntries(["hookecho", "weatherdesk"].map((product) => [product, sourceClicks[product] / Math.max(1, sourcePosts[product])]));
+const saturday = rates.hookecho === rates.weatherdesk
+  ? (deltas.weatherdesk || 0) > (deltas.hookecho || 0) ? "weatherdesk" : "hookecho"
+  : rates.weatherdesk > rates.hookecho ? "weatherdesk" : "hookecho";
+const pauses = promotionPauses(artifacts, cta);
+writeOutput("saturday_product", saturday);
+writeOutput("promotion_pauses", pauses);
+const activePauses = new Set(artifacts.filter(({ name }) => name.startsWith("promotion-pauses-")).flatMap(({ name }) => name.split("-")));
+const pausedChannels = pauses.split(",").map((entry) => entry.split("=")[0]).filter((channel) => channel && !activePauses.has(channel));
+writeOutput("paused_channels", pausedChannels.join("-"));
+const promotionDays = Math.floor((Date.now() - new Date("2026-09-08T00:00:00Z")) / 86_400_000);
+const reportWeek = Math.floor((promotionDays + 1) / 7);
+writeOutput("should_rebalance", String(reportWeek > 0 && reportWeek % 2 === 0));
+
 const body = [
-  `**HookEcho — last 8 days**`,
+  "**HookEcho + WeatherDesk — weekly promotion report**",
   ...sections,
-  failures.length ? `_sources that failed: ${failures.join("; ")}_` : "",
-]
-  .filter(Boolean)
-  .join("\n\n")
-  .slice(0, 1990);
+  failures.length ? `_optional sources that failed: ${failures.join("; ")}_` : "",
+].filter(Boolean).join("\n\n").slice(0, 1990);
 
 console.log(body);
-
-const hook = process.env.DISCORD_WEBHOOK_URL;
-if (!hook) {
+if (!process.env.DISCORD_WEBHOOK_URL) {
   console.log("discord: skipped (DISCORD_WEBHOOK_URL unset)");
 } else {
-  const resp = await fetch(hook, {
+  await fetchText(process.env.DISCORD_WEBHOOK_URL, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ content: body }),
   });
-  if (!resp.ok) throw new Error(`discord ${resp.status}: ${await resp.text()}`);
   console.log("discord: posted");
+}
+
+async function ctaMetrics() {
+  if (!process.env.CLOUDFLARE_API_TOKEN || !process.env.CLOUDFLARE_ACCOUNT_ID) return [];
+  const sql = `SELECT blob1 AS target, blob2 AS placement, SUM(double1 * _sample_interval) AS clicks FROM hookecho_cta WHERE timestamp >= NOW() - INTERVAL '14' DAY GROUP BY target, placement ORDER BY clicks DESC`;
+  const data = await get(`https://api.cloudflare.com/client/v4/accounts/${process.env.CLOUDFLARE_ACCOUNT_ID}/analytics_engine/sql`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${process.env.CLOUDFLARE_API_TOKEN}`, "content-type": "text/plain" },
+    body: sql,
+  });
+  return data.data || [];
+}
+
+async function googleToken(refreshToken) {
+  const data = await get("https://oauth2.googleapis.com/token", {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      client_id: process.env.GOOGLE_OAUTH_CLIENT_ID,
+      client_secret: process.env.GOOGLE_OAUTH_CLIENT_SECRET,
+      refresh_token: refreshToken,
+      grant_type: "refresh_token",
+    }),
+  });
+  return data.access_token;
+}
+
+function channelClicks(channel, product) {
+  return Math.round(cta.filter((row) => row.placement === channel && (product === "weatherdesk" ? row.target.startsWith("weatherdesk") : !row.target.startsWith("weatherdesk"))).reduce((sum, row) => sum + Number(row.clicks || 0), 0));
+}
+
+async function metaActivity(id, token, type) {
+  const graph = `https://graph.facebook.com/${process.env.META_GRAPH_VERSION || "v25.0"}`;
+  const edge = type === "facebook" ? "posts" : "media";
+  const fields = type === "facebook" ? "id,created_time" : "id,timestamp,media_product_type";
+  const media = await get(`${graph}/${id}/${edge}?fields=${fields}&since=${Math.floor(SINCE / 1000)}&limit=25&access_token=${encodeURIComponent(token)}`);
+  const items = (media.data || []).filter((item) => type === "facebook" || item.media_product_type === "REELS");
+  const totals = await Promise.all(items.map(async (item) => ({
+    reach: await metaInsight(graph, item.id, token, type === "facebook" ? ["post_impressions_unique"] : ["reach"], type),
+    plays: await metaInsight(graph, item.id, token, type === "facebook" ? ["post_video_views", "post_video_views_organic"] : ["views", "plays"], type),
+  })));
+  return totals.reduce((sum, item) => ({ reach: sum.reach + item.reach, plays: sum.plays + item.plays }), { reach: 0, plays: 0 });
+}
+
+async function metaInsight(graph, id, token, alternatives, type) {
+  for (const metric of alternatives) {
+    try {
+      const period = type === "facebook" ? "&period=lifetime" : "";
+      const result = await get(`${graph}/${id}/insights?metric=${metric}${period}&access_token=${encodeURIComponent(token)}`);
+      const row = result.data?.[0];
+      const value = row?.total_value?.value ?? row?.values?.at(-1)?.value ?? row?.value ?? 0;
+      if (Number.isFinite(Number(value))) return Number(value);
+    } catch {
+      // Meta renames metrics across Graph versions; try the documented predecessor.
+    }
+  }
+  return 0;
+}
+
+async function actionArtifacts() {
+  if (!process.env.GITHUB_TOKEN || !process.env.GITHUB_REPOSITORY) return [];
+  const all = [];
+  for (let page = 1; page <= 5; page++) {
+    const data = await get(`https://api.github.com/repos/${process.env.GITHUB_REPOSITORY}/actions/artifacts?per_page=100&page=${page}`, github());
+    all.push(...(data.artifacts || []));
+    if ((data.artifacts || []).length < 100) break;
+  }
+  return all.filter((artifact) => !artifact.expired && new Date(artifact.created_at).valueOf() > Date.now() - 14 * 86_400_000);
+}
+
+function writeOutput(name, value) {
+  if (process.env.GITHUB_OUTPUT) appendFileSync(process.env.GITHUB_OUTPUT, `${name}=${value}\n`);
 }

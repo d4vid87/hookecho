@@ -1,0 +1,18 @@
+{
+  "capturedAt": "2026-09-05",
+  "campaignDays": 90,
+  "combinedStars": 98,
+  "targetStars": 200,
+  "hookecho": {
+    "stars": 56,
+    "fourteenDayGitHubVisitors": 262,
+    "fourteenDayGitHubViews": 552,
+    "releaseAssetDownloads": 278
+  },
+  "weatherdesk": {
+    "stars": 42,
+    "fourteenDayGitHubVisitors": 791,
+    "fourteenDayGitHubViews": 2045,
+    "releaseAssetDownloads": 1941
+  }
+}

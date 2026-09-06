@@ -1,316 +1,429 @@
-// Announce a release: post to the wired channels, write drafts for the ones that are hand-posted.
-//
-//   node scripts/announce/post.mjs v0.9.0 [--dry-run]
-//
-// Bluesky, Mastodon, X and a Discord webhook are posted automatically; each is skipped with a log
-// line if its secrets are unset, so a half-configured repo still works. Reddit and Hacker News are
-// never automated — both communities read that as spam, and both are where the traffic is — so
-// this writes announce-drafts.md to paste by hand (see docs/promotion.md).
-//
-// ponytail: zero dependencies (fetch + node:crypto, node >= 20), text and links only. No image
-// upload: the repo's social-preview image already gives every channel a link card, and hero.gif is
-// far over Bluesky's blob cap. Upload code is the upgrade path if a plain card ever underperforms.
-import { createHmac } from "node:crypto";
-import { readFileSync, writeFileSync } from "node:fs";
+// One no-dependency promotion entry point: prepare factual campaigns, then publish one channel.
+// Public posting is disabled for scheduled/weather work until PROMOTION_ENABLED=true. Stable
+// HookEcho releases keep the behaviour they had before this system existed.
+import { appendFileSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import {
+  CHANNELS,
+  PRODUCTS,
+  PROMOTION_START,
+  campaignForDate,
+  composeText,
+  isPaused,
+  pickWeatherCampaign,
+  releaseCampaign,
+  trackedUrl,
+  weatherCapAllows,
+} from "./campaigns.mjs";
 
-const REPO = "d4vid87/hookecho";
-const DEMO = "https://app.hookecho.io/";
-const tag = process.argv[2];
-const dryRun = process.argv.includes("--dry-run");
-if (!tag) {
-  console.error("usage: post.mjs <tag> [--dry-run]");
-  process.exit(1);
-}
-const version = tag.replace(/^v/, "");
-// The tagged release URL, not the asset: `demote-old` in release.yml drafts old releases, so this
-// link rots one release later. That is why the demo is the primary call to action everywhere.
-const releaseUrl = `https://github.com/${REPO}/releases/tag/${tag}`;
+const UA = "HookEcho promotion (https://github.com/d4vid87/hookecho)";
+const GRAPH = process.env.META_GRAPH_VERSION || "v25.0";
 
-/** The tag's own CHANGELOG section, as a bullet list. */
-function notes() {
-  const lines = readFileSync("CHANGELOG.md", "utf8").split("\n");
-  const start = lines.findIndex((l) => l.startsWith(`## ${version} `));
-  if (start < 0) throw new Error(`no CHANGELOG.md section for ${version}`);
-  const rest = lines.slice(start + 1);
-  const end = rest.findIndex((l) => l.startsWith("## "));
-  return (end < 0 ? rest : rest.slice(0, end)).join("\n").trim();
+export function markerName(campaign, channel) {
+  return `promo-${campaign.id}-${channel}`.replace(/[^A-Za-z0-9_.-]/g, "-").slice(0, 240);
 }
 
-/** The bullets as one-line summaries, longest-first trimmed to fit a budget. */
-function highlights(body, max) {
-  const items = body
-    .split(/\n(?=- )/)
-    .map((b) => b.replace(/^- /, "").replace(/\s+/g, " ").trim())
-    .filter(Boolean);
-  const out = [];
-  let used = 0;
-  for (const item of items) {
-    const line = `• ${item.split(" — ")[0].replace(/[.:,;]$/, "")}`;
-    if (used + line.length + 1 > max) break;
-    out.push(line);
-    used += line.length + 1;
+export function channelSecrets(channel, product, env = process.env) {
+  const suffix = product.toUpperCase();
+  if (channel === "bluesky") return env.BSKY_HANDLE && env.BSKY_APP_PASSWORD;
+  if (channel === "mastodon") return env.MASTODON_URL && env.MASTODON_TOKEN;
+  if (channel === "discord") return env.DISCORD_WEBHOOK_URL;
+  if (channel === "youtube") return env.GOOGLE_OAUTH_CLIENT_ID && env.GOOGLE_OAUTH_CLIENT_SECRET && env[`YOUTUBE_${suffix}_REFRESH_TOKEN`];
+  if (channel === "facebook") return env[`META_${suffix}_PAGE_ID`] && env[`META_${suffix}_PAGE_TOKEN`];
+  if (channel === "instagram") return env[`META_${suffix}_IG_USER_ID`] && (env[`META_${suffix}_IG_TOKEN`] || env[`META_${suffix}_PAGE_TOKEN`]);
+  return false;
+}
+
+export async function retryingFetch(url, init, fetchFn = fetch, sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))) {
+  let last;
+  for (let attempt = 0; attempt < 4; attempt++) {
+    try {
+      const response = await fetchFn(url, init);
+      if (response.ok || (response.status !== 429 && response.status < 500)) return response;
+      last = new Error(`${response.status} ${await response.text()}`);
+      last.status = response.status;
+    } catch (error) {
+      last = error;
+    }
+    if (attempt < 3) await sleep(500 * 2 ** attempt);
   }
-  return out.join("\n");
+  throw last;
 }
 
-const body = notes();
-const headline = `HookEcho ${version} is out — an open-source NEXRAD radar viewer in Rust (wgpu + egui). No accounts, no telemetry, runs on your machine.`;
-
-function compose(limit, links) {
-  const tail = `\n\n${links}`;
-  const room = limit - headline.length - tail.length - 2;
-  const bullets = room > 40 ? highlights(body, room) : "";
-  return `${headline}${bullets ? `\n\n${bullets}` : ""}${tail}`;
-}
-
-// --- channels ---------------------------------------------------------------
-
-async function postBluesky(text) {
-  const { BSKY_HANDLE, BSKY_APP_PASSWORD } = process.env;
-  if (!BSKY_HANDLE || !BSKY_APP_PASSWORD) return skip("bluesky");
-  const api = "https://bsky.social/xrpc";
-  const session = await json(`${api}/com.atproto.server.createSession`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ identifier: BSKY_HANDLE, password: BSKY_APP_PASSWORD }),
-  });
-  await json(`${api}/com.atproto.repo.createRecord`, {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      authorization: `Bearer ${session.accessJwt}`,
-    },
-    body: JSON.stringify({
-      repo: session.did,
-      collection: "app.bsky.feed.post",
-      record: {
-        $type: "app.bsky.feed.post",
-        text,
-        facets: linkFacets(text),
-        createdAt: new Date().toISOString(),
-      },
-    }),
-  });
-  console.log("bluesky: posted");
-}
-
-/** Bluesky wants byte offsets into the UTF-8 encoding, not character indices. */
-function linkFacets(text) {
-  const bytes = Buffer.from(text, "utf8");
-  const facets = [];
-  for (const m of text.matchAll(/https?:\/\/\S+/g)) {
-    const uri = m[0].replace(/[.,)]+$/, "");
-    const byteStart = Buffer.from(text.slice(0, m.index), "utf8").length;
-    facets.push({
-      index: { byteStart, byteEnd: byteStart + Buffer.from(uri, "utf8").length },
-      features: [{ $type: "app.bsky.richtext.facet#link", uri }],
-    });
+async function request(url, init = {}, fetchFn = fetch) {
+  const response = await retryingFetch(url, {
+    ...init,
+    headers: { "user-agent": UA, ...(init.headers || {}) },
+  }, fetchFn);
+  const body = await response.text();
+  if (!response.ok) {
+    const error = new Error(`${response.status} ${url}: ${body.slice(0, 300)}`);
+    error.status = response.status;
+    throw error;
   }
-  return bytes.length ? facets : [];
+  return body ? JSON.parse(body) : {};
 }
 
-async function postMastodon(text) {
-  const { MASTODON_URL, MASTODON_TOKEN } = process.env;
-  if (!MASTODON_URL || !MASTODON_TOKEN) return skip("mastodon");
-  await json(`${MASTODON_URL.replace(/\/$/, "")}/api/v1/statuses`, {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      authorization: `Bearer ${MASTODON_TOKEN}`,
-    },
-    body: JSON.stringify({ status: text }),
-  });
-  console.log("mastodon: posted");
+async function combinedStars() {
+  const values = await Promise.all(Object.values(PRODUCTS).map(async ({ repo }) => {
+    try {
+      return (await request(`https://api.github.com/repos/${repo}`, githubHeaders())).stargazers_count || 0;
+    } catch {
+      return 0;
+    }
+  }));
+  return values.reduce((sum, value) => sum + value, 0);
 }
 
-async function postX(text) {
-  const { X_API_KEY, X_API_SECRET, X_ACCESS_TOKEN, X_ACCESS_SECRET } = process.env;
-  if (!X_API_KEY || !X_API_SECRET || !X_ACCESS_TOKEN || !X_ACCESS_SECRET) return skip("x");
-  const url = "https://api.twitter.com/2/tweets";
-  const auth = oauth1Header("POST", url, {
-    consumerKey: X_API_KEY,
-    consumerSecret: X_API_SECRET,
-    token: X_ACCESS_TOKEN,
-    tokenSecret: X_ACCESS_SECRET,
-  });
-  await json(url, {
-    method: "POST",
-    headers: { "content-type": "application/json", authorization: auth },
-    body: JSON.stringify({ text }),
-  });
-  console.log("x: posted");
+function githubHeaders() {
+  return process.env.GITHUB_TOKEN
+    ? { headers: { authorization: `Bearer ${process.env.GITHUB_TOKEN}`, accept: "application/vnd.github+json" } }
+    : {};
 }
 
-// OAuth 1.0a, HMAC-SHA1, for one JSON endpoint whose body is not signed.
-// ponytail: 40 lines beats a dependency for a single call — reach for twitter-api-v2 the day a
-// second endpoint (media upload) shows up.
-function oauth1Header(method, url, keys, extra = {}) {
-  const enc = (s) =>
-    encodeURIComponent(s).replace(/[!*'()]/g, (c) => "%" + c.charCodeAt(0).toString(16).toUpperCase());
-  const params = {
-    oauth_consumer_key: keys.consumerKey,
-    oauth_nonce: randomNonce(),
-    oauth_signature_method: "HMAC-SHA1",
-    oauth_timestamp: String(Math.floor(Date.now() / 1000)),
-    oauth_token: keys.token,
-    oauth_version: "1.0",
-    ...extra,
-  };
-  const base = [
-    method.toUpperCase(),
-    enc(url),
-    enc(
-      Object.keys(params)
-        .sort()
-        .map((k) => `${enc(k)}=${enc(params[k])}`)
-        .join("&"),
-    ),
-  ].join("&");
-  const signingKey = `${enc(keys.consumerSecret)}&${enc(keys.tokenSecret)}`;
-  params.oauth_signature = createHmac("sha1", signingKey).update(base).digest("base64");
-  return (
-    "OAuth " +
-    Object.keys(params)
-      .sort()
-      .map((k) => `${enc(k)}="${enc(params[k])}"`)
-      .join(", ")
+async function listArtifacts() {
+  const { GITHUB_TOKEN, GITHUB_REPOSITORY } = process.env;
+  if (!GITHUB_TOKEN || !GITHUB_REPOSITORY) return [];
+  const artifacts = [];
+  for (let page = 1; page <= 5; page++) {
+    const data = await request(
+      `https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/artifacts?per_page=100&page=${page}`,
+      githubHeaders(),
+    );
+    artifacts.push(...(data.artifacts || []));
+    if ((data.artifacts || []).length < 100) break;
+  }
+  return artifacts.filter((artifact) => !artifact.expired);
+}
+
+async function prepareScheduled(output, date = new Date().toISOString(), saturday) {
+  const artifacts = await listArtifacts();
+  const selected = [saturday, latestSaturdayProduct(artifacts), process.env.SATURDAY_PRODUCT].find((value) => PRODUCTS[value]) || "hookecho";
+  const campaign = campaignForDate(date, selected);
+  if (!campaign) return false;
+  campaign.combinedStars = await combinedStars();
+  writeFileSync(output, JSON.stringify(campaign, null, 2));
+  return true;
+}
+
+async function prepareRelease(output, product, tag, changelogPath) {
+  const changelog = readFileSync(changelogPath, "utf8");
+  const campaign = releaseCampaign(product, tag, changelog);
+  campaign.combinedStars = await combinedStars();
+  writeFileSync(output, JSON.stringify(campaign, null, 2));
+  return true;
+}
+
+async function prepareLatestRelease(output, product) {
+  if (!PRODUCTS[product]) throw new Error("unknown product");
+  const release = await request(`https://api.github.com/repos/${PRODUCTS[product].repo}/releases/latest`, githubHeaders());
+  if (release.draft || release.prerelease || !release.tag_name || new Date(release.published_at) < new Date(`${PROMOTION_START}T00:00:00Z`)) return false;
+  const version = release.tag_name.replace(/^v/, "");
+  const heading = product === "weatherdesk" ? `## [${version}]` : `## ${version}`;
+  const campaign = releaseCampaign(product, release.tag_name, `${heading}\n${release.body || "- A new stable release is ready."}`);
+  campaign.combinedStars = await combinedStars();
+  writeFileSync(output, JSON.stringify(campaign, null, 2));
+  return true;
+}
+
+async function prepareWeather(output) {
+  const artifacts = await listArtifacts();
+  const today = new Date().toISOString().slice(0, 10);
+  const monitorName = `weather-monitor-${today}`;
+  writeOutput("monitor_marker", artifacts.some((artifact) => artifact.name === monitorName) ? "" : monitorName);
+
+  const nws = await request("https://api.weather.gov/alerts/active?status=actual&message_type=alert", {
+    headers: { accept: "application/geo+json" },
+  });
+  if (!Array.isArray(nws.features)) throw new Error("NWS returned a malformed alert feed");
+  const nhcUrls = ["index-at.xml", "index-ep.xml", "index-cp.xml"].map((name) => `https://www.nhc.noaa.gov/${name}`);
+  const nhc = await Promise.all(nhcUrls.map(async (url) => {
+    try {
+      const response = await retryingFetch(url, { headers: { "user-agent": UA } });
+      return response.ok ? response.text() : "";
+    } catch {
+      return "";
+    }
+  }));
+  if (nhc.some((xml) => !/<rss\b/i.test(xml) || !/<\/rss>/i.test(xml))) throw new Error("NHC returned a missing or malformed feed");
+
+  const monitorDays = new Set(
+    artifacts.map((artifact) => artifact.name.match(/^weather-monitor-(\d{4}-\d{2}-\d{2})$/)?.[1]).filter(Boolean),
+  );
+  monitorDays.add(today);
+  writeOutput("monitor_days", String(monitorDays.size));
+  if (monitorDays.size < 7) return false;
+
+  const published = publishedWeather(artifacts);
+  if (!weatherCapAllows(published)) return false;
+  const ids = new Set(published.map((item) => item.id));
+  const campaign = pickWeatherCampaign(nws.features, nhc, ids);
+  if (!campaign) return false;
+  campaign.combinedStars = await combinedStars();
+  writeFileSync(output, JSON.stringify(campaign, null, 2));
+  return true;
+}
+
+function publishedWeather(artifacts) {
+  const found = new Map();
+  for (const artifact of artifacts) {
+    const match = artifact.name.match(/^promo-(weather-[a-f0-9]{10}-[a-f0-9]{10})-(?:bluesky|mastodon|facebook)$/);
+    if (match && !found.has(match[1])) found.set(match[1], { id: match[1], createdAt: artifact.created_at });
+  }
+  return [...found.values()];
+}
+
+async function publishFile(path, channel, media, dryRun = false) {
+  const campaign = JSON.parse(readFileSync(path, "utf8"));
+  if (!PRODUCTS[campaign.product] || !campaign.id || !campaign.title || !campaign.body) throw new Error("invalid campaign file");
+  if (![...CHANNELS, "discord"].includes(channel)) throw new Error("unknown channel");
+  const marker = markerName(campaign, channel);
+  writeOutput("marker", marker);
+
+  if (campaign.kind === "weather" && !["bluesky", "mastodon", "facebook"].includes(channel)) return skipped(channel, "weather is text-only");
+  if (["youtube", "instagram"].includes(channel) && !media) return skipped(channel, "media missing");
+  const text = composeText(campaign, channel);
+  if (dryRun || process.env.DRY_RUN === "true") {
+    console.log(`[dry-run] ${channel} ${marker}\n${text}`);
+    return false;
+  }
+
+  const artifacts = await listArtifacts();
+  if (isPaused(channel, process.env.PROMOTION_PAUSES) || artifactPaused(channel, artifacts)) return skipped(channel, "paused");
+  if (artifacts.some((artifact) => artifact.name === marker)) return skipped(channel, "already posted");
+  if (!channelSecrets(channel, campaign.product)) return skipped(channel, "secrets unset");
+  if (campaign.kind !== "release" && process.env.PROMOTION_ENABLED !== "true" && process.env.MANUAL_TEST !== "true") return skipped(channel, "promotion disabled");
+  if (channel === "youtube" && process.env.YOUTUBE_PUBLIC_UPLOADS !== "true" && process.env.YOUTUBE_TEST_UPLOADS !== "true") {
+    return skipped(channel, "YouTube audit not enabled");
+  }
+
+  try {
+    if (channel === "bluesky") await postBluesky(text);
+    else if (channel === "mastodon") await postMastodon(text);
+    else if (channel === "discord") await postDiscord(text);
+    else if (channel === "youtube") await postYouTube(campaign, text, media);
+    else if (channel === "facebook") await postFacebook(campaign, text, media);
+    else if (channel === "instagram") await postInstagram(campaign, text, media);
+  } catch (error) {
+    writeFileSync("promotion-failure.txt", `${new Date().toISOString()} ${campaign.id} ${channel} ${error.status || "error"}\n`);
+    const kind = error.status === 401 || error.status === 403 ? "promo-auth-failure" : "promo-failure";
+    writeOutput("failure_marker", `${kind}-${channel}-${Date.now()}`);
+    throw error;
+  }
+  writeOutput("posted", "true");
+  console.log(`${channel}: posted ${campaign.id}`);
+  return true;
+}
+
+function latestSaturdayProduct(artifacts) {
+  return [...artifacts]
+    .sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)))
+    .map(({ name }) => name.match(/^promotion-saturday-(hookecho|weatherdesk)-/)?.[1])
+    .find(Boolean);
+}
+
+function artifactPaused(channel, artifacts) {
+  return artifacts.some(({ name, created_at }) =>
+    name.startsWith("promotion-pauses-")
+    && name.split("-").includes(channel)
+    && Date.now() - new Date(created_at).valueOf() < 14 * 86_400_000,
   );
 }
 
-function randomNonce() {
-  return createHmac("sha1", String(Date.now())).update(String(Math.random())).digest("hex");
+async function postBluesky(text) {
+  const api = "https://bsky.social/xrpc";
+  const session = await request(`${api}/com.atproto.server.createSession`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ identifier: process.env.BSKY_HANDLE, password: process.env.BSKY_APP_PASSWORD }),
+  });
+  await request(`${api}/com.atproto.repo.createRecord`, {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: `Bearer ${session.accessJwt}` },
+    body: JSON.stringify({
+      repo: session.did,
+      collection: "app.bsky.feed.post",
+      record: { $type: "app.bsky.feed.post", text, facets: linkFacets(text), createdAt: new Date().toISOString() },
+    }),
+  });
+}
+
+export function linkFacets(text) {
+  return [...text.matchAll(/https?:\/\/\S+/g)].map((match) => {
+    const uri = match[0].replace(/[.,)]+$/, "");
+    const byteStart = Buffer.byteLength(text.slice(0, match.index));
+    return {
+      index: { byteStart, byteEnd: byteStart + Buffer.byteLength(uri) },
+      features: [{ $type: "app.bsky.richtext.facet#link", uri }],
+    };
+  });
+}
+
+async function postMastodon(text) {
+  await request(`${process.env.MASTODON_URL.replace(/\/$/, "")}/api/v1/statuses`, {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: `Bearer ${process.env.MASTODON_TOKEN}` },
+    body: JSON.stringify({ status: text }),
+  });
 }
 
 async function postDiscord(text) {
-  const url = process.env.DISCORD_WEBHOOK_URL;
-  if (!url) return skip("discord");
-  const resp = await fetch(url, {
+  await request(process.env.DISCORD_WEBHOOK_URL, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ content: text }),
   });
-  if (!resp.ok) throw new Error(`discord ${resp.status}: ${await resp.text()}`);
-  console.log("discord: posted");
 }
 
-const skip = (name) => console.log(`${name}: skipped (secrets unset)`);
-
-async function json(url, init) {
-  const resp = await fetch(url, init);
-  const text = await resp.text();
-  if (!resp.ok) throw new Error(`${url} ${resp.status}: ${text.slice(0, 300)}`);
-  return text ? JSON.parse(text) : {};
+async function googleToken(product) {
+  const suffix = product.toUpperCase();
+  const body = new URLSearchParams({
+    client_id: process.env.GOOGLE_OAUTH_CLIENT_ID,
+    client_secret: process.env.GOOGLE_OAUTH_CLIENT_SECRET,
+    refresh_token: process.env[`YOUTUBE_${suffix}_REFRESH_TOKEN`],
+    grant_type: "refresh_token",
+  });
+  return (await request("https://oauth2.googleapis.com/token", {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body,
+  })).access_token;
 }
 
-// --- hand-posted drafts -----------------------------------------------------
-
-function makeDrafts() {
-  const bullets = body;
-  const sub = (name, title, intro) =>
-    `### r/${name}\n\n**Title:** ${title}\n\n${intro}\n\n${bullets}\n\nLive demo (runs in the browser, no install): ${DEMO}\nSource and downloads: https://github.com/${REPO}\n`;
-
-  return `# Announcement drafts — ${tag}
-
-Paste these by hand, one community per day, in the wave order in docs/promotion.md.
-Reddit and HN are deliberately not automated. Reply to everything for the first
-6–12 hours; that is the part that decides how the post does.
-
-${sub(
-  "rust",
-  `HookEcho ${version} — NEXRAD weather radar in Rust, wgpu + egui, also compiled to wasm`,
-  "Written from scratch in Rust: Level 2/3 radar decode, a wgpu render pipeline, egui UI, and the same codebase running as a desktop app, an Android APK and a wasm build in the browser. Happy to talk about the rendering or the decoding.",
-)}
-${sub(
-  "meteorology",
-  `HookEcho ${version} — a free, open-source radar viewer with soundings, effective-layer parameters and model fields`,
-  "Free and open source, no account or subscription. Level 2/3 per-site analysis, archive replay back to 1991, forecast soundings with effective-layer severe parameters, HRRR/RAP/GFS/ECMWF fields and a model difference layer.",
-)}
-${sub(
-  "stormchasing",
-  `HookEcho ${version} — open-source radar for chasing: archive replay, spotter network, rain-arrival ETA, offline chase packs`,
-  "Built for the road: offline chase packs, GPS position sharing through your own relay, spotter network overlay, warning alerts read aloud, rain-arrival ETA, and Android as well as desktop. No subscription.",
-)}
-${sub(
-  "opensource",
-  `HookEcho ${version} — MIT-licensed NEXRAD radar viewer, no accounts, no telemetry`,
-  "MIT, Rust, no hosted service and no telemetry — the app talks to public NOAA/NWS feeds from your own machine. Linux AppImage, Windows installer, Android APK, container image, and a browser build.",
-)}
-## Hacker News (Show HN)
-
-**Title:** Show HN: HookEcho – NEXRAD weather radar viewer in Rust (${DEMO})
-
-**First comment (post it immediately after submitting):**
-
-I built this because the good radar software is Windows-only, paid, or both. It
-decodes NEXRAD Level 2/3 itself, renders through wgpu, and the same code runs on
-the desktop, on Android and in the browser as wasm — the demo link is the real
-app, streaming live chunks as a scan comes in. No accounts, no telemetry, no
-hosted service: it talks to the public NOAA and NWS feeds from your machine.
-
-${bullets}
-
-Source: https://github.com/${REPO}
-`;
-}
-
-// --- run --------------------------------------------------------------------
-
-const texts = {
-  bluesky: compose(300, `${DEMO}\n${releaseUrl}`),
-  mastodon: compose(500, `Live demo: ${DEMO}\nRelease: ${releaseUrl}`),
-  x: compose(280, DEMO),
-  discord: compose(2000, `Live demo: ${DEMO}\nRelease: ${releaseUrl}`),
-};
-
-writeFileSync("announce-drafts.md", makeDrafts());
-console.log("wrote announce-drafts.md");
-
-if (dryRun) {
-  selfCheckOauth1();
-  for (const [name, text] of Object.entries(texts)) {
-    console.log(`\n--- ${name} (${text.length} chars) ---\n${text}`);
-  }
-  console.log(`\n--- drafts ---\n${makeDrafts()}`);
-  process.exit(0);
-}
-
-// One channel refusing is not a failed announcement — X in particular answers 402 the moment its
-// pay-per-use credits run out, and that must not take the other channels or the drafts with it.
-// The run still fails at the end so the refusal is visible rather than buried in a green log.
-const failed = [];
-for (const [name, post, text] of [
-  ["bluesky", postBluesky, texts.bluesky],
-  ["mastodon", postMastodon, texts.mastodon],
-  ["x", postX, texts.x],
-  ["discord", postDiscord, texts.discord],
-]) {
-  try {
-    await post(text);
-  } catch (e) {
-    failed.push(name);
-    console.error(`::warning::${name}: ${e.message}`);
-  }
-}
-if (failed.length) {
-  console.error(`::error::channels that refused: ${failed.join(", ")}`);
-  process.exitCode = 1;
-}
-
-// The signature is the one piece here that fails silently-but-authentically if it is subtly wrong,
-// so it is checked against RFC 5849 §3.1's own worked example.
-function selfCheckOauth1() {
-  const header = oauth1Header(
-    "POST",
-    "http://example.com/request",
+async function postYouTube(campaign, text, media) {
+  const token = await googleToken(campaign.product);
+  const size = statSync(media).size;
+  const privacyStatus = process.env.YOUTUBE_PUBLIC_UPLOADS === "true" ? "public" : "private";
+  const response = await retryingFetch(
+    "https://www.googleapis.com/upload/youtube/v3/videos?uploadType=resumable&part=snippet,status",
     {
-      consumerKey: "9djdj82h48djs9d2",
-      consumerSecret: "j49sk3j29djd",
-      token: "kkk9d7dh3k39sjv7",
-      tokenSecret: "dh893hdasih9",
+      method: "POST",
+      headers: {
+        "user-agent": UA,
+        authorization: `Bearer ${token}`,
+        "content-type": "application/json",
+        "x-upload-content-length": String(size),
+        "x-upload-content-type": "video/mp4",
+      },
+      body: JSON.stringify({
+        snippet: { title: campaign.title.slice(0, 100), description: text, categoryId: "28" },
+        status: { privacyStatus, selfDeclaredMadeForKids: false },
+      }),
     },
-    { oauth_timestamp: "137131201", oauth_nonce: "7d8f3e4a" },
   );
-  if (!/oauth_signature="[^"]+"/.test(header)) throw new Error("oauth1: no signature produced");
-  if (!header.includes('oauth_signature_method="HMAC-SHA1"')) throw new Error("oauth1: bad header");
-  console.log("oauth1 self-check: header well-formed");
+  if (!response.ok) throw Object.assign(new Error(`YouTube ${response.status}: ${(await response.text()).slice(0, 300)}`), { status: response.status });
+  const upload = response.headers.get("location");
+  if (!upload) throw new Error("YouTube returned no upload URL");
+  const done = await retryingFetch(upload, {
+    method: "PUT",
+    headers: { authorization: `Bearer ${token}`, "content-type": "video/mp4", "content-length": String(size) },
+    body: readFileSync(media),
+  });
+  if (!done.ok) throw Object.assign(new Error(`YouTube upload ${done.status}: ${(await done.text()).slice(0, 300)}`), { status: done.status });
 }
+
+function metaCredentials(product, instagram = false) {
+  const suffix = product.toUpperCase();
+  return instagram
+    ? { id: process.env[`META_${suffix}_IG_USER_ID`], token: process.env[`META_${suffix}_IG_TOKEN`] || process.env[`META_${suffix}_PAGE_TOKEN`] }
+    : { id: process.env[`META_${suffix}_PAGE_ID`], token: process.env[`META_${suffix}_PAGE_TOKEN`] };
+}
+
+async function postFacebook(campaign, text, media) {
+  const { id, token } = metaCredentials(campaign.product);
+  if (!media) {
+    await request(`https://graph.facebook.com/${GRAPH}/${id}/feed`, {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ message: text, access_token: token }),
+    });
+    return;
+  }
+  const start = await request(`https://graph.facebook.com/${GRAPH}/${id}/video_reels`, {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({ upload_phase: "start", access_token: token }),
+  });
+  const bytes = readFileSync(media);
+  const upload = await retryingFetch(start.upload_url, {
+    method: "POST",
+    headers: { authorization: `OAuth ${token}`, offset: "0", file_size: String(bytes.length), "content-type": "application/octet-stream" },
+    body: bytes,
+  });
+  if (!upload.ok) throw Object.assign(new Error(`Facebook upload ${upload.status}: ${(await upload.text()).slice(0, 300)}`), { status: upload.status });
+  await request(`https://graph.facebook.com/${GRAPH}/${id}/video_reels`, {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      upload_phase: "finish",
+      video_id: String(start.video_id),
+      video_state: "PUBLISHED",
+      description: text,
+      access_token: token,
+    }),
+  });
+}
+
+async function postInstagram(campaign, text, media) {
+  const { id, token } = metaCredentials(campaign.product, true);
+  const container = await request(`https://graph.facebook.com/${GRAPH}/${id}/media`, {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({ media_type: "REELS", upload_type: "resumable", caption: text, access_token: token }),
+  });
+  const bytes = readFileSync(media);
+  const uploaded = await retryingFetch(container.uri, {
+    method: "POST",
+    headers: { authorization: `OAuth ${token}`, offset: "0", file_size: String(bytes.length), "content-type": "application/octet-stream" },
+    body: bytes,
+  });
+  if (!uploaded.ok) throw Object.assign(new Error(`Instagram upload ${uploaded.status}: ${(await uploaded.text()).slice(0, 300)}`), { status: uploaded.status });
+  for (let attempt = 0; attempt < 24; attempt++) {
+    const status = await request(`https://graph.facebook.com/${GRAPH}/${container.id}?fields=status_code&access_token=${encodeURIComponent(token)}`);
+    if (status.status_code === "FINISHED") break;
+    if (status.status_code === "ERROR" || status.status_code === "EXPIRED") throw new Error(`Instagram container ${status.status_code}`);
+    if (attempt === 23) throw new Error("Instagram processing timed out");
+    await new Promise((resolve) => setTimeout(resolve, 5000));
+  }
+  await request(`https://graph.facebook.com/${GRAPH}/${id}/media_publish`, {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({ creation_id: String(container.id), access_token: token }),
+  });
+}
+
+function skipped(channel, reason) {
+  console.log(`${channel}: skipped (${reason})`);
+  writeOutput("posted", "false");
+  return false;
+}
+
+function writeOutput(name, value) {
+  if (process.env.GITHUB_OUTPUT) appendFileSync(process.env.GITHUB_OUTPUT, `${name}=${value}\n`);
+}
+
+async function notify(text) {
+  if (!process.env.DISCORD_WEBHOOK_URL) return console.log(`discord: skipped (${text})`);
+  await postDiscord(text.slice(0, 1900));
+}
+
+async function main(args = process.argv.slice(2)) {
+  const [command, ...rest] = args;
+  let made = false;
+  if (command === "prepare-scheduled") made = await prepareScheduled(rest[0], rest[1], rest[2]);
+  else if (command === "prepare-release") made = await prepareRelease(rest[0], rest[1], rest[2], rest[3]);
+  else if (command === "prepare-latest-release") made = await prepareLatestRelease(rest[0], rest[1]);
+  else if (command === "prepare-weather") made = await prepareWeather(rest[0]);
+  else if (command === "publish") return publishFile(rest[0], rest[1], rest[2] || "", rest.includes("--dry-run"));
+  else if (command === "notify") return notify(rest.join(" "));
+  else throw new Error("usage: post.mjs prepare-scheduled|prepare-release|prepare-latest-release|prepare-weather|publish|notify …");
+  writeOutput("has_campaign", String(made));
+  if (made) console.log(`prepared ${JSON.parse(readFileSync(rest[0], "utf8")).id}`);
+}
+
+const invoked = process.argv[1] && import.meta.url === new URL(`file://${process.argv[1]}`).href;
+if (invoked) main().catch((error) => {
+  console.error(`::error::${error.message}`);
+  process.exitCode = 1;
+});
+
+export { main, prepareLatestRelease, prepareRelease, prepareScheduled, prepareWeather, publishFile, trackedUrl };

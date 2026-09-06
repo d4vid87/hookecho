@@ -19,6 +19,8 @@ on Windows, Linux, and Android.
 
 The whole app as wasm, on live data, with nothing to install.
 
+If HookEcho is useful to you, please [give the project a star](../../stargazers).
+
 ![Moore, Oklahoma, 20 May 2013 — KTLX 0.5° reflectivity, replayed from the archive](docs/shots/hero.gif)
 
 <sub>**KTLX 0.5° reflectivity — Moore, Oklahoma, 20 May 2013.** Replayed from the
