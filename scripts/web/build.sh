@@ -114,9 +114,9 @@ gz_bytes="$(gzip -9 -c "web/dist/hookecho_bg-$wasm_hash.wasm" | wc -c)"
 # raw / 4.01 MB gz here), so skipping it makes a local build look ~130 KB under the gate while CI
 # is over it. Install binaryen and the two agree; the warning above is not cosmetic.
 #
-# Raised deliberately for the offline chase packs (IndexedDB via web-sys) — the one budget raise
-# the R18 batch reserved for itself.
-budget="${HOOKECHO_WASM_BUDGET:-4072000}"
+# Raised deliberately for the offline chase packs (IndexedDB via web-sys) and the detailed dark
+# street-map labels shipped in the default view.
+budget="${HOOKECHO_WASM_BUDGET:-4074000}"
 printf 'wasm: %s raw, %s gzipped (budget %s)\n' \
   "$(stat -c%s "web/dist/hookecho_bg-$wasm_hash.wasm")" "$gz_bytes" "$budget"
 if [ "$gz_bytes" -gt "$budget" ]; then
