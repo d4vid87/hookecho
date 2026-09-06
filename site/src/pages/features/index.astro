@@ -1,9 +1,8 @@
 ---
 import Base from "../../layouts/Base.astro";
 
-// Screenshots come straight from the repo at a tag, so GitHub carries the bytes and a later
-// commit on main cannot change what this page shows. Bump the tag when a release reshoots.
-const shots = "https://raw.githubusercontent.com/d4vid87/hookecho/v0.12.0-beta.1/docs/shots";
+// GitHub carries the bytes; keep this page on the current product UI.
+const shots = "https://raw.githubusercontent.com/d4vid87/hookecho/main/docs/shots";
 
 // Every section opens the real app on the thing it just described. The link vocabulary is the
 // app's own #goto grammar (crates/hookecho/src/app.rs, `parse_goto`):

@@ -34,6 +34,7 @@ PROFILE="$WORK/profile"
 L_ALLTILTS="Compare 4 tilts"
 L_PANES="4 panes"
 L_LINKCAM="Link pane cameras"
+L_PANEL="Layers panel"
 L_WIND="Wind (animated)"
 L_SITES="Radar sites"
 L_XSECTION="Tool: Cross-section"
@@ -74,7 +75,7 @@ preflight() {
   # "4 panes" is built by format!("{n} pane{}"), so it never appears literally in the source.
   grep -qF '{n} pane' "$APP" "$REGISTRY" \
     || die "palette label '$L_PANES' is not in the registry any more — update shoot.sh"
-  for l in "$L_TRACKS" "$L_TOUR" "$L_ALLTILTS" "$L_LINKCAM" "$L_WIND" "$L_SITES" "$L_XSECTION" "$L_FORECAST" "$L_STORMTABLE" "$L_FRONTS" "$L_GLM" \
+  for l in "$L_TRACKS" "$L_TOUR" "$L_ALLTILTS" "$L_LINKCAM" "$L_PANEL" "$L_WIND" "$L_SITES" "$L_XSECTION" "$L_FORECAST" "$L_STORMTABLE" "$L_FRONTS" "$L_GLM" \
            "$L_MRMS" "$L_MOSAIC" "$L_QPE" "$L_HRRR" "$L_VERIFY" \
            "$L_VILD" "$L_MEHS" "$L_SNOW" "$L_RECON"; do
     grep -qF "$l" "$APP" "$REGISTRY" \
@@ -140,15 +141,6 @@ stop_app() { pkill -x hookecho 2>/dev/null || true; sleep 0.6; }
 key()   { DISPLAY="$DISPLAY_NUM" xdotool key --window "$WID" "$@"; sleep 0.4; }
 click() { DISPLAY="$DISPLAY_NUM" xdotool mousemove --sync "$1" "$2" click 1; sleep 0.8; }
 
-# Every palette action leaves the layers panel open over the left third of the map. Its own close
-# button is the only reliable way shut: the `l` hotkey is a toggle, and after a palette action the
-# panel's state is not knowable, so a toggle is a coin flip. Escape does not reach it either —
-# the palette leaves the keyboard focus in the panel's search field.
-close_drawer() {
-  click 307 81
-  sleep 1.2
-}
-
 # The readout card follows the pointer, so wherever the last click landed leaves a tooltip in the
 # middle of the frame. Park it in the corner the chrome already occupies before capturing.
 park_pointer() { DISPLAY="$DISPLAY_NUM" xdotool mousemove --sync 8 992; sleep 0.6; }
@@ -157,10 +149,6 @@ palette() { # palette "Exact Registry Label"
   DISPLAY="$DISPLAY_NUM" xdotool key --clearmodifiers ctrl+k; sleep 0.6
   DISPLAY="$DISPLAY_NUM" xdotool type --delay 45 -- "$1"; sleep 0.8
   DISPLAY="$DISPLAY_NUM" xdotool key Return; sleep 1.2
-  # Turning a layer on leaves the panel it was turned on from sitting over the left third of the
-  # map. Every scene that reaches for the palette wants the layer, not the panel; the two scenes
-  # that do want the panel open it with the `l` key instead and never come through here.
-  close_drawer
 }
 
 # Wait for the frame to stop changing rather than sleeping a guessed number of seconds: archive
@@ -223,6 +211,7 @@ scene_tropical()     { launch "$IAN";        wait_settle 16; key 1; wait_settle 
 scene_derived() {
   launch "$MAYFIELD"; wait_settle 14; key 1
   palette "$L_VILD"
+  palette "$L_PANEL"
   wait_settle 14 90
   snap derived
 }
@@ -267,6 +256,7 @@ scene_alltilts() {
   launch "KTLX,-97.52,35.37,11.2,2013-05-20T20:15:00Z"; wait_settle 14; key 1
   palette "$L_LINKCAM"
   palette "$L_PANES"   # four products of one storm only reads if all four look at the same place
+  palette "$L_PANEL"
   wait_settle 20 120
   # One product per pane, clicked on each pane's own REF/VEL/SW/ZDR/PHI/CC strip: the strip both
   # picks the pane and sets its moment, so no separate "focus this pane" click is needed. The
@@ -343,6 +333,7 @@ scene_forecast() {
   wait_settle 20 160
   palette "$L_FORECAST"
   click 700 430
+  palette "$L_PANEL"
   wait_settle 8
   snap forecast
 }
@@ -360,6 +351,7 @@ scene_stormtable() { # SCIT cells are fetched for today/yesterday only
 scene_fronts() {
   launch "KTLX,-95.0,38.5,4.6"; wait_settle 16
   palette "$L_FRONTS"
+  palette "$L_PANEL"
   wait_settle 12
   snap fronts
 }
@@ -370,6 +362,7 @@ scene_hrrr() {
   launch "KTLX,-89.5,38.5,5.4"; wait_settle 16
   palette "$L_TRACKS"
   palette "$L_HRRR"
+  palette "$L_PANEL"
   wait_settle 20 160
   snap hrrr
 }
@@ -379,6 +372,7 @@ scene_mrms() {
   launch "KTLX,-91.0,38.2,5.6"; wait_settle 16
   palette "$L_TRACKS"   # the T+ labels are a different shot's subject
   palette "$L_MRMS"
+  palette "$L_PANEL"
   wait_settle 16 120
   snap mrms
 }
@@ -390,6 +384,7 @@ scene_mosaic() {
   wait_settle 16
   palette "$L_TRACKS"
   palette "$L_MOSAIC"
+  palette "$L_PANEL"
   wait_settle 20 160
   snap mosaic
 }
@@ -400,6 +395,7 @@ scene_qpe() {
   wait_settle 16
   palette "$L_TRACKS"
   palette "$L_QPE"
+  palette "$L_PANEL"
   wait_settle 16 120
   snap qpe
 }
@@ -419,6 +415,7 @@ scene_wind() {
   launch "${LIVE_SITE:-KTLX},-98.5,39.5,4.3"; wait_settle 16
   palette "$L_WIND"
   palette "$L_SITES"   # the 160 site rings tile the whole CONUS view and fight the streaks
+  palette "$L_PANEL"
   # The HRRR wind grid is a big download and the particles seed from it: shoot too early and the
   # streaks only exist where the grid had landed, which reads as "the feature covers half a map".
   wait_settle 30 240
