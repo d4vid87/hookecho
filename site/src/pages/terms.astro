@@ -1,0 +1,54 @@
+---
+import Base from "../layouts/Base.astro";
+---
+
+<Base
+  title="Terms | HookEcho"
+  description="Terms for the HookEcho website and its owner-operated YouTube publishing tool."
+>
+  <section>
+    <div class="wrap prose">
+      <p class="eyebrow">Terms</p>
+      <h1>Terms of use</h1>
+      <p class="lede">Effective September 5, 2026</p>
+
+      <h2>HookEcho and WeatherDesk</h2>
+      <p>
+        HookEcho and WeatherDesk are open-source weather tools provided without warranties. They
+        are not official warning sources or substitutes for instructions from public safety
+        authorities. The software licenses in their repositories govern copying and distribution.
+      </p>
+
+      <h2>YouTube publishing tool</h2>
+      <p>
+        The HookEcho Promotion API client is private, owner-operated automation. It uploads our
+        product media and metadata to the authorized HookEcho and WeatherDesk channels and reads
+        aggregate channel analytics for project reporting. It is not offered to site visitors or
+        third-party channel owners.
+      </p>
+      <p>
+        Use of the client and YouTube features is also governed by the
+        <a href="https://www.youtube.com/t/terms">YouTube Terms of Service</a>. Uploaded content
+        must comply with those terms, the YouTube Community Guidelines, copyright law and privacy
+        rights. Google may suspend or terminate API access for non-compliance.
+      </p>
+
+      <h2>Privacy and access</h2>
+      <p>
+        Our <a href="/privacy/">privacy policy</a> explains the data the client accesses, stores
+        and reports, along with revocation and deletion instructions. Questions can be sent to
+        <a href="mailto:hookecho.io@gmail.com">hookecho.io@gmail.com</a>.
+      </p>
+    </div>
+  </section>
+</Base>
+
+<style>
+  :global(section:first-of-type) {
+    background-image: var(--mesh);
+    background-repeat: no-repeat;
+    background-size: 100% 22rem;
+  }
+  .prose { max-width: 68ch; }
+  .lede { font-size: 1.1rem; color: var(--text-dim); }
+</style>

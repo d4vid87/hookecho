@@ -82,6 +82,34 @@ import Base from "../layouts/Base.astro";
         is nothing here for you to hand us.
       </p>
 
+      <h2>YouTube publishing</h2>
+      <p>
+        Our owner-operated promotion tool uses the YouTube Data API to upload HookEcho and
+        WeatherDesk videos and the YouTube Analytics API to read aggregate channel statistics.
+        It is not available to site visitors and does not provide a public Google sign-in. Only
+        the owners of the two project channels authorize it.
+      </p>
+      <p>
+        The tool stores OAuth refresh tokens as encrypted GitHub Actions secrets. It does not
+        request or store Google passwords, viewer identities, comments, watch histories or other
+        per-viewer data. Uploaded media and metadata are created by us. Aggregate views, average
+        watch duration, shares and subscribers gained may appear in a private workflow log and
+        our weekly project report; they are not sold or used for advertising.
+      </p>
+      <p>
+        This use of YouTube API Services is subject to the
+        <a href="https://www.youtube.com/t/terms">YouTube Terms of Service</a> and
+        <a href="https://policies.google.com/privacy">Google Privacy Policy</a>. A channel owner
+        can revoke access from
+        <a href="https://security.google.com/settings/security/permissions"
+          >Google Security settings</a
+        >. They can also request deletion by emailing
+        <a href="mailto:hookecho.io@gmail.com">hookecho.io@gmail.com</a>. We delete stored tokens
+        and retained YouTube API data as soon as possible and within seven calendar days of a
+        revocation or deletion request. Deleting our stored data does not delete content or data
+        held by YouTube; that must be managed through YouTube.
+      </p>
+
       <h2>If you would rather check than trust</h2>
       <p>
         The site and the app are both in
