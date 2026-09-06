@@ -108,8 +108,8 @@ test("an existing success marker makes a retry a no-op", async () => {
   const path = join(dir, "campaign.json");
   const campaign = { id: "scheduled-existing", kind: "scheduled", product: "hookecho", title: "Test", body: "Body", askForStar: false, combinedStars: 98 };
   writeFileSync(path, JSON.stringify(campaign));
-  const before = { GITHUB_TOKEN: process.env.GITHUB_TOKEN, GITHUB_REPOSITORY: process.env.GITHUB_REPOSITORY, BSKY_HANDLE: process.env.BSKY_HANDLE, BSKY_APP_PASSWORD: process.env.BSKY_APP_PASSWORD };
-  Object.assign(process.env, { GITHUB_TOKEN: "token", GITHUB_REPOSITORY: "d4vid87/hookecho", BSKY_HANDLE: "test", BSKY_APP_PASSWORD: "test" });
+  const before = { GITHUB_TOKEN: process.env.GITHUB_TOKEN, GITHUB_REPOSITORY: process.env.GITHUB_REPOSITORY, BSKY_HANDLE: process.env.BSKY_HANDLE, BSKY_APP_PASSWORD: process.env.BSKY_APP_PASSWORD, DRY_RUN: process.env.DRY_RUN };
+  Object.assign(process.env, { GITHUB_TOKEN: "token", GITHUB_REPOSITORY: "d4vid87/hookecho", BSKY_HANDLE: "test", BSKY_APP_PASSWORD: "test", DRY_RUN: "false" });
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async (url) => {
     assert.match(String(url), /actions\/artifacts/);
@@ -150,7 +150,7 @@ test("every provider builds a valid request without contacting a service", async
   }));
 
   const keys = [
-    "PROMOTION_ENABLED", "YOUTUBE_PUBLIC_UPLOADS", "BSKY_HANDLE", "BSKY_APP_PASSWORD",
+    "PROMOTION_ENABLED", "DRY_RUN", "YOUTUBE_PUBLIC_UPLOADS", "BSKY_HANDLE", "BSKY_APP_PASSWORD",
     "MASTODON_URL", "MASTODON_TOKEN", "DISCORD_WEBHOOK_URL", "GOOGLE_OAUTH_CLIENT_ID",
     "GOOGLE_OAUTH_CLIENT_SECRET", "YOUTUBE_HOOKECHO_REFRESH_TOKEN", "META_HOOKECHO_PAGE_ID",
     "META_HOOKECHO_PAGE_TOKEN", "META_HOOKECHO_IG_USER_ID", "META_HOOKECHO_IG_TOKEN",
@@ -158,6 +158,7 @@ test("every provider builds a valid request without contacting a service", async
   const before = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
   Object.assign(process.env, {
     PROMOTION_ENABLED: "true",
+    DRY_RUN: "false",
     YOUTUBE_PUBLIC_UPLOADS: "true",
     BSKY_HANDLE: "bot.test",
     BSKY_APP_PASSWORD: "secret",
