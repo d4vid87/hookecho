@@ -8,9 +8,11 @@ const placements = {
   download: "final",
   android: "nav",
   "hookecho-source": "footer",
+  "hookecho-youtube": "footer",
   weatherdesk: "homepage",
   "weatherdesk-release": "weatherdesk-hero",
   "weatherdesk-source": "weatherdesk-final",
+  "weatherdesk-youtube": "footer",
 };
 
 test("allowlisted CTA redirects keep working and record only aggregate fields", () => {

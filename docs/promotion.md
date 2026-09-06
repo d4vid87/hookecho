@@ -62,6 +62,11 @@ Create separate HookEcho and WeatherDesk YouTube channels, Facebook Pages and In
 professional accounts. One Google Cloud project and one Meta developer app may authorize both
 sets. Complete the provider reviews, then add these GitHub Actions secrets:
 
+The Google side is provisioned in project `hookecho-promotion`. HookEcho uses YouTube channel
+`UCZRECVhcCwdr0Fm5Z0NUo7g`; WeatherDesk uses `UCDgrO5Mn_mshCQukQm428lA`. Both channel tokens,
+Data API access, Analytics access and private upload checks were verified on September 5, 2026.
+Public YouTube uploads remain disabled pending Google's API audit.
+
 - Existing: `BSKY_HANDLE`, `BSKY_APP_PASSWORD`, `MASTODON_URL`, `MASTODON_TOKEN`,
   `DISCORD_WEBHOOK_URL`, `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_API_TOKEN`.
 - GitHub metrics: optional `PROMOTION_GITHUB_TOKEN` with read access to traffic for both

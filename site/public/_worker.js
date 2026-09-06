@@ -3,9 +3,11 @@ export const GO_TARGETS = Object.freeze({
   download: "/download/",
   android: "/download/#p-android",
   "hookecho-source": "https://github.com/d4vid87/hookecho",
+  "hookecho-youtube": "https://www.youtube.com/channel/UCZRECVhcCwdr0Fm5Z0NUo7g",
   weatherdesk: "/weatherdesk/",
   "weatherdesk-release": "https://github.com/d4vid87/weatherdesk/releases/latest",
   "weatherdesk-source": "https://github.com/d4vid87/weatherdesk",
+  "weatherdesk-youtube": "https://www.youtube.com/channel/UCDgrO5Mn_mshCQukQm428lA",
 });
 
 export const GO_PLACEMENTS = new Set([
