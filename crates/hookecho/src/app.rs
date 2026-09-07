@@ -2408,6 +2408,11 @@ pub struct HookEchoApp {
     diff_valid: Option<(String, String)>,
     /// When `goto.txt` was last looked for — see the poll in `update`.
     goto_poll: Option<Instant>,
+    /// The `#goto=` fragment last applied, web only — so a kiosk tab that never navigates away
+    /// (a Home Assistant browser card, a wallpanel display) picks up a new link the same way a
+    /// fresh tab does. See the poll in `update` and `apply_goto_hash`'s doc comment.
+    #[cfg(target_arch = "wasm32")]
+    last_goto_hash: Option<String>,
     /// The last difference grid, kept on the CPU after upload so the cursor can read a number off
     /// it. A diverging color says "the models disagree here"; only a value says by how much.
     diff_grid: Option<wxdata::mrms::MrmsField>,
@@ -3364,6 +3369,8 @@ impl HookEchoApp {
             diff_valid: None,
             diff_grid: None,
             goto_poll: None,
+            #[cfg(target_arch = "wasm32")]
+            last_goto_hash: None,
             diff_key: None,
             sounding_at: None,
             zone_pts: Vec::new(),
@@ -3772,8 +3779,11 @@ impl HookEchoApp {
         }
     }
 
-    /// The browser's own deep link: `https://…/#goto=KTLX,-97.3,35.3,9`. Read once at boot — a
-    /// fragment change afterwards is someone editing the URL bar, not a share being opened.
+    /// The browser's own deep link: `https://…/#goto=KTLX,-97.3,35.3,9`. Called at boot, and again
+    /// from the poll in `update` — a tab that never navigates away (a Home Assistant browser
+    /// card, a kiosk display, a bookmarked tab someone keeps open) only ever gets a fragment-only
+    /// navigation when the link changes, which the browser treats as same-document and never
+    /// reloads. Without the re-check that tap silently did nothing.
     /// Percent-escapes are decoded by `parse_goto`, so a fragment that came back from a chat
     /// client with its commas and colons escaped still opens.
     #[cfg(target_arch = "wasm32")]
@@ -3781,6 +3791,10 @@ impl HookEchoApp {
         let Some(h) = web_sys::window().and_then(|w| w.location().hash().ok()) else {
             return;
         };
+        if self.last_goto_hash.as_deref() == Some(h.as_str()) {
+            return;
+        }
+        self.last_goto_hash = Some(h.clone());
         if let Some(v) = h.strip_prefix("#goto=") {
             self.apply_goto(v);
             // A shared link points at one moment on purpose. Auto-playing away from it would
@@ -15522,6 +15536,8 @@ impl eframe::App for HookEchoApp {
         {
             self.goto_poll = Some(Instant::now());
             self.drain_goto_file();
+            #[cfg(target_arch = "wasm32")]
+            self.apply_goto_hash();
         }
         // The settings window has no HTTP client or runtime, so the voice-download button raises
         // a flag and the work happens here, on the same spawner everything else fetches on.
