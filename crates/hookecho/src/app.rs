@@ -11554,8 +11554,9 @@ impl HookEchoApp {
             // alternate frames, which is exactly the flicker you see while panning.
             labels.sort_by_key(|l| {
                 (
-                    !self.labels.was_shown(label_key(l)),
+                    l.shield != crate::vector_tiles::RoadShield::Interstate,
                     !l.city,
+                    !self.labels.was_shown(label_key(l)),
                     l.rank,
                 )
             });
