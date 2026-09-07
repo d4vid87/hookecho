@@ -118,7 +118,7 @@ async function prepareLatestRelease(output, product) {
   const release = await request(`https://api.github.com/repos/${PRODUCTS[product].repo}/releases/latest`, githubHeaders());
   if (release.draft || release.prerelease || !release.tag_name || new Date(release.published_at) < new Date(`${PROMOTION_START}T00:00:00Z`)) return false;
   const version = release.tag_name.replace(/^v/, "");
-  const heading = product === "weatherdesk" ? `## [${version}]` : `## ${version}`;
+  const heading = product === "stormdesk" ? `## [${version}]` : `## ${version}`;
   const campaign = releaseCampaign(product, release.tag_name, `${heading}\n${release.body || "- A new stable release is ready."}`);
   campaign.combinedStars = await combinedStars();
   writeFileSync(output, JSON.stringify(campaign, null, 2));
@@ -217,7 +217,7 @@ async function publishFile(path, channel, media, dryRun = false) {
 function latestSaturdayProduct(artifacts) {
   return [...artifacts]
     .sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)))
-    .map(({ name }) => name.match(/^promotion-saturday-(hookecho|weatherdesk)-/)?.[1])
+    .map(({ name }) => name.match(/^promotion-saturday-(hookecho|stormdesk)-/)?.[1])
     .find(Boolean);
 }
 

@@ -20,9 +20,9 @@ if [ "$product" = hookecho ]; then
   accent=0x20d9ff
   url=hookecho.io
 else
-  name=WeatherDesk
+  name=StormDesk
   accent=0x58a6ff
-  url=hookecho.io/weatherdesk
+  url=hookecho.io/stormdesk
 fi
 printf '%s' "$name" > "$work/product.txt"
 printf '%s' "$label" > "$work/label.txt"

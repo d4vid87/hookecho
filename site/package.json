@@ -2,7 +2,7 @@
   "name": "hookecho-site",
   "private": true,
   "type": "module",
-  "_comment": "The build copies HookEcho source shots; optimized HookEcho and WeatherDesk WebP assets live in public/shots.",
+  "_comment": "The build copies HookEcho source shots; optimized HookEcho and StormDesk WebP assets live in public/shots.",
   "scripts": {
     "dev": "npm run shots && astro dev",
     "build": "npm run shots && astro build",

@@ -20,10 +20,10 @@ import { channelSecrets, linkFacets, markerName, publishFile, retryingFetch } fr
 test("the 13-week calendar keeps fixed product slots and Saturday star asks", () => {
   const tuesday = campaignForDate("2026-09-08T16:00:00Z");
   const thursday = campaignForDate("2026-09-10T16:00:00Z");
-  const saturday = campaignForDate("2026-09-12T16:00:00Z", "weatherdesk");
+  const saturday = campaignForDate("2026-09-12T16:00:00Z", "stormdesk");
   assert.equal(tuesday.product, "hookecho");
-  assert.equal(thursday.product, "weatherdesk");
-  assert.equal(saturday.product, "weatherdesk");
+  assert.equal(thursday.product, "stormdesk");
+  assert.equal(saturday.product, "stormdesk");
   assert.equal(tuesday.askForStar, false);
   assert.equal(saturday.askForStar, true);
   assert.equal(campaignForDate("2026-12-08T16:00:00Z"), null);
@@ -31,13 +31,13 @@ test("the 13-week calendar keeps fixed product slots and Saturday star asks", ()
 
 test("release copy, channel limits, redirects, facets, secrets and pauses are bounded", () => {
   const hook = releaseCampaign("hookecho", "v1.2.3", "## 1.2.3 — Test\n- First thing — detail\n- Second thing");
-  const desk = releaseCampaign("weatherdesk", "v4.1.0", "## [4.1.0]\n- New dashboard");
+  const desk = releaseCampaign("stormdesk", "v4.1.0", "## [4.1.0]\n- New dashboard");
   hook.combinedStars = 98;
   desk.combinedStars = 200;
   assert.match(hook.body, /First thing/);
   assert.equal(markerName(hook, "youtube"), markerName(hook, "youtube"));
   assert.match(trackedUrl(hook, "youtube"), /download\/youtube$/);
-  assert.match(trackedUrl(desk, "facebook"), /weatherdesk-release\/facebook$/);
+  assert.match(trackedUrl(desk, "facebook"), /stormdesk-release\/facebook$/);
   assert.ok(composeText(hook, "bluesky").length <= 300);
   assert.match(composeText(desk, "mastodon"), /give it a star/);
   hook.body = "Long release detail ".repeat(80);

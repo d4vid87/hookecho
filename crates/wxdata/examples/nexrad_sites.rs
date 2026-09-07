@@ -4,7 +4,7 @@
 //! The site builds on Node alone (no Rust in .github/workflows/site.yml), so the JSON is
 //! committed and CI re-runs this to check it hasn't drifted.
 //!
-//! Separate from `sites_json.rs` on purpose: that one dumps every network in a schema WeatherDesk
+//! Separate from `sites_json.rs` on purpose: that one dumps every network in a schema StormDesk
 //! vendors, and this one carries the timezone and the network the page template branches on.
 
 fn round4(v: f32) -> f64 {

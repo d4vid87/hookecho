@@ -285,7 +285,7 @@ land later in the cycle.
   page hosting it once a second, and takes one back through the share link's new
   `bm:<basemap>` and `srv` fields. Browsers partition an iframe's storage, so the
   host is the only place an embedded view can persist — this is what stops
-  WeatherDesk's radar resetting on every launch.
+  StormDesk's radar resetting on every launch.
 - A lost graphics context or a panic after startup now says so instead of leaving
   the last frame on screen forever.
 - `cargo run -p wxdata --example sites_json` dumps the radar site registry for

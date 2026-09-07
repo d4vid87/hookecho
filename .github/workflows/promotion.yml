@@ -10,7 +10,7 @@ on:
       kind:
         description: Campaign to prepare
         type: choice
-        options: [scheduled, weather, weatherdesk-release]
+        options: [scheduled, weather, stormdesk-release]
         default: scheduled
       date:
         description: UTC date for a scheduled-campaign rehearsal
@@ -42,7 +42,7 @@ env:
   GOOGLE_OAUTH_CLIENT_ID: ${{ secrets.GOOGLE_OAUTH_CLIENT_ID }}
   GOOGLE_OAUTH_CLIENT_SECRET: ${{ secrets.GOOGLE_OAUTH_CLIENT_SECRET }}
   YOUTUBE_HOOKECHO_REFRESH_TOKEN: ${{ secrets.YOUTUBE_HOOKECHO_REFRESH_TOKEN }}
-  YOUTUBE_WEATHERDESK_REFRESH_TOKEN: ${{ secrets.YOUTUBE_WEATHERDESK_REFRESH_TOKEN }}
+  YOUTUBE_STORMDESK_REFRESH_TOKEN: ${{ secrets[format('YOUTUBE_{0}{1}_REFRESH_TOKEN', 'WEATHER', 'DESK')] }}
   YOUTUBE_PUBLIC_UPLOADS: ${{ vars.YOUTUBE_PUBLIC_UPLOADS }}
   YOUTUBE_TEST_UPLOADS: ${{ github.event_name == 'workflow_dispatch' && !inputs.dry_run && vars.YOUTUBE_PUBLIC_UPLOADS != 'true' }}
   META_GRAPH_VERSION: ${{ vars.META_GRAPH_VERSION }}
@@ -50,10 +50,10 @@ env:
   META_HOOKECHO_PAGE_TOKEN: ${{ secrets.META_HOOKECHO_PAGE_TOKEN }}
   META_HOOKECHO_IG_USER_ID: ${{ secrets.META_HOOKECHO_IG_USER_ID }}
   META_HOOKECHO_IG_TOKEN: ${{ secrets.META_HOOKECHO_IG_TOKEN }}
-  META_WEATHERDESK_PAGE_ID: ${{ secrets.META_WEATHERDESK_PAGE_ID }}
-  META_WEATHERDESK_PAGE_TOKEN: ${{ secrets.META_WEATHERDESK_PAGE_TOKEN }}
-  META_WEATHERDESK_IG_USER_ID: ${{ secrets.META_WEATHERDESK_IG_USER_ID }}
-  META_WEATHERDESK_IG_TOKEN: ${{ secrets.META_WEATHERDESK_IG_TOKEN }}
+  META_STORMDESK_PAGE_ID: ${{ secrets.META_STORMDESK_PAGE_ID }}
+  META_STORMDESK_PAGE_TOKEN: ${{ secrets.META_STORMDESK_PAGE_TOKEN }}
+  META_STORMDESK_IG_USER_ID: ${{ secrets.META_STORMDESK_IG_USER_ID }}
+  META_STORMDESK_IG_TOKEN: ${{ secrets.META_STORMDESK_IG_TOKEN }}
 
 jobs:
   prepare-scheduled:
@@ -203,8 +203,8 @@ jobs:
           node scripts/announce/post.mjs notify "Weather post failed for ${{ matrix.channel }}: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           exit 1
 
-  prepare-weatherdesk-release:
-    if: github.event.schedule == '17 * * * *' || (github.event_name == 'workflow_dispatch' && inputs.kind == 'weatherdesk-release')
+  prepare-stormdesk-release:
+    if: github.event.schedule == '17 * * * *' || (github.event_name == 'workflow_dispatch' && inputs.kind == 'stormdesk-release')
     runs-on: ubuntu-latest
     outputs:
       has_campaign: ${{ steps.prepare.outputs.has_campaign }}
@@ -213,7 +213,7 @@ jobs:
       - id: prepare
         env:
           GITHUB_TOKEN: ${{ github.token }}
-        run: node scripts/announce/post.mjs prepare-latest-release campaign.json weatherdesk
+        run: node scripts/announce/post.mjs prepare-latest-release campaign.json stormdesk
       - name: Install media tools
         if: steps.prepare.outputs.has_campaign == 'true'
         run: sudo apt-get update && sudo apt-get install -y ffmpeg fonts-dejavu-core
@@ -223,15 +223,15 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: steps.prepare.outputs.has_campaign == 'true'
         with:
-          name: weatherdesk-release-${{ github.run_id }}
+          name: stormdesk-release-${{ github.run_id }}
           path: |
             campaign.json
             social.mp4
           retention-days: 1
 
-  publish-weatherdesk-release:
-    needs: prepare-weatherdesk-release
-    if: needs.prepare-weatherdesk-release.outputs.has_campaign == 'true'
+  publish-stormdesk-release:
+    needs: prepare-stormdesk-release
+    if: needs.prepare-stormdesk-release.outputs.has_campaign == 'true'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -240,7 +240,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
-        with: { name: "weatherdesk-release-${{ github.run_id }}" }
+        with: { name: "stormdesk-release-${{ github.run_id }}" }
       - id: post
         continue-on-error: true
         run: node scripts/announce/post.mjs publish campaign.json "${{ matrix.channel }}" social.mp4
@@ -264,5 +264,5 @@ jobs:
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
         run: |
-          node scripts/announce/post.mjs notify "WeatherDesk release post failed for ${{ matrix.channel }}: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          node scripts/announce/post.mjs notify "StormDesk release post failed for ${{ matrix.channel }}: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           exit 1

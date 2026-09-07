@@ -1,7 +1,7 @@
 //! Dump the radar site registry as JSON, for embedders that want a site picker without pulling in
 //! this crate: `cargo run -p wxdata --example sites_json > sites.json`.
 //!
-//! WeatherDesk vendors the output. The registry changes about once a decade, so a generated file
+//! StormDesk vendors the output. The registry changes about once a decade, so a generated file
 //! beats an endpoint.
 
 fn main() {

@@ -1,6 +1,6 @@
 name: Announce
 
-# Stable HookEcho releases use the same publisher as scheduled and WeatherDesk campaigns. The tag
+# Stable HookEcho releases use the same publisher as scheduled and StormDesk campaigns. The tag
 # event is retained because releases created by GITHUB_TOKEN do not trigger release workflows.
 on:
   push:
