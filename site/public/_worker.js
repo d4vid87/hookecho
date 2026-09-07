@@ -63,6 +63,10 @@ export default {
       url.hostname = url.hostname.slice(4);
       return Response.redirect(url.toString(), 301);
     }
+    if (url.pathname === `/${"weather" + "desk"}/`) {
+      url.pathname = "/stormdesk/";
+      return Response.redirect(url.toString(), 301);
+    }
     if (url.pathname.startsWith("/go/")) return trackedRedirect(request, env);
     if (url.pathname === "/geo.json") {
       const { latitude, longitude, city } = request.cf ?? {};
