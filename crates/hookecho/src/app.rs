@@ -11537,7 +11537,8 @@ impl HookEchoApp {
                 )
             };
             let z = cam.zoom;
-            let repeat_shields = z >= 8.0;
+            // Repeat route shields from regional zoom; collision placement still prevents overlap.
+            let repeat_shields = z >= 5.0;
             let mut labels: Vec<&crate::vector_tiles::PlaceLabel> =
                 vlabels.iter().filter(|l| z >= l.min_zoom as f64).collect();
             let label_key = |l: &crate::vector_tiles::PlaceLabel| {
