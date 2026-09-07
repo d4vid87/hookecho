@@ -1,0 +1,310 @@
+---
+import Base from "../../layouts/Base.astro";
+
+const systems = [
+  "Tempest",
+  "Ecowitt",
+  "Ambient Weather",
+  "Davis",
+  "AcuRite",
+  "La Crosse",
+  "Weather Underground / WeeWX",
+];
+
+const benefits = [
+  {
+    title: "Your station, read properly",
+    body: "See temperature, wind, rain, pressure, humidity, UV, lightning, trends and records without digging through separate apps.",
+  },
+  {
+    title: "One dashboard for the whole home",
+    body: "The desktop app runs StormDesk and serves the same dashboard to tablets, laptops and displays on your local network.",
+  },
+  {
+    title: "HookEcho radar inside",
+    body: "Live radar, warnings and storm context sit beside your station data, already centered where your weather is happening.",
+  },
+];
+
+const steps = [
+  ["1", "Install the host app", "Run StormDesk on the Windows, Mac, Linux or Raspberry Pi computer that will stay on your network."],
+  ["2", "Connect your weather", "Choose a supported station service, local console or a place to use when you do not have a station."],
+  ["3", "Open it everywhere", "Use the local address StormDesk gives you on tablets and other screens connected to the same network."],
+];
+
+const jsonld = {
+  "@context": "https://schema.org",
+  "@type": "SoftwareApplication",
+  name: "StormDesk",
+  applicationCategory: "WeatherApplication",
+  operatingSystem: "Windows, macOS, Linux, Raspberry Pi, Android",
+  url: "https://hookecho.io/stormdesk/",
+  downloadUrl: "https://github.com/d4vid87/stormdesk/releases/latest",
+  codeRepository: "https://github.com/d4vid87/stormdesk",
+  license: "https://opensource.org/licenses/MIT",
+  isAccessibleForFree: true,
+  offers: { "@type": "Offer", price: "0", priceCurrency: "USD" },
+  author: { "@type": "Person", name: "David May" },
+  description:
+    "A whole-home dashboard for personal weather stations, with HookEcho radar built in.",
+};
+---
+
+<Base
+  title="StormDesk — your weather station, on every screen"
+  description="Turn Tempest, Ecowitt, Ambient, Davis and more into a whole-home weather dashboard, with HookEcho radar built in."
+  image="/shots/stormdesk-social.jpg"
+  jsonld={jsonld}
+>
+  <section class="wd-hero" aria-labelledby="stormdesk-title">
+    <div class="wrap hero-grid">
+      <div class="hero-copy">
+        <div class="product-kicker">
+          <img src="/stormdesk-icon.png" alt="" width="58" height="58" />
+          <p class="eyebrow">StormDesk 4.1</p>
+        </div>
+        <h1 id="stormdesk-title">Your weather station, on every screen.</h1>
+        <p class="lede">
+          Run StormDesk on one computer, then open its dashboard on tablets and other devices
+          around your home. Your station data, forecasts and HookEcho radar stay together on your
+          own network.
+        </p>
+        <p class="caveat">
+          Free and open source. Windows and macOS installers are unsigned; Android uses a
+          sideloaded APK.
+        </p>
+        <div class="actions">
+          <a class="btn wd-primary" href="/go/stormdesk-release/stormdesk-hero">
+            Download StormDesk
+          </a>
+          <a class="btn" href="/go/stormdesk-source/stormdesk-hero">View source</a>
+        </div>
+      </div>
+      <picture class="hero-shot">
+        <source
+          type="image/webp"
+          srcset="/shots/stormdesk-dashboard-800.webp 800w, /shots/stormdesk-dashboard-1200.webp 1200w"
+          sizes="(max-width: 760px) calc(100vw - 2.5rem), 52vw"
+        />
+        <img
+          src="/shots/stormdesk-dashboard-1200.webp"
+          alt="StormDesk dashboard showing current station readings, forecasts and weather charts"
+          width="1200"
+          height="675"
+          fetchpriority="high"
+        />
+      </picture>
+    </div>
+  </section>
+
+  <section aria-labelledby="benefits-title">
+    <div class="wrap">
+      <p class="eyebrow">One clear view</p>
+      <h2 id="benefits-title">Built around the weather you own.</h2>
+      <div class="benefit-grid">
+        {benefits.map((benefit) => (
+          <article>
+            <h3>{benefit.title}</h3>
+            <p>{benefit.body}</p>
+          </article>
+        ))}
+      </div>
+    </div>
+  </section>
+
+  <section class="supported" aria-labelledby="supported-title">
+    <div class="wrap supported-grid">
+      <div>
+        <p class="eyebrow">Bring your station</p>
+        <h2 id="supported-title">The systems weather watchers already use.</h2>
+        <p>
+          Connect a supported personal station, or start with a location and add hardware later.
+        </p>
+      </div>
+      <ul aria-label="Supported weather station systems">
+        {systems.map((system) => <li>{system}</li>)}
+      </ul>
+    </div>
+  </section>
+
+  <section aria-labelledby="setup-title">
+    <div class="wrap">
+      <p class="eyebrow">Three steps</p>
+      <h2 id="setup-title">From download to dashboard.</h2>
+      <ol class="steps">
+        {steps.map(([number, title, body]) => (
+          <li>
+            <span aria-hidden="true">{number}</span>
+            <div>
+              <h3>{title}</h3>
+              <p>{body}</p>
+            </div>
+          </li>
+        ))}
+      </ol>
+    </div>
+  </section>
+
+  <section class="radar" aria-labelledby="radar-title">
+    <div class="wrap radar-card">
+      <div>
+        <p class="eyebrow">Radar by HookEcho</p>
+        <h2 id="radar-title">Station readings tell you now. Radar shows what comes next.</h2>
+      </div>
+      <p>
+        StormDesk embeds HookEcho beside your local observations, centered on your station. You
+        can follow rain, warnings and storm movement without leaving the dashboard—and open the
+        full radar when you need every tilt, velocity or dual-pol product.
+      </p>
+    </div>
+  </section>
+
+  <section class="download" aria-labelledby="download-title">
+    <div class="wrap">
+      <p class="eyebrow">Free and open source</p>
+      <h2 id="download-title">Put your station on the screens that matter.</h2>
+      <ul class="platforms" aria-label="Available platforms">
+        <li><strong>Windows</strong><span>Unsigned installer</span></li>
+        <li><strong>macOS</strong><span>Unsigned installer</span></li>
+        <li><strong>Linux / Raspberry Pi</strong><span>Desktop host</span></li>
+        <li><strong>Android</strong><span>Sideloaded APK</span></li>
+      </ul>
+      <div class="actions final-actions">
+        <a class="btn wd-primary" href="/go/stormdesk-release/stormdesk-final">
+          Download StormDesk
+        </a>
+        <a class="btn" href="/go/stormdesk-source/stormdesk-final">View source</a>
+      </div>
+      <p class="caveat">Installers, APKs and checksums are published together on GitHub.</p>
+    </div>
+  </section>
+</Base>
+
+<style>
+  .wd-hero {
+    color: #e6edf5;
+    background:
+      radial-gradient(65% 70% at 90% 15%, rgb(57 255 136 / 0.12), transparent 70%),
+      #000;
+  }
+  .hero-grid {
+    display: grid;
+    grid-template-columns: minmax(19rem, 0.9fr) minmax(27rem, 1.2fr);
+    gap: clamp(2rem, 5vw, 4.5rem);
+    align-items: center;
+  }
+  .hero-copy h1 { max-width: 12ch; }
+  .product-kicker { display: flex; align-items: center; gap: var(--sp-3); }
+  .product-kicker img { border-radius: 14px; box-shadow: 0 0 28px rgb(57 255 136 / 0.18); }
+  .product-kicker p { margin: 0; color: #39ff88; }
+  .lede { color: #9fb3a7; font-size: var(--text-lg); }
+  .actions { display: flex; flex-wrap: wrap; gap: var(--sp-3); margin-top: var(--sp-5); }
+  .wd-primary { background: #0c3d25; border-color: #39ff88; color: #dfffea; }
+  .wd-primary:hover { background: #115331; box-shadow: 0 8px 32px rgb(57 255 136 / 0.2); }
+  .caveat { color: #7f9688; font-size: var(--text-sm); margin-top: var(--sp-3); }
+  .hero-shot,
+  .hero-shot img { display: block; width: 100%; }
+  .hero-shot img {
+    border: 1px solid #176638;
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-2);
+  }
+  .benefit-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: var(--sp-4);
+    margin-top: var(--sp-7);
+  }
+  .benefit-grid article { border-top: 2px solid #39ff88; padding-top: var(--sp-5); }
+  .benefit-grid p,
+  .supported p,
+  .radar p { color: var(--text-dim); }
+  .supported { background: var(--bg-deep); border-block: 1px solid var(--stroke); }
+  .supported-grid {
+    display: grid;
+    grid-template-columns: minmax(17rem, 0.8fr) minmax(22rem, 1.2fr);
+    gap: var(--sp-7);
+    align-items: center;
+  }
+  .supported ul {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--sp-3);
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+  .supported li {
+    padding: 0.55rem 0.9rem;
+    border: 1px solid color-mix(in srgb, #39ff88 32%, var(--stroke));
+    border-radius: 999px;
+    background: var(--surface-1);
+    color: var(--text);
+    font-size: var(--text-sm);
+  }
+  .steps { display: grid; gap: 0; margin: var(--sp-7) 0 0; padding: 0; list-style: none; }
+  .steps li {
+    display: grid;
+    grid-template-columns: 3rem 1fr;
+    gap: var(--sp-5);
+    padding-block: var(--sp-5);
+    border-top: 1px solid var(--stroke);
+  }
+  .steps li > span {
+    display: grid;
+    place-items: center;
+    width: 2.5rem;
+    height: 2.5rem;
+    border-radius: 50%;
+    background: #0c3d25;
+    color: #aaffc4;
+    font-weight: 750;
+  }
+  .steps h3 { margin-bottom: var(--sp-2); }
+  .steps p { color: var(--text-dim); margin: 0; }
+  .radar { background: color-mix(in srgb, #39ff88 5%, #000); }
+  .radar-card {
+    display: grid;
+    grid-template-columns: minmax(17rem, 0.9fr) minmax(20rem, 1fr);
+    gap: var(--sp-7);
+    align-items: center;
+    padding-block: var(--sp-6);
+    border-block: 1px solid color-mix(in srgb, #39ff88 32%, var(--stroke));
+  }
+  .radar-card p { margin: 0; }
+  .download { text-align: center; background-image: var(--mesh); }
+  .download h2,
+  .download .caveat { margin-inline: auto; }
+  .platforms {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: var(--sp-3);
+    margin: var(--sp-7) 0;
+    padding: 0;
+    list-style: none;
+  }
+  .platforms li {
+    display: grid;
+    gap: var(--sp-1);
+    padding: var(--sp-4);
+    border: 1px solid var(--stroke);
+    border-radius: var(--radius);
+    background: var(--surface-1);
+  }
+  .platforms span { color: var(--text-dim); font-size: var(--text-sm); }
+  .final-actions { justify-content: center; }
+
+  @media (max-width: 840px) {
+    .hero-grid,
+    .supported-grid,
+    .radar-card { grid-template-columns: 1fr; }
+    .benefit-grid { grid-template-columns: 1fr; gap: var(--sp-6); }
+    .hero-shot { grid-row: 1; }
+    .platforms { grid-template-columns: repeat(2, 1fr); }
+  }
+  @media (max-width: 480px) {
+    .actions { align-items: stretch; flex-direction: column; }
+    .actions .btn { justify-content: center; }
+    .platforms { grid-template-columns: 1fr; }
+  }
+</style>

@@ -81,29 +81,29 @@ const jsonld = {
     </div>
   </section>
 
-  <section class="weatherdesk" aria-labelledby="weatherdesk-title">
-    <div class="wrap weatherdesk-card">
-      <div class="weatherdesk-copy">
+  <section class="stormdesk" aria-labelledby="stormdesk-title">
+    <div class="wrap stormdesk-card">
+      <div class="stormdesk-copy">
         <p class="eyebrow">Also from us</p>
-        <h2 id="weatherdesk-title">Your weather station deserves a better screen.</h2>
+        <h2 id="stormdesk-title">Your weather station deserves a better screen.</h2>
         <p>
-          WeatherDesk turns Tempest, Ecowitt, Ambient, Davis and more into a whole-home
+          StormDesk turns Tempest, Ecowitt, Ambient, Davis and more into a whole-home
           dashboard—with HookEcho radar built in.
         </p>
         <p class="station-list">Tempest · Ecowitt · Ambient · Davis · AcuRite · La Crosse</p>
-        <a class="btn weatherdesk-button" href="/go/weatherdesk/homepage">Explore WeatherDesk</a>
+        <a class="btn stormdesk-button" href="/go/stormdesk/homepage">Explore StormDesk</a>
       </div>
       <picture>
         <source
           type="image/webp"
-          srcset="/shots/weatherdesk-wide-800.webp 800w, /shots/weatherdesk-wide-1600.webp 1600w"
+          srcset="/shots/stormdesk-wide-800.webp 800w, /shots/stormdesk-wide-1600.webp 1600w"
           sizes="(max-width: 760px) calc(100vw - 2.5rem), 55vw"
         />
         <img
-          src="/shots/weatherdesk-wide-1600.webp"
-          alt="WeatherDesk showing a personal weather dashboard with HookEcho radar"
+          src="/shots/stormdesk-wide-1600.webp"
+          alt="StormDesk showing a personal weather dashboard with HookEcho radar"
           width="1600"
-          height="670"
+          height="900"
           loading="lazy"
         />
       </picture>
@@ -128,7 +128,7 @@ const jsonld = {
         Questions, ideas, or storm reports? <a href={DISCORD_INVITE}>Join the Discord server.</a>
         If you find our projects useful, please star
         <a href="/go/hookecho-source/final">HookEcho</a> or
-        <a href="/go/weatherdesk-source/final">WeatherDesk</a> on GitHub.
+        <a href="/go/stormdesk-source/final">StormDesk</a> on GitHub.
       </p>
     </div>
   </section>
@@ -175,24 +175,24 @@ const jsonld = {
     list-style: none;
   }
   .trust li::before { content: "✓"; color: var(--accent); margin-right: 0.55rem; }
-  .weatherdesk { background: color-mix(in srgb, #1678c8 6%, var(--bg)); }
-  .weatherdesk-card {
+  .stormdesk { background: color-mix(in srgb, #39ff88 5%, #000); }
+  .stormdesk-card {
     display: grid;
     grid-template-columns: minmax(18rem, 0.85fr) minmax(24rem, 1.4fr);
     gap: clamp(2rem, 5vw, 4.5rem);
     align-items: center;
   }
-  .weatherdesk-copy h2 { max-width: 14ch; }
-  .weatherdesk-copy > p:not(.eyebrow, .station-list) {
+  .stormdesk-copy h2 { max-width: 14ch; }
+  .stormdesk-copy > p:not(.eyebrow, .station-list) {
     color: var(--text-dim);
     font-size: var(--text-lg);
   }
-  .station-list { color: #2497e3; font-size: var(--text-sm); font-weight: 650; }
-  .weatherdesk-button { background: #1678c8; border-color: #1678c8; color: #fff; }
-  .weatherdesk picture,
-  .weatherdesk img { display: block; width: 100%; }
-  .weatherdesk img {
-    border: 1px solid color-mix(in srgb, #2497e3 35%, var(--stroke));
+  .station-list { color: #39ff88; font-size: var(--text-sm); font-weight: 650; }
+  .stormdesk-button { background: #0c3d25; border-color: #39ff88; color: #dfffea; }
+  .stormdesk picture,
+  .stormdesk img { display: block; width: 100%; }
+  .stormdesk img {
+    border: 1px solid color-mix(in srgb, #39ff88 35%, var(--stroke));
     border-radius: var(--radius-lg);
     box-shadow: var(--shadow-2);
   }
@@ -206,10 +206,10 @@ const jsonld = {
   @media (max-width: 760px) {
     .benefit-grid,
     .trust-inner,
-    .weatherdesk-card { grid-template-columns: 1fr; }
+    .stormdesk-card { grid-template-columns: 1fr; }
     .benefit-grid { gap: var(--sp-6); }
     .trust ul { grid-template-columns: 1fr; }
-    .weatherdesk-copy h2 { max-width: 18ch; }
+    .stormdesk-copy h2 { max-width: 18ch; }
   }
   @media (max-width: 560px) {
     .actions { align-items: stretch; flex-direction: column; }

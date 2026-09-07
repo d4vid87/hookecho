@@ -5,7 +5,7 @@ import { promotionPauses } from "./campaigns.mjs";
 // No usernames, IPs, referrers tied to people, or other identifiers are stored or emitted.
 const PRODUCTS = [
   { id: "hookecho", repo: "d4vid87/hookecho", youtube: "YOUTUBE_HOOKECHO_REFRESH_TOKEN", page: "META_HOOKECHO_PAGE_ID", pageToken: "META_HOOKECHO_PAGE_TOKEN", ig: "META_HOOKECHO_IG_USER_ID", igToken: "META_HOOKECHO_IG_TOKEN" },
-  { id: "weatherdesk", repo: "d4vid87/weatherdesk", youtube: "YOUTUBE_WEATHERDESK_REFRESH_TOKEN", page: "META_WEATHERDESK_PAGE_ID", pageToken: "META_WEATHERDESK_PAGE_TOKEN", ig: "META_WEATHERDESK_IG_USER_ID", igToken: "META_WEATHERDESK_IG_TOKEN" },
+  { id: "stormdesk", repo: "d4vid87/stormdesk", youtube: "YOUTUBE_STORMDESK_REFRESH_TOKEN", page: "META_STORMDESK_PAGE_ID", pageToken: "META_STORMDESK_PAGE_TOKEN", ig: "META_STORMDESK_IG_USER_ID", igToken: "META_STORMDESK_IG_TOKEN" },
 ];
 const SOCIAL_CHANNELS = new Set(["bluesky", "mastodon", "youtube", "facebook", "instagram"]);
 const SINCE = Date.now() - 7 * 86_400_000;
@@ -66,10 +66,10 @@ async function getStars(repo) {
 
 await section("Mentions", async () => {
   const hits = [];
-  for (const query of ["hookecho", "weatherdesk"]) {
+  for (const query of ["hookecho", "stormdesk"]) {
     const data = await get(`https://hn.algolia.com/api/v1/search_by_date?query=${query}&numericFilters=created_at_i>${Math.floor(SINCE / 1000)}`);
     hits.push(...data.hits.slice(0, 3).map((hit) => `• HN: ${hit.title || hit.story_title} — https://news.ycombinator.com/item?id=${hit.objectID}`));
-    const githubMentions = await get(`https://api.github.com/search/issues?q=${query}+in:title,body+-repo:d4vid87/hookecho+-repo:d4vid87/weatherdesk+updated:>${new Date(SINCE).toISOString().slice(0, 10)}&per_page=3`, github());
+    const githubMentions = await get(`https://api.github.com/search/issues?q=${query}+in:title,body+-repo:d4vid87/hookecho+-repo:d4vid87/stormdesk+updated:>${new Date(SINCE).toISOString().slice(0, 10)}&per_page=3`, github());
     hits.push(...(githubMentions.items || []).map((item) => `• GitHub: ${item.title} — ${item.html_url}`));
   }
   if (process.env.BSKY_HANDLE && process.env.BSKY_APP_PASSWORD) {
@@ -78,7 +78,7 @@ await section("Mentions", async () => {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ identifier: process.env.BSKY_HANDLE, password: process.env.BSKY_APP_PASSWORD }),
     });
-    for (const query of ["hookecho", "weatherdesk"]) {
+    for (const query of ["hookecho", "stormdesk"]) {
       const data = await get(`https://public.api.bsky.app/xrpc/app.bsky.feed.searchPosts?q=${query}&limit=25`, {
         headers: { authorization: `Bearer ${session.accessJwt}` },
       });
@@ -95,7 +95,7 @@ const productMetrics = [];
 await section("GitHub", async () => {
   productMetrics.push(...await Promise.all(PRODUCTS.map(repoMetrics)));
   return productMetrics.map((item) =>
-    `• ${item.id === "hookecho" ? "HookEcho" : "WeatherDesk"}: ${item.stars} stars (+${item.starDelta}), ${item.visitors} visitors, ${item.cloners} cloners, ${item.downloads} downloads; refs: ${item.referrers || "none"}`,
+    `• ${item.id === "hookecho" ? "HookEcho" : "StormDesk"}: ${item.stars} stars (+${item.starDelta}), ${item.visitors} visitors, ${item.cloners} cloners, ${item.downloads} downloads; refs: ${item.referrers || "none"}`,
   );
 });
 
@@ -162,19 +162,19 @@ await section("Publishing", async () => {
   }
   return [`• ${succeeded} successful destination posts`, ...[...counts].map(([channel, count]) => `• ${channel}: ${count} failures`)];
 });
-const sourceClicks = Object.fromEntries(["hookecho", "weatherdesk"].map((product) => [
+const sourceClicks = Object.fromEntries(["hookecho", "stormdesk"].map((product) => [
   product,
   cta.filter((row) => row.target === `${product}-source` && SOCIAL_CHANNELS.has(row.placement)).reduce((sum, row) => sum + Number(row.clicks || 0), 0),
 ]));
 const deltas = Object.fromEntries(productMetrics.map((item) => [item.id, item.starDelta]));
-const sourcePosts = Object.fromEntries(["hookecho", "weatherdesk"].map((product) => [
+const sourcePosts = Object.fromEntries(["hookecho", "stormdesk"].map((product) => [
   product,
   artifacts.filter(({ name }) => name.includes(`-open-source-${product}-`) && !name.includes("failure")).length,
 ]));
-const rates = Object.fromEntries(["hookecho", "weatherdesk"].map((product) => [product, sourceClicks[product] / Math.max(1, sourcePosts[product])]));
-const saturday = rates.hookecho === rates.weatherdesk
-  ? (deltas.weatherdesk || 0) > (deltas.hookecho || 0) ? "weatherdesk" : "hookecho"
-  : rates.weatherdesk > rates.hookecho ? "weatherdesk" : "hookecho";
+const rates = Object.fromEntries(["hookecho", "stormdesk"].map((product) => [product, sourceClicks[product] / Math.max(1, sourcePosts[product])]));
+const saturday = rates.hookecho === rates.stormdesk
+  ? (deltas.stormdesk || 0) > (deltas.hookecho || 0) ? "stormdesk" : "hookecho"
+  : rates.stormdesk > rates.hookecho ? "stormdesk" : "hookecho";
 const pauses = promotionPauses(artifacts, cta);
 writeOutput("saturday_product", saturday);
 writeOutput("promotion_pauses", pauses);
@@ -186,7 +186,7 @@ const reportWeek = Math.floor((promotionDays + 1) / 7);
 writeOutput("should_rebalance", String(reportWeek > 0 && reportWeek % 2 === 0));
 
 const body = [
-  "**HookEcho + WeatherDesk — weekly promotion report**",
+  "**HookEcho + StormDesk — weekly promotion report**",
   ...sections,
   failures.length ? `_optional sources that failed: ${failures.join("; ")}_` : "",
 ].filter(Boolean).join("\n\n").slice(0, 1990);
@@ -229,7 +229,7 @@ async function googleToken(refreshToken) {
 }
 
 function channelClicks(channel, product) {
-  return Math.round(cta.filter((row) => row.placement === channel && (product === "weatherdesk" ? row.target.startsWith("weatherdesk") : !row.target.startsWith("weatherdesk"))).reduce((sum, row) => sum + Number(row.clicks || 0), 0));
+  return Math.round(cta.filter((row) => row.placement === channel && (product === "stormdesk" ? row.target.startsWith("stormdesk") : !row.target.startsWith("stormdesk"))).reduce((sum, row) => sum + Number(row.clicks || 0), 0));
 }
 
 async function metaActivity(id, token, type) {

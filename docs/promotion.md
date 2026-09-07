@@ -1,11 +1,11 @@
 # Releasing and promoting
 
-HookEcho owns the promotion automation for both HookEcho and WeatherDesk. It uses GitHub Actions,
+HookEcho owns the promotion automation for both HookEcho and StormDesk. It uses GitHub Actions,
 the platform APIs and real product captures; there is no marketing service, paid media, LLM or
 audience database.
 
 The 90-day run starts on 2026-09-08. The recorded baseline is 98 combined GitHub stars (HookEcho
-56, WeatherDesk 42), with checkpoints of 132 on day 30, 166 on day 60 and 200 on day 90. The
+56, StormDesk 42), with checkpoints of 132 on day 30, 166 on day 60 and 200 on day 90. The
 machine-readable baseline is [`scripts/announce/baseline.json`](../scripts/announce/baseline.json).
 
 ## Schedule
@@ -13,7 +13,7 @@ machine-readable baseline is [`scripts/announce/baseline.json`](../scripts/annou
 | UTC time | Campaign | Destinations |
 |---|---|---|
 | Tuesday 16:00 | HookEcho feature or radar education | Bluesky, Mastodon, HookEcho YouTube/Facebook/Instagram |
-| Thursday 16:00 | WeatherDesk integration or whole-home use | Bluesky, Mastodon, WeatherDesk YouTube/Facebook/Instagram |
+| Thursday 16:00 | StormDesk integration or whole-home use | Bluesky, Mastodon, StormDesk YouTube/Facebook/Instagram |
 | Saturday 16:00 | Open-source, privacy, contributor or archive proof | Bluesky, Mastodon and the selected product accounts |
 | Every 30 minutes | Qualifying official weather | Bluesky, Mastodon and HookEcho Facebook |
 | Monday 14:00 | Metrics and opportunity report | Discord |
@@ -49,7 +49,7 @@ account setup.
 ## Media
 
 [`scripts/announce/render-social.sh`](../scripts/announce/render-social.sh) turns the selected real
-HookEcho capture or WeatherDesk v4 demo-data screenshot into a 20-second, 1080×1920 H.264 video. It
+HookEcho capture or StormDesk v4 demo-data screenshot into a 20-second, 1080×1920 H.264 video. It
 burns in the campaign caption, product identity and `LIVE`, `ARCHIVE` or `DEMO DATA`, includes a
 silent AAC track, emits `yuv420p`, and validates the result with `ffprobe`.
 
@@ -58,12 +58,12 @@ host is used. YouTube uploads remain disabled until the Google Cloud project pas
 
 ## One-time authorization
 
-Create separate HookEcho and WeatherDesk YouTube channels, Facebook Pages and Instagram
+Create separate HookEcho and StormDesk YouTube channels, Facebook Pages and Instagram
 professional accounts. One Google Cloud project and one Meta developer app may authorize both
 sets. Complete the provider reviews, then add these GitHub Actions secrets:
 
 The Google side is provisioned in project `hookecho-promotion`. HookEcho uses YouTube channel
-`UCZRECVhcCwdr0Fm5Z0NUo7g`; WeatherDesk uses `UCDgrO5Mn_mshCQukQm428lA`. Both channel tokens,
+`UCZRECVhcCwdr0Fm5Z0NUo7g`; StormDesk uses `UCDgrO5Mn_mshCQukQm428lA`. Both channel tokens,
 Data API access, Analytics access and private upload checks were verified on September 5, 2026.
 Public YouTube uploads remain disabled pending Google's API audit.
 
@@ -72,10 +72,10 @@ Public YouTube uploads remain disabled pending Google's API audit.
 - GitHub metrics: optional `PROMOTION_GITHUB_TOKEN` with read access to traffic for both
   repositories. The workflow token remains the fallback.
 - Google: `GOOGLE_OAUTH_CLIENT_ID`, `GOOGLE_OAUTH_CLIENT_SECRET`,
-  `YOUTUBE_HOOKECHO_REFRESH_TOKEN`, `YOUTUBE_WEATHERDESK_REFRESH_TOKEN`.
+  `YOUTUBE_HOOKECHO_REFRESH_TOKEN`, `YOUTUBE_STORMDESK_REFRESH_TOKEN`.
 - Meta: `META_HOOKECHO_PAGE_ID`, `META_HOOKECHO_PAGE_TOKEN`,
   `META_HOOKECHO_IG_USER_ID`, `META_HOOKECHO_IG_TOKEN`, and the four equivalent
-  `META_WEATHERDESK_*` secrets.
+  `META_STORMDESK_*` secrets.
 
 Repository variables are the controls:
 
@@ -117,7 +117,7 @@ For HookEcho, bump `Cargo.toml`, add the matching `CHANGELOG.md` section, commit
 `vX.Y.Z` tag. `release.yml` creates the packages; `announce.yml` waits for that release and uses the
 shared publisher. Prerelease tags containing `-` are not announced automatically.
 
-WeatherDesk stable releases are detected hourly from its latest GitHub release, so its application
+StormDesk stable releases are detected hourly from its latest GitHub release, so its application
 repository needs no duplicated platform credentials or publishing code.
 
 ## Measurement

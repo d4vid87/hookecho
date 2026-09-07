@@ -10,11 +10,11 @@ export const PRODUCTS = Object.freeze({
     landing: "https://hookecho.io",
     media: "docs/shots/hero.gif",
   },
-  weatherdesk: {
-    name: "WeatherDesk",
-    repo: "d4vid87/weatherdesk",
-    landing: "https://hookecho.io/weatherdesk/",
-    media: "site/public/shots/weatherdesk-dashboard-1200.webp",
+  stormdesk: {
+    name: "StormDesk",
+    repo: "d4vid87/stormdesk",
+    landing: "https://hookecho.io/stormdesk/",
+    media: "site/public/shots/stormdesk-dashboard-1200.webp",
   },
 });
 
@@ -34,24 +34,24 @@ const hookecho = [
   ["Weather software without surveillance", "The app talks to public weather feeds from your machine and sends us no telemetry.", "docs/shots/reflectivity.jpg", "ARCHIVE"],
 ];
 
-const weatherdesk = [
-  ["Your station on every screen", "WeatherDesk serves one whole-home dashboard from the desktop app to tablets and other LAN devices."],
+const stormdesk = [
+  ["Your station on every screen", "StormDesk serves one whole-home dashboard from the desktop app to tablets and other LAN devices."],
   ["A better Tempest dashboard", "Connect a Tempest station and put observations, forecast context, alerts, and radar on one screen."],
   ["Ecowitt, without a cloud dashboard", "Bring Ecowitt observations into a local dashboard built for a wall tablet."],
   ["Ambient Weather, room to breathe", "Turn Ambient Weather station data into a calm whole-home display instead of a phone-sized panel."],
   ["Davis data around the house", "Use a Davis station as the source for a dashboard every device on the LAN can open."],
   ["Older stations still deserve a screen", "AcuRite and La Crosse hardware can feed the same current dashboard as newer stations."],
-  ["WeeWX fits right in", "Weather Underground protocol and WeeWX make WeatherDesk useful without replacing a working station stack."],
-  ["HookEcho radar is built in", "Open local NEXRAD radar inside the dashboard, then switch to the full Forecast Lab when needed."],
+  ["WeeWX fits right in", "Weather Underground protocol and WeeWX make StormDesk useful without replacing a working station stack."],
+  ["HookEcho radar is built in", "Open local NEXRAD radar inside the dashboard, then switch to the full Radar view when needed."],
   ["Made for the wall tablet", "The host app serves the dashboard locally, so an old tablet can become the household weather display."],
   ["Past, present, and next", "The Timeline joins recent station changes, official alerts, and the next 48 hours in one view."],
-  ["Forecast Lab, not forecast clutter", "Compare radar, models, and severe-weather parameters when a simple daily forecast is not enough."],
+  ["Radar without forecast clutter", "Compare radar, models, and severe-weather parameters when a simple daily forecast is not enough."],
   ["Know when the station is stale", "Station health exposes battery, signal, sensor faults, and time since the latest report."],
   ["No station required", "Start with a location forecast today, then connect a supported personal station whenever you are ready."],
 ].map(([title, body], i) => [
   title,
   body,
-  i % 2 ? "site/public/shots/weatherdesk-wide-1600.webp" : "site/public/shots/weatherdesk-dashboard-1200.webp",
+  i % 2 ? "site/public/shots/stormdesk-wide-1600.webp" : "site/public/shots/stormdesk-dashboard-1200.webp",
   "DEMO DATA",
 ]);
 
@@ -71,20 +71,20 @@ const proof = {
     ["Contributors can run the evidence", "Tests, smoke checks, and reproducible screenshot scenes live beside the code they verify."],
     ["Useful weather tools can be free", "If HookEcho has earned a place in your weather workflow, a GitHub star helps other people find it."],
   ],
-  weatherdesk: [
+  stormdesk: [
     ["Self-hosted means your house", "The desktop app serves the dashboard across your LAN; your station does not need our server."],
-    ["A dashboard without a framework", "WeatherDesk uses native browser modules and a small local host instead of a hosted application stack."],
+    ["A dashboard without a framework", "StormDesk uses native browser modules and a small local host instead of a hosted application stack."],
     ["One screen, many station brands", "Tempest, Ecowitt, Ambient, Davis, AcuRite, La Crosse, Weather Underground, and WeeWX share one UI."],
     ["A Raspberry Pi can host it", "Linux and arm64 packages make a small always-on host a first-class installation."],
-    ["Home Assistant can stay home", "WeatherDesk fits alongside an existing local automation setup instead of replacing it."],
+    ["Home Assistant can stay home", "StormDesk fits alongside an existing local automation setup instead of replacing it."],
     ["Your archive stays local", "Station history and dashboard settings remain on the machines you control."],
-    ["Radar is not an afterthought", "HookEcho runs inside WeatherDesk, centered on the station and ready to open into its full analysis view."],
+    ["Radar is not an afterthought", "HookEcho runs inside StormDesk, centered on the station and ready to open into its full analysis view."],
     ["Old tablets get a second job", "Any modern browser on the LAN can become a dedicated weather display."],
-    ["Forecasts need context", "WeatherDesk places station observations, official alerts, radar, and multiple models beside each other."],
+    ["Forecasts need context", "StormDesk places station observations, official alerts, radar, and multiple models beside each other."],
     ["No station lock-in", "Changing hardware does not require changing the dashboard used around the house."],
-    ["Demo data, real interface", "The screenshots and clips use the current v4 dashboard without exposing a private station or token."],
+    ["Demo data, real interface", "The screenshots and clips use the current StormDesk dashboard without exposing a private station or token."],
     ["Open source is supportable", "Issues, source, installers, and checksums are visible instead of disappearing behind an app-store listing."],
-    ["A useful station should be visible", "If WeatherDesk improved how you use your station, a GitHub star helps another owner discover it."],
+    ["A useful station should be visible", "If StormDesk improved how you use your station, a GitHub star helps another owner discover it."],
   ],
 };
 
@@ -112,9 +112,9 @@ export function campaignForDate(value, saturdayProduct = "hookecho") {
   const week = Math.floor(elapsed / 7);
   if (week < 0 || week >= 13) return null;
   if (date.getUTCDay() === 2) return entry("hookecho", "tip", hookecho[week], week);
-  if (date.getUTCDay() === 4) return entry("weatherdesk", "use-case", weatherdesk[week], week);
+  if (date.getUTCDay() === 4) return entry("stormdesk", "use-case", stormdesk[week], week);
   if (date.getUTCDay() === 6) {
-    const product = saturdayProduct === "weatherdesk" ? "weatherdesk" : "hookecho";
+    const product = saturdayProduct === "stormdesk" ? "stormdesk" : "hookecho";
     const row = proof[product][week];
     return entry(product, "open-source", [row[0], row[1], PRODUCTS[product].media, product === "hookecho" ? "ARCHIVE" : "DEMO DATA"], week, true);
   }
@@ -125,7 +125,7 @@ export function releaseCampaign(product, tag, changelog) {
   if (!PRODUCTS[product] || !/^v?[0-9][0-9A-Za-z.-]*$/.test(tag)) throw new Error("invalid release");
   const version = tag.replace(/^v/, "");
   const lines = changelog.split("\n");
-  const patterns = product === "weatherdesk"
+  const patterns = product === "stormdesk"
     ? [new RegExp(`^## \\[${escapeRegExp(version)}\\]`), new RegExp(`^## ${escapeRegExp(version)}(?: |$)`)]
     : [new RegExp(`^## ${escapeRegExp(version)}(?: |$)`), new RegExp(`^## \\[${escapeRegExp(version)}\\]`)];
   const start = lines.findIndex((line) => patterns.some((pattern) => pattern.test(line)));
@@ -155,7 +155,7 @@ export function trackedUrl(campaign, channel) {
   const source = campaign.kind !== "release" && campaign.askForStar && campaign.combinedStars < 200;
   const target = campaign.product === "hookecho"
     ? source ? "hookecho-source" : campaign.kind === "release" ? "download" : "web"
-    : source ? "weatherdesk-source" : campaign.kind === "release" ? "weatherdesk-release" : "weatherdesk";
+    : source ? "stormdesk-source" : campaign.kind === "release" ? "stormdesk-release" : "stormdesk";
   return `https://hookecho.io/go/${target}/${channel}`;
 }
 
@@ -163,7 +163,7 @@ export function composeText(campaign, channel) {
   const product = PRODUCTS[campaign.product];
   if (!product) throw new Error("unknown product");
   const link = campaign.officialUrl || trackedUrl(campaign, channel);
-  const source = `https://hookecho.io/go/${campaign.product === "hookecho" ? "hookecho-source" : "weatherdesk-source"}/${channel}`;
+  const source = `https://hookecho.io/go/${campaign.product === "hookecho" ? "hookecho-source" : "stormdesk-source"}/${channel}`;
   const star = campaign.askForStar && (campaign.kind === "release" || campaign.combinedStars < 200)
     ? `If ${product.name} is useful to you, please give it a star on GitHub.${campaign.kind === "release" ? ` ${source}` : ""}`
     : "";

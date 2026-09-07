@@ -9,10 +9,10 @@ const placements = {
   android: "nav",
   "hookecho-source": "footer",
   "hookecho-youtube": "footer",
-  weatherdesk: "homepage",
-  "weatherdesk-release": "weatherdesk-hero",
-  "weatherdesk-source": "weatherdesk-final",
-  "weatherdesk-youtube": "footer",
+  stormdesk: "homepage",
+  "stormdesk-release": "stormdesk-hero",
+  "stormdesk-source": "stormdesk-final",
+  "stormdesk-youtube": "footer",
 };
 
 test("allowlisted CTA redirects keep working and record only aggregate fields", () => {

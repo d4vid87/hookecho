@@ -2904,7 +2904,7 @@ pub struct HookEchoApp {
     hodo_last_fetch: Option<Instant>,
     /// Streamer/OBS mode: hide all chrome (drawer/pills/docks), leaving only the map.
     obs_mode: bool,
-    /// `?embed` in the browser build: chromeless map inside someone else's iframe (WeatherDesk).
+    /// `?embed` in the browser build: chromeless map inside someone else's iframe (StormDesk).
     /// Hides chrome like OBS mode, and idles at one frame a minute until the visitor touches it —
     /// an embedded radar repainting at 10 fps costs the host page a whole core.
     embed: bool,
@@ -3062,7 +3062,7 @@ impl HookEchoApp {
         // page-level handler never fires). Reload is the only recovery on every backend.
         //
         // The throttle lives in the URL, not sessionStorage — WebKit blocks storage in
-        // third-party iframes (the WeatherDesk embed), and a throttle that fails open there is a
+        // third-party iframes (the StormDesk embed), and a throttle that fails open there is a
         // reload loop (the Ubuntu lockup). One reload per navigation: flag already present means
         // this navigation was the retry, so stay on the dead canvas. index.src.html strips the
         // flag after 60s of healthy running, earning a future retry.
