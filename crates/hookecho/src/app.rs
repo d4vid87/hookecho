@@ -11571,6 +11571,7 @@ impl HookEchoApp {
                 egui::vec2(-1.0, 1.0),
                 egui::vec2(-1.0, -1.0),
             ];
+            let mut placed_shields: Vec<(&str, crate::vector_tiles::RoadShield, egui::Pos2)> = Vec::new();
             for l in labels {
                 if (l.shield == crate::vector_tiles::RoadShield::None || !repeat_shields)
                     && !seen.insert(l.name.as_str())
@@ -11600,6 +11601,11 @@ impl HookEchoApp {
                         p,
                         egui::vec2((galley.size().x + pad).max(height), height),
                     );
+                    if placed_shields.iter().any(|(name, shield, position)| {
+                        *name == l.name && *shield == l.shield && position.distance(p) < 100.0
+                    }) {
+                        continue;
+                    }
                     if !self.labels.place(
                         label_key(l),
                         r.expand(3.0),
@@ -11607,6 +11613,7 @@ impl HookEchoApp {
                     ) {
                         continue;
                     }
+                    placed_shields.push((&l.name, l.shield, p));
                     match l.shield {
                         RoadShield::Interstate => {
                             let shield = |rect: egui::Rect| {

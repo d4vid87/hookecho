@@ -520,15 +520,39 @@ fn road_label(
     (!label.is_empty()).then_some((label, min_zoom, rank, shield))
 }
 
-fn road_anchor(geometry: &geo_types::Geometry<f32>) -> Option<(f32, f32)> {
-    let line = match geometry {
-        geo_types::Geometry::LineString(line) => Some(line),
-        geo_types::Geometry::MultiLineString(lines) => {
-            lines.0.iter().max_by_key(|line| line.0.len())
+fn road_anchors(geometry: &geo_types::Geometry<f32>, shield: bool) -> Vec<(f32, f32)> {
+    let lines = match geometry {
+        geo_types::Geometry::LineString(line) => std::slice::from_ref(line),
+        geo_types::Geometry::MultiLineString(lines) => lines.0.as_slice(),
+        _ => return Vec::new(),
+    };
+    let fractions: &[f32] = if shield { &[0.5, 0.25, 0.75] } else { &[0.5] };
+    let mut anchors = Vec::new();
+    for line in lines {
+        let length = |pair: &[geo_types::Coord<f32>]| {
+            (pair[1].x - pair[0].x).hypot(pair[1].y - pair[0].y)
+        };
+        let total: f32 = line.0.windows(2).map(length).sum();
+        if total <= 0.0 || !total.is_finite() {
+            continue;
         }
-        _ => None,
-    }?;
-    line.0.get(line.0.len() / 2).map(|p| (p.x, p.y))
+        for fraction in fractions {
+            let mut remaining = total * fraction;
+            for pair in line.0.windows(2) {
+                let distance = length(pair);
+                if distance > 0.0 && remaining <= distance {
+                    let t = remaining / distance;
+                    anchors.push((
+                        pair[0].x + t * (pair[1].x - pair[0].x),
+                        pair[0].y + t * (pair[1].y - pair[0].y),
+                    ));
+                    break;
+                }
+                remaining -= distance;
+            }
+        }
+    }
+    anchors
 }
 
 /// OpenMapTiles supplies pre-selected road-name geometry in `transportation_name`, so labels use
@@ -566,18 +590,17 @@ fn extract_road_labels(
         ) else {
             continue;
         };
-        let Some((px, py)) = road_anchor(&f.geometry) else {
-            continue;
-        };
-        let p = tw(px, py, n, txf, tyf, extent);
-        out.push(PlaceLabel {
-            world: [p.x, p.y],
-            name,
-            rank,
-            city: false,
-            shield,
-            min_zoom,
-        });
+        for (px, py) in road_anchors(&f.geometry, shield != RoadShield::None) {
+            let p = tw(px, py, n, txf, tyf, extent);
+            out.push(PlaceLabel {
+                world: [p.x, p.y],
+                name: name.clone(),
+                rank,
+                city: false,
+                shield,
+                min_zoom,
+            });
+        }
     }
     out
 }
@@ -1154,6 +1177,19 @@ mod tests {
     }
 
     #[test]
+    fn road_shields_have_alternatives_on_each_component() {
+        use geo_types::{Geometry, LineString, MultiLineString};
+        let line = LineString::from(vec![(0.0, 0.0), (1.0, 0.0), (100.0, 0.0)]);
+        assert_eq!(road_anchors(&Geometry::LineString(line.clone()), true),
+            vec![(50.0, 0.0), (25.0, 0.0), (75.0, 0.0)]);
+        let other = LineString::from(vec![(0.0, 10.0), (100.0, 10.0)]);
+        let anchors = road_anchors(&Geometry::MultiLineString(MultiLineString(vec![line, other])), true);
+        assert_eq!(anchors.len(), 6);
+        assert!(anchors.contains(&(50.0, 10.0)));
+        assert!(road_anchors(&Geometry::LineString(LineString::from(vec![(0.0, 0.0), (0.0, 0.0)])), true).is_empty());
+    }
+
+    #[test]
     fn regional_views_fetch_the_first_road_label_level() {
         assert_eq!(label_detail_bias(4.0), 0.0);
         for zoom in [5.0, 5.3, 5.9] {
@@ -1175,7 +1211,7 @@ mod tests {
             128, 32, 120, 2,
         ];
         let (_, _, labels) = build_tile(bytes, (5, 7, 12), basemap_style::Palette::Dark, 5.0);
-        assert_eq!(labels.len(), 1);
+        assert_eq!(labels.len(), 3);
         assert_eq!(labels[0].name, "35");
         assert_eq!(labels[0].shield, RoadShield::Interstate);
         assert!(labels[0].min_zoom <= 5.3);
