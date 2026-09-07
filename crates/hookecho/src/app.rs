@@ -2130,7 +2130,9 @@ fn goto_link(g: &Goto) -> String {
         .flatten()
         .map(|v| format!(",thr:{v}"))
         .unwrap_or_default();
-    let body = format!("{site},{lon:.4},{lat:.4},{zoom:.1}{t}{m}{z}{thr}");
+    let basemap = g.basemap.as_ref().map(|s| format!(",bm:{s}")).unwrap_or_default();
+    let srv = if g.srv { ",srv" } else { "" };
+    let body = format!("{site},{lon:.4},{lat:.4},{zoom:.1}{t}{m}{z}{thr}{basemap}{srv}");
     #[cfg(target_arch = "wasm32")]
     {
         let origin = web_sys::window()
@@ -3748,6 +3750,8 @@ impl HookEchoApp {
             log::warn!("HOOKECHO_GOTO: want SITE[,lon,lat,zoom[,RFC3339|product|tilt]], got {v:?}");
             return;
         };
+        self.firstrun.open = false;
+        self.settings.setup_done = true;
         self.goto_view(&g.site, g.lon, g.lat, g.zoom, g.time);
         let view = &mut self.views[self.active];
         if let Some(m) = g.moment {
@@ -7842,10 +7846,10 @@ impl HookEchoApp {
                     time,
                     moment: Some(v.moment),
                     tilt: Some(v.tilt),
-                    basemap: None,
+                    basemap: Some(v.basemap.slug().to_string()),
                     threshold: v.threshold_enabled[v.moment.index()]
                         .then(|| v.thresholds[v.moment.index()]),
-                    srv: false,
+                    srv: v.srv,
                 });
                 // A phone or a tablet has a share sheet, and pasting into a chat is what this is
                 // for; the clipboard is the fallback for everything that does not.
@@ -11540,7 +11544,7 @@ impl HookEchoApp {
             // Repeat route shields from regional zoom; collision placement still prevents overlap.
             let repeat_shields = z >= 5.0;
             let mut labels: Vec<&crate::vector_tiles::PlaceLabel> =
-                vlabels.iter().filter(|l| z >= l.min_zoom as f64).collect();
+                vlabels.iter().filter(|l| l.visible_at(z)).collect();
             let label_key = |l: &crate::vector_tiles::PlaceLabel| {
                 let key = crate::labelplace::key(&l.name);
                 if repeat_shields && l.shield != crate::vector_tiles::RoadShield::None {
@@ -11554,8 +11558,7 @@ impl HookEchoApp {
             // alternate frames, which is exactly the flicker you see while panning.
             labels.sort_by_key(|l| {
                 (
-                    l.shield != crate::vector_tiles::RoadShield::Interstate,
-                    !l.city,
+                    l.priority(),
                     !self.labels.was_shown(label_key(l)),
                     l.rank,
                 )
@@ -11603,7 +11606,7 @@ impl HookEchoApp {
                         egui::vec2((galley.size().x + pad).max(height), height),
                     );
                     if placed_shields.iter().any(|(name, shield, position)| {
-                        *name == l.name && *shield == l.shield && position.distance(p) < 100.0
+                        *name == l.name && *shield == l.shield && position.distance(p) < if z < 8.0 { 160.0 } else { 220.0 }
                     }) {
                         continue;
                     }
@@ -17769,6 +17772,11 @@ mod tests {
         assert_eq!(g.basemap.as_deref(), Some("dark"));
         assert!(g.srv);
         assert_eq!(g.tilt, Some(2));
+        let round = super::parse_goto(&super::goto_link(&g)).unwrap();
+        assert_eq!(round.basemap, g.basemap);
+        assert_eq!(round.srv, g.srv);
+        assert_eq!(round.moment, g.moment);
+        assert_eq!(round.tilt, g.tilt);
         // Old links are unchanged: no basemap, not storm-relative.
         let g = super::parse_goto(",-97.3,35.3,6.5").unwrap();
         assert_eq!(g.site, "");

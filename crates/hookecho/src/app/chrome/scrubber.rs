@@ -59,6 +59,7 @@ impl HookEchoApp {
         let dvr = self.dvr_depth();
         // Edited through a local so the pill closure keeps its single `&mut self.views` borrow.
         let mut loop_frames = self.settings.live_loop_frames;
+        let narrow = self.chrome_rect.width() < 600.0;
         let compact_live = self.views[self.active].timeline.following;
         // Where the scrubber lands, for the tour's spotlight (same reason: no `self` in there).
         let mut scrub_rect = None;
@@ -69,7 +70,7 @@ impl HookEchoApp {
             .min(self.chrome_rect.width() - 16.0);
         // The phone's pill drops the two extras: the readouts fit a desktop row, not a 400 pt one,
         // and rain arrival has its own chip lane.
-        let (dvr, rain) = if cfg!(target_os = "android") {
+        let (dvr, rain) = if narrow {
             (0, None)
         } else {
             (dvr, rain)
@@ -99,7 +100,7 @@ impl HookEchoApp {
                 let row = ui.horizontal(|ui| {
                     // The phone says the site in its search pill; a second copy here is 60 pt of
                     // a 400 pt row spent saying it twice, and the clock loses that argument.
-                    if !cfg!(target_os = "android") {
+                    if !narrow {
                         ui.label(
                             egui::RichText::new(&site)
                                 .size(crate::ui::style::FONT_BASE)
@@ -167,7 +168,7 @@ impl HookEchoApp {
                     } else {
                         (
                             egui::Color32::from_gray(150),
-                            format!("ARCHIVE {}", t.date.format("%m/%d")),
+                            if narrow { "ARCHIVE".to_string() } else { format!("ARCHIVE {}", t.date.format("%m/%d")) },
                             "Scrubbed to an archive day. Click to jump back to live.",
                         )
                     };
@@ -297,7 +298,7 @@ impl HookEchoApp {
                                 .current()
                                 .and_then(|id| id.date_time())
                                 .map(|d| match tz {
-                                    Some(tz) if ui.available_width() < 190.0 => {
+                                    Some(tz) if narrow || ui.available_width() < 190.0 => {
                                         d.with_timezone(&tz).format("%-I:%M %p").to_string()
                                     }
                                     _ => crate::timefmt::fmt_clock(d, tz, true),
@@ -336,6 +337,7 @@ impl HookEchoApp {
                         // top of each other. Scrubbed to the archive, the badge already carries
                         // the date; the age only earns its place while the timeline is live.
                         let age = match (&age, t.following) {
+                            _ if narrow => &None,
                             (Some(_), false) if ui.available_width() < 150.0 => &None,
                             _ => &age,
                         };
@@ -345,7 +347,7 @@ impl HookEchoApp {
                                     .size(crate::ui::style::FONT_SM)
                                     .color(egui::Color32::from_gray(150)),
                             );
-                        } else if loading {
+                        } else if loading && !narrow {
                             ui.label(
                                 egui::RichText::new("loading\u{2026}")
                                     .size(crate::ui::style::FONT_SM)
@@ -374,6 +376,17 @@ impl HookEchoApp {
                 });
                 if let Some(rect) = &mut scrub_rect {
                     *rect = rect.union(row.response.rect);
+                }
+                if narrow {
+                    let status = if !t.following {
+                        t.date.format("%Y-%m-%d").to_string()
+                    } else {
+                        age.clone().unwrap_or_else(|| if loading { "Loading radar…".into() } else { String::new() })
+                    };
+                    let response = ui.small(status);
+                    if let Some(rect) = &mut scrub_rect {
+                        *rect = rect.union(response.rect);
+                    }
                 }
                 });
             });

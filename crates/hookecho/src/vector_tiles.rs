@@ -83,6 +83,21 @@ pub struct PlaceLabel {
     pub min_zoom: f32,
 }
 
+impl PlaceLabel {
+    pub fn visible_at(&self, zoom: f64) -> bool {
+        zoom >= self.min_zoom as f64 && (zoom >= 8.0 || self.shield != RoadShield::Interstate
+            || self.name.trim_end_matches(|c: char| c.is_ascii_alphabetic())
+                .parse::<u16>().is_ok_and(|n| n < 100))
+    }
+
+    pub fn priority(&self) -> u8 {
+        if self.city && self.rank <= 3 { 0 }
+        else if self.shield == RoadShield::Interstate { 1 }
+        else if self.city { 2 }
+        else { 3 }
+    }
+}
+
 fn srgb_to_linear(c: u8) -> f32 {
     let c = c as f32 / 255.0;
     if c <= 0.04045 {
@@ -792,8 +807,9 @@ struct FetchedVector {
 pub struct VectorTileManager {
     spawner: crate::rt::Spawner,
     client: reqwest::Client,
-    tx: Sender<Result<FetchedVector, TileId>>,
-    rx: Receiver<Result<FetchedVector, TileId>>,
+    tx: Sender<(u64, Result<FetchedVector, TileId>)>,
+    rx: Receiver<(u64, Result<FetchedVector, TileId>)>,
+    render_generation: u64,
     /// Fetches out. Bounded by `MAX_INFLIGHT`, and given back on every path including a timeout.
     inflight: std::sync::Arc<std::sync::atomic::AtomicUsize>,
     /// Tiles whose fetch failed, and when. Retried after [`RETRY_AFTER`].
@@ -819,6 +835,7 @@ pub struct VectorTileManager {
     template_tx: Sender<Option<String>>,
     template_rx: Receiver<Option<String>>,
     template_requested: bool,
+    template_failed: Option<wxdata::clock::Instant>,
 }
 
 impl VectorTileManager {
@@ -846,6 +863,7 @@ impl VectorTileManager {
             uploaded: LruCache::new(NonZeroUsize::new(VECTOR_TILE_CACHE).unwrap()),
             vevicted: Vec::new(),
             labels: HashMap::new(),
+            render_generation: 0,
             label_gen: 0,
             palette: basemap_style::Palette::Dark,
             theme: crate::settings::Theme::Dark,
@@ -856,6 +874,7 @@ impl VectorTileManager {
             template_tx,
             template_rx,
             template_requested: false,
+            template_failed: None,
         }
     }
 
@@ -874,6 +893,7 @@ impl VectorTileManager {
             return false;
         }
         self.palette = palette;
+        self.render_generation += 1;
         self.requested.clear();
         self.failed.clear();
         self.uploaded.clear();
@@ -888,6 +908,7 @@ impl VectorTileManager {
             return false;
         }
         self.theme = theme;
+        self.render_generation += 1;
         self.requested.clear();
         self.uploaded.clear();
         self.labels.clear();
@@ -925,6 +946,7 @@ impl VectorTileManager {
         // to z12 from the z7 the manager starts at left roads roughly thirty times too wide until
         // something else happened to clear them. The 700 ms settle above is what makes doing this
         // unconditionally affordable.
+        self.render_generation += 1;
         self.requested.clear();
         self.failed.clear();
         self.uploaded.clear();
@@ -945,9 +967,12 @@ impl VectorTileManager {
     /// return nothing.
     pub fn ensure_template(&mut self) {
         while let Ok(t) = self.template_rx.try_recv() {
+            self.template_requested = false;
+            self.template_failed = t.is_none().then(wxdata::clock::Instant::now);
             self.template = t;
         }
-        if self.template.is_some() || self.template_requested {
+        if self.template.is_some() || self.template_requested
+            || self.template_failed.is_some_and(|t| t.elapsed() < RETRY_AFTER) {
             return;
         }
         self.template_requested = true;
@@ -955,7 +980,8 @@ impl VectorTileManager {
         let tx = self.template_tx.clone();
         let dir = self.cache_root.clone();
         self.spawner.spawn(async move {
-            let t = fetch_tilejson(&client, dir.as_deref()).await;
+            let t = wxdata::task::timeout(TILE_TIMEOUT, fetch_tilejson(&client, dir.as_deref()))
+                .await.ok().flatten();
             let _ = tx.send(t);
         });
     }
@@ -965,6 +991,7 @@ impl VectorTileManager {
         let Some(template) = self.template.clone() else {
             return;
         };
+        let generation = self.render_generation;
         let palette = self.palette;
         let theme = self.theme;
         let tess_zoom = self.tess_zoom as f64;
@@ -1007,7 +1034,7 @@ impl VectorTileManager {
                 let Ok(bytes) = bytes else {
                     // Say so rather than going quiet: an id that stays in `requested` with nothing
                     // coming is a permanently missing tile, and a slot that is never given back.
-                    let _ = tx.send(Err(id));
+                    let _ = tx.send((generation, Err(id)));
                     inflight.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
                     if let Some(ctx) = ctx {
                         ctx.request_repaint();
@@ -1019,12 +1046,12 @@ impl VectorTileManager {
                 blocking.spawn_blocking(move || {
                     let (vertices, indices, labels) =
                         build_tile_with_theme(&bytes, id, palette, tess_zoom, theme);
-                    let _ = tx.send(Ok(FetchedVector {
+                    let _ = tx.send((generation, Ok(FetchedVector {
                         id,
                         vertices,
                         indices,
                         labels,
-                    }));
+                    })));
                     inflight.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
                     if let Some(ctx) = ctx {
                         ctx.request_repaint();
@@ -1076,7 +1103,10 @@ impl VectorTileManager {
     /// Drain finished tessellations into upload-ready tiles (each returned once).
     pub fn drain_ready(&mut self) -> Vec<PendingVectorTile> {
         let mut ready = Vec::new();
-        while let Ok(f) = self.rx.try_recv() {
+        while let Ok((generation, f)) = self.rx.try_recv() {
+            if generation != self.render_generation {
+                continue;
+            }
             let f = match f {
                 Ok(f) => f,
                 // Out of `requested` so the next visibility pass is the retry, and into `failed`
@@ -1147,6 +1177,80 @@ impl VectorTileManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn test_manager() -> VectorTileManager {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let (template_tx, template_rx) = std::sync::mpsc::channel();
+        VectorTileManager {
+            spawner: crate::rt::Spawner::new(tokio::runtime::Handle::current()),
+            client: reqwest::Client::new(),
+            tx,
+            rx,
+            ctx: None,
+            requested: HashSet::new(),
+            inflight: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            failed: HashMap::new(),
+            uploaded: LruCache::new(NonZeroUsize::new(VECTOR_TILE_CACHE).unwrap()),
+            vevicted: Vec::new(),
+            labels: HashMap::new(),
+            render_generation: 0,
+            label_gen: 0,
+            palette: basemap_style::Palette::Dark,
+            theme: crate::settings::Theme::Dark,
+            tess_zoom: 7,
+            zoom_settled: None,
+            cache_root: None,
+            template: None,
+            template_tx,
+            template_rx,
+            template_requested: false,
+            template_failed: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn obsolete_tiles_cannot_replace_new_style_or_cancel_new_requests() {
+        let mut manager = test_manager();
+        let id = (6, 14, 25);
+        let old = manager.render_generation;
+        manager.set_style(basemap_style::Palette::Light);
+        manager.requested.insert(id);
+        manager.tx.send((old, Err(id))).unwrap();
+        manager.tx.send((old, Ok(FetchedVector { id, vertices: vec![], indices: vec![], labels: vec![] }))).unwrap();
+        assert!(manager.drain_ready().is_empty());
+        assert!(manager.requested.contains(&id));
+        assert!(!manager.failed.contains_key(&id));
+        manager.tx.send((manager.render_generation, Ok(FetchedVector { id, vertices: vec![], indices: vec![], labels: vec![] }))).unwrap();
+        assert_eq!(manager.drain_ready().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn metadata_failure_releases_request_and_backs_off() {
+        let mut manager = test_manager();
+        manager.template_requested = true;
+        manager.template_tx.send(None).unwrap();
+        manager.ensure_template();
+        assert!(!manager.template_requested);
+        assert!(manager.template_failed.is_some());
+        manager.template_tx.send(Some("https://example.test/{z}/{x}/{y}".into())).unwrap();
+        manager.ensure_template();
+        assert!(manager.template.is_some());
+        assert!(manager.template_failed.is_none());
+    }
+
+    #[test]
+    fn regional_labels_keep_major_cities_and_through_routes() {
+        let mut label = PlaceLabel { world: [0.0, 0.0], name: "35E".into(), rank: 100, city: false, shield: RoadShield::Interstate, min_zoom: 5.0 };
+        assert!(label.visible_at(5.3));
+        let highway_priority = label.priority();
+        label.name = "635".into();
+        assert!(!label.visible_at(5.3));
+        assert!(label.visible_at(9.6));
+        label.city = true;
+        label.shield = RoadShield::None;
+        label.rank = 2;
+        assert!(label.priority() < highway_priority);
+    }
 
     #[test]
     fn empty_bytes_yield_background_quad_only() {

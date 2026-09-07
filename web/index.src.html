@@ -77,10 +77,11 @@
       });
     </script>
     <script type="module">
-      import init, { start } from "./dist/hookecho.js";
-      import { makeBridge } from "./decode-bridge.js";
       const boot = document.getElementById("boot");
 
+      try {
+      const { default: init, start } = await import("./dist/hookecho.js");
+      const { makeBridge } = await import("./decode-bridge.js");
       // Compile the wasm once and share the compiled module with the decode worker. A
       // `WebAssembly.Module` is structured-cloneable, so the worker gets a second *instance* —
       // its own heap, its own thread — without a second download or a second compile.
@@ -89,7 +90,7 @@
       // seconds of frozen map. See web/decode-worker.js and crates/wxdata/src/wasm_worker.rs.
       const glueUrl = new URL("./dist/hookecho.js", import.meta.url).href;
       const wasmUrl = new URL("./dist/hookecho_bg.wasm", import.meta.url).href;
-      const module = await WebAssembly.compileStreaming(fetch(wasmUrl));
+      const module = await WebAssembly.compileStreaming(fetch(wasmUrl, { signal: AbortSignal.timeout(60000) }));
 
       // Job ids, transfers and worker-death handling all live in decode-bridge.js, which takes
       // the spawn as a callback so its failure path can be tested without a browser.
@@ -127,7 +128,6 @@
         if (String(e.message || "").includes("unreachable")) dead("HookEcho stopped: " + e.message);
       });
 
-      try {
         // The module is already compiled above — hand it over rather than fetching the wasm twice.
         await init({ module_or_path: module });
         await start("hookecho");
@@ -144,7 +144,11 @@
       } catch (e) {
         // Nearly always one of two things: a browser with neither WebGPU nor WebGL2, or the
         // wasm being served with the wrong MIME type. Say which rather than showing a blank page.
-        boot.textContent = "HookEcho failed to start: " + e;
+        boot.textContent = "HookEcho couldn't start. Check your connection and retry.";
+        const retry = document.createElement("button");
+        retry.textContent = "Retry";
+        retry.onclick = () => location.reload();
+        boot.appendChild(retry);
         console.error(e);
       }
     </script>
