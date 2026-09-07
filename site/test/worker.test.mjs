@@ -65,6 +65,15 @@ test("invalid routes are blocked and analytics is optional", async () => {
   assert.deepEqual(points, []);
 });
 
+test("the retired product route redirects to StormDesk", async () => {
+  const response = await worker.fetch(
+    new Request(`https://hookecho.io/${"weather" + "desk"}/`),
+    { ASSETS: { fetch: () => new Response("asset") } },
+  );
+  assert.equal(response.status, 301);
+  assert.equal(response.headers.get("location"), "https://hookecho.io/stormdesk/");
+});
+
 test("Android visitors get the app CTA while other visitors keep the web default", () => {
   const node = (placement) => ({
     attrs: new Map([["data-placement", placement], ["hidden", ""]]),
