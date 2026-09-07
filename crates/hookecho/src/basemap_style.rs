@@ -241,6 +241,12 @@ pub fn style(p: Palette) -> &'static VecStyle {
     }
 }
 
+/// Regional roads stay hairlines; street-level views retain the full road hierarchy.
+/// Apply to both the road and its casing so the outline never overwhelms the fill.
+pub fn road_scale(zoom: f64) -> f64 {
+    0.25 + 0.75 * ((zoom - 5.0) / 8.0).clamp(0.0, 1.0)
+}
+
 /// Casing (outline) color + width for a road, drawn in a pass *under* the road itself so majors
 /// read as ribbons rather than bare lines. `None` for classes that get no casing.
 ///
@@ -360,6 +366,16 @@ pub fn stroke(p: Palette, layer: &str, class: &str) -> Option<([u8; 4], f32)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn regional_roads_are_thin_and_grow_to_street_scale() {
+        assert_eq!(road_scale(3.0), 0.25);
+        let width = stroke(Palette::Dark, "transportation", "motorway").unwrap().1;
+        assert!(road_scale(5.3) * f64::from(width) < 1.2);
+        assert!(road_scale(9.0) > road_scale(5.3));
+        assert_eq!(road_scale(13.0), 1.0);
+        assert_eq!(road_scale(18.0), 1.0);
+    }
 
     #[test]
     fn dark_and_light_differ_and_resolve() {

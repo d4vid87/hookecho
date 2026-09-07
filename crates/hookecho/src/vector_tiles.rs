@@ -313,7 +313,12 @@ pub fn build_tile_with_theme(
             let Some((c, wpx)) = styled else {
                 continue;
             };
-            let w = (wpx as f64 * px_to_tile * theme_scale as f64) as f32;
+            let road_scale = if *layer == "transportation" {
+                basemap_style::road_scale(tess_zoom)
+            } else {
+                1.0
+            };
+            let w = (wpx as f64 * px_to_tile * theme_scale as f64 * road_scale) as f32;
             let mut b = Path::builder();
             let mut any = false;
             match &f.geometry {
@@ -370,51 +375,50 @@ fn extract_labels(
     txf: f64,
     tyf: f64,
 ) -> Vec<PlaceLabel> {
-    let Some(i) = names.iter().position(|nm| nm == "place") else {
-        return Vec::new();
-    };
-    let extent = reader
-        .get_layer_metadata()
-        .ok()
-        .and_then(|m| m.get(i).map(|l| l.extent as f64))
-        .unwrap_or(4096.0);
     let mut out = Vec::new();
-    for f in reader.get_features(i).unwrap_or_default() {
-        let Some((city, min_zoom)) = place_visibility(&prop(&f.properties, "class")) else {
-            continue;
-        };
-        let name = {
-            let en = prop(&f.properties, "name:en");
-            if en.is_empty() {
-                prop(&f.properties, "name")
-            } else {
-                en
-            }
-        };
-        if name.is_empty() {
-            continue;
-        }
-        // OpenMapTiles encodes place labels as single-point MultiPoints.
-        let pt = match &f.geometry {
-            geo_types::Geometry::Point(p) => Some((p.x(), p.y())),
-            geo_types::Geometry::MultiPoint(mp) => mp.0.first().map(|p| (p.x(), p.y())),
-            _ => None,
-        };
-        if let Some((px, py)) = pt {
-            let p = tw(px, py, n, txf, tyf, extent);
-            let rank = match f.properties.as_ref().and_then(|p| p.get("rank")) {
-                Some(Value::Int(r)) | Some(Value::SInt(r)) => *r,
-                Some(Value::UInt(r)) => *r as i64,
-                _ => 100,
+    if let Some(i) = names.iter().position(|nm| nm == "place") {
+        let extent = reader
+            .get_layer_metadata()
+            .ok()
+            .and_then(|m| m.get(i).map(|l| l.extent as f64))
+            .unwrap_or(4096.0);
+        for f in reader.get_features(i).unwrap_or_default() {
+            let Some((city, min_zoom)) = place_visibility(&prop(&f.properties, "class")) else {
+                continue;
             };
-            out.push(PlaceLabel {
-                world: [p.x, p.y],
-                name,
-                rank,
-                city,
-                shield: RoadShield::None,
-                min_zoom,
-            });
+            let name = {
+                let en = prop(&f.properties, "name:en");
+                if en.is_empty() {
+                    prop(&f.properties, "name")
+                } else {
+                    en
+                }
+            };
+            if name.is_empty() {
+                continue;
+            }
+            // OpenMapTiles encodes place labels as single-point MultiPoints.
+            let pt = match &f.geometry {
+                geo_types::Geometry::Point(p) => Some((p.x(), p.y())),
+                geo_types::Geometry::MultiPoint(mp) => mp.0.first().map(|p| (p.x(), p.y())),
+                _ => None,
+            };
+            if let Some((px, py)) = pt {
+                let p = tw(px, py, n, txf, tyf, extent);
+                let rank = match f.properties.as_ref().and_then(|p| p.get("rank")) {
+                    Some(Value::Int(r)) | Some(Value::SInt(r)) => *r,
+                    Some(Value::UInt(r)) => *r as i64,
+                    _ => 100,
+                };
+                out.push(PlaceLabel {
+                    world: [p.x, p.y],
+                    name,
+                    rank,
+                    city,
+                    shield: RoadShield::None,
+                    min_zoom,
+                });
+            }
         }
     }
     out.extend(extract_airport_labels(reader, names, n, txf, tyf));
@@ -471,7 +475,7 @@ fn extract_airport_labels(
 fn place_visibility(cls: &str) -> Option<(bool, f32)> {
     match cls {
         "city" => Some((true, 0.0)),
-        "town" => Some((false, 7.0)),
+        "town" => Some((false, 6.0)),
         "village" => Some((false, 8.5)),
         "suburb" | "neighbourhood" => Some((false, 11.5)),
         _ => None,
@@ -485,8 +489,8 @@ fn road_label(
     reference: String,
 ) -> Option<(String, f32, i64, RoadShield)> {
     let (min_zoom, rank, prefer_ref): (f32, i64, bool) = match cls {
-        "motorway" => (6.0, 100, true),
-        "trunk" => (7.0, 110, true),
+        "motorway" => (5.0, 100, true),
+        "trunk" => (6.0, 110, true),
         "primary" => (8.0, 120, true),
         "secondary" => (9.5, 130, true),
         "tertiary" => (12.0, 140, false),
@@ -501,7 +505,7 @@ fn road_label(
         _ => RoadShield::None,
     };
     let min_zoom = match shield {
-        RoadShield::Us => min_zoom.max(6.5),
+        RoadShield::Us => min_zoom.max(6.0),
         RoadShield::State => min_zoom.max(7.5),
         RoadShield::Other => min_zoom.max(9.0),
         _ => min_zoom,
@@ -698,6 +702,12 @@ pub async fn fetch_tilejson(
         let _ = std::fs::write(dir.join("tilejson.txt"), &t);
     }
     Some(t)
+}
+
+// OpenMapTiles starts transportation_name at z6. Fetch that detail once interstate
+// labels become visible, while keeping the cheaper tiles for the national view.
+fn label_detail_bias(zoom: f64) -> f64 {
+    if (5.0..6.0).contains(&zoom) { 6.0 - zoom } else { 0.0 }
 }
 
 /// Headless helper: fetch + tessellate all `visible` vector tiles, returning GPU-ready geometry
@@ -901,9 +911,7 @@ impl VectorTileManager {
     }
 
     pub fn visible(&self, cam: &Camera, viewport_px: (f32, f32)) -> Vec<VisibleTile> {
-        // Vector tiles tessellate to resolution-independent triangles, so they stay crisp at any
-        // DPI — no zoom bias needed (unlike raster, which upsamples a fixed-px image).
-        tile_cover(cam, viewport_px, MAX_VECTOR_Z, 0.0)
+        tile_cover(cam, viewport_px, MAX_VECTOR_Z, label_detail_bias(cam.zoom))
     }
 
     /// Kick off tilejson + tile fetches for anything visible and not yet requested.
@@ -1146,8 +1154,36 @@ mod tests {
     }
 
     #[test]
+    fn regional_views_fetch_the_first_road_label_level() {
+        assert_eq!(label_detail_bias(4.0), 0.0);
+        for zoom in [5.0, 5.3, 5.9] {
+            assert_eq!((zoom + label_detail_bias(zoom)).round(), 6.0);
+        }
+        assert_eq!(label_detail_bias(6.0), 0.0);
+        assert_eq!(label_detail_bias(12.0), 0.0);
+    }
+
+    #[test]
+    fn road_labels_survive_tiles_without_places() {
+        // MVT with one interstate line and no `place` layer.
+        let bytes = &[
+            26, 102, 10, 19, 116, 114, 97, 110, 115, 112, 111, 114, 116, 97, 116, 105, 111, 110, 95, 110,
+            97, 109, 101, 18, 18, 18, 6, 0, 0, 1, 1, 2, 2, 24, 2, 34, 6, 9, 20, 20,
+            10, 20, 0, 26, 5, 99, 108, 97, 115, 115, 26, 7, 110, 101, 116, 119, 111, 114, 107, 26,
+            3, 114, 101, 102, 34, 10, 10, 8, 109, 111, 116, 111, 114, 119, 97, 121, 34, 15, 10, 13,
+            117, 115, 45, 105, 110, 116, 101, 114, 115, 116, 97, 116, 101, 34, 4, 10, 2, 51, 53, 40,
+            128, 32, 120, 2,
+        ];
+        let (_, _, labels) = build_tile(bytes, (5, 7, 12), basemap_style::Palette::Dark, 5.0);
+        assert_eq!(labels.len(), 1);
+        assert_eq!(labels[0].name, "35");
+        assert_eq!(labels[0].shield, RoadShield::Interstate);
+        assert!(labels[0].min_zoom <= 5.3);
+    }
+
+    #[test]
     fn road_labels_prefer_highway_refs_and_keep_street_names() {
-        assert_eq!(place_visibility("town"), Some((false, 7.0)));
+        assert_eq!(place_visibility("town"), Some((false, 6.0)));
         assert_eq!(place_visibility("village"), Some((false, 8.5)));
         assert_eq!(
             road_label(
@@ -1156,11 +1192,11 @@ mod tests {
                 "Stemmons Freeway".into(),
                 "35E".into()
             ),
-            Some(("35E".into(), 6.0, 100, RoadShield::Interstate))
+            Some(("35E".into(), 5.0, 100, RoadShield::Interstate))
         );
         assert_eq!(
             road_label("trunk", "us-highway", String::new(), "281".into()),
-            Some(("281".into(), 7.0, 110, RoadShield::Us))
+            Some(("281".into(), 6.0, 110, RoadShield::Us))
         );
         assert_eq!(
             road_label("primary", "us-state", String::new(), "171".into()),
