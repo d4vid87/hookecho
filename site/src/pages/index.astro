@@ -1,6 +1,5 @@
 ---
 import Base from "../layouts/Base.astro";
-import Hero from "../components/Hero.astro";
 import Icon from "../components/Icon.astro";
 import { DISCORD_INVITE } from "../data/community";
 
@@ -41,178 +40,140 @@ const jsonld = {
 
 <Base
   title="HookEcho — live weather radar, free and open source"
-  description="See rain move, follow warnings and open the radar nearest you. HookEcho is free, open source and available in your browser or as an app."
+  description="Live NEXRAD radar, weather warnings and powerful storm analysis. Free and open source, with no account or ads."
   jsonld={jsonld}
 >
-  <Hero
-    title="See what’s coming."
-    accent="Right now."
-    tagline="Watch rain move, follow warnings, and tap anywhere for the forecast. Free, with no account or ads."
-  />
+  <section class="radar-hero" aria-labelledby="hero-title">
+    <div class="wrap product-grid">
+      <div class="hero-copy">
+        <p class="eyebrow">Free · Open source</p>
+        <h1 id="hero-title">Know what’s coming.</h1>
+        <p class="intro">Live NEXRAD radar, weather warnings and powerful storm analysis. No account. No ads.</p>
+        <div class="actions">
+          <a class="btn btn-primary" href="/go/web/hero" data-smart-primary data-placement="hero">Open live radar <Icon name="arrow-right" /></a>
+          <a class="btn" href="/go/download/hero" data-smart-secondary data-placement="hero">Download app</a>
+        </div>
+        <p class="platforms">Web · Windows · macOS · Linux · Android</p>
+        <p class="android-note" data-android-note hidden>Android beta · sideloaded APK.</p>
+      </div>
+      <figure class="product-preview">
+        <a href="/go/web/hero" aria-label="Open HookEcho live radar">
+          <picture>
+            <source type="image/webp" srcset="/shots/reflectivity-640.webp 640w, /shots/reflectivity-1280.webp 1280w" sizes="(max-width: 900px) calc(100vw - 2.5rem), 60vw" />
+            <img src="/shots/reflectivity-1280.webp" alt="HookEcho radar showing storm reflectivity, map controls and playback timeline" width="1280" height="800" fetchpriority="high" />
+          </picture>
+        </a>
+        <figcaption>HookEcho in action · Radar screenshot</figcaption>
+      </figure>
+    </div>
+  </section>
+
+  <div class="trust">
+    <ul class="wrap" aria-label="HookEcho promises">
+      <li><Icon name="broadcast" /> NOAA &amp; NWS data</li>
+      <li><Icon name="github-logo" /> MIT licensed</li>
+      <li><Icon name="crosshair" /> No account or ads</li>
+    </ul>
+  </div>
+
+  <section class="stormdesk" aria-labelledby="stormdesk-title">
+    <div class="wrap product-grid">
+      <div>
+        <p class="eyebrow">Meet StormDesk</p>
+        <h2 id="stormdesk-title">Your station.<br />One clear view.</h2>
+        <p class="intro">Station data, forecasts and HookEcho radar in one dashboard.</p>
+        <p class="station-list">Works with Tempest, Ecowitt, Ambient, Davis, AcuRite and La Crosse.</p>
+        <a class="text-link" href="/go/stormdesk/homepage">Explore StormDesk <Icon name="arrow-right" /></a>
+      </div>
+      <figure class="product-preview">
+        <a href="/go/stormdesk/homepage" aria-label="Explore the StormDesk weather station dashboard">
+          <picture>
+            <source type="image/webp" srcset="/shots/stormdesk-dashboard-800.webp?v=4074903 800w, /shots/stormdesk-dashboard-1200.webp?v=4074903 1200w" sizes="(max-width: 900px) calc(100vw - 2.5rem), 60vw" />
+            <img src="/shots/stormdesk-dashboard-1200.webp?v=4074903" alt="StormDesk Desk tab showing current conditions and the local forecast" width="1200" height="675" loading="lazy" />
+          </picture>
+        </a>
+        <figcaption>StormDesk in action · Dashboard screenshot</figcaption>
+      </figure>
+    </div>
+  </section>
+
+  <section class="community wrap" aria-labelledby="community-title">
+    <Icon name="github-logo" size={36} />
+    <div>
+      <h2 id="community-title">Built in the open. Help it grow.</h2>
+      <p>If these tools help you, give the projects a star.</p>
+    </div>
+    <div class="actions">
+      <a class="btn" href="/go/hookecho-source/final"><span aria-hidden="true">☆</span> Star HookEcho</a>
+      <a class="btn" href="/go/stormdesk-source/final"><span aria-hidden="true">☆</span> Star StormDesk</a>
+    </div>
+  </section>
 
   <section class="benefits" aria-labelledby="benefits-title">
     <div class="wrap">
-      <p class="eyebrow">Weather without the runaround</p>
-      <h2 id="benefits-title">Start simple. Go as deep as the storm demands.</h2>
+      <p class="eyebrow">Simple to start. Room to explore.</p>
+      <h2 id="benefits-title">Go as deep as the storm demands.</h2>
       <div class="benefit-grid">
         {benefits.map((benefit) => (
-          <article class="benefit">
-            <span class="benefit-icon"><Icon name={benefit.icon} size={22} /></span>
+          <article>
+            <span class="benefit-icon"><Icon name={benefit.icon} size={24} /></span>
             <h3>{benefit.title}</h3>
             <p>{benefit.body}</p>
           </article>
         ))}
       </div>
-    </div>
-  </section>
-
-  <section class="trust" aria-labelledby="trust-title">
-    <div class="wrap trust-inner">
-      <div>
-        <p class="eyebrow">Built in the open</p>
-        <h2 id="trust-title">Public weather data. Private by design.</h2>
-      </div>
-      <ul aria-label="HookEcho promises">
-        <li>Direct NOAA and NWS data</li>
-        <li>MIT licensed</li>
-        <li>No account or ads</li>
-        <li>No app telemetry</li>
-      </ul>
-    </div>
-  </section>
-
-  <section class="stormdesk" aria-labelledby="stormdesk-title">
-    <div class="wrap stormdesk-card">
-      <div class="stormdesk-copy">
-        <p class="eyebrow">Also from us</p>
-        <h2 id="stormdesk-title">Your weather station deserves a better screen.</h2>
-        <p>
-          StormDesk turns Tempest, Ecowitt, Ambient, Davis and more into a whole-home
-          dashboard—with HookEcho radar built in.
-        </p>
-        <p class="station-list">Tempest · Ecowitt · Ambient · Davis · AcuRite · La Crosse</p>
-        <a class="btn stormdesk-button" href="/go/stormdesk/homepage">Explore StormDesk</a>
-      </div>
-      <picture>
-        <source
-          type="image/webp"
-          srcset="/shots/stormdesk-dashboard-800.webp?v=4074903 800w, /shots/stormdesk-dashboard-1200.webp?v=4074903 1200w"
-          sizes="(max-width: 760px) calc(100vw - 2.5rem), 55vw"
-        />
-        <img
-          src="/shots/stormdesk-dashboard-1200.webp?v=4074903"
-          alt="StormDesk Desk tab showing current conditions and the local forecast"
-          width="1200"
-          height="675"
-          loading="lazy"
-        />
-      </picture>
-    </div>
-  </section>
-
-  <section class="final-cta" aria-labelledby="final-title">
-    <div class="wrap">
-      <p class="eyebrow">Your radar is ready</p>
-      <h2 id="final-title">Open the weather near you.</h2>
-      <p>No signup and no setup questions. The map opens on your area and starts moving.</p>
-      <div class="actions">
-        <a class="btn btn-primary" href="/go/web/final" data-smart-primary data-placement="final">
-          Open live radar
-        </a>
-        <a class="btn" href="/go/download/final" data-smart-secondary data-placement="final">
-          Download
-        </a>
-      </div>
-      <p class="android-note" data-android-note hidden>Android beta · sideloaded APK.</p>
-      <p class="community-link">
-        Questions, ideas, or storm reports? <a href={DISCORD_INVITE}>Join the Discord server.</a>
-        If you find our projects useful, please star
-        <a href="/go/hookecho-source/final">HookEcho</a> or
-        <a href="/go/stormdesk-source/final">StormDesk</a> on GitHub.
-      </p>
+      <a class="text-link" href="/features/">Explore all features <Icon name="arrow-right" /></a>
+      <p class="community-link">Questions, ideas, or storm reports? <a href={DISCORD_INVITE}>Join the Discord server.</a></p>
     </div>
   </section>
 </Base>
 
 <style>
-  .benefits .wrap > h2 { max-width: 18ch; }
-  .benefit-grid {
-    display: grid;
-    grid-template-columns: repeat(3, 1fr);
-    gap: var(--sp-4);
-    margin-top: var(--sp-7);
-  }
-  .benefit { border-top: 1px solid var(--stroke-strong); padding-top: var(--sp-5); }
-  .benefit-icon {
-    display: grid;
-    place-items: center;
-    width: 2.75rem;
-    height: 2.75rem;
-    margin-bottom: var(--sp-5);
-    border-radius: 50%;
-    background: color-mix(in srgb, var(--accent) 12%, var(--surface-1));
-    color: var(--accent);
-  }
-  .benefit p { color: var(--text-dim); margin: 0; }
-  .trust {
-    padding-block: clamp(2.5rem, 6vw, 4rem);
-    background: var(--bg-deep);
-    border-block: 1px solid var(--stroke);
-  }
-  .trust-inner {
-    display: grid;
-    grid-template-columns: minmax(16rem, 1fr) minmax(20rem, 1.2fr);
-    gap: var(--sp-7);
-    align-items: center;
-  }
-  .trust h2 { margin: 0; }
-  .trust ul {
-    display: grid;
-    grid-template-columns: repeat(2, 1fr);
-    gap: var(--sp-3) var(--sp-6);
-    margin: 0;
-    padding: 0;
-    list-style: none;
-  }
-  .trust li::before { content: "✓"; color: var(--accent); margin-right: 0.55rem; }
-  .stormdesk { background: color-mix(in srgb, #39ff88 5%, #000); }
-  .stormdesk-card {
-    display: grid;
-    grid-template-columns: minmax(18rem, 0.85fr) minmax(24rem, 1.4fr);
-    gap: clamp(2rem, 5vw, 4.5rem);
-    align-items: center;
-  }
-  .stormdesk-copy h2 { max-width: 14ch; }
-  .stormdesk-copy > p:not(.eyebrow, .station-list) {
-    color: var(--text-dim);
-    font-size: var(--text-lg);
-  }
-  .station-list { color: #39ff88; font-size: var(--text-sm); font-weight: 650; }
-  .stormdesk-button { background: #0c3d25; border-color: #39ff88; color: #dfffea; }
-  .stormdesk picture,
-  .stormdesk img { display: block; width: 100%; }
-  .stormdesk img {
-    border: 1px solid color-mix(in srgb, #39ff88 35%, var(--stroke));
-    border-radius: var(--radius-lg);
-    box-shadow: var(--shadow-2);
-  }
-  .final-cta { text-align: center; background-image: var(--mesh); }
-  .final-cta h2,
-  .final-cta p { margin-inline: auto; }
-  .final-cta > .wrap > p:not(.eyebrow, .android-note) { color: var(--text-dim); }
-  .actions { display: flex; justify-content: center; gap: var(--sp-3); flex-wrap: wrap; }
-  .android-note { color: var(--text-dim); font-size: var(--text-sm); margin-top: var(--sp-3); }
-  .community-link { color: var(--text-dim); font-size: var(--text-sm); margin-top: var(--sp-5); }
-  @media (max-width: 760px) {
-    .benefit-grid,
-    .trust-inner,
-    .stormdesk-card { grid-template-columns: 1fr; }
-    .benefit-grid { gap: var(--sp-6); }
-    .trust ul { grid-template-columns: 1fr; }
-    .stormdesk-copy h2 { max-width: 18ch; }
+  .radar-hero { padding-block: clamp(2.5rem, 5vw, 4.5rem) 2rem; }
+  .product-grid { display: grid; grid-template-columns: minmax(0, 0.85fr) minmax(0, 1.6fr); gap: clamp(2rem, 4vw, 4rem); align-items: center; }
+  .eyebrow { color: var(--accent); font-weight: 650; }
+  h1 { font-size: clamp(3rem, 4.5vw, 4.6rem); max-width: 10ch; line-height: 1.04; margin-bottom: 1.5rem; }
+  .intro { color: var(--text-dim); font-size: clamp(1rem, 1.5vw, 1.2rem); margin-bottom: 1.75rem; }
+  .actions { display: flex; flex-wrap: wrap; gap: 0.75rem; }
+  .platforms, .android-note { color: var(--text-dim); font-size: 0.82rem; margin: 1.25rem 0 0; }
+  .product-preview { margin: 0; min-width: 0; }
+  .product-preview a { display: block; border: 1px solid var(--stroke-strong); border-radius: 9px; overflow: hidden; }
+  .product-preview a:hover { border-color: var(--accent); }
+  .product-preview picture, .product-preview img { display: block; width: 100%; }
+  figcaption { color: var(--text-dim); font-size: 0.75rem; text-align: center; padding-top: 0.65rem; }
+  .trust { border-block: 1px solid var(--stroke); }
+  .trust ul { display: grid; grid-template-columns: repeat(3, 1fr); list-style: none; padding: 1rem 0; }
+  .trust li { display: flex; align-items: center; justify-content: center; gap: 0.75rem; color: var(--text-dim); font-size: 0.9rem; }
+  .trust li + li { border-left: 1px solid var(--stroke); }
+  .stormdesk { padding-block: 2.5rem 1.5rem; }
+  .stormdesk h2 { font-size: clamp(2rem, 3vw, 2.8rem); }
+  .station-list { color: var(--text-dim); font-size: 0.85rem; }
+  .text-link { display: inline-flex; align-items: center; gap: 0.75rem; text-decoration: none; padding-block: 0.6rem; }
+  .text-link:hover { text-decoration: underline; }
+  .community { display: flex; align-items: center; gap: 1.5rem; padding: 1.5rem 2rem; border: 1px solid var(--stroke-strong); border-radius: 9px; margin-block: 0.5rem 0; }
+  .community h2 { font-size: 1.3rem; font-weight: 550; letter-spacing: -0.02em; }
+  .community p { margin: 0; font-size: 0.85rem; color: var(--text-dim); }
+  .community .actions { margin-left: auto; }
+  .benefits { padding-block: 4rem; }
+  .benefits h2 { font-size: clamp(1.8rem, 3vw, 2.5rem); }
+  .benefit-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 2rem; margin: 2rem 0 1rem; }
+  .benefit-grid article { border-top: 1px solid var(--stroke); padding-top: 1.5rem; }
+  .benefit-icon { color: var(--accent); display: block; margin-bottom: 1rem; }
+  .benefit-grid p, .community-link { color: var(--text-dim); font-size: 0.95rem; }
+  .community-link { margin-top: 1rem; }
+  @media (max-width: 1100px) { .community { flex-wrap: wrap; } .community .actions { margin-left: 0; } }
+  @media (max-width: 900px) {
+    .product-grid { grid-template-columns: 1fr; gap: 2rem; }
+    h1 { max-width: 15ch; }
+    .hero-copy { max-width: 36rem; }
+    .stormdesk { padding-top: 2.5rem; }
+    .benefit-grid { grid-template-columns: 1fr; gap: 1.5rem; }
   }
   @media (max-width: 560px) {
-    .actions { align-items: stretch; flex-direction: column; }
-    .actions .btn { justify-content: center; }
+    .trust ul { grid-template-columns: 1fr; gap: 0.75rem; }
+    .trust li + li { border-left: 0; }
+    .community { padding: 1.25rem; }
+    .actions { width: 100%; }
+    .actions .btn { flex: 1 1 auto; justify-content: center; }
   }
 </style>

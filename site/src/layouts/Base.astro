@@ -66,7 +66,7 @@ const current = (href: string) => href.startsWith("/") && (path === href || path
 ---
 
 <!doctype html>
-<html lang="en">
+<html lang="en" class:list={{ "home-dark": path === "/" }}>
   <head>
     <link rel="preconnect" href="https://img.hookecho.io" crossorigin />
     <meta charset="utf-8" />
@@ -76,7 +76,7 @@ const current = (href: string) => href.startsWith("/") && (path === href || path
     <link rel="canonical" href={url} />
     <link rel="icon" href="/logo.png" type="image/png" />
     <link rel="alternate" type="application/rss+xml" title="HookEcho" href="/rss.xml" />
-    <meta name="theme-color" content="#0b100d" />
+    <meta name="theme-color" content={path === "/" ? "#080f17" : "#0b100d"} />
     <link
       rel="preload"
       href="/fonts/InterVariable-subset.woff2"
@@ -125,12 +125,14 @@ const current = (href: string) => href.startsWith("/") && (path === href || path
           }
         </nav>
 
-        <a
+        {path === "/" ? (
+          <a class="btn header-cta" href="/go/hookecho-source/nav">☆ Star on GitHub</a>
+        ) : (<a
           class="btn btn-primary header-cta"
           href="/go/web/nav"
           data-smart-primary
           data-placement="nav"
-        >Open radar</a>
+        >Open radar</a>)}
 
         <details class="site-menu">
           <summary aria-label="Navigation menu">Menu</summary>
@@ -186,6 +188,24 @@ const current = (href: string) => href.startsWith("/") && (path === href || path
 </html>
 
 <style>
+  :global(html.home-dark) {
+    --bg: #080f17;
+    --bg-deep: #050b12;
+    --surface-1: #0d1722;
+    --surface-2: #111e2b;
+    --stroke: #22303e;
+    --stroke-strong: #3a4c5d;
+    --text: #f2f5f8;
+    --text-dim: #a6b2bf;
+    --accent: #65e2b5;
+    --accent-ink: #062019;
+    --page: 1390px;
+    color-scheme: dark;
+  }
+  :global(.home-dark .btn) { border-radius: 6px; background: transparent; border-color: var(--stroke-strong); }
+  :global(.home-dark .btn-primary) { background: var(--accent); border-color: var(--accent); }
+  :global(.home-dark .btn:hover) { box-shadow: none; border-color: var(--accent); }
+
   .site-head {
     position: sticky;
     top: 0;
