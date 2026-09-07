@@ -5,7 +5,8 @@ order: 3
 ---
 
 A radar sends out a pulse and listens for what comes back. Everything on the
-screen is some measurement of that echo. There are only a few you need.
+screen is some measurement of that echo. Start with reflectivity, then compare other products when you need more detail.
+Colours depend on the selected palette: always read the scale alongside the map.
 
 ## Reflectivity (Z) — where the rain is
 
@@ -26,9 +27,9 @@ Velocity measures whether the echo is moving toward the radar or away from it,
 along the beam. Green is toward, red is away. The radar site is the centre of
 that logic, so the same wind reads differently on either side of it.
 
-What you're hunting for is **green and red tight against each other** over a
-short distance. Air coming at the radar right beside air going away from it is
-air spinning: a rotating storm.
+A tight inbound/outbound pair can indicate rotation, but adjacent red and green
+alone do not establish a rotating storm or tornado. Velocity measures only
+motion along the radar beam; compare the pattern, location and neighbouring scans.
 
 HookEcho dealiases velocity by default, so a fast couplet reads as red against
 green instead of folding back into nonsense.
@@ -42,8 +43,8 @@ options when a couplet looks marginal.
 CC asks whether everything in the beam looks alike. Rain is uniform, so CC is
 high — near 1.0. Anything mixed pulls it down: hail, melting snow, birds, and
 crucially **debris**. A tornado on the ground lofts fence posts and roof
-shingles, and a hole punched in CC where the reflectivity is high is one of the
-strongest confirmations there is.
+shingles, and low CC can support a debris signature when it coincides with a strong
+rotation signature and reflectivity. Low CC by itself does not identify debris.
 
 ## Differential reflectivity (ZDR)
 
@@ -54,16 +55,18 @@ where the reflectivity is enormous. High Z with low ZDR is a hail signature.
 ## Three questions, three answers
 
 **Is it rotating?** Velocity, 0.5° tilt: look for a tight inbound/outbound pair
-over a few gates. Then turn on storm-relative velocity to be sure.
+over a few gates. Compare storm-relative velocity and successive scans; neither view alone proves a tornado.
 
-**Is it hail?** Reflectivity over about 50 dBZ is the candidate; confirm with CC
-dropping and ZDR going flat. The **storm attributes** table
+**Is it hail?** Reflectivity over about 50 dBZ is the candidate; compare with CC
+and ZDR for supporting evidence. These are clues, not a direct hail-size measurement. The **storm attributes** table
 (<kbd>Ctrl</kbd>+<kbd>K</kbd> → "cells") lists every tracked cell with its hail
 size, tops and VIL, sorted — click a row to fly there.
 
 **Is it a tornado?** The debris signature is all three together at low tilt: a
 velocity couplet, high reflectivity, and a hole in CC. The app flags candidates,
-but those three panels are the reason.
+but interpretation needs context. Some tornadoes have no visible debris signature,
+especially when weak or far from the radar. Follow official warnings rather than
+waiting for a signature to appear.
 
 ## Tilts, and why they matter
 
@@ -82,3 +85,9 @@ tilts side by side to make that easy to see.
 Dual-polarization — CC and ZDR — arrived across the network around 2012. Replay
 a storm from before your site was upgraded and those products simply aren't
 there. That's the data, not a bug.
+
+## Learn more from the National Weather Service
+
+- [What radar shows](https://www.weather.gov/index.php/bmx/radar_aboutnwsradar_whatitshows): reflectivity and velocity.
+- [Dual-polarization products](https://www.weather.gov/jan/dualpolupgrade-products): what CC and ZDR measure.
+- [Tornado debris signatures](https://www.weather.gov/lmk/nws_radar_dualpol_tordebris): interpretation and limitations.

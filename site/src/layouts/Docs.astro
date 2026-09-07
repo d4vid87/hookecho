@@ -8,9 +8,10 @@ interface Props {
   /** Collection id of the page being shown, or undefined on the docs index. */
   current?: string;
   jsonld?: object;
+  headings?: { depth: number; slug: string; text: string }[];
 }
 
-const { title, description, current, jsonld } = Astro.props;
+const { title, description, current, jsonld, headings = [] } = Astro.props;
 
 const pages = (await getCollection("docs")).sort((a, b) => a.data.order - b.data.order);
 const at = pages.findIndex((p) => p.id === current);
@@ -21,8 +22,10 @@ const next = at >= 0 && at < pages.length - 1 ? pages[at + 1] : undefined;
 <Base title={`${title} — HookEcho docs`} description={description} jsonld={jsonld}>
   <div class="wrap docs">
     <nav class="side" aria-label="Documentation">
-      <p class="eyebrow">Docs</p>
+      <a class="docs-home" href="/docs/" aria-current={!current ? "page" : undefined}>Documentation home</a>
       <div id="search"></div>
+      <details class="guide-menu" open>
+        <summary>Browse guides</summary>
       <ul>
         {pages.map((p) => (
           <li>
@@ -32,10 +35,18 @@ const next = at >= 0 && at < pages.length - 1 ? pages[at + 1] : undefined;
           </li>
         ))}
       </ul>
+      </details>
     </nav>
 
     <article class="prose" data-pagefind-body>
       <h1>{title}</h1>
+      <p class="lead">{description}</p>
+      {headings.some((h) => h.depth === 2) && (
+        <nav class="on-page" aria-label="On this page">
+          <strong>On this page</strong>
+          <ul>{headings.filter((h) => h.depth === 2).map((h) => <li><a href={`#${h.slug}`}>{h.text}</a></li>)}</ul>
+        </nav>
+      )}
       <slot />
 
       {(prev || next) && (
@@ -66,10 +77,15 @@ const next = at >= 0 && at < pages.length - 1 ? pages[at + 1] : undefined;
 />
 <script is:inline type="module">
   import("/pagefind/pagefind-ui.js")
-    .then(({ PagefindUI }) => {
-      new PagefindUI({ element: "#search", showSubResults: true, showImages: false });
+    .then(() => {
+      new window.PagefindUI({ element: "#search", showSubResults: true, showImages: false });
     })
-    .catch(() => {});
+    .catch(() => {
+      document.querySelector("#search").textContent = "Search unavailable. Browse the guides below.";
+    });
+  if (window.matchMedia("(max-width: 800px)").matches) {
+    document.querySelector(".guide-menu").open = false;
+  }
 </script>
 
 <style>
@@ -80,10 +96,7 @@ const next = at >= 0 && at < pages.length - 1 ? pages[at + 1] : undefined;
     padding: 3rem 0 4.5rem;
     align-items: start;
   }
-  @media (max-width: 800px) {
-    .docs { grid-template-columns: minmax(0, 1fr); }
-    .side { position: static; border-bottom: 1px solid var(--stroke); padding-bottom: 1.5rem; }
-  }
+
   .side {
     position: sticky;
     top: 5rem;
@@ -91,6 +104,22 @@ const next = at >= 0 && at < pages.length - 1 ? pages[at + 1] : undefined;
     border: 1px solid var(--stroke);
     border-radius: var(--radius-lg);
     padding: var(--sp-4);
+  }
+  .docs-home { margin-bottom: 1rem; font-weight: 650; }
+  .guide-menu summary { cursor: pointer; font-weight: 600; padding-block: 0.5rem; }
+  .lead { color: var(--text-dim); font-size: 1.1rem; }
+  .on-page { padding: 1rem 1.25rem; border: 1px solid var(--stroke); border-radius: var(--radius); margin: 1.5rem 0 2rem; background: var(--surface-1); }
+  .on-page ul { margin: 0.5rem 0 0; }
+  .on-page a { font-size: 0.9rem; }
+  .prose { min-width: 0; }
+  .prose :global(h2), .prose :global(h3) { scroll-margin-top: 5rem; }
+  .prose :global(img) { border: 1px solid var(--stroke); border-radius: var(--radius); }
+  .prose :global(blockquote) { margin: 1.5rem 0; padding: 1rem 1.25rem; border-left: 3px solid var(--accent); background: var(--surface-1); }
+  .prose :global(blockquote p:last-child) { margin-bottom: 0; }
+  .prose :global(a), .prose :global(code) { overflow-wrap: anywhere; }
+  @media (max-width: 800px) {
+    .docs { grid-template-columns: minmax(0, 1fr); gap: 1.5rem; padding-top: 1.5rem; }
+    .docs .side { position: static; }
   }
   .side ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.55rem; }
   .side a {

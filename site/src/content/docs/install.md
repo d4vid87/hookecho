@@ -4,9 +4,10 @@ description: Download HookEcho for Windows, macOS, Linux or Android — or run i
 order: 2
 ---
 
-Every build comes from the same
-[Releases page](https://github.com/d4vid87/hookecho/releases/latest), and
-[the download page](/download/) picks the right one for your machine. Versioned
+[The download page](/download/) helps you choose the right build for your machine.
+Use [the rolling beta build](https://github.com/d4vid87/hookecho/releases/tag/latest)
+for the current filenames below, or choose a versioned release from
+[all releases](https://github.com/d4vid87/hookecho/releases). Versioned
 `v*` releases are the stable channel; a rolling `latest` prerelease carries the
 newest work if you don't want to wait for a tag.
 
@@ -29,11 +30,11 @@ chmod +x HookEcho-x86_64.AppImage
 ./HookEcho-x86_64.AppImage
 ```
 
-On Debian or Ubuntu, **`hookecho_<version>_amd64.deb`** installs it properly
+On Debian or Ubuntu, **`HookEcho-amd64.deb`** installs it properly
 with a menu entry and icon:
 
 ```sh
-sudo apt install ./hookecho_*.deb
+sudo apt install ./HookEcho-amd64.deb
 ```
 
 Packaging manifests for Flatpak, Snap, the AUR and Homebrew live in the repo and
@@ -62,10 +63,31 @@ only way this build stops being experimental.
 
 ## From source
 
+Install Git and a [Rust toolchain](https://rustup.rs/) first. Then clone the repository
+and run from its root:
+
 ```sh
+git clone https://github.com/d4vid87/hookecho.git
+cd hookecho
 cargo run --release
 ```
 
 Needs a Rust toolchain, and on Linux the ALSA, Wayland and GTK development
 headers. Android builds go through `android/build.sh` with the NDK and
 `cargo-ndk`.
+
+## Update an existing installation
+
+Download the new build for the same platform from the [download page](/download/).
+Close HookEcho before running an installer or replacing a portable build. On
+Android, install the new APK over the existing app; uninstalling first can remove
+app data.
+
+After opening the update, check your saved places and alert settings. If something
+fails, include the build version and operating system in a
+[bug report](https://github.com/d4vid87/hookecho/issues/new).
+
+## Next step
+
+[Open your first radar](/docs/getting-started/) or check
+[installation and loading problems](/docs/troubleshooting/).

@@ -1,16 +1,27 @@
 ---
 title: Getting started
-description: From opening HookEcho for the first time to watching a storm, in about ten seconds.
+description: Open the radar, choose a place, animate recent scans and return to live weather.
 order: 1
 ---
 
-HookEcho asks for one thing on first launch: which radar you open to. Let it use
-your location and it picks the nearest one and gets out of the way. Otherwise,
-search the list — every radar in the network is in there by name or by its
-four-letter ID.
+## Open your first radar
 
-That's the whole of setup. Everything else has a sensible default, and lives in
-**Settings** when you want to change it.
+1. [Open HookEcho in your browser](https://app.hookecho.io/), or launch the
+   [installed app](/docs/install/).
+2. Allow location access to choose a nearby radar, or search for your place or
+   a radar's four-letter ID, such as **KTLX**. Location access is optional.
+3. Start with **Reflectivity (Z)** to see precipitation. Wait for the first scan
+   to load; the time is shown on the bottom timeline.
+4. Press **Play** to watch recent scans. Drag the timeline to inspect one moment.
+5. Press **LIVE** to return to the newest scan whenever you have moved into the past.
+
+You should now see the map, a radar timestamp, and the colour scale. An empty
+map can mean dry weather; check the timestamp before assuming data is missing.
+If the first scan never appears, use [Troubleshooting](/docs/troubleshooting/).
+
+![HookEcho showing reflectivity and the playback timeline during a historic storm](/shots/reflectivity-1280.webp)
+
+*Example archive screenshot, not current weather.*
 
 ## What you're looking at
 
@@ -29,7 +40,7 @@ Nothing is docked. The map runs edge to edge underneath all of it.
 
 ## If you remember one thing
 
-Press <kbd>Ctrl</kbd>+<kbd>K</kbd>. It searches the panel, and Enter runs the top
+Open the search pill, or press <kbd>Ctrl</kbd>+<kbd>K</kbd>. It searches the panel, and Enter runs the top
 match. Every action in the app is in there — products, layers, windows, and
 "Fly to" for any place name. You never have to learn where anything lives.
 
@@ -40,8 +51,7 @@ match. Every action in the app is in there — products, layers, windows, and
 2. Leave the product on **Reflectivity (Z)**. That's where the rain and hail are.
 3. Switch to **Velocity (V)** to see what the storm is *doing* — which way the
    air inside it is moving.
-4. Walk the tilt row to look higher into the storm. 0.5° is closest to the
-   ground.
+4. Walk the tilt row to look higher into the storm. 0.5° is the lowest common tilt; the beam is higher above the ground farther from the radar.
 5. The **LIVE** badge means you're on the newest scan. Anything that moves you
    off it turns the badge off; click it to snap back.
 

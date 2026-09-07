@@ -1,7 +1,7 @@
 ---
 title: FAQ and glossary
 description: Common questions, common problems, and where to find what all the abbreviations mean.
-order: 7
+order: 8
 ---
 
 ## Questions
@@ -39,23 +39,8 @@ than nagging. Keys go in Settings and stay on your machine.
 
 ## Things that look broken
 
-**Nothing loads.** The app talks to NOAA and the NWS directly, so this is
-usually the network. `--status` prints a per-feed report from the terminal.
-
-**The times look wrong.** Radar times read in *the selected radar's* local time
-— not yours and not Zulu — so a Texas pane and an Oklahoma pane can differ side
-by side. Settings → Units switches everything to UTC.
-
-**It's slow.** Lower the 3D quality preset, turn off the animated wind
-particles, and use fewer panes. On a phone, close station cards you aren't
-reading.
-
-**The disk is filling up.** Settings → Storage lists every cache against its
-cap, with clear and open buttons. Nothing cached is irreplaceable.
-
-Still stuck? [Open an issue](https://github.com/d4vid87/hookecho/issues) with
-the site, the product and the time you were looking at — that's usually enough
-to replay it.
+Use [Troubleshooting](/docs/troubleshooting/) for missing scans, browser problems,
+old timestamps, notifications, storage and a checklist for reporting bugs.
 
 ## Glossary
 

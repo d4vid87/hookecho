@@ -31,7 +31,8 @@ Severe warnings aren't all equal, and neither are the alerts. HookEcho reads the
 NWS escalation tiers — CONSIDERABLE, then DESTRUCTIVE or an observed tornado,
 then a **Tornado Emergency** — and a higher tier gets a pulsing polygon, a red
 threat chip at the top of the alert list, a dedicated siren, and an
-urgent-priority push that gets through your phone's quiet hours.
+urgent-priority push. Whether it sounds during quiet hours depends on your
+phone and receiving app settings.
 
 ## Where the storm actually is
 
@@ -52,3 +53,10 @@ A home-screen widget shows what's warned at your saved locations. See
 The desktop build keeps alerting from the tray. If you want the map itself
 available elsewhere on your own network, `--serve` publishes it as a local HTTP
 endpoint.
+
+## Check your setup
+
+Save a marker, select the channels you want, and check notification permission
+in your operating system. Browser alerts need an open tab; Android background
+alerts need the background service enabled. If delivery fails, follow the
+[notification checklist](/docs/troubleshooting/#notifications-are-not-arriving).

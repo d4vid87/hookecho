@@ -7,13 +7,23 @@ const pages = (await getCollection("docs")).sort((a, b) => a.data.order - b.data
 
 <Docs
   title="Documentation"
-  description="How to use HookEcho: getting started, installing, reading the radar, alerts, the phone app and the browser version."
+  description="Find your radar, follow the weather, and learn the deeper tools at your own pace."
 >
-  <p>
-    Short guides, in plain language. If you've just installed it, start with
-    <a href="/docs/getting-started/">Getting started</a>.
-  </p>
-
+  <div class="start">
+    <p class="eyebrow">New to HookEcho?</p>
+    <h2>Start with the weather near you.</h2>
+    <p>Open the radar, choose a place, and press Play. No account or installation needed.</p>
+    <a class="btn btn-primary" href="/docs/getting-started/">Follow the quick start →</a>
+    <a class="try" href="/go/web/hero">Open live radar</a>
+  </div>
+  <h2>What would you like to do?</h2>
+  <div class="tasks">
+    <a href="/docs/install/">Install on my device <span>Windows, Linux, macOS and Android →</span></a>
+    <a href="/docs/reading-the-radar/">Understand the radar <span>Colours, motion and storm structure →</span></a>
+    <a href="/docs/alerts-and-notifications/">Set up weather alerts <span>Saved places and notification options →</span></a>
+    <a href="/docs/troubleshooting/">Fix a problem <span>Loading, playback, speed and alerts →</span></a>
+  </div>
+  <h2>All guides</h2>
   <ul class="toc">
     {pages.map((p) => (
       <li>
@@ -25,6 +35,15 @@ const pages = (await getCollection("docs")).sort((a, b) => a.data.order - b.data
 </Docs>
 
 <style>
+  .start { background: var(--surface-1); border: 1px solid var(--stroke); border-radius: var(--radius); padding: 1.5rem; margin-block: 1.5rem 2rem; }
+  .start h2 { margin-top: 0; font-size: 1.7rem; }
+  .try { display: inline-block; padding: 0.75rem; }
+  .tasks { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; }
+  .tasks > a { border: 1px solid var(--stroke); border-radius: var(--radius); padding: 1.2rem; text-decoration: none; font-weight: 600; }
+  .tasks > a:hover { border-color: var(--accent); }
+  .tasks span { display: block; color: var(--text-dim); font-size: 0.85rem; font-weight: 400; margin-top: 0.5rem; }
+  @media (max-width: 560px) { .tasks { grid-template-columns: 1fr; } }
+
   .toc { list-style: none; margin: 2rem 0 0; padding: 0; display: grid; gap: 1.1rem; }
   .toc li { max-width: var(--measure); }
   .toc a { font-weight: 600; font-size: 1.05rem; }

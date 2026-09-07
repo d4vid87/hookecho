@@ -8,7 +8,7 @@ export async function getStaticPaths() {
 }
 
 const { page } = Astro.props;
-const { Content } = await render(page);
+const { Content, headings } = await render(page);
 
 // The FAQ writes each question as a bold line with its answer in the paragraph underneath, so the
 // structured data comes out of the same prose the page renders — no second copy to keep in sync.
@@ -33,6 +33,7 @@ const jsonld = faq.length
   description={page.data.description}
   current={page.id}
   jsonld={jsonld}
+  headings={headings}
 >
   <Content />
 </Docs>
