@@ -1,5 +1,6 @@
 ---
 import Base from "../layouts/Base.astro";
+import DemoMedia from "../components/DemoMedia.astro";
 import Icon from "../components/Icon.astro";
 import { DISCORD_INVITE } from "../data/community";
 
@@ -57,13 +58,8 @@ const jsonld = {
         <p class="android-note" data-android-note hidden>Android beta · sideloaded APK.</p>
       </div>
       <figure class="product-preview">
-        <a href="/go/web/hero" aria-label="Open HookEcho live radar">
-          <picture>
-            <source type="image/webp" srcset="/shots/reflectivity-640.webp 640w, /shots/reflectivity-1280.webp 1280w" sizes="(max-width: 900px) calc(100vw - 2.5rem), 60vw" />
-            <img src="/shots/reflectivity-1280.webp" alt="HookEcho radar showing storm reflectivity, map controls and playback timeline" width="1280" height="800" fetchpriority="high" />
-          </picture>
-        </a>
-        <figcaption>HookEcho in action · Radar screenshot</figcaption>
+        <DemoMedia gif="/shots/hookecho-hero.gif" poster="/shots/hookecho-poster.webp" alt="HookEcho replaying archived radar scans of the Moore storm on May 20, 2013" width={1100} height={688} eager />
+        <figcaption>HookEcho archive replay · May 20, 2013</figcaption>
       </figure>
     </div>
   </section>
@@ -86,13 +82,8 @@ const jsonld = {
         <a class="text-link" href="/go/stormdesk/homepage">Explore StormDesk <Icon name="arrow-right" /></a>
       </div>
       <figure class="product-preview">
-        <a href="/go/stormdesk/homepage" aria-label="Explore the StormDesk weather station dashboard">
-          <picture>
-            <source type="image/webp" srcset="/shots/stormdesk-dashboard-800.webp?v=4074903 800w, /shots/stormdesk-dashboard-1200.webp?v=4074903 1200w" sizes="(max-width: 900px) calc(100vw - 2.5rem), 60vw" />
-            <img src="/shots/stormdesk-dashboard-1200.webp?v=4074903" alt="StormDesk Desk tab showing current conditions and the local forecast" width="1200" height="675" loading="lazy" />
-          </picture>
-        </a>
-        <figcaption>StormDesk in action · Dashboard screenshot</figcaption>
+        <DemoMedia gif="/shots/stormdesk-hero.gif" poster="/shots/stormdesk-dashboard-1200.webp" alt="A tour of StormDesk’s redesigned dashboard, timeline, local signals, history and radar, using labeled sample station data" />
+        <figcaption>StormDesk in action · Sample station data</figcaption>
       </figure>
     </div>
   </section>

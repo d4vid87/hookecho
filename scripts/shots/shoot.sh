@@ -108,6 +108,7 @@ write_profile() {
 # ---------------------------------------------------------------- driving
 
 WID=""
+APP_PID=""
 
 launch() { # launch SITE,lon,lat,zoom[,RFC3339]  [settings-overrides-json]
   stop_app
@@ -122,7 +123,8 @@ launch() { # launch SITE,lon,lat,zoom[,RFC3339]  [settings-overrides-json]
     unset WAYLAND_DISPLAY
     # The tile cache is the real one on purpose: basemap tiles are already paid for, and a cold
     # cache means every scene waits on Mapbox before it can settle.
-    "$BIN" >"$WORK/app.log" 2>&1 & )
+    exec "$BIN" >"$WORK/app.log" 2>&1 ) &
+  APP_PID=$!
   for _ in $(seq 40); do
     WID="$(DISPLAY="$DISPLAY_NUM" xdotool search --name "HookEcho" 2>/dev/null | tail -1 || true)"
     [ -n "$WID" ] && break
@@ -136,7 +138,10 @@ launch() { # launch SITE,lon,lat,zoom[,RFC3339]  [settings-overrides-json]
   sleep 1
 }
 
-stop_app() { pkill -x hookecho 2>/dev/null || true; sleep 0.6; }
+stop_app() {
+  if [ -n "$APP_PID" ]; then kill "$APP_PID" 2>/dev/null || true; wait "$APP_PID" 2>/dev/null || true; APP_PID=""; fi
+  sleep 0.6
+}
 
 key()   { DISPLAY="$DISPLAY_NUM" xdotool key --window "$WID" "$@"; sleep 0.4; }
 click() { DISPLAY="$DISPLAY_NUM" xdotool mousemove --sync "$1" "$2" click 1; sleep 0.8; }
@@ -656,11 +661,11 @@ check() {
     [ -f "$REPO/$f" ] || { echo "MISSING: $f (referenced by README)"; fail=1; }
     # The phone set lives a directory down and was outside this cross-reference until it was
     # scripted — which is how it went a whole release cycle showing chrome that no longer existed.
-  done < <(grep -o 'docs/shots/\(android/\)\?[a-z0-9]*\.\(jpg\|gif\)' "$REPO/README.md" | sort -u)
-  for f in "$OUT"/*.jpg "$OUT"/*.gif "$OUT"/android/*.jpg "$OUT"/android/*.gif; do
+  done < <(grep -ho 'docs/shots/\(mobile/\)\?[a-z0-9]*\.\(jpg\|gif\)' "$REPO/README.md" "$REPO/docs/technical-reference.md" | sort -u)
+  for f in "$OUT"/*.jpg "$OUT"/*.gif "$OUT"/mobile/*.jpg "$OUT"/mobile/*.gif; do
     [ -e "$f" ] || continue
-    grep -q "docs/shots/\(android/\)\?$(basename "$f")" "$REPO/README.md" \
-      || { echo "ORPHAN: $(basename "$f") is not in the README"; fail=1; }
+    grep -qF "$(basename "$f")" "$REPO/README.md" "$REPO/docs/technical-reference.md" \
+      || { echo "ORPHAN: $(basename "$f") is not in the README or technical reference"; fail=1; }
   done
   for f in "$OUT"/*.jpg; do
     [ -e "$f" ] || continue

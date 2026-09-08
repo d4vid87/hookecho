@@ -1,5 +1,6 @@
 ---
 import Base from "../../layouts/Base.astro";
+import DemoMedia from "../../components/DemoMedia.astro";
 
 const systems = [
   "Tempest",
@@ -80,20 +81,7 @@ const jsonld = {
           <a class="btn" href="/go/stormdesk-source/stormdesk-hero">View source</a>
         </div>
       </div>
-      <picture class="hero-shot">
-        <source
-          type="image/webp"
-          srcset="/shots/stormdesk-dashboard-800.webp?v=4074903 800w, /shots/stormdesk-dashboard-1200.webp?v=4074903 1200w"
-          sizes="(max-width: 760px) calc(100vw - 2.5rem), 52vw"
-        />
-        <img
-          src="/shots/stormdesk-dashboard-1200.webp?v=4074903"
-          alt="StormDesk dashboard showing current station readings, forecasts and weather charts"
-          width="1200"
-          height="675"
-          fetchpriority="high"
-        />
-      </picture>
+      <div class="hero-shot"><DemoMedia gif="/shots/stormdesk-hero.gif" poster="/shots/stormdesk-dashboard-1200.webp" alt="StormDesk product tour with sample station data and HookEcho radar" eager /><p class="caveat">Preview of the updated interface · Sample station data</p></div>
     </div>
   </section>
 

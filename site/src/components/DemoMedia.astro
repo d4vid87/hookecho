@@ -1,0 +1,34 @@
+---
+interface Props { gif: string; poster: string; alt: string; width?: number; height?: number; eager?: boolean; }
+const { gif, poster, alt, width = 1100, height = 733, eager = false } = Astro.props;
+---
+<div class="demo-media">
+  <picture>
+    <source media="(prefers-reduced-motion: reduce)" srcset={poster} />
+    <img src={gif} alt={alt} width={width} height={height} decoding="async" loading={eager ? "eager" : "lazy"} data-gif={gif} data-poster={poster} />
+  </picture>
+  <button class="demo-pause" type="button" aria-pressed="false">Pause animation</button>
+</div>
+<script>
+  document.querySelectorAll<HTMLElement>('.demo-media').forEach((box) => {
+    const image = box.querySelector('img')!;
+    const button = box.querySelector('button')!;
+    const reduced = matchMedia('(prefers-reduced-motion: reduce)');
+    button.hidden = reduced.matches;
+    reduced.addEventListener('change', () => { button.hidden = reduced.matches; });
+    button.addEventListener('click', () => {
+      const paused = button.getAttribute('aria-pressed') !== 'true';
+      image.src = (paused ? image.dataset.poster : image.dataset.gif)!;
+      button.setAttribute('aria-pressed', String(paused));
+      button.textContent = paused ? 'Play animation' : 'Pause animation';
+    });
+  });
+</script>
+<style>
+  .demo-media { position:relative; overflow:hidden; border-radius:inherit; }
+  picture, img { display:block; width:100%; }
+  img { height:auto; }
+  .demo-pause { position:absolute; right:12px; bottom:12px; background:#0b151deb; color:#f0f4f7; border:1px solid #617480; border-radius:7px; padding:8px 10px; cursor:pointer; font:12px system-ui; }
+  .demo-pause[hidden] { display:none; }
+  .demo-pause:focus-visible { outline:2px solid #43cfc3; outline-offset:2px; }
+</style>

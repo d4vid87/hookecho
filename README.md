@@ -18,6 +18,14 @@ No account. No ads. No API key. Free and open source.
 
 ![HookEcho replaying the Moore, Oklahoma tornado of May 20, 2013](docs/shots/hero.gif)
 
+## Current interface
+
+| Reflectivity | Velocity |
+| --- | --- |
+| ![Archived supercell reflectivity](docs/shots/reflectivity.jpg) | ![Archived storm velocity](docs/shots/velocity.jpg) |
+
+[See the complete screenshot gallery](docs/technical-reference.md#screenshots).
+
 ## Start here
 
 The quickest way to use HookEcho is to [open the radar in your browser](https://app.hookecho.io/).

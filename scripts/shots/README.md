@@ -97,3 +97,10 @@ Look at every frame. The script cannot tell a good screenshot from a bad one.
 Then `./shoot.sh check` for the mechanical part, and confirm the whole set shares one basemap.
 The theme is pinned to Dark in `settings.template.json` — the shoot no longer inherits whatever
 theme your own config happens to be on, so the set can't drift a shot at a time.
+
+The public documentation currently uses `docs/shots/mobile/` browser captures.
+The `android` command refreshes native Android/store captures when a physical device is connected.
+
+To refresh the browser phone set, run `node scripts/shots/mobile-browser.cjs` from the repository root
+with Playwright and Chromium installed. Encode `/tmp/hookecho-mobile-frames/%d.png` at 2 fps
+with ffmpeg to `docs/shots/mobile/hero.gif`. These are browser previews, not Android store assets.
