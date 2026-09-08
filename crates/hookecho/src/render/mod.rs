@@ -1242,6 +1242,7 @@ impl RenderResources {
         );
         let quads = (self.panes.get(&cb.pane).map(|p| p.quads_key) != Some(Some(quads_key)))
             .then(|| self.tile_verts(cb));
+        let visible_vector = vector_draw_tiles(&cb.visible_vector, self.vector_tiles.keys().copied());
         let overlay_present = self.overlay.is_some();
 
         let pane = self.pane_mut(device, cb.pane);
@@ -1276,7 +1277,7 @@ impl RenderResources {
             pane.frame_visible = visible;
             pane.quads_key = Some(quads_key);
         }
-        pane.frame_visible_vector = cb.visible_vector.clone();
+        pane.frame_visible_vector = visible_vector;
         pane.vector_over_raster = cb.vector_over_raster;
         pane.frame_draw_radar = cb.draw_radar && pane.radar.is_some();
         pane.frame_draw_overlay = cb.draw_overlay && overlay_present;
@@ -1620,6 +1621,48 @@ impl egui_wgpu::CallbackTrait for MapCallback {
         crate::prof_scope!("render paint");
         let res: &RenderResources = resources.get().unwrap();
         res.record_pane(self.pane, pass);
+    }
+}
+
+/// Keep cached geography visible while a new zoom level loads. Coarse tiles draw first,
+/// then finer fallbacks, then the requested tiles so current detail always wins.
+fn vector_draw_tiles(visible: &[TileId], resident: impl Iterator<Item = TileId>) -> Vec<TileId> {
+    let resident: std::collections::BTreeSet<_> = resident.collect();
+    let mut fallback = std::collections::BTreeSet::new();
+    // ponytail: bounded tile-cache scan; add a spatial index only if the cache grows substantially.
+    for &(z, x, y) in visible {
+        if resident.contains(&(z, x, y)) {
+            continue;
+        }
+        for &(rz, rx, ry) in &resident {
+            let overlaps = if rz <= z {
+                (x >> (z - rz), y >> (z - rz)) == (rx, ry)
+            } else {
+                (rx >> (rz - z), ry >> (rz - z)) == (x, y)
+            };
+            if overlaps {
+                fallback.insert((rz, rx, ry));
+            }
+        }
+    }
+    fallback.into_iter().chain(visible.iter().copied().filter(|id| resident.contains(id))).collect()
+}
+
+#[cfg(test)]
+mod vector_fallback_tests {
+    use super::vector_draw_tiles;
+
+    #[test]
+    fn zooming_both_ways_keeps_cached_tiles_and_current_detail_wins() {
+        let parent = (4, 3, 5);
+        let child = (5, 6, 10);
+        let sibling = (5, 7, 10);
+        let far = (5, 20, 20);
+        assert_eq!(vector_draw_tiles(&[child], [parent, far].into_iter()), vec![parent]);
+        assert_eq!(vector_draw_tiles(&[parent], [child, far].into_iter()), vec![child]);
+        assert_eq!(vector_draw_tiles(&[child, sibling], [parent, child].into_iter()), vec![parent, child]);
+        assert_eq!(vector_draw_tiles(&[child], [parent, child].into_iter()), vec![child]);
+        assert!(vector_draw_tiles(&[child], [far].into_iter()).is_empty());
     }
 }
 
