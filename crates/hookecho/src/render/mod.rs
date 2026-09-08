@@ -1635,7 +1635,7 @@ impl egui_wgpu::CallbackTrait for MapCallback {
 
 /// Keep cached geography visible while a new zoom level loads. Coarse tiles draw first,
 /// then finer fallbacks, then the requested tiles so current detail always wins.
-fn vector_draw_tiles(visible: &[TileId], resident: impl Iterator<Item = TileId>) -> Vec<TileId> {
+pub(crate) fn vector_draw_tiles(visible: &[TileId], resident: impl Iterator<Item = TileId>) -> Vec<TileId> {
     let resident: Vec<_> = resident.collect();
     let mut fallback = Vec::new();
     // ponytail: bounded tile-cache scan; add a spatial index only if the cache grows substantially.
@@ -1643,13 +1643,14 @@ fn vector_draw_tiles(visible: &[TileId], resident: impl Iterator<Item = TileId>)
         if resident.contains(&(z, x, y)) {
             continue;
         }
+        // Prefer the nearest ancestor instead of stacking every cached zoom level.
+        if let Some(parent) = resident.iter().copied().filter(|&(rz, rx, ry)| {
+            rz < z && (x >> (z - rz), y >> (z - rz)) == (rx, ry)
+        }).max_by_key(|id| id.0) {
+            fallback.push(parent);
+        }
         for &(rz, rx, ry) in &resident {
-            let overlaps = if rz <= z {
-                (x >> (z - rz), y >> (z - rz)) == (rx, ry)
-            } else {
-                (rx >> (rz - z), ry >> (rz - z)) == (x, y)
-            };
-            if overlaps {
+            if rz > z && (rx >> (rz - z), ry >> (rz - z)) == (x, y) {
                 fallback.push((rz, rx, ry));
             }
         }
@@ -1670,6 +1671,8 @@ mod vector_fallback_tests {
         let child = (5, 6, 10);
         let sibling = (5, 7, 10);
         let far = (5, 20, 20);
+        let grandparent = (3, 1, 2);
+        assert_eq!(vector_draw_tiles(&[child], [grandparent, parent].into_iter()), vec![parent]);
         assert_eq!(vector_draw_tiles(&[child], [parent, far].into_iter()), vec![parent]);
         assert_eq!(vector_draw_tiles(&[parent], [child, far].into_iter()), vec![child]);
         assert_eq!(vector_draw_tiles(&[child, sibling], [parent, child].into_iter()), vec![parent, child]);
