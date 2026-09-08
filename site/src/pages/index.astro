@@ -88,6 +88,21 @@ const jsonld = {
     </div>
   </section>
 
+  <section class="phone-demos wrap" id="android" aria-labelledby="android-title">
+    <p class="eyebrow">Recorded on Android</p>
+    <h2 id="android-title">Both apps, on your phone.</h2>
+    <div class="phone-grid">
+      <figure class="product-preview">
+        <DemoMedia gif="/shots/hookecho-android.gif" poster="/shots/hookecho-android.webp" alt="HookEcho on an Android phone, showing radar and the layers panel" width={400} height={778} />
+        <figcaption>HookEcho · Radar and layers</figcaption>
+      </figure>
+      <figure class="product-preview">
+        <DemoMedia gif="/shots/stormdesk-android.gif" poster="/shots/stormdesk-android.webp" alt="StormDesk on an Android phone, showing current conditions and rain history" width={400} height={778} />
+        <figcaption>StormDesk · Conditions and history</figcaption>
+      </figure>
+    </div>
+  </section>
+
   <section class="community wrap" aria-labelledby="community-title">
     <Icon name="github-logo" size={36} />
     <div>
@@ -136,6 +151,10 @@ const jsonld = {
   .trust ul { display: grid; grid-template-columns: repeat(3, 1fr); list-style: none; padding: 1rem 0; }
   .trust li { display: flex; align-items: center; justify-content: center; gap: 0.75rem; color: var(--text-dim); font-size: 0.9rem; }
   .trust li + li { border-left: 1px solid var(--stroke); }
+  .phone-demos { padding-block: 3rem; }
+  .phone-demos h2 { font-size: clamp(1.8rem, 3vw, 2.5rem); }
+  .phone-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 320px)); justify-content: center; gap: 2rem; margin-top: 2rem; }
+  @media (max-width: 560px) { .phone-grid { grid-template-columns: minmax(0, 320px); } }
   .stormdesk { padding-block: 2.5rem 1.5rem; }
   .stormdesk h2 { font-size: clamp(2rem, 3vw, 2.8rem); }
   .station-list { color: var(--text-dim); font-size: 0.85rem; }

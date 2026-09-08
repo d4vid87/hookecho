@@ -18,6 +18,12 @@ No account. No ads. No API key. Free and open source.
 
 ![HookEcho replaying the Moore, Oklahoma tornado of May 20, 2013](docs/shots/hero.gif)
 
+## On Android
+
+<img src="site/public/shots/hookecho-android.gif" alt="HookEcho radar and layers recorded on an Android phone" width="320">
+
+Recorded on a Samsung Galaxy S24 Ultra. [Watch both phone demos](https://hookecho.io/#android).
+
 ## Current interface
 
 | Reflectivity | Velocity |
