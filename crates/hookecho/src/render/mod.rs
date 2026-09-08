@@ -382,6 +382,8 @@ struct CameraUniform {
     scale: [f32; 2],
     world_per_pixel: f32,
     road_scale: f32,
+    // WebGL uniform bindings must occupy a multiple of 16 bytes.
+    _pad: [f32; 2],
 }
 
 struct TileGpu {
@@ -1261,6 +1263,7 @@ impl RenderResources {
                 road_scale: crate::basemap_style::road_scale(
                     -(256.0 * cb.world_per_pixel as f64).log2(),
                 ) as f32,
+                _pad: [0.0; 2],
             }),
         );
         if let Some(r) = &cb.radar_upload {

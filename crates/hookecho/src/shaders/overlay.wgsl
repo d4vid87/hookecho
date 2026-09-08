@@ -6,6 +6,7 @@ struct Camera {
     scale: vec2<f32>,
     world_per_pixel: f32,
     road_scale: f32,
+    _pad: vec2<f32>,
 };
 
 @group(0) @binding(0) var<uniform> camera: Camera;
