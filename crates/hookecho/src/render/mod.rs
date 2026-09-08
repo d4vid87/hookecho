@@ -1648,15 +1648,9 @@ pub(crate) fn vector_draw_tiles(visible: &[TileId], resident: impl Iterator<Item
             rz < z && (x >> (z - rz), y >> (z - rz)) == (rx, ry)
         }).max_by_key(|id| id.0) {
             fallback.push(parent);
-            continue;
         }
         for &(rz, rx, ry) in &resident {
-            let overlaps = if rz <= z {
-                (x >> (z - rz), y >> (z - rz)) == (rx, ry)
-            } else {
-                (rx >> (rz - z), ry >> (rz - z)) == (x, y)
-            };
-            if overlaps {
+            if rz > z && (rx >> (rz - z), ry >> (rz - z)) == (x, y) {
                 fallback.push((rz, rx, ry));
             }
         }
