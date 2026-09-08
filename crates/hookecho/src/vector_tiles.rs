@@ -59,7 +59,7 @@ enum StrokePass {
     Road,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum RoadShield {
     None,
     Interstate,
@@ -69,7 +69,7 @@ pub enum RoadShield {
 }
 
 /// A map label to draw with the egui painter (never appears in GPU/headless PNGs).
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct PlaceLabel {
     pub world: [f32; 2],
     pub name: String,
@@ -796,11 +796,23 @@ const TILE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 /// hundreds of requests a second. Same number, same reason, as the raster manager's.
 const RETRY_AFTER: std::time::Duration = std::time::Duration::from_secs(5);
 
+#[derive(serde::Serialize, serde::Deserialize)]
 struct FetchedVector {
     id: TileId,
     vertices: Vec<OverlayVertex>,
     indices: Vec<u32>,
     labels: Vec<PlaceLabel>,
+}
+
+// Reuse the radar worker and its transferred buffers: no additional worker or WASM heap.
+#[cfg(any(target_arch = "wasm32", test))]
+type VectorJob = (Vec<u8>, TileId, basemap_style::Palette, f64, crate::settings::Theme);
+
+#[cfg(any(target_arch = "wasm32", test))]
+pub(crate) fn build_worker_tile(payload: &[u8]) -> Result<Vec<u8>, postcard::Error> {
+    let (bytes, id, palette, zoom, theme): VectorJob = postcard::from_bytes(payload)?;
+    let (vertices, indices, labels) = build_tile_with_theme(&bytes, id, palette, zoom, theme);
+    postcard::to_allocvec(&FetchedVector { id, vertices, indices, labels })
 }
 
 /// Async vector-tile manager for the GUI (mirrors [`crate::tiles::TileManager`]).
@@ -1021,6 +1033,7 @@ impl VectorTileManager {
             let tx = self.tx.clone();
             let id = v.id;
             let ctx = self.ctx.clone();
+            #[cfg(not(target_arch = "wasm32"))]
             let blocking = self.spawner.clone();
             let inflight = self.inflight.clone();
             self.inflight.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -1041,21 +1054,32 @@ impl VectorTileManager {
                     }
                     return;
                 };
-                // gunzip + lyon tessellation is the heaviest CPU in the app after the volume
-                // decode; running it on the async worker starves every other fetch.
-                blocking.spawn_blocking(move || {
-                    let (vertices, indices, labels) =
-                        build_tile_with_theme(&bytes, id, palette, tess_zoom, theme);
-                    let _ = tx.send((generation, Ok(FetchedVector {
-                        id,
-                        vertices,
-                        indices,
-                        labels,
-                    })));
+                let finish = move |result| {
+                    let _ = tx.send((generation, result));
                     inflight.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
-                    if let Some(ctx) = ctx {
-                        ctx.request_repaint();
-                    }
+                    if let Some(ctx) = ctx { ctx.request_repaint(); }
+                };
+                #[cfg(target_arch = "wasm32")]
+                {
+                    let payload = postcard::to_allocvec(&(bytes, id, palette, tess_zoom, theme));
+                    let result = match payload {
+                        Ok(payload) => {
+                            let encoded = match wxdata::wasm_worker::tessellate_vector(payload.clone()).await {
+                                Ok(encoded) => Some(encoded),
+                                Err(wxdata::wasm_worker::Error::Unavailable) => build_worker_tile(&payload).ok(),
+                                Err(e) => { log::warn!("vector tile worker: {e}"); None }
+                            };
+                            encoded.and_then(|data| postcard::from_bytes::<FetchedVector>(&data).ok())
+                                .filter(|tile| tile.id == id).ok_or(id)
+                        }
+                        Err(_) => Err(id),
+                    };
+                    finish(result);
+                }
+                #[cfg(not(target_arch = "wasm32"))]
+                blocking.spawn_blocking(move || {
+                    let (vertices, indices, labels) = build_tile_with_theme(&bytes, id, palette, tess_zoom, theme);
+                    finish(Ok(FetchedVector { id, vertices, indices, labels }));
                 });
             });
         }
@@ -1209,6 +1233,22 @@ mod tests {
             template_requested: false,
             template_failed: None,
         }
+    }
+
+    #[test]
+    fn worker_tile_matches_inline_geometry_and_rejects_invalid_jobs() {
+        let id = (8, 65, 95);
+        let palette = basemap_style::Palette::Dark;
+        let theme = crate::settings::Theme::Dark;
+        let payload = postcard::to_allocvec(&(vec![] as Vec<u8>, id, palette, 8.0, theme)).unwrap();
+        let encoded = build_worker_tile(&payload).unwrap();
+        let result: FetchedVector = postcard::from_bytes(&encoded).unwrap();
+        let (vertices, indices, labels) = build_tile_with_theme(&[], id, palette, 8.0, theme);
+        assert_eq!(result.id, id);
+        assert_eq!(bytemuck::cast_slice::<_, u8>(&result.vertices), bytemuck::cast_slice::<_, u8>(&vertices));
+        assert_eq!(result.indices, indices);
+        assert_eq!(result.labels.len(), labels.len());
+        assert!(build_worker_tile(b"not a tile job").is_err());
     }
 
     #[tokio::test]

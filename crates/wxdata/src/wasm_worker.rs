@@ -44,6 +44,11 @@ pub async fn assemble_chunks(framed: Vec<u8>) -> Result<Vec<u8>, Error> {
     call("assemble", framed).await
 }
 
+/// Build a vector basemap tile off the thread handling map input.
+pub async fn tessellate_vector(payload: Vec<u8>) -> Result<Vec<u8>, Error> {
+    call("vector", payload).await
+}
+
 /// Run one job on the worker. `op` names the export it should call.
 async fn call(op: &str, bytes: Vec<u8>) -> Result<Vec<u8>, Error> {
     let global = js_sys::global();

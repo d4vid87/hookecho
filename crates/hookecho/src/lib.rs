@@ -195,6 +195,13 @@ pub fn assemble_live_chunks(framed: Vec<u8>) -> Result<Vec<u8>, wasm_bindgen::Js
     wxdata::live::assemble_and_encode(&framed).map_err(|e| e.to_string().into())
 }
 
+/// Worker export: decode and triangulate a basemap tile without blocking map input.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen::prelude::wasm_bindgen]
+pub fn tessellate_vector_tile(payload: Vec<u8>) -> Result<Vec<u8>, wasm_bindgen::JsValue> {
+    vector_tiles::build_worker_tile(&payload).map_err(|e| e.to_string().into())
+}
+
 /// Web entry point, called from `web/index.html` with the id of a `<canvas>`.
 ///
 /// Same `HookEchoApp` as every other platform — eframe's `WebRunner` takes the identical creation

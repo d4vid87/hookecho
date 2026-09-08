@@ -42,7 +42,8 @@ self.onmessage = async (e) => {
   const { id, bytes, op } = msg;
   try {
     const wasm = await ready;
-    const run = op === "assemble" ? wasm.assemble_live_chunks : wasm.decode_archive2;
+    const run = op === "vector" ? wasm.tessellate_vector_tile
+      : op === "assemble" ? wasm.assemble_live_chunks : wasm.decode_archive2;
     const out = run(new Uint8Array(bytes));
     // Transfer rather than copy: a decoded volume is tens of MB and the worker is done with it.
     self.postMessage({ id, ok: out.buffer }, [out.buffer]);

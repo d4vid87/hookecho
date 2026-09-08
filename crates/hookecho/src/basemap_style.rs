@@ -15,7 +15,7 @@ const fn rgb(hex: u32) -> [u8; 4] {
 /// This used to be a bare `dark: bool`. It is an enum because the hybrid satellite basemap needs
 /// a third look — roads and boundaries only, no land or water fills — drawn *over* raster imagery
 /// rather than instead of it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum Palette {
     #[default]
     Dark,

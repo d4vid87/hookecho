@@ -91,3 +91,10 @@ test("no workers at all means every job decodes inline", async () => {
   });
   await assert.rejects(() => bridge(new Uint8Array([1]), "decode"), /worker unavailable/);
 });
+
+test("vector tile jobs preserve their operation and transferred payload", async () => {
+  const { bridge, spawned } = harness([[{ ok: new Uint8Array([7]).buffer }]]);
+  assert.deepEqual([...await bridge(new Uint8Array([3, 4]), "vector")], [7]);
+  assert.equal(spawned[0].jobs[0].op, "vector");
+  assert.deepEqual([...new Uint8Array(spawned[0].jobs[0].bytes)], [3, 4]);
+});
