@@ -234,11 +234,9 @@ fn row(ui: &mut egui::Ui, e: &PaletteEntry, accent: Color32, draggable: bool) ->
     } else {
         (ui.visuals().text_color(), ui.visuals().faint_bg_color)
     };
-    let icon = RichText::new(glyph(e)).size(14.0).color(if on {
-        accent
-    } else {
-        ui.visuals().weak_text_color()
-    });
+    let icon = RichText::new(glyph(e))
+        .size(14.0)
+        .color(if on { accent } else { ui.visuals().weak_text_color() });
     let mut clicked = false;
     let outer = ui
         .horizontal(|ui| {
@@ -337,8 +335,11 @@ fn row(ui: &mut egui::Ui, e: &PaletteEntry, accent: Color32, draggable: bool) ->
         egui::Popup::menu(&health_resp).show(|ui| health_popup(ui, health));
     } else if on {
         // Only enabled rows need a state dot; gray dots on every disabled row were visual noise.
-        ui.painter()
-            .circle_filled(resp.rect.right_center() + vec2(-10.0, 0.0), 3.5, accent);
+        ui.painter().circle_filled(
+            resp.rect.right_center() + vec2(-10.0, 0.0),
+            3.5,
+            accent,
+        );
     }
     Hit {
         clicked,
