@@ -1158,7 +1158,27 @@ impl VectorTileManager {
 
     /// Labels for the given visible tile ids (for the egui text pass).
     pub fn labels_for<'a>(&'a self, ids: impl Iterator<Item = &'a TileId>) -> Vec<&'a PlaceLabel> {
-        ids.filter_map(|id| self.labels.get(id)).flatten().collect()
+        let mut labels = Vec::new();
+        for &id in ids {
+            // The GPU retains cached geography while a new detail level loads. Use the same
+            // fallback for names/shields; looking up only exact ids blanked every label at once.
+            let sources = crate::render::vector_draw_tiles(&[id], self.labels.keys().copied());
+            let n = (1u32 << id.0) as f32;
+            for source in &sources {
+                if let Some(tile_labels) = self.labels.get(source) {
+                    labels.extend(tile_labels.iter().filter(|l| {
+                        ((l.world[0] * n).floor() as u32, (l.world[1] * n).floor() as u32)
+                            == (id.1, id.2)
+                            && !sources.iter().any(|&(z, x, y)| {
+                                let n = (1u32 << z) as f32;
+                                z > source.0 && ((l.world[0] * n).floor() as u32,
+                                    (l.world[1] * n).floor() as u32) == (x, y)
+                            })
+                    }));
+                }
+            }
+        }
+        labels
     }
 }
 
@@ -1192,6 +1212,28 @@ mod tests {
             template_requested: false,
             template_failed: None,
         }
+    }
+
+    #[tokio::test]
+    async fn labels_follow_cached_geography_through_zoom_and_partial_loads() {
+        let mut manager = test_manager();
+        let parent = (4, 3, 5);
+        let child = (5, 6, 10);
+        let sibling = (5, 7, 10);
+        let label = |name: &str, x| PlaceLabel {
+            name: name.into(), world: [x, 10.5 / 32.0], city: true,
+            rank: 1, shield: RoadShield::None, min_zoom: 0.0,
+        };
+        manager.labels.insert(parent, vec![label("old left", 6.5 / 32.0), label("right", 7.5 / 32.0)]);
+        assert_eq!(manager.labels_for([&child, &sibling].into_iter()).len(), 2,
+            "zoom-in must retain names before child tiles arrive");
+        manager.labels.insert(child, vec![label("new left", 6.5 / 32.0)]);
+        let names: Vec<_> = manager.labels_for([&child, &sibling].into_iter())
+            .into_iter().map(|l| l.name.as_str()).collect();
+        assert_eq!(names, ["new left", "right"], "partial loads must not duplicate or erase neighbors");
+        manager.labels.remove(&parent);
+        assert_eq!(manager.labels_for([&parent].into_iter())[0].name, "new left",
+            "zoom-out retains child labels while its parent loads");
     }
 
     #[test]
