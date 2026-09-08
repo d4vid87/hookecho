@@ -215,18 +215,22 @@ pub fn build_tile_with_theme(
         let base = verts.len() as u32;
         verts.extend_from_slice(&[
             OverlayVertex {
+                offset: [0.0; 3],
                 world: [x0 as f32, y0 as f32],
                 color: bg,
             },
             OverlayVertex {
+                offset: [0.0; 3],
                 world: [x1 as f32, y0 as f32],
                 color: bg,
             },
             OverlayVertex {
+                offset: [0.0; 3],
                 world: [x1 as f32, y1 as f32],
                 color: bg,
             },
             OverlayVertex {
+                offset: [0.0; 3],
                 world: [x0 as f32, y1 as f32],
                 color: bg,
             },
@@ -293,6 +297,7 @@ pub fn build_tile_with_theme(
                 &mut BuffersBuilder::new(&mut buf, |v: FillVertex| {
                     let p = v.position();
                     OverlayVertex {
+                        offset: [0.0; 3],
                         world: [
                             ((txf + p.x as f64) / n) as f32,
                             ((tyf + p.y as f64) / n) as f32,
@@ -328,12 +333,7 @@ pub fn build_tile_with_theme(
             let Some((c, wpx)) = styled else {
                 continue;
             };
-            let road_scale = if *layer == "transportation" {
-                basemap_style::road_scale(tess_zoom)
-            } else {
-                1.0
-            };
-            let w = (wpx as f64 * px_to_tile * theme_scale as f64 * road_scale) as f32;
+            let w = (wpx as f64 * px_to_tile * theme_scale as f64) as f32;
             let mut b = Path::builder();
             let mut any = false;
             match &f.geometry {
@@ -364,8 +364,13 @@ pub fn build_tile_with_theme(
                 &path,
                 &opts,
                 &mut BuffersBuilder::new(&mut buf, |v: StrokeVertex| {
-                    let p = v.position();
+                    // Keep the centerline geographic; expand its edges in screen pixels on the GPU.
+                    let p = v.position_on_path();
+                    let normal = v.normal();
+                    let half_px = (w as f64 / px_to_tile * 0.5) as f32;
                     OverlayVertex {
+                        offset: [normal.x * half_px, normal.y * half_px,
+                            if *layer == "transportation" { 1.0 } else { 0.0 }],
                         world: [
                             ((txf + p.x as f64) / n) as f32,
                             ((tyf + p.y as f64) / n) as f32,
@@ -839,9 +844,6 @@ pub struct VectorTileManager {
     label_gen: u64,
     palette: basemap_style::Palette,
     theme: crate::settings::Theme,
-    tess_zoom: i32,
-    /// Candidate new tessellation zoom and when it was first seen — see [`Self::note_zoom`].
-    zoom_settled: Option<(i32, wxdata::clock::Instant)>,
     cache_root: Option<PathBuf>,
     template: Option<String>,
     template_tx: Sender<Option<String>>,
@@ -879,8 +881,6 @@ impl VectorTileManager {
             label_gen: 0,
             palette: basemap_style::Palette::Dark,
             theme: crate::settings::Theme::Dark,
-            tess_zoom: 7,
-            zoom_settled: None,
             cache_root,
             template: None,
             template_tx,
@@ -928,45 +928,6 @@ impl VectorTileManager {
         true
     }
 
-    /// Refresh stroke widths after zooming settles, keeping resident tiles until replacements land.
-    pub fn note_zoom(&mut self, cam_zoom: f64, gesture_live: bool) {
-        if gesture_live {
-            self.zoom_settled = None;
-            return;
-        }
-        let tz = cam_zoom.round() as i32;
-        if tz == self.tess_zoom {
-            self.zoom_settled = None;
-            return;
-        }
-        // Mid-pinch this fires at every integer step, and each one throws away the whole vector
-        // basemap and re-tessellates it — the worst possible moment. Wait for the zoom to hold
-        // still before acting on it.
-        let settled = *self
-            .zoom_settled
-            .get_or_insert_with(|| (tz, wxdata::clock::Instant::now()));
-        if settled.0 != tz {
-            self.zoom_settled = Some((tz, wxdata::clock::Instant::now()));
-            return;
-        }
-        if settled.1.elapsed() < std::time::Duration::from_millis(700) {
-            return;
-        }
-        self.zoom_settled = None;
-        self.tess_zoom = tz;
-        // Every resident tile was tessellated for the *old* zoom, and stroke widths are baked in
-        // at tessellation. This used to re-tessellate only when overzooming past the deepest tile
-        // level, on the theory that below that the tile ids change anyway and the new tiles pick
-        // up the new width. They do — but the tiles already on screen do not, and a jump straight
-        // to z12 from the z7 the manager starts at left roads roughly thirty times too wide until
-        // something else happened to clear them. The 700 ms settle above is what makes doing this
-        // unconditionally affordable.
-        self.render_generation += 1;
-        self.requested.clear();
-        self.failed.clear();
-        // Keep the GPU tiles and labels visible; drain_ready replaces each tile in place.
-    }
-
     pub fn visible(&self, cam: &Camera, viewport_px: (f32, f32)) -> Vec<VisibleTile> {
         tile_cover(cam, viewport_px, MAX_VECTOR_Z, label_detail_bias(cam.zoom))
     }
@@ -1006,7 +967,6 @@ impl VectorTileManager {
         let generation = self.render_generation;
         let palette = self.palette;
         let theme = self.theme;
-        let tess_zoom = self.tess_zoom as f64;
         for v in visible {
             // Same reason the raster manager caps itself: a pan at low zoom asks for a screenful
             // at once, and without a ceiling they all leave together and answer together.
@@ -1024,6 +984,7 @@ impl VectorTileManager {
                 continue;
             }
             let (z, x, y) = v.id;
+            let tess_zoom = z as f64;
             let url = fill_template(&template, z, x, y);
             let path = self
                 .cache_root
@@ -1224,8 +1185,6 @@ mod tests {
             label_gen: 0,
             palette: basemap_style::Palette::Dark,
             theme: crate::settings::Theme::Dark,
-            tess_zoom: 7,
-            zoom_settled: None,
             cache_root: None,
             template: None,
             template_tx,
@@ -1252,23 +1211,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn zoom_refresh_keeps_tiles_until_their_replacements_arrive() {
+    async fn replacement_tiles_upload_once() {
         let mut manager = test_manager();
         let id = (6, 14, 25);
         manager.uploaded.put(id, 0);
         manager.labels.insert(id, vec![]);
         manager.requested.insert(id);
-        let settled = wxdata::clock::Instant::now() - std::time::Duration::from_secs(1);
-        manager.zoom_settled = Some((9, settled));
-        manager.note_zoom(9.0, true);
-        assert_eq!(manager.render_generation, 0, "no rebuild while zooming");
-        assert!(manager.zoom_settled.is_none());
-        manager.zoom_settled = Some((9, settled));
-        manager.note_zoom(9.0, false);
-        assert_eq!(manager.render_generation, 1);
-        assert!(manager.uploaded.contains(&id), "keep the visible GPU tile");
-        assert!(manager.labels.contains_key(&id), "keep its labels too");
-        assert!(!manager.requested.contains(&id), "allow a replacement fetch");
+        manager.render_generation = 1;
         for _ in 0..2 {
             manager.tx.send((1, Ok(FetchedVector {
                 id, vertices: vec![], indices: vec![], labels: vec![],

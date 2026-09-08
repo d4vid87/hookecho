@@ -76,6 +76,7 @@ pub fn build_with_theme(
             &path,
             &fill_opts,
             &mut BuffersBuilder::new(&mut buf, |v: FillVertex| OverlayVertex {
+                offset: [0.0; 3],
                 world: [v.position().x, v.position().y],
                 color: fill,
             }),
@@ -84,6 +85,7 @@ pub fn build_with_theme(
             &path,
             &stroke_opts,
             &mut BuffersBuilder::new(&mut buf, |v: StrokeVertex| OverlayVertex {
+                offset: [0.0; 3],
                 world: [v.position().x, v.position().y],
                 color: stroke,
             }),
@@ -162,6 +164,7 @@ pub fn append_placefiles_with_theme(
                     &path,
                     &opts,
                     &mut BuffersBuilder::new(&mut buf, |v: StrokeVertex| OverlayVertex {
+                        offset: [0.0; 3],
                         world: [v.position().x, v.position().y],
                         color: stroke,
                     }),
@@ -191,6 +194,7 @@ pub fn append_placefiles_with_theme(
                     &path,
                     &opts,
                     &mut BuffersBuilder::new(&mut buf, |v: FillVertex| OverlayVertex {
+                        offset: [0.0; 3],
                         world: [v.position().x, v.position().y],
                         color: fill,
                     }),
@@ -204,6 +208,7 @@ pub fn append_placefiles_with_theme(
                 for (p, c) in verts {
                     let (wx, wy) = project(*p);
                     geom.vertices.push(OverlayVertex {
+                        offset: [0.0; 3],
                         world: [wx as f32, wy as f32],
                         color: color(*c),
                     });
@@ -228,6 +233,7 @@ pub fn append_placefiles_with_theme(
                 for (p, _uv) in verts {
                     let (wx, wy) = project(*p);
                     geom.vertices.push(OverlayVertex {
+                        offset: [0.0; 3],
                         world: [wx as f32, wy as f32],
                         color: col,
                     });

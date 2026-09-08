@@ -300,6 +300,8 @@ pub struct MrmsUpload {
 pub struct OverlayVertex {
     pub world: [f32; 2],
     pub color: [f32; 4],
+    /// XY: screen-pixel stroke extrusion. Z: apply the road width scale (0 or 1).
+    pub offset: [f32; 3],
 }
 
 /// Pre-tessellated overlay geometry to upload this frame.
@@ -321,6 +323,7 @@ pub struct MapCallback {
     pub pane: u32,
     pub camera_center: [f32; 2],
     pub camera_scale: [f32; 2],
+    pub world_per_pixel: f32,
     pub new_tiles: Vec<PendingTile>,
     pub visible: Vec<VisibleTile>,
     /// Which basemap style this pane draws ([`crate::tiles::BasemapStyle::key`]).
@@ -377,6 +380,8 @@ struct RadarVertex {
 struct CameraUniform {
     center: [f32; 2],
     scale: [f32; 2],
+    world_per_pixel: f32,
+    road_scale: f32,
 }
 
 struct TileGpu {
@@ -488,7 +493,7 @@ impl RenderResources {
                 ty: wgpu::BindingType::Buffer {
                     ty: wgpu::BufferBindingType::Uniform,
                     has_dynamic_offset: false,
-                    min_binding_size: NonZeroU64::new(16),
+                    min_binding_size: NonZeroU64::new(std::mem::size_of::<CameraUniform>() as u64),
                 },
                 count: None,
             }],
@@ -724,7 +729,7 @@ impl RenderResources {
                 buffers: &[wgpu::VertexBufferLayout {
                     array_stride: std::mem::size_of::<OverlayVertex>() as u64,
                     step_mode: wgpu::VertexStepMode::Vertex,
-                    attributes: &wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x4],
+                    attributes: &wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x4, 2 => Float32x3],
                 }],
             },
             fragment: Some(wgpu::FragmentState {
@@ -1252,6 +1257,10 @@ impl RenderResources {
             bytemuck::bytes_of(&CameraUniform {
                 center: cb.camera_center,
                 scale: cb.camera_scale,
+                world_per_pixel: cb.world_per_pixel,
+                road_scale: crate::basemap_style::road_scale(
+                    -(256.0 * cb.world_per_pixel as f64).log2(),
+                ) as f32,
             }),
         );
         if let Some(r) = &cb.radar_upload {

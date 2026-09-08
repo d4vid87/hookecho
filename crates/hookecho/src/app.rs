@@ -11364,6 +11364,7 @@ impl HookEchoApp {
             pane: idx as u32,
             camera_center: center,
             camera_scale: scale,
+            world_per_pixel: cam.world_per_pixel() as f32,
             new_tiles,
             visible,
             basemap_key: pane_style.key(),
@@ -17265,10 +17266,6 @@ impl eframe::App for HookEchoApp {
                     .vtiles
                     .set_style(style.vector_palette().unwrap_or_default());
                 clear_vector |= self.vtiles.set_theme(self.settings.theme);
-                self.vtiles.note_zoom(
-                    self.views[self.active.min(n - 1)].camera.zoom,
-                    self.gesture_live,
-                );
             }
             self.last_viewport = rects
                 .get(self.active)
