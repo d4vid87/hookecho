@@ -234,9 +234,11 @@ fn row(ui: &mut egui::Ui, e: &PaletteEntry, accent: Color32, draggable: bool) ->
     } else {
         (ui.visuals().text_color(), ui.visuals().faint_bg_color)
     };
-    let icon = RichText::new(glyph(e))
-        .size(14.0)
-        .color(if on { accent } else { ui.visuals().weak_text_color() });
+    let icon = RichText::new(glyph(e)).size(14.0).color(if on {
+        accent
+    } else {
+        ui.visuals().weak_text_color()
+    });
     let mut clicked = false;
     let outer = ui
         .horizontal(|ui| {
@@ -335,11 +337,8 @@ fn row(ui: &mut egui::Ui, e: &PaletteEntry, accent: Color32, draggable: bool) ->
         egui::Popup::menu(&health_resp).show(|ui| health_popup(ui, health));
     } else if on {
         // Only enabled rows need a state dot; gray dots on every disabled row were visual noise.
-        ui.painter().circle_filled(
-            resp.rect.right_center() + vec2(-10.0, 0.0),
-            3.5,
-            accent,
-        );
+        ui.painter()
+            .circle_filled(resp.rect.right_center() + vec2(-10.0, 0.0), 3.5, accent);
     }
     Hit {
         clicked,
@@ -379,6 +378,11 @@ pub(crate) fn body(
         );
         if focus_search {
             field.request_focus();
+        }
+        // The Android keyboard shrinks the sheet after focus is granted. Reveal the
+        // field again when clipped, without pinning the scroll position while browsing.
+        if field.has_focus() && !ui.clip_rect().contains_rect(field.rect) {
+            field.scroll_to_me(Some(egui::Align::Center));
         }
     });
     ui.add_space(8.0);
@@ -541,6 +545,46 @@ fn fade_out_bottom(ui: &mut egui::Ui, out: &egui::scroll_area::ScrollAreaOutput<
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn focused_search_scrolls_above_keyboard() {
+        let ctx = egui::Context::default();
+        let mut query = String::new();
+        let mut pref = Vec::new();
+        let mut offset = 0.0;
+        for frame in 0..12 {
+            let height = if frame < 3 { 800.0 } else { 300.0 };
+            let input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(360.0, height),
+                )),
+                time: Some(frame as f64 / 10.0),
+                ..Default::default()
+            };
+            let _ = ctx.run_ui(input, |ui| {
+                let out = egui::ScrollArea::vertical().show(ui, |ui| {
+                    ui.add_space(400.0); // product controls above the search field
+                    body(
+                        ui,
+                        &[],
+                        &mut query,
+                        Color32::WHITE,
+                        100.0,
+                        frame == 0,
+                        &mut pref,
+                        |_| {},
+                    );
+                    ui.add_space(200.0);
+                });
+                offset = out.state.offset.y;
+            });
+        }
+        assert!(
+            offset > 150.0,
+            "focused search stayed behind the keyboard: {offset}"
+        );
+    }
 
     /// Grouping must never hide a row for good: every specialist entry remains searchable.
     #[test]
