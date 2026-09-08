@@ -149,6 +149,7 @@ jobs:
           python3 -m http.server 8080 --directory web &
           for _ in $(seq 1 30); do curl -sf http://127.0.0.1:8080/ >/dev/null && break; sleep 1; done
           node scripts/web/smoke.mjs http://127.0.0.1:8080/
+          node scripts/web/smoke.mjs http://127.0.0.1:8080/ --webgl
 
   # Golden-image test for the wgpu radar pipeline. Runs on the software rasterizer
   # (mesa lavapipe) via HOOKECHO_GPU_FALLBACK=1 so the render is deterministic across

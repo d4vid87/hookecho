@@ -13,6 +13,7 @@ import puppeteer from "puppeteer";
 const args = process.argv.slice(2);
 // Only meaningful against a deployed origin, where `/proxy/` is real and volumes actually arrive.
 const expectLoop = args.includes("--expect-loop");
+const webgl = args.includes("--webgl");
 const url = args.find((a) => !a.startsWith("--")) ?? "http://127.0.0.1:8080/";
 const errors = [];
 
@@ -33,6 +34,12 @@ const browser = await puppeteer.launch({
   ],
 });
 const page = await browser.newPage();
+if (webgl) {
+  // Exercise the fallback used by browsers without WebGPU, including uniform alignment rules.
+  await page.evaluateOnNewDocument(() => {
+    Object.defineProperty(navigator, "gpu", { value: undefined });
+  });
+}
 page.on("pageerror", (e) => errors.push(`page error: ${e.message}`));
 let loopStarted = false;
 page.on("console", (m) => {
