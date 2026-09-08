@@ -2920,7 +2920,7 @@ pub struct HookEchoApp {
     /// When the user last did anything — the input the idle heartbeat listens for. Also what
     /// "a gesture is in progress" is read from.
     last_input: Instant,
-    /// A pointer or finger is down this frame. Read once at the top of `ui`, because the overlay
+    /// A drag, touch, scroll or pinch is active this frame. Read at the top of `ui`, because the overlay
     /// tessellation asks it before any pane has drawn.
     gesture_live: bool,
     /// Perf readout state: whether `HOOKECHO_PERF=1` asked for the window, the frame count and
@@ -14914,8 +14914,14 @@ pub(crate) fn to_upload(
     }
 }
 
-/// Whether the overlay geometry should be re-tessellated this frame.
-///
+/// Include inertial scrolling and trackpad pinches, which do not hold a pointer down.
+fn map_gesture_live(i: &egui::InputState) -> bool {
+    i.pointer.any_down()
+        || i.any_touches()
+        || i.smooth_scroll_delta != egui::Vec2::ZERO
+        || (i.zoom_delta() - 1.0).abs() > f32::EPSILON
+}
+
 /// A zoom-bucket crossing waits for the gesture to end; new geometry does not.
 fn should_retess(gesture_live: bool, geometry_changed: bool, bucket_changed: bool) -> bool {
     geometry_changed || (bucket_changed && !gesture_live)
@@ -15522,7 +15528,7 @@ impl eframe::App for HookEchoApp {
         // force one refresh rather than making the user wait out the poll interval.
         self.frame_nr = self.frame_nr.wrapping_add(1);
         wxdata::stats::bump(wxdata::stats::Counter::FramesDrawn);
-        self.gesture_live = ctx.input(|i| i.pointer.any_down() || i.any_touches());
+        self.gesture_live = ctx.input(map_gesture_live);
         #[cfg(not(target_arch = "wasm32"))]
         self.perf.tick(ctx);
         #[cfg(debug_assertions)]
@@ -17259,9 +17265,10 @@ impl eframe::App for HookEchoApp {
                     .vtiles
                     .set_style(style.vector_palette().unwrap_or_default());
                 clear_vector |= self.vtiles.set_theme(self.settings.theme);
-                clear_vector |= self
-                    .vtiles
-                    .note_zoom(self.views[self.active.min(n - 1)].camera.zoom);
+                self.vtiles.note_zoom(
+                    self.views[self.active.min(n - 1)].camera.zoom,
+                    self.gesture_live,
+                );
             }
             self.last_viewport = rects
                 .get(self.active)
@@ -17701,6 +17708,22 @@ mod field_lut_tests {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn wheel_and_trackpad_zoom_count_as_live_gestures() {
+        let mut input = egui::InputState::default();
+        assert!(!super::map_gesture_live(&input));
+        input.smooth_scroll_delta = egui::vec2(0.0, 0.25);
+        assert!(super::map_gesture_live(&input), "include the smoothed wheel tail");
+        let ctx = egui::Context::default();
+        let raw = egui::RawInput {
+            events: vec![egui::Event::Zoom(1.1)],
+            ..Default::default()
+        };
+        let _ = ctx.run_ui(raw, |ui| {
+            assert!(ui.input(super::map_gesture_live), "trackpad pinch without a button");
+        });
+    }
 
     /// New geometry appears when it lands; a zoom-bucket crossing waits for the finger to lift,
     /// so a pinch across three buckets tessellates once instead of three times.

@@ -819,7 +819,7 @@ pub struct VectorTileManager {
     requested: HashSet<TileId>,
     /// Tessellated tiles live on the GPU; this mirrors them so the oldest can be dropped. A
     /// HashSet here meant a long pan grew vertex buffers until the style changed.
-    uploaded: LruCache<TileId, ()>,
+    uploaded: LruCache<TileId, u64>,
     /// Ids the LRU pushed out, handed to the renderer to free.
     vevicted: Vec<TileId>,
     labels: HashMap<TileId, Vec<PlaceLabel>>,
@@ -916,13 +916,16 @@ impl VectorTileManager {
         true
     }
 
-    /// Note the current camera zoom (drives stroke widths). Returns true (clear GPU cache) only
-    /// when overzooming past the max tile level, where tile ids stop changing but widths must.
-    pub fn note_zoom(&mut self, cam_zoom: f64) -> bool {
+    /// Refresh stroke widths after zooming settles, keeping resident tiles until replacements land.
+    pub fn note_zoom(&mut self, cam_zoom: f64, gesture_live: bool) {
+        if gesture_live {
+            self.zoom_settled = None;
+            return;
+        }
         let tz = cam_zoom.round() as i32;
         if tz == self.tess_zoom {
             self.zoom_settled = None;
-            return false;
+            return;
         }
         // Mid-pinch this fires at every integer step, and each one throws away the whole vector
         // basemap and re-tessellates it — the worst possible moment. Wait for the zoom to hold
@@ -932,10 +935,10 @@ impl VectorTileManager {
             .get_or_insert_with(|| (tz, wxdata::clock::Instant::now()));
         if settled.0 != tz {
             self.zoom_settled = Some((tz, wxdata::clock::Instant::now()));
-            return false;
+            return;
         }
         if settled.1.elapsed() < std::time::Duration::from_millis(700) {
-            return false;
+            return;
         }
         self.zoom_settled = None;
         self.tess_zoom = tz;
@@ -949,10 +952,7 @@ impl VectorTileManager {
         self.render_generation += 1;
         self.requested.clear();
         self.failed.clear();
-        self.uploaded.clear();
-        self.labels.clear();
-        self.label_gen += 1;
-        true
+        // Keep the GPU tiles and labels visible; drain_ready replaces each tile in place.
     }
 
     pub fn visible(&self, cam: &Camera, viewport_px: (f32, f32)) -> Vec<VisibleTile> {
@@ -1117,8 +1117,11 @@ impl VectorTileManager {
                     continue;
                 }
             };
-            match self.uploaded.push(f.id, ()) {
-                Some((id, _)) if id == f.id => continue, // already resident
+            if self.uploaded.peek(&f.id) == Some(&generation) {
+                continue; // already resident at this generation
+            }
+            match self.uploaded.push(f.id, generation) {
+                Some((id, _)) if id == f.id => {} // refreshed in place
                 Some((id, _)) => {
                     self.requested.remove(&id);
                     self.labels.remove(&id);
@@ -1206,6 +1209,34 @@ mod tests {
             template_requested: false,
             template_failed: None,
         }
+    }
+
+    #[tokio::test]
+    async fn zoom_refresh_keeps_tiles_until_their_replacements_arrive() {
+        let mut manager = test_manager();
+        let id = (6, 14, 25);
+        manager.uploaded.put(id, 0);
+        manager.labels.insert(id, vec![]);
+        manager.requested.insert(id);
+        let settled = wxdata::clock::Instant::now() - std::time::Duration::from_secs(1);
+        manager.zoom_settled = Some((9, settled));
+        manager.note_zoom(9.0, true);
+        assert_eq!(manager.render_generation, 0, "no rebuild while zooming");
+        assert!(manager.zoom_settled.is_none());
+        manager.zoom_settled = Some((9, settled));
+        manager.note_zoom(9.0, false);
+        assert_eq!(manager.render_generation, 1);
+        assert!(manager.uploaded.contains(&id), "keep the visible GPU tile");
+        assert!(manager.labels.contains_key(&id), "keep its labels too");
+        assert!(!manager.requested.contains(&id), "allow a replacement fetch");
+        for _ in 0..2 {
+            manager.tx.send((1, Ok(FetchedVector {
+                id, vertices: vec![], indices: vec![], labels: vec![],
+            }))).unwrap();
+        }
+        assert_eq!(manager.drain_ready().len(), 1, "replace once, ignore duplicates");
+        assert_eq!(manager.uploaded.peek(&id), Some(&1));
+        assert!(manager.take_evicted().is_empty());
     }
 
     #[tokio::test]
