@@ -7,6 +7,9 @@
 # Publishing: bump pkgver + sha256sums (scripts/release/stamp-manifests.sh does both), then
 # `makepkg --printsrcinfo > .SRCINFO` and push both files to ssh://aur@aur.archlinux.org/hookecho.git
 pkgname=hookecho
+# The Git tag (`_tag`) keeps its hyphens; `pkgver` must not have any, so a
+# prerelease stamps as e.g. 0.12.0_beta.2. stamp-manifests.sh writes both.
+_tag=0.8.0
 pkgver=0.8.0
 pkgrel=1
 pkgdesc="Advanced NEXRAD weather radar viewer"
@@ -17,23 +20,29 @@ license=('MIT')
 # libs and talks to portals over D-Bus, so these are the whole list.
 depends=('alsa-lib' 'systemd-libs' 'libxkbcommon' 'wayland' 'libxcb' 'gtk3')
 makedepends=('cargo')
-source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
+source=("$pkgname-$_tag.tar.gz::$url/archive/refs/tags/v$_tag.tar.gz")
 sha256sums=('a77106b1869671f6c697cc41c62117518dc9b590eccb932917f258c6509845e6')
 
 prepare() {
-  cd "$pkgname-$pkgver"
+  cd "$pkgname-$_tag"
   export RUSTUP_TOOLCHAIN=stable
   cargo fetch --locked --target "$(rustc -vV | sed -n 's/host: //p')"
 }
 
 build() {
-  cd "$pkgname-$pkgver"
+  cd "$pkgname-$_tag"
   export RUSTUP_TOOLCHAIN=stable CARGO_TARGET_DIR=target
+  # makepkg's default flags carry -flto=auto, which makes gcc emit slim-LTO
+  # bytecode in the C archives (aws-lc-sys). The final link is driven by
+  # rustc, which cannot consume those objects, so the link dies on undefined
+  # aws_lc_* symbols. Strip it here; the Rust crates keep the -C lto=fat the
+  # Cargo profile sets. Verified on Arch (gcc 16, rustc 1.97).
+  export CFLAGS="${CFLAGS//-flto*/}" CXXFLAGS="${CXXFLAGS//-flto*/}" LDFLAGS="${LDFLAGS//-flto*/}"
   cargo build --frozen --release -p hookecho
 }
 
 package() {
-  cd "$pkgname-$pkgver"
+  cd "$pkgname-$_tag"
   install -Dm755 "target/release/$pkgname" "$pkgdir/usr/bin/$pkgname"
   install -Dm644 packaging/hookecho.desktop "$pkgdir/usr/share/applications/hookecho.desktop"
   install -Dm644 packaging/io.hookecho.HookEcho.metainfo.xml \
