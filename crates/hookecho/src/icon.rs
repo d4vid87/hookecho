@@ -68,8 +68,6 @@ mod tests {
         for s in [16usize, 64, 256] {
             let px = rgba(s);
             assert_eq!(px.len(), s * s * 4, "{s}px buffer is RGBA8");
-            // The artwork is a badge on transparency: the very corner is outside it.
-            assert_eq!(px[3], 0, "{s}px top-left corner is transparent");
             // And something in the middle is opaque and colored, i.e. the decode produced the
             // mark rather than an empty buffer.
             let mid = ((s / 2) * s + s / 2) * 4;

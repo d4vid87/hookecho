@@ -19,6 +19,9 @@ for s in 192 512; do
     magick "$src" -resize "${s}x${s}" -strip "web/icon-$s.png"
 done
 
+# Website navigation, favicon and generated social cards use the same artwork.
+cp crates/hookecho/data/logo.png site/public/logo.png
+
 # Windows installer icon: one .ico carrying every size the shell picks from.
 magick "$src" -define icon:auto-resize=256,128,64,48,32,16 -strip packaging/windows/icon.ico
 

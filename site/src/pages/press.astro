@@ -7,7 +7,7 @@ const raw = `https://raw.githubusercontent.com/d4vid87/hookecho/${tag}`;
 // Assets are linked at a tag rather than copied into this site: GitHub carries the bandwidth, and
 // a later commit cannot change what a published article ends up pointing at.
 const assets = [
-  { href: `${raw}/assets/brand/hookecho-logo.png`, label: "App icon", note: "PNG, 1024×1024" },
+  { href: "https://raw.githubusercontent.com/d4vid87/hookecho/main/assets/brand/hookecho-logo.png", label: "App icon", note: "Current artwork · PNG, 1254×1254" },
   { href: `${raw}/docs/shots/alltilts.jpg`, label: "Every tilt", note: "Level 2 volume, all elevations" },
   { href: `${raw}/docs/shots/velocity.jpg`, label: "Velocity", note: "Storm-relative velocity, dealiased" },
   { href: `${raw}/docs/shots/alerts.jpg`, label: "Warnings", note: "Polygons, storm reports, spotters" },
@@ -63,7 +63,7 @@ const assets = [
 
       <h2>Images</h2>
       <p class="dim">
-        Linked from the repository at tag {tag}. Right-click to save; hotlinking is fine too.
+        Current app icon and screenshots from tag {tag}. Right-click to save; hotlinking is fine too.
       </p>
       <ul class="assets">
         {
