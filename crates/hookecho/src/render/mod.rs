@@ -1627,8 +1627,8 @@ impl egui_wgpu::CallbackTrait for MapCallback {
 /// Keep cached geography visible while a new zoom level loads. Coarse tiles draw first,
 /// then finer fallbacks, then the requested tiles so current detail always wins.
 fn vector_draw_tiles(visible: &[TileId], resident: impl Iterator<Item = TileId>) -> Vec<TileId> {
-    let resident: std::collections::BTreeSet<_> = resident.collect();
-    let mut fallback = std::collections::BTreeSet::new();
+    let resident: Vec<_> = resident.collect();
+    let mut fallback = Vec::new();
     // ponytail: bounded tile-cache scan; add a spatial index only if the cache grows substantially.
     for &(z, x, y) in visible {
         if resident.contains(&(z, x, y)) {
@@ -1641,11 +1641,14 @@ fn vector_draw_tiles(visible: &[TileId], resident: impl Iterator<Item = TileId>)
                 (rx >> (rz - z), ry >> (rz - z)) == (x, y)
             };
             if overlaps {
-                fallback.insert((rz, rx, ry));
+                fallback.push((rz, rx, ry));
             }
         }
     }
-    fallback.into_iter().chain(visible.iter().copied().filter(|id| resident.contains(id))).collect()
+    fallback.sort_unstable();
+    fallback.dedup();
+    fallback.extend(visible.iter().copied().filter(|id| resident.contains(id)));
+    fallback
 }
 
 #[cfg(test)]
