@@ -163,7 +163,8 @@ wait_settle() { # wait_settle [floor_secs] [cap_secs]
   local floor="${1:-10}" cap="${2:-100}" last="" now="" stable=0 t=0
   sleep "$floor"; t=$floor
   while [ "$t" -lt "$cap" ]; do
-    now="$(import -display "$DISPLAY_NUM" -window root png:- 2>/dev/null | md5sum | cut -c1-16)"
+    # Ignore the live clock and scan-age text in the bottom transport bar.
+    now="$(import -display "$DISPLAY_NUM" -window root -crop 1600x900+0+0 png:- 2>/dev/null | md5sum | cut -c1-16)"
     if [ "$now" = "$last" ]; then
       stable=$((stable + 1))
       [ "$stable" -ge 2 ] && { log "settled after ${t}s"; return 0; }
@@ -658,10 +659,10 @@ check() {
   # Every referenced file exists, and every file is referenced — an orphan shot is a shot nobody
   # noticed going stale.
   while read -r f; do
-    [ -f "$REPO/$f" ] || { echo "MISSING: $f (referenced by README)"; fail=1; }
+    [ -f "$REPO/docs/$f" ] || { echo "MISSING: $f (referenced by documentation)"; fail=1; }
     # The phone set lives a directory down and was outside this cross-reference until it was
     # scripted — which is how it went a whole release cycle showing chrome that no longer existed.
-  done < <(grep -ho 'docs/shots/\(mobile/\)\?[a-z0-9]*\.\(jpg\|gif\)' "$REPO/README.md" "$REPO/docs/technical-reference.md" | sort -u)
+  done < <(grep -ho 'shots/\(mobile/\)\?[a-z0-9]*\.\(jpg\|gif\)' "$REPO/README.md" "$REPO/docs/technical-reference.md" | sort -u)
   for f in "$OUT"/*.jpg "$OUT"/*.gif "$OUT"/mobile/*.jpg "$OUT"/mobile/*.gif; do
     [ -e "$f" ] || continue
     grep -qF "$(basename "$f")" "$REPO/README.md" "$REPO/docs/technical-reference.md" \
