@@ -296,7 +296,7 @@ pub struct MrmsUpload {
 
 /// A tessellated vertex for the vector overlay layer.
 #[repr(C)]
-#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable, serde::Serialize, serde::Deserialize)]
 pub struct OverlayVertex {
     pub world: [f32; 2],
     pub color: [f32; 4],

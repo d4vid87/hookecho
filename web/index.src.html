@@ -96,7 +96,7 @@
       // the spawn as a callback so its failure path can be tested without a browser.
       globalThis.__decodeVolume = makeBridge({
         spawnWorker: () => {
-          const w = new Worker(new URL("./decode-worker.js", import.meta.url), { type: "module" });
+          const w = new Worker(new URL("./decode-worker.js?v=vector-tiles", import.meta.url), { type: "module" });
           w.postMessage({ module, glue: glueUrl });
           return w;
         },
