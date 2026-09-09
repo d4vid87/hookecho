@@ -12303,32 +12303,45 @@ impl HookEchoApp {
                         .collect();
                     painter.add(egui::Shape::line(pts, egui::Stroke::new(1.5, gray)));
                 }
-                // Forecast track: cell -> future positions, ticks + T+NNm labels.
+                // SCIT positions retain their geometry; cross-ticks mark each forecast time.
                 if self.filters.show_tracks && !c.track.is_empty() {
-                    let white = egui::Color32::from_rgb(235, 235, 235);
+                    let white = egui::Color32::WHITE;
                     let mut prev = p;
                     for tp in &c.track {
                         let tpp = to_screen(tp.lon, tp.lat);
-                        painter.line_segment([prev, tpp], egui::Stroke::new(1.5, white));
-                        painter.circle_filled(tpp, 3.0, white);
+                        let direction = (tpp - prev).normalized();
+                        let tick = egui::vec2(-direction.y, direction.x) * 12.0;
+                        for (width, color) in [(4.0, egui::Color32::BLACK), (2.0, white)] {
+                            painter.line_segment([prev, tpp], egui::Stroke::new(width, color));
+                            if direction.length_sq() > 0.0 {
+                                painter.line_segment(
+                                    [tpp - tick, tpp + tick],
+                                    egui::Stroke::new(width, color),
+                                );
+                            }
+                        }
                         if label_tracks {
-                            let txt = format!("T+{}m", tp.minutes);
-                            let lp = tpp + egui::vec2(5.0, -2.0);
+                            let txt = ui::cell_window::track_time(
+                                c.time,
+                                tp.minutes,
+                                self.settings.tz_for(view.site.as_deref()),
+                            );
+                            let lp = tpp + egui::vec2(6.0, -16.0);
                             for off in [egui::vec2(1.0, 1.0), egui::vec2(-1.0, -1.0)] {
                                 painter.text(
                                     lp + off,
-                                    egui::Align2::LEFT_CENTER,
+                                    egui::Align2::LEFT_BOTTOM,
                                     &txt,
-                                    egui::FontId::proportional(10.0),
-                                    egui::Color32::from_black_alpha(180),
+                                    egui::FontId::proportional(14.0),
+                                    egui::Color32::BLACK,
                                 );
                             }
                             painter.text(
                                 lp,
-                                egui::Align2::LEFT_CENTER,
+                                egui::Align2::LEFT_BOTTOM,
                                 &txt,
-                                egui::FontId::proportional(10.0),
-                                egui::Color32::from_rgb(255, 90, 90),
+                                egui::FontId::proportional(14.0),
+                                white,
                             );
                         }
                         prev = tpp;
@@ -12339,8 +12352,14 @@ impl HookEchoApp {
                 }
                 let col = cell_color(c.kind);
                 let color = egui::Color32::from_rgba_unmultiplied(col[0], col[1], col[2], 255);
-                painter.circle_stroke(p, 6.0, egui::Stroke::new(2.0, color));
-                painter.circle_filled(p, 2.0, color);
+                let marker_color = if c.kind == CellKind::Storm {
+                    egui::Color32::WHITE
+                } else {
+                    color
+                };
+                painter.circle_filled(p, 7.0, egui::Color32::BLACK);
+                painter.circle_stroke(p, 6.0, egui::Stroke::new(2.0, marker_color));
+                painter.circle_filled(p, 2.0, marker_color);
                 if c.kind == CellKind::Storm && cell_labels_shown.contains(&c.id) {
                     painter.text(
                         p + egui::vec2(8.0, -8.0),
@@ -16977,8 +16996,9 @@ impl eframe::App for HookEchoApp {
                 .follow_cell
                 .as_ref()
                 .is_some_and(|(_, c, _)| c.id == cell.id);
+            let tz = self.active_tz();
             let (open, toggled, to_3d) =
-                ui::cell_window::show(ctx, cell, trend, following, &mut self.popovers);
+                ui::cell_window::show(ctx, cell, trend, following, tz, &mut self.popovers);
             // Crop the volume to this storm before opening it: the full 300 km box is a wall of
             // echo you would then have to hunt through by hand. The clip is computed here, where
             // the cell is still borrowed, and applied below.

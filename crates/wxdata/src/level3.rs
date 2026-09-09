@@ -40,6 +40,8 @@ pub struct TrackPoint {
 /// (a product may be missing, or a row unparsable) and render as `—`.
 #[derive(Debug, Clone, Default)]
 pub struct Cell {
+    /// Timestamp of the NST scan, used as the origin of forecast arrival times.
+    pub time: Option<chrono::DateTime<chrono::Utc>>,
     pub kind: CellKind,
     pub lon: f64,
     pub lat: f64,
@@ -81,6 +83,7 @@ pub struct Cell {
 impl Cell {
     pub(crate) fn new(kind: CellKind, lon: f64, lat: f64, id: String, title: String) -> Self {
         Cell {
+            time: None,
             kind,
             lon,
             lat,
@@ -196,7 +199,7 @@ pub async fn fetch_cells(http: &reqwest::Client, site: &str) -> Vec<Cell> {
         fetch_latest(http, &s3, "NMD"),
     );
 
-    if let Some((p, _)) = nst {
+    if let Some((p, time)) = nst {
         let (lat0, lon0) = (p.lat as f64, p.lon as f64);
         let table = p.tabular.clone().unwrap_or_default();
         let graphic = p.graphic.clone().unwrap_or_default();
@@ -205,6 +208,7 @@ pub async fn fetch_cells(http: &reqwest::Client, site: &str) -> Vec<Cell> {
         for c in &p.cells {
             let (lon, lat) = offset_lonlat(lon0, lat0, c.x_km, c.y_km);
             let mut cell = Cell::new(CellKind::Storm, lon, lat, c.id.clone(), c.id.clone());
+            cell.time = time;
             if let Some(pf) = fcst.get(&c.id) {
                 cell.az_deg = Some(pf.az);
                 cell.range_nm = Some(pf.range);
