@@ -40,6 +40,10 @@ strip = true
 inherits = "release"
 opt-level = "s"
 
+# Favor size for the browser UI; decoding crates below keep full optimization.
+[profile.web.package.hookecho]
+opt-level = "z"
+
 # ...except the crates that actually spend the CPU. A Level 2 volume is a gzip wrapper around ~130
 # bzip2-compressed records, and it is decoded before the first pixel of radar exists; shrinking
 # these costs more seconds on screen than it saves on the wire.
