@@ -464,6 +464,7 @@ pub fn run(
         pane: 0,
         camera_center: center,
         camera_scale: scale,
+        world_per_pixel: camera.world_per_pixel() as f32,
         new_tiles,
         visible,
         basemap_key: basemap.key(),
@@ -519,6 +520,7 @@ pub fn run_multipane(site: &str, out_a: &str, out_b: &str) -> anyhow::Result<()>
             pane,
             camera_center: center,
             camera_scale: scale,
+            world_per_pixel: cam.world_per_pixel() as f32,
             basemap_key: 0,
             vector_over_raster: false,
             new_tiles: Vec::new(),
@@ -1184,6 +1186,7 @@ pub fn run_live(out_path: &str, site: &str, moment: Moment) -> anyhow::Result<()
         pane: 0,
         camera_center: center,
         camera_scale: scale,
+        world_per_pixel: camera.world_per_pixel() as f32,
         basemap_key: 0,
         vector_over_raster: false,
         new_tiles: Vec::new(),
@@ -1269,6 +1272,7 @@ pub fn run_placefile(path: &str, out_path: &str) -> anyhow::Result<()> {
         pane: 0,
         camera_center: center,
         camera_scale: scale,
+        world_per_pixel: camera.world_per_pixel() as f32,
         basemap_key: 0,
         vector_over_raster: false,
         new_tiles: Vec::new(),
@@ -1331,6 +1335,7 @@ pub fn run_overlay(out_path: &str) -> anyhow::Result<()> {
         pane: 0,
         camera_center: center,
         camera_scale: scale,
+        world_per_pixel: camera.world_per_pixel() as f32,
         basemap_key: 0,
         vector_over_raster: false,
         new_tiles,
@@ -1453,6 +1458,7 @@ pub fn run_mrms(out_path: &str) -> anyhow::Result<()> {
         pane: 0,
         camera_center: center,
         camera_scale: scale,
+        world_per_pixel: camera.world_per_pixel() as f32,
         basemap_key: 0,
         vector_over_raster: false,
         new_tiles,
@@ -1510,6 +1516,7 @@ pub fn run_lightning(out_path: &str) -> anyhow::Result<()> {
         pane: 0,
         camera_center: center,
         camera_scale: scale,
+        world_per_pixel: camera.world_per_pixel() as f32,
         basemap_key: 0,
         vector_over_raster: false,
         new_tiles,
@@ -1583,6 +1590,7 @@ pub fn run_field(slug: &str, out_path: &str) -> anyhow::Result<()> {
         pane: 0,
         camera_center: center,
         camera_scale: scale,
+        world_per_pixel: camera.world_per_pixel() as f32,
         basemap_key: 0,
         vector_over_raster: false,
         new_tiles,
@@ -1685,6 +1693,7 @@ pub fn run_global(model: &str, slug: &str, out_path: &str) -> anyhow::Result<()>
         pane: 0,
         camera_center: center,
         camera_scale: scale,
+        world_per_pixel: camera.world_per_pixel() as f32,
         basemap_key: 0,
         vector_over_raster: false,
         new_tiles,
@@ -1801,6 +1810,7 @@ pub fn run_diff(slug: &str, out_path: &str) -> anyhow::Result<()> {
         pane: 0,
         camera_center: center,
         camera_scale: scale,
+        world_per_pixel: camera.world_per_pixel() as f32,
         basemap_key: 0,
         vector_over_raster: false,
         new_tiles,
@@ -2126,6 +2136,7 @@ pub fn run_l3grid(kind: &str, site: &str, out_path: &str) -> anyhow::Result<()> 
         pane: 0,
         camera_center: center,
         camera_scale: scale,
+        world_per_pixel: camera.world_per_pixel() as f32,
         basemap_key: 0,
         vector_over_raster: false,
         new_tiles,
@@ -2201,6 +2212,7 @@ pub fn run_env(slug: &str, out_path: &str) -> anyhow::Result<()> {
         pane: 0,
         camera_center: center,
         camera_scale: scale,
+        world_per_pixel: camera.world_per_pixel() as f32,
         basemap_key: 0,
         vector_over_raster: false,
         new_tiles,
@@ -2385,6 +2397,7 @@ pub fn run_hrrr_layer(
         pane: 0,
         camera_center: center,
         camera_scale: scale,
+        world_per_pixel: camera.world_per_pixel() as f32,
         basemap_key: 0,
         vector_over_raster: false,
         new_tiles,
@@ -2423,6 +2436,7 @@ fn render_field_png(
         pane: 0,
         camera_center: center,
         camera_scale: scale,
+        world_per_pixel: camera.world_per_pixel() as f32,
         basemap_key: 0,
         vector_over_raster: false,
         new_tiles,
@@ -3197,6 +3211,7 @@ mod golden_tests {
                 pane: 0,
                 camera_center: center,
                 camera_scale: scale,
+                world_per_pixel: camera.world_per_pixel() as f32,
                 basemap_key: 0,
                 vector_over_raster: false,
                 new_tiles: Vec::new(),
@@ -3232,6 +3247,65 @@ mod golden_tests {
         assert_eq!(quads, 1, "a still camera keeps its tile quads");
     }
 
+
+    #[test]
+    #[ignore = "gpu"]
+    fn gpu_stroke_width_survives_zoom_without_reupload() {
+        use crate::render::{OverlayUpload, OverlayVertex};
+        let mut camera = Camera::at_lonlat(-97.0, 35.0, 7.0);
+        let (center, scale) = camera.world_to_clip_uniform((200.0, 200.0));
+        let mut cb = MapCallback {
+            pane: 0,
+            camera_center: center,
+            camera_scale: scale,
+            world_per_pixel: camera.world_per_pixel() as f32,
+            basemap_key: 0,
+            vector_over_raster: false,
+            new_tiles: Vec::new(),
+            visible: Vec::new(),
+            radar_upload: None,
+            draw_radar: false,
+            overlay_upload: None,
+            draw_overlay: true,
+            field_uploads: Vec::new(),
+            field_draws: Vec::new(),
+            clear_tiles: false,
+            drop_tiles: Vec::new(),
+            drop_fields: Vec::new(),
+            new_vector_tiles: Vec::new(),
+            visible_vector: Vec::new(),
+            clear_vector: false,
+            drop_vector_tiles: Vec::new(),
+            wind_upload: None,
+            wind: None,
+        };
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let (device, queue, _) = init_gpu(&rt).expect("no wgpu adapter");
+        let format = wgpu::TextureFormat::Rgba8UnormSrgb;
+        let mut res = RenderResources::new(&device, format);
+        let target = new_target(&device, format, 200);
+        let view = target.create_view(&Default::default());
+        cb.overlay_upload = Some(OverlayUpload {
+            vertices: [(-0.02, -2.0), (0.02, -2.0), (0.02, 2.0), (-0.02, 2.0)]
+                .into_iter().map(|(x, y)| OverlayVertex {
+                    world: [center[0] + x, center[1]], color: [1.0; 4], offset: [0.0, y, 0.0],
+                }).collect(),
+            indices: vec![0, 1, 2, 0, 2, 3],
+        });
+        for zoom in [7.0, 9.25, 6.5, 12.0] {
+            camera.zoom = zoom;
+            let (center, scale) = camera.world_to_clip_uniform((200.0, 200.0));
+            cb.camera_center = center;
+            cb.camera_scale = scale;
+            cb.world_per_pixel = camera.world_per_pixel() as f32;
+            res.render_once(&device, &queue, &view, &cb, wgpu::Color::BLACK);
+            cb.overlay_upload = None;
+            let pixels = read_target(&device, &queue, &target, 200);
+            let width = (0..200).filter(|&y| pixels[(y * 200 + 100) * 4] > 200).count();
+            assert_eq!(width, 4, "stroke changed width at zoom {zoom}");
+        }
+    }
+
     /// Golden-image test for the radar render pipeline. Run with
     /// `HOOKECHO_GPU_FALLBACK=1 cargo test -p hookecho -- --ignored gpu` so the
     /// software (lavapipe) adapter is used — the golden is authored under lavapipe.
@@ -3247,6 +3321,7 @@ mod golden_tests {
             pane: 0,
             camera_center: center,
             camera_scale: scale,
+            world_per_pixel: camera.world_per_pixel() as f32,
             basemap_key: 0,
             vector_over_raster: false,
             new_tiles: Vec::new(),

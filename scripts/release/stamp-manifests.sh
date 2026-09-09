@@ -40,8 +40,13 @@ sed -i \
   -e "s|^  sha256 .*|  sha256 \"$SRC_SHA\"|" \
   packaging/homebrew/hookecho.rb
 
+# pkgver cannot contain hyphens, so a prerelease tag stamps _tag verbatim
+# and pkgver with hyphens as underscores; the PKGBUILD builds URLs and
+# directory names from _tag.
+PKGV=${VER//-/_}
 sed -i \
-  -e "s|^pkgver=.*|pkgver=$VER|" \
+  -e "s|^_tag=.*|_tag=$VER|" \
+  -e "s|^pkgver=.*|pkgver=$PKGV|" \
   -e "s|^pkgrel=.*|pkgrel=1|" \
   -e "s|^sha256sums=.*|sha256sums=('$SRC_SHA')|" \
   packaging/aur/PKGBUILD

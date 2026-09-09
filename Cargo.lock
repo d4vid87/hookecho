@@ -2592,6 +2592,7 @@ dependencies = [
  "nexrad-model",
  "notify-rust",
  "percent-encoding",
+ "postcard",
  "puffin",
  "puffin_http",
  "reqwest 0.12.28",

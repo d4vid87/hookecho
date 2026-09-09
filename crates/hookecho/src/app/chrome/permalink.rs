@@ -43,8 +43,12 @@ impl HookEchoApp {
             // The rest of the URL is left exactly as it is — the recovery reload's `?relaunched`
             // lives in the query, and stamping over it would spend the retry it is tracking.
             if let Ok(h) = win.history() {
-                let _ = h.replace_state_with_url(&wasm_bindgen::JsValue::NULL, "", Some(&frag));
-                *last = Some(frag);
+                if h.replace_state_with_url(&wasm_bindgen::JsValue::NULL, "", Some(&frag)).is_ok() {
+                    // This is our own camera snapshot, not an incoming navigation. Otherwise
+                    // apply_goto_hash replays this stale zoom on its next one-second poll.
+                    self.last_goto_hash = Some(frag.clone());
+                    *last = Some(frag);
+                }
             }
         }
     }

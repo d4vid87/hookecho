@@ -27,6 +27,7 @@ winresource = "0.1"
 profiling = ["dep:puffin", "dep:puffin_http"]
 
 [dependencies]
+postcard = { version = "1", features = ["alloc"] }
 wxdata = { path = "../wxdata" }
 puffin = { version = "0.20", optional = true }
 puffin_http = { version = "0.17", optional = true }

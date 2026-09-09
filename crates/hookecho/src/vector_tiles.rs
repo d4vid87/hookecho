@@ -59,7 +59,7 @@ enum StrokePass {
     Road,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum RoadShield {
     None,
     Interstate,
@@ -69,7 +69,7 @@ pub enum RoadShield {
 }
 
 /// A map label to draw with the egui painter (never appears in GPU/headless PNGs).
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct PlaceLabel {
     pub world: [f32; 2],
     pub name: String,
@@ -215,18 +215,22 @@ pub fn build_tile_with_theme(
         let base = verts.len() as u32;
         verts.extend_from_slice(&[
             OverlayVertex {
+                offset: [0.0; 3],
                 world: [x0 as f32, y0 as f32],
                 color: bg,
             },
             OverlayVertex {
+                offset: [0.0; 3],
                 world: [x1 as f32, y0 as f32],
                 color: bg,
             },
             OverlayVertex {
+                offset: [0.0; 3],
                 world: [x1 as f32, y1 as f32],
                 color: bg,
             },
             OverlayVertex {
+                offset: [0.0; 3],
                 world: [x0 as f32, y1 as f32],
                 color: bg,
             },
@@ -293,6 +297,7 @@ pub fn build_tile_with_theme(
                 &mut BuffersBuilder::new(&mut buf, |v: FillVertex| {
                     let p = v.position();
                     OverlayVertex {
+                        offset: [0.0; 3],
                         world: [
                             ((txf + p.x as f64) / n) as f32,
                             ((tyf + p.y as f64) / n) as f32,
@@ -328,12 +333,7 @@ pub fn build_tile_with_theme(
             let Some((c, wpx)) = styled else {
                 continue;
             };
-            let road_scale = if *layer == "transportation" {
-                basemap_style::road_scale(tess_zoom)
-            } else {
-                1.0
-            };
-            let w = (wpx as f64 * px_to_tile * theme_scale as f64 * road_scale) as f32;
+            let w = (wpx as f64 * px_to_tile * theme_scale as f64) as f32;
             let mut b = Path::builder();
             let mut any = false;
             match &f.geometry {
@@ -364,8 +364,13 @@ pub fn build_tile_with_theme(
                 &path,
                 &opts,
                 &mut BuffersBuilder::new(&mut buf, |v: StrokeVertex| {
-                    let p = v.position();
+                    // Keep the centerline geographic; expand its edges in screen pixels on the GPU.
+                    let p = v.position_on_path();
+                    let normal = v.normal();
+                    let half_px = (w as f64 / px_to_tile * 0.5) as f32;
                     OverlayVertex {
+                        offset: [normal.x * half_px, normal.y * half_px,
+                            if *layer == "transportation" { 1.0 } else { 0.0 }],
                         world: [
                             ((txf + p.x as f64) / n) as f32,
                             ((tyf + p.y as f64) / n) as f32,
@@ -796,11 +801,23 @@ const TILE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 /// hundreds of requests a second. Same number, same reason, as the raster manager's.
 const RETRY_AFTER: std::time::Duration = std::time::Duration::from_secs(5);
 
+#[derive(serde::Serialize, serde::Deserialize)]
 struct FetchedVector {
     id: TileId,
     vertices: Vec<OverlayVertex>,
     indices: Vec<u32>,
     labels: Vec<PlaceLabel>,
+}
+
+// Reuse the radar worker and its transferred buffers: no additional worker or WASM heap.
+#[cfg(any(target_arch = "wasm32", test))]
+type VectorJob = (Vec<u8>, TileId, basemap_style::Palette, f64, crate::settings::Theme);
+
+#[cfg(any(target_arch = "wasm32", test))]
+pub(crate) fn build_worker_tile(payload: &[u8]) -> Result<Vec<u8>, postcard::Error> {
+    let (bytes, id, palette, zoom, theme): VectorJob = postcard::from_bytes(payload)?;
+    let (vertices, indices, labels) = build_tile_with_theme(&bytes, id, palette, zoom, theme);
+    postcard::to_allocvec(&FetchedVector { id, vertices, indices, labels })
 }
 
 /// Async vector-tile manager for the GUI (mirrors [`crate::tiles::TileManager`]).
@@ -819,7 +836,7 @@ pub struct VectorTileManager {
     requested: HashSet<TileId>,
     /// Tessellated tiles live on the GPU; this mirrors them so the oldest can be dropped. A
     /// HashSet here meant a long pan grew vertex buffers until the style changed.
-    uploaded: LruCache<TileId, ()>,
+    uploaded: LruCache<TileId, u64>,
     /// Ids the LRU pushed out, handed to the renderer to free.
     vevicted: Vec<TileId>,
     labels: HashMap<TileId, Vec<PlaceLabel>>,
@@ -827,9 +844,6 @@ pub struct VectorTileManager {
     label_gen: u64,
     palette: basemap_style::Palette,
     theme: crate::settings::Theme,
-    tess_zoom: i32,
-    /// Candidate new tessellation zoom and when it was first seen — see [`Self::note_zoom`].
-    zoom_settled: Option<(i32, wxdata::clock::Instant)>,
     cache_root: Option<PathBuf>,
     template: Option<String>,
     template_tx: Sender<Option<String>>,
@@ -867,8 +881,6 @@ impl VectorTileManager {
             label_gen: 0,
             palette: basemap_style::Palette::Dark,
             theme: crate::settings::Theme::Dark,
-            tess_zoom: 7,
-            zoom_settled: None,
             cache_root,
             template: None,
             template_tx,
@@ -916,45 +928,6 @@ impl VectorTileManager {
         true
     }
 
-    /// Note the current camera zoom (drives stroke widths). Returns true (clear GPU cache) only
-    /// when overzooming past the max tile level, where tile ids stop changing but widths must.
-    pub fn note_zoom(&mut self, cam_zoom: f64) -> bool {
-        let tz = cam_zoom.round() as i32;
-        if tz == self.tess_zoom {
-            self.zoom_settled = None;
-            return false;
-        }
-        // Mid-pinch this fires at every integer step, and each one throws away the whole vector
-        // basemap and re-tessellates it — the worst possible moment. Wait for the zoom to hold
-        // still before acting on it.
-        let settled = *self
-            .zoom_settled
-            .get_or_insert_with(|| (tz, wxdata::clock::Instant::now()));
-        if settled.0 != tz {
-            self.zoom_settled = Some((tz, wxdata::clock::Instant::now()));
-            return false;
-        }
-        if settled.1.elapsed() < std::time::Duration::from_millis(700) {
-            return false;
-        }
-        self.zoom_settled = None;
-        self.tess_zoom = tz;
-        // Every resident tile was tessellated for the *old* zoom, and stroke widths are baked in
-        // at tessellation. This used to re-tessellate only when overzooming past the deepest tile
-        // level, on the theory that below that the tile ids change anyway and the new tiles pick
-        // up the new width. They do — but the tiles already on screen do not, and a jump straight
-        // to z12 from the z7 the manager starts at left roads roughly thirty times too wide until
-        // something else happened to clear them. The 700 ms settle above is what makes doing this
-        // unconditionally affordable.
-        self.render_generation += 1;
-        self.requested.clear();
-        self.failed.clear();
-        self.uploaded.clear();
-        self.labels.clear();
-        self.label_gen += 1;
-        true
-    }
-
     pub fn visible(&self, cam: &Camera, viewport_px: (f32, f32)) -> Vec<VisibleTile> {
         tile_cover(cam, viewport_px, MAX_VECTOR_Z, label_detail_bias(cam.zoom))
     }
@@ -994,7 +967,6 @@ impl VectorTileManager {
         let generation = self.render_generation;
         let palette = self.palette;
         let theme = self.theme;
-        let tess_zoom = self.tess_zoom as f64;
         for v in visible {
             // Same reason the raster manager caps itself: a pan at low zoom asks for a screenful
             // at once, and without a ceiling they all leave together and answer together.
@@ -1012,6 +984,7 @@ impl VectorTileManager {
                 continue;
             }
             let (z, x, y) = v.id;
+            let tess_zoom = z as f64;
             let url = fill_template(&template, z, x, y);
             let path = self
                 .cache_root
@@ -1021,6 +994,7 @@ impl VectorTileManager {
             let tx = self.tx.clone();
             let id = v.id;
             let ctx = self.ctx.clone();
+            #[cfg(not(target_arch = "wasm32"))]
             let blocking = self.spawner.clone();
             let inflight = self.inflight.clone();
             self.inflight.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -1041,21 +1015,32 @@ impl VectorTileManager {
                     }
                     return;
                 };
-                // gunzip + lyon tessellation is the heaviest CPU in the app after the volume
-                // decode; running it on the async worker starves every other fetch.
-                blocking.spawn_blocking(move || {
-                    let (vertices, indices, labels) =
-                        build_tile_with_theme(&bytes, id, palette, tess_zoom, theme);
-                    let _ = tx.send((generation, Ok(FetchedVector {
-                        id,
-                        vertices,
-                        indices,
-                        labels,
-                    })));
+                let finish = move |result| {
+                    let _ = tx.send((generation, result));
                     inflight.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
-                    if let Some(ctx) = ctx {
-                        ctx.request_repaint();
-                    }
+                    if let Some(ctx) = ctx { ctx.request_repaint(); }
+                };
+                #[cfg(target_arch = "wasm32")]
+                {
+                    let payload = postcard::to_allocvec(&(bytes, id, palette, tess_zoom, theme));
+                    let result = match payload {
+                        Ok(payload) => {
+                            let encoded = match wxdata::wasm_worker::tessellate_vector(payload.clone()).await {
+                                Ok(encoded) => Some(encoded),
+                                Err(wxdata::wasm_worker::Error::Unavailable) => build_worker_tile(&payload).ok(),
+                                Err(e) => { log::warn!("vector tile worker: {e}"); None }
+                            };
+                            encoded.and_then(|data| postcard::from_bytes::<FetchedVector>(&data).ok())
+                                .filter(|tile| tile.id == id).ok_or(id)
+                        }
+                        Err(_) => Err(id),
+                    };
+                    finish(result);
+                }
+                #[cfg(not(target_arch = "wasm32"))]
+                blocking.spawn_blocking(move || {
+                    let (vertices, indices, labels) = build_tile_with_theme(&bytes, id, palette, tess_zoom, theme);
+                    finish(Ok(FetchedVector { id, vertices, indices, labels }));
                 });
             });
         }
@@ -1117,8 +1102,11 @@ impl VectorTileManager {
                     continue;
                 }
             };
-            match self.uploaded.push(f.id, ()) {
-                Some((id, _)) if id == f.id => continue, // already resident
+            if self.uploaded.peek(&f.id) == Some(&generation) {
+                continue; // already resident at this generation
+            }
+            match self.uploaded.push(f.id, generation) {
+                Some((id, _)) if id == f.id => {} // refreshed in place
                 Some((id, _)) => {
                     self.requested.remove(&id);
                     self.labels.remove(&id);
@@ -1170,7 +1158,27 @@ impl VectorTileManager {
 
     /// Labels for the given visible tile ids (for the egui text pass).
     pub fn labels_for<'a>(&'a self, ids: impl Iterator<Item = &'a TileId>) -> Vec<&'a PlaceLabel> {
-        ids.filter_map(|id| self.labels.get(id)).flatten().collect()
+        let mut labels = Vec::new();
+        for &id in ids {
+            // The GPU retains cached geography while a new detail level loads. Use the same
+            // fallback for names/shields; looking up only exact ids blanked every label at once.
+            let sources = crate::render::vector_draw_tiles(&[id], self.labels.keys().copied());
+            let n = (1u32 << id.0) as f32;
+            for source in &sources {
+                if let Some(tile_labels) = self.labels.get(source) {
+                    labels.extend(tile_labels.iter().filter(|l| {
+                        ((l.world[0] * n).floor() as u32, (l.world[1] * n).floor() as u32)
+                            == (id.1, id.2)
+                            && !sources.iter().any(|&(z, x, y)| {
+                                let n = (1u32 << z) as f32;
+                                z > source.0 && ((l.world[0] * n).floor() as u32,
+                                    (l.world[1] * n).floor() as u32) == (x, y)
+                            })
+                    }));
+                }
+            }
+        }
+        labels
     }
 }
 
@@ -1197,8 +1205,6 @@ mod tests {
             label_gen: 0,
             palette: basemap_style::Palette::Dark,
             theme: crate::settings::Theme::Dark,
-            tess_zoom: 7,
-            zoom_settled: None,
             cache_root: None,
             template: None,
             template_tx,
@@ -1206,6 +1212,62 @@ mod tests {
             template_requested: false,
             template_failed: None,
         }
+    }
+
+    #[tokio::test]
+    async fn labels_follow_cached_geography_through_zoom_and_partial_loads() {
+        let mut manager = test_manager();
+        let parent = (4, 3, 5);
+        let child = (5, 6, 10);
+        let sibling = (5, 7, 10);
+        let label = |name: &str, x| PlaceLabel {
+            name: name.into(), world: [x, 10.5 / 32.0], city: true,
+            rank: 1, shield: RoadShield::None, min_zoom: 0.0,
+        };
+        manager.labels.insert(parent, vec![label("old left", 6.5 / 32.0), label("right", 7.5 / 32.0)]);
+        assert_eq!(manager.labels_for([&child, &sibling].into_iter()).len(), 2,
+            "zoom-in must retain names before child tiles arrive");
+        manager.labels.insert(child, vec![label("new left", 6.5 / 32.0)]);
+        let names: Vec<_> = manager.labels_for([&child, &sibling].into_iter())
+            .into_iter().map(|l| l.name.as_str()).collect();
+        assert_eq!(names, ["new left", "right"], "partial loads must not duplicate or erase neighbors");
+        manager.labels.remove(&parent);
+        assert_eq!(manager.labels_for([&parent].into_iter())[0].name, "new left",
+            "zoom-out retains child labels while its parent loads");
+    }
+
+    #[test]
+    fn worker_tile_matches_inline_geometry_and_rejects_invalid_jobs() {
+        let id = (8, 65, 95);
+        let palette = basemap_style::Palette::Dark;
+        let theme = crate::settings::Theme::Dark;
+        let payload = postcard::to_allocvec(&(vec![] as Vec<u8>, id, palette, 8.0, theme)).unwrap();
+        let encoded = build_worker_tile(&payload).unwrap();
+        let result: FetchedVector = postcard::from_bytes(&encoded).unwrap();
+        let (vertices, indices, labels) = build_tile_with_theme(&[], id, palette, 8.0, theme);
+        assert_eq!(result.id, id);
+        assert_eq!(bytemuck::cast_slice::<_, u8>(&result.vertices), bytemuck::cast_slice::<_, u8>(&vertices));
+        assert_eq!(result.indices, indices);
+        assert_eq!(result.labels.len(), labels.len());
+        assert!(build_worker_tile(b"not a tile job").is_err());
+    }
+
+    #[tokio::test]
+    async fn replacement_tiles_upload_once() {
+        let mut manager = test_manager();
+        let id = (6, 14, 25);
+        manager.uploaded.put(id, 0);
+        manager.labels.insert(id, vec![]);
+        manager.requested.insert(id);
+        manager.render_generation = 1;
+        for _ in 0..2 {
+            manager.tx.send((1, Ok(FetchedVector {
+                id, vertices: vec![], indices: vec![], labels: vec![],
+            }))).unwrap();
+        }
+        assert_eq!(manager.drain_ready().len(), 1, "replace once, ignore duplicates");
+        assert_eq!(manager.uploaded.peek(&id), Some(&1));
+        assert!(manager.take_evicted().is_empty());
     }
 
     #[tokio::test]

@@ -89,7 +89,7 @@ sed \
 # a worker the browser never bothers to install.
 font_shell=""
 for f in web/dist/font-*.ttf; do font_shell="$font_shell,\"/${f#web/}\""; done
-shell_json="[\"/\",\"/dist/hookecho-$glue_hash.js\",\"/dist/hookecho_bg-$wasm_hash.wasm\",\"/decode-worker.js\",\"/decode-bridge.js\",\"/manifest.webmanifest\",\"/icon-192.png\",\"/icon-512.png\"$font_shell]"
+shell_json="[\"/\",\"/dist/hookecho-$glue_hash.js\",\"/dist/hookecho_bg-$wasm_hash.wasm\",\"/decode-worker.js?v=vector-tiles\",\"/decode-bridge.js\",\"/manifest.webmanifest\",\"/icon-192.png\",\"/icon-512.png\"$font_shell]"
 sed \
   -e "s#__SHELL__#$shell_json#" \
   -e "s#__VERSION__#\"$glue_hash-$wasm_hash\"#" \
@@ -116,8 +116,8 @@ gz_bytes="$(gzip -9 -c "web/dist/hookecho_bg-$wasm_hash.wasm" | wc -c)"
 #
 # Raised deliberately for the offline chase packs (IndexedDB via web-sys) and the detailed dark
 # street-map labels shipped in the default view.
-# Map recovery, responsive timeline and shared-view fixes: CI measured 4,075,695 bytes.
-budget="${HOOKECHO_WASM_BUDGET:-4080000}"
+# Vector-tile worker serialization adds ~2.4 KB gzip while moving tessellation off the UI thread.
+budget="${HOOKECHO_WASM_BUDGET:-4085000}"
 printf 'wasm: %s raw, %s gzipped (budget %s)\n' \
   "$(stat -c%s "web/dist/hookecho_bg-$wasm_hash.wasm")" "$gz_bytes" "$budget"
 if [ "$gz_bytes" -gt "$budget" ]; then

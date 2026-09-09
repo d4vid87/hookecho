@@ -296,10 +296,12 @@ pub struct MrmsUpload {
 
 /// A tessellated vertex for the vector overlay layer.
 #[repr(C)]
-#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable, serde::Serialize, serde::Deserialize)]
 pub struct OverlayVertex {
     pub world: [f32; 2],
     pub color: [f32; 4],
+    /// XY: screen-pixel stroke extrusion. Z: apply the road width scale (0 or 1).
+    pub offset: [f32; 3],
 }
 
 /// Pre-tessellated overlay geometry to upload this frame.
@@ -321,6 +323,7 @@ pub struct MapCallback {
     pub pane: u32,
     pub camera_center: [f32; 2],
     pub camera_scale: [f32; 2],
+    pub world_per_pixel: f32,
     pub new_tiles: Vec<PendingTile>,
     pub visible: Vec<VisibleTile>,
     /// Which basemap style this pane draws ([`crate::tiles::BasemapStyle::key`]).
@@ -377,6 +380,10 @@ struct RadarVertex {
 struct CameraUniform {
     center: [f32; 2],
     scale: [f32; 2],
+    world_per_pixel: f32,
+    road_scale: f32,
+    // WebGL uniform bindings must occupy a multiple of 16 bytes.
+    _pad: [f32; 2],
 }
 
 struct TileGpu {
@@ -488,7 +495,7 @@ impl RenderResources {
                 ty: wgpu::BindingType::Buffer {
                     ty: wgpu::BufferBindingType::Uniform,
                     has_dynamic_offset: false,
-                    min_binding_size: NonZeroU64::new(16),
+                    min_binding_size: NonZeroU64::new(std::mem::size_of::<CameraUniform>() as u64),
                 },
                 count: None,
             }],
@@ -724,7 +731,7 @@ impl RenderResources {
                 buffers: &[wgpu::VertexBufferLayout {
                     array_stride: std::mem::size_of::<OverlayVertex>() as u64,
                     step_mode: wgpu::VertexStepMode::Vertex,
-                    attributes: &wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x4],
+                    attributes: &wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x4, 2 => Float32x3],
                 }],
             },
             fragment: Some(wgpu::FragmentState {
@@ -1242,6 +1249,7 @@ impl RenderResources {
         );
         let quads = (self.panes.get(&cb.pane).map(|p| p.quads_key) != Some(Some(quads_key)))
             .then(|| self.tile_verts(cb));
+        let visible_vector = vector_draw_tiles(&cb.visible_vector, self.vector_tiles.keys().copied());
         let overlay_present = self.overlay.is_some();
 
         let pane = self.pane_mut(device, cb.pane);
@@ -1251,6 +1259,11 @@ impl RenderResources {
             bytemuck::bytes_of(&CameraUniform {
                 center: cb.camera_center,
                 scale: cb.camera_scale,
+                world_per_pixel: cb.world_per_pixel,
+                road_scale: crate::basemap_style::road_scale(
+                    -(256.0 * cb.world_per_pixel as f64).log2(),
+                ) as f32,
+                _pad: [0.0; 2],
             }),
         );
         if let Some(r) = &cb.radar_upload {
@@ -1276,7 +1289,7 @@ impl RenderResources {
             pane.frame_visible = visible;
             pane.quads_key = Some(quads_key);
         }
-        pane.frame_visible_vector = cb.visible_vector.clone();
+        pane.frame_visible_vector = visible_vector;
         pane.vector_over_raster = cb.vector_over_raster;
         pane.frame_draw_radar = cb.draw_radar && pane.radar.is_some();
         pane.frame_draw_overlay = cb.draw_overlay && overlay_present;
@@ -1620,6 +1633,54 @@ impl egui_wgpu::CallbackTrait for MapCallback {
         crate::prof_scope!("render paint");
         let res: &RenderResources = resources.get().unwrap();
         res.record_pane(self.pane, pass);
+    }
+}
+
+/// Keep cached geography visible while a new zoom level loads. Coarse tiles draw first,
+/// then finer fallbacks, then the requested tiles so current detail always wins.
+pub(crate) fn vector_draw_tiles(visible: &[TileId], resident: impl Iterator<Item = TileId>) -> Vec<TileId> {
+    let resident: Vec<_> = resident.collect();
+    let mut fallback = Vec::new();
+    // ponytail: bounded tile-cache scan; add a spatial index only if the cache grows substantially.
+    for &(z, x, y) in visible {
+        if resident.contains(&(z, x, y)) {
+            continue;
+        }
+        // Prefer the nearest ancestor instead of stacking every cached zoom level.
+        if let Some(parent) = resident.iter().copied().filter(|&(rz, rx, ry)| {
+            rz < z && (x >> (z - rz), y >> (z - rz)) == (rx, ry)
+        }).max_by_key(|id| id.0) {
+            fallback.push(parent);
+        }
+        for &(rz, rx, ry) in &resident {
+            if rz > z && (rx >> (rz - z), ry >> (rz - z)) == (x, y) {
+                fallback.push((rz, rx, ry));
+            }
+        }
+    }
+    fallback.sort_unstable();
+    fallback.dedup();
+    fallback.extend(visible.iter().copied().filter(|id| resident.contains(id)));
+    fallback
+}
+
+#[cfg(test)]
+mod vector_fallback_tests {
+    use super::vector_draw_tiles;
+
+    #[test]
+    fn zooming_both_ways_keeps_cached_tiles_and_current_detail_wins() {
+        let parent = (4, 3, 5);
+        let child = (5, 6, 10);
+        let sibling = (5, 7, 10);
+        let far = (5, 20, 20);
+        let grandparent = (3, 1, 2);
+        assert_eq!(vector_draw_tiles(&[child], [grandparent, parent].into_iter()), vec![parent]);
+        assert_eq!(vector_draw_tiles(&[child], [parent, far].into_iter()), vec![parent]);
+        assert_eq!(vector_draw_tiles(&[parent], [child, far].into_iter()), vec![child]);
+        assert_eq!(vector_draw_tiles(&[child, sibling], [parent, child].into_iter()), vec![parent, child]);
+        assert_eq!(vector_draw_tiles(&[child], [parent, child].into_iter()), vec![child]);
+        assert!(vector_draw_tiles(&[child], [far].into_iter()).is_empty());
     }
 }
 
