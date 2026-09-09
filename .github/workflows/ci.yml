@@ -119,7 +119,7 @@ jobs:
       # Without this, build.sh skips wasm-opt with a warning and the size gate measures a bundle
       # nobody ships.
       - name: Install binaryen (wasm-opt)
-        run: sudo apt-get update && sudo apt-get install -y binaryen
+        run: bash scripts/web/install-binaryen.sh
 
       - name: Build the bundle
         run: scripts/web/build.sh

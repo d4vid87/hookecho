@@ -40,7 +40,7 @@ jobs:
       # build.sh runs wasm-opt when it is on PATH and warns when it is not; the deployed bundle
       # should always be the optimized one.
       - name: Install binaryen (wasm-opt)
-        run: sudo apt-get update && sudo apt-get install -y binaryen
+        run: bash scripts/web/install-binaryen.sh
 
       - name: Build the bundle
         run: scripts/web/build.sh
