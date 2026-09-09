@@ -1,9 +1,10 @@
 //! The Layers panel: a searchable, categorized list of every layer/product/tool in the app,
-//! rendered as big full-width toggle rows. Desktop shows it as a right-edge slide-in; Android
+//! browsed through category tiles or the active list. Desktop uses floating cards; Android
 //! hosts the same body in a bottom sheet. Both read the one action registry
 //! (`HookEchoApp::palette_entries`), so they can never drift apart.
 
 use crate::app::{HealthState, PaletteAction, PaletteEntry, SourceHealth};
+use crate::ui::a11y::Named as _;
 use egui::{vec2, Color32, RichText, Stroke};
 
 /// Category order in the panel (anything else falls to the bottom, in registry order).
@@ -171,7 +172,7 @@ fn compact_age(age: std::time::Duration) -> String {
     }
 }
 
-fn health_look(state: HealthState) -> (&'static str, Color32) {
+pub(crate) fn health_look(state: HealthState) -> (&'static str, Color32) {
     match state {
         HealthState::Fresh => ("Fresh", Color32::from_rgb(70, 200, 120)),
         HealthState::Fetching => ("Fetching", Color32::from_rgb(80, 160, 240)),
@@ -234,9 +235,11 @@ fn row(ui: &mut egui::Ui, e: &PaletteEntry, accent: Color32, draggable: bool) ->
     } else {
         (ui.visuals().text_color(), ui.visuals().faint_bg_color)
     };
-    let icon = RichText::new(glyph(e))
-        .size(14.0)
-        .color(if on { accent } else { ui.visuals().weak_text_color() });
+    let icon = RichText::new(glyph(e)).size(14.0).color(if on {
+        accent
+    } else {
+        ui.visuals().weak_text_color()
+    });
     let mut clicked = false;
     let outer = ui
         .horizontal(|ui| {
@@ -335,17 +338,133 @@ fn row(ui: &mut egui::Ui, e: &PaletteEntry, accent: Color32, draggable: bool) ->
         egui::Popup::menu(&health_resp).show(|ui| health_popup(ui, health));
     } else if on {
         // Only enabled rows need a state dot; gray dots on every disabled row were visual noise.
-        ui.painter().circle_filled(
-            resp.rect.right_center() + vec2(-10.0, 0.0),
-            3.5,
-            accent,
-        );
+        ui.painter()
+            .circle_filled(resp.rect.right_center() + vec2(-10.0, 0.0), 3.5, accent);
     }
     Hit {
         clicked,
         explain,
         resp,
     }
+}
+
+/// Registry selection also describes tools and layouts; those are not visible map layers.
+fn active_layer(e: &PaletteEntry) -> bool {
+    use crate::app::{ContourKind, OverlayToggle as T};
+    e.on == Some(true)
+        && match e.action {
+            PaletteAction::SetMoment(..) | PaletteAction::ToggleField(_) => true,
+            PaletteAction::SetContours(kind) => kind != ContourKind::Off,
+            PaletteAction::ToggleOverlay(toggle) => {
+                !matches!(toggle, T::AlertPanel | T::LinkCameras | T::MiniLoop)
+            }
+            _ => false,
+        }
+}
+
+fn active_row(ui: &mut egui::Ui, e: &PaletteEntry, accent: Color32) -> Option<PaletteAction> {
+    use egui_phosphor::regular as ph;
+    let mut chosen = None;
+    ui.horizontal(|ui| {
+        ui.set_min_height(38.0);
+        let label = e.label.split(" (").next().unwrap_or(&e.label);
+        let warning = e
+            .health
+            .as_ref()
+            .filter(|h| h.state() != HealthState::Fresh);
+        let controls = if warning.is_some() { 102.0 } else { 52.0 };
+        ui.allocate_ui_with_layout(
+            vec2((ui.available_width() - controls).max(80.0), 38.0),
+            egui::Layout::left_to_right(egui::Align::Center),
+            |ui| {
+                ui.add(egui::Label::new(RichText::new(label).size(14.0)).wrap())
+                    .on_hover_text(format!("{}\n{}", e.label, e.desc));
+            },
+        );
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if matches!(e.action, PaletteAction::SetMoment(..)) {
+                ui.weak("Current");
+            } else if ui
+                .add(
+                    egui::Button::new(RichText::new(ph::TOGGLE_RIGHT).size(28.0).color(accent))
+                        .frame(false)
+                        .min_size(vec2(36.0, 32.0)),
+                )
+                .named_toggle(&format!("Show {}", e.label), true)
+                .clicked()
+            {
+                chosen = Some(match e.action {
+                    PaletteAction::SetContours(_) => {
+                        PaletteAction::SetContours(crate::app::ContourKind::Off)
+                    }
+                    action => action,
+                });
+            }
+            if let Some(health) = warning {
+                let (label, color) = health_look(health.state());
+                let status = ui
+                    .small_button(RichText::new(label).size(10.0).color(color))
+                    .on_hover_text("Source status — click for details");
+                egui::Popup::menu(&status).show(|ui| health_popup(ui, health));
+            }
+        });
+    });
+    chosen
+}
+
+/// A category is navigation, not a layer toggle. Keep the entire tile keyboard-accessible.
+fn category_tile(
+    ui: &mut egui::Ui,
+    cat: &str,
+    active: usize,
+    width: f32,
+    accent: Color32,
+) -> egui::Response {
+    let response = ui.add_sized(
+        vec2(width, 74.0),
+        egui::Button::new("")
+            .fill(ui.visuals().faint_bg_color)
+            .stroke(Stroke::new(
+                1.0,
+                ui.visuals().widgets.noninteractive.bg_stroke.color,
+            ))
+            .corner_radius(12.0),
+    );
+    response.widget_info(|| {
+        egui::WidgetInfo::labeled(
+            egui::WidgetType::Button,
+            ui.is_enabled(),
+            format!("{}, {active} active", category_name(cat)),
+        )
+    });
+    let r = response.rect.shrink(12.0);
+    let painter = ui.painter();
+    painter.text(
+        r.left_top(),
+        egui::Align2::LEFT_TOP,
+        category_glyph(cat),
+        egui::FontId::proportional(22.0),
+        if ui.visuals().dark_mode {
+            Color32::from_rgb(112, 215, 228)
+        } else {
+            accent
+        },
+    );
+    painter.text(
+        r.right_top(),
+        egui::Align2::RIGHT_TOP,
+        format!("{active}  ›"),
+        egui::FontId::proportional(12.0),
+        ui.visuals().weak_text_color(),
+    );
+    painter.text(
+        r.left_bottom(),
+        egui::Align2::LEFT_BOTTOM,
+        category_name(cat),
+        egui::FontId::proportional(13.0),
+        ui.visuals().text_color(),
+    );
+    response.on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 
 /// The panel body: search box + categorized rows. Returns the clicked action, if any.
@@ -363,6 +482,11 @@ pub(crate) fn body(
     mut after_radar: impl FnMut(&mut egui::Ui),
 ) -> Option<PaletteAction> {
     let mut chosen = None;
+    let nav_id = ui.make_persistent_id("layer_navigation");
+    let (mut active_only, mut category) = ui.ctx().data_mut(|d| {
+        d.get_temp::<(bool, Option<String>)>(nav_id)
+            .unwrap_or_default()
+    });
     // (dragged label, label it was dropped on) — applied after the loop so the borrow of `pref`
     // doesn't have to live inside the scroll area.
     let mut moved: Option<(String, String)> = None;
@@ -374,7 +498,12 @@ pub(crate) fn body(
         );
         let field = ui.add(
             egui::TextEdit::singleline(query)
-                .hint_text("Search layers, tools, or places")
+                .hint_text(if active_only {
+                    "Filter active layers…"
+                } else {
+                    "Find a layer, tool, or place…"
+                })
+                .margin(egui::vec2(8.0, 8.0))
                 .desired_width(ui.available_width() - 4.0),
         );
         if focus_search {
@@ -387,13 +516,32 @@ pub(crate) fn body(
         }
     });
     ui.add_space(8.0);
-    ui.label(
-        RichText::new("BROWSE")
-            .size(10.0)
-            .color(ui.visuals().weak_text_color()),
-    );
-    ui.add_space(3.0);
-    let order = matches(entries, query);
+    ui.horizontal(|ui| {
+        let width = (ui.available_width() - ui.spacing().item_spacing.x) * 0.5;
+        let count = entries.iter().filter(|e| active_layer(e)).count();
+        for (label, value) in [
+            ("Browse".to_string(), false),
+            (format!("Active · {count}"), true),
+        ] {
+            if ui
+                .add_sized(
+                    vec2(width, 34.0),
+                    egui::Button::new(label)
+                        .selected(active_only == value)
+                        .corner_radius(9.0),
+                )
+                .clicked()
+            {
+                active_only = value;
+                category = None;
+            }
+        }
+    });
+    ui.add_space(10.0);
+    let order: Vec<_> = matches(entries, query)
+        .into_iter()
+        .filter(|i| !active_only || active_layer(&entries[*i]))
+        .collect();
     // Enter runs the top-ranked match. Type-and-Enter was the whole point of the command palette
     // this drawer replaced; without it the search box is a filter, not a launcher.
     if !query.is_empty() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
@@ -406,7 +554,37 @@ pub(crate) fn body(
         .show(ui, |ui| {
             if order.is_empty() {
                 ui.add_space(8.0);
-                ui.weak("No matches.");
+                ui.weak(if active_only && query.is_empty() {
+                    "No active layers."
+                } else {
+                    "No matches."
+                });
+                return;
+            }
+            if active_only {
+                for cat in CATEGORIES {
+                    let group: Vec<_> = order
+                        .iter()
+                        .copied()
+                        .filter(|i| entries[*i].category == cat)
+                        .collect();
+                    if group.is_empty() {
+                        continue;
+                    }
+                    ui.add_space(6.0);
+                    ui.label(
+                        RichText::new(category_name(cat))
+                            .size(11.0)
+                            .color(ui.visuals().weak_text_color()),
+                    );
+                    for i in group {
+                        if let Some(action) = active_row(ui, &entries[i], accent) {
+                            chosen = Some(action);
+                        }
+                    }
+                    ui.separator();
+                }
+                after_radar(ui);
                 return;
             }
             if !query.is_empty() {
@@ -425,9 +603,92 @@ pub(crate) fn body(
                 }
                 return;
             }
-            // Not searching: one collapsed group per category. Seven headers fit on screen at
-            // once, so the whole app is visible as an outline instead of a wall of controls.
-            for cat in CATEGORIES {
+            if category.is_none() {
+                let width = (ui.available_width() - 8.0) * 0.5;
+                let categories: Vec<_> = CATEGORIES
+                    .into_iter()
+                    .filter(|cat| entries.iter().any(|e| e.category == *cat))
+                    .collect();
+                for pair in categories.chunks(2) {
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 8.0;
+                        for cat in pair {
+                            let active = entries
+                                .iter()
+                                .filter(|e| e.category == *cat && e.on == Some(true))
+                                .count();
+                            if category_tile(ui, cat, active, width, accent).clicked() {
+                                category = Some((*cat).to_string());
+                            }
+                        }
+                    });
+                    ui.add_space(4.0);
+                }
+                ui.add_space(6.0);
+                if let Some(entry) = entries.iter().find(|e| {
+                    e.action == PaletteAction::ToggleOverlay(crate::app::OverlayToggle::Tracks)
+                }) {
+                    let on = entry.on == Some(true);
+                    egui::Frame::new()
+                        .fill(ui.visuals().faint_bg_color)
+                        .corner_radius(12.0)
+                        .inner_margin(10)
+                        .show(ui, |ui| {
+                            ui.horizontal(|ui| {
+                                ui.label(
+                                    RichText::new(egui_phosphor::regular::PATH)
+                                        .size(24.0)
+                                        .color(accent),
+                                );
+                                ui.vertical(|ui| {
+                                    ui.label(RichText::new("Storm tracks").size(14.0));
+                                    ui.label(
+                                        RichText::new("Projected cell movement")
+                                            .size(10.0)
+                                            .color(ui.visuals().weak_text_color()),
+                                    );
+                                });
+                                ui.with_layout(
+                                    egui::Layout::right_to_left(egui::Align::Center),
+                                    |ui| {
+                                        let icon = if on {
+                                            egui_phosphor::regular::TOGGLE_RIGHT
+                                        } else {
+                                            egui_phosphor::regular::TOGGLE_LEFT
+                                        };
+                                        if ui
+                                            .add(
+                                                egui::Button::new(
+                                                    RichText::new(icon).size(32.0).color(if on {
+                                                        accent
+                                                    } else {
+                                                        ui.visuals().weak_text_color()
+                                                    }),
+                                                )
+                                                .frame(false)
+                                                .min_size(vec2(40.0, 36.0)),
+                                            )
+                                            .named_toggle("Projected storm tracks", on)
+                                            .clicked()
+                                        {
+                                            chosen = Some(entry.action);
+                                        }
+                                    },
+                                );
+                            });
+                        });
+                }
+                return;
+            }
+            let selected = category.clone().unwrap();
+            if ui
+                .button(format!("‹  {}", category_name(&selected)))
+                .clicked()
+            {
+                category = None;
+            }
+            ui.add_space(6.0);
+            for cat in CATEGORIES.into_iter().filter(|cat| *cat == selected) {
                 let mut in_cat: Vec<usize> = order
                     .iter()
                     .copied()
@@ -443,55 +704,30 @@ pub(crate) fn body(
                     (dragged.unwrap_or(usize::MAX), !entries[*i].common)
                 });
                 let seq: Vec<String> = in_cat.iter().map(|i| entries[*i].label.clone()).collect();
-                let active = in_cat
-                    .iter()
-                    .filter(|i| entries[**i].on == Some(true))
-                    .count();
-                let status = if active == 0 {
-                    String::new()
-                } else {
-                    format!("  ·  {active} on")
-                };
-                let head = RichText::new(format!(
-                    "{}  {}{}",
-                    category_glyph(cat),
-                    category_name(cat),
-                    status
-                ))
-                .size(13.0)
-                .strong();
-                egui::CollapsingHeader::new(head)
-                    .id_salt(("cat", cat))
-                    .default_open(false)
-                    .show_unindented(ui, |ui| {
-                        for i in in_cat {
-                            let Hit {
-                                clicked,
-                                explain,
-                                resp,
-                            } = row(ui, &entries[i], accent, true);
-                            if clicked {
-                                chosen = Some(entries[i].action);
-                            }
-                            if let Some(t) = explain {
-                                chosen = Some(PaletteAction::Explain(t));
-                            }
-                            // Insertion line above the row the pointer is over, so a drop lands
-                            // where the preview says it will.
-                            if resp.dnd_hover_payload::<String>().is_some() {
-                                let r = resp.rect;
-                                ui.painter().hline(
-                                    r.x_range(),
-                                    r.top() - 1.0,
-                                    Stroke::new(2.0, accent),
-                                );
-                            }
-                            if let Some(drag) = resp.dnd_release_payload::<String>() {
-                                moved = Some(((*drag).clone(), entries[i].label.clone()));
-                            }
-                            ui.add_space(2.0);
-                        }
-                    });
+                for i in in_cat {
+                    let Hit {
+                        clicked,
+                        explain,
+                        resp,
+                    } = row(ui, &entries[i], accent, true);
+                    if clicked {
+                        chosen = Some(entries[i].action);
+                    }
+                    if let Some(t) = explain {
+                        chosen = Some(PaletteAction::Explain(t));
+                    }
+                    // Insertion line above the row the pointer is over, so a drop lands
+                    // where the preview says it will.
+                    if resp.dnd_hover_payload::<String>().is_some() {
+                        let r = resp.rect;
+                        ui.painter()
+                            .hline(r.x_range(), r.top() - 1.0, Stroke::new(2.0, accent));
+                    }
+                    if let Some(drag) = resp.dnd_release_payload::<String>() {
+                        moved = Some(((*drag).clone(), entries[i].label.clone()));
+                    }
+                    ui.add_space(2.0);
+                }
                 // The knobs for the products right above them, not at the bottom of the panel:
                 // a threshold or a forecast hour is read together with the layer it belongs to.
                 if cat == "Radar" {
@@ -509,6 +745,8 @@ pub(crate) fn body(
             }
         });
     fade_out_bottom(ui, &out);
+    ui.ctx()
+        .data_mut(|d| d.insert_temp(nav_id, (active_only, category)));
     chosen
 }
 
@@ -546,6 +784,104 @@ fn fade_out_bottom(ui: &mut egui::Ui, out: &egui::scroll_area::ScrollAreaOutput<
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn active_list_excludes_commands_and_off_contours() {
+        use crate::app::{ContourKind, OverlayToggle as T};
+        let mut entry = PaletteEntry {
+            label: "test".into(),
+            category: "Reference",
+            action: PaletteAction::ToggleOverlay(T::RadarSites),
+            on: Some(true),
+            desc: "",
+            common: true,
+            key: None,
+            health: None,
+        };
+        assert!(active_layer(&entry));
+        for action in [
+            PaletteAction::SetContours(ContourKind::Off),
+            PaletteAction::TogglePanel,
+            PaletteAction::SetPanes(1),
+            PaletteAction::ToggleOverlay(T::AlertPanel),
+            PaletteAction::ToggleOverlay(T::LinkCameras),
+            PaletteAction::ToggleOverlay(T::MiniLoop),
+        ] {
+            entry.action = action;
+            assert!(!active_layer(&entry), "{action:?}");
+        }
+        entry.action = PaletteAction::ToggleOverlay(T::Tracks);
+        entry.on = Some(false);
+        assert!(!active_layer(&entry));
+        entry.on = Some(true);
+        assert!(active_layer(&entry));
+    }
+
+    #[test]
+    fn floating_navigation_keeps_categories_active_layers_and_search_reachable() {
+        let entries: Vec<_> = CATEGORIES
+            .iter()
+            .map(|cat| PaletteEntry {
+                label: format!("{cat} layer"),
+                category: cat,
+                action: PaletteAction::ToggleOverlay(crate::app::OverlayToggle::RadarSites),
+                on: Some(*cat == "Radar"),
+                desc: "",
+                common: true,
+                key: None,
+                health: None,
+            })
+            .collect();
+        let render = |active: bool, category: Option<&str>, search: &str| {
+            let ctx = egui::Context::default();
+            let mut query = search.to_string();
+            let mut pref = Vec::new();
+            let mut text = Vec::new();
+            for _ in 0..3 {
+                let out = ctx.run_ui(egui::RawInput::default(), |ui| {
+                    ui.set_width(308.0);
+                    let id = ui.make_persistent_id("layer_navigation");
+                    ui.ctx()
+                        .data_mut(|d| d.insert_temp(id, (active, category.map(str::to_string))));
+                    body(
+                        ui,
+                        &entries,
+                        &mut query,
+                        Color32::WHITE,
+                        700.0,
+                        false,
+                        &mut pref,
+                        |_| {},
+                    );
+                });
+                text = out
+                    .shapes
+                    .iter()
+                    .filter_map(|s| match &s.shape {
+                        egui::Shape::Text(t) => Some(t.galley.job.text.clone()),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>();
+            }
+            text
+        };
+        let browse = render(false, None, "");
+        for cat in CATEGORIES {
+            assert!(
+                browse.iter().any(|s| s == category_name(cat)),
+                "missing {cat}: {browse:?}"
+            );
+            assert!(render(false, Some(cat), "")
+                .iter()
+                .any(|s| s == &format!("{cat} layer")));
+        }
+        let active = render(true, None, "");
+        assert!(active.iter().any(|s| s == "Radar layer"));
+        assert!(!active.iter().any(|s| s == "National layer"));
+        assert!(render(false, Some("Radar"), "National")
+            .iter()
+            .any(|s| s == "National layer"));
+    }
 
     #[test]
     fn focused_search_scrolls_above_keyboard() {

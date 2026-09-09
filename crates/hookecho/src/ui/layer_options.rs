@@ -109,7 +109,57 @@ pub(crate) fn show(
     ]
     .iter()
     .any(|l| on.contains(l));
-    if global_on {
+    let sections = [
+        ("Storm cells", filters.show_cells),
+        ("Alerts", filters.show_alerts),
+        ("Tropical", *show_tropical),
+        ("Outlooks", true),
+        ("Environment", true),
+        ("Global forecast", global_on),
+        ("Model comparison", on.contains(&FL::ModelDiff)),
+        ("Lightning", show_glm || on.contains(&FL::Lightning)),
+        ("Spotters", show_spotters),
+        ("Rotation tracks", on.contains(&FL::Rotation)),
+        ("Hail swaths", on.contains(&FL::HailSwath)),
+        ("Radar mosaic", on.contains(&FL::Mosaic)),
+        ("Future radar", on.contains(&FL::Hrrr)),
+        ("Nowcast", filters.show_nowcast),
+        ("Snowfall", on.contains(&FL::SnowAnalysis)),
+        (
+            "Derived radar",
+            [FL::VilLocal, FL::VilDensity, FL::EtopLocal]
+                .iter()
+                .any(|l| on.contains(l)),
+        ),
+        ("Detectors", filters.show_tbss || filters.show_zdr_columns),
+        (
+            "Level 3 grids",
+            [FL::Vil, FL::EchoTops, FL::Hca]
+                .iter()
+                .any(|l| on.contains(l)),
+        ),
+    ];
+    let id = ui.id().with("layer_settings_section");
+    let remembered = ui.ctx().data_mut(|d| d.get_temp::<&'static str>(id));
+    let mut section = remembered
+        .filter(|name| sections.iter().any(|(s, on)| s == name && *on))
+        .unwrap_or(sections.iter().find(|(_, on)| *on).unwrap().0);
+    ui.spacing_mut().item_spacing.y = 8.0;
+    egui::ComboBox::from_id_salt("settings_for")
+        .width(ui.available_width() - 8.0)
+        .selected_text(section)
+        .show_ui(ui, |ui| {
+            for (name, visible) in sections {
+                if visible {
+                    ui.selectable_value(&mut section, name, name);
+                }
+            }
+        })
+        .response
+        .on_hover_text("Choose a layer to adjust");
+    ui.ctx().data_mut(|d| d.insert_temp(id, section));
+    ui.add_space(4.0);
+    if section == "Global forecast" && global_on {
         ui.horizontal(|ui| {
             ui.label("Global model:");
             for m in [
@@ -132,7 +182,7 @@ pub(crate) fn show(
         });
     }
 
-    if on.contains(&FL::ModelDiff) {
+    if section == "Model comparison" && on.contains(&FL::ModelDiff) {
         let (a, b) = diff_field.pair();
         ui.horizontal_wrapped(|ui| {
             ui.label("Difference:");
@@ -159,7 +209,7 @@ pub(crate) fn show(
         }
     }
 
-    if on.contains(&FL::Lightning) {
+    if section == "Lightning" && on.contains(&FL::Lightning) {
         ui.horizontal(|ui| {
             ui.label("CG density window:");
             for m in [1u16, 5, 15, 30] {
@@ -171,14 +221,13 @@ pub(crate) fn show(
         ui.weak("NLDN = cloud-to-ground only; GLM = total lightning (optical, in-cloud included).");
     }
 
-    if show_glm {
-        changed |= ui
-            .checkbox(glm_goes_west, "Include GOES-West")
+    if section == "Lightning" && show_glm {
+        changed |= crate::ui::style::toggle(ui, glm_goes_west, "Include GOES-West")
             .on_hover_text("Adds GOES-18 so the Pacific and the west coast are covered too")
             .changed();
     }
 
-    if show_spotters {
+    if section == "Spotters" && show_spotters {
         ui.horizontal(|ui| {
             ui.label("Spotters within:");
             ui.add(
@@ -192,132 +241,167 @@ pub(crate) fn show(
         });
     }
 
-    // SPC outlook: a four-way day selector whose own "Off" is the off-state, so it can't wear the
-    // registry's ON/OFF pill. It lives here rather than in the layer list.
-    // Days 4–8 are SPC's experimental severe probability, one layer per day; the row wraps
-    // rather than growing a second control for "which kind of day this is".
-    ui.horizontal_wrapped(|ui| {
-        ui.label("SPC Outlook:");
-        for day in 0u8..=8 {
-            let label = if day == 0 {
+    if section == "Outlooks" {
+        // SPC outlook: a four-way day selector whose own "Off" is the off-state, so it can't wear the
+        // registry's ON/OFF pill. It lives here rather than in the layer list.
+        // Days 4–8 are SPC's experimental severe probability, one layer per day; the row wraps
+        // rather than growing a second control for "which kind of day this is".
+        ui.label("SPC Outlook");
+        egui::ComboBox::from_id_salt("outlook_day")
+            .width(ui.available_width() - 8.0)
+            .selected_text(if filters.outlook_day == 0 {
                 "Off".to_string()
             } else {
-                format!("D{day}")
-            };
-            changed |= ui
-                .selectable_value(&mut filters.outlook_day, day, label)
-                .changed();
+                format!("Day {}", filters.outlook_day)
+            })
+            .show_ui(ui, |ui| {
+                for day in 0u8..=8 {
+                    let label = if day == 0 {
+                        "Off".to_string()
+                    } else {
+                        format!("Day {day}")
+                    };
+                    changed |= ui
+                        .selectable_value(&mut filters.outlook_day, day, label)
+                        .changed();
+                }
+            });
+        // Day-1 hazard sub-select (probabilistic tornado/wind/hail); Days 2–3 are categorical only.
+        if filters.outlook_day == 1 {
+            ui.indent("outlook_kind", |ui| {
+                ui.label("Hazard");
+                egui::ComboBox::from_id_salt("outlook_hazard")
+                    .width(ui.available_width() - 8.0)
+                    .selected_text(filters.outlook_kind.label())
+                    .show_ui(ui, |ui| {
+                        for kind in wxdata::spc::OutlookKind::ALL {
+                            if ui
+                                .selectable_value(&mut filters.outlook_kind, kind, kind.label())
+                                .changed()
+                            {
+                                actions.outlook_kind_changed = true;
+                                changed = true;
+                            }
+                        }
+                    });
+            });
         }
-    });
-    // Day-1 hazard sub-select (probabilistic tornado/wind/hail); Days 2–3 are categorical only.
-    if filters.outlook_day == 1 {
-        ui.indent("outlook_kind", |ui| {
-            ui.horizontal(|ui| {
-                ui.label("Hazard:");
-                for kind in wxdata::spc::OutlookKind::ALL {
+
+        // Excessive Rainfall Outlook: the flood half of the day, directly under the severe half.
+        ui.label("Rainfall outlook");
+        egui::ComboBox::from_id_salt("ero_day")
+            .width(ui.available_width() - 8.0)
+            .selected_text(if filters.ero_day == 0 {
+                "Off".to_string()
+            } else {
+                format!("Day {}", filters.ero_day)
+            })
+            .show_ui(ui, |ui| {
+                for day in 0u8..=3 {
+                    let label = if day == 0 {
+                        "Off".to_string()
+                    } else {
+                        format!("Day {day}")
+                    };
                     if ui
-                        .selectable_value(&mut filters.outlook_kind, kind, kind.label())
+                        .selectable_value(&mut filters.ero_day, day, label)
                         .changed()
                     {
-                        actions.outlook_kind_changed = true;
+                        actions.ero_day_changed = true;
                         changed = true;
                     }
                 }
             });
-        });
+
+        // Winter Storm Severity Index: same off-plus-three-days shape as the outlook selector.
+        ui.label("Winter impacts");
+        egui::ComboBox::from_id_salt("wssi_day")
+            .width(ui.available_width() - 8.0)
+            .selected_text(if filters.wssi_day == 0 {
+                "Off".to_string()
+            } else {
+                format!("Day {}", filters.wssi_day)
+            })
+            .show_ui(ui, |ui| {
+                for day in 0u8..=3 {
+                    let label = if day == 0 {
+                        "Off".to_string()
+                    } else {
+                        format!("Day {day}")
+                    };
+                    if ui
+                        .selectable_value(&mut filters.wssi_day, day, label)
+                        .changed()
+                    {
+                        actions.wssi_day_changed = true;
+                        changed = true;
+                    }
+                }
+            });
     }
 
-    // Excessive Rainfall Outlook: the flood half of the day, directly under the severe half.
-    ui.horizontal(|ui| {
-        ui.label("Rainfall outlook:");
-        for day in 0u8..=3 {
-            let label = if day == 0 {
-                "Off".to_string()
-            } else {
-                format!("D{day}")
-            };
-            if ui
-                .selectable_value(&mut filters.ero_day, day, label)
-                .changed()
-            {
-                actions.ero_day_changed = true;
-                changed = true;
-            }
-        }
-    });
-
-    // Winter Storm Severity Index: same off-plus-three-days shape as the outlook selector.
-    ui.horizontal(|ui| {
-        ui.label("Winter impacts:");
-        for day in 0u8..=3 {
-            let label = if day == 0 {
-                "Off".to_string()
-            } else {
-                format!("D{day}")
-            };
-            if ui
-                .selectable_value(&mut filters.wssi_day, day, label)
-                .changed()
-            {
-                actions.wssi_day_changed = true;
-                changed = true;
-            }
-        }
-    });
-
-    // Where the environment fields and contours come from. RAP f00 is an analysis of what the
-    // atmosphere is doing now (assimilated obs, 13 km) rather than an HRRR forecast at hour zero —
-    // the thing people mean by "mesoanalysis". Labelled honestly, coarser grid and all.
-    let env_before = *env_model;
-    ui.horizontal(|ui| {
-        ui.label("Environment:");
-        ui.selectable_value(env_model, wxdata::hrrr::Model::Hrrr, "HRRR 3 km")
-            .on_hover_text("HRRR forecast model, 3 km grid (analysis at F+0)");
-        ui.selectable_value(env_model, wxdata::hrrr::Model::Rap, "RAP analysis")
+    if section == "Environment" {
+        // Where the environment fields and contours come from. RAP f00 is an analysis of what the
+        // atmosphere is doing now (assimilated obs, 13 km) rather than an HRRR forecast at hour zero —
+        // the thing people mean by "mesoanalysis". Labelled honestly, coarser grid and all.
+        let env_before = *env_model;
+        ui.label("Model");
+        egui::ComboBox::from_id_salt("environment_model")
+            .width(ui.available_width() - 8.0)
+            .selected_text(env_model.label())
+            .show_ui(ui, |ui| {
+                ui.selectable_value(env_model, wxdata::hrrr::Model::Hrrr, "HRRR 3 km")
+                    .on_hover_text("HRRR forecast model, 3 km grid (analysis at F+0)");
+                ui.selectable_value(env_model, wxdata::hrrr::Model::Rap, "RAP analysis")
             .on_hover_text(
                 "RAP f00 observed analysis, 13 km grid — coarser, but what is, not what's forecast",
             );
-        ui.selectable_value(env_model, wxdata::hrrr::Model::NamNest, "NAM 3 km nest")
+                ui.selectable_value(env_model, wxdata::hrrr::Model::NamNest, "NAM 3 km nest")
             .on_hover_text(
                 "The NAM's 3 km CONUS nest — a second convection-allowing opinion on its own \
                  dynamical core, run every six hours",
             );
-    });
-    if *env_model != env_before {
-        // Both sources feed CAPE/SRH and the contours; drop their clocks so the next frame refetches.
-        for l in [FL::Cape, FL::Srh] {
-            if let Some(s) = fields.get_mut(&l) {
-                s.last_fetch = None;
-            }
-        }
-        // STP needs an LCL height the RAP file doesn't carry (see wxdata::severe::fetch_grid).
-        if !stp_source(*env_model) && *contour_kind == crate::app::ContourKind::Stp {
-            *contour_kind = crate::app::ContourKind::Off;
-        }
-        changed = true;
-    }
-
-    // Model contours (isolines) — MSLP / 2 m temp / dewpoint / SB-CAPE / 0-3 km SRH.
-    egui::ComboBox::from_label("Contours")
-        .selected_text(contour_kind.label())
-        .show_ui(ui, |ui| {
-            for k in crate::app::ContourKind::ALL {
-                if k == crate::app::ContourKind::Stp && !stp_source(*env_model) {
-                    continue; // no LCL height in these files
+            });
+        if *env_model != env_before {
+            // Both sources feed CAPE/SRH and the contours; drop their clocks so the next frame refetches.
+            for l in [FL::Cape, FL::Srh] {
+                if let Some(s) = fields.get_mut(&l) {
+                    s.last_fetch = None;
                 }
-                ui.selectable_value(contour_kind, k, k.label());
             }
-        })
-        .response
-        .on_hover_text("Draw a surface field as labeled contour lines (f00)");
+            // STP needs an LCL height the RAP file doesn't carry (see wxdata::severe::fetch_grid).
+            if !stp_source(*env_model) && *contour_kind == crate::app::ContourKind::Stp {
+                *contour_kind = crate::app::ContourKind::Off;
+            }
+            changed = true;
+        }
+
+        // Model contours (isolines) — MSLP / 2 m temp / dewpoint / SB-CAPE / 0-3 km SRH.
+        ui.label("Contours");
+        egui::ComboBox::from_id_salt("environment_contours")
+            .width(ui.available_width() - 8.0)
+            .selected_text(contour_kind.label())
+            .show_ui(ui, |ui| {
+                for k in crate::app::ContourKind::ALL {
+                    if k == crate::app::ContourKind::Stp && !stp_source(*env_model) {
+                        continue; // no LCL height in these files
+                    }
+                    ui.selectable_value(contour_kind, k, k.label());
+                }
+            })
+            .response
+            .on_hover_text("Draw a surface field as labeled contour lines (f00)");
+    }
 
     // Everything below belongs to a layer that has to be on for it to mean anything.
     let header = |ui: &mut egui::Ui, text: &str| {
-        ui.add_space(4.0);
-        ui.label(egui::RichText::new(text).small().strong());
+        if text != section && !(section == "Alerts" && text == "NWS Alerts") {
+            ui.add_space(4.0);
+            ui.label(egui::RichText::new(text).small().strong());
+        }
     };
 
-    if on.contains(&FL::Rotation) {
+    if section == "Rotation tracks" && on.contains(&FL::Rotation) {
         header(ui, "Rotation tracks");
         ui.horizontal(|ui| {
             ui.label("Window:");
@@ -336,7 +420,7 @@ pub(crate) fn show(
         });
     }
 
-    if on.contains(&FL::HailSwath) {
+    if section == "Hail swaths" && on.contains(&FL::HailSwath) {
         header(ui, "Hail swaths");
         ui.horizontal(|ui| {
             ui.label("Window:");
@@ -358,14 +442,14 @@ pub(crate) fn show(
         });
     }
 
-    if on.contains(&FL::Mosaic) {
+    if section == "Radar mosaic" && on.contains(&FL::Mosaic) {
         header(ui, "Radar mosaic");
         if let Some(m) = mosaic {
             ui.weak(m);
         }
     }
 
-    if on.contains(&FL::Hrrr) {
+    if section == "Future radar" && on.contains(&FL::Hrrr) {
         header(ui, "Future radar");
         ui.add(egui::Slider::new(hrrr_fcst_hour, 0..=18).text("F+ hr"));
         match hrrr_valid {
@@ -385,7 +469,7 @@ pub(crate) fn show(
         }
     }
 
-    if on.contains(&FL::Cape) {
+    if section == "Environment" && on.contains(&FL::Cape) {
         header(ui, "CAPE");
         ui.horizontal(|ui| {
             ui.label("Parcel:");
@@ -399,7 +483,7 @@ pub(crate) fn show(
         });
     }
 
-    if on.contains(&FL::Srh) {
+    if section == "Environment" && on.contains(&FL::Srh) {
         header(ui, "Storm-relative helicity");
         ui.horizontal(|ui| {
             ui.label("Depth:");
@@ -413,15 +497,15 @@ pub(crate) fn show(
         });
     }
 
-    if filters.show_cells {
+    if section == "Storm cells" && filters.show_cells {
         header(ui, "Storm cells");
-        ui.checkbox(&mut filters.show_tracks, "SCIT forecast tracks")
+        crate::ui::style::toggle(ui, &mut filters.show_tracks, "Forecast tracks")
             .on_hover_text("15/30/45/60-min projected storm positions");
-        ui.checkbox(&mut filters.show_arrival_cones, "Arrival-time cones")
+        crate::ui::style::toggle(ui, &mut filters.show_arrival_cones, "Arrival-time cones")
             .on_hover_text("Project cell motion forward + ETA to your saved markers");
     }
 
-    if filters.show_nowcast {
+    if section == "Nowcast" && filters.show_nowcast {
         header(ui, "Nowcast");
         ui.horizontal(|ui| {
             ui.label("Lead:");
@@ -438,36 +522,40 @@ pub(crate) fn show(
         }
     }
 
-    if filters.show_alerts {
+    if section == "Alerts" && filters.show_alerts {
         header(ui, "NWS Alerts");
         for cat in Category::ALL {
-            changed |= ui
-                .checkbox(&mut filters.alert_cats[cat.index()], cat.label())
-                .changed();
+            changed |=
+                crate::ui::style::toggle(ui, &mut filters.alert_cats[cat.index()], cat.label())
+                    .changed();
         }
     }
 
-    if *show_tropical {
+    if section == "Tropical" && *show_tropical {
         header(ui, "Tropical");
-        ui.horizontal(|ui| {
-            ui.label("Wind field:");
-            changed |= ui.selectable_value(tropical_wind_kt, None, "Off").changed();
-            for kt in [34u8, 50, 64] {
-                changed |= ui
-                    .selectable_value(tropical_wind_kt, Some(kt), format!("{kt} kt"))
-                    .on_hover_text("How far out the forecast wind of that strength reaches")
-                    .changed();
-            }
-        });
-        changed |= ui
-            .checkbox(tropical_surge, "Potential storm surge")
+        ui.label("Wind field");
+        egui::ComboBox::from_id_salt("tropical_wind")
+            .width(ui.available_width() - 8.0)
+            .selected_text(
+                tropical_wind_kt.map_or_else(|| "Off".to_string(), |kt| format!("{kt} kt")),
+            )
+            .show_ui(ui, |ui| {
+                changed |= ui.selectable_value(tropical_wind_kt, None, "Off").changed();
+                for kt in [34u8, 50, 64] {
+                    changed |= ui
+                        .selectable_value(tropical_wind_kt, Some(kt), format!("{kt} kt"))
+                        .on_hover_text("How far out the forecast wind of that strength reaches")
+                        .changed();
+                }
+            });
+        changed |= crate::ui::style::toggle(ui, tropical_surge, "Potential storm surge")
             .on_hover_text(
                 "How deep water could get above ground if the peak surge arrives at high tide",
             )
             .changed();
     }
 
-    if on.contains(&FL::SnowAnalysis) {
+    if section == "Snowfall" && on.contains(&FL::SnowAnalysis) {
         header(ui, "Snowfall analysis");
         ui.horizontal(|ui| {
             ui.label("Window:");
@@ -479,9 +567,10 @@ pub(crate) fn show(
         });
     }
 
-    if [FL::VilLocal, FL::VilDensity, FL::EtopLocal]
-        .iter()
-        .any(|l| on.contains(l))
+    if section == "Derived radar"
+        && [FL::VilLocal, FL::VilDensity, FL::EtopLocal]
+            .iter()
+            .any(|l| on.contains(l))
     {
         header(ui, "Derived products");
         ui.horizontal(|ui| {
@@ -496,7 +585,7 @@ pub(crate) fn show(
     // Detector thresholds. Each block only appears with its own detector on, and the defaults are
     // what the detectors shipped with — the reset button is there because a slider you can't get
     // back from is worse than no slider.
-    if filters.show_tbss {
+    if section == "Detectors" && filters.show_tbss {
         header(ui, "Hail spike (TBSS)");
         ui.add(
             egui::Slider::new(&mut detectors.tbss_core_dbz, 50.0..=70.0)
@@ -505,7 +594,7 @@ pub(crate) fn show(
         )
         .on_hover_text("How strong the core must be before a spike behind it is looked for");
     }
-    if filters.show_zdr_columns {
+    if section == "Detectors" && filters.show_zdr_columns {
         header(ui, "ZDR columns");
         ui.add(
             egui::Slider::new(&mut detectors.zdr_min_db, 0.5..=3.0)
@@ -518,7 +607,7 @@ pub(crate) fn show(
                 .suffix(" km"),
         );
     }
-    if show_glm {
+    if section == "Lightning" && show_glm {
         header(ui, "Flash-extent density");
         ui.add(
             egui::Slider::new(&mut detectors.glm_fed_cell_deg, 0.02..=0.2)
@@ -533,15 +622,17 @@ pub(crate) fn show(
         );
         ui.weak("Takes effect on the next flash-density refresh.");
     }
-    if (filters.show_tbss || filters.show_zdr_columns || show_glm)
+    if (section == "Detectors" || section == "Lightning")
+        && (filters.show_tbss || filters.show_zdr_columns || show_glm)
         && ui.button("Reset detector thresholds").clicked()
     {
         *detectors = crate::settings::DetectorTuning::default();
     }
 
-    if [FL::Vil, FL::EchoTops, FL::Hca]
-        .iter()
-        .any(|l| on.contains(l))
+    if section == "Level 3 grids"
+        && [FL::Vil, FL::EchoTops, FL::Hca]
+            .iter()
+            .any(|l| on.contains(l))
     {
         header(ui, "Level 3 grids");
         ui.weak(format!("Site: {}", l3grid_site.unwrap_or("—")));

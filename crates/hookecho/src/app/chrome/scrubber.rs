@@ -25,7 +25,7 @@ impl HookEchoApp {
             .unwrap_or_else(|| "no site".to_string());
         let age = self.views[self.active].volume.as_ref().map(|v| {
             let secs = (Utc::now() - v.time).num_seconds().max(0);
-            format!("Latest scan \u{b7} {} ago", humanize(secs))
+            format!("Scan {} ago", humanize(secs))
         });
         let loading = self.views[self.active].loading;
         // Which mechanism is actually feeding the pane: the sweep-by-sweep chunk stream, or the
@@ -60,30 +60,26 @@ impl HookEchoApp {
         // Edited through a local so the pill closure keeps its single `&mut self.views` borrow.
         let mut loop_frames = self.settings.live_loop_frames;
         let narrow = self.chrome_rect.width() < 600.0;
-        let compact_live = self.views[self.active].timeline.following;
+        let compact_live = narrow;
         // Where the scrubber lands, for the tour's spotlight (same reason: no `self` in there).
         let mut scrub_rect = None;
         // Wide enough for the track to be worth scrubbing, never so wide it spans a 4K map — and
         // never wider than the screen, which on a phone the 420 pt floor would otherwise be.
         let width = (self.chrome_rect.width() - 160.0)
-            .clamp(420.0, if compact_live { 600.0 } else { 900.0 })
+            .clamp(420.0, if narrow { 420.0 } else { 760.0 })
             .min(self.chrome_rect.width() - 16.0);
         // The phone's pill drops the two extras: the readouts fit a desktop row, not a 400 pt one,
         // and rain arrival has its own chip lane.
-        let (dvr, rain) = if narrow {
-            (0, None)
-        } else {
-            (dvr, rain)
-        };
+        let (dvr, rain) = if narrow { (0, None) } else { (dvr, rain) };
         let live_window = self.views[self.active].timeline.live_window;
         egui::Area::new(egui::Id::new("scrubber"))
             .constrain_to(self.chrome_rect)
             .anchor(
                 egui::Align2::CENTER_BOTTOM,
-                egui::vec2(0.0, crate::ui::style::LANE_BOTTOM_CHIP),
+                egui::vec2(0.0, if narrow { crate::ui::style::LANE_BOTTOM_CHIP } else { -24.0 }),
             )
             .show(ctx, |ui| {
-                crate::ui::style::glass(ui, 238)
+                crate::ui::style::glass(ui, 252)
                     .inner_margin(egui::Margin::symmetric(
                         if compact_live { 10 } else { 12 },
                         if compact_live { 4 } else { 9 },
@@ -97,6 +93,7 @@ impl HookEchoApp {
                 if t.slot_count() > 0 {
                     scrub_rect = Some(track(ui, t, tz, accent, live_window, compact_live));
                 }
+                if !narrow { ui.add_space(4.0); ui.separator(); }
                 let row = ui.horizontal(|ui| {
                     // The phone says the site in its search pill; a second copy here is 60 pt of
                     // a 400 pt row spent saying it twice, and the clock loses that argument.
@@ -109,19 +106,21 @@ impl HookEchoApp {
                         );
                     }
                     let btn = |ui: &mut egui::Ui, glyph: &str, on: bool, name: &str| {
+                        let primary = name == "Play" || name == "Pause";
                         let fg = if on {
                             accent
                         } else {
                             egui::Color32::from_gray(225)
                         };
                         ui.add(
-                            egui::Button::new(egui::RichText::new(glyph).size(16.0).color(fg))
+                            egui::Button::new(egui::RichText::new(glyph).size(if primary && !narrow { 26.0 } else { 16.0 }).color(fg))
                                 .min_size(egui::vec2(
-                                    if compact_live { 24.0 } else { 30.0 },
-                                    if compact_live { 24.0 } else { 30.0 },
+                                    if narrow { 28.0 } else if primary { 48.0 } else { 32.0 },
+                                    if narrow { 28.0 } else if primary { 48.0 } else { 32.0 },
                                 ))
-                                .fill(egui::Color32::TRANSPARENT)
-                                .stroke(egui::Stroke::NONE),
+                                .fill(if primary && !narrow { accent.gamma_multiply(0.28) } else { egui::Color32::TRANSPARENT })
+                                .corner_radius(24.0)
+                                .stroke(if primary && !narrow { egui::Stroke::new(1.0, accent) } else { egui::Stroke::NONE }),
                         )
                         .named_toggle(name, on)
                         .clicked()
@@ -141,6 +140,49 @@ impl HookEchoApp {
                     if btn(ui, ph::SKIP_FORWARD, false, "Next frame") {
                         t.step(1);
                     }
+                    let clock_size = egui::vec2(if narrow { 100.0 } else { (ui.available_width() - 210.0).max(170.0) }, if narrow { 28.0 } else { 54.0 });
+                    ui.allocate_ui_with_layout(
+                        clock_size,
+                        egui::Layout::left_to_right(egui::Align::Center).with_main_align(egui::Align::Center),
+                        |ui| {
+                    ui.set_min_size(clock_size);
+                    // The clock and status readouts share the broadcast row beneath the track.
+                    let observed = t.frames.len();
+                    if observed == 0 {
+                        ui.weak(if t.listing {
+                            "listing volumes\u{2026}"
+                        } else if archived {
+                            "(no volumes)"
+                        } else {
+                            "live only"
+                        });
+                    } else {
+                        let readout = match t.forecast_hour() {
+                            Some(h) => format!("F+{h}h"),
+                            // The transport, the badge, the clock and the age share one row, and
+                            // on a phone that leaves the clock about a hundred points —
+                            // "5:10:35 PM CDT" ran off the edge and under the age readout. When
+                            // the room is not there the seconds and the zone go first: a phone's
+                            // zone is the one it is standing in.
+                            None => t
+                                .current()
+                                .and_then(|id| id.date_time())
+                                .map(|d| match tz {
+                                    Some(tz) if narrow || ui.available_width() < 190.0 => {
+                                        d.with_timezone(&tz).format("%-I:%M %p").to_string()
+                                    }
+                                    _ => crate::timefmt::fmt_clock(d, tz, false),
+                                })
+                                .unwrap_or_default(),
+                        };
+                        ui.add_sized(clock_size, egui::Label::new(
+                            egui::RichText::new(readout)
+                                .size(if narrow { 15.0 } else { 22.0 })
+                                .strong()
+                                .color(egui::Color32::from_gray(238)),
+                        ));
+                    }
+                    });
                     // Live / archive badge: click to re-pin to the newest volume.
                     //
                     // Pinned to live but the newest volume is old means the site's feed has
@@ -149,7 +191,7 @@ impl HookEchoApp {
                     let (col, text, hint) = if t.following && fresh {
                         (
                             mobile::OMEGA_GREEN,
-                            "LIVE".to_string(),
+                            "Live".to_string(),
                             if streaming {
                                 "Following the newest volume, sweep by sweep (live stream)."
                             } else {
@@ -160,7 +202,7 @@ impl HookEchoApp {
                     } else if t.following {
                         (
                             egui::Color32::from_rgb(220, 180, 0),
-                            "STALE".to_string(),
+                            "Stale".to_string(),
                             "Following the newest volume, but this site has not produced one \
                              recently — its feed has stopped. The age next to the clock is how \
                              far behind it is.",
@@ -168,18 +210,18 @@ impl HookEchoApp {
                     } else {
                         (
                             egui::Color32::from_gray(150),
-                            if narrow { "ARCHIVE".to_string() } else { format!("ARCHIVE {}", t.date.format("%m/%d")) },
+                            if narrow { "Archive".to_string() } else { format!("Archive {}", t.date.format("%m/%d")) },
                             "Scrubbed to an archive day. Click to jump back to live.",
                         )
                     };
                     let badge = ui.add(
                         egui::Button::new(
-                            egui::RichText::new(text)
+                            egui::RichText::new(format!("● {text}"))
                                 .size(12.0)
                                 .strong()
-                                .color(egui::Color32::BLACK),
+                                .color(col),
                         )
-                        .fill(col)
+                        .fill(egui::Color32::TRANSPARENT)
                         .corner_radius(9.0),
                     )
                     .named(hint);
@@ -194,6 +236,25 @@ impl HookEchoApp {
                         .align(egui::RectAlign::TOP_START)
                         .show(|ui| {
                             ui.set_min_width(240.0);
+                        if dvr > 1 {
+                            ui.label(
+                                egui::RichText::new(format!("\u{27f2} {dvr}"))
+                                    .size(crate::ui::style::FONT_SM)
+                                    .color(egui::Color32::from_gray(150)),
+                            )
+                            .on_hover_text("Frames buffered in memory for instant replay (R)");
+                        }
+                        if let Some(r) = &rain {
+                            ui.label(
+                                egui::RichText::new(r)
+                                    .size(crate::ui::style::FONT_SM)
+                                    .color(egui::Color32::from_rgb(110, 180, 240)),
+                            )
+                            .on_hover_text(
+                                "Estimated from storm motion \u{2014} rough for backbuilding storms",
+                            );
+                        }
+
                             ui.horizontal(|ui| {
                                 ui.label("Date:");
                                 if ui.button(egui_phosphor::regular::CARET_LEFT).clicked() {
@@ -276,48 +337,11 @@ impl HookEchoApp {
                                 }
                             }
                         });
-                    // The clock and status readouts share the broadcast row beneath the track.
-                    let observed = t.frames.len();
-                    if observed == 0 {
-                        ui.weak(if t.listing {
-                            "listing volumes\u{2026}"
-                        } else if archived {
-                            "(no volumes)"
-                        } else {
-                            "live only"
-                        });
-                    } else {
-                        let readout = match t.forecast_hour() {
-                            Some(h) => format!("F+{h}h"),
-                            // The transport, the badge, the clock and the age share one row, and
-                            // on a phone that leaves the clock about a hundred points —
-                            // "5:10:35 PM CDT" ran off the edge and under the age readout. When
-                            // the room is not there the seconds and the zone go first: a phone's
-                            // zone is the one it is standing in.
-                            None => t
-                                .current()
-                                .and_then(|id| id.date_time())
-                                .map(|d| match tz {
-                                    Some(tz) if narrow || ui.available_width() < 190.0 => {
-                                        d.with_timezone(&tz).format("%-I:%M %p").to_string()
-                                    }
-                                    _ => crate::timefmt::fmt_clock(d, tz, true),
-                                })
-                                .unwrap_or_default(),
-                        };
-                        ui.label(
-                            egui::RichText::new(readout)
-                                .size(15.0)
-                                .strong()
-                                .monospace()
-                                .color(egui::Color32::from_gray(238)),
-                        );
-                    }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         let archive = ui
                             .add(
                                 egui::Button::new(
-                                    egui::RichText::new(ph::CALENDAR_DOTS)
+                                    egui::RichText::new(ph::DOTS_THREE)
                                         .size(18.0)
                                         .color(egui::Color32::from_gray(225)),
                                 )
@@ -352,24 +376,6 @@ impl HookEchoApp {
                                 egui::RichText::new("loading\u{2026}")
                                     .size(crate::ui::style::FONT_SM)
                                     .color(egui::Color32::from_gray(150)),
-                            );
-                        }
-                        if dvr > 1 {
-                            ui.label(
-                                egui::RichText::new(format!("\u{27f2} {dvr}"))
-                                    .size(crate::ui::style::FONT_SM)
-                                    .color(egui::Color32::from_gray(150)),
-                            )
-                            .on_hover_text("Frames buffered in memory for instant replay (R)");
-                        }
-                        if let Some(r) = &rain {
-                            ui.label(
-                                egui::RichText::new(r)
-                                    .size(crate::ui::style::FONT_SM)
-                                    .color(egui::Color32::from_rgb(110, 180, 240)),
-                            )
-                            .on_hover_text(
-                                "Estimated from storm motion \u{2014} rough for backbuilding storms",
                             );
                         }
                     });
@@ -527,7 +533,7 @@ fn track(
     p.circle_stroke(
         knob,
         knob_radius,
-        egui::Stroke::new(1.0, egui::Color32::BLACK),
+        egui::Stroke::new(1.0, egui::Color32::from_gray(230)),
     );
 
     // Click anywhere on the track, or drag the knob: both are the same "put the playhead here".

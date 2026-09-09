@@ -10,7 +10,7 @@ impl HookEchoApp {
             .health(&lane)
     }
 
-    fn radar_health(&self) -> SourceHealth {
+    pub(in crate::app) fn radar_health(&self) -> SourceHealth {
         let v = &self.views[self.active];
         let age = v.volume.as_ref().map(|volume| {
             (chrono::Utc::now() - volume.time)

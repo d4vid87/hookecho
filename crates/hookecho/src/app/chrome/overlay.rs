@@ -16,7 +16,7 @@ const PANEL_W: f32 = 332.0;
 const CONTROLS: egui::Vec2 = egui::vec2(-70.0, 44.0);
 const RIGHT_PANEL: egui::Vec2 = egui::vec2(-130.0, 44.0);
 /// What the scrubber pill needs along the bottom edge, plus a margin.
-const SCRUBBER_CLEARANCE: f32 = 84.0;
+const SCRUBBER_CLEARANCE: f32 = 144.0;
 /// How far above the bottom edge the phone's pane strip sits: over the scrubber pill, not on it.
 const PANE_STRIP_UP: f32 = 150.0;
 
@@ -76,6 +76,13 @@ impl HookEchoApp {
         let mut opts = ui::layer_options::UiActions::default();
         let mut focus_search = std::mem::take(&mut self.sidebar_focus_search);
         let mut alerts_tab = self.show_alert_panel;
+        let settings_id = egui::Id::new("panel_settings_page");
+        let mut settings_page =
+            ctx.data_mut(|d| d.get_temp::<Option<&'static str>>(settings_id).flatten());
+        if self.tour.wants_panel() {
+            settings_page = None;
+        }
+        let settings_page_was = settings_page;
         let (alert_count, _) = self.alert_badge();
         let bounds = self.view_bounds();
         let feats = self.active_alert_features().to_vec();
@@ -100,147 +107,204 @@ impl HookEchoApp {
         let sheets_layout = sheets(ctx);
         let mut sheet_close = false;
         let mut body = |ui: &mut egui::Ui| {
-            // One title and one way out. The previous brand + Data/Alerts tab row looked like
-            // three unrelated navigation systems before the actual layer controls even began.
-            ui.horizontal(|ui| {
-                ui.label(
-                    egui::RichText::new(if alerts_tab { "Alerts" } else { "Layers" })
-                        .size(crate::ui::style::FONT_LG)
-                        .strong(),
-                );
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if !phone()
-                        && ui
-                            .add(
-                                egui::Button::new(
-                                    egui::RichText::new(egui_phosphor::regular::X).size(14.0),
-                                )
-                                .fill(egui::Color32::TRANSPARENT)
-                                .stroke(egui::Stroke::NONE),
-                            )
-                            .named("Close this panel")
-                            .clicked()
-                    {
-                        hide = true;
-                    }
-                    let switch = if alerts_tab {
-                        format!("{}  Layers", egui_phosphor::regular::STACK)
-                    } else if alert_count == 0 {
-                        format!("{}  Alerts", egui_phosphor::regular::BELL)
+            if !alerts_tab && settings_page.is_none() {
+                self.product_section(ui, &mut opts);
+                ui.add_space(12.0);
+            }
+            crate::ui::style::glass(ui, 250).show(ui, |ui| {
+                if let Some(page) = settings_page.filter(|_| !alerts_tab) {
+                    let section_id = egui::Id::new("preferences_section");
+                    let section = if page == "Preferences" {
+                        ui.ctx()
+                            .data_mut(|d| d.get_temp::<&'static str>(section_id))
                     } else {
-                        format!("{}  Alerts  {alert_count}", egui_phosphor::regular::BELL)
+                        None
                     };
-                    if ui.small_button(switch).clicked() {
-                        alerts_tab = !alerts_tab;
-                    }
-                });
-            });
-            ui.add_space(6.0);
-            if alerts_tab {
-                alert_hit = ui::alert_panel::body(ui, &feats, bounds, &mut muted);
-                return;
-            }
-            self.product_section(ui, &mut opts);
-            ui.add_space(8.0);
-            // A drag rewrites the order in place, so persist it when it moves.
-            let order_was = self.settings.layer_order.clone();
-            chosen = ui::layers_panel::body(
-                ui,
-                &entries,
-                &mut query,
-                accent,
-                // Leave room for the disclosures under the tree, whatever the window
-                // height. In the sheet there is no height to read yet — it scrolls — so
-                // the tree takes half the screen and the rest scrolls past it.
-                if sheets_layout {
-                    chrome.height() * 0.5
-                } else {
-                    (ui.available_height() - 110.0).max(120.0)
-                },
-                std::mem::take(&mut focus_search),
-                &mut self.settings.layer_order,
-                |ui| {
-                    // Knobs for the layers that are already on, drawn between the Radar group
-                    // and the rest. Collapsed by default: the list is still the panel's job.
-                    egui::CollapsingHeader::new("Active layer settings")
-                        .default_open(false)
-                        .show(ui, |ui| {
-                            let glm_options = self.show_glm
-                                || self.views[self.active]
-                                    .fields_on
-                                    .contains(&crate::render::FieldLayer::GlmFed);
-                            crate::ui::layer_options::show(
-                                ui,
-                                &mut self.filters,
-                                &mut self.fields,
-                                &self.views[self.active].fields_on.clone(),
-                                &mut self.rotation_minutes,
-                                &mut self.hail_minutes,
-                                &mut self.hrrr_fcst_hour,
-                                self.hrrr_valid,
-                                tz,
-                                &mut self.env_cape_ml,
-                                &mut self.env_srh_km,
-                                &mut self.env_model,
-                                &mut self.contour_kind,
-                                &mut etop_dbz,
-                                &mut self.snow_hours,
-                                &self.show_tropical,
-                                &mut self.tropical_wind_kt,
-                                &mut self.tropical_surge,
-                                l3_site.as_deref(),
-                                &mut self.global_model,
-                                &mut self.global_fcst_hour,
-                                &mut self.diff_field,
-                                self.diff_valid.as_ref(),
-                                &mut self.settings.lightning_minutes,
-                                glm_options,
-                                &mut self.settings.glm_goes_west,
-                                self.show_spotters,
-                                &mut self.settings.spotter_range_km,
-                                &mut self.settings.detectors,
-                                Some(mosaic.as_str()),
-                                &mut opts,
-                            );
+                    ui.horizontal(|ui| {
+                        if ui
+                            .button(if section.is_some() {
+                                "‹ Back"
+                            } else {
+                                "‹ Layers"
+                            })
+                            .clicked()
+                        {
+                            if section.is_some() {
+                                ui.ctx().data_mut(|d| d.remove::<&'static str>(section_id));
+                            } else {
+                                settings_page = None;
+                            }
+                        }
+                        ui.label(
+                            egui::RichText::new(section.unwrap_or(page))
+                                .size(20.0)
+                                .strong(),
+                        );
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui
+                                .button(egui_phosphor::regular::X)
+                                .named("Close settings panel")
+                                .clicked()
+                            {
+                                hide = true;
+                            }
                         });
-                },
-            );
-            self.settings.etop_dbz = etop_dbz;
-            if self.settings.layer_order != order_was {
-                self.settings.save();
-            }
-            // Place search folds in here rather than keeping a pill of its own: action
-            // matches rank first, and this row is the explicit "I meant a place" answer.
-            if !query.trim().is_empty() {
-                ui.add_space(4.0);
-                let w = ui.available_width();
-                if ui
-                    .add(
-                        egui::Button::new(
-                            egui::RichText::new(format!(
-                                "{}  Fly to \u{201c}{}\u{201d}",
-                                egui_phosphor::regular::MAP_PIN,
-                                query.trim()
-                            ))
-                            .size(13.0),
-                        )
-                        .min_size(egui::vec2(w, 34.0))
-                        .corner_radius(10.0),
-                    )
-                    .named("Search the place name and move the map there")
-                    .clicked()
-                {
-                    fly_to = Some(query.trim().to_string());
+                    });
+                    ui.add_space(10.0);
+                    if page == "Map settings" {
+                        self.map_rows(ui, &mut opts);
+                    } else {
+                        self.app_rows(ui);
+                    }
+                    return;
                 }
-            }
-            ui.add_space(4.0);
-            // The set-once map knobs, and the app's own commands.
-            egui::CollapsingHeader::new("Map settings")
-                .default_open(false)
-                .show(ui, |ui| self.map_rows(ui, &mut opts));
-            egui::CollapsingHeader::new("Application")
-                .default_open(false)
-                .show(ui, |ui| self.app_rows(ui));
+                // One title and one way out. The previous brand + Data/Alerts tab row looked like
+                // three unrelated navigation systems before the actual layer controls even began.
+                ui.horizontal(|ui| {
+                    ui.label(
+                        egui::RichText::new(if alerts_tab { "Alerts" } else { "Layers" })
+                            .size(crate::ui::style::FONT_TITLE)
+                            .strong(),
+                    );
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if !phone()
+                            && ui
+                                .add(
+                                    egui::Button::new(
+                                        egui::RichText::new(egui_phosphor::regular::X).size(14.0),
+                                    )
+                                    .fill(egui::Color32::TRANSPARENT)
+                                    .stroke(egui::Stroke::NONE),
+                                )
+                                .named("Close this panel")
+                                .clicked()
+                        {
+                            hide = true;
+                        }
+                        let switch = if alerts_tab {
+                            format!("{}  Layers", egui_phosphor::regular::STACK)
+                        } else if alert_count == 0 {
+                            format!("{}  Alerts", egui_phosphor::regular::BELL)
+                        } else {
+                            format!("{}  Alerts  {alert_count}", egui_phosphor::regular::BELL)
+                        };
+                        if ui.small_button(switch).clicked() {
+                            alerts_tab = !alerts_tab;
+                        }
+                    });
+                });
+                ui.add_space(6.0);
+                if alerts_tab {
+                    alert_hit = ui::alert_panel::body(ui, &feats, bounds, &mut muted);
+                    return;
+                }
+                // A drag rewrites the order in place, so persist it when it moves.
+                let order_was = self.settings.layer_order.clone();
+                chosen = ui::layers_panel::body(
+                    ui,
+                    &entries,
+                    &mut query,
+                    accent,
+                    // Leave room for the disclosures under the tree, whatever the window
+                    // height. In the sheet there is no height to read yet — it scrolls — so
+                    // the tree takes half the screen and the rest scrolls past it.
+                    if sheets_layout {
+                        chrome.height() * 0.5
+                    } else {
+                        (ui.available_height() - 110.0).max(120.0)
+                    },
+                    std::mem::take(&mut focus_search),
+                    &mut self.settings.layer_order,
+                    |ui| {
+                        // Knobs for the layers that are already on, drawn between the Radar group
+                        // and the rest. Collapsed by default: the list is still the panel's job.
+                        egui::CollapsingHeader::new("Layer settings")
+                            .default_open(false)
+                            .show(ui, |ui| {
+                                let glm_options = self.show_glm
+                                    || self.views[self.active]
+                                        .fields_on
+                                        .contains(&crate::render::FieldLayer::GlmFed);
+                                crate::ui::layer_options::show(
+                                    ui,
+                                    &mut self.filters,
+                                    &mut self.fields,
+                                    &self.views[self.active].fields_on.clone(),
+                                    &mut self.rotation_minutes,
+                                    &mut self.hail_minutes,
+                                    &mut self.hrrr_fcst_hour,
+                                    self.hrrr_valid,
+                                    tz,
+                                    &mut self.env_cape_ml,
+                                    &mut self.env_srh_km,
+                                    &mut self.env_model,
+                                    &mut self.contour_kind,
+                                    &mut etop_dbz,
+                                    &mut self.snow_hours,
+                                    &self.show_tropical,
+                                    &mut self.tropical_wind_kt,
+                                    &mut self.tropical_surge,
+                                    l3_site.as_deref(),
+                                    &mut self.global_model,
+                                    &mut self.global_fcst_hour,
+                                    &mut self.diff_field,
+                                    self.diff_valid.as_ref(),
+                                    &mut self.settings.lightning_minutes,
+                                    glm_options,
+                                    &mut self.settings.glm_goes_west,
+                                    self.show_spotters,
+                                    &mut self.settings.spotter_range_km,
+                                    &mut self.settings.detectors,
+                                    Some(mosaic.as_str()),
+                                    &mut opts,
+                                );
+                            });
+                    },
+                );
+                self.settings.etop_dbz = etop_dbz;
+                if self.settings.layer_order != order_was {
+                    self.settings.save();
+                }
+                // Place search folds in here rather than keeping a pill of its own: action
+                // matches rank first, and this row is the explicit "I meant a place" answer.
+                if !query.trim().is_empty() {
+                    ui.add_space(4.0);
+                    let w = ui.available_width();
+                    if ui
+                        .add(
+                            egui::Button::new(
+                                egui::RichText::new(format!(
+                                    "{}  Fly to \u{201c}{}\u{201d}",
+                                    egui_phosphor::regular::MAP_PIN,
+                                    query.trim()
+                                ))
+                                .size(13.0),
+                            )
+                            .min_size(egui::vec2(w, 34.0))
+                            .corner_radius(10.0),
+                        )
+                        .named("Search the place name and move the map there")
+                        .clicked()
+                    {
+                        fly_to = Some(query.trim().to_string());
+                    }
+                }
+                ui.add_space(4.0);
+                for (label, icon) in [
+                    ("Map settings", egui_phosphor::regular::GEAR),
+                    ("Preferences", egui_phosphor::regular::SLIDERS_HORIZONTAL),
+                ] {
+                    if ui
+                        .add_sized(
+                            egui::vec2(ui.available_width(), 34.0),
+                            egui::Button::new(format!("{icon}  {label}  ›")).corner_radius(9.0),
+                        )
+                        .clicked()
+                    {
+                        settings_page = Some(label);
+                    }
+                }
+            });
         };
         if sheets(ctx) {
             let title = if alerts_tab_was {
@@ -264,20 +328,21 @@ impl HookEchoApp {
                 .constrain_to(chrome)
                 .anchor(egui::Align2::LEFT_TOP, egui::vec2(PANEL_X, PANEL_TOP))
                 .show(ctx, |ui| {
-                    // Denser than the chips: this one carries a wall of small text, and a basemap
-                    // label showing through a list row is unreadable, not tasteful.
-                    crate::ui::style::glass(ui, 250).show(ui, |ui| {
-                        // A tablet's docked panel is a rail: same card, thumb-width.
-                        ui.set_width(if phone() {
-                            crate::ui::m3::RAIL_W
-                        } else {
-                            PANEL_W
-                        });
-                        ui.set_max_height(max_h);
-                        body(ui);
+                    ui.set_width(if phone() {
+                        crate::ui::m3::RAIL_W
+                    } else {
+                        PANEL_W
                     });
+                    ui.set_max_height(max_h);
+                    egui::ScrollArea::vertical()
+                        .id_salt(("floating_panel_scroll", settings_page_was))
+                        .max_height(max_h)
+                        .show(ui, |ui| {
+                            body(ui);
+                        });
                 });
         }
+        ctx.data_mut(|d| d.insert_temp(settings_id, settings_page));
         self.show_alert_panel = alerts_tab;
         self.settings.mute_alerts = muted;
         if hide || sheet_close {

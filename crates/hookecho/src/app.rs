@@ -7174,44 +7174,62 @@ impl HookEchoApp {
     fn map_rows(&mut self, ui: &mut egui::Ui, actions: &mut ui::layer_options::UiActions) {
         use crate::settings::StartView;
         let chasepack = self.chasepack_ui();
-        let (mb_key, mt_key) = (
-            !self.settings.mapbox_key.is_empty(),
-            !self.settings.maptiler_key.is_empty(),
-        );
+        ui.spacing_mut().item_spacing.y = 8.0;
+        ui.spacing_mut().interact_size.y = 32.0;
         let current = self.views[self.active].basemap;
-        // A named button that opens the grid, rather than the grid inline: the drawer column is
-        // narrow, and fifty cards in it would push everything else off the panel.
+        ui.label(egui::RichText::new("Background").strong());
         let mut picked = None;
-        ui.menu_button(format!("Background: {}", current.label()), |ui| {
-            ui.set_min_width(460.0);
-            egui::ScrollArea::vertical()
-                .max_height(460.0)
-                .show(ui, |ui| {
-                    picked = ui::basemap_picker::grid(ui, &mut self.tiles, current, &self.settings);
-                });
-            if picked.is_some() {
-                ui.close();
+        ui.with_layout(egui::Layout::top_down_justified(egui::Align::LEFT), |ui| {
+            ui.menu_button(format!("{}    Change…", current.label()), |ui| {
+                let width = (ui.ctx().content_rect().width() - 48.0).clamp(220.0, 460.0);
+                ui.set_min_width(width);
+                egui::ScrollArea::vertical()
+                    .max_height(460.0)
+                    .show(ui, |ui| {
+                        picked =
+                            ui::basemap_picker::grid(ui, &mut self.tiles, current, &self.settings);
+                    });
+                if picked.is_some() {
+                    ui.close();
+                }
+            })
+            .response
+            .on_hover_text("Choose a map style. Shortcut: Z cycles backgrounds.");
+        });
+        if let Some(style) = picked {
+            self.set_basemap(style);
+        }
+        ui.add_space(4.0);
+        ui.separator();
+        ui.label(egui::RichText::new("Radar appearance").strong());
+        let mut smooth = self.settings.smooth_radar;
+        ui.horizontal(|ui| {
+            let width = (ui.available_width() - ui.spacing().item_spacing.x) / 2.0;
+            for (label, value, hint) in [
+                ("Crisp", false, "Show each radar gate with a sharp edge"),
+                ("Smooth", true, "Blend neighboring radar gates"),
+            ] {
+                if ui
+                    .add_sized(
+                        egui::vec2(width, 34.0),
+                        egui::Button::new(label)
+                            .selected(smooth == value)
+                            .corner_radius(9.0),
+                    )
+                    .on_hover_text(hint)
+                    .clicked()
+                {
+                    smooth = value;
+                }
             }
         });
-        if let Some(s) = picked {
-            self.views[self.active].basemap = s;
-            self.settings.basemap = s.slug().to_string(); // persist across restarts
+        if smooth != self.settings.smooth_radar {
+            self.settings.smooth_radar = smooth;
+            for view in &mut self.views {
+                view.smooth = smooth;
+            }
         }
         let (view, settings) = (&mut self.views[self.active], &mut self.settings);
-        ui.weak(if mb_key && mt_key {
-            "Z cycles backgrounds"
-        } else {
-            "Z cycles backgrounds · more styles with Mapbox/MapTiler keys in Settings"
-        });
-        // One taste setting, not a per-pane one: flip it and every pane follows, and it persists.
-        let mut smooth = settings.smooth_radar;
-        let smooth_changed = ui
-            .checkbox(&mut smooth, "Smooth radar data")
-            .on_hover_text("Interpolate between gates instead of drawing hard gate squares")
-            .changed();
-        if smooth_changed {
-            settings.smooth_radar = smooth;
-        }
 
         // A download in flight stays above the disclosure — progress you can't find reads as a hang.
         if let Some((done, total, errors, mb)) = chasepack.progress {
@@ -7234,10 +7252,15 @@ impl HookEchoApp {
             return;
         }
 
-        ui.collapsing("Startup & offline", |ui| {
+        ui.separator();
+        ui.label(egui::RichText::new("On launch").strong());
+        {
             // Startup view: remember this site + camera as the launch position.
             if ui
-                .button("Save as startup view")
+                .add_enabled(
+                    view.site.is_some(),
+                    egui::Button::new("Start here next time"),
+                )
                 .on_hover_text("Open here (site + map position) on next launch")
                 .clicked()
             {
@@ -7254,13 +7277,15 @@ impl HookEchoApp {
                 let mut clear = false;
                 ui.horizontal(|ui| {
                     ui.weak(format!("Starts at {site}"));
-                    clear = ui.small_button("Clear").clicked();
+                    clear = ui.small_button("Reset").clicked();
                 });
                 if clear {
                     settings.start_view = None;
                 }
             }
-
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        ui.collapsing("Offline maps", |ui| {
             // Offline chase pack: pre-cache this view's basemap tiles so it renders with no signal.
             ui.separator();
             if !chasepack.packable {
@@ -7306,11 +7331,6 @@ impl HookEchoApp {
                 }
             }
         });
-        if smooth_changed {
-            for v in &mut self.views {
-                v.smooth = smooth;
-            }
-        }
     }
 
     /// Whether distances should read in kilometres: they should everywhere the US networks do not
@@ -7406,38 +7426,41 @@ impl HookEchoApp {
         let mut thr = self.views[self.active].thresholds[mi];
         let (vmin, vmax) = moment.value_range();
         let (unit_factor, unit_label) = display_units(moment, &self.settings);
-        let product_rect = egui::Frame::new()
-            .fill(ui.visuals().faint_bg_color)
-            .corner_radius(style::RADIUS_SM)
-            .inner_margin(egui::Margin::symmetric(10, 8))
+        let health = self.radar_health();
+        let (status, status_color) = ui::layers_panel::health_look(health.state());
+        let product_rect = style::glass(ui, 250)
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
+                    if ui.add(egui::Button::new(
+                        egui::RichText::new(egui_phosphor::regular::BROADCAST)
+                            .size(24.0).color(crate::theme::accent(self.settings.theme)))
+                        .min_size(egui::vec2(42.0, 42.0)).corner_radius(21.0))
+                        .on_hover_text("Choose the radar site").clicked() {
+                        actions.open_site_dialog = true;
+                    }
                     ui.vertical(|ui| {
-                        ui.label(
-                            egui::RichText::new("CURRENT RADAR")
-                                .size(style::FONT_SM)
-                                .color(ui.visuals().weak_text_color()),
-                        );
-                        ui.label(
-                            egui::RichText::new(crate::products::name(moment, srv))
-                                .size(style::FONT_LG)
-                                .strong(),
-                        );
-                    });
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui
-                            .button(format!("{}  {site}", egui_phosphor::regular::BROADCAST))
-                            .on_hover_text("Choose the radar site")
-                            .clicked()
-                        {
+                        if ui.add(egui::Button::new(egui::RichText::new(&site).strong())
+                            .frame(false)).on_hover_text("Choose the radar site").clicked() {
                             actions.open_site_dialog = true;
                         }
+                        if let Some(site) = wxdata::sites::site_by_id(&site) {
+                            ui.label(egui::RichText::new(format!("{}, {}", site.city, site.state)).size(12.0)
+                                .color(ui.visuals().weak_text_color()));
+                        }
+                    });
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.label(egui::RichText::new(format!("● {status}"))
+                            .size(11.0).color(status_color))
+                            .on_hover_text("Radar source freshness");
                     });
                 });
+                ui.add_space(8.0);
+                ui.label(egui::RichText::new(crate::products::name(moment, srv))
+                    .size(style::FONT_TITLE).strong());
                 ui.add_space(6.0);
                 ui.horizontal(|ui| {
                     ui.label(
-                        egui::RichText::new("Elevation")
+                        egui::RichText::new("Tilt")
                             .size(style::FONT_SM)
                             .color(ui.visuals().weak_text_color()),
                     )
@@ -13982,168 +14005,239 @@ impl HookEchoApp {
 
     /// The app's own commands — the ones that aren't a layer, product, tool or window, and so
     /// have no place in the action registry: view toggles, chase, capture, settings bundles.
-    /// Rendered inside the drawer, and (for one more commit) inside the old More popup.
+    /// Compact preference groups; details stay collapsed until needed.
     fn app_rows(&mut self, ui: &mut egui::Ui) {
+        use crate::ui::a11y::Named;
+        use crate::ui::style::toggle;
         let metric = self.metric();
-        {
-            ui.label(egui::RichText::new("View").strong());
-            {
-                let v = &mut self.views[self.active];
-                let mut on = v.basemap != crate::tiles::BasemapStyle::None;
-                if ui.checkbox(&mut on, "Basemap").changed() {
-                    v.basemap = if on {
-                        crate::tiles::BasemapStyle::default()
-                    } else {
-                        crate::tiles::BasemapStyle::None
+        use egui_phosphor::regular as ph;
+        ui.spacing_mut().item_spacing.y = 8.0;
+        ui.spacing_mut().interact_size.y = 30.0;
+        let section_id = egui::Id::new("preferences_section");
+        let section = ui
+            .ctx()
+            .data_mut(|d| d.get_temp::<&'static str>(section_id));
+        if section.is_none() {
+            for (title, description, icon) in [
+                ("Display", "Map visibility and streaming", ph::MONITOR),
+                ("Location", "GPS, route recording and sharing", ph::MAP_PIN),
+                #[cfg(not(target_arch = "wasm32"))]
+                (
+                    "Weather radio",
+                    "Listen to local weather broadcasts",
+                    ph::RADIO,
+                ),
+                ("Share", "Share this view and export images", ph::EXPORT),
+                ("Backup", "Save or restore your settings", ph::FLOPPY_DISK),
+                ("Help", "Guided tour, setup and support", ph::QUESTION),
+            ] {
+                let width = ui.available_width();
+                let response = ui
+                    .add_sized(
+                        egui::vec2(width, 58.0),
+                        egui::Button::new("").corner_radius(10.0),
+                    )
+                    .named(title)
+                    .on_hover_text(description);
+                let rect = response.rect;
+                let painter = ui.painter();
+                painter.text(
+                    rect.left_center() + egui::vec2(18.0, 0.0),
+                    egui::Align2::CENTER_CENTER,
+                    icon,
+                    egui::FontId::proportional(20.0),
+                    crate::theme::accent(self.settings.theme),
+                );
+                painter.text(
+                    rect.left_top() + egui::vec2(40.0, 12.0),
+                    egui::Align2::LEFT_TOP,
+                    title,
+                    egui::FontId::proportional(14.0),
+                    ui.visuals().text_color(),
+                );
+                painter.text(
+                    rect.left_top() + egui::vec2(40.0, 33.0),
+                    egui::Align2::LEFT_TOP,
+                    description,
+                    egui::FontId::proportional(10.0),
+                    ui.visuals().weak_text_color(),
+                );
+                painter.text(
+                    rect.right_center() - egui::vec2(14.0, 0.0),
+                    egui::Align2::CENTER_CENTER,
+                    ph::CARET_RIGHT,
+                    egui::FontId::proportional(14.0),
+                    ui.visuals().weak_text_color(),
+                );
+                if response.clicked() {
+                    ui.ctx().data_mut(|d| d.insert_temp(section_id, title));
+                }
+            }
+            return;
+        }
+        if section == Some("Display") {
+            ui.scope(|ui| {
+                {
+                    let v = &mut self.views[self.active];
+                    let mut on = v.basemap != crate::tiles::BasemapStyle::None;
+                    if toggle(ui, &mut on, "Basemap").changed() {
+                        v.basemap = if on {
+                            crate::tiles::BasemapStyle::default()
+                        } else {
+                            crate::tiles::BasemapStyle::None
+                        };
+                    }
+                    toggle(ui, &mut v.show_radar, "Radar");
+                    toggle(ui, &mut v.show_legend, "Color scale");
+                }
+                if toggle(ui, &mut self.obs_mode, "Streaming mode")
+                    .on_hover_text("F8 · Hide panels for a clean streaming view")
+                    .changed()
+                    && !self.obs_mode
+                {
+                    self.obs_tour = false;
+                }
+                if toggle(ui, &mut self.obs_tour, "Tour active warnings")
+                    .on_hover_text("F9 · Visit each active warning every 12 seconds")
+                    .changed()
+                {
+                    self.obs_tour_last = None;
+                    if self.obs_tour {
+                        self.obs_mode = true;
+                    }
+                }
+
+                if ui
+                    .add_enabled(
+                        !self.measure.is_empty(),
+                        egui::Button::new("Clear measurements"),
+                    )
+                    .clicked()
+                {
+                    self.measure.clear();
+                }
+            });
+        }
+
+        if section == Some("Location") {
+            ui.scope(|ui| {
+                if toggle(ui, &mut self.chase_mode, "Follow my location").changed()
+                    && !self.chase_mode
+                {
+                    self.chase_applied = None;
+                }
+                if self.chase_mode {
+                    match self
+                        .chase_pos
+                        .and_then(|(lon, lat)| crate::geo::nearest_site_id(lon, lat))
+                    {
+                        Some(s) => ui.weak(format!("nearest radar: {s}")),
+                        None => ui.weak("pick a location with Tool: Set chase location"),
                     };
                 }
-                ui.checkbox(&mut v.show_radar, "Radar");
-                ui.checkbox(&mut v.show_legend, "Legend");
-            }
-            if ui
-                .checkbox(&mut self.obs_mode, "Streamer / OBS mode (F8)")
-                .on_hover_text(
-                    "Hide all panels, leaving only the map — clean capture for streaming",
-                )
-                .changed()
-                && !self.obs_mode
-            {
-                self.obs_tour = false;
-            }
-            if ui
-                .checkbox(&mut self.obs_tour, "Auto-tour active warnings (F9)")
-                .on_hover_text("Cycle the camera through active warning polygons every ~12 s")
-                .changed()
-            {
-                self.obs_tour_last = None;
-                if self.obs_tour {
-                    self.obs_mode = true;
-                }
-            }
-
-            ui.separator();
-            ui.label(egui::RichText::new("Chase").strong());
-            if ui
-                .checkbox(&mut self.chase_mode, "Chase mode (follow me)")
-                .changed()
-                && !self.chase_mode
-            {
-                self.chase_applied = None;
-            }
-            if self.chase_mode {
-                match self
-                    .chase_pos
-                    .and_then(|(lon, lat)| crate::geo::nearest_site_id(lon, lat))
-                {
-                    Some(s) => ui.weak(format!("nearest radar: {s}")),
-                    None => ui.weak("pick a location with Tool: Set chase location"),
-                };
-            }
-            ui.checkbox(&mut self.settings.chase_log, "Log the chase")
-                .on_hover_text(
+                toggle(ui, &mut self.settings.chase_log, "Record my route").on_hover_text(
                     "Record a breadcrumb track of your GPS fixes, to draw on the map and save \
                      as GPX. In memory until you save it; nothing is uploaded.",
                 );
-            if self.settings.chase_log && !self.chase_track.points.is_empty() {
-                ui.weak(format!(
-                    "{} points · {}",
-                    self.chase_track.points.len(),
-                    crate::geo::fmt_distance(self.chase_track.km(), metric, 0)
-                ));
-                ui.horizontal(|ui| {
-                    if ui
-                        .button("\u{1f4cd} Mark")
-                        .on_hover_text("Name this spot in the track (saved into the GPX)")
-                        .clicked()
-                    {
-                        let n = self.chase_track.waypoints.len() + 1;
-                        self.chase_track.mark(format!("Mark {n}"));
-                    }
-                    if ui.button("Save GPX…").clicked() {
-                        let gpx = self.chase_track.to_gpx();
-                        match crate::dialog::save_bytes("chase.gpx", "gpx", gpx.as_bytes()) {
-                            crate::dialog::Saved::Where(w) => {
-                                self.toast(ToastKind::Success, format!("Saved to {w}"))
-                            }
-                            crate::dialog::Saved::Failed(e) => {
-                                self.toast(ToastKind::Error, format!("GPX save failed: {e}"))
-                            }
-                            crate::dialog::Saved::Cancelled => {}
+                if self.settings.chase_log && !self.chase_track.points.is_empty() {
+                    ui.weak(format!(
+                        "{} points · {}",
+                        self.chase_track.points.len(),
+                        crate::geo::fmt_distance(self.chase_track.km(), metric, 0)
+                    ));
+                    ui.horizontal(|ui| {
+                        if ui
+                            .button("\u{1f4cd} Mark")
+                            .on_hover_text("Name this spot in the track (saved into the GPX)")
+                            .clicked()
+                        {
+                            let n = self.chase_track.waypoints.len() + 1;
+                            self.chase_track.mark(format!("Mark {n}"));
                         }
-                    }
-                    if ui
-                        .button("Clear")
-                        .on_hover_text("Forget the track so far")
-                        .clicked()
-                    {
-                        self.chase_track.clear();
-                    }
-                });
-            }
-            // Desktop streams from a local gpsd; Android polls the system LocationManager over
-            // JNI (see platform.rs); the web watches the browser's own Geolocation. All three
-            // feed the same `gps_rx` channel.
-            if self.gps_rx.is_none() {
-                let (label, tip) = if cfg!(target_os = "android") {
-                    (
-                        "Enable GPS (chase)",
-                        "Follow your device's position (asks for the location permission)",
-                    )
-                } else if cfg!(target_arch = "wasm32") {
-                    (
-                        "Enable GPS (chase)",
-                        "Follow your position (asks the browser for the location permission)",
-                    )
-                } else {
-                    (
-                        "Connect GPS (gpsd)",
-                        "Stream your live position from a local gpsd on :2947",
-                    )
-                };
-                if ui.button(label).on_hover_text(tip).clicked() {
-                    let rx = if cfg!(target_os = "android") {
-                        crate::platform::start_location()
+                        if ui.button("Save GPX…").clicked() {
+                            let gpx = self.chase_track.to_gpx();
+                            match crate::dialog::save_bytes("chase.gpx", "gpx", gpx.as_bytes()) {
+                                crate::dialog::Saved::Where(w) => {
+                                    self.toast(ToastKind::Success, format!("Saved to {w}"))
+                                }
+                                crate::dialog::Saved::Failed(e) => {
+                                    self.toast(ToastKind::Error, format!("GPX save failed: {e}"))
+                                }
+                                crate::dialog::Saved::Cancelled => {}
+                            }
+                        }
+                        if ui
+                            .button("Clear")
+                            .on_hover_text("Forget the track so far")
+                            .clicked()
+                        {
+                            self.chase_track.clear();
+                        }
+                    });
+                }
+                // Desktop streams from a local gpsd; Android polls the system LocationManager over
+                // JNI (see platform.rs); the web watches the browser's own Geolocation. All three
+                // feed the same `gps_rx` channel.
+                if self.gps_rx.is_none() {
+                    let (label, tip) = if cfg!(target_os = "android") {
+                        (
+                            "Enable location…",
+                            "Follow your device's position (asks for the location permission)",
+                        )
+                    } else if cfg!(target_arch = "wasm32") {
+                        (
+                            "Enable location…",
+                            "Follow your position (asks the browser for the location permission)",
+                        )
                     } else {
-                        crate::gps::spawn()
+                        (
+                            "Connect GPS (gpsd)",
+                            "Stream your live position from a local gpsd on :2947",
+                        )
                     };
-                    match rx {
-                        Some(rx) => {
-                            self.gps_rx = Some(rx);
-                            self.chase_mode = true;
+                    if ui.button(label).on_hover_text(tip).clicked() {
+                        let rx = if cfg!(target_os = "android") {
+                            crate::platform::start_location()
+                        } else {
+                            crate::gps::spawn()
+                        };
+                        match rx {
+                            Some(rx) => {
+                                self.gps_rx = Some(rx);
+                                self.chase_mode = true;
+                            }
+                            None => log::warn!("no position source available"),
                         }
-                        None => log::warn!("no position source available"),
+                    }
+                } else {
+                    // getLastKnownLocation is null until the first fix lands (cold start,
+                    // indoors, or permission still pending) — say so rather than look dead.
+                    if self.chase_pos.is_some() {
+                        ui.weak("📡 GPS connected");
+                    } else {
+                        ui.weak("📡 waiting for GPS fix…");
+                    }
+                    if ui.button("Disconnect GPS").clicked() {
+                        self.gps_rx = None;
                     }
                 }
-            } else {
-                // getLastKnownLocation is null until the first fix lands (cold start,
-                // indoors, or permission still pending) — say so rather than look dead.
-                if self.chase_pos.is_some() {
-                    ui.weak("📡 GPS connected");
-                } else {
-                    ui.weak("📡 waiting for GPS fix…");
-                }
-                if ui.button("Disconnect GPS").clicked() {
-                    self.gps_rx = None;
-                }
-            }
-            // Position sharing: the phone in the field and the desktop at home showing each other
-            // as dots on the same radar. LAN needs no setup; the relay covers cellular.
-            ui.checkbox(&mut self.settings.share_position, "Share my position")
-                .on_hover_text(
+                // Position sharing: the phone in the field and the desktop at home showing each other
+                // as dots on the same radar. LAN needs no setup; the relay covers cellular.
+                toggle(ui, &mut self.settings.share_position, "Share my position").on_hover_text(
                     "Broadcast your GPS fix to other HookEcho instances, and show theirs",
                 );
-            if self.settings.share_position {
-                ui.horizontal(|ui| {
-                    ui.label("Name");
-                    ui.add(
-                        egui::TextEdit::singleline(&mut self.settings.share_name)
-                            .hint_text("me")
-                            .desired_width(120.0),
-                    );
-                });
-                ui.horizontal(|ui| {
-                    ui.label("Relay");
-                    ui.add(
+                if self.settings.share_position {
+                    ui.horizontal(|ui| {
+                        ui.label("Name");
+                        ui.add(
+                            egui::TextEdit::singleline(&mut self.settings.share_name)
+                                .hint_text("me")
+                                .desired_width(120.0),
+                        );
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label("Relay");
+                        ui.add(
                         egui::TextEdit::singleline(&mut self.settings.share_relay)
                             .hint_text("https://… (optional)")
                             .desired_width(180.0),
@@ -14152,10 +14246,10 @@ impl HookEchoApp {
                         "HTTP endpoint you host: POST a position, GET the list. Leave empty for \
                          same-network sharing only. The endpoint sees your live position.",
                     );
-                });
-                ui.horizontal(|ui| {
-                    ui.label("Stream");
-                    ui.add(
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label("Stream");
+                        ui.add(
                         egui::TextEdit::singleline(&mut self.settings.share_video_url)
                             .hint_text("https://… (optional)")
                             .desired_width(180.0),
@@ -14164,88 +14258,105 @@ impl HookEchoApp {
                         "A live-video URL published with your dot, so partners can click it and \
                          watch. Direct HLS/MJPEG plays in-app; YouTube and Twitch open a browser.",
                     );
-                });
-                match self.peers.len() {
-                    0 => ui.weak("no one else sharing yet"),
-                    n => ui.weak(format!("👥 {n} sharing")),
-                };
-            }
-
-            ui.separator();
-            ui.label(egui::RichText::new("Weather radio").strong());
-            self.nwr_rows(ui);
-
-            ui.separator();
-            ui.label(egui::RichText::new("Capture").strong());
-            if ui.button("Save screenshot…").clicked() {
-                if let Some(path) = crate::dialog::save_path("hookecho.png", "png") {
-                    self.request_capture(ui.ctx(), ShotDest::File(path));
+                    });
+                    match self.peers.len() {
+                        0 => ui.weak("no one else sharing yet"),
+                        n => ui.weak(format!("👥 {n} sharing")),
+                    };
                 }
+            });
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            if section == Some("Weather radio") {
+                self.nwr_rows(ui);
             }
-            if ui.button("Copy view to clipboard").clicked() {
-                self.request_capture(ui.ctx(), ShotDest::Clipboard);
-            }
-            ui.checkbox(&mut self.settings.share_card, "Caption shared images")
-                .on_hover_text(
-                    "Stamp the site, product, valid time and source onto saved and copied \
+        }
+        if section == Some("Share") {
+            ui.scope(|ui| {
+                if ui.button("Copy link to this view").clicked() {
+                    self.apply_palette(PaletteAction::CopyViewLink, ui.ctx());
+                }
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    if ui.button("Save screenshot…").clicked() {
+                        if let Some(path) = crate::dialog::save_path("hookecho.png", "png") {
+                            self.request_capture(ui.ctx(), ShotDest::File(path));
+                        }
+                    }
+                    if ui.button("Copy view to clipboard").clicked() {
+                        self.request_capture(ui.ctx(), ShotDest::Clipboard);
+                    }
+                    toggle(ui, &mut self.settings.share_card, "Caption shared images")
+                        .on_hover_text(
+                            "Stamp the site, product, valid time and source onto saved and copied \
                      images, so a screenshot still says what it is once it leaves here",
-                );
-            if ui
-                .add_enabled(
-                    self.loop_export.is_none(),
-                    egui::Button::new("Export loop (GIF)…"),
-                )
-                .on_hover_text("Capture the archive timeline as a looping animation")
-                .clicked()
-            {
-                self.start_loop_export(crate::loopexport::LoopFormat::Gif);
-            }
-            // MP4 export shells out to the `ffmpeg` CLI, which isn't present on Android; GIF
-            // export (pure Rust) stays. Hide the MP4 item there rather than fail on click.
-            if !cfg!(target_os = "android")
-                && ui
-                    .add_enabled(
-                        self.loop_export.is_none(),
-                        egui::Button::new("Export loop (MP4)…"),
-                    )
-                    .on_hover_text("Capture the archive timeline as an MP4 (requires ffmpeg)")
+                        );
+                    if ui
+                        .add_enabled(
+                            self.loop_export.is_none(),
+                            egui::Button::new("Export loop (GIF)…"),
+                        )
+                        .on_hover_text("Capture the archive timeline as a looping animation")
+                        .clicked()
+                    {
+                        self.start_loop_export(crate::loopexport::LoopFormat::Gif);
+                    }
+                    // MP4 export shells out to the `ffmpeg` CLI, which isn't present on Android; GIF
+                    // export (pure Rust) stays. Hide the MP4 item there rather than fail on click.
+                    if !cfg!(target_os = "android")
+                        && ui
+                            .add_enabled(
+                                self.loop_export.is_none(),
+                                egui::Button::new("Export loop (MP4)…"),
+                            )
+                            .on_hover_text(
+                                "Capture the archive timeline as an MP4 (requires ffmpeg)",
+                            )
+                            .clicked()
+                    {
+                        self.start_loop_export(crate::loopexport::LoopFormat::Mp4);
+                    }
+                }
+            });
+        }
+
+        if section == Some("Backup") {
+            ui.scope(|ui| {
+                if ui
+                    .button("Save settings backup…")
+                    .on_hover_text("Save settings + color tables to a portable bundle")
                     .clicked()
-            {
-                self.start_loop_export(crate::loopexport::LoopFormat::Mp4);
-            }
-            if ui.button("Clear measurement").clicked() {
-                self.measure.clear();
-            }
+                {
+                    self.export_settings_bundle();
+                }
+                if ui
+                    .button("Restore settings backup…")
+                    .on_hover_text("Load a settings bundle from another machine")
+                    .clicked()
+                {
+                    self.import_settings_bundle();
+                }
+            });
+        }
 
-            ui.separator();
-            ui.label(egui::RichText::new("Settings").strong());
-            if ui
-                .button("Export settings…")
-                .on_hover_text("Save settings + color tables to a portable bundle")
-                .clicked()
-            {
-                self.export_settings_bundle();
-            }
-            if ui
-                .button("Import settings…")
-                .on_hover_text("Load a settings bundle from another machine")
-                .clicked()
-            {
-                self.import_settings_bundle();
-            }
-
-            ui.separator();
-            ui.weak("HookEcho — NEXRAD radar viewer");
-            ui.weak("github.com/d4vid87/hookecho");
-            if ui.button("Set up again…").clicked() {
-                self.firstrun.start();
-            }
-            if ui.button("Take the tour…").clicked() {
-                self.tour.start();
-            }
-            if ui.button("Exit").clicked() {
-                ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
-            }
+        if section == Some("Help") {
+            ui.scope(|ui| {
+                ui.hyperlink_to(
+                    "HookEcho help & feedback",
+                    "https://github.com/d4vid87/hookecho",
+                );
+                if ui.button("Set up again…").clicked() {
+                    self.firstrun.start();
+                }
+                if ui.button("Take the tour…").clicked() {
+                    self.tour.start();
+                }
+                #[cfg(not(target_arch = "wasm32"))]
+                if ui.button("Exit HookEcho").clicked() {
+                    ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
+                }
+            });
         }
     }
 

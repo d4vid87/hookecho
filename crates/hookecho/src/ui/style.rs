@@ -102,3 +102,88 @@ pub fn square_btn(ui: &mut egui::Ui, glyph: &str, active: bool, accent: Color32)
             .corner_radius(13.0),
     )
 }
+
+/// Full-width, keyboard-accessible settings switch.
+pub(crate) fn toggle(ui: &mut egui::Ui, value: &mut bool, label: &str) -> egui::Response {
+    use crate::ui::a11y::Named;
+    let mut response = ui
+        .add_sized(
+            egui::vec2(ui.available_width(), 38.0),
+            egui::Button::new("").frame(false),
+        )
+        .named_toggle(label, *value);
+    if response.clicked() {
+        *value = !*value;
+        response.mark_changed();
+    }
+    let rect = response.rect;
+    ui.painter().text(
+        rect.left_center(),
+        egui::Align2::LEFT_CENTER,
+        label,
+        egui::FontId::proportional(14.0),
+        ui.visuals().text_color(),
+    );
+    ui.painter().text(
+        rect.right_center(),
+        egui::Align2::RIGHT_CENTER,
+        if *value {
+            egui_phosphor::regular::TOGGLE_RIGHT
+        } else {
+            egui_phosphor::regular::TOGGLE_LEFT
+        },
+        egui::FontId::proportional(28.0),
+        if *value {
+            ui.visuals().selection.stroke.color
+        } else {
+            ui.visuals().weak_text_color()
+        },
+    );
+    response
+}
+
+#[cfg(test)]
+mod switch_tests {
+    #[test]
+    fn settings_switch_toggles_and_reports_changes() {
+        let ctx = egui::Context::default();
+        let mut value = false;
+        let mut pos = egui::Pos2::ZERO;
+        let mut frame = |events| {
+            let mut changed = false;
+            let _ = ctx.run_ui(
+                egui::RawInput {
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    let response = super::toggle(ui, &mut value, "Radar");
+                    pos = response.rect.center();
+                    changed = response.changed();
+                },
+            );
+            (value, changed, pos)
+        };
+        let (_, changed, pos) = frame(vec![]);
+        assert!(!changed);
+        for expected in [true, false] {
+            frame(vec![
+                egui::Event::PointerMoved(pos),
+                egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: Default::default(),
+                },
+            ]);
+            let (value, changed, _) = frame(vec![egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: Default::default(),
+            }]);
+            assert_eq!(value, expected);
+            assert!(changed);
+        }
+    }
+}
