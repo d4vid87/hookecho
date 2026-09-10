@@ -13764,8 +13764,11 @@ impl HookEchoApp {
         // chrome (see `app::mobile`), so drawing both would be redundant.
         if view.show_legend && !cfg!(target_os = "android") {
             // The moment's scale floats over this pane's right edge (no panel, no card) so the map
-            // keeps the pixels; the field/wind ramps still need their cards.
-            if view.volume.is_some() {
+            // keeps the pixels; the field/wind ramps still need their cards. The WSV3 layout docks
+            // this same scale under the ribbon, so drawing it here too would be the third copy.
+            let wsv3_colorbar = self.settings.layout == crate::settings::Layout::Wsv3
+                && !cfg!(target_os = "android");
+            if view.volume.is_some() && !wsv3_colorbar {
                 let (df, dl) = display_units(view.moment, &self.settings);
                 ui::legend::draw_vertical(
                     &painter,

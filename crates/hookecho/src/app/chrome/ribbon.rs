@@ -10,6 +10,18 @@ use super::*;
 use crate::ui::wsv3;
 use egui::{vec2, Align, Color32, Layout, RichText};
 
+/// One fixed-width ribbon group laid out top-down, followed by a hairline divider. Fixed width
+/// because `horizontal_wrapped` inside a group otherwise claims the whole remaining ribbon width
+/// as its own and strands every group after it far to the right.
+fn ribbon_group(ui: &mut egui::Ui, w: f32, add: impl FnOnce(&mut egui::Ui)) {
+    ui.allocate_ui_with_layout(
+        vec2(w, wsv3::RIBBON_H - 6.0),
+        Layout::top_down(Align::Min),
+        add,
+    );
+    wsv3::vsep(ui);
+}
+
 impl HookEchoApp {
     /// The docked ribbon. Call on the eframe root `Ui`, before `chrome_rect` is captured, so the
     /// floating windows constrain to the map area below it.
@@ -48,15 +60,18 @@ impl HookEchoApp {
         let layers_on = self.panel_open && !self.show_alert_panel;
         let alerts_on = self.panel_open && self.show_alert_panel;
         let basemap_on = self.basemap_open;
-        let playing = self.views[self.active].timeline.playing;
-        let following = self.views[self.active].timeline.following;
+        let hrrr_on = self.views[self.active]
+            .fields_on
+            .contains(&crate::render::FieldLayer::Hrrr);
+        let hrrr_valid = self.hrrr_valid;
+        let tz_l = self.active_tz();
 
         let (disp_f, disp_l) = display_units(moment, &self.settings);
         let table = self.palettes.table(moment).clone();
 
         let mut pick_tilt: Option<usize> = None;
         let mut pick_panes: Option<usize> = None;
-        let mut transport: Option<i32> = None; // -2 begin, -1 back, 0 play/pause, 1 fwd, 2 live
+        let mut hrrr_hour = self.hrrr_fcst_hour;
         let mut all_tilts = false;
 
         egui::Panel::top("wsv3_ribbon")
@@ -70,30 +85,35 @@ impl HookEchoApp {
 
                 ui.spacing_mut().item_spacing = vec2(6.0, 3.0);
                 ui.horizontal(|ui| {
-                    ui.add_space(8.0);
+                    ui.add_space(6.0);
 
                     // ---- RADAR ----
-                    ui.vertical(|ui| {
+                    ribbon_group(ui, 208.0, |ui| {
                         wsv3::group_label(ui, "Radar");
                         ui.horizontal(|ui| {
-                            let broadcast = ui.add(
-                                egui::Button::new(
-                                    RichText::new(egui_phosphor::regular::BROADCAST)
-                                        .size(20.0)
-                                        .color(accent),
+                            if ui
+                                .add(
+                                    egui::Button::new(
+                                        RichText::new(egui_phosphor::regular::BROADCAST)
+                                            .size(20.0)
+                                            .color(accent),
+                                    )
+                                    .min_size(vec2(34.0, 34.0))
+                                    .fill(wsv3::PILL_BG)
+                                    .corner_radius(17.0),
                                 )
-                                .min_size(vec2(34.0, 34.0))
-                                .fill(wsv3::PILL_BG)
-                                .corner_radius(17.0),
-                            );
-                            if broadcast.clicked() {
+                                .clicked()
+                            {
                                 actions.open_site_dialog = true;
                             }
                             ui.vertical(|ui| {
                                 if ui
                                     .add(
                                         egui::Button::new(
-                                            RichText::new(&site).size(16.0).strong().color(wsv3::INK),
+                                            RichText::new(&site)
+                                                .size(16.0)
+                                                .strong()
+                                                .color(wsv3::INK),
                                         )
                                         .frame(false),
                                     )
@@ -108,25 +128,30 @@ impl HookEchoApp {
                                 );
                             });
                         });
-                        ui.add_space(2.0);
-                        ui.horizontal_wrapped(|ui| {
-                            ui.set_max_width(232.0);
-                            for p in &crate::products::PRODUCTS {
-                                let on = p.moment == moment;
-                                if wsv3::pill_sized(ui, p.short, on, accent, 40.0)
+                        ui.add_space(1.0);
+                        for chunk in crate::products::PRODUCTS.chunks(4) {
+                            ui.horizontal(|ui| {
+                                for p in chunk {
+                                    if wsv3::pill_sized(
+                                        ui,
+                                        p.short,
+                                        p.moment == moment,
+                                        accent,
+                                        40.0,
+                                    )
                                     .on_hover_text(p.blurb)
                                     .clicked()
-                                {
-                                    actions.palette =
-                                        Some(PaletteAction::SetMoment(p.moment, srv));
+                                    {
+                                        actions.palette =
+                                            Some(PaletteAction::SetMoment(p.moment, srv));
+                                    }
                                 }
-                            }
-                        });
+                            });
+                        }
                     });
-                    wsv3::vsep(ui);
 
                     // ---- TILT ----
-                    ui.vertical(|ui| {
+                    ribbon_group(ui, 250.0, |ui| {
                         wsv3::group_label(ui, "Tilt angle");
                         if elevations.is_empty() {
                             ui.label(
@@ -136,7 +161,6 @@ impl HookEchoApp {
                             );
                         } else {
                             ui.horizontal_wrapped(|ui| {
-                                ui.set_max_width(258.0);
                                 for (i, a) in elevations.iter().enumerate() {
                                     if wsv3::pill_sized(
                                         ui,
@@ -161,10 +185,9 @@ impl HookEchoApp {
                             });
                         }
                     });
-                    wsv3::vsep(ui);
 
                     // ---- VIEW ----
-                    ui.vertical(|ui| {
+                    ribbon_group(ui, 148.0, |ui| {
                         wsv3::group_label(ui, "View");
                         ui.horizontal(|ui| {
                             ui.label(
@@ -180,7 +203,7 @@ impl HookEchoApp {
                         });
                         wsv3::check(ui, "Smoothing", &mut smooth);
                         wsv3::check(ui, "Map legend", &mut legend_on);
-                        ui.add_space(2.0);
+                        ui.add_space(1.0);
                         ui.horizontal(|ui| {
                             for n in [1usize, 2, 4] {
                                 if wsv3::pill_sized(
@@ -198,10 +221,47 @@ impl HookEchoApp {
                             }
                         });
                     });
-                    wsv3::vsep(ui);
+
+                    // ---- MODEL ----
+                    ribbon_group(ui, 128.0, |ui| {
+                        wsv3::group_label(ui, "Model");
+                        if wsv3::pill(ui, "HRRR future", hrrr_on, accent)
+                            .on_hover_text(
+                                "HRRR composite-reflectivity forecast — future radar out to 18 h",
+                            )
+                            .clicked()
+                        {
+                            actions.palette = Some(PaletteAction::ToggleField(
+                                crate::render::FieldLayer::Hrrr,
+                            ));
+                        }
+                        if hrrr_on {
+                            ui.horizontal(|ui| {
+                                if wsv3::pill(ui, "\u{2039}", false, accent).clicked() {
+                                    hrrr_hour = hrrr_hour.saturating_sub(1).max(1);
+                                }
+                                ui.label(
+                                    RichText::new(format!("F+{hrrr_hour}h"))
+                                        .size(12.0)
+                                        .strong()
+                                        .color(wsv3::INK),
+                                );
+                                if wsv3::pill(ui, "\u{203a}", false, accent).clicked() {
+                                    hrrr_hour = (hrrr_hour + 1).min(18);
+                                }
+                            });
+                            if let Some(v) = hrrr_valid {
+                                ui.label(
+                                    RichText::new(crate::timefmt::fmt_clock(v, tz_l, false))
+                                        .size(10.0)
+                                        .color(wsv3::STATUS_FG),
+                                );
+                            }
+                        }
+                    });
 
                     // ---- OVERLAYS ----
-                    ui.vertical(|ui| {
+                    ribbon_group(ui, 92.0, |ui| {
                         wsv3::group_label(ui, "Overlays");
                         if wsv3::pill(ui, "Layers", layers_on, accent).clicked() {
                             self.panel_open = !layers_on;
@@ -215,13 +275,11 @@ impl HookEchoApp {
                             self.basemap_open = !basemap_on;
                         }
                     });
-                    wsv3::vsep(ui);
 
                     // ---- TOOLS ----
-                    ui.vertical(|ui| {
+                    ribbon_group(ui, 224.0, |ui| {
                         wsv3::group_label(ui, "Tools");
                         ui.horizontal_wrapped(|ui| {
-                            ui.set_max_width(210.0);
                             for (tool, label) in [
                                 (MapTool::Interrogate, "Explore"),
                                 (MapTool::Measure, "Measure"),
@@ -244,10 +302,9 @@ impl HookEchoApp {
                             }
                         });
                     });
-                    wsv3::vsep(ui);
 
                     // ---- CAPTURE ----
-                    ui.vertical(|ui| {
+                    ribbon_group(ui, 118.0, |ui| {
                         wsv3::group_label(ui, "Capture");
                         if wsv3::pill(ui, "Share view", false, accent).clicked() {
                             actions.palette = Some(PaletteAction::CopyViewLink);
@@ -256,67 +313,11 @@ impl HookEchoApp {
                             actions.palette = Some(PaletteAction::OpenInWindy);
                         }
                         if wsv3::pill(ui, "Settings", false, accent).clicked() {
-                            actions.palette =
-                                Some(PaletteAction::OpenWindow(AppWindow::Settings));
+                            actions.palette = Some(PaletteAction::OpenWindow(AppWindow::Settings));
                         }
                         if wsv3::pill(ui, "Help", false, accent).clicked() {
                             actions.palette = Some(PaletteAction::OpenWindow(AppWindow::Help));
                         }
-                    });
-
-                    // ---- LOOP (right, clear of the window buttons) ----
-                    ui.with_layout(Layout::right_to_left(Align::Min), |ui| {
-                        ui.add_space(wsv3::WINDOW_BTN_KEEPOUT);
-                        ui.vertical(|ui| {
-                            wsv3::group_label(ui, "Loop");
-                            ui.horizontal(|ui| {
-                                use egui_phosphor::regular as ph;
-                                let tb = |ui: &mut egui::Ui, glyph: &str, big: bool| {
-                                    ui.add(
-                                        egui::Button::new(
-                                            RichText::new(glyph)
-                                                .size(if big { 20.0 } else { 15.0 })
-                                                .color(wsv3::INK),
-                                        )
-                                        .min_size(vec2(if big { 34.0 } else { 26.0 }, 26.0))
-                                        .fill(wsv3::PILL_BG)
-                                        .corner_radius(13.0),
-                                    )
-                                    .clicked()
-                                };
-                                if tb(ui, ph::SKIP_BACK, false) {
-                                    transport = Some(-2);
-                                }
-                                if tb(ui, ph::CARET_LEFT, false) {
-                                    transport = Some(-1);
-                                }
-                                if tb(ui, if playing { ph::PAUSE } else { ph::PLAY }, true) {
-                                    transport = Some(0);
-                                }
-                                if tb(ui, ph::CARET_RIGHT, false) {
-                                    transport = Some(1);
-                                }
-                                if tb(ui, ph::SKIP_FORWARD, false) {
-                                    transport = Some(2);
-                                }
-                            });
-                            let (badge, col) = if following {
-                                ("\u{25cf} Live", wsv3::WSV3_BLUE)
-                            } else {
-                                ("\u{25cf} Archive", Color32::from_gray(150))
-                            };
-                            if ui
-                                .add(
-                                    egui::Button::new(
-                                        RichText::new(badge).size(11.0).strong().color(col),
-                                    )
-                                    .frame(false),
-                                )
-                                .clicked()
-                            {
-                                transport = Some(2);
-                            }
-                        });
                     });
                 });
 
@@ -343,16 +344,9 @@ impl HookEchoApp {
             self.settings.save();
         }
         self.views[self.active].show_legend = legend_on;
-        if let Some(t) = transport {
-            let tl = &mut self.views[self.active].timeline;
-            match t {
-                -2 => tl.go_begin(),
-                -1 => tl.step(-1),
-                0 => tl.toggle_play(),
-                1 => tl.step(1),
-                _ => tl.go_head(),
-            }
-        }
+        // The per-frame sync in `update` refetches when `hrrr_fcst_hour` changes; a no-op write
+        // when the steppers weren't touched costs nothing.
+        self.hrrr_fcst_hour = hrrr_hour;
         self.apply_ui_actions(actions, ctx);
     }
 
@@ -422,6 +416,9 @@ impl HookEchoApp {
             .anchor(egui::Align2::LEFT_TOP, vec2(10.0, 10.0))
             .interactable(false)
             .show(ctx, |ui| {
+                // Give the label room so it lays out on one line instead of wrapping to the
+                // Area's shrink-wrapped width.
+                ui.set_max_width(360.0);
                 egui::Frame::new()
                     .fill(Color32::from_rgb(0x22, 0x35, 0x5e))
                     .stroke(egui::Stroke::new(1.0, Color32::from_rgb(0x4a, 0x63, 0x9a)))
