@@ -6,6 +6,7 @@ on:
       - feat/wsv3-redesign
     paths:
       - .github/workflows/chatgpt-volume3d-fix.yml
+  workflow_dispatch:
 
 permissions:
   contents: write
