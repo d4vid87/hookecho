@@ -8,6 +8,14 @@ The rolling `latest` release tracks `main` and is not listed here.
 
 ## Unreleased
 
+### GPS connects itself
+
+- **Connect GPS at launch** (Chase tab; `gps_autoconnect` in settings.json)
+  opens the gpsd stream every start on desktop, so a receiver on the dash no
+  longer needs the connect button clicked every morning. Turning autoconnect
+  on connects at once; Disconnect GPS turns it off again. Android and the
+  web keep the click, since there it is a permission prompt.
+
 ### Warnings say where, and what to do
 
 - Spoken warnings are on by default and now say something the tone cannot.
