@@ -5300,6 +5300,8 @@ impl HookEchoApp {
                         n: v3.n as u32,
                         nz: v3.nz as u32,
                         lut,
+                        half_km: v3.half_km,
+                        top_km: v3.top_km,
                     },
                     (v3.value_min, v3.value_max),
                 ))
