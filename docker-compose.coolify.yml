@@ -4,7 +4,7 @@
 # `web` service in the Coolify UI; Coolify wires its proxy to container port 8080. First build
 # is long (native release + two wasm builds) — raise the build timeout if it trips.
 #
-# Standalone: `docker compose -f docker-compose.coolify.yml up -d --build`, then open :8080.
+# Standalone: `docker compose -f docker-compose.coolify.yml up -d --build`, then open :8882.
 
 name: hookecho
 
@@ -17,8 +17,10 @@ services:
     mem_limit: 2g
     cpus: 2.0
     pids_limit: 256
+    # Host 8882 → container 8080 (8080 is taken on the host). Coolify's proxy targets the
+    # container port (8080); this mapping is for direct host access.
     ports:
-      - "8080:8080"
+      - "8882:8080"
     volumes:
       - hookecho-config:/root/.config/hookecho
       - hookecho-cache:/root/.cache/hookecho
