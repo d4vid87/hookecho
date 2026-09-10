@@ -123,6 +123,9 @@ pub struct Settings {
     /// Seconds between live-update polls for the newest volume.
     pub poll_interval_secs: u64,
     pub theme: Theme,
+    /// Desktop/web chrome: the WSV3 ribbon (default) or the original map-first minimal chrome.
+    #[serde(default)]
+    pub layout: Layout,
     /// UI density (spacing/type token table). Comfortable by default; Compact restores the
     /// pre-0.12 pro-dense desktop metrics.
     pub density: Density,
@@ -978,6 +981,30 @@ pub fn default_alert_radius_mi() -> f64 {
     20.0
 }
 
+/// Which desktop/web chrome the app draws.
+///
+/// `Wsv3` is the WSV3-style pro layout: a docked ribbon of labeled control groups over a
+/// navy→black gradient, a docked colour scale, and a bottom status bar. `Minimal` is the
+/// original map-first floating chrome — a search pill, a right-edge control column, and panels
+/// that slide over the map. Android always uses its own touch chrome regardless of this.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum Layout {
+    #[default]
+    Wsv3,
+    Minimal,
+}
+
+impl Layout {
+    pub const ALL: [Layout; 2] = [Layout::Wsv3, Layout::Minimal];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Layout::Wsv3 => "WSV3 ribbon",
+            Layout::Minimal => "Minimal (map-first)",
+        }
+    }
+}
+
 /// Whether radar timestamps read in the selected site's local time or in UTC ("Zulu").
 ///
 /// Site-local is the default: the clock a chaser cares about is the one the storm is under.
@@ -1081,6 +1108,7 @@ impl Default for Settings {
             etop_dbz: default_etop_dbz(),
             poll_interval_secs: 30,
             theme: Theme::Dark,
+            layout: Layout::default(),
             density: Density::default(),
             accent: None,
             reduce_motion: false,

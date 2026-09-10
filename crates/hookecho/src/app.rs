@@ -16481,6 +16481,17 @@ impl eframe::App for HookEchoApp {
         // `embed` still buys the idle heartbeat and the state postMessage.
         let bare = self.obs_mode;
 
+        // The WSV3 ribbon layout: desktop/web only, off under OBS. Docked before `chrome_rect` is
+        // read so the floating windows and the scrubber constrain to the map area between the
+        // ribbon and the status bar.
+        let wsv3_layout = !bare
+            && !cfg!(target_os = "android")
+            && self.settings.layout == crate::settings::Layout::Wsv3;
+        if wsv3_layout {
+            self.wsv3_ribbon(root, ctx);
+            self.wsv3_status_bar(root);
+        }
+
         self.chrome_rect = root.available_rect_before_wrap();
         // Before any chrome: everything below asks `motion::reduced()`, and the answer has to be
         // the same for every surface in a frame.
@@ -16504,10 +16515,21 @@ impl eframe::App for HookEchoApp {
             };
             if chrome {
                 self.sync_permalink();
-                self.search_pill(ctx);
-                self.control_column(ctx);
+                // WSV3 layout: the ribbon (already drawn above) replaces the search pill, the
+                // right-edge control column and the pane strip. Everything else — the timeline
+                // scrubber, the layers/basemap panels the ribbon opens, the corner chips — is
+                // shared with the minimal layout.
+                if !wsv3_layout {
+                    self.search_pill(ctx);
+                    self.control_column(ctx);
+                }
+                if wsv3_layout {
+                    self.wsv3_timestamp(ctx);
+                }
                 self.scrubber(ctx);
-                self.pane_strip(ctx);
+                if !wsv3_layout {
+                    self.pane_strip(ctx);
+                }
                 self.panel(ctx);
                 self.basemap_panel(ctx);
                 self.info_chip(ctx);

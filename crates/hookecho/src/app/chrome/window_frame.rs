@@ -38,8 +38,12 @@ impl HookEchoApp {
     /// Minimize / maximize / close, floating above the control column they line up with.
     fn window_buttons(&mut self, ctx: &egui::Context) {
         let maximized = ctx.input(|i| i.viewport().maximized.unwrap_or(false));
+        // Constrain to the whole content rect, not `chrome_rect`: the WSV3 layout docks a ribbon
+        // across the top, so `chrome_rect` starts below it — anchoring there would drop the
+        // min/max/close buttons into the map. The ribbon reserves `wsv3::WINDOW_BTN_KEEPOUT` on
+        // its right edge for them. The minimal layout is unaffected (there the two rects match).
         egui::Area::new(egui::Id::new("window_buttons"))
-            .constrain_to(self.chrome_rect)
+            .constrain_to(ctx.content_rect())
             .anchor(egui::Align2::RIGHT_TOP, vec2(-70.0, 8.0))
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {

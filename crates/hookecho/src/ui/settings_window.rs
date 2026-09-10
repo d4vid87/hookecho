@@ -802,6 +802,22 @@ fn general_tab(
             .on_hover_text("Compact restores the denser spacing of earlier releases.");
             ui.end_row();
 
+            if !cfg!(target_os = "android") {
+                ui.label("Layout");
+                ui.horizontal(|ui| {
+                    for l in crate::settings::Layout::ALL {
+                        ui.selectable_value(&mut settings.layout, l, l.label());
+                    }
+                })
+                .response
+                .on_hover_text(
+                    "WSV3 ribbon: a docked toolbar of control groups, a docked colour scale and \
+                     a status bar. Minimal: the original map-first search pill and control \
+                     column.",
+                );
+                ui.end_row();
+            }
+
             ui.label("Motion");
             ui.checkbox(&mut settings.reduce_motion, "Reduce motion")
                 .on_hover_text(

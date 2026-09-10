@@ -7,6 +7,7 @@ mod overlay;
 mod permalink;
 pub(crate) use overlay::compact;
 mod registry;
+mod ribbon;
 mod scrubber;
 mod state;
 mod window_frame;
