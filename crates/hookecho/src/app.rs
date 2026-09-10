@@ -3721,6 +3721,11 @@ impl HookEchoApp {
         // `update` picks them up a moment later, once there is radar on screen.
         #[cfg(not(target_arch = "wasm32"))]
         app.fetch_overlays(&cc.egui_ctx.clone());
+        // The receiver on the dash does not need a click every morning.
+        #[cfg(not(any(target_os = "android", target_arch = "wasm32")))]
+        if app.settings.gps_autoconnect {
+            app.connect_gpsd();
+        }
         app
     }
 
@@ -5787,6 +5792,21 @@ impl HookEchoApp {
                     });
                 });
             });
+    }
+
+    /// Open the gpsd stream and enter chase mode. Shared by the Chase tab's connect button,
+    /// the launch-time autoconnect, and the toggle that turns autoconnect on. A daemon that is
+    /// not there just logs; chase mode stays manual.
+    #[cfg(not(any(target_os = "android", target_arch = "wasm32")))]
+    fn connect_gpsd(&mut self) {
+        match crate::gps::spawn() {
+            Some(rx) => {
+                log::info!("gpsd: connected on localhost:2947, chase mode on");
+                self.gps_rx = Some(rx);
+                self.chase_mode = true;
+            }
+            None => log::warn!("gpsd: not reachable on localhost:2947"),
+        }
     }
 
     /// Chase-mode follow-me: when the tracked position changes, hand the active pane off to the
@@ -14220,6 +14240,19 @@ impl HookEchoApp {
                     }
                     if ui.button("Disconnect GPS").clicked() {
                         self.gps_rx = None;
+                        // A deliberate disconnect is also a "not at launch, either".
+                        self.settings.gps_autoconnect = false;
+                    }
+                }
+                // Desktop only: gpsd is a daemon that is either there or not, so connecting at
+                // launch costs nothing and asks nobody. The permission platforms keep the click.
+                #[cfg(not(any(target_os = "android", target_arch = "wasm32")))]
+                {
+                    let was = self.settings.gps_autoconnect;
+                    toggle(ui, &mut self.settings.gps_autoconnect, "Connect GPS at launch")
+                        .on_hover_text("Connect to the local gpsd every time HookEcho starts");
+                    if self.settings.gps_autoconnect && !was && self.gps_rx.is_none() {
+                        self.connect_gpsd();
                     }
                 }
                 // Position sharing: the phone in the field and the desktop at home showing each other
