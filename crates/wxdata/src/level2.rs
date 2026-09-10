@@ -132,6 +132,102 @@ pub struct BinnedSweep {
     pub value_max: f32,
 }
 
+/// One real Level II gate prepared for geographic GPU instancing. Geometry comes from the
+/// transmitting radial rather than from the regular 720-row display grid.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ObservedGate {
+    pub azimuth_deg: f32,
+    pub beam_width_deg: f32,
+    pub slant_start_km: f32,
+    pub slant_span_km: f32,
+    pub elevation_deg: f32,
+    /// Same normalized palette index as [`BinnedSweep::data`] (`2..=255` is valid).
+    pub value_index: u8,
+    /// Original gate index in its radial, retained for picking/inspection.
+    pub gate: u32,
+}
+
+/// Cached input for the observed-sweep map renderer.
+#[derive(Debug, Clone)]
+pub struct ObservedGates {
+    pub gates: Vec<ObservedGate>,
+    pub radar_lat: f32,
+    pub radar_lon: f32,
+    pub sweep_count: usize,
+    pub radial_count: usize,
+    pub gate_stride: usize,
+}
+
+/// Extract every valid observed gate of `moment`, preserving each radial's real azimuth, beam
+/// width, elevation, first-gate range and gate spacing. The stride is raised as needed to keep
+/// the GPU instance buffer inside `instance_budget`; camera changes never call this function.
+pub fn observed_gates(
+    scan: &Scan,
+    moment: Moment,
+    requested_stride: usize,
+    instance_budget: usize,
+) -> anyhow::Result<ObservedGates> {
+    if moment == Moment::SpecificDifferentialPhase {
+        anyhow::bail!("KDP is derived during binning and has no exact observed gates");
+    }
+    let site = scan
+        .site()
+        .ok_or_else(|| anyhow::anyhow!("scan has no site metadata"))?;
+    let carrying: Vec<_> = scan
+        .sweeps()
+        .iter()
+        .filter(|s| s.radials().iter().any(|r| moment.select(r).is_some()))
+        .collect();
+    let radial_count = carrying.iter().map(|s| s.radials().len()).sum();
+    let total_gates: usize = carrying
+        .iter()
+        .flat_map(|s| s.radials())
+        .filter_map(|r| moment.select(r))
+        .map(|m| m.gate_count() as usize)
+        .sum();
+    let budget = instance_budget.max(1);
+    let budget_stride = total_gates.div_ceil(budget);
+    let gate_stride = requested_stride.max(1).max(budget_stride);
+    let (value_min, value_max) = moment.value_range();
+    let span = (value_max - value_min).max(f32::EPSILON);
+    let normalize = |v: f32| 2 + (((v - value_min) / span).clamp(0.0, 1.0) * 253.0) as u8;
+    let mut gates = Vec::with_capacity((total_gates / gate_stride).min(budget));
+    'sweeps: for sweep in &carrying {
+        for radial in sweep.radials() {
+            let Some(data) = moment.select(radial) else {
+                continue;
+            };
+            let first = data.first_gate_range_km() as f32;
+            let interval = data.gate_interval_km() as f32;
+            for (gate, value) in data.iter().enumerate().step_by(gate_stride) {
+                let MomentValue::Value(value) = value else {
+                    continue;
+                };
+                gates.push(ObservedGate {
+                    azimuth_deg: radial.azimuth_angle_degrees().rem_euclid(360.0),
+                    beam_width_deg: radial.azimuth_spacing_degrees().max(0.01),
+                    slant_start_km: first + gate as f32 * interval,
+                    slant_span_km: interval,
+                    elevation_deg: radial.elevation_angle_degrees(),
+                    value_index: normalize(value),
+                    gate: gate as u32,
+                });
+                if gates.len() >= budget {
+                    break 'sweeps;
+                }
+            }
+        }
+    }
+    Ok(ObservedGates {
+        gates,
+        radar_lat: site.latitude(),
+        radar_lon: site.longitude(),
+        sweep_count: carrying.len(),
+        radial_count,
+        gate_stride,
+    })
+}
+
 /// The first UTC day with volumes in the AWS NEXRAD archive.
 ///
 /// Nothing before this exists to be asked for, so it is where a date picker has to stop. The

@@ -4,10 +4,14 @@
 //! `(1,1)` at 180°E / ~85.05°S. This matches the XYZ tile scheme so tile `(z,x,y)`
 //! covers the world rect `[x/2^z, (x+1)/2^z] × [y/2^z, (y+1)/2^z]`.
 
+use glam::{Mat4, Vec3, Vec4};
 use std::f64::consts::PI;
 
 /// Max latitude representable in web mercator (where y would go to infinity).
 pub const MAX_LAT: f64 = 85.05112878;
+
+/// Equatorial circumference of the spherical Earth used by Web Mercator.
+pub const EARTH_CIRCUMFERENCE_M: f64 = 2.0 * PI * 6_371_000.0;
 
 /// Longitude/latitude (degrees) -> normalized mercator world coord.
 pub fn lonlat_to_world(lon: f64, lat: f64) -> (f64, f64) {
@@ -35,6 +39,10 @@ pub struct Camera {
     pub center: (f64, f64),
     /// Fractional zoom; `2^zoom` tiles span the world per axis.
     pub zoom: f64,
+    /// Degrees away from the overhead view. Zero preserves the classic 2D map exactly.
+    pub pitch: f32,
+    /// Clockwise map bearing in degrees. Zero is north-up.
+    pub bearing: f32,
 }
 
 impl Camera {
@@ -42,7 +50,50 @@ impl Camera {
         Self {
             center: lonlat_to_world(lon, lat),
             zoom,
+            pitch: 0.0,
+            bearing: 0.0,
         }
+    }
+
+    /// Whether this camera needs the geographic perspective transform.
+    pub fn is_3d(&self) -> bool {
+        self.pitch.abs() > 0.01 || self.bearing.abs() > 0.01
+    }
+
+    /// One physical metre expressed in normalized Web-Mercator world units at `lat_deg`.
+    pub fn world_units_per_metre(lat_deg: f64) -> f64 {
+        1.0 / (EARTH_CIRCUMFERENCE_M * lat_deg.to_radians().cos().abs().max(0.01))
+    }
+
+    /// Perspective view-projection for local coordinates expressed in screen pixels at ground
+    /// level: +X east, +Y north, +Z up. At pitch/bearing zero the ground plane matches the old
+    /// slippy-map projection pixel-for-pixel.
+    pub fn view_projection(&self, viewport_px: (f32, f32)) -> Mat4 {
+        let (width, height) = (viewport_px.0.max(1.0), viewport_px.1.max(1.0));
+        let fov = 45f32.to_radians();
+        let distance = height * 0.5 / (fov * 0.5).tan();
+        let pitch = self.pitch.clamp(0.0, 60.0).to_radians();
+        let bearing = self.bearing.to_radians();
+        let forward_ground = Vec3::new(bearing.sin(), bearing.cos(), 0.0);
+        let eye = self.eye_position(viewport_px);
+        let view = Mat4::look_at_rh(eye, Vec3::ZERO, forward_ground);
+        let proj = Mat4::perspective_rh(fov, width / height, 1.0, distance * 40.0);
+        proj * view
+    }
+
+    /// Camera position in the local pixel/metre-preserving coordinate system used by 3D radar.
+    pub fn eye_position(&self, viewport_px: (f32, f32)) -> Vec3 {
+        let height = viewport_px.1.max(1.0);
+        let fov = 45f32.to_radians();
+        let distance = height * 0.5 / (fov * 0.5).tan();
+        let pitch = self.pitch.clamp(0.0, 60.0).to_radians();
+        let bearing = self.bearing.to_radians();
+        let forward_ground = Vec3::new(bearing.sin(), bearing.cos(), 0.0);
+        -forward_ground * (distance * pitch.sin()) + Vec3::Z * (distance * pitch.cos())
+    }
+
+    pub fn view_projection_uniform(&self, viewport_px: (f32, f32)) -> [[f32; 4]; 4] {
+        self.view_projection(viewport_px).to_cols_array_2d()
     }
 
     /// World units covered by one screen pixel.
@@ -52,9 +103,20 @@ impl Camera {
 
     /// Pan by a screen-pixel delta (drag). Positive dx/dy move content right/down.
     pub fn pan_pixels(&mut self, dx: f32, dy: f32, viewport_px: (f32, f32)) {
-        let wpp = self.world_per_pixel();
-        self.center.0 -= dx as f64 * wpp;
-        self.center.1 -= dy as f64 * wpp;
+        if self.is_3d() {
+            let screen_center = (viewport_px.0 * 0.5, viewport_px.1 * 0.5);
+            if let (Some(a), Some(b)) = (
+                self.screen_to_ground(screen_center, viewport_px),
+                self.screen_to_ground((screen_center.0 - dx, screen_center.1 - dy), viewport_px),
+            ) {
+                self.center.0 += b.0 - a.0;
+                self.center.1 += b.1 - a.1;
+            }
+        } else {
+            let wpp = self.world_per_pixel();
+            self.center.0 -= dx as f64 * wpp;
+            self.center.1 -= dy as f64 * wpp;
+        }
         self.settle(viewport_px);
     }
 
@@ -97,6 +159,9 @@ impl Camera {
 
     /// Screen pixel (origin top-left) -> world coord.
     pub fn screen_to_world(&self, px: (f32, f32), viewport_px: (f32, f32)) -> (f64, f64) {
+        if self.is_3d() {
+            return self.screen_to_ground(px, viewport_px).unwrap_or(self.center);
+        }
         let wpp = self.world_per_pixel();
         let wx = self.center.0 + (px.0 as f64 - viewport_px.0 as f64 / 2.0) * wpp;
         let wy = self.center.1 + (px.1 as f64 - viewport_px.1 as f64 / 2.0) * wpp;
@@ -105,6 +170,20 @@ impl Camera {
 
     /// World coord -> screen pixel (origin top-left); inverse of [`Self::screen_to_world`].
     pub fn world_to_screen(&self, world: (f64, f64), viewport_px: (f32, f32)) -> (f32, f32) {
+        if self.is_3d() {
+            let wpp = self.world_per_pixel();
+            let dx = wrapped_delta(world.0, self.center.0) / wpp;
+            let dy = (self.center.1 - world.1) / wpp;
+            let p = self.view_projection(viewport_px)
+                * Vec4::new(dx as f32, dy as f32, 0.0, 1.0);
+            if p.w.abs() > f32::EPSILON {
+                let ndc = p.truncate() / p.w;
+                return (
+                    (ndc.x + 1.0) * viewport_px.0 * 0.5,
+                    (1.0 - ndc.y) * viewport_px.1 * 0.5,
+                );
+            }
+        }
         let ppw = 256.0 * 2f64.powf(self.zoom); // pixels per world unit
         let px = (world.0 - self.center.0) * ppw + viewport_px.0 as f64 / 2.0;
         let py = (world.1 - self.center.1) * ppw + viewport_px.1 as f64 / 2.0;
@@ -122,6 +201,37 @@ impl Camera {
             [sx as f32, -sy as f32],
         )
     }
+
+    fn screen_to_ground(&self, px: (f32, f32), viewport_px: (f32, f32)) -> Option<(f64, f64)> {
+        let x = px.0 / viewport_px.0.max(1.0) * 2.0 - 1.0;
+        let y = 1.0 - px.1 / viewport_px.1.max(1.0) * 2.0;
+        let inv = self.view_projection(viewport_px).inverse();
+        let near4 = inv * Vec4::new(x, y, -1.0, 1.0);
+        let far4 = inv * Vec4::new(x, y, 1.0, 1.0);
+        if near4.w.abs() <= f32::EPSILON || far4.w.abs() <= f32::EPSILON {
+            return None;
+        }
+        let near = near4.truncate() / near4.w;
+        let far = far4.truncate() / far4.w;
+        let ray = far - near;
+        if ray.z.abs() <= 1e-6 {
+            return None;
+        }
+        let t = -near.z / ray.z;
+        if t < 0.0 {
+            return None;
+        }
+        let ground = near + ray * t;
+        let wpp = self.world_per_pixel();
+        Some((
+            (self.center.0 + ground.x as f64 * wpp).rem_euclid(1.0),
+            self.center.1 - ground.y as f64 * wpp,
+        ))
+    }
+}
+
+fn wrapped_delta(x: f64, center: f64) -> f64 {
+    (x - center + 0.5).rem_euclid(1.0) - 0.5
 }
 
 #[cfg(test)]
@@ -135,6 +245,8 @@ mod tests {
         let mut c = Camera {
             center: (0.5, 0.5),
             zoom: 3.0,
+            pitch: 0.0,
+            bearing: 0.0,
         };
         c.pan_pixels(0.0, 100_000.0, vp);
         let half = 400.0 / (256.0 * 8.0);
@@ -154,6 +266,8 @@ mod tests {
         let mut c = Camera {
             center: (0.5, 0.1),
             zoom: 2.0,
+            pitch: 0.0,
+            bearing: 0.0,
         };
         c.pan_pixels(0.0, 300.0, (2000.0, 2000.0));
         assert_eq!(c.center.1, 0.5);
@@ -167,6 +281,8 @@ mod tests {
         let mut c = Camera {
             center: (0.999, 0.5),
             zoom: 8.0,
+            pitch: 0.0,
+            bearing: 0.0,
         };
         c.zoom_at(-1.0, (799.0, 400.0), vp);
         assert!(
@@ -211,5 +327,26 @@ mod tests {
         let world_after = cam.screen_to_world(cursor, vp);
         assert!((world_before.0 - world_after.0).abs() < 1e-9);
         assert!((world_before.1 - world_after.1).abs() < 1e-9);
+    }
+
+    #[test]
+    fn pitched_camera_roundtrips_ground_points() {
+        let mut cam = Camera::at_lonlat(-97.28, 35.33, 8.0);
+        cam.pitch = 55.0;
+        cam.bearing = 32.0;
+        let vp = (1000.0, 700.0);
+        for px in [(500.0, 350.0), (300.0, 450.0), (700.0, 480.0)] {
+            let world = cam.screen_to_world(px, vp);
+            let got = cam.world_to_screen(world, vp);
+            assert!((got.0 - px.0).abs() < 0.05, "x: {px:?} -> {got:?}");
+            assert!((got.1 - px.1).abs() < 0.05, "y: {px:?} -> {got:?}");
+        }
+    }
+
+    #[test]
+    fn physical_altitude_scale_is_latitude_aware() {
+        let equator = Camera::world_units_per_metre(0.0);
+        let at_sixty = Camera::world_units_per_metre(60.0);
+        assert!((at_sixty / equator - 2.0).abs() < 1e-9);
     }
 }

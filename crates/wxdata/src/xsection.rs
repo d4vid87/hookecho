@@ -7,9 +7,9 @@
 
 use crate::level2::BinnedSweep;
 
-const R_EARTH_KM: f64 = 6371.0;
+const R_EARTH_KM: f64 = crate::beam_geometry::EARTH_RADIUS_M / 1_000.0;
 /// Standard-atmosphere effective earth radius (4/3 earth) for beam propagation.
-pub const R_EFF_KM: f64 = R_EARTH_KM * 4.0 / 3.0;
+pub const R_EFF_KM: f64 = crate::beam_geometry::EFFECTIVE_EARTH_RADIUS_M / 1_000.0;
 
 /// A reconstructed vertical cross-section. `dbz` is row-major `rows × cols`; row 0 is the top of
 /// the panel (highest altitude), column 0 is endpoint A. `None` = no beam coverage.
@@ -53,9 +53,9 @@ impl CrossSection {
 
 /// 4/3-earth beam height (km) at slant range `slant_km` and elevation `elev_deg`.
 pub fn beam_height_km(slant_km: f64, elev_deg: f64) -> f64 {
-    let e = elev_deg.to_radians();
-    (slant_km * slant_km + R_EFF_KM * R_EFF_KM + 2.0 * slant_km * R_EFF_KM * e.sin()).sqrt()
-        - R_EFF_KM
+    crate::beam_geometry::beam_point(slant_km * 1_000.0, elev_deg, 0.0)
+        .height_above_radar_m
+        / 1_000.0
 }
 
 /// Slant range (km) to the point where the `elev_deg` beam passes over a ground range of
@@ -85,12 +85,8 @@ pub fn slant_from_ground_km(ground_km: f64, elev_deg: f64) -> f64 {
 /// Ground range (km) under the beam at slant range `slant_km` — the inverse of
 /// [`slant_from_ground_km`], used to check it.
 pub fn ground_from_slant_km(slant_km: f64, elev_deg: f64) -> f64 {
-    let h = beam_height_km(slant_km, elev_deg);
-    let e = elev_deg.to_radians();
-    R_EFF_KM
-        * (slant_km * e.cos() / (R_EFF_KM + h))
-            .clamp(-1.0, 1.0)
-            .asin()
+    crate::beam_geometry::beam_point(slant_km * 1_000.0, elev_deg, 0.0).ground_range_m
+        / 1_000.0
 }
 
 /// Great-circle distance (km) and initial bearing (deg from north) from `(lon0,lat0)` to `(lon,lat)`.

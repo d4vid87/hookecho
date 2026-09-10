@@ -10,7 +10,7 @@ struct Uniforms {
     box_min: vec4<f32>,
     box_max: vec4<f32>,
     dims: vec4<f32>, // nx, ny, nz, step_count
-    // x: minimum reflectivity index to draw (isolates cores); y,z,w: spare.
+    // x: minimum reflectivity index to draw; y: layer opacity.
     ctl: vec4<f32>,
     // Slab bounds as fractions of the full box, so slicing narrows what is marched without
     // changing how a world position maps to a voxel.
@@ -85,6 +85,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     // Opacity ramps from the threshold, not from zero: with a 45 dBZ floor the surviving cores
     // read solid instead of uniformly hazy.
     let head = max(255.0 - f32(floor_idx), 1.0);
-    let alpha = clamp((f32(max_idx) - f32(floor_idx)) / head * 1.6 + 0.15, 0.0, 1.0);
+    let alpha = clamp((f32(max_idx) - f32(floor_idx)) / head * 1.6 + 0.15, 0.0, 1.0)
+        * u.ctl.y;
     return vec4<f32>(color.rgb * alpha, alpha);
 }

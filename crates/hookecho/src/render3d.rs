@@ -18,11 +18,14 @@ pub struct Uniforms {
 }
 
 /// A new volume grid to upload: `data` is `n×n×nz` R8 indices, `lut` a 256-entry RGBA table.
+#[derive(Clone)]
 pub struct Volume3dUpload {
     pub data: Vec<u8>,
     pub n: u32,
     pub nz: u32,
     pub lut: Vec<u8>,
+    pub half_km: f32,
+    pub top_km: f32,
 }
 
 /// Box extents of the rendered volume (z exaggerated for legibility).
@@ -73,9 +76,57 @@ pub fn orbit_uniform(
         box_min: [BOX_MIN.x, BOX_MIN.y, BOX_MIN.z, 0.0],
         box_max: [BOX_MAX.x, BOX_MAX.y, BOX_MAX.z, 0.0],
         dims: [n as f32, n as f32, nz as f32, steps as f32],
-        ctl: [v3.threshold_idx, 0.0, 0.0, 0.0],
+        ctl: [v3.threshold_idx, 1.0, 0.0, 0.0],
         clip_min: [v3.clip[0], v3.clip[2], v3.clip[4], 0.0],
         clip_max: [v3.clip[1], v3.clip[3], v3.clip[5], 0.0],
+    }
+}
+
+/// Main-map raymarch uniforms. The Cartesian texture stays radar-relative, while the box is
+/// expressed in the same local pixel coordinates as the pitched geographic camera.
+#[allow(clippy::too_many_arguments)]
+pub fn map_uniform(
+    camera: &crate::render::mercator::Camera,
+    viewport: (f32, f32),
+    radar_lon: f64,
+    radar_lat: f64,
+    antenna_altitude_m: f32,
+    upload: &Volume3dUpload,
+    steps: u32,
+    view: View3d,
+    vertical_exaggeration: f32,
+    opacity: f32,
+) -> Uniforms {
+    let radar_world = crate::render::mercator::lonlat_to_world(radar_lon, radar_lat);
+    let wpp = camera.world_per_pixel();
+    let dx = (radar_world.0 - camera.center.0 + 0.5).rem_euclid(1.0) - 0.5;
+    let dy = camera.center.1 - radar_world.1;
+    let metres_to_px = crate::render::mercator::Camera::world_units_per_metre(radar_lat) / wpp;
+    let half_px = upload.half_km as f64 * 1_000.0 * metres_to_px;
+    let z0 = antenna_altitude_m as f64 * metres_to_px * vertical_exaggeration as f64;
+    let z1 = (antenna_altitude_m as f64 + upload.top_km as f64 * 1_000.0)
+        * metres_to_px
+        * vertical_exaggeration as f64;
+    let box_min = Vec3::new(
+        (dx / wpp - half_px) as f32,
+        (dy / wpp - half_px) as f32,
+        z0 as f32,
+    );
+    let box_max = Vec3::new(
+        (dx / wpp + half_px) as f32,
+        (dy / wpp + half_px) as f32,
+        z1 as f32,
+    );
+    let eye = camera.eye_position(viewport);
+    Uniforms {
+        inv_view_proj: camera.view_projection(viewport).inverse().to_cols_array_2d(),
+        cam_pos: [eye.x, eye.y, eye.z, 1.0],
+        box_min: [box_min.x, box_min.y, box_min.z, 0.0],
+        box_max: [box_max.x, box_max.y, box_max.z, 0.0],
+        dims: [upload.n as f32, upload.n as f32, upload.nz as f32, steps as f32],
+        ctl: [view.threshold_idx, opacity.clamp(0.0, 1.0), 0.0, 0.0],
+        clip_min: [view.clip[0], view.clip[2], view.clip[4], 0.0],
+        clip_max: [view.clip[1], view.clip[3], view.clip[5], 0.0],
     }
 }
 

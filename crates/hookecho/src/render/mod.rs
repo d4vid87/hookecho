@@ -63,6 +63,21 @@ pub struct RadarUpload {
     pub lut_only: bool,
 }
 
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct ObservedGateInstance {
+    pub polar: [f32; 4],
+    pub data: [f32; 4],
+}
+
+/// Static observed-gate geometry uploaded only when volume/product/density changes.
+pub struct ObservedSweepUpload {
+    pub instances: Vec<ObservedGateInstance>,
+    /// Radar/site, transfer-function and physical scaling controls; see `radar_observed.wgsl`.
+    pub uniform: [f32; 12],
+    pub lut: Vec<u8>,
+}
+
 /// A national gridded field layer (all share the MRMS warp pipeline; they differ only in data,
 /// LUT, and draw order). `below_radar` layers paint under the single-site radar; the rest above.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
@@ -324,6 +339,10 @@ pub struct MapCallback {
     pub camera_center: [f32; 2],
     pub camera_scale: [f32; 2],
     pub world_per_pixel: f32,
+    /// Perspective transform for radar-relative screen-pixel coordinates.
+    pub camera_view_proj: [[f32; 4]; 4],
+    /// Zero keeps the original orthographic shader path bit-for-bit; one enables perspective.
+    pub camera_3d: f32,
     pub new_tiles: Vec<PendingTile>,
     pub visible: Vec<VisibleTile>,
     /// Which basemap style this pane draws ([`crate::tiles::BasemapStyle::key`]).
@@ -333,6 +352,8 @@ pub struct MapCallback {
     pub vector_over_raster: bool,
     pub radar_upload: Option<RadarUpload>,
     pub draw_radar: bool,
+    pub observed_upload: Option<ObservedSweepUpload>,
+    pub draw_observed: bool,
     /// `Some` only when the overlay geometry changed (else the last upload is reused).
     pub overlay_upload: Option<OverlayUpload>,
     pub draw_overlay: bool,
@@ -382,8 +403,9 @@ struct CameraUniform {
     scale: [f32; 2],
     world_per_pixel: f32,
     road_scale: f32,
-    // WebGL uniform bindings must occupy a multiple of 16 bytes.
-    _pad: [f32; 2],
+    mode_3d: f32,
+    _pad: f32,
+    view_proj: [[f32; 4]; 4],
 }
 
 struct TileGpu {
@@ -401,6 +423,14 @@ struct RadarGpu {
     /// shape writes into these textures instead of building new ones with a new bind group.
     dims: (u32, u32),
     flag_dims: (u32, u32),
+}
+
+struct ObservedGpu {
+    _lut: wgpu::Texture,
+    uniform: wgpu::Buffer,
+    instances: wgpu::Buffer,
+    bind_group: wgpu::BindGroup,
+    count: u32,
 }
 
 struct OverlayGpu {
@@ -427,6 +457,7 @@ struct PaneGpu {
     tile_vbuf: wgpu::Buffer,
     radar_vbuf: wgpu::Buffer,
     radar: Option<RadarGpu>,
+    observed: Option<ObservedGpu>,
     /// Ids of the tiles this frame's quads draw, in quad order. Not the same as the visible list:
     /// a missing tile is stood in for by resident children or an ancestor.
     frame_visible: Vec<TileKey>,
@@ -439,6 +470,7 @@ struct PaneGpu {
     frame_visible_vector: Vec<TileId>,
     vector_over_raster: bool,
     frame_draw_radar: bool,
+    frame_draw_observed: bool,
     frame_draw_overlay: bool,
     /// Field layers this pane draws this frame. Per-pane, not shared: two panes are how you look
     /// at two fields at once.
@@ -449,11 +481,13 @@ struct PaneGpu {
 pub struct RenderResources {
     tile_pipeline: wgpu::RenderPipeline,
     radar_pipeline: wgpu::RenderPipeline,
+    observed_pipeline: wgpu::RenderPipeline,
     overlay_pipeline: wgpu::RenderPipeline,
     mrms_pipeline: wgpu::RenderPipeline,
     camera_bgl: wgpu::BindGroupLayout,
     tile_bgl: wgpu::BindGroupLayout,
     radar_bgl: wgpu::BindGroupLayout,
+    observed_bgl: wgpu::BindGroupLayout,
     mrms_bgl: wgpu::BindGroupLayout,
     sampler: wgpu::Sampler,
     // Shared across panes: tile image cache, vector tile geometry, and the world-space overlay
@@ -482,6 +516,8 @@ impl RenderResources {
         let tile_shader = device.create_shader_module(wgpu::include_wgsl!("../shaders/tiles.wgsl"));
         let radar_shader =
             device.create_shader_module(wgpu::include_wgsl!("../shaders/radar.wgsl"));
+        let observed_shader =
+            device.create_shader_module(wgpu::include_wgsl!("../shaders/radar_observed.wgsl"));
         let overlay_shader =
             device.create_shader_module(wgpu::include_wgsl!("../shaders/overlay.wgsl"));
         let mrms_shader = device.create_shader_module(wgpu::include_wgsl!("../shaders/mrms.wgsl"));
@@ -570,6 +606,31 @@ impl RenderResources {
                 },
             ],
         });
+        let observed_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("observed_radar_bgl"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: NonZeroU64::new(48),
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+            ],
+        });
 
         let blend = Some(wgpu::BlendState::ALPHA_BLENDING);
         let color_target = wgpu::ColorTargetState {
@@ -632,6 +693,40 @@ impl RenderResources {
                 entry_point: Some("fs_main"),
                 compilation_options: Default::default(),
                 targets: &[Some(color_target)],
+            }),
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview_mask: None,
+            cache: None,
+        });
+        let observed_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("observed_radar_layout"),
+            bind_group_layouts: &[Some(&camera_bgl), Some(&observed_bgl)],
+            immediate_size: 0,
+        });
+        let observed_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("observed_radar_pipeline"),
+            layout: Some(&observed_layout),
+            vertex: wgpu::VertexState {
+                module: &observed_shader,
+                entry_point: Some("vs_main"),
+                compilation_options: Default::default(),
+                buffers: &[wgpu::VertexBufferLayout {
+                    array_stride: std::mem::size_of::<ObservedGateInstance>() as u64,
+                    step_mode: wgpu::VertexStepMode::Instance,
+                    attributes: &wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32x4],
+                }],
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &observed_shader,
+                entry_point: Some("fs_main"),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: target_format,
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
             }),
             primitive: wgpu::PrimitiveState::default(),
             depth_stencil: None,
@@ -765,11 +860,13 @@ impl RenderResources {
         Self {
             tile_pipeline,
             radar_pipeline,
+            observed_pipeline,
             overlay_pipeline,
             mrms_pipeline,
             camera_bgl,
             tile_bgl,
             radar_bgl,
+            observed_bgl,
             mrms_bgl,
             sampler,
             tiles: HashMap::new(),
@@ -819,11 +916,13 @@ impl RenderResources {
                 tile_vbuf,
                 radar_vbuf,
                 radar: None,
+                observed: None,
                 frame_visible: Vec::new(),
                 quads_key: None,
                 frame_visible_vector: Vec::new(),
                 vector_over_raster: false,
                 frame_draw_radar: false,
+                frame_draw_observed: false,
                 frame_draw_overlay: false,
                 field_draws: Vec::new(),
             }
@@ -1104,6 +1203,76 @@ impl RenderResources {
         })
     }
 
+    fn build_observed(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        up: &ObservedSweepUpload,
+    ) -> ObservedGpu {
+        let uniform = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("observed_radar_uniform"),
+            contents: bytemuck::cast_slice(&up.uniform),
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        });
+        let instances = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("observed_radar_instances"),
+            contents: bytemuck::cast_slice(&up.instances),
+            usage: wgpu::BufferUsages::VERTEX,
+        });
+        let lut_size = wgpu::Extent3d {
+            width: 256,
+            height: 1,
+            depth_or_array_layers: 1,
+        };
+        let lut = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("observed_radar_lut"),
+            size: lut_size,
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8UnormSrgb,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &lut,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            &up.lut,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(256 * 4),
+                rows_per_image: Some(1),
+            },
+            lut_size,
+        );
+        let lut_view = lut.create_view(&wgpu::TextureViewDescriptor::default());
+        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("observed_radar_bg"),
+            layout: &self.observed_bgl,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: uniform.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(&lut_view),
+                },
+            ],
+        });
+        ObservedGpu {
+            _lut: lut,
+            uniform,
+            instances,
+            bind_group,
+            count: up.instances.len() as u32,
+        }
+    }
+
     /// Upload camera/tiles/radar for `cb` and stage its pane's draw list. Shared caches (tiles,
     /// vector tiles, overlay) update once; per-pane state (camera, radar, tile quads) is keyed
     /// by `cb.pane`. Shared by the egui callback and the headless renderer.
@@ -1234,6 +1403,10 @@ impl RenderResources {
             }
             None => None,
         };
+        let new_observed = cb
+            .observed_upload
+            .as_ref()
+            .map(|up| self.build_observed(device, queue, up));
         // Build the tile quad list against the shared tile cache before mutably borrowing the pane
         // — a tile with no texture yet borrows one from the tiles around it (see `tile_quads`).
         // Skipped outright when nothing it depends on moved: a still map rebuilt up to 512 tiles
@@ -1263,7 +1436,9 @@ impl RenderResources {
                 road_scale: crate::basemap_style::road_scale(
                     -(256.0 * cb.world_per_pixel as f64).log2(),
                 ) as f32,
-                _pad: [0.0; 2],
+                mode_3d: cb.camera_3d,
+                _pad: 0.0,
+                view_proj: cb.camera_view_proj,
             }),
         );
         if let Some(r) = &cb.radar_upload {
@@ -1282,6 +1457,15 @@ impl RenderResources {
         if let Some(radar) = new_radar {
             pane.radar = Some(radar);
         }
+        if let Some(observed) = new_observed {
+            #[cfg(debug_assertions)]
+            log::debug!(
+                "3D observed radar: {} gate instances, {} bytes",
+                observed.count,
+                observed.count as usize * std::mem::size_of::<ObservedGateInstance>()
+            );
+            pane.observed = Some(observed);
+        }
         if let Some((tverts, visible)) = quads {
             if !tverts.is_empty() {
                 queue.write_buffer(&pane.tile_vbuf, 0, bytemuck::cast_slice(&tverts));
@@ -1292,6 +1476,7 @@ impl RenderResources {
         pane.frame_visible_vector = visible_vector;
         pane.vector_over_raster = cb.vector_over_raster;
         pane.frame_draw_radar = cb.draw_radar && pane.radar.is_some();
+        pane.frame_draw_observed = cb.draw_observed && pane.observed.is_some();
         pane.frame_draw_overlay = cb.draw_overlay && overlay_present;
         pane.field_draws = field_draws;
     }
@@ -1512,6 +1697,18 @@ impl RenderResources {
                 pass.set_bind_group(1, &radar.bind_group, &[]);
                 pass.set_vertex_buffer(0, pane.radar_vbuf.slice(..));
                 pass.draw(0..6, 0..1);
+            }
+        }
+        // Painter-order translucency is deliberate: the map has no depth attachment, and sharing
+        // unrelated egui depth would make upper tilts disappear behind whichever layer painted
+        // first. Gate altitude still controls perspective and mutual visual placement.
+        if pane.frame_draw_observed {
+            if let Some(observed) = &pane.observed {
+                pass.set_pipeline(&self.observed_pipeline);
+                pass.set_bind_group(0, cam, &[]);
+                pass.set_bind_group(1, &observed.bind_group, &[]);
+                pass.set_vertex_buffer(0, observed.instances.slice(..));
+                pass.draw(0..6, 0..observed.count);
             }
         }
         // Field layers over the radar (rotation/hail/shear/lightning signals).

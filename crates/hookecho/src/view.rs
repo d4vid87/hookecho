@@ -10,6 +10,45 @@ use std::sync::Arc;
 use wxdata::clock::Instant;
 use wxdata::level2::{self, BinnedSweep, Moment, Scan};
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Map3dRepresentation {
+    ObservedSweeps,
+    SmoothVolume,
+}
+
+/// Geographic 3D controls belong to a map pane so they stay synchronized with that pane's
+/// product, timeline, site and camera rather than becoming another viewer.
+#[derive(Clone, Debug)]
+pub struct Map3dState {
+    pub enabled: bool,
+    pub representation: Map3dRepresentation,
+    pub vertical_exaggeration: f32,
+    pub opacity: f32,
+    pub gate_stride: usize,
+    pub instance_budget: usize,
+    /// Upload identity. Camera state is intentionally absent: moving the camera updates uniforms,
+    /// never the millions-of-gates buffer.
+    pub observed_key: Option<(String, Moment, usize, u64, [u32; 6])>,
+}
+
+impl Default for Map3dState {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            representation: Map3dRepresentation::ObservedSweeps,
+            vertical_exaggeration: 1.0,
+            opacity: 0.72,
+            gate_stride: if cfg!(target_os = "android") { 2 } else { 1 },
+            instance_budget: if cfg!(target_os = "android") {
+                250_000
+            } else {
+                1_000_000
+            },
+            observed_key: None,
+        }
+    }
+}
+
 /// How many binned sweeps one volume keeps. A sweep is ~1.3 MB.
 ///
 /// Twelve was below the number of tilts in a volume, which is the one size it must not be: VCP
@@ -176,6 +215,7 @@ impl Volume {
 /// One map pane.
 pub struct MapView {
     pub camera: crate::render::mercator::Camera,
+    pub map_3d: Map3dState,
     /// Selected radar site (`None` = Supercell's cleared "None" state).
     pub site: Option<String>,
     pub moment: Moment,
@@ -226,6 +266,7 @@ impl MapView {
     pub fn new(site: Option<String>, camera: crate::render::mercator::Camera) -> Self {
         Self {
             camera,
+            map_3d: Map3dState::default(),
             site,
             moment: Moment::Reflectivity,
             tilt: 0,

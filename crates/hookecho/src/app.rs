@@ -14,12 +14,15 @@ use crate::hotkeys::{self, BindableAction};
 use crate::overlay_build;
 #[cfg(not(target_arch = "wasm32"))]
 use crate::perf::PerfReadout;
-use crate::render::{mercator::Camera, MapCallback, OverlayUpload, RadarUpload, RenderResources};
+use crate::render::{
+    mercator::Camera, MapCallback, ObservedGateInstance, ObservedSweepUpload, OverlayUpload,
+    RadarUpload, RenderResources,
+};
 use crate::settings::Settings;
 use crate::tiles::TileManager;
 use crate::ui;
 use crate::ui::detail_window::Detail;
-use crate::view::{MapView, Volume};
+use crate::view::{Map3dRepresentation, MapView, Volume};
 use chrono::{DateTime, NaiveDate, Utc};
 use lru::LruCache;
 use std::num::NonZeroUsize;
@@ -3234,6 +3237,8 @@ impl HookEchoApp {
                 Camera {
                     center: (sv.x, sv.y),
                     zoom: sv.zoom,
+                    pitch: 0.0,
+                    bearing: 0.0,
                 },
             ),
             _ => {
@@ -10524,6 +10529,241 @@ impl HookEchoApp {
         }
     }
 
+    /// Build the static instance buffer for all real gates in a Level II volume. The cache key
+    /// excludes camera state on purpose: pitch, bearing, pan and zoom only change the shared
+    /// camera uniform.
+    fn pane_observed_radar(
+        &mut self,
+        idx: usize,
+        data: usize,
+    ) -> (Option<ObservedSweepUpload>, bool) {
+        let state = &self.views[idx].map_3d;
+        if !state.enabled || state.representation != Map3dRepresentation::ObservedSweeps {
+            return (None, false);
+        }
+        let moment = self.views[idx].moment;
+        if moment == Moment::SpecificDifferentialPhase {
+            // KDP is derived from PhiDP after binning; calling it an observed gate would be false.
+            return (None, false);
+        }
+        let Some(vol) = self.views[data].volume.as_ref() else {
+            return (None, false);
+        };
+        if !vol.moments[moment.index()] {
+            return (None, false);
+        }
+        let name = vol.name.clone();
+        let scan = Arc::clone(&vol.scan);
+        let threshold = self.views[idx].active_threshold();
+        let (value_min, value_max) = moment.value_range();
+        let threshold_idx = threshold.map_or(2.0, |value| {
+            (2.0 + (value - value_min) / (value_max - value_min).max(f32::EPSILON) * 253.0)
+                .clamp(2.0, 255.0)
+        });
+        let (motion_e, motion_n, srv) = self.views[idx]
+            .storm_motion_uv()
+            .map(|(e, n)| {
+                let per_ms = 253.0 / (value_max - value_min).max(f32::EPSILON);
+                (e * per_ms, n * per_ms, 1.0f32)
+            })
+            .unwrap_or((0.0, 0.0, 0.0));
+        let controls = [
+            self.views[idx].map_3d.vertical_exaggeration.to_bits(),
+            self.views[idx].map_3d.opacity.to_bits(),
+            threshold_idx.to_bits(),
+            motion_e.to_bits(),
+            motion_n.to_bits(),
+            srv.to_bits(),
+        ];
+        let palette_gen = self.palettes.gen.wrapping_add(
+            if crate::theme::is_high_contrast(self.settings.theme) {
+                0x9e37_79b9_7f4a_7c15
+            } else {
+                0
+            },
+        );
+        let key = (
+            name,
+            moment,
+            self.views[idx].map_3d.gate_stride,
+            palette_gen,
+            controls,
+        );
+        if self.views[idx].map_3d.observed_key.as_ref() == Some(&key) {
+            return (None, true);
+        }
+        let observed = match level2::observed_gates(
+            &scan,
+            moment,
+            self.views[idx].map_3d.gate_stride,
+            self.views[idx].map_3d.instance_budget,
+        ) {
+            Ok(gates) => gates,
+            Err(err) => {
+                self.views[idx].error = Some(err.to_string());
+                return (None, false);
+            }
+        };
+        let antenna_altitude_m = self.views[idx]
+            .site
+            .as_deref()
+            .and_then(wxdata::sites::site_by_id)
+            .map(|site| site.elevation_meters as f64 + wxdata::towers::tower_m(site.id))
+            .unwrap_or(0.0) as f32;
+        let table = crate::colormap::effective_table(&self.palettes, moment, self.settings.theme);
+        let lut = crate::colormap::bake_lut(&table, (value_min, value_max), None).to_vec();
+        let instances = observed
+            .gates
+            .iter()
+            .map(|gate| ObservedGateInstance {
+                polar: [
+                    gate.azimuth_deg,
+                    gate.beam_width_deg,
+                    gate.slant_start_km,
+                    gate.slant_span_km,
+                ],
+                data: [
+                    gate.elevation_deg,
+                    gate.value_index as f32,
+                    gate.gate as f32,
+                    0.0,
+                ],
+            })
+            .collect();
+        #[cfg(debug_assertions)]
+        log::debug!(
+            "3D observed {}: {} sweeps, {} radials, {} instances, stride {}",
+            moment.short_name(),
+            observed.sweep_count,
+            observed.radial_count,
+            observed.gates.len(),
+            observed.gate_stride
+        );
+        let uniform = [
+            observed.radar_lat,
+            observed.radar_lon,
+            antenna_altitude_m,
+            self.views[idx].map_3d.vertical_exaggeration,
+            self.views[idx].map_3d.opacity,
+            threshold_idx,
+            Camera::world_units_per_metre(observed.radar_lat as f64) as f32,
+            srv,
+            motion_e,
+            motion_n,
+            0.0,
+            0.0,
+        ];
+        self.views[idx].map_3d.observed_key = Some(key);
+        (
+            Some(ObservedSweepUpload {
+                instances,
+                uniform,
+                lut,
+            }),
+            true,
+        )
+    }
+
+    fn map_3d_controls(&mut self, idx: usize, prect: egui::Rect, ctx: &egui::Context) {
+        let volume_supported = self.volume3d_supported;
+        let moment = self.views[idx].moment;
+        let pos = prect.right_top() + egui::vec2(-246.0, 8.0);
+        egui::Area::new(egui::Id::new(("map_3d_controls", idx)))
+            .order(egui::Order::Foreground)
+            .fixed_pos(pos)
+            .show(ctx, |ui| {
+                egui::Frame::popup(ui.style())
+                    .inner_margin(egui::Margin::symmetric(8, 6))
+                    .show(ui, |ui| {
+                        ui.set_width(230.0);
+                        let view = &mut self.views[idx];
+                        let was_enabled = view.map_3d.enabled;
+                        ui.horizontal(|ui| {
+                            ui.selectable_value(&mut view.map_3d.enabled, false, "2D");
+                            ui.selectable_value(&mut view.map_3d.enabled, true, "3D map");
+                            if view.camera.bearing.abs() > 0.1
+                                && ui.small_button("North ↑").clicked()
+                            {
+                                view.camera.bearing = 0.0;
+                            }
+                        });
+                        if was_enabled != view.map_3d.enabled {
+                            if view.map_3d.enabled {
+                                view.camera.pitch = 50.0;
+                            } else {
+                                view.camera.pitch = 0.0;
+                                view.camera.bearing = 0.0;
+                            }
+                        }
+                        if !view.map_3d.enabled {
+                            return;
+                        }
+                        if view.map_3d.representation == Map3dRepresentation::SmoothVolume
+                            && moment != Moment::Reflectivity
+                        {
+                            view.map_3d.representation = Map3dRepresentation::ObservedSweeps;
+                        }
+                        ui.horizontal(|ui| {
+                            ui.selectable_value(
+                                &mut view.map_3d.representation,
+                                Map3dRepresentation::ObservedSweeps,
+                                "Observed",
+                            )
+                            .on_hover_text("Every real Level II tilt; no synthetic sweeps");
+                            ui.add_enabled_ui(
+                                volume_supported && moment == Moment::Reflectivity,
+                                |ui| {
+                                    ui.selectable_value(
+                                        &mut view.map_3d.representation,
+                                        Map3dRepresentation::SmoothVolume,
+                                        "Smooth",
+                                    )
+                                },
+                            )
+                            .response
+                            .on_hover_text("Regularized reflectivity volume");
+                        });
+                        ui.add(
+                            egui::Slider::new(&mut view.camera.pitch, 0.0..=60.0)
+                                .text("Pitch")
+                                .suffix("°"),
+                        );
+                        ui.add(
+                            egui::Slider::new(&mut view.camera.bearing, -180.0..=180.0)
+                                .text("Bearing")
+                                .suffix("°"),
+                        );
+                        ui.add(
+                            egui::Slider::new(&mut view.map_3d.vertical_exaggeration, 1.0..=8.0)
+                                .text("Vertical")
+                                .suffix("×"),
+                        );
+                        ui.add(
+                            egui::Slider::new(&mut view.map_3d.opacity, 0.1..=1.0)
+                                .text("Opacity"),
+                        );
+                        if view.map_3d.representation == Map3dRepresentation::ObservedSweeps {
+                            ui.horizontal(|ui| {
+                                ui.label("Gates");
+                                for (label, stride) in [("Full", 1), ("½", 2), ("¼", 4)] {
+                                    ui.selectable_value(
+                                        &mut view.map_3d.gate_stride,
+                                        stride,
+                                        label,
+                                    );
+                                }
+                            });
+                            if moment == Moment::SpecificDifferentialPhase {
+                                ui.weak("KDP is derived; shown on the map plane.");
+                            }
+                        } else {
+                            ui.weak("Reflectivity floor, quality, and slicing use the 3D volume controls.");
+                        }
+                        ui.weak("Right-drag rotates · drag pans · wheel zooms");
+                    });
+            });
+    }
+
     /// The always-on-top mini loop: a small undecorated window showing the active pane, so the
     /// radar stays visible over whatever else is on screen.
     ///
@@ -10733,7 +10973,16 @@ impl HookEchoApp {
         } else if response.dragged() && quiet {
             self.active = idx;
             let d = response.drag_delta();
-            match self.tap_zoom {
+            if self.views[idx].map_3d.enabled
+                && response.dragged_by(egui::PointerButton::Secondary)
+            {
+                self.views[idx].camera.bearing =
+                    (self.views[idx].camera.bearing - d.x * 0.35 + 180.0).rem_euclid(360.0)
+                        - 180.0;
+                self.views[idx].camera.pitch =
+                    (self.views[idx].camera.pitch + d.y * 0.25).clamp(0.0, 60.0);
+            } else {
+                match self.tap_zoom {
                 // Double-tap-drag: the map zoom every phone map has, and the only one you can do
                 // one-handed. Drag up to zoom in, anchored on the point that was tapped, so the
                 // thing you double-tapped is the thing that stays put.
@@ -10743,9 +10992,10 @@ impl HookEchoApp {
                         .camera
                         .zoom_at(-d.y as f64 * 0.01, cursor, vp);
                 }
-                None => {
-                    self.views[idx].camera.pan_pixels(d.x, d.y, vp);
-                    self.follow_cell = None; // a manual pan takes over the camera
+                    None => {
+                        self.views[idx].camera.pan_pixels(d.x, d.y, vp);
+                        self.follow_cell = None; // a manual pan takes over the camera
+                    }
                 }
             }
         }
@@ -10833,6 +11083,13 @@ impl HookEchoApp {
                     self.views[idx]
                         .camera
                         .zoom_at((mt.zoom_delta as f64).log2(), cursor, vp);
+                }
+                if self.views[idx].map_3d.enabled && mt.rotation_delta.abs() > 0.001 {
+                    self.views[idx].camera.bearing = (self.views[idx].camera.bearing
+                        - mt.rotation_delta.to_degrees()
+                        + 180.0)
+                        .rem_euclid(360.0)
+                        - 180.0;
                 }
                 let t = mt.translation_delta;
                 if t != egui::Vec2::ZERO {
@@ -11344,10 +11601,16 @@ impl HookEchoApp {
         };
 
         // --- Radar (this pane's product, its own volume) ---
+        self.map_3d_controls(idx, prect, ctx);
         let (radar_upload, mut draw_radar) = self.pane_radar(idx, idx);
+        let (observed_upload, mut draw_observed) = self.pane_observed_radar(idx, idx);
+        if draw_observed {
+            draw_radar = false;
+        }
         // In the forecast-scrub tail there's no observed volume — show the HRRR field instead.
         if self.views[idx].timeline.forecast_hour().is_some() {
             draw_radar = false;
+            draw_observed = false;
         }
 
         // Field layers: upload freshly-fetched grids on the first pane; every pane draws the
@@ -11402,18 +11665,28 @@ impl HookEchoApp {
 
         let cam = self.views[idx].camera;
         let (center, scale) = cam.world_to_clip_uniform(vp);
-        let (wind_upload, wind) = self.wind_gpu_frame(idx, &cam, vp);
+        let (wind_upload, wind) = if cam.is_3d() {
+            // The particle compositor is a screen-space trail buffer and cannot be pitched without
+            // smearing history across the map. Hide it in 3D until that buffer is reprojected.
+            (None, None)
+        } else {
+            self.wind_gpu_frame(idx, &cam, vp)
+        };
         let cb = MapCallback {
             pane: idx as u32,
             camera_center: center,
             camera_scale: scale,
             world_per_pixel: cam.world_per_pixel() as f32,
+            camera_view_proj: cam.view_projection_uniform(vp),
+            camera_3d: if cam.is_3d() { 1.0 } else { 0.0 },
             new_tiles,
             visible,
             basemap_key: pane_style.key(),
             vector_over_raster: pane_style == BasemapStyle::HybridSatellite,
             radar_upload,
             draw_radar,
+            observed_upload,
+            draw_observed,
             overlay_upload: if first {
                 self.pending_overlay.take()
             } else {
@@ -14430,6 +14703,8 @@ impl HookEchoApp {
         v.camera = crate::render::mercator::Camera {
             center: lonlat_to_world(lon, lat),
             zoom,
+            pitch: 0.0,
+            bearing: 0.0,
         };
         v.camera_placed = true;
         if let Some(t) = time {
