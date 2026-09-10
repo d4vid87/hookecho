@@ -26,29 +26,28 @@ jobs:
         run: |
           python3 - <<'PY'
           from pathlib import Path
+          import re
 
           path = Path("crates/hookecho/src/app.rs")
           text = path.read_text()
-          old = """                    crate::render3d::Volume3dUpload {
-                        data: v3.data,
-                        n: v3.n as u32,
-                        nz: v3.nz as u32,
-                        lut,
-                    },"""
-          new = """                    crate::render3d::Volume3dUpload {
-                        data: v3.data,
-                        n: v3.n as u32,
-                        nz: v3.nz as u32,
-                        lut,
-                        half_km: v3.half_km,
-                        top_km: v3.top_km,
-                    },"""
-
-          count = text.count(old)
+          pattern = re.compile(
+              r"(crate::render3d::Volume3dUpload\s*\{\s*"
+              r"data:\s*v3\.data,\s*"
+              r"n:\s*v3\.n\s+as\s+u32,\s*"
+              r"nz:\s*v3\.nz\s+as\s+u32,\s*"
+              r"lut,)(\s*\})",
+              re.MULTILINE,
+          )
+          replacement = (
+              r"\1\n"
+              "                        half_km: v3.half_km,\n"
+              "                        top_km: v3.top_km,"
+              r"\2"
+          )
+          text, count = pattern.subn(replacement, text, count=1)
           if count != 1:
-              raise SystemExit(f"Expected exactly one matching Volume3dUpload initializer, found {count}")
-
-          path.write_text(text.replace(old, new, 1))
+              raise SystemExit(f"Expected exactly one incomplete Volume3dUpload initializer, found {count}")
+          path.write_text(text)
           PY
 
           git diff --check
