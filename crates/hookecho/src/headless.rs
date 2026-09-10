@@ -2660,6 +2660,8 @@ pub fn run_3d(site: &str, out_path: &str, threshold_dbz: Option<f32>) -> anyhow:
         n: v3.n as u32,
         nz: v3.nz as u32,
         lut,
+        half_km: v3.half_km,
+        top_km: v3.top_km,
     };
     let view = crate::render3d::View3d {
         threshold_idx: match threshold_dbz {
