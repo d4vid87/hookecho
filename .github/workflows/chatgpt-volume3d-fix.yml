@@ -1,0 +1,73 @@
+name: One-shot Volume3D compile fix
+
+on:
+  push:
+    branches:
+      - feat/wsv3-redesign
+    paths:
+      - .github/workflows/chatgpt-volume3d-fix.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch-and-verify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out failing branch
+        uses: actions/checkout@v4
+        with:
+          ref: feat/wsv3-redesign
+          fetch-depth: 1
+
+      - name: Add missing Volume3d geometry fields
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("crates/hookecho/src/app.rs")
+          text = path.read_text()
+          old = """                    crate::render3d::Volume3dUpload {
+                        data: v3.data,
+                        n: v3.n as u32,
+                        nz: v3.nz as u32,
+                        lut,
+                    },"""
+          new = """                    crate::render3d::Volume3dUpload {
+                        data: v3.data,
+                        n: v3.n as u32,
+                        nz: v3.nz as u32,
+                        lut,
+                        half_km: v3.half_km,
+                        top_km: v3.top_km,
+                    },"""
+
+          count = text.count(old)
+          if count != 1:
+              raise SystemExit(f"Expected exactly one matching Volume3dUpload initializer, found {count}")
+
+          path.write_text(text.replace(old, new, 1))
+          PY
+
+          git diff --check
+          git diff -- crates/hookecho/src/app.rs
+
+      - name: Install WASM target
+        run: rustup target add wasm32-unknown-unknown
+
+      - name: Verify the failing WASM compile target
+        env:
+          RUSTFLAGS: '--cfg getrandom_backend="wasm_js"'
+        run: cargo build --locked --profile web --target wasm32-unknown-unknown -p hookecho --lib
+
+      - name: Commit verified source fix and remove one-shot workflow
+        shell: bash
+        run: |
+          git rm -- .github/workflows/chatgpt-volume3d-fix.yml
+          git add -- crates/hookecho/src/app.rs
+          git diff --cached --check
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "Fix Volume3dUpload geometry propagation"
+          git push origin HEAD:feat/wsv3-redesign
