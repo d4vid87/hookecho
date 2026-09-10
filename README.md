@@ -30,6 +30,12 @@ Recorded on a Samsung Galaxy S24 Ultra. [Watch both phone demos](https://hookech
 | --- | --- |
 | ![Archived supercell reflectivity](docs/shots/reflectivity.jpg) | ![Archived storm velocity](docs/shots/velocity.jpg) |
 
+| Layers and observations | Storm attributes |
+| --- | --- |
+| ![Floating layers and labeled map controls](docs/shots/layers.jpg) | ![Storm list with selected cell attributes](docs/shots/stormtable.jpg) |
+
+![Selected storm cell with all attributes visible](docs/shots/cellconsole.jpg)
+
 [See the complete screenshot gallery](docs/technical-reference.md#screenshots).
 
 ## Start here

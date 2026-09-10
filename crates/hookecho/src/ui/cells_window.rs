@@ -5,8 +5,6 @@
 //! worth looking at. This is the table that answers it: sort by hail size or reflectivity, click
 //! the worst row, fly there.
 
-use egui::{Align, Layout, RichText};
-use egui_extras::{Column, TableBuilder};
 use wxdata::level3::Cell;
 
 /// Which column the table is ordered by.
@@ -33,6 +31,8 @@ pub struct CellsWindow {
     /// Descending by default — the interesting storms are the big numbers.
     desc: bool,
     first_run: bool,
+    query: String,
+    selected: Option<String>,
 }
 
 impl CellsWindow {
@@ -63,17 +63,6 @@ fn cmp_opt<T: PartialOrd>(a: Option<T>, b: Option<T>, desc: bool) -> std::cmp::O
                 o
             }
         }
-    }
-}
-
-/// Green through amber to red across the score, so the top of the table reads at a glance.
-fn rank_color(score: u8) -> egui::Color32 {
-    let t = score as f32 / 100.0;
-    if t < 0.5 {
-        egui::Color32::from_rgb((60.0 + t * 2.0 * 195.0) as u8, 200, 60)
-    } else {
-        let k = (t - 0.5) * 2.0;
-        egui::Color32::from_rgb(255, (200.0 - k * 160.0) as u8, (60.0 - k * 20.0) as u8)
     }
 }
 
@@ -136,33 +125,6 @@ pub fn to_csv(cells: &[Cell], scores: &[u8], order: &[usize]) -> String {
     s
 }
 
-fn num<T: std::fmt::Display>(v: Option<T>) -> String {
-    v.map(|x| x.to_string()).unwrap_or_else(|| "—".into())
-}
-
-fn f1(v: Option<f32>) -> String {
-    v.map(|x| format!("{x:.1}")).unwrap_or_else(|| "—".into())
-}
-
-fn f0(v: Option<f32>) -> String {
-    v.map(|x| format!("{x:.0}")).unwrap_or_else(|| "—".into())
-}
-
-/// One row's summary line, shared by the desktop table and the touch list.
-fn movement(c: &Cell) -> String {
-    match (c.mvt_deg, c.mvt_kt) {
-        (Some(d), Some(k)) => format!("{d:.0}° {k:.0}kt"),
-        _ => "—".into(),
-    }
-}
-
-fn position(c: &Cell) -> String {
-    match (c.az_deg, c.range_nm) {
-        (Some(a), Some(r)) => format!("{a:.0}° {r:.0}nm"),
-        _ => "—".into(),
-    }
-}
-
 /// Show the table. Returns the id of a clicked cell, if any.
 #[allow(clippy::too_many_arguments)] // one call site, flat; a params struct buys nothing
 pub fn show(
@@ -177,274 +139,158 @@ pub fn show(
     // Per-cell-id history across volumes, oldest→newest — the same map the attributes popup
     // draws its trend rows from.
     trends: &std::collections::HashMap<String, Vec<crate::ui::cell_window::CellSample>>,
-    accent: egui::Color32,
-    drawer: &mut crate::ui::drawer::Drawer,
+    _accent: egui::Color32,
+    _drawer: &mut crate::ui::drawer::Drawer,
 ) -> Option<String> {
     if !w.open {
         return None;
     }
     let mut chosen = None;
     let mut open = w.open;
-    let order = sorted_indices(cells, scores, w.sort, w.desc);
-    let Some(window) = drawer.page_sized(
-        ctx,
-        "Storm attributes",
-        &mut open,
-        false,
-        720.0,
-        egui::Window::new("Storm attributes"),
-    ) else {
-        w.open = open;
-        return None;
-    };
-    window.show(ctx, |ui| {
-        if cells.is_empty() {
-            ui.weak("No tracked storm cells for this site right now.");
-            ui.small("Cells come from the radar's own storm-tracking product (SCIT).");
-            return;
-        }
-        ui.horizontal(|ui| {
-            ui.label(
-                RichText::new(format!("{} cells", cells.len()))
-                    .strong()
-                    .color(accent),
-            );
-            ui.weak("· click a row to fly there");
-            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                crate::ui::csv_buttons(ui, "cells.csv", "Every row, current sort", || {
-                    to_csv(cells, scores, &order)
+    let order: Vec<_> = sorted_indices(cells, scores, w.sort, w.desc)
+        .into_iter()
+        .filter(|i| {
+            cells[*i]
+                .id
+                .to_lowercase()
+                .contains(&w.query.to_lowercase())
+        })
+        .collect();
+    if !order
+        .iter()
+        .any(|i| Some(&cells[*i].id) == w.selected.as_ref())
+    {
+        w.selected = order.first().map(|i| cells[*i].id.clone());
+    }
+    let width = (ctx.content_rect().width() - 48.0).clamp(300.0, 960.0);
+    egui::Window::new("Storm attributes")
+        .open(&mut open)
+        .default_width(width)
+        .default_pos(egui::pos2(24.0, 64.0))
+        .default_height((ctx.content_rect().height() - 128.0).clamp(300.0, 600.0))
+        .resizable(true)
+        .vscroll(true)
+        .collapsible(false)
+        .frame(
+            egui::Frame::window(&ctx.style_of(ctx.theme()))
+                .fill(egui::Color32::from_rgb(17, 23, 31))
+                .corner_radius(16)
+                .inner_margin(16),
+        )
+        .show(ctx, |ui| {
+            ui.horizontal_wrapped(|ui| {
+                ui.weak(format!("{} cells", cells.len()));
+                ui.add(
+                    egui::TextEdit::singleline(&mut w.query)
+                        .hint_text("Find a cell…")
+                        .desired_width(150.0),
+                );
+                egui::ComboBox::from_id_salt("cell_sort")
+                    .selected_text("Sort by…")
+                    .show_ui(ui, |ui| {
+                        for (label, key) in [
+                            ("Severity", SortCol::Rank),
+                            ("Cell ID", SortCol::Id),
+                            ("Range", SortCol::Range),
+                            ("Reflectivity", SortCol::MaxDbz),
+                            ("Cell top", SortCol::Top),
+                            ("VIL", SortCol::Vil),
+                            ("Hail probability", SortCol::Poh),
+                            ("Severe hail", SortCol::Posh),
+                            ("Hail size", SortCol::Hail),
+                        ] {
+                            ui.selectable_value(&mut w.sort, key, label);
+                        }
+                    });
+                ui.checkbox(&mut w.desc, "Descending");
+                ui.menu_button("Export CSV", |ui| {
+                    crate::ui::csv_buttons(
+                        ui,
+                        "cells.csv",
+                        "Filtered cells in current sort",
+                        || to_csv(cells, scores, &order),
+                    );
                 });
             });
-        });
-        ui.separator();
-
-        // Android: TableBuilder row clicks don't register under touch (nested scroll eats
-        // them) — same trap the site dialog hit. Buttons take taps reliably.
-        if cfg!(target_os = "android") {
-            egui::ScrollArea::vertical().show(ui, |ui| {
-                for &i in &order {
-                    let c = &cells[i];
-                    let line = format!(
-                        "{}  {}   {}   {} dBZ   hail {}\"\n{}   top {} kft   VIL {}",
-                        scores.get(i).copied().unwrap_or(0),
-                        c.title,
-                        position(c),
-                        f0(c.max_dbz),
-                        f1(c.hail_in),
-                        movement(c),
-                        f0(c.top_kft),
-                        f0(c.vil),
-                    );
-                    let btn = egui::Button::new(RichText::new(line).size(14.0))
-                        .fill(egui::Color32::from_rgba_unmultiplied(255, 255, 255, 12))
-                        .corner_radius(8.0)
-                        .wrap_mode(egui::TextWrapMode::Extend)
-                        .min_size(egui::vec2(ui.available_width(), 46.0));
-                    if ui.add(btn).clicked() {
-                        chosen = Some(c.id.clone());
-                    }
-                    ui.add_space(3.0);
-                }
-            });
-            return;
-        }
-
-        let header = |ui: &mut egui::Ui, label: &str, col: SortCol, w: &mut CellsWindow| {
-            let active = w.sort == col;
-            let text = if active {
-                format!("{label} {}", if w.desc { "▼" } else { "▲" })
-            } else {
-                label.to_string()
-            };
-            if ui.button(text).clicked() {
-                if active {
-                    w.desc = !w.desc;
-                } else {
-                    w.sort = col;
-                    w.desc = true;
-                }
+            ui.add_space(12.0);
+            if order.is_empty() {
+                ui.weak("No matching storm cells.");
+                return;
             }
-        };
-
-        // Horizontal scroll keeps every column reachable on a narrow window.
-        egui::ScrollArea::horizontal().show(ui, |ui| {
-            TableBuilder::new(ui)
-                .striped(true)
-                .sense(egui::Sense::click())
-                .column(Column::exact(46.0)) // rank
-                .column(Column::exact(52.0)) // id
-                .column(Column::exact(92.0)) // az/range
-                .column(Column::exact(86.0)) // movement
-                .column(Column::exact(56.0)) // max dbz
-                .column(Column::exact(52.0)) // top
-                .column(Column::exact(52.0)) // vil
-                .column(Column::exact(48.0)) // poh
-                .column(Column::exact(52.0)) // posh
-                .column(Column::exact(56.0)) // hail
-                .column(Column::exact(64.0)) // trend
-                .column(Column::remainder()) // flags
-                .min_scrolled_height(0.0)
-                .header(22.0, |mut h| {
-                    h.col(|ui| header(ui, "Sev", SortCol::Rank, w));
-                    h.col(|ui| header(ui, "ID", SortCol::Id, w));
-                    h.col(|ui| header(ui, "Pos", SortCol::Range, w));
-                    h.col(|ui| {
-                        ui.label("Moving");
-                    });
-                    h.col(|ui| header(ui, "dBZ", SortCol::MaxDbz, w));
-                    h.col(|ui| header(ui, "Top", SortCol::Top, w));
-                    h.col(|ui| header(ui, "VIL", SortCol::Vil, w));
-                    h.col(|ui| header(ui, "POH", SortCol::Poh, w));
-                    h.col(|ui| header(ui, "SVR", SortCol::Posh, w));
-                    h.col(|ui| header(ui, "Hail", SortCol::Hail, w));
-                    h.col(|ui| {
-                        ui.label("Trend").on_hover_text(
-                            "Peak reflectivity over the volumes this cell has been tracked \
-                                 for \u{2014} whether it is strengthening or falling apart",
-                        );
-                    });
-                    h.col(|ui| {
-                        ui.label("Flags");
-                    });
-                })
-                .body(|body| {
-                    body.rows(20.0, order.len(), |mut row| {
-                        let i = order[row.index()];
-                        let c = &cells[i];
-                        let score = scores.get(i).copied().unwrap_or(0);
-                        row.col(|ui| {
-                            ui.label(
-                                RichText::new(score.to_string())
-                                    .strong()
-                                    .color(rank_color(score)),
-                            )
-                            .on_hover_text(
-                                "Severity 0\u{2013}100: ProbSevere, rotation (Vrot) and \
-                                         hail size blended, nudged by the radar's TVS/MESO flags",
-                            );
-                        });
-                        row.col(|ui| {
-                            ui.label(RichText::new(&c.title).strong());
-                        });
-                        row.col(|ui| {
-                            ui.label(position(c));
-                        });
-                        row.col(|ui| {
-                            ui.label(movement(c));
-                        });
-                        row.col(|ui| {
-                            ui.label(f0(c.max_dbz));
-                        });
-                        row.col(|ui| {
-                            ui.label(f0(c.top_kft));
-                        });
-                        row.col(|ui| {
-                            ui.label(f0(c.vil));
-                        });
-                        row.col(|ui| {
-                            ui.label(num(c.poh));
-                        });
-                        row.col(|ui| {
-                            ui.label(num(c.posh));
-                        });
-                        row.col(|ui| {
-                            // The number people scan for first.
-                            let t = RichText::new(f1(c.hail_in));
-                            ui.label(if c.hail_in.is_some_and(|h| h >= 1.0) {
-                                t.strong().color(egui::Color32::from_rgb(240, 170, 60))
-                            } else {
-                                t
-                            });
-                        });
-                        row.col(|ui| {
-                            // A column of numbers says how strong a storm is now; it cannot
-                            // say which way it is going, which is the thing you actually
-                            // triage on when six cells are on screen.
-                            let hist = trends.get(&c.id).map(Vec::as_slice).unwrap_or(&[]);
-                            let dbz: Vec<f32> = hist.iter().filter_map(|s| s.dbz).collect();
-                            let resp = crate::theme::sparkline_sized(
-                                ui,
-                                &dbz,
-                                egui::Color32::from_rgb(240, 170, 60),
-                                egui::vec2(60.0, 16.0),
-                            );
-                            if !hist.is_empty() {
-                                resp.on_hover_ui(|ui| {
-                                    ui.label(
-                                        RichText::new(format!(
-                                            "{} over {} volumes",
-                                            c.title,
-                                            hist.len()
-                                        ))
-                                        .strong(),
-                                    );
-                                    for (label, vals, color) in [
-                                        (
-                                            "Peak dBZ",
-                                            dbz.clone(),
-                                            egui::Color32::from_rgb(240, 170, 60),
-                                        ),
-                                        (
-                                            "VIL",
-                                            hist.iter().filter_map(|s| s.vil).collect::<Vec<_>>(),
-                                            egui::Color32::from_rgb(120, 200, 240),
-                                        ),
-                                        (
-                                            "Top (kft)",
-                                            hist.iter().filter_map(|s| s.top).collect::<Vec<_>>(),
-                                            egui::Color32::from_rgb(150, 230, 170),
-                                        ),
-                                    ] {
-                                        ui.label(RichText::new(label).small().weak());
-                                        crate::theme::sparkline_sized(
-                                            ui,
-                                            &vals,
-                                            color,
-                                            egui::vec2(160.0, 26.0),
-                                        );
-                                    }
-                                });
+            let draw_list = |ui: &mut egui::Ui, selected: &mut Option<String>| {
+                ui.horizontal(|ui| {
+                    ui.strong("Cell");
+                    ui.weak("     Range · Peak reflectivity");
+                });
+                egui::ScrollArea::vertical()
+                    .id_salt("storm_list")
+                    .max_height(440.0)
+                    .show(ui, |ui| {
+                        for &i in &order {
+                            let c = &cells[i];
+                            let range = c
+                                .range_nm
+                                .map(|v| format!("{v:.0} NM"))
+                                .unwrap_or_else(|| "—".into());
+                            let peak = c
+                                .max_dbz
+                                .map(|v| format!("{v:.0} dBZ"))
+                                .unwrap_or_else(|| "—".into());
+                            if ui
+                                .add_sized(
+                                    [ui.available_width(), 44.0],
+                                    egui::Button::new(format!("{}     {range} · {peak}", c.id))
+                                        .selected(selected.as_ref() == Some(&c.id)),
+                                )
+                                .clicked()
+                            {
+                                *selected = Some(c.id.clone());
                             }
-                        });
-                        row.col(|ui| {
-                            ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
-                                if c.tvs.is_some() {
-                                    ui.label(
-                                        RichText::new("TVS")
-                                            .small()
-                                            .strong()
-                                            .color(egui::Color32::from_rgb(235, 70, 70)),
-                                    );
-                                }
-                                if zdr_cells.contains(&c.id) {
-                                    ui.label(
-                                        RichText::new("Z\u{25b2}")
-                                            .small()
-                                            .strong()
-                                            .color(egui::Color32::from_rgb(120, 230, 160)),
-                                    )
-                                    .on_hover_text(
-                                        "A ZDR column reaches above the freezing level here \
-                                             \u{2014} the updraft is deep",
-                                    );
-                                }
-                                if c.meso.is_some() {
-                                    ui.label(
-                                        RichText::new("MESO")
-                                            .small()
-                                            .strong()
-                                            .color(egui::Color32::from_rgb(235, 160, 60)),
-                                    );
-                                }
-                            });
-                        });
-                        if row.response().clicked() {
+                        }
+                    });
+            };
+            let detail = |ui: &mut egui::Ui, selected: &Option<String>| {
+                if let Some(c) = cells.iter().find(|c| Some(&c.id) == selected.as_ref()) {
+                    ui.horizontal(|ui| {
+                        ui.heading(format!("Cell {}", c.id));
+                        if ui.button("Center on map").clicked() {
                             chosen = Some(c.id.clone());
                         }
                     });
+                    let score = cells
+                        .iter()
+                        .position(|x| x.id == c.id)
+                        .and_then(|i| scores.get(i));
+                    if let Some(score) = score {
+                        ui.weak(format!("Severity score {score}/100"));
+                    }
+                    if zdr_cells.contains(&c.id) {
+                        ui.label("ZDR column detected");
+                    }
+                    crate::ui::cell_window::attributes(
+                        ui,
+                        c,
+                        trends.get(&c.id).map(Vec::as_slice).unwrap_or(&[]),
+                    );
+                }
+            };
+            let mut detail = detail;
+            if ui.available_width() >= 740.0 {
+                ui.horizontal_top(|ui| {
+                    ui.allocate_ui_with_layout(
+                        egui::vec2(290.0, 440.0),
+                        egui::Layout::top_down(egui::Align::LEFT),
+                        |ui| draw_list(ui, &mut w.selected),
+                    );
+                    ui.separator();
+                    ui.vertical(|ui| detail(ui, &w.selected));
                 });
+            } else {
+                draw_list(ui, &mut w.selected);
+                ui.separator();
+                detail(ui, &w.selected);
+            }
         });
-    });
     w.open = open;
     chosen
 }

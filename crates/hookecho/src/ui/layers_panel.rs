@@ -467,6 +467,66 @@ fn category_tile(
     response.on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 
+/// Observation actions are grouped without duplicating the registry or losing specialist entries.
+fn observation_group(action: PaletteAction) -> u8 {
+    use crate::app::OverlayToggle as T;
+    match action {
+        PaletteAction::ToggleOverlay(
+            T::Metar | T::Webcams | T::Spotters | T::Gauges | T::Aqi | T::Tropical,
+        ) => 0,
+        PaletteAction::ToggleOverlay(T::Pireps | T::Recon | T::Aviation) => 1,
+        _ => 2,
+    }
+}
+fn observation_row(ui: &mut egui::Ui, e: &PaletteEntry, accent: Color32) -> bool {
+    let title = e.label.split(" (").next().unwrap_or(&e.label);
+    let on = e.on == Some(true);
+    let r = ui
+        .add_sized(
+            [ui.available_width(), 66.0],
+            egui::Button::new("").corner_radius(10.0),
+        )
+        .named_toggle(&e.label, on)
+        .on_hover_text(e.desc);
+    let p = ui.painter();
+    let rect = r.rect;
+    p.text(
+        rect.left_top() + vec2(12.0, 10.0),
+        egui::Align2::LEFT_TOP,
+        title,
+        egui::FontId::proportional(15.0),
+        ui.visuals().text_color(),
+    );
+    let desc = e.desc.split('—').next().unwrap_or(e.desc).trim();
+    let galley = p.layout(
+        desc.to_string(),
+        egui::FontId::proportional(10.0),
+        ui.visuals().weak_text_color(),
+        (rect.width() - 68.0).max(100.0),
+    );
+    p.galley(
+        rect.left_top() + vec2(12.0, 34.0),
+        galley,
+        ui.visuals().weak_text_color(),
+    );
+    p.text(
+        rect.right_center() - vec2(12.0, 0.0),
+        egui::Align2::RIGHT_CENTER,
+        if on {
+            egui_phosphor::regular::TOGGLE_RIGHT
+        } else {
+            egui_phosphor::regular::TOGGLE_LEFT
+        },
+        egui::FontId::proportional(27.0),
+        if on {
+            accent
+        } else {
+            ui.visuals().weak_text_color()
+        },
+    );
+    r.clicked()
+}
+
 /// The panel body: search box + categorized rows. Returns the clicked action, if any.
 /// `focus_search` grabs the search field this frame (Ctrl+K opens the drawer typing-ready).
 /// `pref` is the persisted drag order and is rewritten in place when a row is dropped.
@@ -688,6 +748,42 @@ pub(crate) fn body(
                 category = None;
             }
             ui.add_space(6.0);
+            if selected == "Obs" {
+                let id = ui.id().with("observation_group");
+                let mut group = ui.ctx().data_mut(|d| d.get_temp::<u8>(id).unwrap_or(0));
+                if group > 0 && ui.button("‹ Everyday observations").clicked() {
+                    group = 0;
+                }
+                ui.weak(match group {
+                    1 => "Aviation & flight data",
+                    2 => "Advanced observations",
+                    _ => "Everyday observations",
+                });
+                for i in order.iter().filter(|i| {
+                    entries[**i].category == "Obs"
+                        && observation_group(entries[**i].action) == group
+                }) {
+                    if observation_row(ui, &entries[*i], accent) {
+                        chosen = Some(entries[*i].action);
+                    }
+                    ui.add_space(4.0);
+                }
+                if group == 0 {
+                    for (label, g) in [
+                        ("Aviation & flight data  ›", 1),
+                        ("Advanced observations  ›", 2),
+                    ] {
+                        if ui
+                            .add_sized([ui.available_width(), 48.0], egui::Button::new(label))
+                            .clicked()
+                        {
+                            group = g;
+                        }
+                    }
+                }
+                ui.ctx().data_mut(|d| d.insert_temp(id, group));
+                return;
+            }
             for cat in CATEGORIES.into_iter().filter(|cat| *cat == selected) {
                 let mut in_cat: Vec<usize> = order
                     .iter()
@@ -824,7 +920,11 @@ mod tests {
             .map(|cat| PaletteEntry {
                 label: format!("{cat} layer"),
                 category: cat,
-                action: PaletteAction::ToggleOverlay(crate::app::OverlayToggle::RadarSites),
+                action: PaletteAction::ToggleOverlay(if *cat == "Obs" {
+                    crate::app::OverlayToggle::Metar
+                } else {
+                    crate::app::OverlayToggle::RadarSites
+                }),
                 on: Some(*cat == "Radar"),
                 desc: "",
                 common: true,

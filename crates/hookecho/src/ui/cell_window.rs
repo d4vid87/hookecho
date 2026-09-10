@@ -1,11 +1,7 @@
-//! Compact storm summary with expandable full attributes.
-
-use crate::theme::{self, stat_card};
+//! Storm console with every available attribute visible on selection.
+use crate::theme;
 use wxdata::level3::Cell;
-
 const KT_TO_MPH: f32 = 1.150_78;
-
-/// One per-volume trend sample for a storm cell.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct CellSample {
     pub vil: Option<f32>,
@@ -13,10 +9,6 @@ pub struct CellSample {
     pub dbz: Option<f32>,
 }
 
-/// Show the storm-attributes window. `trend` is the cell's per-volume history (oldest→newest);
-/// `following` reflects whether the camera is currently tracking this cell. Returns
-/// `(still_open, follow_toggled, to_3d)` — the two flags are `true` for the one frame their
-/// button is hit.
 pub fn show(
     ctx: &egui::Context,
     cell: &Cell,
@@ -25,228 +17,145 @@ pub fn show(
     tz: Option<wxdata::tz::Tz>,
     popovers: &mut crate::ui::popover::Popovers,
 ) -> (bool, bool, bool) {
-    let mut open = true;
-    let mut follow_toggled = false;
-    let mut to_3d = false;
+    let (mut open, mut follow, mut view3d) = (true, false, false);
     popovers
         .card(
             ctx,
             "cell",
-            egui::Window::new(format!(
-                "Cell {}, {}",
-                cell.id,
-                track_time(cell.time, 0, tz)
-            ))
-            .id(egui::Id::new(("cell_summary", &cell.id))),
+            egui::Window::new(format!("Cell {}", cell.id))
+                .id(egui::Id::new(("cell_console", &cell.id))),
         )
         .open(&mut open)
-        .default_width(290.0)
+        .default_width((ctx.content_rect().width() - 48.0).clamp(280.0, 720.0))
+        .default_height(560.0)
+        .max_height((ctx.content_rect().height() - 160.0).max(260.0))
+        .vscroll(true)
         .resizable(false)
         .collapsible(false)
         .frame(
             egui::Frame::window(&ctx.style_of(ctx.theme()))
-                .fill(egui::Color32::from_gray(80))
-                .corner_radius(12)
-                .inner_margin(12),
+                .fill(egui::Color32::from_rgb(17, 23, 31))
+                .corner_radius(16)
+                .inner_margin(18),
         )
         .show(ctx, |ui| {
-            ui.visuals_mut().override_text_color = Some(egui::Color32::WHITE);
-            ui.label(
-                egui::RichText::new(format!("Hail Size: {}", opt(cell.hail_in, "\"", 2)))
-                    .size(19.0),
-            );
-            let movement = match (cell.mvt_deg, cell.mvt_kt) {
-                (Some(dir), Some(kt)) => format!("{} at {kt:.0} kts", crate::geo::compass(dir)),
-                _ => "Movement: —".into(),
-            };
-            ui.label(egui::RichText::new(movement).size(19.0));
-            egui::CollapsingHeader::new(
-                egui::RichText::new("ⓘ Full attributes")
-                    .color(egui::Color32::from_rgb(80, 190, 235)),
-            )
-            .id_salt(("cell_attributes", &cell.id))
-            .show(ui, |ui| {
-                egui::ScrollArea::vertical()
-                    .max_height(460.0)
-                    .show(ui, |ui| {
-                        let label = if following {
-                            "Following ✓ (tap to stop)"
+            ui.weak(track_time(cell.time, 0, tz));
+            ui.add_space(10.0);
+            attributes(ui, cell, trend);
+            ui.separator();
+            ui.horizontal_wrapped(|ui| {
+                follow = ui
+                    .add_sized(
+                        [150.0, 38.0],
+                        egui::Button::new(if following {
+                            "Stop following"
                         } else {
-                            "⌖ Follow"
-                        };
-                        if ui
-                    .add(egui::Button::new(label).min_size(egui::vec2(ui.available_width(), 0.0)))
-                    .on_hover_text(
-                        "Keep the camera centered on this cell as it moves through each new volume",
+                            "Follow cell"
+                        })
+                        .selected(true),
                     )
-                    .clicked()
-                {
-                    follow_toggled = true;
-                }
-                        if ui
-                    .add(
-                        egui::Button::new("\u{25A6} See in 3D")
-                            .min_size(egui::vec2(ui.available_width(), 0.0)),
-                    )
-                    .on_hover_text(
-                        "Open the raymarched volume cropped to this storm \u{2014} the whole box \
-                         at once is a wall of echo you then have to hunt through",
-                    )
-                    .clicked()
-                {
-                    to_3d = true;
-                }
-                        theme::section(ui, "Current Position", |ui| {
-                            grid(
-                                ui,
-                                &[
-                                    ("Latitude", format!("{:.3}°", cell.lat)),
-                                    ("Longitude", format!("{:.3}°", cell.lon)),
-                                    ("Range", opt(cell.range_nm, " NM", 0)),
-                                    ("Bearing", opt(cell.az_deg, "°", 0)),
-                                ],
-                            );
-                        });
-                        theme::section(ui, "Movement", |ui| {
-                            let mph = cell.mvt_kt.map(|k| k * KT_TO_MPH);
-                            grid(
-                                ui,
-                                &[
-                                    ("Speed", opt(mph, " mph", 0)),
-                                    ("Direction", opt(cell.mvt_deg, "°", 0)),
-                                ],
-                            );
-                        });
-                        theme::section(ui, "Intensity & Structure", |ui| {
-                            let base = cell.base_kft.map(|b| {
-                                format!("{}{:.1} kft", if cell.base_below { "<" } else { "" }, b)
-                            });
-                            grid(
-                                ui,
-                                &[
-                                    ("Max dBZ", opt(cell.max_dbz, " dBZ", 0)),
-                                    ("Max ref hgt", opt(cell.max_dbz_hgt_kft, " kft", 1)),
-                                    ("Cell top", opt(cell.top_kft, " kft", 1)),
-                                    ("Cell base", base.unwrap_or_else(|| "—".into())),
-                                    ("Cell-based VIL", opt(cell.vil, "", 0)),
-                                ],
-                            );
-                        });
-                        theme::section(ui, "Hail Potential", |ui| {
-                            grid(
-                                ui,
-                                &[
-                                    (
-                                        "POH",
-                                        cell.poh
-                                            .map(|v| format!("{v}%"))
-                                            .unwrap_or_else(|| "—".into()),
-                                    ),
-                                    (
-                                        "POSH",
-                                        cell.posh
-                                            .map(|v| format!("{v}%"))
-                                            .unwrap_or_else(|| "—".into()),
-                                    ),
-                                    ("Max size", opt(cell.hail_in, " in", 2)),
-                                ],
-                            );
-                        });
-                        theme::section(ui, "Features", |ui| {
-                            grid(
-                                ui,
-                                &[
-                                    ("TVS", cell.tvs.clone().unwrap_or_else(|| "None".into())),
-                                    (
-                                        "Mesocyclone",
-                                        cell.meso.clone().unwrap_or_else(|| "None".into()),
-                                    ),
-                                ],
-                            );
-                        });
-                        theme::section(ui, "Error Metrics", |ui| {
-                            grid(
-                                ui,
-                                &[
-                                    ("Forecast error", opt(cell.fcst_err_nm, " NM", 1)),
-                                    ("Mean error", opt(cell.mean_err_nm, " NM", 1)),
-                                ],
-                            );
-                        });
-                        if trend.len() >= 2 {
-                            theme::section(ui, "Trends (per volume)", |ui| {
-                                trend_row(
-                                    ui,
-                                    "Max dBZ",
-                                    trend,
-                                    |s| s.dbz,
-                                    egui::Color32::from_rgb(255, 140, 90),
-                                );
-                                trend_row(
-                                    ui,
-                                    "Cell top kft",
-                                    trend,
-                                    |s| s.top,
-                                    egui::Color32::from_rgb(120, 200, 140),
-                                );
-                                trend_row(
-                                    ui,
-                                    "Cell-based VIL",
-                                    trend,
-                                    |s| s.vil,
-                                    egui::Color32::from_rgb(90, 170, 255),
-                                );
-                            });
-                        }
-                    });
+                    .clicked();
+                view3d = ui
+                    .add_sized([140.0, 38.0], egui::Button::new("View in 3D"))
+                    .clicked();
             });
         });
-    (open, follow_toggled, to_3d)
+    (open, follow, view3d)
 }
-
-/// A labelled trend sparkline over the samples that carry the selected field.
-fn trend_row(
-    ui: &mut egui::Ui,
-    label: &str,
-    trend: &[CellSample],
-    f: fn(&CellSample) -> Option<f32>,
-    color: egui::Color32,
-) {
-    let vals: Vec<f32> = trend.iter().filter_map(f).collect();
-    ui.label(egui::RichText::new(label).small().weak());
-    theme::sparkline(ui, &vals, color);
-}
-
-/// Format an optional value with a unit suffix and `decimals` precision (`—` when absent).
 fn opt(v: Option<f32>, unit: &str, decimals: usize) -> String {
     v.map(|x| format!("{x:.*}{unit}", decimals))
         .unwrap_or_else(|| "—".into())
 }
-
-/// Lay out label/value pairs. Desktop: wrapped stat cards. Android: a compact vertical
-/// `LABEL: value` list — the fixed-width cards force the window wider than the phone screen and
-/// clip both edges, so a shrinkable list is the only reliable fit.
-fn grid(ui: &mut egui::Ui, cards: &[(&str, String)]) {
-    if cfg!(target_os = "android") {
-        for (label, value) in cards {
-            ui.horizontal(|ui| {
-                ui.label(
-                    egui::RichText::new(format!("{}:", label.to_uppercase()))
-                        .size(11.0)
-                        .weak(),
-                );
-                ui.label(egui::RichText::new(value).size(14.5).strong());
-            });
-        }
-    } else {
-        ui.horizontal_wrapped(|ui| {
-            for (label, value) in cards {
-                stat_card(ui, label, value);
+fn value(ui: &mut egui::Ui, label: &str, value: String) {
+    ui.label(egui::RichText::new(label).size(11.0).weak());
+    ui.label(egui::RichText::new(value).size(15.0).strong());
+    ui.add_space(5.0);
+}
+/// Shared with the selected detail pane; no disclosure hides missing or populated fields.
+pub(crate) fn attributes(ui: &mut egui::Ui, c: &Cell, trend: &[CellSample]) {
+    let movement = match (c.mvt_deg, c.mvt_kt) {
+        (Some(d), Some(k)) => format!("{} · {k:.0} kt", crate::geo::compass(d)),
+        _ => "—".into(),
+    };
+    let groups = [
+        (
+            "STORM",
+            vec![
+                ("Hail size", opt(c.hail_in, " in", 2)),
+                ("Movement", movement),
+                ("Peak reflectivity", opt(c.max_dbz, " dBZ", 0)),
+                ("Peak height", opt(c.max_dbz_hgt_kft, " kft", 1)),
+                ("Cell top", opt(c.top_kft, " kft", 1)),
+                (
+                    "Cell base",
+                    c.base_kft
+                        .map(|v| format!("{}{v:.1} kft", if c.base_below { "<" } else { "" }))
+                        .unwrap_or_else(|| "—".into()),
+                ),
+                ("VIL", opt(c.vil, " kg/m²", 0)),
+            ],
+        ),
+        (
+            "POSITION",
+            vec![
+                ("Latitude", format!("{:.3}°", c.lat)),
+                ("Longitude", format!("{:.3}°", c.lon)),
+                ("Radar range", opt(c.range_nm, " NM", 0)),
+                ("Bearing", opt(c.az_deg, "°", 0)),
+                ("Forecast error", opt(c.fcst_err_nm, " NM", 1)),
+                ("Mean error", opt(c.mean_err_nm, " NM", 1)),
+            ],
+        ),
+        (
+            "MOTION & FEATURES",
+            vec![
+                ("Speed", opt(c.mvt_kt.map(|k| k * KT_TO_MPH), " mph", 0)),
+                ("Direction", opt(c.mvt_deg, "°", 0)),
+                (
+                    "Hail probability",
+                    c.poh.map(|v| format!("{v}%")).unwrap_or_else(|| "—".into()),
+                ),
+                (
+                    "Severe hail probability",
+                    c.posh
+                        .map(|v| format!("{v}%"))
+                        .unwrap_or_else(|| "—".into()),
+                ),
+                ("TVS", c.tvs.clone().unwrap_or_else(|| "—".into())),
+                ("Mesocyclone", c.meso.clone().unwrap_or_else(|| "—".into())),
+            ],
+        ),
+    ];
+    let columns = if ui.available_width() >= 540.0 { 3 } else { 2 };
+    // Flow the last group beneath on smaller screens; all fields remain visible.
+    for chunk in groups.chunks(columns) {
+        ui.columns(columns, |cols| {
+            for (col, (title, fields)) in cols.iter_mut().zip(chunk) {
+                col.label(egui::RichText::new(*title).size(11.0).strong());
+                col.separator();
+                for (label, v) in fields {
+                    value(col, label, v.clone());
+                }
+            }
+        });
+    }
+    if trend.len() >= 2 {
+        ui.separator();
+        ui.columns(3, |cols| {
+            for (col, (label, values)) in cols.iter_mut().zip([
+                (
+                    "Reflectivity trend",
+                    trend.iter().filter_map(|s| s.dbz).collect::<Vec<_>>(),
+                ),
+                ("Top trend", trend.iter().filter_map(|s| s.top).collect()),
+                ("VIL trend", trend.iter().filter_map(|s| s.vil).collect()),
+            ]) {
+                col.small(label);
+                theme::sparkline(col, &values, egui::Color32::from_rgb(80, 165, 245));
             }
         });
     }
 }
-
 /// Anchor forecast clocks to the storm product, never the wall clock or radar playhead.
 pub fn track_time(
     time: Option<chrono::DateTime<chrono::Utc>>,
@@ -282,7 +191,11 @@ mod tests {
         let mut popovers = crate::ui::popover::Popovers::default();
         let mut labels = Vec::new();
         for _ in 0..3 {
-            let output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            let input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1600.0, 1000.0))),
+                ..Default::default()
+            };
+            let output = ctx.run_ui(input, |ui| {
                 assert_eq!(
                     show(ui.ctx(), &cell, &[], false, None, &mut popovers),
                     (true, false, false)
@@ -292,17 +205,16 @@ mod tests {
                 .shapes
                 .iter()
                 .filter_map(|s| match &s.shape {
-                    egui::Shape::Text(t) => Some(t.galley.job.text.clone()),
+                    egui::Shape::Text(t) if s.clip_rect.contains(t.pos) => Some(t.galley.job.text.clone()),
                     _ => None,
                 })
                 .collect();
         }
-        assert!(
-            labels.iter().any(|s| s == "Hail Size: 0.50\""),
-            "{labels:?}"
-        );
-        assert!(labels.iter().any(|s| s == "ENE at 19 kts"), "{labels:?}");
-        assert!(!labels.iter().any(|s| s == "Current Position"));
+        assert!(labels.iter().any(|s| s == "0.50 in"), "{labels:?}");
+        assert!(labels.iter().any(|s| s == "ENE · 19 kt"), "{labels:?}");
+        assert!(labels.iter().any(|s| s == "Latitude"));
+        assert!(labels.iter().any(|s| s == "Forecast error"));
+        assert!(labels.iter().any(|s| s == "View in 3D"), "actions must fit without scrolling: {labels:?}");
     }
 
     #[test]

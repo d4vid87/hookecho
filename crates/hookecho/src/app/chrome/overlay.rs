@@ -10,11 +10,11 @@ use crate::ui::a11y::Named as _;
 /// The floating panel's geometry: left margin, top offset, width.
 const PANEL_X: f32 = 10.0;
 const PANEL_TOP: f32 = 10.0;
-const PANEL_W: f32 = 332.0;
+const PANEL_W: f32 = 372.0;
 /// The control column sits inboard of the pane's color scale (`ui::legend`: a 16 px bar, its
 /// inset, and the value labels to its left), so the two never share pixels.
 const CONTROLS: egui::Vec2 = egui::vec2(-70.0, 44.0);
-const RIGHT_PANEL: egui::Vec2 = egui::vec2(-130.0, 44.0);
+const RIGHT_PANEL: egui::Vec2 = egui::vec2(-248.0, 44.0);
 /// What the scrubber pill needs along the bottom edge, plus a margin.
 const SCRUBBER_CLEARANCE: f32 = 144.0;
 /// How far above the bottom edge the phone's pane strip sits: over the scrubber pill, not on it.
@@ -497,7 +497,23 @@ impl HookEchoApp {
 
     /// The right-edge control column: the buttons that open what floats over the map.
     pub(crate) fn control_column(&mut self, ctx: &egui::Context) {
-        use crate::ui::style::square_btn;
+        let square_btn = |ui: &mut egui::Ui, icon: &str, on: bool, accent: egui::Color32| {
+            if phone() {
+                return crate::ui::style::square_btn(ui, icon, on, accent);
+            }
+            let label = match icon {
+                egui_phosphor::regular::STACK => "Layers",
+                egui_phosphor::regular::MAP_TRIFOLD => "Map",
+                egui_phosphor::regular::BELL => "Alerts",
+                _ => "Share",
+            };
+            ui.add_sized(
+                [148.0, 46.0],
+                egui::Button::new(egui::RichText::new(format!("{icon}     {label}")).size(16.0))
+                    .selected(on)
+                    .corner_radius(10.0),
+            )
+        };
         let mut alerts_anchor = None;
         let accent = crate::theme::accent(self.settings.theme);
         let (alert_count, esc) = self.alert_badge();
@@ -514,59 +530,61 @@ impl HookEchoApp {
             .constrain_to(self.chrome_rect)
             .anchor(egui::Align2::RIGHT_TOP, at)
             .show(ctx, |ui| {
-                ui.vertical(|ui| {
-                    if square_btn(ui, egui_phosphor::regular::STACK, layers_on, accent)
-                        .named_toggle("Layers, products and tools", layers_on)
+                crate::ui::style::glass(ui, 252)
+                    .inner_margin(8)
+                    .show(ui, |ui| {
+                        if square_btn(ui, egui_phosphor::regular::STACK, layers_on, accent)
+                            .named_toggle("Layers, products and tools", layers_on)
+                            .clicked()
+                        {
+                            self.panel_open = !layers_on;
+                            self.show_alert_panel = false;
+                        }
+                        if square_btn(
+                            ui,
+                            egui_phosphor::regular::MAP_TRIFOLD,
+                            self.basemap_open,
+                            accent,
+                        )
+                        .named_toggle("Background map", self.basemap_open)
                         .clicked()
-                    {
-                        self.panel_open = !layers_on;
-                        self.show_alert_panel = false;
-                    }
-                    if square_btn(
-                        ui,
-                        egui_phosphor::regular::MAP_TRIFOLD,
-                        self.basemap_open,
-                        accent,
-                    )
-                    .named_toggle("Background map", self.basemap_open)
-                    .clicked()
-                    {
-                        self.basemap_open = !self.basemap_open;
-                    }
-                    let bell = square_btn(ui, egui_phosphor::regular::BELL, alerts_on, accent)
-                        .named_toggle("Active alerts in view", alerts_on);
-                    alerts_anchor = Some(bell.rect);
-                    if bell.clicked() {
-                        self.panel_open = !alerts_on;
-                        self.show_alert_panel = true;
-                    }
-                    // Sharing where you are looking is the thing people do with a radar and had
-                    // no button for — only Ctrl+K knew about it.
-                    if square_btn(ui, egui_phosphor::regular::SHARE_NETWORK, false, accent)
-                        .named("Share this view")
-                        .clicked()
-                    {
-                        self.apply_palette(crate::app::PaletteAction::CopyViewLink, ctx);
-                    }
-                    // Count over the bell's top-right corner, coloured by the worst alert in
-                    // view — the same escalation the alert panel sorts by.
-                    if alert_count > 0 {
-                        let c = match esc {
-                            0 => crate::ui::style::OMEGA_ORANGE,
-                            1 => egui::Color32::from_rgb(230, 120, 60),
-                            _ => egui::Color32::from_rgb(200, 20, 20),
-                        };
-                        let at = bell.rect.right_top() + egui::vec2(-4.0, 4.0);
-                        ui.painter().circle_filled(at, 8.0, c);
-                        ui.painter().text(
-                            at,
-                            egui::Align2::CENTER_CENTER,
-                            alert_count.min(99).to_string(),
-                            egui::FontId::proportional(10.0),
-                            egui::Color32::BLACK,
-                        );
-                    }
-                });
+                        {
+                            self.basemap_open = !self.basemap_open;
+                        }
+                        let bell = square_btn(ui, egui_phosphor::regular::BELL, alerts_on, accent)
+                            .named_toggle("Active alerts in view", alerts_on);
+                        alerts_anchor = Some(bell.rect);
+                        if bell.clicked() {
+                            self.panel_open = !alerts_on;
+                            self.show_alert_panel = true;
+                        }
+                        // Sharing where you are looking is the thing people do with a radar and had
+                        // no button for — only Ctrl+K knew about it.
+                        if square_btn(ui, egui_phosphor::regular::SHARE_NETWORK, false, accent)
+                            .named("Share this view")
+                            .clicked()
+                        {
+                            self.apply_palette(crate::app::PaletteAction::CopyViewLink, ctx);
+                        }
+                        // Count over the bell's top-right corner, coloured by the worst alert in
+                        // view — the same escalation the alert panel sorts by.
+                        if alert_count > 0 {
+                            let c = match esc {
+                                0 => crate::ui::style::OMEGA_ORANGE,
+                                1 => egui::Color32::from_rgb(230, 120, 60),
+                                _ => egui::Color32::from_rgb(200, 20, 20),
+                            };
+                            let at = bell.rect.right_top() + egui::vec2(-4.0, 4.0);
+                            ui.painter().circle_filled(at, 8.0, c);
+                            ui.painter().text(
+                                at,
+                                egui::Align2::CENTER_CENTER,
+                                alert_count.min(99).to_string(),
+                                egui::FontId::proportional(10.0),
+                                egui::Color32::BLACK,
+                            );
+                        }
+                    });
             });
         self.tour_anchors.alerts = alerts_anchor;
     }

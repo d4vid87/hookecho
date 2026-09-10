@@ -2,13 +2,14 @@
 import { DISCORD_INVITE } from "../data/community";
 import Base from "../layouts/Base.astro";
 
-const tag = "v0.12.0-beta.1";
-const raw = `https://raw.githubusercontent.com/d4vid87/hookecho/${tag}`;
-// Assets are linked at a tag rather than copied into this site: GitHub carries the bandwidth, and
-// a later commit cannot change what a published article ends up pointing at.
+const raw = "https://raw.githubusercontent.com/d4vid87/hookecho/main";
+// Keep the press screenshots aligned with the rolling app and GitHub gallery.
 const assets = [
+  { href: `${raw}/docs/shots/cellconsole.jpg`, label: "Cell console", note: "All cell attributes visible on selection" },
+  { href: `${raw}/docs/shots/stormtable.jpg`, label: "Storm attributes", note: "Storm list with selected cell details" },
+  { href: `${raw}/docs/shots/layers.jpg`, label: "Layers", note: "Floating controls and grouped layers" },
   { href: "https://raw.githubusercontent.com/d4vid87/hookecho/main/assets/brand/hookecho-logo.png", label: "App icon", note: "Current artwork · PNG, 1254×1254" },
-  { href: `${raw}/docs/shots/alltilts.jpg`, label: "Every tilt", note: "Level 2 volume, all elevations" },
+  { href: `${raw}/docs/shots/alltilts.jpg`, label: "Four radar views", note: "Reflectivity, velocity and dual-polarization" },
   { href: `${raw}/docs/shots/velocity.jpg`, label: "Velocity", note: "Storm-relative velocity, dealiased" },
   { href: `${raw}/docs/shots/alerts.jpg`, label: "Warnings", note: "Polygons, storm reports, spotters" },
   { href: `${raw}/docs/shots/mosaic.jpg`, label: "National mosaic", note: "MRMS" },
@@ -63,7 +64,7 @@ const assets = [
 
       <h2>Images</h2>
       <p class="dim">
-        Current app icon and screenshots from tag {tag}. Right-click to save; hotlinking is fine too.
+        App icon and screenshots from the current GitHub gallery. Right-click to save; hotlinking is fine too.
       </p>
       <ul class="assets">
         {
