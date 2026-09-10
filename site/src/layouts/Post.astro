@@ -27,7 +27,7 @@ const jsonld = {
   description,
   datePublished: stamp,
   url: new URL(Astro.url.pathname, Astro.site).toString(),
-  image: new URL(image ?? "/shots/alltilts.jpg", Astro.site).toString(),
+  image: new URL(image ?? "/shots/alltilts.jpg?v=0dc4ee0", Astro.site).toString(),
   author: { "@type": "Person", name: "David May" },
   publisher: { "@type": "Organization", name: "HookEcho" },
 };

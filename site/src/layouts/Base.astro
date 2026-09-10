@@ -11,7 +11,7 @@ interface Props {
   jsonld?: object;
 }
 
-const { title, description, image = "/shots/alltilts.jpg", jsonld } = Astro.props;
+const { title, description, image = "/shots/alltilts.jpg?v=0dc4ee0", jsonld } = Astro.props;
 const url = new URL(Astro.url.pathname, Astro.site);
 const social = new URL(image, Astro.site);
 const analytics = import.meta.env.PUBLIC_CF_ANALYTICS_TOKEN;
