@@ -1,0 +1,79 @@
+# HookEcho, full web deployment: the interactive browser app (WebAssembly) + the JSON/snapshot
+# API + the CORS proxy the browser build needs, all served by one `--serve` process.
+#
+# This is the image Coolify (or any Docker host) deploys from `docker-compose.coolify.yml`. The
+# lighter `Dockerfile` at the repo root builds only the `--serve` API, no browser bundle.
+#
+# The build is heavy: a release build of the native binary (fat LTO) plus two `wasm32` builds
+# (the app and the lite viewer) plus a one-time `cargo install wasm-bindgen-cli`. Budget 20–40
+# minutes for a cold build; incremental redeploys reuse the layer cache.
+
+# ---- build ------------------------------------------------------------------------------------
+FROM rust:bookworm AS build
+
+# Native build deps (eframe/rodio want ALSA and the windowing headers even headless) plus the
+# tools scripts/web/build.sh shells out to: jq for the lite site list, curl/tar for Binaryen.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        libasound2-dev libudev-dev libxkbcommon-dev libwayland-dev libxcb1-dev libgtk-3-dev \
+        jq curl ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN rustup target add wasm32-unknown-unknown
+
+WORKDIR /src
+
+# wasm-bindgen-cli must match the `wasm-bindgen` version the lockfile pins exactly, or the
+# generated glue and the wasm disagree at load time. Do this before `COPY . .` so an unrelated
+# source edit does not re-run the ~3-minute install.
+COPY Cargo.lock ./
+RUN version="$(sed -n '/^name = "wasm-bindgen"$/,/^$/s/^version = "\(.*\)"/\1/p' Cargo.lock)" \
+    && echo "wasm-bindgen-cli $version" \
+    && cargo install wasm-bindgen-cli --version "$version" --locked
+
+# Binaryen 130. Debian's package is far older and misexports the externref table wasm-bindgen
+# emits (see scripts/web/install-binaryen.sh, which pins the same release + digest for CI).
+RUN curl -fsSL --retry 3 \
+      https://github.com/WebAssembly/binaryen/releases/download/version_130/binaryen-version_130-x86_64-linux.tar.gz \
+      -o /tmp/binaryen.tar.gz \
+    && echo "0a18362361ad05465118cd8eeb72edaeec89de6894bc283576ef4e07aa3babcc  /tmp/binaryen.tar.gz" | sha256sum -c - \
+    && tar -xzf /tmp/binaryen.tar.gz -C /opt \
+    && rm /tmp/binaryen.tar.gz
+ENV PATH="/opt/binaryen-version_130/bin:${PATH}"
+
+COPY . .
+
+# The browser bundle: app + lite viewer into web/dist, plus generated web/index.html and
+# web/sw.js. getrandom 0.3 needs the cfg to pick its browser backend. The WSV3 ribbon adds a few
+# KB of egui to the app wasm; nudge the deploy-time regression gate so the build does not fail on
+# it (the committed gate in scripts/web/build.sh is left untouched).
+ENV RUSTFLAGS='--cfg getrandom_backend="wasm_js"'
+ENV HOOKECHO_WASM_BUDGET=4250000
+RUN bash scripts/web/build.sh
+
+# The native server binary. Its RUSTFLAGS are not the wasm ones — build it in a clean env.
+RUN env -u RUSTFLAGS cargo build --release -p hookecho --bin hookecho
+
+# ---- runtime ----------------------------------------------------------------------------------
+FROM debian:bookworm-slim
+
+# Runtime halves of the build deps, lavapipe (mesa-vulkan-drivers) so /snapshot.png can render
+# with no display, and curl for the container healthcheck.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        libasound2 libxkbcommon0 libwayland-client0 libxcb1 libgtk-3-0 \
+        mesa-vulkan-drivers libvulkan1 curl ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+COPY --from=build /src/target/release/hookecho /usr/local/bin/hookecho
+COPY --from=build /src/web ./web
+
+# Settings (saved locations the JSON routes report on; add `serve_token` here to lock the
+# instance down) and the tile/volume cache.
+VOLUME ["/root/.config/hookecho", "/root/.cache/hookecho"]
+
+EXPOSE 8080
+
+# 0.0.0.0 inside the container is the whole point. No token by default → fully open, which is
+# what a public radar site wants; set `serve_token` in the mounted settings.json to lock it and
+# add `--public` back here if the site still needs to embed the preset frames.
+ENTRYPOINT ["hookecho", "--serve", "8080", "--bind", "0.0.0.0", "--web-root", "/app/web"]

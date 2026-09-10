@@ -1,0 +1,39 @@
+# HookEcho for Coolify (or any Docker Compose host).
+#
+# Coolify: create a resource → Docker Compose → point it at this file. Set the domain on the
+# `web` service in the Coolify UI; Coolify wires its proxy to container port 8080. First build
+# is long (native release + two wasm builds) — raise the build timeout if it trips.
+#
+# Standalone: `docker compose -f docker-compose.coolify.yml up -d --build`, then open :8080.
+
+name: hookecho
+
+services:
+  web:
+    build:
+      context: .
+      dockerfile: ./Dockerfile.coolify
+    restart: unless-stopped
+    mem_limit: 2g
+    cpus: 2.0
+    pids_limit: 256
+    ports:
+      - "8080:8080"
+    volumes:
+      - hookecho-config:/root/.config/hookecho
+      - hookecho-cache:/root/.cache/hookecho
+    environment:
+      # Uncomment to lock the instance down. The same value must be set as `serve_token` if you
+      # prefer the settings.json route; this env var is not read by the app — it is a reminder.
+      # HOOKECHO_SERVE_TOKEN: "change-me"
+      RUST_LOG: "warn"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://127.0.0.1:8080/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+volumes:
+  hookecho-config:
+  hookecho-cache:
