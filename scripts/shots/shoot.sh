@@ -297,11 +297,20 @@ scene_verify() {
 }
 
 scene_alerts() {
-  # Archived warnings render whenever the timeline is scrubbed (app.rs sync_archive_warnings), so
-  # the panel lists the real April 27 2011 warning stack instead of "No alerts in view."
-  launch "$TUSCALOOSA"; wait_settle 16; key 1; sleep 1
+  # ALERT_GOTO lets a release shoot use a current NWS warning, whose feed includes the full
+  # bulletin body. The stable archive fallback still exercises the reader when no warning is live.
+  launch "${ALERT_GOTO:-$TUSCALOOSA}"; wait_settle 16; key 1; sleep 1
   key a; sleep 2
+  click 180 140; sleep 2
   snap alerts
+}
+
+scene_emergency() {
+  # A high-consequence warning over the Moore storm, for the emergency-severity presentation.
+  launch "KTLX,-97.45,35.30,9.4,2013-05-20T20:00:00Z"; wait_settle 16; key 1; sleep 1
+  key a; sleep 2
+  click 180 140; sleep 2
+  snap emergency
 }
 
 # --- onboarding -------------------------------------------------------------------------------
@@ -684,7 +693,7 @@ check() {
   [ "$fail" = 0 ] && log "check passed" || die "check failed"
 }
 
-ARCHIVE_SCENES=(reflectivity velocity alltilts xsection alerts products layers tropical verify derived)
+ARCHIVE_SCENES=(reflectivity velocity alltilts xsection alerts emergency products layers tropical verify derived)
 LIVE_SCENES=(wind stormtable forecast fronts hrrr mrms mosaic qpe glm tdwr winter recon fires)
 
 main() {

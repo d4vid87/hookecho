@@ -186,8 +186,12 @@ force at that moment.
 
 | Storm attributes | Active alerts |
 |---|---|
-| ![The storm attributes table listing tracked cells](shots/stormtable.jpg) | ![The alerts panel listing tornado warnings](shots/alerts.jpg) |
-| <sub>KTBW — live</sub> | <sub>KBMX — 27 Apr 2011 outbreak</sub> |
+| ![The storm attributes table listing tracked cells](shots/stormtable.jpg) | ![The glass warning reader with the official bulletin immediately visible](shots/alerts.jpg) |
+| <sub>KTBW — live</sub> | <sub>Actual NWS warning captured in the app</sub> |
+
+![An emergency-severity tornado warning over archived Moore radar](shots/emergency.jpg)
+
+<sub>**Emergency-severity warning presentation.** KTLX — 20 May 2013 archive replay.</sub>
 
 ### Looking ahead
 

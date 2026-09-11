@@ -42,7 +42,8 @@ run time and never leaves the scratch profile; the committed template has an emp
 | `velocity` | El Reno — May 31 2013 | The velocity couplet, unmistakable |
 | `alltilts` | Moore | A 60+ dBZ core in all four panes |
 | `xsection` | Moore | The vault, in a panel that is not empty |
-| `alerts` | Tuscaloosa | The real archived tornado-warning stack |
+| `alerts` | Current NWS warning (`ALERT_GOTO`) | The scrollable official warning bulletin |
+| `emergency` | Moore | The emergency-severity tornado-warning presentation |
 | `products` | Joplin — May 22 2011 | The picker over a storm, not over black |
 | `layers` | Mayfield — Dec 11 2021 | Whole rows, opaque card |
 | `forecast` | Moore | A populated point forecast |

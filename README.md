@@ -34,6 +34,10 @@ Recorded on a Samsung Galaxy S24 Ultra. [Watch both phone demos](https://hookech
 | --- | --- |
 | ![Floating layers and labeled map controls](docs/shots/layers.jpg) | ![Storm list with selected cell attributes](docs/shots/stormtable.jpg) |
 
+| Warning bulletin | Tornado emergency |
+| --- | --- |
+| ![Official warning bulletin immediately visible in the glass warning reader](docs/shots/alerts.jpg) | ![Emergency-severity tornado warning highlighted over archived radar](docs/shots/emergency.jpg) |
+
 ![Selected storm cell with all attributes visible](docs/shots/cellconsole.jpg)
 
 [See the complete screenshot gallery](docs/technical-reference.md#screenshots).

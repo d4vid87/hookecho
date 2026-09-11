@@ -2,6 +2,7 @@
   "default_site": "KTLX",
   "theme": "Dark",
   "basemap": "dark",
+  "map_quality": "Full",
   "mapbox_key": "",
   "ui_scale": 1.0,
   "setup_done": true,
