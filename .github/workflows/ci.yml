@@ -131,7 +131,7 @@ jobs:
       # Pure logic, no browser: the allowlist, the TTL table, and when a conditional request
       # is allowed to become a 304.
       - name: Test the proxy core
-        run: node --test web/_worker.js/proxy-core.test.mjs
+        run: node --test web/_worker.js/*.test.mjs
 
       # Also pure logic: what the page does when the decode worker dies. A trap is not something
       # the browser smoke test can ask for on demand, so the bridge takes its spawn as a callback

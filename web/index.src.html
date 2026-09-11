@@ -11,7 +11,7 @@
     <!-- The wasm is the critical path and it is megabytes: start it in parallel with the module
          graph rather than after it. Without these the browser discovers the wasm only once it has
          parsed and executed the glue, which serializes two large downloads for no reason. -->
-    <link rel="modulepreload" href="./dist/hookecho.js" />
+    <link rel="modulepreload" href="./dist/hookecho.js?boot=2" />
     <link rel="preload" href="./dist/hookecho_bg.wasm" as="fetch" type="application/wasm" crossorigin />
     <!-- The first two hosts the app talks to once it is up: basemap tiles, and the live radar
          chunk bucket (the only radar host it reaches cross-origin — volumes go via /proxy). -->
@@ -80,7 +80,8 @@
       const boot = document.getElementById("boot");
 
       try {
-      const { default: init, start } = await import("./dist/hookecho.js");
+      // A previous Pages fallback cached HTML at an immutable JS URL. Use a fresh cache key.
+      const { default: init, start } = await import("./dist/hookecho.js?boot=2");
       const { makeBridge } = await import("./decode-bridge.js");
       // Compile the wasm once and share the compiled module with the decode worker. A
       // `WebAssembly.Module` is structured-cloneable, so the worker gets a second *instance* —
@@ -88,7 +89,7 @@
       //
       // What it is for: decoding a Level 2 volume is seconds of bzip2, and on this thread that is
       // seconds of frozen map. See web/decode-worker.js and crates/wxdata/src/wasm_worker.rs.
-      const glueUrl = new URL("./dist/hookecho.js", import.meta.url).href;
+      const glueUrl = new URL("./dist/hookecho.js?boot=2", import.meta.url).href;
       const wasmUrl = new URL("./dist/hookecho_bg.wasm", import.meta.url).href;
       const module = await WebAssembly.compileStreaming(fetch(wasmUrl, { signal: AbortSignal.timeout(60000) }));
 

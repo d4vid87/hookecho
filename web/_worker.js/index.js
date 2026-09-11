@@ -20,7 +20,15 @@ export default {
         headers: { "content-type": "application/json", "cache-control": "private, no-store" },
       });
     }
-    if (!url.pathname.startsWith("/proxy/")) return env.ASSETS.fetch(request);
+    if (!url.pathname.startsWith("/proxy/")) {
+      const response = await env.ASSETS.fetch(request);
+      // Never cache Pages' HTML fallback (or a missing file) as immutable executable code.
+      const type = response.headers.get("content-type") || "";
+      if (!response.ok || (url.pathname.startsWith("/dist/") && type.includes("text/html"))) {
+        return new Response("Asset not found", { status: 404, headers: { "cache-control": "no-store" } });
+      }
+      return response;
+    }
     return handleProxy(request, {
       fetchInit: (host, search) => ({ cf: { cacheTtl: cacheSeconds(host, search), cacheEverything: true } }),
       // The browser gets the same TTL the edge is holding the bytes for — one policy, stated

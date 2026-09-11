@@ -122,6 +122,9 @@ jobs:
           echo "::error::the alias still serves $live, not $asset — this deploy did not go live"
           exit 1
 
+      - name: Check executable assets on both public app addresses
+        run: node scripts/web/check-assets.mjs https://app.hookecho.io/ https://hookecho.pages.dev/
+
       - name: Check the proxy caches and revalidates
         run: |
           url="$DEPLOY_URL/proxy/api.weather.gov/alerts/active/count"
