@@ -154,6 +154,15 @@ impl Track {
     /// Where this cell will be `minutes` from its last observation, on its current motion.
     pub fn extrapolate(&self, minutes: f64) -> Option<(f64, f64)> {
         let last = self.points.last()?;
+        if self.points.len() < 2
+            || !minutes.is_finite() || minutes < 0.0
+            || !self.speed_kt.is_finite() || self.speed_kt < 0.0
+            || !self.dir_deg.is_finite()
+            || !last.0.is_finite() || !last.1.is_finite()
+            || last.0.abs() > 180.0 || last.1.abs() > 90.0
+        {
+            return None;
+        }
         let km = self.speed_kt * 1.852 / 60.0 * minutes;
         Some(dest(last.0, last.1, self.dir_deg, km))
     }
@@ -183,6 +192,11 @@ pub fn associate(
     let mut out = prev.to_vec();
     let mut taken = vec![false; out.len()];
     for cell in now {
+        if !cell.lon.is_finite() || !cell.lat.is_finite()
+            || cell.lon.abs() > 180.0 || cell.lat.abs() > 90.0
+        {
+            continue;
+        }
         let mut best: Option<(usize, f64)> = None;
         for (i, tr) in out.iter().enumerate() {
             if taken[i] {
@@ -209,14 +223,40 @@ pub fn associate(
                 out[i].dir_deg = dir;
                 out[i].speed_kt = speed;
             }
-            None => out.push(Track {
+            None => {
+                out.push(Track {
                 points: vec![(cell.lon, cell.lat, t)],
                 dir_deg: 0.0,
                 speed_kt: 0.0,
-            }),
+                });
+                // Newly created tracks already own a cell in this scan. Keep the association
+                // flags aligned with `out` before examining the next cell.
+                taken.push(true);
+            }
         }
     }
     out
+}
+
+#[cfg(test)]
+mod association_regressions {
+    #[test]
+    fn multiple_new_cells_start_independent_tracks() {
+        let now = chrono::DateTime::from_timestamp(1_700_000_000, 0).unwrap();
+        let cells = [
+            super::Blob { lon: -97.0, lat: 32.0, dbz_max: 50.0, area_km2: 10.0 },
+            super::Blob { lon: -96.5, lat: 32.0, dbz_max: 50.0, area_km2: 10.0 },
+        ];
+        let tracks = super::associate(&[], &cells, now, 30.0);
+        assert_eq!(tracks.len(), 2);
+        assert!(tracks.iter().all(|track| track.points.len() == 1));
+        assert_eq!(tracks[1].points[0].0, cells[1].lon);
+        assert!(tracks[0].extrapolate(30.0).is_none(), "one observation cannot establish motion");
+        let mut invalid = tracks[0].clone();
+        invalid.points.push((-96.9, 32.0, now + chrono::Duration::minutes(5)));
+        invalid.speed_kt = f64::NAN;
+        assert!(invalid.extrapolate(30.0).is_none());
+    }
 }
 
 /// Direction and speed over the last few points.
