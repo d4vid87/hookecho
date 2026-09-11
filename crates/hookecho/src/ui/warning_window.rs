@@ -97,7 +97,7 @@ fn detail_view(ui: &mut egui::Ui, card: &WarnCard, selected: &mut Option<usize>)
         if ui.button("‹ Back").clicked() {
             *selected = None;
         }
-        ui.label(countdown(a));
+    ui.label(countdown(a));
     });
     ui.add_space(12.0);
     let icon = if a.event.contains("Statement") {
@@ -123,6 +123,10 @@ fn detail_view(ui: &mut egui::Ui, card: &WarnCard, selected: &mut Option<usize>)
     }
     ui.add_space(12.0);
     ui.separator();
+    if ui.button("Read official bulletin aloud").clicked() {
+        crate::speech::enable();
+        crate::speech::speak(&format!("{}. {}. {}\n{}", a.event, a.area, a.description, a.instruction));
+    }
     ui.label(egui::RichText::new("Official bulletin").size(18.0).strong());
     ui.add_space(6.0);
     egui::ScrollArea::vertical()

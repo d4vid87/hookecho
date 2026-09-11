@@ -198,7 +198,7 @@ storm-relative velocity, derived products, warnings, satellite and lightning —
 locally, with no account and no central server."""
 section = "science"
 priority = "optional"
-depends = "$auto"
+depends = "$auto, espeak-ng"
 assets = [
     ["../../target/release/hookecho", "usr/bin/", "755"],
     ["../../packaging/hookecho.desktop", "usr/share/applications/", "644"],

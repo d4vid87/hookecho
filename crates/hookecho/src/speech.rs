@@ -8,6 +8,51 @@
 //! the wrong moment. Every call is fire-and-forget on one background worker and every failure is
 //! logged and dropped — a machine with no speech engine is a normal machine, not a broken one.
 
+static STATUS: std::sync::Mutex<String> = std::sync::Mutex::new(String::new());
+static CANCEL_EPOCH: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+pub fn stop() {
+    CANCEL_EPOCH.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    #[cfg(not(target_arch = "wasm32"))]
+    if let Ok(mut jobs) = speech_queue().jobs.lock() { jobs.clear(); }
+    #[cfg(target_arch = "wasm32")]
+    {
+        WEB_QUEUE.with(|queue| queue.borrow_mut().jobs.clear());
+        if let Some(synth) = web_sys::window().and_then(|window| window.speech_synthesis().ok()) {
+            synth.cancel();
+        }
+    }
+}
+
+pub fn status() -> String {
+    STATUS.lock().map(|status| status.clone()).unwrap_or_default()
+}
+
+fn set_status(message: impl Into<String>) {
+    if let Ok(mut status) = STATUS.lock() {
+        *status = message.into();
+    }
+}
+
+/// Browsers require an explicit interaction before automatic audio. Native apps use their
+/// existing persisted speech preference; browser activation lasts for this page session.
+pub fn enable() {
+    set_status("");
+    #[cfg(target_arch = "wasm32")]
+    WEB_ENABLED.with(|enabled| enabled.set(true));
+}
+
+pub fn automatic_ready() -> bool {
+    #[cfg(target_arch = "wasm32")]
+    {
+        WEB_ENABLED.with(|enabled| enabled.get())
+            && web_sys::window().and_then(|window| window.speech_synthesis().ok())
+                .is_some_and(|synth| synth.get_voices().length() > 0)
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    { true }
+}
+
 /// Piper binary and voice model, as configured. Empty binary means "look on PATH"; empty voice
 /// means Piper is off, since a neural engine with no model has nothing to say.
 ///
@@ -265,10 +310,12 @@ fn speech_worker(queue: &SpeechQueue) {
         let job = jobs.pop_front().expect("queue was not empty");
         drop(jobs);
 
+        let epoch = CANCEL_EPOCH.load(std::sync::atomic::Ordering::Relaxed);
         if let Some((sound, volume)) = job.tone {
             crate::audio::play_blocking(&sound, volume);
         }
         for line in job.lines {
+            if CANCEL_EPOCH.load(std::sync::atomic::Ordering::Relaxed) != epoch { break; }
             let jobs = queue
                 .jobs
                 .lock()
@@ -280,6 +327,7 @@ fn speech_worker(queue: &SpeechQueue) {
             }
             if let Err(e) = imp::speak_blocking(&line) {
                 log::warn!("speech failed: {e}");
+                set_status(format!("Speech unavailable: {e}. Check your system voice and try the test warning."));
                 break;
             }
         }
@@ -321,6 +369,7 @@ pub fn speak(text: &str) {
 struct WebQueue {
     jobs: std::collections::VecDeque<SpeechJob>,
     running: bool,
+    priority: Option<Priority>,
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -343,6 +392,11 @@ pub(crate) fn announce(
     }
     let start = WEB_QUEUE.with(|queue| {
         let mut queue = queue.borrow_mut();
+        if priority == Priority::Emergency && queue.priority != Some(Priority::Emergency) {
+            if let Some(synth) = web_sys::window().and_then(|window| window.speech_synthesis().ok()) {
+                synth.cancel();
+            }
+        }
         enqueue(&mut queue.jobs, job);
         if queue.running {
             false
@@ -359,15 +413,22 @@ pub(crate) fn announce(
 #[cfg(target_arch = "wasm32")]
 async fn web_speech_worker() {
     loop {
-        let Some(job) = WEB_QUEUE.with(|queue| queue.borrow_mut().jobs.pop_front()) else {
+        let Some(job) = WEB_QUEUE.with(|queue| {
+            let mut queue = queue.borrow_mut();
+            let job = queue.jobs.pop_front();
+            queue.priority = job.as_ref().map(|job| job.priority);
+            job
+        }) else {
             WEB_QUEUE.with(|queue| queue.borrow_mut().running = false);
             return;
         };
+        let epoch = CANCEL_EPOCH.load(std::sync::atomic::Ordering::Relaxed);
         if let Some((sound, volume)) = &job.tone {
             crate::audio::play(sound, *volume);
             crate::fonts::sleep_ms(crate::audio::duration_ms(sound)).await;
         }
         for line in job.lines {
+            if CANCEL_EPOCH.load(std::sync::atomic::Ordering::Relaxed) != epoch { break; }
             let preempt =
                 WEB_QUEUE.with(|queue| should_preempt(job.priority, &queue.borrow().jobs));
             if preempt {
@@ -375,6 +436,7 @@ async fn web_speech_worker() {
             }
             if let Err(e) = imp::speak_blocking(&line) {
                 log::warn!("speech failed: {e}");
+                set_status(format!("Speech unavailable: {e}. Enable a device voice, then try the test warning."));
                 break;
             }
             // Let the browser start the queued utterance before observing its state.
@@ -386,6 +448,7 @@ async fn web_speech_worker() {
             }
             if polls == 4_800 {
                 log::warn!("browser speech did not finish after 120 seconds");
+                set_status("Speech timed out. Check browser audio and try the test warning.");
             }
         }
     }
@@ -393,6 +456,13 @@ async fn web_speech_worker() {
 
 #[cfg(target_arch = "wasm32")]
 mod imp {
+    use wasm_bindgen::JsCast;
+    type ErrorHandler = wasm_bindgen::closure::Closure<dyn FnMut(web_sys::Event)>;
+    std::thread_local! {
+        // Keep the utterance and callback alive until the next sentence. Detach the previous
+        // handler before dropping its Rust closure, including after cancellation.
+        static UTTERANCE: std::cell::RefCell<Option<(web_sys::SpeechSynthesisUtterance, ErrorHandler)>> = const { std::cell::RefCell::new(None) };
+    }
     /// `speechSynthesis` is in every browser we build for, so the web arm needs no engine of its
     /// own. A browser with speech disabled throws, which lands in the same warn-and-drop path as a
     /// desktop with no espeak.
@@ -403,7 +473,24 @@ mod imp {
             .map_err(|_| "no speechSynthesis")?;
         let utter = web_sys::SpeechSynthesisUtterance::new_with_text(text)
             .map_err(|_| "utterance failed")?;
+        if synth.get_voices().length() == 0 {
+            return Err("no browser voices available yet".into());
+        }
+        super::WEB_VOLUME.with(|volume| utter.set_volume(volume.get()));
+        let handler = ErrorHandler::new(|event: web_sys::Event| {
+            let reason = js_sys::Reflect::get(event.as_ref(), &"error".into()).ok()
+                .and_then(|value| value.as_string()).unwrap_or_else(|| "unknown error".into());
+            if reason != "canceled" && reason != "interrupted" {
+                super::set_status(format!("Browser speech failed: {reason}. Check device voices and try the test warning."));
+            }
+        });
+        utter.set_onerror(Some(handler.as_ref().unchecked_ref()));
         synth.speak(&utter);
+        UTTERANCE.with(|slot| {
+            let mut slot = slot.borrow_mut();
+            if let Some((previous, _)) = slot.as_ref() { previous.set_onerror(None); }
+            *slot = Some((utter, handler));
+        });
         Ok(())
     }
 
@@ -496,10 +583,17 @@ pub fn set_volume(v: f32) {
     VOLUME.store(v.clamp(0.0, 1.0).to_bits(), std::sync::atomic::Ordering::Relaxed);
 }
 
-/// The browser mixes speech itself and `SpeechSynthesisUtterance` carries its own volume, so
-/// there is nothing here to set. A stub rather than a `cfg` at every call site.
+/// Apply the shared alert volume to each subsequently created browser utterance.
 #[cfg(target_arch = "wasm32")]
-pub fn set_volume(_v: f32) {}
+pub fn set_volume(v: f32) {
+    WEB_VOLUME.with(|volume| volume.set(v.clamp(0.0, 1.0)));
+}
+
+#[cfg(target_arch = "wasm32")]
+std::thread_local! {
+    static WEB_VOLUME: std::cell::Cell<f32> = const { std::cell::Cell::new(1.0) };
+    static WEB_ENABLED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
 
 /// Only the desktop arm plays its own audio; Android hands the words to TextToSpeech, which owns
 /// the level itself.

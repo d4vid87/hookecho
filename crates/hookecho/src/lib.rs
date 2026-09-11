@@ -73,6 +73,7 @@ pub mod serve;
 pub mod settings;
 pub mod share;
 pub mod speech;
+mod spoken_alerts;
 /// Live station markers and their telemetry cards.
 pub mod stationlayer;
 /// The `--status` report; native only — it builds its own runtime.

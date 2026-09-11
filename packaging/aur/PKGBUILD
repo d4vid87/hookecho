@@ -18,7 +18,7 @@ url="https://github.com/d4vid87/hookecho"
 license=('MIT')
 # Mirrors the build deps the release workflow installs; the binary dlopens the X11/Wayland client
 # libs and talks to portals over D-Bus, so these are the whole list.
-depends=('alsa-lib' 'systemd-libs' 'libxkbcommon' 'wayland' 'libxcb' 'gtk3')
+depends=('alsa-lib' 'systemd-libs' 'libxkbcommon' 'wayland' 'libxcb' 'gtk3' 'espeak-ng')
 makedepends=('cargo')
 source=("$pkgname-$_tag.tar.gz::$url/archive/refs/tags/v$_tag.tar.gz")
 sha256sums=('a77106b1869671f6c697cc41c62117518dc9b590eccb932917f258c6509845e6')

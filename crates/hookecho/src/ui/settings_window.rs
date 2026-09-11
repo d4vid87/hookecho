@@ -1230,11 +1230,28 @@ fn alerts_tab(ui: &mut egui::Ui, settings: &mut Settings) {
     ui.add_space(8.0);
     ui.separator();
     ui.strong("Spoken warnings");
+    if ui.button("Stop speech").clicked() {
+        crate::speech::stop();
+    }
+    ui.small("Reads warnings in the visible map area. Muting alerts also mutes speech.");
+    #[cfg(target_arch = "wasm32")]
+    {
+        ui.small("Browser voices require activation each session. Speech is not available when this page is closed.");
+        if ui.button("Enable spoken alerts").clicked() {
+            settings.speak_warnings = true;
+            crate::speech::enable();
+            speak_test(settings);
+        }
+    }
     ui.checkbox(&mut settings.speak_warnings, "Read new warnings aloud")
         .on_hover_text(
             "The tone first, then the words: which counties, the towns in the path, where it sits \
              from your saved place, and what to do \u{2014} for when your eyes are on the road",
         );
+    let speech_status = crate::speech::status();
+    if !speech_status.is_empty() {
+        ui.colored_label(egui::Color32::from_rgb(240, 190, 90), speech_status);
+    }
     ui.weak("Piper below is the good voice; without it Linux uses spd-say or espeak, macOS and \
              Windows their own, Android its own.");
     // Hearing it once beats reading three settings and waiting for weather to find out that the
@@ -1272,6 +1289,7 @@ fn alerts_tab(ui: &mut egui::Ui, settings: &mut Settings) {
 /// is the one worth knowing works. The home marker's name is borrowed so the relation clause
 /// sounds like it will on the night.
 fn speak_test(settings: &Settings) {
+    crate::speech::enable();
     let home = settings
         .markers
         .iter()

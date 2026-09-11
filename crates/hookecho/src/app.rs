@@ -2299,7 +2299,7 @@ pub struct HookEchoApp {
     /// sweep once rather than once a frame.
     celltrack_cache: LruCache<String, Vec<wxdata::celltrack::Blob>>,
     /// The tracks themselves, with the frame list they were built from.
-    tracks_cache: Option<((usize, String, usize), Vec<wxdata::celltrack::Track>)>,
+    tracks_cache: Option<((usize, String, usize), Vec<String>, Vec<wxdata::celltrack::Track>)>,
     show_local_tracks: bool,
     site_dialog: Option<ui::site_dialog::SiteDialog>,
     firstrun: ui::firstrun::FirstRun,
@@ -2939,6 +2939,8 @@ pub struct HookEchoApp {
     known_warning_ids: std::collections::HashSet<String>,
     /// False until the first alert fetch seeds `known_warning_ids` (avoids alerting on startup).
     warnings_seeded: bool,
+    spoken_alerts: crate::spoken_alerts::SpokenAlerts,
+    spoken_check: Option<Instant>,
     /// Per-location cooldown clock for the lightning-proximity alarm (re-alert after it goes quiet).
     lightning_alerted: std::collections::HashMap<String, Instant>,
     /// True while a TDS is currently detected, so the alert fires on the rising edge only.
@@ -3656,6 +3658,8 @@ impl HookEchoApp {
             obs_tour_idx: 0,
             known_warning_ids,
             warnings_seeded: false,
+            spoken_alerts: crate::spoken_alerts::SpokenAlerts::default(),
+            spoken_check: None,
             lightning_alerted: std::collections::HashMap::new(),
             tds_active: false,
             rot_active: false,
@@ -4551,15 +4555,56 @@ impl HookEchoApp {
         }
     }
 
+    fn speak_visible_warnings(&mut self) {
+        if self.spoken_check.is_some_and(|at| at.elapsed().as_secs_f32() < 1.0) {
+            return;
+        }
+        self.spoken_check = Some(Instant::now());
+        if self.settings.mute_alerts {
+            crate::speech::stop();
+            return;
+        }
+        if !self.settings.speak_warnings || self.settings.mute_alerts
+            || self.archive_bucket().is_some()
+            || !crate::speech::automatic_ready()
+        {
+            return;
+        }
+        let now = chrono::Utc::now();
+        let bounds = self.view_bounds();
+        let quiet = self.in_quiet_hours();
+        let mut announcements = Vec::new();
+        for feature in &self.alert_features {
+            if feature.kind != overlay::FeatureKind::Warning || !feature_in_box(feature, bounds) {
+                continue;
+            }
+            let Some(alert) = &feature.alert else { continue };
+            let escalation = wxdata::alerts::escalation(alert);
+            if escalation < self.settings.alert_min_escalation || (quiet && escalation < 2) {
+                continue;
+            }
+            if self.spoken_alerts.take(alert, now) {
+                let until = alert.expires.map(|at| crate::timefmt::fmt_clock(at,
+                    self.settings.tz_for(self.views[self.active].site.as_deref()), false))
+                    .unwrap_or_default();
+                announcements.push((escalation, wxdata::spoken::warning_script(alert, "", &until)));
+            }
+        }
+        announcements.sort_by_key(|(escalation, _)| std::cmp::Reverse(*escalation));
+        crate::speech::set_volume(self.settings.alert_volume);
+        for (escalation, script) in announcements {
+            crate::speech::announce(if escalation >= 2 {
+                crate::speech::Priority::Emergency
+            } else { crate::speech::Priority::Warning }, None, vec![script]);
+        }
+    }
+
     /// Detect warning-tier alerts whose id we haven't seen, raising a banner + audible cue for
     /// each new one. The first fetch only seeds the known set (no alert on already-active warnings).
     fn detect_new_warnings(&mut self, feats: &[GeoFeature]) {
         let metric = self.metric();
         let mut alerted = false;
         let mut max_esc = 0u8; // highest escalation among newly-seen warnings this pass
-        // Collected, not spoken here: the tone has to play first, and it plays once for the whole
-        // pass rather than once per warning.
-        let mut to_speak: Vec<(u8, String)> = Vec::new();
         // Only banner warnings within the selected radar's coverage — a warning covering a saved
         // location still banners + pushes regardless (that's a watched place, not the viewed site).
         let site_box = self.active_site_bounds(250.0);
@@ -4728,24 +4773,7 @@ impl HookEchoApp {
                 if notify_ok {
                     max_esc = max_esc.max(esc);
                 }
-                // Queued, not spoken: the tone leads, and the whole pass is announced together
-                // below so two warnings in one fetch cannot talk over each other. Chasing is an
-                // eyes-on-the-road activity, and a warning you have to read is one you read late.
-                if self.settings.speak_warnings && notify_ok {
-                    let until = a
-                        .expires
-                        .map(|t| {
-                            crate::timefmt::fmt_clock(
-                                t,
-                                self.settings.tz_for(self.views[self.active].site.as_deref()),
-                                false,
-                            )
-                        })
-                        .unwrap_or_default();
-                    // Hazard, then where it sits against a place you know, then the counties, the
-                    // towns in its path and what to do — see `wxdata::spoken`.
-                    to_speak.push((esc, wxdata::spoken::warning_script(a, &relation, &until)));
-                }
+                let _ = relation; // Push/banner location selection does not scope map speech.
                 if notify_ok && self.settings.ntfy_snapshot {
                     // Newest wins: one picture per pass, of whatever last warned.
                     self.snapshot_push = Some(format!("{label} — {area}"));
@@ -4781,8 +4809,6 @@ impl HookEchoApp {
                 // The voice tracks the same slider the tones do; Piper's output has no level of
                 // its own, so without this the words arrived louder than the tone.
                 crate::speech::set_volume(self.settings.alert_volume);
-                // One announcement for the whole pass: highest escalation first, then the rest.
-                to_speak.sort_by_key(|(esc, _)| std::cmp::Reverse(*esc));
                 crate::speech::announce(
                     if urgent {
                         crate::speech::Priority::Emergency
@@ -4790,7 +4816,7 @@ impl HookEchoApp {
                         crate::speech::Priority::Warning
                     },
                     tone,
-                    to_speak.into_iter().map(|(_, line)| line).collect(),
+                    Vec::new(),
                 );
             }
         }
@@ -6673,11 +6699,6 @@ impl HookEchoApp {
     /// with one volume in hand.
     fn compute_local_tracks(&mut self) -> Vec<wxdata::celltrack::Track> {
         let key = self.volume_key(self.active);
-        if let Some((k, v)) = &self.tracks_cache {
-            if *k == key {
-                return v.clone();
-            }
-        }
         let frames: Vec<_> = self.views[self.active]
             .timeline
             .frames
@@ -6686,6 +6707,14 @@ impl HookEchoApp {
             .filter_map(|id| id.date_time().map(|t| (id.name().to_string(), t)))
             .filter(|(name, _)| self.scan_cache.contains(name))
             .collect();
+        let frame_names: Vec<_> = frames.iter().map(|(name, _)| name.clone()).collect();
+        // Earlier frames can finish decoding while the displayed volume is unchanged.
+        // A volume-only key otherwise freezes a partial motion estimate indefinitely.
+        if let Some((k, names, tracks)) = &self.tracks_cache {
+            if *k == key && *names == frame_names {
+                return tracks.clone();
+            }
+        }
         let mut tracks: Vec<wxdata::celltrack::Track> = Vec::new();
         for (name, at) in frames {
             let cells = match self.celltrack_cache.get(&name) {
@@ -6719,7 +6748,7 @@ impl HookEchoApp {
             tracks
                 .retain(|t| t.points.last().is_some_and(|p| p.2 == newest) && t.points.len() >= 2);
         }
-        self.tracks_cache = Some((key, tracks.clone()));
+        self.tracks_cache = Some((key, frame_names, tracks.clone()));
         tracks
     }
 
@@ -8463,6 +8492,8 @@ impl HookEchoApp {
         self.tropical_text_rx = Some(rx);
         self.tropical_window.busy = true;
         self.tropical_window.error = None;
+        // Never display the previous storm/product under a newly selected heading.
+        self.tropical_window.text = None;
         let http = self.http.clone();
         self.spawner.spawn(async move {
             let res = wxdata::tropical::fetch_advisory(&http, &title, &url)
@@ -9598,6 +9629,7 @@ impl HookEchoApp {
 
     fn poll_messages(&mut self) {
         self.drain_feed_errors();
+        self.speak_visible_warnings();
         while let Ok(msg) = self.msg_rx.try_recv() {
             let idx = msg.view();
             // LiveEnded must be handled even after a site change (to drop the stream handle).
