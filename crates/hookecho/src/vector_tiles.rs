@@ -999,6 +999,7 @@ impl VectorTileManager {
             let inflight = self.inflight.clone();
             self.inflight.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             self.spawner.spawn(async move {
+                let fetch_started = wxdata::clock::Instant::now();
                 let bytes = wxdata::task::timeout(
                     TILE_TIMEOUT + crate::tiles::BACKSTOP,
                     load_tile_bytes(&client, &url, path.as_deref()),
@@ -1015,7 +1016,12 @@ impl VectorTileManager {
                     }
                     return;
                 };
+                log::debug!("basemap tile {id:?}: fetch/cache {:.1} ms, {} bytes",
+                    fetch_started.elapsed().as_secs_f64() * 1000.0, bytes.len());
+                let processing_started = wxdata::clock::Instant::now();
                 let finish = move |result| {
+                    log::debug!("basemap tile {id:?}: processing {:.1} ms",
+                        processing_started.elapsed().as_secs_f64() * 1000.0);
                     let _ = tx.send((generation, result));
                     inflight.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
                     if let Some(ctx) = ctx { ctx.request_repaint(); }
@@ -1088,7 +1094,10 @@ impl VectorTileManager {
     /// Drain finished tessellations into upload-ready tiles (each returned once).
     pub fn drain_ready(&mut self) -> Vec<PendingVectorTile> {
         let mut ready = Vec::new();
-        while let Ok((generation, f)) = self.rx.try_recv() {
+        // Bound upload batches rather than allowing completed downloads to monopolize one
+        // render frame. Leave the remainder queued and explicitly schedule the next frame.
+        while ready.len() < 2 {
+            let Ok((generation, f)) = self.rx.try_recv() else { break };
             if generation != self.render_generation {
                 continue;
             }
@@ -1123,6 +1132,11 @@ impl VectorTileManager {
                 vertices: f.vertices,
                 indices: f.indices,
             });
+        }
+        if ready.len() == 2 {
+            if let Some(ctx) = &self.ctx {
+                ctx.request_repaint();
+            }
         }
         ready
     }
@@ -1234,6 +1248,20 @@ mod tests {
         manager.labels.remove(&parent);
         assert_eq!(manager.labels_for([&parent].into_iter())[0].name, "new left",
             "zoom-out retains child labels while its parent loads");
+    }
+
+    #[tokio::test]
+    async fn completed_tiles_are_uploaded_in_bounded_batches() {
+        let mut manager = test_manager();
+        for x in 0..5 {
+            manager.tx.send((manager.render_generation, Ok(FetchedVector {
+                id: (4, x, 5), vertices: Vec::new(), indices: Vec::new(), labels: Vec::new(),
+            }))).unwrap();
+        }
+        assert_eq!(manager.drain_ready().len(), 2);
+        assert_eq!(manager.drain_ready().len(), 2);
+        assert_eq!(manager.drain_ready().len(), 1);
+        assert!(manager.drain_ready().is_empty());
     }
 
     #[test]
