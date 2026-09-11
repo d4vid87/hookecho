@@ -128,7 +128,9 @@ fn detail_view(ui: &mut egui::Ui, card: &WarnCard, selected: &mut Option<usize>)
     egui::ScrollArea::vertical()
         .id_salt((&a.id, "bulletin"))
         .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysVisible)
-        .max_height((ui.available_height() - 32.0).max(100.0))
+        // A fixed reading viewport must not grow with the window's previous content size.
+        .max_height((ui.ctx().content_rect().height() * 0.4).clamp(120.0, 360.0))
+        .auto_shrink([false, false])
         .show(ui, |ui| {
             if !a.area.is_empty() {
                 ui.strong(&a.area);
