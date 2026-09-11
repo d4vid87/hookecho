@@ -48,7 +48,7 @@ impl Default for TropicalWindow {
         Self {
             open: false,
             storm_id: None,
-            product: Product::Discussion,
+            product: Product::Advisory,
             text: None,
             busy: false,
             error: None,
@@ -62,25 +62,32 @@ pub fn show(
     w: &mut TropicalWindow,
     ctx: &egui::Context,
     storms: &[TropicalStorm],
-    drawer: &mut crate::ui::drawer::Drawer,
+    _drawer: &mut crate::ui::drawer::Drawer,
 ) -> Option<(String, Product)> {
     if !w.open {
         return None;
     }
     let mut want: Option<(String, Product)> = None;
     let mut open = w.open;
-    let Some(window) = drawer.page_sized(
-        ctx,
-        "Tropical products",
-        &mut open,
-        false,
-        600.0,
-        egui::Window::new("Tropical products"),
-    ) else {
-        w.open = open;
-        return None;
-    };
+    let mut close = false;
+    let mut window = egui::Window::new("Tropical products")
+        .open(&mut open)
+        .frame(crate::ui::popover::glass_frame())
+        .title_bar(false)
+        .collapsible(false)
+        .default_width(460.0)
+        .max_width((ctx.content_rect().width() - 32.0).max(160.0));
+    if ctx.content_rect().width() < 600.0 {
+        window = window.fixed_rect(ctx.content_rect().shrink(8.0)).resizable(false);
+    }
     window.show(ctx, |ui| {
+        ui.visuals_mut().override_text_color = Some(egui::Color32::from_rgb(225, 234, 244));
+        ui.horizontal(|ui| {
+            ui.weak("OFFICIAL TROPICAL PRODUCTS · NHC");
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                close = ui.button("Close ×").clicked();
+            });
+        });
         if storms.is_empty() {
             ui.weak("No active tropical cyclones.");
             ui.small("The NHC publishes these only while a storm is being advised on.");
@@ -100,7 +107,7 @@ pub fn show(
             }
         });
         ui.horizontal(|ui| {
-            for p in [Product::Discussion, Product::Advisory] {
+            for p in [Product::Advisory, Product::Discussion] {
                 if ui.selectable_label(w.product == p, p.label()).clicked() && w.product != p {
                     w.product = p;
                     if let Some(id) = w.storm_id.clone() {
@@ -124,10 +131,13 @@ pub fn show(
         }
         ui.separator();
         egui::ScrollArea::vertical()
+            .max_height((ctx.content_rect().height() * 0.65).clamp(120.0, 640.0))
             .auto_shrink([false, false])
             .show(ui, |ui| match &w.text {
                 // The products are column-formatted plain text; monospace or they lose it.
                 Some(a) => {
+                    ui.heading(&a.title);
+                    ui.add_space(8.0);
                     ui.add(
                         egui::Label::new(egui::RichText::new(&a.text).monospace().size(12.0))
                             .wrap(),
@@ -141,6 +151,14 @@ pub fn show(
                 }
             });
     });
-    w.open = open;
+    w.open = open && !close;
     want
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn public_advisory_is_the_initial_product() {
+        assert_eq!(super::TropicalWindow::default().product, super::Product::Advisory);
+    }
 }
