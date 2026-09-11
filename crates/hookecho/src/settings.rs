@@ -411,6 +411,12 @@ pub struct Settings {
     /// "my location". Nothing is written to the saved markers and nothing is shared.
     #[serde(default)]
     pub alert_follow_gps: bool,
+    /// Connect to the local gpsd at launch and stay in chase mode. The Chase tab's connect
+    /// button was never remembered, so a laptop with a receiver on the dash had to be clicked
+    /// back into following itself every start. Desktop only: Android and the web ask for a
+    /// permission instead, and launch is the wrong moment to ask.
+    #[serde(default)]
+    pub gps_autoconnect: bool,
     /// Quiet hours: between `quiet_start_hour` and `quiet_end_hour` (local, 24h), alert sounds
     /// and pushes are held back. Escalated warnings — Tornado Emergency, PDS, destructive — go
     /// through anyway: the whole point of the tier is that it is worth waking up for.
@@ -1151,6 +1157,7 @@ impl Default for Settings {
             battery_saver: false,
             ntfy_snapshot: false,
             alert_follow_gps: false,
+            gps_autoconnect: false,
             quiet_hours: false,
             quiet_start_hour: default_quiet_start(),
             quiet_end_hour: default_quiet_end(),
@@ -1685,6 +1692,7 @@ mod tests {
             battery_saver: false,
             ntfy_snapshot: false,
             alert_follow_gps: false,
+            gps_autoconnect: false,
             quiet_hours: false,
             quiet_start_hour: 22,
             quiet_end_hour: 7,

@@ -398,7 +398,9 @@ clearing a cache costs the next fetch and nothing else.
 - **Chase mode**: live GPS (gpsd on desktop, the system location service on
   Android) drawn as a blue dot on the radar, a storm-relative HUD with closest
   approach and escape bearing, and offline "chase packs" of pre-downloaded
-  basemap tiles.
+  basemap tiles. On desktop, **Connect GPS at launch** (Chase tab, or
+  `gps_autoconnect` in settings.json) opens the gpsd stream every start, so a
+  receiver on the dash needs no click; Disconnect GPS turns it back off.
 - **Position sharing**: opt in and every HookEcho on the same network sees
   everyone else's dot, no account and no configuration (UDP broadcast on
   :41777). For devices that aren't on one network — the phone chasing on
