@@ -3,10 +3,11 @@ use crate::theme;
 use wxdata::level3::Cell;
 const KT_TO_MPH: f32 = 1.150_78;
 
-/// A SCIT projection must not use a future product or an old motion estimate. Three normal
-/// five-minute scans is the maximum retained motion age; history can remain visible afterward.
+/// A SCIT projection must not use a genuinely future product or an old motion estimate. Level II
+/// is timestamped near volume start while SCIT arrives near volume end, so one normal volume of
+/// positive skew is still the same displayed scan. History can remain visible afterward.
 pub fn projection_valid(cell: &Cell, scan: chrono::DateTime<chrono::Utc>) -> bool {
-    cell.time.is_some_and(|time| (0..=900).contains(&(scan - time).num_seconds()))
+    cell.time.is_some_and(|time| (-600..=900).contains(&(scan - time).num_seconds()))
         && cell.lon.is_finite() && cell.lon.abs() <= 180.0
         && cell.lat.is_finite() && cell.lat.abs() <= 90.0
         && cell.mvt_deg.is_some_and(|direction| direction.is_finite() && (0.0..360.0).contains(&direction))
@@ -207,7 +208,8 @@ mod tests {
         let mut cell = Cell { time: Some(now), lon: -97.0, lat: 32.0,
             mvt_deg: Some(90.0), mvt_kt: Some(30.0), ..Default::default() };
         assert!(projection_valid(&cell, now));
-        assert!(!projection_valid(&cell, now - chrono::Duration::seconds(1)));
+        assert!(projection_valid(&cell, now - chrono::Duration::minutes(10)));
+        assert!(!projection_valid(&cell, now - chrono::Duration::minutes(11)));
         assert!(!projection_valid(&cell, now + chrono::Duration::minutes(16)));
         assert!(error_km(&cell).is_none());
         cell.fcst_err_nm = Some(2.0);
