@@ -5,6 +5,7 @@ for (const origin of process.argv.slice(2)) {
   const html = await page.text();
   const paths = [...html.matchAll(/(?:href=")(\.\/dist\/hookecho[^" ]+\.(?:js|wasm)(?:\?[^" ]*)?)/g)].map(m => m[1]);
   if (paths.length !== 2) throw new Error(`${origin}: missing bundle references`);
+  paths.push("./decode-bridge.js", "./decode-worker.js?v=vector-tiles");
   for (const path of paths) {
     const response = await fetch(new URL(path, origin));
     const expected = path.includes(".wasm") ? "application/wasm" : "javascript";

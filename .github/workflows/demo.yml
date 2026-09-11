@@ -88,6 +88,14 @@ jobs:
           exit 1
 
       # The same boot check CI runs against a local server, now against the deployed origin.
+      - name: Wait for all startup assets
+        run: |
+          for attempt in $(seq 1 12); do
+            node scripts/web/check-assets.mjs "$DEPLOY_URL/" && exit 0
+            sleep 10
+          done
+          exit 1
+
       - name: Smoke-test the deployed demo
         run: node scripts/web/smoke.mjs "$DEPLOY_URL/" --expect-loop
 

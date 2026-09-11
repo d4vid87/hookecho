@@ -11,3 +11,11 @@ test("missing bundle assets cannot become cached HTML, while valid JS passes thr
     if (expected === 404) assert.equal(result.headers.get("cache-control"), "no-store");
   }
 });
+
+test("asset revalidation retains 304 responses", async () => {
+  const result = await worker.fetch(new Request("https://app.hookecho.io/decode-bridge.js"), {
+    ASSETS: { fetch: async () => new Response(null, { status: 304, headers: { etag: '"asset"' } }) },
+  });
+  assert.equal(result.status, 304);
+  assert.equal(result.headers.get("etag"), '"asset"');
+});
