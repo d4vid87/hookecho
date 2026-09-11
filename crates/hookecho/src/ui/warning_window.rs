@@ -1,7 +1,6 @@
 //! Warning window: a click on a warning/watch polygon opens a stack of alert cards; clicking a
-//! card drills into the full NWS bulletin (WHAT TO EXPECT chips + raw text).
+//! card opens the official bulletin directly in a scrollable glass reading panel.
 
-use crate::theme::{self, stat_card};
 use wxdata::overlay::AlertInfo;
 
 /// One card in the stack: the alert plus its polygon stroke color.
@@ -23,17 +22,30 @@ pub fn show(
     popovers: &mut crate::ui::popover::Popovers,
 ) -> bool {
     let mut open = true;
+    let mut close = false;
     popovers
-        .card(ctx, "warning", egui::Window::new("Active Warnings"))
+        .card(ctx, "warning", egui::Window::new("Weather alerts"))
         .open(&mut open)
-        .default_size([460.0, 560.0])
-        .show(ctx, |ui| match popup.selected {
-            Some(i) if i < popup.cards.len() => {
-                detail_view(ui, &popup.cards[i], &mut popup.selected)
+        .frame(crate::ui::popover::glass_frame())
+        .collapsible(false)
+        .title_bar(false)
+        .default_size([460.0, 520.0])
+        .show(ctx, |ui| {
+            ui.visuals_mut().override_text_color = Some(egui::Color32::from_rgb(225, 234, 244));
+            ui.horizontal(|ui| {
+                ui.weak("WEATHER ALERT");
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    close = ui.button("Close ×").clicked();
+                });
+            });
+            match popup.selected {
+                Some(i) if i < popup.cards.len() => {
+                    detail_view(ui, &popup.cards[i], &mut popup.selected)
+                }
+                _ => stack_view(ui, &popup.cards, &mut popup.selected),
             }
-            _ => stack_view(ui, &popup.cards, &mut popup.selected),
         });
-    open
+    open && !close
 }
 
 fn stack_view(ui: &mut egui::Ui, cards: &[WarnCard], selected: &mut Option<usize>) {
@@ -87,46 +99,73 @@ fn detail_view(ui: &mut egui::Ui, card: &WarnCard, selected: &mut Option<usize>)
         }
         ui.label(countdown(a));
     });
-    ui.separator();
-    ui.heading(egui::RichText::new(&a.event).color(color32(card.color)));
-    if !a.headline.is_empty() {
+    ui.add_space(12.0);
+    let icon = if a.event.contains("Statement") {
+        egui_phosphor::regular::INFO
+    } else {
+        egui_phosphor::regular::WARNING
+    };
+    ui.horizontal_wrapped(|ui| {
+        ui.label(
+            egui::RichText::new(icon)
+                .size(28.0)
+                .color(color32(card.color)),
+        );
+        ui.label(egui::RichText::new(&a.event).size(26.0).strong());
+    });
+    if !a.headline.is_empty() && a.headline != a.event {
         ui.label(&a.headline);
     }
 
-    theme::section(ui, "What to Expect", |ui| {
-        ui.horizontal_wrapped(|ui| {
-            if let Some(w) = &a.max_wind {
-                stat_card(ui, "Max Wind", w);
-            }
-            if let Some(h) = a.max_hail_in {
-                stat_card(ui, "Max Hail", &format!("{h:.2} in"));
-            }
-            if let Some(s) = &a.source {
-                stat_card(ui, "Source", s);
-            }
-        });
-    });
-
-    if a.damage_threat.is_some() || a.tornado_detection.is_some() {
-        theme::section(ui, "Expected Impacts", |ui| {
-            if let Some(d) = &a.damage_threat {
-                ui.label(format!("Damage threat: {d}"));
-            }
-            if let Some(t) = &a.tornado_detection {
-                ui.label(format!("Tornado: {t}"));
-            }
-        });
+    if let Some(expires) = a.expires {
+        ui.add_space(8.0);
+        ui.label(format!("Expires {}", expires.format("%b %-d · %H:%M UTC")));
     }
-
-    ui.add_space(4.0);
-    egui::ScrollArea::vertical().show(ui, |ui| {
-        let mut body = a.description.clone();
-        if !a.instruction.is_empty() {
-            body.push_str("\n\nPRECAUTIONARY/PREPAREDNESS ACTIONS...\n");
-            body.push_str(&a.instruction);
-        }
-        ui.add(egui::Label::new(egui::RichText::new(body).monospace()).wrap());
-    });
+    ui.add_space(12.0);
+    ui.separator();
+    ui.label(egui::RichText::new("Official bulletin").size(18.0).strong());
+    ui.add_space(6.0);
+    egui::ScrollArea::vertical()
+        .id_salt((&a.id, "bulletin"))
+        .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysVisible)
+        .max_height((ui.available_height() - 32.0).max(100.0))
+        .show(ui, |ui| {
+            if !a.area.is_empty() {
+                ui.strong(&a.area);
+                ui.add_space(10.0);
+            }
+            ui.horizontal_wrapped(|ui| {
+                if let Some(w) = &a.max_wind {
+                    ui.label(format!("Wind: {w}"));
+                }
+                if let Some(h) = a.max_hail_in {
+                    ui.label(format!("Hail: {h:.2} in"));
+                }
+                if let Some(d) = &a.damage_threat {
+                    ui.label(format!("Damage threat: {d}"));
+                }
+                if let Some(t) = &a.tornado_detection {
+                    ui.label(format!("Tornado: {t}"));
+                }
+            });
+            let mut body = a.description.clone();
+            if !a.instruction.is_empty() {
+                body.push_str("\n\nPRECAUTIONARY/PREPAREDNESS ACTIONS...\n");
+                body.push_str(&a.instruction);
+            }
+            ui.add(egui::Label::new(egui::RichText::new(body).size(16.0)).wrap());
+            if let Some(source) = &a.source {
+                ui.add_space(10.0);
+                ui.add(
+                    egui::Label::new(
+                        egui::RichText::new(format!("Reported source: {source}")).small(),
+                    )
+                    .wrap(),
+                );
+            }
+        });
+    ui.separator();
+    ui.weak("Official alert bulletin · source text as issued");
 }
 
 /// "Expires in N min" / "Expires in H h M min" / "EXPIRED" from the alert expiry.
@@ -148,4 +187,75 @@ pub(crate) fn countdown(a: &AlertInfo) -> String {
 
 fn color32(c: [u8; 4]) -> egui::Color32 {
     egui::Color32::from_rgba_unmultiplied(c[0], c[1], c[2], 255)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn warnings_and_statements_show_bulletin_without_expanding() {
+        for event in ["Special Marine Warning", "Special Weather Statement"] {
+            let ctx = egui::Context::default();
+            let mut popup = WarningPopup {
+                selected: Some(0),
+                cards: vec![WarnCard {
+                    color: [240, 160, 60, 255],
+                    info: AlertInfo {
+                        id: event.into(),
+                        event: event.into(),
+                        headline: "Issued by NWS".into(),
+                        area: "Sample area".into(),
+                        description: "Official sample bulletin text.".into(),
+                        instruction: "Sample preparedness instructions.".into(),
+                        expires: Some(chrono::Utc::now() + chrono::Duration::hours(1)),
+                        max_hail_in: None,
+                        max_wind: None,
+                        tornado_detection: None,
+                        damage_threat: None,
+                        source: None,
+                        motion: None,
+                        vtec: None,
+                    },
+                }],
+            };
+            let mut popovers = crate::ui::popover::Popovers::default();
+            let mut labels = String::new();
+            for _ in 0..3 {
+                let output = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(1280.0, 900.0),
+                        )),
+                        ..Default::default()
+                    },
+                    |ui| {
+                        assert!(show(ui.ctx(), &mut popup, &mut popovers));
+                    },
+                );
+                labels = output
+                    .shapes
+                    .iter()
+                    .filter_map(|s| match &s.shape {
+                        egui::Shape::Text(t) if s.clip_rect.contains(t.pos) => {
+                            Some(t.galley.job.text.as_str())
+                        }
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n");
+            }
+            assert!(labels.contains(event), "{labels}");
+            assert!(
+                labels.contains("Official sample bulletin text."),
+                "{labels}"
+            );
+            assert!(
+                labels.contains("Sample preparedness instructions."),
+                "{labels}"
+            );
+            assert!(labels.contains("Expires"), "{labels}");
+        }
+    }
 }

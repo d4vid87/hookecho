@@ -22,13 +22,57 @@ pub fn show(
     popovers: &mut crate::ui::popover::Popovers,
 ) -> bool {
     let mut open = true;
+    let mut close = false;
     popovers
         .card(ctx, "detail", egui::Window::new("Feature Details"))
         .open(&mut open)
-        // Wide enough for a 69-column fixed-width product (SPC bulletins, L3 attribute
-        // tables) to land on its own line breaks instead of the wrap point.
-        .default_size([560.0, 420.0])
+        .frame(crate::ui::popover::glass_frame())
+        .collapsible(false)
+        .title_bar(false)
+        // Preserve table width for non-outage products.
+        .default_size(if outage_summary(&detail.body).is_some() {
+            [420.0, 320.0]
+        } else {
+            [560.0, 420.0]
+        })
         .show(ctx, |ui| {
+            ui.visuals_mut().override_text_color = Some(egui::Color32::from_rgb(225, 234, 244));
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                close = ui.button("Close ×").clicked();
+            });
+            if let Some((place, count, rest)) = outage_summary(&detail.body) {
+                ui.label(
+                    egui::RichText::new(format!(
+                        "{}  POWER OUTAGE",
+                        egui_phosphor::regular::LIGHTNING
+                    ))
+                    .color(egui::Color32::from_rgb(246, 194, 105))
+                    .strong(),
+                );
+                ui.add_space(12.0);
+                ui.label(egui::RichText::new(place).size(23.0));
+                ui.label(egui::RichText::new(count).size(46.0).strong());
+                ui.label("Customers without power");
+                ui.add_space(12.0);
+                ui.separator();
+                egui::ScrollArea::vertical().show(ui, |ui| {
+                    let mut lines = rest.lines();
+                    let tier = lines.next().unwrap_or_default();
+                    let stats = lines.next().unwrap_or_default();
+                    ui.horizontal_wrapped(|ui| {
+                        for stat in stats.split(", ") {
+                            ui.label(egui::RichText::new(stat).size(18.0).strong());
+                            ui.separator();
+                        }
+                        ui.label(egui::RichText::new(tier).size(16.0));
+                    });
+                    ui.add_space(10.0);
+                    for line in lines {
+                        ui.add(egui::Label::new(egui::RichText::new(line).size(13.0)).wrap());
+                    }
+                });
+                return;
+            }
             ui.horizontal(|ui| {
                 let c = detail.color;
                 let (rect, _) =
@@ -75,5 +119,34 @@ pub fn show(
                 }
             }
         });
-    open
+    open && !close
+}
+
+// ODIN's existing display format; other feature bodies retain their table formatting.
+fn outage_summary(body: &str) -> Option<(&str, &str, String)> {
+    if !body.contains("Source: ODIN (DOE/ORNL)") {
+        return None;
+    }
+    let (place, remainder) = body.split_once('\n')?;
+    let (count, remainder) = remainder.split_once(" customers without power ")?;
+    let (tier, rest) = remainder.split_once('\n')?;
+    Some((
+        place,
+        count,
+        format!("{}\n{}", tier.trim_matches(['(', ')']), rest),
+    ))
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn outage_card_preserves_counts_caveats_and_optional_details() {
+        let body = "Harris, Texas\n1,205 customers without power (scattered)\n15 incidents, 1 utility\nCause: storm\n\nSource: ODIN (DOE/ORNL) — participating utilities only.";
+        let (place, count, rest) = super::outage_summary(body).unwrap();
+        assert_eq!((place, count), ("Harris, Texas", "1,205"));
+        assert!(rest.contains("15 incidents, 1 utility"));
+        assert!(rest.contains("Cause: storm"));
+        assert!(rest.contains("participating utilities only"));
+        assert!(super::outage_summary("A different feature").is_none());
+    }
 }
