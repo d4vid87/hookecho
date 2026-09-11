@@ -99,6 +99,25 @@ pub fn speak(_text: &str) -> Result<(), String> {
     Err("not android".into())
 }
 
+pub fn stop_speech() {
+    #[cfg(target_os = "android")]
+    android_tts::stop();
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen::prelude::wasm_bindgen(inline_js = "export function clearHookEchoMapCache(){return caches.delete('tiles-v2')}")]
+extern "C" { fn clearHookEchoMapCache(); }
+
+/// Clear only basemap data; radar volumes and settings are deliberately separate.
+pub fn clear_map_cache() {
+    #[cfg(target_arch = "wasm32")]
+    clearHookEchoMapCache();
+    #[cfg(not(target_arch = "wasm32"))]
+    if let Some(root) = crate::paths::cache_dir() {
+        for sub in ["tiles", "vector"] { let _ = crate::storage::clear(&root.join(sub)); }
+    }
+}
+
 /// Start or stop the Android background alert service (`AlertService.kt`). No-op elsewhere —
 /// desktop already keeps watching because the window is still open.
 pub fn set_background_alerts(_enabled: bool) {
@@ -1334,6 +1353,14 @@ mod android_tts {
                 Err(e) => return Err(format!("{e:?}")),
             }
         }
+    }
+
+    pub fn stop() {
+        let Some(tts) = TTS.get() else { return };
+        let Some(app) = super::android::app() else { return };
+        let Ok(vm) = (unsafe { jni::JavaVM::from_raw(app.vm_as_ptr() as *mut jni::sys::JavaVM) }) else { return };
+        let Ok(mut env) = vm.attach_current_thread() else { return };
+        let _ = env.call_method(tts.as_obj(), "stop", "()I", &[]);
     }
 
     /// One `speak()` attempt. `Ok(false)` means the engine isn't ready yet (retry).

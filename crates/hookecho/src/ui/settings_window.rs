@@ -232,9 +232,9 @@ impl SettingsWindow {
                 "0 uses the platform default: 2 GB on the desktop, 300 MB on Android.",
             ),
             (
-                "Map tiles (each cache)",
+                "Map tiles (per cache)",
                 &mut settings.tile_disk_cache_mb,
-                "Applies to the raster and vector tile caches separately. 0 = platform default.",
+                "Raster and vector caches share a 250 MB ceiling; each may use up to 125 MB.",
             ),
         ] {
             ui.horizontal(|ui| {
@@ -578,6 +578,20 @@ fn custom_tile_source(ui: &mut egui::Ui, settings: &mut Settings) {
 }
 
 fn basemaps_tab(ui: &mut egui::Ui, settings: &mut Settings) {
+    ui.horizontal_wrapped(|ui| {
+        ui.label("Map quality");
+        for (value, label) in [
+            (crate::settings::MapQuality::Auto, "Auto"),
+            (crate::settings::MapQuality::Performance, "Performance"),
+            (crate::settings::MapQuality::Full, "Full quality"),
+        ] {
+            ui.selectable_value(&mut settings.map_quality, value, label);
+        }
+    });
+    ui.small("Auto adapts detail during movement. All modes restore full settled detail. Map cache: 250 MB maximum.");
+    if ui.button("Clear map cache").clicked() {
+        crate::platform::clear_map_cache();
+    }
     ui.label("Provider API keys unlock additional raster basemap styles.");
     ui.add_space(6.0);
     key_field(ui, "Mapbox access token", &mut settings.mapbox_key);

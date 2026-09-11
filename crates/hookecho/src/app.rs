@@ -2299,6 +2299,7 @@ pub struct HookEchoApp {
     /// sweep once rather than once a frame.
     celltrack_cache: LruCache<String, Vec<wxdata::celltrack::Blob>>,
     /// The tracks themselves, with the frame list they were built from.
+    #[allow(clippy::type_complexity)]
     tracks_cache: Option<((usize, String, usize), Vec<String>, Vec<wxdata::celltrack::Track>)>,
     show_local_tracks: bool,
     site_dialog: Option<ui::site_dialog::SiteDialog>,
@@ -4575,7 +4576,7 @@ impl HookEchoApp {
         let quiet = self.in_quiet_hours();
         let mut announcements = Vec::new();
         for feature in &self.alert_features {
-            if feature.kind != overlay::FeatureKind::Warning || !feature_in_box(feature, bounds) {
+            if feature.kind != overlay::FeatureKind::Warning || !feature_intersects_box(feature, bounds) {
                 continue;
             }
             let Some(alert) = &feature.alert else { continue };
@@ -11315,8 +11316,7 @@ impl HookEchoApp {
         // bake in faint labels that are hard to read, so we overlay crisp haloed ones. Only the
         // *geometry* is basemap-specific: vector basemaps draw it, raster keeps its own imagery.
         let (visible_vector, vlabels, visible_vector_tiles) = {
-            let vis = self.vtiles.visible(&cam, vp);
-            self.vtiles.request_missing(&vis);
+            let vis = self.vtiles.request_view(&cam, vp, self.gesture_live, self.settings.map_quality);
             let ids: Vec<crate::render::TileId> = vis.iter().map(|v| v.id).collect();
             // Deep-copying every visible place name every frame (for every pane) showed up at the
             // 4-10 fps the phone runs at. The set only changes when the visible tiles do, or when
@@ -12054,13 +12054,15 @@ impl HookEchoApp {
             // Arrival-time cones: project each moving cell forward, shade the swept path, and
             // list ETAs to any watched marker the cone covers.
             if self.filters.show_arrival_cones {
-                const LEAD_MIN: f64 = 60.0;
-                const HALF_ANGLE: f64 = 18.0;
+                const LEAD_MIN: f64 = 30.0;
                 // Indices, not strings: every marker inside every cone used to be formatted and
                 // then thrown away by the `take(6)` below.
                 let mut etas: Vec<(f64, usize, usize)> = Vec::new();
                 let cells = self.active_storm_cells();
                 for (ci, c) in cells.iter().enumerate() {
+                    let Some(scan) = view.volume.as_ref().map(|volume| volume.time) else { continue };
+                    if !ui::cell_window::projection_valid(c, scan) { continue; }
+                    let Some(error_km) = ui::cell_window::error_km(c) else { continue };
                     let (Some(dir), Some(kt)) = (c.mvt_deg, c.mvt_kt) else {
                         continue;
                     };
@@ -12068,14 +12070,15 @@ impl HookEchoApp {
                         continue;
                     }
                     let lead_km = kt as f64 * 1.852 * (LEAD_MIN / 60.0);
+                    let half_angle = error_km.atan2(lead_km).to_degrees();
                     let left = crate::geo::destination_point(
                         [c.lon, c.lat],
-                        dir as f64 - HALF_ANGLE,
+                        dir as f64 - half_angle,
                         lead_km,
                     );
                     let right = crate::geo::destination_point(
                         [c.lon, c.lat],
-                        dir as f64 + HALF_ANGLE,
+                        dir as f64 + half_angle,
                         lead_km,
                     );
                     let apex = to_screen(c.lon, c.lat);
@@ -12104,7 +12107,7 @@ impl HookEchoApp {
                             dir,
                             kt,
                             [m.lon, m.lat],
-                            HALF_ANGLE,
+                            half_angle,
                             LEAD_MIN,
                         ) {
                             etas.push((min, mi, ci));
@@ -12117,7 +12120,10 @@ impl HookEchoApp {
                     let mut y = prect.top() + 40.0;
                     for (min, mi, ci) in etas.iter().take(6) {
                         let (m, c) = (&self.settings.markers[*mi], &cells[*ci]);
-                        let text = format!("⏱ {} — {} in {:.0} min", m.name, c.id, min);
+                        let error_min = ui::cell_window::error_km(c).unwrap_or(0.0)
+                            / (c.mvt_kt.unwrap_or(1.0) as f64 * 1.852 / 60.0);
+                        let text = format!("⏱ {} — {} ≈ {:.0}–{:.0} min (source-error range)",
+                            m.name, c.id, (min - error_min).max(0.0), min + error_min);
                         let galley =
                             painter.layout_no_wrap(text, font.clone(), egui::Color32::WHITE);
                         let anchor = egui::pos2(prect.left() + 8.0, y);
@@ -12380,10 +12386,13 @@ impl HookEchoApp {
                     painter.add(egui::Shape::line(pts, egui::Stroke::new(1.5, gray)));
                 }
                 // SCIT positions retain their geometry; cross-ticks mark each forecast time.
-                if self.filters.show_tracks && !c.track.is_empty() {
+                if self.filters.show_tracks && !c.track.is_empty()
+                    && view.volume.as_ref().is_some_and(|volume| ui::cell_window::projection_valid(c, volume.time)) {
                     let white = egui::Color32::WHITE;
                     let mut prev = p;
-                    for tp in &c.track {
+                    for tp in c.track.iter().filter(|point| point.minutes <= 30
+                        && point.lon.is_finite() && point.lat.is_finite()
+                        && point.lon.abs() <= 180.0 && point.lat.abs() <= 90.0) {
                         let tpp = to_screen(tp.lon, tp.lat);
                         let direction = (tpp - prev).normalized();
                         let tick = egui::vec2(-direction.y, direction.x) * 12.0;
@@ -15668,6 +15677,31 @@ fn feature_in_box(f: &GeoFeature, bx: (f64, f64, f64, f64)) -> bool {
     x1 >= bx0 && x0 <= bx1 && y1 >= by0 && y0 <= by1
 }
 
+/// Exact enough for warning polygons and a rectangular viewport: vertices, contained corners,
+/// and crossing edges. Bbox is the cheap rejection shared by every overlay.
+fn feature_intersects_box(f: &GeoFeature, bx: (f64, f64, f64, f64)) -> bool {
+    if !feature_in_box(f, bx) { return false; }
+    let (x0, y0, x1, y1) = bx;
+    let inside = |p: &[f64; 2]| (x0..=x1).contains(&p[0]) && (y0..=y1).contains(&p[1]);
+    let corners = [[x0, y0], [x1, y0], [x1, y1], [x0, y1]];
+    f.rings.iter().any(|ring| {
+        ring.iter().any(inside)
+            || corners.iter().any(|corner| point_in_ring_ll(ring, corner[0], corner[1]))
+            || ring.iter().zip(ring.iter().cycle().skip(1)).take(ring.len()).any(|(a, b)|
+                segments_intersect(*a, *b, [x0, y0], [x1, y0])
+                || segments_intersect(*a, *b, [x1, y0], [x1, y1])
+                || segments_intersect(*a, *b, [x1, y1], [x0, y1])
+                || segments_intersect(*a, *b, [x0, y1], [x0, y0]))
+    })
+}
+
+fn segments_intersect(a: [f64; 2], b: [f64; 2], c: [f64; 2], d: [f64; 2]) -> bool {
+    let cross = |p: [f64; 2], q: [f64; 2], r: [f64; 2]|
+        (q[0] - p[0]) * (r[1] - p[1]) - (q[1] - p[1]) * (r[0] - p[0]);
+    let (ab_c, ab_d, cd_a, cd_b) = (cross(a, b, c), cross(a, b, d), cross(c, d, a), cross(c, d, b));
+    ab_c * ab_d <= 0.0 && cd_a * cd_b <= 0.0
+}
+
 impl eframe::App for HookEchoApp {
     /// Flush any settings change the one-second dirty-diff throttle hasn't picked up yet.
     fn on_exit(&mut self) {
@@ -17793,7 +17827,7 @@ mod follow_tests {
 
 #[cfg(test)]
 mod warning_scope_tests {
-    use super::{feature_in_box, GeoFeature};
+    use super::{feature_in_box, feature_intersects_box, GeoFeature};
     use wxdata::overlay::FeatureKind;
 
     fn poly(x0: f64, y0: f64, x1: f64, y1: f64) -> GeoFeature {
@@ -17822,6 +17856,17 @@ mod warning_scope_tests {
         let mut empty = poly(0.0, 0.0, 0.0, 0.0);
         empty.rings.clear();
         assert!(!feature_in_box(&empty, bx));
+    }
+
+    #[test]
+    fn visible_speech_requires_real_polygon_intersection() {
+        let bx = (0.0, 0.0, 2.0, 2.0);
+        assert!(feature_intersects_box(&poly(-1.0, 0.5, 1.0, 1.5), bx));
+        assert!(feature_intersects_box(&poly(-1.0, -1.0, 3.0, 3.0), bx));
+        let diagonal = GeoFeature { rings: vec![vec![[-2.0, 0.9], [0.9, 3.0], [3.0, 3.0], [3.0, 0.9]]], ..poly(0.0, 0.0, 0.0, 0.0) };
+        assert!(feature_intersects_box(&diagonal, bx));
+        let outside = GeoFeature { rings: vec![vec![[-1.0, 1.9], [1.9, 3.0], [3.0, 3.0], [-1.0, 1.9]]], ..poly(0.0, 0.0, 0.0, 0.0) };
+        assert!(!feature_intersects_box(&outside, (1.0, 1.0, 2.0, 2.0)));
     }
 }
 

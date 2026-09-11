@@ -932,6 +932,32 @@ impl VectorTileManager {
         tile_cover(cam, viewport_px, MAX_VECTOR_Z, label_detail_bias(cam.zoom))
     }
 
+    /// A low-detail geographic backdrop arrives before fine streets. Existing renderer parent
+    /// fallback draws these tiles while requested children are still loading.
+    pub fn request_view(&mut self, cam: &Camera, viewport: (f32, f32), moving: bool,
+        quality: crate::settings::MapQuality) -> Vec<VisibleTile> {
+        let full = self.visible(cam, viewport);
+        let reduced = quality != crate::settings::MapQuality::Full;
+        let slow = self.ctx.as_ref().is_some_and(|ctx| ctx.input(|input| input.stable_dt > 1.0 / 30.0));
+        let reduction = if quality == crate::settings::MapQuality::Performance || slow { 2.0 } else { 1.0 };
+        let coarse = tile_cover(cam, viewport, MAX_VECTOR_Z,
+            label_detail_bias(cam.zoom) - reduction);
+        let full_ready = full.iter().all(|tile| self.uploaded.contains(&tile.id));
+        let coarse_finished = coarse.iter().all(|tile|
+            self.uploaded.contains(&tile.id) || self.failed.contains_key(&tile.id));
+        if reduced && (moving || (!full_ready && !coarse_finished)) {
+            self.request_missing(&coarse);
+            return if moving { coarse } else { full };
+        }
+        self.request_missing(&full);
+        if full_ready && !moving {
+            // Only after visible work completes: a small buffer for the next nearby pan.
+            let margin = (viewport.0 + 128.0, viewport.1 + 128.0);
+            self.request_missing(&self.visible(cam, margin));
+        }
+        full
+    }
+
     /// Kick off tilejson + tile fetches for anything visible and not yet requested.
     /// Start the TileJSON fetch if it hasn't run, and take its result if it has.
     ///
@@ -1262,6 +1288,20 @@ mod tests {
         assert_eq!(manager.drain_ready().len(), 2);
         assert_eq!(manager.drain_ready().len(), 1);
         assert!(manager.drain_ready().is_empty());
+    }
+
+    #[tokio::test]
+    async fn moving_performance_view_requests_lower_zoom_without_losing_settled_detail() {
+        let mut manager = test_manager();
+        let camera = Camera::at_lonlat(-97.0, 32.0, 9.0);
+        let full = manager.visible(&camera, (800.0, 600.0));
+        let moving = manager.request_view(&camera, (800.0, 600.0), true,
+            crate::settings::MapQuality::Performance);
+        assert!(moving[0].id.0 <= full[0].id.0);
+        let settled = manager.request_view(&camera, (800.0, 600.0), false,
+            crate::settings::MapQuality::Full);
+        assert_eq!(settled.iter().map(|tile| tile.id).collect::<Vec<_>>(),
+            full.iter().map(|tile| tile.id).collect::<Vec<_>>());
     }
 
     #[test]

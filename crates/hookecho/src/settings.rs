@@ -9,6 +9,14 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum MapQuality {
+    #[default]
+    Auto,
+    Performance,
+    Full,
+}
+
 /// egui theme preference.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum Theme {
@@ -543,9 +551,11 @@ pub struct Settings {
     /// 300 MB Android). Applied by the startup sweep, so a change takes effect next launch.
     #[serde(default)]
     pub volume_cache_mb: u32,
-    /// Cap for each on-disk map-tile cache (raster and vector), in MB. 0 = platform default.
+    /// Requested cap for each map cache, bounded to half the combined 250 MB ceiling.
     #[serde(default)]
     pub tile_disk_cache_mb: u32,
+    #[serde(default)]
+    pub map_quality: MapQuality,
 }
 
 /// Where the dual-pol signature detectors and the GLM flash-extent grid draw their lines.
@@ -1075,6 +1085,7 @@ impl Default for Settings {
             quiet_pending: Vec::new(),
             volume_cache_mb: 0,
             tile_disk_cache_mb: 0,
+            map_quality: MapQuality::Auto,
             share_card: true,
             layer_order: Vec::new(),
             mping_key: String::new(),
@@ -1587,6 +1598,7 @@ mod tests {
             quiet_pending: Vec::new(),
             volume_cache_mb: 0,
             tile_disk_cache_mb: 0,
+            map_quality: MapQuality::Auto,
             workspaces: Vec::new(),
             seeded_workspaces: false,
             smooth_radar: false,

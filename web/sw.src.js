@@ -22,13 +22,14 @@ const CACHE = "shell-" + __VERSION__;
 
 // Survives deploys — the tiles in it are not versioned by our build, and throwing them away
 // because the wasm changed would be pure waste.
-const TILES = "tiles-v1";
+const TILES = "tiles-v2";
 
 // Roughly a few hundred MB of raster at worst, which is well inside a normal origin quota and
 // small enough that trimming stays cheap. Cache.keys() is insertion-ordered, so the oldest
 // entries are the first ones — evicting from the front is FIFO with no bookkeeping to store.
-const TILE_MAX = 1500;
-const TILE_TRIM = 300;
+const TILE_BYTES = 250 * 1024 * 1024;
+let tileWrites = Promise.resolve();
+let tileSizes = null;
 
 // Is this an XYZ tile (or the glyphs and sprites a vector basemap needs to draw one)? Matched on
 // URL shape rather than a host list: the app ships a dozen basemaps and lets the user paste their
@@ -54,11 +55,36 @@ function isTile(url) {
 
 // Drop the oldest entries once the cache has grown past its cap. Fire-and-forget: a trim that
 // loses a race just runs again on the next tile.
-async function trim() {
+async function storeTile(request, response) {
   const c = await caches.open(TILES);
-  const keys = await c.keys();
-  if (keys.length <= TILE_MAX) return;
-  await Promise.all(keys.slice(0, TILE_TRIM).map((k) => c.delete(k)));
+  if (!tileSizes) {
+    tileSizes = new Map();
+    for (const key of await c.keys()) {
+      const stored = await c.match(key);
+      const size = Number(stored?.headers.get("x-hookecho-cache-bytes"));
+      if (!Number.isSafeInteger(size) || size <= 0) await c.delete(key);
+      else tileSizes.set(key.url, size);
+    }
+  }
+  const bytes = await response.arrayBuffer();
+  if (!bytes.byteLength || bytes.byteLength > TILE_BYTES) return;
+  const headers = new Headers(response.headers);
+  headers.set("x-hookecho-cache-bytes", String(bytes.byteLength));
+  // Stored bytes are already decoded by fetch; don't retain transport compression metadata.
+  headers.delete("content-encoding");
+  headers.delete("content-length");
+  let total = [...tileSizes.values()].reduce((sum, size) => sum + size, 0)
+    - (tileSizes.get(request.url) || 0) + bytes.byteLength;
+  for (const [url, size] of tileSizes) {
+    if (total <= TILE_BYTES) break;
+    if (url === request.url) continue;
+    await c.delete(url);
+    tileSizes.delete(url);
+    total -= size;
+  }
+  await c.put(request, new Response(bytes, { status: response.status, headers }));
+  tileSizes.delete(request.url);
+  tileSizes.set(request.url, bytes.byteLength);
 }
 
 self.addEventListener("install", (e) => {
@@ -90,23 +116,19 @@ self.addEventListener("fetch", (e) => {
     // range, a satellite timestamp), so a hit is the right answer and a conditional request would
     // only spend a round trip to be told so.
     e.respondWith(
-      caches.match(req).then(
+      caches.match(req).catch(() => undefined).then(
         (hit) =>
           hit ||
           fetch(req).then((res) => {
             // Opaque responses (a tile host with no CORS headers) are cacheable and replayable,
             // which is all the renderer needs. An error is not: caching a 404 tile would make a
             // transient outage permanent.
-            if (res.ok || res.type === "opaque") {
+            if (res.ok && res.type !== "opaque") {
               const copy = res.clone();
               // Not waitUntil: by the time this runs the response has usually already been
               // handed to the page, and a settled event rejects it. The worker stays alive for
               // the fetch anyway, and a store that loses the race costs one re-download.
-              caches
-                .open(TILES)
-                .then((c) => c.put(req, copy))
-                .then(trim)
-                .catch(() => {});
+              tileWrites = tileWrites.then(() => storeTile(req, copy)).catch(() => {});
             }
             return res;
           }),

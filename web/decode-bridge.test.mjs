@@ -7,6 +7,16 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { makeBridge } from "./decode-bridge.js";
 
+test("radar goes ahead of queued vector work", async () => {
+  const { bridge, spawned } = harness([[]]);
+  await Promise.all([
+    bridge(new Uint8Array([1]), "vector"),
+    bridge(new Uint8Array([2]), "vector"),
+    bridge(new Uint8Array([3]), "assemble"),
+  ]);
+  assert.deepEqual(spawned[0].jobs.map(job => job.op), ["vector", "assemble", "vector"]);
+});
+
 /// A worker that answers every job the way the script says, in order, and remembers whether it
 /// was terminated. `reply` is `{ ok }`, `{ err }` or `{ err, fatal }`.
 function stubWorker(replies) {

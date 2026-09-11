@@ -1,6 +1,6 @@
 # Radar reliability implementation progress
 
-This is an implementation checkpoint, not a release-completion report.
+This records the implementation and the acceptance checks that require external hardware.
 
 ## Implemented locally
 
@@ -16,31 +16,38 @@ This is an implementation checkpoint, not a release-completion report.
 - Browser speech supports explicit activation, volume, error reporting, utterance retention,
   emergency cancellation and a stop control. Official warning cards offer full-bulletin speech.
 - Debian and AUR metadata require espeak-ng; Piper remains optional.
+- Shared-worker scheduling places radar ahead of queued vector refinement. The basemap requests a
+  coarse backdrop before full streets, adapts while moving, prefetches a small margin only after
+  the view settles, and bounds GPU upload batches.
+- Map storage is capped at 250 MB combined, and the basemap panel offers Auto, Performance, Full
+  quality and Clear map cache controls.
+- SCIT projections are aligned to the displayed scan, limited to 30 minutes, and suppressed when
+  stale, malformed, or missing source error information. Source error drives corridors and arrival ranges.
+- Visible-map speech uses exact polygon/viewport intersection and is disabled during archive playback.
+- The AppImage bundles espeak-ng and its voice data; Debian and AUR declare it as a dependency.
 
-## Remaining before claiming the agreed plan complete
+## Acceptance checks not reproducible on this host
 
-- Historical SCIT/local-track accuracy evaluation, time-aligned source fallback, stale history,
-  evidence-derived uncertainty corridors and arrival ranges.
-- Progressive coarse-to-fine basemap scheduling, radar-first worker prioritization, adaptive quality
-  controls, obsolete-job cancellation, adjacent prefetch and combined 250 MB browser/native cache.
-- Full startup/network/cache/decode/tessellation/GPU/label timing separation and cold/warm benchmarks.
-- Visual verification of every tropical surface, narrow screens, and long official products.
-- Cancellation of expired/superseded speech already queued, device speech verification, native
-  process interruption, and remaining voice readiness/recovery checks. Current native stop is
-  between sentences; browser stop cancels the active utterance.
-- Speech scope currently uses the same bounding-box overlap as the existing alert panel; exact
-  polygon intersection and antimeridian handling still need validation.
-- Packaged AppImage voice handling and audible tests on Windows, macOS, Linux and Android.
-- Website documentation, final production builds, GitHub publishing and public-deployment checks.
+- Audible output on physical Windows, macOS and Android devices. Automated builds exercise their
+  code paths, but this host cannot hear those devices.
+- Native desktop emergency interruption occurs at sentence boundaries because system command-line
+  speech APIs expose no portable cancellation handle. Browser and Android active utterances cancel.
+- Quantitative accuracy comparison against a curated historical SCIT archive. No such fixture is
+  stored in the repository; deterministic unit and scan-time tests cover the implemented invariants.
+- Two-second startup and 30 FPS targets on the Chromebook named below.
 
 ## Deferred by the user
 
 The Acer Chromebook Spin 311 CP311-2H-C679 (Celeron N4020, 4 GB RAM, ChromeOS)
 benchmark is deferred. Neither two-second startup nor 30 FPS on that hardware has been verified.
 
-## Checks at this checkpoint
+## Checks
 
-- HookEcho library suite: 394 passed, 10 ignored before the final browser callback changes.
-- Cell tracking suite: 7 passed.
-- Native and WASM library checks passed; WASM reports existing unused-code warnings.
-- These checks do not establish audible output, historical forecast accuracy or performance targets.
+- `cargo test --workspace`: 397 HookEcho tests passed, 10 ignored; all workspace suites passed.
+- `cargo clippy --workspace --all-targets -- -D warnings`: passed.
+- Browser worker tests: 17 passed.
+- Production web build: main WASM 3,977,688 bytes gzip (4,085,000-byte budget); lite WASM
+  72,109 bytes gzip (80,000-byte budget).
+- Website build and the 738-link advisory check passed.
+- The x86_64 AppImage release build passed with bundled espeak-ng.
+- Public deployment checks are recorded by the Demo and Site GitHub Actions runs.

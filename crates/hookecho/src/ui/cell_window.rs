@@ -2,6 +2,22 @@
 use crate::theme;
 use wxdata::level3::Cell;
 const KT_TO_MPH: f32 = 1.150_78;
+
+/// A SCIT projection must not use a future product or an old motion estimate. Three normal
+/// five-minute scans is the maximum retained motion age; history can remain visible afterward.
+pub fn projection_valid(cell: &Cell, scan: chrono::DateTime<chrono::Utc>) -> bool {
+    cell.time.is_some_and(|time| (0..=900).contains(&(scan - time).num_seconds()))
+        && cell.lon.is_finite() && cell.lon.abs() <= 180.0
+        && cell.lat.is_finite() && cell.lat.abs() <= 90.0
+        && cell.mvt_deg.is_some_and(|direction| direction.is_finite() && (0.0..360.0).contains(&direction))
+        && cell.mvt_kt.is_some_and(|speed| speed.is_finite() && speed >= 0.0)
+}
+
+pub fn error_km(cell: &Cell) -> Option<f64> {
+    [cell.fcst_err_nm, cell.mean_err_nm].into_iter().flatten()
+        .filter(|value| value.is_finite() && *value >= 0.0)
+        .reduce(f32::max).map(|value| value as f64 * 1.852)
+}
 #[derive(Debug, Clone, Copy, Default)]
 pub struct CellSample {
     pub vil: Option<f32>,
@@ -40,6 +56,13 @@ pub fn show(
         )
         .show(ctx, |ui| {
             ui.weak(track_time(cell.time, 0, tz));
+            ui.small("Source: radar SCIT · Motion estimates are not official warnings or forecasts.");
+            if !projection_valid(cell, chrono::Utc::now()) {
+                ui.weak("Stale or insufficient motion data — forward projection unavailable.");
+            }
+            if error_km(cell).is_none() {
+                ui.weak("Unable to estimate arrival reliably: source error information unavailable.");
+            }
             ui.add_space(10.0);
             attributes(ui, cell, trend);
             ui.separator();
@@ -177,6 +200,21 @@ pub fn track_time(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn projection_rejects_future_stale_and_invalid_motion() {
+        let now = chrono::DateTime::from_timestamp(1_700_000_000, 0).unwrap();
+        let mut cell = Cell { time: Some(now), lon: -97.0, lat: 32.0,
+            mvt_deg: Some(90.0), mvt_kt: Some(30.0), ..Default::default() };
+        assert!(projection_valid(&cell, now));
+        assert!(!projection_valid(&cell, now - chrono::Duration::seconds(1)));
+        assert!(!projection_valid(&cell, now + chrono::Duration::minutes(16)));
+        assert!(error_km(&cell).is_none());
+        cell.fcst_err_nm = Some(2.0);
+        assert_eq!(error_km(&cell), Some(3.704));
+        cell.mvt_kt = Some(f32::NAN);
+        assert!(!projection_valid(&cell, now));
+    }
 
     #[test]
     fn summary_renders_without_expanding_full_attributes() {

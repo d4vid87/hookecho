@@ -27,6 +27,18 @@ rm -rf "$APPDIR"
 mkdir -p "$APPDIR/usr/bin"
 cp "$ROOT/target/release/hookecho" "$APPDIR/usr/bin/hookecho"
 
+# The AppImage is the Linux package with no package manager to declare a speech dependency to.
+# Bundle espeak-ng and its small voice data; Piper remains an optional higher-quality voice.
+command -v espeak-ng >/dev/null || { echo "espeak-ng is required to build the AppImage" >&2; exit 1; }
+cp "$(command -v espeak-ng)" "$APPDIR/usr/bin/espeak-ng"
+mkdir -p "$APPDIR/usr/lib" "$APPDIR/usr/share/espeak-ng-data"
+data_dir="$(dirname "$(find /usr -type f -path '*/espeak-ng-data/*' -name phontab -print -quit)")"
+test -n "$data_dir"
+cp -a "$data_dir/." "$APPDIR/usr/share/espeak-ng-data/"
+ldd "$(command -v espeak-ng)" | sed -n 's/.*=> \([^ ]*\).*/\1/p' | while read -r lib; do
+  case "$lib" in */libc.so.*|*/libm.so.*|*/libpthread.so.*|*/libdl.so.*) ;; *) cp -L "$lib" "$APPDIR/usr/lib/" ;; esac
+done
+
 # Desktop entry (top level + the canonical applications dir).
 cp "$ROOT/packaging/hookecho.desktop" "$APPDIR/hookecho.desktop"
 mkdir -p "$APPDIR/usr/share/applications"
@@ -46,8 +58,9 @@ done
 mkdir -p "$APPDIR/usr/share/metainfo"
 cp "$ROOT/packaging/io.hookecho.HookEcho.metainfo.xml" "$APPDIR/usr/share/metainfo/"
 
-# AppRun -> the binary.
-ln -sf usr/bin/hookecho "$APPDIR/AppRun"
+# AppRun adds the bundled voice engine to the process environment.
+cp "$ROOT/packaging/AppRun" "$APPDIR/AppRun"
+chmod +x "$APPDIR/AppRun"
 
 # Fetch appimagetool if we don't have it.
 if [ ! -x "$TOOL" ]; then

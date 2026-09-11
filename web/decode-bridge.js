@@ -14,6 +14,16 @@ export function makeBridge({ spawnWorker, maxRespawns = 3, log = console.warn })
   const pending = new Map();
   let worker = null;
   let nextId = 1;
+  const queued = [];
+  let active = false;
+  const dispatch = () => {
+    if (active || !worker || !queued.length) return;
+    // Keep radar work ahead of queued map refinement. Never interrupt an executing decode.
+    const radar = queued.findIndex(job => job.op !== "vector");
+    const job = queued.splice(radar < 0 ? 0 : radar, 1)[0];
+    active = true;
+    worker.postMessage(job, [job.bytes]);
+  };
   // A trap that repeats is a bug in the decode, not bad luck, and respawning forever would turn
   // it into a loop.
   let respawns = 0;
@@ -28,6 +38,8 @@ export function makeBridge({ spawnWorker, maxRespawns = 3, log = console.warn })
     // once" apart from "this volume is bad".
     for (const [, [, reject]] of pending) reject(new Error("worker unavailable"));
     pending.clear();
+    queued.length = 0;
+    active = false;
     if (++respawns <= maxRespawns) {
       log(`decode worker restarting (${respawns}/${maxRespawns}):`, why);
       attach();
@@ -51,6 +63,7 @@ export function makeBridge({ spawnWorker, maxRespawns = 3, log = console.warn })
       const { id, ok, err, fatal } = e.data;
       const entry = pending.get(id);
       if (entry) {
+        active = false;
         pending.delete(id);
         const [resolve, reject] = entry;
         if (err) reject(new Error(err));
@@ -59,6 +72,7 @@ export function makeBridge({ spawnWorker, maxRespawns = 3, log = console.warn })
       // A trap poisons the heap this instance decodes in: everything after it would fail too. The
       // job that hit it was already answered above, so this only costs the jobs still queued.
       if (fatal) retire("wasm trap");
+      else dispatch();
     };
   };
 
@@ -73,7 +87,8 @@ export function makeBridge({ spawnWorker, maxRespawns = 3, log = console.warn })
       pending.set(id, [resolve, reject]);
       // Transfer, not copy: the volume is tens of MB and this side is finished with it. Rust
       // hands us a fresh JS-heap array for exactly this reason.
-      worker.postMessage({ id, op, bytes: bytes.buffer }, [bytes.buffer]);
+      queued.push({ id, op, bytes: bytes.buffer });
+      dispatch();
     });
   };
 }

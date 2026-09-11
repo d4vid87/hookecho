@@ -1757,6 +1757,14 @@ pub(crate) async fn load_tile_bytes(
             let _ = std::fs::create_dir_all(parent);
         }
         let _ = std::fs::write(p, &bytes);
+        if let Some(root) = crate::paths::cache_dir() {
+            for sub in ["tiles", "vector"] {
+                let cache = root.join(sub);
+                if p.starts_with(&cache) {
+                    sweep_later(cache, "map cache", tile_cache_bytes());
+                }
+            }
+        }
     }
     Ok(bytes)
 }
@@ -1783,11 +1791,8 @@ const RASTER_TILE_CACHE: usize = if cfg!(target_os = "android") {
 
 /// Largest the on-disk tile cache may get. It grows by ~20 KB a tile and nothing ever removed
 /// anything, so a few long sessions of panning could quietly fill a phone.
-pub(crate) const DISK_CACHE_BYTES: u64 = if cfg!(target_os = "android") {
-    150 * 1024 * 1024
-} else {
-    500 * 1024 * 1024
-};
+// Two independently swept caches share a 250 MB maximum through equal reservations.
+pub(crate) const DISK_CACHE_BYTES: u64 = 125 * 1024 * 1024;
 
 /// User overrides for the two disk caps, in bytes; 0 means "use the platform default".
 ///
@@ -1804,11 +1809,11 @@ pub(crate) fn set_cache_caps(tile_mb: u32, volume_mb: u32) {
     VOLUME_CAP.store(u64::from(volume_mb) * 1024 * 1024, Relaxed);
 }
 
-/// Cap for each on-disk tile cache (raster and vector are swept separately, to this same figure).
+/// Cap for each on-disk tile cache; the two equal caps form the combined 250 MB ceiling.
 pub(crate) fn tile_cache_bytes() -> u64 {
     match TILE_CAP.load(std::sync::atomic::Ordering::Relaxed) {
         0 => DISK_CACHE_BYTES,
-        n => n,
+        n => n.min(DISK_CACHE_BYTES),
     }
 }
 
@@ -1862,6 +1867,7 @@ pub(crate) fn sweep_later(root: std::path::PathBuf, label: &'static str, cap: u6
     #[cfg(not(target_arch = "wasm32"))]
     {
         let Ok(mut j) = JANITOR.lock() else { return };
+        if j.0.iter().any(|job| job.0 == root) { return; }
         j.0.push(SweepJob(root, label, cap));
         if j.1 {
             return;

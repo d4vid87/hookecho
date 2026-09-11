@@ -16,7 +16,13 @@ the panel, and take **Save marker** when the map flies there. Mark one of them a
 - a **desktop notification**,
 - a phone push via [ntfy.sh](https://ntfy.sh),
 - a webhook into **Discord, Slack or Matrix**,
-- the warning **read aloud** through your system voice.
+- the warning **read aloud** through your system or browser voice.
+
+Spoken alerts are scoped to warnings visible on the map, independently of saved-place push
+notifications. Open **Settings → Alerts**, enable spoken alerts, and run the test warning. Browsers
+require this activation once per page session and cannot speak after the page closes. HookEcho
+shows a recovery message if a device voice is missing or playback fails. Emergency speech
+interrupts routine warning speech; **Stop speech** and the master mute remain available.
 
 ## Choosing what you're told about
 
@@ -37,9 +43,10 @@ phone and receiving app settings.
 ## Where the storm actually is
 
 Every warning carries the office's own storm-motion description, which HookEcho
-parses into a vector: the warned storm as a dot, its projected path at 15, 30,
-45 and 60 minutes, and an ETA to each of your saved locations. That turns
-"there's a warning near you" into "it's 22 minutes from home."
+parses into a vector: the warned storm as a dot and its projected path up to 30 minutes. When the
+radar product publishes an error estimate, HookEcho uses it for the corridor and presents arrival
+as a range. Without that support, it says the arrival cannot be estimated reliably. Tracks are
+estimates, not official warnings or forecasts, and stale projections are suppressed.
 
 ## On your phone
 

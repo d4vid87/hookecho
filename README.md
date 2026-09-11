@@ -132,8 +132,8 @@ HookEcho can warn you when official weather alerts approach a saved place. Depen
 device, alerts can appear in the app, browser, phone notification, email, Discord, Telegram, or
 another service you connect.
 
-The app explains what the warning is, where it is, and when it expires. Emergency warnings are
-shown and sounded more strongly than routine notices.
+The app explains what the warning is, where it is, and when it expires. It can read warnings in
+the visible map area through the device voice; emergency speech interrupts routine notices.
 
 ## Privacy
 

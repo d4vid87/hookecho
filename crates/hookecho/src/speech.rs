@@ -13,6 +13,7 @@ static CANCEL_EPOCH: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64
 
 pub fn stop() {
     CANCEL_EPOCH.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    crate::platform::stop_speech();
     #[cfg(not(target_arch = "wasm32"))]
     if let Ok(mut jobs) = speech_queue().jobs.lock() { jobs.clear(); }
     #[cfg(target_arch = "wasm32")]
@@ -343,6 +344,10 @@ pub(crate) fn announce(
     tone: Option<(crate::settings::AlertSound, f32)>,
     lines: Vec<String>,
 ) {
+    if priority == Priority::Emergency {
+        CANCEL_EPOCH.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        crate::platform::stop_speech();
+    }
     let job = SpeechJob::new(priority, tone, lines);
     if job.is_empty() {
         return;
