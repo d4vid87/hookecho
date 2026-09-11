@@ -12060,8 +12060,7 @@ impl HookEchoApp {
                 let mut etas: Vec<(f64, usize, usize)> = Vec::new();
                 let cells = self.active_storm_cells();
                 for (ci, c) in cells.iter().enumerate() {
-                    let Some(scan) = view.volume.as_ref().map(|volume| volume.time) else { continue };
-                    if !ui::cell_window::projection_valid(c, scan) { continue; }
+                    if !ui::cell_window::projection_valid(c, chrono::Utc::now()) { continue; }
                     let Some(error_km) = ui::cell_window::error_km(c) else { continue };
                     let (Some(dir), Some(kt)) = (c.mvt_deg, c.mvt_kt) else {
                         continue;
@@ -12387,7 +12386,7 @@ impl HookEchoApp {
                 }
                 // SCIT positions retain their geometry; cross-ticks mark each forecast time.
                 if self.filters.show_tracks && !c.track.is_empty()
-                    && view.volume.as_ref().is_some_and(|volume| ui::cell_window::projection_valid(c, volume.time)) {
+                    && ui::cell_window::projection_valid(c, chrono::Utc::now()) {
                     let white = egui::Color32::WHITE;
                     let mut prev = p;
                     for tp in c.track.iter().filter(|point| point.minutes <= 30
