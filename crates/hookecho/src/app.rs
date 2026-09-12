@@ -1561,6 +1561,8 @@ pub(crate) enum PaletteAction {
     AllTilts,
     ToggleField(crate::render::FieldLayer),
     ToggleOverlay(OverlayToggle),
+    /// Show Day 1 categorical SPC outlook, or hide the selected outlook.
+    ToggleOutlook,
     SetContours(ContourKind),
     Tool(MapTool),
     OpenWindow(AppWindow),
@@ -7876,6 +7878,13 @@ impl HookEchoApp {
                 ) {
                     self.rebuild_overlays();
                 }
+            }
+            PaletteAction::ToggleOutlook => {
+                self.filters.outlook_day = if self.filters.outlook_day == 0 { 1 } else { 0 };
+                if self.filters.outlook_day == 1 && self.outlook_features[0].is_empty() {
+                    self.spawn_overlay(ctx, OverlaySource::Outlook(1, self.outlook_kind_for_day()));
+                }
+                self.rebuild_overlays();
             }
             PaletteAction::SetContours(k) => self.contour_kind = k,
             // Tapping the armed tool disarms it. Interrogate is the resting state, so "off" means

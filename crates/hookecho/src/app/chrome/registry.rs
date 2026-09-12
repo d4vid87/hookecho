@@ -105,6 +105,7 @@ impl HookEchoApp {
                 T::Wind => RequestLane::Feed("Wind particles"),
                 _ => return None,
             },
+            PaletteAction::ToggleOutlook => RequestLane::Feed("SPC outlook"),
             _ => return None,
         };
         Some(self.request_health(lane))
@@ -812,6 +813,14 @@ impl HookEchoApp {
                 Some(on),
             );
         }
+        push(
+            "SPC convective outlook",
+            "Severe",
+            "Storm Prediction Center severe-weather risk areas",
+            true,
+            PaletteAction::ToggleOutlook,
+            Some(self.filters.outlook_day != 0),
+        );
         push(
             "Cycle basemap",
             "Reference",
