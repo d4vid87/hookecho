@@ -358,7 +358,6 @@ fn active_layer(e: &PaletteEntry) -> bool {
             PaletteAction::ToggleOverlay(toggle) => {
                 !matches!(toggle, T::AlertPanel | T::LinkCameras | T::MiniLoop)
             }
-            PaletteAction::ToggleOutlook => true,
             _ => false,
         }
 }
@@ -740,7 +739,7 @@ pub(crate) fn body(
                         });
                 }
                 ui.add_space(8.0);
-                if let Some(entry) = entries.iter().find(|e| e.action == PaletteAction::ToggleOutlook) {
+                if let Some(entry) = entries.iter().find(|e| e.action == PaletteAction::OpenOutlooks) {
                     let hit = row(ui, entry, accent, false);
                     if hit.clicked {
                         chosen = Some(entry.action);

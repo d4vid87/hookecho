@@ -153,6 +153,47 @@ impl HookEchoApp {
                     ui.add_space(10.0);
                     if page == "Map settings" {
                         self.map_rows(ui, &mut opts);
+                    } else if page == "Outlooks" {
+                        ui.ctx().data_mut(|d| {
+                            d.insert_temp(ui.id().with("layer_settings_section"), "Outlooks")
+                        });
+                        let glm_options = self.show_glm
+                            || self.views[self.active]
+                                .fields_on
+                                .contains(&crate::render::FieldLayer::GlmFed);
+                        crate::ui::layer_options::show(
+                            ui,
+                            &mut self.filters,
+                            &mut self.fields,
+                            &self.views[self.active].fields_on.clone(),
+                            &mut self.rotation_minutes,
+                            &mut self.hail_minutes,
+                            &mut self.hrrr_fcst_hour,
+                            self.hrrr_valid,
+                            tz,
+                            &mut self.env_cape_ml,
+                            &mut self.env_srh_km,
+                            &mut self.env_model,
+                            &mut self.contour_kind,
+                            &mut etop_dbz,
+                            &mut self.snow_hours,
+                            &self.show_tropical,
+                            &mut self.tropical_wind_kt,
+                            &mut self.tropical_surge,
+                            l3_site.as_deref(),
+                            &mut self.global_model,
+                            &mut self.global_fcst_hour,
+                            &mut self.diff_field,
+                            self.diff_valid.as_ref(),
+                            &mut self.settings.lightning_minutes,
+                            glm_options,
+                            &mut self.settings.glm_goes_west,
+                            self.show_spotters,
+                            &mut self.settings.spotter_range_km,
+                            &mut self.settings.detectors,
+                            Some(mosaic.as_str()),
+                            &mut opts,
+                        );
                     } else {
                         self.app_rows(ui);
                     }
