@@ -242,38 +242,56 @@ pub(crate) fn show(
     }
 
     if section == "Outlooks" {
-        // SPC outlook: a four-way day selector whose own "Off" is the off-state, so it can't wear the
-        // registry's ON/OFF pill. It lives here rather than in the layer list.
-        // Days 4–8 are SPC's experimental severe probability, one layer per day; the row wraps
-        // rather than growing a second control for "which kind of day this is".
-        ui.label("SPC Outlook");
-        egui::ComboBox::from_id_salt("outlook_day")
-            .width(ui.available_width() - 8.0)
-            .selected_text(if filters.outlook_day == 0 {
-                "Off".to_string()
-            } else {
-                format!("Day {}", filters.outlook_day)
-            })
-            .show_ui(ui, |ui| {
-                for day in 0u8..=8 {
-                    let label = if day == 0 {
-                        "Off".to_string()
-                    } else {
-                        format!("Day {day}")
-                    };
-                    changed |= ui
-                        .selectable_value(&mut filters.outlook_day, day, label)
-                        .changed();
-                }
-            });
-        // Day-1 hazard sub-select (probabilistic tornado/wind/hail); Days 2–3 are categorical only.
-        if filters.outlook_day == 1 {
-            ui.indent("outlook_kind", |ui| {
-                ui.label("Hazard");
-                egui::ComboBox::from_id_salt("outlook_hazard")
-                    .width(ui.available_width() - 8.0)
-                    .selected_text(filters.outlook_kind.label())
-                    .show_ui(ui, |ui| {
+        let accent = ui.visuals().selection.stroke.color;
+        egui::Frame::new()
+            .fill(ui.visuals().faint_bg_color)
+            .stroke(ui.visuals().window_stroke)
+            .corner_radius(crate::ui::style::RADIUS_LG)
+            .inner_margin(12)
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label(
+                        egui::RichText::new(egui_phosphor::regular::WARNING)
+                            .size(22.0)
+                            .color(accent),
+                    );
+                    ui.vertical(|ui| {
+                        ui.label(egui::RichText::new("SPC Convective Outlook").strong());
+                        ui.weak("NOAA Storm Prediction Center");
+                    });
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.colored_label(
+                            if filters.outlook_day == 0 {
+                                ui.visuals().weak_text_color()
+                            } else {
+                                accent
+                            },
+                            if filters.outlook_day == 0 {
+                                "OFF"
+                            } else {
+                                "ON"
+                            },
+                        );
+                    });
+                });
+                ui.separator();
+                ui.label(egui::RichText::new("Forecast day").small().strong());
+                ui.horizontal_wrapped(|ui| {
+                    for day in 1u8..=8 {
+                        changed |= ui
+                            .selectable_value(&mut filters.outlook_day, day, format!("Day {day}"))
+                            .changed();
+                    }
+                });
+                changed |= ui
+                    .selectable_value(&mut filters.outlook_day, 0, "Hide outlook")
+                    .changed();
+
+                // Day 1 is the only outlook with separate tornado, wind and hail probabilities.
+                if filters.outlook_day == 1 {
+                    ui.add_space(4.0);
+                    ui.label(egui::RichText::new("Layer").small().strong());
+                    ui.horizontal_wrapped(|ui| {
                         for kind in wxdata::spc::OutlookKind::ALL {
                             if ui
                                 .selectable_value(&mut filters.outlook_kind, kind, kind.label())
@@ -284,8 +302,24 @@ pub(crate) fn show(
                             }
                         }
                     });
+                } else if filters.outlook_day >= 4 {
+                    ui.weak("Experimental severe-weather probability");
+                }
+
+                ui.add_space(4.0);
+                ui.horizontal_wrapped(|ui| {
+                    for (label, color) in [
+                        ("TSTM", egui::Color32::from_rgb(85, 170, 85)),
+                        ("MRGL", egui::Color32::from_rgb(65, 145, 75)),
+                        ("SLGT", egui::Color32::from_rgb(235, 210, 45)),
+                        ("ENH", egui::Color32::from_rgb(235, 145, 45)),
+                        ("MDT", egui::Color32::from_rgb(220, 60, 55)),
+                        ("HIGH", egui::Color32::from_rgb(220, 70, 190)),
+                    ] {
+                        ui.colored_label(color, egui::RichText::new(format!("● {label}")).small());
+                    }
+                });
             });
-        }
 
         // Excessive Rainfall Outlook: the flood half of the day, directly under the severe half.
         ui.label("Rainfall outlook");
