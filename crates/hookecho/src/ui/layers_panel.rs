@@ -227,6 +227,7 @@ fn health_popup(ui: &mut egui::Ui, health: &SourceHealth) {
 
 fn row(ui: &mut egui::Ui, e: &PaletteEntry, accent: Color32, draggable: bool) -> Hit {
     let on = e.on.unwrap_or(false);
+    let glass = e.category == "National";
     let (fg, bg) = if on {
         (
             accent,
@@ -241,9 +242,22 @@ fn row(ui: &mut egui::Ui, e: &PaletteEntry, accent: Color32, draggable: bool) ->
         ui.visuals().weak_text_color()
     });
     let mut clicked = false;
-    let outer = ui
-        .horizontal(|ui| {
-            ui.spacing_mut().item_spacing.x = 4.0;
+    let outer = egui::Frame::new()
+        .fill(if glass {
+            ui.visuals().faint_bg_color
+        } else {
+            Color32::TRANSPARENT
+        })
+        .stroke(if glass {
+            Stroke::new(1.0, ui.visuals().widgets.noninteractive.bg_stroke.color)
+        } else {
+            Stroke::NONE
+        })
+        .corner_radius(if glass { 12.0 } else { 0.0 })
+        .inner_margin(if glass { 6 } else { 0 })
+        .show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 4.0;
             // The icon doubles as the grip: a separate handle column costs width the label needs,
             // and dragging from the label itself would fight the click that toggles the layer.
             if draggable {
@@ -269,8 +283,8 @@ fn row(ui: &mut egui::Ui, e: &PaletteEntry, accent: Color32, draggable: bool) ->
                         ui.add(
                             egui::Button::new(RichText::new(&e.label).size(13.0).color(fg))
                                 .min_size(vec2(w, ROW_H))
-                                .fill(bg)
-                                .corner_radius(7.0)
+                                .fill(if glass && !on { Color32::TRANSPARENT } else { bg })
+                                .corner_radius(if glass { 9.0 } else { 7.0 })
                                 .stroke(if on {
                                     Stroke::new(1.0, accent.gamma_multiply(0.7))
                                 } else {
@@ -287,6 +301,8 @@ fn row(ui: &mut egui::Ui, e: &PaletteEntry, accent: Color32, draggable: bool) ->
             }
             clicked = resp.clicked();
             resp
+            })
+            .inner
         })
         .inner;
     // The button's rect, not the whole strip: it's what the chips are drawn against and what a
