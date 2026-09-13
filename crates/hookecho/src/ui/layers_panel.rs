@@ -229,7 +229,7 @@ fn row(ui: &mut egui::Ui, e: &PaletteEntry, accent: Color32, draggable: bool) ->
     let on = e.on.unwrap_or(false);
     let glass = matches!(
         e.category,
-        "National" | "Radar" | "Severe" | "Models" | "Reference"
+        "National" | "Radar" | "Severe" | "Models" | "Reference" | "Tools"
     );
     let (fg, bg) = if on {
         (
