@@ -11296,6 +11296,23 @@ impl HookEchoApp {
                                                 cards,
                                                 selected: Some(0),
                                             });
+                                    } else if hits
+                                        .iter()
+                                        .any(|f| f.kind == overlay::FeatureKind::TropicalCone)
+                                    {
+                                        self.detail = None;
+                                        if let Some(id) = self
+                                            .tropical
+                                            .as_ref()
+                                            .and_then(|t| nearest_tropical_id(&t.storms, lon, lat))
+                                        {
+                                            self.tropical_window.open = true;
+                                            self.tropical_window.storm_id = Some(id.clone());
+                                            self.fetch_tropical_text(
+                                                &id,
+                                                self.tropical_window.product,
+                                            );
+                                        }
                                     } else {
                                         self.warning_popup = None;
                                         self.detail = hits.first().map(|f| Detail {
@@ -15738,6 +15755,22 @@ fn segments_intersect(a: [f64; 2], b: [f64; 2], c: [f64; 2], d: [f64; 2]) -> boo
     ab_c * ab_d <= 0.0 && cd_a * cd_b <= 0.0
 }
 
+fn nearest_tropical_id(
+    storms: &[wxdata::tropical::TropicalStorm],
+    lon: f64,
+    lat: f64,
+) -> Option<String> {
+    storms
+        .iter()
+        .min_by(|a, b| {
+            let distance = |s: &&wxdata::tropical::TropicalStorm| {
+                crate::geo::great_circle([lon, lat], [s.lon, s.lat]).0
+            };
+            distance(a).total_cmp(&distance(b))
+        })
+        .map(|s| s.id.clone())
+}
+
 impl eframe::App for HookEchoApp {
     /// Flush any settings change the one-second dirty-diff throttle hasn't picked up yet.
     fn on_exit(&mut self) {
@@ -17903,6 +17936,36 @@ mod warning_scope_tests {
         assert!(feature_intersects_box(&diagonal, bx));
         let outside = GeoFeature { rings: vec![vec![[-1.0, 1.9], [1.9, 3.0], [3.0, 3.0], [-1.0, 1.9]]], ..poly(0.0, 0.0, 0.0, 0.0) };
         assert!(!feature_intersects_box(&outside, (1.0, 1.0, 2.0, 2.0)));
+    }
+}
+
+#[cfg(test)]
+mod tropical_click_tests {
+    use super::nearest_tropical_id;
+    use wxdata::tropical::TropicalStorm;
+
+    fn storm(id: &str, lon: f64, lat: f64) -> TropicalStorm {
+        TropicalStorm {
+            id: id.into(),
+            name: id.into(),
+            classification: "TS".into(),
+            intensity_kt: 35.0,
+            lat,
+            lon,
+            pressure_mb: None,
+            points: Vec::new(),
+            advisory_url: None,
+            discussion_url: None,
+        }
+    }
+
+    #[test]
+    fn cone_click_selects_the_nearest_active_storm() {
+        let storms = [storm("near", -115.0, 20.0), storm("far", -80.0, 30.0)];
+        assert_eq!(
+            nearest_tropical_id(&storms, -114.0, 21.0).as_deref(),
+            Some("near")
+        );
     }
 }
 
