@@ -6,7 +6,7 @@
 //! shared [`GeoFeature`] type.
 
 use crate::alerts::USER_AGENT;
-use crate::overlay::{for_each_feature, polygons_of, FeatureKind, GeoFeature};
+use crate::overlay::{for_each_feature, polygons_of, AlertInfo, FeatureKind, GeoFeature};
 
 const OUTLOOK_BASE: &str = "https://www.spc.noaa.gov/products/outlook";
 /// Days 4-8 live under the experimental products path and are one probabilistic layer per day
@@ -280,6 +280,10 @@ pub fn parse_watches(json: &str) -> anyhow::Result<Vec<GeoFeature>> {
         } else {
             format!("{prod} {number}")
         };
+        let office = str_of("wfo");
+        let expires = chrono::DateTime::parse_from_rfc3339(str_of("ends"))
+            .ok()
+            .map(|t| t.with_timezone(&chrono::Utc));
         let mut detail = String::new();
         for (label, key) in [("Until", "ends"), ("Issued", "issuance"), ("Office", "wfo")] {
             let v = str_of(key);
@@ -304,7 +308,26 @@ pub fn parse_watches(json: &str) -> anyhow::Result<Vec<GeoFeature>> {
                 kind: FeatureKind::WatchBox,
                 title: title.clone(),
                 detail: detail.clone(),
-                alert: None,
+                alert: Some(AlertInfo {
+                    id: format!("spc-watch-{prod}-{number}"),
+                    event: title.clone(),
+                    headline: if office.is_empty() {
+                        "NOAA Storm Prediction Center".into()
+                    } else {
+                        format!("Issued by {office}")
+                    },
+                    area: String::new(),
+                    description: detail.clone(),
+                    instruction: String::new(),
+                    expires,
+                    max_hail_in: None,
+                    max_wind: None,
+                    tornado_detection: None,
+                    damage_threat: None,
+                    source: None,
+                    motion: None,
+                    vtec: None,
+                }),
             });
         }
     })?;
@@ -563,7 +586,12 @@ mod tests {
         assert!(f[0].detail.contains("Issued: 2026-08-30T17:00:00-05:00"));
         assert!(f[0].detail.contains("Office: KOUN"));
         assert!(f[0].detail.contains("https://api.weather.gov/alerts/x"));
+        let alert = f[0].alert.as_ref().expect("watch uses alert card");
+        assert_eq!(alert.event, "Tornado Watch 0638");
+        assert_eq!(alert.headline, "Issued by KOUN");
+        assert!(alert.expires.is_some());
         assert_eq!(f[1].title, "Severe Thunderstorm Watch 0637");
+        assert!(f[1].alert.is_some());
         assert_eq!(f[1].stroke, [230, 200, 30, 235]);
         // A watch is a backdrop for the warnings inside it, so both fills stay nearly clear.
         assert!(f.iter().all(|x| x.fill[3] < 30));
