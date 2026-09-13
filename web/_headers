@@ -8,6 +8,9 @@
 /dist/*
   Cache-Control: public, max-age=31536000, immutable
 
+/voice/*
+  Cache-Control: public, max-age=31536000, immutable
+
 # index.html carries the hashed names, so it is the one thing that must never be stale.
 /
   Cache-Control: public, max-age=0, must-revalidate

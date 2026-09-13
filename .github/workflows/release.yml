@@ -194,7 +194,9 @@ jobs:
         run: |
           mkdir -p dist
           cp target/release/hookecho.exe dist/
-          cd dist && 7z a hookecho-windows-x86_64.zip hookecho.exe
+          packaging/piper/fetch.sh windows-x86_64 target/release/piper
+          cp -a target/release/piper dist/
+          cd dist && 7z a hookecho-windows-x86_64.zip hookecho.exe piper
 
       # Two versions, because the installers cannot take the one the tag uses: WiX rejects
       # anything but `x.x.x.x` ("The Product/@Version attribute's value, '0.12.0-alpha.1', is not
@@ -212,11 +214,14 @@ jobs:
       - name: Build MSI
         shell: bash
         run: |
+          heat dir target/release/piper -nologo -cg PiperFiles -dr PiperFolder -srd -gg -var var.PiperDir \
+            -out dist/piper.wxs
           candle -nologo -arch x64 \
             -dAppVersion=${{ steps.ver.outputs.numeric }} \
             -dExePath=target/release/hookecho.exe \
             -o dist/hookecho.wixobj packaging/windows/main.wxs
-          light -nologo -o dist/HookEcho-x86_64.msi dist/hookecho.wixobj
+          candle -nologo -arch x64 -dPiperDir=target/release/piper -o dist/piper.wixobj dist/piper.wxs
+          light -nologo -o dist/HookEcho-x86_64.msi dist/hookecho.wixobj dist/piper.wixobj
 
       # Inno Setup 6 is preinstalled on windows-latest (not on PATH). pwsh avoids
       # Git-bash mangling of the /D switches.
@@ -313,6 +318,8 @@ jobs:
           APP=dist/HookEcho.app
           mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
           cp target/release/hookecho "$APP/Contents/MacOS/hookecho"
+          case "$(uname -m)" in arm64) PIPER_PLATFORM=macos-aarch64;; *) PIPER_PLATFORM=macos-x86_64;; esac
+          packaging/piper/fetch.sh "$PIPER_PLATFORM" "$APP/Contents/Resources/piper"
 
           # Icons at every size the iconset wants, each drawn rather than resampled.
           ICONSET=dist/hookecho.iconset

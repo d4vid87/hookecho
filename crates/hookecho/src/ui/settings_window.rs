@@ -1266,8 +1266,10 @@ fn alerts_tab(ui: &mut egui::Ui, settings: &mut Settings) {
     if !speech_status.is_empty() {
         ui.colored_label(egui::Color32::from_rgb(240, 190, 90), speech_status);
     }
-    ui.weak("Piper below is the good voice; without it Linux uses spd-say or espeak, macOS and \
-             Windows their own, Android its own.");
+    #[cfg(not(target_arch = "wasm32"))]
+    ui.weak("Bundled Amy is the default. A custom Piper path below overrides it; device speech is used if Amy fails.");
+    #[cfg(target_arch = "wasm32")]
+    ui.weak("Amy prepares locally after the map starts. Device speech is used if preparation or inference fails.");
     // Hearing it once beats reading three settings and waiting for weather to find out that the
     // engine was never installed.
     if ui
@@ -1327,9 +1329,8 @@ fn speak_test(settings: &Settings) {
 
 /// Piper: the local neural voice, and the one download this app ever offers.
 ///
-/// Nothing here is bundled. The binary is whatever the user installed (most distros package it),
-/// and the voice model is a ~60 MB file that would be absurd to commit — so the button fetches it
-/// into the data directory on request, and until then espeak keeps working.
+/// Native release packages include Amy. These fields remain for existing custom Piper voices;
+/// choosing one overrides the bundle without changing saved installations.
 #[cfg(not(target_arch = "wasm32"))]
 fn piper_row(ui: &mut egui::Ui, settings: &mut Settings) {
     ui.add_space(4.0);

@@ -15,6 +15,7 @@ Cargo.lock
 /dist
 # Browser bundle output (scripts/web/build.sh).
 /web/dist/
+/web/voice/
 packaging/appimagetool-*.AppImage
 
 # Android build artifacts (the .so is produced by cargo-ndk; Gradle output is transient).

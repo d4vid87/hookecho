@@ -99,7 +99,8 @@ self.addEventListener("activate", (e) => {
       .keys()
       .then((keys) =>
         Promise.all(
-          keys.filter((k) => k !== CACHE && k !== TILES).map((k) => caches.delete(k)),
+          keys.filter((k) => k !== CACHE && k !== TILES && !k.startsWith("voice-"))
+            .map((k) => caches.delete(k)),
         ),
       )
       .then(() => self.clients.claim()),

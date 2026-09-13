@@ -20,6 +20,7 @@ UninstallDisplayIcon={app}\hookecho.exe
 
 [Files]
 Source: "{#ExeDir}\hookecho.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#ExeDir}\piper\*"; DestDir: "{app}\piper"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
 Name: "{group}\HookEcho"; Filename: "{app}\hookecho.exe"
