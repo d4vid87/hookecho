@@ -740,10 +740,58 @@ pub(crate) fn body(
                 }
                 ui.add_space(8.0);
                 if let Some(entry) = entries.iter().find(|e| e.action == PaletteAction::OpenOutlooks) {
-                    let hit = row(ui, entry, accent, false);
-                    if hit.clicked {
-                        chosen = Some(entry.action);
-                    }
+                    let on = entry.on == Some(true);
+                    egui::Frame::new()
+                        .fill(ui.visuals().faint_bg_color)
+                        .corner_radius(12.0)
+                        .inner_margin(10)
+                        .show(ui, |ui| {
+                            ui.horizontal(|ui| {
+                                ui.label(
+                                    RichText::new(egui_phosphor::regular::WARNING)
+                                        .size(24.0)
+                                        .color(accent),
+                                );
+                                let details = ui.vertical(|ui| {
+                                    ui.label(RichText::new("SPC convective outlook").size(14.0));
+                                    ui.label(
+                                        RichText::new("Storm Prediction Center risk areas")
+                                            .size(10.0)
+                                            .color(ui.visuals().weak_text_color()),
+                                    );
+                                });
+                                if details.response.interact(egui::Sense::click()).clicked() {
+                                    chosen = Some(PaletteAction::OpenOutlooks);
+                                }
+                                ui.with_layout(
+                                    egui::Layout::right_to_left(egui::Align::Center),
+                                    |ui| {
+                                        let icon = if on {
+                                            egui_phosphor::regular::TOGGLE_RIGHT
+                                        } else {
+                                            egui_phosphor::regular::TOGGLE_LEFT
+                                        };
+                                        if ui
+                                            .add(
+                                                egui::Button::new(
+                                                    RichText::new(icon).size(32.0).color(if on {
+                                                        accent
+                                                    } else {
+                                                        ui.visuals().weak_text_color()
+                                                    }),
+                                                )
+                                                .frame(false)
+                                                .min_size(vec2(40.0, 36.0)),
+                                            )
+                                            .named_toggle("SPC convective outlook", on)
+                                            .clicked()
+                                        {
+                                            chosen = Some(PaletteAction::ToggleOutlook);
+                                        }
+                                    },
+                                );
+                            });
+                        });
                 }
                 return;
             }
