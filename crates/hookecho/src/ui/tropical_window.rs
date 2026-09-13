@@ -127,14 +127,12 @@ pub fn show(
             .max_height((ctx.content_rect().height() * 0.65).clamp(120.0, 640.0))
             .auto_shrink([false, false])
             .show(ui, |ui| match &w.text {
-                // The products are column-formatted plain text; monospace or they lose it.
                 Some(a) => {
-                    ui.heading(&a.title);
-                    ui.add_space(8.0);
-                    ui.add(
-                        egui::Label::new(egui::RichText::new(&a.text).monospace().size(12.0))
-                            .wrap(),
-                    );
+                    ui.label(egui::RichText::new("Official bulletin").size(18.0).strong());
+                    ui.add_space(6.0);
+                    ui.strong(&a.title);
+                    ui.add_space(10.0);
+                    ui.add(egui::Label::new(egui::RichText::new(&a.text).size(16.0)).wrap());
                 }
                 None if w.busy => {
                     ui.weak("Fetching…");
