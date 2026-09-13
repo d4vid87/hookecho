@@ -86,7 +86,7 @@ pub fn window(ctx: &egui::Context) -> Frame {
     let alpha = if style.visuals.window_stroke.width > 1.0 {
         255
     } else {
-        246
+        228
     };
     Frame::window(&style)
         .fill(Color32::from_rgba_unmultiplied(
