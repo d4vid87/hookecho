@@ -539,6 +539,8 @@ pub(crate) fn body(
     max_height: f32,
     focus_search: bool,
     pref: &mut Vec<String>,
+    outlook_day: u8,
+    outlook_kind: wxdata::spc::OutlookKind,
     mut after_radar: impl FnMut(&mut egui::Ui),
 ) -> Option<PaletteAction> {
     let mut chosen = None;
@@ -793,6 +795,36 @@ pub(crate) fn body(
                             });
                         });
                 }
+                ui.add_space(6.0);
+                ui.label(RichText::new("Forecast day").size(12.0).strong());
+                ui.horizontal_wrapped(|ui| {
+                    for day in 1u8..=8 {
+                        if ui.selectable_label(outlook_day == day, format!("Day {day}")).clicked() {
+                            chosen = Some(PaletteAction::SetOutlookDay(day));
+                        }
+                    }
+                });
+                ui.add_space(6.0);
+                ui.label(RichText::new("Layer").size(12.0).strong());
+                ui.horizontal_wrapped(|ui| {
+                    for (index, kind) in wxdata::spc::OutlookKind::ALL.into_iter().enumerate() {
+                        if ui.selectable_label(outlook_kind == kind, kind.label()).clicked() {
+                            chosen = Some(PaletteAction::SetOutlookKind(index as u8));
+                        }
+                    }
+                });
+                ui.horizontal_wrapped(|ui| {
+                    for (label, color) in [
+                        ("TSTM", Color32::from_rgb(85, 170, 85)),
+                        ("MRGL", Color32::from_rgb(65, 145, 75)),
+                        ("SLGT", Color32::from_rgb(235, 210, 45)),
+                        ("ENH", Color32::from_rgb(235, 145, 45)),
+                        ("MDT", Color32::from_rgb(220, 60, 55)),
+                        ("HIGH", Color32::from_rgb(220, 70, 190)),
+                    ] {
+                        ui.colored_label(color, RichText::new(format!("● {label}")).small());
+                    }
+                });
                 return;
             }
             let selected = category.clone().unwrap();
@@ -1006,6 +1038,8 @@ mod tests {
                         700.0,
                         false,
                         &mut pref,
+                        0,
+                        wxdata::spc::OutlookKind::default(),
                         |_| {},
                     );
                 });
@@ -1065,6 +1099,8 @@ mod tests {
                         100.0,
                         frame == 0,
                         &mut pref,
+                        0,
+                        wxdata::spc::OutlookKind::default(),
                         |_| {},
                     );
                     ui.add_space(200.0);
@@ -1076,6 +1112,49 @@ mod tests {
             offset > 150.0,
             "focused search stayed behind the keyboard: {offset}"
         );
+    }
+
+    #[test]
+    fn browse_shows_spc_day_and_layer_controls() {
+        let ctx = egui::Context::default();
+        let mut query = String::new();
+        let mut pref = Vec::new();
+        let entries = [PaletteEntry {
+            label: "SPC convective outlook".into(),
+            category: "Severe",
+            action: PaletteAction::OpenOutlooks,
+            on: Some(true),
+            desc: "",
+            common: true,
+            key: None,
+            health: None,
+        }];
+        let out = ctx.run_ui(egui::RawInput::default(), |ui| {
+            ui.set_width(400.0);
+            body(
+                ui,
+                &entries,
+                &mut query,
+                Color32::WHITE,
+                800.0,
+                false,
+                &mut pref,
+                1,
+                wxdata::spc::OutlookKind::Categorical,
+                |_| {},
+            );
+        });
+        let text: Vec<_> = out
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) => Some(text.galley.job.text.as_str()),
+                _ => None,
+            })
+            .collect();
+        for expected in ["Forecast day", "Day 8", "Layer", "Hail", "● HIGH"] {
+            assert!(text.contains(&expected), "missing {expected}: {text:?}");
+        }
     }
 
     /// Grouping must never hide a row for good: every specialist entry remains searchable.

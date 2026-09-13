@@ -1565,6 +1565,8 @@ pub(crate) enum PaletteAction {
     OpenOutlooks,
     /// Show Day 1 SPC outlook, or hide the selected outlook.
     ToggleOutlook,
+    SetOutlookDay(u8),
+    SetOutlookKind(u8),
     SetContours(ContourKind),
     Tool(MapTool),
     OpenWindow(AppWindow),
@@ -7894,6 +7896,22 @@ impl HookEchoApp {
                 }
                 self.rebuild_overlays();
             }
+            PaletteAction::SetOutlookDay(day) if day <= 8 => {
+                self.filters.outlook_day = day;
+                if day > 0 && self.outlook_features[(day - 1) as usize].is_empty() {
+                    self.spawn_overlay(ctx, OverlaySource::Outlook(day, self.outlook_kind_for_day()));
+                }
+                self.rebuild_overlays();
+            }
+            PaletteAction::SetOutlookKind(index) => {
+                let Some(kind) = wxdata::spc::OutlookKind::ALL.get(index as usize).copied() else { return };
+                self.filters.outlook_day = 1;
+                self.filters.outlook_kind = kind;
+                self.outlook_features[0].clear();
+                self.spawn_overlay(ctx, OverlaySource::Outlook(1, kind));
+                self.rebuild_overlays();
+            }
+            PaletteAction::SetOutlookDay(_) => {}
             PaletteAction::SetContours(k) => self.contour_kind = k,
             // Tapping the armed tool disarms it. Interrogate is the resting state, so "off" means
             // back to it — without this the row read ON with no way to turn it off.

@@ -256,6 +256,8 @@ impl HookEchoApp {
                     },
                     std::mem::take(&mut focus_search),
                     &mut self.settings.layer_order,
+                    self.filters.outlook_day,
+                    self.filters.outlook_kind,
                     |ui| {
                         // Knobs for the layers that are already on, drawn between the Radar group
                         // and the rest. Collapsed by default: the list is still the panel's job.
