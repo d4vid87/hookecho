@@ -82,7 +82,14 @@ pub(crate) fn modal_sheet<R>(
     close: &mut bool,
     add: impl FnOnce(&mut egui::Ui) -> R,
 ) -> Rect {
-    let h = content.height() * 0.88;
+    let size_id = Id::new((id, "size"));
+    let mut size: u8 = ctx.memory(|m| m.data.get_temp(size_id).unwrap_or(1));
+    let h = content.height()
+        * match size {
+            0 => 0.58,
+            2 => 1.0,
+            _ => 0.82,
+        };
     // Drag offset lives in egui's temp memory: it is per-sheet transient UI state with no
     // business in the app struct, and it dying with the sheet is the wanted behavior.
     let drag_id = Id::new((id, "drag_y"));
@@ -135,7 +142,8 @@ pub(crate) fn modal_sheet<R>(
                     ui.set_width(rect.width() - m3::SP_4 * 2.0);
                     let handle = m3::drag_handle(ui);
                     if handle.clicked() {
-                        *close = true;
+                        size = (size + 1) % 3;
+                        ctx.memory_mut(|m| m.data.insert_temp(size_id, size));
                     }
                     if handle.dragged() {
                         let dy = (drag_y + handle.drag_delta().y).max(0.0);
@@ -160,6 +168,22 @@ pub(crate) fn modal_sheet<R>(
                             let accent = ui.visuals().selection.bg_fill;
                             if icon_button(ui, ph::X, false, accent).clicked() {
                                 *close = true;
+                            }
+                            let glyph = if size == 2 {
+                                ph::ARROWS_IN
+                            } else {
+                                ph::ARROWS_OUT
+                            };
+                            if icon_button(ui, glyph, false, accent)
+                                .on_hover_text(if size == 2 {
+                                    "Restore sheet"
+                                } else {
+                                    "Expand sheet"
+                                })
+                                .clicked()
+                            {
+                                size = if size == 2 { 1 } else { 2 };
+                                ctx.memory_mut(|m| m.data.insert_temp(size_id, size));
                             }
                         });
                     });

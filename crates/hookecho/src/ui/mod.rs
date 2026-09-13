@@ -24,7 +24,7 @@ pub(crate) fn loading(ui: &mut egui::Ui, what: &str) {
 pub(crate) fn phone_surface<'a>(ctx: &egui::Context, w: egui::Window<'a>) -> egui::Window<'a> {
     if cfg!(target_os = "android") {
         let r = ctx.content_rect();
-        let frame = egui::Frame::window(&ctx.style_of(ctx.theme()))
+        let frame = crate::ui::style::window(ctx)
             .corner_radius(0)
             .shadow(egui::epaint::Shadow::NONE)
             .inner_margin(egui::Margin::symmetric(

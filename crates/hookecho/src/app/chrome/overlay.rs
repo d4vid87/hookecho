@@ -23,8 +23,8 @@ const PANE_STRIP_UP: f32 = 150.0;
 /// Is this the phone layout? Same surfaces, same registry, same state — a thumb-sized pill across
 /// the top, a control column with room around it, and panels that come up from the bottom edge as
 /// modal sheets instead of floating beside the map.
-fn phone() -> bool {
-    cfg!(target_os = "android")
+fn phone(ctx: &egui::Context) -> bool {
+    cfg!(target_os = "android") || compact(ctx)
 }
 
 /// Is this a compact screen — a phone held in portrait?
@@ -39,7 +39,7 @@ pub(crate) fn compact(ctx: &egui::Context) -> bool {
 
 /// Does this screen get bottom sheets instead of a docked panel?
 fn sheets(ctx: &egui::Context) -> bool {
-    phone() && compact(ctx)
+    phone(ctx) && compact(ctx)
 }
 
 /// Where the phone's chrome starts: under the status bar and the color-scale strips.
@@ -208,7 +208,7 @@ impl HookEchoApp {
                             .strong(),
                     );
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if !phone()
+                        if !phone(ctx)
                             && ui
                                 .add(
                                     egui::Button::new(
@@ -371,7 +371,7 @@ impl HookEchoApp {
                 .constrain_to(chrome)
                 .anchor(egui::Align2::LEFT_TOP, egui::vec2(PANEL_X, PANEL_TOP))
                 .show(ctx, |ui| {
-                    ui.set_width(if phone() {
+                    ui.set_width(if phone(ctx) {
                         crate::ui::m3::RAIL_W
                     } else {
                         PANEL_W
@@ -449,14 +449,14 @@ impl HookEchoApp {
             .as_ref()
             .map(|v| v.vcp.split(" (").next().unwrap_or_default().to_string())
             .unwrap_or_default();
-        let width = if phone() {
+        let width = if phone(ctx) {
             // Clear of the chrome-hide eye in the opposite corner, which is a 48 pt target with
             // a margin of its own.
             (self.chrome_rect.width() - crate::ui::m3::SP_3 * 3.0 - 48.0).max(180.0)
         } else {
             PANEL_W
         };
-        let (x, y) = if phone() {
+        let (x, y) = if phone(ctx) {
             (crate::ui::m3::SP_3, phone_top(ctx))
         } else {
             (PANEL_X, 10.0)
@@ -471,7 +471,7 @@ impl HookEchoApp {
                         let menu = ui.add(
                             egui::Button::new(
                                 egui::RichText::new(egui_phosphor::regular::LIST)
-                                    .size(if phone() { 20.0 } else { 16.0 })
+                                    .size(if phone(ctx) { 20.0 } else { 16.0 })
                                     .color(if self.panel_open {
                                         accent
                                     } else {
@@ -490,7 +490,7 @@ impl HookEchoApp {
                         {
                             self.panel_open = !self.panel_open;
                         }
-                        if phone() {
+                        if phone(ctx) {
                             let label = ui
                                 .add(
                                     egui::Button::new(
@@ -505,7 +505,7 @@ impl HookEchoApp {
                                 self.site_dialog = Some(Default::default());
                             }
                         }
-                        let hint = egui::RichText::new(if phone() {
+                        let hint = egui::RichText::new(if phone(ctx) {
                             egui_phosphor::regular::MAGNIFYING_GLASS.to_string()
                         } else {
                             format!(
@@ -518,7 +518,7 @@ impl HookEchoApp {
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             let search = ui.add(
                                 egui::Button::new(hint)
-                                    .min_size(if phone() {
+                                    .min_size(if phone(ctx) {
                                         egui::vec2(40.0, 32.0)
                                     } else {
                                         egui::vec2(PANEL_W - 74.0, 26.0)
@@ -541,7 +541,7 @@ impl HookEchoApp {
     /// The right-edge control column: the buttons that open what floats over the map.
     pub(crate) fn control_column(&mut self, ctx: &egui::Context) {
         let square_btn = |ui: &mut egui::Ui, icon: &str, on: bool, accent: egui::Color32| {
-            if phone() {
+            if phone(ctx) {
                 return crate::ui::style::square_btn(ui, icon, on, accent);
             }
             let label = match icon {
@@ -562,9 +562,17 @@ impl HookEchoApp {
         let (alert_count, esc) = self.alert_badge();
         let layers_on = self.panel_open && !self.show_alert_panel;
         let alerts_on = self.panel_open && self.show_alert_panel;
+        let share_on = self.panel_open
+            && ctx.data_mut(|d| {
+                d.get_temp::<Option<&'static str>>(egui::Id::new("panel_settings_page"))
+                    .flatten()
+                    == Some("Preferences")
+                    && d.get_temp::<&'static str>(egui::Id::new("preferences_section"))
+                        == Some("Share")
+            });
         // On the phone the column drops below the pill and the chrome-hide eye, and sits at the
         // screen edge: there is no legend box to stay clear of, the color scale is a top strip.
-        let at = if phone() {
+        let at = if phone(ctx) {
             egui::vec2(-crate::ui::m3::SP_3, phone_top(ctx) + 56.0)
         } else {
             CONTROLS
@@ -603,11 +611,19 @@ impl HookEchoApp {
                         }
                         // Sharing where you are looking is the thing people do with a radar and had
                         // no button for — only Ctrl+K knew about it.
-                        if square_btn(ui, egui_phosphor::regular::SHARE_NETWORK, false, accent)
+                        if square_btn(ui, egui_phosphor::regular::SHARE_NETWORK, share_on, accent)
                             .named("Share this view")
                             .clicked()
                         {
-                            self.apply_palette(crate::app::PaletteAction::CopyViewLink, ctx);
+                            self.panel_open = true;
+                            self.show_alert_panel = false;
+                            ctx.data_mut(|d| {
+                                d.insert_temp(
+                                    egui::Id::new("panel_settings_page"),
+                                    Some("Preferences"),
+                                );
+                                d.insert_temp(egui::Id::new("preferences_section"), "Share");
+                            });
                         }
                         // Count over the bell's top-right corner, coloured by the worst alert in
                         // view — the same escalation the alert panel sorts by.

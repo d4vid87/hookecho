@@ -62,32 +62,25 @@ pub fn show(
     w: &mut TropicalWindow,
     ctx: &egui::Context,
     storms: &[TropicalStorm],
-    _drawer: &mut crate::ui::drawer::Drawer,
+    drawer: &mut crate::ui::drawer::Drawer,
 ) -> Option<(String, Product)> {
     if !w.open {
         return None;
     }
     let mut want: Option<(String, Product)> = None;
     let mut open = w.open;
-    let mut close = false;
-    let mut window = egui::Window::new("Tropical products")
-        .open(&mut open)
-        .frame(crate::ui::popover::glass_frame())
-        .title_bar(false)
-        .collapsible(false)
-        .default_width(460.0)
-        .max_width((ctx.content_rect().width() - 32.0).max(160.0));
-    if ctx.content_rect().width() < 600.0 {
-        window = window.fixed_rect(ctx.content_rect().shrink(8.0)).resizable(false);
-    }
+    let Some(window) = drawer.page(
+        ctx,
+        "Tropical products",
+        &mut open,
+        false,
+        egui::Window::new("Tropical products"),
+    ) else {
+        w.open = open;
+        return None;
+    };
     window.show(ctx, |ui| {
-        ui.visuals_mut().override_text_color = Some(egui::Color32::from_rgb(225, 234, 244));
-        ui.horizontal(|ui| {
-            ui.weak("OFFICIAL TROPICAL PRODUCTS · NHC");
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                close = ui.button("Close ×").clicked();
-            });
-        });
+        ui.weak("OFFICIAL TROPICAL PRODUCTS · NHC");
         if storms.is_empty() {
             ui.weak("No active tropical cyclones.");
             ui.small("The NHC publishes these only while a storm is being advised on.");
@@ -151,7 +144,7 @@ pub fn show(
                 }
             });
     });
-    w.open = open && !close;
+    w.open = open;
     want
 }
 
@@ -159,6 +152,9 @@ pub fn show(
 mod tests {
     #[test]
     fn public_advisory_is_the_initial_product() {
-        assert_eq!(super::TropicalWindow::default().product, super::Product::Advisory);
+        assert_eq!(
+            super::TropicalWindow::default().product,
+            super::Product::Advisory
+        );
     }
 }

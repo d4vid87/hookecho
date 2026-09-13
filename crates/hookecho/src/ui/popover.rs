@@ -27,15 +27,8 @@ const KEEPOUT_SIDE: f32 = 10.0;
 const RISE: f32 = 12.0;
 
 /// Shared glass treatment for map feature and official bulletin cards.
-pub fn glass_frame() -> egui::Frame {
-    egui::Frame::new()
-        .fill(egui::Color32::from_rgba_unmultiplied(15, 26, 40, 245))
-        .stroke(egui::Stroke::new(
-            1.0,
-            egui::Color32::from_rgb(91, 119, 145),
-        ))
-        .corner_radius(16)
-        .inner_margin(20)
+pub fn glass_frame(ctx: &egui::Context) -> egui::Frame {
+    crate::ui::style::window(ctx).inner_margin(20)
 }
 
 #[derive(Default)]

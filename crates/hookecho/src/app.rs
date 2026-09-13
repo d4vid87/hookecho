@@ -8067,7 +8067,7 @@ impl HookEchoApp {
 
     fn open_alert_popup(&mut self, id: &str) {
         let mut seen = std::collections::HashSet::new();
-        let cards: Vec<ui::warning_window::WarnCard> = self
+        let mut cards: Vec<ui::warning_window::WarnCard> = self
             .active_alert_features()
             .iter()
             .filter_map(|f| f.alert.as_ref().map(|a| (a, f.stroke)))
@@ -8077,6 +8077,7 @@ impl HookEchoApp {
                 color,
             })
             .collect();
+        ui::warning_window::sort_cards(&mut cards);
         if !cards.is_empty() {
             self.detail = None;
             self.warning_popup = Some(ui::warning_window::WarningPopup {
@@ -11276,7 +11277,7 @@ impl HookEchoApp {
                                     // across MultiPolygon parts); other features use the generic popup.
                                     let hits = overlay::hit_all(&self.overlays, lon, lat);
                                     let mut seen = std::collections::HashSet::new();
-                                    let cards: Vec<ui::warning_window::WarnCard> = hits
+                                    let mut cards: Vec<ui::warning_window::WarnCard> = hits
                                         .iter()
                                         .filter_map(|f| f.alert.as_ref().map(|a| (a, f.stroke)))
                                         .filter(|(a, _)| seen.insert(a.id.clone()))
@@ -11285,6 +11286,7 @@ impl HookEchoApp {
                                             color,
                                         })
                                         .collect();
+                                    ui::warning_window::sort_cards(&mut cards);
                                     if !cards.is_empty() {
                                         self.detail = None;
                                         // Open straight to the full bulletin of the top alert; the

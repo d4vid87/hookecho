@@ -26,7 +26,7 @@ pub fn show(
     popovers
         .card(ctx, "detail", egui::Window::new("Feature Details"))
         .open(&mut open)
-        .frame(crate::ui::popover::glass_frame())
+        .frame(crate::ui::popover::glass_frame(ctx))
         .collapsible(false)
         .title_bar(false)
         // Preserve table width for non-outage products.
@@ -36,7 +36,6 @@ pub fn show(
             [560.0, 420.0]
         })
         .show(ctx, |ui| {
-            ui.visuals_mut().override_text_color = Some(egui::Color32::from_rgb(225, 234, 244));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 close = ui.button("Close ×").clicked();
             });

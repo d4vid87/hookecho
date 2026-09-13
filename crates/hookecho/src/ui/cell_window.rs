@@ -49,12 +49,7 @@ pub fn show(
         .vscroll(true)
         .resizable(false)
         .collapsible(false)
-        .frame(
-            egui::Frame::window(&ctx.style_of(ctx.theme()))
-                .fill(egui::Color32::from_rgb(17, 23, 31))
-                .corner_radius(16)
-                .inner_margin(18),
-        )
+        .frame(crate::ui::style::window(ctx).inner_margin(18))
         .show(ctx, |ui| {
             ui.weak(track_time(cell.time, 0, tz));
             ui.small("Source: radar SCIT · Motion estimates are not official warnings or forecasts.");

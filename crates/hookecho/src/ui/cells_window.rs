@@ -171,12 +171,7 @@ pub fn show(
         .resizable(true)
         .vscroll(true)
         .collapsible(false)
-        .frame(
-            egui::Frame::window(&ctx.style_of(ctx.theme()))
-                .fill(egui::Color32::from_rgb(17, 23, 31))
-                .corner_radius(16)
-                .inner_margin(16),
-        )
+        .frame(crate::ui::style::window(ctx).inner_margin(16))
         .show(ctx, |ui| {
             ui.horizontal_wrapped(|ui| {
                 ui.weak(format!("{} cells", cells.len()));

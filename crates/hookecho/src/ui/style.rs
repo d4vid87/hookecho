@@ -77,6 +77,33 @@ pub fn glass(ui: &egui::Ui, alpha: u8) -> Frame {
         .stroke(Stroke::new(1.0, edge))
 }
 
+/// Theme-aware glass for dialogs and drawers. One frame keeps every app-owned window readable
+/// across dark, light, OLED, coloured and high-contrast themes.
+pub fn window(ctx: &egui::Context) -> Frame {
+    let style = ctx.style_of(ctx.theme());
+    let dark = style.visuals.dark_mode;
+    let base = style.visuals.window_fill;
+    let alpha = if style.visuals.window_stroke.width > 1.0 {
+        255
+    } else {
+        246
+    };
+    Frame::window(&style)
+        .fill(Color32::from_rgba_unmultiplied(
+            base.r(),
+            base.g(),
+            base.b(),
+            alpha,
+        ))
+        .stroke(style.visuals.window_stroke)
+        .corner_radius(RADIUS_LG)
+        .shadow(if dark {
+            style.visuals.window_shadow
+        } else {
+            style.visuals.popup_shadow
+        })
+}
+
 /// A ~44px rounded-square chrome button holding one Phosphor glyph.
 pub fn square_btn(ui: &mut egui::Ui, glyph: &str, active: bool, accent: Color32) -> egui::Response {
     // The inactive fill has to be a dark chip, not a near-transparent white wash: these buttons

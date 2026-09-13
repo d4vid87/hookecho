@@ -227,10 +227,7 @@ fn health_popup(ui: &mut egui::Ui, health: &SourceHealth) {
 
 fn row(ui: &mut egui::Ui, e: &PaletteEntry, accent: Color32, draggable: bool) -> Hit {
     let on = e.on.unwrap_or(false);
-    let glass = matches!(
-        e.category,
-        "National" | "Radar" | "Severe" | "Models" | "Reference" | "Tools"
-    );
+    let glass = true;
     let (fg, bg) = if on {
         (
             accent,

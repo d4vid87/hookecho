@@ -15,6 +15,15 @@ pub struct WarningPopup {
     pub selected: Option<usize>,
 }
 
+pub fn sort_cards(cards: &mut [WarnCard]) {
+    cards.sort_by_key(|card| {
+        std::cmp::Reverse((
+            crate::ui::alert_panel::severity_rank(&card.info.event),
+            wxdata::alerts::escalation(&card.info),
+        ))
+    });
+}
+
 /// Show the warning window. Returns `false` when it should close.
 pub fn show(
     ctx: &egui::Context,
@@ -26,12 +35,11 @@ pub fn show(
     popovers
         .card(ctx, "warning", egui::Window::new("Weather alerts"))
         .open(&mut open)
-        .frame(crate::ui::popover::glass_frame())
+        .frame(crate::ui::popover::glass_frame(ctx))
         .collapsible(false)
         .title_bar(false)
         .default_size([460.0, 520.0])
         .show(ctx, |ui| {
-            ui.visuals_mut().override_text_color = Some(egui::Color32::from_rgb(225, 234, 244));
             ui.horizontal(|ui| {
                 ui.weak("WEATHER ALERT");
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -40,7 +48,7 @@ pub fn show(
             });
             match popup.selected {
                 Some(i) if i < popup.cards.len() => {
-                    detail_view(ui, &popup.cards[i], &mut popup.selected)
+                    detail_view(ui, &popup.cards, i, &mut popup.selected)
                 }
                 _ => stack_view(ui, &popup.cards, &mut popup.selected),
             }
@@ -91,14 +99,26 @@ fn stack_view(ui: &mut egui::Ui, cards: &[WarnCard], selected: &mut Option<usize
     });
 }
 
-fn detail_view(ui: &mut egui::Ui, card: &WarnCard, selected: &mut Option<usize>) {
+fn detail_view(ui: &mut egui::Ui, cards: &[WarnCard], index: usize, selected: &mut Option<usize>) {
+    let card = &cards[index];
     let a = &card.info;
     ui.horizontal(|ui| {
-        if ui.button("‹ Back").clicked() {
+        if ui.button("‹ All alerts").clicked() {
             *selected = None;
         }
-    ui.label(countdown(a));
+        ui.label(countdown(a));
     });
+    if cards.len() > 1 {
+        let mut choice = index;
+        egui::ComboBox::from_id_salt("overlapping_alerts")
+            .selected_text(format!("Alert {} of {}", index + 1, cards.len()))
+            .show_ui(ui, |ui| {
+                for (i, item) in cards.iter().enumerate() {
+                    ui.selectable_value(&mut choice, i, &item.info.event);
+                }
+            });
+        *selected = Some(choice);
+    }
     ui.add_space(12.0);
     let icon = if a.event.contains("Statement") {
         egui_phosphor::regular::INFO
@@ -116,16 +136,50 @@ fn detail_view(ui: &mut egui::Ui, card: &WarnCard, selected: &mut Option<usize>)
     if !a.headline.is_empty() && a.headline != a.event {
         ui.label(&a.headline);
     }
-
-    if let Some(expires) = a.expires {
-        ui.add_space(8.0);
-        ui.label(format!("Expires {}", expires.format("%b %-d · %H:%M UTC")));
-    }
+    egui::Frame::new()
+        .fill(ui.visuals().faint_bg_color)
+        .stroke(ui.visuals().widgets.noninteractive.bg_stroke)
+        .corner_radius(crate::ui::style::RADIUS_SM)
+        .inner_margin(10)
+        .show(ui, |ui| {
+            ui.label(egui::RichText::new("ALERT SUMMARY").small().weak());
+            ui.label(if a.area.is_empty() {
+                "Affected area unavailable"
+            } else {
+                &a.area
+            });
+            ui.label(a.expires.map_or_else(
+                || "Validity unavailable".to_string(),
+                |expires| format!("Valid until {}", expires.format("%b %-d · %H:%M UTC")),
+            ));
+            let mut hazards = Vec::new();
+            if let Some(w) = &a.max_wind {
+                hazards.push(format!("Wind {w}"));
+            }
+            if let Some(h) = a.max_hail_in {
+                hazards.push(format!("Hail {h:.2} in"));
+            }
+            if let Some(d) = &a.damage_threat {
+                hazards.push(format!("Damage {d}"));
+            }
+            ui.label(if hazards.is_empty() {
+                "Hazard details unavailable".to_string()
+            } else {
+                hazards.join(" · ")
+            });
+            ui.label(a.source.as_deref().map_or_else(
+                || "Source details unavailable".to_string(),
+                |source| format!("Source: {source}"),
+            ));
+        });
     ui.add_space(12.0);
     ui.separator();
-    if ui.button("Read official bulletin aloud").clicked() {
+    if !a.description.is_empty() && ui.button("Read official bulletin aloud").clicked() {
         crate::speech::enable();
-        crate::speech::speak(&format!("{}. {}. {}\n{}", a.event, a.area, a.description, a.instruction));
+        crate::speech::speak(&format!(
+            "{}. {}. {}\n{}",
+            a.event, a.area, a.description, a.instruction
+        ));
     }
     ui.label(egui::RichText::new("Official bulletin").size(18.0).strong());
     ui.add_space(6.0);
@@ -154,6 +208,12 @@ fn detail_view(ui: &mut egui::Ui, card: &WarnCard, selected: &mut Option<usize>)
                     ui.label(format!("Tornado: {t}"));
                 }
             });
+            if a.description.is_empty() {
+                ui.weak(
+                    "The source provides the watch area and timing, but no official bulletin text.",
+                );
+                return;
+            }
             let mut body = a.description.clone();
             if !a.instruction.is_empty() {
                 body.push_str("\n\nPRECAUTIONARY/PREPAREDNESS ACTIONS...\n");
@@ -171,7 +231,11 @@ fn detail_view(ui: &mut egui::Ui, card: &WarnCard, selected: &mut Option<usize>)
             }
         });
     ui.separator();
-    ui.weak("Official alert bulletin · source text as issued");
+    ui.weak(if a.description.is_empty() {
+        "Alert metadata · official bulletin unavailable"
+    } else {
+        "Official alert bulletin · source text as issued"
+    });
 }
 
 /// "Expires in N min" / "Expires in H h M min" / "EXPIRED" from the alert expiry.
@@ -263,5 +327,31 @@ mod tests {
             );
             assert!(labels.contains("Expires"), "{labels}");
         }
+    }
+
+    #[test]
+    fn overlapping_alerts_put_the_highest_priority_first() {
+        let card = |event: &str| WarnCard {
+            color: [255; 4],
+            info: AlertInfo {
+                event: event.into(),
+                id: event.into(),
+                headline: String::new(),
+                area: String::new(),
+                description: String::new(),
+                instruction: String::new(),
+                expires: None,
+                max_hail_in: None,
+                max_wind: None,
+                tornado_detection: None,
+                damage_threat: None,
+                source: None,
+                motion: None,
+                vtec: None,
+            },
+        };
+        let mut cards = vec![card("Flood Advisory"), card("Tornado Warning")];
+        sort_cards(&mut cards);
+        assert_eq!(cards[0].info.event, "Tornado Warning");
     }
 }

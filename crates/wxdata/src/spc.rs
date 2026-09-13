@@ -317,7 +317,7 @@ pub fn parse_watches(json: &str) -> anyhow::Result<Vec<GeoFeature>> {
                         format!("Issued by {office}")
                     },
                     area: String::new(),
-                    description: detail.clone(),
+                    description: String::new(),
                     instruction: String::new(),
                     expires,
                     max_hail_in: None,

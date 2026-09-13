@@ -39,6 +39,8 @@ pub struct Drawer {
     /// Is the top page's quick-settings row expanded? Per-page state would outlive the page it
     /// belongs to; a single flag reset on every page change is the honest scope.
     pub gear: bool,
+    /// Large analysis pages can temporarily take the map workspace.
+    expanded: bool,
 }
 
 impl Drawer {
@@ -103,15 +105,18 @@ impl Drawer {
         if !self.stack.iter().any(|t| t == title) {
             self.stack.push(title.to_string());
             self.gear = false;
+            self.expanded = false;
         }
         if self.stack.last().map(String::as_str) != Some(title) {
             return None;
         }
 
-        let (head, body) = rects(ctx, width);
+        let (head, body) = rects(ctx, width, self.expanded);
         let (head, body) = self.slide(ctx, head, body);
         let depth = self.stack.len();
         let mut gear_on = self.gear;
+        let mut expanded = self.expanded;
+        let can_expand = width > WIDTH;
         let mut close = false;
         egui::Area::new(egui::Id::new("drawer_header"))
             .fixed_pos(head.min)
@@ -144,23 +149,38 @@ impl Drawer {
                                 .size(crate::ui::style::FONT_LG)
                                 .strong(),
                         );
-                        if gear {
+                        if gear || can_expand {
                             ui.with_layout(
                                 egui::Layout::right_to_left(egui::Align::Center),
                                 |ui| {
-                                    if ui
-                                        .add(
-                                            egui::Button::new(
-                                                egui::RichText::new(egui_phosphor::regular::GEAR)
+                                    if gear
+                                        && ui
+                                            .add(
+                                                egui::Button::new(
+                                                    egui::RichText::new(
+                                                        egui_phosphor::regular::GEAR,
+                                                    )
                                                     .size(crate::ui::style::FONT_LG),
+                                                )
+                                                .fill(egui::Color32::TRANSPARENT)
+                                                .stroke(egui::Stroke::NONE),
                                             )
-                                            .fill(egui::Color32::TRANSPARENT)
-                                            .stroke(egui::Stroke::NONE),
-                                        )
-                                        .named_toggle("Quick settings for this page", gear_on)
-                                        .clicked()
+                                            .named_toggle("Quick settings for this page", gear_on)
+                                            .clicked()
                                     {
                                         gear_on = !gear_on;
+                                    }
+                                    if can_expand
+                                        && ui
+                                            .button(if expanded {
+                                                egui_phosphor::regular::ARROWS_IN
+                                            } else {
+                                                egui_phosphor::regular::ARROWS_OUT
+                                            })
+                                            .named_toggle("Expand analysis workspace", expanded)
+                                            .clicked()
+                                    {
+                                        expanded = !expanded;
                                     }
                                 },
                             );
@@ -169,12 +189,13 @@ impl Drawer {
                 });
             });
         self.gear = gear_on;
+        self.expanded = expanded;
         if close {
             *open = false;
             return None;
         }
 
-        let frame = egui::Frame::window(&ctx.style_of(ctx.theme()))
+        let frame = crate::ui::style::window(ctx)
             .corner_radius(if cfg!(target_os = "android") {
                 0
             } else {
@@ -216,9 +237,9 @@ impl Drawer {
 }
 
 /// Header and body rectangles for the current screen.
-fn rects(ctx: &egui::Context, width: f32) -> (Rect, Rect) {
+fn rects(ctx: &egui::Context, width: f32, expanded: bool) -> (Rect, Rect) {
     let full = ctx.content_rect();
-    let (x, w, top, bottom) = if cfg!(target_os = "android") {
+    let (x, w, top, bottom) = if cfg!(target_os = "android") || expanded {
         (full.left(), full.width(), full.top(), full.bottom())
     } else {
         (

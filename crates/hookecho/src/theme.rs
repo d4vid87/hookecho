@@ -183,6 +183,12 @@ pub fn apply(
         Visuals::light()
     };
     tune(&mut visuals, &pal);
+    visuals.window_fill = Color32::from_rgba_unmultiplied(
+        pal.bg.r(),
+        pal.bg.g(),
+        pal.bg.b(),
+        if matches!(theme, Theme::HighContrast) { 255 } else { 246 },
+    );
 
     let mut style = Style {
         visuals,
@@ -209,8 +215,8 @@ pub fn apply(
     ] {
         w.corner_radius = r;
     }
-    style.visuals.window_corner_radius = CornerRadius::same(8);
-    style.visuals.menu_corner_radius = CornerRadius::same(8);
+    style.visuals.window_corner_radius = CornerRadius::same(18);
+    style.visuals.menu_corner_radius = CornerRadius::same(12);
 
     // Type scale (egui's default face; sizes only).
     use egui::{FontFamily::Proportional, FontId, TextStyle};
