@@ -11,5 +11,5 @@ set(BUILD_TESTING OFF CACHE BOOL "" FORCE)
 add_subdirectory("${ESPEAK_ROOT}" "${CMAKE_CURRENT_BINARY_DIR}/espeak")
 
 add_library(hookecho_phonemize SHARED phonemize.cpp)
-target_include_directories(hookecho_phonemize PRIVATE "${ESPEAK_ROOT}/src/ucd-tools/include")
+target_include_directories(hookecho_phonemize PRIVATE "${ESPEAK_ROOT}/src/ucd-tools/src/include")
 target_link_libraries(hookecho_phonemize PRIVATE espeak-ng log)
