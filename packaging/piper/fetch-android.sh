@@ -15,6 +15,9 @@ fi
 rm -rf "$work/espeak-ng"
 mkdir "$work/espeak-ng"
 tar -xzf "$archive" --strip-components=1 -C "$work/espeak-ng"
+# Android packages the release's precompiled espeak-ng-data. The upstream CMake data target tries
+# to execute its newly cross-compiled ARM binary on the x86 build host.
+sed -i '/include(cmake\/data.cmake)/d' "$work/espeak-ng/CMakeLists.txt"
 "$root/packaging/piper/fetch.sh" web "$work/voice"
 rm -rf "$assets"
 mkdir -p "$assets"
