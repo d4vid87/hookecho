@@ -7,6 +7,7 @@
 
 use crate::alerts::USER_AGENT;
 use crate::overlay::{for_each_feature, polygons_of, AlertInfo, FeatureKind, GeoFeature};
+use futures_util::{stream, StreamExt};
 
 const OUTLOOK_BASE: &str = "https://www.spc.noaa.gov/products/outlook";
 /// Days 4-8 live under the experimental products path and are one probabilistic layer per day
@@ -345,7 +346,50 @@ pub async fn fetch_watches(client: &reqwest::Client) -> anyhow::Result<Vec<GeoFe
         .error_for_status()?
         .text()
         .await?;
-    parse_watches(&body)
+    let mut features = parse_watches(&body)?;
+    let urls: std::collections::BTreeSet<String> = features
+        .iter()
+        .filter_map(|feature| {
+            feature
+                .detail
+                .lines()
+                .find(|line| line.starts_with("https://api.weather.gov/alerts/"))
+                .map(str::to_owned)
+        })
+        .collect();
+    let bulletins: std::collections::HashMap<String, AlertInfo> = stream::iter(urls)
+        .map(|url| async move {
+            let text = client
+                .get(crate::net::fetch_url(&url))
+                .timeout(crate::net::FEED_TIMEOUT)
+                .header("User-Agent", USER_AGENT)
+                .send()
+                .await
+                .ok()?
+                .error_for_status()
+                .ok()?
+                .text()
+                .await
+                .ok()?;
+            Some((url, crate::alerts::parse_alert_info(&text).ok()?))
+        })
+        .buffer_unordered(4)
+        .filter_map(async move |item| item)
+        .collect()
+        .await;
+    for feature in &mut features {
+        let Some((url, bulletin)) = bulletins
+            .iter()
+            .find(|(url, _)| feature.detail.lines().any(|line| line == url.as_str()))
+        else {
+            continue;
+        };
+        let mut bulletin = bulletin.clone();
+        bulletin.event = feature.title.clone();
+        feature.detail = format!("{}\n\n{}", bulletin.description, url);
+        feature.alert = Some(bulletin);
+    }
+    Ok(features)
 }
 
 /// Fetch the categorical outlook for `day` (1–3), or the severe probability for a Day 4–8.
