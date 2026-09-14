@@ -23,6 +23,8 @@ pub fn show(
 ) -> bool {
     let mut open = true;
     let mut close = false;
+    let mesoscale = detail.title.starts_with("Mesoscale Discussion");
+    let max_height = (ctx.content_rect().height() - 154.0).max(220.0);
     popovers
         .card(ctx, "detail", egui::Window::new("Feature Details"))
         .open(&mut open)
@@ -35,9 +37,15 @@ pub fn show(
         } else {
             [560.0, 420.0]
         })
+        .max_size([560.0, max_height])
         .show(ctx, |ui| {
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                close = ui.button("Close ×").clicked();
+            ui.horizontal(|ui| {
+                if mesoscale {
+                    ui.weak("SPC MESOSCALE DISCUSSION");
+                }
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    close = ui.button("Close ×").clicked();
+                });
             });
             if let Some((place, count, rest)) = outage_summary(&detail.body) {
                 ui.label(
@@ -105,7 +113,11 @@ pub fn show(
             }
             egui::ScrollArea::vertical().show(ui, |ui| {
                 // Monospace keeps L3 attribute-table columns aligned.
-                ui.add(egui::Label::new(egui::RichText::new(&detail.body).monospace()).wrap());
+                let text =
+                    egui::RichText::new(&detail.body).size(if mesoscale { 16.0 } else { 14.0 });
+                ui.add(
+                    egui::Label::new(if mesoscale { text } else { text.monospace() }).wrap(),
+                );
             });
             // A button rather than `ui.hyperlink_to`: Android needs the JNI ACTION_VIEW path in
             // platform::open_url, which egui's own hyperlink does not go through.

@@ -426,6 +426,11 @@ pub async fn fetch_mesoscale_discussions(
             }
             if let Some(text) = texts.get(&url) {
                 feature.detail = format!("{text}\n\n{}", feature.detail);
+            } else {
+                feature.detail = format!(
+                    "Official discussion text is temporarily unavailable.\n\n{}",
+                    feature.detail
+                );
             }
         }
         out.push(feature);
