@@ -441,9 +441,6 @@ jobs:
           distribution: temurin
           java-version: "17"
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
-
       - name: Set up Android NDK
         uses: nttld/setup-ndk@v1
         id: ndk
