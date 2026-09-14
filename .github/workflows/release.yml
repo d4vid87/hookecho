@@ -291,7 +291,9 @@ jobs:
 
   macos:
     name: macOS app (experimental)
-    runs-on: macos-latest
+    # Piper's archived arm64 download is mislabeled x86_64; build one internally consistent Intel
+    # app (runs under Rosetta on Apple Silicon) rather than shipping a bundle that cannot launch.
+    runs-on: macos-13
     # Waits only so the release exists before the upload at the end. `!cancelled()` because on a
     # push to main `create-release` is skipped, and a skipped dependency would otherwise skip the
     # build too.
@@ -318,8 +320,8 @@ jobs:
           APP=dist/HookEcho.app
           mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
           cp target/release/hookecho "$APP/Contents/MacOS/hookecho"
-          case "$(uname -m)" in arm64) PIPER_PLATFORM=macos-aarch64;; *) PIPER_PLATFORM=macos-x86_64;; esac
-          packaging/piper/fetch.sh "$PIPER_PLATFORM" "$APP/Contents/Resources/piper"
+          packaging/piper/fetch.sh macos-x86_64 "$APP/Contents/Resources/piper"
+          file "$APP/Contents/MacOS/hookecho" "$APP/Contents/Resources/piper/piper" | grep -q 'x86_64'
 
           # Icons at every size the iconset wants, each drawn rather than resampled.
           ICONSET=dist/hookecho.iconset
@@ -457,6 +459,9 @@ jobs:
         env:
           ANDROID_NDK_HOME: ${{ steps.ndk.outputs.ndk-path }}
         run: cargo ndk -t arm64-v8a -o android/app/src/main/jniLibs build --release --lib -p hookecho
+
+      - name: Bundle Amy voice and phonemizer
+        run: packaging/piper/fetch-android.sh
 
       # Stable signature across runs (phones reject updates whose signature changes). Absent
       # secrets (e.g. forks) fall back to a per-run debug key — still installable, not updatable.

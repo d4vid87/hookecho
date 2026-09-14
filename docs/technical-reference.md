@@ -6,7 +6,7 @@
 
 [![CI](https://github.com/d4vid87/hookecho/actions/workflows/ci.yml/badge.svg)](https://github.com/d4vid87/hookecho/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/d4vid87/hookecho?sort=semver)](https://github.com/d4vid87/hookecho/releases)
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](#license)
+[![License: GPL v3](https://img.shields.io/badge/license-GPLv3-blue.svg)](#license)
 ![Platforms](https://img.shields.io/badge/platforms-Windows%20%7C%20Linux%20%7C%20Android%20%7C%20Web%20%7C%20macOS%20(experimental)-lightgrey)
 
 This guide keeps HookEcho's detailed feature, data, integration, and development notes out of the
@@ -959,4 +959,4 @@ Questions, chase reports and arguments about which product to look at:
 
 ## License
 
-MIT — see [LICENSE](../LICENSE).
+GPL-3.0-only — see [LICENSE](../LICENSE).

@@ -61,6 +61,16 @@ pub fn status() -> String {
     STATUS.lock().map(|status| status.clone()).unwrap_or_default()
 }
 
+#[cfg(target_arch = "wasm32")]
+pub fn retry() {
+    use wasm_bindgen::JsCast;
+    if let Ok(retry) = js_sys::Reflect::get(&js_sys::global(), &"__hookechoAmyRetry".into()) {
+        if let Some(retry) = retry.dyn_ref::<js_sys::Function>() {
+            let _ = retry.call0(&js_sys::global());
+        }
+    }
+}
+
 fn set_status(message: impl Into<String>) {
     if let Ok(mut status) = STATUS.lock() {
         *status = message.into();

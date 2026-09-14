@@ -1264,7 +1264,11 @@ fn alerts_tab(ui: &mut egui::Ui, settings: &mut Settings) {
         );
     let speech_status = crate::speech::status();
     if !speech_status.is_empty() {
-        ui.colored_label(egui::Color32::from_rgb(240, 190, 90), speech_status);
+        ui.colored_label(egui::Color32::from_rgb(240, 190, 90), &speech_status);
+    }
+    #[cfg(target_arch = "wasm32")]
+    if speech_status.starts_with("Device voice — fallback") && ui.button("Retry Amy").clicked() {
+        crate::speech::retry();
     }
     #[cfg(not(target_arch = "wasm32"))]
     ui.weak("Bundled Amy is the default. A custom Piper path below overrides it; device speech is used if Amy fails.");

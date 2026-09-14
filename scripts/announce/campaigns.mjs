@@ -57,7 +57,7 @@ const stormdesk = [
 
 const proof = {
   hookecho: [
-    ["Free means the whole app", "MIT licensed, no paid tier, and the browser build is the same radar engine as desktop and Android."],
+    ["Free means the whole app", "GPL licensed, no paid tier, and the browser build is the same radar engine as desktop and Android."],
     ["The decoder is open too", "HookEcho decodes NEXRAD Level 2 and Level 3 data in the open instead of hiding the hard part behind a service."],
     ["Archive cases you can inspect", "Historic storm pages deep-link to the exact radar, product, tilt, and scan so anyone can verify the example."],
     ["One Rust codebase, four platforms", "Desktop, Android, and WebAssembly builds share the radar engine and public-data model."],

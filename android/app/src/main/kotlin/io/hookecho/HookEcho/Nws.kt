@@ -34,6 +34,12 @@ object Nws {
 
     data class Alert(val id: String, val event: String, val headline: String, val tier: Int)
 
+    fun speechEnabled(filesDir: File): Boolean {
+        val f = File(filesDir, "config/settings.json")
+        val root = runCatching { JSONObject(f.readText()) }.getOrNull() ?: return true
+        return root.optBoolean("speak_warnings", true) && !root.optBoolean("mute_alerts", false)
+    }
+
     /**
      * Is the phone inside the user's quiet-hours window? Same `settings.json` fields, and the
      * same reading as the desktop: start == end is no window rather than all day, and a window

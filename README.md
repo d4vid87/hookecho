@@ -171,4 +171,4 @@ development, and testing.
 
 ## License
 
-HookEcho is free and open source under the [MIT License](LICENSE).
+HookEcho is free and open source under the [GNU GPL v3](LICENSE).

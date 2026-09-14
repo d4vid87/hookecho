@@ -18,7 +18,7 @@ description: |
 base: core22
 confinement: strict
 grade: stable
-license: MIT
+license: GPL-3.0
 
 apps:
   hookecho:

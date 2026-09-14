@@ -5,7 +5,7 @@ Publisher: d4vid87
 PublisherUrl: https://github.com/d4vid87
 PackageName: HookEcho
 PackageUrl: https://github.com/d4vid87/hookecho
-License: MIT
+License: GPL-3.0-only
 LicenseUrl: https://github.com/d4vid87/hookecho/blob/main/LICENSE
 ShortDescription: Advanced NEXRAD weather radar viewer
 Description: |-

@@ -9,7 +9,7 @@ class Hookecho < Formula
   url "https://github.com/d4vid87/hookecho/archive/refs/tags/v0.8.0.tar.gz"
   # Filled in at tag time: `brew fetch --build-from-source hookecho` prints the checksum.
   sha256 "a77106b1869671f6c697cc41c62117518dc9b590eccb932917f258c6509845e6"
-  license "MIT"
+  license "GPL-3.0-only"
   head "https://github.com/d4vid87/hookecho.git", branch: "main"
 
   depends_on "rust" => :build

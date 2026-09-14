@@ -31,6 +31,12 @@ globalThis.__hookechoAmyStop = () => {
   if (audio) { audio.pause(); audio.removeAttribute("src"); }
   speechSynthesis.cancel();
 };
+globalThis.__hookechoAmyRetry = () => {
+  globalThis.__hookechoAmyPreparing = null;
+  if (worker) worker.terminate();
+  worker = null;
+  return prepareAmy();
+};
 
 async function sha256(bytes) {
   const digest = await crypto.subtle.digest("SHA-256", bytes);
