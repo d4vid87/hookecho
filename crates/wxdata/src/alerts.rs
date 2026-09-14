@@ -229,6 +229,18 @@ fn build_alert(
     Some((kind, rgb, detail, alert))
 }
 
+/// Parse one `api.weather.gov/alerts/{id}` response for callers that already own its geometry.
+pub(crate) fn parse_alert_info(json: &str) -> anyhow::Result<AlertInfo> {
+    let value: serde_json::Value = serde_json::from_str(json)?;
+    let props = value
+        .get("properties")
+        .and_then(serde_json::Value::as_object)
+        .ok_or_else(|| anyhow::anyhow!("alert response has no properties"))?;
+    build_alert(props)
+        .map(|(_, _, _, alert)| alert)
+        .ok_or_else(|| anyhow::anyhow!("alert response has no event"))
+}
+
 /// Parse an api.weather.gov alerts GeoJSON payload into features (each carries [`AlertInfo`]).
 /// Only alerts with an inline polygon are returned; zone-only alerts are resolved separately.
 pub fn parse_alerts(json: &str) -> anyhow::Result<Vec<GeoFeature>> {
@@ -470,6 +482,14 @@ pub async fn fetch_active(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parses_one_watch_bulletin_without_geometry() {
+        let json = r#"{"type":"Feature","geometry":null,"properties":{"id":"watch-669","event":"Tornado Watch","headline":"Tornado Watch 669","areaDesc":"Central Iowa","description":"A couple tornadoes possible.","instruction":null,"expires":"2026-09-15T05:00:00+00:00","parameters":{}}}"#;
+        let alert = parse_alert_info(json).unwrap();
+        assert_eq!(alert.area, "Central Iowa");
+        assert_eq!(alert.description, "A couple tornadoes possible.");
+    }
 
     #[test]
     fn parses_and_styles_warning() {
