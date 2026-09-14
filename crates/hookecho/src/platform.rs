@@ -1368,7 +1368,7 @@ mod android_tts {
     }
 
     fn try_piper(text: &str) -> jni::errors::Result<bool> {
-        super::android::with_class("io.hookecho.HookEcho.PiperVoice", |env, class, activity| {
+        super::android_alerts::with_class("io.hookecho.HookEcho.PiperVoice", |env, class, activity| {
             let msg = env.new_string(text)?;
             env.call_static_method(
                 class,
@@ -1380,7 +1380,7 @@ mod android_tts {
     }
 
     fn try_piper_stop() -> jni::errors::Result<()> {
-        super::android::with_class("io.hookecho.HookEcho.PiperVoice", |env, class, _| {
+        super::android_alerts::with_class("io.hookecho.HookEcho.PiperVoice", |env, class, _| {
             env.call_static_method(class, "stop", "()V", &[]).map(|_| ())
         })
     }
