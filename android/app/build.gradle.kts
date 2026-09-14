@@ -34,6 +34,7 @@ val cargoVersionCode: Int = cargoVersion.split(".", "-")
 android {
     namespace = "io.hookecho.HookEcho"
     compileSdk = 35
+    ndkVersion = "26.3.11579264"
 
     defaultConfig {
         applicationId = "io.hookecho.HookEcho"
