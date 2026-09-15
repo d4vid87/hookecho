@@ -27,9 +27,6 @@ pub fn stop() {
                 let _ = stop.call0(&js_sys::global());
             }
         }
-        if let Some(synth) = web_sys::window().and_then(|window| window.speech_synthesis().ok()) {
-            synth.cancel();
-        }
     }
 }
 
@@ -89,8 +86,8 @@ pub fn automatic_ready() -> bool {
     #[cfg(target_arch = "wasm32")]
     {
         WEB_ENABLED.with(|enabled| enabled.get())
-            && web_sys::window().and_then(|window| window.speech_synthesis().ok())
-                .is_some_and(|synth| synth.get_voices().length() > 0)
+            && js_sys::Reflect::get(&js_sys::global(), &"__hookechoAmyStatus".into())
+                .ok().and_then(|value| value.as_string()).as_deref() == Some("Amy — ready")
     }
     #[cfg(not(target_arch = "wasm32"))]
     { true }
@@ -118,7 +115,7 @@ pub fn set_piper(bin: &str, voice: &str) {
     };
     if let Ok(mut g) = PIPER.write() {
         set_status(if voice.is_empty() {
-            "Device voice — fallback"
+            "Piper unavailable"
         } else if custom {
             "Custom Piper voice — ready"
         } else {
@@ -471,7 +468,7 @@ std::thread_local! {
 }
 
 /// The same single FIFO on the browser's one thread. Only one utterance is handed to
-/// `speechSynthesis` at a time, so its `speaking` state is the completion signal and the next
+/// One Piper utterance at a time; its speaking state is the completion signal and the next
 /// sentence is a preemption boundary.
 #[cfg(target_arch = "wasm32")]
 pub(crate) fn announce(
@@ -529,7 +526,7 @@ async fn web_speech_worker() {
             }
             if let Err(e) = imp::speak_blocking(&line) {
                 log::warn!("speech failed: {e}");
-                set_status(format!("Speech unavailable: {e}. Enable a device voice, then try the test warning."));
+                set_status(format!("Piper unavailable: {e}. Retry the voice, then test again."));
                 break;
             }
             // Let the browser start the queued utterance before observing its state.
@@ -550,15 +547,7 @@ async fn web_speech_worker() {
 #[cfg(target_arch = "wasm32")]
 mod imp {
     use wasm_bindgen::JsCast;
-    type ErrorHandler = wasm_bindgen::closure::Closure<dyn FnMut(web_sys::Event)>;
-    std::thread_local! {
-        // Keep the utterance and callback alive until the next sentence. Detach the previous
-        // handler before dropping its Rust closure, including after cancellation.
-        static UTTERANCE: std::cell::RefCell<Option<(web_sys::SpeechSynthesisUtterance, ErrorHandler)>> = const { std::cell::RefCell::new(None) };
-    }
-    /// `speechSynthesis` is in every browser we build for, so the web arm needs no engine of its
-    /// own. A browser with speech disabled throws, which lands in the same warn-and-drop path as a
-    /// desktop with no espeak.
+
     pub fn speak_blocking(text: &str) -> Result<(), String> {
         if let Ok(speak) = js_sys::Reflect::get(&js_sys::global(), &"__hookechoAmySpeak".into()) {
             if let Some(speak) = speak.dyn_ref::<js_sys::Function>() {
@@ -568,42 +557,12 @@ mod imp {
                 return Ok(());
             }
         }
-        let synth = web_sys::window()
-            .ok_or("no window")?
-            .speech_synthesis()
-            .map_err(|_| "no speechSynthesis")?;
-        let utter = web_sys::SpeechSynthesisUtterance::new_with_text(text)
-            .map_err(|_| "utterance failed")?;
-        if synth.get_voices().length() == 0 {
-            return Err("no browser voices available yet".into());
-        }
-        super::WEB_VOLUME.with(|volume| utter.set_volume(volume.get()));
-        let handler = ErrorHandler::new(|event: web_sys::Event| {
-            let reason = js_sys::Reflect::get(event.as_ref(), &"error".into()).ok()
-                .and_then(|value| value.as_string()).unwrap_or_else(|| "unknown error".into());
-            if reason != "canceled" && reason != "interrupted" {
-                super::set_status(format!("Browser speech failed: {reason}. Check device voices and try the test warning."));
-            }
-        });
-        utter.set_onerror(Some(handler.as_ref().unchecked_ref()));
-        synth.speak(&utter);
-        UTTERANCE.with(|slot| {
-            let mut slot = slot.borrow_mut();
-            if let Some((previous, _)) = slot.as_ref() { previous.set_onerror(None); }
-            *slot = Some((utter, handler));
-        });
-        Ok(())
+        Err("Amy is not ready".into())
     }
 
     pub fn is_speaking() -> bool {
-        if js_sys::Reflect::get(&js_sys::global(), &"__hookechoAmySpeaking".into())
+        js_sys::Reflect::get(&js_sys::global(), &"__hookechoAmySpeaking".into())
             .ok().and_then(|value| value.as_bool()).unwrap_or(false)
-        {
-            return true;
-        }
-        web_sys::window()
-            .and_then(|w| w.speech_synthesis().ok())
-            .is_some_and(|s| s.speaking())
     }
 }
 
@@ -701,8 +660,7 @@ std::thread_local! {
     static WEB_ENABLED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
-/// Only the desktop arm plays its own audio; Android hands the words to TextToSpeech, which owns
-/// the level itself.
+/// Only the desktop arm plays its own audio; Android's Piper bridge owns the level itself.
 #[cfg(not(any(target_os = "android", target_arch = "wasm32")))]
 fn speech_volume() -> f32 {
     f32::from_bits(VOLUME.load(std::sync::atomic::Ordering::Relaxed))
@@ -712,57 +670,14 @@ fn speech_volume() -> f32 {
 mod imp {
     use std::process::{Command, Stdio};
 
-    /// Desktop speech goes through whatever the system already has: speech-dispatcher or espeak on
-    /// Linux, PowerShell's System.Speech on Windows, `say` on macOS. No new dependency, and on a
-    /// box with none of them installed this is a no-op rather than a failed build.
+    /// Piper is the only speech engine: a failed neural voice must be visible, never silently
+    /// replaced by a robotic device voice.
     pub fn speak_blocking(text: &str) -> Result<(), String> {
-        // Piper first when it is configured and present: a neural voice is the difference between
-        // a warning you listen to and one you turn off. Anything wrong with it — missing binary,
-        // missing model, a crash — falls through to the platform engine rather than going silent.
         match piper(text) {
-            Ok(true) => return Ok(()),
-            Ok(false) => {}
-            Err(e) => log::warn!("piper failed, falling back: {e}"),
+            Ok(true) => Ok(()),
+            Ok(false) => Err("Piper voice is not configured".into()),
+            Err(e) => Err(e),
         }
-        #[cfg(target_os = "linux")]
-        let candidates: Vec<(&str, Vec<String>)> = vec![
-            ("spd-say", vec!["-w".into(), text.to_string()]),
-            ("espeak-ng", vec![text.to_string()]),
-            ("espeak", vec![text.to_string()]),
-        ];
-        #[cfg(target_os = "macos")]
-        let candidates: Vec<(&str, Vec<String>)> = vec![("say", vec![text.to_string()])];
-        #[cfg(target_os = "windows")]
-        let candidates: Vec<(&str, Vec<String>)> = vec![(
-            "powershell",
-            vec![
-                "-NoProfile".into(),
-                "-Command".into(),
-                format!(
-                    "Add-Type -AssemblyName System.Speech; \
-                     (New-Object System.Speech.Synthesis.SpeechSynthesizer).Speak('{}')",
-                    text.replace('\'', "''")
-                ),
-            ],
-        )];
-        #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
-        let candidates: Vec<(&str, Vec<String>)> = Vec::new();
-
-        for (bin, args) in &candidates {
-            let mut cmd = Command::new(bin);
-            crate::platform::no_window(&mut cmd);
-            match cmd
-                .args(args)
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .status()
-            {
-                Ok(s) if s.success() => return Ok(()),
-                Ok(_) => continue,
-                Err(_) => continue, // not installed; try the next one
-            }
-        }
-        Err("no speech engine found (tried spd-say / espeak)".into())
     }
 
     /// Synthesize through Piper and play the result. `Ok(false)` means Piper is not configured,
@@ -839,7 +754,7 @@ mod imp {
 
 #[cfg(target_os = "android")]
 mod imp {
-    /// Android's TextToSpeech is JNI, and all JNI lives in `platform`.
+    /// Android's bundled Piper bridge lives in `platform`.
     pub fn speak_blocking(text: &str) -> Result<(), String> {
         crate::platform::speak(text)
     }

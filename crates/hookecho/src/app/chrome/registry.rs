@@ -207,7 +207,7 @@ impl HookEchoApp {
         for (layer, category, label, desc, common) in [
             (
                 FL::Mrms,
-                "National",
+                "MRMS",
                 "National mosaic (MRMS)",
                 "Every radar in the country stitched into one picture",
                 true,
@@ -1089,7 +1089,11 @@ impl HookEchoApp {
             let on = None;
             push(
                 label,
-                "Tools",
+                if w == W::Settings {
+                    "Settings"
+                } else {
+                    "Tools"
+                },
                 desc,
                 common,
                 PaletteAction::OpenWindow(w),

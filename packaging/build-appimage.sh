@@ -31,18 +31,6 @@ cp "$ROOT/target/release/hookecho" "$APPDIR/usr/bin/hookecho"
 mkdir -p "$APPDIR/usr/lib/hookecho/piper"
 cp -a "$ROOT/target/piper/linux-x86_64/." "$APPDIR/usr/lib/hookecho/piper/"
 
-# The AppImage is the Linux package with no package manager to declare a speech dependency to.
-# Bundle espeak-ng and its small voice data as Amy's device-voice fallback.
-command -v espeak-ng >/dev/null || { echo "espeak-ng is required to build the AppImage" >&2; exit 1; }
-cp "$(command -v espeak-ng)" "$APPDIR/usr/bin/espeak-ng"
-mkdir -p "$APPDIR/usr/lib" "$APPDIR/usr/share/espeak-ng-data"
-data_dir="$(dirname "$(find /usr -type f -path '*/espeak-ng-data/*' -name phontab -print -quit)")"
-test -n "$data_dir"
-cp -a "$data_dir/." "$APPDIR/usr/share/espeak-ng-data/"
-ldd "$(command -v espeak-ng)" | sed -n 's/.*=> \([^ ]*\).*/\1/p' | while read -r lib; do
-  case "$lib" in */libc.so.*|*/libm.so.*|*/libpthread.so.*|*/libdl.so.*) ;; *) cp -L "$lib" "$APPDIR/usr/lib/" ;; esac
-done
-
 # Desktop entry (top level + the canonical applications dir).
 cp "$ROOT/packaging/hookecho.desktop" "$APPDIR/hookecho.desktop"
 mkdir -p "$APPDIR/usr/share/applications"

@@ -1307,64 +1307,20 @@ mod android_location {
     }
 }
 
-/// Android speech synthesis (`TextToSpeech`), for spoken warnings.
+/// Android Piper bridge for spoken warnings.
 #[cfg(target_os = "android")]
 mod android_tts {
-    use jni::objects::{JObject, JValue};
-    use std::sync::OnceLock;
-    use std::time::Duration;
+    use jni::objects::JValue;
 
-    /// The `TextToSpeech` instance, kept alive for the process. Building one per utterance would
-    /// re-run engine init (~1 s) every time and leak service connections.
-    static TTS: OnceLock<jni::objects::GlobalRef> = OnceLock::new();
-
-    /// Android TTS through raw JNI rather than a Kotlin helper: this predates the alert service's
-    /// Kotlin source set, and it works, so it stays raw. (A helper class would now be cheap — if
-    /// this ever needs touching, that is the direction.)
-    ///
-    /// The cost of skipping Kotlin is the `OnInitListener`: implementing a Java interface from JNI
-    /// needs a runtime proxy, so we pass `null` (AOSP null-checks it before dispatch) and instead
-    /// poll `speak` until the engine stops returning ERROR. Init takes well under a second in
-    /// practice; the retry window is generous because a dropped tornado warning is the bad
-    /// outcome, not a slow one.
     pub fn speak(text: &str) -> Result<(), String> {
-        if try_piper(text).unwrap_or(false) {
-            return Ok(());
-        }
-        let deadline = wxdata::clock::Instant::now() + Duration::from_secs(6);
-        loop {
-            match try_speak(text) {
-                Ok(true) => {
-                    // `speak` only queues. The cross-platform speech worker needs this call to
-                    // finish at the utterance boundary so an emergency can run next.
-                    std::thread::sleep(Duration::from_millis(20));
-                    let speech_deadline = wxdata::clock::Instant::now() + Duration::from_secs(120);
-                    while is_speaking().map_err(|e| format!("{e:?}"))? {
-                        if wxdata::clock::Instant::now() >= speech_deadline {
-                            return Err("TTS utterance did not finish".into());
-                        }
-                        std::thread::sleep(Duration::from_millis(50));
-                    }
-                    return Ok(());
-                }
-                Ok(false) => {
-                    if wxdata::clock::Instant::now() >= deadline {
-                        return Err("TTS engine never became ready".into());
-                    }
-                    std::thread::sleep(Duration::from_millis(250));
-                }
-                Err(e) => return Err(format!("{e:?}")),
-            }
-        }
+        try_piper(text)
+            .map_err(|e| format!("{e:?}"))?
+            .then_some(())
+            .ok_or_else(|| "Piper failed to synthesize speech".into())
     }
 
     pub fn stop() {
         let _ = try_piper_stop();
-        let Some(tts) = TTS.get() else { return };
-        let Some(app) = super::android::app() else { return };
-        let Ok(vm) = (unsafe { jni::JavaVM::from_raw(app.vm_as_ptr() as *mut jni::sys::JavaVM) }) else { return };
-        let Ok(mut env) = vm.attach_current_thread() else { return };
-        let _ = env.call_method(tts.as_obj(), "stop", "()I", &[]);
     }
 
     fn try_piper(text: &str) -> jni::errors::Result<bool> {
@@ -1385,62 +1341,6 @@ mod android_tts {
         })
     }
 
-    /// One `speak()` attempt. `Ok(false)` means the engine isn't ready yet (retry).
-    fn try_speak(text: &str) -> jni::errors::Result<bool> {
-        let Some(app) = super::android::app() else {
-            return Ok(false);
-        };
-        let vm = unsafe { jni::JavaVM::from_raw(app.vm_as_ptr() as *mut jni::sys::JavaVM) }?;
-        let mut env = vm.attach_current_thread()?;
-        let activity = unsafe { JObject::from_raw(app.activity_as_ptr() as jni::sys::jobject) };
-
-        if TTS.get().is_none() {
-            let class = env.find_class("android/speech/tts/TextToSpeech")?;
-            let obj = env.new_object(
-                &class,
-                "(Landroid/content/Context;Landroid/speech/tts/TextToSpeech$OnInitListener;)V",
-                &[JValue::Object(&activity), JValue::Object(&JObject::null())],
-            )?;
-            let global = env.new_global_ref(&obj)?;
-            let _ = TTS.set(global);
-        }
-        let tts = TTS.get().expect("just set");
-
-        let msg = env.new_string(text)?;
-        let id = env.new_string("hookecho")?;
-        // QUEUE_ADD = 1: warnings stack rather than cutting each other off.
-        let res = env.call_method(
-            tts.as_obj(),
-            "speak",
-            "(Ljava/lang/CharSequence;ILandroid/os/Bundle;Ljava/lang/String;)I",
-            &[
-                JValue::Object(&msg),
-                JValue::Int(1),
-                JValue::Object(&JObject::null()),
-                JValue::Object(&id),
-            ],
-        );
-        match res {
-            // SUCCESS = 0, ERROR = -1 (engine not bound yet).
-            Ok(v) => Ok(v.i()? == 0),
-            Err(e) => {
-                let _ = env.exception_clear();
-                Err(e)
-            }
-        }
-    }
-
-    fn is_speaking() -> jni::errors::Result<bool> {
-        let Some(app) = super::android::app() else {
-            return Ok(false);
-        };
-        let Some(tts) = TTS.get() else {
-            return Ok(false);
-        };
-        let vm = unsafe { jni::JavaVM::from_raw(app.vm_as_ptr() as *mut jni::sys::JavaVM) }?;
-        let mut env = vm.attach_current_thread()?;
-        env.call_method(tts.as_obj(), "isSpeaking", "()Z", &[])?.z()
-    }
 }
 
 #[cfg(target_os = "android")]

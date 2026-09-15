@@ -137,7 +137,7 @@ device, alerts can appear in the app, browser, phone notification, email, Discor
 another service you connect.
 
 The app explains what the warning is, where it is, and when it expires. It can read warnings in
-the visible map area through the device voice; emergency speech interrupts routine notices.
+the visible map area through the bundled Piper voice; emergency speech interrupts routine notices.
 
 ## Privacy
 

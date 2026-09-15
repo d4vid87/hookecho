@@ -8,7 +8,7 @@ use crate::ui::a11y::Named as _;
 use egui::{vec2, Color32, RichText, Stroke};
 
 /// Category order in the panel (anything else falls to the bottom, in registry order).
-pub(crate) const CATEGORIES: [&str; 7] = [
+pub(crate) const CATEGORIES: [&str; 9] = [
     "Radar",
     "National",
     "Severe",
@@ -16,6 +16,8 @@ pub(crate) const CATEGORIES: [&str; 7] = [
     "Models",
     "Reference",
     "Tools",
+    "MRMS",
+    "Settings",
 ];
 
 /// Case-insensitive subsequence match with a compactness score: lower is a tighter match.
@@ -60,7 +62,9 @@ fn category_name(category: &str) -> &'static str {
         "Obs" => "Observations",
         "Models" => "Forecast models",
         "Reference" => "Map reference",
-        _ => "Tools",
+        "Tools" => "Tools",
+        "MRMS" => "MRMS",
+        _ => "Settings",
     }
 }
 
@@ -73,7 +77,9 @@ fn category_glyph(category: &str) -> &'static str {
         "Obs" => ph::THERMOMETER,
         "Models" => ph::CHART_LINE,
         "Reference" => ph::MAP_TRIFOLD,
-        _ => ph::WRENCH,
+        "Tools" => ph::WRENCH,
+        "MRMS" => ph::GLOBE,
+        _ => ph::GEAR,
     }
 }
 

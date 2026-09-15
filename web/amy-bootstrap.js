@@ -11,16 +11,9 @@ let worker;
 let audio;
 let nextJob = 0;
 
-function fallback(text, volume) {
-  const utterance = new SpeechSynthesisUtterance(text);
-  utterance.volume = volume;
-  speechSynthesis.speak(utterance);
-}
-
 globalThis.__hookechoAmySpeak = (text, volume) => {
   if (!worker || globalThis.__hookechoAmyStatus !== "Amy — ready") {
-    fallback(text, volume);
-    return;
+    throw new Error("Amy is not ready");
   }
   globalThis.__hookechoAmySpeaking = true;
   worker.postMessage({ type: "speak", id: ++nextJob, text });
@@ -29,7 +22,6 @@ globalThis.__hookechoAmyStop = () => {
   nextJob++;
   globalThis.__hookechoAmySpeaking = false;
   if (audio) { audio.pause(); audio.removeAttribute("src"); }
-  speechSynthesis.cancel();
 };
 globalThis.__hookechoAmyRetry = () => {
   globalThis.__hookechoAmyPreparing = null;
@@ -103,15 +95,15 @@ export async function prepareAmy() {
         else if (data.type === "audio" && data.id === nextJob) {
           audio = new Audio(URL.createObjectURL(new Blob([data.bytes], { type: "audio/wav" })));
           audio.onended = () => { globalThis.__hookechoAmySpeaking = false; };
-          audio.play().catch((error) => status(`Device voice — fallback (${error.message})`));
+          audio.play().catch((error) => status(`Amy unavailable (${error.message})`));
         } else if (data.type === "error" && data.id === nextJob) {
           globalThis.__hookechoAmySpeaking = false;
-          status(`Device voice — fallback (${data.message})`);
+          status(`Amy unavailable (${data.message})`);
         }
       };
       worker.postMessage({ type: "prepare" });
     } catch (error) {
-      status(`Device voice — fallback (${error.message || error})`);
+      status(`Amy unavailable (${error.message || error})`);
     }
   })();
   return globalThis.__hookechoAmyPreparing;

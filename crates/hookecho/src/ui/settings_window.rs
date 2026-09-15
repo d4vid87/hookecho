@@ -1267,13 +1267,13 @@ fn alerts_tab(ui: &mut egui::Ui, settings: &mut Settings) {
         ui.colored_label(egui::Color32::from_rgb(240, 190, 90), &speech_status);
     }
     #[cfg(target_arch = "wasm32")]
-    if speech_status.starts_with("Device voice — fallback") && ui.button("Retry Amy").clicked() {
+    if speech_status.starts_with("Amy unavailable") && ui.button("Retry Amy").clicked() {
         crate::speech::retry();
     }
     #[cfg(not(target_arch = "wasm32"))]
-    ui.weak("Bundled Amy is the default. A custom Piper path below overrides it; device speech is used if Amy fails.");
+    ui.weak("Bundled Piper Amy is the default. A custom Piper path below overrides it.");
     #[cfg(target_arch = "wasm32")]
-    ui.weak("Amy prepares locally after the map starts. Device speech is used if preparation or inference fails.");
+    ui.weak("Piper Amy prepares locally after the map starts; speech stays off if it cannot load.");
     // Hearing it once beats reading three settings and waiting for weather to find out that the
     // engine was never installed.
     if ui
@@ -1361,8 +1361,8 @@ fn piper_row(ui: &mut egui::Ui, settings: &mut Settings) {
         crate::speech::set_piper(&settings.piper_path, &settings.piper_voice);
     }
     // Only once a voice is chosen: until then Piper is off on purpose and there is nothing wrong.
-    // Android speaks through its own TextToSpeech and has no Piper to diagnose — and the runtime
-    // `if !cfg!(android)` at the call site still compiles this body, so the gate has to be here.
+    // Android's Piper bridge has no desktop binary to diagnose — and the runtime
+    // `if !cfg!(android)` at the call site still compiles this body, so the gate stays here.
     #[cfg(not(target_os = "android"))]
     if !settings.piper_voice.is_empty() {
         if let Some(problem) = crate::speech::piper_problem() {

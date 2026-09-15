@@ -367,7 +367,7 @@ pub struct Settings {
     #[serde(default = "default_true")]
     pub speak_warnings: bool,
     /// Path to a Piper binary, or blank to look on `PATH`. Piper is a local neural voice; when it
-    /// and a voice model are both present, spoken warnings go through it instead of espeak.
+    /// and a voice model are both present, spoken warnings use it.
     #[serde(default)]
     pub piper_path: String,
     /// Path to a Piper `.onnx` voice model. Blank turns Piper off — an engine with no model has
