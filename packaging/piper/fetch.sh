@@ -7,9 +7,9 @@ manifest="$root/packaging/piper/assets.json"
 mkdir -p "$out"
 fetch() {
   local url="$1" digest="$2" path="$3"
-  if [ -f "$path" ] && printf '%s  %s\n' "$digest" "$path" | sha256sum -c --status; then return; fi
+  if [ -f "$path" ] && printf '%s  %s\n' "$digest" "$path" | sha256sum -c >/dev/null 2>&1; then return; fi
   curl -fL --retry 3 -o "$path.part" "$url"
-  printf '%s  %s\n' "$digest" "$path.part" | sha256sum -c --status || { echo "checksum mismatch: $url" >&2; exit 1; }
+  printf '%s  %s\n' "$digest" "$path.part" | sha256sum -c >/dev/null 2>&1 || { echo "checksum mismatch: $url" >&2; exit 1; }
   mv "$path.part" "$path"
 }
 model=(); while IFS= read -r line; do model+=("$line"); done < <(jq -r '.voice.model[]' "$manifest" | tr -d '\r')
