@@ -17573,6 +17573,9 @@ impl eframe::App for HookEchoApp {
                     .set_style(style.vector_palette().unwrap_or_default());
                 clear_vector |= self.vtiles.set_theme(self.settings.theme);
             }
+            clear_vector |= self
+                .vtiles
+                .set_simplified(self.settings.map_quality != crate::settings::MapQuality::Full);
             self.last_viewport = rects
                 .get(self.active)
                 .map_or((full.width(), full.height()), |r| (r.width(), r.height()));
