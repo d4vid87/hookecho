@@ -145,12 +145,15 @@ impl Tour {
         let card_w = 420.0_f32.min(screen.width() - 32.0);
         let body = self.body(sig);
         let mut act = 0_i8;
-        egui::Area::new(egui::Id::new("tour_card"))
+        let window = egui::Window::new("60-second guide")
+            .id(egui::Id::new("tour_card"))
+            .frame(style::window(ctx))
+            .title_bar(false)
+            .collapsible(false)
+            .resizable(false)
             .order(egui::Order::Foreground)
-            .constrain_to(screen)
-            .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
-            .show(ctx, |ui| {
-                style::window(ctx).show(ui, |ui| {
+            .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO);
+        crate::ui::phone_surface(ctx, window).show(ctx, |ui| {
                     ui.set_width(card_w);
                     ui.horizontal(|ui| {
                         ui.label(
@@ -215,8 +218,7 @@ impl Tour {
                             }
                         });
                     });
-                });
-            });
+        });
         match act {
             1 => self.next(),
             -1 => self.back(),
