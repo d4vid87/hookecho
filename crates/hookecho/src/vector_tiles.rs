@@ -199,6 +199,12 @@ pub fn build_tile_with_theme(
     tess_zoom: f64,
     theme: crate::settings::Theme,
 ) -> (Vec<OverlayVertex>, Vec<u32>, Vec<PlaceLabel>) {
+    build_tile_detail(bytes, id, palette, tess_zoom, theme, false)
+}
+
+fn build_tile_detail(bytes: &[u8], id: TileId, palette: basemap_style::Palette,
+    tess_zoom: f64, theme: crate::settings::Theme, simplified: bool,
+) -> (Vec<OverlayVertex>, Vec<u32>, Vec<PlaceLabel>) {
     let (z, tx, ty) = id;
     let n = (1u64 << z) as f64;
     let (txf, tyf) = (tx as f64, ty as f64);
@@ -253,6 +259,7 @@ pub fn build_tile_with_theme(
 
     // Fills.
     for (layer, key) in FILL_LAYERS {
+        if simplified && *layer != "water" { continue; }
         let Some(i) = names.iter().position(|nm| nm == layer) else {
             continue;
         };
@@ -383,7 +390,7 @@ pub fn build_tile_with_theme(
         }
     }
 
-    let labels = extract_labels(&reader, &names, n, txf, tyf);
+    let labels = extract_labels(&reader, &names, n, txf, tyf, simplified);
     (verts, indices, labels)
 }
 
@@ -394,6 +401,7 @@ fn extract_labels(
     n: f64,
     txf: f64,
     tyf: f64,
+    simplified: bool,
 ) -> Vec<PlaceLabel> {
     let mut out = Vec::new();
     if let Some(i) = names.iter().position(|nm| nm == "place") {
@@ -441,9 +449,11 @@ fn extract_labels(
             }
         }
     }
-    out.extend(extract_airport_labels(reader, names, n, txf, tyf));
     out.extend(extract_road_labels(reader, names, n, txf, tyf));
-    out.extend(extract_pois(reader, names, n, txf, tyf));
+    if !simplified {
+        out.extend(extract_airport_labels(reader, names, n, txf, tyf));
+        out.extend(extract_pois(reader, names, n, txf, tyf));
+    }
     out
 }
 
@@ -785,10 +795,9 @@ pub async fn fetch_visible_vector(
 
 /// Vector tile fetches allowed out at once.
 ///
-/// Two in the browser, for the reason spelled out on the raster manager's copy: the six
-/// connections Chrome allows to this origin are shared with the radar and every feed, and street
-/// labels are the least important thing competing for them.
-const MAX_INFLIGHT: usize = if cfg!(target_arch = "wasm32") { 2 } else { 6 };
+/// Four in the browser leaves two of Chrome's six origin connections for radar and feeds while
+/// letting a visible 2×2 block arrive together.
+const MAX_INFLIGHT: usize = if cfg!(target_arch = "wasm32") { 4 } else { 6 };
 
 /// How long a tile fetch may take before the slot is taken back. Generous — a slow tile is still
 /// worth having — but finite, which on wasm it otherwise is not.
@@ -811,12 +820,12 @@ struct FetchedVector {
 
 // Reuse the radar worker and its transferred buffers: no additional worker or WASM heap.
 #[cfg(any(target_arch = "wasm32", test))]
-type VectorJob = (Vec<u8>, TileId, basemap_style::Palette, f64, crate::settings::Theme);
+type VectorJob = (Vec<u8>, TileId, basemap_style::Palette, f64, crate::settings::Theme, bool);
 
 #[cfg(any(target_arch = "wasm32", test))]
 pub(crate) fn build_worker_tile(payload: &[u8]) -> Result<Vec<u8>, postcard::Error> {
-    let (bytes, id, palette, zoom, theme): VectorJob = postcard::from_bytes(payload)?;
-    let (vertices, indices, labels) = build_tile_with_theme(&bytes, id, palette, zoom, theme);
+    let (bytes, id, palette, zoom, theme, simplified): VectorJob = postcard::from_bytes(payload)?;
+    let (vertices, indices, labels) = build_tile_detail(&bytes, id, palette, zoom, theme, simplified);
     postcard::to_allocvec(&FetchedVector { id, vertices, indices, labels })
 }
 
@@ -844,12 +853,14 @@ pub struct VectorTileManager {
     label_gen: u64,
     palette: basemap_style::Palette,
     theme: crate::settings::Theme,
+    simplified: bool,
     cache_root: Option<PathBuf>,
     template: Option<String>,
     template_tx: Sender<Option<String>>,
     template_rx: Receiver<Option<String>>,
     template_requested: bool,
     template_failed: Option<wxdata::clock::Instant>,
+    speculative: Option<TileId>,
 }
 
 impl VectorTileManager {
@@ -881,12 +892,14 @@ impl VectorTileManager {
             label_gen: 0,
             palette: basemap_style::Palette::Dark,
             theme: crate::settings::Theme::Dark,
+            simplified: false,
             cache_root,
             template: None,
             template_tx,
             template_rx,
             template_requested: false,
             template_failed: None,
+            speculative: None,
         }
     }
 
@@ -911,6 +924,7 @@ impl VectorTileManager {
         self.uploaded.clear();
         self.labels.clear();
         self.label_gen += 1;
+        self.speculative = None;
         true
     }
 
@@ -925,6 +939,20 @@ impl VectorTileManager {
         self.uploaded.clear();
         self.labels.clear();
         self.label_gen += 1;
+        self.speculative = None;
+        true
+    }
+
+    pub fn set_simplified(&mut self, simplified: bool) -> bool {
+        if self.simplified == simplified { return false; }
+        self.simplified = simplified;
+        self.render_generation += 1;
+        self.requested.clear();
+        self.failed.clear();
+        self.uploaded.clear();
+        self.labels.clear();
+        self.label_gen += 1;
+        self.speculative = None;
         true
     }
 
@@ -932,28 +960,36 @@ impl VectorTileManager {
         tile_cover(cam, viewport_px, MAX_VECTOR_Z, label_detail_bias(cam.zoom))
     }
 
+    fn centered(mut tiles: Vec<VisibleTile>, cam: &Camera) -> Vec<VisibleTile> {
+        tiles.sort_by(|a, b| {
+            let distance = |tile: &VisibleTile| {
+                let x = (tile.world_min[0] + tile.world_max[0]) as f64 * 0.5 - cam.center.0;
+                let y = (tile.world_min[1] + tile.world_max[1]) as f64 * 0.5 - cam.center.1;
+                x * x + y * y
+            };
+            distance(a).total_cmp(&distance(b))
+        });
+        tiles
+    }
+
     /// A low-detail geographic backdrop arrives before fine streets. Existing renderer parent
     /// fallback draws these tiles while requested children are still loading.
     pub fn request_view(&mut self, cam: &Camera, viewport: (f32, f32), moving: bool,
-        quality: crate::settings::MapQuality) -> Vec<VisibleTile> {
-        let full = self.visible(cam, viewport);
-        let reduced = quality != crate::settings::MapQuality::Full;
-        let slow = self.ctx.as_ref().is_some_and(|ctx| ctx.input(|input| input.stable_dt > 1.0 / 30.0));
-        let reduction = if quality == crate::settings::MapQuality::Performance || slow { 2.0 } else { 1.0 };
-        let coarse = tile_cover(cam, viewport, MAX_VECTOR_Z,
-            label_detail_bias(cam.zoom) - reduction);
+        _quality: crate::settings::MapQuality) -> Vec<VisibleTile> {
+        let full = Self::centered(self.visible(cam, viewport), cam);
         let full_ready = full.iter().all(|tile| self.uploaded.contains(&tile.id));
-        let coarse_finished = coarse.iter().all(|tile|
-            self.uploaded.contains(&tile.id) || self.failed.contains_key(&tile.id));
-        if reduced && (moving || (!full_ready && !coarse_finished)) {
-            self.request_missing(&coarse);
-            return if moving { coarse } else { full };
-        }
         self.request_missing(&full);
         if full_ready && !moving {
-            // Only after visible work completes: a small buffer for the next nearby pan.
-            let margin = (viewport.0 + 128.0, viewport.1 + 128.0);
-            self.request_missing(&self.visible(cam, margin));
+            let mut preload = Self::centered(tile_cover(cam, viewport, MAX_VECTOR_Z,
+                label_detail_bias(cam.zoom) + 1.0), cam);
+            preload.truncate(4);
+            if self.speculative.is_none() {
+                if let Some(tile) = preload.into_iter().find(|tile|
+                    !self.requested.contains(&tile.id) && !self.uploaded.contains(&tile.id)) {
+                    self.request_missing(std::slice::from_ref(&tile));
+                    if self.requested.contains(&tile.id) { self.speculative = Some(tile.id); }
+                }
+            }
         }
         full
     }
@@ -993,7 +1029,9 @@ impl VectorTileManager {
         let generation = self.render_generation;
         let palette = self.palette;
         let theme = self.theme;
+        let simplified = self.simplified;
         for v in visible {
+            if self.uploaded.contains(&v.id) { continue; }
             // Same reason the raster manager caps itself: a pan at low zoom asks for a screenful
             // at once, and without a ceiling they all leave together and answer together.
             if self
@@ -1054,7 +1092,7 @@ impl VectorTileManager {
                 };
                 #[cfg(target_arch = "wasm32")]
                 {
-                    let payload = postcard::to_allocvec(&(bytes, id, palette, tess_zoom, theme));
+                    let payload = postcard::to_allocvec(&(bytes, id, palette, tess_zoom, theme, simplified));
                     let result = match payload {
                         Ok(payload) => {
                             let encoded = match wxdata::wasm_worker::tessellate_vector(payload.clone()).await {
@@ -1071,7 +1109,7 @@ impl VectorTileManager {
                 }
                 #[cfg(not(target_arch = "wasm32"))]
                 blocking.spawn_blocking(move || {
-                    let (vertices, indices, labels) = build_tile_with_theme(&bytes, id, palette, tess_zoom, theme);
+                    let (vertices, indices, labels) = build_tile_detail(&bytes, id, palette, tess_zoom, theme, simplified);
                     finish(Ok(FetchedVector { id, vertices, indices, labels }));
                 });
             });
@@ -1124,6 +1162,8 @@ impl VectorTileManager {
         // render frame. Leave the remainder queued and explicitly schedule the next frame.
         while ready.len() < 2 {
             let Ok((generation, f)) = self.rx.try_recv() else { break };
+            let completed_id = match &f { Ok(tile) => tile.id, Err(id) => *id };
+            if self.speculative == Some(completed_id) { self.speculative = None; }
             if generation != self.render_generation {
                 continue;
             }
@@ -1175,8 +1215,11 @@ impl VectorTileManager {
     /// Keep this frame's tiles at the front of the LRU so a wide view can't evict what it draws.
     pub fn touch_visible(&mut self, visible: &[VisibleTile]) {
         let want = VECTOR_TILE_CACHE.max(visible.len() + 8);
-        for v in visible {
-            self.uploaded.promote(&v.id);
+        let protected = crate::render::vector_draw_tiles(
+            &visible.iter().map(|v| v.id).collect::<Vec<_>>(),
+            self.uploaded.iter().map(|(id, _)| *id));
+        for id in protected {
+            self.uploaded.promote(&id);
         }
         while self.uploaded.len() > want {
             if let Some((id, _)) = self.uploaded.pop_lru() {
@@ -1245,12 +1288,14 @@ mod tests {
             label_gen: 0,
             palette: basemap_style::Palette::Dark,
             theme: crate::settings::Theme::Dark,
+            simplified: false,
             cache_root: None,
             template: None,
             template_tx,
             template_rx,
             template_requested: false,
             template_failed: None,
+            speculative: None,
         }
     }
 
@@ -1291,17 +1336,65 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn moving_performance_view_requests_lower_zoom_without_losing_settled_detail() {
+    async fn moving_performance_view_requests_full_zoom_without_losing_settled_detail() {
         let mut manager = test_manager();
         let camera = Camera::at_lonlat(-97.0, 32.0, 9.0);
         let full = manager.visible(&camera, (800.0, 600.0));
         let moving = manager.request_view(&camera, (800.0, 600.0), true,
             crate::settings::MapQuality::Performance);
-        assert!(moving[0].id.0 <= full[0].id.0);
+        assert_eq!(moving.iter().map(|tile| tile.id).collect::<HashSet<_>>(),
+            full.iter().map(|tile| tile.id).collect());
         let settled = manager.request_view(&camera, (800.0, 600.0), false,
             crate::settings::MapQuality::Full);
-        assert_eq!(settled.iter().map(|tile| tile.id).collect::<Vec<_>>(),
-            full.iter().map(|tile| tile.id).collect::<Vec<_>>());
+        assert_eq!(settled.iter().map(|tile| tile.id).collect::<HashSet<_>>(),
+            full.iter().map(|tile| tile.id).collect());
+    }
+
+    #[test]
+    fn visible_tiles_are_requested_center_first() {
+        let camera = Camera::at_lonlat(-97.0, 32.0, 9.0);
+        let tiles = VectorTileManager::centered(
+            tile_cover(&camera, (800.0, 600.0), MAX_VECTOR_Z, 0.0), &camera);
+        let distance = |tile: &VisibleTile| {
+            let x = (tile.world_min[0] + tile.world_max[0]) as f64 * 0.5 - camera.center.0;
+            let y = (tile.world_min[1] + tile.world_max[1]) as f64 * 0.5 - camera.center.1;
+            x * x + y * y
+        };
+        assert!(tiles.windows(2).all(|p| distance(&p[0]) <= distance(&p[1])));
+    }
+
+    #[tokio::test]
+    async fn simplified_quality_invalidates_rich_geometry_once() {
+        let mut manager = test_manager();
+        let generation = manager.render_generation;
+        assert!(manager.set_simplified(true));
+        assert!(manager.render_generation > generation);
+        assert!(!manager.set_simplified(true));
+    }
+
+    #[tokio::test]
+    async fn preload_keeps_one_speculative_request_in_flight() {
+        let mut manager = test_manager();
+        manager.template = Some("https://example.invalid/{z}/{x}/{y}".into());
+        let camera = Camera::at_lonlat(-97.0, 32.0, 9.0);
+        let visible = manager.visible(&camera, (800.0, 600.0));
+        for tile in &visible { manager.uploaded.put(tile.id, 0); }
+        manager.request_view(&camera, (800.0, 600.0), false, crate::settings::MapQuality::Full);
+        let first = manager.speculative.expect("preload");
+        manager.request_view(&camera, (800.0, 600.0), false, crate::settings::MapQuality::Full);
+        assert_eq!(manager.speculative, Some(first));
+    }
+
+    #[tokio::test]
+    async fn visible_fallback_is_protected_from_eviction() {
+        let mut manager = test_manager();
+        manager.uploaded.resize(NonZeroUsize::new(VECTOR_TILE_CACHE + 8).unwrap());
+        let parent = (5, 7, 12);
+        for x in 0..VECTOR_TILE_CACHE as u32 + 7 { manager.uploaded.put((9, x, 20), 0); }
+        manager.uploaded.put(parent, 0);
+        manager.touch_visible(&[VisibleTile { id: (6, 14, 24), world_min: [0.0; 2], world_max: [1.0; 2] }]);
+        assert!(manager.uploaded.contains(&parent));
+        assert!(!manager.take_evicted().contains(&parent));
     }
 
     #[test]
@@ -1309,7 +1402,7 @@ mod tests {
         let id = (8, 65, 95);
         let palette = basemap_style::Palette::Dark;
         let theme = crate::settings::Theme::Dark;
-        let payload = postcard::to_allocvec(&(vec![] as Vec<u8>, id, palette, 8.0, theme)).unwrap();
+        let payload = postcard::to_allocvec(&(vec![] as Vec<u8>, id, palette, 8.0, theme, false)).unwrap();
         let encoded = build_worker_tile(&payload).unwrap();
         let result: FetchedVector = postcard::from_bytes(&encoded).unwrap();
         let (vertices, indices, labels) = build_tile_with_theme(&[], id, palette, 8.0, theme);
