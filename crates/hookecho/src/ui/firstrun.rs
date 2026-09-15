@@ -82,54 +82,90 @@ pub fn show(ctx: &egui::Context, fr: &mut FirstRun, settings: &mut Settings) -> 
 
     let mut finished = None;
     let mut open = true;
-    crate::ui::phone_surface(ctx, egui::Window::new("Welcome to HookEcho"))
+    let mut close = false;
+    let accent = crate::theme::accent(settings.theme);
+    let logo = crate::icon::texture(ctx, 128);
+    let window = egui::Window::new("Welcome to HookEcho")
         .open(&mut open)
+        .frame(crate::ui::style::window(ctx))
         .collapsible(false)
         .resizable(false)
+        .title_bar(false)
         .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
-        .show(ctx, |ui| {
-            ui.set_width(420.0_f32.min(ctx.content_rect().width() - 40.0));
-            ui.label("Which radar should this open to? Everything else has a sensible default and lives in Settings.");
-            ui.add_space(8.0);
+        .order(egui::Order::Foreground);
+    crate::ui::phone_surface(ctx, window).show(ctx, |ui| {
+        let compact = ctx.content_rect().width() < 600.0;
+        ui.set_width(520.0_f32.min((ctx.content_rect().width() - 32.0).max(280.0)));
+        ui.horizontal(|ui| {
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                close = ui
+                    .add_sized(
+                        [44.0, 44.0],
+                        egui::Button::new(egui_phosphor::regular::X).frame(false),
+                    )
+                    .on_hover_text("Close")
+                    .clicked();
+            });
+        });
+        ui.vertical_centered(|ui| {
+            ui.add(egui::Image::new(&logo).fit_to_exact_size(egui::vec2(88.0, 88.0)));
+            ui.label(
+                egui::RichText::new("Welcome to HookEcho")
+                    .size(crate::ui::m3::T_HEADLINE)
+                    .strong(),
+            );
+            ui.label(
+                egui::RichText::new(
+                    "Choose a radar to get started. You can change it anytime in Settings.",
+                )
+                .weak(),
+            );
+        });
+        ui.add_space(12.0);
 
-            ui.horizontal(|ui| {
-                if fr.rx.is_some() {
-                    // getLastKnownLocation is null until the first fix lands, and gpsd can take a
-                    // few seconds to see a satellite. Say so rather than look stuck.
+        ui.vertical_centered(|ui| {
+            if fr.rx.is_some() {
+                ui.horizontal(|ui| {
                     ui.spinner();
                     ui.weak("Finding the nearest radar\u{2026}");
-                    ctx.request_repaint_after(std::time::Duration::from_millis(250));
-                } else if ui
-                    .button(format!(
-                        "{} Use my location",
-                        egui_phosphor::regular::CROSSHAIR
-                    ))
-                    .on_hover_text(if cfg!(any(target_os = "android", target_arch = "wasm32")) {
-                        "Asks for the location permission, picks the nearest radar, and gets out of the way"
-                    } else {
-                        "Reads a local gpsd on :2947 and picks the nearest radar"
-                    })
-                    .clicked()
-                {
-                    fr.locate();
-                }
-            });
-            if fr.refused {
-                ui.small(if cfg!(any(target_os = "android", target_arch = "wasm32")) {
-                    "No position yet \u{2014} pick a radar below instead."
-                } else {
-                    "No gpsd on this machine \u{2014} pick a radar below instead."
                 });
+                ctx.request_repaint_after(std::time::Duration::from_millis(250));
+            } else if ui
+                .add_sized(
+                    [220.0, 44.0],
+                    egui::Button::new(format!(
+                        "{}  Use my location",
+                        egui_phosphor::regular::CROSSHAIR
+                    )),
+                )
+                .on_hover_text(if cfg!(any(target_os = "android", target_arch = "wasm32")) {
+                    "Asks for the location permission, picks the nearest radar, and gets out of the way"
+                } else {
+                    "Reads a local gpsd on :2947 and picks the nearest radar"
+                })
+                .clicked()
+            {
+                fr.locate();
             }
+        });
+        if fr.refused {
+            ui.small(if cfg!(any(target_os = "android", target_arch = "wasm32")) {
+                "No position yet \u{2014} pick a radar below instead."
+            } else {
+                "No gpsd on this machine \u{2014} pick a radar below instead."
+            });
+        }
 
-            ui.add_space(8.0);
-            ui.add(
-                egui::TextEdit::singleline(&mut fr.filter)
-                    .hint_text("Search by ID, city, or state\u{2026}"),
-            );
-            let needle = fr.filter.to_ascii_uppercase();
+        ui.add_space(10.0);
+        ui.add(
+            egui::TextEdit::singleline(&mut fr.filter)
+                .hint_text("Search by ID, city, or state\u{2026}")
+                .desired_width(f32::INFINITY),
+        );
+        let needle = fr.filter.to_ascii_uppercase();
+        crate::ui::style::glass(ui, 190).show(ui, |ui| {
             egui::ScrollArea::vertical()
-                .max_height(220.0)
+                .max_height((ctx.content_rect().height() - 390.0).clamp(140.0, 280.0))
                 .show(ui, |ui| {
                     for s in wxdata::sites::sites() {
                         if !needle.is_empty()
@@ -139,38 +175,74 @@ pub fn show(ctx: &egui::Context, fr: &mut FirstRun, settings: &mut Settings) -> 
                         {
                             continue;
                         }
-                        let label = format!("{}  \u{2014}  {}, {}", s.id, s.city, s.state);
-                        if ui
-                            .selectable_label(settings.default_site == s.id, label)
-                            .clicked()
-                        {
+                        let selected = settings.default_site == s.id;
+                        let fill = if selected {
+                            egui::Color32::from_rgba_unmultiplied(
+                                accent.r(),
+                                accent.g(),
+                                accent.b(),
+                                52,
+                            )
+                        } else {
+                            egui::Color32::TRANSPARENT
+                        };
+                        let button = egui::Button::new(format!(
+                            "{}  \u{2014}  {}, {}",
+                            s.id, s.city, s.state
+                        ))
+                        .selected(selected)
+                        .fill(fill)
+                        .corner_radius(crate::ui::m3::R_SM)
+                        .min_size(egui::vec2(ui.available_width(), 44.0));
+                        if ui.add(button).clicked() {
                             settings.default_site = s.id.to_string();
                         }
                     }
                 });
-
-            ui.add_space(8.0);
-            ui.separator();
-            ui.horizontal(|ui| {
-                if ui.button("Show me the radar").clicked() {
-                    finished = Some(false);
-                }
-                if ui
-                    .button("\u{2026}with the 60-second tour")
-                    .on_hover_text("Four stops on the live map: the timeline, the products, where everything lives, and how to read a storm")
-                    .clicked()
-                {
-                    finished = Some(true);
-                }
-            });
         });
+
+        ui.add_space(10.0);
+        let actions = |ui: &mut egui::Ui, finished: &mut Option<bool>| {
+            let width = if compact {
+                ui.available_width()
+            } else {
+                (ui.available_width() - 8.0) / 2.0
+            };
+            if ui
+                .add_sized(
+                    [width, 44.0],
+                    egui::Button::new("Show me the radar")
+                        .fill(accent)
+                        .stroke(egui::Stroke::NONE),
+                )
+                .clicked()
+            {
+                *finished = Some(false);
+            }
+            if ui
+                .add_sized(
+                    [width, 44.0],
+                    egui::Button::new("Take the 60-second tour"),
+                )
+                .on_hover_text("Four stops on the live map: the timeline, the products, where everything lives, and how to read a storm")
+                .clicked()
+            {
+                *finished = Some(true);
+            }
+        };
+        if compact {
+            ui.vertical(|ui| actions(ui, &mut finished));
+        } else {
+            ui.horizontal(|ui| actions(ui, &mut finished));
+        }
+    });
 
     let finished = finished.map(|take_tour| Finish {
         site: settings.default_site.clone(),
         take_tour,
         located: false,
     });
-    if finished.is_some() || !open {
+    if finished.is_some() || !open || close {
         fr.open = false;
         fr.rx = None;
     }
