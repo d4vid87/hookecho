@@ -182,7 +182,8 @@ impl Tour {
                     ui.add_space(6.0);
                     ui.label(egui::RichText::new(body).size(style::FONT_BASE));
                     ui.add_space(16.0);
-                    ui.horizontal_centered(|ui| {
+                    ui.horizontal(|ui| {
+                        ui.add_space((ui.available_width() - 72.0).max(0.0) / 2.0);
                         for i in 0..TITLES.len() {
                             ui.label(
                                 egui::RichText::new(if i == step { "●" } else { "○" }).color(
