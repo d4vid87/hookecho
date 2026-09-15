@@ -16684,7 +16684,6 @@ impl eframe::App for HookEchoApp {
                 following: v.timeline.following,
             };
             let accent = crate::theme::accent(self.settings.theme);
-            self.tour.advance_if_done(sig);
             let anchors = self.tour_anchors;
             self.tour.show(ctx, &anchors, sig, accent);
         }
