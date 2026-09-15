@@ -12,12 +12,12 @@ fetch() {
   printf '%s  %s\n' "$digest" "$path.part" | sha256sum -c --status || { echo "checksum mismatch: $url" >&2; exit 1; }
   mv "$path.part" "$path"
 }
-readarray -t model < <(jq -r '.voice.model[]' "$manifest" | tr -d '\r')
-readarray -t config < <(jq -r '.voice.config[]' "$manifest" | tr -d '\r')
+model=(); while IFS= read -r line; do model+=("$line"); done < <(jq -r '.voice.model[]' "$manifest" | tr -d '\r')
+config=(); while IFS= read -r line; do config+=("$line"); done < <(jq -r '.voice.config[]' "$manifest" | tr -d '\r')
 fetch "${model[0]}" "${model[1]}" "$out/en_US-amy-medium.onnx"
 fetch "${config[0]}" "${config[1]}" "$out/en_US-amy-medium.onnx.json"
 if [ "$platform" = web ]; then exit 0; fi
-readarray -t archive < <(jq -r --arg p "$platform" '.piper.archives[$p][]' "$manifest" | tr -d '\r')
+archive=(); while IFS= read -r line; do archive+=("$line"); done < <(jq -r --arg p "$platform" '.piper.archives[$p][]' "$manifest" | tr -d '\r')
 [ "${#archive[@]}" -eq 2 ] || { echo "unsupported Piper platform: $platform" >&2; exit 1; }
 case "$platform" in windows-*) ext=zip;; *) ext=tar.gz;; esac
 fetch "${archive[0]}" "${archive[1]}" "$out/piper.$ext"
