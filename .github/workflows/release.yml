@@ -293,7 +293,7 @@ jobs:
     name: macOS app (experimental)
     # Piper's archived arm64 download is mislabeled x86_64; build one internally consistent Intel
     # app (runs under Rosetta on Apple Silicon) rather than shipping a bundle that cannot launch.
-    runs-on: macos-13
+    runs-on: macos-15-intel
     # Waits only so the release exists before the upload at the end. `!cancelled()` because on a
     # push to main `create-release` is skipped, and a skipped dependency would otherwise skip the
     # build too.
