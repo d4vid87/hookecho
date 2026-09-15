@@ -1,0 +1,19 @@
+{
+  "piper": {
+    "version": "2023.11.14-2",
+    "license": "MIT",
+    "archives": {
+      "linux-x86_64": ["https://github.com/rhasspy/piper/releases/download/2023.11.14-2/piper_linux_x86_64.tar.gz", "a50cb45f355b7af1f6d758c1b360717877ba0a398cc8cbe6d2a7a3a26e225992"],
+      "windows-x86_64": ["https://github.com/rhasspy/piper/releases/download/2023.11.14-2/piper_windows_amd64.zip", "f3c58906402b24f3a96d92145f58acba6d86c9b5db896d207f78dc80811efcea"],
+      "macos-aarch64": ["https://github.com/rhasspy/piper/releases/download/2023.11.14-2/piper_macos_aarch64.tar.gz", "6b1eb03b3735946cb35216e063e7eebcc33a6bbf5dd96ec0217959bf1cdcb0cc"],
+      "macos-x86_64": ["https://github.com/rhasspy/piper/releases/download/2023.11.14-2/piper_macos_x64.tar.gz", "ced85c0a3df13945b1e623b878a48fdc2854d5c485b4b67f62857cf551deaf8b"]
+    }
+  },
+  "voice": {
+    "id": "en_US-amy-medium",
+    "revision": "39ab474be869e9181350af6a65e4953eef67aaa0",
+    "license": "CC-BY-SA-4.0",
+    "model": ["https://huggingface.co/rhasspy/piper-voices/resolve/39ab474be869e9181350af6a65e4953eef67aaa0/en/en_US/amy/medium/en_US-amy-medium.onnx", "b3a6e47b57b8c7fbe6a0ce2518161a50f59a9cdd8a50835c02cb02bdd6206c18"],
+    "config": ["https://huggingface.co/rhasspy/piper-voices/resolve/39ab474be869e9181350af6a65e4953eef67aaa0/en/en_US/amy/medium/en_US-amy-medium.onnx.json", "95a23eb4d42909d38df73bb9ac7f45f597dbfcde2d1bf9526fdeaf5466977d77"]
+  }
+}

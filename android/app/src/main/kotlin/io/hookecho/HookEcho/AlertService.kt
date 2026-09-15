@@ -182,6 +182,9 @@ class AlertService : Service() {
                 .setAutoCancel(true)
                 .build()
             manager(context).notify(a.id.hashCode(), n)
+            if (!MainActivity.foreground && Nws.speechEnabled(context.filesDir)) {
+                Thread { PiperVoice.speakBlocking(context, "${a.event} for ${m.name}. ${a.headline}") }.start()
+            }
         }
 
         private fun manager(context: Context) = context.getSystemService(NotificationManager::class.java)

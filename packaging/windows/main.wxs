@@ -20,6 +20,7 @@
     <Directory Id="TARGETDIR" Name="SourceDir">
       <Directory Id="ProgramFiles64Folder">
         <Directory Id="INSTALLFOLDER" Name="HookEcho">
+          <Directory Id="PiperFolder" Name="piper" />
           <Component Id="MainExe" Guid="6f9ffb55-9e00-435b-a116-9f88413aa820" Win64="yes">
             <File Id="HookechoExe" Source="$(var.ExePath)" KeyPath="yes" />
           </Component>
@@ -53,6 +54,7 @@
       <ComponentRef Id="MainExe" />
       <ComponentRef Id="UrlScheme" />
       <ComponentRef Id="StartMenuShortcut" />
+      <ComponentGroupRef Id="PiperFiles" />
     </Feature>
   </Product>
 </Wix>

@@ -22,6 +22,13 @@ import java.io.File
  * anyway; so the stream is copied into the cache and `filesDir/import.txt` names it.
  */
 class MainActivity : GameActivity() {
+    companion object {
+        const val EXTRA_GOTO = "hookecho.goto"
+        @Volatile var foreground = false
+    }
+
+    override fun onStart() { super.onStart(); foreground = true }
+    override fun onStop() { foreground = false; super.onStop() }
     /**
      * Predictive back. The callback is *disabled* by default, which is the whole point: with
      * nothing open in the app, Android owns the gesture and can draw its live preview of the home
@@ -119,9 +126,5 @@ class MainActivity : GameActivity() {
             ?: intent?.data?.takeIf { it.scheme == "hookecho" }?.toString()
             ?: return
         runCatching { File(filesDir, "goto.txt").writeText(goto) }
-    }
-
-    companion object {
-        const val EXTRA_GOTO = "hookecho.goto"
     }
 }

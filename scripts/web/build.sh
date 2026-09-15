@@ -76,6 +76,18 @@ done
 # Trailing comma trimmed: this is pasted into the page as a JS object literal.
 font_urls="{${font_urls%,}}"
 
+# Amy is deliberately outside the radar wasm and below Cloudflare Pages' 25 MiB file ceiling.
+# Start-up JS fetches these ordered pieces only after the map is running.
+"$root/packaging/piper/fetch.sh" web "$root/target/piper/web"
+"$root/scripts/web/piper-runtime.sh"
+voice_dir="web/voice/amy-medium-39ab474b"
+mkdir -p "$voice_dir"
+find "$voice_dir" -type f -delete
+split -b 20M -d -a 2 "$root/target/piper/web/en_US-amy-medium.onnx" "$voice_dir/model.part-"
+cp "$root/target/piper/web/en_US-amy-medium.onnx.json" "$voice_dir/en_US-amy-medium.onnx.json"
+chunks="$(find "$voice_dir" -name 'model.part-*' -printf '%f\n' | sort | jq -R . | jq -sc .)"
+jq -n --argjson chunks "$chunks" '{voice:"en_US-amy-medium", chunks:$chunks}' > "$voice_dir/manifest.json"
+
 # web/index.html is generated (gitignored); web/index.src.html is the committed source. Generating
 # it rather than sed-ing in place keeps `git status` clean across builds.
 sed \

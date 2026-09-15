@@ -13,20 +13,62 @@ static CANCEL_EPOCH: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64
 
 pub fn stop() {
     CANCEL_EPOCH.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    #[cfg(not(any(target_os = "android", target_arch = "wasm32")))]
+    terminate_piper();
     crate::platform::stop_speech();
     #[cfg(not(target_arch = "wasm32"))]
     if let Ok(mut jobs) = speech_queue().jobs.lock() { jobs.clear(); }
     #[cfg(target_arch = "wasm32")]
     {
+        use wasm_bindgen::JsCast;
         WEB_QUEUE.with(|queue| queue.borrow_mut().jobs.clear());
+        if let Ok(stop) = js_sys::Reflect::get(&js_sys::global(), &"__hookechoAmyStop".into()) {
+            if let Some(stop) = stop.dyn_ref::<js_sys::Function>() {
+                let _ = stop.call0(&js_sys::global());
+            }
+        }
         if let Some(synth) = web_sys::window().and_then(|window| window.speech_synthesis().ok()) {
             synth.cancel();
         }
     }
 }
 
+#[cfg(not(any(target_os = "android", target_arch = "wasm32")))]
+static PIPER_PID: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+#[cfg(not(any(target_os = "android", target_arch = "wasm32")))]
+fn terminate_piper() {
+    let pid = PIPER_PID.swap(0, std::sync::atomic::Ordering::AcqRel);
+    if pid == 0 {
+        return;
+    }
+    #[cfg(unix)]
+    let _ = std::process::Command::new("kill").arg(pid.to_string()).status();
+    #[cfg(target_os = "windows")]
+    let _ = std::process::Command::new("taskkill")
+        .args(["/PID", &pid.to_string(), "/T", "/F"])
+        .status();
+}
+
 pub fn status() -> String {
+    #[cfg(target_arch = "wasm32")]
+    if let Some(value) = js_sys::Reflect::get(&js_sys::global(), &"__hookechoAmyStatus".into())
+        .ok()
+        .and_then(|value| value.as_string())
+    {
+        return value;
+    }
     STATUS.lock().map(|status| status.clone()).unwrap_or_default()
+}
+
+#[cfg(target_arch = "wasm32")]
+pub fn retry() {
+    use wasm_bindgen::JsCast;
+    if let Ok(retry) = js_sys::Reflect::get(&js_sys::global(), &"__hookechoAmyRetry".into()) {
+        if let Some(retry) = retry.dyn_ref::<js_sys::Function>() {
+            let _ = retry.call0(&js_sys::global());
+        }
+    }
 }
 
 fn set_status(message: impl Into<String>) {
@@ -68,9 +110,50 @@ static PIPER: std::sync::RwLock<(String, String)> =
 /// user edits either field.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn set_piper(bin: &str, voice: &str) {
+    let custom = !voice.trim().is_empty();
+    let (bin, voice) = if voice.trim().is_empty() {
+        bundled_piper().unwrap_or_else(|| (bin.trim().to_string(), String::new()))
+    } else {
+        (bin.trim().to_string(), voice.trim().to_string())
+    };
     if let Ok(mut g) = PIPER.write() {
-        *g = (bin.trim().to_string(), voice.trim().to_string());
+        set_status(if voice.is_empty() {
+            "Device voice — fallback"
+        } else if custom {
+            "Custom Piper voice — ready"
+        } else {
+            "Amy — ready"
+        });
+        *g = (bin, voice);
     }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn bundled_piper() -> Option<(String, String)> {
+    let mut roots = Vec::new();
+    if let Some(dir) = std::env::var_os("HOOKECHO_PIPER_DIR") {
+        roots.push(dir.into());
+    }
+    let exe = std::env::current_exe().ok()?;
+    if let Some(dir) = exe.parent() {
+        roots.push(dir.join("piper"));
+        roots.push(dir.join("../Resources/piper"));
+        roots.push(dir.join("../lib/hookecho/piper"));
+    }
+    roots.into_iter().find_map(|root: std::path::PathBuf| {
+        let bin = root.join(if cfg!(target_os = "windows") {
+            "piper.exe"
+        } else {
+            "piper"
+        });
+        let voice = root.join(format!("{DEFAULT_VOICE}.onnx"));
+        (bin.is_file() && voice.is_file()).then(|| {
+            (
+                bin.to_string_lossy().into_owned(),
+                voice.to_string_lossy().into_owned(),
+            )
+        })
+    })
 }
 
 /// Where a downloaded voice lands. One file per voice id, so downloading a second voice does not
@@ -90,7 +173,7 @@ pub fn default_voice_path() -> Option<std::path::PathBuf> {
 /// The voice preselected in the picker: a mid-quality US English model, the smallest one that
 /// does not sound worse than espeak.
 #[cfg(not(target_arch = "wasm32"))]
-pub const DEFAULT_VOICE: &str = "en_US-lessac-medium";
+pub const DEFAULT_VOICE: &str = "en_US-amy-medium";
 
 /// The voices the picker offers, by Piper id (`{lang}_{REGION}-{name}-{quality}`).
 ///
@@ -100,8 +183,8 @@ pub const DEFAULT_VOICE: &str = "en_US-lessac-medium";
 /// `.onnx` the user downloaded themselves.
 #[cfg(not(target_arch = "wasm32"))]
 pub const VOICES: &[&str] = &[
-    "en_US-lessac-medium",
     "en_US-amy-medium",
+    "en_US-lessac-medium",
     "en_US-ryan-high",
     "en_US-joe-medium",
     "en_US-kusal-medium",
@@ -135,6 +218,9 @@ pub const VOICES: &[&str] = &[
 /// `https://huggingface.co/api/models/rhasspy/piper-voices` and paste its `sha` here.
 #[cfg(not(target_arch = "wasm32"))]
 const VOICES_REVISION: &str = "39ab474be869e9181350af6a65e4953eef67aaa0";
+
+#[cfg(not(target_arch = "wasm32"))]
+pub const AMY_SHA256: &str = "b3a6e47b57b8c7fbe6a0ce2518161a50f59a9cdd8a50835c02cb02bdd6206c18";
 
 #[cfg(not(target_arch = "wasm32"))]
 pub fn voice_url(id: &str) -> Option<String> {
@@ -346,6 +432,8 @@ pub(crate) fn announce(
 ) {
     if priority == Priority::Emergency {
         CANCEL_EPOCH.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        #[cfg(not(target_os = "android"))]
+        terminate_piper();
         crate::platform::stop_speech();
     }
     let job = SpeechJob::new(priority, tone, lines);
@@ -472,6 +560,14 @@ mod imp {
     /// own. A browser with speech disabled throws, which lands in the same warn-and-drop path as a
     /// desktop with no espeak.
     pub fn speak_blocking(text: &str) -> Result<(), String> {
+        if let Ok(speak) = js_sys::Reflect::get(&js_sys::global(), &"__hookechoAmySpeak".into()) {
+            if let Some(speak) = speak.dyn_ref::<js_sys::Function>() {
+                let volume = super::WEB_VOLUME.with(std::cell::Cell::get);
+                speak.call2(&js_sys::global(), &text.into(), &volume.into())
+                    .map_err(|_| "Amy invocation failed".to_string())?;
+                return Ok(());
+            }
+        }
         let synth = web_sys::window()
             .ok_or("no window")?
             .speech_synthesis()
@@ -500,6 +596,11 @@ mod imp {
     }
 
     pub fn is_speaking() -> bool {
+        if js_sys::Reflect::get(&js_sys::global(), &"__hookechoAmySpeaking".into())
+            .ok().and_then(|value| value.as_bool()).unwrap_or(false)
+        {
+            return true;
+        }
         web_sys::window()
             .and_then(|w| w.speech_synthesis().ok())
             .is_some_and(|s| s.speaking())
@@ -710,6 +811,7 @@ mod imp {
             }
             Err(e) => return Err(format!("spawn {bin}: {e}")),
         };
+        super::PIPER_PID.store(child.id(), std::sync::atomic::Ordering::Release);
         child
             .stdin
             .take()
@@ -717,6 +819,7 @@ mod imp {
             .write_all(text.as_bytes())
             .map_err(|e| e.to_string())?;
         let out = child.wait_with_output().map_err(|e| e.to_string())?;
+        super::PIPER_PID.store(0, std::sync::atomic::Ordering::Release);
         if !out.status.success() || out.stdout.is_empty() {
             // The likeliest cause on Arch is the wrong `piper`: `extra/piper` is a mouse
             // configuration tool that installs the same binary name.

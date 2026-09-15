@@ -15,7 +15,7 @@ pkgrel=1
 pkgdesc="Advanced NEXRAD weather radar viewer"
 arch=('x86_64')
 url="https://github.com/d4vid87/hookecho"
-license=('MIT')
+license=('GPL-3.0-only')
 # Mirrors the build deps the release workflow installs; the binary dlopens the X11/Wayland client
 # libs and talks to portals over D-Bus, so these are the whole list.
 depends=('alsa-lib' 'systemd-libs' 'libxkbcommon' 'wayland' 'libxcb' 'gtk3' 'espeak-ng')

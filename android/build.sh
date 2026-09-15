@@ -20,6 +20,8 @@ FEATURES="${FEATURES:-}"   # e.g. FEATURES=profiling
 
 cd "$(dirname "$0")/.."   # repo root
 
+packaging/piper/fetch-android.sh
+
 echo "== cargo-ndk: building libhookecho.so ($ABI, $BUILD_TYPE) =="
 # --lib: only the cdylib matters on Android (the bin target is desktop-only).
 NDK_FLAGS=(-t "$ABI" -o android/app/src/main/jniLibs build --lib -p hookecho)

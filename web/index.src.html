@@ -77,6 +77,10 @@
       });
     </script>
     <script type="module">
+      import { prepareAmy } from "./amy-bootstrap.js";
+      setTimeout(prepareAmy, 1000);
+    </script>
+    <script type="module">
       const boot = document.getElementById("boot");
 
       try {

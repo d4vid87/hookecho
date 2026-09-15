@@ -26,7 +26,7 @@ export const ROWS = [
   {
     label: "Price",
     cells: [
-      { v: "yes", t: "Free, MIT licensed" },
+      { v: "yes", t: "Free, GPL licensed" },
       { v: "part", t: "Paid app, subscription tiers" },
       { v: "part", t: "Free with ads, subscription" },
       { v: "part", t: "Free, optional Premium" },
@@ -310,6 +310,6 @@ export const COMPETITORS: Competitor[] = [
       "More non-US radar networks than our US-plus-Germany coverage.",
     ],
     verdict:
-      "RadarOmega and HookEcho read the same public Level 2 volumes and show the same tilts, velocity and dual-pol products. The difference is the bill and the source: RadarOmega charges for the app and again for the add-ons, and you cannot read its code. HookEcho is MIT licensed, runs in a browser with nothing installed, and the archive goes back to 1991 without an add-on.",
+      "RadarOmega and HookEcho read the same public Level 2 volumes and show the same tilts, velocity and dual-pol products. The difference is the bill and the source: RadarOmega charges for the app and again for the add-ons, and you cannot read its code. HookEcho is GPL licensed, runs in a browser with nothing installed, and the archive goes back to 1991 without an add-on.",
   },
 ];

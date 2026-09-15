@@ -21,6 +21,8 @@ for px in 128 256; do
   ./target/release/hookecho --headless-icon "target/deb-assets/hookecho-${px}.png" "$px"
 done
 
+"$ROOT/packaging/piper/fetch.sh" linux-x86_64 "$ROOT/target/deb-assets/piper"
+
 echo "==> packaging"
 # --no-build: we just built it, and cargo-deb's own build would not reuse the profile above.
 cargo deb -p hookecho --no-build

@@ -194,7 +194,9 @@ jobs:
         run: |
           mkdir -p dist
           cp target/release/hookecho.exe dist/
-          cd dist && 7z a hookecho-windows-x86_64.zip hookecho.exe
+          packaging/piper/fetch.sh windows-x86_64 target/release/piper
+          cp -a target/release/piper dist/
+          cd dist && 7z a hookecho-windows-x86_64.zip hookecho.exe piper
 
       # Two versions, because the installers cannot take the one the tag uses: WiX rejects
       # anything but `x.x.x.x` ("The Product/@Version attribute's value, '0.12.0-alpha.1', is not
@@ -212,11 +214,14 @@ jobs:
       - name: Build MSI
         shell: bash
         run: |
+          heat dir target/release/piper -nologo -cg PiperFiles -dr PiperFolder -srd -gg -var var.PiperDir \
+            -out dist/piper.wxs
           candle -nologo -arch x64 \
             -dAppVersion=${{ steps.ver.outputs.numeric }} \
             -dExePath=target/release/hookecho.exe \
             -o dist/hookecho.wixobj packaging/windows/main.wxs
-          light -nologo -o dist/HookEcho-x86_64.msi dist/hookecho.wixobj
+          candle -nologo -arch x64 -dPiperDir=target/release/piper -o dist/piper.wixobj dist/piper.wxs
+          light -nologo -o dist/HookEcho-x86_64.msi dist/hookecho.wixobj dist/piper.wixobj
 
       # Inno Setup 6 is preinstalled on windows-latest (not on PATH). pwsh avoids
       # Git-bash mangling of the /D switches.
@@ -286,7 +291,9 @@ jobs:
 
   macos:
     name: macOS app (experimental)
-    runs-on: macos-latest
+    # Piper's archived arm64 download is mislabeled x86_64; build one internally consistent Intel
+    # app (runs under Rosetta on Apple Silicon) rather than shipping a bundle that cannot launch.
+    runs-on: macos-15-intel
     # Waits only so the release exists before the upload at the end. `!cancelled()` because on a
     # push to main `create-release` is skipped, and a skipped dependency would otherwise skip the
     # build too.
@@ -313,6 +320,8 @@ jobs:
           APP=dist/HookEcho.app
           mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
           cp target/release/hookecho "$APP/Contents/MacOS/hookecho"
+          packaging/piper/fetch.sh macos-x86_64 "$APP/Contents/Resources/piper"
+          file "$APP/Contents/MacOS/hookecho" "$APP/Contents/Resources/piper/piper" | grep -q 'x86_64'
 
           # Icons at every size the iconset wants, each drawn rather than resampled.
           ICONSET=dist/hookecho.iconset
@@ -432,9 +441,6 @@ jobs:
           distribution: temurin
           java-version: "17"
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
-
       - name: Set up Android NDK
         uses: nttld/setup-ndk@v1
         id: ndk
@@ -450,6 +456,9 @@ jobs:
         env:
           ANDROID_NDK_HOME: ${{ steps.ndk.outputs.ndk-path }}
         run: cargo ndk -t arm64-v8a -o android/app/src/main/jniLibs build --release --lib -p hookecho
+
+      - name: Bundle Amy voice and phonemizer
+        run: packaging/piper/fetch-android.sh
 
       # Stable signature across runs (phones reject updates whose signature changes). Absent
       # secrets (e.g. forks) fall back to a per-run debug key — still installable, not updatable.

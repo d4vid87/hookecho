@@ -16,6 +16,7 @@ dependencies {
     // Survives process death and reboot: the alert foreground service can be killed, and only a
     // scheduled worker gets the poll going again (see AlertWorker.kt / BootReceiver.kt).
     implementation("androidx.work:work-runtime-ktx:2.9.1")
+    implementation("com.microsoft.onnxruntime:onnxruntime-android:1.17.1")
 }
 
 // Single source of truth for the version: the workspace Cargo.toml. Hand-maintained gradle
@@ -33,6 +34,7 @@ val cargoVersionCode: Int = cargoVersion.split(".", "-")
 android {
     namespace = "io.hookecho.HookEcho"
     compileSdk = 35
+    ndkVersion = "26.3.11579264"
 
     defaultConfig {
         applicationId = "io.hookecho.HookEcho"
@@ -45,6 +47,7 @@ android {
         ndk {
             abiFilters += "arm64-v8a"
         }
+        externalNativeBuild.cmake.cppFlags += "-std=c++17"
     }
 
     kotlinOptions {
@@ -59,6 +62,12 @@ android {
     // cargo-ndk drops libhookecho.so into src/main/jniLibs/<abi>/; AGP just packages the prebuilt
     // library — the Rust build is driven outside Gradle (see ../build.sh and the release workflow).
     sourceSets["main"].jniLibs.srcDirs("src/main/jniLibs")
+
+    externalNativeBuild {
+        cmake { path = file("src/main/cpp/CMakeLists.txt") }
+    }
+
+    androidResources { noCompress += "onnx" }
 
     // cargo-ndk copies whatever it finds next to the cdylib, including build-script artifacts
     // (stale `libmvt_reader-*.so` orphans were shipping in every APK). The .so dir is a build

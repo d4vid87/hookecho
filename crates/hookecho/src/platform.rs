@@ -613,7 +613,7 @@ mod android_alerts {
     /// The app's own classes are not on the JNI thread's default loader — `FindClass` from a
     /// thread the JVM did not create only sees the system loader — so every call into our Kotlin
     /// goes through `getClassLoader().loadClass()`.
-    fn with_class<T>(
+    pub(super) fn with_class<T>(
         name: &str,
         f: impl FnOnce(&mut jni::JNIEnv, &JClass, &JObject) -> jni::errors::Result<T>,
     ) -> jni::errors::Result<T> {
@@ -1328,6 +1328,9 @@ mod android_tts {
     /// practice; the retry window is generous because a dropped tornado warning is the bad
     /// outcome, not a slow one.
     pub fn speak(text: &str) -> Result<(), String> {
+        if try_piper(text).unwrap_or(false) {
+            return Ok(());
+        }
         let deadline = wxdata::clock::Instant::now() + Duration::from_secs(6);
         loop {
             match try_speak(text) {
@@ -1356,11 +1359,30 @@ mod android_tts {
     }
 
     pub fn stop() {
+        let _ = try_piper_stop();
         let Some(tts) = TTS.get() else { return };
         let Some(app) = super::android::app() else { return };
         let Ok(vm) = (unsafe { jni::JavaVM::from_raw(app.vm_as_ptr() as *mut jni::sys::JavaVM) }) else { return };
         let Ok(mut env) = vm.attach_current_thread() else { return };
         let _ = env.call_method(tts.as_obj(), "stop", "()I", &[]);
+    }
+
+    fn try_piper(text: &str) -> jni::errors::Result<bool> {
+        super::android_alerts::with_class("io.hookecho.HookEcho.PiperVoice", |env, class, activity| {
+            let msg = env.new_string(text)?;
+            env.call_static_method(
+                class,
+                "speakBlocking",
+                "(Landroid/content/Context;Ljava/lang/String;)Z",
+                &[JValue::Object(activity), JValue::Object(&msg)],
+            )?.z()
+        })
+    }
+
+    fn try_piper_stop() -> jni::errors::Result<()> {
+        super::android_alerts::with_class("io.hookecho.HookEcho.PiperVoice", |env, class, _| {
+            env.call_static_method(class, "stop", "()V", &[]).map(|_| ())
+        })
     }
 
     /// One `speak()` attempt. `Ok(false)` means the engine isn't ready yet (retry).

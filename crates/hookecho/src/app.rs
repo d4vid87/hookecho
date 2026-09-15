@@ -5728,6 +5728,14 @@ impl HookEchoApp {
                 crate::speech::set_voice_status(false, "download was too small to be a voice");
                 return;
             }
+            if id == crate::speech::DEFAULT_VOICE {
+                use sha2::Digest;
+                let digest = format!("{:x}", sha2::Sha256::digest(&model));
+                if digest != crate::speech::AMY_SHA256 {
+                    crate::speech::set_voice_status(false, "Amy checksum failed; using device voice");
+                    return;
+                }
+            }
             let part = path.with_extension("part");
             let wrote = std::fs::write(&part, &model)
                 .and_then(|()| std::fs::rename(&part, &path))

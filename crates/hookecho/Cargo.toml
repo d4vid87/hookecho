@@ -205,4 +205,5 @@ assets = [
     ["../../packaging/io.hookecho.HookEcho.metainfo.xml", "usr/share/metainfo/", "644"],
     ["../../target/deb-assets/hookecho-256.png", "usr/share/icons/hicolor/256x256/apps/hookecho.png", "644"],
     ["../../target/deb-assets/hookecho-128.png", "usr/share/icons/hicolor/128x128/apps/hookecho.png", "644"],
+    ["../../target/deb-assets/piper/*", "usr/lib/hookecho/piper/", "755"],
 ]

@@ -27,8 +27,12 @@ rm -rf "$APPDIR"
 mkdir -p "$APPDIR/usr/bin"
 cp "$ROOT/target/release/hookecho" "$APPDIR/usr/bin/hookecho"
 
+"$ROOT/packaging/piper/fetch.sh" linux-x86_64
+mkdir -p "$APPDIR/usr/lib/hookecho/piper"
+cp -a "$ROOT/target/piper/linux-x86_64/." "$APPDIR/usr/lib/hookecho/piper/"
+
 # The AppImage is the Linux package with no package manager to declare a speech dependency to.
-# Bundle espeak-ng and its small voice data; Piper remains an optional higher-quality voice.
+# Bundle espeak-ng and its small voice data as Amy's device-voice fallback.
 command -v espeak-ng >/dev/null || { echo "espeak-ng is required to build the AppImage" >&2; exit 1; }
 cp "$(command -v espeak-ng)" "$APPDIR/usr/bin/espeak-ng"
 mkdir -p "$APPDIR/usr/lib" "$APPDIR/usr/share/espeak-ng-data"
