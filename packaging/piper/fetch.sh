@@ -16,6 +16,8 @@ model=(); while IFS= read -r line; do model+=("$line"); done < <(jq -r '.voice.m
 config=(); while IFS= read -r line; do config+=("$line"); done < <(jq -r '.voice.config[]' "$manifest" | tr -d '\r')
 fetch "${model[0]}" "${model[1]}" "$out/en_US-amy-medium.onnx"
 fetch "${config[0]}" "${config[1]}" "$out/en_US-amy-medium.onnx.json"
+curl -fsSL 'https://raw.githubusercontent.com/MycroftAI/mimic3-voices/master/LICENSE' -o "$out/Amy-LICENSE-CC-BY-SA-4.0"
+printf '%s\n' 'Amy voice source: https://github.com/MycroftAI/mimic3-voices' > "$out/ATTRIBUTION"
 if [ "$platform" = web ]; then exit 0; fi
 archive=(); while IFS= read -r line; do archive+=("$line"); done < <(jq -r --arg p "$platform" '.piper.archives[$p][]' "$manifest" | tr -d '\r')
 [ "${#archive[@]}" -eq 2 ] || { echo "unsupported Piper platform: $platform" >&2; exit 1; }
@@ -28,5 +30,3 @@ find "$out/runtime" -mindepth 1 -delete
 rmdir "$out/runtime"
 find "$out" -maxdepth 1 -type f \( -name 'piper.zip' -o -name 'piper.tar.gz' \) -delete
 curl -fsSL 'https://raw.githubusercontent.com/rhasspy/piper/master/LICENSE.md' -o "$out/Piper-LICENSE-MIT"
-curl -fsSL 'https://raw.githubusercontent.com/MycroftAI/mimic3-voices/master/LICENSE' -o "$out/Amy-LICENSE-CC-BY-SA-4.0"
-printf '%s\n' 'Amy voice source: https://github.com/MycroftAI/mimic3-voices' > "$out/ATTRIBUTION"
