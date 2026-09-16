@@ -763,6 +763,65 @@ pub(crate) fn body(
                         });
                 }
                 ui.add_space(8.0);
+                for (action, icon, label, detail) in [
+                    (
+                        PaletteAction::ToggleField(crate::render::FieldLayer::Mrms),
+                        egui_phosphor::regular::GLOBE,
+                        "MRMS",
+                        "National reflectivity mosaic",
+                    ),
+                    (
+                        PaletteAction::OpenWindow(crate::app::AppWindow::StormTable),
+                        egui_phosphor::regular::CHART_LINE,
+                        "Storm attributes",
+                        "Hail, tops, rotation and motion",
+                    ),
+                ] {
+                    if let Some(entry) = entries.iter().find(|e| e.action == action) {
+                        let on = entry.on == Some(true);
+                        let card = egui::Frame::new()
+                            .fill(ui.visuals().faint_bg_color)
+                            .corner_radius(12.0)
+                            .inner_margin(10)
+                            .show(ui, |ui| {
+                                ui.horizontal(|ui| {
+                                    ui.label(RichText::new(icon).size(24.0).color(accent));
+                                    ui.vertical(|ui| {
+                                        ui.label(RichText::new(label).size(14.0));
+                                        ui.label(
+                                            RichText::new(detail)
+                                                .size(10.0)
+                                                .color(ui.visuals().weak_text_color()),
+                                        );
+                                    });
+                                    if entry.on.is_some() {
+                                        ui.with_layout(
+                                            egui::Layout::right_to_left(egui::Align::Center),
+                                            |ui| {
+                                                ui.label(
+                                                    RichText::new(if on {
+                                                        egui_phosphor::regular::TOGGLE_RIGHT
+                                                    } else {
+                                                        egui_phosphor::regular::TOGGLE_LEFT
+                                                    })
+                                                    .size(32.0)
+                                                    .color(if on {
+                                                        accent
+                                                    } else {
+                                                        ui.visuals().weak_text_color()
+                                                    }),
+                                                );
+                                            },
+                                        );
+                                    }
+                                });
+                            });
+                        if card.response.interact(egui::Sense::click()).clicked() {
+                            chosen = Some(action);
+                        }
+                        ui.add_space(8.0);
+                    }
+                }
                 if let Some(entry) = entries.iter().find(|e| e.action == PaletteAction::OpenOutlooks) {
                     let on = entry.on == Some(true);
                     egui::Frame::new()

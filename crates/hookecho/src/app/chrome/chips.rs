@@ -380,8 +380,14 @@ impl HookEchoApp {
             self.error_chip = Some((msg.clone(), now));
         }
         if resp.clicked() {
-            ctx.copy_text(msg);
-            self.toast(ToastKind::Success, "Error copied");
+            if let Some(site) = self.views[self.active].failover_from.take() {
+                self.views[self.active].site = Some(site.clone());
+                self.views[self.active].error = None;
+                self.toast(ToastKind::Info, format!("Returning to {site}"));
+            } else {
+                ctx.copy_text(msg);
+                self.toast(ToastKind::Success, "Error copied");
+            }
             self.error_chip = None;
         }
     }

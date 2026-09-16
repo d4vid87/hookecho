@@ -31,6 +31,7 @@ pub struct FirstRun {
     /// A source was asked for and said no (no gpsd, no permission). Stops the button from looking
     /// like it does nothing.
     refused: bool,
+    save_home: bool,
 }
 
 impl FirstRun {
@@ -39,6 +40,7 @@ impl FirstRun {
         self.filter.clear();
         self.rx = None;
         self.refused = false;
+        self.save_home = true;
     }
 
     /// Ask the platform where we are. The same sources chase mode uses — Android polls the system
@@ -54,10 +56,10 @@ impl FirstRun {
     }
 
     /// The nearest site to the first fix that arrives, if one has.
-    fn fix_site(&mut self) -> Option<String> {
+    fn fix_site(&mut self) -> Option<(String, f64, f64)> {
         let rx = self.rx.as_ref()?;
         let (lon, lat) = rx.try_recv().ok()?;
-        crate::geo::nearest_site_id(lon, lat)
+        crate::geo::nearest_site_id(lon, lat).map(|site| (site, lon, lat))
     }
 }
 
@@ -69,8 +71,21 @@ pub fn show(ctx: &egui::Context, fr: &mut FirstRun, settings: &mut Settings) -> 
     }
     // A fix ends the card wherever the user is in it: they asked for the nearest radar, and this
     // is the whole of the ten-second start.
-    if let Some(site) = fr.fix_site() {
+    if let Some((site, lon, lat)) = fr.fix_site() {
         settings.default_site = site.clone();
+        if fr.save_home {
+            for marker in &mut settings.markers { marker.home = false; }
+            settings.markers.push(crate::settings::Marker {
+                id: crate::settings::new_marker_id(),
+                name: "Home".into(),
+                lat,
+                lon,
+                icon: None,
+                alert_radius_mi: 30.0,
+                video_url: String::new(),
+                home: true,
+            });
+        }
         fr.open = false;
         fr.rx = None;
         return Some(Finish {
@@ -147,6 +162,8 @@ pub fn show(ctx: &egui::Context, fr: &mut FirstRun, settings: &mut Settings) -> 
             {
                 fr.locate();
             }
+            ui.checkbox(&mut fr.save_home, "Save my location as Home")
+                .on_hover_text("Home powers the local summary and spoken warnings within 30 miles. You can skip this and add Home later.");
         });
         if fr.refused {
             ui.small(if cfg!(any(target_os = "android", target_arch = "wasm32")) {
@@ -260,6 +277,7 @@ mod tests {
         let mut fr = FirstRun {
             open: true,
             rx: Some(rx),
+            save_home: true,
             ..Default::default()
         };
         let ctx = egui::Context::default();
@@ -270,6 +288,8 @@ mod tests {
         assert!(out.located && !out.take_tour);
         assert!(!fr.open);
         assert_eq!(settings.default_site, "KTLX");
+        let home = settings.markers.iter().find(|marker| marker.home).expect("Home saved");
+        assert!((home.lon + 97.5).abs() < 0.001 && (home.lat - 35.47).abs() < 0.001);
     }
 
     #[test]

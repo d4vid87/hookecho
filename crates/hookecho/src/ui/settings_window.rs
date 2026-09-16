@@ -588,7 +588,7 @@ fn basemaps_tab(ui: &mut egui::Ui, settings: &mut Settings) {
             ui.selectable_value(&mut settings.map_quality, value, label);
         }
     });
-    ui.small("Auto adapts detail during movement. All modes restore full settled detail. Map cache: 250 MB maximum.");
+    ui.small("Auto hides labels only while the map is moving, then restores them. Performance keeps simplified map geometry. Map cache: 250 MB maximum.");
     if ui.button("Clear map cache").clicked() {
         crate::platform::clear_map_cache();
     }
@@ -1247,7 +1247,7 @@ fn alerts_tab(ui: &mut egui::Ui, settings: &mut Settings) {
     if ui.button("Stop speech").clicked() {
         crate::speech::stop();
     }
-    ui.small("Reads warnings in the visible map area. Muting alerts also mutes speech.");
+    ui.small("Reads warnings within 30 miles of Home. Muting alerts also mutes speech.");
     #[cfg(target_arch = "wasm32")]
     {
         ui.small("Browser voices require activation each session. Speech is not available when this page is closed.");
