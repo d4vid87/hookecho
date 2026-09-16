@@ -19,11 +19,11 @@ const { src, poster, alt, cues, eager = false, phone = false } = Astro.props;
       <source data-src={`${src}.mp4`} type="video/mp4" />
     </video>
     <p class="guided-callout" aria-hidden="true">{cues[0]?.text}</p>
-    <div class="guided-controls">
-      <button type="button" data-action="toggle">Pause</button>
-      <button type="button" data-action="replay">Replay</button>
-      <button type="button" data-action="enlarge">Enlarge</button>
-    </div>
+  </div>
+  <div class="guided-controls">
+    <button type="button" data-action="toggle">Pause</button>
+    <button type="button" data-action="replay">Replay</button>
+    <button type="button" data-action="enlarge">Enlarge</button>
   </div>
   <ol class="guided-steps" aria-label="What this demonstration shows">
     {cues.map((cue, index) => <li data-cue={index}>{cue.text}</li>)}
@@ -131,7 +131,7 @@ const { src, poster, alt, cues, eager = false, phone = false } = Astro.props;
   .phone .guided-frame { width: min(100%, 330px); aspect-ratio: 540 / 1170; margin-inline: auto; }
   .phone img, .phone video { aspect-ratio: 540 / 1170; }
   .guided-callout { position: absolute; left: 16px; bottom: 16px; max-width: min(28rem, calc(100% - 150px)); margin: 0; padding: 0.65rem 0.85rem; border: 1px solid rgb(255 255 255 / 0.16); border-radius: 10px; background: rgb(7 13 20 / 0.82); backdrop-filter: blur(14px); color: #f4f7fa; font-size: 0.86rem; }
-  .guided-controls { position: absolute; right: 12px; bottom: 12px; display: flex; gap: 6px; }
+  .guided-controls { display: flex; justify-content: flex-end; gap: 6px; margin-top: .65rem; }
   button { min-height: 36px; padding: 0.45rem 0.65rem; border: 1px solid rgb(255 255 255 / 0.22); border-radius: 8px; background: rgb(7 13 20 / 0.88); color: #f4f7fa; cursor: pointer; }
   button:hover { border-color: var(--accent); }
   .guided-steps { display: flex; gap: 0.65rem; list-style: none; padding: 0.85rem 0 0; margin: 0; }
@@ -144,7 +144,7 @@ const { src, poster, alt, cues, eager = false, phone = false } = Astro.props;
   .dialog-close { position: absolute; right: .7rem; top: .55rem; }
   @media (max-width: 620px) {
     .guided-callout { position: static; max-width: none; border-width: 1px 0 0; border-radius: 0; backdrop-filter: none; }
-    .guided-controls { top: 10px; bottom: auto; flex-wrap: wrap; justify-content: flex-end; max-width: calc(100% - 20px); }
+    .guided-controls { flex-wrap: wrap; }
     .guided-steps { display: grid; }
   }
   @media (prefers-reduced-motion: reduce) {
