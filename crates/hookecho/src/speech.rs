@@ -1,8 +1,8 @@
 //! Speaking warnings out loud.
 //!
 //! Two layers. The words come from [`wxdata::spoken`] — hazard, place and heading first, NWS
-//! shorthand expanded. The voice is whatever the machine has: a local neural engine (Piper) when
-//! one is configured, otherwise the platform's own synthesizer.
+//! shorthand expanded. Piper is the only voice engine; failure stays visible instead of silently
+//! falling back to a robotic platform synthesizer.
 //!
 //! Chasing is an eyes-on-the-road activity: a warning you have to read is a warning you read at
 //! the wrong moment. Every call is fire-and-forget on one background worker and every failure is
@@ -483,8 +483,11 @@ pub(crate) fn announce(
     let start = WEB_QUEUE.with(|queue| {
         let mut queue = queue.borrow_mut();
         if priority == Priority::Emergency && queue.priority != Some(Priority::Emergency) {
-            if let Some(synth) = web_sys::window().and_then(|window| window.speech_synthesis().ok()) {
-                synth.cancel();
+            use wasm_bindgen::JsCast;
+            if let Ok(stop) = js_sys::Reflect::get(&js_sys::global(), &"__hookechoAmyStop".into()) {
+                if let Some(stop) = stop.dyn_ref::<js_sys::Function>() {
+                    let _ = stop.call0(&js_sys::global());
+                }
             }
         }
         enqueue(&mut queue.jobs, job);

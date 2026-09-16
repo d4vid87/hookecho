@@ -55,7 +55,7 @@ class AlertService : Service() {
             // CPU up for five minutes to do a second of work.
             val wl = getSystemService(PowerManager::class.java)
                 .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "hookecho:alerts")
-            val hot = try {
+            val result = try {
                 wl.acquire(60_000L)
                 pollOnce(this, seen)
             } finally {
@@ -64,12 +64,12 @@ class AlertService : Service() {
             // The widget's own 30-minute clock is a floor; while the service runs it stays as
             // fresh as the poll it just did.
             AlertWidget.refresh(this)
-            AlertAlarm.markPolled(this)
+            if (result.successfulRequests > 0) AlertAlarm.markPolled(this)
             // Tighten the cadence while something is actually warned at a watched point. Battery
             // saver stretches the calm case only: once a warning is up, the user has bigger
             // problems than battery, and the tight loop is the whole reason this service exists.
             val waitMs = when {
-                hot -> 60_000L
+                result.hot -> 60_000L
                 batterySaver(this) -> 900_000L
                 else -> 300_000L
             }
@@ -107,6 +107,12 @@ class AlertService : Service() {
         /** Newest-last, so trimming from the front drops the oldest IDs. */
         private const val SEEN_CAP = 200
 
+        data class PollResult(
+            val hot: Boolean,
+            val successfulRequests: Int,
+            val failedRequests: Int,
+        )
+
         private fun prefs(context: Context) =
             context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
 
@@ -133,8 +139,10 @@ class AlertService : Service() {
          * Shared by the service and [AlertWorker] so there is exactly one poll path.
          */
         @JvmStatic
-        fun pollOnce(context: Context, seen: LinkedHashSet<String>): Boolean {
+        fun pollOnce(context: Context, seen: LinkedHashSet<String>): PollResult {
             var hot = false
+            var successful = 0
+            var failed = 0
             val before = seen.size
             // Quiet hours silences everything below the emergency tier. The alert is still
             // recorded as seen, so it does not re-fire the moment the window ends.
@@ -142,19 +150,32 @@ class AlertService : Service() {
                 context.filesDir,
                 java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY),
             )
-            runCatching {
-                for (m in Nws.watched(context.filesDir)) {
-                    for (p in m.samples) {
-                        for (a in Nws.alertsAt(p[0], p[1])) {
-                            if (a.tier >= Nws.TIER_WARNING) hot = true
-                            val loud = !quiet || a.tier >= Nws.TIER_EMERGENCY
-                            if (seen.add(a.id) && loud) notify(context, m, a, Nws.speaksAt(m, p))
-                        }
+            for (m in runCatching { Nws.watched(context.filesDir) }.getOrDefault(emptyList())) {
+                if (m.home) {
+                    val response = Nws.alertsWithin(m.lat, m.lon, 30.0)
+                    if (response.successful) successful++ else failed++
+                    for (a in response.alerts) {
+                        if (a.tier >= Nws.TIER_WARNING) hot = true
+                        val loud = !quiet || a.tier >= Nws.TIER_EMERGENCY
+                        if (seen.add(a.id) && loud) notify(context, m, a, true)
                     }
                 }
-            }.onFailure { /* offline or NWS hiccup: try again next pass */ }
+                for (p in m.samples) {
+                    val response = Nws.alertsAt(p[0], p[1])
+                    if (!response.successful) {
+                        failed++
+                        continue
+                    }
+                    successful++
+                    for (a in response.alerts) {
+                        if (a.tier >= Nws.TIER_WARNING) hot = true
+                        val loud = !quiet || a.tier >= Nws.TIER_EMERGENCY
+                        if (seen.add(a.id) && loud) notify(context, m, a, Nws.speaksAt(m, p))
+                    }
+                }
+            }
             if (seen.size != before) saveSeen(context, seen)
-            return hot
+            return PollResult(hot, successful, failed)
         }
 
         private fun notify(context: Context, m: Nws.Watch, a: Nws.Alert, speak: Boolean) {
@@ -183,7 +204,11 @@ class AlertService : Service() {
                 .build()
             manager(context).notify(a.id.hashCode(), n)
             if (speak && !MainActivity.foreground && Nws.speechEnabled(context.filesDir)) {
-                Thread { PiperVoice.speakBlocking(context, "${a.event} for ${m.name}. ${a.headline}") }.start()
+                PiperVoice.enqueue(
+                    context,
+                    "${a.event} for ${m.name}. ${a.headline}",
+                    a.tier,
+                )
             }
         }
 

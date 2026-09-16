@@ -9,19 +9,32 @@ function status(text, progress = null) {
 
 let worker;
 let audio;
+let audioUrl;
 let nextJob = 0;
+
+function clearAudio() {
+  if (audio) {
+    audio.pause();
+    audio.removeAttribute("src");
+    audio = null;
+  }
+  if (audioUrl) {
+    URL.revokeObjectURL(audioUrl);
+    audioUrl = null;
+  }
+  globalThis.__hookechoAmySpeaking = false;
+}
 
 globalThis.__hookechoAmySpeak = (text, volume) => {
   if (!worker || globalThis.__hookechoAmyStatus !== "Amy — ready") {
     throw new Error("Amy is not ready");
   }
   globalThis.__hookechoAmySpeaking = true;
-  worker.postMessage({ type: "speak", id: ++nextJob, text });
+  worker.postMessage({ type: "speak", id: ++nextJob, text, volume: Math.max(0, Math.min(1, volume)) });
 };
 globalThis.__hookechoAmyStop = () => {
   nextJob++;
-  globalThis.__hookechoAmySpeaking = false;
-  if (audio) { audio.pause(); audio.removeAttribute("src"); }
+  clearAudio();
 };
 globalThis.__hookechoAmyRetry = () => {
   globalThis.__hookechoAmyPreparing = null;
@@ -93,9 +106,17 @@ export async function prepareAmy() {
       worker.onmessage = ({ data }) => {
         if (data.type === "ready") status("Amy — ready");
         else if (data.type === "audio" && data.id === nextJob) {
-          audio = new Audio(URL.createObjectURL(new Blob([data.bytes], { type: "audio/wav" })));
-          audio.onended = () => { globalThis.__hookechoAmySpeaking = false; };
-          audio.play().catch((error) => status(`Amy unavailable (${error.message})`));
+          clearAudio();
+          audioUrl = URL.createObjectURL(new Blob([data.bytes], { type: "audio/wav" }));
+          audio = new Audio(audioUrl);
+          audio.volume = Math.max(0, Math.min(1, data.volume ?? 1));
+          audio.onended = clearAudio;
+          audio.onerror = clearAudio;
+          globalThis.__hookechoAmySpeaking = true;
+          audio.play().catch((error) => {
+            clearAudio();
+            status(`Amy unavailable (${error.message})`);
+          });
         } else if (data.type === "error" && data.id === nextJob) {
           globalThis.__hookechoAmySpeaking = false;
           status(`Amy unavailable (${data.message})`);

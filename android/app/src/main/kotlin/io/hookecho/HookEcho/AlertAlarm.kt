@@ -33,20 +33,21 @@ class AlertAlarm : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         if (!AlertService.isEnabled(context)) return
         AlertService.createChannels(context)
-        // The alarm wakes the CPU only long enough to deliver this broadcast; a poll is a network
-        // round trip, so it needs its own lock or the device sleeps mid-fetch.
-        val wl = context.getSystemService(PowerManager::class.java)
-            .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "hookecho:alarm")
-        try {
-            wl.acquire(60_000L)
-            AlertService.pollOnce(context, AlertService.loadSeen(context))
-            AlertWidget.refresh(context)
-            markPolled(context)
-        } finally {
-            if (wl.isHeld) wl.release()
-            // Re-arm last and unconditionally: a poll that threw must not end the chain.
-            arm(context)
-        }
+        val pending = goAsync()
+        Thread {
+            val wl = context.getSystemService(PowerManager::class.java)
+                .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "hookecho:alarm")
+            try {
+                wl.acquire(60_000L)
+                val result = AlertService.pollOnce(context, AlertService.loadSeen(context))
+                AlertWidget.refresh(context)
+                if (result.successfulRequests > 0) markPolled(context)
+            } finally {
+                if (wl.isHeld) wl.release()
+                arm(context)
+                pending.finish()
+            }
+        }.start()
     }
 
     companion object {

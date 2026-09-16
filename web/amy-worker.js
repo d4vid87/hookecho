@@ -15,7 +15,7 @@ self.onmessage = async ({ data }) => {
     } else if (data.type === "speak") {
       const wav = await session.predict(data.text);
       const bytes = await wav.arrayBuffer();
-      self.postMessage({ type: "audio", id: data.id, bytes }, [bytes]);
+      self.postMessage({ type: "audio", id: data.id, bytes, volume: data.volume }, [bytes]);
     }
   } catch (error) {
     self.postMessage({ type: "error", id: data.id, message: String(error?.message || error) });

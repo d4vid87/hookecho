@@ -30,13 +30,25 @@ class AlertWidget : AppWidgetProvider() {
     private fun render(context: Context, manager: AppWidgetManager, ids: IntArray) {
         val watched = Nws.watched(context.filesDir)
         val lines = ArrayList<String>()
+        var successful = 0
+        var failed = 0
         for (m in watched) {
-            for (a in Nws.alertsAt(m.lat, m.lon)) {
-                lines.add("${a.event} — ${m.name}")
+            if (m.home) {
+                val response = Nws.alertsWithin(m.lat, m.lon, 30.0)
+                if (response.successful) successful++ else failed++
+                for (a in response.alerts) lines.add("${a.event} — ${m.name}")
+            }
+            for (p in m.samples) {
+                val response = Nws.alertsAt(p[0], p[1])
+                if (response.successful) successful++ else failed++
+                for (a in response.alerts) {
+                    lines.add("${a.event} — ${m.name}")
+                }
             }
         }
         var text = when {
             watched.isEmpty() -> "No saved locations yet"
+            successful == 0 && failed > 0 -> "Couldn't check alerts"
             lines.isEmpty() -> "All quiet"
             else -> lines.distinct().take(4).joinToString("\n")
         }

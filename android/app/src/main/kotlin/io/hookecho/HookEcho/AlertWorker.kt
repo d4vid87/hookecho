@@ -34,14 +34,18 @@ class AlertWorker(context: Context, params: WorkerParameters) : Worker(context, 
         } catch (e: Exception) {
             if (Build.VERSION.SDK_INT >= 31 && e !is ForegroundServiceStartNotAllowedException) throw e
         }
-        AlertService.pollOnce(context, AlertService.loadSeen(context))
+        val poll = AlertService.pollOnce(context, AlertService.loadSeen(context))
         AlertWidget.refresh(context)
-        AlertAlarm.markPolled(context)
+        if (poll.successfulRequests > 0) AlertAlarm.markPolled(context)
         // Watchdog half: an exact alarm is a one-shot that re-arms itself, so anything that eats
         // one — a force-stop, a reboot before BootReceiver, the OS cancelling on package replace
         // — ends the chain silently. Re-arming here every 15 minutes is what restarts it.
         AlertAlarm.arm(context)
-        return Result.success()
+        return if (poll.successfulRequests > 0 || poll.failedRequests == 0) {
+            Result.success()
+        } else {
+            Result.retry()
+        }
     }
 
     companion object {

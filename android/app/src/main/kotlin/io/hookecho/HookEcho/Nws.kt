@@ -34,6 +34,9 @@ object Nws {
     )
 
     data class Alert(val id: String, val event: String, val headline: String, val tier: Int)
+    data class AlertResponse(val alerts: List<Alert>, val error: String? = null) {
+        val successful: Boolean get() = error == null
+    }
 
     fun speechEnabled(filesDir: File): Boolean {
         val f = File(filesDir, "config/settings.json")
@@ -128,8 +131,9 @@ object Nws {
 
         // Trim from the back so early markers keep their rim rather than every place losing it.
         var budget = SAMPLE_CAP
-        return out.sortedByDescending { it.home }.map { w ->
-            val take = w.samples.take(maxOf(1, minOf(w.samples.size, budget)))
+        return out.sortedByDescending { it.home }.mapNotNull { w ->
+            if (budget <= 0) return@mapNotNull null
+            val take = w.samples.take(minOf(w.samples.size, budget))
             budget -= take.size
             w.copy(samples = take)
         }
@@ -160,7 +164,7 @@ object Nws {
         return doubleArrayOf(Math.toDegrees(la2), Math.toDegrees(lo2))
     }
 
-    fun alertsAt(lat: Double, lon: Double): List<Alert> {
+    fun alertsAt(lat: Double, lon: Double): AlertResponse = runCatching {
         val url = URL("https://api.weather.gov/alerts/active?point=%.4f,%.4f".format(lat, lon))
         val conn = (url.openConnection() as HttpURLConnection).apply {
             setRequestProperty("User-Agent", USER_AGENT)
@@ -169,18 +173,88 @@ object Nws {
             readTimeout = 15_000
         }
         val body = try {
-            if (conn.responseCode != 200) return emptyList()
+            if (conn.responseCode != 200) error("NWS HTTP ${conn.responseCode}")
             conn.inputStream.bufferedReader().readText()
         } finally {
             conn.disconnect()
         }
-        val features = JSONObject(body).optJSONArray("features") ?: return emptyList()
-        return (0 until features.length()).mapNotNull { i ->
+        val features = JSONObject(body).optJSONArray("features")
+            ?: return@runCatching AlertResponse(emptyList())
+        AlertResponse((0 until features.length()).mapNotNull { i ->
             val p = features.optJSONObject(i)?.optJSONObject("properties") ?: return@mapNotNull null
             val event = p.optString("event")
             val id = p.optString("id").ifEmpty { event + p.optString("sent") }
             Alert(id, event, p.optString("headline", event), tierOf(p, event))
-        }.filter { it.tier > 0 }
+        }.filter { it.tier > 0 })
+    }.getOrElse { AlertResponse(emptyList(), it.message ?: it.javaClass.simpleName) }
+
+    /** Geometry-backed alerts touching a radius. Point lookup remains the zone-only fallback. */
+    fun alertsWithin(lat: Double, lon: Double, radiusMi: Double): AlertResponse = runCatching {
+        val conn = (URL("https://api.weather.gov/alerts/active").openConnection() as HttpURLConnection).apply {
+            setRequestProperty("User-Agent", USER_AGENT)
+            setRequestProperty("Accept", "application/geo+json")
+            connectTimeout = 15_000
+            readTimeout = 15_000
+        }
+        val body = try {
+            if (conn.responseCode != 200) error("NWS HTTP ${conn.responseCode}")
+            conn.inputStream.bufferedReader().readText()
+        } finally {
+            conn.disconnect()
+        }
+        val features = JSONObject(body).optJSONArray("features")
+            ?: return@runCatching AlertResponse(emptyList())
+        AlertResponse((0 until features.length()).mapNotNull { i ->
+            val feature = features.optJSONObject(i) ?: return@mapNotNull null
+            if (!geometryTouches(feature.optJSONObject("geometry"), lat, lon, radiusMi)) {
+                return@mapNotNull null
+            }
+            val p = feature.optJSONObject("properties") ?: return@mapNotNull null
+            val event = p.optString("event")
+            val id = p.optString("id").ifEmpty { event + p.optString("sent") }
+            Alert(id, event, p.optString("headline", event), tierOf(p, event))
+        }.filter { it.tier > 0 })
+    }.getOrElse { AlertResponse(emptyList(), it.message ?: it.javaClass.simpleName) }
+
+    private fun geometryTouches(geometry: JSONObject?, lat: Double, lon: Double, radiusMi: Double): Boolean {
+        geometry ?: return false
+        val coordinates = geometry.optJSONArray("coordinates") ?: return false
+        val rings = when (geometry.optString("type")) {
+            "Polygon" -> (0 until coordinates.length()).mapNotNull { coordinates.optJSONArray(it) }
+            "MultiPolygon" -> (0 until coordinates.length()).flatMap { p ->
+                val polygon = coordinates.optJSONArray(p) ?: return@flatMap emptyList()
+                (0 until polygon.length()).mapNotNull { polygon.optJSONArray(it) }
+            }
+            else -> emptyList()
+        }
+        return rings.any { ringTouches(it, lat, lon, radiusMi) }
+    }
+
+    private fun ringTouches(ring: org.json.JSONArray, lat: Double, lon: Double, radiusMi: Double): Boolean {
+        val points = (0 until ring.length()).mapNotNull { i ->
+            val p = ring.optJSONArray(i) ?: return@mapNotNull null
+            val x = (p.optDouble(0) - lon) * Math.cos(Math.toRadians(lat)) * 69.172
+            val y = (p.optDouble(1) - lat) * 69.0
+            if (x.isFinite() && y.isFinite()) doubleArrayOf(x, y) else null
+        }
+        if (points.size < 3) return false
+        var inside = false
+        var previous = points.last()
+        for (point in points) {
+            if ((point[1] > 0) != (previous[1] > 0) &&
+                0 < (previous[0] - point[0]) * -point[1] / (previous[1] - point[1]) + point[0]
+            ) inside = !inside
+            val dx = previous[0] - point[0]
+            val dy = previous[1] - point[1]
+            val length2 = dx * dx + dy * dy
+            val t = if (length2 == 0.0) 0.0 else
+                (-(point[0] * dx + point[1] * dy) / length2).coerceIn(0.0, 1.0)
+            val nearestX = point[0] + t * dx
+            val nearestY = point[1] + t * dy
+            if (nearestX * nearestX + nearestY * nearestY <= radiusMi * radiusMi) return true
+            previous = point
+        }
+        return inside
     }
 
     /**
