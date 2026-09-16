@@ -1591,7 +1591,11 @@ impl TileManager {
     /// Drain finished fetches into upload-ready tiles (each returned exactly once).
     pub fn drain_ready(&mut self) -> Vec<PendingTile> {
         let mut ready = Vec::new();
-        while let Ok(t) = self.rx.try_recv() {
+        // Uploading every tile that finished during a network burst turns one otherwise smooth
+        // pan frame into a wall of texture allocation. Two matches the vector-tile budget; the
+        // caller requests another frame while this batch is non-empty, so the queue still drains.
+        while ready.len() < 2 {
+            let Ok(t) = self.rx.try_recv() else { break };
             let t = match t {
                 Ok(t) => t,
                 Err(id) => {
@@ -2063,6 +2067,29 @@ pub fn start_pack_download(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn completed_tiles_are_uploaded_in_bounded_batches() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .expect("runtime");
+        let mut m = TileManager::new(crate::rt::Spawner::new(rt.handle().clone()));
+        for x in 0..5 {
+            m.tx.send(Ok(FetchedTile {
+                id: (4, x, 5),
+                style: 0,
+                rgba: vec![0; 4],
+                width: 1,
+                height: 1,
+            }))
+            .unwrap();
+        }
+        assert_eq!(m.drain_ready().len(), 2);
+        assert_eq!(m.drain_ready().len(), 2);
+        assert_eq!(m.drain_ready().len(), 1);
+        assert!(m.drain_ready().is_empty());
+    }
 
     /// 512-px providers made the 512-entry cache four times the memory the entry count assumed.
     /// Eviction has to weigh bytes, and has to leave the frame's own tiles alone.

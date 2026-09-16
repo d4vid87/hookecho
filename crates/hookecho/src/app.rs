@@ -10196,7 +10196,9 @@ impl HookEchoApp {
                             })
                     })
         };
-        if !next_pending {
+        // A frame switch bins and uploads a full sweep. Holding animation while the map is under
+        // the pointer keeps that unavoidable work out of the gesture; playback resumes on release.
+        if should_advance_timeline(next_pending, self.gesture_live) {
             self.views[idx].timeline.tick();
         }
         // Playback paces itself rather than riding whatever the idle heartbeat happens to give
@@ -10337,6 +10339,12 @@ impl HookEchoApp {
     /// download-per-frame. At most two are in flight; each task gives its slot back when it ends,
     /// and anything still booked well past the fetch deadline is aged out.
     fn prefetch_frames(&mut self, idx: usize, ctx: &egui::Context) {
+        // Gesture frames own the browser's main thread and its small same-origin connection pool.
+        // The displayed frame is already cached or fetched on the foreground path; neighbours can
+        // wait until the hand lifts without changing what the user sees.
+        if self.gesture_live {
+            return;
+        }
         // Longer than a volume fetch is allowed to take, so this only ever reaps entries whose
         // task is genuinely gone. At 15 s it reaped entries whose download was still running,
         // and every tick after that started the same download again.
@@ -10406,6 +10414,9 @@ impl HookEchoApp {
     /// back from the newest frame instead, under the same in-flight budget, so the visitor's first
     /// volume is the current one and the recent past fills in behind it.
     fn backfill_loop_frames(&mut self, idx: usize, ctx: &egui::Context) {
+        if self.gesture_live {
+            return;
+        }
         book(&self.prefetching)
             .retain(|_, at| at.elapsed() < VOLUME_TIMEOUT + std::time::Duration::from_secs(15));
         if book(&self.prefetching).len() >= MAX_PREFETCH_INFLIGHT {
@@ -11683,7 +11694,9 @@ impl HookEchoApp {
         // City/town labels, overlaid on every basemap. On raster (satellite) the baked-in labels
         // are faint over imagery + echoes, so we draw crisp white text with a solid black halo;
         // vector basemaps use their palette's label colors. Bigger fonts + an 8-way halo read well.
-        if !vlabels.is_empty() {
+        let hide_labels_while_moving = self.settings.map_quality == crate::settings::MapQuality::Auto
+            && self.gesture_live;
+        if !vlabels.is_empty() && !hide_labels_while_moving {
             let (text_col, halo_col, big) = if is_vector {
                 let st = crate::basemap_style::style(basemap.vector_palette().unwrap_or_default());
                 (
@@ -15199,6 +15212,10 @@ fn should_retess(gesture_live: bool, geometry_changed: bool, bucket_changed: boo
     geometry_changed || (bucket_changed && !gesture_live)
 }
 
+fn should_advance_timeline(next_pending: bool, gesture_live: bool) -> bool {
+    !next_pending && !gesture_live
+}
+
 /// Every radar site with its world-space position, projected once.
 ///
 /// The table is static and the projection is a `ln(tan(...))` per site; ~350 of them ran every
@@ -17583,9 +17600,9 @@ impl eframe::App for HookEchoApp {
                     .set_style(style.vector_palette().unwrap_or_default());
                 clear_vector |= self.vtiles.set_theme(self.settings.theme);
             }
-            clear_vector |= self
-                .vtiles
-                .set_simplified(self.settings.map_quality != crate::settings::MapQuality::Full);
+            clear_vector |= self.vtiles.set_simplified(
+                self.settings.map_quality == crate::settings::MapQuality::Performance,
+            );
             self.last_viewport = rects
                 .get(self.active)
                 .map_or((full.width(), full.height()), |r| (r.width(), r.height()));
@@ -18108,6 +18125,14 @@ mod tests {
             !should_retess(false, false, false),
             "nothing changed, nothing to do"
         );
+    }
+
+    #[test]
+    fn playback_waits_for_downloads_and_live_gestures() {
+        use super::should_advance_timeline;
+        assert!(should_advance_timeline(false, false));
+        assert!(!should_advance_timeline(true, false));
+        assert!(!should_advance_timeline(false, true));
     }
 
     /// A palette change must not re-send the sweep. Everything the GPU keeps (the gate bytes,
