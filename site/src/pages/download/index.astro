@@ -56,20 +56,15 @@ const stores = ["Flathub", "Snap Store", "AUR", "Homebrew", "winget"];
   title="Download HookEcho"
   description="Download HookEcho for Windows, macOS, Linux or Android — or open it straight in your browser. Free, open source, no account."
 >
-  <section>
+  <section class="download">
     <div class="wrap">
-      <h1>Download</h1>
-      <p class="lede">
-        Free and open source, no account, no telemetry. Or skip the download entirely:
-        <a href="https://app.hookecho.io">app.hookecho.io</a> is the whole app running in your
-        browser on live data.
-      </p>
+      <header class="download-head" data-reveal><div><p class="eyebrow">Use it your way</p><h1>Radar without the runaround.</h1><p class="lede">Open the whole app in your browser now, or install HookEcho on the device you take into the storm.</p><div class="head-actions"><a class="btn btn-primary" href="/go/web/download">Open live radar</a><a class="btn" href={releases}>View releases</a></div></div><img src="/shots/hookecho-poster.webp?v=20260916" alt="HookEcho live radar" /></header>
 
       <p id="pick" class="pick" hidden></p>
 
       <div class="grid">
         {platforms.map((p) => (
-          <div class="tile platform" id={`p-${p.id}`} data-reveal data-tilt>
+          <div class="platform" id={`p-${p.id}`} data-reveal>
             <h2><Icon name={p.icon} size={20} /> {p.name}</h2>
             <p class="note">{p.note}</p>
             <div class="links">
@@ -130,6 +125,7 @@ const stores = ["Flathub", "Snap Store", "AUR", "Homebrew", "winget"];
 </script>
 
 <style>
+  .download{padding:clamp(2.5rem,6vw,5rem) 0 5rem}.eyebrow{color:var(--accent);font-weight:750;letter-spacing:.12em;text-transform:uppercase;font-size:.75rem}.download-head{display:grid;grid-template-columns:minmax(280px,.8fr) minmax(0,1.2fr);gap:clamp(2rem,6vw,6rem);align-items:center;margin-bottom:3.5rem}.download-head h1{font-size:clamp(3rem,6vw,5.8rem);line-height:.94;letter-spacing:-.055em;margin:.5rem 0 1rem}.download-head img{width:100%;border:1px solid #5cdcff40;border-radius:22px;box-shadow:0 30px 80px #0009,0 0 45px #42d4ff18}.head-actions{display:flex;gap:.7rem;flex-wrap:wrap;margin-top:1.5rem}
   .lede { font-size: 1.15rem; color: var(--text-dim); }
   .pick { color: var(--text); font-weight: 600; }
   .grid {
@@ -138,7 +134,8 @@ const stores = ["Flathub", "Snap Store", "AUR", "Homebrew", "winget"];
     grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
     margin: 1.5rem 0 2rem;
   }
-  .platform { display: flex; flex-direction: column; }
+  .platform { display: flex; flex-direction: column; min-height:280px;padding:1.5rem;border:1px solid var(--stroke);border-radius:18px;background:linear-gradient(145deg,rgb(17 40 55/.82),rgb(7 18 28/.76));box-shadow:inset 0 1px #b6efff10,0 18px 45px #0004;transition:border-color .2s ease,transform .2s ease; }
+  .platform:hover{border-color:#51d4fa73;transform:translateY(-3px)}
   .platform h2 { font-size: var(--text-lg); display: flex; align-items: center; gap: 0.5rem; }
   .platform .note { color: var(--text-dim); font-size: 0.95rem; }
   /* The platform we think you are on is the one object on the page with the brand gradient
@@ -146,9 +143,9 @@ const stores = ["Flathub", "Snap Store", "AUR", "Homebrew", "winget"];
   .platform.is-yours {
     border-color: transparent;
     background:
-      linear-gradient(var(--surface-1), var(--surface-1)) padding-box,
-      var(--ramp-hot) border-box;
-    box-shadow: var(--glow-hot);
+      linear-gradient(#0c1d29,#0c1d29) padding-box,
+      linear-gradient(135deg,#a3edff,var(--accent),#2a82bf) border-box;
+    box-shadow:0 18px 60px #21bfea24;
   }
   /* Push the buttons to the bottom so they line up across cards with different note lengths. */
   .links { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: auto; }
@@ -164,4 +161,5 @@ const stores = ["Flathub", "Snap Store", "AUR", "Homebrew", "winget"];
     font-size: 0.95rem;
   }
   .stores span { opacity: 0.7; font-size: 0.85rem; }
+  @media(max-width:760px){.download-head{grid-template-columns:1fr;gap:1.5rem}.download-head h1{font-size:clamp(2.8rem,14vw,4.5rem)}.download-head img{order:2}.platform{min-height:0}}
 </style>

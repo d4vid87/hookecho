@@ -1,8 +1,8 @@
 ---
 import Base from "../../layouts/Base.astro";
 
-// GitHub carries the bytes; keep this page on the current product UI.
-const shots = "https://raw.githubusercontent.com/d4vid87/hookecho/main/docs/shots";
+// Keep feature imagery local so the copy and captures deploy as one verified version.
+const shots = "/shots";
 
 // Every section opens the real app on the thing it just described. The link vocabulary is the
 // app's own #goto grammar (crates/hookecho/src/app.rs, `parse_goto`):
@@ -22,7 +22,7 @@ const sections = [
       "tilt. Step up through the tilts to see how a storm leans, or put four of them on screen " +
       "at once.",
     shot: "alltilts.jpg",
-    alt: "Reflectivity, velocity and two dual-polarization views of the same storm",
+    alt: "Reflectivity, velocity, correlation coefficient and spectrum width views of the same storm",
     link: { href: ktlx(), label: "Open the radar" },
   },
   {
@@ -45,7 +45,7 @@ const sections = [
       "The national MRMS mosaic at full resolution, with the derived grids that come with it: " +
       "rotation tracks showing where a mesocyclone has been, MESH hail size, and QPE rainfall " +
       "totals for the flooding question.",
-    shot: "mosaic.jpg",
+    shot: "mrms.jpg",
     alt: "The national MRMS radar mosaic across the United States",
     link: { href: ktlx(), label: "See the mosaic" },
   },
@@ -55,11 +55,11 @@ const sections = [
     title: "Every warning polygon, and a phone that tells you",
     body:
       "Watches, warnings, and Special Weather Statements open in a clear glass card with the " +
-      "official bulletin already visible, scrollable, and ready to read aloud. Spoken alerts cover " +
-      "the visible map, with emergencies interrupting routine speech. Follow storm reports as they come in and " +
+      "official bulletin already visible, scrollable, and ready to read aloud. Spoken warnings and " +
+      "emergencies cover the area within 30 miles of your Home location, with emergencies taking priority. Follow storm reports as they come in and " +
       "spotter positions — drawn on the map rather than buried in a list. Set a rule for your " +
       "own location and the app tells you when a polygon covers it.",
-    shot: "alerts.jpg",
+    shot: null,
     alt: "Glass warning reader with the official bulletin immediately visible over live radar",
     link: { href: "/docs/alerts-and-notifications/", label: "How alerts work" },
   },
@@ -83,7 +83,7 @@ const sections = [
       "Model fields drawn over the same map as the radar, with Skew-T soundings and the severe " +
       "composite parameters — CAPE, shear, STP, helicity — so the forecast and the radar are one " +
       "screen instead of two tabs.",
-    shot: "hrrr.jpg",
+    shot: null,
     alt: "HRRR model fields over the map alongside severe composite parameters",
     link: { href: ktlx(), label: "Open the models" },
   },
@@ -95,7 +95,7 @@ const sections = [
       "Hurricane forecast tracks and cones from the National Hurricane Center, with the advisory " +
       "first in a polished glass reader—official text remains immediately visible and scrollable—" +
       "over the same radar you use for everything else.",
-    shot: "tropical.jpg",
+    shot: null,
     alt: "A hurricane forecast cone and track drawn over the map with advisory text alongside",
     link: { href: app, label: "Open the app" },
   },
@@ -107,7 +107,7 @@ const sections = [
       "Scrub back through the NOAA archive to any volume since 1991 and replay an event with its " +
       "warnings and reports time-synced. Or build an offline chase pack ahead of time, for the " +
       "part of the day when the data connection is the thing that fails.",
-    shot: "verify.jpg",
+    shot: null,
     alt: "Archive playback with historical warnings and reports replayed alongside the radar",
     link: { href: "/docs/getting-started/", label: "Getting started" },
   },
@@ -120,7 +120,7 @@ const sections = [
       "draws the same products, with a layout built for one thumb. Home-screen widget, quick " +
       "settings tile, and warning notifications for where you actually are — which, when you are " +
       "chasing, keeps changing.",
-    shot: "android/hero.gif",
+    shot: "/showcase/phone-poster.webp",
     alt: "The Android app: opening to live radar, panning the map and opening a warning",
     link: { href: "/download/", label: "Get the Android build" },
   },
@@ -135,7 +135,7 @@ const sections = [
     <span class="sweep" aria-hidden="true"></span>
     <div class="wrap">
       <p class="eyebrow">Features</p>
-      <h1>Everything, from the source</h1>
+      <h1>Simple at first.<br />Powerful when you need it.</h1>
       <p class="lede">
         HookEcho talks straight to the public NOAA, NWS and MRMS feeds from your own machine. No
         account, no subscription tier holding a product back, no telemetry. Here is what that gets
@@ -148,9 +148,9 @@ const sections = [
   </section>
 
   {
-    sections.map((s, i) => (
-      <section class={i % 2 ? "alt" : ""} id={s.id}>
-        <div class="wrap row" data-reveal>
+    sections.map((s) => (
+      <section class="feature-section" id={s.id}>
+        <div class:list={["wrap", "row", { "text-only": !s.shot }]} data-reveal>
           <div class="copy">
             <p class="eyebrow">{s.eyebrow}</p>
             <h2>{s.title}</h2>
@@ -159,7 +159,7 @@ const sections = [
               {s.link.label}
             </a>
           </div>
-          <img src={`${shots}/${s.shot}`} alt={s.alt} loading="lazy" />
+          {s.shot && <img src={s.shot.startsWith("/") ? s.shot : `${shots}/${s.shot}?v=20260916`} alt={s.alt} loading="lazy" />}
         </div>
       </section>
     ))
@@ -178,10 +178,10 @@ const sections = [
 </Base>
 
 <style>
-  .head { position: relative; overflow: hidden; }
+  .head { position: relative; overflow: hidden; padding:clamp(3rem,7vw,6rem) 0 2rem; background:radial-gradient(50rem 30rem at 70% 20%,#21bce520,transparent 70%); }
+  .head h1{font-size:clamp(3rem,7vw,6.5rem);line-height:.92;letter-spacing:-.055em;margin:.6rem 0 1.2rem;max-width:1000px}.eyebrow{color:var(--accent);font-weight:750;letter-spacing:.11em;text-transform:uppercase;font-size:.75rem}
   .head .wrap { position: relative; }
   .lede { font-size: 1.15rem; color: var(--text-dim); }
-  .alt { background: var(--bg-deep); border-block: 1px solid var(--stroke); }
 
   .jump { display: flex; gap: 0.5rem; flex-wrap: wrap; margin-top: 1.6rem; }
   .jump a {
@@ -198,7 +198,6 @@ const sections = [
      leaves a clipped gradient unpainted in the composited layer that fade creates — the
      eyebrow comes out as transparent glyphs. Same fix as the landing page's big number. */
   .copy .eyebrow { color: var(--ramp-1); }
-  .alt .copy .eyebrow { color: var(--ramp-3); }
 
   /* Anchored sections land under the sticky header without this. */
   section[id] { scroll-margin-top: 4.5rem; }
@@ -206,8 +205,9 @@ const sections = [
   .row {
     display: grid;
     gap: 2rem;
-    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+    grid-template-columns: minmax(280px,.72fr) minmax(0,1.28fr);
     align-items: center;
+    padding:clamp(1.4rem,3vw,2.5rem);border:1px solid var(--stroke);border-radius:22px;background:linear-gradient(135deg,rgb(14 34 48/.82),rgb(5 16 25/.7));box-shadow:inset 0 1px #c5f3ff0d,0 24px 65px #0004;
   }
   .row img {
     border: 1px solid var(--stroke);
@@ -215,12 +215,7 @@ const sections = [
     display: block;
     box-shadow: var(--shadow-2);
   }
-  /* The copy holds its place while the shot scrolls past it — eight sections of alternating
-     rows otherwise read as one long column of the same thing. */
-  @media (min-width: 900px) {
-    .copy { position: sticky; top: 5.5rem; align-self: start; }
-  }
-  /* Alternate which side the shot sits on, so eight sections do not read as one long column. */
-  .alt .row .copy { order: 2; }
+  .feature-section{padding:clamp(1rem,2.5vw,2rem) 0}.feature-section:nth-of-type(3n) .row{background:linear-gradient(135deg,rgb(7 20 31/.76),rgb(17 44 59/.82))}.text-only .copy{max-width:760px}.text-only{grid-template-columns:1fr;min-height:0}.copy h2{font-size:clamp(1.7rem,3vw,2.8rem);line-height:1.03;letter-spacing:-.03em}.copy>p:not(.eyebrow){color:var(--text-dim)}
   .ctas { display: flex; gap: 0.75rem; flex-wrap: wrap; margin-top: 1.4rem; }
+  @media(max-width:760px){.row{grid-template-columns:1fr}.head h1{font-size:clamp(2.8rem,13vw,4.8rem)}}
 </style>

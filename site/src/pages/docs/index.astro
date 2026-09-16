@@ -35,17 +35,18 @@ const pages = (await getCollection("docs")).sort((a, b) => a.data.order - b.data
 </Docs>
 
 <style>
-  .start { background: var(--surface-1); border: 1px solid var(--stroke); border-radius: var(--radius); padding: 1.5rem; margin-block: 1.5rem 2rem; }
+  .start { position:relative;overflow:hidden;background:linear-gradient(135deg,rgb(20 54 70/.88),rgb(6 19 29/.78)); border: 1px solid #51d8ff55; border-radius: 20px; padding: clamp(1.4rem,4vw,2.5rem); margin-block: 1.5rem 3rem;box-shadow:0 24px 70px #0005,inset 0 1px #c4f4ff17; }
+  .start::after{content:"";position:absolute;width:15rem;aspect-ratio:1;border-radius:50%;right:-7rem;top:-8rem;background:#3cd0f72e;filter:blur(30px);pointer-events:none}
   .start h2 { margin-top: 0; font-size: 1.7rem; }
   .try { display: inline-block; padding: 0.75rem; }
   .tasks { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; }
-  .tasks > a { border: 1px solid var(--stroke); border-radius: var(--radius); padding: 1.2rem; text-decoration: none; font-weight: 600; }
-  .tasks > a:hover { border-color: var(--accent); }
+  .tasks > a { border: 1px solid var(--stroke); border-radius: 16px; padding: 1.3rem; text-decoration: none; font-weight: 650;background:linear-gradient(145deg,rgb(15 36 50/.8),rgb(7 19 28/.68));transition:border-color .2s ease,transform .2s ease; }
+  .tasks > a:hover { border-color: var(--accent);transform:translateY(-2px) }
   .tasks span { display: block; color: var(--text-dim); font-size: 0.85rem; font-weight: 400; margin-top: 0.5rem; }
   @media (max-width: 560px) { .tasks { grid-template-columns: 1fr; } }
 
   .toc { list-style: none; margin: 2rem 0 0; padding: 0; display: grid; gap: 1.1rem; }
-  .toc li { max-width: var(--measure); }
+  .toc li { max-width: var(--measure);padding:1rem 1.1rem;border-left:2px solid var(--stroke);background:linear-gradient(90deg,rgb(20 49 65/.38),transparent); }
   .toc a { font-weight: 600; font-size: 1.05rem; }
   .toc span { display: block; color: var(--text-dim); font-size: 0.95rem; }
 </style>

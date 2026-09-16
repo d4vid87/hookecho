@@ -63,7 +63,7 @@ const current = (href: string) => href.startsWith("/") && (path === href || path
 ---
 
 <!doctype html>
-<html lang="en" class:list={{ "home-dark": path === "/" }}>
+<html lang="en" class="site-glass">
   <head>
     <link rel="preconnect" href="https://img.hookecho.io" crossorigin />
     <meta charset="utf-8" />
@@ -73,7 +73,7 @@ const current = (href: string) => href.startsWith("/") && (path === href || path
     <link rel="canonical" href={url} />
     <link rel="icon" href="/logo.png" type="image/png" />
     <link rel="alternate" type="application/rss+xml" title="HookEcho" href="/rss.xml" />
-    <meta name="theme-color" content={path === "/" ? "#080f17" : "#0b100d"} />
+    <meta name="theme-color" content="#06111b" />
     <link
       rel="preload"
       href="/fonts/InterVariable-subset.woff2"
@@ -181,30 +181,31 @@ const current = (href: string) => href.startsWith("/") && (path === href || path
 </html>
 
 <style>
-  :global(html.home-dark) {
-    --bg: #080f17;
-    --bg-deep: #050b12;
-    --surface-1: #0d1722;
-    --surface-2: #111e2b;
-    --stroke: #22303e;
-    --stroke-strong: #3a4c5d;
+  :global(html.site-glass) {
+    --bg: #06111b;
+    --bg-deep: #02070d;
+    --surface-1: #0b1824;
+    --surface-2: #102231;
+    --stroke: #183448;
+    --stroke-strong: #2a6078;
     --text: #f2f5f8;
-    --text-dim: #a6b2bf;
-    --accent: #65e2b5;
-    --accent-ink: #062019;
+    --text-dim: #a7b8c7;
+    --accent: #62ddff;
+    --accent-ink: #03141c;
     --page: 1390px;
     color-scheme: dark;
   }
-  :global(.home-dark .btn) { border-radius: 6px; background: transparent; border-color: var(--stroke-strong); }
-  :global(.home-dark .btn-primary) { background: var(--accent); border-color: var(--accent); }
-  :global(.home-dark .btn:hover) { box-shadow: none; border-color: var(--accent); }
+  :global(.site-glass body) { background: radial-gradient(70rem 40rem at 78% -8%, rgb(35 151 205 / .18), transparent 65%), radial-gradient(55rem 34rem at -12% 40%, rgb(20 112 161 / .1), transparent 70%), var(--bg); }
+  :global(.site-glass .btn) { border-radius: 10px; background: rgb(9 24 36 / .7); border-color: var(--stroke-strong); backdrop-filter: blur(12px); }
+  :global(.site-glass .btn-primary) { color: var(--accent-ink); background: linear-gradient(135deg, #9aeaff, var(--accent)); border-color: #9aeaff; box-shadow: 0 8px 30px rgb(61 203 244 / .18); }
+  :global(.site-glass .btn:hover) { border-color: var(--accent); box-shadow: 0 8px 28px rgb(57 190 235 / .16); transform: translateY(-1px); }
 
   .site-head {
     position: sticky;
     top: 0;
     z-index: 20;
-    background: color-mix(in srgb, var(--bg) 92%, transparent);
-    backdrop-filter: blur(12px);
+    background: color-mix(in srgb, var(--bg-deep) 80%, transparent);
+    backdrop-filter: blur(18px) saturate(135%);
     border-bottom: 1px solid var(--stroke);
   }
   .head-inner {
@@ -244,10 +245,10 @@ const current = (href: string) => href.startsWith("/") && (path === href || path
   .site-menu nav a:hover,
   .site-menu nav a[aria-current="page"] { color: var(--text); }
   .desktop-nav a[aria-current="page"],
-  .site-menu nav a[aria-current="page"] { text-decoration: underline; text-underline-offset: 0.35rem; }
+  .site-menu nav a[aria-current="page"] { color: var(--accent); text-decoration: underline; text-underline-offset: 0.35rem; }
   .header-cta { flex: none; padding: 0.55rem 1rem; font-size: 0.9rem; }
 
-  .site-foot { border-top: 1px solid var(--stroke); padding: var(--sp-7) 0; }
+  .site-foot { border-top: 1px solid var(--stroke); padding: var(--sp-7) 0; background: linear-gradient(180deg, rgb(5 17 27 / .2), var(--bg-deep)); }
   .foot-grid {
     display: grid;
     grid-template-columns: minmax(16rem, 2fr) repeat(3, minmax(8rem, 1fr));

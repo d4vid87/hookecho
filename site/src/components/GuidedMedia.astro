@@ -22,24 +22,38 @@ const { src, poster, alt, cues, eager = false, phone = false } = Astro.props;
     <div class="guided-controls">
       <button type="button" data-action="toggle">Pause</button>
       <button type="button" data-action="replay">Replay</button>
+      <button type="button" data-action="enlarge">Enlarge</button>
     </div>
   </div>
   <ol class="guided-steps" aria-label="What this demonstration shows">
     {cues.map((cue, index) => <li data-cue={index}>{cue.text}</li>)}
   </ol>
+  <dialog aria-label="Enlarged weather demonstration">
+    <button type="button" class="dialog-close" data-action="close">Close</button>
+    <video muted loop playsinline controls poster={poster} aria-label={alt}>
+      <source data-src={`${src}.webm`} type="video/webm" />
+      <source data-src={`${src}.mp4`} type="video/mp4" />
+    </video>
+  </dialog>
 </figure>
 
 <script>
   const reduced = matchMedia("(prefers-reduced-motion: reduce)");
   document.querySelectorAll<HTMLElement>(".guided-media").forEach((box) => {
-    const video = box.querySelector("video")!;
+    const video = box.querySelector<HTMLVideoElement>(".guided-frame video")!;
+    const dialog = box.querySelector<HTMLDialogElement>("dialog")!;
+    const enlarged = dialog.querySelector<HTMLVideoElement>("video")!;
     const image = box.querySelector("img")!;
     const callout = box.querySelector<HTMLElement>(".guided-callout")!;
     const toggle = box.querySelector<HTMLButtonElement>('[data-action="toggle"]')!;
     const replay = box.querySelector<HTMLButtonElement>('[data-action="replay"]')!;
+    const enlarge = box.querySelector<HTMLButtonElement>('[data-action="enlarge"]')!;
     const steps = [...box.querySelectorAll<HTMLElement>("[data-cue]")];
     const cues = JSON.parse(box.dataset.cues || "[]") as { at: number; text: string }[];
     let loaded = false;
+    let enlargedLoaded = false;
+    let manuallyPaused = false;
+    let inView = false;
 
     const showCue = () => {
       let active = 0;
@@ -55,7 +69,9 @@ const { src, poster, alt, cues, eager = false, phone = false } = Astro.props;
       video.load();
       loaded = true;
     };
-    const play = () => {
+    const play = (explicit = false) => {
+      if (manuallyPaused && !explicit) return;
+      if (explicit) manuallyPaused = false;
       load();
       video.play().then(() => {
         image.hidden = true;
@@ -64,23 +80,43 @@ const { src, poster, alt, cues, eager = false, phone = false } = Astro.props;
       }).catch(() => {});
     };
     const observer = new IntersectionObserver(([entry]) => {
-      if (entry.isIntersecting) play(); else video.pause();
+      inView = entry.isIntersecting;
+      if (inView) play(); else video.pause();
     }, { rootMargin: "200px" });
     observer.observe(box);
     video.addEventListener("timeupdate", showCue);
     toggle.addEventListener("click", () => {
-      if (video.paused) play();
+      if (video.paused) play(true);
       else {
+        manuallyPaused = true;
         video.pause();
         toggle.textContent = "Play";
         toggle.setAttribute("aria-pressed", "true");
       }
     });
-    replay.addEventListener("click", () => { video.currentTime = 0; play(); showCue(); });
+    replay.addEventListener("click", () => { video.currentTime = 0; play(true); showCue(); });
+    enlarge.addEventListener("click", () => {
+      if (!enlargedLoaded && !reduced.matches) {
+        enlarged.querySelectorAll<HTMLSourceElement>("source").forEach((source) => source.src = source.dataset.src!);
+        enlarged.load();
+        enlargedLoaded = true;
+      }
+      enlarged.currentTime = video.currentTime;
+      video.pause();
+      dialog.showModal();
+      if (!reduced.matches) enlarged.play().catch(() => {});
+    });
+    dialog.querySelector<HTMLButtonElement>('[data-action="close"]')!.addEventListener("click", () => dialog.close());
+    dialog.addEventListener("close", () => {
+      enlarged.pause();
+      video.currentTime = enlarged.currentTime;
+      if (inView) play();
+      enlarge.focus();
+    });
     reduced.addEventListener("change", () => {
       if (reduced.matches) {
         video.pause(); image.hidden = false;
-      } else if (box.getBoundingClientRect().top < innerHeight) play();
+      } else if (inView) play();
     });
     showCue();
   });
@@ -101,9 +137,14 @@ const { src, poster, alt, cues, eager = false, phone = false } = Astro.props;
   .guided-steps { display: flex; gap: 0.65rem; list-style: none; padding: 0.85rem 0 0; margin: 0; }
   .guided-steps li { flex: 1; padding-top: 0.65rem; border-top: 2px solid var(--stroke); color: var(--text-dim); font-size: 0.78rem; line-height: 1.35; }
   .guided-steps li[aria-current] { border-color: var(--accent); color: var(--text); }
+  dialog { width: min(94vw, 1400px); padding: 3rem 0 0; border: 1px solid var(--stroke-strong); border-radius: 18px; background: #040b12; color: var(--text); box-shadow: 0 30px 100px #000c; }
+  dialog::backdrop { background: rgb(1 5 10 / .86); backdrop-filter: blur(8px); }
+  dialog video { position: static; width: 100%; height: auto; aspect-ratio: 16 / 10; }
+  .phone dialog video { aspect-ratio: 540 / 1170; max-height: 82vh; object-fit: contain; }
+  .dialog-close { position: absolute; right: .7rem; top: .55rem; }
   @media (max-width: 620px) {
     .guided-callout { position: static; max-width: none; border-width: 1px 0 0; border-radius: 0; backdrop-filter: none; }
-    .guided-controls { top: 10px; bottom: auto; }
+    .guided-controls { top: 10px; bottom: auto; flex-wrap: wrap; justify-content: flex-end; max-width: calc(100% - 20px); }
     .guided-steps { display: grid; }
   }
   @media (prefers-reduced-motion: reduce) {
