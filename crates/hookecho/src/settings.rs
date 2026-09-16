@@ -1869,7 +1869,7 @@ mod tests {
         let v: serde_json::Value = serde_json::from_str(&json).unwrap();
         assert_eq!(v["background_alerts"], serde_json::json!(true));
         let m = &v["markers"][0];
-        for key in ["name", "lat", "lon", "alert_radius_mi"] {
+        for key in ["name", "lat", "lon", "alert_radius_mi", "home"] {
             assert!(
                 m.get(key).is_some(),
                 "AlertService.kt reads markers[].{key}"

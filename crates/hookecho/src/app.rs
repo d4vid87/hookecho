@@ -4579,10 +4579,16 @@ impl HookEchoApp {
         }
         let now = chrono::Utc::now();
         let bounds = self.view_bounds();
+        let Some(home) = self.settings.markers.iter().find(|marker| marker.home) else {
+            return;
+        };
         let quiet = self.in_quiet_hours();
         let mut announcements = Vec::new();
         for feature in &self.alert_features {
-            if feature.kind != overlay::FeatureKind::Warning || !feature_intersects_box(feature, bounds) {
+            if feature.kind != overlay::FeatureKind::Warning
+                || !feature_intersects_box(feature, bounds)
+                || !warning_is_near_home(feature, home.lon, home.lat)
+            {
                 continue;
             }
             let Some(alert) = &feature.alert else { continue };
@@ -15756,6 +15762,10 @@ fn feature_intersects_box(f: &GeoFeature, bx: (f64, f64, f64, f64)) -> bool {
     })
 }
 
+fn warning_is_near_home(f: &GeoFeature, lon: f64, lat: f64) -> bool {
+    f.distance_km(lon, lat) <= 30.0 * crate::geo::KM_PER_MILE
+}
+
 fn segments_intersect(a: [f64; 2], b: [f64; 2], c: [f64; 2], d: [f64; 2]) -> bool {
     let cross = |p: [f64; 2], q: [f64; 2], r: [f64; 2]|
         (q[0] - p[0]) * (r[1] - p[1]) - (q[1] - p[1]) * (r[0] - p[0]);
@@ -17906,7 +17916,7 @@ mod follow_tests {
 
 #[cfg(test)]
 mod warning_scope_tests {
-    use super::{feature_in_box, feature_intersects_box, GeoFeature};
+    use super::{feature_in_box, feature_intersects_box, warning_is_near_home, GeoFeature};
     use wxdata::overlay::FeatureKind;
 
     fn poly(x0: f64, y0: f64, x1: f64, y1: f64) -> GeoFeature {
@@ -17946,6 +17956,13 @@ mod warning_scope_tests {
         assert!(feature_intersects_box(&diagonal, bx));
         let outside = GeoFeature { rings: vec![vec![[-1.0, 1.9], [1.9, 3.0], [3.0, 3.0], [-1.0, 1.9]]], ..poly(0.0, 0.0, 0.0, 0.0) };
         assert!(!feature_intersects_box(&outside, (1.0, 1.0, 2.0, 2.0)));
+    }
+
+    #[test]
+    fn spoken_warnings_stop_thirty_miles_from_home() {
+        let warning = poly(-97.0, 35.0, -96.9, 35.1);
+        assert!(warning_is_near_home(&warning, -97.0, 35.0));
+        assert!(!warning_is_near_home(&warning, -97.0, 36.0));
     }
 }
 

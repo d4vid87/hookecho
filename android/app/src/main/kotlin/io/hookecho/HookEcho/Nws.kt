@@ -30,6 +30,7 @@ object Nws {
         val lat: Double,
         val lon: Double,
         val samples: List<DoubleArray>,
+        val home: Boolean = false,
     )
 
     data class Alert(val id: String, val event: String, val headline: String, val tier: Int)
@@ -93,12 +94,16 @@ object Nws {
             val lon = m.optDouble("lon")
             if (!lat.isFinite() || !lon.isFinite()) continue
             val radiusMi = m.optDouble("alert_radius_mi", 0.0).let { if (it.isFinite()) it else 0.0 }
+            val home = m.optBoolean("home", false)
             val samples = ArrayList<DoubleArray>()
             samples.add(doubleArrayOf(lat, lon))
+            if (home && radiusMi != 30.0) {
+                for (k in 0 until RIM_POINTS) samples.add(offset(lat, lon, 30.0, k * 360.0 / RIM_POINTS))
+            }
             if (radiusMi > 0.0) {
                 for (k in 0 until RIM_POINTS) samples.add(offset(lat, lon, radiusMi, k * 360.0 / RIM_POINTS))
             }
-            out.add(Watch(m.optString("name", "Saved location"), lat, lon, samples))
+            out.add(Watch(m.optString("name", "Saved location"), lat, lon, samples, home))
         }
 
         val zones = root.optJSONArray("alert_polygons")
@@ -123,11 +128,22 @@ object Nws {
 
         // Trim from the back so early markers keep their rim rather than every place losing it.
         var budget = SAMPLE_CAP
-        return out.map { w ->
+        return out.sortedByDescending { it.home }.map { w ->
             val take = w.samples.take(maxOf(1, minOf(w.samples.size, budget)))
             budget -= take.size
             w.copy(samples = take)
         }
+    }
+
+    fun speaksAt(watch: Watch, sample: DoubleArray): Boolean {
+        if (!watch.home) return false
+        val lat1 = Math.toRadians(watch.lat)
+        val lat2 = Math.toRadians(sample[0])
+        val dLat = lat2 - lat1
+        val dLon = Math.toRadians(sample[1] - watch.lon)
+        val a = Math.sin(dLat / 2).let { it * it } +
+            Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLon / 2).let { it * it }
+        return 3958.8 * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a)) <= 30.01
     }
 
     /** Destination point `distMi` from (`lat`,`lon`) on `bearingDeg`, spherical earth. */

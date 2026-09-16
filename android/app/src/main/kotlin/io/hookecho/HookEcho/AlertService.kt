@@ -148,7 +148,7 @@ class AlertService : Service() {
                         for (a in Nws.alertsAt(p[0], p[1])) {
                             if (a.tier >= Nws.TIER_WARNING) hot = true
                             val loud = !quiet || a.tier >= Nws.TIER_EMERGENCY
-                            if (seen.add(a.id) && loud) notify(context, m, a)
+                            if (seen.add(a.id) && loud) notify(context, m, a, Nws.speaksAt(m, p))
                         }
                     }
                 }
@@ -157,7 +157,7 @@ class AlertService : Service() {
             return hot
         }
 
-        private fun notify(context: Context, m: Nws.Watch, a: Nws.Alert) {
+        private fun notify(context: Context, m: Nws.Watch, a: Nws.Alert, speak: Boolean) {
             // Deep-link back to the watched point. The site field is left empty: the app keeps
             // whichever radar it was on and just flies the camera there.
             val goto = ",%.4f,%.4f,9".format(m.lon, m.lat)
@@ -182,7 +182,7 @@ class AlertService : Service() {
                 .setAutoCancel(true)
                 .build()
             manager(context).notify(a.id.hashCode(), n)
-            if (!MainActivity.foreground && Nws.speechEnabled(context.filesDir)) {
+            if (speak && !MainActivity.foreground && Nws.speechEnabled(context.filesDir)) {
                 Thread { PiperVoice.speakBlocking(context, "${a.event} for ${m.name}. ${a.headline}") }.start()
             }
         }
