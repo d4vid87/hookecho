@@ -11688,29 +11688,36 @@ impl HookEchoApp {
         // themselves are drawn much further down with the rest of the cell layer. Reserving here
         // and drawing there is the whole reason the placer separates the two: a warning label
         // must not lose its slot to a town name that merely happened to be painted earlier.
-        let cell_labels_shown: std::collections::HashSet<String> = if self.filters.show_cells
+        let cell_labels_shown: std::collections::HashMap<String, String> = if self.filters.show_cells
             && self.cells_site.as_deref() == view.site.as_deref()
         {
-            let ids: Vec<(String, egui::Pos2)> = self
+            let selected = self.cell_popup.as_ref().map(|c| c.id.as_str());
+            let mut ids: Vec<(String, String, egui::Pos2, bool, bool, i32)> = self
                 .active_storm_cells()
                 .iter()
                 .filter(|c| c.kind == CellKind::Storm && !c.id.is_empty())
                 .map(|c| {
                     let w = crate::render::mercator::lonlat_to_world(c.lon, c.lat);
                     let (sx, sy) = cam.world_to_screen(w, vp);
-                    (
-                        c.id.clone(),
+                    let warned = self.alert_features.iter().any(|feature| {
+                        feature.kind == overlay::FeatureKind::Warning
+                            && feature.distance_km(c.lon, c.lat) < 0.5
+                    });
+                    (c.id.clone(), cell_glance_label(c),
                         egui::pos2(prect.left() + sx, prect.top() + sy),
-                    )
+                        selected == Some(c.id.as_str()), warned, cell_strength(c))
                 })
                 .collect();
+            ids.sort_by_key(|(_, _, _, selected, warned, strength)| {
+                (!*selected, !*warned, std::cmp::Reverse(*strength))
+            });
             ids.into_iter()
-                .filter(|(_, p)| prect.contains(*p))
-                .filter(|(id, p)| {
+                .filter(|(_, _, p, _, _, _)| prect.contains(*p))
+                .filter(|(id, label, p, _, _, _)| {
                     // Matches the draw below: 11 pt text, left-bottom anchored, up and right
                     // of the marker.
                     let anchor = *p + egui::vec2(8.0, -8.0);
-                    let size = egui::vec2(id.len() as f32 * 6.5, 13.0);
+                    let size = egui::vec2(label.len() as f32 * 6.5, 13.0);
                     let rect =
                         egui::Rect::from_min_size(egui::pos2(anchor.x, anchor.y - size.y), size)
                             .expand(2.0);
@@ -11720,38 +11727,42 @@ impl HookEchoApp {
                         crate::labelplace::Priority::Warning,
                     )
                 })
-                .map(|(id, _)| id)
+                .map(|(id, label, _, _, _, _)| (id, label))
                 .collect()
         } else {
-            std::collections::HashSet::new()
+            std::collections::HashMap::new()
         };
         let view = &self.views[idx];
 
         // City/town labels, overlaid on every basemap. On raster (satellite) the baked-in labels
         // are faint over imagery + echoes, so we draw crisp white text with a solid black halo;
-        // vector basemaps use their palette's label colors. Bigger fonts + an 8-way halo read well.
-        let hide_labels_while_moving = self.settings.map_quality == crate::settings::MapQuality::Auto
-            && self.gesture_live;
-        if !vlabels.is_empty() && !hide_labels_while_moving {
+        // vector basemaps use their palette's label colors.
+        if !vlabels.is_empty() {
             let (text_col, halo_col, big) = if is_vector {
                 let st = crate::basemap_style::style(basemap.vector_palette().unwrap_or_default());
                 (
                     egui::Color32::from_rgb(st.label[0], st.label[1], st.label[2]),
                     egui::Color32::from_rgb(st.label_halo[0], st.label_halo[1], st.label_halo[2]),
-                    13.0,
+                    if vp.0 < 600.0 { 14.5 } else { 13.0 },
                 )
             } else {
                 (
                     egui::Color32::WHITE,
                     egui::Color32::from_black_alpha(235),
-                    14.5,
+                    if vp.0 < 600.0 { 16.0 } else { 14.5 },
                 )
             };
             let z = cam.zoom;
             // Repeat route shields from regional zoom; collision placement still prevents overlap.
             let repeat_shields = z >= 5.0;
             let mut labels: Vec<&crate::vector_tiles::PlaceLabel> =
-                vlabels.iter().filter(|l| l.visible_at(z)).collect();
+                vlabels.iter().filter(|l| {
+                    l.visible_at(z)
+                        && (!(self.gesture_live
+                            && self.settings.map_quality == crate::settings::MapQuality::Auto)
+                            || l.priority() <= 1)
+                        && (vp.0 >= 600.0 || l.priority() <= 2 || z >= 12.0)
+                }).collect();
             let label_key = |l: &crate::vector_tiles::PlaceLabel| {
                 let key = crate::labelplace::key(&l.name);
                 if repeat_shields && l.shield != crate::vector_tiles::RoadShield::None {
@@ -11771,12 +11782,9 @@ impl HookEchoApp {
                 )
             });
             let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
-            // 8-way halo (cardinals + diagonals) for a solid, readable outline.
-            const HALO: [egui::Vec2; 8] = [
-                egui::vec2(1.2, 0.0),
-                egui::vec2(-1.2, 0.0),
-                egui::vec2(0.0, 1.2),
-                egui::vec2(0.0, -1.2),
+            // Four diagonal passes make a solid outline with half the painter work of the old
+            // eight-way halo.
+            const HALO: [egui::Vec2; 4] = [
                 egui::vec2(1.0, 1.0),
                 egui::vec2(1.0, -1.0),
                 egui::vec2(-1.0, 1.0),
@@ -11797,10 +11805,10 @@ impl HookEchoApp {
                 if l.shield != crate::vector_tiles::RoadShield::None {
                     use crate::vector_tiles::RoadShield;
                     let (height, pad, text_color) = match l.shield {
-                        RoadShield::Interstate => (25.0, 10.0, egui::Color32::WHITE),
-                        RoadShield::Us => (22.0, 11.0, egui::Color32::BLACK),
-                        RoadShield::State => (19.0, 9.0, egui::Color32::BLACK),
-                        RoadShield::Other => (17.0, 7.0, egui::Color32::BLACK),
+                        RoadShield::Interstate => (21.0, 8.0, egui::Color32::WHITE),
+                        RoadShield::Us => (19.0, 9.0, egui::Color32::BLACK),
+                        RoadShield::State => (17.0, 7.0, egui::Color32::BLACK),
+                        RoadShield::Other => (16.0, 6.0, egui::Color32::BLACK),
                         RoadShield::None => unreachable!(),
                     };
                     let galley = painter.layout_no_wrap(
@@ -11849,7 +11857,7 @@ impl HookEchoApp {
                             let inner = r.shrink(1.2);
                             painter.add(egui::Shape::convex_polygon(
                                 shield(inner),
-                                egui::Color32::from_rgb(38, 67, 145),
+                                egui::Color32::from_rgb(55, 73, 105),
                                 egui::Stroke::NONE,
                             ));
                             painter.add(egui::Shape::convex_polygon(
@@ -11860,7 +11868,7 @@ impl HookEchoApp {
                                     egui::pos2(inner.right() - 3.0, inner.top() + 2.0),
                                     egui::pos2(inner.right() - 1.0, inner.top() + 6.5),
                                 ],
-                                egui::Color32::from_rgb(190, 37, 48),
+                                egui::Color32::from_rgb(126, 66, 72),
                                 egui::Stroke::NONE,
                             ));
                             painter.line_segment(
@@ -11936,8 +11944,9 @@ impl HookEchoApp {
                 // One layout per label, reused for all nine draws. `painter.text` would lay the
                 // string out again every time, which at eight halo offsets meant ten text
                 // layouts per visible place name, every frame.
-                for off in HALO {
-                    painter.galley_with_override_text_color(p + off, galley.clone(), halo_col);
+                let halo = if self.gesture_live { &HALO[..2] } else { &HALO[..] };
+                for off in halo {
+                    painter.galley_with_override_text_color(p + *off, galley.clone(), halo_col);
                 }
                 painter.galley_with_override_text_color(p, galley, text_col);
             }
@@ -12488,7 +12497,7 @@ impl HookEchoApp {
                 }
             }
 
-            let label_tracks = self.filters.show_tracks && cam.zoom >= 7.0;
+            let selected_cell = self.cell_popup.as_ref().map(|cell| cell.id.as_str());
             for c in self.active_storm_cells() {
                 let p = to_screen(c.lon, c.lat);
                 // Past track (packet 23): faint gray polyline leading up to the current position.
@@ -12521,10 +12530,19 @@ impl HookEchoApp {
                                 );
                             }
                         }
-                        if label_tracks {
-                            let txt = ui::cell_window::track_time(
+                        if self.filters.show_tracks && cam.zoom >= 7.0
+                            && selected_cell == Some(c.id.as_str())
+                        {
+                            let uncertainty = ui::cell_window::error_km(c)
+                                .zip(c.mvt_kt)
+                                .filter(|(_, kt)| *kt > 1.0)
+                                .map_or(0, |(km, kt)| {
+                                    (km / (kt as f64 * 1.852 / 60.0)).round() as u16
+                                });
+                            let txt = ui::cell_window::track_time_range(
                                 c.time,
                                 tp.minutes,
+                                uncertainty,
                                 self.settings.tz_for(view.site.as_deref()),
                             );
                             let lp = tpp + egui::vec2(6.0, -16.0);
@@ -12561,11 +12579,11 @@ impl HookEchoApp {
                 painter.circle_filled(p, 7.0, egui::Color32::BLACK);
                 painter.circle_stroke(p, 6.0, egui::Stroke::new(2.0, marker_color));
                 painter.circle_filled(p, 2.0, marker_color);
-                if c.kind == CellKind::Storm && cell_labels_shown.contains(&c.id) {
+                if let Some(label) = cell_labels_shown.get(&c.id) {
                     painter.text(
                         p + egui::vec2(8.0, -8.0),
                         egui::Align2::LEFT_BOTTOM,
-                        &c.id,
+                        label,
                         egui::FontId::proportional(11.0),
                         color,
                     );
@@ -15673,6 +15691,33 @@ fn cell_color(kind: CellKind) -> [u8; 4] {
     }
 }
 
+fn cell_glance_label(cell: &Cell) -> String {
+    let indicator = if cell.tvs.as_deref().is_some_and(|v| !v.trim().is_empty()) {
+        "TVS".to_string()
+    } else if cell.meso.as_deref().is_some_and(|v| !v.trim().is_empty()) {
+        "MESO".to_string()
+    } else if let Some(hail) = cell.hail_in.filter(|v| *v > 0.0) {
+        format!("{hail:.1}\" hail")
+    } else if let Some(dbz) = cell.max_dbz {
+        format!("{dbz:.0} dBZ")
+    } else {
+        String::new()
+    };
+    if indicator.is_empty() { cell.id.clone() } else { format!("{}  {indicator}", cell.id) }
+}
+
+fn cell_strength(cell: &Cell) -> i32 {
+    if cell.tvs.as_deref().is_some_and(|v| !v.trim().is_empty()) {
+        50_000
+    } else if cell.meso.as_deref().is_some_and(|v| !v.trim().is_empty()) {
+        40_000
+    } else if let Some(hail) = cell.hail_in {
+        30_000 + (hail * 100.0) as i32
+    } else {
+        cell.max_dbz.map_or(0, |v| (v * 100.0) as i32)
+    }
+}
+
 /// The storm cell (with a non-empty SCIT id) nearest to `(lon, lat)` within `max_km`, if any.
 /// Used by the storm-follow camera to reacquire a tracked cell after SCIT renumbers it.
 fn nearest_cell(cells: &[Cell], lon: f64, lat: f64, max_km: f64) -> Option<&Cell> {
@@ -18123,6 +18168,20 @@ mod field_lut_tests {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn storm_labels_show_only_the_strongest_indicator() {
+        let cell = wxdata::level3::Cell {
+            id: "A1".into(),
+            tvs: Some("TVS".into()),
+            meso: Some("MESO".into()),
+            hail_in: Some(2.0),
+            max_dbz: Some(65.0),
+            ..Default::default()
+        };
+        assert_eq!(super::cell_glance_label(&cell), "A1  TVS");
+        assert_eq!(super::cell_strength(&cell), 50_000);
+    }
 
     #[test]
     fn wheel_and_trackpad_zoom_count_as_live_gestures() {

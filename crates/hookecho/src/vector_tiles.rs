@@ -187,7 +187,7 @@ pub fn build_tile(
     id: TileId,
     palette: basemap_style::Palette,
     tess_zoom: f64,
-) -> (Vec<OverlayVertex>, Vec<u32>, Vec<PlaceLabel>) {
+) -> (Vec<OverlayVertex>, Vec<u32>, Vec<OverlayVertex>, Vec<u32>, Vec<PlaceLabel>) {
     build_tile_with_theme(bytes, id, palette, tess_zoom, crate::settings::Theme::Dark)
 }
 
@@ -198,19 +198,21 @@ pub fn build_tile_with_theme(
     palette: basemap_style::Palette,
     tess_zoom: f64,
     theme: crate::settings::Theme,
-) -> (Vec<OverlayVertex>, Vec<u32>, Vec<PlaceLabel>) {
+) -> (Vec<OverlayVertex>, Vec<u32>, Vec<OverlayVertex>, Vec<u32>, Vec<PlaceLabel>) {
     build_tile_detail(bytes, id, palette, tess_zoom, theme, false)
 }
 
 fn build_tile_detail(bytes: &[u8], id: TileId, palette: basemap_style::Palette,
     tess_zoom: f64, theme: crate::settings::Theme, simplified: bool,
-) -> (Vec<OverlayVertex>, Vec<u32>, Vec<PlaceLabel>) {
+) -> (Vec<OverlayVertex>, Vec<u32>, Vec<OverlayVertex>, Vec<u32>, Vec<PlaceLabel>) {
     let (z, tx, ty) = id;
     let n = (1u64 << z) as f64;
     let (txf, tyf) = (tx as f64, ty as f64);
 
     let mut verts: Vec<OverlayVertex> = Vec::new();
     let mut indices: Vec<u32> = Vec::new();
+    let mut foreground_verts = Vec::new();
+    let mut foreground_indices = Vec::new();
 
     // Background land quad covering the whole tile — skipped entirely by the overlay palette,
     // which draws on top of raster imagery and must not hide it.
@@ -246,7 +248,7 @@ fn build_tile_detail(bytes: &[u8], id: TileId, palette: basemap_style::Palette,
 
     let data = maybe_gunzip(bytes);
     let Ok(reader) = Reader::new(data) else {
-        return (verts, indices, Vec::new());
+        return (verts, indices, foreground_verts, foreground_indices, Vec::new());
     };
     let names = reader.get_layer_names().unwrap_or_default();
     let meta = reader.get_layer_metadata().unwrap_or_default();
@@ -266,6 +268,9 @@ fn build_tile_detail(bytes: &[u8], id: TileId, palette: basemap_style::Palette,
         let extent = extent_of(i);
         let feats = reader.get_features(i).unwrap_or_default();
         for f in &feats {
+            if *layer == "building" && tess_zoom < 14.0 {
+                continue;
+            }
             let cls = prop(&f.properties, key);
             let Some(c) = basemap_style::fill(palette, layer, &cls) else {
                 continue;
@@ -329,6 +334,18 @@ fn build_tile_detail(bytes: &[u8], id: TileId, palette: basemap_style::Palette,
                 continue;
             }
             let cls = prop(&f.properties, key);
+            if *layer == "transportation" {
+                let min_zoom = match cls.as_str() {
+                    "service" | "track" => 14.0,
+                    "path" | "footway" | "cycleway" | "pedestrian" => 15.0,
+                    "minor" | "street" => 12.0,
+                    "tertiary" => 10.0,
+                    _ => 0.0,
+                };
+                if tess_zoom < min_zoom {
+                    continue;
+                }
+            }
             // County lines only once they're readable; at CONUS zooms they're visual noise.
             if *layer == "boundary" && cls == "6" && z < 7 {
                 continue;
@@ -386,12 +403,17 @@ fn build_tile_detail(bytes: &[u8], id: TileId, palette: basemap_style::Palette,
                     }
                 }),
             );
+            let foreground = *layer == "transportation"
+                && matches!(cls.as_str(), "motorway" | "trunk");
+            if foreground {
+                append(&mut foreground_verts, &mut foreground_indices, buf.clone());
+            }
             append(&mut verts, &mut indices, buf);
         }
     }
 
     let labels = extract_labels(&reader, &names, n, txf, tyf, simplified);
-    (verts, indices, labels)
+    (verts, indices, foreground_verts, foreground_indices, labels)
 }
 
 /// Pull place, road, and selected POI labels from the vector tile.
@@ -779,12 +801,15 @@ pub async fn fetch_visible_vector(
         let url = fill_template(template, z, x, y);
         match load_tile_bytes(client, &url, None).await {
             Ok(bytes) => {
-                let (verts, indices, lbls) = build_tile(&bytes, v.id, palette, tess_zoom);
+                let (verts, indices, foreground_vertices, foreground_indices, lbls) =
+                    build_tile(&bytes, v.id, palette, tess_zoom);
                 labels.extend(lbls);
                 out.push(PendingVectorTile {
                     id: v.id,
                     vertices: verts,
                     indices,
+                    foreground_vertices,
+                    foreground_indices,
                 });
             }
             Err(e) => log::warn!("vector tile {url}: {e}"),
@@ -815,6 +840,8 @@ struct FetchedVector {
     id: TileId,
     vertices: Vec<OverlayVertex>,
     indices: Vec<u32>,
+    foreground_vertices: Vec<OverlayVertex>,
+    foreground_indices: Vec<u32>,
     labels: Vec<PlaceLabel>,
 }
 
@@ -825,8 +852,11 @@ type VectorJob = (Vec<u8>, TileId, basemap_style::Palette, f64, crate::settings:
 #[cfg(any(target_arch = "wasm32", test))]
 pub(crate) fn build_worker_tile(payload: &[u8]) -> Result<Vec<u8>, postcard::Error> {
     let (bytes, id, palette, zoom, theme, simplified): VectorJob = postcard::from_bytes(payload)?;
-    let (vertices, indices, labels) = build_tile_detail(&bytes, id, palette, zoom, theme, simplified);
-    postcard::to_allocvec(&FetchedVector { id, vertices, indices, labels })
+    let (vertices, indices, foreground_vertices, foreground_indices, labels) =
+        build_tile_detail(&bytes, id, palette, zoom, theme, simplified);
+    postcard::to_allocvec(&FetchedVector {
+        id, vertices, indices, foreground_vertices, foreground_indices, labels,
+    })
 }
 
 /// Async vector-tile manager for the GUI (mirrors [`crate::tiles::TileManager`]).
@@ -1109,8 +1139,11 @@ impl VectorTileManager {
                 }
                 #[cfg(not(target_arch = "wasm32"))]
                 blocking.spawn_blocking(move || {
-                    let (vertices, indices, labels) = build_tile_detail(&bytes, id, palette, tess_zoom, theme, simplified);
-                    finish(Ok(FetchedVector { id, vertices, indices, labels }));
+                    let (vertices, indices, foreground_vertices, foreground_indices, labels) =
+                        build_tile_detail(&bytes, id, palette, tess_zoom, theme, simplified);
+                    finish(Ok(FetchedVector {
+                        id, vertices, indices, foreground_vertices, foreground_indices, labels,
+                    }));
                 });
             });
         }
@@ -1197,6 +1230,8 @@ impl VectorTileManager {
                 id: f.id,
                 vertices: f.vertices,
                 indices: f.indices,
+                foreground_vertices: f.foreground_vertices,
+                foreground_indices: f.foreground_indices,
             });
         }
         if ready.len() == 2 {
@@ -1326,7 +1361,8 @@ mod tests {
         let mut manager = test_manager();
         for x in 0..5 {
             manager.tx.send((manager.render_generation, Ok(FetchedVector {
-                id: (4, x, 5), vertices: Vec::new(), indices: Vec::new(), labels: Vec::new(),
+                id: (4, x, 5), vertices: Vec::new(), indices: Vec::new(),
+                foreground_vertices: Vec::new(), foreground_indices: Vec::new(), labels: Vec::new(),
             }))).unwrap();
         }
         assert_eq!(manager.drain_ready().len(), 2);
@@ -1405,7 +1441,8 @@ mod tests {
         let payload = postcard::to_allocvec(&(vec![] as Vec<u8>, id, palette, 8.0, theme, false)).unwrap();
         let encoded = build_worker_tile(&payload).unwrap();
         let result: FetchedVector = postcard::from_bytes(&encoded).unwrap();
-        let (vertices, indices, labels) = build_tile_with_theme(&[], id, palette, 8.0, theme);
+        let (vertices, indices, _, _, labels) =
+            build_tile_with_theme(&[], id, palette, 8.0, theme);
         assert_eq!(result.id, id);
         assert_eq!(bytemuck::cast_slice::<_, u8>(&result.vertices), bytemuck::cast_slice::<_, u8>(&vertices));
         assert_eq!(result.indices, indices);
@@ -1423,7 +1460,8 @@ mod tests {
         manager.render_generation = 1;
         for _ in 0..2 {
             manager.tx.send((1, Ok(FetchedVector {
-                id, vertices: vec![], indices: vec![], labels: vec![],
+                id, vertices: vec![], indices: vec![], foreground_vertices: vec![],
+                foreground_indices: vec![], labels: vec![],
             }))).unwrap();
         }
         assert_eq!(manager.drain_ready().len(), 1, "replace once, ignore duplicates");
@@ -1439,11 +1477,13 @@ mod tests {
         manager.set_style(basemap_style::Palette::Light);
         manager.requested.insert(id);
         manager.tx.send((old, Err(id))).unwrap();
-        manager.tx.send((old, Ok(FetchedVector { id, vertices: vec![], indices: vec![], labels: vec![] }))).unwrap();
+        manager.tx.send((old, Ok(FetchedVector { id, vertices: vec![], indices: vec![],
+            foreground_vertices: vec![], foreground_indices: vec![], labels: vec![] }))).unwrap();
         assert!(manager.drain_ready().is_empty());
         assert!(manager.requested.contains(&id));
         assert!(!manager.failed.contains_key(&id));
-        manager.tx.send((manager.render_generation, Ok(FetchedVector { id, vertices: vec![], indices: vec![], labels: vec![] }))).unwrap();
+        manager.tx.send((manager.render_generation, Ok(FetchedVector { id, vertices: vec![], indices: vec![],
+            foreground_vertices: vec![], foreground_indices: vec![], labels: vec![] }))).unwrap();
         assert_eq!(manager.drain_ready().len(), 1);
     }
 
@@ -1478,18 +1518,19 @@ mod tests {
     #[test]
     fn empty_bytes_yield_background_quad_only() {
         // Not a valid tile: build_tile still emits the background land quad (2 triangles).
-        let (verts, indices, labels) =
+        let (verts, indices, foreground, foreground_indices, labels) =
             build_tile(b"", (7, 30, 49), basemap_style::Palette::Dark, 7.0);
         assert_eq!(verts.len(), 4);
         assert_eq!(indices.len(), 6);
         assert!(labels.is_empty());
+        assert!(foreground.is_empty() && foreground_indices.is_empty());
     }
 
     /// The hybrid overlay draws no background, so it must emit nothing at all for a tile with no
     /// features — otherwise every hybrid tile would be a solid quad over the satellite imagery.
     #[test]
     fn overlay_palette_emits_no_background_quad() {
-        let (verts, indices, _) =
+        let (verts, indices, _, _, _) =
             build_tile(b"", (7, 30, 49), basemap_style::Palette::HybridOverlay, 7.0);
         assert!(verts.is_empty());
         assert!(indices.is_empty());
@@ -1537,7 +1578,7 @@ mod tests {
             117, 115, 45, 105, 110, 116, 101, 114, 115, 116, 97, 116, 101, 34, 4, 10, 2, 51, 53, 40,
             128, 32, 120, 2,
         ];
-        let (_, _, labels) = build_tile(bytes, (5, 7, 12), basemap_style::Palette::Dark, 5.0);
+        let (_, _, _, _, labels) = build_tile(bytes, (5, 7, 12), basemap_style::Palette::Dark, 5.0);
         assert_eq!(labels.len(), 3);
         assert_eq!(labels[0].name, "35");
         assert_eq!(labels[0].shield, RoadShield::Interstate);

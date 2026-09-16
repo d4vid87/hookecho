@@ -315,6 +315,9 @@ pub struct PendingVectorTile {
     pub id: TileId,
     pub vertices: Vec<OverlayVertex>,
     pub indices: Vec<u32>,
+    /// Motorway/trunk/primary strokes repeated over radar for geographic orientation.
+    pub foreground_vertices: Vec<OverlayVertex>,
+    pub foreground_indices: Vec<u32>,
 }
 
 /// Per-frame draw instructions handed to the render callback.
@@ -409,6 +412,11 @@ struct OverlayGpu {
     index_count: u32,
 }
 
+struct VectorGpu {
+    base: OverlayGpu,
+    foreground: Option<OverlayGpu>,
+}
+
 struct MrmsGpu {
     _tex: wgpu::Texture,
     _lut: wgpu::Texture,
@@ -464,7 +472,7 @@ pub struct RenderResources {
     // believing an evicted tile was still uploaded and never re-sent it, so zooming back to an
     // area left black squares where those tiles used to be.
     tiles: HashMap<TileKey, TileGpu>,
-    vector_tiles: HashMap<TileId, OverlayGpu>,
+    vector_tiles: HashMap<TileId, VectorGpu>,
     overlay: Option<OverlayGpu>,
     fields: HashMap<FieldLayer, MrmsGpu>,
     // One entry per live pane.
@@ -1450,14 +1458,23 @@ impl RenderResources {
             contents: bytemuck::cast_slice(&t.indices),
             usage: wgpu::BufferUsages::INDEX,
         });
-        self.vector_tiles.insert(
-            t.id,
-            OverlayGpu {
-                vbuf,
-                ibuf,
-                index_count: t.indices.len() as u32,
-            },
-        );
+        let foreground = (!t.foreground_indices.is_empty()).then(|| OverlayGpu {
+            vbuf: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("vector_foreground_vbuf"),
+                contents: bytemuck::cast_slice(&t.foreground_vertices),
+                usage: wgpu::BufferUsages::VERTEX,
+            }),
+            ibuf: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("vector_foreground_ibuf"),
+                contents: bytemuck::cast_slice(&t.foreground_indices),
+                usage: wgpu::BufferUsages::INDEX,
+            }),
+            index_count: t.foreground_indices.len() as u32,
+        });
+        self.vector_tiles.insert(t.id, VectorGpu {
+            base: OverlayGpu { vbuf, ibuf, index_count: t.indices.len() as u32 },
+            foreground,
+        });
     }
 
     /// Paint the active field layers in the requested band (below/above the radar), in the fixed
@@ -1514,6 +1531,9 @@ impl RenderResources {
                 pass.draw(0..6, 0..1);
             }
         }
+        // Only the small major-road subset is repeated here. Town labels and route shields are
+        // painted by egui above this callback, so orientation survives an opaque radar core.
+        self.draw_vector_foreground(pane, cam, pass);
         // Field layers over the radar (rotation/hail/shear/lightning signals).
         self.draw_fields(pane, pass, false);
         // Wind particles under the overlay, not over it: the CPU path paints in egui's own layer,
@@ -1549,10 +1569,28 @@ impl RenderResources {
         pass.set_bind_group(0, cam, &[]);
         for tid in &pane.frame_visible_vector {
             if let Some(t) = self.vector_tiles.get(tid) {
-                pass.set_vertex_buffer(0, t.vbuf.slice(..));
-                pass.set_index_buffer(t.ibuf.slice(..), wgpu::IndexFormat::Uint32);
-                pass.draw_indexed(0..t.index_count, 0, 0..1);
+                pass.set_vertex_buffer(0, t.base.vbuf.slice(..));
+                pass.set_index_buffer(t.base.ibuf.slice(..), wgpu::IndexFormat::Uint32);
+                pass.draw_indexed(0..t.base.index_count, 0, 0..1);
             }
+        }
+    }
+
+    fn draw_vector_foreground(
+        &self,
+        pane: &PaneGpu,
+        cam: &wgpu::BindGroup,
+        pass: &mut wgpu::RenderPass<'_>,
+    ) {
+        pass.set_pipeline(&self.overlay_pipeline);
+        pass.set_bind_group(0, cam, &[]);
+        for tid in &pane.frame_visible_vector {
+            let Some(t) = self.vector_tiles.get(tid).and_then(|t| t.foreground.as_ref()) else {
+                continue;
+            };
+            pass.set_vertex_buffer(0, t.vbuf.slice(..));
+            pass.set_index_buffer(t.ibuf.slice(..), wgpu::IndexFormat::Uint32);
+            pass.draw_indexed(0..t.index_count, 0, 0..1);
         }
     }
 

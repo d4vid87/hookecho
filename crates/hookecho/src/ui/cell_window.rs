@@ -193,9 +193,29 @@ pub fn track_time(
     })
 }
 
+pub fn track_time_range(
+    time: Option<chrono::DateTime<chrono::Utc>>,
+    minutes: u16,
+    uncertainty_min: u16,
+    tz: Option<wxdata::tz::Tz>,
+) -> String {
+    if uncertainty_min == 0 {
+        return format!("≈{}", track_time(time, minutes, tz));
+    }
+    let start = minutes.saturating_sub(uncertainty_min);
+    let end = minutes.saturating_add(uncertainty_min);
+    format!("≈{}–{}", track_time(time, start, tz), track_time(time, end, tz))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn track_ranges_are_approximate_and_saturate_at_now() {
+        assert_eq!(track_time_range(None, 5, 10, None), "≈Time unavailable–+15 min");
+        assert_eq!(track_time_range(None, 20, 0, None), "≈+20 min");
+    }
 
     #[test]
     fn projection_rejects_future_stale_and_invalid_motion() {

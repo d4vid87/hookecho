@@ -64,20 +64,20 @@ struct Colors {
 }
 
 const C_DARK: Colors = Colors {
-    water: 0x1b2733,
-    wood: 0x151c17,
-    park: 0x152018,
-    residential: 0x16181d,
-    building: 0x1d2028,
-    motorway: 0x89939f,
-    primary: 0x737e8a,
-    secondary: 0x626d79,
-    minor: 0x596571,
-    rail: 0x343b44,
-    admin2: 0x707b88,
-    admin4: 0x4b5561,
-    county: 0x3b434d,
-    casing: 0x0d1015,
+    water: 0x142536,
+    wood: 0x121a18,
+    park: 0x14201b,
+    residential: 0x171a20,
+    building: 0x20242c,
+    motorway: 0xf1d79a,
+    primary: 0xd7c797,
+    secondary: 0x77828e,
+    minor: 0x4c5661,
+    rail: 0x303842,
+    admin2: 0x8995a3,
+    admin4: 0x46515e,
+    county: 0x303945,
+    casing: 0x090c11,
 };
 const C_LIGHT: Colors = Colors {
     water: 0xc3d6e3,
@@ -189,9 +189,9 @@ pub struct VecStyle {
 }
 
 const DARK: VecStyle = VecStyle {
-    background: Some(rgb(0x111318)),
-    label: rgb(0xc8d0da),
-    label_halo: rgb(0x0b0d11),
+    background: Some(rgb(0x0f1217)),
+    label: rgb(0xd5dbe3),
+    label_halo: rgb(0x07090d),
 };
 const LIGHT: VecStyle = VecStyle {
     background: Some(rgb(0xf2efe9)),
