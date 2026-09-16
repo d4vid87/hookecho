@@ -50,6 +50,37 @@ pub fn upstream_eta(
     None
 }
 
+/// Arrival window spanning the first contiguous upstream echo. A band has depth, so presenting
+/// its near and far edges is more honest than turning the first wet kilometre into an exact time.
+pub fn upstream_eta_range(
+    sample: impl Fn(f64, f64) -> Option<f32>,
+    point: [f64; 2],
+    mvt_deg: f64,
+    mvt_kt: f64,
+    max_min: f32,
+) -> Option<(f32, f32)> {
+    if mvt_kt <= 1.0 { return None; }
+    let kmh = mvt_kt * 1.852;
+    let reach_km = kmh * (max_min as f64 / 60.0);
+    let upwind = (mvt_deg + 180.0).rem_euclid(360.0);
+    let mut edge = None;
+    let mut d = 0.0;
+    while d <= reach_km {
+        let at = crate::geo::destination_point(point, upwind, d);
+        let wet = sample(at[0], at[1]).is_some_and(|v| v >= THRESH_DBZ);
+        match (edge, wet) {
+            (None, true) => edge = Some((d, d)),
+            (Some((start, _)), true) => edge = Some((start, d)),
+            (Some((start, end)), false) => {
+                return Some(((start / kmh * 60.0) as f32, (end / kmh * 60.0) as f32));
+            }
+            _ => {}
+        }
+        d += 1.0;
+    }
+    edge.map(|(start, end)| ((start / kmh * 60.0) as f32, (end / kmh * 60.0) as f32))
+}
+
 /// Per-minute reflectivity over `point` for the next `max_min` minutes, same upstream walk as
 /// [`upstream_eta`] but sampling every minute instead of stopping at the first echo. `None` when
 /// the storms aren't moving (nothing to advect) — the whole method needs translation.
@@ -162,6 +193,13 @@ mod tests {
         // 30 kt = 55.6 km/h; echo 27.8 km upstream is half an hour out.
         let eta = upstream_eta(band(90.0, 27.8), [0.0, 40.0], 90.0, 30.0, MAX_MIN).unwrap();
         assert!((eta - 30.0).abs() < 2.0, "expected ~30 min, got {eta}");
+    }
+
+    #[test]
+    fn eta_range_spans_the_echo_band() {
+        let range = upstream_eta_range(band(90.0, 27.8), [0.0, 40.0], 90.0, 30.0, MAX_MIN)
+            .expect("band is upstream");
+        assert!(range.0 < 30.0 && range.1 > 30.0, "{range:?}");
     }
 
     #[test]

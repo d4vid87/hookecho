@@ -208,6 +208,8 @@ pub struct MapView {
     pub loading: bool,
     pub last_poll: Option<Instant>,
     pub error: Option<String>,
+    pub fetch_failures: u8,
+    pub failover_from: Option<String>,
     /// National field layers drawn in this pane. Per-pane rather than app-wide: two panes is how
     /// you compare two fields, and the model-difference layer would rather be a pair of panes
     /// than a subtraction. The grids themselves stay in one shared cache — only the choice of
@@ -246,6 +248,8 @@ impl MapView {
             loading: false,
             last_poll: None,
             error: None,
+            fetch_failures: 0,
+            failover_from: None,
             fields_on: Default::default(),
             moments_seen: [false; Moment::ALL.len()],
         }

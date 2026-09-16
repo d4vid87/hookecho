@@ -2959,6 +2959,9 @@ pub struct HookEchoApp {
     /// Transient results of things the user just did (export saved, encode failed). The third
     /// lane, distinct from the warning banners (weather) and the error chip (radar feed).
     toasts: Vec<Toast>,
+    /// Last settings-write failure already shown. Keeping the dirty snapshot means the next
+    /// one-second save tick retries; remembering the text prevents a toast every second.
+    settings_save_error: Option<String>,
     /// Auxiliary feeds already reported to the user; see [`HookEchoApp::drain_feed_errors`].
     feed_errors_told: std::collections::HashMap<String, Instant>,
     /// Right-dock active-alerts panel toggle.
@@ -3672,6 +3675,7 @@ impl HookEchoApp {
             rot_active: false,
             warning_banners: Vec::new(),
             toasts: Vec::new(),
+            settings_save_error: None,
             feed_errors_told: std::collections::HashMap::new(),
             show_alert_panel: false,
             xsection_pts: Vec::new(),
@@ -4578,7 +4582,6 @@ impl HookEchoApp {
             return;
         }
         let now = chrono::Utc::now();
-        let bounds = self.view_bounds();
         let Some(home) = self.settings.markers.iter().find(|marker| marker.home) else {
             return;
         };
@@ -4586,7 +4589,6 @@ impl HookEchoApp {
         let mut announcements = Vec::new();
         for feature in &self.alert_features {
             if feature.kind != overlay::FeatureKind::Warning
-                || !feature_intersects_box(feature, bounds)
                 || !warning_is_near_home(feature, home.lon, home.lat)
             {
                 continue;
@@ -5188,7 +5190,7 @@ impl HookEchoApp {
     /// Check whether echo is heading for any watched point (saved markers + your chase position)
     /// and alert once per approach. Live data only — an ETA off an archived scan is meaningless.
     fn check_rain_arrival(&mut self) {
-        use crate::rain_arrival::{upstream_eta, Verdict};
+        use crate::rain_arrival::{upstream_eta, upstream_eta_range, Verdict};
         if !self.settings.rain_alerts {
             self.rain_eta.clear();
             return;
@@ -5255,14 +5257,28 @@ impl HookEchoApp {
                 self.rain_eta.push((name.clone(), min));
             }
             if let Verdict::Fire(min) = self.rain_detector.update(id, eta) {
+                let range = upstream_eta_range(
+                    &sample,
+                    *at,
+                    dir as f64,
+                    kt as f64,
+                    crate::rain_arrival::MAX_MIN,
+                );
+                let estimate = range.map_or_else(
+                    || format!("About {min:.0} minutes out"),
+                    |(start, end)| format!("Approximately {start:.0}–{end:.0} minutes out"),
+                );
                 self.notify_alert(
                     &format!("\u{1f327} Rain reaching {name}"),
-                    &format!("About {min:.0} minutes out"),
+                    &estimate,
                     false,
                 );
                 self.banner(
                     format!("\u{1f327} Rain reaching {name}"),
-                    format!("~{min:.0} min"),
+                    range.map_or_else(
+                        || format!("~{min:.0} min"),
+                        |(start, end)| format!("≈{start:.0}–{end:.0} min"),
+                    ),
                 );
                 fired = true;
             }
@@ -9738,6 +9754,7 @@ impl HookEchoApp {
                     }
                     v.loading = false;
                     v.error = None;
+                    v.fetch_failures = 0;
                     v.clamp_tilt();
                     v.clamp_moment();
                     self.pane_shown.remove(&view);
@@ -9774,6 +9791,7 @@ impl HookEchoApp {
                     }
                     v.loading = false;
                     v.error = None;
+                    v.fetch_failures = 0;
                     v.clamp_tilt();
                     v.clamp_moment();
                     // A healthy stream pushes the poll deadline forward — this line IS the
@@ -9782,11 +9800,14 @@ impl HookEchoApp {
                     self.pane_shown.remove(&view);
                     self.scan_chime(view, time);
                 }
-                DataMsg::UpToDate { view, .. } => self.views[view].loading = false,
+                DataMsg::UpToDate { view, .. } => {
+                    self.views[view].loading = false;
+                    self.views[view].fetch_failures = 0;
+                }
                 DataMsg::Prefetched { name, scan, .. } => {
                     self.scan_cache.put(name, Arc::new(scan));
                 }
-                DataMsg::Error { view, err, .. } => {
+                DataMsg::Error { view, err, site } => {
                     let v = &mut self.views[view];
                     v.loading = false;
                     // The newest archive volume is published while the radar is still writing it,
@@ -9797,6 +9818,21 @@ impl HookEchoApp {
                         log::debug!("head volume not complete yet: {err}");
                     } else {
                         v.error = Some(err);
+                        v.fetch_failures = v.fetch_failures.saturating_add(1);
+                        let stale = v.volume.as_ref().is_none_or(|volume|
+                            (chrono::Utc::now() - volume.time).num_minutes() >= 10);
+                        if v.fetch_failures >= 3 && stale && v.timeline.following
+                            && wxdata::sites::is_nexrad(&site)
+                        {
+                            if let Some(next) = nearest_alternate_nexrad(&site) {
+                                v.site = Some(next.clone());
+                                v.failover_from = Some(site.clone());
+                                v.fetch_failures = 0;
+                                v.error = Some(format!(
+                                    "{site} is stale — switched to {next} with the same product. Click to return."
+                                ));
+                            }
+                        }
                     }
                 }
                 DataMsg::LiveEnded { .. } => unreachable!("handled above"),
@@ -15761,33 +15797,25 @@ fn feature_in_box(f: &GeoFeature, bx: (f64, f64, f64, f64)) -> bool {
     x1 >= bx0 && x0 <= bx1 && y1 >= by0 && y0 <= by1
 }
 
-/// Exact enough for warning polygons and a rectangular viewport: vertices, contained corners,
-/// and crossing edges. Bbox is the cheap rejection shared by every overlay.
-fn feature_intersects_box(f: &GeoFeature, bx: (f64, f64, f64, f64)) -> bool {
-    if !feature_in_box(f, bx) { return false; }
-    let (x0, y0, x1, y1) = bx;
-    let inside = |p: &[f64; 2]| (x0..=x1).contains(&p[0]) && (y0..=y1).contains(&p[1]);
-    let corners = [[x0, y0], [x1, y0], [x1, y1], [x0, y1]];
-    f.rings.iter().any(|ring| {
-        ring.iter().any(inside)
-            || corners.iter().any(|corner| point_in_ring_ll(ring, corner[0], corner[1]))
-            || ring.iter().zip(ring.iter().cycle().skip(1)).take(ring.len()).any(|(a, b)|
-                segments_intersect(*a, *b, [x0, y0], [x1, y0])
-                || segments_intersect(*a, *b, [x1, y0], [x1, y1])
-                || segments_intersect(*a, *b, [x1, y1], [x0, y1])
-                || segments_intersect(*a, *b, [x0, y1], [x0, y0]))
-    })
-}
-
 fn warning_is_near_home(f: &GeoFeature, lon: f64, lat: f64) -> bool {
     f.distance_km(lon, lat) <= 30.0 * crate::geo::KM_PER_MILE
 }
 
-fn segments_intersect(a: [f64; 2], b: [f64; 2], c: [f64; 2], d: [f64; 2]) -> bool {
-    let cross = |p: [f64; 2], q: [f64; 2], r: [f64; 2]|
-        (q[0] - p[0]) * (r[1] - p[1]) - (q[1] - p[1]) * (r[0] - p[0]);
-    let (ab_c, ab_d, cd_a, cd_b) = (cross(a, b, c), cross(a, b, d), cross(c, d, a), cross(c, d, b));
-    ab_c * ab_d <= 0.0 && cd_a * cd_b <= 0.0
+fn nearest_alternate_nexrad(site: &str) -> Option<String> {
+    let here = wxdata::sites::site_by_id(site)?;
+    wxdata::sites::sites()
+        .iter()
+        .filter(|candidate| candidate.id != site && wxdata::sites::is_nexrad(candidate.id))
+        .min_by(|a, b| {
+            let distance = |candidate: &&wxdata::sites::SiteEntry| {
+                crate::geo::great_circle(
+                    [here.longitude as f64, here.latitude as f64],
+                    [candidate.longitude as f64, candidate.latitude as f64],
+                ).0
+            };
+            distance(a).total_cmp(&distance(b))
+        })
+        .map(|candidate| candidate.id.to_string())
 }
 
 fn nearest_tropical_id(
@@ -17702,8 +17730,18 @@ impl eframe::App for HookEchoApp {
             if self.settings.palettes != self.saved.palettes {
                 self.palettes.reload(&self.settings.palette_paths());
             }
-            self.settings.save();
-            self.saved = self.settings.clone();
+            match self.settings.save_checked() {
+                Ok(()) => {
+                    self.saved = self.settings.clone();
+                    self.settings_save_error = None;
+                }
+                Err(e) => {
+                    if self.settings_save_error.as_deref() != Some(e.as_str()) {
+                        self.toast(ToastKind::Error, format!("Settings were not saved — {e}"));
+                        self.settings_save_error = Some(e);
+                    }
+                }
+            }
         }
 
         // Embedded in another page: hand the active pane's state to the parent frame so it can
@@ -17933,7 +17971,7 @@ mod follow_tests {
 
 #[cfg(test)]
 mod warning_scope_tests {
-    use super::{feature_in_box, feature_intersects_box, warning_is_near_home, GeoFeature};
+    use super::{feature_in_box, nearest_alternate_nexrad, warning_is_near_home, GeoFeature};
     use wxdata::overlay::FeatureKind;
 
     fn poly(x0: f64, y0: f64, x1: f64, y1: f64) -> GeoFeature {
@@ -17965,21 +18003,17 @@ mod warning_scope_tests {
     }
 
     #[test]
-    fn visible_speech_requires_real_polygon_intersection() {
-        let bx = (0.0, 0.0, 2.0, 2.0);
-        assert!(feature_intersects_box(&poly(-1.0, 0.5, 1.0, 1.5), bx));
-        assert!(feature_intersects_box(&poly(-1.0, -1.0, 3.0, 3.0), bx));
-        let diagonal = GeoFeature { rings: vec![vec![[-2.0, 0.9], [0.9, 3.0], [3.0, 3.0], [3.0, 0.9]]], ..poly(0.0, 0.0, 0.0, 0.0) };
-        assert!(feature_intersects_box(&diagonal, bx));
-        let outside = GeoFeature { rings: vec![vec![[-1.0, 1.9], [1.9, 3.0], [3.0, 3.0], [-1.0, 1.9]]], ..poly(0.0, 0.0, 0.0, 0.0) };
-        assert!(!feature_intersects_box(&outside, (1.0, 1.0, 2.0, 2.0)));
-    }
-
-    #[test]
     fn spoken_warnings_stop_thirty_miles_from_home() {
         let warning = poly(-97.0, 35.0, -96.9, 35.1);
         assert!(warning_is_near_home(&warning, -97.0, 35.0));
         assert!(!warning_is_near_home(&warning, -97.0, 36.0));
+    }
+
+    #[test]
+    fn radar_recovery_picks_another_nexrad() {
+        let alternate = nearest_alternate_nexrad("KTLX").expect("nearby NEXRAD");
+        assert_ne!(alternate, "KTLX");
+        assert!(wxdata::sites::is_nexrad(&alternate));
     }
 }
 

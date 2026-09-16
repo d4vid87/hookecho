@@ -505,7 +505,10 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn live_tempest_stations_report() {
-        let token = std::env::var("HOOKECHO_TEMPEST_TOKEN").expect("set HOOKECHO_TEMPEST_TOKEN");
+        let Ok(token) = std::env::var("HOOKECHO_TEMPEST_TOKEN") else {
+            eprintln!("skipped: HOOKECHO_TEMPEST_TOKEN is not set");
+            return;
+        };
         let client = reqwest::Client::new();
         let obs = fetch_all(&client, &[], &token, "", "", 33.0, -96.0).await;
         for o in &obs {
@@ -525,7 +528,10 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn live_synoptic_mesonets_report() {
-        let token = std::env::var("HOOKECHO_SYNOPTIC_TOKEN").expect("set HOOKECHO_SYNOPTIC_TOKEN");
+        let Ok(token) = std::env::var("HOOKECHO_SYNOPTIC_TOKEN") else {
+            eprintln!("skipped: HOOKECHO_SYNOPTIC_TOKEN is not set");
+            return;
+        };
         let client = reqwest::Client::new();
         // Norman: as dense a mesonet as the country has.
         let obs = crate::synoptic::fetch_near(&client, &token, 35.22, -97.44, 60, 60)

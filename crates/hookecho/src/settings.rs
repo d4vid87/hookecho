@@ -1361,27 +1361,50 @@ impl Settings {
         let mut settings = bundle.settings;
         if !bundle.palette_files.is_empty() {
             let dir = Self::colortables_dir().ok_or("no colortables dir")?;
+            for moment in bundle.palette_files.keys() {
+                if moment.is_empty()
+                    || !moment
+                        .bytes()
+                        .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+                {
+                    return Err(format!("invalid palette name: {moment:?}"));
+                }
+            }
+            std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+            let stage = dir.join(format!(".import-{}", std::process::id()));
+            if stage.exists() {
+                std::fs::remove_dir_all(&stage).map_err(|e| e.to_string())?;
+            }
+            std::fs::create_dir(&stage).map_err(|e| e.to_string())?;
             for (moment, text) in &bundle.palette_files {
+                std::fs::write(stage.join(format!("{moment}.pal")), text)
+                    .map_err(|e| e.to_string())?;
+            }
+            for moment in bundle.palette_files.keys() {
                 let path = dir.join(format!("{moment}.pal"));
-                std::fs::write(&path, text).map_err(|e| e.to_string())?;
+                atomic_write(
+                    &path,
+                    &std::fs::read(stage.join(format!("{moment}.pal")))
+                        .map_err(|e| e.to_string())?,
+                )
+                .map_err(|e| e.to_string())?;
                 settings
                     .palettes
                     .insert(moment.clone(), path.to_string_lossy().into_owned());
             }
+            let _ = std::fs::remove_dir_all(stage);
         }
         Ok(settings)
     }
 
     /// Persist `json`: a settings.json on native, a `localStorage` entry on the web.
     #[cfg(not(target_arch = "wasm32"))]
-    fn write_saved(json: &str) {
-        let Some(path) = Self::path() else { return };
+    fn write_saved(json: &str) -> Result<(), String> {
+        let Some(path) = Self::path() else { return Err("settings path unavailable".into()) };
         if let Some(parent) = path.parent() {
-            let _ = std::fs::create_dir_all(parent);
+            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
         }
-        if let Err(e) = atomic_write(&path, json.as_bytes()) {
-            log::warn!("settings save failed: {e}");
-        }
+        atomic_write(&path, json.as_bytes()).map_err(|e| e.to_string())
     }
 
     /// Web: one `localStorage` key holding the same JSON. Quota/private-mode failures are logged.
@@ -1389,19 +1412,20 @@ impl Settings {
     // ponytail: settings only. Caches and palette files stay in memory on the web; IndexedDB is the
     // upgrade path if offline-web ever becomes real.
     #[cfg(target_arch = "wasm32")]
-    fn write_saved(json: &str) {
-        let Some(store) = local_storage() else { return };
-        if let Err(e) = store.set_item(WEB_KEY, json) {
-            log::warn!("settings save failed: {e:?}");
-        }
+    fn write_saved(json: &str) -> Result<(), String> {
+        let Some(store) = local_storage() else { return Err("browser storage unavailable".into()) };
+        store.set_item(WEB_KEY, json).map_err(|e| format!("{e:?}"))
     }
 
-    /// Write out, logging (not failing) on error.
+    pub fn save_checked(&self) -> Result<(), String> {
+        let json = serde_json::to_string_pretty(self).map_err(|e| e.to_string())?;
+        Self::write_saved(&json)
+    }
+
+    /// Write out, logging on error. Interactive edits use [`Self::save_checked`] so failure is
+    /// visible; startup/exit callers have no UI available to report through.
     pub fn save(&self) {
-        match serde_json::to_string_pretty(self) {
-            Ok(json) => Self::write_saved(&json),
-            Err(e) => log::warn!("settings serialize failed: {e}"),
-        }
+        if let Err(e) = self.save_checked() { log::warn!("settings save failed: {e}"); }
     }
 }
 
@@ -1784,6 +1808,15 @@ mod tests {
         let ref_path = s.palettes.get("REF").expect("REF palette path set");
         let text = std::fs::read_to_string(ref_path).expect("palette file written");
         assert!(text.contains("test palette"));
+    }
+
+    #[test]
+    fn bundle_rejects_palette_paths() {
+        let json = r#"{
+            "settings": {"default_site":"KFWS"},
+            "palette_files": {"../../outside":"Step: 5"}
+        }"#;
+        assert!(Settings::import_bundle(json).is_err());
     }
 
     #[test]

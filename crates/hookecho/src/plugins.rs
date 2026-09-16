@@ -76,22 +76,23 @@ pub async fn run(
         .spawn()
         .map_err(|e| anyhow::anyhow!("could not run {command}: {e}"))?;
 
-    let mut out = Vec::new();
-    let mut err = String::new();
+    let mut stdout = child.stdout.take().expect("stdout piped");
+    let mut stderr = child.stderr.take().expect("stderr piped");
     let read = async {
-        if let Some(mut so) = child.stdout.take() {
-            // `take` caps the read itself, so a plugin that never stops writing can't grow us.
-            (&mut so)
-                .take(MAX_OUTPUT as u64)
-                .read_to_end(&mut out)
-                .await?;
-        }
-        if let Some(mut se) = child.stderr.take() {
-            (&mut se).take(64 * 1024).read_to_string(&mut err).await?;
-        }
-        child.wait().await
+        let out = async {
+            let mut bytes = Vec::new();
+            (&mut stdout).take(MAX_OUTPUT as u64).read_to_end(&mut bytes).await?;
+            std::io::Result::Ok(bytes)
+        };
+        let err = async {
+            let mut text = String::new();
+            (&mut stderr).take(64 * 1024).read_to_string(&mut text).await?;
+            std::io::Result::Ok(text)
+        };
+        let (out, err, status) = tokio::join!(out, err, child.wait());
+        Ok::<_, std::io::Error>((out?, err?, status?))
     };
-    let status = match tokio::time::timeout(TIMEOUT, read).await {
+    let (out, err, status) = match tokio::time::timeout(TIMEOUT, read).await {
         Ok(r) => r?,
         Err(_) => {
             let _ = child.start_kill();
