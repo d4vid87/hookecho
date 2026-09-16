@@ -550,12 +550,31 @@ impl HookEchoApp {
                 egui_phosphor::regular::BELL => "Alerts",
                 _ => "Share",
             };
-            ui.add_sized(
+            let response = ui.add_sized(
                 [148.0, 46.0],
-                egui::Button::new(egui::RichText::new(format!("{icon}     {label}")).size(16.0))
+                egui::Button::new("")
                     .selected(on)
                     .corner_radius(10.0),
-            )
+            );
+            let color = if on {
+                ui.visuals().selection.stroke.color
+            } else {
+                ui.style().interact(&response).text_color()
+            };
+            let center_y = response.rect.center().y;
+            for (text, offset, align) in [
+                (icon, 32.0, egui::Align2::CENTER_CENTER),
+                (label, 60.0, egui::Align2::LEFT_CENTER),
+            ] {
+                ui.painter().text(
+                    egui::pos2(response.rect.left() + offset, center_y),
+                    align,
+                    text,
+                    egui::FontId::proportional(16.0),
+                    color,
+                );
+            }
+            response
         };
         let mut alerts_anchor = None;
         let accent = crate::theme::accent(self.settings.theme);
