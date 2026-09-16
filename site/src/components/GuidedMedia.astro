@@ -1,0 +1,112 @@
+---
+interface Cue { at: number; text: string; }
+interface Props {
+  src: string;
+  poster: string;
+  alt: string;
+  cues: Cue[];
+  eager?: boolean;
+  phone?: boolean;
+}
+const { src, poster, alt, cues, eager = false, phone = false } = Astro.props;
+---
+
+<figure class:list={["guided-media", { phone }]} data-cues={JSON.stringify(cues)}>
+  <div class="guided-frame">
+    <img src={poster} alt={alt} loading={eager ? "eager" : "lazy"} decoding="async" />
+    <video muted loop playsinline preload="none" aria-hidden="true">
+      <source data-src={`${src}.webm`} type="video/webm" />
+      <source data-src={`${src}.mp4`} type="video/mp4" />
+    </video>
+    <p class="guided-callout" aria-hidden="true">{cues[0]?.text}</p>
+    <div class="guided-controls">
+      <button type="button" data-action="toggle">Pause</button>
+      <button type="button" data-action="replay">Replay</button>
+    </div>
+  </div>
+  <ol class="guided-steps" aria-label="What this demonstration shows">
+    {cues.map((cue, index) => <li data-cue={index}>{cue.text}</li>)}
+  </ol>
+</figure>
+
+<script>
+  const reduced = matchMedia("(prefers-reduced-motion: reduce)");
+  document.querySelectorAll<HTMLElement>(".guided-media").forEach((box) => {
+    const video = box.querySelector("video")!;
+    const image = box.querySelector("img")!;
+    const callout = box.querySelector<HTMLElement>(".guided-callout")!;
+    const toggle = box.querySelector<HTMLButtonElement>('[data-action="toggle"]')!;
+    const replay = box.querySelector<HTMLButtonElement>('[data-action="replay"]')!;
+    const steps = [...box.querySelectorAll<HTMLElement>("[data-cue]")];
+    const cues = JSON.parse(box.dataset.cues || "[]") as { at: number; text: string }[];
+    let loaded = false;
+
+    const showCue = () => {
+      let active = 0;
+      cues.forEach((cue, index) => { if (video.currentTime >= cue.at) active = index; });
+      callout.textContent = cues[active]?.text || "";
+      steps.forEach((step, index) => step.toggleAttribute("aria-current", index === active));
+    };
+    const load = () => {
+      if (loaded || reduced.matches) return;
+      video.querySelectorAll<HTMLSourceElement>("source").forEach((source) => {
+        source.src = source.dataset.src!;
+      });
+      video.load();
+      loaded = true;
+    };
+    const play = () => {
+      load();
+      video.play().then(() => {
+        image.hidden = true;
+        toggle.textContent = "Pause";
+        toggle.setAttribute("aria-pressed", "false");
+      }).catch(() => {});
+    };
+    const observer = new IntersectionObserver(([entry]) => {
+      if (entry.isIntersecting) play(); else video.pause();
+    }, { rootMargin: "200px" });
+    observer.observe(box);
+    video.addEventListener("timeupdate", showCue);
+    toggle.addEventListener("click", () => {
+      if (video.paused) play();
+      else {
+        video.pause();
+        toggle.textContent = "Play";
+        toggle.setAttribute("aria-pressed", "true");
+      }
+    });
+    replay.addEventListener("click", () => { video.currentTime = 0; play(); showCue(); });
+    reduced.addEventListener("change", () => {
+      if (reduced.matches) {
+        video.pause(); image.hidden = false;
+      } else if (box.getBoundingClientRect().top < innerHeight) play();
+    });
+    showCue();
+  });
+</script>
+
+<style>
+  .guided-media { margin: 0; min-width: 0; }
+  .guided-frame { position: relative; aspect-ratio: 16 / 10; overflow: hidden; border-radius: 18px; border: 1px solid var(--stroke-strong); background: #070b10; box-shadow: 0 24px 70px rgb(0 0 0 / 0.32); }
+  img, video { display: block; width: 100%; aspect-ratio: 16 / 10; object-fit: cover; }
+  img[hidden] { display: none; }
+  video { position: absolute; inset: 0; }
+  .phone .guided-frame { width: min(100%, 330px); aspect-ratio: 540 / 1170; margin-inline: auto; }
+  .phone img, .phone video { aspect-ratio: 540 / 1170; }
+  .guided-callout { position: absolute; left: 16px; bottom: 16px; max-width: min(28rem, calc(100% - 150px)); margin: 0; padding: 0.65rem 0.85rem; border: 1px solid rgb(255 255 255 / 0.16); border-radius: 10px; background: rgb(7 13 20 / 0.82); backdrop-filter: blur(14px); color: #f4f7fa; font-size: 0.86rem; }
+  .guided-controls { position: absolute; right: 12px; bottom: 12px; display: flex; gap: 6px; }
+  button { min-height: 36px; padding: 0.45rem 0.65rem; border: 1px solid rgb(255 255 255 / 0.22); border-radius: 8px; background: rgb(7 13 20 / 0.88); color: #f4f7fa; cursor: pointer; }
+  button:hover { border-color: var(--accent); }
+  .guided-steps { display: flex; gap: 0.65rem; list-style: none; padding: 0.85rem 0 0; margin: 0; }
+  .guided-steps li { flex: 1; padding-top: 0.65rem; border-top: 2px solid var(--stroke); color: var(--text-dim); font-size: 0.78rem; line-height: 1.35; }
+  .guided-steps li[aria-current] { border-color: var(--accent); color: var(--text); }
+  @media (max-width: 620px) {
+    .guided-callout { position: static; max-width: none; border-width: 1px 0 0; border-radius: 0; backdrop-filter: none; }
+    .guided-controls { top: 10px; bottom: auto; }
+    .guided-steps { display: grid; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    video, .guided-callout, .guided-controls { display: none; }
+  }
+</style>

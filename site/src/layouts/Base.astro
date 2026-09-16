@@ -18,21 +18,20 @@ const analytics = import.meta.env.PUBLIC_CF_ANALYTICS_TOKEN;
 const path = Astro.url.pathname;
 
 const nav = [
-  { href: "/features/", label: "Features" },
-  { href: "/compare/", label: "Compare" },
+  { href: "/#showcase", label: "Showcase" },
+  { href: "/download/", label: "Download" },
   { href: "/docs/", label: "Learn" },
-  { href: "/stormdesk/", label: "StormDesk" },
+  { href: "/go/hookecho-source/nav", label: "GitHub" },
 ];
 
 const footer = [
   {
     title: "Product",
     links: [
-      { href: "/features/", label: "Features" },
+      { href: "/#showcase", label: "Showcase" },
       { href: "/compare/", label: "Compare" },
       { href: "/download/", label: "Download" },
       { href: "https://app.hookecho.io/lite/", label: "HookEcho Lite" },
-      { href: "/stormdesk/", label: "StormDesk" },
     ],
   },
   {
@@ -49,12 +48,10 @@ const footer = [
     title: "Project",
     links: [
       { href: "/go/hookecho-source/footer", label: "Star HookEcho on GitHub" },
-      { href: "/go/stormdesk-source/footer", label: "Star StormDesk on GitHub" },
       { href: "/roadmap/", label: "Roadmap" },
       { href: "/changelog/", label: "Changelog" },
       { href: DISCORD_INVITE, label: "Discord" },
       { href: "/go/hookecho-youtube/footer", label: "HookEcho on YouTube" },
-      { href: "/go/stormdesk-youtube/footer", label: "StormDesk on YouTube" },
       { href: "https://github.com/d4vid87/hookecho/issues", label: "Report a problem" },
       { href: "/privacy/", label: "Privacy" },
       { href: "/terms/", label: "Terms" },
@@ -125,14 +122,10 @@ const current = (href: string) => href.startsWith("/") && (path === href || path
           }
         </nav>
 
-        {path === "/" ? (
-          <a class="btn header-cta" href="/go/hookecho-source/nav">☆ Star on GitHub</a>
-        ) : (<a
+        <a
           class="btn btn-primary header-cta"
           href="/go/web/nav"
-          data-smart-primary
-          data-placement="nav"
-        >Open radar</a>)}
+        >Open live radar</a>
 
         <details class="site-menu">
           <summary aria-label="Navigation menu">Menu</summary>
@@ -159,8 +152,8 @@ const current = (href: string) => href.startsWith("/") && (path === href || path
             <span>HookEcho</span>
           </a>
           <p>
-            HookEcho and StormDesk are free, open-source weather tools built on public data,
-            with no accounts, ads or app telemetry.
+            HookEcho is a free, open-source weather radar built on public data, with no account,
+            ads or app telemetry.
           </p>
         </div>
         {

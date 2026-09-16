@@ -257,7 +257,7 @@ scene_recon() {
 }
 
 scene_alltilts() {
-  # Tighter than $MOORE: CC and ZDR are mostly clear-air noise away from the core, so the quad
+  # Tighter than $MOORE: CC and SW are mostly clear-air noise away from the core, so the quad
   # only reads if the panes are filled by the storm itself rather than the county around it.
   launch "KTLX,-97.52,35.37,11.2,2013-05-20T20:15:00Z"; wait_settle 14; key 1
   palette "$L_LINKCAM"
@@ -270,7 +270,7 @@ scene_alltilts() {
   # labels are evenly spaced from the pane's left edge (REF +40, VEL +91, SW +142, ZDR +193).
   click  894  30   # top-right   VEL
   click  344 522   # bottom-left CC
-  click  996 522   # bottom-right ZDR
+  click  945 522   # bottom-right SW
   # Each pane bins its own moment from the same volume, and the last one lands last — a short
   # wait here shoots half-empty panes, which is exactly the failure the old screenshot set shipped.
   wait_settle 60 240

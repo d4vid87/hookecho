@@ -74,7 +74,7 @@ test("the retired product route redirects to StormDesk", async () => {
   assert.equal(response.headers.get("location"), "https://hookecho.io/stormdesk/");
 });
 
-test("Android visitors get the app CTA while other visitors keep the web default", () => {
+test("Android visitors keep live radar primary and see the install note", () => {
   const node = (placement) => ({
     attrs: new Map([["data-placement", placement], ["hidden", ""]]),
     textContent: "unchanged",
@@ -94,10 +94,8 @@ test("Android visitors get the app CTA while other visitors keep the web default
   };
 
   applySmartCtas("Mozilla/5.0 (Linux; Android 16)", root);
-  assert.equal(primary.attrs.get("href"), "/go/android/hero");
-  assert.equal(primary.textContent, "Get Android app");
-  assert.equal(secondary.attrs.get("href"), "/go/web/hero");
-  assert.equal(secondary.textContent, "Open in browser");
+  assert.equal(primary.textContent, "unchanged");
+  assert.equal(secondary.textContent, "unchanged");
   assert.equal(note.attrs.has("hidden"), false);
 
   const unchanged = node("final");
