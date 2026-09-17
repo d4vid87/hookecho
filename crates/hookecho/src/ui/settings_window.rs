@@ -1,4 +1,4 @@
-//! Settings window: General, Palettes, Units, Basemaps, Alerts, Hotkeys, Sync, Storage.
+//! Focused settings pages with desktop navigation and a compact category picker.
 
 use crate::app::PaletteEntry;
 use crate::colormap::Palettes;
@@ -9,15 +9,32 @@ use wxdata::level2::Moment;
 #[derive(Default, PartialEq, Clone, Copy)]
 enum Tab {
     #[default]
-    General,
-    Palettes,
-    Units,
-    Basemaps,
+    Appearance,
+    Radar,
     Alerts,
+    Units,
+    Workspaces,
     Hotkeys,
     Sync,
-    #[cfg(not(target_arch = "wasm32"))]
-    Storage,
+    Advanced,
+    Help,
+}
+
+impl Tab {
+    const ALL: [(Self, &'static str, &'static str); 9] = [
+        (Self::Appearance, "Appearance", "Personalize"),
+        (Self::Radar, "Radar & map", "Personalize"),
+        (Self::Alerts, "Alerts", "Personalize"),
+        (Self::Units, "Units & time", "Personalize"),
+        (Self::Workspaces, "Workspaces", "Manage"),
+        (Self::Hotkeys, "Keyboard shortcuts", "Manage"),
+        (Self::Sync, "Sync", "Manage"),
+        (Self::Advanced, "Advanced", "More"),
+        (Self::Help, "Help & setup", "More"),
+    ];
+    fn label(self) -> &'static str {
+        Self::ALL.iter().find(|(tab, _, _)| *tab == self).unwrap().1
+    }
 }
 
 /// What the app knows about the sync session, handed in so this window stays state-free.
@@ -57,7 +74,7 @@ pub struct SettingsWindow {
     storage: Option<std::sync::mpsc::Receiver<Vec<crate::storage::Entry>>>,
     #[cfg(not(target_arch = "wasm32"))]
     storage_rows: Option<Vec<crate::storage::Entry>>,
-    /// Set by the General tab's two buttons; the app drains them after `show`.
+    /// Set by the Help page's two buttons; the app drains them after `show`.
     pub run_setup: bool,
     pub run_tour: bool,
     /// True while a keypress is being captured — the app stands its global hotkey table down so
@@ -88,56 +105,111 @@ impl SettingsWindow {
         self.prev_open = self.open;
 
         let mut open = self.open;
-        let Some(window) = drawer.page(
+        let Some(window) = drawer.page_sized(
             ctx,
             "Settings",
             &mut open,
             false,
+            760.0,
             egui::Window::new("Settings"),
         ) else {
             self.open = open;
             return None;
         };
-        window.show(ctx, |ui| {
-            // Keep the whole window inside a phone screen; tabs wrap instead of clipping.
-            if cfg!(target_os = "android") {
-                ui.set_max_width(ui.ctx().content_rect().width() - 28.0);
-            }
-            ui.horizontal_wrapped(|ui| {
-                for (tab, label) in [
-                    (Tab::General, "General"),
-                    (Tab::Palettes, "Palettes"),
-                    (Tab::Units, "Units"),
-                    (Tab::Basemaps, "Basemaps"),
-                    (Tab::Alerts, "Alerts"),
-                    (Tab::Hotkeys, "Hotkeys"),
-                    (Tab::Sync, "Sync"),
-                    #[cfg(not(target_arch = "wasm32"))]
-                    (Tab::Storage, "Storage"),
-                ] {
-                    // Chips on the phone: a `selectable_value` is a text-height target, and
-                    // seven of them wrapped across a 360pt screen is a game of darts.
-                    if cfg!(target_os = "android") {
-                        if crate::ui::m3::chip(ui, label, self.tab == tab).clicked() {
-                            self.tab = tab;
+        let frame = egui::Frame::new()
+            .fill(ctx.global_style().visuals.panel_fill)
+            .inner_margin(18.0)
+            .corner_radius(12.0);
+        window.vscroll(false).frame(frame).show(ctx, |ui| {
+            ui.spacing_mut().item_spacing = egui::vec2(10.0, 12.0);
+            ui.spacing_mut().interact_size.y = 32.0;
+            ui.spacing_mut().text_edit_width = 180.0;
+            let previous = self.tab;
+            let wide = ui.available_width() >= 600.0 && ui.available_height() >= 560.0;
+            if !wide {
+                egui::ComboBox::from_id_salt("settings_category")
+                    .selected_text(self.tab.label())
+                    .width(ui.available_width())
+                    .show_ui(ui, |ui| {
+                        for (tab, label, _) in Tab::ALL {
+                            ui.selectable_value(&mut self.tab, tab, label);
                         }
-                    } else {
-                        ui.selectable_value(&mut self.tab, tab, label);
-                    }
-                }
-            });
-            ui.separator();
-            match self.tab {
-                Tab::General => general_tab(ui, settings, &mut self.run_setup, &mut self.run_tour),
-                Tab::Palettes => self.palettes_tab(ui, settings, palettes),
-                Tab::Units => units_tab(ui, settings),
-                Tab::Basemaps => basemaps_tab(ui, settings),
-                Tab::Alerts => alerts_tab(ui, settings),
-                Tab::Hotkeys => self.hotkeys_tab(ui, settings, entries),
-                Tab::Sync => action = sync_tab(ui, settings, &sync),
-                #[cfg(not(target_arch = "wasm32"))]
-                Tab::Storage => self.storage_tab(ui, settings),
+                    });
+                ui.separator();
             }
+            ui.horizontal_top(|ui| {
+                if wide {
+                    ui.vertical(|ui| {
+                        ui.set_width(168.0);
+                        let mut group = "";
+                        for (tab, label, section) in Tab::ALL {
+                            if section != group {
+                                if !group.is_empty() {
+                                    ui.add_space(12.0);
+                                }
+                                ui.weak(section);
+                                group = section;
+                            }
+                            if ui
+                                .add_sized(
+                                    [168.0, 36.0],
+                                    egui::Button::new(label).selected(self.tab == tab),
+                                )
+                                .clicked()
+                            {
+                                self.tab = tab;
+                            }
+                        }
+                    });
+                    ui.separator();
+                }
+                if self.tab != previous {
+                    self.rebinding = None;
+                }
+                egui::ScrollArea::vertical()
+                    .id_salt(("settings_content", self.tab.label()))
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        ui.vertical(|ui| {
+                            ui.set_width(ui.available_width());
+                            ui.heading(self.tab.label());
+                            ui.add_space(8.0);
+                            match self.tab {
+                                Tab::Appearance => appearance_tab(ui, settings),
+                                Tab::Radar => {
+                                    settings_group(ui, "Radar defaults", |ui| {
+                                        radar_defaults(ui, settings)
+                                    });
+                                    settings_group(ui, "Map", |ui| basemaps_tab(ui, settings));
+                                    ui.collapsing("Radar palettes", |ui| {
+                                        self.palettes_tab(ui, settings, palettes)
+                                    });
+                                }
+                                Tab::Alerts => alerts_tab(ui, settings),
+                                Tab::Units => settings_group(ui, "Measurement & clock", |ui| {
+                                    units_tab(ui, settings)
+                                }),
+                                Tab::Workspaces => workspaces_tab(ui, settings),
+                                Tab::Hotkeys => self.hotkeys_tab(ui, settings, entries),
+                                Tab::Sync => action = sync_tab(ui, settings, &sync),
+                                Tab::Advanced => {
+                                    settings_group(ui, "Background", |ui| {
+                                        background_settings(ui, settings)
+                                    });
+                                    ui.collapsing("Weather data connections", |ui| {
+                                        integrations_tab(ui, settings)
+                                    });
+                                    ui.collapsing("AI summaries", |ui| ai_settings(ui, settings));
+                                    #[cfg(not(target_arch = "wasm32"))]
+                                    ui.collapsing("Storage & cache", |ui| {
+                                        self.storage_tab(ui, settings)
+                                    });
+                                }
+                                Tab::Help => help_tab(ui, &mut self.run_setup, &mut self.run_tour),
+                            }
+                        });
+                    });
+            });
         });
         self.capturing = self.rebinding.is_some() && open;
         if !open {
@@ -497,36 +569,25 @@ impl SettingsWindow {
 }
 
 fn units_tab(ui: &mut egui::Ui, settings: &mut Settings) {
-    egui::Grid::new("units_grid").num_columns(2).spacing([12.0, 8.0]).show(ui, |ui| {
-        ui.label("Velocity / spectrum width");
-        ui.horizontal(|ui| {
-            for u in VelocityUnit::ALL {
-                ui.selectable_value(&mut settings.velocity_unit, u, u.label());
-            }
-        });
-        ui.end_row();
-
-        ui.label("Temperature");
-        ui.horizontal(|ui| {
-            for u in crate::settings::TempUnit::ALL {
-                ui.selectable_value(&mut settings.temp_unit, u, u.label());
-            }
-        })
-        .response
-        .on_hover_text("Surface station plots (observations arrive in Celsius)");
-        ui.end_row();
-
-        ui.label("Time display");
-        ui.horizontal(|ui| {
-            for d in TimeDisplay::ALL {
-                ui.selectable_value(&mut settings.time_display, d, d.label());
-            }
-        })
-        .response
-        .on_hover_text("Site local reads the clock the radar is standing in; UTC is the Zulu time on the wire");
-        ui.end_row();
+    ui.label("Velocity / spectrum width");
+    ui.horizontal_wrapped(|ui| {
+        for u in VelocityUnit::ALL {
+            ui.selectable_value(&mut settings.velocity_unit, u, u.label());
+        }
     });
-    ui.weak("Reflectivity stays dBZ; internal data is unchanged (display-only).");
+    ui.label("Temperature");
+    ui.horizontal_wrapped(|ui| {
+        for u in crate::settings::TempUnit::ALL {
+            ui.selectable_value(&mut settings.temp_unit, u, u.label());
+        }
+    });
+    ui.label("Time display");
+    ui.horizontal_wrapped(|ui| {
+        for d in TimeDisplay::ALL {
+            ui.selectable_value(&mut settings.time_display, d, d.label());
+        }
+    });
+    ui.weak("Site local uses the radar site's clock. Reflectivity stays dBZ.");
 }
 
 /// The "Custom (XYZ URL)" basemap's template, zoom cap and attribution.
@@ -548,7 +609,7 @@ fn custom_tile_source(ui: &mut egui::Ui, settings: &mut Settings) {
         ui.add(
             egui::TextEdit::singleline(&mut settings.custom_tile_url)
                 .hint_text("https://tiles.example.com/{z}/{x}/{y}.png")
-                .desired_width(340.0),
+                .desired_width(ui.available_width()),
         );
     });
     if !settings.custom_tile_url.is_empty()
@@ -572,7 +633,7 @@ fn custom_tile_source(ui: &mut egui::Ui, settings: &mut Settings) {
         ui.add(
             egui::TextEdit::singleline(&mut settings.custom_tile_attribution)
                 .hint_text("© Your data source")
-                .desired_width(340.0),
+                .desired_width(ui.available_width()),
         );
     });
 }
@@ -592,17 +653,22 @@ fn basemaps_tab(ui: &mut egui::Ui, settings: &mut Settings) {
     if ui.button("Clear map cache").clicked() {
         crate::platform::clear_map_cache();
     }
-    ui.label("Provider API keys unlock additional raster basemap styles.");
-    ui.add_space(6.0);
-    key_field(ui, "Mapbox access token", &mut settings.mapbox_key);
-    ui.add_space(8.0);
-    key_field(ui, "MapTiler API key", &mut settings.maptiler_key);
-    ui.add_space(6.0);
-    ui.weak("Keys are stored locally in settings.json and sent only to the provider's tile API.");
-    ui.add_space(12.0);
-    custom_tile_source(ui, settings);
-    ui.add_space(12.0);
-    ui.separator();
+    ui.collapsing("Basemap providers & custom tiles", |ui| {
+        ui.label("Provider API keys unlock additional raster basemap styles.");
+        ui.add_space(6.0);
+        key_field(ui, "Mapbox access token", &mut settings.mapbox_key);
+        ui.add_space(8.0);
+        key_field(ui, "MapTiler API key", &mut settings.maptiler_key);
+        ui.add_space(6.0);
+        ui.weak(
+            "Keys are stored locally in settings.json and sent only to the provider's tile API.",
+        );
+        ui.add_space(12.0);
+        custom_tile_source(ui, settings);
+    });
+}
+
+fn integrations_tab(ui: &mut egui::Ui, settings: &mut Settings) {
     ui.label("Live station cards");
     ui.weak("Optional. Airport METARs need no key; these add personal weather stations.");
     ui.add_space(6.0);
@@ -753,15 +819,101 @@ fn sync_tab(ui: &mut egui::Ui, settings: &mut Settings, sync: &SyncView) -> Opti
     action
 }
 
-fn general_tab(
-    ui: &mut egui::Ui,
-    settings: &mut Settings,
-    run_setup: &mut bool,
-    run_tour: &mut bool,
-) {
-    egui::Grid::new("general_grid")
+fn settings_group(ui: &mut egui::Ui, title: &str, body: impl FnOnce(&mut egui::Ui)) {
+    egui::Frame::new()
+        .fill(ui.visuals().faint_bg_color)
+        .stroke(ui.visuals().widgets.noninteractive.bg_stroke)
+        .corner_radius(10.0)
+        .inner_margin(14.0)
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.strong(title);
+            ui.add_space(6.0);
+            body(ui);
+        });
+    ui.add_space(8.0);
+}
+
+fn appearance_tab(ui: &mut egui::Ui, settings: &mut Settings) {
+    settings_group(ui, "Make Hook Echo yours", |ui| {
+        egui::Grid::new("appearance_grid")
+            .num_columns(2)
+            .spacing([12.0, 18.0])
+            .show(ui, |ui| {
+                ui.label("Theme");
+                ui.horizontal(|ui| {
+                    egui::ComboBox::from_id_salt("theme")
+                        .selected_text(settings.theme.label())
+                        .show_ui(ui, |ui| {
+                            for t in Theme::ALL {
+                                ui.selectable_value(&mut settings.theme, t, t.label());
+                            }
+                        });
+                    // Live swatch: accent over the theme background, so the choice previews at a glance.
+                    let (rect, _) =
+                        ui.allocate_exact_size(egui::vec2(46.0, 18.0), egui::Sense::hover());
+                    let p = ui.painter_at(rect);
+                    p.rect_filled(rect, 3.0, crate::theme::preview_bg(settings.theme));
+                    p.circle_filled(rect.center(), 6.0, crate::theme::accent(settings.theme));
+                });
+                ui.end_row();
+
+                ui.label("Accent color");
+                ui.horizontal(|ui| {
+                    let mut on = settings.accent.is_some();
+                    let theme_accent = crate::theme::accent(settings.theme);
+                    if ui.checkbox(&mut on, "Custom").changed() {
+                        settings.accent =
+                            on.then(|| [theme_accent.r(), theme_accent.g(), theme_accent.b()]);
+                    }
+                    if let Some(rgb) = settings.accent.as_mut() {
+                        ui.color_edit_button_srgb(rgb);
+                    }
+                });
+                ui.end_row();
+            });
+    });
+    settings_group(ui, "Comfort & accessibility", |ui| {
+        egui::Grid::new("comfort_grid")
+            .num_columns(2)
+            .spacing([12.0, 18.0])
+            .show(ui, |ui| {
+                ui.label("Density");
+                ui.horizontal(|ui| {
+                    for d in crate::ui::m3::Density::ALL {
+                        ui.selectable_value(&mut settings.density, d, d.label());
+                    }
+                })
+                .response
+                .on_hover_text("Compact restores the denser spacing of earlier releases.");
+                ui.end_row();
+
+                ui.label("Motion");
+                ui.checkbox(&mut settings.reduce_motion, "Reduce motion")
+                    .on_hover_text(
+                        "Panels and cards appear where they belong instead of sliding in. The app \
+                     also turns this on for itself if frames get slow.",
+                    );
+                ui.end_row();
+
+                ui.label("UI scale");
+                // Phones start denser: 0.5 × a 4.0 density factor ≈ a desktop-density canvas.
+                let lo = if cfg!(target_os = "android") {
+                    0.5
+                } else {
+                    0.7
+                };
+                ui.add(egui::Slider::new(&mut settings.ui_scale, lo..=1.6).step_by(0.05));
+                ui.end_row();
+            });
+        ui.weak("UI scale also responds to Ctrl+= / Ctrl+- / Ctrl+0.");
+    });
+}
+
+fn radar_defaults(ui: &mut egui::Ui, settings: &mut Settings) {
+    egui::Grid::new("radar_defaults")
         .num_columns(2)
-        .spacing([12.0, 8.0])
+        .spacing([12.0, 12.0])
         .show(ui, |ui| {
             ui.label("Default site");
             let mut site = settings.default_site.clone();
@@ -773,76 +925,14 @@ fn general_tab(
             ui.label("Poll interval (s)");
             ui.add(egui::DragValue::new(&mut settings.poll_interval_secs).range(10..=600));
             ui.end_row();
-
-            ui.label("Theme");
-            ui.horizontal(|ui| {
-                egui::ComboBox::from_id_salt("theme")
-                    .selected_text(settings.theme.label())
-                    .show_ui(ui, |ui| {
-                        for t in Theme::ALL {
-                            ui.selectable_value(&mut settings.theme, t, t.label());
-                        }
-                    });
-                // Live swatch: accent over the theme background, so the choice previews at a glance.
-                let (rect, _) =
-                    ui.allocate_exact_size(egui::vec2(46.0, 18.0), egui::Sense::hover());
-                let p = ui.painter_at(rect);
-                p.rect_filled(rect, 3.0, crate::theme::preview_bg(settings.theme));
-                p.circle_filled(rect.center(), 6.0, crate::theme::accent(settings.theme));
-            });
-            ui.end_row();
-
-            ui.label("Accent color");
-            ui.horizontal(|ui| {
-                let mut on = settings.accent.is_some();
-                let theme_accent = crate::theme::accent(settings.theme);
-                if ui.checkbox(&mut on, "Custom").changed() {
-                    settings.accent =
-                        on.then(|| [theme_accent.r(), theme_accent.g(), theme_accent.b()]);
-                }
-                if let Some(rgb) = settings.accent.as_mut() {
-                    ui.color_edit_button_srgb(rgb);
-                }
-            });
-            ui.end_row();
-
-            ui.label("Density");
-            ui.horizontal(|ui| {
-                for d in crate::ui::m3::Density::ALL {
-                    ui.selectable_value(&mut settings.density, d, d.label());
-                }
-            })
-            .response
-            .on_hover_text("Compact restores the denser spacing of earlier releases.");
-            ui.end_row();
-
-            ui.label("Motion");
-            ui.checkbox(&mut settings.reduce_motion, "Reduce motion")
-                .on_hover_text(
-                    "Panels and cards appear where they belong instead of sliding in. The app \
-                     also turns this on for itself if frames get slow.",
-                );
-            ui.end_row();
-
-            ui.label("UI scale");
-            // Phones start denser: 0.5 × a 4.0 density factor ≈ a desktop-density canvas.
-            let lo = if cfg!(target_os = "android") {
-                0.5
-            } else {
-                0.7
-            };
-            ui.add(egui::Slider::new(&mut settings.ui_scale, lo..=1.6).step_by(0.05));
-            ui.end_row();
         });
-    ui.weak("UI scale also responds to Ctrl+= / Ctrl+- / Ctrl+0.");
-
     let valid = wxdata::sites::site_by_id(&settings.default_site).is_some();
     if !valid && !settings.default_site.is_empty() {
         ui.colored_label(egui::Color32::YELLOW, "⚠ unknown site id");
     }
+}
 
-    ui.add_space(8.0);
-    ui.separator();
+fn help_tab(ui: &mut egui::Ui, run_setup: &mut bool, run_tour: &mut bool) {
     ui.strong("Getting started");
     ui.horizontal(|ui| {
         if ui
@@ -863,7 +953,9 @@ fn general_tab(
 
     ui.add_space(8.0);
     ui.separator();
-    ui.strong("Background");
+}
+
+fn background_settings(ui: &mut egui::Ui, settings: &mut Settings) {
     ui.checkbox(
         &mut settings.close_to_tray,
         "Keep running in background when window closes",
@@ -874,7 +966,9 @@ fn general_tab(
 
     ui.add_space(8.0);
     ui.separator();
-    ui.strong("Workspaces");
+}
+
+fn workspaces_tab(ui: &mut egui::Ui, settings: &mut Settings) {
     if settings.workspaces.is_empty() {
         ui.weak("None yet \u{2014} arrange your panes, then run \"Save workspace\" from Ctrl+K.");
     } else {
@@ -883,7 +977,10 @@ fn general_tab(
     let mut remove = None;
     for (i, ws) in settings.workspaces.iter_mut().enumerate() {
         ui.horizontal(|ui| {
-            ui.add(egui::TextEdit::singleline(&mut ws.name).desired_width(220.0));
+            ui.add(
+                egui::TextEdit::singleline(&mut ws.name)
+                    .desired_width((ui.available_width() - 150.0).max(100.0)),
+            );
             ui.weak(format!(
                 "{} pane{}",
                 ws.panes.len(),
@@ -900,14 +997,16 @@ fn general_tab(
 
     ui.add_space(8.0);
     ui.separator();
-    ui.strong("AI");
+}
+
+fn ai_settings(ui: &mut egui::Ui, settings: &mut Settings) {
     ui.horizontal(|ui| {
         ui.label("Anthropic key:");
         ui.add(
             egui::TextEdit::singleline(&mut settings.anthropic_key)
                 .password(true)
                 .hint_text("sk-ant-…")
-                .desired_width(240.0),
+                .desired_width(ui.available_width()),
         );
     });
     ui.weak("Optional. Storm Digest (Ctrl+K) works offline; a key lets Claude write friendlier prose. Held locally only.");
@@ -986,7 +1085,8 @@ pub fn sound_picker(ui: &mut egui::Ui, settings: &mut Settings) {
 
 /// Everything that fires when weather happens: sounds, push, proximity alarms.
 fn alerts_tab(ui: &mut egui::Ui, settings: &mut Settings) {
-    sound_picker(ui, settings);
+    ui.collapsing("Sounds & volume", |ui| sound_picker(ui, settings));
+    egui::CollapsingHeader::new("When to interrupt").default_open(true).show(ui, |ui| {
 
     ui.add_space(8.0);
     ui.separator();
@@ -1009,7 +1109,7 @@ fn alerts_tab(ui: &mut egui::Ui, settings: &mut Settings) {
             "While a GPS fix is coming in, your own position joins the saved locations the \
              lightning and rotation alerts watch. Nothing is saved or shared.",
         );
-    ui.horizontal(|ui| {
+    ui.horizontal_wrapped(|ui| {
         ui.checkbox(&mut settings.quiet_hours, "Quiet hours");
         ui.add_enabled_ui(settings.quiet_hours, |ui| {
             ui.add(egui::DragValue::new(&mut settings.quiet_start_hour).range(0..=23));
@@ -1022,7 +1122,7 @@ fn alerts_tab(ui: &mut egui::Ui, settings: &mut Settings) {
         "Holds sounds and pushes between those hours. Tornado Emergency, PDS and destructive \
          warnings still come through — that tier is what quiet hours is for.",
     );
-    ui.horizontal(|ui| {
+    ui.horizontal_wrapped(|ui| {
         ui.label("Push and sound only for:");
         for (tier, label) in [
             (0u8, "Every warning"),
@@ -1033,7 +1133,7 @@ fn alerts_tab(ui: &mut egui::Ui, settings: &mut Settings) {
         }
     });
     ui.weak("Quieter warnings still banner and still show in the alert list.");
-    ui.horizontal(|ui| {
+    ui.horizontal_wrapped(|ui| {
         ui.label("Roll up after");
         ui.add(
             egui::DragValue::new(&mut settings.alert_rollup_threshold)
@@ -1051,145 +1151,151 @@ fn alerts_tab(ui: &mut egui::Ui, settings: &mut Settings) {
         "On an outbreak day, pushes past that rate collapse into one rolling summary instead of          one buzz per warning. 0 turns it off; escalated warnings always push as themselves.",
     );
 
-    ui.add_space(8.0);
-    ui.separator();
-    ui.strong("Push notifications (ntfy.sh)");
-    ui.horizontal(|ui| {
-        ui.label("Topic:");
-        ui.add(egui::TextEdit::singleline(&mut settings.ntfy_topic).hint_text("your-secret-topic"));
     });
-    ui.weak("When a warning covers a saved location marker, a push is sent to ntfy.sh/<topic>.");
-    ui.weak("Subscribe to the same topic in the ntfy app on your phone. Leave blank to disable.");
-    ui.add_enabled_ui(!cfg!(target_os = "android"), |ui| {
-        ui.checkbox(&mut settings.ntfy_snapshot, "Attach a picture of the radar")
-            .on_hover_text(
-                "Pushes the view you're looking at alongside the warning. Desktop only — the \
+    ui.collapsing("Push notifications (ntfy.sh)", |ui| {
+        ui.horizontal_wrapped(|ui| {
+            ui.label("Topic:");
+            ui.add(
+                egui::TextEdit::singleline(&mut settings.ntfy_topic).hint_text("your-secret-topic"),
+            );
+        });
+        ui.weak(
+            "When a warning covers a saved location marker, a push is sent to ntfy.sh/<topic>.",
+        );
+        ui.weak(
+            "Subscribe to the same topic in the ntfy app on your phone. Leave blank to disable.",
+        );
+        ui.add_enabled_ui(!cfg!(target_os = "android"), |ui| {
+            ui.checkbox(&mut settings.ntfy_snapshot, "Attach a picture of the radar")
+                .on_hover_text(
+                    "Pushes the view you're looking at alongside the warning. Desktop only — the \
                  phone's background alert service has nothing to render from.",
-            );
-    });
-
-    ui.add_space(8.0);
-    ui.separator();
-    ui.strong("Chat webhooks");
-    ui.horizontal(|ui| {
-        ui.label("Discord:");
-        ui.add(
-            egui::TextEdit::singleline(&mut settings.discord_webhook)
-                .hint_text("https://discord.com/api/webhooks/…"),
-        );
-    });
-    ui.horizontal(|ui| {
-        ui.label("Slack:");
-        ui.add(
-            egui::TextEdit::singleline(&mut settings.slack_webhook)
-                .hint_text("https://hooks.slack.com/services/…"),
-        );
-    });
-    ui.horizontal(|ui| {
-        ui.label("Matrix server:");
-        ui.add(
-            egui::TextEdit::singleline(&mut settings.matrix_homeserver)
-                .hint_text("https://matrix.org"),
-        );
-    });
-    ui.horizontal(|ui| {
-        ui.label("Matrix room:");
-        ui.add(egui::TextEdit::singleline(&mut settings.matrix_room).hint_text("!room:matrix.org"));
-    });
-    ui.horizontal(|ui| {
-        ui.label("Matrix token:");
-        ui.add(
-            egui::TextEdit::singleline(&mut settings.matrix_token)
-                .password(true)
-                .hint_text("access token"),
-        );
-    });
-    ui.weak("Every alert that goes to ntfy also posts here. Blank fields are off.");
-    ui.weak("These URLs and the token are secrets — they stay in your settings file.");
-
-    // No Android (its alerts leave through the foreground service) and no web (no TCP socket).
-    if !cfg!(any(target_os = "android", target_arch = "wasm32")) {
-        ui.add_space(8.0);
-        ui.separator();
-        ui.strong("MQTT");
-        ui.horizontal(|ui| {
-            ui.label("Broker:");
-            ui.add(
-                egui::TextEdit::singleline(&mut settings.mqtt_host)
-                    .desired_width(160.0)
-                    .hint_text("mqtt.lan"),
-            );
-            ui.add(egui::DragValue::new(&mut settings.mqtt_port).range(1..=65535));
-            ui.checkbox(&mut settings.mqtt_tls, "TLS");
+                );
         });
-        ui.horizontal(|ui| {
-            ui.label("User:");
+    });
+    ui.collapsing("Chat webhooks", |ui| {
+        ui.horizontal_wrapped(|ui| {
+            ui.label("Discord:");
             ui.add(
-                egui::TextEdit::singleline(&mut settings.mqtt_user)
-                    .desired_width(110.0)
-                    .hint_text("optional"),
-            );
-            ui.label("Password:");
-            ui.add(
-                egui::TextEdit::singleline(&mut settings.mqtt_pass)
-                    .desired_width(110.0)
-                    .password(true),
+                egui::TextEdit::singleline(&mut settings.discord_webhook)
+                    .hint_text("https://discord.com/api/webhooks/…"),
             );
         });
-        ui.horizontal(|ui| {
-            ui.label("Topic prefix:");
-            ui.add(egui::TextEdit::singleline(&mut settings.mqtt_prefix).hint_text("home/weather"));
+        ui.horizontal_wrapped(|ui| {
+            ui.label("Slack:");
+            ui.add(
+                egui::TextEdit::singleline(&mut settings.slack_webhook)
+                    .hint_text("https://hooks.slack.com/services/…"),
+            );
         });
-        ui.horizontal(|ui| {
-            ui.checkbox(&mut settings.mqtt_discovery, "Home Assistant discovery")
+        ui.horizontal_wrapped(|ui| {
+            ui.label("Matrix server:");
+            ui.add(
+                egui::TextEdit::singleline(&mut settings.matrix_homeserver)
+                    .hint_text("https://matrix.org"),
+            );
+        });
+        ui.horizontal_wrapped(|ui| {
+            ui.label("Matrix room:");
+            ui.add(
+                egui::TextEdit::singleline(&mut settings.matrix_room).hint_text("!room:matrix.org"),
+            );
+        });
+        ui.horizontal_wrapped(|ui| {
+            ui.label("Matrix token:");
+            ui.add(
+                egui::TextEdit::singleline(&mut settings.matrix_token)
+                    .password(true)
+                    .hint_text("access token"),
+            );
+        });
+        ui.weak("Every alert that goes to ntfy also posts here. Blank fields are off.");
+        ui.weak("These URLs and the token are secrets — they stay in your settings file.");
+    });
+    ui.collapsing("MQTT / Home Assistant", |ui| {
+        // No Android (its alerts leave through the foreground service) and no web (no TCP socket).
+        if !cfg!(any(target_os = "android", target_arch = "wasm32")) {
+            ui.add_space(8.0);
+            ui.separator();
+            ui.strong("MQTT");
+            ui.horizontal_wrapped(|ui| {
+                ui.label("Broker:");
+                ui.add(
+                    egui::TextEdit::singleline(&mut settings.mqtt_host)
+                        .desired_width(160.0)
+                        .hint_text("mqtt.lan"),
+                );
+                ui.add(egui::DragValue::new(&mut settings.mqtt_port).range(1..=65535));
+                ui.checkbox(&mut settings.mqtt_tls, "TLS");
+            });
+            ui.horizontal_wrapped(|ui| {
+                ui.label("User:");
+                ui.add(
+                    egui::TextEdit::singleline(&mut settings.mqtt_user)
+                        .desired_width(110.0)
+                        .hint_text("optional"),
+                );
+                ui.label("Password:");
+                ui.add(
+                    egui::TextEdit::singleline(&mut settings.mqtt_pass)
+                        .desired_width(110.0)
+                        .password(true),
+                );
+            });
+            ui.horizontal_wrapped(|ui| {
+                ui.label("Topic prefix:");
+                ui.add(
+                    egui::TextEdit::singleline(&mut settings.mqtt_prefix).hint_text("home/weather"),
+                );
+            });
+            ui.horizontal_wrapped(|ui| {
+                ui.checkbox(&mut settings.mqtt_discovery, "Home Assistant discovery")
                 .on_hover_text(
                     "Publish retained config topics so Home Assistant creates the device itself, \
                      with a mute switch that publishes back to <prefix>/cmd/mute. Leave off if \
                      this broker has no Home Assistant on it.",
                 );
-        });
-        ui.horizontal(|ui| {
-            ui.label("Strikes topic:");
-            ui.add(
-                egui::TextEdit::singleline(&mut settings.strikes_topic)
-                    .hint_text("blitzortung/1.1/#"),
-            )
-            .on_hover_text(
-                "Subscribe to lightning strikes someone else is already publishing to this \
+            });
+            ui.horizontal_wrapped(|ui| {
+                ui.label("Strikes topic:");
+                ui.add(
+                    egui::TextEdit::singleline(&mut settings.strikes_topic)
+                        .hint_text("blitzortung/1.1/#"),
+                )
+                .on_hover_text(
+                    "Subscribe to lightning strikes someone else is already publishing to this \
                  broker \u{2014} a Home Assistant Blitzortung integration, or the relay in \
                  scripts/strikes-relay. Empty is off. HookEcho never connects to a strike \
                  network itself.",
-            );
-        });
-        ui.weak(
-            "Publishes <prefix>/status and <prefix>/nearest every five minutes, and \
+                );
+            });
+            ui.weak(
+                "Publishes <prefix>/status and <prefix>/nearest every five minutes, and \
              <prefix>/alerts as warnings arrive. Takes effect on restart.",
-        );
-    }
-
-    ui.add_space(8.0);
-    ui.separator();
-    ui.strong("Battery");
-    if ui
-        .checkbox(
-            &mut settings.battery_saver,
-            "Battery saver — check less often",
-        )
-        .on_hover_text(
-            "Slows every cadence the app controls: the screen redraws four times a second \
+            );
+        }
+    });
+    ui.collapsing("Battery", |ui| {
+        if ui
+            .checkbox(
+                &mut settings.battery_saver,
+                "Battery saver — check less often",
+            )
+            .on_hover_text(
+                "Slows every cadence the app controls: the screen redraws four times a second \
              instead of ten, volumes are polled half as often, and on Android the background \
              alert poll drops from every 5 minutes to every 15. Warnings still arrive, later.",
-        )
-        .changed()
-    {
-        crate::platform::set_battery_saver(settings.battery_saver);
-    }
+            )
+            .changed()
+        {
+            crate::platform::set_battery_saver(settings.battery_saver);
+        }
 
-    if cfg!(target_os = "android") {
-        ui.add_space(8.0);
-        ui.separator();
-        ui.strong("Background alerts");
-        if ui
+        if cfg!(target_os = "android") {
+            ui.add_space(8.0);
+            ui.separator();
+            ui.strong("Background alerts");
+            if ui
             .checkbox(
                 &mut settings.background_alerts,
                 "Watch my saved locations while the app is closed",
@@ -1203,47 +1309,43 @@ fn alerts_tab(ui: &mut egui::Ui, settings: &mut Settings) {
         {
             crate::platform::set_background_alerts(settings.background_alerts);
         }
-        alert_health(ui);
-    }
-
-    ui.add_space(8.0);
-    ui.separator();
-    ui.strong("Weather radio relays");
-    ui.weak(
+            alert_health(ui);
+        }
+    });
+    ui.collapsing("Weather radio relays", |ui| {
+        ui.weak(
         "NOAA broadcasts NWR on VHF and streams nothing itself, so these are listener-run relays \
          — find the MP3 URL for your county and paste it here. Play them from the drawer.",
     );
-    let mut remove = None;
-    for (i, s) in settings.nwr_streams.iter_mut().enumerate() {
-        ui.horizontal(|ui| {
-            ui.add(
-                egui::TextEdit::singleline(&mut s.name)
-                    .hint_text("KEC55 Norman")
-                    .desired_width(130.0),
-            );
-            ui.add(
-                egui::TextEdit::singleline(&mut s.url)
-                    .hint_text("https://…/stream.mp3")
-                    .desired_width(220.0),
-            );
-            if ui.button("✖").on_hover_text("Remove").clicked() {
-                remove = Some(i);
-            }
-        });
-    }
-    if let Some(i) = remove {
-        settings.nwr_streams.remove(i);
-    }
-    if ui.button("Add relay").clicked() {
-        settings.nwr_streams.push(crate::settings::NwrStream {
-            name: String::new(),
-            url: String::new(),
-        });
-    }
-
-    ui.add_space(8.0);
-    ui.separator();
-    ui.strong("Spoken warnings");
+        let mut remove = None;
+        for (i, s) in settings.nwr_streams.iter_mut().enumerate() {
+            ui.horizontal_wrapped(|ui| {
+                ui.add(
+                    egui::TextEdit::singleline(&mut s.name)
+                        .hint_text("KEC55 Norman")
+                        .desired_width(130.0),
+                );
+                ui.add(
+                    egui::TextEdit::singleline(&mut s.url)
+                        .hint_text("https://…/stream.mp3")
+                        .desired_width(220.0),
+                );
+                if ui.button("✖").on_hover_text("Remove").clicked() {
+                    remove = Some(i);
+                }
+            });
+        }
+        if let Some(i) = remove {
+            settings.nwr_streams.remove(i);
+        }
+        if ui.button("Add relay").clicked() {
+            settings.nwr_streams.push(crate::settings::NwrStream {
+                name: String::new(),
+                url: String::new(),
+            });
+        }
+    });
+    ui.collapsing("Spoken warnings", |ui| {
     if ui.button("Stop speech").clicked() {
         crate::speech::stop();
     }
@@ -1288,9 +1390,8 @@ fn alerts_tab(ui: &mut egui::Ui, settings: &mut Settings) {
         piper_row(ui, settings);
     }
 
-    ui.add_space(8.0);
-    ui.separator();
-    ui.strong("Proximity alarms");
+    });
+    ui.collapsing("Proximity alarms", |ui| {
     ui.checkbox(
         &mut settings.rain_alerts,
         "Rain heading for a saved location",
@@ -1301,6 +1402,7 @@ fn alerts_tab(ui: &mut egui::Ui, settings: &mut Settings) {
     );
     ui.checkbox(&mut settings.lightning_alarm, "Lightning within ~15 km of a saved location")
         .on_hover_text("Chime + push when CG lightning strikes near a marker. Requires the Lightning layer (National) to be on.");
+    });
 }
 
 /// Speak a warning that never happened, through the whole chain the real ones use.
@@ -1482,5 +1584,27 @@ fn alert_health(ui: &mut egui::Ui) {
              the app to sleep on its own — that switch lives in Settings \u{2192} Battery \u{2192} \
              Background usage limits, and is outside what any app can set for you.",
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn focused_pages_fit_a_phone_without_changing_preferences() {
+        for page in [appearance_tab, units_tab, radar_defaults, basemaps_tab] {
+            let ctx = egui::Context::default();
+            let mut settings = Settings::default();
+            let before = serde_json::to_value(&settings).unwrap();
+            for _ in 0..3 {
+                let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+                    ui.set_width(320.0);
+                    page(ui, &mut settings);
+                    assert!(ui.min_rect().width() <= 321.0, "page overflow: {:?}", ui.min_rect());
+                });
+            }
+            assert_eq!(serde_json::to_value(&settings).unwrap(), before);
+        }
     }
 }

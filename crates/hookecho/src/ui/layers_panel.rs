@@ -727,7 +727,11 @@ pub(crate) fn body(
                 ui.horizontal(|ui| {
                     for cat in ["Tools", "Settings"] {
                         if category_tile(ui, cat, width).clicked() {
-                            category = Some(cat.to_string());
+                            if cat == "Settings" {
+                                chosen = Some(PaletteAction::OpenWindow(crate::app::AppWindow::Settings));
+                            } else {
+                                category = Some(cat.to_string());
+                            }
                         }
                     }
                 });
@@ -842,6 +846,42 @@ pub(crate) fn body(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn settings_footer_opens_settings_with_one_click() {
+        let ctx = egui::Context::default();
+        let mut query = String::new();
+        let mut pref = Vec::new();
+        let mut pos = egui::Pos2::ZERO;
+        let entries = [PaletteEntry {
+            label: "Settings…".into(), category: "Settings",
+            action: PaletteAction::OpenWindow(crate::app::AppWindow::Settings),
+            on: None, desc: "", common: true, key: None, health: None,
+        }];
+        let mut action = None;
+        for frame in 0..5 {
+            let mut input = egui::RawInput::default();
+            if frame >= 3 {
+                input.events = vec![egui::Event::PointerMoved(pos), egui::Event::PointerButton {
+                    pos, button: egui::PointerButton::Primary, pressed: frame == 3,
+                    modifiers: egui::Modifiers::default(),
+                }];
+            }
+            let out = ctx.run_ui(input, |ui| {
+                ui.set_width(340.0);
+                action = body(ui, &entries, &mut query, Color32::WHITE, 700.0, false,
+                    &mut pref, 0, wxdata::spc::OutlookKind::default(), |_| {});
+            });
+            if frame == 2 {
+                pos = out.shapes.iter().find_map(|shape| match &shape.shape {
+                    egui::Shape::Text(t) if t.galley.job.text.ends_with("Settings") =>
+                        Some(t.pos + t.galley.rect.size() * 0.5),
+                    _ => None,
+                }).expect("Settings footer is visible");
+            }
+        }
+        assert!(matches!(action, Some(PaletteAction::OpenWindow(crate::app::AppWindow::Settings))));
+    }
 
     #[test]
     fn active_list_excludes_commands_and_off_contours() {

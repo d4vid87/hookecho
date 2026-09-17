@@ -352,7 +352,7 @@ impl HookEchoApp {
                 ui.add_space(4.0);
                 for (label, icon) in [
                     ("Map settings", egui_phosphor::regular::GEAR),
-                    ("Preferences", egui_phosphor::regular::SLIDERS_HORIZONTAL),
+                    ("Settings", egui_phosphor::regular::SLIDERS_HORIZONTAL),
                 ] {
                     if ui
                         .add_sized(
@@ -361,7 +361,11 @@ impl HookEchoApp {
                         )
                         .clicked()
                     {
-                        settings_page = Some(label);
+                        if label == "Settings" {
+                            chosen = Some(PaletteAction::OpenWindow(crate::app::AppWindow::Settings));
+                        } else {
+                            settings_page = Some(label);
+                        }
                     }
                 }
             });
