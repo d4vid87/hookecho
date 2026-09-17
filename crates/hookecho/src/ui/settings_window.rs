@@ -1088,9 +1088,6 @@ fn alerts_tab(ui: &mut egui::Ui, settings: &mut Settings) {
     ui.collapsing("Sounds & volume", |ui| sound_picker(ui, settings));
     egui::CollapsingHeader::new("When to interrupt").default_open(true).show(ui, |ui| {
 
-    ui.add_space(8.0);
-    ui.separator();
-    ui.strong("When to interrupt");
     ui.add_enabled_ui(!cfg!(target_os = "android"), |ui| {
         let r = ui
             .checkbox(&mut settings.desktop_notify, "Post alerts to the desktop")
@@ -1212,9 +1209,9 @@ fn alerts_tab(ui: &mut egui::Ui, settings: &mut Settings) {
         ui.weak("Every alert that goes to ntfy also posts here. Blank fields are off.");
         ui.weak("These URLs and the token are secrets — they stay in your settings file.");
     });
-    ui.collapsing("MQTT / Home Assistant", |ui| {
-        // No Android (its alerts leave through the foreground service) and no web (no TCP socket).
-        if !cfg!(any(target_os = "android", target_arch = "wasm32")) {
+    // Android uses its foreground service; browsers have no TCP socket.
+    if !cfg!(any(target_os = "android", target_arch = "wasm32")) {
+        ui.collapsing("MQTT / Home Assistant", |ui| {
             ui.add_space(8.0);
             ui.separator();
             ui.strong("MQTT");
@@ -1273,8 +1270,8 @@ fn alerts_tab(ui: &mut egui::Ui, settings: &mut Settings) {
                 "Publishes <prefix>/status and <prefix>/nearest every five minutes, and \
              <prefix>/alerts as warnings arrive. Takes effect on restart.",
             );
-        }
-    });
+        });
+    }
     ui.collapsing("Battery", |ui| {
         if ui
             .checkbox(
