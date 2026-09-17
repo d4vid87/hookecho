@@ -125,7 +125,7 @@ impl HookEchoApp {
                             .button(if section.is_some() {
                                 "‹ Back"
                             } else {
-                                "‹ Layers"
+                                "‹ All controls"
                             })
                             .clicked()
                         {
@@ -199,12 +199,35 @@ impl HookEchoApp {
                     }
                     return;
                 }
+                if !alerts_tab {
+                    if let Some(action) = ui::layers_panel::primary_controls(
+                        ui, &entries, self.filters.outlook_day, self.filters.outlook_kind,
+                    ) { chosen = Some(action); }
+                    ui.add_space(12.0);
+                    ui.separator();
+                    ui.heading("Severe weather alerts");
+                    let mut show_alerts = self.filters.show_alerts;
+                    if ui.checkbox(&mut show_alerts, "Show warnings on map").changed() {
+                        chosen = Some(PaletteAction::ToggleOverlay(OverlayToggle::Alerts));
+                    }
+                    ui.push_id("inline_severe_alerts", |ui| {
+                        egui::ScrollArea::vertical().max_height(220.0).show(ui, |ui| {
+                            alert_hit = ui::alert_panel::body(ui, &feats, bounds, &mut muted);
+                        });
+                    });
+                    ui.separator();
+                    if let Some(action) = ui::layers_panel::workspace_shortcuts(ui, &entries) {
+                        chosen = Some(action);
+                    }
+                    ui.add_space(12.0);
+                    ui.separator();
+                }
                 // One title and one way out. The previous brand + Data/Alerts tab row looked like
                 // three unrelated navigation systems before the actual layer controls even began.
                 ui.horizontal(|ui| {
                     ui.label(
-                        egui::RichText::new(if alerts_tab { "Alerts" } else { "Layers" })
-                            .size(crate::ui::style::FONT_TITLE)
+                        egui::RichText::new(if alerts_tab { "Alerts" } else { "Optional settings and Tools" })
+                            .size(17.0)
                             .strong(),
                     );
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -222,15 +245,8 @@ impl HookEchoApp {
                         {
                             hide = true;
                         }
-                        let switch = if alerts_tab {
-                            format!("{}  Layers", egui_phosphor::regular::STACK)
-                        } else if alert_count == 0 {
-                            format!("{}  Alerts", egui_phosphor::regular::BELL)
-                        } else {
-                            format!("{}  Alerts  {alert_count}", egui_phosphor::regular::BELL)
-                        };
-                        if ui.small_button(switch).clicked() {
-                            alerts_tab = !alerts_tab;
+                        if alerts_tab && ui.small_button("‹ All controls").clicked() {
+                            alerts_tab = false;
                         }
                     });
                 });
@@ -241,7 +257,7 @@ impl HookEchoApp {
                 }
                 // A drag rewrites the order in place, so persist it when it moves.
                 let order_was = self.settings.layer_order.clone();
-                chosen = ui::layers_panel::body(
+                let optional_action = ui::layers_panel::body(
                     ui,
                     &entries,
                     &mut query,
@@ -252,7 +268,7 @@ impl HookEchoApp {
                     if sheets_layout {
                         chrome.height() * 0.5
                     } else {
-                        (ui.available_height() - 110.0).max(120.0)
+                        420.0
                     },
                     std::mem::take(&mut focus_search),
                     &mut self.settings.layer_order,
@@ -304,6 +320,7 @@ impl HookEchoApp {
                             });
                     },
                 );
+                if optional_action.is_some() { chosen = optional_action; }
                 self.settings.etop_dbz = etop_dbz;
                 if self.settings.layer_order != order_was {
                     self.settings.save();
@@ -353,7 +370,7 @@ impl HookEchoApp {
             let title = if alerts_tab_was {
                 format!("Alerts in view ({alert_count})")
             } else {
-                "Layers & tools".to_string()
+                "Radar & tools".to_string()
             };
             let rect = crate::app::mobile::sheet::modal_sheet(
                 ctx,

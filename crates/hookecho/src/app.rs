@@ -7495,7 +7495,7 @@ impl HookEchoApp {
             .clone()
             .unwrap_or_else(|| "Pick a site".to_string());
 
-        let pick: Option<(wxdata::level2::Moment, bool)> = None;
+        let mut pick: Option<(wxdata::level2::Moment, bool)> = None;
         let mut pick_tilt: Option<usize> = None;
         // Expert knobs for the product you're on, edited through locals so the popup closure
         // doesn't need `self`. They used to live in the toolbox's Product ▸ Options disclosure.
@@ -7516,6 +7516,36 @@ impl HookEchoApp {
         let (status, status_color) = ui::layers_panel::health_look(health.state());
         let product_rect = style::glass(ui, 250)
             .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new("Radar products").strong());
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.button(egui_phosphor::regular::X).on_hover_text("Close radar controls").clicked() {
+                            self.panel_open = false;
+                        }
+                    });
+                });
+                for pair in [
+                    [("Reflectivity", Moment::Reflectivity, false), ("Velocity", Moment::Velocity, false)],
+                    [("Storm relative", Moment::Velocity, true), ("Correlation", Moment::CorrelationCoefficient, false)],
+                ] {
+                    ui.columns(2, |columns| {
+                        for (column, (label, m, relative)) in columns.iter_mut().zip(pair) {
+                            let selected = moment == m && (m != Moment::Velocity || srv == relative);
+                            if column.add_sized([column.available_width(), 38.0], egui::Button::new(label).selected(selected)).clicked() {
+                                pick = Some((m, relative));
+                            }
+                        }
+                    });
+                }
+                ui.menu_button("More radar products", |ui| {
+                    for product in crate::products::PRODUCTS {
+                        if ui.button(product.name).clicked() {
+                            pick = Some((product.moment, false));
+                            ui.close();
+                        }
+                    }
+                });
+                ui.add_space(8.0);
                 ui.horizontal(|ui| {
                     if ui.add(egui::Button::new(
                         egui::RichText::new(egui_phosphor::regular::BROADCAST)
@@ -7629,6 +7659,10 @@ impl HookEchoApp {
                             }
                         });
                     });
+                ui.add_space(8.0);
+                if ui.add_sized([ui.available_width(), 40.0], egui::Button::new(format!("{}  Custom locations", egui_phosphor::regular::MAP_PIN))).clicked() {
+                    self.marker_window.open = true;
+                }
             })
             .response
             .rect;
@@ -7651,6 +7685,9 @@ impl HookEchoApp {
             v.storm_speed_kt = speed_kt;
             v.threshold_enabled[mi] = thr_on;
             v.thresholds[mi] = thr;
+        }
+        if let Some((moment, relative)) = pick {
+            self.apply_palette(PaletteAction::SetMoment(moment, relative), ui.ctx());
         }
         if srv_from_cells {
             if let Some((dir, spd)) = self.scit_mean_motion() {

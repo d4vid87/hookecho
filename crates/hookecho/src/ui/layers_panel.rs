@@ -434,59 +434,91 @@ fn active_row(ui: &mut egui::Ui, e: &PaletteEntry, accent: Color32) -> Option<Pa
     chosen
 }
 
-/// A category is navigation, not a layer toggle. Keep the entire tile keyboard-accessible.
-fn category_tile(
+/// Quiet, keyboard-accessible navigation for optional categories.
+fn category_tile(ui: &mut egui::Ui, cat: &str, width: f32) -> egui::Response {
+    ui.add_sized(
+        vec2(width, 44.0),
+        egui::Button::new(format!("{}  {}", category_glyph(cat), category_name(cat)))
+            .frame(false),
+    ).named(category_name(cat))
+}
+
+/// The frequently used controls stay above alerts and the optional browser on every platform.
+pub(crate) fn primary_controls(
     ui: &mut egui::Ui,
-    cat: &str,
-    active: usize,
-    width: f32,
-    accent: Color32,
-) -> egui::Response {
-    let response = ui.add_sized(
-        vec2(width, 74.0),
-        egui::Button::new("")
-            .fill(ui.visuals().faint_bg_color)
-            .stroke(Stroke::new(
-                1.0,
-                ui.visuals().widgets.noninteractive.bg_stroke.color,
-            ))
-            .corner_radius(12.0),
-    );
-    response.widget_info(|| {
-        egui::WidgetInfo::labeled(
-            egui::WidgetType::Button,
-            ui.is_enabled(),
-            format!("{}, {active} active", category_name(cat)),
-        )
+    entries: &[PaletteEntry],
+    outlook_day: u8,
+    outlook_kind: wxdata::spc::OutlookKind,
+) -> Option<PaletteAction> {
+    use crate::app::{AppWindow, OverlayToggle};
+    let mut chosen = None;
+    let open_id = ui.make_persistent_id("primary_spc_open");
+    let mut spc_open = ui.ctx().data_mut(|d| d.get_temp::<bool>(open_id).unwrap_or(true));
+    ui.columns(4, |columns| {
+        for (column, (label, action)) in columns.iter_mut().zip([
+            ("Storm\ntracks", PaletteAction::ToggleOverlay(OverlayToggle::Tracks)),
+            ("MRMS", PaletteAction::ToggleField(crate::render::FieldLayer::Mrms)),
+            ("Storm\nattributes", PaletteAction::OpenWindow(AppWindow::StormTable)),
+            ("SPC\nOutlook", PaletteAction::OpenOutlooks),
+        ]) {
+            let on = if action == PaletteAction::OpenOutlooks { spc_open } else {
+                entries.iter().any(|e| e.action == action && e.on == Some(true))
+            };
+            if column.add_sized([column.available_width(), 64.0], egui::Button::new(RichText::new(label).size(12.0)).selected(on)).clicked() {
+                if action == PaletteAction::OpenOutlooks { spc_open = !spc_open; }
+                else { chosen = Some(action); }
+            }
+        }
     });
-    let r = response.rect.shrink(12.0);
-    let painter = ui.painter();
-    painter.text(
-        r.left_top(),
-        egui::Align2::LEFT_TOP,
-        category_glyph(cat),
-        egui::FontId::proportional(22.0),
-        if ui.visuals().dark_mode {
-            Color32::from_rgb(112, 215, 228)
-        } else {
-            accent
-        },
-    );
-    painter.text(
-        r.right_top(),
-        egui::Align2::RIGHT_TOP,
-        format!("{active}  ›"),
-        egui::FontId::proportional(12.0),
-        ui.visuals().weak_text_color(),
-    );
-    painter.text(
-        r.left_bottom(),
-        egui::Align2::LEFT_BOTTOM,
-        category_name(cat),
-        egui::FontId::proportional(13.0),
-        ui.visuals().text_color(),
-    );
-    response.on_hover_cursor(egui::CursorIcon::PointingHand)
+    ui.ctx().data_mut(|d| d.insert_temp(open_id, spc_open));
+    if spc_open {
+        ui.add_space(12.0);
+        ui.label(RichText::new("SPC Convective Outlook").strong());
+        let mut on = outlook_day != 0;
+        if ui.checkbox(&mut on, "Show outlook on map").changed() {
+            chosen = Some(PaletteAction::ToggleOutlook);
+        }
+        ui.label(RichText::new("Forecast day").size(12.0).strong());
+        ui.horizontal_wrapped(|ui| {
+            for day in 1u8..=8 {
+                if ui.selectable_label(outlook_day == day, format!("Day {day}")).clicked() {
+                    chosen = Some(PaletteAction::SetOutlookDay(day));
+                }
+            }
+        });
+        ui.add_space(6.0);
+        ui.label(RichText::new("Layer").size(12.0).strong());
+        ui.horizontal_wrapped(|ui| {
+            for (index, kind) in wxdata::spc::OutlookKind::ALL.into_iter().enumerate() {
+                if ui.selectable_label(outlook_kind == kind, kind.label()).clicked() {
+                    chosen = Some(PaletteAction::SetOutlookKind(index as u8));
+                }
+            }
+        });
+        ui.horizontal_wrapped(|ui| {
+            for (label, color) in [
+                ("TSTM", Color32::from_rgb(85, 170, 85)),
+                ("MRGL", Color32::from_rgb(65, 145, 75)),
+                ("SLGT", Color32::from_rgb(235, 210, 45)),
+                ("ENH", Color32::from_rgb(235, 145, 45)),
+                ("MDT", Color32::from_rgb(220, 60, 55)),
+                ("HIGH", Color32::from_rgb(220, 70, 190)),
+            ] {
+                ui.colored_label(color, RichText::new(format!("● {label}")).small());
+            }
+        });
+    }
+    chosen
+}
+
+pub(crate) fn workspace_shortcuts(ui: &mut egui::Ui, entries: &[PaletteEntry]) -> Option<PaletteAction> {
+    let mut chosen = None;
+    for entry in entries.iter().filter(|e| matches!(e.action, PaletteAction::ApplyWorkspace(_))) {
+        if ui.add_sized([ui.available_width(), 44.0], egui::Button::new(format!("{}  {}", egui_phosphor::regular::MAP_TRIFOLD, entry.label))).clicked() {
+            chosen = Some(entry.action);
+        }
+    }
+    chosen
 }
 
 /// Observation actions are grouped without duplicating the registry or losing specialist entries.
@@ -558,11 +590,11 @@ pub(crate) fn body(
     entries: &[PaletteEntry],
     query: &mut String,
     accent: Color32,
-    max_height: f32,
+    _max_height: f32,
     focus_search: bool,
     pref: &mut Vec<String>,
-    outlook_day: u8,
-    outlook_kind: wxdata::spc::OutlookKind,
+    _outlook_day: u8,
+    _outlook_kind: wxdata::spc::OutlookKind,
     mut after_radar: impl FnMut(&mut egui::Ui),
 ) -> Option<PaletteAction> {
     let mut chosen = None;
@@ -585,7 +617,7 @@ pub(crate) fn body(
                 .hint_text(if active_only {
                     "Filter active layers…"
                 } else {
-                    "Find a layer, tool, or place…"
+                    "Find a setting, tool, or place…"
                 })
                 .margin(egui::vec2(8.0, 8.0))
                 .desired_width(ui.available_width() - 4.0),
@@ -601,21 +633,9 @@ pub(crate) fn body(
     });
     ui.add_space(8.0);
     ui.horizontal(|ui| {
-        let width = (ui.available_width() - ui.spacing().item_spacing.x) * 0.5;
         let count = entries.iter().filter(|e| active_layer(e)).count();
-        for (label, value) in [
-            ("Browse".to_string(), false),
-            (format!("Active · {count}"), true),
-        ] {
-            if ui
-                .add_sized(
-                    vec2(width, 34.0),
-                    egui::Button::new(label)
-                        .selected(active_only == value)
-                        .corner_radius(9.0),
-                )
-                .clicked()
-            {
+        for (label, value) in [("Browse".to_string(), false), (format!("{count} active"), true)] {
+            if ui.selectable_label(active_only == value, label).clicked() {
                 active_only = value;
                 category = None;
             }
@@ -633,9 +653,7 @@ pub(crate) fn body(
             return Some(entries[*i].action);
         }
     }
-    let out = egui::ScrollArea::vertical()
-        .max_height(max_height)
-        .show(ui, |ui| {
+    ui.scope(|ui| {
             if order.is_empty() {
                 ui.add_space(8.0);
                 ui.weak(if active_only && query.is_empty() {
@@ -691,219 +709,26 @@ pub(crate) fn body(
                 let width = (ui.available_width() - 8.0) * 0.5;
                 let categories: Vec<_> = CATEGORIES
                     .into_iter()
+                    .filter(|cat| !["Radar", "MRMS", "Tools", "Settings"].contains(cat))
                     .filter(|cat| entries.iter().any(|e| e.category == *cat))
                     .collect();
                 for pair in categories.chunks(2) {
                     ui.horizontal(|ui| {
                         ui.spacing_mut().item_spacing.x = 8.0;
                         for cat in pair {
-                            let active = entries
-                                .iter()
-                                .filter(|e| e.category == *cat && e.on == Some(true))
-                                .count();
-                            if category_tile(ui, cat, active, width, accent).clicked() {
+                            if category_tile(ui, cat, width).clicked() {
                                 category = Some((*cat).to_string());
                             }
                         }
                     });
                     ui.add_space(4.0);
                 }
-                ui.add_space(6.0);
-                if let Some(entry) = entries.iter().find(|e| {
-                    e.action == PaletteAction::ToggleOverlay(crate::app::OverlayToggle::Tracks)
-                }) {
-                    let on = entry.on == Some(true);
-                    egui::Frame::new()
-                        .fill(ui.visuals().faint_bg_color)
-                        .corner_radius(12.0)
-                        .inner_margin(10)
-                        .show(ui, |ui| {
-                            ui.horizontal(|ui| {
-                                ui.label(
-                                    RichText::new(egui_phosphor::regular::PATH)
-                                        .size(24.0)
-                                        .color(accent),
-                                );
-                                ui.vertical(|ui| {
-                                    ui.label(RichText::new("Storm tracks").size(14.0));
-                                    ui.label(
-                                        RichText::new("Projected cell movement")
-                                            .size(10.0)
-                                            .color(ui.visuals().weak_text_color()),
-                                    );
-                                });
-                                ui.with_layout(
-                                    egui::Layout::right_to_left(egui::Align::Center),
-                                    |ui| {
-                                        let icon = if on {
-                                            egui_phosphor::regular::TOGGLE_RIGHT
-                                        } else {
-                                            egui_phosphor::regular::TOGGLE_LEFT
-                                        };
-                                        if ui
-                                            .add(
-                                                egui::Button::new(
-                                                    RichText::new(icon).size(32.0).color(if on {
-                                                        accent
-                                                    } else {
-                                                        ui.visuals().weak_text_color()
-                                                    }),
-                                                )
-                                                .frame(false)
-                                                .min_size(vec2(40.0, 36.0)),
-                                            )
-                                            .named_toggle("Projected storm tracks", on)
-                                            .clicked()
-                                        {
-                                            chosen = Some(entry.action);
-                                        }
-                                    },
-                                );
-                            });
-                        });
-                }
-                ui.add_space(8.0);
-                for (action, icon, label, detail) in [
-                    (
-                        PaletteAction::ToggleField(crate::render::FieldLayer::Mrms),
-                        egui_phosphor::regular::GLOBE,
-                        "MRMS",
-                        "National reflectivity mosaic",
-                    ),
-                    (
-                        PaletteAction::OpenWindow(crate::app::AppWindow::StormTable),
-                        egui_phosphor::regular::CHART_LINE,
-                        "Storm attributes",
-                        "Hail, tops, rotation and motion",
-                    ),
-                ] {
-                    if let Some(entry) = entries.iter().find(|e| e.action == action) {
-                        let on = entry.on == Some(true);
-                        let card = egui::Frame::new()
-                            .fill(ui.visuals().faint_bg_color)
-                            .corner_radius(12.0)
-                            .inner_margin(10)
-                            .show(ui, |ui| {
-                                ui.horizontal(|ui| {
-                                    ui.label(RichText::new(icon).size(24.0).color(accent));
-                                    ui.vertical(|ui| {
-                                        ui.label(RichText::new(label).size(14.0));
-                                        ui.label(
-                                            RichText::new(detail)
-                                                .size(10.0)
-                                                .color(ui.visuals().weak_text_color()),
-                                        );
-                                    });
-                                    if entry.on.is_some() {
-                                        ui.with_layout(
-                                            egui::Layout::right_to_left(egui::Align::Center),
-                                            |ui| {
-                                                ui.label(
-                                                    RichText::new(if on {
-                                                        egui_phosphor::regular::TOGGLE_RIGHT
-                                                    } else {
-                                                        egui_phosphor::regular::TOGGLE_LEFT
-                                                    })
-                                                    .size(32.0)
-                                                    .color(if on {
-                                                        accent
-                                                    } else {
-                                                        ui.visuals().weak_text_color()
-                                                    }),
-                                                );
-                                            },
-                                        );
-                                    }
-                                });
-                            });
-                        if card.response.interact(egui::Sense::click()).clicked() {
-                            chosen = Some(action);
+                ui.separator();
+                ui.horizontal(|ui| {
+                    for cat in ["Tools", "Settings"] {
+                        if category_tile(ui, cat, width).clicked() {
+                            category = Some(cat.to_string());
                         }
-                        ui.add_space(8.0);
-                    }
-                }
-                if let Some(entry) = entries.iter().find(|e| e.action == PaletteAction::OpenOutlooks) {
-                    let on = entry.on == Some(true);
-                    egui::Frame::new()
-                        .fill(ui.visuals().faint_bg_color)
-                        .corner_radius(12.0)
-                        .inner_margin(10)
-                        .show(ui, |ui| {
-                            ui.horizontal(|ui| {
-                                ui.label(
-                                    RichText::new(egui_phosphor::regular::WARNING)
-                                        .size(24.0)
-                                        .color(accent),
-                                );
-                                let details = ui.vertical(|ui| {
-                                    ui.label(RichText::new("SPC convective outlook").size(14.0));
-                                    ui.label(
-                                        RichText::new("Storm Prediction Center risk areas")
-                                            .size(10.0)
-                                            .color(ui.visuals().weak_text_color()),
-                                    );
-                                });
-                                if details.response.interact(egui::Sense::click()).clicked() {
-                                    chosen = Some(PaletteAction::OpenOutlooks);
-                                }
-                                ui.with_layout(
-                                    egui::Layout::right_to_left(egui::Align::Center),
-                                    |ui| {
-                                        let icon = if on {
-                                            egui_phosphor::regular::TOGGLE_RIGHT
-                                        } else {
-                                            egui_phosphor::regular::TOGGLE_LEFT
-                                        };
-                                        if ui
-                                            .add(
-                                                egui::Button::new(
-                                                    RichText::new(icon).size(32.0).color(if on {
-                                                        accent
-                                                    } else {
-                                                        ui.visuals().weak_text_color()
-                                                    }),
-                                                )
-                                                .frame(false)
-                                                .min_size(vec2(40.0, 36.0)),
-                                            )
-                                            .named_toggle("SPC convective outlook", on)
-                                            .clicked()
-                                        {
-                                            chosen = Some(PaletteAction::ToggleOutlook);
-                                        }
-                                    },
-                                );
-                            });
-                        });
-                }
-                ui.add_space(6.0);
-                ui.label(RichText::new("Forecast day").size(12.0).strong());
-                ui.horizontal_wrapped(|ui| {
-                    for day in 1u8..=8 {
-                        if ui.selectable_label(outlook_day == day, format!("Day {day}")).clicked() {
-                            chosen = Some(PaletteAction::SetOutlookDay(day));
-                        }
-                    }
-                });
-                ui.add_space(6.0);
-                ui.label(RichText::new("Layer").size(12.0).strong());
-                ui.horizontal_wrapped(|ui| {
-                    for (index, kind) in wxdata::spc::OutlookKind::ALL.into_iter().enumerate() {
-                        if ui.selectable_label(outlook_kind == kind, kind.label()).clicked() {
-                            chosen = Some(PaletteAction::SetOutlookKind(index as u8));
-                        }
-                    }
-                });
-                ui.horizontal_wrapped(|ui| {
-                    for (label, color) in [
-                        ("TSTM", Color32::from_rgb(85, 170, 85)),
-                        ("MRGL", Color32::from_rgb(65, 145, 75)),
-                        ("SLGT", Color32::from_rgb(235, 210, 45)),
-                        ("ENH", Color32::from_rgb(235, 145, 45)),
-                        ("MDT", Color32::from_rgb(220, 60, 55)),
-                        ("HIGH", Color32::from_rgb(220, 70, 190)),
-                    ] {
-                        ui.colored_label(color, RichText::new(format!("● {label}")).small());
                     }
                 });
                 return;
@@ -952,7 +777,7 @@ pub(crate) fn body(
                 ui.ctx().data_mut(|d| d.insert_temp(id, group));
                 return;
             }
-            for cat in CATEGORIES.into_iter().filter(|cat| *cat == selected) {
+            for cat in CATEGORIES.into_iter().filter(|cat| *cat == selected || (selected == "National" && *cat == "MRMS")) {
                 let mut in_cat: Vec<usize> = order
                     .iter()
                     .copied()
@@ -1008,43 +833,12 @@ pub(crate) fn body(
                 }
             }
         });
-    fade_out_bottom(ui, &out);
     ui.ctx()
         .data_mut(|d| d.insert_temp(nav_id, (active_only, category)));
     chosen
 }
 
 /// Fade the last few pixels of the scroll viewport into the card colour when there's more below.
-/// The viewport cuts wherever the height budget runs out, which lands mid-row often enough that a
-/// half-drawn description ("Specific Differential Pha…") read as a rendering bug. A fade says
-/// "keep scrolling" instead.
-fn fade_out_bottom(ui: &mut egui::Ui, out: &egui::scroll_area::ScrollAreaOutput<()>) {
-    const H: f32 = 22.0;
-    let more_below = out.content_size.y > out.inner_rect.height() + 1.0
-        && out.state.offset.y + out.inner_rect.height() < out.content_size.y - 1.0;
-    if !more_below {
-        return;
-    }
-    let r = out.inner_rect;
-    let (cr, cg, cb) = crate::ui::style::CARD_FILL;
-    let (clear, solid) = (
-        Color32::from_rgba_unmultiplied(cr, cg, cb, 0),
-        Color32::from_rgb(cr, cg, cb),
-    );
-    let mut mesh = egui::Mesh::default();
-    for (p, c) in [
-        (egui::pos2(r.left(), r.bottom() - H), clear),
-        (egui::pos2(r.right(), r.bottom() - H), clear),
-        (r.right_bottom(), solid),
-        (r.left_bottom(), solid),
-    ] {
-        mesh.colored_vertex(p, c);
-    }
-    mesh.add_triangle(0, 1, 2);
-    mesh.add_triangle(0, 2, 3);
-    ui.painter().add(egui::Shape::mesh(mesh));
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1137,10 +931,10 @@ mod tests {
         };
         let browse = render(false, None, "");
         for cat in CATEGORIES {
-            assert!(
-                browse.iter().any(|s| s == category_name(cat)),
+            if !["Radar", "MRMS"].contains(&cat) { assert!(
+                browse.iter().any(|s| s.ends_with(category_name(cat))),
                 "missing {cat}: {browse:?}"
-            );
+            ); }
             assert!(render(false, Some(cat), "")
                 .iter()
                 .any(|s| s == &format!("{cat} layer")));
@@ -1198,8 +992,6 @@ mod tests {
     #[test]
     fn browse_shows_spc_day_and_layer_controls() {
         let ctx = egui::Context::default();
-        let mut query = String::new();
-        let mut pref = Vec::new();
         let entries = [PaletteEntry {
             label: "SPC convective outlook".into(),
             category: "Severe",
@@ -1212,18 +1004,7 @@ mod tests {
         }];
         let out = ctx.run_ui(egui::RawInput::default(), |ui| {
             ui.set_width(400.0);
-            body(
-                ui,
-                &entries,
-                &mut query,
-                Color32::WHITE,
-                800.0,
-                false,
-                &mut pref,
-                1,
-                wxdata::spc::OutlookKind::Categorical,
-                |_| {},
-            );
+            primary_controls(ui, &entries, 1, wxdata::spc::OutlookKind::Categorical);
         });
         let text: Vec<_> = out
             .shapes
@@ -1235,6 +1016,53 @@ mod tests {
             .collect();
         for expected in ["Forecast day", "Day 8", "Layer", "Hail", "● HIGH"] {
             assert!(text.contains(&expected), "missing {expected}: {text:?}");
+        }
+    }
+
+    #[test]
+    fn primary_controls_dispatch_actions_and_keep_workspaces_reachable() {
+        let ctx = egui::Context::default();
+        let entries = [PaletteEntry {
+            label: "Workspace: Chase".into(), category: "Reference",
+            action: PaletteAction::ApplyWorkspace(0), on: None, desc: "",
+            common: true, key: None, health: None,
+        }];
+        let mut action = None;
+        let mut frame = |events| {
+            ctx.run_ui(egui::RawInput { events, ..Default::default() }, |ui| {
+                ui.set_width(340.0);
+                action = primary_controls(ui, &entries, 1, wxdata::spc::OutlookKind::Categorical);
+                if let Some(workspace) = workspace_shortcuts(ui, &entries) { action = Some(workspace); }
+                ui.ctx().data_mut(|d| {
+                    d.remove::<PaletteAction>(egui::Id::new("test_action"));
+                    if let Some(action) = action { d.insert_temp(egui::Id::new("test_action"), action); }
+                });
+            })
+        };
+        for (label, expected) in [
+            ("MRMS", PaletteAction::ToggleField(crate::render::FieldLayer::Mrms)),
+            ("Storm\ntracks", PaletteAction::ToggleOverlay(crate::app::OverlayToggle::Tracks)),
+            ("Storm\nattributes", PaletteAction::OpenWindow(crate::app::AppWindow::StormTable)),
+            ("Day 8", PaletteAction::SetOutlookDay(8)),
+            ("Hail", PaletteAction::SetOutlookKind(3)),
+            ("Workspace: Chase", PaletteAction::ApplyWorkspace(0)),
+        ] {
+            let output = frame(Vec::new());
+            let point = output.shapes.iter().find_map(|shape| match &shape.shape {
+                egui::Shape::Text(t) if t.galley.job.text.ends_with(label) =>
+                    Some(t.pos + t.galley.rect.size() * 0.5),
+                _ => None,
+            }).unwrap_or_else(|| panic!("missing {label}"));
+            frame(vec![egui::Event::PointerMoved(point), egui::Event::PointerButton {
+                pos: point, button: egui::PointerButton::Primary, pressed: true,
+                modifiers: egui::Modifiers::NONE,
+            }]);
+            frame(vec![egui::Event::PointerButton {
+                pos: point, button: egui::PointerButton::Primary, pressed: false,
+                modifiers: egui::Modifiers::NONE,
+            }]);
+            // Inspect outside the renderer's mutable capture.
+            assert_eq!(ctx.data(|d| d.get_temp::<PaletteAction>(egui::Id::new("test_action"))), Some(expected));
         }
     }
 
