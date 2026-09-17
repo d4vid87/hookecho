@@ -31,7 +31,7 @@ pub struct Drawer {
     stack: Vec<String>,
     /// Titles that asked to draw this frame; a page that closed itself simply stops asking.
     seen: Vec<String>,
-    /// Which frame `seen` belongs to, so the stack can prune itself without the app calling us.
+    /// Which frame `seen` belongs to.
     frame: u64,
     /// App time the drawer last went from empty to showing something, so the slide-in animates
     /// from where the drawer actually came from rather than from wherever egui last latched it.
@@ -44,6 +44,17 @@ pub struct Drawer {
 }
 
 impl Drawer {
+    /// Prune closed pages before chrome checks `is_open`, even when no pages draw anymore.
+    pub fn begin_frame(&mut self, ctx: &egui::Context) {
+        let frame = ctx.cumulative_pass_nr();
+        if frame != self.frame {
+            // A page that stopped drawing has closed itself (its own ✕, a hotkey, an action).
+            self.stack.retain(|t| self.seen.contains(t));
+            self.seen.clear();
+            self.frame = frame;
+        }
+    }
+
     /// Is a page showing? The floating panel steps aside when one is: they share the same lane,
     /// and the drawer is where the panel just sent the user.
     pub fn is_open(&self) -> bool {
@@ -91,13 +102,7 @@ impl Drawer {
         if !*open {
             return None;
         }
-        let frame = ctx.cumulative_pass_nr();
-        if frame != self.frame {
-            // A page that stopped drawing has closed itself (its own ✕, a hotkey, an action).
-            self.stack.retain(|t| self.seen.contains(t));
-            self.seen.clear();
-            self.frame = frame;
-        }
+        self.begin_frame(ctx);
         self.seen.push(title.to_string());
         if self.stack.is_empty() {
             self.opened_at = ctx.input(|i| i.time);
@@ -252,4 +257,29 @@ fn rects(ctx: &egui::Context, width: f32, expanded: bool) -> (Rect, Rect) {
     let head = Rect::from_min_size(pos2(x, top), vec2(w, HEADER_H));
     let body = Rect::from_min_max(pos2(x, head.bottom() + 4.0), pos2(x + w, bottom));
     (head, body)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn closing_last_page_releases_panel() {
+        let ctx = egui::Context::default();
+        let mut drawer = Drawer::default();
+        let _ = ctx.run_ui(Default::default(), |ui| {
+            drawer.begin_frame(ui.ctx());
+            drawer.stack.push("Settings".into());
+            drawer.seen.push("Settings".into());
+        });
+        let _ = ctx.run_ui(Default::default(), |ui| {
+            drawer.begin_frame(ui.ctx());
+            assert!(drawer.is_open());
+            // The last tool closed: no page calls this frame.
+        });
+        let _ = ctx.run_ui(Default::default(), |ui| {
+            drawer.begin_frame(ui.ctx());
+            assert!(!drawer.is_open());
+        });
+    }
 }

@@ -180,6 +180,15 @@ fn maybe_gunzip(bytes: &[u8]) -> Vec<u8> {
     bytes.to_vec()
 }
 
+/// Background geometry, foreground geometry, and labels for one vector tile.
+pub type TileGeometry = (
+    Vec<OverlayVertex>,
+    Vec<u32>,
+    Vec<OverlayVertex>,
+    Vec<u32>,
+    Vec<PlaceLabel>,
+);
+
 /// Decode + style + tessellate one MVT tile. Pure (no GPU/network); returns overlay geometry
 /// (with a background land quad baked in) plus its city/town labels.
 pub fn build_tile(
@@ -187,7 +196,7 @@ pub fn build_tile(
     id: TileId,
     palette: basemap_style::Palette,
     tess_zoom: f64,
-) -> (Vec<OverlayVertex>, Vec<u32>, Vec<OverlayVertex>, Vec<u32>, Vec<PlaceLabel>) {
+) -> TileGeometry {
     build_tile_with_theme(bytes, id, palette, tess_zoom, crate::settings::Theme::Dark)
 }
 
@@ -198,13 +207,13 @@ pub fn build_tile_with_theme(
     palette: basemap_style::Palette,
     tess_zoom: f64,
     theme: crate::settings::Theme,
-) -> (Vec<OverlayVertex>, Vec<u32>, Vec<OverlayVertex>, Vec<u32>, Vec<PlaceLabel>) {
+) -> TileGeometry {
     build_tile_detail(bytes, id, palette, tess_zoom, theme, false)
 }
 
 fn build_tile_detail(bytes: &[u8], id: TileId, palette: basemap_style::Palette,
     tess_zoom: f64, theme: crate::settings::Theme, simplified: bool,
-) -> (Vec<OverlayVertex>, Vec<u32>, Vec<OverlayVertex>, Vec<u32>, Vec<PlaceLabel>) {
+) -> TileGeometry {
     let (z, tx, ty) = id;
     let n = (1u64 << z) as f64;
     let (txf, tyf) = (tx as f64, ty as f64);
