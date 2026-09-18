@@ -2769,9 +2769,8 @@ pub struct HookEchoApp {
     last_tap: Option<(f64, egui::Pos2)>,
     /// Touch: the anchor of a double-tap-drag zoom in progress (`None` = a drag pans).
     tap_zoom: Option<egui::Pos2>,
-    /// Android: rects the mobile chrome covers this frame. Two-finger gestures are read straight
-    /// off the raw input, which has no idea egui drew a sheet over the map, so the pane input
-    /// block checks the gesture center against these.
+    /// Rects covered by floating chrome this frame. Raw wheel/pinch input must not
+    /// reach the map beneath these surfaces, including gaps between menu widgets.
     mobile_occlusion: Vec<egui::Rect>,
     /// When the last two-finger gesture ended. Lifting one finger of a pinch leaves the other
     /// one down, which egui immediately reads as a click and a fresh drag — an interrogate popup
@@ -10846,10 +10845,12 @@ impl HookEchoApp {
         let is_vector = pane_style.vector_palette().is_some();
         let is_raster = pane_style.is_raster();
         let vp = (prect.width(), prect.height());
+        let map_input = ui.input(|i| i.pointer.interact_pos())
+            .is_none_or(|pos| map_input_at(ui.ctx(), pos, &self.mobile_occlusion));
         let response = ui.interact(
             prect,
             egui::Id::new(("pane", idx)),
-            egui::Sense::click_and_drag(),
+            if map_input { egui::Sense::click_and_drag() } else { egui::Sense::hover() },
         );
 
         // --- Input (mutates this pane's camera / selects it active) ---
@@ -10938,7 +10939,7 @@ impl HookEchoApp {
         // scroll pans: on a trackpad a two-finger swipe is the obvious way to move the map, and on
         // a mouse it is a tilt wheel nobody was using.
         let (zoom, scroll) = ui.input(|i| (i.zoom_delta(), i.smooth_scroll_delta));
-        if let Some(pos) = response.hover_pos().filter(|p| prect.contains(*p)) {
+        if let Some(pos) = response.hover_pos().filter(|p| prect.contains(*p) && map_input) {
             let cursor = (pos.x - prect.left(), pos.y - prect.top());
             // `zoom_delta()` reports a live touchscreen pinch too, which the gesture block below
             // already owns (and it is the one that knows about the mobile chrome) — skip it here
@@ -10978,16 +10979,8 @@ impl HookEchoApp {
             // the root ui's available rect — so it answered true over bare map and killed every
             // pinch. Ask about the gesture's own center instead: any layer above the background
             // there is real chrome.
-            let over_layer = ui
-                .ctx()
-                .layer_id_at(mt.center_pos)
-                .is_some_and(|l| l.order != egui::Order::Background);
-            let occluded = over_layer
-                || self
-                    .mobile_occlusion
-                    .iter()
-                    .any(|r| r.contains(mt.center_pos));
-            if prect.contains(mt.center_pos) && !occluded {
+            if prect.contains(mt.center_pos)
+                && map_input_at(ui.ctx(), mt.center_pos, &self.mobile_occlusion) {
                 self.active = idx;
                 // Zoom first, then pan: the translation is in screen pixels, and applying it at
                 // the pre-zoom scale over-moves the map by the pinch's own scale factor — which is
@@ -15290,6 +15283,20 @@ pub(crate) fn to_upload(
     }
 }
 
+/// Raw map gestures must not pass through floating controls or their empty space.
+fn map_input_at(ctx: &egui::Context, pos: egui::Pos2, occlusion: &[egui::Rect]) -> bool {
+    !occlusion.iter().any(|rect| rect.contains(pos))
+        && ctx.layer_id_at(pos).is_none_or(|layer| layer.order == egui::Order::Background)
+}
+
+fn map_gesture_on_map(ctx: &egui::Context, occlusion: &[egui::Rect]) -> bool {
+    let (live, pos) = ctx.input(|i| (
+        map_gesture_live(i),
+        i.multi_touch().map(|touch| touch.center_pos).or_else(|| i.pointer.interact_pos()),
+    ));
+    live && pos.is_some_and(|pos| map_input_at(ctx, pos, occlusion))
+}
+
 /// Include inertial scrolling and trackpad pinches, which do not hold a pointer down.
 fn map_gesture_live(i: &egui::InputState) -> bool {
     i.pointer.any_down()
@@ -15972,7 +15979,7 @@ impl eframe::App for HookEchoApp {
         // force one refresh rather than making the user wait out the poll interval.
         self.frame_nr = self.frame_nr.wrapping_add(1);
         wxdata::stats::bump(wxdata::stats::Counter::FramesDrawn);
-        self.gesture_live = ctx.input(map_gesture_live);
+        self.gesture_live = map_gesture_on_map(ctx, &self.mobile_occlusion);
         #[cfg(not(target_arch = "wasm32"))]
         self.perf.tick(ctx);
         #[cfg(debug_assertions)]
@@ -16786,7 +16793,6 @@ impl eframe::App for HookEchoApp {
             if chrome {
                 self.sync_permalink();
                 self.search_pill(ctx);
-                self.control_column(ctx);
                 self.scrubber(ctx);
                 self.pane_strip(ctx);
                 self.panel(ctx);
@@ -18219,6 +18225,41 @@ mod tests {
         };
         assert_eq!(super::cell_glance_label(&cell), "A1  TVS");
         assert_eq!(super::cell_strength(&cell), 50_000);
+    }
+
+    #[test]
+    fn menu_wheel_and_pinch_do_not_interrupt_the_map() {
+        let menu = egui::Rect::from_min_size(egui::pos2(10.0, 10.0), egui::vec2(300.0, 400.0));
+        for (pos, blocked) in [(menu.center(), true), (egui::pos2(600.0, 300.0), false)] {
+            for event in [
+                egui::Event::MouseWheel { unit: egui::MouseWheelUnit::Point, phase: egui::TouchPhase::Move,
+                    delta: egui::vec2(0.0, -100.0), modifiers: egui::Modifiers::default() },
+                egui::Event::Zoom(1.2),
+            ] {
+                let ctx = egui::Context::default();
+                let raw = egui::RawInput {
+                    events: vec![egui::Event::PointerMoved(pos), event],
+                    ..Default::default()
+                };
+                let _ = ctx.run_ui(raw, |ui| {
+                    assert!(ui.input(super::map_gesture_live));
+                    assert_eq!(super::map_input_at(ui.ctx(), pos, &[menu]), !blocked);
+                    let moving_map = super::map_gesture_on_map(ui.ctx(), &[menu]);
+                    assert_eq!(moving_map, !blocked);
+                    assert_eq!(super::should_advance_timeline(false, moving_map), blocked,
+                        "menu input must not pause radar playback");
+                });
+            }
+        }
+        // Popups/windows are also occluders, without needing a menu rectangle.
+        let ctx = egui::Context::default();
+        for _ in 0..3 {
+            let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+                egui::Area::new(egui::Id::new("settings_popup"))
+                    .fixed_pos(menu.min).show(ui.ctx(), |ui| { ui.allocate_space(menu.size()); });
+            });
+        }
+        assert!(!super::map_input_at(&ctx, menu.center(), &[]));
     }
 
     #[test]

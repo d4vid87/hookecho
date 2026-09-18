@@ -98,7 +98,7 @@ impl Tour {
                 )
             }
             2 => if android {
-                "Layers opens everything else: overlays, tools, windows, the radar site. It has a \
+                "The menu opens everything else: overlays, tools, windows, the radar site. It has a \
                  search box — type what you want in plain English (\"hail\", \"sounding\", a town \
                  name) and it's one tap away."
             } else {
@@ -106,16 +106,15 @@ impl Tour {
                  overlays, tools, settings. Ctrl+K jumps straight to its search — type what you \
                  want in plain English (\"hail\", \"sounding\", a town name) and Enter runs the \
                  top match. Tools you read rather than watch open as pages in a drawer down the \
-                 left edge; the buttons down the right edge are the layers, the background map \
-                 and the alert bell."
+                 left edge. Map settings and sharing are also in the panel."
             }
             .to_string(),
             _ => {
                 let tap = if android { "Tap" } else { "Click" };
                 format!(
                     "{tap} a storm on the map to interrogate it — what the beam sees there, which \
-                     warnings cover it, how far away it is.\n\nThe bell counts warnings in view; \
-                     open it for the list, worst first. Alerts on your saved places work with the \
+                     warnings cover it, how far away it is.\n\nThe menu lists severe weather alerts in view, \
+                     worst first. Alerts on your saved places work with the \
                      app closed.\n\nPress ? any time for the keyboard map."
                 )
             }

@@ -137,7 +137,8 @@ pub fn body(
                 ui.weak("No alerts in view.");
                 return None;
             }
-            egui::ScrollArea::vertical().show(ui, |ui| {
+            // The host owns scrolling, so warnings never trap the menu wheel.
+            {
                 for row in &rows {
                     let a = row.info;
                     let resp = egui::Frame::new()
@@ -190,7 +191,7 @@ pub fn body(
                     }
                     ui.add_space(4.0);
                 }
-            });
+            }
         }
     }
     clicked
@@ -203,6 +204,40 @@ fn color32(c: [u8; 4]) -> egui::Color32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn warnings_scroll_with_the_menu_in_both_directions() {
+        let feats: Vec<GeoFeature> = (0..20).map(|i| serde_json::from_value(serde_json::json!({
+            "rings": [[[0.0,0.0],[1.0,1.0]]], "fill": [0,0,0,0],
+            "stroke": [255,0,0,255], "kind": "Warning", "title": "Warning", "detail": "",
+            "alert": { "id": i.to_string(), "event": "Tornado Warning", "headline": "Warning",
+                "area": "Test county", "description": "", "instruction": "" }
+        })).unwrap()).collect();
+        let ctx = egui::Context::default();
+        let mut offset = 0.0;
+        let mut down = 0.0;
+        for frame in 0..45 {
+            let mut events = vec![egui::Event::PointerMoved(egui::pos2(100.0, 100.0))];
+            if frame >= 3 {
+                events.push(egui::Event::MouseWheel { unit: egui::MouseWheelUnit::Point, phase: egui::TouchPhase::Move,
+                    delta: egui::vec2(0.0, if frame < 24 { -80.0 } else { 80.0 }),
+                    modifiers: egui::Modifiers::default() });
+            }
+            let _ = ctx.run_ui(egui::RawInput { events, time: Some(frame as f64 / 10.0),
+                ..Default::default() }, |ui| {
+                ui.set_width(300.0);
+                let out = egui::ScrollArea::vertical().max_height(260.0).show(ui, |ui| {
+                    ui.label("Severe weather alerts");
+                    assert!(body(ui, &feats, (-2.0,-2.0,2.0,2.0), &mut false).is_none());
+                    ui.label("Optional settings and Tools");
+                });
+                offset = out.state.offset.y;
+            });
+            if frame == 23 { down = offset; }
+        }
+        assert!(down > 400.0, "wheel over warnings must scroll the host menu: {down}");
+        assert!(offset < down - 400.0, "scrolling back must not stick: {offset} / {down}");
+    }
 
     #[test]
     fn severity_orders_tornado_first() {

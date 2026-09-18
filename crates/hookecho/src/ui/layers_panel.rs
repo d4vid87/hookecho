@@ -625,9 +625,17 @@ pub(crate) fn body(
         if focus_search {
             field.request_focus();
         }
-        // The Android keyboard shrinks the sheet after focus is granted. Reveal the
-        // field again when clipped, without pinning the scroll position while browsing.
-        if field.has_focus() && !ui.clip_rect().contains_rect(field.rect) {
+        // Only reveal on an explicit search request or when the keyboard shrinks the
+        // viewport. Revealing every clipped frame traps scrolling near the search box.
+        let height = ui.ctx().content_rect().height();
+        let previous_height = ui.ctx().data_mut(|data| {
+            let id = field.id.with("viewport_height");
+            let previous = data.get_temp::<f32>(id).unwrap_or(height);
+            data.insert_temp(id, height);
+            previous
+        });
+        if focus_search || (field.has_focus() && height < previous_height
+            && !ui.clip_rect().contains_rect(field.rect)) {
             field.scroll_to_me(Some(egui::Align::Center));
         }
     });
@@ -985,6 +993,37 @@ mod tests {
         assert!(render(false, Some("Radar"), "National")
             .iter()
             .any(|s| s == "National layer"));
+    }
+
+    #[test]
+    fn focused_search_does_not_pull_the_menu_back_while_scrolling() {
+        let ctx = egui::Context::default();
+        let mut query = String::new();
+        let mut pref = Vec::new();
+        let mut offset = 0.0;
+        let mut focused_offset = 0.0;
+        for frame in 0..30 {
+            let mut events = vec![egui::Event::PointerMoved(egui::pos2(100.0, 100.0))];
+            if frame >= 10 {
+                events.push(egui::Event::MouseWheel { unit: egui::MouseWheelUnit::Point,
+                    phase: egui::TouchPhase::Move, delta: egui::vec2(0.0, 80.0),
+                    modifiers: egui::Modifiers::default() });
+            }
+            let _ = ctx.run_ui(egui::RawInput { events, time: Some(frame as f64 / 10.0),
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(360.0, 400.0))),
+                ..Default::default() }, |ui| {
+                let out = egui::ScrollArea::vertical().show(ui, |ui| {
+                    ui.add_space(600.0);
+                    body(ui, &[], &mut query, Color32::WHITE, 100.0, frame == 0,
+                        &mut pref, 0, wxdata::spc::OutlookKind::default(), |_| {});
+                    ui.add_space(200.0);
+                });
+                offset = out.state.offset.y;
+            });
+            if frame == 9 { focused_offset = offset; }
+        }
+        assert!(focused_offset > 300.0, "search must initially be revealed");
+        assert!(offset < 10.0, "user must be able to scroll back to radar products: {offset}");
     }
 
     #[test]

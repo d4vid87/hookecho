@@ -1,4 +1,4 @@
-//! The floating map-first chrome: search pill, right-edge control column, and the panels that
+//! The floating map-first chrome: search pill and the panels that
 //! slide over the map (layers/alerts, basemap).
 //!
 //! The map runs edge to edge underneath all of it. Nothing here is docked, so a closed panel
@@ -11,17 +11,14 @@ use crate::ui::a11y::Named as _;
 const PANEL_X: f32 = 10.0;
 const PANEL_TOP: f32 = 10.0;
 const PANEL_W: f32 = 372.0;
-/// The control column sits inboard of the pane's color scale (`ui::legend`: a 16 px bar, its
-/// inset, and the value labels to its left), so the two never share pixels.
-const CONTROLS: egui::Vec2 = egui::vec2(-70.0, 44.0);
-const RIGHT_PANEL: egui::Vec2 = egui::vec2(-248.0, 44.0);
+const RIGHT_PANEL: egui::Vec2 = egui::vec2(-70.0, 44.0);
 /// What the scrubber pill needs along the bottom edge, plus a margin.
 const SCRUBBER_CLEARANCE: f32 = 144.0;
 /// How far above the bottom edge the phone's pane strip sits: over the scrubber pill, not on it.
 const PANE_STRIP_UP: f32 = 150.0;
 
 /// Is this the phone layout? Same surfaces, same registry, same state — a thumb-sized pill across
-/// the top, a control column with room around it, and panels that come up from the bottom edge as
+/// the top, and panels that come up from the bottom edge as
 /// modal sheets instead of floating beside the map.
 fn phone(ctx: &egui::Context) -> bool {
     cfg!(target_os = "android") || compact(ctx)
@@ -53,7 +50,7 @@ impl HookEchoApp {
     ///
     /// Holds the whole action registry (products, layers, tools, windows — searchable) with the
     /// app's own commands below it, plus the alerts tab. Closed by default; the search pill and
-    /// the control column are the ways in.
+    /// keyboard shortcuts are the ways in.
     pub(crate) fn panel(&mut self, ctx: &egui::Context) {
         // The tour's product stop spotlights the site and tilt rows, which are in here.
         if self.tour.wants_panel() {
@@ -211,9 +208,7 @@ impl HookEchoApp {
                         chosen = Some(PaletteAction::ToggleOverlay(OverlayToggle::Alerts));
                     }
                     ui.push_id("inline_severe_alerts", |ui| {
-                        egui::ScrollArea::vertical().max_height(220.0).show(ui, |ui| {
-                            alert_hit = ui::alert_panel::body(ui, &feats, bounds, &mut muted);
-                        });
+                        alert_hit = ui::alert_panel::body(ui, &feats, bounds, &mut muted);
                     });
                     ui.separator();
                     if let Some(action) = ui::layers_panel::workspace_shortcuts(ui, &entries) {
@@ -353,6 +348,7 @@ impl HookEchoApp {
                 for (label, icon) in [
                     ("Map settings", egui_phosphor::regular::GEAR),
                     ("Settings", egui_phosphor::regular::SLIDERS_HORIZONTAL),
+                    ("Share this view", egui_phosphor::regular::SHARE_NETWORK),
                 ] {
                     if ui
                         .add_sized(
@@ -363,6 +359,9 @@ impl HookEchoApp {
                     {
                         if label == "Settings" {
                             chosen = Some(PaletteAction::OpenWindow(crate::app::AppWindow::Settings));
+                        } else if label == "Share this view" {
+                            settings_page = Some("Preferences");
+                            ctx.data_mut(|d| d.insert_temp(egui::Id::new("preferences_section"), "Share"));
                         } else {
                             settings_page = Some(label);
                         }
@@ -388,7 +387,7 @@ impl HookEchoApp {
             // egui's layers — without this rect a pinch on the sheet zoomed the map under it.
             self.mobile_occlusion.push(rect);
         } else {
-            egui::Area::new(egui::Id::new("panel"))
+            let panel = egui::Area::new(egui::Id::new("panel"))
                 .constrain_to(chrome)
                 .anchor(egui::Align2::LEFT_TOP, egui::vec2(PANEL_X, PANEL_TOP))
                 .show(ctx, |ui| {
@@ -399,12 +398,13 @@ impl HookEchoApp {
                     });
                     ui.set_max_height(max_h);
                     egui::ScrollArea::vertical()
-                        .id_salt(("floating_panel_scroll", settings_page_was))
+                        .id_salt(("floating_panel_scroll", settings_page_was, alerts_tab_was))
                         .max_height(max_h)
                         .show(ui, |ui| {
                             body(ui);
                         });
                 });
+            self.mobile_occlusion.push(panel.response.rect);
         }
         ctx.data_mut(|d| d.insert_temp(settings_id, settings_page));
         self.show_alert_panel = alerts_tab;
@@ -559,135 +559,6 @@ impl HookEchoApp {
         self.tour_anchors.menu = anchor;
     }
 
-    /// The right-edge control column: the buttons that open what floats over the map.
-    pub(crate) fn control_column(&mut self, ctx: &egui::Context) {
-        let square_btn = |ui: &mut egui::Ui, icon: &str, on: bool, accent: egui::Color32| {
-            if phone(ctx) {
-                return crate::ui::style::square_btn(ui, icon, on, accent);
-            }
-            let label = match icon {
-                egui_phosphor::regular::STACK => "Layers",
-                egui_phosphor::regular::MAP_TRIFOLD => "Map",
-                egui_phosphor::regular::BELL => "Alerts",
-                _ => "Share",
-            };
-            let response = ui.add_sized(
-                [148.0, 46.0],
-                egui::Button::new("")
-                    .selected(on)
-                    .corner_radius(10.0),
-            );
-            let color = if on {
-                ui.visuals().selection.stroke.color
-            } else {
-                ui.style().interact(&response).text_color()
-            };
-            let center_y = response.rect.center().y;
-            for (text, offset, align) in [
-                (icon, 32.0, egui::Align2::CENTER_CENTER),
-                (label, 60.0, egui::Align2::LEFT_CENTER),
-            ] {
-                ui.painter().text(
-                    egui::pos2(response.rect.left() + offset, center_y),
-                    align,
-                    text,
-                    egui::FontId::proportional(16.0),
-                    color,
-                );
-            }
-            response
-        };
-        let mut alerts_anchor = None;
-        let accent = crate::theme::accent(self.settings.theme);
-        let (alert_count, esc) = self.alert_badge();
-        let layers_on = self.panel_open && !self.show_alert_panel;
-        let alerts_on = self.panel_open && self.show_alert_panel;
-        let share_on = self.panel_open
-            && ctx.data_mut(|d| {
-                d.get_temp::<Option<&'static str>>(egui::Id::new("panel_settings_page"))
-                    .flatten()
-                    == Some("Preferences")
-                    && d.get_temp::<&'static str>(egui::Id::new("preferences_section"))
-                        == Some("Share")
-            });
-        // On the phone the column drops below the pill and the chrome-hide eye, and sits at the
-        // screen edge: there is no legend box to stay clear of, the color scale is a top strip.
-        let at = if phone(ctx) {
-            egui::vec2(-crate::ui::m3::SP_3, phone_top(ctx) + 56.0)
-        } else {
-            CONTROLS
-        };
-        egui::Area::new(egui::Id::new("control_column"))
-            .constrain_to(self.chrome_rect)
-            .anchor(egui::Align2::RIGHT_TOP, at)
-            .show(ctx, |ui| {
-                crate::ui::style::glass(ui, 252)
-                    .inner_margin(8)
-                    .show(ui, |ui| {
-                        if square_btn(ui, egui_phosphor::regular::STACK, layers_on, accent)
-                            .named_toggle("Layers, products and tools", layers_on)
-                            .clicked()
-                        {
-                            self.panel_open = !layers_on;
-                            self.show_alert_panel = false;
-                        }
-                        if square_btn(
-                            ui,
-                            egui_phosphor::regular::MAP_TRIFOLD,
-                            self.basemap_open,
-                            accent,
-                        )
-                        .named_toggle("Background map", self.basemap_open)
-                        .clicked()
-                        {
-                            self.basemap_open = !self.basemap_open;
-                        }
-                        let bell = square_btn(ui, egui_phosphor::regular::BELL, alerts_on, accent)
-                            .named_toggle("Active alerts in view", alerts_on);
-                        alerts_anchor = Some(bell.rect);
-                        if bell.clicked() {
-                            self.panel_open = !alerts_on;
-                            self.show_alert_panel = true;
-                        }
-                        // Sharing where you are looking is the thing people do with a radar and had
-                        // no button for — only Ctrl+K knew about it.
-                        if square_btn(ui, egui_phosphor::regular::SHARE_NETWORK, share_on, accent)
-                            .named("Share this view")
-                            .clicked()
-                        {
-                            self.panel_open = true;
-                            self.show_alert_panel = false;
-                            ctx.data_mut(|d| {
-                                d.insert_temp(
-                                    egui::Id::new("panel_settings_page"),
-                                    Some("Preferences"),
-                                );
-                                d.insert_temp(egui::Id::new("preferences_section"), "Share");
-                            });
-                        }
-                        // Count over the bell's top-right corner, coloured by the worst alert in
-                        // view — the same escalation the alert panel sorts by.
-                        if alert_count > 0 {
-                            let c = match esc {
-                                0 => crate::ui::style::OMEGA_ORANGE,
-                                1 => egui::Color32::from_rgb(230, 120, 60),
-                                _ => egui::Color32::from_rgb(200, 20, 20),
-                            };
-                            let at = bell.rect.right_top() + egui::vec2(-4.0, 4.0);
-                            ui.painter().circle_filled(at, 8.0, c);
-                            ui.painter().text(
-                                at,
-                                egui::Align2::CENTER_CENTER,
-                                alert_count.min(99).to_string(),
-                                egui::FontId::proportional(10.0),
-                                egui::Color32::BLACK,
-                            );
-                        }
-                    });
-            });
-        self.tour_anchors.alerts = alerts_anchor;
-    }
-
     /// The pane strip: which of the split panes is on screen, and the way to the others.
     ///
     /// The phone draws one pane at a time, so the desktop's accent outline has nothing to say —
@@ -746,7 +617,7 @@ impl HookEchoApp {
         }
     }
 
-    /// Background picker, slid in beside the control column.
+    /// Background picker beside the map.
     pub(crate) fn basemap_panel(&mut self, ctx: &egui::Context) {
         if !self.basemap_open {
             return;
