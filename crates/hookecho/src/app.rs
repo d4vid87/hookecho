@@ -14150,10 +14150,16 @@ impl HookEchoApp {
         if ws.panes.is_empty() {
             return;
         }
-        let adopted = ws
-            .adopt_site
-            .then(|| self.views[self.active].site.clone())
-            .flatten();
+        let current_site = self.views[self.active]
+            .site
+            .as_deref()
+            .filter(|site| wxdata::sites::site_by_id(site).is_some());
+        let default_site = if wxdata::sites::site_by_id(&self.settings.default_site).is_some() {
+            &self.settings.default_site
+        } else {
+            "KTLX"
+        };
+        let adopted = ws.adopted_site(current_site, default_site);
         self.set_pane_count(ws.panes.len());
         for (v, snap) in self.views.iter_mut().zip(&ws.panes) {
             snap.apply(v);
@@ -14174,6 +14180,11 @@ impl HookEchoApp {
                 continue;
             }
             *self.overlay_flag(t) = ws.overlays_on.iter().any(|s| *s == t.slug());
+        }
+        // A site-less layout needs the site picker visible or there is no way to attach radar.
+        // This also repairs starter workspaces saved before RadarSites was part of their overlays.
+        if ws.panes.iter().any(|pane| pane.site.is_none()) {
+            self.show_radar_sites = true;
         }
         // Same rule for the national field layers: an unknown slug is a layer this build
         // doesn't have, which is a thing to skip rather than an error.

@@ -45,6 +45,13 @@ pub struct Workspace {
     pub chrome: Option<Chrome>,
 }
 
+impl Workspace {
+    pub fn adopted_site(&self, current: Option<&str>, default: &str) -> Option<String> {
+        self.adopt_site
+            .then(|| current.unwrap_or(default).to_owned())
+    }
+}
+
 /// The floating chrome's state, as far as it is worth restoring: which surface was showing, not
 /// how far it was scrolled.
 #[derive(Debug, Clone, PartialEq, Default, serde::Serialize, serde::Deserialize)]
@@ -184,6 +191,7 @@ pub fn starters() -> Vec<Workspace> {
             overlays_on: vec![
                 "Alerts".into(),
                 "Cells".into(),
+                "RadarSites".into(),
                 "Spotters".into(),
                 "StormReports".into(),
                 "Tds".into(),
@@ -209,7 +217,12 @@ pub fn starters() -> Vec<Workspace> {
             }],
             active: 0,
             link_cameras: false,
-            overlays_on: vec!["Alerts".into(), "StormReports".into(), "Fronts".into()],
+            overlays_on: vec![
+                "Alerts".into(),
+                "RadarSites".into(),
+                "StormReports".into(),
+                "Fronts".into(),
+            ],
             adopt_site: false,
             fields_on: vec!["mrms".into()],
             chrome: None,
@@ -223,7 +236,12 @@ pub fn starters() -> Vec<Workspace> {
                 .collect(),
             active: 0,
             link_cameras: true,
-            overlays_on: vec!["Alerts".into(), "Cells".into(), "RangeRings".into()],
+            overlays_on: vec![
+                "Alerts".into(),
+                "Cells".into(),
+                "RadarSites".into(),
+                "RangeRings".into(),
+            ],
             adopt_site: true,
             fields_on: Vec::new(),
             chrome: None,
@@ -234,6 +252,17 @@ pub fn starters() -> Vec<Workspace> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn starters_can_always_reach_radar() {
+        let starters = starters();
+        assert!(starters
+            .iter()
+            .all(|ws| ws.overlays_on.iter().any(|overlay| overlay == "RadarSites")));
+        assert_eq!(starters[0].adopted_site(None, "KTLX").as_deref(), Some("KTLX"));
+        assert_eq!(starters[2].adopted_site(Some("KFWS"), "KTLX").as_deref(), Some("KFWS"));
+        assert_eq!(starters[1].adopted_site(None, "KTLX"), None);
+    }
 
     #[test]
     fn pane_roundtrips_through_a_view() {
