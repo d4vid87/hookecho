@@ -278,14 +278,12 @@ pub(crate) fn show(
                 ui.label(egui::RichText::new("Forecast day").small().strong());
                 ui.horizontal_wrapped(|ui| {
                     for day in 1u8..=8 {
-                        changed |= ui
-                            .selectable_value(&mut filters.outlook_day, day, format!("Day {day}"))
-                            .changed();
+                        if ui.selectable_label(filters.outlook_day == day, format!("Day {day}")).clicked() {
+                            filters.outlook_day = if filters.outlook_day == day { 0 } else { day };
+                            changed = true;
+                        }
                     }
                 });
-                changed |= ui
-                    .selectable_value(&mut filters.outlook_day, 0, "Hide outlook")
-                    .changed();
 
                 // Day 1 is the only outlook with separate tornado, wind and hail probabilities.
                 if filters.outlook_day == 1 {

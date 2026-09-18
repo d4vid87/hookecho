@@ -474,15 +474,11 @@ pub(crate) fn primary_controls(
     if spc_open {
         ui.add_space(12.0);
         ui.label(RichText::new("SPC Convective Outlook").strong());
-        let mut on = outlook_day != 0;
-        if ui.checkbox(&mut on, "Show outlook on map").changed() {
-            chosen = Some(PaletteAction::ToggleOutlook);
-        }
         ui.label(RichText::new("Forecast day").size(12.0).strong());
         ui.horizontal_wrapped(|ui| {
             for day in 1u8..=8 {
                 if ui.selectable_label(outlook_day == day, format!("Day {day}")).clicked() {
-                    chosen = Some(PaletteAction::SetOutlookDay(day));
+                    chosen = Some(PaletteAction::SetOutlookDay(if outlook_day == day { 0 } else { day }));
                 }
             }
         });
@@ -1095,6 +1091,41 @@ mod tests {
             .collect();
         for expected in ["Forecast day", "Day 8", "Layer", "Hail", "● HIGH"] {
             assert!(text.contains(&expected), "missing {expected}: {text:?}");
+        }
+    }
+
+    #[test]
+    fn outlook_days_toggle_off_and_switch_directly() {
+        let ctx = egui::Context::default();
+        let mut active = 0;
+        let mut frame = |events| {
+            ctx.run_ui(egui::RawInput { events, ..Default::default() }, |ui| {
+                ui.set_width(340.0);
+                if let Some(PaletteAction::SetOutlookDay(day)) =
+                    primary_controls(ui, &[], active, wxdata::spc::OutlookKind::Categorical) {
+                    active = day;
+                }
+                ui.ctx().data_mut(|d| d.insert_temp(egui::Id::new("test_outlook_day"), active));
+            })
+        };
+        for day in 1u8..=8 {
+            for expected in [day, 0, day] {
+                let output = frame(Vec::new());
+                assert!(!output.shapes.iter().any(|shape| matches!(&shape.shape,
+                    egui::Shape::Text(t) if t.galley.job.text == "Show outlook on map")));
+                let point = output.shapes.iter().find_map(|shape| match &shape.shape {
+                    egui::Shape::Text(t) if t.galley.job.text == format!("Day {day}") =>
+                        Some(t.pos + t.galley.rect.size() * 0.5),
+                    _ => None,
+                }).expect("forecast day is visible");
+                for pressed in [true, false] {
+                    frame(vec![egui::Event::PointerMoved(point), egui::Event::PointerButton {
+                        pos: point, button: egui::PointerButton::Primary, pressed,
+                        modifiers: egui::Modifiers::NONE,
+                    }]);
+                }
+                assert_eq!(ctx.data(|d| d.get_temp::<u8>(egui::Id::new("test_outlook_day"))), Some(expected));
+            }
         }
     }
 
