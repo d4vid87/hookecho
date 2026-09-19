@@ -725,10 +725,10 @@ impl OverlaySource {
                 }
             }
             OverlaySource::Field(layer, product) => {
-                if product == wxdata::mrms::REFLECTIVITY {
+                if wxdata::mrms::descriptor_for_product(&product).is_some() {
                     OverlayMsg::RegisteredField(
                         layer,
-                        wxdata::mrms::fetch_latest_reflectivity_frame(http).await?,
+                        wxdata::mrms::fetch_latest_frame(http, &product).await?,
                     )
                 } else {
                     OverlayMsg::Field(layer, wxdata::mrms::fetch_latest(http, &product).await?)

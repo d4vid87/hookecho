@@ -124,11 +124,13 @@ pub(crate) fn show(
         ("Radar mosaic", on.contains(&FL::Mosaic)),
         (
             "Data details",
-            on.contains(&FL::Mrms)
-                && fields
-                    .get(&FL::Mrms)
-                    .and_then(|state| state.frame.as_ref())
-                    .is_some(),
+            crate::render::FieldLayer::DRAW_ORDER.iter().any(|layer| {
+                on.contains(layer)
+                    && fields
+                        .get(layer)
+                        .and_then(|state| state.frame.as_ref())
+                        .is_some()
+            }),
         ),
         ("Future radar", on.contains(&FL::Hrrr)),
         ("Nowcast", filters.show_nowcast),
@@ -168,7 +170,13 @@ pub(crate) fn show(
     ui.ctx().data_mut(|d| d.insert_temp(id, section));
     ui.add_space(4.0);
     if section == "Data details" {
-        if let Some(frame) = fields.get(&FL::Mrms).and_then(|state| state.frame.as_ref()) {
+        if let Some(frame) = crate::render::FieldLayer::DRAW_ORDER
+            .iter()
+            .rev()
+            .find(|layer| on.contains(layer))
+            .and_then(|layer| fields.get(layer))
+            .and_then(|state| state.frame.as_ref())
+        {
             ui.label(egui::RichText::new(frame.descriptor.display_name).strong());
             egui::Grid::new("field_provenance").num_columns(2).show(ui, |ui| {
                 ui.weak("Source");

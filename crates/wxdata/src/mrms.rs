@@ -32,6 +32,51 @@ pub static REFLECTIVITY_DESCRIPTOR: FieldDescriptor = FieldDescriptor {
     supports_contours: true,
     supports_difference: true,
 };
+
+macro_rules! descriptor {
+    ($name:ident, $id:literal, $display:literal, $short:literal, $units:literal, $kind:ident, $palette:literal, $sampling:ident, $difference:literal, [$($alias:literal),* $(,)?]) => {
+        pub static $name: FieldDescriptor = FieldDescriptor {
+            id: FieldId($id),
+            source: "NOAA MRMS",
+            family: FieldFamily::Mrms,
+            display_name: $display,
+            short_name: $short,
+            search_aliases: &[$($alias),*],
+            units: $units,
+            value_kind: ValueKind::$kind,
+            palette_key: $palette,
+            sampling: SamplingPolicy::$sampling,
+            missing: MissingData::Nan,
+            supports_contours: matches!(ValueKind::$kind, ValueKind::Scalar),
+            supports_difference: $difference,
+        };
+    };
+}
+
+descriptor!(LIGHTNING_DESCRIPTOR, "mrms.nldn-cg-density", "Cloud-to-ground lightning density", "CG Lightning", "strikes/km²/min", Scalar, "lightning", Bilinear, false, ["nldn", "lightning"]);
+descriptor!(MESH_DESCRIPTOR, "mrms.mesh", "Maximum estimated hail size", "MESH", "mm", Scalar, "mesh", Bilinear, true, ["hail", "mesh"]);
+descriptor!(HAIL_SWATH_DESCRIPTOR, "mrms.mesh-max", "Maximum hail-size swath", "Hail Swath", "mm", Accumulation, "hail-swath", Nearest, false, ["hail track", "mesh max"]);
+descriptor!(AZSHEAR_DESCRIPTOR, "mrms.azshear-0-2km", "0–2 km azimuthal shear", "AzShear", "s⁻¹", Scalar, "azshear", Bilinear, true, ["rotation", "shear"]);
+descriptor!(ROTATION_DESCRIPTOR, "mrms.rotation-track", "Rotation track", "Rotation Track", "s⁻¹", Accumulation, "rotation", Nearest, false, ["rotation", "azimuthal shear"]);
+descriptor!(QPE_01H_DESCRIPTOR, "mrms.qpe-1h", "One-hour quantitative precipitation estimate", "QPE 1h", "mm", Accumulation, "qpe-1h", Nearest, false, ["rain", "precipitation"]);
+descriptor!(QPE_24H_DESCRIPTOR, "mrms.qpe-24h", "24-hour quantitative precipitation estimate", "QPE 24h", "mm", Accumulation, "qpe-24h", Nearest, false, ["rain", "precipitation"]);
+descriptor!(PRECIP_RATE_DESCRIPTOR, "mrms.precip-rate", "Surface precipitation rate", "Precip Rate", "mm/hr", Scalar, "precip-rate", Bilinear, true, ["rain rate"]);
+descriptor!(PRECIP_TYPE_DESCRIPTOR, "mrms.precip-type", "Surface precipitation type", "Precip Type", "category", Categorical, "precip-type", Nearest, false, ["rain", "snow", "sleet"]);
+descriptor!(FLASH_ARI30_DESCRIPTOR, "mrms.flash-ari30", "30-minute flash-flood recurrence interval", "FLASH ARI", "yr", Scalar, "flash-flood", Bilinear, false, ["flood", "ari"]);
+
+pub static DESCRIPTORS: [&FieldDescriptor; 11] = [
+    &REFLECTIVITY_DESCRIPTOR,
+    &LIGHTNING_DESCRIPTOR,
+    &MESH_DESCRIPTOR,
+    &HAIL_SWATH_DESCRIPTOR,
+    &AZSHEAR_DESCRIPTOR,
+    &ROTATION_DESCRIPTOR,
+    &QPE_01H_DESCRIPTOR,
+    &QPE_24H_DESCRIPTOR,
+    &PRECIP_RATE_DESCRIPTOR,
+    &PRECIP_TYPE_DESCRIPTOR,
+    &FLASH_ARI30_DESCRIPTOR,
+];
 /// Cloud-to-ground lightning strike density, 5-minute average (strikes/km²/min).
 pub const LIGHTNING: &str = "CONUS/NLDN_CG_005min_AvgDensity_00.00";
 
@@ -322,15 +367,18 @@ pub async fn fetch_latest(http: &reqwest::Client, product: &str) -> anyhow::Resu
 }
 
 /// Fetch composite reflectivity through the common metadata path.
-pub async fn fetch_latest_reflectivity_frame(
+pub async fn fetch_latest_frame(
     http: &reqwest::Client,
+    product: &str,
 ) -> anyhow::Result<FieldFrame> {
-    let key = latest_key(http, REFLECTIVITY).await?;
-    let field = fetch_key(http, REFLECTIVITY, &key).await?;
+    let descriptor = descriptor_for_product(product)
+        .ok_or_else(|| anyhow::anyhow!("unregistered MRMS product {product}"))?;
+    let key = latest_key(http, product).await?;
+    let field = fetch_key(http, product, &key).await?;
     let received_time = chrono::Utc::now();
     let valid_time = field.time;
     Ok(FieldFrame::new(
-        &REFLECTIVITY_DESCRIPTOR,
+        descriptor,
         field,
         DataStamp {
             source_identity: key,
@@ -342,6 +390,34 @@ pub async fn fetch_latest_reflectivity_frame(
             quality: QualitySummary::Unknown,
         },
     ))
+}
+
+/// Registry metadata for a currently supported MRMS object path.
+pub fn descriptor_for_product(product: &str) -> Option<&'static FieldDescriptor> {
+    Some(match product {
+        REFLECTIVITY => &REFLECTIVITY_DESCRIPTOR,
+        LIGHTNING
+        | "CONUS/NLDN_CG_001min_AvgDensity_00.00"
+        | "CONUS/NLDN_CG_015min_AvgDensity_00.00"
+        | "CONUS/NLDN_CG_030min_AvgDensity_00.00" => &LIGHTNING_DESCRIPTOR,
+        MESH => &MESH_DESCRIPTOR,
+        MESH_1440
+        | "CONUS/MESH_Max_30min_00.50"
+        | "CONUS/MESH_Max_60min_00.50"
+        | "CONUS/MESH_Max_120min_00.50"
+        | "CONUS/MESH_Max_240min_00.50"
+        | "CONUS/MESH_Max_360min_00.50" => &HAIL_SWATH_DESCRIPTOR,
+        AZSHEAR => &AZSHEAR_DESCRIPTOR,
+        "CONUS/RotationTrack30min_00.50"
+        | "CONUS/RotationTrack60min_00.50"
+        | "CONUS/RotationTrack120min_00.50" => &ROTATION_DESCRIPTOR,
+        QPE_01H => &QPE_01H_DESCRIPTOR,
+        QPE_24H => &QPE_24H_DESCRIPTOR,
+        PRECIP_RATE => &PRECIP_RATE_DESCRIPTOR,
+        PRECIP_TYPE => &PRECIP_TYPE_DESCRIPTOR,
+        FLASH_ARI30 => &FLASH_ARI30_DESCRIPTOR,
+        _ => return None,
+    })
 }
 
 async fn fetch_key(
@@ -628,5 +704,29 @@ mod tests {
         // 720 is not published, so it lands on the 24-hour swath rather than a 404.
         assert_eq!(hail_swath(720), MESH_1440);
         assert_eq!(hail_swath(1440), MESH_1440);
+    }
+
+    #[test]
+    fn supported_products_have_unique_stable_descriptors() {
+        let products = [
+            REFLECTIVITY,
+            lightning_density(30),
+            MESH,
+            hail_swath(60),
+            AZSHEAR,
+            rotation_track(120),
+            QPE_01H,
+            QPE_24H,
+            PRECIP_RATE,
+            PRECIP_TYPE,
+            FLASH_ARI30,
+        ];
+        let mut ids: Vec<_> = products
+            .into_iter()
+            .map(|product| descriptor_for_product(product).unwrap().id.0)
+            .collect();
+        ids.sort_unstable();
+        ids.dedup();
+        assert_eq!(ids.len(), DESCRIPTORS.len());
     }
 }
