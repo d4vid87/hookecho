@@ -230,6 +230,8 @@ enum OverlayMsg {
     Placefile(String, wxdata::placefile::Placefile),
     /// The latest grid for a national field layer (mosaic, rotation, MESH, AzShear, lightning).
     Field(crate::render::FieldLayer, wxdata::mrms::MrmsField),
+    /// A registry-backed grid. Unmigrated fields continue through `Field` above.
+    RegisteredField(crate::render::FieldLayer, wxdata::field::FieldFrame),
     /// A model-difference grid plus the two valid times it compared, for the layer's own row.
     ModelDiff(wxdata::mrms::MrmsField, (String, String)),
     /// `(0 °C, −20 °C)` level heights above sea level, in metres, at the active radar.
@@ -723,7 +725,14 @@ impl OverlaySource {
                 }
             }
             OverlaySource::Field(layer, product) => {
-                OverlayMsg::Field(layer, wxdata::mrms::fetch_latest(http, &product).await?)
+                if product == wxdata::mrms::REFLECTIVITY {
+                    OverlayMsg::RegisteredField(
+                        layer,
+                        wxdata::mrms::fetch_latest_reflectivity_frame(http).await?,
+                    )
+                } else {
+                    OverlayMsg::Field(layer, wxdata::mrms::fetch_latest(http, &product).await?)
+                }
             }
             OverlaySource::SnowBands => {
                 // Both grids at once: the mask is useless without the echo and vice versa.
@@ -1759,6 +1768,8 @@ type ZdrCache = (
 #[derive(Default)]
 pub(crate) struct FieldState {
     pub pending: Option<crate::render::MrmsUpload>,
+    /// Native values and provenance for registry-backed products. GPU uploads remain display-only.
+    pub frame: Option<wxdata::field::FieldFrame>,
     pub last_fetch: Option<Instant>,
     /// Since when no pane has drawn this layer. Its GPU texture (up to 8192 px of R8) is freed
     /// after [`FIELD_EVICT`]; before this, thirty-five layers could stay resident until exit.
@@ -8286,6 +8297,13 @@ impl HookEchoApp {
                     let upload = self.field_upload(layer, &field);
                     if let Some(s) = self.fields.get_mut(&layer) {
                         s.pending = Some(upload);
+                    }
+                }
+                OverlayMsg::RegisteredField(layer, frame) => {
+                    let upload = self.field_upload(layer, frame.field());
+                    if let Some(s) = self.fields.get_mut(&layer) {
+                        s.pending = Some(upload);
+                        s.frame = Some(frame);
                     }
                 }
                 OverlayMsg::ModelDiff(field, valid) => {

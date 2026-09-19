@@ -122,6 +122,14 @@ pub(crate) fn show(
         ("Rotation tracks", on.contains(&FL::Rotation)),
         ("Hail swaths", on.contains(&FL::HailSwath)),
         ("Radar mosaic", on.contains(&FL::Mosaic)),
+        (
+            "Data details",
+            on.contains(&FL::Mrms)
+                && fields
+                    .get(&FL::Mrms)
+                    .and_then(|state| state.frame.as_ref())
+                    .is_some(),
+        ),
         ("Future radar", on.contains(&FL::Hrrr)),
         ("Nowcast", filters.show_nowcast),
         ("Snowfall", on.contains(&FL::SnowAnalysis)),
@@ -159,6 +167,31 @@ pub(crate) fn show(
         .on_hover_text("Choose a layer to adjust");
     ui.ctx().data_mut(|d| d.insert_temp(id, section));
     ui.add_space(4.0);
+    if section == "Data details" {
+        if let Some(frame) = fields.get(&FL::Mrms).and_then(|state| state.frame.as_ref()) {
+            ui.label(egui::RichText::new(frame.descriptor.display_name).strong());
+            egui::Grid::new("field_provenance").num_columns(2).show(ui, |ui| {
+                ui.weak("Source");
+                ui.label(frame.descriptor.source);
+                ui.end_row();
+                ui.weak("Valid");
+                ui.label(frame.stamp.valid_time.format("%Y-%m-%d %H:%M UTC").to_string());
+                ui.end_row();
+                ui.weak("Received");
+                ui.label(frame.stamp.received_time.format("%Y-%m-%d %H:%M:%S UTC").to_string());
+                ui.end_row();
+                ui.weak("Units");
+                ui.label(frame.descriptor.units);
+                ui.end_row();
+                ui.weak("Grid");
+                ui.label(format!("{} × {} · {}", frame.grid.nx, frame.grid.ny, frame.grid.projection));
+                ui.end_row();
+                ui.weak("Object");
+                ui.label(&frame.stamp.source_identity);
+                ui.end_row();
+            });
+        }
+    }
     if section == "Global forecast" && global_on {
         ui.horizontal(|ui| {
             ui.label("Global model:");

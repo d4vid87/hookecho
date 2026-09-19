@@ -7,10 +7,31 @@
 use gribberish::data_message::DataMessage;
 use gribberish::message::read_message;
 
+use crate::field::{
+    DataClass, DataStamp, FieldDescriptor, FieldFamily, FieldFrame, FieldId, MissingData,
+    QualitySummary, SamplingPolicy, ValueKind,
+};
+
 const BUCKET: &str = "https://noaa-mrms-pds.s3.amazonaws.com";
 
 /// National composite reflectivity mosaic (dBZ).
 pub const REFLECTIVITY: &str = "CONUS/MergedReflectivityQCComposite_00.50";
+
+pub static REFLECTIVITY_DESCRIPTOR: FieldDescriptor = FieldDescriptor {
+    id: FieldId("mrms.composite-reflectivity"),
+    source: "NOAA MRMS",
+    family: FieldFamily::Mrms,
+    display_name: "MRMS composite reflectivity",
+    short_name: "MRMS Reflectivity",
+    search_aliases: &["mosaic", "dbz", "reflectivity"],
+    units: "dBZ",
+    value_kind: ValueKind::Scalar,
+    palette_key: "reflectivity",
+    sampling: SamplingPolicy::Bilinear,
+    missing: MissingData::Nan,
+    supports_contours: true,
+    supports_difference: true,
+};
 /// Cloud-to-ground lightning strike density, 5-minute average (strikes/km²/min).
 pub const LIGHTNING: &str = "CONUS/NLDN_CG_005min_AvgDensity_00.00";
 
@@ -91,6 +112,27 @@ fn haversine_km(lat1: f64, lon1: f64, lat2: f64, lon2: f64) -> f64 {
 }
 
 impl MrmsField {
+    /// Value from the cell containing `(lon, lat)`, or `None` outside the grid/missing data.
+    pub fn sample_nearest(&self, lon: f64, lat: f64) -> Option<f32> {
+        if self.nx == 0
+            || self.ny == 0
+            || lon < self.lon_west
+            || lon > self.lon_east
+            || lat < self.lat_south
+            || lat > self.lat_north
+        {
+            return None;
+        }
+        let x = (((lon - self.lon_west) / (self.lon_east - self.lon_west) * self.nx as f64)
+            .floor() as usize)
+            .min(self.nx - 1);
+        let y = (((self.lat_north - lat) / (self.lat_north - self.lat_south) * self.ny as f64)
+            .floor() as usize)
+            .min(self.ny - 1);
+        let value = self.values[y * self.nx + x];
+        value.is_finite().then_some(value)
+    }
+
     /// Largest non-NaN grid value within `radius_km` of `(lon, lat)`, or 0.0 if none. Scans a
     /// lat/lon window sized to the radius and haversine-filters. Used for point proximity checks
     /// (e.g. lightning density near a saved location) against a density/intensity grid.
@@ -276,6 +318,37 @@ impl MrmsField {
 /// Fetch + decode the latest CONUS mosaic for `product` (see [`REFLECTIVITY`], [`LIGHTNING`]).
 pub async fn fetch_latest(http: &reqwest::Client, product: &str) -> anyhow::Result<MrmsField> {
     let key = latest_key(http, product).await?;
+    fetch_key(http, product, &key).await
+}
+
+/// Fetch composite reflectivity through the common metadata path.
+pub async fn fetch_latest_reflectivity_frame(
+    http: &reqwest::Client,
+) -> anyhow::Result<FieldFrame> {
+    let key = latest_key(http, REFLECTIVITY).await?;
+    let field = fetch_key(http, REFLECTIVITY, &key).await?;
+    let received_time = chrono::Utc::now();
+    let valid_time = field.time;
+    Ok(FieldFrame::new(
+        &REFLECTIVITY_DESCRIPTOR,
+        field,
+        DataStamp {
+            source_identity: key,
+            issue_time: None,
+            run_time: None,
+            valid_time,
+            received_time,
+            class: DataClass::Analysis,
+            quality: QualitySummary::Unknown,
+        },
+    ))
+}
+
+async fn fetch_key(
+    http: &reqwest::Client,
+    product: &str,
+    key: &str,
+) -> anyhow::Result<MrmsField> {
     let url = format!("{BUCKET}/{key}");
     let gz = http
         .get(&url)

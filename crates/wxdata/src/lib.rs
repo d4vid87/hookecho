@@ -20,6 +20,7 @@ pub mod eccc;
 pub mod efield;
 pub mod ero;
 pub mod forecast;
+pub mod field;
 pub mod fronts;
 pub mod geocode;
 pub mod glm;
