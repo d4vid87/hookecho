@@ -117,7 +117,7 @@ impl PaneSnap {
                 crate::render::FieldLayer::DRAW_ORDER
                     .iter()
                     .filter(|l| v.fields_on.contains(l))
-                    .map(|l| l.slug().to_string())
+                    .map(|l| l.stable_id().to_string())
                     .collect(),
             ),
             thresholds: wxdata::level2::Moment::ALL
@@ -307,7 +307,10 @@ mod tests {
         v.thresholds[Moment::Velocity.index()] = Some(20.0);
 
         let snap = PaneSnap::capture(&v);
-        assert_eq!(snap.fields_on.as_deref(), Some(["mrms".to_string()].as_slice()));
+        assert_eq!(
+            snap.fields_on.as_deref(),
+            Some(["mrms.composite-reflectivity".to_string()].as_slice())
+        );
         assert_eq!(snap.thresholds, vec![(Moment::Reflectivity, 35.0)]);
 
         let mut fresh = MapView::new(
@@ -397,7 +400,7 @@ mod tests {
             assert!(ws.active < ws.panes.len());
             for slug in &ws.fields_on {
                 assert!(
-                    crate::render::FieldLayer::from_slug(slug).is_some(),
+                    crate::render::FieldLayer::from_stable_id(slug).is_some(),
                     "{}: unknown field layer {slug}",
                     ws.name
                 );

@@ -14280,7 +14280,7 @@ impl HookEchoApp {
             fields_on: crate::render::FieldLayer::DRAW_ORDER
                 .iter()
                 .filter(|l| self.field_wanted(**l))
-                .map(|l| l.slug().to_string())
+                .map(|l| l.stable_id().to_string())
                 .collect(),
             chrome: Some(self.capture_chrome()),
         }
@@ -14335,10 +14335,9 @@ impl HookEchoApp {
             // back to the workspace-wide list so an old file still restores what it meant. An
             // empty list is a pane that had its layers off, which is a decision, not a gap.
             let list = snap.fields_on.as_ref().unwrap_or(&ws.fields_on);
-            v.fields_on = crate::render::FieldLayer::DRAW_ORDER
+            v.fields_on = list
                 .iter()
-                .copied()
-                .filter(|l| list.iter().any(|s| s == l.slug()))
+                .filter_map(|id| crate::render::FieldLayer::from_stable_id(id))
                 .collect();
         }
         if let Some(c) = &ws.chrome {

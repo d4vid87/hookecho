@@ -259,6 +259,44 @@ impl FieldLayer {
     pub fn from_slug(s: &str) -> Option<FieldLayer> {
         Self::DRAW_ORDER.into_iter().find(|f| f.slug() == s)
     }
+
+    /// Registry identity for migrated products; legacy layers keep their established slug.
+    pub fn stable_id(self) -> &'static str {
+        use FieldLayer as FL;
+        match self {
+            FL::Mrms => wxdata::mrms::REFLECTIVITY_DESCRIPTOR.id.0,
+            FL::Lightning => wxdata::mrms::LIGHTNING_DESCRIPTOR.id.0,
+            FL::Mesh => wxdata::mrms::MESH_DESCRIPTOR.id.0,
+            FL::HailSwath => wxdata::mrms::HAIL_SWATH_DESCRIPTOR.id.0,
+            FL::AzShear => wxdata::mrms::AZSHEAR_DESCRIPTOR.id.0,
+            FL::Rotation => wxdata::mrms::ROTATION_DESCRIPTOR.id.0,
+            FL::Qpe1h => wxdata::mrms::QPE_01H_DESCRIPTOR.id.0,
+            FL::Qpe24h => wxdata::mrms::QPE_24H_DESCRIPTOR.id.0,
+            FL::PrecipRate => wxdata::mrms::PRECIP_RATE_DESCRIPTOR.id.0,
+            FL::PrecipType => wxdata::mrms::PRECIP_TYPE_DESCRIPTOR.id.0,
+            FL::FlashFlood => wxdata::mrms::FLASH_ARI30_DESCRIPTOR.id.0,
+            other => other.slug(),
+        }
+    }
+
+    /// Read current registry IDs and every legacy layer slug.
+    pub fn from_stable_id(id: &str) -> Option<FieldLayer> {
+        use FieldLayer as FL;
+        Some(match id {
+            "mrms.composite-reflectivity" => FL::Mrms,
+            "mrms.nldn-cg-density" => FL::Lightning,
+            "mrms.mesh" => FL::Mesh,
+            "mrms.mesh-max" => FL::HailSwath,
+            "mrms.azshear-0-2km" => FL::AzShear,
+            "mrms.rotation-track" => FL::Rotation,
+            "mrms.qpe-1h" => FL::Qpe1h,
+            "mrms.qpe-24h" => FL::Qpe24h,
+            "mrms.precip-rate" => FL::PrecipRate,
+            "mrms.precip-type" => FL::PrecipType,
+            "mrms.flash-ari30" => FL::FlashFlood,
+            legacy => return Self::from_slug(legacy),
+        })
+    }
 }
 
 #[cfg(test)]
@@ -276,6 +314,17 @@ mod field_slug_tests {
         slugs.dedup();
         assert_eq!(slugs.len(), n, "two layers share a slug");
         assert_eq!(FieldLayer::from_slug("not-a-layer"), None);
+    }
+
+    #[test]
+    fn migrated_ids_and_legacy_slugs_both_restore() {
+        assert_eq!(FieldLayer::Mrms.stable_id(), "mrms.composite-reflectivity");
+        assert_eq!(
+            FieldLayer::from_stable_id("mrms.composite-reflectivity"),
+            Some(FieldLayer::Mrms)
+        );
+        assert_eq!(FieldLayer::from_stable_id("mrms"), Some(FieldLayer::Mrms));
+        assert_eq!(FieldLayer::from_stable_id("future.unknown"), None);
     }
 }
 
