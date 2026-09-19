@@ -13,6 +13,14 @@
 use wxdata::global::GlobalField;
 use wxdata::mrms::MrmsField;
 
+/// Comparisons are scientific only when both operands describe the same valid instant.
+pub fn same_valid_time(
+    a: chrono::DateTime<chrono::Utc>,
+    b: chrono::DateTime<chrono::Utc>,
+) -> bool {
+    a == b
+}
+
 /// What the difference layer is differencing, and therefore which two models it asks for.
 ///
 /// ponytail: a fixed pair per field rather than two free model pickers. These are the two
@@ -361,5 +369,12 @@ mod tests {
         };
         assert!(rgb(-9.0).1 > rgb(-9.0).0, "negative is blue");
         assert!(rgb(9.0).0 > rgb(9.0).1, "positive is red");
+    }
+
+    #[test]
+    fn comparisons_require_the_same_valid_instant() {
+        let a = chrono::Utc::now();
+        assert!(same_valid_time(a, a));
+        assert!(!same_valid_time(a, a + chrono::Duration::minutes(1)));
     }
 }

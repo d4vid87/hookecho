@@ -785,6 +785,12 @@ impl OverlaySource {
                             wxdata::global::fetch(http, GlobalModel::Ecmwf, g, fh),
                         )
                         .await?;
+                        anyhow::ensure!(
+                            crate::fielddiff::same_valid_time(gfs.valid(), ecmwf.valid()),
+                            "model difference unavailable: GFS valid {} but ECMWF valid {}",
+                            gfs.valid().format("%d %H:%MZ"),
+                            ecmwf.valid().format("%d %H:%MZ")
+                        );
                         let valid = (
                             gfs.valid().format("%d %H:%MZ").to_string(),
                             ecmwf.valid().format("%d %H:%MZ").to_string(),
@@ -815,6 +821,12 @@ impl OverlaySource {
                             ),
                         )
                         .await?;
+                        anyhow::ensure!(
+                            crate::fielddiff::same_valid_time(hrrr.run, rap.run),
+                            "model difference unavailable: HRRR valid {} but RAP valid {}",
+                            hrrr.run.format("%d %H:%MZ"),
+                            rap.run.format("%d %H:%MZ")
+                        );
                         let valid = (
                             hrrr.run.format("%d %H:%MZ").to_string(),
                             rap.run.format("%d %H:%MZ").to_string(),
@@ -11619,6 +11631,7 @@ impl HookEchoApp {
         let field_draws: Vec<(crate::render::FieldLayer, f32)> = self.views[idx]
             .fields_on
             .iter()
+            .filter(|layer| self.field_aligned(idx, **layer))
             .map(|k| {
                 (
                     *k,
@@ -14058,6 +14071,33 @@ impl HookEchoApp {
                 ui::legend::draw_ramp(&painter, prect, &crate::render::field_ramps::WIND, y);
             }
         }
+    }
+
+    /// Whether a registry-backed observed field answers the instant this pane is showing.
+    /// Unmigrated fields retain their existing behavior until they carry a `DataStamp`.
+    fn field_aligned(&self, pane: usize, layer: crate::render::FieldLayer) -> bool {
+        let Some(frame) = self.fields.get(&layer).and_then(|state| state.frame.as_ref()) else {
+            return true;
+        };
+        let Some(analysis_time) = self.views[pane]
+            .timeline
+            .current()
+            .and_then(|id| id.date_time())
+            .or_else(|| self.views[pane].volume.as_ref().map(|volume| volume.time))
+        else {
+            return true;
+        };
+        let available = [wxdata::timecoord::TimedFrame {
+            valid: frame.stamp.valid_time,
+            value: (),
+        }];
+        wxdata::timecoord::align(
+            &available,
+            analysis_time,
+            wxdata::timecoord::TimePolicy::NearestPast,
+            chrono::Duration::seconds((field_refresh_secs(layer) * 2) as i64),
+        )
+        .is_some()
     }
 
     /// Resize the pane grid to `n` (1/2/4). New panes copy the active pane's site/camera but
