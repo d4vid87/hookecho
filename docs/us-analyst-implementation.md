@@ -7,10 +7,10 @@ roadmap checkbox only after its gate passes and link the test or capture here.
 | Area | Status | Current evidence | Gate evidence |
 |---|---|---|---|
 | A1 field registry | Partial | `wxdata::field`; MRMS reflectivity descriptor/frame/sample path | `cargo test -p wxdata --lib` |
-| A2 time alignment | Partial | `timeline.rs`, radar playback, model valid times | Pending common coordinator tests |
-| A3 requests/cancellation | Partial | `RequestBook`, generation checks, worker decode | Pending shared-consumer cancellation tests |
+| A2 time alignment | Partial | `timecoord.rs`; observed MRMS draw alignment; exact-time model differences | Coordinator and compatibility tests pass; HRRR/RAP registry migration pending |
+| A3 requests/cancellation | Partial | hashed request identity, deduplication, abortable fetches, generation checks | Shared-consumer and stale-result tests pass; decode-stage cancellation pending |
 | A4 provenance/health | Partial | source health plus reflectivity `DataStamp` inspector | Pending all migrated families |
-| A5 persistent cache | Partial | native caches and IndexedDB chase packs | Pending automatic browser object cache |
+| A5 persistent cache | Partial | native caches, pinned IndexedDB chase packs, automatic MRMS object cache | Integrity/LRU tests and web storage controls pass; model byte ranges pending milestone 4 |
 | B operational radar | Partial | Level II stream/archive, progressive merge, six moments | Pending provider/failover fixture gate |
 | C radar analysis | Partial | derived radar products and detectors | Pending bounded product DSL |
 | D satellite/GLM | Partial | GLM support | Pending native ABI ingest and projection gate |
@@ -42,4 +42,3 @@ Baseline commit: `9a0847c6521e9d9354c42cde09d291f4f2b67327`.
 Startup, resident memory, and interactive frame timing are hardware-dependent. Capture them with
 `scripts/perf/capture.sh` and the in-app performance panel on the release-test hardware before the
 foundation promotion; do not turn one developer-machine run into a universal threshold.
-

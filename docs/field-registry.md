@@ -29,8 +29,9 @@ use nearest-neighbor sampling.
 
 ## First migration
 
-`mrms.composite-reflectivity` is the first complete slice. Acquisition records the immutable S3
-object key and receipt time, the renderer consumes its native field through the compatibility
-bridge, and Layer options → Data details exposes source, valid/received times, units, grid, and
-source identity. The common sampler reads the native values rather than the display texture.
-
+`mrms.composite-reflectivity` was the first complete slice. Every currently supported MRMS field
+now has a descriptor and enters through the same frame/provenance path. Acquisition records the
+immutable S3 object key and receipt time, the renderer consumes native fields through the
+compatibility bridge, and Layer options → Data details exposes source, valid/received times,
+units, grid, and source identity. The common sampler reads native values rather than the display
+texture.
