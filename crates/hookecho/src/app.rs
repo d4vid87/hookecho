@@ -307,7 +307,7 @@ enum OverlayMsg {
 }
 
 /// One overlay data source to fetch.
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 enum OverlaySource {
     /// NWS alerts; the `(lat, lon)` list scopes zone-only alert resolution to the active radar and
     /// every saved marker. The bounds are the active pane's viewport, which is what decides
@@ -515,6 +515,8 @@ impl SourceHealth {
 
 struct RequestStatus {
     fetching: bool,
+    /// Hashed source arguments. The hash deduplicates without retaining API keys or locations.
+    identity: u64,
     last_attempt: Instant,
     last_success: Option<Instant>,
     last_failure: Option<(Instant, String)>,
@@ -530,7 +532,15 @@ struct RequestBook {
 }
 
 impl RequestBook {
-    fn start(&mut self, lane: RequestLane) -> u64 {
+    /// Start distinct work, or join the identical request already running in this lane.
+    fn start(&mut self, lane: RequestLane, identity: u64) -> Option<u64> {
+        if self
+            .status
+            .get(&lane)
+            .is_some_and(|status| status.fetching && status.identity == identity)
+        {
+            return None;
+        }
         self.next = self.next.wrapping_add(1);
         self.latest.insert(lane.clone(), self.next);
         let now = Instant::now();
@@ -539,17 +549,19 @@ impl RequestBook {
             .entry(lane)
             .and_modify(|s| {
                 s.fetching = true;
+                s.identity = identity;
                 s.last_attempt = now;
                 s.cadence = cadence;
             })
             .or_insert(RequestStatus {
                 fetching: true,
+                identity,
                 last_attempt: now,
                 last_success: None,
                 last_failure: None,
                 cadence,
             });
-        self.next
+        Some(self.next)
     }
 
     fn is_current(&self, lane: &RequestLane, generation: u64) -> bool {
@@ -611,6 +623,15 @@ enum OverlayDelivery {
 }
 
 impl OverlaySource {
+    fn identity(&self) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut hash = std::collections::hash_map::DefaultHasher::new();
+        // Debug includes every selector carried by the enum. Hash immediately so credentials and
+        // private coordinates never enter request state, health UI, or diagnostics.
+        format!("{self:?}").hash(&mut hash);
+        hash.finish()
+    }
+
     fn lane(&self) -> RequestLane {
         use crate::render::FieldLayer as FL;
         match self {
@@ -4096,6 +4117,12 @@ impl HookEchoApp {
         if self.derived_key.as_ref() == Some(&key) {
             return;
         }
+        let derived_identity = {
+            use std::hash::{Hash, Hasher};
+            let mut hash = std::collections::hash_map::DefaultHasher::new();
+            key.hash(&mut hash);
+            hash.finish()
+        };
         // Binning is cached on the volume; the integral is the expensive half and runs off-thread.
         let sweeps = vol.reflectivity_tilts();
         if sweeps.len() < 2 {
@@ -4113,7 +4140,8 @@ impl HookEchoApp {
             .overlay_requests
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .start(lane.clone());
+            .start(lane.clone(), derived_identity)
+            .expect("a changed derived-field key cannot duplicate an in-flight request");
         let cap = self.field_texture_cap();
         let ctx = ctx.clone();
         self.spawner.spawn_blocking(move || {
@@ -4172,11 +4200,15 @@ impl HookEchoApp {
 
     fn spawn_overlay(&self, ctx: &egui::Context, source: OverlaySource) {
         let lane = source.lane();
-        let generation = self
+        let identity = source.identity();
+        let Some(generation) = self
             .overlay_requests
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .start(lane.clone());
+            .start(lane.clone(), identity)
+        else {
+            return;
+        };
         let http = self.http.clone();
         let tx = self.overlay_tx.clone();
         let ctx = ctx.clone();
@@ -18743,9 +18775,9 @@ mod request_book_tests {
         let mut book = RequestBook::default();
         let cape = RequestLane::Field(FieldLayer::Cape);
         let srh = RequestLane::Field(FieldLayer::Srh);
-        let old_cape = book.start(cape.clone());
-        let current_srh = book.start(srh.clone());
-        let current_cape = book.start(cape.clone());
+        let old_cape = book.start(cape.clone(), 1).unwrap();
+        let current_srh = book.start(srh.clone(), 1).unwrap();
+        let current_cape = book.start(cape.clone(), 2).unwrap();
 
         // A late success or failure has the same identity check: neither may mutate state.
         assert!(!book.is_current(&cape, old_cape));
@@ -18757,6 +18789,20 @@ mod request_book_tests {
         assert_eq!(health.state(), HealthState::Fresh);
         assert!(health.error.is_none());
         assert_eq!(book.health(&srh).state(), HealthState::Fetching);
+    }
+
+    #[test]
+    fn identical_inflight_work_is_joined_but_changed_work_supersedes_it() {
+        let mut book = RequestBook::default();
+        let lane = RequestLane::Field(FieldLayer::Mrms);
+        let first = book.start(lane.clone(), 41).unwrap();
+        assert_eq!(book.start(lane.clone(), 41), None);
+        let changed = book.start(lane.clone(), 42).unwrap();
+        assert_ne!(first, changed);
+        assert!(!book.finish(&lane, first, None));
+        assert!(book.finish(&lane, changed, None));
+        // Once completed, the same identity may refresh normally.
+        assert!(book.start(lane, 42).is_some());
     }
 
     #[test]
