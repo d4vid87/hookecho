@@ -169,7 +169,7 @@ fn pane(moment: wxdata::level2::Moment, tilt: usize, srv: bool) -> PaneSnap {
         // `None`, not an empty list: a starter describes an arrangement, and its panes take the
         // workspace-wide layers rather than asserting that every pane is bare.
         fields_on: None,
-        thresholds: Vec::new(),
+        thresholds: vec![(wxdata::level2::Moment::Reflectivity, 16.0)],
     }
 }
 
@@ -213,7 +213,7 @@ pub fn starters() -> Vec<Workspace> {
                 lat: 38.5,
                 zoom: 4.0,
                 fields_on: Some(vec!["mrms".into()]),
-                thresholds: Vec::new(),
+                thresholds: vec![(Moment::Reflectivity, 16.0)],
             }],
             active: 0,
             link_cameras: false,

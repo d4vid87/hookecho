@@ -202,14 +202,18 @@ impl HookEchoApp {
                     ) { chosen = Some(action); }
                     ui.add_space(12.0);
                     ui.separator();
-                    ui.heading("Severe weather alerts");
+                    ui.horizontal(|ui| {
+                        ui.heading("Severe weather alerts");
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui.button(format!("Alerts  {alert_count}")).clicked() {
+                                alerts_tab = true;
+                            }
+                        });
+                    });
                     let mut show_alerts = self.filters.show_alerts;
                     if ui.checkbox(&mut show_alerts, "Show warnings on map").changed() {
                         chosen = Some(PaletteAction::ToggleOverlay(OverlayToggle::Alerts));
                     }
-                    ui.push_id("inline_severe_alerts", |ui| {
-                        alert_hit = ui::alert_panel::body(ui, &feats, bounds, &mut muted);
-                    });
                     ui.separator();
                     if let Some(action) = ui::layers_panel::workspace_shortcuts(ui, &entries) {
                         chosen = Some(action);

@@ -226,13 +226,17 @@ pub struct MapView {
 
 impl MapView {
     pub fn new(site: Option<String>, camera: crate::render::mercator::Camera) -> Self {
+        let mut thresholds = [None; Moment::ALL.len()];
+        let mut threshold_enabled = [false; Moment::ALL.len()];
+        thresholds[Moment::Reflectivity.index()] = Some(16.0);
+        threshold_enabled[Moment::Reflectivity.index()] = true;
         Self {
             camera,
             site,
             moment: Moment::Reflectivity,
             tilt: 0,
-            thresholds: [None; Moment::ALL.len()],
-            threshold_enabled: [false; Moment::ALL.len()],
+            thresholds,
+            threshold_enabled,
             volume: None,
             recent: LruCache::new(NonZeroUsize::new(RECENT_VOLUMES).unwrap()),
             loaded_site: None,
@@ -586,5 +590,11 @@ mod tests {
         // SRV never applies to non-velocity moments.
         v.moment = Moment::Reflectivity;
         assert_eq!(v.storm_motion_uv(), None);
+    }
+
+    #[test]
+    fn new_views_ship_with_the_reflectivity_floor() {
+        let v = MapView::new(None, Camera::at_lonlat(-97.0, 35.0, 8.0));
+        assert_eq!(v.active_threshold(), Some(16.0));
     }
 }
