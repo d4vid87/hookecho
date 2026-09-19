@@ -26,6 +26,17 @@ impl Spawner {
         self.handle.spawn(fut);
     }
 
+    pub fn spawn_abortable<F>(&self, fut: F) -> futures_util::future::AbortHandle
+    where
+        F: std::future::Future<Output = ()> + Send + 'static,
+    {
+        let (handle, registration) = futures_util::future::AbortHandle::new_pair();
+        self.handle.spawn(async move {
+            let _ = futures_util::future::Abortable::new(fut, registration).await;
+        });
+        handle
+    }
+
     /// Run blocking work (file I/O, a long decode) off the UI thread.
     pub fn spawn_blocking<F>(&self, f: F)
     where
@@ -51,6 +62,17 @@ impl Spawner {
         F: std::future::Future<Output = ()> + 'static,
     {
         wasm_bindgen_futures::spawn_local(fut);
+    }
+
+    pub fn spawn_abortable<F>(&self, fut: F) -> futures_util::future::AbortHandle
+    where
+        F: std::future::Future<Output = ()> + 'static,
+    {
+        let (handle, registration) = futures_util::future::AbortHandle::new_pair();
+        wasm_bindgen_futures::spawn_local(async move {
+            let _ = futures_util::future::Abortable::new(fut, registration).await;
+        });
+        handle
     }
 
     /// There is no thread pool to move work to, so "blocking" work runs on the main thread.

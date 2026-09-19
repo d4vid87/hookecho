@@ -521,6 +521,7 @@ struct RequestStatus {
     last_success: Option<Instant>,
     last_failure: Option<(Instant, String)>,
     cadence: std::time::Duration,
+    abort: Option<futures_util::future::AbortHandle>,
 }
 
 /// Latest generation and fetch health in each result lane.
@@ -542,6 +543,9 @@ impl RequestBook {
             return None;
         }
         self.next = self.next.wrapping_add(1);
+        if let Some(handle) = self.status.get_mut(&lane).and_then(|status| status.abort.take()) {
+            handle.abort();
+        }
         self.latest.insert(lane.clone(), self.next);
         let now = Instant::now();
         let cadence = lane.cadence();
@@ -560,8 +564,39 @@ impl RequestBook {
                 last_success: None,
                 last_failure: None,
                 cadence,
+                abort: None,
             });
         Some(self.next)
+    }
+
+    fn attach_abort(
+        &mut self,
+        lane: &RequestLane,
+        generation: u64,
+        handle: futures_util::future::AbortHandle,
+    ) {
+        if self.is_current(lane, generation) {
+            if let Some(status) = self.status.get_mut(lane) {
+                status.abort = Some(handle);
+                return;
+            }
+        }
+        handle.abort();
+    }
+
+    fn cancel(&mut self, lane: &RequestLane) -> bool {
+        let Some(status) = self.status.get_mut(lane) else {
+            return false;
+        };
+        if !status.fetching {
+            return false;
+        }
+        if let Some(handle) = status.abort.take() {
+            handle.abort();
+        }
+        status.fetching = false;
+        self.latest.remove(lane);
+        true
     }
 
     fn is_current(&self, lane: &RequestLane, generation: u64) -> bool {
@@ -575,6 +610,7 @@ impl RequestBook {
         }
         if let Some(s) = self.status.get_mut(lane) {
             s.fetching = false;
+            s.abort = None;
             match error {
                 Some(e) => s.last_failure = Some((Instant::now(), e.to_string())),
                 None => s.last_success = Some(Instant::now()),
@@ -4225,7 +4261,8 @@ impl HookEchoApp {
         let tx = self.overlay_tx.clone();
         let ctx = ctx.clone();
         let cap = self.field_texture_cap();
-        self.spawner.spawn(async move {
+        let delivery_lane = lane.clone();
+        let handle = self.spawner.spawn_abortable(async move {
             // Deliberately shorter than the 120 s refresh that drives this: a fetch that cannot
             // outlive its own cadence cannot stack. Before, a feed the network swallowed left a
             // task alive forever and the next tick started another one on top of it.
@@ -4245,12 +4282,16 @@ impl HookEchoApp {
                 Err(e) => Err(e.to_string()),
             };
             let _ = tx.send(OverlayDelivery::Fetched {
-                lane,
+                lane: delivery_lane,
                 generation,
                 result,
             });
             ctx.request_repaint();
         });
+        self.overlay_requests
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .attach_abort(&lane, generation, handle);
     }
 
     /// Hazard kind for the current outlook day: probabilistic layers exist only for Day 1;
@@ -11601,6 +11642,17 @@ impl HookEchoApp {
                 .flat_map(|v| v.fields_on.iter().copied())
                 .collect();
             let mut drop = Vec::new();
+            {
+                let mut requests = self
+                    .overlay_requests
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                for layer in crate::render::FieldLayer::DRAW_ORDER {
+                    if !on.contains(&layer) {
+                        requests.cancel(&RequestLane::Field(layer));
+                    }
+                }
+            }
             for (layer, st) in self.fields.iter_mut() {
                 if on.contains(layer) {
                     st.off_since = None;
@@ -18843,6 +18895,19 @@ mod request_book_tests {
         assert!(book.finish(&lane, changed, None));
         // Once completed, the same identity may refresh normally.
         assert!(book.start(lane, 42).is_some());
+    }
+
+    #[test]
+    fn a_field_is_cancelled_only_after_its_last_consumer_leaves() {
+        let mut book = RequestBook::default();
+        let lane = RequestLane::Field(FieldLayer::Mrms);
+        let generation = book.start(lane.clone(), 1).unwrap();
+        let (handle, _registration) = futures_util::future::AbortHandle::new_pair();
+        book.attach_abort(&lane, generation, handle.clone());
+        assert!(book.cancel(&lane));
+        assert!(handle.is_aborted());
+        assert!(!book.is_current(&lane, generation));
+        assert!(!book.cancel(&lane));
     }
 
     #[test]
