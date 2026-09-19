@@ -40,6 +40,7 @@ pub mod ndbc;
 pub mod net;
 pub mod nohrsc;
 pub mod obs;
+pub mod object_cache;
 pub mod odim;
 pub mod openmeteo;
 pub mod opera;

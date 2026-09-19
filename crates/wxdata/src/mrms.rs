@@ -363,7 +363,7 @@ impl MrmsField {
 /// Fetch + decode the latest CONUS mosaic for `product` (see [`REFLECTIVITY`], [`LIGHTNING`]).
 pub async fn fetch_latest(http: &reqwest::Client, product: &str) -> anyhow::Result<MrmsField> {
     let key = latest_key(http, product).await?;
-    fetch_key(http, product, &key).await
+    fetch_key(http, product, &key).await.map(|fetched| fetched.0)
 }
 
 /// Fetch composite reflectivity through the common metadata path.
@@ -374,8 +374,7 @@ pub async fn fetch_latest_frame(
     let descriptor = descriptor_for_product(product)
         .ok_or_else(|| anyhow::anyhow!("unregistered MRMS product {product}"))?;
     let key = latest_key(http, product).await?;
-    let field = fetch_key(http, product, &key).await?;
-    let received_time = chrono::Utc::now();
+    let (field, received_time) = fetch_key(http, product, &key).await?;
     let valid_time = field.time;
     Ok(FieldFrame::new(
         descriptor,
@@ -424,7 +423,13 @@ async fn fetch_key(
     http: &reqwest::Client,
     product: &str,
     key: &str,
-) -> anyhow::Result<MrmsField> {
+) -> anyhow::Result<(MrmsField, chrono::DateTime<chrono::Utc>)> {
+    if let Some(cached) = crate::object_cache::get("mrms", key).await {
+        let raw = gunzip(&cached.bytes)?;
+        let field = crate::task::guarded(|| decode_grib2(&raw))
+            .unwrap_or_else(|_| anyhow::bail!("cached grib decode panicked for {product}"))?;
+        return Ok((field, cached.received_at));
+    }
     let url = format!("{BUCKET}/{key}");
     let gz = http
         .get(&url)
@@ -433,11 +438,16 @@ async fn fetch_key(
         .error_for_status()?
         .bytes()
         .await?;
+    let received_at = chrono::Utc::now();
     let raw = gunzip(&gz)?;
     // gribberish can panic on some MRMS product packings (a slice off-by-one on rotation-track /
     // AzShear grids). Contain it so a bad product surfaces as an error, never a process abort.
-    crate::task::guarded(|| decode_grib2(&raw))
-        .unwrap_or_else(|_| anyhow::bail!("grib decode panicked for {product}"))
+    let field = crate::task::guarded(|| decode_grib2(&raw))
+        .unwrap_or_else(|_| anyhow::bail!("grib decode panicked for {product}"))?;
+    if let Err(error) = crate::object_cache::put("mrms", key, &gz, received_at).await {
+        log::warn!("MRMS browser cache write failed: {error}");
+    }
+    Ok((field, received_at))
 }
 
 /// Newest key seen per product, so refreshes can ask S3 only for what came after it.

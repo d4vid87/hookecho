@@ -60,7 +60,7 @@ wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
 # Already in the lockfile under eframe/wgpu — `net.rs` needs only the page origin, to point feed
 # fetches at the same-origin CORS proxy.
-web-sys = { version = "0.3", features = ["Window", "Location"] }
+web-sys = { version = "0.3", features = ["Window", "Location", "Event", "IdbFactory", "IdbOpenDbRequest", "IdbDatabase", "IdbObjectStore", "IdbTransaction", "IdbTransactionMode", "IdbRequest"] }
 # The browser's only timer. `task::sleep` needs one, and there is no tokio here.
 gloo-timers = { version = "0.3", features = ["futures"] }
 # Already in the lockfile under eframe. Backs `clock::Instant`: the standard library's panics here.

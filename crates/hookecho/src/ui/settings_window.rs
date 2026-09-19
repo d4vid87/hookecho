@@ -204,6 +204,8 @@ impl SettingsWindow {
                                     ui.collapsing("Storage & cache", |ui| {
                                         self.storage_tab(ui, settings)
                                     });
+                                    #[cfg(target_arch = "wasm32")]
+                                    ui.collapsing("Storage & cache", browser_storage_tab);
                                 }
                                 Tab::Help => help_tab(ui, &mut self.run_setup, &mut self.run_tour),
                             }
@@ -565,6 +567,49 @@ impl SettingsWindow {
                     }
                 }
             });
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+fn browser_storage_tab(ui: &mut egui::Ui) {
+    let (rows, ready, error) = wxdata::object_cache::known_stats();
+    if !ready {
+        ui.spinner();
+        ui.ctx().request_repaint();
+        return;
+    }
+    ui.weak("Automatic weather-data cache. Saved chase packs are separate and stay pinned.");
+    if rows.is_empty() {
+        ui.label("No automatic weather data cached yet.");
+    }
+    for row in rows {
+        ui.horizontal(|ui| {
+            ui.label(row.family.to_uppercase());
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui.button("Clear").clicked() {
+                    wxdata::object_cache::spawn_clear(row.family.clone());
+                }
+                ui.weak(format!(
+                    "{} objects · {} of {}",
+                    row.objects,
+                    human_bytes(row.bytes),
+                    human_bytes(row.cap)
+                ));
+            });
+        });
+    }
+    if let Some(error) = error {
+        ui.colored_label(ui.visuals().error_fg_color, error);
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+fn human_bytes(bytes: usize) -> String {
+    let mb = bytes as f64 / 1024.0 / 1024.0;
+    if mb >= 1024.0 {
+        format!("{:.1} GB", mb / 1024.0)
+    } else {
+        format!("{mb:.1} MB")
     }
 }
 
