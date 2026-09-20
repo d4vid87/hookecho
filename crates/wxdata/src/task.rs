@@ -45,6 +45,18 @@ pub async fn sleep(d: std::time::Duration) {
     gloo_timers::future::TimeoutFuture::new(d.as_millis() as u32).await;
 }
 
+/// Give an enclosing abortable task a chance to stop before its next CPU-heavy stage.
+#[cfg(not(target_arch = "wasm32"))]
+pub async fn yield_now() {
+    tokio::task::yield_now().await;
+}
+
+/// Browser equivalent: return to the event loop before continuing synchronous work.
+#[cfg(target_arch = "wasm32")]
+pub async fn yield_now() {
+    gloo_timers::future::TimeoutFuture::new(0).await;
+}
+
 /// Run `fut`, giving up after `d`.
 ///
 /// The reason this exists rather than `reqwest`'s own timeout: on wasm reqwest has no timeout to
@@ -122,6 +134,15 @@ mod tests {
         // The shape of the bug this is for: a request that is neither answered nor refused.
         let stuck = timeout(Duration::from_secs(5), std::future::pending::<()>()).await;
         assert!(stuck.is_err(), "a future that never finishes times out");
+    }
+
+    #[test]
+    fn yield_now_returns_pending_before_cpu_work_can_continue() {
+        use std::future::Future;
+
+        let mut future = std::pin::pin!(yield_now());
+        let mut context = std::task::Context::from_waker(futures_util::task::noop_waker_ref());
+        assert!(future.as_mut().poll(&mut context).is_pending());
     }
 }
 

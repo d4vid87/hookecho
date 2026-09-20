@@ -4197,6 +4197,9 @@ impl HookEchoApp {
             .unwrap_or_else(Err)
             {
                 Ok(msg) => {
+                    // Fetch adapters decode before returning. Yield once so cancellation can stop
+                    // an obsolete request before the next CPU-heavy stage pools its full grid.
+                    wxdata::task::yield_now().await;
                     // Max-pool oversized grids here, on the fetch task: MRMS rotation tracks and
                     // AzShear arrive 14000x7000, and doing this on the UI thread stalled a frame
                     // for the whole pool.
