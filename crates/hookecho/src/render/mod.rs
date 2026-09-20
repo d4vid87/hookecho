@@ -81,6 +81,8 @@ pub enum FieldLayer {
     AzShear,
     AzShearMid,
     Posh,
+    MrmsEchoTop18,
+    MrmsVil,
     Lightning,
     /// Instantaneous precipitation rate (mm/hr) — how hard it is coming down right now,
     /// as against the QPE layers' how much has fallen.
@@ -185,7 +187,7 @@ impl FieldLayer {
     }
 
     /// Fixed bottom-to-top paint order within each band.
-    pub const DRAW_ORDER: [FieldLayer; 50] = [
+    pub const DRAW_ORDER: [FieldLayer; 52] = [
         // Below-radar context band (bottom to top). The global models sit at the very bottom:
         // they are the synoptic backdrop everything else is drawn against.
         FieldLayer::GoesC13,
@@ -237,6 +239,8 @@ impl FieldLayer {
         FieldLayer::AzShear,
         FieldLayer::AzShearMid,
         FieldLayer::Posh,
+        FieldLayer::MrmsEchoTop18,
+        FieldLayer::MrmsVil,
         FieldLayer::Lightning,
         FieldLayer::GlmFed,
     ];
@@ -259,6 +263,8 @@ impl FieldLayer {
             FieldLayer::AzShear => "azshear",
             FieldLayer::AzShearMid => "azshear-mid",
             FieldLayer::Posh => "posh",
+            FieldLayer::MrmsEchoTop18 => "mrms-echo-top-18",
+            FieldLayer::MrmsVil => "mrms-vil",
             FieldLayer::Lightning => "lightning",
             FieldLayer::PrecipRate => "preciprate",
             FieldLayer::Qpe1h => "qpe1h",
@@ -321,6 +327,8 @@ impl FieldLayer {
             FL::AzShear => &wxdata::mrms::AZSHEAR_DESCRIPTOR,
             FL::AzShearMid => &wxdata::mrms::AZSHEAR_MID_DESCRIPTOR,
             FL::Posh => &wxdata::mrms::POSH_DESCRIPTOR,
+            FL::MrmsEchoTop18 => &wxdata::mrms::ECHO_TOP_18_DESCRIPTOR,
+            FL::MrmsVil => &wxdata::mrms::VIL_DESCRIPTOR,
             FL::Rotation => &wxdata::mrms::ROTATION_DESCRIPTOR,
             FL::Qpe1h => &wxdata::mrms::QPE_01H_DESCRIPTOR,
             FL::Qpe3h => &wxdata::mrms::QPE_03H_DESCRIPTOR,

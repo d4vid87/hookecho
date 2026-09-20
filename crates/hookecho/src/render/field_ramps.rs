@@ -281,6 +281,21 @@ static ECHO_TOPS: FieldRamp = ramp!(
     ]
 );
 
+static MRMS_ECHO_TOPS: FieldRamp = ramp!(
+    "MRMS storm tops",
+    "km AGL",
+    1.5,
+    21.0,
+    RampScale::Linear,
+    255,
+    &[
+        (0.0, [40, 90, 200]),
+        (0.4, [40, 200, 90]),
+        (0.75, [240, 230, 60]),
+        (1.0, [240, 240, 240]),
+    ]
+);
+
 /// VIL density: water aloft per unit storm depth. Above ~3.5 g/m³ is the classic large-hail
 /// signature, so the scale turns hot exactly there rather than spending its range on drizzle.
 static VIL_DENSITY: FieldRamp = ramp!(
@@ -723,6 +738,8 @@ pub fn ramp_for(layer: FieldLayer) -> Option<&'static FieldRamp> {
         // MEHS shares the MRMS MESH scale: one hail scale app-wide.
         FL::HailMehs => &MESH,
         FL::HailPosh | FL::Posh => &POSH,
+        FL::MrmsEchoTop18 => &MRMS_ECHO_TOPS,
+        FL::MrmsVil => &VIL,
         FL::PrecipType => &PRECIP_TYPE,
         FL::UpdraftHelicity => &UPDRAFT_HELICITY,
         FL::Smoke => &SMOKE,

@@ -1743,6 +1743,8 @@ fn field_refresh_secs(layer: crate::render::FieldLayer) -> u64 {
         | FL::MrmsLowLevel
         | FL::Mesh
         | FL::Posh
+        | FL::MrmsEchoTop18
+        | FL::MrmsVil
         | FL::Rotation
         | FL::AzShearMid
         | FL::Hrrr

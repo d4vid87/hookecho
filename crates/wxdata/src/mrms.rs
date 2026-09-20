@@ -60,6 +60,8 @@ descriptor!(HAIL_SWATH_DESCRIPTOR, "mrms.mesh-max", "Maximum hail-size swath", "
 descriptor!(AZSHEAR_DESCRIPTOR, "mrms.azshear-0-2km", "0–2 km azimuthal shear", "AzShear", "s⁻¹", Scalar, "azshear", Bilinear, true, ["rotation", "shear"]);
 descriptor!(AZSHEAR_MID_DESCRIPTOR, "mrms.azshear-3-6km", "3–6 km azimuthal shear", "Mid-level AzShear", "s⁻¹", Scalar, "azshear", Bilinear, true, ["rotation", "shear", "mid level"]);
 descriptor!(POSH_DESCRIPTOR, "mrms.posh", "Probability of severe hail", "POSH", "%", Probability, "posh", Bilinear, false, ["hail", "probability"]);
+descriptor!(ECHO_TOP_18_DESCRIPTOR, "mrms.echo-top-18", "18 dBZ echo-top height", "MRMS Echo Tops", "km AGL", Scalar, "echo-tops", Bilinear, true, ["storm top", "cloud top", "height"]);
+descriptor!(VIL_DESCRIPTOR, "mrms.vil", "Vertically integrated liquid", "MRMS VIL", "kg/m²", Scalar, "vil", Bilinear, true, ["water aloft", "hail"]);
 descriptor!(ROTATION_DESCRIPTOR, "mrms.rotation-track", "Rotation track", "Rotation Track", "s⁻¹", Accumulation, "rotation", Nearest, false, ["rotation", "azimuthal shear"]);
 descriptor!(QPE_01H_DESCRIPTOR, "mrms.qpe-1h", "One-hour quantitative precipitation estimate", "QPE 1h", "mm", Accumulation, "qpe-1h", Nearest, false, ["rain", "precipitation"]);
 descriptor!(QPE_03H_DESCRIPTOR, "mrms.qpe-3h", "Three-hour quantitative precipitation estimate", "QPE 3h", "mm", Accumulation, "qpe-3h", Nearest, false, ["rain", "precipitation"]);
@@ -70,7 +72,7 @@ descriptor!(PRECIP_RATE_DESCRIPTOR, "mrms.precip-rate", "Surface precipitation r
 descriptor!(PRECIP_TYPE_DESCRIPTOR, "mrms.precip-type", "Surface precipitation type", "Precip Type", "category", Categorical, "precip-type", Nearest, false, ["rain", "snow", "sleet"]);
 descriptor!(FLASH_ARI30_DESCRIPTOR, "mrms.flash-ari30", "30-minute flash-flood recurrence interval", "FLASH ARI", "yr", Scalar, "flash-flood", Bilinear, false, ["flood", "ari"]);
 
-pub static DESCRIPTORS: [&FieldDescriptor; 17] = [
+pub static DESCRIPTORS: [&FieldDescriptor; 19] = [
     &REFLECTIVITY_DESCRIPTOR,
     &LOW_LEVEL_REFLECTIVITY_DESCRIPTOR,
     &LIGHTNING_DESCRIPTOR,
@@ -79,6 +81,8 @@ pub static DESCRIPTORS: [&FieldDescriptor; 17] = [
     &AZSHEAR_DESCRIPTOR,
     &AZSHEAR_MID_DESCRIPTOR,
     &POSH_DESCRIPTOR,
+    &ECHO_TOP_18_DESCRIPTOR,
+    &VIL_DESCRIPTOR,
     &ROTATION_DESCRIPTOR,
     &QPE_01H_DESCRIPTOR,
     &QPE_03H_DESCRIPTOR,
@@ -106,6 +110,8 @@ pub fn product_for_id(
         "mrms.azshear-0-2km" => AZSHEAR,
         "mrms.azshear-3-6km" => AZSHEAR_MID,
         "mrms.posh" => POSH,
+        "mrms.echo-top-18" => ECHO_TOP_18,
+        "mrms.vil" => VIL,
         "mrms.rotation-track" => rotation_track(rotation_minutes),
         "mrms.qpe-1h" => QPE_01H,
         "mrms.qpe-3h" => QPE_03H,
@@ -160,6 +166,10 @@ pub const AZSHEAR_MID: &str = "CONUS/MergedAzShear_3-6kmAGL_00.50";
 pub const POSH: &str = "CONUS/POSH_00.50";
 /// Composite reflectivity from the lowest available radar observations (dBZ).
 pub const LOW_LEVEL_REFLECTIVITY: &str = "CONUS/LowLevelCompositeReflectivity_00.50";
+/// Height of the 18 dBZ echo top (km AGL).
+pub const ECHO_TOP_18: &str = "CONUS/EchoTop_18_00.50";
+/// High-resolution vertically integrated liquid (kg/m²).
+pub const VIL: &str = "CONUS/LVL3_HighResVIL_00.50";
 /// Multi-sensor 1-hour QPE accumulation, Pass-2 gauge-corrected (mm).
 pub const QPE_01H: &str = "CONUS/MultiSensor_QPE_01H_Pass2_00.00";
 /// Multi-sensor 3-hour QPE accumulation, Pass-2 gauge-corrected (mm).
@@ -464,6 +474,8 @@ pub fn descriptor_for_product(product: &str) -> Option<&'static FieldDescriptor>
         AZSHEAR => &AZSHEAR_DESCRIPTOR,
         AZSHEAR_MID => &AZSHEAR_MID_DESCRIPTOR,
         POSH => &POSH_DESCRIPTOR,
+        ECHO_TOP_18 => &ECHO_TOP_18_DESCRIPTOR,
+        VIL => &VIL_DESCRIPTOR,
         "CONUS/RotationTrack30min_00.50"
         | "CONUS/RotationTrack60min_00.50"
         | "CONUS/RotationTrack120min_00.50" => &ROTATION_DESCRIPTOR,

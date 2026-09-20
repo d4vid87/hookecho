@@ -24,3 +24,14 @@ workflow without making pull-request tests depend on the network.
 - Fixture: `g19-c13-meso.nc`, an unmodified public GOES-19 C13 mesoscale granule from
   `noaa-goes19/ABI-L2-CMIPM/2025/100/18/`, SHA-256
   `f8c25303bcb27d5bec342cae2be858cf825b0960e89de35c5f7bed75280d677a`.
+
+## NOAA MRMS
+
+- Provider: NOAA Open Data Dissemination on AWS, public bucket
+  <https://registry.opendata.aws/noaa-mrms-pds/>.
+- Selected catalog prefixes and their current object dates are checked by `scripts/feed-contracts.sh`.
+- The NWS Warning Decision Training Division MRMS product guide defines 18 dBZ echo tops as the
+  maximum height AGL of that reflectivity surface and VIL as vertically integrated liquid water:
+  <https://training.weather.gov/wdtd/courses/MRMS/index.php>.
+- Live objects confirm native echo-top values are kilometres AGL and VIL is kg/m²; HookEcho keeps
+  those native values for sampling and applies display palettes only during upload.

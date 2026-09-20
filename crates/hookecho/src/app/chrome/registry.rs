@@ -66,6 +66,8 @@ impl HookEchoApp {
                         | FL::AzShear
                         | FL::AzShearMid
                         | FL::Posh
+                        | FL::MrmsEchoTop18
+                        | FL::MrmsVil
                         | FL::PrecipRate
                         | FL::Qpe1h
                         | FL::Qpe3h
@@ -346,6 +348,20 @@ impl HookEchoApp {
                 "National",
                 "Severe hail probability (POSH)",
                 "MRMS probability that a storm is producing severe hail",
+                false,
+            ),
+            (
+                FL::MrmsEchoTop18,
+                "National",
+                "Storm-top height (MRMS 18 dBZ)",
+                "Height of the 18 dBZ echo top above ground",
+                false,
+            ),
+            (
+                FL::MrmsVil,
+                "National",
+                "Water aloft (MRMS VIL)",
+                "Vertically integrated liquid from the national radar mosaic",
                 false,
             ),
             (
