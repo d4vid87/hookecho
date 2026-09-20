@@ -4,6 +4,108 @@ use chrono::{DateTime, TimeZone, Utc};
 
 const J2000_UNIX: i64 = 946_728_000;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Satellite {
+    East,
+    West,
+}
+
+impl Satellite {
+    fn bucket(self) -> &'static str {
+        match self {
+            Self::East => crate::glm::EAST,
+            Self::West => crate::glm::WEST,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Scene {
+    Conus,
+    Mesoscale1,
+    Mesoscale2,
+}
+
+fn prefix(at: DateTime<Utc>, scene: Scene, band: u8) -> String {
+    use chrono::Datelike;
+    let (product, stem) = match scene {
+        Scene::Conus => ("ABI-L2-CMIPC", "ABI-L2-CMIPC"),
+        Scene::Mesoscale1 => ("ABI-L2-CMIPM", "ABI-L2-CMIPM1"),
+        Scene::Mesoscale2 => ("ABI-L2-CMIPM", "ABI-L2-CMIPM2"),
+    };
+    format!(
+        "{product}/{:04}/{:03}/{:02}/OR_{stem}-M6C{band:02}",
+        at.year(),
+        at.ordinal(),
+        at.format("%H")
+    )
+}
+
+async fn latest_key(
+    http: &reqwest::Client,
+    satellite: Satellite,
+    scene: Scene,
+    band: u8,
+    at: DateTime<Utc>,
+) -> anyhow::Result<String> {
+    for hour in [at, at - chrono::Duration::hours(1)] {
+        let prefix = prefix(hour, scene, band);
+        let url = format!(
+            "{}/?list-type=2&prefix={prefix}&max-keys=1000",
+            satellite.bucket()
+        );
+        let xml = http
+            .get(crate::net::fetch_url(&url))
+            .timeout(crate::net::FEED_TIMEOUT)
+            .send()
+            .await?
+            .error_for_status()?
+            .text()
+            .await?;
+        if let Some(key) = xml
+            .split("<Key>")
+            .skip(1)
+            .filter_map(|part| part.split_once("</Key>").map(|(key, _)| key))
+            .max()
+        {
+            return Ok(key.to_string());
+        }
+    }
+    anyhow::bail!("GOES ABI: no recent C{band:02} image")
+}
+
+pub async fn fetch_latest(
+    http: &reqwest::Client,
+    satellite: Satellite,
+    scene: Scene,
+    band: u8,
+) -> anyhow::Result<Image> {
+    if !(1..=16).contains(&band) {
+        anyhow::bail!("GOES ABI: band must be 1 through 16");
+    }
+    let key = latest_key(http, satellite, scene, band, Utc::now()).await?;
+    let bytes = http
+        .get(crate::net::fetch_url(&format!(
+            "{}/{}",
+            satellite.bucket(),
+            key
+        )))
+        .timeout(crate::net::FEED_TIMEOUT)
+        .send()
+        .await?
+        .error_for_status()?
+        .bytes()
+        .await?;
+    let image = decode(bytes.to_vec())?;
+    if image.band != band {
+        anyhow::bail!(
+            "GOES ABI: requested C{band:02}, received C{:02}",
+            image.band
+        );
+    }
+    Ok(image)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Projection {
     pub longitude_origin_deg: f64,
@@ -152,5 +254,18 @@ mod tests {
         assert!((lat - 36.059_45).abs() < 0.001, "latitude {lat}");
         assert!(image.projection.lon_lat(0.3, 0.3).is_none());
         assert_eq!(image.valid_time.timestamp(), 1_744_308_031);
+    }
+
+    #[test]
+    fn official_bucket_prefixes_name_each_supported_scene() {
+        let at = Utc.with_ymd_and_hms(2025, 4, 10, 18, 0, 0).unwrap();
+        assert_eq!(
+            prefix(at, Scene::Conus, 13),
+            "ABI-L2-CMIPC/2025/100/18/OR_ABI-L2-CMIPC-M6C13"
+        );
+        assert_eq!(
+            prefix(at, Scene::Mesoscale2, 9),
+            "ABI-L2-CMIPM/2025/100/18/OR_ABI-L2-CMIPM2-M6C09"
+        );
     }
 }
