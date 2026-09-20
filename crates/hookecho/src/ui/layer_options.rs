@@ -85,6 +85,7 @@ pub(crate) fn show(
     lightning_minutes: &mut u16,
     show_glm: bool,
     glm_goes_west: &mut bool,
+    abi_scene: &mut wxdata::abi::Scene,
     // Spotter Network dots: on-state, and how far from the radar to draw them (0 = whole feed).
     show_spotters: bool,
     spotter_range_km: &mut f64,
@@ -109,6 +110,11 @@ pub(crate) fn show(
     ]
     .iter()
     .any(|l| on.contains(l));
+    let satellite_on = on.iter().any(|layer| {
+        layer.descriptor().is_some_and(|descriptor| {
+            descriptor.family == wxdata::field::FieldFamily::Satellite
+        })
+    });
     let sections = [
         ("Storm cells", filters.show_cells),
         ("Alerts", filters.show_alerts),
@@ -118,6 +124,7 @@ pub(crate) fn show(
         ("Global forecast", global_on),
         ("Model comparison", on.contains(&FL::ModelDiff)),
         ("Lightning", show_glm || on.contains(&FL::Lightning)),
+        ("Satellite", satellite_on),
         ("Spotters", show_spotters),
         ("Rotation tracks", on.contains(&FL::Rotation)),
         ("Hail swaths", on.contains(&FL::HailSwath)),
@@ -308,6 +315,30 @@ pub(crate) fn show(
         changed |= crate::ui::style::toggle(ui, glm_goes_west, "Include GOES-West")
             .on_hover_text("Adds GOES-18 so the Pacific and the west coast are covered too")
             .changed();
+    }
+
+    if section == "Satellite" {
+        let before = *abi_scene;
+        ui.horizontal_wrapped(|ui| {
+            ui.label("ABI sector:");
+            for (scene, label) in [
+                (wxdata::abi::Scene::Conus, "CONUS"),
+                (wxdata::abi::Scene::Mesoscale1, "Mesoscale 1"),
+                (wxdata::abi::Scene::Mesoscale2, "Mesoscale 2"),
+            ] {
+                changed |= ui.selectable_value(abi_scene, scene, label).changed();
+            }
+        });
+        ui.weak("Mesoscale sectors update every minute and move with active weather.");
+        if *abi_scene != before {
+            for (layer, state) in fields.iter_mut() {
+                if layer.descriptor().is_some_and(|descriptor| {
+                    descriptor.family == wxdata::field::FieldFamily::Satellite
+                }) {
+                    state.last_fetch = None;
+                }
+            }
+        }
     }
 
     if section == "Spotters" && show_spotters {

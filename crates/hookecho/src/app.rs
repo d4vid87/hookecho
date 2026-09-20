@@ -339,8 +339,13 @@ enum OverlaySource {
     /// A national field layer plus the MRMS S3 product path to fetch it from.
     Field(crate::render::FieldLayer, String),
     /// Native GOES ABI imagery for a registered band.
-    GoesAbi(crate::render::FieldLayer, u8, Option<DateTime<Utc>>),
-    GoesRgb(Option<DateTime<Utc>>),
+    GoesAbi(
+        crate::render::FieldLayer,
+        u8,
+        wxdata::abi::Scene,
+        Option<DateTime<Utc>>,
+    ),
+    GoesRgb(wxdata::abi::Scene, Option<DateTime<Utc>>),
     /// Local storm reports: live (`None`) or a 30-min archive bucket (Unix secs / 1800).
     StormReports(Option<i64>),
     Spotters,
@@ -688,12 +693,12 @@ impl OverlaySource {
                     OverlayMsg::Field(layer, wxdata::mrms::fetch_latest(http, &product).await?)
                 }
             }
-            OverlaySource::GoesAbi(layer, band, at) => {
+            OverlaySource::GoesAbi(layer, band, scene, at) => {
                 let received = Utc::now();
                 let image = wxdata::abi::fetch_at(
                     http,
                     wxdata::abi::Satellite::East,
-                    wxdata::abi::Scene::Conus,
+                    scene,
                     band,
                     at.unwrap_or(received),
                 )
@@ -704,12 +709,12 @@ impl OverlaySource {
                     None,
                 )
             }
-            OverlaySource::GoesRgb(at) => OverlayMsg::Rgb(
+            OverlaySource::GoesRgb(scene, at) => OverlayMsg::Rgb(
                 crate::render::FieldLayer::GoesTrueColor,
                 wxdata::abi::fetch_rgb_at(
                     http,
                     wxdata::abi::Satellite::East,
-                    wxdata::abi::Scene::Conus,
+                    scene,
                     &wxdata::abi::TRUE_COLOR,
                     at.unwrap_or_else(Utc::now),
                 )
@@ -6846,6 +6851,7 @@ impl HookEchoApp {
         }
         let http = self.http.clone();
         let ctx = ctx.clone();
+        let abi_scene = self.settings.abi_scene;
         self.spawner.spawn(async move {
             let mut satellite: std::collections::BTreeSet<String> =
                 current_satellite.into_iter().collect();
@@ -6854,7 +6860,7 @@ impl HookEchoApp {
                     if let Ok(image) = wxdata::abi::fetch_at(
                         &http,
                         wxdata::abi::Satellite::East,
-                        wxdata::abi::Scene::Conus,
+                        abi_scene,
                         band,
                         time,
                     )
@@ -16730,7 +16736,15 @@ impl eframe::App for HookEchoApp {
                 let state = self.fields.entry(layer).or_default();
                 state.last_fetch = Some(Instant::now());
                 state.requested_time = Some(satellite_time);
-                self.spawn_overlay(ctx, OverlaySource::GoesAbi(layer, band, satellite_time));
+                self.spawn_overlay(
+                    ctx,
+                    OverlaySource::GoesAbi(
+                        layer,
+                        band,
+                        self.settings.abi_scene,
+                        satellite_time,
+                    ),
+                );
             }
         }
         for (index, entry) in wxdata::abi::CATALOG.iter().enumerate() {
@@ -16748,7 +16762,12 @@ impl eframe::App for HookEchoApp {
                 state.requested_time = Some(satellite_time);
                 self.spawn_overlay(
                     ctx,
-                    OverlaySource::GoesAbi(layer, entry.band, satellite_time),
+                    OverlaySource::GoesAbi(
+                        layer,
+                        entry.band,
+                        self.settings.abi_scene,
+                        satellite_time,
+                    ),
                 );
             }
         }
@@ -16765,7 +16784,10 @@ impl eframe::App for HookEchoApp {
                 let state = self.fields.entry(layer).or_default();
                 state.last_fetch = Some(Instant::now());
                 state.requested_time = Some(satellite_time);
-                self.spawn_overlay(ctx, OverlaySource::GoesRgb(satellite_time));
+                self.spawn_overlay(
+                    ctx,
+                    OverlaySource::GoesRgb(self.settings.abi_scene, satellite_time),
+                );
             }
         }
         // Snow bands: the mosaic and the precipitation-type grid, cut to the banded snow.

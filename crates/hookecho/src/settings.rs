@@ -254,6 +254,9 @@ pub struct Settings {
     /// listing per 20-second cycle and covers the Pacific and the west coast.
     #[serde(default)]
     pub glm_goes_west: bool,
+    /// Native ABI sector used by satellite field layers.
+    #[serde(default)]
+    pub abi_scene: wxdata::abi::Scene,
     /// How far from the active radar to draw Spotter Network dots, in km. 0 = no limit (the whole
     /// CONUS feed). Default 230 km, roughly the radar's own useful range.
     #[serde(default = "default_spotter_range_km")]
@@ -1149,6 +1152,7 @@ impl Default for Settings {
             share_video_url: String::new(),
             lightning_minutes: default_lightning_minutes(),
             glm_goes_west: false,
+            abi_scene: wxdata::abi::Scene::default(),
             spotter_range_km: default_spotter_range_km(),
             alert_sound: true,
             smooth_radar: true,
@@ -1722,6 +1726,7 @@ mod tests {
             }),
             lightning_minutes: default_lightning_minutes(),
             glm_goes_west: false,
+            abi_scene: wxdata::abi::Scene::default(),
             spotter_range_km: default_spotter_range_km(),
             alert_sound: false,
             ntfy_topic: "hookecho-test".to_string(),
