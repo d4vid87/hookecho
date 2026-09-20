@@ -720,6 +720,7 @@ pub fn ramp_for(layer: FieldLayer) -> Option<&'static FieldRamp> {
             "vil-density" => Some(&VIL_DENSITY),
             "qpe-1h" => Some(&QPE_1H),
             "qpe-24h" => Some(&QPE_24H),
+            "flash-flood" => Some(&FLASH_FLOOD),
             _ => None,
         };
     }

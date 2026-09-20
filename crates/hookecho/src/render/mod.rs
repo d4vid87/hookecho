@@ -188,7 +188,7 @@ impl FieldLayer {
     }
 
     /// Fixed bottom-to-top paint order within each band.
-    pub const DRAW_ORDER: [FieldLayer; 64] = [
+    pub const DRAW_ORDER: [FieldLayer; 70] = [
         // Below-radar context band (bottom to top). The global models sit at the very bottom:
         // they are the synoptic backdrop everything else is drawn against.
         FieldLayer::GoesC13,
@@ -254,6 +254,12 @@ impl FieldLayer {
         FieldLayer::MrmsCatalog(9),
         FieldLayer::MrmsCatalog(10),
         FieldLayer::MrmsCatalog(11),
+        FieldLayer::MrmsCatalog(12),
+        FieldLayer::MrmsCatalog(13),
+        FieldLayer::MrmsCatalog(14),
+        FieldLayer::MrmsCatalog(15),
+        FieldLayer::MrmsCatalog(16),
+        FieldLayer::MrmsCatalog(17),
         FieldLayer::Lightning,
         FieldLayer::GlmFed,
     ];

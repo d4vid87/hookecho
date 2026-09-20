@@ -74,6 +74,12 @@ descriptor!(RADAR_QPE_24H_DESCRIPTOR, "mrms.radar-qpe-24h", "Radar-only 24-hour 
 descriptor!(LAYER_REFLECTIVITY_LOW_DESCRIPTOR, "mrms.layer-reflectivity-low", "Low-layer composite reflectivity", "Low-layer Reflectivity", "dBZ", Scalar, "reflectivity", Bilinear, true, ["mosaic", "dbz", "0-24 kft"]);
 descriptor!(LAYER_REFLECTIVITY_HIGH_DESCRIPTOR, "mrms.layer-reflectivity-high", "High-layer composite reflectivity", "High-layer Reflectivity", "dBZ", Scalar, "reflectivity", Bilinear, true, ["mosaic", "dbz", "24-60 kft"]);
 descriptor!(LAYER_REFLECTIVITY_SUPER_DESCRIPTOR, "mrms.layer-reflectivity-super", "Super-high composite reflectivity", "Super-high Reflectivity", "dBZ", Scalar, "reflectivity", Bilinear, true, ["mosaic", "dbz", "33-60 kft"]);
+descriptor!(FLASH_ARI01H_DESCRIPTOR, "mrms.flash-ari-1h", "1-hour flash-flood recurrence interval", "FLASH ARI 1h", "yr", Scalar, "flash-flood", Bilinear, false, ["flood", "ari", "recurrence"]);
+descriptor!(FLASH_ARI03H_DESCRIPTOR, "mrms.flash-ari-3h", "3-hour flash-flood recurrence interval", "FLASH ARI 3h", "yr", Scalar, "flash-flood", Bilinear, false, ["flood", "ari", "recurrence"]);
+descriptor!(FLASH_ARI06H_DESCRIPTOR, "mrms.flash-ari-6h", "6-hour flash-flood recurrence interval", "FLASH ARI 6h", "yr", Scalar, "flash-flood", Bilinear, false, ["flood", "ari", "recurrence"]);
+descriptor!(FLASH_ARI12H_DESCRIPTOR, "mrms.flash-ari-12h", "12-hour flash-flood recurrence interval", "FLASH ARI 12h", "yr", Scalar, "flash-flood", Bilinear, false, ["flood", "ari", "recurrence"]);
+descriptor!(FLASH_ARI24H_DESCRIPTOR, "mrms.flash-ari-24h", "24-hour flash-flood recurrence interval", "FLASH ARI 24h", "yr", Scalar, "flash-flood", Bilinear, false, ["flood", "ari", "recurrence"]);
+descriptor!(FLASH_ARIMAX_DESCRIPTOR, "mrms.flash-ari-max", "Maximum flash-flood recurrence interval", "FLASH ARI Max", "yr", Scalar, "flash-flood", Bilinear, false, ["flood", "ari", "recurrence"]);
 
 pub struct CatalogProduct {
     pub descriptor: &'static FieldDescriptor,
@@ -82,7 +88,7 @@ pub struct CatalogProduct {
     pub description: &'static str,
 }
 
-pub static CATALOG: [CatalogProduct; 12] = [
+pub static CATALOG: [CatalogProduct; 18] = [
     CatalogProduct { descriptor: &ECHO_TOP_30_DESCRIPTOR, product: "CONUS/EchoTop_30_00.50", slug: "mrms-echo-top-30", description: "Height of the 30 dBZ storm top above ground" },
     CatalogProduct { descriptor: &ECHO_TOP_50_DESCRIPTOR, product: "CONUS/EchoTop_50_00.50", slug: "mrms-echo-top-50", description: "Height of the 50 dBZ core for storm-severity analysis" },
     CatalogProduct { descriptor: &ECHO_TOP_60_DESCRIPTOR, product: "CONUS/EchoTop_60_00.50", slug: "mrms-echo-top-60", description: "Height of the strongest 60 dBZ core" },
@@ -95,6 +101,12 @@ pub static CATALOG: [CatalogProduct; 12] = [
     CatalogProduct { descriptor: &LAYER_REFLECTIVITY_LOW_DESCRIPTOR, product: "CONUS/LayerCompositeReflectivity_Low_00.50", slug: "mrms-layer-reflectivity-low", description: "Strongest reflectivity in the low 0–24 kft layer" },
     CatalogProduct { descriptor: &LAYER_REFLECTIVITY_HIGH_DESCRIPTOR, product: "CONUS/LayerCompositeReflectivity_High_00.50", slug: "mrms-layer-reflectivity-high", description: "Strongest reflectivity in the high 24–60 kft layer" },
     CatalogProduct { descriptor: &LAYER_REFLECTIVITY_SUPER_DESCRIPTOR, product: "CONUS/LayerCompositeReflectivity_Super_00.50", slug: "mrms-layer-reflectivity-super", description: "Strongest reflectivity in the 33–60 kft layer" },
+    CatalogProduct { descriptor: &FLASH_ARI01H_DESCRIPTOR, product: "CONUS/FLASH_QPE_ARI01H_00.00", slug: "mrms-flash-ari-1h", description: "How rare the last hour of rainfall is at this location" },
+    CatalogProduct { descriptor: &FLASH_ARI03H_DESCRIPTOR, product: "CONUS/FLASH_QPE_ARI03H_00.00", slug: "mrms-flash-ari-3h", description: "How rare the last three hours of rainfall are" },
+    CatalogProduct { descriptor: &FLASH_ARI06H_DESCRIPTOR, product: "CONUS/FLASH_QPE_ARI06H_00.00", slug: "mrms-flash-ari-6h", description: "How rare the last six hours of rainfall are" },
+    CatalogProduct { descriptor: &FLASH_ARI12H_DESCRIPTOR, product: "CONUS/FLASH_QPE_ARI12H_00.00", slug: "mrms-flash-ari-12h", description: "How rare the last 12 hours of rainfall are" },
+    CatalogProduct { descriptor: &FLASH_ARI24H_DESCRIPTOR, product: "CONUS/FLASH_QPE_ARI24H_00.00", slug: "mrms-flash-ari-24h", description: "How rare the last 24 hours of rainfall are" },
+    CatalogProduct { descriptor: &FLASH_ARIMAX_DESCRIPTOR, product: "CONUS/FLASH_QPE_ARIMAX_00.00", slug: "mrms-flash-ari-max", description: "Largest recurrence interval across FLASH rainfall windows" },
 ];
 descriptor!(ROTATION_DESCRIPTOR, "mrms.rotation-track", "Rotation track", "Rotation Track", "s⁻¹", Accumulation, "rotation", Nearest, false, ["rotation", "azimuthal shear"]);
 descriptor!(QPE_01H_DESCRIPTOR, "mrms.qpe-1h", "One-hour quantitative precipitation estimate", "QPE 1h", "mm", Accumulation, "qpe-1h", Nearest, false, ["rain", "precipitation"]);
@@ -106,7 +118,7 @@ descriptor!(PRECIP_RATE_DESCRIPTOR, "mrms.precip-rate", "Surface precipitation r
 descriptor!(PRECIP_TYPE_DESCRIPTOR, "mrms.precip-type", "Surface precipitation type", "Precip Type", "category", Categorical, "precip-type", Nearest, false, ["rain", "snow", "sleet"]);
 descriptor!(FLASH_ARI30_DESCRIPTOR, "mrms.flash-ari30", "30-minute flash-flood recurrence interval", "FLASH ARI", "yr", Scalar, "flash-flood", Bilinear, false, ["flood", "ari"]);
 
-pub static DESCRIPTORS: [&FieldDescriptor; 31] = [
+pub static DESCRIPTORS: [&FieldDescriptor; 37] = [
     &REFLECTIVITY_DESCRIPTOR,
     &LOW_LEVEL_REFLECTIVITY_DESCRIPTOR,
     &LIGHTNING_DESCRIPTOR,
@@ -129,6 +141,12 @@ pub static DESCRIPTORS: [&FieldDescriptor; 31] = [
     &LAYER_REFLECTIVITY_LOW_DESCRIPTOR,
     &LAYER_REFLECTIVITY_HIGH_DESCRIPTOR,
     &LAYER_REFLECTIVITY_SUPER_DESCRIPTOR,
+    &FLASH_ARI01H_DESCRIPTOR,
+    &FLASH_ARI03H_DESCRIPTOR,
+    &FLASH_ARI06H_DESCRIPTOR,
+    &FLASH_ARI12H_DESCRIPTOR,
+    &FLASH_ARI24H_DESCRIPTOR,
+    &FLASH_ARIMAX_DESCRIPTOR,
     &ROTATION_DESCRIPTOR,
     &QPE_01H_DESCRIPTOR,
     &QPE_03H_DESCRIPTOR,

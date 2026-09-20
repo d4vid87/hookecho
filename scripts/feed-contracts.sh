@@ -69,6 +69,12 @@ check_prefixes \
   'CONUS/LayerCompositeReflectivity_Low_00.50/' \
   'CONUS/LayerCompositeReflectivity_High_00.50/' \
   'CONUS/LayerCompositeReflectivity_Super_00.50/' \
+  'CONUS/FLASH_QPE_ARI01H_00.00/' \
+  'CONUS/FLASH_QPE_ARI03H_00.00/' \
+  'CONUS/FLASH_QPE_ARI06H_00.00/' \
+  'CONUS/FLASH_QPE_ARI12H_00.00/' \
+  'CONUS/FLASH_QPE_ARI24H_00.00/' \
+  'CONUS/FLASH_QPE_ARIMAX_00.00/' \
   'CONUS/MultiSensor_QPE_01H_Pass2_00.00/' \
   'CONUS/MultiSensor_QPE_03H_Pass2_00.00/' \
   'CONUS/MultiSensor_QPE_06H_Pass2_00.00/' \
@@ -95,6 +101,12 @@ check_recent_mrms \
   'CONUS/LayerCompositeReflectivity_Low_00.50' \
   'CONUS/LayerCompositeReflectivity_High_00.50' \
   'CONUS/LayerCompositeReflectivity_Super_00.50' \
+  'CONUS/FLASH_QPE_ARI01H_00.00' \
+  'CONUS/FLASH_QPE_ARI03H_00.00' \
+  'CONUS/FLASH_QPE_ARI06H_00.00' \
+  'CONUS/FLASH_QPE_ARI12H_00.00' \
+  'CONUS/FLASH_QPE_ARI24H_00.00' \
+  'CONUS/FLASH_QPE_ARIMAX_00.00' \
   'CONUS/MultiSensor_QPE_01H_Pass2_00.00' \
   'CONUS/MultiSensor_QPE_03H_Pass2_00.00' \
   'CONUS/MultiSensor_QPE_06H_Pass2_00.00' \
