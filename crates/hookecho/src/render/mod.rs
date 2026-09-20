@@ -283,6 +283,7 @@ impl FieldLayer {
             FL::GoesC13 => &wxdata::abi::C13_DESCRIPTOR,
             FL::GoesWaterVapor => &wxdata::abi::C08_DESCRIPTOR,
             FL::GoesVisible => &wxdata::abi::C02_DESCRIPTOR,
+            FL::GoesTrueColor => &wxdata::abi::TRUE_COLOR_DESCRIPTOR,
             FL::Mrms => &wxdata::mrms::REFLECTIVITY_DESCRIPTOR,
             FL::Lightning => &wxdata::mrms::LIGHTNING_DESCRIPTOR,
             FL::Mesh => &wxdata::mrms::MESH_DESCRIPTOR,

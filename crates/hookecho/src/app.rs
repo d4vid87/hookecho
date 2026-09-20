@@ -339,8 +339,8 @@ enum OverlaySource {
     /// A national field layer plus the MRMS S3 product path to fetch it from.
     Field(crate::render::FieldLayer, String),
     /// Native GOES ABI imagery for a registered band.
-    GoesAbi(crate::render::FieldLayer, u8),
-    GoesRgb,
+    GoesAbi(crate::render::FieldLayer, u8, Option<DateTime<Utc>>),
+    GoesRgb(Option<DateTime<Utc>>),
     /// Local storm reports: live (`None`) or a 30-min archive bucket (Unix secs / 1800).
     StormReports(Option<i64>),
     Spotters,
@@ -593,8 +593,8 @@ impl OverlaySource {
             Self::Spotters => RequestLane::Feed("Spotter Network"),
             Self::ProbSevere => RequestLane::Feed("ProbSevere"),
             Self::Fronts => RequestLane::Feed("Surface analysis"),
-            Self::GoesAbi(layer, _) => RequestLane::Field(*layer),
-            Self::GoesRgb => RequestLane::Field(crate::render::FieldLayer::GoesTrueColor),
+            Self::GoesAbi(layer, ..) => RequestLane::Field(*layer),
+            Self::GoesRgb(..) => RequestLane::Field(crate::render::FieldLayer::GoesTrueColor),
             Self::FreezingLevels(..) => RequestLane::Feed("Freezing levels"),
             Self::Obs { .. } => RequestLane::Feed("Radar observations"),
             Self::Vwp(..) => RequestLane::Feed("VAD profile"),
@@ -688,13 +688,14 @@ impl OverlaySource {
                     OverlayMsg::Field(layer, wxdata::mrms::fetch_latest(http, &product).await?)
                 }
             }
-            OverlaySource::GoesAbi(layer, band) => {
+            OverlaySource::GoesAbi(layer, band, at) => {
                 let received = Utc::now();
-                let image = wxdata::abi::fetch_latest(
+                let image = wxdata::abi::fetch_at(
                     http,
                     wxdata::abi::Satellite::East,
                     wxdata::abi::Scene::Conus,
                     band,
+                    at.unwrap_or(received),
                 )
                 .await?;
                 OverlayMsg::RegisteredField(
@@ -703,13 +704,14 @@ impl OverlaySource {
                     None,
                 )
             }
-            OverlaySource::GoesRgb => OverlayMsg::Rgb(
+            OverlaySource::GoesRgb(at) => OverlayMsg::Rgb(
                 crate::render::FieldLayer::GoesTrueColor,
-                wxdata::abi::fetch_rgb(
+                wxdata::abi::fetch_rgb_at(
                     http,
                     wxdata::abi::Satellite::East,
                     wxdata::abi::Scene::Conus,
                     &wxdata::abi::TRUE_COLOR,
+                    at.unwrap_or_else(Utc::now),
                 )
                 .await?,
             ),
@@ -1813,7 +1815,11 @@ pub(crate) struct FieldState {
     pub pending: Option<crate::render::MrmsUpload>,
     /// Native values and provenance for registry-backed products. GPU uploads remain display-only.
     pub frame: Option<wxdata::field::FieldFrame>,
+    /// Small common metadata retained for direct-color fields that have no scalar `FieldFrame`.
+    pub metadata: Option<(wxdata::field::GridSpec, wxdata::field::DataStamp)>,
     pub last_fetch: Option<Instant>,
+    /// Analysis time used by the current native-satellite request (`None` inside = live).
+    pub requested_time: Option<Option<DateTime<Utc>>>,
     /// Since when no pane has drawn this layer. Its GPU texture (up to 8192 px of R8) is freed
     /// after [`FIELD_EVICT`]; before this, thirty-five layers could stay resident until exit.
     pub off_since: Option<Instant>,
@@ -8414,6 +8420,7 @@ impl HookEchoApp {
                     let upload = self.field_upload(layer, display.as_ref().unwrap_or(frame.field()));
                     if let Some(s) = self.fields.get_mut(&layer) {
                         s.pending = Some(upload);
+                        s.metadata = Some((frame.grid.clone(), frame.stamp.clone()));
                         s.frame = Some(frame);
                     }
                 }
@@ -8421,6 +8428,28 @@ impl HookEchoApp {
                     let upload = rgb_upload(&image);
                     if let Some(state) = self.fields.get_mut(&layer) {
                         state.pending = Some(upload);
+                        state.metadata = Some((
+                            wxdata::field::GridSpec {
+                                nx: image.width,
+                                ny: image.height,
+                                projection: "GOES-R fixed grid",
+                                lon_west: image.lon_west,
+                                lon_east: image.lon_east,
+                                lat_north: image.lat_north,
+                                lat_south: image.lat_south,
+                                native_resolution_m: None,
+                                missing: wxdata::field::MissingData::Nan,
+                            },
+                            wxdata::field::DataStamp {
+                                source_identity: image.source_identity.clone(),
+                                issue_time: None,
+                                run_time: None,
+                                valid_time: image.valid_time,
+                                received_time: Utc::now(),
+                                class: wxdata::field::DataClass::Observed,
+                                quality: wxdata::field::QualitySummary::Unknown,
+                            },
+                        ));
                     }
                 }
                 OverlayMsg::ModelDiff(frame, valid) => {
@@ -14282,7 +14311,11 @@ impl HookEchoApp {
         chrono::Duration,
         bool,
     )> {
-        let frame = self.fields.get(&layer).and_then(|state| state.frame.as_ref())?;
+        let stamp = self
+            .fields
+            .get(&layer)
+            .and_then(|state| state.metadata.as_ref())
+            .map(|(_, stamp)| stamp)?;
         let analysis_time = self.views[pane]
             .timeline
             .current()
@@ -14290,17 +14323,17 @@ impl HookEchoApp {
             .or_else(|| self.views[pane].volume.as_ref().map(|volume| volume.time))?;
         let tolerance = field_time_tolerance(layer);
         let available = [wxdata::timecoord::TimedFrame {
-            valid: frame.stamp.valid_time,
+            valid: stamp.valid_time,
             value: (),
         }];
         let aligned = wxdata::timecoord::align(
             &available,
             analysis_time,
-            wxdata::timecoord::policy_for(frame.stamp.class),
+            wxdata::timecoord::policy_for(stamp.class),
             tolerance,
         )
         .is_some();
-        Some((frame.stamp.valid_time, analysis_time, tolerance, aligned))
+        Some((stamp.valid_time, analysis_time, tolerance, aligned))
     }
 
     /// Resize the pane grid to `n` (1/2/4). New panes copy the active pane's site/camera but
@@ -16597,6 +16630,14 @@ impl eframe::App for HookEchoApp {
             }
         }
         // GOES ABI imagery has its own source adapter and arrives every five minutes.
+        let satellite_time = (!self.views[self.active].timeline.following)
+            .then(|| {
+                self.views[self.active]
+                    .timeline
+                    .current()
+                    .and_then(|frame| frame.date_time())
+            })
+            .flatten();
         for (layer, band) in [
             (FL::GoesC13, 13),
             (FL::GoesWaterVapor, 8),
@@ -16604,26 +16645,32 @@ impl eframe::App for HookEchoApp {
         ] {
             let stale = self.field_wanted(layer)
                 && self.fields.get(&layer).is_none_or(|state| {
-                    state
-                        .last_fetch
-                        .is_none_or(|time| time.elapsed().as_secs() >= field_refresh_secs(layer))
+                    state.requested_time != Some(satellite_time)
+                        || state.last_fetch.is_none_or(|time| {
+                            time.elapsed().as_secs() >= field_refresh_secs(layer)
+                        })
                 });
             if stale {
-                self.fields.entry(layer).or_default().last_fetch = Some(Instant::now());
-                self.spawn_overlay(ctx, OverlaySource::GoesAbi(layer, band));
+                let state = self.fields.entry(layer).or_default();
+                state.last_fetch = Some(Instant::now());
+                state.requested_time = Some(satellite_time);
+                self.spawn_overlay(ctx, OverlaySource::GoesAbi(layer, band, satellite_time));
             }
         }
         {
             let layer = FL::GoesTrueColor;
             let stale = self.field_wanted(layer)
                 && self.fields.get(&layer).is_none_or(|state| {
-                    state
-                        .last_fetch
-                        .is_none_or(|time| time.elapsed().as_secs() >= field_refresh_secs(layer))
+                    state.requested_time != Some(satellite_time)
+                        || state.last_fetch.is_none_or(|time| {
+                            time.elapsed().as_secs() >= field_refresh_secs(layer)
+                        })
                 });
             if stale {
-                self.fields.entry(layer).or_default().last_fetch = Some(Instant::now());
-                self.spawn_overlay(ctx, OverlaySource::GoesRgb);
+                let state = self.fields.entry(layer).or_default();
+                state.last_fetch = Some(Instant::now());
+                state.requested_time = Some(satellite_time);
+                self.spawn_overlay(ctx, OverlaySource::GoesRgb(satellite_time));
             }
         }
         // Snow bands: the mosaic and the precipitation-type grid, cut to the banded snow.
@@ -18607,6 +18654,7 @@ mod field_lut_tests {
             lon_east: -98.0,
             lat_north: 40.0,
             lat_south: 39.0,
+            source_identity: "fixture".into(),
         };
         let upload = rgb_upload(&image);
         assert!(upload.rgba);

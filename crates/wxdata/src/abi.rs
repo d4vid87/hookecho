@@ -57,6 +57,22 @@ pub static C02_DESCRIPTOR: FieldDescriptor = FieldDescriptor {
     supports_difference: true,
 };
 
+pub static TRUE_COLOR_DESCRIPTOR: FieldDescriptor = FieldDescriptor {
+    id: FieldId("satellite.goes.abi.true-color"),
+    source: "NOAA GOES ABI",
+    family: FieldFamily::Satellite,
+    display_name: "GOES true color",
+    short_name: "GOES True Color",
+    search_aliases: &["satellite", "visible", "rgb", "geocolor"],
+    units: "RGB",
+    value_kind: ValueKind::Vector,
+    palette_key: "true-color",
+    sampling: SamplingPolicy::Nearest,
+    missing: MissingData::Nan,
+    supports_contours: false,
+    supports_difference: false,
+};
+
 pub fn descriptor_for_band(band: u8) -> Option<&'static FieldDescriptor> {
     match band {
         2 => Some(&C02_DESCRIPTOR),
@@ -92,6 +108,7 @@ pub struct RgbImage {
     pub lon_east: f64,
     pub lat_north: f64,
     pub lat_south: f64,
+    pub source_identity: String,
 }
 
 pub async fn fetch_rgb(
@@ -100,10 +117,20 @@ pub async fn fetch_rgb(
     scene: Scene,
     recipe: &'static RgbRecipe,
 ) -> anyhow::Result<RgbImage> {
+    fetch_rgb_at(http, satellite, scene, recipe, Utc::now()).await
+}
+
+pub async fn fetch_rgb_at(
+    http: &reqwest::Client,
+    satellite: Satellite,
+    scene: Scene,
+    recipe: &'static RgbRecipe,
+    at: DateTime<Utc>,
+) -> anyhow::Result<RgbImage> {
     let (red, green, blue) = futures_util::future::try_join3(
-        fetch_latest(http, satellite, scene, recipe.bands[0]),
-        fetch_latest(http, satellite, scene, recipe.bands[1]),
-        fetch_latest(http, satellite, scene, recipe.bands[2]),
+        fetch_at(http, satellite, scene, recipe.bands[0], at),
+        fetch_at(http, satellite, scene, recipe.bands[1], at),
+        fetch_at(http, satellite, scene, recipe.bands[2], at),
     )
     .await?;
     compose_rgb(recipe, [&red, &green, &blue])
@@ -168,6 +195,11 @@ pub fn compose_rgb(recipe: &'static RgbRecipe, channels: [&Image; 3]) -> anyhow:
         lon_east,
         lat_north,
         lat_south,
+        source_identity: channels
+            .iter()
+            .map(|image| image.source_identity.as_str())
+            .collect::<Vec<_>>()
+            .join(" + "),
     })
 }
 
@@ -233,12 +265,26 @@ async fn latest_key(
             .split("<Key>")
             .skip(1)
             .filter_map(|part| part.split_once("</Key>").map(|(key, _)| key))
-            .max()
+            .filter_map(|key| {
+                key_time(key)
+                    .filter(|time| *time <= at)
+                    .map(|time| (time, key))
+            })
+            .max_by_key(|(time, _)| *time)
+            .map(|(_, key)| key)
         {
             return Ok(key.to_string());
         }
     }
     anyhow::bail!("GOES ABI: no recent C{band:02} image")
+}
+
+fn key_time(key: &str) -> Option<DateTime<Utc>> {
+    let value = key.split("_s").nth(1)?.get(..13)?;
+    let number = |range: std::ops::Range<usize>| value.get(range)?.parse::<u32>().ok();
+    chrono::NaiveDate::from_yo_opt(number(0..4)? as i32, number(4..7)?)?
+        .and_hms_opt(number(7..9)?, number(9..11)?, number(11..13)?)
+        .map(|time| time.and_utc())
 }
 
 pub async fn fetch_latest(
@@ -247,10 +293,20 @@ pub async fn fetch_latest(
     scene: Scene,
     band: u8,
 ) -> anyhow::Result<Image> {
+    fetch_at(http, satellite, scene, band, Utc::now()).await
+}
+
+pub async fn fetch_at(
+    http: &reqwest::Client,
+    satellite: Satellite,
+    scene: Scene,
+    band: u8,
+    at: DateTime<Utc>,
+) -> anyhow::Result<Image> {
     if !(1..=16).contains(&band) {
         anyhow::bail!("GOES ABI: band must be 1 through 16");
     }
-    let key = latest_key(http, satellite, scene, band, Utc::now()).await?;
+    let key = latest_key(http, satellite, scene, band, at).await?;
     let bytes = http
         .get(crate::net::fetch_url(&format!(
             "{}/{}",
@@ -578,6 +634,13 @@ mod tests {
         assert_eq!(
             prefix(at, Scene::Conus, 13),
             "ABI-L2-CMIPC/2025/100/18/OR_ABI-L2-CMIPC-M6C13"
+        );
+        assert_eq!(
+            key_time("OR_ABI-L2-CMIPC-M6C13_G19_s20251001846231_e.nc")
+                .unwrap()
+                .format("%Y-%m-%d %H:%M:%S")
+                .to_string(),
+            "2025-04-10 18:46:23"
         );
         assert_eq!(
             prefix(at, Scene::Mesoscale2, 9),

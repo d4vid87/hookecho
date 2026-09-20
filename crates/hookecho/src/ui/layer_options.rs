@@ -170,70 +170,76 @@ pub(crate) fn show(
     ui.ctx().data_mut(|d| d.insert_temp(id, section));
     ui.add_space(4.0);
     if section == "Data details" {
-        if let Some(frame) = crate::render::FieldLayer::DRAW_ORDER
+        if let Some((descriptor, grid, stamp)) = crate::render::FieldLayer::DRAW_ORDER
             .iter()
             .rev()
             .find(|layer| on.contains(layer))
-            .and_then(|layer| fields.get(layer))
-            .and_then(|state| state.frame.as_ref())
+            .and_then(|layer| {
+                let descriptor = layer.descriptor()?;
+                let (grid, stamp) = fields.get(layer)?.metadata.as_ref()?;
+                Some((descriptor, grid, stamp))
+            })
         {
-            ui.label(egui::RichText::new(frame.descriptor.display_name).strong());
-            egui::Grid::new("field_provenance").num_columns(2).show(ui, |ui| {
-                ui.weak("Source");
-                ui.label(frame.descriptor.source);
-                ui.end_row();
-                ui.weak("Valid");
-                ui.label(frame.stamp.valid_time.format("%Y-%m-%d %H:%M UTC").to_string());
-                ui.end_row();
-                ui.weak("Issue");
-                ui.label(
-                    frame
-                        .stamp
-                        .issue_time
-                        .map(|time| time.format("%Y-%m-%d %H:%M UTC").to_string())
-                        .unwrap_or_else(|| "Unknown".into()),
-                );
-                ui.end_row();
-                ui.weak("Run");
-                ui.label(
-                    frame
-                        .stamp
-                        .run_time
-                        .map(|time| time.format("%Y-%m-%d %H:%M UTC").to_string())
-                        .unwrap_or_else(|| "Unknown".into()),
-                );
-                ui.end_row();
-                ui.weak("Received");
-                ui.label(frame.stamp.received_time.format("%Y-%m-%d %H:%M:%S UTC").to_string());
-                ui.end_row();
-                ui.weak("Class");
-                ui.label(frame.stamp.class.label());
-                ui.end_row();
-                ui.weak("Quality");
-                ui.label(frame.stamp.quality.label());
-                ui.end_row();
-                ui.weak("Units");
-                ui.label(frame.descriptor.units);
-                ui.end_row();
-                ui.weak("Grid");
-                ui.label(format!("{} × {} · {}", frame.grid.nx, frame.grid.ny, frame.grid.projection));
-                ui.end_row();
-                ui.weak("Resolution");
-                ui.label(
-                    frame
-                        .grid
-                        .native_resolution_m
-                        .map(|metres| format!("{metres:.0} m"))
-                        .unwrap_or_else(|| "Unknown".into()),
-                );
-                ui.end_row();
-                ui.weak("Sampling");
-                ui.label(frame.descriptor.sampling.label());
-                ui.end_row();
-                ui.weak("Object");
-                ui.label(&frame.stamp.source_identity);
-                ui.end_row();
-            });
+            ui.label(egui::RichText::new(descriptor.display_name).strong());
+            egui::Grid::new("field_provenance")
+                .num_columns(2)
+                .show(ui, |ui| {
+                    ui.weak("Source");
+                    ui.label(descriptor.source);
+                    ui.end_row();
+                    ui.weak("Valid");
+                    ui.label(stamp.valid_time.format("%Y-%m-%d %H:%M UTC").to_string());
+                    ui.end_row();
+                    ui.weak("Issue");
+                    ui.label(
+                        stamp
+                            .issue_time
+                            .map(|time| time.format("%Y-%m-%d %H:%M UTC").to_string())
+                            .unwrap_or_else(|| "Unknown".into()),
+                    );
+                    ui.end_row();
+                    ui.weak("Run");
+                    ui.label(
+                        stamp
+                            .run_time
+                            .map(|time| time.format("%Y-%m-%d %H:%M UTC").to_string())
+                            .unwrap_or_else(|| "Unknown".into()),
+                    );
+                    ui.end_row();
+                    ui.weak("Received");
+                    ui.label(
+                        stamp
+                            .received_time
+                            .format("%Y-%m-%d %H:%M:%S UTC")
+                            .to_string(),
+                    );
+                    ui.end_row();
+                    ui.weak("Class");
+                    ui.label(stamp.class.label());
+                    ui.end_row();
+                    ui.weak("Quality");
+                    ui.label(stamp.quality.label());
+                    ui.end_row();
+                    ui.weak("Units");
+                    ui.label(descriptor.units);
+                    ui.end_row();
+                    ui.weak("Grid");
+                    ui.label(format!("{} × {} · {}", grid.nx, grid.ny, grid.projection));
+                    ui.end_row();
+                    ui.weak("Resolution");
+                    ui.label(
+                        grid.native_resolution_m
+                            .map(|metres| format!("{metres:.0} m"))
+                            .unwrap_or_else(|| "Unknown".into()),
+                    );
+                    ui.end_row();
+                    ui.weak("Sampling");
+                    ui.label(descriptor.sampling.label());
+                    ui.end_row();
+                    ui.weak("Object");
+                    ui.label(&stamp.source_identity);
+                    ui.end_row();
+                });
         }
     }
     if section == "Global forecast" && global_on {
@@ -355,7 +361,10 @@ pub(crate) fn show(
                 ui.label(egui::RichText::new("Forecast day").small().strong());
                 ui.horizontal_wrapped(|ui| {
                     for day in 1u8..=8 {
-                        if ui.selectable_label(filters.outlook_day == day, format!("Day {day}")).clicked() {
+                        if ui
+                            .selectable_label(filters.outlook_day == day, format!("Day {day}"))
+                            .clicked()
+                        {
                             filters.outlook_day = if filters.outlook_day == day { 0 } else { day };
                             changed = true;
                         }
