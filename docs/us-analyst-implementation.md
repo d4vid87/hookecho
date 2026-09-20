@@ -13,7 +13,7 @@ roadmap checkbox only after its gate passes and link the test or capture here.
 | A5 persistent cache | Partial | native caches, pinned IndexedDB chase packs, automatic MRMS object cache with stale-object reload fallback, bounded memory fallback with visible degraded status | Integrity/LRU tests and web storage controls pass; model byte ranges pending milestone 4 |
 | B operational radar | Partial | Level II stream/archive, progressive merge, six moments | Pending provider/failover fixture gate |
 | C radar analysis | Partial | derived radar products and detectors | Pending bounded product DSL |
-| D satellite/GLM | Partial | GLM support | Pending native ABI ingest and projection gate |
+| D satellite/GLM | Partial | GLM flashes and registry-backed flash-extent density with source valid time | Pending native ABI ingest and projection gate |
 | E MRMS catalog | Partial | operational subset in `mrms.rs` | Pending descriptor-driven supported catalog |
 | F model workstation | Partial | HRRR/RAP/global fields and comparisons | Pending generic engine and ensemble gate |
 | G analysis/verification | Partial | observations, soundings, warning verification | Pending objective analysis/forecast verification |

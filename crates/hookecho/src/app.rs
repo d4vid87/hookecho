@@ -8219,7 +8219,19 @@ impl HookEchoApp {
         let mut changed = false;
         while let Ok(delivery) = self.overlay_rx.try_recv() {
             let msg = match delivery {
-                OverlayDelivery::Immediate(msg) => msg,
+                OverlayDelivery::Immediate(msg) => {
+                    if let OverlayMsg::RegisteredField(layer, frame, _) = &msg {
+                        let lane = RequestLane::Field(*layer);
+                        let mut requests = self
+                            .overlay_requests
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner);
+                        if let Some(generation) = requests.start(lane.clone(), 0) {
+                            requests.finish(&lane, generation, None, Some(frame.stamp.valid_time));
+                        }
+                    }
+                    msg
+                }
                 OverlayDelivery::Fetched {
                     lane,
                     generation,
@@ -16620,15 +16632,18 @@ impl eframe::App for HookEchoApp {
             if let Some(s) = self.fields.get_mut(&FL::GlmFed) {
                 s.last_fetch = Some(Instant::now());
             }
-            let field = self.glm.lock().ok().and_then(|f| {
-                wxdata::glm::flash_density(
+            let now = Utc::now();
+            let frame = self.glm.lock().ok().and_then(|f| {
+                wxdata::glm::flash_density_frame(
                     f.flashes(),
                     self.settings.detectors.glm_fed_cell_deg,
                     chrono::Duration::minutes(self.settings.detectors.glm_fed_window_min),
-                    Utc::now(),
+                    now,
+                    f.last_keys().values().cloned().collect::<Vec<_>>().join(" + "),
                 )
             });
-            if let Some(field) = &field {
+            if let Some(frame) = &frame {
+                let field = frame.field();
                 self.evaluate_grid_rules(crate::settings::RuleTrigger::GlmFed, field);
                 // The jump is the difference between this grid and the one before it, so it can
                 // only be asked for once there is a previous one — the first grid after launch
@@ -16640,13 +16655,15 @@ impl eframe::App for HookEchoApp {
                 }
                 self.glm_fed_prev = Some(field.clone());
             }
-            if let (Some(field), true) = (field, glm_fed_on) {
+            if let (Some(frame), true) = (frame, glm_fed_on) {
                 let cap = self.field_texture_cap();
+                let display = registered_display_field(&frame, cap);
                 let _ = self
                     .overlay_tx
-                    .send(OverlayDelivery::Immediate(OverlayMsg::Field(
+                    .send(OverlayDelivery::Immediate(OverlayMsg::RegisteredField(
                         FL::GlmFed,
-                        field.decimated(cap),
+                        frame,
+                        display,
                     )));
             }
         }

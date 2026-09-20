@@ -294,6 +294,7 @@ impl FieldLayer {
             FL::Vil => &wxdata::level3::VIL_DESCRIPTOR,
             FL::EchoTops => &wxdata::level3::ECHO_TOPS_DESCRIPTOR,
             FL::Hca => &wxdata::level3::HCA_DESCRIPTOR,
+            FL::GlmFed => &wxdata::glm::FLASH_DENSITY_DESCRIPTOR,
             _ => return None,
         })
     }
@@ -347,6 +348,10 @@ mod field_slug_tests {
         assert_eq!(
             FieldLayer::from_stable_id("snowbands"),
             Some(FieldLayer::SnowBands)
+        );
+        assert_eq!(
+            FieldLayer::GlmFed.stable_id(),
+            "satellite.glm.flash-extent-density"
         );
         for layer in [
             FieldLayer::UpdraftHelicity,
