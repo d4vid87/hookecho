@@ -17,7 +17,10 @@ check_prefixes() {
 check_prefixes \
   'https://noaa-mrms-pds.s3.amazonaws.com/?list-type=2&delimiter=/&prefix=CONUS/' \
   'CONUS/MergedReflectivityQCComposite_00.50/' \
+  'CONUS/LowLevelCompositeReflectivity_00.50/' \
   'CONUS/MergedAzShear_0-2kmAGL_00.50/' \
+  'CONUS/MergedAzShear_3-6kmAGL_00.50/' \
+  'CONUS/POSH_00.50/' \
   'CONUS/MultiSensor_QPE_01H_Pass2_00.00/' \
   'CONUS/MultiSensor_QPE_03H_Pass2_00.00/' \
   'CONUS/MultiSensor_QPE_06H_Pass2_00.00/' \

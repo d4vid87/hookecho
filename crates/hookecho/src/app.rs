@@ -1734,7 +1734,14 @@ fn field_refresh_secs(layer: crate::render::FieldLayer) -> u64 {
     match layer {
         FL::GoesC13 | FL::GoesWaterVapor | FL::GoesVisible | FL::GoesTrueColor => 300,
         FL::Lightning | FL::AzShear => 60,
-        FL::Mrms | FL::Mesh | FL::Rotation | FL::Hrrr | FL::Mosaic => 120,
+        FL::Mrms
+        | FL::MrmsLowLevel
+        | FL::Mesh
+        | FL::Posh
+        | FL::Rotation
+        | FL::AzShearMid
+        | FL::Hrrr
+        | FL::Mosaic => 120,
         // QPE accumulations update on a ~2-minute MRMS cadence.
         // The rate product lands every 2 minutes; the accumulations move far more slowly.
         FL::PrecipRate => 120,
@@ -16035,7 +16042,7 @@ impl HookEchoApp {
         use crate::render::FieldLayer as FL;
         match layer {
             // Mosaic + HRRR forecast are both dBZ → the reflectivity palette.
-            FL::Mrms | FL::Mosaic | FL::Hrrr => {
+            FL::Mrms | FL::MrmsLowLevel | FL::Mosaic | FL::Hrrr => {
                 mrms_upload(f, self.palettes.table(Moment::Reflectivity))
             }
             other => field_upload_indexed(other, f),

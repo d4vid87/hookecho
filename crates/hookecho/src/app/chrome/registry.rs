@@ -56,11 +56,14 @@ impl HookEchoApp {
                         | FL::GoesVisible
                         | FL::GoesTrueColor
                         | FL::Mrms
+                        | FL::MrmsLowLevel
                         | FL::Mosaic
                         | FL::Rotation
                         | FL::Mesh
                         | FL::Lightning
                         | FL::AzShear
+                        | FL::AzShearMid
+                        | FL::Posh
                         | FL::PrecipRate
                         | FL::Qpe1h
                         | FL::Qpe3h
@@ -273,6 +276,13 @@ impl HookEchoApp {
                 true,
             ),
             (
+                FL::MrmsLowLevel,
+                "MRMS",
+                "Low-level reflectivity (MRMS)",
+                "Composite of the lowest available radar observations",
+                false,
+            ),
+            (
                 FL::Mosaic,
                 "National",
                 "Seamless mosaic (single-radar)",
@@ -306,6 +316,20 @@ impl HookEchoApp {
                 "National",
                 "Rotation strength (AzShear, 0–2 km)",
                 "Low-level rotation strength, right now",
+                false,
+            ),
+            (
+                FL::AzShearMid,
+                "National",
+                "Mid-level rotation strength (AzShear, 3–6 km)",
+                "Rotation strength in the mid-levels of a storm",
+                false,
+            ),
+            (
+                FL::Posh,
+                "National",
+                "Severe hail probability (POSH)",
+                "MRMS probability that a storm is producing severe hail",
                 false,
             ),
             (

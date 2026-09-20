@@ -53,10 +53,13 @@ macro_rules! descriptor {
     };
 }
 
+descriptor!(LOW_LEVEL_REFLECTIVITY_DESCRIPTOR, "mrms.low-level-composite-reflectivity", "Low-level composite reflectivity", "Low-level Reflectivity", "dBZ", Scalar, "reflectivity", Bilinear, true, ["mosaic", "dbz", "low level"]);
 descriptor!(LIGHTNING_DESCRIPTOR, "mrms.nldn-cg-density", "Cloud-to-ground lightning density", "CG Lightning", "strikes/km²/min", Scalar, "lightning", Bilinear, false, ["nldn", "lightning"]);
 descriptor!(MESH_DESCRIPTOR, "mrms.mesh", "Maximum estimated hail size", "MESH", "mm", Scalar, "mesh", Bilinear, true, ["hail", "mesh"]);
 descriptor!(HAIL_SWATH_DESCRIPTOR, "mrms.mesh-max", "Maximum hail-size swath", "Hail Swath", "mm", Accumulation, "hail-swath", Nearest, false, ["hail track", "mesh max"]);
 descriptor!(AZSHEAR_DESCRIPTOR, "mrms.azshear-0-2km", "0–2 km azimuthal shear", "AzShear", "s⁻¹", Scalar, "azshear", Bilinear, true, ["rotation", "shear"]);
+descriptor!(AZSHEAR_MID_DESCRIPTOR, "mrms.azshear-3-6km", "3–6 km azimuthal shear", "Mid-level AzShear", "s⁻¹", Scalar, "azshear", Bilinear, true, ["rotation", "shear", "mid level"]);
+descriptor!(POSH_DESCRIPTOR, "mrms.posh", "Probability of severe hail", "POSH", "%", Probability, "posh", Bilinear, false, ["hail", "probability"]);
 descriptor!(ROTATION_DESCRIPTOR, "mrms.rotation-track", "Rotation track", "Rotation Track", "s⁻¹", Accumulation, "rotation", Nearest, false, ["rotation", "azimuthal shear"]);
 descriptor!(QPE_01H_DESCRIPTOR, "mrms.qpe-1h", "One-hour quantitative precipitation estimate", "QPE 1h", "mm", Accumulation, "qpe-1h", Nearest, false, ["rain", "precipitation"]);
 descriptor!(QPE_03H_DESCRIPTOR, "mrms.qpe-3h", "Three-hour quantitative precipitation estimate", "QPE 3h", "mm", Accumulation, "qpe-3h", Nearest, false, ["rain", "precipitation"]);
@@ -67,12 +70,15 @@ descriptor!(PRECIP_RATE_DESCRIPTOR, "mrms.precip-rate", "Surface precipitation r
 descriptor!(PRECIP_TYPE_DESCRIPTOR, "mrms.precip-type", "Surface precipitation type", "Precip Type", "category", Categorical, "precip-type", Nearest, false, ["rain", "snow", "sleet"]);
 descriptor!(FLASH_ARI30_DESCRIPTOR, "mrms.flash-ari30", "30-minute flash-flood recurrence interval", "FLASH ARI", "yr", Scalar, "flash-flood", Bilinear, false, ["flood", "ari"]);
 
-pub static DESCRIPTORS: [&FieldDescriptor; 14] = [
+pub static DESCRIPTORS: [&FieldDescriptor; 17] = [
     &REFLECTIVITY_DESCRIPTOR,
+    &LOW_LEVEL_REFLECTIVITY_DESCRIPTOR,
     &LIGHTNING_DESCRIPTOR,
     &MESH_DESCRIPTOR,
     &HAIL_SWATH_DESCRIPTOR,
     &AZSHEAR_DESCRIPTOR,
+    &AZSHEAR_MID_DESCRIPTOR,
+    &POSH_DESCRIPTOR,
     &ROTATION_DESCRIPTOR,
     &QPE_01H_DESCRIPTOR,
     &QPE_03H_DESCRIPTOR,
@@ -93,10 +99,13 @@ pub fn product_for_id(
 ) -> Option<&'static str> {
     Some(match id {
         "mrms.composite-reflectivity" => REFLECTIVITY,
+        "mrms.low-level-composite-reflectivity" => LOW_LEVEL_REFLECTIVITY,
         "mrms.nldn-cg-density" => lightning_density(lightning_minutes),
         "mrms.mesh" => MESH,
         "mrms.mesh-max" => hail_swath(hail_minutes),
         "mrms.azshear-0-2km" => AZSHEAR,
+        "mrms.azshear-3-6km" => AZSHEAR_MID,
+        "mrms.posh" => POSH,
         "mrms.rotation-track" => rotation_track(rotation_minutes),
         "mrms.qpe-1h" => QPE_01H,
         "mrms.qpe-3h" => QPE_03H,
@@ -145,6 +154,12 @@ pub fn hail_swath(minutes: u16) -> &'static str {
 }
 /// Instantaneous 0–2 km AGL azimuthal shear (s⁻¹).
 pub const AZSHEAR: &str = "CONUS/MergedAzShear_0-2kmAGL_00.50";
+/// Instantaneous 3–6 km AGL azimuthal shear (s⁻¹).
+pub const AZSHEAR_MID: &str = "CONUS/MergedAzShear_3-6kmAGL_00.50";
+/// Probability of severe hail (%).
+pub const POSH: &str = "CONUS/POSH_00.50";
+/// Composite reflectivity from the lowest available radar observations (dBZ).
+pub const LOW_LEVEL_REFLECTIVITY: &str = "CONUS/LowLevelCompositeReflectivity_00.50";
 /// Multi-sensor 1-hour QPE accumulation, Pass-2 gauge-corrected (mm).
 pub const QPE_01H: &str = "CONUS/MultiSensor_QPE_01H_Pass2_00.00";
 /// Multi-sensor 3-hour QPE accumulation, Pass-2 gauge-corrected (mm).
@@ -434,6 +449,7 @@ pub async fn fetch_latest_frame(
 pub fn descriptor_for_product(product: &str) -> Option<&'static FieldDescriptor> {
     Some(match product {
         REFLECTIVITY => &REFLECTIVITY_DESCRIPTOR,
+        LOW_LEVEL_REFLECTIVITY => &LOW_LEVEL_REFLECTIVITY_DESCRIPTOR,
         LIGHTNING
         | "CONUS/NLDN_CG_001min_AvgDensity_00.00"
         | "CONUS/NLDN_CG_015min_AvgDensity_00.00"
@@ -446,6 +462,8 @@ pub fn descriptor_for_product(product: &str) -> Option<&'static FieldDescriptor>
         | "CONUS/MESH_Max_240min_00.50"
         | "CONUS/MESH_Max_360min_00.50" => &HAIL_SWATH_DESCRIPTOR,
         AZSHEAR => &AZSHEAR_DESCRIPTOR,
+        AZSHEAR_MID => &AZSHEAR_MID_DESCRIPTOR,
+        POSH => &POSH_DESCRIPTOR,
         "CONUS/RotationTrack30min_00.50"
         | "CONUS/RotationTrack60min_00.50"
         | "CONUS/RotationTrack120min_00.50" => &ROTATION_DESCRIPTOR,

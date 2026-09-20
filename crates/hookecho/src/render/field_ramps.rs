@@ -703,7 +703,7 @@ pub fn ramp_for(layer: FieldLayer) -> Option<&'static FieldRamp> {
         FL::GoesC13 => &GOES_C13,
         FL::GoesWaterVapor => &GOES_WATER_VAPOR,
         FL::GoesVisible => &GOES_VISIBLE,
-        FL::Rotation | FL::AzShear => &ROTATION,
+        FL::Rotation | FL::AzShear | FL::AzShearMid => &ROTATION,
         FL::Mesh => &MESH,
         FL::HailSwath => &HAIL_SWATH,
         FL::PrecipRate => &PRECIP_RATE,
@@ -720,7 +720,7 @@ pub fn ramp_for(layer: FieldLayer) -> Option<&'static FieldRamp> {
         FL::VilDensity => &VIL_DENSITY,
         // MEHS shares the MRMS MESH scale: one hail scale app-wide.
         FL::HailMehs => &MESH,
-        FL::HailPosh => &POSH,
+        FL::HailPosh | FL::Posh => &POSH,
         FL::PrecipType => &PRECIP_TYPE,
         FL::UpdraftHelicity => &UPDRAFT_HELICITY,
         FL::Smoke => &SMOKE,
@@ -739,6 +739,7 @@ pub fn ramp_for(layer: FieldLayer) -> Option<&'static FieldRamp> {
         // Composite is reflectivity in dBZ, so like the mosaic it follows the user's own
         // reflectivity `.pal` rather than a fixed ramp of its own.
         FL::Mrms
+        | FL::MrmsLowLevel
         | FL::Mosaic
         | FL::CompositeLocal
         | FL::Hrrr
@@ -754,8 +755,9 @@ mod tests {
 
     /// Layers colored outside this table. A new `FieldLayer` must join the table or this list —
     /// forgetting both silently ships a layer with no legend.
-    const NO_RAMP: [FieldLayer; 7] = [
+    const NO_RAMP: [FieldLayer; 8] = [
         FieldLayer::Mrms,
+        FieldLayer::MrmsLowLevel,
         FieldLayer::Mosaic,
         FieldLayer::CompositeLocal,
         FieldLayer::Hrrr,

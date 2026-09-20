@@ -72,10 +72,13 @@ pub enum FieldLayer {
     GoesVisible,
     GoesTrueColor,
     Mrms,
+    MrmsLowLevel,
     Hrrr,
     Rotation,
     Mesh,
     AzShear,
+    AzShearMid,
+    Posh,
     Lightning,
     /// Instantaneous precipitation rate (mm/hr) — how hard it is coming down right now,
     /// as against the QPE layers' how much has fallen.
@@ -157,6 +160,7 @@ impl FieldLayer {
                 | FieldLayer::GoesVisible
                 | FieldLayer::GoesTrueColor
                 | FieldLayer::Mrms
+                | FieldLayer::MrmsLowLevel
                 | FieldLayer::Mosaic
                 | FieldLayer::Hrrr
                 | FieldLayer::Cape
@@ -177,7 +181,7 @@ impl FieldLayer {
     }
 
     /// Fixed bottom-to-top paint order within each band.
-    pub const DRAW_ORDER: [FieldLayer; 45] = [
+    pub const DRAW_ORDER: [FieldLayer; 48] = [
         // Below-radar context band (bottom to top). The global models sit at the very bottom:
         // they are the synoptic backdrop everything else is drawn against.
         FieldLayer::GoesC13,
@@ -192,6 +196,7 @@ impl FieldLayer {
         FieldLayer::GlobalPrecip,
         FieldLayer::ModelDiff,
         FieldLayer::Mrms,
+        FieldLayer::MrmsLowLevel,
         FieldLayer::Mosaic,
         FieldLayer::Hrrr,
         FieldLayer::Cape,
@@ -224,6 +229,8 @@ impl FieldLayer {
         FieldLayer::Rotation,
         FieldLayer::Mesh,
         FieldLayer::AzShear,
+        FieldLayer::AzShearMid,
+        FieldLayer::Posh,
         FieldLayer::Lightning,
         FieldLayer::GlmFed,
     ];
@@ -237,10 +244,13 @@ impl FieldLayer {
             FieldLayer::GoesVisible => "goes-visible",
             FieldLayer::GoesTrueColor => "goes-true-color",
             FieldLayer::Mrms => "mrms",
+            FieldLayer::MrmsLowLevel => "mrms-low-level",
             FieldLayer::Hrrr => "hrrr",
             FieldLayer::Rotation => "rotation",
             FieldLayer::Mesh => "mesh",
             FieldLayer::AzShear => "azshear",
+            FieldLayer::AzShearMid => "azshear-mid",
+            FieldLayer::Posh => "posh",
             FieldLayer::Lightning => "lightning",
             FieldLayer::PrecipRate => "preciprate",
             FieldLayer::Qpe1h => "qpe1h",
@@ -294,10 +304,13 @@ impl FieldLayer {
             FL::GoesVisible => &wxdata::abi::C02_DESCRIPTOR,
             FL::GoesTrueColor => &wxdata::abi::TRUE_COLOR_DESCRIPTOR,
             FL::Mrms => &wxdata::mrms::REFLECTIVITY_DESCRIPTOR,
+            FL::MrmsLowLevel => &wxdata::mrms::LOW_LEVEL_REFLECTIVITY_DESCRIPTOR,
             FL::Lightning => &wxdata::mrms::LIGHTNING_DESCRIPTOR,
             FL::Mesh => &wxdata::mrms::MESH_DESCRIPTOR,
             FL::HailSwath => &wxdata::mrms::HAIL_SWATH_DESCRIPTOR,
             FL::AzShear => &wxdata::mrms::AZSHEAR_DESCRIPTOR,
+            FL::AzShearMid => &wxdata::mrms::AZSHEAR_MID_DESCRIPTOR,
+            FL::Posh => &wxdata::mrms::POSH_DESCRIPTOR,
             FL::Rotation => &wxdata::mrms::ROTATION_DESCRIPTOR,
             FL::Qpe1h => &wxdata::mrms::QPE_01H_DESCRIPTOR,
             FL::Qpe3h => &wxdata::mrms::QPE_03H_DESCRIPTOR,
