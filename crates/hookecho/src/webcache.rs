@@ -46,6 +46,9 @@ pub struct Pack {
     pub date: String,
     /// Volume object names, oldest first — the timeline as it stood when saved.
     pub volumes: Vec<String>,
+    /// Immutable native GOES source objects pinned in the shared object cache.
+    #[serde(default)]
+    pub satellite: Vec<String>,
     /// Unix seconds when it was saved.
     pub saved_at: i64,
     /// Total size of the volumes, for the eviction accounting and the picker's readout.
@@ -178,11 +181,17 @@ pub async fn save_pack(
     site: &str,
     date: &str,
     volumes: Vec<(String, Vec<u8>)>,
+    satellite: Vec<String>,
 ) -> anyhow::Result<Pack> {
     if volumes.is_empty() {
         anyhow::bail!("nothing in the loop to save");
     }
     let db = open().await?;
+    let pack_key = format!("{site}-{date}");
+    let previous = packs()
+        .await
+        .into_iter()
+        .find(|pack| pack.key() == pack_key);
     let mut bytes = 0.0;
     let mut names = Vec::new();
     for (name, data) in &volumes {
@@ -190,10 +199,24 @@ pub async fn save_pack(
         bytes += data.len() as f64;
         names.push(name.clone());
     }
+    let mut pinned = Vec::new();
+    for key in satellite {
+        let Some(object) = wxdata::object_cache::get("satellite", &key).await else {
+            continue;
+        };
+        if wxdata::object_cache::set_pinned("satellite", &key, true)
+            .await
+            .is_ok()
+        {
+            bytes += object.bytes.len() as f64;
+            pinned.push(key);
+        }
+    }
     let pack = Pack {
         site: site.to_string(),
         date: date.to_string(),
         volumes: names,
+        satellite: pinned,
         saved_at: chrono::Utc::now().timestamp(),
         bytes,
     };
@@ -203,6 +226,14 @@ pub async fn save_pack(
         .put_with_key(&json.as_str().into(), &pack.key().into())
         .map_err(|e| anyhow!("{e:?}"))?;
     await_request(req).await?;
+    if let Some(previous) = previous {
+        let current = packs().await;
+        for key in previous.satellite {
+            if !current.iter().any(|pack| pack.satellite.contains(&key)) {
+                let _ = wxdata::object_cache::set_pinned("satellite", &key, false).await;
+            }
+        }
+    }
     evict(&db).await;
     Ok(pack)
 }
@@ -237,6 +268,11 @@ async fn delete_pack(db: &IdbDatabase, pack: &Pack) -> anyhow::Result<()> {
         }
         if let Ok(req) = s.delete(&name.as_str().into()) {
             let _ = await_request(req).await;
+        }
+    }
+    for key in &pack.satellite {
+        if !others.iter().any(|pack| pack.satellite.contains(key)) {
+            let _ = wxdata::object_cache::set_pinned("satellite", key, false).await;
         }
     }
     let s = store(db, PACKS, IdbTransactionMode::Readwrite)?;
@@ -303,7 +339,12 @@ async fn refresh() {
 /// Fetch every volume in `ids` — from the pack store when it is already there, from the bucket
 /// otherwise — and save them as one pack.
 #[cfg(target_arch = "wasm32")]
-pub async fn save_timeline(site: String, date: String, ids: Vec<wxdata::level2::Identifier>) {
+pub async fn save_timeline(
+    site: String,
+    date: String,
+    ids: Vec<wxdata::level2::Identifier>,
+    satellite: Vec<String>,
+) {
     let total = ids.len();
     let mut out = Vec::new();
     for (i, id) in ids.into_iter().enumerate() {
@@ -321,7 +362,7 @@ pub async fn save_timeline(site: String, date: String, ids: Vec<wxdata::level2::
         };
         out.push((name, bytes));
     }
-    match save_pack(&site, &date, out).await {
+    match save_pack(&site, &date, out, satellite).await {
         Ok(p) => set_status(Some(format!("saved {}", p.label()))),
         Err(e) => set_status(Some(format!("could not save the pack: {e}"))),
     }
@@ -347,6 +388,7 @@ mod tests {
             site: "KTLX".into(),
             date: "2026-05-20".into(),
             volumes: vec!["KTLX20260520_231502_V06".into()],
+            satellite: vec!["ABI-L2-CMIPC/example.nc".into()],
             saved_at: 1_780_000_000,
             bytes: 32.0 * 1024.0 * 1024.0,
         };

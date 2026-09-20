@@ -6790,9 +6790,54 @@ impl HookEchoApp {
         let ids: Vec<_> = tl.frames.iter().take(tl.playhead + 1).cloned().collect();
         let site = self.views[self.active].site.clone().unwrap_or_default();
         let date = tl.date.format("%Y-%m-%d").to_string();
+        let current_satellite: Vec<String> = self.views[self.active]
+            .fields_on
+            .iter()
+            .filter_map(|layer| self.fields.get(layer))
+            .filter_map(|state| state.metadata.as_ref())
+            .flat_map(|(_, stamp)| stamp.source_identity.split(" + "))
+            .filter(|key| key.contains("ABI-L2-"))
+            .map(str::to_string)
+            .collect();
+        let mut satellite_bands = std::collections::BTreeSet::new();
+        for layer in &self.views[self.active].fields_on {
+            match layer {
+                crate::render::FieldLayer::GoesVisible => {
+                    satellite_bands.insert(2);
+                }
+                crate::render::FieldLayer::GoesWaterVapor => {
+                    satellite_bands.insert(8);
+                }
+                crate::render::FieldLayer::GoesC13 => {
+                    satellite_bands.insert(13);
+                }
+                crate::render::FieldLayer::GoesTrueColor => {
+                    satellite_bands.extend(wxdata::abi::TRUE_COLOR.bands);
+                }
+                _ => {}
+            }
+        }
+        let http = self.http.clone();
         let ctx = ctx.clone();
         self.spawner.spawn(async move {
-            crate::webcache::save_timeline(site, date, ids).await;
+            let mut satellite: std::collections::BTreeSet<String> =
+                current_satellite.into_iter().collect();
+            for time in ids.iter().filter_map(|id| id.date_time()) {
+                for &band in &satellite_bands {
+                    if let Ok(image) = wxdata::abi::fetch_at(
+                        &http,
+                        wxdata::abi::Satellite::East,
+                        wxdata::abi::Scene::Conus,
+                        band,
+                        time,
+                    )
+                    .await
+                    {
+                        satellite.insert(image.source_identity);
+                    }
+                }
+            }
+            crate::webcache::save_timeline(site, date, ids, satellite.into_iter().collect()).await;
             ctx.request_repaint();
         });
     }
@@ -8445,7 +8490,7 @@ impl HookEchoApp {
                                 issue_time: None,
                                 run_time: None,
                                 valid_time: image.valid_time,
-                                received_time: Utc::now(),
+                                received_time: image.received_time.unwrap_or_else(Utc::now),
                                 class: wxdata::field::DataClass::Observed,
                                 quality: wxdata::field::QualitySummary::Unknown,
                             },
@@ -18655,6 +18700,7 @@ mod field_lut_tests {
             lat_north: 40.0,
             lat_south: 39.0,
             source_identity: "fixture".into(),
+            received_time: None,
         };
         let upload = rgb_upload(&image);
         assert!(upload.rgba);

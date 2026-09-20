@@ -109,6 +109,7 @@ pub struct RgbImage {
     pub lat_north: f64,
     pub lat_south: f64,
     pub source_identity: String,
+    pub received_time: Option<DateTime<Utc>>,
 }
 
 pub async fn fetch_rgb(
@@ -200,6 +201,10 @@ pub fn compose_rgb(recipe: &'static RgbRecipe, channels: [&Image; 3]) -> anyhow:
             .map(|image| image.source_identity.as_str())
             .collect::<Vec<_>>()
             .join(" + "),
+        received_time: channels
+            .iter()
+            .filter_map(|image| image.received_time)
+            .max(),
     })
 }
 
@@ -307,19 +312,33 @@ pub async fn fetch_at(
         anyhow::bail!("GOES ABI: band must be 1 through 16");
     }
     let key = latest_key(http, satellite, scene, band, at).await?;
-    let bytes = http
-        .get(crate::net::fetch_url(&format!(
-            "{}/{}",
-            satellite.bucket(),
-            key
-        )))
-        .timeout(crate::net::FEED_TIMEOUT)
-        .send()
-        .await?
-        .error_for_status()?
-        .bytes()
-        .await?;
-    let image = decode(bytes.to_vec())?;
+    let (bytes, received_time) = match crate::object_cache::get("satellite", &key).await {
+        Some(cached) => (cached.bytes, cached.received_at),
+        None => {
+            let bytes = http
+                .get(crate::net::fetch_url(&format!(
+                    "{}/{}",
+                    satellite.bucket(),
+                    key
+                )))
+                .timeout(crate::net::FEED_TIMEOUT)
+                .send()
+                .await?
+                .error_for_status()?
+                .bytes()
+                .await?
+                .to_vec();
+            let received = Utc::now();
+            if let Err(error) = crate::object_cache::put("satellite", &key, &bytes, received).await
+            {
+                log::warn!("GOES ABI browser cache write failed: {error}");
+            }
+            (bytes, received)
+        }
+    };
+    let mut image = decode(bytes)?;
+    image.source_identity = key;
+    image.received_time = Some(received_time);
     if image.band != band {
         anyhow::bail!(
             "GOES ABI: requested C{band:02}, received C{:02}",
@@ -394,6 +413,7 @@ pub struct Image {
     pub projection: Projection,
     pub valid_time: DateTime<Utc>,
     pub source_identity: String,
+    pub received_time: Option<DateTime<Utc>>,
 }
 
 impl Image {
@@ -448,6 +468,7 @@ impl Image {
             .ok_or_else(|| anyhow::anyhow!("ABI: C{:02} is not registered", self.band))?;
         let valid_time = self.valid_time;
         let source_identity = self.source_identity.clone();
+        let received_time = self.received_time.unwrap_or(received_time);
         let display = self.display_grid(self.width.min(700), self.height.min(700))?;
         Ok(FieldFrame::from_abi(
             descriptor,
@@ -586,6 +607,7 @@ pub fn decode(bytes: Vec<u8>) -> anyhow::Result<Image> {
             .and_then(hdf5lite::Value::as_str)
             .unwrap_or("NOAA GOES ABI CMIP")
             .to_string(),
+        received_time: None,
     })
 }
 
@@ -674,6 +696,7 @@ mod tests {
             },
             valid_time: Utc::now(),
             source_identity: "fixture".into(),
+            received_time: None,
         };
         let mut green = base.clone();
         green.band = 3;
