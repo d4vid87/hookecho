@@ -9,7 +9,54 @@
 //! `NaN`, so it draws through the existing warp/upload path with no new pipeline and reads as
 //! emphasis rather than as a separate scale.
 
+use crate::field::{
+    DataClass, DataStamp, FieldDescriptor, FieldFamily, FieldFrame, FieldId, MissingData,
+    QualitySummary, SamplingPolicy, ValueKind,
+};
 use crate::mrms::MrmsField;
+
+pub static SNOW_BANDS_DESCRIPTOR: FieldDescriptor = FieldDescriptor {
+    id: FieldId("derived.mrms.snow-bands"),
+    source: "NOAA MRMS derived",
+    family: FieldFamily::ObservationDerived,
+    display_name: "MRMS snow bands",
+    short_name: "Snow Bands",
+    search_aliases: &["snow squall", "banded snow", "reflectivity"],
+    units: "dBZ",
+    value_kind: ValueKind::Scalar,
+    palette_key: "snow-bands",
+    sampling: SamplingPolicy::Bilinear,
+    missing: MissingData::Nan,
+    supports_contours: false,
+    supports_difference: false,
+};
+
+/// Derive snow-band reflectivity while retaining both source identities and the native grid.
+pub fn snow_bands_frame(echo: &FieldFrame, precip_type: &FieldFrame) -> Option<FieldFrame> {
+    if (echo.stamp.valid_time - precip_type.stamp.valid_time).abs() > chrono::Duration::minutes(5) {
+        return None;
+    }
+    let field = bands(echo.field(), 20.0, Some((precip_type.field(), &[3, 4])))?;
+    Some(FieldFrame::new(
+        &SNOW_BANDS_DESCRIPTOR,
+        field,
+        DataStamp {
+            source_identity: format!(
+                "{} + {}",
+                echo.stamp.source_identity, precip_type.stamp.source_identity
+            ),
+            issue_time: None,
+            run_time: None,
+            valid_time: echo.stamp.valid_time,
+            received_time: echo
+                .stamp
+                .received_time
+                .max(precip_type.stamp.received_time),
+            class: DataClass::Derived,
+            quality: QualitySummary::Unknown,
+        },
+    ))
+}
 
 /// A component has to be at least this many grid cells before its shape means anything. Below it,
 /// two cells in a row look infinitely elongated.
@@ -218,5 +265,51 @@ mod tests {
         let b = bands(&f, 20.0, Some((&mask, &[3, 4]))).unwrap();
         assert!(b.values[5].is_finite(), "snow half kept");
         assert!(b.values[30].is_nan(), "rain half masked out");
+    }
+
+    #[test]
+    fn snow_band_frame_keeps_contributors_and_refuses_stale_masks() {
+        let valid = chrono::Utc::now();
+        let frame = |descriptor, field: MrmsField, source: &str, time| {
+            FieldFrame::new(
+                descriptor,
+                field,
+                DataStamp {
+                    source_identity: source.into(),
+                    issue_time: None,
+                    run_time: None,
+                    valid_time: time,
+                    received_time: time,
+                    class: DataClass::Analysis,
+                    quality: QualitySummary::Good,
+                },
+            )
+        };
+        let echo = frame(
+            &crate::mrms::REFLECTIVITY_DESCRIPTOR,
+            field(60, 20, |x, y| if y < 2 && x < 40 { 30.0 } else { f32::NAN }),
+            "echo-key",
+            valid,
+        );
+        let flags = frame(
+            &crate::mrms::PRECIP_TYPE_DESCRIPTOR,
+            field(60, 20, |x, _| if x < 20 { 3.0 } else { 1.0 }),
+            "flag-key",
+            valid,
+        );
+        let derived = snow_bands_frame(&echo, &flags).unwrap();
+        assert_eq!(derived.descriptor.id, SNOW_BANDS_DESCRIPTOR.id);
+        assert_eq!(derived.stamp.class, DataClass::Derived);
+        assert_eq!(derived.stamp.source_identity, "echo-key + flag-key");
+        assert!(derived.field().values[5].is_finite());
+        assert!(derived.field().values[30].is_nan());
+
+        let stale = frame(
+            &crate::mrms::PRECIP_TYPE_DESCRIPTOR,
+            flags.field().clone(),
+            "old-flag-key",
+            valid - chrono::Duration::minutes(6),
+        );
+        assert!(snow_bands_frame(&echo, &stale).is_none());
     }
 }

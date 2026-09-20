@@ -289,6 +289,7 @@ impl FieldLayer {
             FL::GlobalWind10m => &wxdata::global::WIND_10M_DESCRIPTOR,
             FL::GlobalPrecip => &wxdata::global::PRECIP_DESCRIPTOR,
             FL::SnowAnalysis => &wxdata::nohrsc::SNOWFALL_DESCRIPTOR,
+            FL::SnowBands => &wxdata::banding::SNOW_BANDS_DESCRIPTOR,
             FL::ModelDiff => &crate::fielddiff::MODEL_DIFF_DESCRIPTOR,
             FL::Vil => &wxdata::level3::VIL_DESCRIPTOR,
             FL::EchoTops => &wxdata::level3::ECHO_TOPS_DESCRIPTOR,
@@ -339,6 +340,14 @@ mod field_slug_tests {
         assert_eq!(FieldLayer::from_stable_id("hrrr"), Some(FieldLayer::Hrrr));
         assert_eq!(FieldLayer::from_stable_id("cape"), Some(FieldLayer::Cape));
         assert_eq!(FieldLayer::from_stable_id("srh"), Some(FieldLayer::Srh));
+        assert_eq!(
+            FieldLayer::SnowBands.stable_id(),
+            "derived.mrms.snow-bands"
+        );
+        assert_eq!(
+            FieldLayer::from_stable_id("snowbands"),
+            Some(FieldLayer::SnowBands)
+        );
         for layer in [
             FieldLayer::UpdraftHelicity,
             FieldLayer::Snowfall,

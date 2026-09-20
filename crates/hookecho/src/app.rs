@@ -684,15 +684,19 @@ impl OverlaySource {
             OverlaySource::SnowBands => {
                 // Both grids at once: the mask is useless without the echo and vice versa.
                 let (mosaic, flags) = futures_util::future::try_join(
-                    wxdata::mrms::fetch_latest(http, wxdata::mrms::REFLECTIVITY),
-                    wxdata::mrms::fetch_latest(http, wxdata::mrms::PRECIP_TYPE),
+                    wxdata::mrms::fetch_latest_frame(http, wxdata::mrms::REFLECTIVITY),
+                    wxdata::mrms::fetch_latest_frame(http, wxdata::mrms::PRECIP_TYPE),
                 )
                 .await?;
                 // MRMS PrecipFlag: 3 is snow, 4 is wet snow. Everything else is rain, ice or
                 // nothing, and a snow-squall layer that lit up over warm rain would be a liar.
-                let bands = wxdata::banding::bands(&mosaic, 20.0, Some((&flags, &[3, 4])))
+                let bands = wxdata::banding::snow_bands_frame(&mosaic, &flags)
                     .ok_or_else(|| anyhow::anyhow!("the mosaic came back empty"))?;
-                OverlayMsg::Field(crate::render::FieldLayer::SnowBands, bands)
+                OverlayMsg::RegisteredField(
+                    crate::render::FieldLayer::SnowBands,
+                    bands,
+                    None,
+                )
             }
             OverlaySource::Global(layer, model, field, fh) => {
                 let fc = wxdata::global::fetch(http, model, field, fh).await?;
