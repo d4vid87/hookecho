@@ -744,6 +744,26 @@ mod tests {
             .all(|pair| { pair[1].azimuth_number() == pair[0].azimuth_number() + 1 }));
         assert_eq!(radials[250].collection_timestamp(), 3_000);
     }
+
+    #[test]
+    fn chunk_assembly_matches_the_same_archived_level2_fixture() {
+        let archive = nexrad_data::volume::File::new(
+            include_bytes!("../tests/data/kdmx-one-sweep.bin").to_vec(),
+        );
+        let expected = archive.scan().expect("archive fixture decodes");
+        let records = archive.records().expect("archive fixture has records");
+        let mut start =
+            archive.data()[..std::mem::size_of::<nexrad_data::volume::Header>()].to_vec();
+        start.extend_from_slice(records[0].data());
+        let mut chunks = vec![Chunk::new(start).expect("start chunk")];
+        chunks.extend(
+            records[1..]
+                .iter()
+                .map(|record| Chunk::new(record.data().to_vec()).expect("data chunk")),
+        );
+        let actual = assemble_volume(chunks).expect("chunks assemble");
+        assert_eq!(actual, expected);
+    }
 }
 
 #[cfg(test)]
