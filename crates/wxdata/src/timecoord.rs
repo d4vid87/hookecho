@@ -12,6 +12,16 @@ pub enum TimePolicy {
     ForecastLead,
 }
 
+pub fn policy_for(class: crate::field::DataClass) -> TimePolicy {
+    match class {
+        crate::field::DataClass::Observed | crate::field::DataClass::Analysis => {
+            TimePolicy::NearestPast
+        }
+        crate::field::DataClass::Forecast => TimePolicy::ForecastLead,
+        crate::field::DataClass::Derived => TimePolicy::Exact,
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TimedFrame<T> {
     pub valid: DateTime<Utc>,
@@ -167,5 +177,14 @@ mod tests {
         };
         assert_eq!((before.value, after.value), (10, 20));
         assert!((weight_after - 0.5).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn data_class_selects_a_scientifically_safe_default() {
+        use crate::field::DataClass;
+        assert_eq!(policy_for(DataClass::Observed), TimePolicy::NearestPast);
+        assert_eq!(policy_for(DataClass::Analysis), TimePolicy::NearestPast);
+        assert_eq!(policy_for(DataClass::Forecast), TimePolicy::ForecastLead);
+        assert_eq!(policy_for(DataClass::Derived), TimePolicy::Exact);
     }
 }

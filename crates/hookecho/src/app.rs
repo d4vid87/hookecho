@@ -14013,11 +14013,15 @@ impl HookEchoApp {
             }
         }
 
-        if let Some((layer, valid, selected, tolerance)) =
+        if let Some((layer, valid, selected, tolerance, aligned)) =
             crate::render::FieldLayer::DRAW_ORDER.iter().rev().find_map(|layer| {
                 view.fields_on.contains(layer).then(|| {
-                    self.field_time_mismatch(idx, *layer)
-                        .map(|(valid, selected, tolerance)| (*layer, valid, selected, tolerance))
+                    self.field_time_status(idx, *layer).and_then(
+                        |(valid, selected, tolerance, aligned)| {
+                            (valid != selected || !aligned)
+                                .then_some((*layer, valid, selected, tolerance, aligned))
+                        },
+                    )
                 })?
             })
         {
@@ -14031,16 +14035,21 @@ impl HookEchoApp {
             let name = layer
                 .descriptor()
                 .map_or_else(|| layer.slug(), |descriptor| descriptor.short_name);
-            let text = format!(
-                "{name} hidden · {minutes}m {direction} (limit {}m)",
-                tolerance.num_minutes()
-            );
+            let text = if aligned {
+                format!("{name} · data {minutes}m {direction}")
+            } else {
+                format!(
+                    "{name} hidden · {minutes}m {direction} (limit {}m)",
+                    tolerance.num_minutes()
+                )
+            };
+            let color = if aligned {
+                egui::Color32::from_rgb(145, 205, 225)
+            } else {
+                egui::Color32::from_rgb(255, 205, 100)
+            };
             let font = egui::FontId::proportional(12.0);
-            let galley = painter.layout_no_wrap(
-                text.clone(),
-                font.clone(),
-                egui::Color32::from_rgb(255, 205, 100),
-            );
+            let galley = painter.layout_no_wrap(text.clone(), font.clone(), color);
             let rect = egui::Rect::from_min_size(
                 prect.left_top() + egui::vec2(12.0, 12.0),
                 galley.size() + egui::vec2(16.0, 10.0),
@@ -14051,7 +14060,7 @@ impl HookEchoApp {
                 egui::Align2::LEFT_CENTER,
                 text,
                 font,
-                egui::Color32::from_rgb(255, 205, 100),
+                color,
             );
         }
     }
@@ -14059,15 +14068,21 @@ impl HookEchoApp {
     /// Whether a registry-backed observed field answers the instant this pane is showing.
     /// Unmigrated fields retain their existing behavior until they carry a `DataStamp`.
     fn field_aligned(&self, pane: usize, layer: crate::render::FieldLayer) -> bool {
-        self.field_time_mismatch(pane, layer).is_none()
+        self.field_time_status(pane, layer)
+            .is_none_or(|(_, _, _, aligned)| aligned)
     }
 
-    /// The visible field's source time when it falls outside this pane's alignment tolerance.
-    fn field_time_mismatch(
+    /// The field's source time, selected analysis time, tolerance, and alignment result.
+    fn field_time_status(
         &self,
         pane: usize,
         layer: crate::render::FieldLayer,
-    ) -> Option<(chrono::DateTime<Utc>, chrono::DateTime<Utc>, chrono::Duration)> {
+    ) -> Option<(
+        chrono::DateTime<Utc>,
+        chrono::DateTime<Utc>,
+        chrono::Duration,
+        bool,
+    )> {
         let frame = self.fields.get(&layer).and_then(|state| state.frame.as_ref())?;
         let analysis_time = self.views[pane]
             .timeline
@@ -14079,18 +14094,14 @@ impl HookEchoApp {
             valid: frame.stamp.valid_time,
             value: (),
         }];
-        if wxdata::timecoord::align(
+        let aligned = wxdata::timecoord::align(
             &available,
             analysis_time,
-            wxdata::timecoord::TimePolicy::NearestPast,
+            wxdata::timecoord::policy_for(frame.stamp.class),
             tolerance,
         )
-        .is_some()
-        {
-            None
-        } else {
-            Some((frame.stamp.valid_time, analysis_time, tolerance))
-        }
+        .is_some();
+        Some((frame.stamp.valid_time, analysis_time, tolerance, aligned))
     }
 
     /// Resize the pane grid to `n` (1/2/4). New panes copy the active pane's site/camera but
