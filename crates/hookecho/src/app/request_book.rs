@@ -121,6 +121,7 @@ impl RequestBook {
                 fetching: false,
                 last_attempt: None,
                 last_success: None,
+                data_age: None,
                 last_failure: None,
                 error: None,
                 cadence: lane.cadence(),
@@ -131,6 +132,7 @@ impl RequestBook {
             fetching: s.fetching,
             last_attempt: Some(now.saturating_duration_since(s.last_attempt)),
             last_success: s.last_success.map(|t| now.saturating_duration_since(t)),
+            data_age: None,
             last_failure: s
                 .last_failure
                 .as_ref()

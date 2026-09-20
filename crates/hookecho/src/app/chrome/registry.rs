@@ -25,6 +25,7 @@ impl HookEchoApp {
             fetching: v.loading,
             last_attempt: v.last_poll.map(|t| t.elapsed()),
             last_success: age,
+            data_age: age,
             last_failure: v.error.as_ref().map(|_| std::time::Duration::ZERO),
             error: v.error.clone(),
             cadence: std::time::Duration::from_secs(120),
@@ -108,7 +109,15 @@ impl HookEchoApp {
             PaletteAction::ToggleOutlook => RequestLane::Feed("SPC outlook"),
             _ => return None,
         };
-        Some(self.request_health(lane))
+        let mut health = self.request_health(lane);
+        if let PaletteAction::ToggleField(layer) = action {
+            health.data_age = self
+                .fields
+                .get(&layer)
+                .and_then(|state| state.frame.as_ref())
+                .and_then(|frame| (chrono::Utc::now() - frame.stamp.valid_time).to_std().ok());
+        }
+        Some(health)
     }
 
     /// Every layer/product/tool/window as a searchable, categorized row. Consumed by the layers

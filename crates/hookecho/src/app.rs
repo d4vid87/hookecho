@@ -488,6 +488,8 @@ pub(crate) struct SourceHealth {
     pub fetching: bool,
     pub last_attempt: Option<std::time::Duration>,
     pub last_success: Option<std::time::Duration>,
+    /// Age of the source's valid time. This is distinct from a successful cache/network read.
+    pub data_age: Option<std::time::Duration>,
     pub last_failure: Option<std::time::Duration>,
     pub error: Option<String>,
     pub cadence: std::time::Duration,
@@ -502,9 +504,13 @@ impl SourceHealth {
             .is_some_and(|failed| self.last_success.is_none_or(|success| failed <= success))
         {
             HealthState::Failed
-        } else if self.last_success.is_some_and(|age| age <= self.cadence) {
+        } else if self
+            .data_age
+            .or(self.last_success)
+            .is_some_and(|age| age <= self.cadence)
+        {
             HealthState::Fresh
-        } else if self.last_success.is_some() {
+        } else if self.data_age.is_some() || self.last_success.is_some() {
             HealthState::Stale
         } else {
             HealthState::Waiting
@@ -18791,6 +18797,7 @@ mod request_book_tests {
             fetching,
             last_attempt: Some(std::time::Duration::from_secs(1)),
             last_success: success.map(std::time::Duration::from_secs),
+            data_age: None,
             last_failure: failure.map(std::time::Duration::from_secs),
             error,
             cadence,
@@ -18798,6 +18805,9 @@ mod request_book_tests {
         assert_eq!(health(true, None, None, None).state(), HealthState::Fetching);
         assert_eq!(health(false, Some(5), None, None).state(), HealthState::Fresh);
         assert_eq!(health(false, Some(61), None, None).state(), HealthState::Stale);
+        let mut old_data = health(false, Some(1), None, None);
+        old_data.data_age = Some(std::time::Duration::from_secs(61));
+        assert_eq!(old_data.state(), HealthState::Stale);
         assert_eq!(
             health(false, Some(20), Some(5), Some("offline".into())).state(),
             HealthState::Failed

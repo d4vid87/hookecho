@@ -223,6 +223,9 @@ fn health_popup(ui: &mut egui::Ui, health: &SourceHealth) {
     egui::Grid::new(("source_health", &health.source))
         .num_columns(2)
         .show(ui, |ui| {
+            ui.weak("Data valid");
+            ui.label(age_line(health.data_age));
+            ui.end_row();
             ui.weak("Last success");
             ui.label(age_line(health.last_success));
             ui.end_row();
