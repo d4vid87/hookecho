@@ -37,6 +37,38 @@ pub static REFLECTIVITY_DESCRIPTOR: FieldDescriptor = FieldDescriptor {
     supports_difference: true,
 };
 
+pub static CAPE_DESCRIPTOR: FieldDescriptor = FieldDescriptor {
+    id: FieldId("model.mesoscale.cape"),
+    source: "NOAA HRRR/RAP",
+    family: FieldFamily::Model,
+    display_name: "Surface convective available potential energy",
+    short_name: "CAPE",
+    search_aliases: &["instability", "environment", "hrrr", "rap"],
+    units: "J/kg",
+    value_kind: ValueKind::Scalar,
+    palette_key: "cape",
+    sampling: SamplingPolicy::Bilinear,
+    missing: MissingData::Nan,
+    supports_contours: true,
+    supports_difference: true,
+};
+
+pub static SRH_DESCRIPTOR: FieldDescriptor = FieldDescriptor {
+    id: FieldId("model.mesoscale.srh"),
+    source: "NOAA HRRR/RAP",
+    family: FieldFamily::Model,
+    display_name: "Storm-relative helicity",
+    short_name: "SRH",
+    search_aliases: &["shear", "environment", "hrrr", "rap"],
+    units: "m²/s²",
+    value_kind: ValueKind::Scalar,
+    palette_key: "srh",
+    sampling: SamplingPolicy::Bilinear,
+    missing: MissingData::Nan,
+    supports_contours: true,
+    supports_difference: true,
+};
+
 /// Which model to pull a field from.
 ///
 /// HRRR is the forecast model this module was written for. RAP is here for its **f00 analysis**:
@@ -135,11 +167,19 @@ impl HrrrForecast {
 
     /// Wrap future radar in the common field metadata path.
     pub fn into_reflectivity_frame(self) -> FieldFrame {
+        self.into_frame(&REFLECTIVITY_DESCRIPTOR, Model::Hrrr)
+    }
+
+    pub fn into_frame(
+        self,
+        descriptor: &'static FieldDescriptor,
+        model: Model,
+    ) -> FieldFrame {
         let valid_time = self.valid();
         let date = self.run.format("%Y%m%d").to_string();
-        let source_identity = Model::Hrrr.url(&date, self.run.hour(), self.fcst_hour);
+        let source_identity = model.url(&date, self.run.hour(), self.fcst_hour);
         FieldFrame::new(
-            &REFLECTIVITY_DESCRIPTOR,
+            descriptor,
             self.field,
             DataStamp {
                 source_identity,
@@ -147,7 +187,11 @@ impl HrrrForecast {
                 run_time: Some(self.run),
                 valid_time,
                 received_time: Utc::now(),
-                class: DataClass::Forecast,
+                class: if model == Model::Rap {
+                    DataClass::Analysis
+                } else {
+                    DataClass::Forecast
+                },
                 quality: QualitySummary::Unknown,
             },
         )
@@ -921,5 +965,24 @@ mod tests {
         assert_eq!(frame.stamp.class, DataClass::Forecast);
         assert!(frame.stamp.source_identity.ends_with("wrfsfcf03.grib2"));
         assert_eq!(frame.sample(-99.5, 39.5).value, Some(42.0));
+
+        let analysis = HrrrForecast {
+            field: MrmsField {
+                values: vec![1_500.0],
+                nx: 1,
+                ny: 1,
+                lon_west: -100.0,
+                lon_east: -99.0,
+                lat_north: 40.0,
+                lat_south: 39.0,
+                time: run,
+            },
+            run,
+            fcst_hour: 0,
+        }
+        .into_frame(&CAPE_DESCRIPTOR, Model::Rap);
+        assert_eq!(analysis.stamp.class, DataClass::Analysis);
+        assert!(analysis.stamp.source_identity.contains("noaa-rap-pds"));
+        assert_eq!(analysis.descriptor.units, "J/kg");
     }
 }

@@ -41,3 +41,5 @@ the display texture.
 HRRR composite reflectivity is the first model migration. It uses the same native-value frame and
 sampler while retaining its existing forecast timeline and renderer. Its stamp identifies the
 model object and exposes run, valid, receipt, forecast classification, and unknown quality.
+HRRR/RAP CAPE and storm-relative helicity use the same path; their stamps distinguish forecast
+guidance from RAP analysis while their existing source and layer controls remain intact.

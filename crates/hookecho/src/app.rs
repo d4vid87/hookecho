@@ -848,7 +848,10 @@ impl OverlaySource {
                     _ => ("REFC", "entire atmosphere".to_string(), -30.0),
                 };
                 let fc = wxdata::hrrr::fetch_field(http, model, var, &level, 0, min_valid).await?;
-                OverlayMsg::Field(layer, fc.field)
+                let descriptor = layer
+                    .descriptor()
+                    .ok_or_else(|| anyhow::anyhow!("unregistered environment field {layer:?}"))?;
+                OverlayMsg::RegisteredField(layer, fc.into_frame(descriptor, model))
             }
             OverlaySource::L3Grid(layer, site) => {
                 use crate::render::FieldLayer as FL;
