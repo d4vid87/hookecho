@@ -25,7 +25,9 @@ impl HookEchoApp {
             .volume
             .as_ref()
             .and_then(|volume| volume.live_status.as_ref())
-            .map_or(source.clone(), |status| format!("{source} · {}", status.summary()));
+            .map_or(source.clone(), |status| {
+                format!("{source} · {}", status.summary())
+            });
         SourceHealth {
             source,
             fetching: v.loading,
@@ -49,7 +51,8 @@ impl HookEchoApp {
             PaletteAction::ToggleField(layer)
                 if matches!(
                     layer,
-                    FL::Mrms
+                    FL::GoesC13
+                        | FL::Mrms
                         | FL::Mosaic
                         | FL::Rotation
                         | FL::Mesh
@@ -81,7 +84,10 @@ impl HookEchoApp {
                         | FL::ThunderProb
                         | FL::GlmFed
                         | FL::ModelDiff
-                ) => RequestLane::Field(layer),
+                ) =>
+            {
+                RequestLane::Field(layer)
+            }
             PaletteAction::ToggleOverlay(toggle) => match toggle {
                 T::AlertPanel | T::Alerts => RequestLane::Feed("Weather alerts"),
                 T::StormReports => RequestLane::Feed("Storm reports"),
@@ -100,9 +106,7 @@ impl HookEchoApp {
                 T::Tfr => RequestLane::Feed("Temporary flight restrictions"),
                 T::Sensors => RequestLane::Feed("Radar observations"),
                 T::Hodo => RequestLane::Feed("VAD profile"),
-                T::Cells | T::Tracks | T::ArrivalCones => {
-                    RequestLane::Feed("Storm cells")
-                }
+                T::Cells | T::Tracks | T::ArrivalCones => RequestLane::Feed("Storm cells"),
                 T::Mds => RequestLane::Feed("Mesoscale discussions"),
                 T::Mping => RequestLane::Feed("mPING reports"),
                 T::Pireps => RequestLane::Feed("Pilot reports"),
@@ -227,6 +231,13 @@ impl HookEchoApp {
 
         // --- National / model grids. ---
         for (layer, category, label, desc, common) in [
+            (
+                FL::GoesC13,
+                "National",
+                "GOES clean infrared (C13)",
+                "Native satellite cloud-top temperatures from GOES ABI",
+                true,
+            ),
             (
                 FL::Mrms,
                 "MRMS",

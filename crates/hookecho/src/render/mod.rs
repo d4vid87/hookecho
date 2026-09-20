@@ -67,6 +67,7 @@ pub struct RadarUpload {
 /// LUT, and draw order). `below_radar` layers paint under the single-site radar; the rest above.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum FieldLayer {
+    GoesC13,
     Mrms,
     Hrrr,
     Rotation,
@@ -145,7 +146,8 @@ impl FieldLayer {
     pub fn below_radar(self) -> bool {
         matches!(
             self,
-            FieldLayer::Mrms
+            FieldLayer::GoesC13
+                | FieldLayer::Mrms
                 | FieldLayer::Mosaic
                 | FieldLayer::Hrrr
                 | FieldLayer::Cape
@@ -166,9 +168,10 @@ impl FieldLayer {
     }
 
     /// Fixed bottom-to-top paint order within each band.
-    pub const DRAW_ORDER: [FieldLayer; 38] = [
+    pub const DRAW_ORDER: [FieldLayer; 39] = [
         // Below-radar context band (bottom to top). The global models sit at the very bottom:
         // they are the synoptic backdrop everything else is drawn against.
+        FieldLayer::GoesC13,
         FieldLayer::GlobalMslp,
         FieldLayer::GlobalHeight500,
         FieldLayer::GlobalTemp2m,
@@ -214,6 +217,7 @@ impl FieldLayer {
     /// written by a newer build names a layer this one skips rather than failing to load.
     pub fn slug(self) -> &'static str {
         match self {
+            FieldLayer::GoesC13 => "goes-c13",
             FieldLayer::Mrms => "mrms",
             FieldLayer::Hrrr => "hrrr",
             FieldLayer::Rotation => "rotation",
@@ -264,6 +268,7 @@ impl FieldLayer {
     pub fn descriptor(self) -> Option<&'static wxdata::field::FieldDescriptor> {
         use FieldLayer as FL;
         Some(match self {
+            FL::GoesC13 => &wxdata::abi::C13_DESCRIPTOR,
             FL::Mrms => &wxdata::mrms::REFLECTIVITY_DESCRIPTOR,
             FL::Lightning => &wxdata::mrms::LIGHTNING_DESCRIPTOR,
             FL::Mesh => &wxdata::mrms::MESH_DESCRIPTOR,

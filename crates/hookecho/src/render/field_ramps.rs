@@ -419,6 +419,25 @@ static GLOBAL_TEMP_2M: FieldRamp = FieldRamp {
     )
 };
 
+static GOES_C13: FieldRamp = FieldRamp {
+    input_scale: 1.0,
+    ..ramp!(
+        "GOES clean infrared",
+        "K",
+        180.0,
+        330.0,
+        RampScale::Linear,
+        220,
+        &[
+            (0.0, [255, 255, 255]),
+            (0.3, [150, 200, 255]),
+            (0.55, [70, 80, 110]),
+            (0.8, [80, 80, 80]),
+            (1.0, [15, 15, 15]),
+        ]
+    )
+};
+
 /// Global 10 m wind speed (the U component's magnitude band, which is what the layer draws).
 static GLOBAL_WIND_10M: FieldRamp = FieldRamp {
     input_scale: 1.943_844, // m/s → kt
@@ -645,6 +664,7 @@ pub fn bake_ramp_lut(stops: &[(f32, [u8; 3])], alpha: u8) -> Vec<u8> {
 pub fn ramp_for(layer: FieldLayer) -> Option<&'static FieldRamp> {
     use FieldLayer as FL;
     Some(match layer {
+        FL::GoesC13 => &GOES_C13,
         FL::Rotation | FL::AzShear => &ROTATION,
         FL::Mesh => &MESH,
         FL::HailSwath => &HAIL_SWATH,

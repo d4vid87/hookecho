@@ -336,6 +336,8 @@ enum OverlaySource {
     Placefile(String),
     /// A national field layer plus the MRMS S3 product path to fetch it from.
     Field(crate::render::FieldLayer, String),
+    /// Native GOES ABI clean-infrared imagery.
+    GoesC13,
     /// Local storm reports: live (`None`) or a 30-min archive bucket (Unix secs / 1800).
     StormReports(Option<i64>),
     Spotters,
@@ -588,6 +590,7 @@ impl OverlaySource {
             Self::Spotters => RequestLane::Feed("Spotter Network"),
             Self::ProbSevere => RequestLane::Feed("ProbSevere"),
             Self::Fronts => RequestLane::Feed("Surface analysis"),
+            Self::GoesC13 => RequestLane::Field(crate::render::FieldLayer::GoesC13),
             Self::FreezingLevels(..) => RequestLane::Feed("Freezing levels"),
             Self::Obs { .. } => RequestLane::Feed("Radar observations"),
             Self::Vwp(..) => RequestLane::Feed("VAD profile"),
@@ -680,6 +683,21 @@ impl OverlaySource {
                 } else {
                     OverlayMsg::Field(layer, wxdata::mrms::fetch_latest(http, &product).await?)
                 }
+            }
+            OverlaySource::GoesC13 => {
+                let received = Utc::now();
+                let image = wxdata::abi::fetch_latest(
+                    http,
+                    wxdata::abi::Satellite::East,
+                    wxdata::abi::Scene::Conus,
+                    13,
+                )
+                .await?;
+                OverlayMsg::RegisteredField(
+                    crate::render::FieldLayer::GoesC13,
+                    image.into_c13_frame(received)?,
+                    None,
+                )
             }
             OverlaySource::SnowBands => {
                 // Both grids at once: the mask is useless without the echo and vice versa.
@@ -1698,6 +1716,7 @@ pub(crate) struct PaletteEntry {
 fn field_refresh_secs(layer: crate::render::FieldLayer) -> u64 {
     use crate::render::FieldLayer as FL;
     match layer {
+        FL::GoesC13 => 300,
         FL::Lightning | FL::AzShear => 60,
         FL::Mrms | FL::Mesh | FL::Rotation | FL::Hrrr | FL::Mosaic => 120,
         // QPE accumulations update on a ~2-minute MRMS cadence.
@@ -16524,6 +16543,20 @@ impl eframe::App for HookEchoApp {
             if stale {
                 self.fields.entry(layer).or_default().last_fetch = Some(Instant::now());
                 self.spawn_overlay(ctx, OverlaySource::Field(layer, product));
+            }
+        }
+        // GOES ABI imagery has its own source adapter and arrives every five minutes.
+        {
+            let layer = FL::GoesC13;
+            let stale = self.field_wanted(layer)
+                && self.fields.get(&layer).is_none_or(|state| {
+                    state
+                        .last_fetch
+                        .is_none_or(|time| time.elapsed().as_secs() >= field_refresh_secs(layer))
+                });
+            if stale {
+                self.fields.entry(layer).or_default().last_fetch = Some(Instant::now());
+                self.spawn_overlay(ctx, OverlaySource::GoesC13);
             }
         }
         // Snow bands: the mosaic and the precipitation-type grid, cut to the banded snow.
