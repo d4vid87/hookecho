@@ -10,7 +10,7 @@ roadmap checkbox only after its gate passes and link the test or capture here.
 | A2 time alignment | Partial | `timecoord.rs`; observed MRMS draw alignment with per-pane offset/tolerance warnings; exact-time model differences | Coordinator and compatibility tests pass; HRRR/RAP registry migration pending |
 | A3 requests/cancellation | Partial | hashed request identity, deduplication, abortable fetches, generation checks | Shared-consumer and stale-result tests pass; decode-stage cancellation pending |
 | A4 provenance/health | Partial | source health plus reflectivity `DataStamp` inspector; valid-data age is distinct from request-success age | Pending all migrated families |
-| A5 persistent cache | Partial | native caches, pinned IndexedDB chase packs, automatic MRMS object cache | Integrity/LRU tests and web storage controls pass; model byte ranges pending milestone 4 |
+| A5 persistent cache | Partial | native caches, pinned IndexedDB chase packs, automatic MRMS object cache, bounded memory fallback with visible degraded status | Integrity/LRU tests and web storage controls pass; model byte ranges pending milestone 4 |
 | B operational radar | Partial | Level II stream/archive, progressive merge, six moments | Pending provider/failover fixture gate |
 | C radar analysis | Partial | derived radar products and detectors | Pending bounded product DSL |
 | D satellite/GLM | Partial | GLM support | Pending native ABI ingest and projection gate |

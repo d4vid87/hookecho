@@ -69,6 +69,47 @@ mod browser {
     const DB: &str = "hookecho-objects";
     const DATA: &str = "data";
     const META: &str = "meta";
+    static MEMORY: std::sync::Mutex<Vec<(Meta, Vec<u8>)>> = std::sync::Mutex::new(Vec::new());
+
+    fn memory_get(family: &str, key: &str) -> Option<CachedObject> {
+        let mut cache = MEMORY.lock().ok()?;
+        let (meta, bytes) = cache
+            .iter_mut()
+            .find(|(meta, _)| meta.family == family && meta.key == key)?;
+        meta.accessed_at = chrono::Utc::now().timestamp();
+        Some(CachedObject {
+            bytes: bytes.clone(),
+            received_at: chrono::DateTime::from_timestamp(meta.received_at, 0)?,
+        })
+    }
+
+    fn memory_put(
+        family: &str,
+        key: &str,
+        bytes: &[u8],
+        received_at: chrono::DateTime<chrono::Utc>,
+    ) {
+        let Ok(mut cache) = MEMORY.lock() else { return };
+        cache.retain(|(meta, _)| meta.key != key);
+        cache.push((
+            Meta {
+                key: key.to_string(),
+                family: family.to_string(),
+                bytes: bytes.len(),
+                checksum: checksum(bytes),
+                received_at: received_at.timestamp(),
+                accessed_at: chrono::Utc::now().timestamp(),
+            },
+            bytes.to_vec(),
+        ));
+        let entries = cache
+            .iter()
+            .filter(|(meta, _)| meta.family == family)
+            .map(|(meta, _)| meta.clone())
+            .collect();
+        let evict = eviction_keys(entries, family_cap(family));
+        cache.retain(|(meta, _)| !evict.contains(&meta.key));
+    }
 
     async fn await_request(req: IdbRequest) -> anyhow::Result<JsValue> {
         let promise = js_sys::Promise::new(&mut |resolve, reject| {
@@ -141,7 +182,7 @@ mod browser {
             .collect()
     }
 
-    pub async fn get(family: &str, key: &str) -> Option<CachedObject> {
+    async fn persistent_get(family: &str, key: &str) -> Option<CachedObject> {
         let db = open().await.ok()?;
         let value = await_request(store(&db, DATA, IdbTransactionMode::Readonly).ok()?.get(&key.into()).ok()?)
             .await
@@ -166,7 +207,7 @@ mod browser {
         })
     }
 
-    pub async fn put(family: &str, key: &str, bytes: &[u8], received_at: chrono::DateTime<chrono::Utc>) -> anyhow::Result<()> {
+    async fn persistent_put(family: &str, key: &str, bytes: &[u8], received_at: chrono::DateTime<chrono::Utc>) -> anyhow::Result<()> {
         let db = open().await?;
         let array = js_sys::Uint8Array::from(bytes);
         let request = store(&db, DATA, IdbTransactionMode::Readwrite)?
@@ -189,13 +230,43 @@ mod browser {
         Ok(())
     }
 
+    pub async fn get(family: &str, key: &str) -> Option<CachedObject> {
+        persistent_get(family, key).await.or_else(|| memory_get(family, key))
+    }
+
+    pub async fn put(
+        family: &str,
+        key: &str,
+        bytes: &[u8],
+        received_at: chrono::DateTime<chrono::Utc>,
+    ) -> anyhow::Result<()> {
+        if let Err(error) = persistent_put(family, key, bytes, received_at).await {
+            memory_put(family, key, bytes, received_at);
+            if let Ok(mut state) = STATE.lock() {
+                state.3 = Some(format!("Browser storage unavailable; using memory cache: {error}"));
+            }
+            refresh().await;
+        } else if let Ok(mut state) = STATE.lock() {
+            state.3 = None;
+        }
+        Ok(())
+    }
+
     async fn stats() -> Vec<CacheStats> {
-        let Ok(db) = open().await else { return Vec::new() };
         let mut totals = std::collections::BTreeMap::<String, (usize, usize)>::new();
-        for entry in metadata(&db).await {
-            let total = totals.entry(entry.family).or_default();
-            total.0 += 1;
-            total.1 += entry.bytes;
+        if let Ok(db) = open().await {
+            for entry in metadata(&db).await {
+                let total = totals.entry(entry.family).or_default();
+                total.0 += 1;
+                total.1 += entry.bytes;
+            }
+        }
+        if let Ok(cache) = MEMORY.lock() {
+            for (entry, _) in cache.iter() {
+                let total = totals.entry(entry.family.clone()).or_default();
+                total.0 += 1;
+                total.1 += entry.bytes;
+            }
         }
         totals
             .into_iter()
@@ -209,6 +280,9 @@ mod browser {
     }
 
     async fn clear_family(family: &str) -> anyhow::Result<()> {
+        if let Ok(mut cache) = MEMORY.lock() {
+            cache.retain(|(entry, _)| entry.family != family);
+        }
         let db = open().await?;
         for entry in metadata(&db).await.into_iter().filter(|entry| entry.family == family) {
             delete(&db, &entry.key).await;
