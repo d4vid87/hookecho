@@ -479,6 +479,20 @@ pub fn descriptor_for_product(product: &str) -> Option<&'static FieldDescriptor>
     })
 }
 
+fn normalize_product_missing(product: &str, field: &mut MrmsField) {
+    if matches!(
+        product,
+        REFLECTIVITY | LOW_LEVEL_REFLECTIVITY | AZSHEAR | AZSHEAR_MID
+    ) {
+        return;
+    }
+    field
+        .values
+        .iter_mut()
+        .filter(|value| value.is_finite() && **value < 0.0)
+        .for_each(|value| *value = f32::NAN);
+}
+
 async fn fetch_key(
     http: &reqwest::Client,
     product: &str,
@@ -486,8 +500,9 @@ async fn fetch_key(
 ) -> anyhow::Result<(MrmsField, chrono::DateTime<chrono::Utc>)> {
     if let Some(cached) = crate::object_cache::get("mrms", key).await {
         let raw = gunzip(&cached.bytes)?;
-        let field = crate::task::guarded(|| decode_grib2(&raw))
+        let mut field = crate::task::guarded(|| decode_grib2(&raw))
             .unwrap_or_else(|_| anyhow::bail!("cached grib decode panicked for {product}"))?;
+        normalize_product_missing(product, &mut field);
         return Ok((field, cached.received_at));
     }
     let url = format!("{BUCKET}/{key}");
@@ -502,8 +517,9 @@ async fn fetch_key(
     let raw = gunzip(&gz)?;
     // gribberish can panic on some MRMS product packings (a slice off-by-one on rotation-track /
     // AzShear grids). Contain it so a bad product surfaces as an error, never a process abort.
-    let field = crate::task::guarded(|| decode_grib2(&raw))
+    let mut field = crate::task::guarded(|| decode_grib2(&raw))
         .unwrap_or_else(|_| anyhow::bail!("grib decode panicked for {product}"))?;
+    normalize_product_missing(product, &mut field);
     if let Err(error) = crate::object_cache::put("mrms", key, &gz, received_at).await {
         log::warn!("MRMS browser cache write failed: {error}");
     }
@@ -806,5 +822,27 @@ mod tests {
         ids.sort_unstable();
         ids.dedup();
         assert_eq!(ids.len(), DESCRIPTORS.len());
+    }
+
+    #[test]
+    fn product_missing_values_do_not_reach_sampling() {
+        let mut field = MrmsField {
+            values: vec![-99.0, -3.0, -1.0, 0.0, 2.0],
+            nx: 5,
+            ny: 1,
+            lon_west: 0.0,
+            lon_east: 5.0,
+            lat_north: 1.0,
+            lat_south: 0.0,
+            time: chrono::Utc::now(),
+        };
+        normalize_product_missing(QPE_01H, &mut field);
+        assert!(field.values[..3].iter().all(|value| value.is_nan()));
+        assert_eq!(&field.values[3..], &[0.0, 2.0]);
+
+        let mut signed = field.clone();
+        signed.values = vec![-20.0, 10.0];
+        normalize_product_missing(AZSHEAR, &mut signed);
+        assert_eq!(signed.values, [-20.0, 10.0]);
     }
 }
