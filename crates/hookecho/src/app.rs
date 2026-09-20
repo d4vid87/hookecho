@@ -1406,6 +1406,7 @@ pub(crate) enum OverlayToggle {
     Strikes,
     Wind,
     LinkCameras,
+    LinkTimes,
     /// The always-on-top mini-loop window (desktop only).
     MiniLoop,
     /// Beam-vs-terrain blockage shading for the displayed tilt (chase mode).
@@ -1426,7 +1427,7 @@ pub(crate) struct BlockageKey {
 impl OverlayToggle {
     /// Every toggle, for the persistence sweep. A new variant belongs here too, or it silently
     /// stops being remembered across restarts.
-    pub(crate) const ALL: [OverlayToggle; 41] = [
+    pub(crate) const ALL: [OverlayToggle; 42] = [
         Self::AlertPanel,
         Self::StormReports,
         Self::Spotters,
@@ -1466,15 +1467,15 @@ impl OverlayToggle {
         Self::Strikes,
         Self::Wind,
         Self::LinkCameras,
+        Self::LinkTimes,
         Self::MiniLoop,
         Self::Blockage,
     ];
 
-    /// Toggles that describe this session's window arrangement rather than a layer: camera
-    /// linking is about the panes on screen right now, and the mini loop is a window. Neither is
-    /// persisted or captured into a workspace.
+    /// Toggles that describe the current window arrangement rather than a global layer. Pane
+    /// links are captured directly by workspaces; the mini loop is only a temporary window.
     pub(crate) fn session_only(self) -> bool {
-        matches!(self, Self::LinkCameras | Self::MiniLoop)
+        matches!(self, Self::LinkCameras | Self::LinkTimes | Self::MiniLoop)
     }
 
     /// Stable name used in the settings file. Persisted as a string, not as the enum: an unknown
@@ -2574,6 +2575,8 @@ pub struct HookEchoApp {
     loop_export: Option<LoopExport>,
     /// When true, all panes share the active pane's camera.
     link_cameras: bool,
+    /// When true, all panes follow the active pane's valid time.
+    link_times: bool,
     /// The always-on-top mini-loop window is open (desktop only; see `mini_loop_viewport`).
     mini_loop: bool,
     /// The mini loop's own camera while it is open; `None` until it borrows the pane's.
@@ -3448,6 +3451,7 @@ impl HookEchoApp {
             share_card: None,
             loop_export: None,
             link_cameras: false,
+            link_times: false,
             mini_loop: false,
             #[cfg(not(any(target_os = "android", target_arch = "wasm32")))]
             mini_cam: None,
@@ -7906,6 +7910,7 @@ impl HookEchoApp {
             T::Pireps => &mut self.show_pireps,
             T::Recon => &mut self.show_recon,
             T::LinkCameras => &mut self.link_cameras,
+            T::LinkTimes => &mut self.link_times,
             T::MiniLoop => &mut self.mini_loop,
             T::Blockage => &mut self.show_blockage,
         }
@@ -14223,6 +14228,7 @@ impl HookEchoApp {
                 .collect(),
             active: self.active,
             link_cameras: self.link_cameras,
+            link_times: self.link_times,
             overlays_on,
             // A workspace you saved records the sites you had open; only the shipped starters
             // adopt whatever is on screen.
@@ -14268,6 +14274,7 @@ impl HookEchoApp {
         }
         self.active = ws.active.min(self.views.len() - 1);
         self.link_cameras = ws.link_cameras;
+        self.link_times = ws.link_times;
         // Overlay names this build doesn't know are skipped, same as the settings restore.
         for t in OverlayToggle::ALL {
             if t.session_only() {
@@ -17732,6 +17739,19 @@ impl eframe::App for HookEchoApp {
                 let cam = self.views[self.active.min(n - 1)].camera;
                 for v in &mut self.views {
                     v.camera = cam;
+                }
+            }
+
+            if self.link_times {
+                let active = self.active.min(n - 1);
+                let leader = &self.views[active].timeline;
+                if let Some(time) = leader.current().and_then(|id| id.date_time()) {
+                    let (following, playing) = (leader.following, leader.playing);
+                    for (i, view) in self.views.iter_mut().enumerate() {
+                        if i != active {
+                            view.timeline.align_to(time, following, playing);
+                        }
+                    }
                 }
             }
 

@@ -24,6 +24,8 @@ pub struct Workspace {
     pub active: usize,
     #[serde(default)]
     pub link_cameras: bool,
+    #[serde(default)]
+    pub link_times: bool,
     /// Overlay toggles that were on, by slug — the same names `Settings::overlays_on` uses, so an
     /// unknown one from a newer build is skipped rather than fatal.
     #[serde(default)]
@@ -188,6 +190,7 @@ pub fn starters() -> Vec<Workspace> {
             ],
             active: 0,
             link_cameras: true,
+            link_times: true,
             overlays_on: vec![
                 "Alerts".into(),
                 "Cells".into(),
@@ -217,6 +220,7 @@ pub fn starters() -> Vec<Workspace> {
             }],
             active: 0,
             link_cameras: false,
+            link_times: false,
             overlays_on: vec![
                 "Alerts".into(),
                 "RadarSites".into(),
@@ -236,6 +240,7 @@ pub fn starters() -> Vec<Workspace> {
                 .collect(),
             active: 0,
             link_cameras: true,
+            link_times: true,
             overlays_on: vec![
                 "Alerts".into(),
                 "Cells".into(),
@@ -370,6 +375,7 @@ mod tests {
             }],
             active: 0,
             link_cameras: true,
+            link_times: true,
             overlays_on: vec!["Alerts".into(), "Cells".into()],
             adopt_site: false,
             fields_on: vec!["mrms".into()],
@@ -390,7 +396,12 @@ mod tests {
         let json = r#"{"name":"old","panes":[],"active":0,"link_cameras":false,
             "overlays_on":["Alerts"]}"#;
         let ws: Workspace = serde_json::from_str(json).unwrap();
-        assert!(ws.fields_on.is_empty() && !ws.adopt_site && ws.chrome.is_none());
+        assert!(
+            ws.fields_on.is_empty()
+                && !ws.adopt_site
+                && !ws.link_times
+                && ws.chrome.is_none()
+        );
     }
 
     #[test]

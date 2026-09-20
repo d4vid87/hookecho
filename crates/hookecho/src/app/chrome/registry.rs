@@ -814,6 +814,13 @@ impl HookEchoApp {
                 false,
             ),
             (
+                T::LinkTimes,
+                "Reference",
+                "Link pane times",
+                "Scrub every pane to the same valid time",
+                false,
+            ),
+            (
                 T::MiniLoop,
                 "Reference",
                 "Mini loop window",

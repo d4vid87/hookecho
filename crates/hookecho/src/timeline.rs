@@ -208,6 +208,23 @@ impl Timeline {
             .map(|(i, _)| i)
     }
 
+    /// Match another pane's valid time, using this radar's nearest available volume.
+    pub fn align_to(&mut self, target: DateTime<Utc>, following: bool, playing: bool) {
+        let date = target.date_naive();
+        if self.date != date || self.frames_key.as_ref().is_some_and(|(_, d)| *d != date) {
+            self.date = date;
+            self.seek_target = Some(target);
+        } else if let Some(i) = self.nearest_frame(target) {
+            self.playhead = i;
+            self.seek_target = None;
+        } else {
+            self.seek_target = Some(target);
+        }
+        self.following = following;
+        self.playing = playing;
+        self.replay = None;
+    }
+
     /// Step `delta` slots (observed frames + forecast tail), un-pinning and pausing playback.
     pub fn step(&mut self, delta: i32) {
         self.playing = false;
@@ -369,6 +386,28 @@ mod tests {
         t.playhead = 0;
         t.set_frames(day("KFWS", 280), ("KFWS".into(), today));
         assert_eq!(t.current().unwrap().date_time(), Some(want));
+    }
+
+    #[test]
+    fn linked_timeline_uses_its_nearest_volume() {
+        let mut leader = Timeline::default();
+        let mut follower = Timeline::default();
+        let date = NaiveDate::from_ymd_opt(2026, 8, 19).unwrap();
+        leader.date = date;
+        follower.date = date;
+        leader.set_frames(day("KTLX", 20), ("KTLX".into(), date));
+        follower.set_frames(day("KFWS", 10), ("KFWS".into(), date));
+        leader.playhead = 7;
+
+        follower.align_to(leader.current().unwrap().date_time().unwrap(), false, false);
+
+        assert_eq!(follower.playhead, 7);
+        assert!(!follower.following);
+
+        let tomorrow = leader.current().unwrap().date_time().unwrap() + chrono::Duration::days(1);
+        follower.align_to(tomorrow, false, false);
+        assert_eq!(follower.date, tomorrow.date_naive());
+        assert_eq!(follower.seek_target, Some(tomorrow));
     }
 
     #[test]
