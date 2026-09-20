@@ -185,14 +185,50 @@ pub(crate) fn show(
                 ui.weak("Valid");
                 ui.label(frame.stamp.valid_time.format("%Y-%m-%d %H:%M UTC").to_string());
                 ui.end_row();
+                ui.weak("Issue");
+                ui.label(
+                    frame
+                        .stamp
+                        .issue_time
+                        .map(|time| time.format("%Y-%m-%d %H:%M UTC").to_string())
+                        .unwrap_or_else(|| "Unknown".into()),
+                );
+                ui.end_row();
+                ui.weak("Run");
+                ui.label(
+                    frame
+                        .stamp
+                        .run_time
+                        .map(|time| time.format("%Y-%m-%d %H:%M UTC").to_string())
+                        .unwrap_or_else(|| "Unknown".into()),
+                );
+                ui.end_row();
                 ui.weak("Received");
                 ui.label(frame.stamp.received_time.format("%Y-%m-%d %H:%M:%S UTC").to_string());
+                ui.end_row();
+                ui.weak("Class");
+                ui.label(frame.stamp.class.label());
+                ui.end_row();
+                ui.weak("Quality");
+                ui.label(frame.stamp.quality.label());
                 ui.end_row();
                 ui.weak("Units");
                 ui.label(frame.descriptor.units);
                 ui.end_row();
                 ui.weak("Grid");
                 ui.label(format!("{} × {} · {}", frame.grid.nx, frame.grid.ny, frame.grid.projection));
+                ui.end_row();
+                ui.weak("Resolution");
+                ui.label(
+                    frame
+                        .grid
+                        .native_resolution_m
+                        .map(|metres| format!("{metres:.0} m"))
+                        .unwrap_or_else(|| "Unknown".into()),
+                );
+                ui.end_row();
+                ui.weak("Sampling");
+                ui.label(frame.descriptor.sampling.label());
                 ui.end_row();
                 ui.weak("Object");
                 ui.label(&frame.stamp.source_identity);

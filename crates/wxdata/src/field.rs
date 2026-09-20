@@ -34,6 +34,15 @@ pub enum SamplingPolicy {
     Bilinear,
 }
 
+impl SamplingPolicy {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Nearest => "Nearest neighbor",
+            Self::Bilinear => "Bilinear",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum MissingData {
     Nan,
@@ -79,11 +88,32 @@ pub enum DataClass {
     Derived,
 }
 
+impl DataClass {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Observed => "Observed",
+            Self::Analysis => "Analysis",
+            Self::Forecast => "Forecast",
+            Self::Derived => "Derived",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum QualitySummary {
     Unknown,
     Good,
     Suspect,
+}
+
+impl QualitySummary {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Unknown => "Unknown",
+            Self::Good => "Good",
+            Self::Suspect => "Suspect",
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
