@@ -9831,7 +9831,16 @@ impl HookEchoApp {
                         .as_ref()
                         .is_some_and(|(v, _, g)| *v == view && *g == gen)
                     {
-                        self.live_stream = None; // interval polling resumes automatically
+                        self.live_stream = None;
+                        if let Some(pane) = self.views.get_mut(view) {
+                            // Do not wait out the normal cadence after a provider dies: fetch the
+                            // complete archive object on this update and label retained data as
+                            // fallback until a new stream update arrives.
+                            pane.last_poll = None;
+                            if let Some(volume) = &mut pane.volume {
+                                volume.end_live();
+                            }
+                        }
                     }
                 }
                 continue;

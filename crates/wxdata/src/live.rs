@@ -70,8 +70,17 @@ impl ScanStatus {
         let elevation = self
             .current_elevation_deg
             .map_or(String::new(), |angle| format!(" · {angle:.1}°"));
+        let transport = if self.stream_active {
+            if self.retries == 0 {
+                String::new()
+            } else {
+                format!(" · {} retries", self.retries)
+            }
+        } else {
+            " · archive fallback".to_string()
+        };
         format!(
-            "VCP {}{elevation} · {cuts} · {}s latency{oldest}{sails}{mrle}",
+            "VCP {}{elevation} · {cuts} · {}s latency{oldest}{sails}{mrle}{transport}",
             self.vcp,
             self.latency.as_secs()
         )
@@ -104,6 +113,8 @@ pub struct ScanStatus {
     pub oldest_radial_age: Option<Duration>,
     pub sails_cuts: u8,
     pub mrle_cuts: u8,
+    pub retries: u32,
+    pub stream_active: bool,
 }
 
 /// Stream live chunks for `site`, starting from `base` (the last polled volume), calling
@@ -191,14 +202,15 @@ where
         &chunks,
         &mut merged,
         &mut cuts_received,
-        true,
-        false,
+        EmitKind::Initial,
+        0,
         &mut on_update,
     )
     .await;
     let mut window_start = chunks.len();
 
     let mut fails = 0u32;
+    let mut retries = 0u32;
     loop {
         let wait = it
             .time_until_next()
@@ -247,8 +259,12 @@ where
                         &window,
                         &mut merged,
                         &mut cuts_received,
-                        false,
-                        sweep_done || ctype == ChunkType::End,
+                        if sweep_done || ctype == ChunkType::End {
+                            EmitKind::Cut
+                        } else {
+                            EmitKind::Block
+                        },
+                        retries,
                         &mut on_update,
                     )
                     .await;
@@ -258,6 +274,7 @@ where
             Ok(None) => { /* not available yet; loop and wait again */ }
             Err(e) => {
                 fails += 1;
+                retries = retries.saturating_add(1);
                 if !tolerate_failure(fails) {
                     return Err(anyhow::anyhow!("chunk stream: {e}"));
                 }
@@ -340,8 +357,8 @@ async fn emit<F: FnMut(Update)>(
     chunks: &[Chunk<'static>],
     merged: &mut Arc<Scan>,
     cuts_received: &mut usize,
-    initial: bool,
-    completed_cut: bool,
+    kind: EmitKind,
+    retries: u32,
     on_update: &mut F,
 ) {
     // Assembling incoming blocks is the heaviest CPU on this
@@ -390,10 +407,10 @@ async fn emit<F: FnMut(Update)>(
             vcp.mrle_cuts(),
         )
     };
-    if initial {
-        *cuts_received = partial_cuts;
-    } else if completed_cut && partial_cuts > 0 {
-        *cuts_received += 1;
+    match kind {
+        EmitKind::Initial => *cuts_received = partial_cuts,
+        EmitKind::Cut if partial_cuts > 0 => *cuts_received += 1,
+        EmitKind::Block | EmitKind::Cut => {}
     }
     if cuts_expected > 0 {
         *cuts_received = (*cuts_received).min(cuts_expected);
@@ -442,8 +459,17 @@ async fn emit<F: FnMut(Update)>(
             oldest_radial_age,
             sails_cuts,
             mrle_cuts,
+            retries,
+            stream_active: true,
         },
     });
+}
+
+#[derive(Clone, Copy)]
+enum EmitKind {
+    Initial,
+    Block,
+    Cut,
 }
 
 /// A sweep pass finishes in well under this. A base sweep older than that at the same elevation
@@ -562,7 +588,7 @@ mod tests {
 
     #[test]
     fn scan_status_summary_reports_progress_and_latency() {
-        let status = ScanStatus {
+        let mut status = ScanStatus {
             provider: "test",
             vcp: 212,
             cuts_received: 3,
@@ -573,11 +599,17 @@ mod tests {
             oldest_radial_age: Some(Duration::from_secs(12)),
             sails_cuts: 2,
             mrle_cuts: 0,
+            retries: 0,
+            stream_active: true,
         };
         assert_eq!(
             status.summary(),
             "VCP 212 · 0.5° · 3/14 cuts · 8s latency · oldest gate 12s · SAILS 2"
         );
+        status.retries = 2;
+        assert!(status.summary().ends_with(" · 2 retries"));
+        status.stream_active = false;
+        assert!(status.summary().ends_with(" · archive fallback"));
     }
 
     // A sweep covering `azimuths` (as azimuth numbers), collected at `t_ms`.

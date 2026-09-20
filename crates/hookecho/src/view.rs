@@ -35,11 +35,7 @@ const BINNED_CACHE: usize = if cfg!(target_arch = "wasm32") { 16 } else { 32 };
 /// Compared with the same 0.15 degree tolerance the caller uses to match a changed tilt: the angles
 /// are recomputed from the merged scan each time and need not be bit-identical.
 fn tilts_only_grew(old: &[f32], new: &[f32]) -> bool {
-    new.len() >= old.len()
-        && old
-            .iter()
-            .zip(new)
-            .all(|(a, b)| (a - b).abs() < 0.15)
+    new.len() >= old.len() && old.iter().zip(new).all(|(a, b)| (a - b).abs() < 0.15)
 }
 
 /// How many volumes a pane keeps after the playhead has moved off them.
@@ -147,6 +143,12 @@ impl Volume {
         self.name = name;
         self.time = time;
         self.live = true;
+    }
+
+    pub fn end_live(&mut self) {
+        if let Some(status) = &mut self.live_status {
+            status.stream_active = false;
+        }
     }
 
     /// Bin (and cache) the sweep for `moment` at tilt index `tilt`.
@@ -397,6 +399,8 @@ mod tests {
             oldest_radial_age: Some(std::time::Duration::ZERO),
             sails_cuts: 0,
             mrle_cuts: 0,
+            retries: 0,
+            stream_active: true,
         }
     }
 
@@ -507,10 +511,13 @@ mod tests {
         // and showing it again later in place of the complete archive volume loses them.
         view.forget_recent();
         view.show_volume(scan_at(&[0.5, 1.5]), "live".into(), now);
-        view.volume
-            .as_mut()
-            .unwrap()
-            .apply_live(scan_at(&[0.5]), "live".into(), now, &[], live_status());
+        view.volume.as_mut().unwrap().apply_live(
+            scan_at(&[0.5]),
+            "live".into(),
+            now,
+            &[],
+            live_status(),
+        );
         view.show_volume(scan_at(&[0.5, 1.5]), "next".into(), now);
         view.show_volume(scan_at(&[0.5, 1.5]), "live".into(), now);
         assert_eq!(
@@ -569,6 +576,8 @@ mod tests {
         vol.apply_live(scan_at(&[0.5]), "c".into(), now, &[], live_status());
         assert_eq!(vol.elevations, vec![0.5]);
         assert_eq!(vol.name, "c");
+        vol.end_live();
+        assert!(!vol.live_status.as_ref().unwrap().stream_active);
     }
 
     /// Early in a live volume only reflectivity has arrived; the dual-pol rows must not blink out
