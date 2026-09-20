@@ -61,6 +61,11 @@ check_prefixes \
   'CONUS/EchoTop_60_00.50/' \
   'CONUS/LVL3_HighResVIL_00.50/' \
   'CONUS/VIL_Density_00.50/' \
+  'CONUS/RadarOnly_QPE_01H_00.00/' \
+  'CONUS/RadarOnly_QPE_03H_00.00/' \
+  'CONUS/RadarOnly_QPE_06H_00.00/' \
+  'CONUS/RadarOnly_QPE_12H_00.00/' \
+  'CONUS/RadarOnly_QPE_24H_00.00/' \
   'CONUS/MultiSensor_QPE_01H_Pass2_00.00/' \
   'CONUS/MultiSensor_QPE_03H_Pass2_00.00/' \
   'CONUS/MultiSensor_QPE_06H_Pass2_00.00/' \
@@ -79,6 +84,11 @@ check_recent_mrms \
   'CONUS/EchoTop_60_00.50' \
   'CONUS/LVL3_HighResVIL_00.50' \
   'CONUS/VIL_Density_00.50' \
+  'CONUS/RadarOnly_QPE_01H_00.00' \
+  'CONUS/RadarOnly_QPE_03H_00.00' \
+  'CONUS/RadarOnly_QPE_06H_00.00' \
+  'CONUS/RadarOnly_QPE_12H_00.00' \
+  'CONUS/RadarOnly_QPE_24H_00.00' \
   'CONUS/MultiSensor_QPE_01H_Pass2_00.00' \
   'CONUS/MultiSensor_QPE_03H_Pass2_00.00' \
   'CONUS/MultiSensor_QPE_06H_Pass2_00.00' \

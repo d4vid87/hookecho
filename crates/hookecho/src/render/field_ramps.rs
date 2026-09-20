@@ -718,6 +718,8 @@ pub fn ramp_for(layer: FieldLayer) -> Option<&'static FieldRamp> {
         return match wxdata::mrms::CATALOG.get(index as usize)?.descriptor.palette_key {
             "echo-tops" => Some(&MRMS_ECHO_TOPS),
             "vil-density" => Some(&VIL_DENSITY),
+            "qpe-1h" => Some(&QPE_1H),
+            "qpe-24h" => Some(&QPE_24H),
             _ => None,
         };
     }
