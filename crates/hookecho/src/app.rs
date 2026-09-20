@@ -1902,7 +1902,7 @@ enum DataMsg {
         time: DateTime<Utc>,
         scan: Scan,
     },
-    /// A live sweep-boundary update (merged full volume) from the chunk streamer.
+    /// A live radial-block update (merged full volume) from the chunk streamer.
     Live {
         view: usize,
         site: String,
