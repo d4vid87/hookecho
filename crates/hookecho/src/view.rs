@@ -313,6 +313,13 @@ impl MapView {
         self.recent.clear();
     }
 
+    pub fn live_stream_ended(&mut self) {
+        self.last_poll = None;
+        if let Some(volume) = &mut self.volume {
+            volume.end_live();
+        }
+    }
+
     pub fn clamp_tilt(&mut self) {
         if let Some(v) = &self.volume {
             if !v.elevations.is_empty() && self.tilt >= v.elevations.len() {
@@ -578,6 +585,19 @@ mod tests {
         assert_eq!(vol.name, "c");
         vol.end_live();
         assert!(!vol.live_status.as_ref().unwrap().stream_active);
+    }
+
+    #[test]
+    fn ending_a_live_stream_requests_archive_fallback_immediately() {
+        let now = chrono::Utc::now();
+        let mut view = MapView::new(Some("KTLX".into()), Camera::at_lonlat(-97.0, 35.0, 8.0));
+        let mut volume = Volume::new(scan_at(&[0.5]), "live".into(), now);
+        volume.live_status = Some(live_status());
+        view.volume = Some(volume);
+        view.last_poll = Some(Instant::now());
+        view.live_stream_ended();
+        assert!(view.last_poll.is_none());
+        assert!(!view.volume.unwrap().live_status.unwrap().stream_active);
     }
 
     /// Early in a live volume only reflectivity has arrived; the dual-pol rows must not blink out

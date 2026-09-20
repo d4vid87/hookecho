@@ -9836,10 +9836,7 @@ impl HookEchoApp {
                             // Do not wait out the normal cadence after a provider dies: fetch the
                             // complete archive object on this update and label retained data as
                             // fallback until a new stream update arrives.
-                            pane.last_poll = None;
-                            if let Some(volume) = &mut pane.volume {
-                                volume.end_live();
-                            }
+                            pane.live_stream_ended();
                         }
                     }
                 }
