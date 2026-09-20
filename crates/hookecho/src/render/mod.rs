@@ -83,6 +83,7 @@ pub enum FieldLayer {
     Qpe1h,
     Qpe3h,
     Qpe6h,
+    Qpe12h,
     Qpe24h,
     /// HRRR surface CAPE (environment suite).
     Cape,
@@ -176,7 +177,7 @@ impl FieldLayer {
     }
 
     /// Fixed bottom-to-top paint order within each band.
-    pub const DRAW_ORDER: [FieldLayer; 44] = [
+    pub const DRAW_ORDER: [FieldLayer; 45] = [
         // Below-radar context band (bottom to top). The global models sit at the very bottom:
         // they are the synoptic backdrop everything else is drawn against.
         FieldLayer::GoesC13,
@@ -206,6 +207,7 @@ impl FieldLayer {
         FieldLayer::Qpe1h,
         FieldLayer::Qpe3h,
         FieldLayer::Qpe6h,
+        FieldLayer::Qpe12h,
         FieldLayer::Qpe24h,
         FieldLayer::FlashFlood,
         FieldLayer::HailSwath,
@@ -244,6 +246,7 @@ impl FieldLayer {
             FieldLayer::Qpe1h => "qpe1h",
             FieldLayer::Qpe3h => "qpe3h",
             FieldLayer::Qpe6h => "qpe6h",
+            FieldLayer::Qpe12h => "qpe12h",
             FieldLayer::Qpe24h => "qpe24h",
             FieldLayer::Cape => "cape",
             FieldLayer::Srh => "srh",
@@ -299,6 +302,7 @@ impl FieldLayer {
             FL::Qpe1h => &wxdata::mrms::QPE_01H_DESCRIPTOR,
             FL::Qpe3h => &wxdata::mrms::QPE_03H_DESCRIPTOR,
             FL::Qpe6h => &wxdata::mrms::QPE_06H_DESCRIPTOR,
+            FL::Qpe12h => &wxdata::mrms::QPE_12H_DESCRIPTOR,
             FL::Qpe24h => &wxdata::mrms::QPE_24H_DESCRIPTOR,
             FL::PrecipRate => &wxdata::mrms::PRECIP_RATE_DESCRIPTOR,
             FL::PrecipType => &wxdata::mrms::PRECIP_TYPE_DESCRIPTOR,

@@ -61,12 +61,13 @@ descriptor!(ROTATION_DESCRIPTOR, "mrms.rotation-track", "Rotation track", "Rotat
 descriptor!(QPE_01H_DESCRIPTOR, "mrms.qpe-1h", "One-hour quantitative precipitation estimate", "QPE 1h", "mm", Accumulation, "qpe-1h", Nearest, false, ["rain", "precipitation"]);
 descriptor!(QPE_03H_DESCRIPTOR, "mrms.qpe-3h", "Three-hour quantitative precipitation estimate", "QPE 3h", "mm", Accumulation, "qpe-3h", Nearest, false, ["rain", "precipitation"]);
 descriptor!(QPE_06H_DESCRIPTOR, "mrms.qpe-6h", "Six-hour quantitative precipitation estimate", "QPE 6h", "mm", Accumulation, "qpe-6h", Nearest, false, ["rain", "precipitation"]);
+descriptor!(QPE_12H_DESCRIPTOR, "mrms.qpe-12h", "12-hour quantitative precipitation estimate", "QPE 12h", "mm", Accumulation, "qpe-12h", Nearest, false, ["rain", "precipitation"]);
 descriptor!(QPE_24H_DESCRIPTOR, "mrms.qpe-24h", "24-hour quantitative precipitation estimate", "QPE 24h", "mm", Accumulation, "qpe-24h", Nearest, false, ["rain", "precipitation"]);
 descriptor!(PRECIP_RATE_DESCRIPTOR, "mrms.precip-rate", "Surface precipitation rate", "Precip Rate", "mm/hr", Scalar, "precip-rate", Bilinear, true, ["rain rate"]);
 descriptor!(PRECIP_TYPE_DESCRIPTOR, "mrms.precip-type", "Surface precipitation type", "Precip Type", "category", Categorical, "precip-type", Nearest, false, ["rain", "snow", "sleet"]);
 descriptor!(FLASH_ARI30_DESCRIPTOR, "mrms.flash-ari30", "30-minute flash-flood recurrence interval", "FLASH ARI", "yr", Scalar, "flash-flood", Bilinear, false, ["flood", "ari"]);
 
-pub static DESCRIPTORS: [&FieldDescriptor; 13] = [
+pub static DESCRIPTORS: [&FieldDescriptor; 14] = [
     &REFLECTIVITY_DESCRIPTOR,
     &LIGHTNING_DESCRIPTOR,
     &MESH_DESCRIPTOR,
@@ -76,6 +77,7 @@ pub static DESCRIPTORS: [&FieldDescriptor; 13] = [
     &QPE_01H_DESCRIPTOR,
     &QPE_03H_DESCRIPTOR,
     &QPE_06H_DESCRIPTOR,
+    &QPE_12H_DESCRIPTOR,
     &QPE_24H_DESCRIPTOR,
     &PRECIP_RATE_DESCRIPTOR,
     &PRECIP_TYPE_DESCRIPTOR,
@@ -99,6 +101,7 @@ pub fn product_for_id(
         "mrms.qpe-1h" => QPE_01H,
         "mrms.qpe-3h" => QPE_03H,
         "mrms.qpe-6h" => QPE_06H,
+        "mrms.qpe-12h" => QPE_12H,
         "mrms.qpe-24h" => QPE_24H,
         "mrms.precip-rate" => PRECIP_RATE,
         "mrms.precip-type" => PRECIP_TYPE,
@@ -148,6 +151,8 @@ pub const QPE_01H: &str = "CONUS/MultiSensor_QPE_01H_Pass2_00.00";
 pub const QPE_03H: &str = "CONUS/MultiSensor_QPE_03H_Pass2_00.00";
 /// Multi-sensor 6-hour QPE accumulation, Pass-2 gauge-corrected (mm).
 pub const QPE_06H: &str = "CONUS/MultiSensor_QPE_06H_Pass2_00.00";
+/// Multi-sensor 12-hour QPE accumulation, Pass-2 gauge-corrected (mm).
+pub const QPE_12H: &str = "CONUS/MultiSensor_QPE_12H_Pass2_00.00";
 /// Multi-sensor 24-hour QPE accumulation, Pass-2 gauge-corrected (mm; storm-total scale).
 pub const QPE_24H: &str = "CONUS/MultiSensor_QPE_24H_Pass2_00.00";
 /// Instantaneous surface precipitation rate (mm/hr), 2-minute cadence.
@@ -447,6 +452,7 @@ pub fn descriptor_for_product(product: &str) -> Option<&'static FieldDescriptor>
         QPE_01H => &QPE_01H_DESCRIPTOR,
         QPE_03H => &QPE_03H_DESCRIPTOR,
         QPE_06H => &QPE_06H_DESCRIPTOR,
+        QPE_12H => &QPE_12H_DESCRIPTOR,
         QPE_24H => &QPE_24H_DESCRIPTOR,
         PRECIP_RATE => &PRECIP_RATE_DESCRIPTOR,
         PRECIP_TYPE => &PRECIP_TYPE_DESCRIPTOR,

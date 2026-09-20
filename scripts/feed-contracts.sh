@@ -21,6 +21,7 @@ check_prefixes \
   'CONUS/MultiSensor_QPE_01H_Pass2_00.00/' \
   'CONUS/MultiSensor_QPE_03H_Pass2_00.00/' \
   'CONUS/MultiSensor_QPE_06H_Pass2_00.00/' \
+  'CONUS/MultiSensor_QPE_12H_Pass2_00.00/' \
   'CONUS/NLDN_CG_005min_AvgDensity_00.00/'
 
 check_prefixes \
