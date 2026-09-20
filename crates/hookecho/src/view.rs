@@ -392,6 +392,7 @@ mod tests {
             cuts_received: 1,
             cuts_expected: 14,
             radials_received: 360,
+            current_elevation_deg: Some(0.5),
             latency: std::time::Duration::ZERO,
             oldest_radial_age: Some(std::time::Duration::ZERO),
             sails_cuts: 0,

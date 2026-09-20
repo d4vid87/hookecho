@@ -57,7 +57,24 @@ impl ScanStatus {
         let oldest = self.oldest_radial_age.map_or(String::new(), |age| {
             format!(" · oldest gate {}s", age.as_secs())
         });
-        format!("{cuts} · {}s latency{oldest}", self.latency.as_secs())
+        let sails = if self.sails_cuts > 0 {
+            format!(" · SAILS {}", self.sails_cuts)
+        } else {
+            String::new()
+        };
+        let mrle = if self.mrle_cuts > 0 {
+            format!(" · MRLE {}", self.mrle_cuts)
+        } else {
+            String::new()
+        };
+        let elevation = self
+            .current_elevation_deg
+            .map_or(String::new(), |angle| format!(" · {angle:.1}°"));
+        format!(
+            "VCP {}{elevation} · {cuts} · {}s latency{oldest}{sails}{mrle}",
+            self.vcp,
+            self.latency.as_secs()
+        )
     }
 }
 
@@ -75,13 +92,14 @@ pub struct Update {
     pub status: ScanStatus,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ScanStatus {
     pub provider: &'static str,
     pub vcp: u16,
     pub cuts_received: usize,
     pub cuts_expected: usize,
     pub radials_received: usize,
+    pub current_elevation_deg: Option<f32>,
     pub latency: Duration,
     pub oldest_radial_age: Option<Duration>,
     pub sails_cuts: u8,
@@ -358,6 +376,12 @@ async fn emit<F: FnMut(Update)>(
         .iter()
         .filter(|sweep| !sweep.radials().is_empty())
         .count();
+    let current_elevation_deg = partial
+        .sweeps()
+        .iter()
+        .rev()
+        .find(|sweep| !sweep.radials().is_empty())
+        .and_then(|sweep| sweep.elevation_angle_degrees());
     let (cuts_expected, sails_cuts, mrle_cuts) = {
         let vcp = partial.coverage_pattern();
         (
@@ -413,6 +437,7 @@ async fn emit<F: FnMut(Update)>(
             cuts_received: *cuts_received,
             cuts_expected,
             radials_received,
+            current_elevation_deg,
             latency: (now - time).to_std().unwrap_or_default(),
             oldest_radial_age,
             sails_cuts,
@@ -543,12 +568,16 @@ mod tests {
             cuts_received: 3,
             cuts_expected: 14,
             radials_received: 720,
+            current_elevation_deg: Some(0.5),
             latency: Duration::from_secs(8),
             oldest_radial_age: Some(Duration::from_secs(12)),
             sails_cuts: 2,
             mrle_cuts: 0,
         };
-        assert_eq!(status.summary(), "3/14 cuts · 8s latency · oldest gate 12s");
+        assert_eq!(
+            status.summary(),
+            "VCP 212 · 0.5° · 3/14 cuts · 8s latency · oldest gate 12s · SAILS 2"
+        );
     }
 
     // A sweep covering `azimuths` (as azimuth numbers), collected at `t_ms`.
