@@ -879,9 +879,9 @@ impl OverlaySource {
                     None => anyhow::bail!("no L3 grid for {site}"),
                 }
             }
-            OverlaySource::Snow(hours) => OverlayMsg::Field(
+            OverlaySource::Snow(hours) => OverlayMsg::RegisteredField(
                 crate::render::FieldLayer::SnowAnalysis,
-                wxdata::nohrsc::fetch(http, hours).await?,
+                wxdata::nohrsc::fetch_frame(http, hours).await?,
             ),
             OverlaySource::FreezingLevels(lon, lat) => {
                 // HRRR carries both isotherm heights as analysis fields, so the hail algorithm
@@ -1703,6 +1703,14 @@ fn field_refresh_secs(layer: crate::render::FieldLayer) -> u64 {
         | FL::HailPosh => 60,
         // Gridded from the GLM feed the app already polls every 20 s; regridding is local work.
         FL::GlmFed => 60,
+    }
+}
+
+fn field_time_tolerance(layer: crate::render::FieldLayer) -> chrono::Duration {
+    match layer {
+        // NOHRSC analyses are issued at 00/06/12/18Z; allow one cadence plus posting delay.
+        crate::render::FieldLayer::SnowAnalysis => chrono::Duration::hours(7),
+        _ => chrono::Duration::seconds((field_refresh_secs(layer) * 2) as i64),
     }
 }
 
@@ -14094,7 +14102,7 @@ impl HookEchoApp {
             .current()
             .and_then(|id| id.date_time())
             .or_else(|| self.views[pane].volume.as_ref().map(|volume| volume.time))?;
-        let tolerance = chrono::Duration::seconds((field_refresh_secs(layer) * 2) as i64);
+        let tolerance = field_time_tolerance(layer);
         let available = [wxdata::timecoord::TimedFrame {
             valid: frame.stamp.valid_time,
             value: (),
@@ -18336,6 +18344,14 @@ mod field_lut_tests {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn snowfall_alignment_covers_its_six_hour_issue_cadence() {
+        assert_eq!(
+            super::field_time_tolerance(crate::render::FieldLayer::SnowAnalysis),
+            chrono::Duration::hours(7)
+        );
+    }
 
     #[test]
     fn storm_labels_show_only_the_strongest_indicator() {

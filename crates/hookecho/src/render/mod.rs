@@ -288,6 +288,7 @@ impl FieldLayer {
             FL::GlobalDewpoint2m => &wxdata::global::DEWPOINT_2M_DESCRIPTOR,
             FL::GlobalWind10m => &wxdata::global::WIND_10M_DESCRIPTOR,
             FL::GlobalPrecip => &wxdata::global::PRECIP_DESCRIPTOR,
+            FL::SnowAnalysis => &wxdata::nohrsc::SNOWFALL_DESCRIPTOR,
             _ => return None,
         })
     }

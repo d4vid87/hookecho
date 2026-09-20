@@ -50,3 +50,6 @@ The six existing global guidance layers use the same path. Their stable IDs are 
 `model.global`, and each frame retains its GFS or ECMWF source object, run, valid, and receipt
 times. The shared moisture layer requests total-column water from both providers so comparisons
 do not mix GFS precipitable water with ECMWF accumulated precipitation.
+
+NOHRSC observed snowfall is registry-backed as an analysis accumulation. The frame keeps the
+selected 6/24/48/72-hour source object and its issue, valid, and receipt times.
