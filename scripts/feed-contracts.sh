@@ -56,7 +56,11 @@ check_prefixes \
   'CONUS/MergedAzShear_3-6kmAGL_00.50/' \
   'CONUS/POSH_00.50/' \
   'CONUS/EchoTop_18_00.50/' \
+  'CONUS/EchoTop_30_00.50/' \
+  'CONUS/EchoTop_50_00.50/' \
+  'CONUS/EchoTop_60_00.50/' \
   'CONUS/LVL3_HighResVIL_00.50/' \
+  'CONUS/VIL_Density_00.50/' \
   'CONUS/MultiSensor_QPE_01H_Pass2_00.00/' \
   'CONUS/MultiSensor_QPE_03H_Pass2_00.00/' \
   'CONUS/MultiSensor_QPE_06H_Pass2_00.00/' \
@@ -70,7 +74,11 @@ check_recent_mrms \
   'CONUS/MergedAzShear_3-6kmAGL_00.50' \
   'CONUS/POSH_00.50' \
   'CONUS/EchoTop_18_00.50' \
+  'CONUS/EchoTop_30_00.50' \
+  'CONUS/EchoTop_50_00.50' \
+  'CONUS/EchoTop_60_00.50' \
   'CONUS/LVL3_HighResVIL_00.50' \
+  'CONUS/VIL_Density_00.50' \
   'CONUS/MultiSensor_QPE_01H_Pass2_00.00' \
   'CONUS/MultiSensor_QPE_03H_Pass2_00.00' \
   'CONUS/MultiSensor_QPE_06H_Pass2_00.00' \

@@ -62,6 +62,24 @@ descriptor!(AZSHEAR_MID_DESCRIPTOR, "mrms.azshear-3-6km", "3–6 km azimuthal sh
 descriptor!(POSH_DESCRIPTOR, "mrms.posh", "Probability of severe hail", "POSH", "%", Probability, "posh", Bilinear, false, ["hail", "probability"]);
 descriptor!(ECHO_TOP_18_DESCRIPTOR, "mrms.echo-top-18", "18 dBZ echo-top height", "MRMS Echo Tops", "km AGL", Scalar, "echo-tops", Bilinear, true, ["storm top", "cloud top", "height"]);
 descriptor!(VIL_DESCRIPTOR, "mrms.vil", "Vertically integrated liquid", "MRMS VIL", "kg/m²", Scalar, "vil", Bilinear, true, ["water aloft", "hail"]);
+descriptor!(ECHO_TOP_30_DESCRIPTOR, "mrms.echo-top-30", "30 dBZ echo-top height", "MRMS 30 dBZ Top", "km AGL", Scalar, "echo-tops", Bilinear, true, ["storm top", "height"]);
+descriptor!(ECHO_TOP_50_DESCRIPTOR, "mrms.echo-top-50", "50 dBZ echo-top height", "MRMS 50 dBZ Top", "km AGL", Scalar, "echo-tops", Bilinear, true, ["storm top", "hail", "height"]);
+descriptor!(ECHO_TOP_60_DESCRIPTOR, "mrms.echo-top-60", "60 dBZ echo-top height", "MRMS 60 dBZ Top", "km AGL", Scalar, "echo-tops", Bilinear, true, ["storm top", "hail", "height"]);
+descriptor!(VIL_DENSITY_DESCRIPTOR, "mrms.vil-density", "VIL density", "MRMS VIL Density", "g/m³", Scalar, "vil-density", Bilinear, true, ["water aloft", "hail"]);
+
+pub struct CatalogProduct {
+    pub descriptor: &'static FieldDescriptor,
+    pub product: &'static str,
+    pub slug: &'static str,
+    pub description: &'static str,
+}
+
+pub static CATALOG: [CatalogProduct; 4] = [
+    CatalogProduct { descriptor: &ECHO_TOP_30_DESCRIPTOR, product: "CONUS/EchoTop_30_00.50", slug: "mrms-echo-top-30", description: "Height of the 30 dBZ storm top above ground" },
+    CatalogProduct { descriptor: &ECHO_TOP_50_DESCRIPTOR, product: "CONUS/EchoTop_50_00.50", slug: "mrms-echo-top-50", description: "Height of the 50 dBZ core for storm-severity analysis" },
+    CatalogProduct { descriptor: &ECHO_TOP_60_DESCRIPTOR, product: "CONUS/EchoTop_60_00.50", slug: "mrms-echo-top-60", description: "Height of the strongest 60 dBZ core" },
+    CatalogProduct { descriptor: &VIL_DENSITY_DESCRIPTOR, product: "CONUS/VIL_Density_00.50", slug: "mrms-vil-density", description: "Liquid water normalized by storm depth" },
+];
 descriptor!(ROTATION_DESCRIPTOR, "mrms.rotation-track", "Rotation track", "Rotation Track", "s⁻¹", Accumulation, "rotation", Nearest, false, ["rotation", "azimuthal shear"]);
 descriptor!(QPE_01H_DESCRIPTOR, "mrms.qpe-1h", "One-hour quantitative precipitation estimate", "QPE 1h", "mm", Accumulation, "qpe-1h", Nearest, false, ["rain", "precipitation"]);
 descriptor!(QPE_03H_DESCRIPTOR, "mrms.qpe-3h", "Three-hour quantitative precipitation estimate", "QPE 3h", "mm", Accumulation, "qpe-3h", Nearest, false, ["rain", "precipitation"]);
@@ -72,7 +90,7 @@ descriptor!(PRECIP_RATE_DESCRIPTOR, "mrms.precip-rate", "Surface precipitation r
 descriptor!(PRECIP_TYPE_DESCRIPTOR, "mrms.precip-type", "Surface precipitation type", "Precip Type", "category", Categorical, "precip-type", Nearest, false, ["rain", "snow", "sleet"]);
 descriptor!(FLASH_ARI30_DESCRIPTOR, "mrms.flash-ari30", "30-minute flash-flood recurrence interval", "FLASH ARI", "yr", Scalar, "flash-flood", Bilinear, false, ["flood", "ari"]);
 
-pub static DESCRIPTORS: [&FieldDescriptor; 19] = [
+pub static DESCRIPTORS: [&FieldDescriptor; 23] = [
     &REFLECTIVITY_DESCRIPTOR,
     &LOW_LEVEL_REFLECTIVITY_DESCRIPTOR,
     &LIGHTNING_DESCRIPTOR,
@@ -83,6 +101,10 @@ pub static DESCRIPTORS: [&FieldDescriptor; 19] = [
     &POSH_DESCRIPTOR,
     &ECHO_TOP_18_DESCRIPTOR,
     &VIL_DESCRIPTOR,
+    &ECHO_TOP_30_DESCRIPTOR,
+    &ECHO_TOP_50_DESCRIPTOR,
+    &ECHO_TOP_60_DESCRIPTOR,
+    &VIL_DENSITY_DESCRIPTOR,
     &ROTATION_DESCRIPTOR,
     &QPE_01H_DESCRIPTOR,
     &QPE_03H_DESCRIPTOR,
@@ -121,7 +143,7 @@ pub fn product_for_id(
         "mrms.precip-rate" => PRECIP_RATE,
         "mrms.precip-type" => PRECIP_TYPE,
         "mrms.flash-ari30" => FLASH_ARI30,
-        _ => return None,
+        _ => return CATALOG.iter().find(|entry| entry.descriptor.id.0 == id).map(|entry| entry.product),
     })
 }
 
@@ -487,7 +509,7 @@ pub fn descriptor_for_product(product: &str) -> Option<&'static FieldDescriptor>
         PRECIP_RATE => &PRECIP_RATE_DESCRIPTOR,
         PRECIP_TYPE => &PRECIP_TYPE_DESCRIPTOR,
         FLASH_ARI30 => &FLASH_ARI30_DESCRIPTOR,
-        _ => return None,
+        _ => return CATALOG.iter().find(|entry| entry.product == product).map(|entry| entry.descriptor),
     })
 }
 

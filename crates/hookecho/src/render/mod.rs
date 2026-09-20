@@ -83,6 +83,7 @@ pub enum FieldLayer {
     Posh,
     MrmsEchoTop18,
     MrmsVil,
+    MrmsCatalog(u8),
     Lightning,
     /// Instantaneous precipitation rate (mm/hr) — how hard it is coming down right now,
     /// as against the QPE layers' how much has fallen.
@@ -187,7 +188,7 @@ impl FieldLayer {
     }
 
     /// Fixed bottom-to-top paint order within each band.
-    pub const DRAW_ORDER: [FieldLayer; 52] = [
+    pub const DRAW_ORDER: [FieldLayer; 56] = [
         // Below-radar context band (bottom to top). The global models sit at the very bottom:
         // they are the synoptic backdrop everything else is drawn against.
         FieldLayer::GoesC13,
@@ -241,6 +242,10 @@ impl FieldLayer {
         FieldLayer::Posh,
         FieldLayer::MrmsEchoTop18,
         FieldLayer::MrmsVil,
+        FieldLayer::MrmsCatalog(0),
+        FieldLayer::MrmsCatalog(1),
+        FieldLayer::MrmsCatalog(2),
+        FieldLayer::MrmsCatalog(3),
         FieldLayer::Lightning,
         FieldLayer::GlmFed,
     ];
@@ -265,6 +270,9 @@ impl FieldLayer {
             FieldLayer::Posh => "posh",
             FieldLayer::MrmsEchoTop18 => "mrms-echo-top-18",
             FieldLayer::MrmsVil => "mrms-vil",
+            FieldLayer::MrmsCatalog(index) => wxdata::mrms::CATALOG
+                .get(index as usize)
+                .map_or("unknown-mrms-catalog", |entry| entry.slug),
             FieldLayer::Lightning => "lightning",
             FieldLayer::PrecipRate => "preciprate",
             FieldLayer::Qpe1h => "qpe1h",
@@ -329,6 +337,7 @@ impl FieldLayer {
             FL::Posh => &wxdata::mrms::POSH_DESCRIPTOR,
             FL::MrmsEchoTop18 => &wxdata::mrms::ECHO_TOP_18_DESCRIPTOR,
             FL::MrmsVil => &wxdata::mrms::VIL_DESCRIPTOR,
+            FL::MrmsCatalog(index) => wxdata::mrms::CATALOG.get(index as usize)?.descriptor,
             FL::Rotation => &wxdata::mrms::ROTATION_DESCRIPTOR,
             FL::Qpe1h => &wxdata::mrms::QPE_01H_DESCRIPTOR,
             FL::Qpe3h => &wxdata::mrms::QPE_03H_DESCRIPTOR,
@@ -426,6 +435,7 @@ mod field_slug_tests {
             assert!(layer.stable_id().contains('.'));
         }
         assert_eq!(FieldLayer::from_stable_id("future.unknown"), None);
+        assert_eq!(FieldLayer::MrmsCatalog(255).slug(), "unknown-mrms-catalog");
         assert_eq!(
             FieldLayer::Lightning.descriptor().unwrap().search_aliases,
             &["nldn", "lightning"]

@@ -714,6 +714,13 @@ pub fn bake_ramp_lut(stops: &[(f32, [u8; 3])], alpha: u8) -> Vec<u8> {
 /// palette (`Mrms`/`Hrrr`, which follow the user's `.pal` table) and `Lightning` (own upload fn).
 pub fn ramp_for(layer: FieldLayer) -> Option<&'static FieldRamp> {
     use FieldLayer as FL;
+    if let FL::MrmsCatalog(index) = layer {
+        return match wxdata::mrms::CATALOG.get(index as usize)?.descriptor.palette_key {
+            "echo-tops" => Some(&MRMS_ECHO_TOPS),
+            "vil-density" => Some(&VIL_DENSITY),
+            _ => None,
+        };
+    }
     Some(match layer {
         FL::GoesC13 => &GOES_C13,
         FL::GoesWaterVapor => &GOES_WATER_VAPOR,
@@ -764,7 +771,8 @@ pub fn ramp_for(layer: FieldLayer) -> Option<&'static FieldRamp> {
         | FL::Hrrr
         | FL::Lightning
         | FL::ModelDiff
-        | FL::GoesTrueColor => return None,
+        | FL::GoesTrueColor
+        | FL::MrmsCatalog(_) => return None,
     })
 }
 

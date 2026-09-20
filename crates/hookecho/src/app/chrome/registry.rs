@@ -68,6 +68,7 @@ impl HookEchoApp {
                         | FL::Posh
                         | FL::MrmsEchoTop18
                         | FL::MrmsVil
+                        | FL::MrmsCatalog(_)
                         | FL::PrecipRate
                         | FL::Qpe1h
                         | FL::Qpe3h
@@ -243,6 +244,17 @@ impl HookEchoApp {
         }
 
         // --- National / model grids. ---
+        for (index, entry) in wxdata::mrms::CATALOG.iter().enumerate() {
+            let layer = FL::MrmsCatalog(index as u8);
+            push(
+                entry.descriptor.display_name,
+                "MRMS",
+                entry.description,
+                false,
+                PaletteAction::ToggleField(layer),
+                Some(self.views[self.active].fields_on.contains(&layer)),
+            );
+        }
         for (layer, category, label, desc, common) in [
             (
                 FL::GoesC13,
