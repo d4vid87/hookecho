@@ -25,6 +25,14 @@ fn nst_matches_metpy_golden() {
     let p = decode(bytes).expect("decode NST");
     assert_eq!(p.code, golden.prod_code, "product code");
     assert!(
+        p.modified_julian_date > 15_000,
+        "real product date retained"
+    );
+    assert!(
+        p.seconds_since_midnight < 86_400,
+        "real product time retained"
+    );
+    assert!(
         (p.lat - golden.lat).abs() < 0.001,
         "lat {} vs {}",
         p.lat,

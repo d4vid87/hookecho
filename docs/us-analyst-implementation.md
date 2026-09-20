@@ -6,7 +6,7 @@ roadmap checkbox only after its gate passes and link the test or capture here.
 
 | Area | Status | Current evidence | Gate evidence |
 |---|---|---|---|
-| A1 field registry | Partial | `wxdata::field`; MRMS, NOHRSC snowfall, plus existing HRRR/RAP/NBM and GFS/ECMWF fields; stable workspace/favorite/recent IDs with legacy-slug reads; descriptor-backed search and native-value map sampling | `cargo test -p wxdata --lib`; workspace, descriptor coverage, field-ID, history and search tests |
+| A1 field registry | Partial | `wxdata::field`; MRMS, NEXRAD Level III grids, NOHRSC snowfall, plus existing HRRR/RAP/NBM and GFS/ECMWF fields; stable workspace/favorite/recent IDs with legacy-slug reads; descriptor-backed search and native-value map sampling | `cargo test -p wxdata --lib`; workspace, descriptor coverage, field-ID, history and search tests |
 | A2 time alignment | Partial | `timecoord.rs`; class-specific observed/analysis/forecast/derived alignment, visible offsets and tolerance warnings, provenance-backed exact-time model differences, and workspace-persisted pane time linking | Coordinator, compatibility, and nearest-volume pane-link tests pass; satellite timeline joins pending |
 | A3 requests/cancellation | Partial | hashed request identity, deduplication, one bounded retry inside the overall timeout, abortable fetches, generation checks | Retry, shared-consumer and stale-result tests pass; decode-stage cancellation pending |
 | A4 provenance/health | Partial | source health plus reflectivity `DataStamp` inspector; valid-data age is distinct from request-success age | Pending all migrated families |

@@ -881,13 +881,13 @@ impl OverlaySource {
             OverlaySource::L3Grid(layer, site) => {
                 use crate::render::FieldLayer as FL;
                 let field = match layer {
-                    FL::Vil => wxdata::level3::fetch_dvl(http, &site).await,
-                    FL::EchoTops => wxdata::level3::fetch_eet(http, &site).await,
-                    FL::Hca => wxdata::level3::fetch_hhc(http, &site).await,
+                    FL::Vil => wxdata::level3::fetch_dvl_frame(http, &site).await,
+                    FL::EchoTops => wxdata::level3::fetch_eet_frame(http, &site).await,
+                    FL::Hca => wxdata::level3::fetch_hhc_frame(http, &site).await,
                     _ => None,
                 };
                 match field {
-                    Some(f) => OverlayMsg::Field(layer, f),
+                    Some(f) => OverlayMsg::RegisteredField(layer, f),
                     None => anyhow::bail!("no L3 grid for {site}"),
                 }
             }

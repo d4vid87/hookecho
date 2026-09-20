@@ -13,7 +13,57 @@
 //! Tabular parsers are token-walkers (not fixed columns) so they survive RPG-build column drift
 //! and page splits; an unparsed row degrades to `None` and never panics.
 
+use crate::field::{
+    DataClass, DataStamp, FieldDescriptor, FieldFamily, FieldFrame, FieldId, MissingData,
+    QualitySummary, SamplingPolicy, ValueKind,
+};
 use nexrad_level3::{decode, Level3Product};
+
+pub static VIL_DESCRIPTOR: FieldDescriptor = FieldDescriptor {
+    id: FieldId("radar.level3.vil"),
+    source: "NEXRAD Level III",
+    family: FieldFamily::Radar,
+    display_name: "Vertically integrated liquid",
+    short_name: "VIL",
+    search_aliases: &["hail", "liquid"],
+    units: "kg m-2",
+    value_kind: ValueKind::Scalar,
+    palette_key: "radar.level3.vil",
+    sampling: SamplingPolicy::Bilinear,
+    missing: MissingData::Nan,
+    supports_contours: false,
+    supports_difference: false,
+};
+pub static ECHO_TOPS_DESCRIPTOR: FieldDescriptor = FieldDescriptor {
+    id: FieldId("radar.level3.echo-tops"),
+    source: "NEXRAD Level III",
+    family: FieldFamily::Radar,
+    display_name: "Enhanced echo tops",
+    short_name: "Echo tops",
+    search_aliases: &["storm top", "EET"],
+    units: "kft",
+    value_kind: ValueKind::Scalar,
+    palette_key: "radar.level3.echo-tops",
+    sampling: SamplingPolicy::Bilinear,
+    missing: MissingData::Nan,
+    supports_contours: false,
+    supports_difference: false,
+};
+pub static HCA_DESCRIPTOR: FieldDescriptor = FieldDescriptor {
+    id: FieldId("radar.level3.hydrometeor-class"),
+    source: "NEXRAD Level III",
+    family: FieldFamily::Radar,
+    display_name: "Hydrometeor classification",
+    short_name: "HCA",
+    search_aliases: &["precipitation type", "HHC"],
+    units: "class",
+    value_kind: ValueKind::Categorical,
+    palette_key: "radar.level3.hydrometeor-class",
+    sampling: SamplingPolicy::Nearest,
+    missing: MissingData::Nan,
+    supports_contours: false,
+    supports_difference: false,
+};
 use std::collections::HashMap;
 
 const BUCKET: &str = "https://unidata-nexrad-level3.s3.amazonaws.com";
@@ -666,16 +716,24 @@ async fn fetch_latest(
     for day in [today, today.pred_opt().unwrap_or(today)] {
         let prefix = format!("{site}_{product}_{}", day.format("%Y_%m_%d"));
         let url = format!("{BUCKET}/?list-type=2&prefix={prefix}");
-        let Ok(resp) = http.get(crate::net::fetch_url(&url))
-        .timeout(crate::net::FEED_TIMEOUT).send().await else {
+        let Ok(resp) = http
+            .get(crate::net::fetch_url(&url))
+            .timeout(crate::net::FEED_TIMEOUT)
+            .send()
+            .await
+        else {
             continue;
         };
         let Ok(xml) = resp.text().await else { continue };
         crate::stats::net(xml.len());
         if let Some(key) = last_key(&xml) {
             let obj_url = format!("{BUCKET}/{key}");
-            if let Ok(resp) = http.get(crate::net::fetch_url(&obj_url))
-            .timeout(crate::net::FEED_TIMEOUT).send().await {
+            if let Ok(resp) = http
+                .get(crate::net::fetch_url(&obj_url))
+                .timeout(crate::net::FEED_TIMEOUT)
+                .send()
+                .await
+            {
                 if let Ok(bytes) = resp.bytes().await {
                     crate::stats::net(bytes.len());
                     match decode(&bytes) {
@@ -764,8 +822,19 @@ pub fn radial_to_field(
         lon_east,
         lat_north,
         lat_south,
-        time: chrono::Utc::now(),
+        time: product_time(p).unwrap_or_else(chrono::Utc::now),
     })
+}
+
+fn product_time(p: &Level3Product) -> Option<chrono::DateTime<chrono::Utc>> {
+    if p.seconds_since_midnight >= 86_400 {
+        return None;
+    }
+    let days = i64::from(p.modified_julian_date.checked_sub(1)?);
+    (chrono::DateTime::UNIX_EPOCH
+        + chrono::Duration::days(days)
+        + chrono::Duration::seconds(i64::from(p.seconds_since_midnight)))
+    .into()
 }
 
 /// Fetch the latest Digital VIL (DVL, product 134) grid for `site`.
@@ -774,12 +843,32 @@ pub async fn fetch_dvl(http: &reqwest::Client, site: &str) -> Option<crate::mrms
     radial_to_field(&p, 1.0, nexrad_level3::dvl_value)
 }
 
+pub async fn fetch_dvl_frame(http: &reqwest::Client, site: &str) -> Option<FieldFrame> {
+    let (p, source, received) =
+        fetch_tgftp_with_metadata(http, &l3_site(site).to_lowercase(), "134il").await?;
+    field_frame(
+        radial_to_field(&p, 1.0, nexrad_level3::dvl_value)?,
+        &VIL_DESCRIPTOR,
+        source,
+        received,
+    )
+}
+
 /// Fetch the latest Enhanced Echo Tops (EET, product 135) grid for `site` (kft; topped flag dropped).
 pub async fn fetch_eet(http: &reqwest::Client, site: &str) -> Option<crate::mrms::MrmsField> {
     let p = fetch_tgftp(http, &l3_site(site).to_lowercase(), "135et").await?;
     radial_to_field(&p, 1.0, |lvl, thr| {
         nexrad_level3::eet_value(lvl, thr).map(|(kft, _topped)| kft)
     })
+}
+
+pub async fn fetch_eet_frame(http: &reqwest::Client, site: &str) -> Option<FieldFrame> {
+    let (p, source, received) =
+        fetch_tgftp_with_metadata(http, &l3_site(site).to_lowercase(), "135et").await?;
+    let field = radial_to_field(&p, 1.0, |lvl, thr| {
+        nexrad_level3::eet_value(lvl, thr).map(|(kft, _)| kft)
+    })?;
+    field_frame(field, &ECHO_TOPS_DESCRIPTOR, source, received)
 }
 
 /// Fetch the latest Digital Base Reflectivity (N0B, product 153) for `site` as a grid — the
@@ -812,9 +901,46 @@ pub async fn fetch_hhc(http: &reqwest::Client, site: &str) -> Option<crate::mrms
     radial_to_field(&p, 0.25, |lvl, _| (lvl >= 10).then_some(lvl as f32))
 }
 
+pub async fn fetch_hhc_frame(http: &reqwest::Client, site: &str) -> Option<FieldFrame> {
+    let (p, source, received) =
+        fetch_tgftp_with_metadata(http, &l3_site(site).to_lowercase(), "177hh").await?;
+    let field = radial_to_field(&p, 0.25, |lvl, _| (lvl >= 10).then_some(lvl as f32))?;
+    field_frame(field, &HCA_DESCRIPTOR, source, received)
+}
+
+fn field_frame(
+    field: crate::mrms::MrmsField,
+    descriptor: &'static FieldDescriptor,
+    source_identity: String,
+    received_time: chrono::DateTime<chrono::Utc>,
+) -> Option<FieldFrame> {
+    let valid_time = field.time;
+    Some(FieldFrame::new(
+        descriptor,
+        field,
+        DataStamp {
+            source_identity,
+            issue_time: None,
+            run_time: None,
+            valid_time,
+            received_time,
+            class: DataClass::Observed,
+            quality: QualitySummary::Unknown,
+        },
+    ))
+}
+
 /// Fetch the latest `DS.{ds}` product for `site` from the tgftp `sn.last` feed and decode it.
 /// `ds` is the directory suffix (`p59hi`, `p62ss`); `site` is the 3-letter L3 id.
 async fn fetch_tgftp(http: &reqwest::Client, site: &str, ds: &str) -> Option<Level3Product> {
+    fetch_tgftp_with_metadata(http, site, ds).await.map(|v| v.0)
+}
+
+async fn fetch_tgftp_with_metadata(
+    http: &reqwest::Client,
+    site: &str,
+    ds: &str,
+) -> Option<(Level3Product, String, chrono::DateTime<chrono::Utc>)> {
     let url = format!("{TGFTP}/DS.{ds}/SI.k{}/sn.last", site.to_lowercase());
     let bytes = http
         .get(crate::net::fetch_url(&url))
@@ -826,9 +952,10 @@ async fn fetch_tgftp(http: &reqwest::Client, site: &str, ds: &str) -> Option<Lev
         .bytes()
         .await
         .ok()?;
+    let received = chrono::Utc::now();
     crate::stats::net(bytes.len());
     match decode(&bytes) {
-        Ok(p) => Some(p),
+        Ok(p) => Some((p, url, received)),
         Err(e) => {
             log::warn!("level3 tgftp decode {ds} {site}: {e}");
             None
@@ -878,6 +1005,8 @@ mod tests {
             });
         }
         let p = Level3Product {
+            modified_julian_date: 1,
+            seconds_since_midnight: 0,
             code: 134,
             lat: 35.0,
             lon: -97.0,
@@ -899,6 +1028,8 @@ mod tests {
         };
         // Decode: nonzero level → its value, else None.
         let f = radial_to_field(&p, 1.0, |lvl, _| (lvl >= 2).then_some(lvl as f32)).unwrap();
+        assert_eq!(f.time, chrono::DateTime::UNIX_EPOCH);
+        assert_eq!(HCA_DESCRIPTOR.sampling, SamplingPolicy::Nearest);
         // A cell due east of the radar (~50 km) should be filled; due west should be empty.
         let east_lon = -97.0 + 0.4;
         let west_lon = -97.0 - 0.4;

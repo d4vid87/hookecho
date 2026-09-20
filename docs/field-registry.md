@@ -56,3 +56,7 @@ selected 6/24/48/72-hour source object and its issue, valid, and receipt times.
 
 Model differences are derived registry frames. They require matching valid times and retain both
 contributor identities, the newest receipt time, native difference units, and derived status.
+
+NEXRAD Level III VIL, enhanced echo tops, and hydrometeor classification are registry-backed
+observations. Their decoder preserves the message-header scan time; HCA declares nearest-neighbor
+sampling so category codes are never interpolated.
