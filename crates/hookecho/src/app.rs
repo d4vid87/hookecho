@@ -679,7 +679,7 @@ impl OverlaySource {
             }
             OverlaySource::Global(layer, model, field, fh) => {
                 let fc = wxdata::global::fetch(http, model, field, fh).await?;
-                OverlayMsg::Field(layer, fc.field)
+                OverlayMsg::RegisteredField(layer, fc.into_frame(field.descriptor()))
             }
             OverlaySource::ModelDiff(field, fh) => {
                 use crate::fielddiff::DiffField;

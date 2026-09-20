@@ -16,6 +16,10 @@
 //! pan east of +180 and it simply ends. Drawing a second copy is easy if anyone chases Fiji.
 
 use crate::alerts::USER_AGENT;
+use crate::field::{
+    DataClass, DataStamp, FieldDescriptor, FieldFamily, FieldFrame, FieldId, MissingData,
+    QualitySummary, SamplingPolicy, ValueKind,
+};
 use crate::mrms::MrmsField;
 use chrono::{DateTime, Datelike, Timelike, Utc};
 
@@ -25,6 +29,81 @@ const ECMWF_BASE: &str = "https://data.ecmwf.int/forecasts";
 /// Quarter-degree source grids resample onto this. Coarser than the grid itself, so the scatter
 /// fills every cell; 1440×721 at 0.25° well under the 4096 texture cap either way.
 const RES_DEG: f64 = 0.3;
+
+macro_rules! descriptor {
+    ($name:ident, $id:literal, $display:literal, $short:literal, $aliases:expr, $units:literal, $kind:expr) => {
+        pub static $name: FieldDescriptor = FieldDescriptor {
+            id: FieldId($id),
+            source: "NOAA GFS / ECMWF IFS",
+            family: FieldFamily::Model,
+            display_name: $display,
+            short_name: $short,
+            search_aliases: $aliases,
+            units: $units,
+            value_kind: $kind,
+            palette_key: $id,
+            sampling: SamplingPolicy::Bilinear,
+            missing: MissingData::Nan,
+            supports_contours: false,
+            supports_difference: true,
+        };
+    };
+}
+
+descriptor!(
+    MSLP_DESCRIPTOR,
+    "model.global.mslp",
+    "Mean sea-level pressure",
+    "MSLP",
+    &["pressure", "GFS", "ECMWF"],
+    "Pa",
+    ValueKind::Scalar
+);
+descriptor!(
+    HEIGHT_500_DESCRIPTOR,
+    "model.global.height-500",
+    "500 hPa height",
+    "500 hPa",
+    &["geopotential", "height", "GFS", "ECMWF"],
+    "m",
+    ValueKind::Scalar
+);
+descriptor!(
+    TEMP_2M_DESCRIPTOR,
+    "model.global.temperature-2m",
+    "2 m temperature",
+    "2 m temp",
+    &["temperature", "GFS", "ECMWF"],
+    "K",
+    ValueKind::Scalar
+);
+descriptor!(
+    DEWPOINT_2M_DESCRIPTOR,
+    "model.global.dewpoint-2m",
+    "2 m dewpoint",
+    "2 m dewpoint",
+    &["moisture", "GFS", "ECMWF"],
+    "K",
+    ValueKind::Scalar
+);
+descriptor!(
+    WIND_10M_DESCRIPTOR,
+    "model.global.wind-10m",
+    "10 m zonal wind",
+    "10 m U wind",
+    &["wind", "u component", "GFS", "ECMWF"],
+    "m s-1",
+    ValueKind::Scalar
+);
+descriptor!(
+    PRECIP_DESCRIPTOR,
+    "model.global.precipitable-water",
+    "Precipitable water",
+    "PWAT",
+    &["total column water", "moisture", "GFS", "ECMWF"],
+    "kg m-2",
+    ValueKind::Scalar
+);
 
 /// Which global model to read.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -96,6 +175,17 @@ impl GlobalField {
         GlobalField::ALL.into_iter().find(|f| f.slug() == s)
     }
 
+    pub fn descriptor(self) -> &'static FieldDescriptor {
+        match self {
+            GlobalField::Mslp => &MSLP_DESCRIPTOR,
+            GlobalField::Height500 => &HEIGHT_500_DESCRIPTOR,
+            GlobalField::Temp2m => &TEMP_2M_DESCRIPTOR,
+            GlobalField::Dewpoint2m => &DEWPOINT_2M_DESCRIPTOR,
+            GlobalField::Wind10m => &WIND_10M_DESCRIPTOR,
+            GlobalField::Precip => &PRECIP_DESCRIPTOR,
+        }
+    }
+
     /// GFS `.idx` `(var, level)`.
     fn gfs_key(self) -> (&'static str, &'static str) {
         match self {
@@ -116,7 +206,7 @@ impl GlobalField {
             GlobalField::Temp2m => ("2t", "sfc", None),
             GlobalField::Dewpoint2m => ("2d", "sfc", None),
             GlobalField::Wind10m => ("10u", "sfc", None),
-            GlobalField::Precip => ("tp", "sfc", None),
+            GlobalField::Precip => ("tcwv", "sfc", None),
         }
     }
 }
@@ -126,11 +216,30 @@ pub struct GlobalForecast {
     pub field: MrmsField,
     pub run: DateTime<Utc>,
     pub fcst_hour: u16,
+    source_identity: String,
+    received_at: DateTime<Utc>,
 }
 
 impl GlobalForecast {
     pub fn valid(&self) -> DateTime<Utc> {
         self.run + chrono::Duration::hours(self.fcst_hour as i64)
+    }
+
+    pub fn into_frame(self, descriptor: &'static FieldDescriptor) -> FieldFrame {
+        let valid_time = self.valid();
+        FieldFrame::new(
+            descriptor,
+            self.field,
+            DataStamp {
+                source_identity: self.source_identity,
+                issue_time: Some(self.run),
+                run_time: Some(self.run),
+                valid_time,
+                received_time: self.received_at,
+                class: DataClass::Forecast,
+                quality: QualitySummary::Unknown,
+            },
+        )
     }
 }
 
@@ -208,6 +317,7 @@ async fn fetch_run(
         .error_for_status()?
         .bytes()
         .await?;
+    let received_at = Utc::now();
 
     let raw = bytes.to_vec();
     let field_out = crate::task::blocking(move || decode(&raw)).await??;
@@ -215,6 +325,8 @@ async fn fetch_run(
         field: field_out,
         run,
         fcst_hour: fh,
+        source_identity: base,
+        received_at,
     })
 }
 
@@ -339,8 +451,16 @@ mod tests {
     fn field_slugs_round_trip() {
         for f in GlobalField::ALL {
             assert_eq!(GlobalField::from_slug(f.slug()), Some(f));
+            assert_eq!(f.descriptor().family, FieldFamily::Model);
         }
         assert_eq!(GlobalField::from_slug("nope"), None);
+    }
+
+    #[test]
+    fn both_models_request_compatible_column_water() {
+        assert_eq!(GlobalField::Precip.gfs_key().0, "PWAT");
+        assert_eq!(GlobalField::Precip.ecmwf_key().0, "tcwv");
+        assert_eq!(GlobalField::Precip.descriptor().units, "kg m-2");
     }
 
     /// Both sources, live, at the newest usable cycle.

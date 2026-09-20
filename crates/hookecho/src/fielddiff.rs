@@ -69,16 +69,15 @@ impl Default for DiffField {
 }
 
 impl DiffField {
-    /// Moisture is here as 2 m dewpoint: both models publish it as the same quantity in the same
-    /// units, so the subtraction means something. Column moisture still is not — GFS publishes
-    /// precipitable water and ECMWF total precipitation, and subtracting them subtracts two
-    /// different things. A plausible looking map of nonsense is worse than no map.
-    pub const ALL: [DiffField; 7] = [
+    /// Every pair uses the same physical quantity and native units. The column-moisture pair is
+    /// GFS precipitable water against ECMWF total-column water, both kg/m² (numerically mm).
+    pub const ALL: [DiffField; 8] = [
         DiffField::Global(GlobalFieldKind::Mslp),
         DiffField::Global(GlobalFieldKind::Height500),
         DiffField::Global(GlobalFieldKind::Temp2m),
         DiffField::Global(GlobalFieldKind::Dewpoint2m),
         DiffField::Global(GlobalFieldKind::Wind10m),
+        DiffField::Global(GlobalFieldKind::Precip),
         DiffField::Cape,
         DiffField::Srh,
     ];

@@ -282,6 +282,12 @@ impl FieldLayer {
             FL::Snowfall => &wxdata::hrrr::SNOWFALL_DESCRIPTOR,
             FL::Smoke => &wxdata::hrrr::SMOKE_DESCRIPTOR,
             FL::ThunderProb => &wxdata::hrrr::THUNDER_PROBABILITY_DESCRIPTOR,
+            FL::GlobalMslp => &wxdata::global::MSLP_DESCRIPTOR,
+            FL::GlobalHeight500 => &wxdata::global::HEIGHT_500_DESCRIPTOR,
+            FL::GlobalTemp2m => &wxdata::global::TEMP_2M_DESCRIPTOR,
+            FL::GlobalDewpoint2m => &wxdata::global::DEWPOINT_2M_DESCRIPTOR,
+            FL::GlobalWind10m => &wxdata::global::WIND_10M_DESCRIPTOR,
+            FL::GlobalPrecip => &wxdata::global::PRECIP_DESCRIPTOR,
             _ => return None,
         })
     }
