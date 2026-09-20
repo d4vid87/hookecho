@@ -57,6 +57,7 @@ impl HookEchoApp {
                         | FL::GoesLongwaveIr
                         | FL::GoesVisible
                         | FL::GoesTrueColor
+                        | FL::GoesCatalog(_)
                         | FL::Mrms
                         | FL::MrmsLowLevel
                         | FL::Mosaic
@@ -244,6 +245,17 @@ impl HookEchoApp {
         }
 
         // --- National / model grids. ---
+        for (index, entry) in wxdata::abi::CATALOG.iter().enumerate() {
+            let layer = FL::GoesCatalog(index as u8);
+            push(
+                entry.descriptor.display_name,
+                "National",
+                "Native GOES ABI channel imagery",
+                false,
+                PaletteAction::ToggleField(layer),
+                Some(self.views[self.active].fields_on.contains(&layer)),
+            );
+        }
         for (index, entry) in wxdata::mrms::CATALOG.iter().enumerate() {
             let layer = FL::MrmsCatalog(index as u8);
             push(

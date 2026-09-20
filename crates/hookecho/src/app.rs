@@ -1737,7 +1737,8 @@ fn field_refresh_secs(layer: crate::render::FieldLayer) -> u64 {
         | FL::GoesMidWaterVapor
         | FL::GoesLongwaveIr
         | FL::GoesVisible
-        | FL::GoesTrueColor => 300,
+        | FL::GoesTrueColor
+        | FL::GoesCatalog(_) => 300,
         FL::Lightning | FL::AzShear => 60,
         FL::Mrms
         | FL::MrmsLowLevel
@@ -6834,6 +6835,11 @@ impl HookEchoApp {
                 }
                 crate::render::FieldLayer::GoesTrueColor => {
                     satellite_bands.extend(wxdata::abi::TRUE_COLOR.bands);
+                }
+                crate::render::FieldLayer::GoesCatalog(index) => {
+                    if let Some(entry) = wxdata::abi::CATALOG.get(*index as usize) {
+                        satellite_bands.insert(entry.band);
+                    }
                 }
                 _ => {}
             }
@@ -16725,6 +16731,25 @@ impl eframe::App for HookEchoApp {
                 state.last_fetch = Some(Instant::now());
                 state.requested_time = Some(satellite_time);
                 self.spawn_overlay(ctx, OverlaySource::GoesAbi(layer, band, satellite_time));
+            }
+        }
+        for (index, entry) in wxdata::abi::CATALOG.iter().enumerate() {
+            let layer = FL::GoesCatalog(index as u8);
+            let stale = self.field_wanted(layer)
+                && self.fields.get(&layer).is_none_or(|state| {
+                    state.requested_time != Some(satellite_time)
+                        || state.last_fetch.is_none_or(|time| {
+                            time.elapsed().as_secs() >= field_refresh_secs(layer)
+                        })
+                });
+            if stale {
+                let state = self.fields.entry(layer).or_default();
+                state.last_fetch = Some(Instant::now());
+                state.requested_time = Some(satellite_time);
+                self.spawn_overlay(
+                    ctx,
+                    OverlaySource::GoesAbi(layer, entry.band, satellite_time),
+                );
             }
         }
         {

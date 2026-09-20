@@ -105,6 +105,50 @@ pub static TRUE_COLOR_DESCRIPTOR: FieldDescriptor = FieldDescriptor {
     supports_difference: false,
 };
 
+macro_rules! channel_descriptor {
+    ($name:ident, $id:literal, $display:literal, $short:literal, $units:literal, $palette:literal, $contours:literal, [$($alias:literal),* $(,)?]) => {
+        pub static $name: FieldDescriptor = FieldDescriptor {
+            id: FieldId($id), source: "NOAA GOES ABI", family: FieldFamily::Satellite,
+            display_name: $display, short_name: $short, search_aliases: &[$($alias),*],
+            units: $units, value_kind: ValueKind::Scalar, palette_key: $palette,
+            sampling: SamplingPolicy::Nearest, missing: MissingData::Nan,
+            supports_contours: $contours, supports_difference: true,
+        };
+    };
+}
+
+channel_descriptor!(C01_DESCRIPTOR, "satellite.goes.abi.c01", "GOES blue visible", "GOES C01", "reflectance", "visible", false, ["satellite", "visible", "blue"]);
+channel_descriptor!(C03_DESCRIPTOR, "satellite.goes.abi.c03", "GOES veggie near-infrared", "GOES C03", "reflectance", "visible", false, ["satellite", "vegetation", "near infrared"]);
+channel_descriptor!(C04_DESCRIPTOR, "satellite.goes.abi.c04", "GOES cirrus near-infrared", "GOES C04", "reflectance", "visible", false, ["satellite", "cirrus", "near infrared"]);
+channel_descriptor!(C05_DESCRIPTOR, "satellite.goes.abi.c05", "GOES snow and ice near-infrared", "GOES C05", "reflectance", "visible", false, ["satellite", "snow", "ice"]);
+channel_descriptor!(C06_DESCRIPTOR, "satellite.goes.abi.c06", "GOES cloud-particle near-infrared", "GOES C06", "reflectance", "visible", false, ["satellite", "cloud particle", "near infrared"]);
+channel_descriptor!(C07_DESCRIPTOR, "satellite.goes.abi.c07", "GOES shortwave infrared", "GOES C07", "K", "infrared", true, ["satellite", "shortwave infrared", "fog"]);
+channel_descriptor!(C10_DESCRIPTOR, "satellite.goes.abi.c10", "GOES lower-level water vapor", "GOES C10", "K", "water-vapor", true, ["satellite", "water vapor", "lower level"]);
+channel_descriptor!(C11_DESCRIPTOR, "satellite.goes.abi.c11", "GOES cloud-top phase infrared", "GOES C11", "K", "infrared", true, ["satellite", "cloud phase", "infrared"]);
+channel_descriptor!(C12_DESCRIPTOR, "satellite.goes.abi.c12", "GOES ozone infrared", "GOES C12", "K", "infrared", true, ["satellite", "ozone", "infrared"]);
+channel_descriptor!(C15_DESCRIPTOR, "satellite.goes.abi.c15", "GOES dirty longwave infrared", "GOES C15", "K", "infrared", true, ["satellite", "dirty window", "infrared"]);
+channel_descriptor!(C16_DESCRIPTOR, "satellite.goes.abi.c16", "GOES carbon-dioxide infrared", "GOES C16", "K", "infrared", true, ["satellite", "carbon dioxide", "infrared"]);
+
+pub struct CatalogBand {
+    pub band: u8,
+    pub descriptor: &'static FieldDescriptor,
+    pub slug: &'static str,
+}
+
+pub static CATALOG: [CatalogBand; 11] = [
+    CatalogBand { band: 1, descriptor: &C01_DESCRIPTOR, slug: "goes-c01" },
+    CatalogBand { band: 3, descriptor: &C03_DESCRIPTOR, slug: "goes-c03" },
+    CatalogBand { band: 4, descriptor: &C04_DESCRIPTOR, slug: "goes-c04" },
+    CatalogBand { band: 5, descriptor: &C05_DESCRIPTOR, slug: "goes-c05" },
+    CatalogBand { band: 6, descriptor: &C06_DESCRIPTOR, slug: "goes-c06" },
+    CatalogBand { band: 7, descriptor: &C07_DESCRIPTOR, slug: "goes-c07" },
+    CatalogBand { band: 10, descriptor: &C10_DESCRIPTOR, slug: "goes-c10" },
+    CatalogBand { band: 11, descriptor: &C11_DESCRIPTOR, slug: "goes-c11" },
+    CatalogBand { band: 12, descriptor: &C12_DESCRIPTOR, slug: "goes-c12" },
+    CatalogBand { band: 15, descriptor: &C15_DESCRIPTOR, slug: "goes-c15" },
+    CatalogBand { band: 16, descriptor: &C16_DESCRIPTOR, slug: "goes-c16" },
+];
+
 pub fn descriptor_for_band(band: u8) -> Option<&'static FieldDescriptor> {
     match band {
         2 => Some(&C02_DESCRIPTOR),
@@ -112,7 +156,7 @@ pub fn descriptor_for_band(band: u8) -> Option<&'static FieldDescriptor> {
         9 => Some(&C09_DESCRIPTOR),
         13 => Some(&C13_DESCRIPTOR),
         14 => Some(&C14_DESCRIPTOR),
-        _ => None,
+        _ => CATALOG.iter().find(|entry| entry.band == band).map(|entry| entry.descriptor),
     }
 }
 
@@ -702,13 +746,17 @@ mod tests {
             prefix(at, Scene::Mesoscale2, 9),
             "ABI-L2-CMIPM/2025/100/18/OR_ABI-L2-CMIPM2-M6C09"
         );
-        for band in [2, 8, 9, 13, 14] {
+        for band in 1..=16 {
             assert_eq!(
                 descriptor_for_band(band).unwrap().id.0,
                 format!("satellite.goes.abi.c{band:02}")
             );
         }
         assert!(descriptor_for_band(99).is_none());
+        let mut ids: Vec<_> = CATALOG.iter().map(|entry| entry.descriptor.id.0).collect();
+        ids.sort_unstable();
+        ids.dedup();
+        assert_eq!(ids.len(), CATALOG.len());
     }
 
     #[test]

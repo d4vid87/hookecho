@@ -73,6 +73,7 @@ pub enum FieldLayer {
     GoesLongwaveIr,
     GoesVisible,
     GoesTrueColor,
+    GoesCatalog(u8),
     Mrms,
     MrmsLowLevel,
     Hrrr,
@@ -166,6 +167,7 @@ impl FieldLayer {
                 | FieldLayer::GoesLongwaveIr
                 | FieldLayer::GoesVisible
                 | FieldLayer::GoesTrueColor
+                | FieldLayer::GoesCatalog(_)
                 | FieldLayer::Mrms
                 | FieldLayer::MrmsLowLevel
                 | FieldLayer::Mosaic
@@ -188,7 +190,7 @@ impl FieldLayer {
     }
 
     /// Fixed bottom-to-top paint order within each band.
-    pub const DRAW_ORDER: [FieldLayer; 70] = [
+    pub const DRAW_ORDER: [FieldLayer; 81] = [
         // Below-radar context band (bottom to top). The global models sit at the very bottom:
         // they are the synoptic backdrop everything else is drawn against.
         FieldLayer::GoesC13,
@@ -197,6 +199,17 @@ impl FieldLayer {
         FieldLayer::GoesLongwaveIr,
         FieldLayer::GoesVisible,
         FieldLayer::GoesTrueColor,
+        FieldLayer::GoesCatalog(0),
+        FieldLayer::GoesCatalog(1),
+        FieldLayer::GoesCatalog(2),
+        FieldLayer::GoesCatalog(3),
+        FieldLayer::GoesCatalog(4),
+        FieldLayer::GoesCatalog(5),
+        FieldLayer::GoesCatalog(6),
+        FieldLayer::GoesCatalog(7),
+        FieldLayer::GoesCatalog(8),
+        FieldLayer::GoesCatalog(9),
+        FieldLayer::GoesCatalog(10),
         FieldLayer::GlobalMslp,
         FieldLayer::GlobalHeight500,
         FieldLayer::GlobalTemp2m,
@@ -274,6 +287,9 @@ impl FieldLayer {
             FieldLayer::GoesLongwaveIr => "goes-longwave-ir",
             FieldLayer::GoesVisible => "goes-visible",
             FieldLayer::GoesTrueColor => "goes-true-color",
+            FieldLayer::GoesCatalog(index) => wxdata::abi::CATALOG
+                .get(index as usize)
+                .map_or("unknown-goes-catalog", |entry| entry.slug),
             FieldLayer::Mrms => "mrms",
             FieldLayer::MrmsLowLevel => "mrms-low-level",
             FieldLayer::Hrrr => "hrrr",
@@ -341,6 +357,7 @@ impl FieldLayer {
             FL::GoesLongwaveIr => &wxdata::abi::C14_DESCRIPTOR,
             FL::GoesVisible => &wxdata::abi::C02_DESCRIPTOR,
             FL::GoesTrueColor => &wxdata::abi::TRUE_COLOR_DESCRIPTOR,
+            FL::GoesCatalog(index) => wxdata::abi::CATALOG.get(index as usize)?.descriptor,
             FL::Mrms => &wxdata::mrms::REFLECTIVITY_DESCRIPTOR,
             FL::MrmsLowLevel => &wxdata::mrms::LOW_LEVEL_REFLECTIVITY_DESCRIPTOR,
             FL::Lightning => &wxdata::mrms::LIGHTNING_DESCRIPTOR,
@@ -450,6 +467,7 @@ mod field_slug_tests {
         }
         assert_eq!(FieldLayer::from_stable_id("future.unknown"), None);
         assert_eq!(FieldLayer::MrmsCatalog(255).slug(), "unknown-mrms-catalog");
+        assert_eq!(FieldLayer::GoesCatalog(255).slug(), "unknown-goes-catalog");
         assert_eq!(
             FieldLayer::Lightning.descriptor().unwrap().search_aliases,
             &["nldn", "lightning"]

@@ -714,6 +714,14 @@ pub fn bake_ramp_lut(stops: &[(f32, [u8; 3])], alpha: u8) -> Vec<u8> {
 /// palette (`Mrms`/`Hrrr`, which follow the user's `.pal` table) and `Lightning` (own upload fn).
 pub fn ramp_for(layer: FieldLayer) -> Option<&'static FieldRamp> {
     use FieldLayer as FL;
+    if let FL::GoesCatalog(index) = layer {
+        return match wxdata::abi::CATALOG.get(index as usize)?.descriptor.palette_key {
+            "visible" => Some(&GOES_VISIBLE),
+            "water-vapor" => Some(&GOES_WATER_VAPOR),
+            "infrared" => Some(&GOES_C13),
+            _ => None,
+        };
+    }
     if let FL::MrmsCatalog(index) = layer {
         return match wxdata::mrms::CATALOG.get(index as usize)?.descriptor.palette_key {
             "echo-tops" => Some(&MRMS_ECHO_TOPS),
@@ -775,6 +783,7 @@ pub fn ramp_for(layer: FieldLayer) -> Option<&'static FieldRamp> {
         | FL::Lightning
         | FL::ModelDiff
         | FL::GoesTrueColor
+        | FL::GoesCatalog(_)
         | FL::MrmsCatalog(_) => return None,
     })
 }
