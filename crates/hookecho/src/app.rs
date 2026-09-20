@@ -1738,7 +1738,7 @@ fn field_refresh_secs(layer: crate::render::FieldLayer) -> u64 {
         // QPE accumulations update on a ~2-minute MRMS cadence.
         // The rate product lands every 2 minutes; the accumulations move far more slowly.
         FL::PrecipRate => 120,
-        FL::Qpe1h | FL::Qpe24h => 120,
+        FL::Qpe1h | FL::Qpe3h | FL::Qpe6h | FL::Qpe24h => 120,
         // MRMS precip type / flash-flood ARI on the ~2-min cadence; L3 grids on the 120 s L3 cadence.
         FL::PrecipType | FL::FlashFlood | FL::Vil | FL::EchoTops | FL::Hca => 120,
         // Bands are cut from the ~2-min mosaic, so they are as fresh as it is.

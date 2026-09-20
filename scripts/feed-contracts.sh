@@ -19,6 +19,8 @@ check_prefixes \
   'CONUS/MergedReflectivityQCComposite_00.50/' \
   'CONUS/MergedAzShear_0-2kmAGL_00.50/' \
   'CONUS/MultiSensor_QPE_01H_Pass2_00.00/' \
+  'CONUS/MultiSensor_QPE_03H_Pass2_00.00/' \
+  'CONUS/MultiSensor_QPE_06H_Pass2_00.00/' \
   'CONUS/NLDN_CG_005min_AvgDensity_00.00/'
 
 check_prefixes \

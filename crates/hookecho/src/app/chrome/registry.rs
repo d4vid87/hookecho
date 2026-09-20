@@ -63,6 +63,8 @@ impl HookEchoApp {
                         | FL::AzShear
                         | FL::PrecipRate
                         | FL::Qpe1h
+                        | FL::Qpe3h
+                        | FL::Qpe6h
                         | FL::Qpe24h
                         | FL::PrecipType
                         | FL::FlashFlood
@@ -317,6 +319,20 @@ impl HookEchoApp {
                 "National",
                 "Rain so far, 1 hour (QPE)",
                 "How much rain has fallen in the last hour",
+                false,
+            ),
+            (
+                FL::Qpe3h,
+                "National",
+                "Rain so far, 3 hours (QPE)",
+                "How much rain has fallen in the last three hours",
+                false,
+            ),
+            (
+                FL::Qpe6h,
+                "National",
+                "Rain so far, 6 hours (QPE)",
+                "How much rain has fallen in the last six hours",
                 false,
             ),
             (
