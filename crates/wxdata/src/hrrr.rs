@@ -6,6 +6,10 @@
 //! MRMS field-layer render pipeline (a plate-carrée→mercator warp).
 
 use crate::alerts::USER_AGENT;
+use crate::field::{
+    DataClass, DataStamp, FieldDescriptor, FieldFamily, FieldFrame, FieldId, MissingData,
+    QualitySummary, SamplingPolicy, ValueKind,
+};
 use crate::mrms::MrmsField;
 use chrono::{DateTime, Datelike, Timelike, Utc};
 use futures_util::StreamExt;
@@ -16,6 +20,22 @@ const NAM_BUCKET: &str = "https://noaa-nam-pds.s3.amazonaws.com";
 /// The National Blend of Models, in GRIB2 with `.idx` sidecars. Not `noaa-nbm-pds`: that bucket
 /// republished as per-element GeoTIFF, which would need a TIFF decoder to read one field.
 const NBM_BUCKET: &str = "https://noaa-nbm-grib2-pds.s3.amazonaws.com";
+
+pub static REFLECTIVITY_DESCRIPTOR: FieldDescriptor = FieldDescriptor {
+    id: FieldId("model.hrrr.composite-reflectivity"),
+    source: "NOAA HRRR",
+    family: FieldFamily::Model,
+    display_name: "HRRR composite reflectivity",
+    short_name: "HRRR Future Radar",
+    search_aliases: &["future radar", "forecast radar", "refc", "dbz"],
+    units: "dBZ",
+    value_kind: ValueKind::Scalar,
+    palette_key: "reflectivity",
+    sampling: SamplingPolicy::Bilinear,
+    missing: MissingData::Nan,
+    supports_contours: true,
+    supports_difference: true,
+};
 
 /// Which model to pull a field from.
 ///
@@ -111,6 +131,26 @@ impl HrrrForecast {
     /// Valid time = run + forecast hour.
     pub fn valid(&self) -> DateTime<Utc> {
         self.run + chrono::Duration::hours(self.fcst_hour as i64)
+    }
+
+    /// Wrap future radar in the common field metadata path.
+    pub fn into_reflectivity_frame(self) -> FieldFrame {
+        let valid_time = self.valid();
+        let date = self.run.format("%Y%m%d").to_string();
+        let source_identity = Model::Hrrr.url(&date, self.run.hour(), self.fcst_hour);
+        FieldFrame::new(
+            &REFLECTIVITY_DESCRIPTOR,
+            self.field,
+            DataStamp {
+                source_identity,
+                issue_time: Some(self.run),
+                run_time: Some(self.run),
+                valid_time,
+                received_time: Utc::now(),
+                class: DataClass::Forecast,
+                quality: QualitySummary::Unknown,
+            },
+        )
     }
 }
 
@@ -855,5 +895,31 @@ mod tests {
         let nbm = Model::Nbm.url("20260825", 12, 6);
         assert!(nbm.contains("noaa-nbm-grib2-pds"));
         assert!(nbm.ends_with("blend.t12z.core.f006.co.grib2"));
+    }
+
+    #[test]
+    fn future_radar_frame_carries_model_provenance() {
+        let run = "2026-08-25T12:00:00Z".parse::<DateTime<Utc>>().unwrap();
+        let frame = HrrrForecast {
+            field: MrmsField {
+                values: vec![42.0],
+                nx: 1,
+                ny: 1,
+                lon_west: -100.0,
+                lon_east: -99.0,
+                lat_north: 40.0,
+                lat_south: 39.0,
+                time: run + chrono::Duration::hours(3),
+            },
+            run,
+            fcst_hour: 3,
+        }
+        .into_reflectivity_frame();
+        assert_eq!(frame.descriptor.id, FieldId("model.hrrr.composite-reflectivity"));
+        assert_eq!(frame.stamp.run_time, Some(run));
+        assert_eq!(frame.stamp.valid_time, run + chrono::Duration::hours(3));
+        assert_eq!(frame.stamp.class, DataClass::Forecast);
+        assert!(frame.stamp.source_identity.ends_with("wrfsfcf03.grib2"));
+        assert_eq!(frame.sample(-99.5, 39.5).value, Some(42.0));
     }
 }

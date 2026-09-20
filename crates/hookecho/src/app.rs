@@ -245,8 +245,6 @@ enum OverlayMsg {
     Spotters(Vec<wxdata::spotters::Spotter>),
     /// ProbSevere per-storm probability polygons.
     ProbSevere(Vec<GeoFeature>),
-    /// An HRRR composite-reflectivity forecast (regridded + run/valid metadata).
-    Hrrr(wxdata::hrrr::HrrrForecast),
     /// HRRR wind components for the particle layer.
     ///
     /// Deliberately not an [`OverlayMsg::Field`]: `spawn_overlay` runs `decimated` on every
@@ -775,7 +773,12 @@ impl OverlaySource {
                 OverlayMsg::ProbSevere(wxdata::probsevere::fetch_probsevere(http).await?)
             }
             OverlaySource::Hrrr(fh) => {
-                OverlayMsg::Hrrr(wxdata::hrrr::fetch_forecast(http, fh).await?)
+                OverlayMsg::RegisteredField(
+                    crate::render::FieldLayer::Hrrr,
+                    wxdata::hrrr::fetch_forecast(http, fh)
+                        .await?
+                        .into_reflectivity_frame(),
+                )
             }
             OverlaySource::HrrrLayer(layer, fh) => {
                 use crate::render::FieldLayer as FL;
@@ -8276,6 +8279,10 @@ impl HookEchoApp {
                     }
                 }
                 OverlayMsg::RegisteredField(layer, frame) => {
+                    if layer == crate::render::FieldLayer::Hrrr {
+                        self.hrrr_run = frame.stamp.run_time;
+                        self.hrrr_valid = Some(frame.stamp.valid_time);
+                    }
                     let upload = self.field_upload(layer, frame.field());
                     if let Some(s) = self.fields.get_mut(&layer) {
                         s.pending = Some(upload);
@@ -8321,15 +8328,6 @@ impl HookEchoApp {
                 OverlayMsg::ProbSevere(f) => {
                     self.evaluate_probsevere_rules(&f);
                     self.probsevere = f;
-                }
-                OverlayMsg::Hrrr(fc) => {
-                    use crate::render::FieldLayer;
-                    let upload = self.field_upload(FieldLayer::Hrrr, &fc.field);
-                    if let Some(s) = self.fields.get_mut(&FieldLayer::Hrrr) {
-                        s.pending = Some(upload);
-                    }
-                    self.hrrr_run = Some(fc.run);
-                    self.hrrr_valid = Some(fc.valid());
                 }
                 OverlayMsg::Obs(site, res) => {
                     // Keep only if still the active site.

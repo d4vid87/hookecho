@@ -37,3 +37,7 @@ issue/run availability, classification, quality, units, grid, native resolution,
 and source identity. Descriptor IDs select source objects through the MRMS registry; the app no
 longer carries a second product-path table. The common sampler reads native values rather than
 the display texture.
+
+HRRR composite reflectivity is the first model migration. It uses the same native-value frame and
+sampler while retaining its existing forecast timeline and renderer. Its stamp identifies the
+model object and exposes run, valid, receipt, forecast classification, and unknown quality.

@@ -275,6 +275,7 @@ impl FieldLayer {
             FL::PrecipRate => &wxdata::mrms::PRECIP_RATE_DESCRIPTOR,
             FL::PrecipType => &wxdata::mrms::PRECIP_TYPE_DESCRIPTOR,
             FL::FlashFlood => &wxdata::mrms::FLASH_ARI30_DESCRIPTOR,
+            FL::Hrrr => &wxdata::hrrr::REFLECTIVITY_DESCRIPTOR,
             _ => return None,
         })
     }
@@ -317,6 +318,8 @@ mod field_slug_tests {
             Some(FieldLayer::Mrms)
         );
         assert_eq!(FieldLayer::from_stable_id("mrms"), Some(FieldLayer::Mrms));
+        assert_eq!(FieldLayer::Hrrr.stable_id(), "model.hrrr.composite-reflectivity");
+        assert_eq!(FieldLayer::from_stable_id("hrrr"), Some(FieldLayer::Hrrr));
         assert_eq!(FieldLayer::from_stable_id("future.unknown"), None);
         assert_eq!(
             FieldLayer::Lightning.descriptor().unwrap().search_aliases,
