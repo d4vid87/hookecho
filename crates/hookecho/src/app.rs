@@ -1732,7 +1732,12 @@ pub(crate) struct PaletteEntry {
 fn field_refresh_secs(layer: crate::render::FieldLayer) -> u64 {
     use crate::render::FieldLayer as FL;
     match layer {
-        FL::GoesC13 | FL::GoesWaterVapor | FL::GoesVisible | FL::GoesTrueColor => 300,
+        FL::GoesC13
+        | FL::GoesWaterVapor
+        | FL::GoesMidWaterVapor
+        | FL::GoesLongwaveIr
+        | FL::GoesVisible
+        | FL::GoesTrueColor => 300,
         FL::Lightning | FL::AzShear => 60,
         FL::Mrms
         | FL::MrmsLowLevel
@@ -6814,6 +6819,12 @@ impl HookEchoApp {
                 }
                 crate::render::FieldLayer::GoesWaterVapor => {
                     satellite_bands.insert(8);
+                }
+                crate::render::FieldLayer::GoesMidWaterVapor => {
+                    satellite_bands.insert(9);
+                }
+                crate::render::FieldLayer::GoesLongwaveIr => {
+                    satellite_bands.insert(14);
                 }
                 crate::render::FieldLayer::GoesC13 => {
                     satellite_bands.insert(13);
@@ -16693,6 +16704,8 @@ impl eframe::App for HookEchoApp {
         for (layer, band) in [
             (FL::GoesC13, 13),
             (FL::GoesWaterVapor, 8),
+            (FL::GoesMidWaterVapor, 9),
+            (FL::GoesLongwaveIr, 14),
             (FL::GoesVisible, 2),
         ] {
             let stale = self.field_wanted(layer)

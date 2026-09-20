@@ -702,6 +702,8 @@ pub fn ramp_for(layer: FieldLayer) -> Option<&'static FieldRamp> {
     Some(match layer {
         FL::GoesC13 => &GOES_C13,
         FL::GoesWaterVapor => &GOES_WATER_VAPOR,
+        FL::GoesMidWaterVapor => &GOES_WATER_VAPOR,
+        FL::GoesLongwaveIr => &GOES_C13,
         FL::GoesVisible => &GOES_VISIBLE,
         FL::Rotation | FL::AzShear | FL::AzShearMid => &ROTATION,
         FL::Mesh => &MESH,

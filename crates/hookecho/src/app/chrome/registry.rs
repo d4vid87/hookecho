@@ -53,6 +53,8 @@ impl HookEchoApp {
                     layer,
                     FL::GoesC13
                         | FL::GoesWaterVapor
+                        | FL::GoesMidWaterVapor
+                        | FL::GoesLongwaveIr
                         | FL::GoesVisible
                         | FL::GoesTrueColor
                         | FL::Mrms
@@ -253,6 +255,20 @@ impl HookEchoApp {
                 "GOES upper-level water vapor (C08)",
                 "Native satellite moisture imagery from GOES ABI",
                 true,
+            ),
+            (
+                FL::GoesMidWaterVapor,
+                "National",
+                "GOES mid-level water vapor (C09)",
+                "Native mid-level moisture imagery from GOES ABI",
+                false,
+            ),
+            (
+                FL::GoesLongwaveIr,
+                "National",
+                "GOES longwave infrared (C14)",
+                "Native longwave cloud-top temperatures from GOES ABI",
+                false,
             ),
             (
                 FL::GoesVisible,

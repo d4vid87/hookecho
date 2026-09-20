@@ -41,6 +41,38 @@ pub static C08_DESCRIPTOR: FieldDescriptor = FieldDescriptor {
     supports_difference: true,
 };
 
+pub static C09_DESCRIPTOR: FieldDescriptor = FieldDescriptor {
+    id: FieldId("satellite.goes.abi.c09"),
+    source: "NOAA GOES ABI",
+    family: FieldFamily::Satellite,
+    display_name: "GOES mid-level water vapor",
+    short_name: "GOES C09",
+    search_aliases: &["satellite", "water vapor", "mid level"],
+    units: "K",
+    value_kind: ValueKind::Scalar,
+    palette_key: "water-vapor",
+    sampling: SamplingPolicy::Nearest,
+    missing: MissingData::Nan,
+    supports_contours: true,
+    supports_difference: true,
+};
+
+pub static C14_DESCRIPTOR: FieldDescriptor = FieldDescriptor {
+    id: FieldId("satellite.goes.abi.c14"),
+    source: "NOAA GOES ABI",
+    family: FieldFamily::Satellite,
+    display_name: "GOES longwave infrared",
+    short_name: "GOES C14",
+    search_aliases: &["satellite", "infrared", "cloud top temperature"],
+    units: "K",
+    value_kind: ValueKind::Scalar,
+    palette_key: "infrared",
+    sampling: SamplingPolicy::Nearest,
+    missing: MissingData::Nan,
+    supports_contours: true,
+    supports_difference: true,
+};
+
 pub static C02_DESCRIPTOR: FieldDescriptor = FieldDescriptor {
     id: FieldId("satellite.goes.abi.c02"),
     source: "NOAA GOES ABI",
@@ -77,7 +109,9 @@ pub fn descriptor_for_band(band: u8) -> Option<&'static FieldDescriptor> {
     match band {
         2 => Some(&C02_DESCRIPTOR),
         8 => Some(&C08_DESCRIPTOR),
+        9 => Some(&C09_DESCRIPTOR),
         13 => Some(&C13_DESCRIPTOR),
+        14 => Some(&C14_DESCRIPTOR),
         _ => None,
     }
 }
@@ -668,6 +702,13 @@ mod tests {
             prefix(at, Scene::Mesoscale2, 9),
             "ABI-L2-CMIPM/2025/100/18/OR_ABI-L2-CMIPM2-M6C09"
         );
+        for band in [2, 8, 9, 13, 14] {
+            assert_eq!(
+                descriptor_for_band(band).unwrap().id.0,
+                format!("satellite.goes.abi.c{band:02}")
+            );
+        }
+        assert!(descriptor_for_band(99).is_none());
     }
 
     #[test]

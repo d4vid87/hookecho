@@ -69,6 +69,8 @@ pub struct RadarUpload {
 pub enum FieldLayer {
     GoesC13,
     GoesWaterVapor,
+    GoesMidWaterVapor,
+    GoesLongwaveIr,
     GoesVisible,
     GoesTrueColor,
     Mrms,
@@ -157,6 +159,8 @@ impl FieldLayer {
             self,
             FieldLayer::GoesC13
                 | FieldLayer::GoesWaterVapor
+                | FieldLayer::GoesMidWaterVapor
+                | FieldLayer::GoesLongwaveIr
                 | FieldLayer::GoesVisible
                 | FieldLayer::GoesTrueColor
                 | FieldLayer::Mrms
@@ -181,11 +185,13 @@ impl FieldLayer {
     }
 
     /// Fixed bottom-to-top paint order within each band.
-    pub const DRAW_ORDER: [FieldLayer; 48] = [
+    pub const DRAW_ORDER: [FieldLayer; 50] = [
         // Below-radar context band (bottom to top). The global models sit at the very bottom:
         // they are the synoptic backdrop everything else is drawn against.
         FieldLayer::GoesC13,
         FieldLayer::GoesWaterVapor,
+        FieldLayer::GoesMidWaterVapor,
+        FieldLayer::GoesLongwaveIr,
         FieldLayer::GoesVisible,
         FieldLayer::GoesTrueColor,
         FieldLayer::GlobalMslp,
@@ -241,6 +247,8 @@ impl FieldLayer {
         match self {
             FieldLayer::GoesC13 => "goes-c13",
             FieldLayer::GoesWaterVapor => "goes-water-vapor",
+            FieldLayer::GoesMidWaterVapor => "goes-mid-water-vapor",
+            FieldLayer::GoesLongwaveIr => "goes-longwave-ir",
             FieldLayer::GoesVisible => "goes-visible",
             FieldLayer::GoesTrueColor => "goes-true-color",
             FieldLayer::Mrms => "mrms",
@@ -301,6 +309,8 @@ impl FieldLayer {
         Some(match self {
             FL::GoesC13 => &wxdata::abi::C13_DESCRIPTOR,
             FL::GoesWaterVapor => &wxdata::abi::C08_DESCRIPTOR,
+            FL::GoesMidWaterVapor => &wxdata::abi::C09_DESCRIPTOR,
+            FL::GoesLongwaveIr => &wxdata::abi::C14_DESCRIPTOR,
             FL::GoesVisible => &wxdata::abi::C02_DESCRIPTOR,
             FL::GoesTrueColor => &wxdata::abi::TRUE_COLOR_DESCRIPTOR,
             FL::Mrms => &wxdata::mrms::REFLECTIVITY_DESCRIPTOR,
