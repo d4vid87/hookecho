@@ -10,7 +10,7 @@ mod chrome;
 mod mobile;
 mod request_book;
 
-use request_book::RequestBook;
+use request_book::{retry_once, RequestBook};
 
 use crate::colormap::{ColorTable, Palettes};
 use crate::hotkeys::{self, BindableAction};
@@ -4144,9 +4144,14 @@ impl HookEchoApp {
             // Deliberately shorter than the 120 s refresh that drives this: a fetch that cannot
             // outlive its own cadence cannot stack. Before, a feed the network swallowed left a
             // task alive forever and the next tick started another one on top of it.
-            let result = match wxdata::task::timeout(OVERLAY_TIMEOUT, source.fetch(&http))
-                .await
-                .unwrap_or_else(Err)
+            let result = match wxdata::task::timeout(
+                OVERLAY_TIMEOUT,
+                retry_once(std::time::Duration::from_millis(750), || {
+                    source.clone().fetch(&http)
+                }),
+            )
+            .await
+            .unwrap_or_else(Err)
             {
                 Ok(msg) => {
                     // Max-pool oversized grids here, on the fetch task: MRMS rotation tracks and
@@ -18820,7 +18825,7 @@ mod nowcast_tests {
 
 #[cfg(test)]
 mod request_book_tests {
-    use super::{HealthState, RequestBook, RequestLane, SourceHealth};
+    use super::{retry_once, HealthState, RequestBook, RequestLane, SourceHealth};
     use crate::render::FieldLayer;
 
     #[test]
@@ -18856,6 +18861,24 @@ mod request_book_tests {
         assert!(book.finish(&lane, changed, None));
         // Once completed, the same identity may refresh normally.
         assert!(book.start(lane, 42).is_some());
+    }
+
+    #[tokio::test]
+    async fn transient_reads_retry_once() {
+        let attempts = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let result = retry_once(std::time::Duration::ZERO, || {
+            let attempts = attempts.clone();
+            async move {
+                if attempts.fetch_add(1, std::sync::atomic::Ordering::Relaxed) == 0 {
+                    Err("temporary")
+                } else {
+                    Ok(42)
+                }
+            }
+        })
+        .await;
+        assert_eq!(result, Ok(42));
+        assert_eq!(attempts.load(std::sync::atomic::Ordering::Relaxed), 2);
     }
 
     #[test]

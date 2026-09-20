@@ -2,6 +2,22 @@ use super::{RequestLane, SourceHealth};
 use std::collections::HashMap;
 use wxdata::clock::Instant;
 
+/// Retry one idempotent read once. The caller owns the overall timeout, so both attempts remain
+/// bounded as one request generation and cancellation still stops the whole operation.
+pub(super) async fn retry_once<T, E, F, Fut>(delay: std::time::Duration, mut operation: F) -> Result<T, E>
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = Result<T, E>>,
+{
+    match operation().await {
+        Ok(value) => Ok(value),
+        Err(_) => {
+            wxdata::task::sleep(delay).await;
+            operation().await
+        }
+    }
+}
+
 struct RequestStatus {
     fetching: bool,
     /// Hashed source arguments. The hash deduplicates without retaining API keys or locations.
