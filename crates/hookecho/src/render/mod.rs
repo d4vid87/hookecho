@@ -323,6 +323,17 @@ mod field_slug_tests {
             &["nldn", "lightning"]
         );
     }
+
+    #[test]
+    fn every_mrms_descriptor_has_one_layer() {
+        for descriptor in wxdata::mrms::DESCRIPTORS {
+            let layers: Vec<_> = FieldLayer::DRAW_ORDER
+                .into_iter()
+                .filter(|layer| layer.descriptor().is_some_and(|d| d.id == descriptor.id))
+                .collect();
+            assert_eq!(layers.len(), 1, "{}", descriptor.id.0);
+        }
+    }
 }
 
 /// A national MRMS mosaic to upload: an R8 index grid + LUT, warped plate-carrée→mercator.
