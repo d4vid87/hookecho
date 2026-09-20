@@ -47,6 +47,17 @@ impl Provider {
     }
 }
 
+impl ScanStatus {
+    pub fn summary(&self) -> String {
+        let cuts = if self.cuts_expected == 0 {
+            format!("{} cuts", self.cuts_received)
+        } else {
+            format!("{}/{} cuts", self.cuts_received, self.cuts_expected)
+        };
+        format!("{cuts} · {}s latency", self.latency.as_secs())
+    }
+}
+
 /// A merged live volume ready to display.
 pub struct Update {
     /// A synthetic name identifying this update (volume prefix + sequence).
@@ -58,6 +69,19 @@ pub struct Update {
     /// Elevation angles (deg) whose sweeps changed vs. the previous update — the app uses
     /// this to evict only the affected tilts from its binned-sweep cache.
     pub changed: Vec<f32>,
+    pub status: ScanStatus,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScanStatus {
+    pub provider: &'static str,
+    pub vcp: u16,
+    pub cuts_received: usize,
+    pub cuts_expected: usize,
+    pub radials_received: usize,
+    pub latency: Duration,
+    pub sails_cuts: u8,
+    pub mrle_cuts: u8,
 }
 
 /// Stream live chunks for `site`, starting from `base` (the last polled volume), calling
@@ -140,7 +164,16 @@ where
     // sweep boundary are re-assembled (plus the start chunk, which carries the VCP and site
     // metadata assembly needs). Re-decoding every accumulated chunk at every boundary was O(n^2)
     // over a volume, and the chunk count grows to ~55.
-    emit(&it, &chunks, &mut merged, &mut on_update).await;
+    let mut cuts_received = 0;
+    emit(
+        &it,
+        &chunks,
+        &mut merged,
+        &mut cuts_received,
+        true,
+        &mut on_update,
+    )
+    .await;
     let mut window_start = chunks.len();
 
     let mut fails = 0u32;
@@ -172,6 +205,7 @@ where
                 if ctype == ChunkType::Start || vol != volume {
                     chunks.clear(); // volume rollover: start a fresh accumulator
                     window_start = 0;
+                    cuts_received = 0;
                 }
                 volume = vol;
                 chunks.push(dc.chunk);
@@ -186,7 +220,15 @@ where
                         .chain(chunks[window_start..].iter())
                         .cloned()
                         .collect();
-                    emit(&it, &window, &mut merged, &mut on_update).await;
+                    emit(
+                        &it,
+                        &window,
+                        &mut merged,
+                        &mut cuts_received,
+                        false,
+                        &mut on_update,
+                    )
+                    .await;
                     window_start = chunks.len();
                 }
             }
@@ -274,6 +316,8 @@ async fn emit<F: FnMut(Update)>(
     it: &ChunkIterator,
     chunks: &[Chunk<'static>],
     merged: &mut Arc<Scan>,
+    cuts_received: &mut usize,
+    initial: bool,
     on_update: &mut F,
 ) {
     // Re-assembling every accumulated chunk at each sweep boundary is the heaviest CPU on this
@@ -288,13 +332,14 @@ async fn emit<F: FnMut(Update)>(
     // window to the same Web Worker the archive decode uses, and assemble inline only if there
     // is no worker to send it to.
     #[cfg(target_arch = "wasm32")]
-    let assembled = match crate::wasm_worker::assemble_chunks(frame(chunks.iter().map(|c| c.data()))).await {
-        Ok(wire) => crate::level2::scan_from_wire(&wire),
-        Err(crate::wasm_worker::Error::Unavailable) => {
-            assemble_volume(chunks.iter().cloned()).map_err(|e| anyhow::anyhow!("{e}"))
-        }
-        Err(e) => Err(anyhow::anyhow!("{e}")),
-    };
+    let assembled =
+        match crate::wasm_worker::assemble_chunks(frame(chunks.iter().map(|c| c.data()))).await {
+            Ok(wire) => crate::level2::scan_from_wire(&wire),
+            Err(crate::wasm_worker::Error::Unavailable) => {
+                assemble_volume(chunks.iter().cloned()).map_err(|e| anyhow::anyhow!("{e}"))
+            }
+            Err(e) => Err(anyhow::anyhow!("{e}")),
+        };
     let partial = match assembled {
         Ok(s) => s,
         Err(e) => {
@@ -302,10 +347,37 @@ async fn emit<F: FnMut(Update)>(
             return;
         }
     };
+    let partial_cuts = partial
+        .sweeps()
+        .iter()
+        .filter(|sweep| !sweep.radials().is_empty())
+        .count();
+    let (cuts_expected, sails_cuts, mrle_cuts) = {
+        let vcp = partial.coverage_pattern();
+        (
+            vcp.number_of_elevation_cuts(),
+            vcp.sails_cuts(),
+            vcp.mrle_cuts(),
+        )
+    };
+    if initial {
+        *cuts_received = partial_cuts;
+    } else if partial_cuts > 0 {
+        *cuts_received += 1;
+    }
+    if cuts_expected > 0 {
+        *cuts_received = (*cuts_received).min(cuts_expected);
+    }
     let (new_scan, changed) = merge_scan(merged, partial);
     if changed.is_empty() {
         return; // nothing new since the last emit; `merged` already holds this content
     }
+    let vcp = new_scan.coverage_pattern_number().number();
+    let radials_received = new_scan
+        .sweeps()
+        .iter()
+        .map(|sweep| sweep.radials().len())
+        .sum();
     *merged = Arc::new(new_scan);
     let (name, time) = it
         .current()
@@ -321,6 +393,16 @@ async fn emit<F: FnMut(Update)>(
         time,
         scan: Arc::clone(merged),
         changed,
+        status: ScanStatus {
+            provider: PUBLIC_PROVIDER.label(),
+            vcp,
+            cuts_received: *cuts_received,
+            cuts_expected,
+            radials_received,
+            latency: (chrono::Utc::now() - time).to_std().unwrap_or_default(),
+            sails_cuts,
+            mrle_cuts,
+        },
     });
 }
 
@@ -434,6 +516,21 @@ mod tests {
             false,
             Vec::new(),
         )
+    }
+
+    #[test]
+    fn scan_status_summary_reports_progress_and_latency() {
+        let status = ScanStatus {
+            provider: "test",
+            vcp: 212,
+            cuts_received: 3,
+            cuts_expected: 14,
+            radials_received: 720,
+            latency: Duration::from_secs(8),
+            sails_cuts: 2,
+            mrle_cuts: 0,
+        };
+        assert_eq!(status.summary(), "3/14 cuts · 8s latency");
     }
 
     // A sweep covering `azimuths` (as azimuth numbers), collected at `t_ms`.
@@ -582,6 +679,8 @@ mod retry_tests {
         }
         assert!(split_framed(&framed[..framed.len() - 1]).is_err());
         assert!(split_framed(&framed[..2]).is_err());
-        assert!(split_framed(&[]).expect("empty framing is an empty window").is_empty());
+        assert!(split_framed(&[])
+            .expect("empty framing is an empty window")
+            .is_empty());
     }
 }

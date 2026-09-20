@@ -1911,6 +1911,7 @@ enum DataMsg {
         /// Already shared with the streaming task's running volume (see `live::Update`).
         scan: Arc<Scan>,
         changed: Vec<f32>,
+        status: live::ScanStatus,
     },
     /// The live stream for `view` ended (error or clean exit); polling resumes.
     LiveEnded {
@@ -9902,6 +9903,7 @@ impl HookEchoApp {
                     time,
                     scan,
                     changed,
+                    status,
                     ..
                 } => {
                     let v = &mut self.views[view];
@@ -9909,8 +9911,12 @@ impl HookEchoApp {
                         continue; // looping pane owns its displayed frame (cf. Volume above)
                     }
                     match &mut v.volume {
-                        Some(vol) => vol.apply_live(scan, name, time, &changed),
-                        None => v.volume = Some(Volume::new(scan, name, time)),
+                        Some(vol) => vol.apply_live(scan, name, time, &changed, status),
+                        None => {
+                            let mut volume = Volume::new(scan, name, time);
+                            volume.live_status = Some(status);
+                            v.volume = Some(volume);
+                        }
                     }
                     v.loading = false;
                     v.error = None;
@@ -10050,6 +10056,7 @@ impl HookEchoApp {
                     time: u.time,
                     scan: u.scan,
                     changed: u.changed,
+                    status: u.status,
                 });
                 cb_ctx.request_repaint();
             })

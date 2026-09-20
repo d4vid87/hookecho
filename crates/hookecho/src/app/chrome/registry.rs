@@ -17,11 +17,17 @@ impl HookEchoApp {
                 .to_std()
                 .unwrap_or_default()
         });
+        let source = v
+            .site
+            .as_deref()
+            .map_or_else(|| "Radar".to_string(), |site| format!("{site} radar"));
+        let source = v
+            .volume
+            .as_ref()
+            .and_then(|volume| volume.live_status.as_ref())
+            .map_or(source.clone(), |status| format!("{source} · {}", status.summary()));
         SourceHealth {
-            source: v
-                .site
-                .as_deref()
-                .map_or_else(|| "Radar".to_string(), |site| format!("{site} radar")),
+            source,
             fetching: v.loading,
             last_attempt: v.last_poll.map(|t| t.elapsed()),
             last_success: age,

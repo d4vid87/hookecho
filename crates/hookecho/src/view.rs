@@ -83,6 +83,7 @@ pub struct Volume {
     /// tilts may not have arrived — so it must never be kept and shown again later in place of
     /// the complete archived volume of the same name.
     live: bool,
+    pub live_status: Option<wxdata::live::ScanStatus>,
 }
 
 impl Volume {
@@ -99,6 +100,7 @@ impl Volume {
             moments,
             binned: LruCache::new(NonZeroUsize::new(BINNED_CACHE).unwrap()),
             live: false,
+            live_status: None,
         }
     }
 
@@ -110,7 +112,9 @@ impl Volume {
         name: String,
         time: DateTime<Utc>,
         changed: &[f32],
+        status: wxdata::live::ScanStatus,
     ) {
+        self.live_status = Some(status);
         // The first chunks of a new volume carry the metadata and a sweep with no radials yet, so
         // the merged scan has no elevation angles at all. Applying it emptied the tilt list, blanked
         // the moment rows, and made the next frame's bin fail with "tilt 0 out of range". Keep
@@ -381,6 +385,19 @@ mod tests {
         MomentData, PulseWidth, Radial, RadialStatus, Sweep, VolumeCoveragePattern,
     };
 
+    fn live_status() -> wxdata::live::ScanStatus {
+        wxdata::live::ScanStatus {
+            provider: "test",
+            vcp: 212,
+            cuts_received: 1,
+            cuts_expected: 14,
+            radials_received: 360,
+            latency: std::time::Duration::ZERO,
+            sails_cuts: 0,
+            mrle_cuts: 0,
+        }
+    }
+
     /// A scan with one radial per given elevation, carrying reflectivity only.
     fn scan_at(elevations: &[f32]) -> Arc<Scan> {
         let sweeps: Vec<Sweep> = elevations
@@ -491,7 +508,7 @@ mod tests {
         view.volume
             .as_mut()
             .unwrap()
-            .apply_live(scan_at(&[0.5]), "live".into(), now, &[]);
+            .apply_live(scan_at(&[0.5]), "live".into(), now, &[], live_status());
         view.show_volume(scan_at(&[0.5, 1.5]), "next".into(), now);
         view.show_volume(scan_at(&[0.5, 1.5]), "live".into(), now);
         assert_eq!(
@@ -543,11 +560,11 @@ mod tests {
         let now = chrono::Utc::now();
         let mut vol = Volume::new(scan_at(&[0.5, 1.5]), "a".into(), now);
         assert_eq!(vol.elevations, vec![0.5, 1.5]);
-        vol.apply_live(scan_at(&[]), "b".into(), now, &[]);
+        vol.apply_live(scan_at(&[]), "b".into(), now, &[], live_status());
         assert_eq!(vol.elevations, vec![0.5, 1.5], "kept the tilts it had");
         assert_eq!(vol.name, "a", "and the volume they came from");
         // A real volume still applies.
-        vol.apply_live(scan_at(&[0.5]), "c".into(), now, &[]);
+        vol.apply_live(scan_at(&[0.5]), "c".into(), now, &[], live_status());
         assert_eq!(vol.elevations, vec![0.5]);
         assert_eq!(vol.name, "c");
     }
