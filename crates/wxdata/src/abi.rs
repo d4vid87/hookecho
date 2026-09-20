@@ -25,6 +25,30 @@ pub static C13_DESCRIPTOR: FieldDescriptor = FieldDescriptor {
     supports_difference: true,
 };
 
+pub static C08_DESCRIPTOR: FieldDescriptor = FieldDescriptor {
+    id: FieldId("satellite.goes.abi.c08"),
+    source: "NOAA GOES ABI",
+    family: FieldFamily::Satellite,
+    display_name: "GOES upper-level water vapor",
+    short_name: "GOES C08",
+    search_aliases: &["satellite", "water vapor", "upper level"],
+    units: "K",
+    value_kind: ValueKind::Scalar,
+    palette_key: "water-vapor",
+    sampling: SamplingPolicy::Nearest,
+    missing: MissingData::Nan,
+    supports_contours: true,
+    supports_difference: true,
+};
+
+pub fn descriptor_for_band(band: u8) -> Option<&'static FieldDescriptor> {
+    match band {
+        8 => Some(&C08_DESCRIPTOR),
+        13 => Some(&C13_DESCRIPTOR),
+        _ => None,
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Satellite {
     East,
@@ -237,15 +261,14 @@ impl Image {
         })
     }
 
-    pub fn into_c13_frame(self, received_time: DateTime<Utc>) -> anyhow::Result<FieldFrame> {
-        if self.band != 13 {
-            anyhow::bail!("ABI: C13 frame received C{:02}", self.band);
-        }
+    pub fn into_frame(self, received_time: DateTime<Utc>) -> anyhow::Result<FieldFrame> {
+        let descriptor = descriptor_for_band(self.band)
+            .ok_or_else(|| anyhow::anyhow!("ABI: C{:02} is not registered", self.band))?;
         let valid_time = self.valid_time;
         let source_identity = self.source_identity.clone();
         let display = self.display_grid(self.width.min(700), self.height.min(700))?;
         Ok(FieldFrame::from_abi(
-            &C13_DESCRIPTOR,
+            descriptor,
             self,
             display,
             DataStamp {
@@ -415,7 +438,7 @@ mod tests {
             image.sample_nearest(lon, lat),
             Some(image.values[250 * 500 + 250])
         );
-        let frame = image.into_c13_frame(Utc::now()).unwrap();
+        let frame = image.into_frame(Utc::now()).unwrap();
         assert_eq!(frame.descriptor.id, C13_DESCRIPTOR.id);
         assert_eq!(
             frame.sample(lon, lat).value,

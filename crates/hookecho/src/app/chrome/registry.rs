@@ -52,6 +52,7 @@ impl HookEchoApp {
                 if matches!(
                     layer,
                     FL::GoesC13
+                        | FL::GoesWaterVapor
                         | FL::Mrms
                         | FL::Mosaic
                         | FL::Rotation
@@ -236,6 +237,13 @@ impl HookEchoApp {
                 "National",
                 "GOES clean infrared (C13)",
                 "Native satellite cloud-top temperatures from GOES ABI",
+                true,
+            ),
+            (
+                FL::GoesWaterVapor,
+                "National",
+                "GOES upper-level water vapor (C08)",
+                "Native satellite moisture imagery from GOES ABI",
                 true,
             ),
             (
