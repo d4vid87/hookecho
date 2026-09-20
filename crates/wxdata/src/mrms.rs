@@ -362,7 +362,7 @@ impl MrmsField {
 
 /// Fetch + decode the latest CONUS mosaic for `product` (see [`REFLECTIVITY`], [`LIGHTNING`]).
 pub async fn fetch_latest(http: &reqwest::Client, product: &str) -> anyhow::Result<MrmsField> {
-    let key = latest_key(http, product).await?;
+    let key = latest_available_key(http, product).await?;
     fetch_key(http, product, &key).await.map(|fetched| fetched.0)
 }
 
@@ -373,7 +373,7 @@ pub async fn fetch_latest_frame(
 ) -> anyhow::Result<FieldFrame> {
     let descriptor = descriptor_for_product(product)
         .ok_or_else(|| anyhow::anyhow!("unregistered MRMS product {product}"))?;
-    let key = latest_key(http, product).await?;
+    let key = latest_available_key(http, product).await?;
     let (field, received_time) = fetch_key(http, product, &key).await?;
     let valid_time = field.time;
     Ok(FieldFrame::new(
@@ -489,12 +489,29 @@ async fn latest_key(http: &reqwest::Client, product: &str) -> anyhow::Result<Str
         }
         // Nothing newer than what we already have.
         if !after.is_empty() {
-            if let Some(k) = known {
-                return Ok(k);
+            if let Some(k) = &known {
+                return Ok(k.clone());
             }
         }
     }
+    if let Some(key) = known {
+        log::warn!("MRMS listing failed; reusing last known object {key}");
+        return Ok(key);
+    }
     anyhow::bail!("no MRMS objects found for today or yesterday")
+}
+
+async fn latest_available_key(http: &reqwest::Client, product: &str) -> anyhow::Result<String> {
+    match latest_key(http, product).await {
+        Ok(key) => Ok(key),
+        Err(error) => match crate::object_cache::latest_key("mrms", &format!("{product}/")).await {
+            Some(key) => {
+                log::warn!("MRMS listing failed; using cached object {key}: {error}");
+                Ok(key)
+            }
+            None => Err(error),
+        },
+    }
 }
 
 fn gunzip(bytes: &[u8]) -> anyhow::Result<Vec<u8>> {

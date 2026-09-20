@@ -58,9 +58,19 @@ fn checksum(bytes: &[u8]) -> u64 {
     hash.finish()
 }
 
+#[cfg(any(target_arch = "wasm32", test))]
+fn newest_key(entries: &[Meta], family: &str, prefix: &str) -> Option<String> {
+    entries
+        .iter()
+        .filter(|entry| entry.family == family && entry.key.starts_with(prefix))
+        .map(|entry| entry.key.as_str())
+        .max()
+        .map(str::to_string)
+}
+
 #[cfg(target_arch = "wasm32")]
 mod browser {
-    use super::{checksum, eviction_keys, family_cap, CacheStats, CachedObject, Meta};
+    use super::{checksum, eviction_keys, family_cap, newest_key, CacheStats, CachedObject, Meta};
     use anyhow::anyhow;
     use wasm_bindgen::{prelude::*, JsCast};
     use wasm_bindgen_futures::JsFuture;
@@ -109,6 +119,12 @@ mod browser {
             .collect();
         let evict = eviction_keys(entries, family_cap(family));
         cache.retain(|(meta, _)| !evict.contains(&meta.key));
+    }
+
+    fn memory_remove(key: &str) {
+        if let Ok(mut cache) = MEMORY.lock() {
+            cache.retain(|(meta, _)| meta.key != key);
+        }
     }
 
     async fn await_request(req: IdbRequest) -> anyhow::Result<JsValue> {
@@ -234,6 +250,17 @@ mod browser {
         persistent_get(family, key).await.or_else(|| memory_get(family, key))
     }
 
+    pub async fn latest_key(family: &str, prefix: &str) -> Option<String> {
+        let mut entries = match open().await {
+            Ok(db) => metadata(&db).await,
+            Err(_) => Vec::new(),
+        };
+        if let Ok(cache) = MEMORY.lock() {
+            entries.extend(cache.iter().map(|(meta, _)| meta.clone()));
+        }
+        newest_key(&entries, family, prefix)
+    }
+
     pub async fn put(
         family: &str,
         key: &str,
@@ -246,8 +273,11 @@ mod browser {
                 state.3 = Some(format!("Browser storage unavailable; using memory cache: {error}"));
             }
             refresh().await;
-        } else if let Ok(mut state) = STATE.lock() {
-            state.3 = None;
+        } else {
+            memory_remove(key);
+            if let Ok(mut state) = STATE.lock() {
+                state.3 = None;
+            }
         }
         Ok(())
     }
@@ -328,7 +358,7 @@ mod browser {
 }
 
 #[cfg(target_arch = "wasm32")]
-pub use browser::{get, known_stats, put, spawn_clear};
+pub use browser::{get, known_stats, latest_key, put, spawn_clear};
 
 #[cfg(not(target_arch = "wasm32"))]
 pub async fn get(_family: &str, _key: &str) -> Option<CachedObject> {
@@ -343,6 +373,11 @@ pub async fn put(
     _received_at: chrono::DateTime<chrono::Utc>,
 ) -> anyhow::Result<()> {
     Ok(())
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub async fn latest_key(_family: &str, _prefix: &str) -> Option<String> {
+    None
 }
 
 #[cfg(test)]
@@ -365,5 +400,27 @@ mod tests {
             80,
         );
         assert_eq!(keys, ["old"]);
+    }
+
+    #[test]
+    fn newest_key_is_scoped_to_family_and_prefix() {
+        let entry = |family: &str, key: &str| Meta {
+            key: key.into(),
+            family: family.into(),
+            bytes: 1,
+            checksum: 0,
+            received_at: 0,
+            accessed_at: 0,
+        };
+        let entries = [
+            entry("mrms", "CONUS/MESH/20260919/a"),
+            entry("mrms", "CONUS/MESH/20260919/b"),
+            entry("model", "CONUS/MESH/20260919/z"),
+        ];
+        assert_eq!(
+            newest_key(&entries, "mrms", "CONUS/MESH/"),
+            Some("CONUS/MESH/20260919/b".into())
+        );
+        assert_eq!(newest_key(&entries, "mrms", "CONUS/QPE/"), None);
     }
 }
