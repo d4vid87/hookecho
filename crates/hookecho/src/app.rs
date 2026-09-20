@@ -1513,6 +1513,7 @@ pub(crate) enum PaletteAction {
     /// Four panes, one product, four distinct tilts, cameras linked.
     AllTilts,
     ToggleField(crate::render::FieldLayer),
+    ToggleFavorite(crate::render::FieldLayer),
     ToggleOverlay(OverlayToggle),
     /// Open the SPC outlook day and hazard controls.
     OpenOutlooks,
@@ -1634,6 +1635,8 @@ pub(crate) struct PaletteEntry {
     pub key: Option<String>,
     /// Current network health. Disabled, static and local-only rows deliberately carry none.
     pub health: Option<SourceHealth>,
+    pub favorite: bool,
+    pub recent: Option<usize>,
 }
 
 /// Refresh cadence (seconds) for a national field layer's product.
@@ -7899,7 +7902,15 @@ impl HookEchoApp {
                 // The active pane's choice, not the app's: that is what makes two panes able to
                 // show two fields.
                 let on = self.views[self.active].fields_on.contains(&layer);
+                if !on && layer.descriptor().is_some() {
+                    self.settings.record_recent_field(layer.stable_id());
+                    self.settings.save();
+                }
                 self.set_field(layer, !on);
+            }
+            PaletteAction::ToggleFavorite(layer) => {
+                self.settings.toggle_favorite_field(layer.stable_id());
+                self.settings.save();
             }
             PaletteAction::ToggleOverlay(t) => {
                 let f = self.overlay_flag(t);

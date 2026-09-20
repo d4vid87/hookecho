@@ -42,7 +42,7 @@ pub(crate) fn fuzzy(needle: &str, hay: &str) -> Option<usize> {
 
 /// Filter + sort entry indices for `query` (best match first, registry order within a tie).
 pub(crate) fn matches(entries: &[PaletteEntry], query: &str) -> Vec<usize> {
-    let mut hits: Vec<(usize, usize)> = entries
+    let mut hits: Vec<(usize, bool, usize, usize)> = entries
         .iter()
         .enumerate()
         .filter_map(|(i, e)| {
@@ -59,11 +59,11 @@ pub(crate) fn matches(entries: &[PaletteEntry], query: &str) -> Vec<usize> {
                 }))
                 .filter_map(|term| fuzzy(query, term))
                 .min()
-                .map(|score| (score, i))
+                .map(|score| (score, !e.favorite, e.recent.unwrap_or(usize::MAX), i))
         })
         .collect();
-    hits.sort_by_key(|(s, i)| (*s, *i));
-    hits.into_iter().map(|(_, i)| i).collect()
+    hits.sort_unstable();
+    hits.into_iter().map(|(_, _, _, i)| i).collect()
 }
 
 /// Row height: one line, tall enough to scan without turning the panel into a wall.
@@ -177,6 +177,7 @@ pub(crate) fn reorder(pref: &mut Vec<String>, seq: &[String], drag: &str, before
 /// What a row click did: toggled the layer, or asked what the label's abbreviation means.
 struct Hit {
     clicked: bool,
+    favorite: Option<crate::render::FieldLayer>,
     /// Index into [`crate::ui::glossary::ENTRIES`], when the ⓘ was the thing clicked.
     explain: Option<usize>,
     resp: egui::Response,
@@ -332,6 +333,31 @@ fn row(ui: &mut egui::Ui, e: &PaletteEntry, accent: Color32, draggable: bool) ->
     // The button's rect, not the whole strip: it's what the chips are drawn against and what a
     // drop is tested on, and it covers everything but the grip.
     let resp = outer;
+    let mut favorite = None;
+    if let PaletteAction::ToggleField(layer) = e.action {
+        if layer.descriptor().is_some() {
+            resp.context_menu(|ui| {
+                let label = if e.favorite {
+                    "Remove from favorites"
+                } else {
+                    "Add to favorites"
+                };
+                if ui.button(label).clicked() {
+                    favorite = Some(layer);
+                    ui.close();
+                }
+            });
+            if e.favorite {
+                ui.painter().text(
+                    resp.rect.right_center() + vec2(-46.0, 0.0),
+                    egui::Align2::CENTER_CENTER,
+                    egui_phosphor::regular::STAR,
+                    egui::FontId::proportional(12.0),
+                    accent,
+                );
+            }
+        }
+    }
     // ⓘ for a row whose label names a term the glossary defines, drawn over the button the same
     // way the state dot is. Clicking it explains instead of toggling: the
     // person who doesn't know what MESH is is not the person who wants it turned on yet.
@@ -383,6 +409,7 @@ fn row(ui: &mut egui::Ui, e: &PaletteEntry, accent: Color32, draggable: bool) ->
     }
     Hit {
         clicked,
+        favorite,
         explain,
         resp,
     }
@@ -720,6 +747,9 @@ pub(crate) fn body(
                     if hit.clicked {
                         chosen = Some(entries[*i].action);
                     }
+                    if let Some(layer) = hit.favorite {
+                        chosen = Some(PaletteAction::ToggleFavorite(layer));
+                    }
                     if let Some(t) = hit.explain {
                         chosen = Some(PaletteAction::Explain(t));
                     }
@@ -816,12 +846,18 @@ pub(crate) fn body(
                 // then registry order. A row that was never dragged still has a stable place.
                 in_cat.sort_by_key(|i| {
                     let dragged = pref.iter().position(|s| *s == entries[*i].label);
-                    (dragged.unwrap_or(usize::MAX), !entries[*i].common)
+                    (
+                        dragged.unwrap_or(usize::MAX),
+                        !entries[*i].favorite,
+                        entries[*i].recent.unwrap_or(usize::MAX),
+                        !entries[*i].common,
+                    )
                 });
                 let seq: Vec<String> = in_cat.iter().map(|i| entries[*i].label.clone()).collect();
                 for i in in_cat {
                     let Hit {
                         clicked,
+                        favorite,
                         explain,
                         resp,
                     } = row(ui, &entries[i], accent, true);
@@ -830,6 +866,9 @@ pub(crate) fn body(
                     }
                     if let Some(t) = explain {
                         chosen = Some(PaletteAction::Explain(t));
+                    }
+                    if let Some(layer) = favorite {
+                        chosen = Some(PaletteAction::ToggleFavorite(layer));
                     }
                     // Insertion line above the row the pointer is over, so a drop lands
                     // where the preview says it will.
@@ -879,6 +918,7 @@ mod tests {
             label: "Settings…".into(), category: "Settings",
             action: PaletteAction::OpenWindow(crate::app::AppWindow::Settings),
             on: None, desc: "", common: true, key: None, health: None,
+            favorite: false, recent: None,
         }];
         let mut action = None;
         for frame in 0..5 {
@@ -917,6 +957,8 @@ mod tests {
             common: true,
             key: None,
             health: None,
+            favorite: false,
+            recent: None,
         };
         assert!(active_layer(&entry));
         for action in [
@@ -954,6 +996,8 @@ mod tests {
                 common: true,
                 key: None,
                 health: None,
+                favorite: false,
+                recent: None,
             })
             .collect();
         let render = |active: bool, category: Option<&str>, search: &str| {
@@ -1094,6 +1138,8 @@ mod tests {
             common: true,
             key: None,
             health: None,
+            favorite: false,
+            recent: None,
         }];
         let out = ctx.run_ui(egui::RawInput::default(), |ui| {
             ui.set_width(400.0);
@@ -1154,6 +1200,7 @@ mod tests {
             label: "Workspace: Chase".into(), category: "Reference",
             action: PaletteAction::ApplyWorkspace(0), on: None, desc: "",
             common: true, key: None, health: None,
+            favorite: false, recent: None,
         }];
         let mut action = None;
         let mut frame = |events| {
@@ -1207,6 +1254,8 @@ mod tests {
                 common: false,
                 key: None,
                 health: None,
+                favorite: false,
+                recent: None,
             },
             PaletteEntry {
                 label: "MRMS Mosaic".into(),
@@ -1217,6 +1266,8 @@ mod tests {
                 common: true,
                 key: None,
                 health: None,
+                favorite: false,
+                recent: None,
             },
         ];
         // Empty query = the full list, common or not.
@@ -1237,6 +1288,8 @@ mod tests {
                 common: true,
                 key: None,
                 health: None,
+                favorite: false,
+                recent: None,
             },
             PaletteEntry {
                 label: "Ground strikes".into(),
@@ -1247,11 +1300,31 @@ mod tests {
                 common: true,
                 key: None,
                 health: None,
+                favorite: false,
+                recent: None,
             },
         ];
         assert_eq!(matches(&entries, "dbz"), vec![0]);
         assert_eq!(matches(&entries, "nldn"), vec![1]);
         assert_eq!(matches(&entries, "strikes/km"), vec![1]);
+    }
+
+    #[test]
+    fn favorites_and_recents_break_equal_search_ties() {
+        let entry = |favorite, recent| PaletteEntry {
+            label: "Hail".into(),
+            category: "National",
+            action: PaletteAction::ToggleField(crate::render::FieldLayer::Mesh),
+            on: None,
+            desc: "",
+            common: true,
+            key: None,
+            health: None,
+            favorite,
+            recent,
+        };
+        assert_eq!(matches(&[entry(false, Some(0)), entry(true, None)], "hail"), vec![1, 0]);
+        assert_eq!(matches(&[entry(false, Some(2)), entry(false, Some(0))], "hail"), vec![1, 0]);
     }
 
     /// The drawer's Enter key runs `matches(...)[0]`, so the ranking has to put the obvious
@@ -1267,6 +1340,8 @@ mod tests {
             common: true,
             key: None,
             health: None,
+            favorite: false,
+            recent: None,
         };
         let entries = [
             e("Storm-Relative Velocity"),

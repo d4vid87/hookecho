@@ -534,6 +534,12 @@ pub struct Settings {
     /// and a renamed action just falls back to its default place.
     #[serde(default)]
     pub layer_order: Vec<String>,
+    /// Starred registry products, persisted by stable field ID rather than display label.
+    #[serde(default)]
+    pub favorite_fields: Vec<String>,
+    /// Most recently enabled registry products, newest first and bounded by the action path.
+    #[serde(default)]
+    pub recent_fields: Vec<String>,
     /// Thresholds the signature detectors fire at (see [`DetectorTuning`]).
     #[serde(default)]
     pub detectors: DetectorTuning,
@@ -590,6 +596,20 @@ impl Default for DetectorTuning {
 }
 
 impl Settings {
+    pub fn record_recent_field(&mut self, id: &str) {
+        self.recent_fields.retain(|saved| saved != id);
+        self.recent_fields.insert(0, id.to_string());
+        self.recent_fields.truncate(8);
+    }
+
+    pub fn toggle_favorite_field(&mut self, id: &str) {
+        if let Some(index) = self.favorite_fields.iter().position(|saved| saved == id) {
+            self.favorite_fields.remove(index);
+        } else {
+            self.favorite_fields.push(id.to_string());
+        }
+    }
+
     /// Timezone to render `site`'s timestamps in — `None` means "show Zulu", either because the
     /// user picked UTC or because the site has no known zone.
     pub fn tz_for(&self, site: Option<&str>) -> Option<wxdata::tz::Tz> {
@@ -1088,6 +1108,8 @@ impl Default for Settings {
             map_quality: MapQuality::Auto,
             share_card: true,
             layer_order: Vec::new(),
+            favorite_fields: Vec::new(),
+            recent_fields: Vec::new(),
             mping_key: String::new(),
             etop_dbz: default_etop_dbz(),
             poll_interval_secs: 30,
@@ -1486,6 +1508,23 @@ mod tests {
     use super::*;
 
     #[test]
+    fn field_history_is_stable_bounded_and_toggleable() {
+        let mut settings = Settings::default();
+        for n in 0..10 {
+            settings.record_recent_field(&format!("field.{n}"));
+        }
+        settings.record_recent_field("field.5");
+        assert_eq!(settings.recent_fields.len(), 8);
+        assert_eq!(settings.recent_fields[0], "field.5");
+        assert_eq!(settings.recent_fields.iter().filter(|id| *id == "field.5").count(), 1);
+
+        settings.toggle_favorite_field("mrms.mesh");
+        assert_eq!(settings.favorite_fields, ["mrms.mesh"]);
+        settings.toggle_favorite_field("mrms.mesh");
+        assert!(settings.favorite_fields.is_empty());
+    }
+
+    #[test]
     fn atomic_write_replaces_an_existing_file() {
         let dir = std::env::temp_dir().join(format!(
             "hookecho-atomic-write-{}-{:?}",
@@ -1628,6 +1667,8 @@ mod tests {
             smooth_radar: false,
             share_card: true,
             layer_order: Vec::new(),
+            favorite_fields: vec!["mrms.mesh".into()],
+            recent_fields: vec!["mrms.composite-reflectivity".into()],
             mping_key: String::new(),
             etop_dbz: 30.0,
             default_site: "KFWS".to_string(),

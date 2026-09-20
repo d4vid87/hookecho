@@ -147,6 +147,9 @@ impl HookEchoApp {
         use AppWindow as W;
         use OverlayToggle as T;
         let mut out = Vec::new();
+        let favorite_fields: std::collections::HashSet<String> =
+            self.settings.favorite_fields.iter().cloned().collect();
+        let recent_fields = self.settings.recent_fields.clone();
         // Reverse index from the live bindings, so a rebind relabels every row that shows a chip.
         let keys: Vec<(PaletteAction, String)> = crate::hotkeys::active(&self.settings)
             .iter()
@@ -177,6 +180,18 @@ impl HookEchoApp {
                     .find(|(a, _)| *a == action)
                     .map(|(_, k)| k.clone()),
                 health: None,
+                favorite: match action {
+                    PaletteAction::ToggleField(layer) => {
+                        favorite_fields.contains(layer.stable_id())
+                    }
+                    _ => false,
+                },
+                recent: match action {
+                    PaletteAction::ToggleField(layer) => recent_fields
+                        .iter()
+                        .position(|saved| saved == layer.stable_id()),
+                    _ => None,
+                },
             })
         };
 
