@@ -134,6 +134,7 @@ pub struct FieldFrame {
     pub grid: GridSpec,
     pub stamp: DataStamp,
     field: Arc<crate::mrms::MrmsField>,
+    native_abi: Option<Arc<crate::abi::Image>>,
 }
 
 impl FieldFrame {
@@ -160,6 +161,39 @@ impl FieldFrame {
             grid,
             stamp,
             field: Arc::new(field),
+            native_abi: None,
+        }
+    }
+
+    pub fn from_abi(
+        descriptor: &'static FieldDescriptor,
+        native: crate::abi::Image,
+        display: crate::mrms::MrmsField,
+        stamp: DataStamp,
+    ) -> Self {
+        let (lon_west, lon_east, lat_north, lat_south) = (
+            display.lon_west,
+            display.lon_east,
+            display.lat_north,
+            display.lat_south,
+        );
+        let grid = GridSpec {
+            nx: native.width,
+            ny: native.height,
+            projection: "GOES-R fixed grid",
+            lon_west,
+            lon_east,
+            lat_north,
+            lat_south,
+            native_resolution_m: None,
+            missing: descriptor.missing,
+        };
+        Self {
+            descriptor,
+            grid,
+            stamp,
+            field: Arc::new(display),
+            native_abi: Some(Arc::new(native)),
         }
     }
 
@@ -167,11 +201,18 @@ impl FieldFrame {
         &self.field
     }
 
+    pub fn native_abi(&self) -> Option<&crate::abi::Image> {
+        self.native_abi.as_deref()
+    }
+
     pub fn sample(&self, lon: f64, lat: f64) -> SampleResult {
-        let value = match self.descriptor.sampling {
-            SamplingPolicy::Bilinear => self.field.sample_bilinear(lon, lat),
-            SamplingPolicy::Nearest => self.field.sample_nearest(lon, lat),
-        };
+        let value = self.native_abi.as_ref().map_or_else(
+            || match self.descriptor.sampling {
+                SamplingPolicy::Bilinear => self.field.sample_bilinear(lon, lat),
+                SamplingPolicy::Nearest => self.field.sample_nearest(lon, lat),
+            },
+            |image| image.sample_nearest(lon, lat),
+        );
         SampleResult {
             value,
             units: self.descriptor.units,

@@ -2,7 +2,28 @@
 
 use chrono::{DateTime, TimeZone, Utc};
 
+use crate::field::{
+    DataClass, DataStamp, FieldDescriptor, FieldFamily, FieldFrame, FieldId, MissingData,
+    QualitySummary, SamplingPolicy, ValueKind,
+};
+
 const J2000_UNIX: i64 = 946_728_000;
+
+pub static C13_DESCRIPTOR: FieldDescriptor = FieldDescriptor {
+    id: FieldId("satellite.goes.abi.c13"),
+    source: "NOAA GOES ABI",
+    family: FieldFamily::Satellite,
+    display_name: "GOES clean infrared",
+    short_name: "GOES C13",
+    search_aliases: &["satellite", "infrared", "cloud top temperature"],
+    units: "K",
+    value_kind: ValueKind::Scalar,
+    palette_key: "infrared",
+    sampling: SamplingPolicy::Nearest,
+    missing: MissingData::Nan,
+    supports_contours: true,
+    supports_difference: true,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Satellite {
@@ -136,6 +157,26 @@ impl Projection {
         let lon = self.longitude_origin_deg.to_radians() - (sy / (h - sx)).atan();
         Some((lon.to_degrees(), lat.to_degrees()))
     }
+
+    /// Convert a geodetic point to ABI fixed-grid scan angles (radians).
+    pub fn scan_angles(self, lon: f64, lat: f64) -> Option<(f64, f64)> {
+        let req = self.semi_major_m;
+        let rpol = self.semi_minor_m;
+        let h = self.perspective_height_m + req;
+        let lon = lon.to_radians();
+        let lat = lat.to_radians();
+        let lon0 = self.longitude_origin_deg.to_radians();
+        let phi = ((rpol * rpol / (req * req)) * lat.tan()).atan();
+        let rc = rpol / (1.0 - (req * req - rpol * rpol) / (req * req) * phi.cos().powi(2)).sqrt();
+        let sx = h - rc * phi.cos() * (lon - lon0).cos();
+        let sy = -rc * phi.cos() * (lon - lon0).sin();
+        let sz = rc * phi.sin();
+        if h * (h - sx) < sy * sy + req * req / (rpol * rpol) * sz * sz {
+            return None;
+        }
+        let range = (sx * sx + sy * sy + sz * sz).sqrt();
+        Some(((-sy / range).asin(), (sz / sx).atan()))
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -151,6 +192,118 @@ pub struct Image {
     pub projection: Projection,
     pub valid_time: DateTime<Utc>,
     pub source_identity: String,
+}
+
+impl Image {
+    pub fn sample_nearest(&self, lon: f64, lat: f64) -> Option<f32> {
+        let (x, y) = self.projection.scan_angles(lon, lat)?;
+        let col = nearest(&self.x, x)?;
+        let row = nearest(&self.y, y)?;
+        let index = row.checked_mul(self.width)?.checked_add(col)?;
+        let value = *self.values.get(index)?;
+        (self.quality.get(index).copied().unwrap_or(3) < 2 && value.is_finite()).then_some(value)
+    }
+
+    /// Regrid native ABI values only for the existing display-texture pipeline.
+    pub fn display_grid(
+        &self,
+        width: usize,
+        height: usize,
+    ) -> anyhow::Result<crate::mrms::MrmsField> {
+        if width < 2 || height < 2 {
+            anyhow::bail!("ABI display grid must be at least 2 by 2");
+        }
+        let bounds = self
+            .bounds()
+            .ok_or_else(|| anyhow::anyhow!("ABI image is off Earth"))?;
+        let (lon_west, lon_east, lat_south, lat_north) = bounds;
+        let mut values = Vec::with_capacity(width * height);
+        for row in 0..height {
+            let lat = lat_north - (lat_north - lat_south) * row as f64 / (height - 1) as f64;
+            for col in 0..width {
+                let lon = lon_west + (lon_east - lon_west) * col as f64 / (width - 1) as f64;
+                values.push(self.sample_nearest(lon, lat).unwrap_or(f32::NAN));
+            }
+        }
+        Ok(crate::mrms::MrmsField {
+            values,
+            nx: width,
+            ny: height,
+            lon_west,
+            lon_east,
+            lat_north,
+            lat_south,
+            time: self.valid_time,
+        })
+    }
+
+    pub fn into_c13_frame(self, received_time: DateTime<Utc>) -> anyhow::Result<FieldFrame> {
+        if self.band != 13 {
+            anyhow::bail!("ABI: C13 frame received C{:02}", self.band);
+        }
+        let valid_time = self.valid_time;
+        let source_identity = self.source_identity.clone();
+        let display = self.display_grid(self.width.min(700), self.height.min(700))?;
+        Ok(FieldFrame::from_abi(
+            &C13_DESCRIPTOR,
+            self,
+            display,
+            DataStamp {
+                source_identity,
+                issue_time: None,
+                run_time: None,
+                valid_time,
+                received_time,
+                class: DataClass::Observed,
+                quality: QualitySummary::Unknown,
+            },
+        ))
+    }
+
+    fn bounds(&self) -> Option<(f64, f64, f64, f64)> {
+        let mut points = Vec::with_capacity((self.width + self.height) * 2);
+        for &x in &self.x {
+            points.extend([
+                self.projection.lon_lat(x, self.y[0]),
+                self.projection.lon_lat(x, *self.y.last()?),
+            ]);
+        }
+        for &y in &self.y {
+            points.extend([
+                self.projection.lon_lat(self.x[0], y),
+                self.projection.lon_lat(*self.x.last()?, y),
+            ]);
+        }
+        let mut valid = points.into_iter().flatten();
+        let (mut west, mut south) = valid.next()?;
+        let (mut east, mut north) = (west, south);
+        for (lon, lat) in valid {
+            west = west.min(lon);
+            east = east.max(lon);
+            south = south.min(lat);
+            north = north.max(lat);
+        }
+        Some((west, east, south, north))
+    }
+}
+
+fn nearest(values: &[f64], target: f64) -> Option<usize> {
+    let first = *values.first()?;
+    let ascending = first <= *values.last()?;
+    let split = values.partition_point(|value| {
+        if ascending {
+            *value < target
+        } else {
+            *value > target
+        }
+    });
+    match split {
+        0 => Some(0),
+        n if n == values.len() => Some(n - 1),
+        n => ((values[n - 1] - target).abs() <= (values[n] - target).abs())
+            .then_some(n - 1)
+            .or(Some(n)),
+    }
 }
 
 pub fn decode(bytes: Vec<u8>) -> anyhow::Result<Image> {
@@ -254,6 +407,20 @@ mod tests {
         assert!((lat - 36.059_45).abs() < 0.001, "latitude {lat}");
         assert!(image.projection.lon_lat(0.3, 0.3).is_none());
         assert_eq!(image.valid_time.timestamp(), 1_744_308_031);
+
+        let (x, y) = image.projection.scan_angles(lon, lat).unwrap();
+        assert!((x - image.x[250]).abs() < 1e-8, "x {x} != {}", image.x[250]);
+        assert!((y - image.y[250]).abs() < 1e-8, "y {y} != {}", image.y[250]);
+        assert_eq!(
+            image.sample_nearest(lon, lat),
+            Some(image.values[250 * 500 + 250])
+        );
+        let frame = image.into_c13_frame(Utc::now()).unwrap();
+        assert_eq!(frame.descriptor.id, C13_DESCRIPTOR.id);
+        assert_eq!(
+            frame.sample(lon, lat).value,
+            Some(frame.native_abi().unwrap().values[250 * 500 + 250])
+        );
     }
 
     #[test]
@@ -267,5 +434,13 @@ mod tests {
             prefix(at, Scene::Mesoscale2, 9),
             "ABI-L2-CMIPM/2025/100/18/OR_ABI-L2-CMIPM2-M6C09"
         );
+    }
+
+    #[test]
+    fn nearest_handles_both_coordinate_orders() {
+        assert_eq!(nearest(&[0.0, 2.0, 4.0], 2.9), Some(1));
+        assert_eq!(nearest(&[4.0, 2.0, 0.0], 2.9), Some(1));
+        assert_eq!(nearest(&[0.0, 2.0], -1.0), Some(0));
+        assert_eq!(nearest(&[2.0, 0.0], -1.0), Some(1));
     }
 }
