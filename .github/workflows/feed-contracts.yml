@@ -1,0 +1,17 @@
+name: Feed contracts
+
+on:
+  schedule:
+    - cron: "23 13 * * 1,4"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  official-sources:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify public NOAA prefixes
+        run: scripts/feed-contracts.sh

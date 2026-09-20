@@ -2,6 +2,9 @@
 
 Adapters in this roadmap are added only after their public contract is checked against an official
 provider source. Live network checks belong in scheduled CI; ordinary tests use committed fixtures.
+The scheduled `Feed contracts` workflow runs `scripts/feed-contracts.sh` against the public NOAA
+bucket listings. A missing prefix fails that workflow without making pull-request tests depend on
+the network.
 
 ## NOAA GOES ABI CMIP
 
