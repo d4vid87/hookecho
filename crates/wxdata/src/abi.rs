@@ -1,0 +1,156 @@
+//! Native GOES ABI Cloud and Moisture Imagery (CMIP) decoding.
+
+use chrono::{DateTime, TimeZone, Utc};
+
+const J2000_UNIX: i64 = 946_728_000;
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Projection {
+    pub longitude_origin_deg: f64,
+    pub perspective_height_m: f64,
+    pub semi_major_m: f64,
+    pub semi_minor_m: f64,
+}
+
+impl Projection {
+    /// Convert ABI fixed-grid scan angles (radians) to geodetic longitude/latitude.
+    pub fn lon_lat(self, x: f64, y: f64) -> Option<(f64, f64)> {
+        let h = self.perspective_height_m + self.semi_major_m;
+        let (sin_x, cos_x) = x.sin_cos();
+        let (sin_y, cos_y) = y.sin_cos();
+        let ratio = self.semi_major_m.powi(2) / self.semi_minor_m.powi(2);
+        let a = sin_x.powi(2) + cos_x.powi(2) * (cos_y.powi(2) + ratio * sin_y.powi(2));
+        let b = -2.0 * h * cos_x * cos_y;
+        let c = h.powi(2) - self.semi_major_m.powi(2);
+        let discriminant = b * b - 4.0 * a * c;
+        if discriminant < 0.0 {
+            return None; // scan coordinate is off Earth
+        }
+        let rs = (-b - discriminant.sqrt()) / (2.0 * a);
+        let sx = rs * cos_x * cos_y;
+        let sy = -rs * sin_x;
+        let sz = rs * cos_x * sin_y;
+        let lat = (ratio * sz / ((h - sx).powi(2) + sy.powi(2)).sqrt()).atan();
+        let lon = self.longitude_origin_deg.to_radians() - (sy / (h - sx)).atan();
+        Some((lon.to_degrees(), lat.to_degrees()))
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct Image {
+    pub width: usize,
+    pub height: usize,
+    pub band: u8,
+    pub values: Vec<f32>,
+    /// NOAA DQF: 0 good, 1 conditionally usable, 2 out of range, 3 missing, 4 focal-plane limit.
+    pub quality: Vec<u8>,
+    pub x: Vec<f64>,
+    pub y: Vec<f64>,
+    pub projection: Projection,
+    pub valid_time: DateTime<Utc>,
+    pub source_identity: String,
+}
+
+pub fn decode(bytes: Vec<u8>) -> anyhow::Result<Image> {
+    let file = hdf5lite::File::open(bytes).map_err(|e| anyhow::anyhow!("ABI: {e}"))?;
+    let dims = file
+        .dataset("CMI")
+        .map_err(|e| anyhow::anyhow!("ABI CMI: {e}"))?
+        .dims;
+    let [height, width] = dims.as_slice() else {
+        anyhow::bail!("ABI CMI: expected a two-dimensional image");
+    };
+    let (height, width) = (*height as usize, *width as usize);
+    let mut values: Vec<f32> = file
+        .read_f64("CMI")
+        .map_err(|e| anyhow::anyhow!("ABI CMI: {e}"))?
+        .into_iter()
+        .map(|value| value as f32)
+        .collect();
+    let quality: Vec<u8> = file
+        .read_f64("DQF")
+        .map_err(|e| anyhow::anyhow!("ABI DQF: {e}"))?
+        .into_iter()
+        .map(|value| if value.is_finite() { value as u8 } else { 3 })
+        .collect();
+    if values.len() != width * height || quality.len() != values.len() {
+        anyhow::bail!("ABI: image and quality dimensions disagree");
+    }
+    for (value, &flag) in values.iter_mut().zip(&quality) {
+        if flag >= 2 {
+            *value = f32::NAN;
+        }
+    }
+    let attrs = file
+        .attributes("goes_imager_projection")
+        .map_err(|e| anyhow::anyhow!("ABI projection: {e}"))?;
+    let number = |name: &str| {
+        attrs
+            .get(name)
+            .and_then(hdf5lite::Value::as_f64)
+            .ok_or_else(|| anyhow::anyhow!("ABI projection: missing {name}"))
+    };
+    let projection = Projection {
+        longitude_origin_deg: number("longitude_of_projection_origin")?,
+        perspective_height_m: number("perspective_point_height")?,
+        semi_major_m: number("semi_major_axis")?,
+        semi_minor_m: number("semi_minor_axis")?,
+    };
+    let t = file
+        .read_f64("t")
+        .ok()
+        .and_then(|times| times.first().copied())
+        .and_then(|seconds| Utc.timestamp_opt(J2000_UNIX + seconds as i64, 0).single())
+        .ok_or_else(|| anyhow::anyhow!("ABI: missing valid time"))?;
+    let root = file.attributes("").unwrap_or_default();
+    Ok(Image {
+        width,
+        height,
+        band: file
+            .read_f64("band_id")
+            .ok()
+            .and_then(|bands| bands.first().copied())
+            .unwrap_or_default() as u8,
+        values,
+        quality,
+        x: file
+            .read_f64("x")
+            .map_err(|e| anyhow::anyhow!("ABI x: {e}"))?,
+        y: file
+            .read_f64("y")
+            .map_err(|e| anyhow::anyhow!("ABI y: {e}"))?,
+        projection,
+        valid_time: t,
+        source_identity: root
+            .get("dataset_name")
+            .and_then(hdf5lite::Value::as_str)
+            .unwrap_or("NOAA GOES ABI CMIP")
+            .to_string(),
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn decodes_real_goes19_c13_mesoscale_with_quality_and_navigation() {
+        let image = decode(include_bytes!("../tests/data/g19-c13-meso.nc").to_vec()).unwrap();
+        assert_eq!((image.width, image.height, image.band), (500, 500, 13));
+        assert_eq!(image.values.len(), 250_000);
+        assert!(image.values.iter().any(|value| value.is_finite()));
+        assert!(image
+            .values
+            .iter()
+            .zip(&image.quality)
+            .all(|(value, flag)| { *flag < 2 || value.is_nan() }));
+        let (lon, lat) = image
+            .projection
+            .lon_lat(image.x[250], image.y[250])
+            .unwrap();
+        assert!((lon - -87.857_76).abs() < 0.001, "longitude {lon}");
+        assert!((lat - 36.059_45).abs() < 0.001, "latitude {lat}");
+        assert!(image.projection.lon_lat(0.3, 0.3).is_none());
+        assert_eq!(image.valid_time.timestamp(), 1_744_308_031);
+    }
+}
