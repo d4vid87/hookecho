@@ -800,7 +800,9 @@ mod tests {
     #[test]
     fn every_layer_is_either_ramped_or_explicitly_exempt() {
         for l in FieldLayer::DRAW_ORDER {
-            let exempt = NO_RAMP.contains(&l);
+            let exempt = NO_RAMP.contains(&l)
+                || l.descriptor()
+                    .is_some_and(|descriptor| descriptor.palette_key == "reflectivity");
             assert_eq!(
                 ramp_for(l).is_some(),
                 !exempt,

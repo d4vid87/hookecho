@@ -71,6 +71,9 @@ descriptor!(RADAR_QPE_03H_DESCRIPTOR, "mrms.radar-qpe-3h", "Radar-only 3-hour pr
 descriptor!(RADAR_QPE_06H_DESCRIPTOR, "mrms.radar-qpe-6h", "Radar-only 6-hour precipitation", "Radar QPE 6h", "mm", Accumulation, "qpe-24h", Nearest, false, ["rain", "precipitation", "radar only"]);
 descriptor!(RADAR_QPE_12H_DESCRIPTOR, "mrms.radar-qpe-12h", "Radar-only 12-hour precipitation", "Radar QPE 12h", "mm", Accumulation, "qpe-24h", Nearest, false, ["rain", "precipitation", "radar only"]);
 descriptor!(RADAR_QPE_24H_DESCRIPTOR, "mrms.radar-qpe-24h", "Radar-only 24-hour precipitation", "Radar QPE 24h", "mm", Accumulation, "qpe-24h", Nearest, false, ["rain", "precipitation", "radar only"]);
+descriptor!(LAYER_REFLECTIVITY_LOW_DESCRIPTOR, "mrms.layer-reflectivity-low", "Low-layer composite reflectivity", "Low-layer Reflectivity", "dBZ", Scalar, "reflectivity", Bilinear, true, ["mosaic", "dbz", "0-24 kft"]);
+descriptor!(LAYER_REFLECTIVITY_HIGH_DESCRIPTOR, "mrms.layer-reflectivity-high", "High-layer composite reflectivity", "High-layer Reflectivity", "dBZ", Scalar, "reflectivity", Bilinear, true, ["mosaic", "dbz", "24-60 kft"]);
+descriptor!(LAYER_REFLECTIVITY_SUPER_DESCRIPTOR, "mrms.layer-reflectivity-super", "Super-high composite reflectivity", "Super-high Reflectivity", "dBZ", Scalar, "reflectivity", Bilinear, true, ["mosaic", "dbz", "33-60 kft"]);
 
 pub struct CatalogProduct {
     pub descriptor: &'static FieldDescriptor,
@@ -79,7 +82,7 @@ pub struct CatalogProduct {
     pub description: &'static str,
 }
 
-pub static CATALOG: [CatalogProduct; 9] = [
+pub static CATALOG: [CatalogProduct; 12] = [
     CatalogProduct { descriptor: &ECHO_TOP_30_DESCRIPTOR, product: "CONUS/EchoTop_30_00.50", slug: "mrms-echo-top-30", description: "Height of the 30 dBZ storm top above ground" },
     CatalogProduct { descriptor: &ECHO_TOP_50_DESCRIPTOR, product: "CONUS/EchoTop_50_00.50", slug: "mrms-echo-top-50", description: "Height of the 50 dBZ core for storm-severity analysis" },
     CatalogProduct { descriptor: &ECHO_TOP_60_DESCRIPTOR, product: "CONUS/EchoTop_60_00.50", slug: "mrms-echo-top-60", description: "Height of the strongest 60 dBZ core" },
@@ -89,6 +92,9 @@ pub static CATALOG: [CatalogProduct; 9] = [
     CatalogProduct { descriptor: &RADAR_QPE_06H_DESCRIPTOR, product: "CONUS/RadarOnly_QPE_06H_00.00", slug: "mrms-radar-qpe-6h", description: "Six-hour precipitation from radar without gauge correction" },
     CatalogProduct { descriptor: &RADAR_QPE_12H_DESCRIPTOR, product: "CONUS/RadarOnly_QPE_12H_00.00", slug: "mrms-radar-qpe-12h", description: "12-hour precipitation from radar without gauge correction" },
     CatalogProduct { descriptor: &RADAR_QPE_24H_DESCRIPTOR, product: "CONUS/RadarOnly_QPE_24H_00.00", slug: "mrms-radar-qpe-24h", description: "24-hour precipitation from radar without gauge correction" },
+    CatalogProduct { descriptor: &LAYER_REFLECTIVITY_LOW_DESCRIPTOR, product: "CONUS/LayerCompositeReflectivity_Low_00.50", slug: "mrms-layer-reflectivity-low", description: "Strongest reflectivity in the low 0–24 kft layer" },
+    CatalogProduct { descriptor: &LAYER_REFLECTIVITY_HIGH_DESCRIPTOR, product: "CONUS/LayerCompositeReflectivity_High_00.50", slug: "mrms-layer-reflectivity-high", description: "Strongest reflectivity in the high 24–60 kft layer" },
+    CatalogProduct { descriptor: &LAYER_REFLECTIVITY_SUPER_DESCRIPTOR, product: "CONUS/LayerCompositeReflectivity_Super_00.50", slug: "mrms-layer-reflectivity-super", description: "Strongest reflectivity in the 33–60 kft layer" },
 ];
 descriptor!(ROTATION_DESCRIPTOR, "mrms.rotation-track", "Rotation track", "Rotation Track", "s⁻¹", Accumulation, "rotation", Nearest, false, ["rotation", "azimuthal shear"]);
 descriptor!(QPE_01H_DESCRIPTOR, "mrms.qpe-1h", "One-hour quantitative precipitation estimate", "QPE 1h", "mm", Accumulation, "qpe-1h", Nearest, false, ["rain", "precipitation"]);
@@ -100,7 +106,7 @@ descriptor!(PRECIP_RATE_DESCRIPTOR, "mrms.precip-rate", "Surface precipitation r
 descriptor!(PRECIP_TYPE_DESCRIPTOR, "mrms.precip-type", "Surface precipitation type", "Precip Type", "category", Categorical, "precip-type", Nearest, false, ["rain", "snow", "sleet"]);
 descriptor!(FLASH_ARI30_DESCRIPTOR, "mrms.flash-ari30", "30-minute flash-flood recurrence interval", "FLASH ARI", "yr", Scalar, "flash-flood", Bilinear, false, ["flood", "ari"]);
 
-pub static DESCRIPTORS: [&FieldDescriptor; 28] = [
+pub static DESCRIPTORS: [&FieldDescriptor; 31] = [
     &REFLECTIVITY_DESCRIPTOR,
     &LOW_LEVEL_REFLECTIVITY_DESCRIPTOR,
     &LIGHTNING_DESCRIPTOR,
@@ -120,6 +126,9 @@ pub static DESCRIPTORS: [&FieldDescriptor; 28] = [
     &RADAR_QPE_06H_DESCRIPTOR,
     &RADAR_QPE_12H_DESCRIPTOR,
     &RADAR_QPE_24H_DESCRIPTOR,
+    &LAYER_REFLECTIVITY_LOW_DESCRIPTOR,
+    &LAYER_REFLECTIVITY_HIGH_DESCRIPTOR,
+    &LAYER_REFLECTIVITY_SUPER_DESCRIPTOR,
     &ROTATION_DESCRIPTOR,
     &QPE_01H_DESCRIPTOR,
     &QPE_03H_DESCRIPTOR,
@@ -529,10 +538,9 @@ pub fn descriptor_for_product(product: &str) -> Option<&'static FieldDescriptor>
 }
 
 fn normalize_product_missing(product: &str, field: &mut MrmsField) {
-    if matches!(
-        product,
-        REFLECTIVITY | LOW_LEVEL_REFLECTIVITY | AZSHEAR | AZSHEAR_MID
-    ) {
+    if descriptor_for_product(product).is_some_and(|descriptor| {
+        matches!(descriptor.palette_key, "reflectivity" | "azshear")
+    }) {
         return;
     }
     field
@@ -892,6 +900,8 @@ mod tests {
         let mut signed = field.clone();
         signed.values = vec![-20.0, 10.0];
         normalize_product_missing(AZSHEAR, &mut signed);
+        assert_eq!(signed.values, [-20.0, 10.0]);
+        normalize_product_missing(CATALOG[9].product, &mut signed);
         assert_eq!(signed.values, [-20.0, 10.0]);
     }
 }

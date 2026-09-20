@@ -16054,12 +16054,14 @@ impl HookEchoApp {
         f: &wxdata::mrms::MrmsField,
     ) -> crate::render::MrmsUpload {
         use crate::render::FieldLayer as FL;
-        match layer {
-            // Mosaic + HRRR forecast are both dBZ → the reflectivity palette.
-            FL::Mrms | FL::MrmsLowLevel | FL::Mosaic | FL::Hrrr => {
-                mrms_upload(f, self.palettes.table(Moment::Reflectivity))
-            }
-            other => field_upload_indexed(other, f),
+        if layer
+            .descriptor()
+            .is_some_and(|descriptor| descriptor.palette_key == "reflectivity")
+            || matches!(layer, FL::Mosaic | FL::Hrrr)
+        {
+            mrms_upload(f, self.palettes.table(Moment::Reflectivity))
+        } else {
+            field_upload_indexed(layer, f)
         }
     }
 }
