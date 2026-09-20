@@ -45,7 +45,22 @@ pub(crate) fn matches(entries: &[PaletteEntry], query: &str) -> Vec<usize> {
     let mut hits: Vec<(usize, usize)> = entries
         .iter()
         .enumerate()
-        .filter_map(|(i, e)| fuzzy(query, &e.label).map(|s| (s, i)))
+        .filter_map(|(i, e)| {
+            let descriptor = match e.action {
+                PaletteAction::ToggleField(layer) => layer.descriptor(),
+                _ => None,
+            };
+            std::iter::once(e.label.as_str())
+                .chain(descriptor.into_iter().flat_map(|d| {
+                    std::iter::once(d.display_name)
+                        .chain(std::iter::once(d.short_name))
+                        .chain(d.search_aliases.iter().copied())
+                        .chain(std::iter::once(d.units))
+                }))
+                .filter_map(|term| fuzzy(query, term))
+                .min()
+                .map(|score| (score, i))
+        })
         .collect();
     hits.sort_by_key(|(s, i)| (*s, *i));
     hits.into_iter().map(|(_, i)| i).collect()
@@ -1205,6 +1220,35 @@ mod tests {
         assert_eq!(matches(&entries, "").len(), entries.len());
         // And an uncommon row is still findable by name.
         assert_eq!(matches(&entries, "echo"), vec![0]);
+    }
+
+    #[test]
+    fn migrated_fields_are_searchable_by_descriptor_metadata() {
+        let entries = [
+            PaletteEntry {
+                label: "National mosaic".into(),
+                category: "National",
+                action: PaletteAction::ToggleField(crate::render::FieldLayer::Mrms),
+                on: None,
+                desc: "",
+                common: true,
+                key: None,
+                health: None,
+            },
+            PaletteEntry {
+                label: "Ground strikes".into(),
+                category: "National",
+                action: PaletteAction::ToggleField(crate::render::FieldLayer::Lightning),
+                on: None,
+                desc: "",
+                common: true,
+                key: None,
+                health: None,
+            },
+        ];
+        assert_eq!(matches(&entries, "dbz"), vec![0]);
+        assert_eq!(matches(&entries, "nldn"), vec![1]);
+        assert_eq!(matches(&entries, "strikes/km"), vec![1]);
     }
 
     /// The drawer's Enter key runs `matches(...)[0]`, so the ranking has to put the obvious
