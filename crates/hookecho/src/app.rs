@@ -11787,15 +11787,23 @@ impl HookEchoApp {
         let radar_probe = response.hover_pos().and_then(|pos| {
             let w = cam.screen_to_world((pos.x - prect.left(), pos.y - prect.top()), vp);
             let (lon, lat) = crate::render::mercator::world_to_lonlat(w.0, w.1);
-            let view = &self.views[idx];
-            let volume = view.volume.as_ref()?;
-            let sample = wxdata::level2::sample_native(
-                &volume.scan,
-                view.moment,
-                view.tilt,
-                lon,
-                lat,
-            )?;
+            let (sample, site, vcp, moment, tilt) = {
+                let view = &self.views[idx];
+                let volume = view.volume.as_ref()?;
+                (
+                    wxdata::level2::sample_native(
+                        &volume.scan,
+                        view.moment,
+                        view.tilt,
+                        lon,
+                        lat,
+                    )?,
+                    view.site.clone().unwrap_or_else(|| "Radar".into()),
+                    volume.vcp.clone(),
+                    view.moment,
+                    view.tilt,
+                )
+            };
             let value = sample.value.map_or_else(
                 || {
                     if sample.folded {
@@ -11806,13 +11814,31 @@ impl HookEchoApp {
                         "Missing".to_string()
                     }
                 },
-                |value| format!("{value:.2} {}", view.moment.units()),
+                |value| format!("Raw: {value:.2} {}", moment.units()),
             );
+            let dealiased = if moment == Moment::Velocity
+                && self.settings.dealias_velocity
+                && !wxdata::tdwr::is_tdwr(&site)
+            {
+                self.views[idx]
+                    .volume
+                    .as_mut()
+                    .and_then(|volume| volume.binned(moment, tilt, true).ok())
+                    .and_then(|sweep| sweep.sample_at(lon, lat))
+                    .and_then(|gate| gate.value)
+                    .map(|value| format!("\nDealiased: {value:.2} {}", moment.units()))
+                    .unwrap_or_default()
+            } else {
+                String::new()
+            };
+            let nyquist = if moment == Moment::Velocity {
+                "\nNyquist: unavailable in decoded metadata"
+            } else {
+                ""
+            };
             Some(format!(
-                "{} {} · {}\n{value}\nElevation {:.2}° · azimuth {:.2}°\nGround {:.1} km · slant {:.1} km · beam {:.0} ft\nGate {} · {:.3} km spacing\n{}",
-                view.site.as_deref().unwrap_or("Radar"),
-                volume.vcp,
-                view.moment.short_name(),
+                "{site} {vcp} · {}\n{value}{dealiased}{nyquist}\nElevation {:.2}° · azimuth {:.2}°\nGround {:.1} km · slant {:.1} km · beam {:.0} ft\nGate {} · {:.3} km spacing\n{}",
+                moment.short_name(),
                 sample.elevation_deg,
                 sample.azimuth_deg,
                 sample.ground_range_km,
