@@ -13530,6 +13530,30 @@ impl HookEchoApp {
                     ));
                 }
             }
+        } else if let Some(hp) = response.hover_pos() {
+            // Sample the same native values the inspector exposes. The GPU texture may be
+            // decimated or palette-indexed for display, so reading it back would be scientifically
+            // wrong even when it looks identical.
+            let frame = crate::render::FieldLayer::DRAW_ORDER
+                .iter()
+                .rev()
+                .find(|layer| view.fields_on.contains(layer))
+                .and_then(|layer| self.fields.get(layer))
+                .and_then(|state| state.frame.as_ref());
+            if let Some(frame) = frame {
+                let w = cam.screen_to_world((hp.x - prect.left(), hp.y - prect.top()), vp);
+                let (lon, lat) = crate::render::mercator::world_to_lonlat(w.0, w.1);
+                let sample = frame.sample(lon, lat);
+                if let Some(value) = sample.value {
+                    response.clone().show_tooltip_text(format!(
+                        "{}: {value:.1} {}\nValid {} · {:?}",
+                        frame.descriptor.short_name,
+                        sample.units,
+                        sample.valid_time.format("%Y-%m-%d %H:%M UTC"),
+                        sample.method
+                    ));
+                }
+            }
         }
 
         // Beam-vs-terrain blockage shading, under the reference annotations. The raster covers a
