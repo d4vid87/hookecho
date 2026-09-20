@@ -234,7 +234,11 @@ enum OverlayMsg {
     /// The latest grid for a national field layer (mosaic, rotation, MESH, AzShear, lightning).
     Field(crate::render::FieldLayer, wxdata::mrms::MrmsField),
     /// A registry-backed grid. Unmigrated fields continue through `Field` above.
-    RegisteredField(crate::render::FieldLayer, wxdata::field::FieldFrame),
+    RegisteredField(
+        crate::render::FieldLayer,
+        wxdata::field::FieldFrame,
+        Option<wxdata::mrms::MrmsField>,
+    ),
     /// A model-difference grid plus the two valid times it compared, for the layer's own row.
     ModelDiff(wxdata::field::FieldFrame, (String, String)),
     /// `(0 °C, −20 °C)` level heights above sea level, in metres, at the active radar.
@@ -531,6 +535,18 @@ enum OverlayDelivery {
     },
 }
 
+fn registered_display_field(
+    frame: &wxdata::field::FieldFrame,
+    max_dim: usize,
+) -> Option<wxdata::mrms::MrmsField> {
+    (frame.grid.nx.max(frame.grid.ny) > max_dim).then(|| match frame.descriptor.value_kind {
+        wxdata::field::ValueKind::Categorical | wxdata::field::ValueKind::Mask => {
+            frame.field().subsampled(max_dim)
+        }
+        _ => frame.field().clone().decimated(max_dim),
+    })
+}
+
 impl OverlaySource {
     fn identity(&self) -> u64 {
         use std::hash::{Hash, Hasher};
@@ -659,6 +675,7 @@ impl OverlaySource {
                     OverlayMsg::RegisteredField(
                         layer,
                         wxdata::mrms::fetch_latest_frame(http, &product).await?,
+                        None,
                     )
                 } else {
                     OverlayMsg::Field(layer, wxdata::mrms::fetch_latest(http, &product).await?)
@@ -679,7 +696,7 @@ impl OverlaySource {
             }
             OverlaySource::Global(layer, model, field, fh) => {
                 let fc = wxdata::global::fetch(http, model, field, fh).await?;
-                OverlayMsg::RegisteredField(layer, fc.into_frame(field.descriptor()))
+                OverlayMsg::RegisteredField(layer, fc.into_frame(field.descriptor()), None)
             }
             OverlaySource::ModelDiff(field, fh) => {
                 use crate::fielddiff::DiffField;
@@ -790,6 +807,7 @@ impl OverlaySource {
                     wxdata::hrrr::fetch_forecast(http, fh)
                         .await?
                         .into_reflectivity_frame(),
+                    None,
                 )
             }
             OverlaySource::HrrrLayer(layer, fh) => {
@@ -858,7 +876,7 @@ impl OverlaySource {
                 } else {
                     fc.into_frame(descriptor, model)
                 };
-                OverlayMsg::RegisteredField(layer, frame)
+                OverlayMsg::RegisteredField(layer, frame, None)
             }
             OverlaySource::Env(layer, model, ml, srh_km) => {
                 use crate::render::FieldLayer as FL;
@@ -876,7 +894,7 @@ impl OverlaySource {
                 let descriptor = layer
                     .descriptor()
                     .ok_or_else(|| anyhow::anyhow!("unregistered environment field {layer:?}"))?;
-                OverlayMsg::RegisteredField(layer, fc.into_frame(descriptor, model))
+                OverlayMsg::RegisteredField(layer, fc.into_frame(descriptor, model), None)
             }
             OverlaySource::L3Grid(layer, site) => {
                 use crate::render::FieldLayer as FL;
@@ -887,13 +905,14 @@ impl OverlaySource {
                     _ => None,
                 };
                 match field {
-                    Some(f) => OverlayMsg::RegisteredField(layer, f),
+                    Some(f) => OverlayMsg::RegisteredField(layer, f, None),
                     None => anyhow::bail!("no L3 grid for {site}"),
                 }
             }
             OverlaySource::Snow(hours) => OverlayMsg::RegisteredField(
                 crate::render::FieldLayer::SnowAnalysis,
                 wxdata::nohrsc::fetch_frame(http, hours).await?,
+                None,
             ),
             OverlaySource::FreezingLevels(lon, lat) => {
                 // HRRR carries both isotherm heights as analysis fields, so the hail algorithm
@@ -4205,6 +4224,10 @@ impl HookEchoApp {
                     // for the whole pool.
                     Ok(match msg {
                         OverlayMsg::Field(layer, f) => OverlayMsg::Field(layer, f.decimated(cap)),
+                        OverlayMsg::RegisteredField(layer, frame, _) => {
+                            let display = registered_display_field(&frame, cap);
+                            OverlayMsg::RegisteredField(layer, frame, display)
+                        }
                         other => other,
                     })
                 }
@@ -8199,7 +8222,9 @@ impl HookEchoApp {
                     result,
                 } => {
                     let data_time = match &result {
-                        Ok(OverlayMsg::RegisteredField(_, frame)) => Some(frame.stamp.valid_time),
+                        Ok(OverlayMsg::RegisteredField(_, frame, _)) => {
+                            Some(frame.stamp.valid_time)
+                        }
                         _ => None,
                     };
                     let current = self
@@ -8331,12 +8356,12 @@ impl HookEchoApp {
                         s.pending = Some(upload);
                     }
                 }
-                OverlayMsg::RegisteredField(layer, frame) => {
+                OverlayMsg::RegisteredField(layer, frame, display) => {
                     if layer == crate::render::FieldLayer::Hrrr {
                         self.hrrr_run = frame.stamp.run_time;
                         self.hrrr_valid = Some(frame.stamp.valid_time);
                     }
-                    let upload = self.field_upload(layer, frame.field());
+                    let upload = self.field_upload(layer, display.as_ref().unwrap_or(frame.field()));
                     if let Some(s) = self.fields.get_mut(&layer) {
                         s.pending = Some(upload);
                         s.frame = Some(frame);
@@ -18871,7 +18896,9 @@ mod nowcast_tests {
 
 #[cfg(test)]
 mod request_book_tests {
-    use super::{retry_once, HealthState, RequestBook, RequestLane, SourceHealth};
+    use super::{
+        registered_display_field, retry_once, HealthState, RequestBook, RequestLane, SourceHealth,
+    };
     use crate::render::FieldLayer;
 
     #[test]
@@ -18919,6 +18946,48 @@ mod request_book_tests {
         assert!(book.finish(&lane, generation, None, Some(valid_time)));
         let age = book.health(&lane).data_age.unwrap().as_secs();
         assert!((600..=601).contains(&age));
+    }
+
+    #[test]
+    fn display_pooling_keeps_native_values_and_categorical_classes() {
+        let field = wxdata::mrms::MrmsField {
+            values: vec![1.0, 100.0, 2.0, 3.0],
+            nx: 4,
+            ny: 1,
+            lon_west: 0.0,
+            lon_east: 4.0,
+            lat_north: 1.0,
+            lat_south: 0.0,
+            time: chrono::Utc::now(),
+        };
+        let frame = |descriptor| {
+            wxdata::field::FieldFrame::new(
+                descriptor,
+                field.clone(),
+                wxdata::field::DataStamp {
+                    source_identity: "fixture".into(),
+                    issue_time: None,
+                    run_time: None,
+                    valid_time: field.time,
+                    received_time: field.time,
+                    class: wxdata::field::DataClass::Analysis,
+                    quality: wxdata::field::QualitySummary::Good,
+                },
+            )
+        };
+
+        let continuous = frame(&wxdata::mrms::REFLECTIVITY_DESCRIPTOR);
+        assert_eq!(
+            registered_display_field(&continuous, 2).unwrap().values,
+            [100.0, 3.0]
+        );
+        assert_eq!(continuous.field().values, [1.0, 100.0, 2.0, 3.0]);
+        let categorical = frame(&wxdata::mrms::PRECIP_TYPE_DESCRIPTOR);
+        assert_eq!(
+            registered_display_field(&categorical, 2).unwrap().values,
+            [1.0, 2.0]
+        );
+        assert!(registered_display_field(&categorical, 4).is_none());
     }
 
     #[tokio::test]
