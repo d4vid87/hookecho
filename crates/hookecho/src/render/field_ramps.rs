@@ -457,6 +457,23 @@ static GOES_WATER_VAPOR: FieldRamp = FieldRamp {
     )
 };
 
+static GOES_VISIBLE: FieldRamp = FieldRamp {
+    input_scale: 1.0,
+    ..ramp!(
+        "GOES red visible",
+        "reflectance",
+        0.0,
+        1.0,
+        RampScale::Linear,
+        230,
+        &[
+            (0.0, [8, 8, 10]),
+            (0.5, [125, 130, 135]),
+            (1.0, [255, 255, 255])
+        ]
+    )
+};
+
 /// Global 10 m wind speed (the U component's magnitude band, which is what the layer draws).
 static GLOBAL_WIND_10M: FieldRamp = FieldRamp {
     input_scale: 1.943_844, // m/s → kt
@@ -685,6 +702,7 @@ pub fn ramp_for(layer: FieldLayer) -> Option<&'static FieldRamp> {
     Some(match layer {
         FL::GoesC13 => &GOES_C13,
         FL::GoesWaterVapor => &GOES_WATER_VAPOR,
+        FL::GoesVisible => &GOES_VISIBLE,
         FL::Rotation | FL::AzShear => &ROTATION,
         FL::Mesh => &MESH,
         FL::HailSwath => &HAIL_SWATH,

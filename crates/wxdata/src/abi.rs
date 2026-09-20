@@ -41,8 +41,25 @@ pub static C08_DESCRIPTOR: FieldDescriptor = FieldDescriptor {
     supports_difference: true,
 };
 
+pub static C02_DESCRIPTOR: FieldDescriptor = FieldDescriptor {
+    id: FieldId("satellite.goes.abi.c02"),
+    source: "NOAA GOES ABI",
+    family: FieldFamily::Satellite,
+    display_name: "GOES red visible",
+    short_name: "GOES C02",
+    search_aliases: &["satellite", "visible", "red"],
+    units: "reflectance",
+    value_kind: ValueKind::Scalar,
+    palette_key: "visible",
+    sampling: SamplingPolicy::Nearest,
+    missing: MissingData::Nan,
+    supports_contours: false,
+    supports_difference: true,
+};
+
 pub fn descriptor_for_band(band: u8) -> Option<&'static FieldDescriptor> {
     match band {
+        2 => Some(&C02_DESCRIPTOR),
         8 => Some(&C08_DESCRIPTOR),
         13 => Some(&C13_DESCRIPTOR),
         _ => None,

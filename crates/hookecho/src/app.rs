@@ -1716,7 +1716,7 @@ pub(crate) struct PaletteEntry {
 fn field_refresh_secs(layer: crate::render::FieldLayer) -> u64 {
     use crate::render::FieldLayer as FL;
     match layer {
-        FL::GoesC13 | FL::GoesWaterVapor => 300,
+        FL::GoesC13 | FL::GoesWaterVapor | FL::GoesVisible => 300,
         FL::Lightning | FL::AzShear => 60,
         FL::Mrms | FL::Mesh | FL::Rotation | FL::Hrrr | FL::Mosaic => 120,
         // QPE accumulations update on a ~2-minute MRMS cadence.
@@ -16546,7 +16546,11 @@ impl eframe::App for HookEchoApp {
             }
         }
         // GOES ABI imagery has its own source adapter and arrives every five minutes.
-        for (layer, band) in [(FL::GoesC13, 13), (FL::GoesWaterVapor, 8)] {
+        for (layer, band) in [
+            (FL::GoesC13, 13),
+            (FL::GoesWaterVapor, 8),
+            (FL::GoesVisible, 2),
+        ] {
             let stale = self.field_wanted(layer)
                 && self.fields.get(&layer).is_none_or(|state| {
                     state

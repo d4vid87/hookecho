@@ -53,6 +53,7 @@ impl HookEchoApp {
                     layer,
                     FL::GoesC13
                         | FL::GoesWaterVapor
+                        | FL::GoesVisible
                         | FL::Mrms
                         | FL::Mosaic
                         | FL::Rotation
@@ -244,6 +245,13 @@ impl HookEchoApp {
                 "National",
                 "GOES upper-level water vapor (C08)",
                 "Native satellite moisture imagery from GOES ABI",
+                true,
+            ),
+            (
+                FL::GoesVisible,
+                "National",
+                "GOES red visible (C02)",
+                "Native high-resolution daytime reflectance from GOES ABI",
                 true,
             ),
             (

@@ -69,6 +69,7 @@ pub struct RadarUpload {
 pub enum FieldLayer {
     GoesC13,
     GoesWaterVapor,
+    GoesVisible,
     Mrms,
     Hrrr,
     Rotation,
@@ -149,6 +150,7 @@ impl FieldLayer {
             self,
             FieldLayer::GoesC13
                 | FieldLayer::GoesWaterVapor
+                | FieldLayer::GoesVisible
                 | FieldLayer::Mrms
                 | FieldLayer::Mosaic
                 | FieldLayer::Hrrr
@@ -170,11 +172,12 @@ impl FieldLayer {
     }
 
     /// Fixed bottom-to-top paint order within each band.
-    pub const DRAW_ORDER: [FieldLayer; 40] = [
+    pub const DRAW_ORDER: [FieldLayer; 41] = [
         // Below-radar context band (bottom to top). The global models sit at the very bottom:
         // they are the synoptic backdrop everything else is drawn against.
         FieldLayer::GoesC13,
         FieldLayer::GoesWaterVapor,
+        FieldLayer::GoesVisible,
         FieldLayer::GlobalMslp,
         FieldLayer::GlobalHeight500,
         FieldLayer::GlobalTemp2m,
@@ -222,6 +225,7 @@ impl FieldLayer {
         match self {
             FieldLayer::GoesC13 => "goes-c13",
             FieldLayer::GoesWaterVapor => "goes-water-vapor",
+            FieldLayer::GoesVisible => "goes-visible",
             FieldLayer::Mrms => "mrms",
             FieldLayer::Hrrr => "hrrr",
             FieldLayer::Rotation => "rotation",
@@ -274,6 +278,7 @@ impl FieldLayer {
         Some(match self {
             FL::GoesC13 => &wxdata::abi::C13_DESCRIPTOR,
             FL::GoesWaterVapor => &wxdata::abi::C08_DESCRIPTOR,
+            FL::GoesVisible => &wxdata::abi::C02_DESCRIPTOR,
             FL::Mrms => &wxdata::mrms::REFLECTIVITY_DESCRIPTOR,
             FL::Lightning => &wxdata::mrms::LIGHTNING_DESCRIPTOR,
             FL::Mesh => &wxdata::mrms::MESH_DESCRIPTOR,
