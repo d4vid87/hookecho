@@ -69,6 +69,70 @@ pub static SRH_DESCRIPTOR: FieldDescriptor = FieldDescriptor {
     supports_difference: true,
 };
 
+pub static UPDRAFT_HELICITY_DESCRIPTOR: FieldDescriptor = FieldDescriptor {
+    id: FieldId("model.hrrr.updraft-helicity-swath"),
+    source: "NOAA HRRR",
+    family: FieldFamily::Model,
+    display_name: "HRRR updraft helicity swath",
+    short_name: "Future Rotation Tracks",
+    search_aliases: &["uh", "rotation", "storm track"],
+    units: "m²/s²",
+    value_kind: ValueKind::Accumulation,
+    palette_key: "updraft-helicity",
+    sampling: SamplingPolicy::Nearest,
+    missing: MissingData::Nan,
+    supports_contours: false,
+    supports_difference: false,
+};
+
+pub static SNOWFALL_DESCRIPTOR: FieldDescriptor = FieldDescriptor {
+    id: FieldId("model.hrrr.snowfall"),
+    source: "NOAA HRRR",
+    family: FieldFamily::Model,
+    display_name: "HRRR accumulated snowfall",
+    short_name: "Forecast Snowfall",
+    search_aliases: &["snow", "accumulation", "asnow"],
+    units: "m",
+    value_kind: ValueKind::Accumulation,
+    palette_key: "snowfall",
+    sampling: SamplingPolicy::Nearest,
+    missing: MissingData::Nan,
+    supports_contours: false,
+    supports_difference: false,
+};
+
+pub static SMOKE_DESCRIPTOR: FieldDescriptor = FieldDescriptor {
+    id: FieldId("model.hrrr.smoke"),
+    source: "NOAA HRRR",
+    family: FieldFamily::Model,
+    display_name: "HRRR near-surface smoke",
+    short_name: "Wildfire Smoke",
+    search_aliases: &["mass density", "air quality", "fire"],
+    units: "kg/m³",
+    value_kind: ValueKind::Scalar,
+    palette_key: "smoke",
+    sampling: SamplingPolicy::Bilinear,
+    missing: MissingData::Nan,
+    supports_contours: true,
+    supports_difference: false,
+};
+
+pub static THUNDER_PROBABILITY_DESCRIPTOR: FieldDescriptor = FieldDescriptor {
+    id: FieldId("model.nbm.thunder-probability"),
+    source: "NOAA NBM",
+    family: FieldFamily::Model,
+    display_name: "NBM thunder probability",
+    short_name: "Thunder Probability",
+    search_aliases: &["tstm", "lightning", "nbm"],
+    units: "%",
+    value_kind: ValueKind::Probability,
+    palette_key: "thunder-probability",
+    sampling: SamplingPolicy::Bilinear,
+    missing: MissingData::Nan,
+    supports_contours: true,
+    supports_difference: false,
+};
+
 /// Which model to pull a field from.
 ///
 /// HRRR is the forecast model this module was written for. RAP is here for its **f00 analysis**:
@@ -175,9 +239,29 @@ impl HrrrForecast {
         descriptor: &'static FieldDescriptor,
         model: Model,
     ) -> FieldFrame {
-        let valid_time = self.valid();
         let date = self.run.format("%Y%m%d").to_string();
         let source_identity = model.url(&date, self.run.hour(), self.fcst_hour);
+        self.into_frame_with_identity(descriptor, model, source_identity)
+    }
+
+    pub fn into_swath_frame(
+        self,
+        descriptor: &'static FieldDescriptor,
+        model: Model,
+    ) -> FieldFrame {
+        let date = self.run.format("%Y%m%d").to_string();
+        let first = model.url(&date, self.run.hour(), 1);
+        let last = model.url(&date, self.run.hour(), self.fcst_hour);
+        self.into_frame_with_identity(descriptor, model, format!("{first} … {last}"))
+    }
+
+    fn into_frame_with_identity(
+        self,
+        descriptor: &'static FieldDescriptor,
+        model: Model,
+        source_identity: String,
+    ) -> FieldFrame {
+        let valid_time = self.valid();
         FieldFrame::new(
             descriptor,
             self.field,
@@ -984,5 +1068,23 @@ mod tests {
         assert_eq!(analysis.stamp.class, DataClass::Analysis);
         assert!(analysis.stamp.source_identity.contains("noaa-rap-pds"));
         assert_eq!(analysis.descriptor.units, "J/kg");
+
+        let swath = HrrrForecast {
+            field: MrmsField {
+                values: vec![75.0],
+                nx: 1,
+                ny: 1,
+                lon_west: -100.0,
+                lon_east: -99.0,
+                lat_north: 40.0,
+                lat_south: 39.0,
+                time: run + chrono::Duration::hours(6),
+            },
+            run,
+            fcst_hour: 6,
+        }
+        .into_swath_frame(&UPDRAFT_HELICITY_DESCRIPTOR, Model::Hrrr);
+        assert!(swath.stamp.source_identity.contains("wrfsfcf01.grib2"));
+        assert!(swath.stamp.source_identity.ends_with("wrfsfcf06.grib2"));
     }
 }

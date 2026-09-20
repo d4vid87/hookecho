@@ -43,3 +43,5 @@ sampler while retaining its existing forecast timeline and renderer. Its stamp i
 model object and exposes run, valid, receipt, forecast classification, and unknown quality.
 HRRR/RAP CAPE and storm-relative helicity use the same path; their stamps distinguish forecast
 guidance from RAP analysis while their existing source and layer controls remain intact.
+The remaining existing regional guidance grids—HRRR updraft-helicity swaths, snowfall and smoke,
+plus NBM thunder probability—also carry registry metadata without changing their controls.

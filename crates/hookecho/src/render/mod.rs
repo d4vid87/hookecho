@@ -278,6 +278,10 @@ impl FieldLayer {
             FL::Hrrr => &wxdata::hrrr::REFLECTIVITY_DESCRIPTOR,
             FL::Cape => &wxdata::hrrr::CAPE_DESCRIPTOR,
             FL::Srh => &wxdata::hrrr::SRH_DESCRIPTOR,
+            FL::UpdraftHelicity => &wxdata::hrrr::UPDRAFT_HELICITY_DESCRIPTOR,
+            FL::Snowfall => &wxdata::hrrr::SNOWFALL_DESCRIPTOR,
+            FL::Smoke => &wxdata::hrrr::SMOKE_DESCRIPTOR,
+            FL::ThunderProb => &wxdata::hrrr::THUNDER_PROBABILITY_DESCRIPTOR,
             _ => return None,
         })
     }
@@ -324,6 +328,15 @@ mod field_slug_tests {
         assert_eq!(FieldLayer::from_stable_id("hrrr"), Some(FieldLayer::Hrrr));
         assert_eq!(FieldLayer::from_stable_id("cape"), Some(FieldLayer::Cape));
         assert_eq!(FieldLayer::from_stable_id("srh"), Some(FieldLayer::Srh));
+        for layer in [
+            FieldLayer::UpdraftHelicity,
+            FieldLayer::Snowfall,
+            FieldLayer::Smoke,
+            FieldLayer::ThunderProb,
+        ] {
+            assert_eq!(FieldLayer::from_stable_id(layer.slug()), Some(layer));
+            assert!(layer.stable_id().contains('.'));
+        }
         assert_eq!(FieldLayer::from_stable_id("future.unknown"), None);
         assert_eq!(
             FieldLayer::Lightning.descriptor().unwrap().search_aliases,

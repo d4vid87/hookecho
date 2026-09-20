@@ -782,10 +782,10 @@ impl OverlaySource {
             }
             OverlaySource::HrrrLayer(layer, fh) => {
                 use crate::render::FieldLayer as FL;
-                let fc = match layer {
+                let (fc, model) = match layer {
                     // Rotation tracks read as a swath: the union of every hourly max window from
                     // now through the scrubbed hour, not just that one hour's slice.
-                    FL::UpdraftHelicity => {
+                    FL::UpdraftHelicity => (
                         wxdata::hrrr::fetch_field_swath(
                             http,
                             "MXUPHL",
@@ -793,10 +793,11 @@ impl OverlaySource {
                             fh.max(1),
                             0.0,
                         )
-                        .await?
-                    }
+                        .await?,
+                        wxdata::hrrr::Model::Hrrr,
+                    ),
                     // Accumulated snowfall since the run started, through the scrubbed hour.
-                    FL::Snowfall => {
+                    FL::Snowfall => (
                         wxdata::hrrr::fetch_field(
                             http,
                             wxdata::hrrr::Model::Hrrr,
@@ -805,12 +806,13 @@ impl OverlaySource {
                             fh,
                             0.0,
                         )
-                        .await?
-                    }
+                        .await?,
+                        wxdata::hrrr::Model::Hrrr,
+                    ),
                     // NBM's calibrated probability of thunder over the hour ending at `fh`. The
                     // idx lists the trailing window first, so the plain var+level match already
                     // picks that one over the run-total windows beside it.
-                    FL::ThunderProb => {
+                    FL::ThunderProb => (
                         wxdata::hrrr::fetch_field(
                             http,
                             wxdata::hrrr::Model::Nbm,
@@ -819,9 +821,10 @@ impl OverlaySource {
                             fh.max(1),
                             0.0,
                         )
-                        .await?
-                    }
-                    _ => {
+                        .await?,
+                        wxdata::hrrr::Model::Nbm,
+                    ),
+                    FL::Smoke => (
                         wxdata::hrrr::fetch_field(
                             http,
                             wxdata::hrrr::Model::Hrrr,
@@ -830,10 +833,20 @@ impl OverlaySource {
                             fh,
                             0.0,
                         )
-                        .await?
-                    }
+                        .await?,
+                        wxdata::hrrr::Model::Hrrr,
+                    ),
+                    _ => anyhow::bail!("unregistered forecast field {layer:?}"),
                 };
-                OverlayMsg::Field(layer, fc.field)
+                let descriptor = layer
+                    .descriptor()
+                    .ok_or_else(|| anyhow::anyhow!("unregistered forecast field {layer:?}"))?;
+                let frame = if layer == FL::UpdraftHelicity {
+                    fc.into_swath_frame(descriptor, model)
+                } else {
+                    fc.into_frame(descriptor, model)
+                };
+                OverlayMsg::RegisteredField(layer, frame)
             }
             OverlaySource::Env(layer, model, ml, srh_km) => {
                 use crate::render::FieldLayer as FL;
