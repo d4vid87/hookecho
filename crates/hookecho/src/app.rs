@@ -10040,8 +10040,9 @@ impl HookEchoApp {
             let cb_tx = tx.clone();
             let cb_ctx = ctx.clone();
             let cb_site = site.clone();
-            log::info!("live stream started for {end_site}");
-            let res = live::stream(site, base, active, move |u| {
+            let provider = live::PUBLIC_PROVIDER;
+            log::info!("{} started for {end_site}", provider.label());
+            let res = provider.stream(site, base, active, move |u| {
                 let _ = cb_tx.send(DataMsg::Live {
                     view: view_idx,
                     site: cb_site.clone(),

@@ -16,6 +16,37 @@ use nexrad_model::data::{Radial, Sweep};
 use std::sync::Arc;
 use std::time::Duration;
 
+/// Public live Level II provider. Additional providers implement the same call surface here.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Provider {
+    AwsChunks,
+}
+
+pub const PUBLIC_PROVIDER: Provider = Provider::AwsChunks;
+
+impl Provider {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::AwsChunks => "AWS NEXRAD live chunks",
+        }
+    }
+
+    pub async fn stream<F>(
+        self,
+        site: String,
+        base: Arc<Scan>,
+        active: impl Fn() -> bool,
+        on_update: F,
+    ) -> anyhow::Result<()>
+    where
+        F: FnMut(Update),
+    {
+        match self {
+            Self::AwsChunks => stream_aws_chunks(site, base, active, on_update).await,
+        }
+    }
+}
+
 /// A merged live volume ready to display.
 pub struct Update {
     /// A synthetic name identifying this update (volume prefix + sequence).
@@ -44,7 +75,7 @@ pub struct Update {
 ///
 /// Runs on the web too: the waits go through [`crate::task::sleep`] (a `setTimeout` there) and the
 /// backfill through `futures_util`, so nothing in here reaches for tokio directly.
-pub async fn stream<F>(
+async fn stream_aws_chunks<F>(
     site: String,
     base: Arc<Scan>,
     active: impl Fn() -> bool,
