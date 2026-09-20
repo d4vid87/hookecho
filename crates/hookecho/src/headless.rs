@@ -1409,6 +1409,7 @@ pub fn run_mrms(out_path: &str) -> anyhow::Result<()> {
     let (wx0, wy0) = lonlat_to_world(field.lon_west, field.lat_north);
     let (wx1, wy1) = lonlat_to_world(field.lon_east, field.lat_south);
     let upload = MrmsUpload {
+        rgba: false,
         data,
         nx: field.nx as u32,
         ny: field.ny as u32,
@@ -2314,6 +2315,7 @@ pub fn run_hrrr_layer(
         let (wx0, wy0) = lonlat_to_world(f.lon_west, f.lat_north);
         let (wx1, wy1) = lonlat_to_world(f.lon_east, f.lat_south);
         let upload = MrmsUpload {
+            rgba: false,
             data,
             nx: f.nx as u32,
             ny: f.ny as u32,
@@ -2368,6 +2370,7 @@ pub fn run_hrrr_layer(
     let (wx0, wy0) = lonlat_to_world(f.lon_west, f.lat_north);
     let (wx1, wy1) = lonlat_to_world(f.lon_east, f.lat_south);
     let upload = MrmsUpload {
+        rgba: false,
         data,
         nx: f.nx as u32,
         ny: f.ny as u32,

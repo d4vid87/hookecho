@@ -54,6 +54,7 @@ impl HookEchoApp {
                     FL::GoesC13
                         | FL::GoesWaterVapor
                         | FL::GoesVisible
+                        | FL::GoesTrueColor
                         | FL::Mrms
                         | FL::Mosaic
                         | FL::Rotation
@@ -252,6 +253,13 @@ impl HookEchoApp {
                 "National",
                 "GOES red visible (C02)",
                 "Native high-resolution daytime reflectance from GOES ABI",
+                true,
+            ),
+            (
+                FL::GoesTrueColor,
+                "National",
+                "GOES true color",
+                "Daytime natural-color satellite imagery composed from native ABI channels",
                 true,
             ),
             (

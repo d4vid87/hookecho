@@ -88,6 +88,10 @@ pub struct RgbImage {
     pub pixels: Vec<[u8; 4]>,
     pub valid_time: DateTime<Utc>,
     pub recipe: &'static RgbRecipe,
+    pub lon_west: f64,
+    pub lon_east: f64,
+    pub lat_north: f64,
+    pub lat_south: f64,
 }
 
 pub async fn fetch_rgb(
@@ -112,23 +116,32 @@ pub fn compose_rgb(recipe: &'static RgbRecipe, channels: [&Image; 3]) -> anyhow:
             .iter()
             .enumerate()
             .all(|(index, image)| image.band == recipe.bands[index]
-                && image.width == first.width
-                && image.height == first.height
-                && image.x == first.x
-                && image.y == first.y
                 && (image.valid_time - first.valid_time).num_seconds().abs() <= 120),
-        "ABI RGB channels differ in band, grid, or valid time"
+        "ABI RGB channels differ in band or valid time"
     );
     let pixels = (0..first.values.len())
         .map(|index| {
             let mut pixel = [0, 0, 0, 0];
-            if channels
-                .iter()
-                .all(|image| image.quality[index] < 2 && image.values[index].is_finite())
-            {
+            let row = index / first.width;
+            let col = index % first.width;
+            let values = first
+                .projection
+                .lon_lat(first.x[col], first.y[row])
+                .map(|(lon, lat)| {
+                    std::array::from_fn(|channel| {
+                        let image = channels[channel];
+                        if image.x == first.x && image.y == first.y {
+                            image.sample_at(index)
+                        } else {
+                            image.sample_nearest(lon, lat)
+                        }
+                    })
+                });
+            if let Some([Some(red), Some(green), Some(blue)]) = values {
+                let values = [red, green, blue];
                 for channel in 0..3 {
                     let (low, high) = recipe.ranges[channel];
-                    let normalized = ((channels[channel].values[index] - low) / (high - low))
+                    let normalized = ((values[channel] - low) / (high - low))
                         .clamp(0.0, 1.0)
                         .powf(1.0 / recipe.gamma[channel]);
                     pixel[channel] = (normalized * 255.0).round() as u8;
@@ -138,6 +151,9 @@ pub fn compose_rgb(recipe: &'static RgbRecipe, channels: [&Image; 3]) -> anyhow:
             pixel
         })
         .collect();
+    let (lon_west, lon_east, lat_south, lat_north) = first
+        .bounds()
+        .ok_or_else(|| anyhow::anyhow!("ABI RGB image is off Earth"))?;
     Ok(RgbImage {
         width: first.width,
         height: first.height,
@@ -148,6 +164,10 @@ pub fn compose_rgb(recipe: &'static RgbRecipe, channels: [&Image; 3]) -> anyhow:
             .min()
             .unwrap_or(first.valid_time),
         recipe,
+        lon_west,
+        lon_east,
+        lat_north,
+        lat_south,
     })
 }
 
@@ -321,13 +341,17 @@ pub struct Image {
 }
 
 impl Image {
+    fn sample_at(&self, index: usize) -> Option<f32> {
+        let value = *self.values.get(index)?;
+        (self.quality.get(index).copied().unwrap_or(3) < 2 && value.is_finite()).then_some(value)
+    }
+
     pub fn sample_nearest(&self, lon: f64, lat: f64) -> Option<f32> {
         let (x, y) = self.projection.scan_angles(lon, lat)?;
         let col = nearest(&self.x, x)?;
         let row = nearest(&self.y, y)?;
         let index = row.checked_mul(self.width)?.checked_add(col)?;
-        let value = *self.values.get(index)?;
-        (self.quality.get(index).copied().unwrap_or(3) < 2 && value.is_finite()).then_some(value)
+        self.sample_at(index)
     }
 
     /// Regrid native ABI values only for the existing display-texture pipeline.
@@ -595,7 +619,12 @@ mod tests {
         let rgb = compose_rgb(&TRUE_COLOR, [&base, &green, &blue]).unwrap();
         assert_eq!(rgb.pixels[0], [136, 136, 136, 255]);
         assert_eq!(rgb.pixels[1], [0, 0, 0, 0]);
-        blue.x[1] = 2.0;
+        blue.width = 3;
+        blue.x = vec![0.0, 0.5, 1.0];
+        blue.values = vec![0.25; 3];
+        blue.quality = vec![0; 3];
+        assert!(compose_rgb(&TRUE_COLOR, [&base, &green, &blue]).is_ok());
+        blue.valid_time += chrono::Duration::minutes(3);
         assert!(compose_rgb(&TRUE_COLOR, [&base, &green, &blue]).is_err());
     }
 }

@@ -737,9 +737,13 @@ pub fn ramp_for(layer: FieldLayer) -> Option<&'static FieldRamp> {
         FL::ThunderProb => &THUNDER_PROB,
         // Composite is reflectivity in dBZ, so like the mosaic it follows the user's own
         // reflectivity `.pal` rather than a fixed ramp of its own.
-        FL::Mrms | FL::Mosaic | FL::CompositeLocal | FL::Hrrr | FL::Lightning | FL::ModelDiff => {
-            return None
-        }
+        FL::Mrms
+        | FL::Mosaic
+        | FL::CompositeLocal
+        | FL::Hrrr
+        | FL::Lightning
+        | FL::ModelDiff
+        | FL::GoesTrueColor => return None,
     })
 }
 
@@ -749,7 +753,7 @@ mod tests {
 
     /// Layers colored outside this table. A new `FieldLayer` must join the table or this list —
     /// forgetting both silently ships a layer with no legend.
-    const NO_RAMP: [FieldLayer; 6] = [
+    const NO_RAMP: [FieldLayer; 7] = [
         FieldLayer::Mrms,
         FieldLayer::Mosaic,
         FieldLayer::CompositeLocal,
@@ -758,6 +762,7 @@ mod tests {
         // The difference layer's ramp is symmetric about zero and rebuilt whenever the field
         // changes, so it is baked in `fielddiff`, not tabulated here.
         FieldLayer::ModelDiff,
+        FieldLayer::GoesTrueColor,
     ];
 
     #[test]

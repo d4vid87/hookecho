@@ -239,6 +239,8 @@ enum OverlayMsg {
         wxdata::field::FieldFrame,
         Option<wxdata::mrms::MrmsField>,
     ),
+    /// A direct RGBA satellite composite.
+    Rgb(crate::render::FieldLayer, wxdata::abi::RgbImage),
     /// A model-difference grid plus the two valid times it compared, for the layer's own row.
     ModelDiff(wxdata::field::FieldFrame, (String, String)),
     /// `(0 °C, −20 °C)` level heights above sea level, in metres, at the active radar.
@@ -338,6 +340,7 @@ enum OverlaySource {
     Field(crate::render::FieldLayer, String),
     /// Native GOES ABI imagery for a registered band.
     GoesAbi(crate::render::FieldLayer, u8),
+    GoesRgb,
     /// Local storm reports: live (`None`) or a 30-min archive bucket (Unix secs / 1800).
     StormReports(Option<i64>),
     Spotters,
@@ -591,6 +594,7 @@ impl OverlaySource {
             Self::ProbSevere => RequestLane::Feed("ProbSevere"),
             Self::Fronts => RequestLane::Feed("Surface analysis"),
             Self::GoesAbi(layer, _) => RequestLane::Field(*layer),
+            Self::GoesRgb => RequestLane::Field(crate::render::FieldLayer::GoesTrueColor),
             Self::FreezingLevels(..) => RequestLane::Feed("Freezing levels"),
             Self::Obs { .. } => RequestLane::Feed("Radar observations"),
             Self::Vwp(..) => RequestLane::Feed("VAD profile"),
@@ -699,6 +703,16 @@ impl OverlaySource {
                     None,
                 )
             }
+            OverlaySource::GoesRgb => OverlayMsg::Rgb(
+                crate::render::FieldLayer::GoesTrueColor,
+                wxdata::abi::fetch_rgb(
+                    http,
+                    wxdata::abi::Satellite::East,
+                    wxdata::abi::Scene::Conus,
+                    &wxdata::abi::TRUE_COLOR,
+                )
+                .await?,
+            ),
             OverlaySource::SnowBands => {
                 // Both grids at once: the mask is useless without the echo and vice versa.
                 let (mosaic, flags) = futures_util::future::try_join(
@@ -1716,7 +1730,7 @@ pub(crate) struct PaletteEntry {
 fn field_refresh_secs(layer: crate::render::FieldLayer) -> u64 {
     use crate::render::FieldLayer as FL;
     match layer {
-        FL::GoesC13 | FL::GoesWaterVapor | FL::GoesVisible => 300,
+        FL::GoesC13 | FL::GoesWaterVapor | FL::GoesVisible | FL::GoesTrueColor => 300,
         FL::Lightning | FL::AzShear => 60,
         FL::Mrms | FL::Mesh | FL::Rotation | FL::Hrrr | FL::Mosaic => 120,
         // QPE accumulations update on a ~2-minute MRMS cadence.
@@ -8401,6 +8415,12 @@ impl HookEchoApp {
                     if let Some(s) = self.fields.get_mut(&layer) {
                         s.pending = Some(upload);
                         s.frame = Some(frame);
+                    }
+                }
+                OverlayMsg::Rgb(layer, image) => {
+                    let upload = rgb_upload(&image);
+                    if let Some(state) = self.fields.get_mut(&layer) {
+                        state.pending = Some(upload);
                     }
                 }
                 OverlayMsg::ModelDiff(frame, valid) => {
@@ -15703,6 +15723,7 @@ fn mrms_upload(f: &wxdata::mrms::MrmsField, table: &ColorTable) -> crate::render
     let (wx1, wy1) = lonlat_to_world(f.lon_east, f.lat_south);
     crate::render::MrmsUpload {
         data,
+        rgba: false,
         nx: f.nx as u32,
         ny: f.ny as u32,
         world_min: [wx0 as f32, wy0 as f32],
@@ -15725,6 +15746,35 @@ fn mrms_upload(f: &wxdata::mrms::MrmsField, table: &ColorTable) -> crate::render
     }
 }
 
+fn rgb_upload(image: &wxdata::abi::RgbImage) -> crate::render::MrmsUpload {
+    use crate::render::mercator::lonlat_to_world;
+    let (wx0, wy0) = lonlat_to_world(image.lon_west, image.lat_north);
+    let (wx1, wy1) = lonlat_to_world(image.lon_east, image.lat_south);
+    crate::render::MrmsUpload {
+        data: image.pixels.iter().flatten().copied().collect(),
+        rgba: true,
+        nx: image.width as u32,
+        ny: image.height as u32,
+        world_min: [wx0 as f32, wy0 as f32],
+        world_max: [wx1 as f32, wy1 as f32],
+        uniform: [
+            image.lon_west as f32,
+            image.lat_north as f32,
+            image.lon_east as f32,
+            image.lat_south as f32,
+            image.width as f32,
+            image.height as f32,
+            1.0,
+            1.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+        ],
+        lut: vec![0; 256 * 4],
+    }
+}
+
 /// Build a field-layer GPU upload from a grid: `map` turns each cell value into a LUT index
 /// (0 = transparent, 2..=255 = data), `lut` is the 256-entry RGBA color table.
 pub(crate) fn field_index_upload(
@@ -15742,6 +15792,7 @@ pub(crate) fn field_index_upload(
     let (wx1, wy1) = lonlat_to_world(f.lon_east, f.lat_south);
     crate::render::MrmsUpload {
         data,
+        rgba: false,
         nx: f.nx as u32,
         ny: f.ny as u32,
         world_min: [wx0 as f32, wy0 as f32],
@@ -16560,6 +16611,19 @@ impl eframe::App for HookEchoApp {
             if stale {
                 self.fields.entry(layer).or_default().last_fetch = Some(Instant::now());
                 self.spawn_overlay(ctx, OverlaySource::GoesAbi(layer, band));
+            }
+        }
+        {
+            let layer = FL::GoesTrueColor;
+            let stale = self.field_wanted(layer)
+                && self.fields.get(&layer).is_none_or(|state| {
+                    state
+                        .last_fetch
+                        .is_none_or(|time| time.elapsed().as_secs() >= field_refresh_secs(layer))
+                });
+            if stale {
+                self.fields.entry(layer).or_default().last_fetch = Some(Instant::now());
+                self.spawn_overlay(ctx, OverlaySource::GoesRgb);
             }
         }
         // Snow bands: the mosaic and the precipitation-type grid, cut to the banded snow.
@@ -18458,7 +18522,9 @@ mod tropical_click_tests {
 
 #[cfg(test)]
 mod field_lut_tests {
-    use super::{categorical_lut, distinct_tilts, glm_style, ramp_lut, ramp_lut_a, windy_url};
+    use super::{
+        categorical_lut, distinct_tilts, glm_style, ramp_lut, ramp_lut_a, rgb_upload, windy_url,
+    };
 
     #[test]
     fn distinct_tilts_skips_sails_repeats() {
@@ -18527,6 +18593,25 @@ mod field_lut_tests {
         assert_eq!(opaque[3], 0, "index 0 clear");
         let translucent = ramp_lut_a(&[(0.0, [0, 0, 0]), (1.0, [255, 255, 255])], 150);
         assert_eq!(translucent[255 * 4 + 3], 150, "top index uses given alpha");
+    }
+
+    #[test]
+    fn rgb_upload_marks_direct_color_and_preserves_pixels() {
+        let image = wxdata::abi::RgbImage {
+            width: 2,
+            height: 1,
+            pixels: vec![[1, 2, 3, 255], [4, 5, 6, 0]],
+            valid_time: chrono::Utc::now(),
+            recipe: &wxdata::abi::TRUE_COLOR,
+            lon_west: -100.0,
+            lon_east: -98.0,
+            lat_north: 40.0,
+            lat_south: 39.0,
+        };
+        let upload = rgb_upload(&image);
+        assert!(upload.rgba);
+        assert_eq!(upload.data, [1, 2, 3, 255, 4, 5, 6, 0]);
+        assert_eq!(upload.uniform[7], 1.0);
     }
 }
 

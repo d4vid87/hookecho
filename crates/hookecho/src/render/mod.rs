@@ -70,6 +70,7 @@ pub enum FieldLayer {
     GoesC13,
     GoesWaterVapor,
     GoesVisible,
+    GoesTrueColor,
     Mrms,
     Hrrr,
     Rotation,
@@ -151,6 +152,7 @@ impl FieldLayer {
             FieldLayer::GoesC13
                 | FieldLayer::GoesWaterVapor
                 | FieldLayer::GoesVisible
+                | FieldLayer::GoesTrueColor
                 | FieldLayer::Mrms
                 | FieldLayer::Mosaic
                 | FieldLayer::Hrrr
@@ -172,12 +174,13 @@ impl FieldLayer {
     }
 
     /// Fixed bottom-to-top paint order within each band.
-    pub const DRAW_ORDER: [FieldLayer; 41] = [
+    pub const DRAW_ORDER: [FieldLayer; 42] = [
         // Below-radar context band (bottom to top). The global models sit at the very bottom:
         // they are the synoptic backdrop everything else is drawn against.
         FieldLayer::GoesC13,
         FieldLayer::GoesWaterVapor,
         FieldLayer::GoesVisible,
+        FieldLayer::GoesTrueColor,
         FieldLayer::GlobalMslp,
         FieldLayer::GlobalHeight500,
         FieldLayer::GlobalTemp2m,
@@ -226,6 +229,7 @@ impl FieldLayer {
             FieldLayer::GoesC13 => "goes-c13",
             FieldLayer::GoesWaterVapor => "goes-water-vapor",
             FieldLayer::GoesVisible => "goes-visible",
+            FieldLayer::GoesTrueColor => "goes-true-color",
             FieldLayer::Mrms => "mrms",
             FieldLayer::Hrrr => "hrrr",
             FieldLayer::Rotation => "rotation",
@@ -399,6 +403,8 @@ mod field_slug_tests {
 /// A national MRMS mosaic to upload: an R8 index grid + LUT, warped plate-carrée→mercator.
 pub struct MrmsUpload {
     pub data: Vec<u8>,
+    /// `data` contains RGBA bytes instead of one LUT index per cell.
+    pub rgba: bool,
     pub nx: u32,
     pub ny: u32,
     /// World-space quad (mercator bbox of the grid).
@@ -1462,7 +1468,11 @@ impl RenderResources {
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::R8Uint,
+            format: if m.rgba {
+                wgpu::TextureFormat::Rgba8Uint
+            } else {
+                wgpu::TextureFormat::R8Uint
+            },
             usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
             view_formats: &[],
         });
@@ -1476,7 +1486,7 @@ impl RenderResources {
             &m.data,
             wgpu::TexelCopyBufferLayout {
                 offset: 0,
-                bytes_per_row: Some(m.nx),
+                bytes_per_row: Some(m.nx * if m.rgba { 4 } else { 1 }),
                 rows_per_image: Some(m.ny),
             },
             size,
