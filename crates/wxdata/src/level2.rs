@@ -159,6 +159,76 @@ pub struct GateSample {
     pub gate: usize,
 }
 
+/// One unquantized Level II gate sampled directly from the decoded radial.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct NativeGateSample {
+    pub value: Option<f32>,
+    pub below_threshold: bool,
+    pub folded: bool,
+    pub azimuth_deg: f32,
+    pub slant_range_km: f32,
+    pub ground_range_km: f32,
+    pub elevation_deg: f32,
+    pub beam_height_ft: f64,
+    pub gate: usize,
+    pub gate_spacing_km: f32,
+    pub collected_at: chrono::DateTime<chrono::Utc>,
+}
+
+/// Sample the nearest native radial and gate without palette encoding or display resampling.
+pub fn sample_native(
+    scan: &Scan,
+    moment: Moment,
+    tilt: usize,
+    lon: f64,
+    lat: f64,
+) -> Option<NativeGateSample> {
+    if moment == Moment::SpecificDifferentialPhase {
+        return None; // KDP is derived during binning; there is no transmitted native gate.
+    }
+    let site = scan.site()?;
+    let sweep = scan.sweeps().get(tilt)?;
+    let elevation_deg = sweep.elevation_angle_degrees()?;
+    let (ground_range_km, bearing) =
+        crate::xsection::dist_bearing(site.longitude() as f64, site.latitude() as f64, lon, lat);
+    let radial = sweep
+        .radials()
+        .iter()
+        .filter(|radial| moment.select(radial).is_some())
+        .min_by(|a, b| {
+            let delta =
+                |angle: f32| ((angle as f64 - bearing + 180.0).rem_euclid(360.0) - 180.0).abs();
+            delta(a.azimuth_angle_degrees()).total_cmp(&delta(b.azimuth_angle_degrees()))
+        })?;
+    let data = moment.select(radial)?;
+    let slant_range_km =
+        crate::xsection::slant_from_ground_km(ground_range_km, elevation_deg as f64);
+    let gate = ((slant_range_km - data.first_gate_range_km()) / data.gate_interval_km()).floor();
+    if gate < 0.0 || gate >= data.gate_count() as f64 {
+        return None;
+    }
+    let gate = gate as usize;
+    let (value, below_threshold, folded) = match data.iter().nth(gate)? {
+        MomentValue::Value(value) => (Some(value), false, false),
+        MomentValue::BelowThreshold => (None, true, false),
+        MomentValue::RangeFolded => (None, false, true),
+    };
+    Some(NativeGateSample {
+        value,
+        below_threshold,
+        folded,
+        azimuth_deg: radial.azimuth_angle_degrees(),
+        slant_range_km: slant_range_km as f32,
+        ground_range_km: ground_range_km as f32,
+        elevation_deg,
+        beam_height_ft: crate::xsection::beam_height_km(slant_range_km, elevation_deg as f64)
+            * 3280.84,
+        gate,
+        gate_spacing_km: data.gate_interval_km() as f32,
+        collected_at: chrono::DateTime::from_timestamp_millis(radial.collection_timestamp())?,
+    })
+}
+
 impl BinnedSweep {
     /// The gate under a ground position, or `None` when it falls outside this sweep.
     ///
@@ -854,6 +924,43 @@ mod tests {
             (got.value.unwrap() - want_value).abs() < 0.01,
             "value {got:?}"
         );
+    }
+
+    #[test]
+    fn native_sampling_preserves_the_radars_value_and_gate_metadata() {
+        let scan = nexrad_data::volume::File::new(
+            include_bytes!("../tests/data/kdmx-one-sweep.bin").to_vec(),
+        )
+        .scan()
+        .expect("fixture decodes");
+        let radial = &scan.sweeps()[0].radials()[100];
+        let data = radial.reflectivity().expect("fixture has reflectivity");
+        let (gate, expected) = data
+            .iter()
+            .enumerate()
+            .find_map(|(gate, value)| match value {
+                MomentValue::Value(value) => Some((gate, value)),
+                _ => None,
+            })
+            .expect("fixture has a measured gate");
+        let slant = data.first_gate_range_km() + (gate as f64 + 0.5) * data.gate_interval_km();
+        let ground = crate::xsection::ground_from_slant_km(
+            slant,
+            scan.sweeps()[0].elevation_angle_degrees().unwrap() as f64,
+        );
+        let site = scan.site().unwrap();
+        let (lon, lat) = destination(
+            site.longitude() as f64,
+            site.latitude() as f64,
+            radial.azimuth_angle_degrees() as f64,
+            ground,
+        );
+        let sample = sample_native(&scan, Moment::Reflectivity, 0, lon, lat).unwrap();
+        assert_eq!(sample.value, Some(expected));
+        assert_eq!(sample.gate, gate);
+        assert!((sample.gate_spacing_km as f64 - data.gate_interval_km()).abs() < 1e-6);
+        assert!((sample.slant_range_km as f64 - slant).abs() < data.gate_interval_km());
+        assert!(sample.beam_height_ft > 0.0);
     }
 
     /// The two sentinel codes are not values, and must not be reported as one.

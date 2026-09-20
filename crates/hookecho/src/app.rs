@@ -11784,6 +11784,45 @@ impl HookEchoApp {
         } else {
             Vec::new()
         };
+        let radar_probe = response.hover_pos().and_then(|pos| {
+            let w = cam.screen_to_world((pos.x - prect.left(), pos.y - prect.top()), vp);
+            let (lon, lat) = crate::render::mercator::world_to_lonlat(w.0, w.1);
+            let view = &self.views[idx];
+            let volume = view.volume.as_ref()?;
+            let sample = wxdata::level2::sample_native(
+                &volume.scan,
+                view.moment,
+                view.tilt,
+                lon,
+                lat,
+            )?;
+            let value = sample.value.map_or_else(
+                || {
+                    if sample.folded {
+                        "Range folded".to_string()
+                    } else if sample.below_threshold {
+                        "Below threshold".to_string()
+                    } else {
+                        "Missing".to_string()
+                    }
+                },
+                |value| format!("{value:.2} {}", view.moment.units()),
+            );
+            Some(format!(
+                "{} {} · {}\n{value}\nElevation {:.2}° · azimuth {:.2}°\nGround {:.1} km · slant {:.1} km · beam {:.0} ft\nGate {} · {:.3} km spacing\n{}",
+                view.site.as_deref().unwrap_or("Radar"),
+                volume.vcp,
+                view.moment.short_name(),
+                sample.elevation_deg,
+                sample.azimuth_deg,
+                sample.ground_range_km,
+                sample.slant_range_km,
+                sample.beam_height_ft,
+                sample.gate,
+                sample.gate_spacing_km,
+                sample.collected_at.format("%Y-%m-%d %H:%M:%S UTC")
+            ))
+        });
 
         // --- Painter overlays (clipped to this pane) ---
         let painter = ui.painter_at(prect);
@@ -13639,6 +13678,8 @@ impl HookEchoApp {
                         sample.method
                     ));
                 }
+            } else if let Some(probe) = &radar_probe {
+                response.clone().show_tooltip_text(probe);
             }
         }
 
