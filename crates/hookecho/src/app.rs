@@ -10107,56 +10107,16 @@ impl HookEchoApp {
     /// has a fetch block of its own (HRRR forecast, the environment suite, the global models,
     /// per-site Level 3 grids).
     ///
-    /// One exhaustive match rather than a skip list and a second match that had to agree with it:
-    /// they drifted, the global model fields were missing from the skip list, and switching one on
-    /// walked into an `unreachable!()` and took the app down. A layer added to `FieldLayer` now
-    /// fails to compile here instead of panicking at runtime.
+    /// Product routing lives beside the MRMS descriptors so the UI does not maintain a second
+    /// source-path table. Unmigrated fields have no descriptor and return `None`.
     fn mrms_product(&self, layer: crate::render::FieldLayer) -> Option<String> {
-        use crate::render::FieldLayer as FL;
-        Some(match layer {
-            FL::Mrms => wxdata::mrms::REFLECTIVITY.to_string(),
-            FL::Lightning => {
-                wxdata::mrms::lightning_density(self.settings.lightning_minutes).to_string()
-            }
-            FL::Mesh => wxdata::mrms::MESH.to_string(),
-            FL::AzShear => wxdata::mrms::AZSHEAR.to_string(),
-            FL::Rotation => wxdata::mrms::rotation_track(self.rotation_minutes).to_string(),
-            FL::PrecipRate => wxdata::mrms::PRECIP_RATE.to_string(),
-            FL::Qpe1h => wxdata::mrms::QPE_01H.to_string(),
-            FL::Qpe24h => wxdata::mrms::QPE_24H.to_string(),
-            FL::PrecipType => wxdata::mrms::PRECIP_TYPE.to_string(),
-            FL::FlashFlood => wxdata::mrms::FLASH_ARI30.to_string(),
-            FL::HailSwath => wxdata::mrms::hail_swath(self.hail_minutes).to_string(),
-            FL::Hrrr
-            | FL::Cape
-            | FL::Srh
-            | FL::Vil
-            | FL::EchoTops
-            | FL::Hca
-            | FL::UpdraftHelicity
-            | FL::Smoke
-            | FL::Mosaic
-            | FL::CompositeLocal
-            | FL::VilLocal
-            | FL::VilDensity
-            | FL::EtopLocal
-            | FL::HailMehs
-            | FL::HailPosh
-            | FL::Snowfall
-            | FL::SnowAnalysis
-            | FL::GlobalMslp
-            | FL::GlobalHeight500
-            | FL::GlobalTemp2m
-            | FL::GlobalDewpoint2m
-            | FL::GlobalWind10m
-            | FL::GlobalPrecip
-            | FL::ModelDiff
-            | FL::GlmFed
-            // Built from two grids at once, so it has a fetch block of its own.
-            | FL::SnowBands
-            // Model layers, fetched on the forecast-hour scrub rather than a product path.
-            | FL::ThunderProb => return None,
-        })
+        wxdata::mrms::product_for_id(
+            layer.descriptor()?.id.0,
+            self.settings.lightning_minutes,
+            self.hail_minutes,
+            self.rotation_minutes,
+        )
+        .map(str::to_string)
     }
 
     /// Per-frame per-pane: react to site changes, keep the timeline current, and (for the active

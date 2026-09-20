@@ -77,6 +77,30 @@ pub static DESCRIPTORS: [&FieldDescriptor; 11] = [
     &PRECIP_TYPE_DESCRIPTOR,
     &FLASH_ARI30_DESCRIPTOR,
 ];
+
+/// Source object path for a registered MRMS field.
+pub fn product_for_id(
+    id: &str,
+    lightning_minutes: u16,
+    hail_minutes: u16,
+    rotation_minutes: u16,
+) -> Option<&'static str> {
+    Some(match id {
+        "mrms.composite-reflectivity" => REFLECTIVITY,
+        "mrms.nldn-cg-density" => lightning_density(lightning_minutes),
+        "mrms.mesh" => MESH,
+        "mrms.mesh-max" => hail_swath(hail_minutes),
+        "mrms.azshear-0-2km" => AZSHEAR,
+        "mrms.rotation-track" => rotation_track(rotation_minutes),
+        "mrms.qpe-1h" => QPE_01H,
+        "mrms.qpe-24h" => QPE_24H,
+        "mrms.precip-rate" => PRECIP_RATE,
+        "mrms.precip-type" => PRECIP_TYPE,
+        "mrms.flash-ari30" => FLASH_ARI30,
+        _ => return None,
+    })
+}
+
 /// Cloud-to-ground lightning strike density, 5-minute average (strikes/km²/min).
 pub const LIGHTNING: &str = "CONUS/NLDN_CG_005min_AvgDensity_00.00";
 
@@ -735,22 +759,13 @@ mod tests {
 
     #[test]
     fn supported_products_have_unique_stable_descriptors() {
-        let products = [
-            REFLECTIVITY,
-            lightning_density(30),
-            MESH,
-            hail_swath(60),
-            AZSHEAR,
-            rotation_track(120),
-            QPE_01H,
-            QPE_24H,
-            PRECIP_RATE,
-            PRECIP_TYPE,
-            FLASH_ARI30,
-        ];
-        let mut ids: Vec<_> = products
+        let mut ids: Vec<_> = DESCRIPTORS
             .into_iter()
-            .map(|product| descriptor_for_product(product).unwrap().id.0)
+            .map(|descriptor| {
+                let product = product_for_id(descriptor.id.0, 30, 60, 120).unwrap();
+                assert_eq!(descriptor_for_product(product).unwrap().id, descriptor.id);
+                descriptor.id.0
+            })
             .collect();
         ids.sort_unstable();
         ids.dedup();

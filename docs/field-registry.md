@@ -33,5 +33,6 @@ use nearest-neighbor sampling.
 now has a descriptor and enters through the same frame/provenance path. Acquisition records the
 immutable S3 object key and receipt time, the renderer consumes native fields through the
 compatibility bridge, and Layer options → Data details exposes source, valid/received times,
-units, grid, and source identity. The common sampler reads native values rather than the display
-texture.
+units, grid, and source identity. Descriptor IDs select source objects through the MRMS registry;
+the app no longer carries a second product-path table. The common sampler reads native values
+rather than the display texture.
