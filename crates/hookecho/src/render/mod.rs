@@ -289,6 +289,7 @@ impl FieldLayer {
             FL::GlobalWind10m => &wxdata::global::WIND_10M_DESCRIPTOR,
             FL::GlobalPrecip => &wxdata::global::PRECIP_DESCRIPTOR,
             FL::SnowAnalysis => &wxdata::nohrsc::SNOWFALL_DESCRIPTOR,
+            FL::ModelDiff => &crate::fielddiff::MODEL_DIFF_DESCRIPTOR,
             _ => return None,
         })
     }

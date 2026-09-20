@@ -236,7 +236,7 @@ enum OverlayMsg {
     /// A registry-backed grid. Unmigrated fields continue through `Field` above.
     RegisteredField(crate::render::FieldLayer, wxdata::field::FieldFrame),
     /// A model-difference grid plus the two valid times it compared, for the layer's own row.
-    ModelDiff(wxdata::mrms::MrmsField, (String, String)),
+    ModelDiff(wxdata::field::FieldFrame, (String, String)),
     /// `(0 °C, −20 °C)` level heights above sea level, in metres, at the active radar.
     FreezingLevels(f64, f64),
     /// Local storm reports: live trailing window (`None`) or an archive bucket (feature CC).
@@ -704,7 +704,11 @@ impl OverlaySource {
                             gfs.valid().format("%d %H:%MZ").to_string(),
                             ecmwf.valid().format("%d %H:%MZ").to_string(),
                         );
-                        (gfs.field, ecmwf.field, valid)
+                        (
+                            gfs.into_frame(g.descriptor()),
+                            ecmwf.into_frame(g.descriptor()),
+                            valid,
+                        )
                     }
                     DiffField::Cape | DiffField::Srh => {
                         let (var, level, min_valid) = match field {
@@ -740,11 +744,19 @@ impl OverlaySource {
                             hrrr.run.format("%d %H:%MZ").to_string(),
                             rap.run.format("%d %H:%MZ").to_string(),
                         );
-                        (hrrr.field, rap.field, valid)
+                        let descriptor = match field {
+                            DiffField::Cape => &wxdata::hrrr::CAPE_DESCRIPTOR,
+                            _ => &wxdata::hrrr::SRH_DESCRIPTOR,
+                        };
+                        (
+                            hrrr.into_frame(descriptor, wxdata::hrrr::Model::Hrrr),
+                            rap.into_frame(descriptor, wxdata::hrrr::Model::Rap),
+                            valid,
+                        )
                     }
                 };
-                let d = crate::fielddiff::diff(&a, &b)
-                    .ok_or_else(|| anyhow::anyhow!("the two models cover nothing in common"))?;
+                let d = crate::fielddiff::diff_frames(&a, &b, field.descriptor())
+                    .ok_or_else(|| anyhow::anyhow!("the model fields are incompatible"))?;
                 OverlayMsg::ModelDiff(d, valid)
             }
             OverlaySource::StormReports(bucket) => {
@@ -8318,20 +8330,21 @@ impl HookEchoApp {
                         s.frame = Some(frame);
                     }
                 }
-                OverlayMsg::ModelDiff(field, valid) => {
+                OverlayMsg::ModelDiff(frame, valid) => {
                     let layer = crate::render::FieldLayer::ModelDiff;
                     let (range, deadband) = self.diff_field.range();
                     let scale = self.diff_field.input_scale();
                     let upload = field_index_upload(
-                        &field,
+                        frame.field(),
                         |v| crate::fielddiff::diff_index(v * scale, range),
                         crate::fielddiff::diverging_lut(range, deadband),
                     );
                     if let Some(s) = self.fields.get_mut(&layer) {
                         s.pending = Some(upload);
+                        s.frame = Some(frame.clone());
                     }
                     self.diff_valid = Some(valid);
-                    self.diff_grid = Some(field);
+                    self.diff_grid = Some(frame.field().clone());
                 }
                 OverlayMsg::StormReports(bucket, reports) => match bucket {
                     None => self.storm_reports = reports,

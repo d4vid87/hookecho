@@ -53,3 +53,6 @@ do not mix GFS precipitable water with ECMWF accumulated precipitation.
 
 NOHRSC observed snowfall is registry-backed as an analysis accumulation. The frame keeps the
 selected 6/24/48/72-hour source object and its issue, valid, and receipt times.
+
+Model differences are derived registry frames. They require matching valid times and retain both
+contributor identities, the newest receipt time, native difference units, and derived status.

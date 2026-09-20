@@ -10,14 +10,99 @@
 //! draw detail that is not there. GFS and ECMWF already share one lattice, so that pair does not
 //! resample at all.
 
+use wxdata::field::{
+    DataClass, DataStamp, FieldDescriptor, FieldFamily, FieldFrame, FieldId, MissingData,
+    QualitySummary, SamplingPolicy, ValueKind,
+};
 use wxdata::global::GlobalField;
 use wxdata::mrms::MrmsField;
 
+macro_rules! descriptor {
+    ($name:ident, $id:literal, $label:literal, $units:literal) => {
+        static $name: FieldDescriptor = FieldDescriptor {
+            id: FieldId($id),
+            source: "Model comparison",
+            family: FieldFamily::Model,
+            display_name: $label,
+            short_name: $label,
+            search_aliases: &["difference", "comparison"],
+            units: $units,
+            value_kind: ValueKind::Scalar,
+            palette_key: "derived.model-difference",
+            sampling: SamplingPolicy::Bilinear,
+            missing: MissingData::Nan,
+            supports_contours: false,
+            supports_difference: false,
+        };
+    };
+}
+
+pub static MODEL_DIFF_DESCRIPTOR: FieldDescriptor = FieldDescriptor {
+    id: FieldId("derived.model-difference"),
+    source: "Model comparison",
+    family: FieldFamily::Model,
+    display_name: "Model difference",
+    short_name: "Model difference",
+    search_aliases: &["spread", "comparison"],
+    units: "",
+    value_kind: ValueKind::Scalar,
+    palette_key: "derived.model-difference",
+    sampling: SamplingPolicy::Bilinear,
+    missing: MissingData::Nan,
+    supports_contours: false,
+    supports_difference: false,
+};
+descriptor!(
+    DIFF_MSLP,
+    "derived.model-difference.mslp",
+    "MSLP difference",
+    "Pa"
+);
+descriptor!(
+    DIFF_HEIGHT,
+    "derived.model-difference.height-500",
+    "500 hPa height difference",
+    "m"
+);
+descriptor!(
+    DIFF_TEMP,
+    "derived.model-difference.temperature-2m",
+    "2 m temperature difference",
+    "K"
+);
+descriptor!(
+    DIFF_DEWPOINT,
+    "derived.model-difference.dewpoint-2m",
+    "2 m dewpoint difference",
+    "K"
+);
+descriptor!(
+    DIFF_WIND,
+    "derived.model-difference.wind-10m",
+    "10 m wind difference",
+    "m s-1"
+);
+descriptor!(
+    DIFF_PRECIP,
+    "derived.model-difference.precipitable-water",
+    "Precipitable water difference",
+    "kg m-2"
+);
+descriptor!(
+    DIFF_CAPE,
+    "derived.model-difference.cape",
+    "CAPE difference",
+    "J/kg"
+);
+descriptor!(
+    DIFF_SRH,
+    "derived.model-difference.srh",
+    "SRH difference",
+    "m2/s2"
+);
+
 /// Comparisons are scientific only when both operands describe the same valid instant.
-pub fn same_valid_time(
-    a: chrono::DateTime<chrono::Utc>,
-    b: chrono::DateTime<chrono::Utc>,
-) -> bool {
+pub fn same_valid_time(a: chrono::DateTime<chrono::Utc>, b: chrono::DateTime<chrono::Utc>) -> bool {
     a == b
 }
 
@@ -69,6 +154,18 @@ impl Default for DiffField {
 }
 
 impl DiffField {
+    pub fn descriptor(self) -> &'static FieldDescriptor {
+        match self {
+            DiffField::Global(GlobalFieldKind::Mslp) => &DIFF_MSLP,
+            DiffField::Global(GlobalFieldKind::Height500) => &DIFF_HEIGHT,
+            DiffField::Global(GlobalFieldKind::Temp2m) => &DIFF_TEMP,
+            DiffField::Global(GlobalFieldKind::Dewpoint2m) => &DIFF_DEWPOINT,
+            DiffField::Global(GlobalFieldKind::Wind10m) => &DIFF_WIND,
+            DiffField::Global(GlobalFieldKind::Precip) => &DIFF_PRECIP,
+            DiffField::Cape => &DIFF_CAPE,
+            DiffField::Srh => &DIFF_SRH,
+        }
+    }
     /// Every pair uses the same physical quantity and native units. The column-moisture pair is
     /// GFS precipitable water against ECMWF total-column water, both kg/m² (numerically mm).
     pub const ALL: [DiffField; 8] = [
@@ -148,6 +245,30 @@ impl DiffField {
             DiffField::Srh => "m²/s²",
         }
     }
+}
+
+pub fn diff_frames(
+    a: &FieldFrame,
+    b: &FieldFrame,
+    descriptor: &'static FieldDescriptor,
+) -> Option<FieldFrame> {
+    if !same_valid_time(a.stamp.valid_time, b.stamp.valid_time) {
+        return None;
+    }
+    let field = diff(a.field(), b.field())?;
+    Some(FieldFrame::new(
+        descriptor,
+        field,
+        DataStamp {
+            source_identity: format!("{} − {}", a.stamp.source_identity, b.stamp.source_identity),
+            issue_time: None,
+            run_time: None,
+            valid_time: a.stamp.valid_time,
+            received_time: a.stamp.received_time.max(b.stamp.received_time),
+            class: DataClass::Derived,
+            quality: QualitySummary::Unknown,
+        },
+    ))
 }
 
 /// `a - b`, on the coarser of the two lattices, over the part of the world both cover.
@@ -319,6 +440,32 @@ mod tests {
         let d = diff(&a, &b).expect("overlapping");
         assert_eq!((d.nx, d.ny), (11, 11));
         assert!(d.values.iter().all(|v| (v - 3.0).abs() < 1e-4));
+    }
+
+    #[test]
+    fn frame_difference_keeps_both_contributors_and_exact_time() {
+        let valid = chrono::Utc::now();
+        let make = |value, source: &str| {
+            FieldFrame::new(
+                &wxdata::global::MSLP_DESCRIPTOR,
+                grid(2, 2, -100.0, -99.0, 39.0, 40.0, value),
+                DataStamp {
+                    source_identity: source.into(),
+                    issue_time: None,
+                    run_time: None,
+                    valid_time: valid,
+                    received_time: valid,
+                    class: DataClass::Forecast,
+                    quality: QualitySummary::Unknown,
+                },
+            )
+        };
+        let frame = diff_frames(&make(8.0, "gfs"), &make(5.0, "ecmwf"), &DIFF_MSLP)
+            .expect("compatible frames");
+        assert_eq!(frame.stamp.class, DataClass::Derived);
+        assert_eq!(frame.stamp.valid_time, valid);
+        assert_eq!(frame.stamp.source_identity, "gfs − ecmwf");
+        assert_eq!(frame.sample(-99.5, 39.5).value, Some(3.0));
     }
 
     #[test]
