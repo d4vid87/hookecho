@@ -39,6 +39,10 @@ Baseline commit: `9a0847c6521e9d9354c42cde09d291f4f2b67327`.
 | Lite web WASM | 149,346 bytes raw / 72,109 gzip | `scripts/web/build.sh`, generated artifact |
 | Linux release executable | 39,041,288 bytes | `cargo build --release -p hookecho` |
 
+The web gate is currently 4,086,000 gzip bytes. The catalog expansion measured 4,085,243 bytes;
+the 1 KB ceiling increase from 4,085,000 keeps a sub-kilobyte margin while retaining searchable
+product metadata for the full ABI channel catalog.
+
 Startup, resident memory, and interactive frame timing are hardware-dependent. Capture them with
 `scripts/perf/capture.sh` and the in-app performance panel on the release-test hardware before the
 foundation promotion; do not turn one developer-machine run into a universal threshold.
