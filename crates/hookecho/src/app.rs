@@ -8195,11 +8195,20 @@ impl HookEchoApp {
                     generation,
                     result,
                 } => {
+                    let data_time = match &result {
+                        Ok(OverlayMsg::RegisteredField(_, frame)) => Some(frame.stamp.valid_time),
+                        _ => None,
+                    };
                     let current = self
                         .overlay_requests
                         .lock()
                         .unwrap_or_else(std::sync::PoisonError::into_inner)
-                        .finish(&lane, generation, result.as_ref().err().map(|e| e.as_str()));
+                        .finish(
+                            &lane,
+                            generation,
+                            result.as_ref().err().map(|e| e.as_str()),
+                            data_time,
+                        );
                     if !current {
                         log::debug!("discarding stale {} reply", lane.label());
                         continue;
@@ -18875,8 +18884,8 @@ mod request_book_tests {
         assert!(!book.is_current(&cape, old_cape));
         assert!(book.is_current(&cape, current_cape));
         assert!(book.is_current(&srh, current_srh));
-        assert!(book.finish(&cape, current_cape, None));
-        assert!(!book.finish(&cape, old_cape, Some("old failure")));
+        assert!(book.finish(&cape, current_cape, None, None));
+        assert!(!book.finish(&cape, old_cape, Some("old failure"), None));
         let health = book.health(&cape);
         assert_eq!(health.state(), HealthState::Fresh);
         assert!(health.error.is_none());
@@ -18891,10 +18900,22 @@ mod request_book_tests {
         assert_eq!(book.start(lane.clone(), 41), None);
         let changed = book.start(lane.clone(), 42).unwrap();
         assert_ne!(first, changed);
-        assert!(!book.finish(&lane, first, None));
-        assert!(book.finish(&lane, changed, None));
+        assert!(!book.finish(&lane, first, None, None));
+        assert!(book.finish(&lane, changed, None, None));
         // Once completed, the same identity may refresh normally.
         assert!(book.start(lane, 42).is_some());
+    }
+
+    #[test]
+    fn field_health_uses_the_frames_valid_time() {
+        let mut book = RequestBook::default();
+        let lane = RequestLane::Field(FieldLayer::Mrms);
+        let generation = book.start(lane.clone(), 1).unwrap();
+        let valid_time = chrono::Utc::now() - chrono::Duration::minutes(10);
+
+        assert!(book.finish(&lane, generation, None, Some(valid_time)));
+        let age = book.health(&lane).data_age.unwrap().as_secs();
+        assert!((600..=601).contains(&age));
     }
 
     #[tokio::test]

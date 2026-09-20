@@ -109,15 +109,7 @@ impl HookEchoApp {
             PaletteAction::ToggleOutlook => RequestLane::Feed("SPC outlook"),
             _ => return None,
         };
-        let mut health = self.request_health(lane);
-        if let PaletteAction::ToggleField(layer) = action {
-            health.data_age = self
-                .fields
-                .get(&layer)
-                .and_then(|state| state.frame.as_ref())
-                .and_then(|frame| (chrono::Utc::now() - frame.stamp.valid_time).to_std().ok());
-        }
-        Some(health)
+        Some(self.request_health(lane))
     }
 
     /// Every layer/product/tool/window as a searchable, categorized row. Consumed by the layers

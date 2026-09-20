@@ -1,4 +1,5 @@
 use super::{RequestLane, SourceHealth};
+use chrono::{DateTime, Utc};
 use std::collections::HashMap;
 use wxdata::clock::Instant;
 
@@ -24,6 +25,7 @@ struct RequestStatus {
     identity: u64,
     last_attempt: Instant,
     last_success: Option<Instant>,
+    data_time: Option<DateTime<Utc>>,
     last_failure: Option<(Instant, String)>,
     cadence: std::time::Duration,
     abort: Option<futures_util::future::AbortHandle>,
@@ -67,6 +69,7 @@ impl RequestBook {
                 identity,
                 last_attempt: now,
                 last_success: None,
+                data_time: None,
                 last_failure: None,
                 cadence,
                 abort: None,
@@ -114,6 +117,7 @@ impl RequestBook {
         lane: &RequestLane,
         generation: u64,
         error: Option<&str>,
+        data_time: Option<DateTime<Utc>>,
     ) -> bool {
         if !self.is_current(lane, generation) {
             return false;
@@ -123,7 +127,12 @@ impl RequestBook {
             s.abort = None;
             match error {
                 Some(e) => s.last_failure = Some((Instant::now(), e.to_string())),
-                None => s.last_success = Some(Instant::now()),
+                None => {
+                    s.last_success = Some(Instant::now());
+                    if data_time.is_some() {
+                        s.data_time = data_time;
+                    }
+                }
             }
         }
         true
@@ -148,7 +157,9 @@ impl RequestBook {
             fetching: s.fetching,
             last_attempt: Some(now.saturating_duration_since(s.last_attempt)),
             last_success: s.last_success.map(|t| now.saturating_duration_since(t)),
-            data_age: None,
+            data_age: s
+                .data_time
+                .map(|time| (Utc::now() - time).to_std().unwrap_or_default()),
             last_failure: s
                 .last_failure
                 .as_ref()
