@@ -66,6 +66,91 @@ pub fn descriptor_for_band(band: u8) -> Option<&'static FieldDescriptor> {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct RgbRecipe {
+    pub name: &'static str,
+    pub bands: [u8; 3],
+    pub ranges: [(f32, f32); 3],
+    pub gamma: [f32; 3],
+}
+
+pub const TRUE_COLOR: RgbRecipe = RgbRecipe {
+    name: "True color",
+    bands: [2, 3, 1],
+    ranges: [(0.0, 1.0); 3],
+    gamma: [2.2; 3],
+};
+
+#[derive(Debug, Clone)]
+pub struct RgbImage {
+    pub width: usize,
+    pub height: usize,
+    pub pixels: Vec<[u8; 4]>,
+    pub valid_time: DateTime<Utc>,
+    pub recipe: &'static RgbRecipe,
+}
+
+pub async fn fetch_rgb(
+    http: &reqwest::Client,
+    satellite: Satellite,
+    scene: Scene,
+    recipe: &'static RgbRecipe,
+) -> anyhow::Result<RgbImage> {
+    let (red, green, blue) = futures_util::future::try_join3(
+        fetch_latest(http, satellite, scene, recipe.bands[0]),
+        fetch_latest(http, satellite, scene, recipe.bands[1]),
+        fetch_latest(http, satellite, scene, recipe.bands[2]),
+    )
+    .await?;
+    compose_rgb(recipe, [&red, &green, &blue])
+}
+
+pub fn compose_rgb(recipe: &'static RgbRecipe, channels: [&Image; 3]) -> anyhow::Result<RgbImage> {
+    let first = channels[0];
+    anyhow::ensure!(
+        channels
+            .iter()
+            .enumerate()
+            .all(|(index, image)| image.band == recipe.bands[index]
+                && image.width == first.width
+                && image.height == first.height
+                && image.x == first.x
+                && image.y == first.y
+                && (image.valid_time - first.valid_time).num_seconds().abs() <= 120),
+        "ABI RGB channels differ in band, grid, or valid time"
+    );
+    let pixels = (0..first.values.len())
+        .map(|index| {
+            let mut pixel = [0, 0, 0, 0];
+            if channels
+                .iter()
+                .all(|image| image.quality[index] < 2 && image.values[index].is_finite())
+            {
+                for channel in 0..3 {
+                    let (low, high) = recipe.ranges[channel];
+                    let normalized = ((channels[channel].values[index] - low) / (high - low))
+                        .clamp(0.0, 1.0)
+                        .powf(1.0 / recipe.gamma[channel]);
+                    pixel[channel] = (normalized * 255.0).round() as u8;
+                }
+                pixel[3] = 255;
+            }
+            pixel
+        })
+        .collect();
+    Ok(RgbImage {
+        width: first.width,
+        height: first.height,
+        pixels,
+        valid_time: channels
+            .iter()
+            .map(|image| image.valid_time)
+            .min()
+            .unwrap_or(first.valid_time),
+        recipe,
+    })
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Satellite {
     East,
@@ -482,5 +567,35 @@ mod tests {
         assert_eq!(nearest(&[4.0, 2.0, 0.0], 2.9), Some(1));
         assert_eq!(nearest(&[0.0, 2.0], -1.0), Some(0));
         assert_eq!(nearest(&[2.0, 0.0], -1.0), Some(1));
+    }
+
+    #[test]
+    fn declarative_rgb_rejects_bad_pixels_and_mismatched_channels() {
+        let base = Image {
+            width: 2,
+            height: 1,
+            band: 2,
+            values: vec![0.25, 1.0],
+            quality: vec![0, 3],
+            x: vec![0.0, 1.0],
+            y: vec![0.0],
+            projection: Projection {
+                longitude_origin_deg: -75.0,
+                perspective_height_m: 35_786_023.0,
+                semi_major_m: 6_378_137.0,
+                semi_minor_m: 6_356_752.314_14,
+            },
+            valid_time: Utc::now(),
+            source_identity: "fixture".into(),
+        };
+        let mut green = base.clone();
+        green.band = 3;
+        let mut blue = base.clone();
+        blue.band = 1;
+        let rgb = compose_rgb(&TRUE_COLOR, [&base, &green, &blue]).unwrap();
+        assert_eq!(rgb.pixels[0], [136, 136, 136, 255]);
+        assert_eq!(rgb.pixels[1], [0, 0, 0, 0]);
+        blue.x[1] = 2.0;
+        assert!(compose_rgb(&TRUE_COLOR, [&base, &green, &blue]).is_err());
     }
 }
