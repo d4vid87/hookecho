@@ -393,6 +393,7 @@ mod tests {
             cuts_expected: 14,
             radials_received: 360,
             latency: std::time::Duration::ZERO,
+            oldest_radial_age: Some(std::time::Duration::ZERO),
             sails_cuts: 0,
             mrle_cuts: 0,
         }

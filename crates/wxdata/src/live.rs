@@ -54,7 +54,10 @@ impl ScanStatus {
         } else {
             format!("{}/{} cuts", self.cuts_received, self.cuts_expected)
         };
-        format!("{cuts} · {}s latency", self.latency.as_secs())
+        let oldest = self
+            .oldest_radial_age
+            .map_or(String::new(), |age| format!(" · oldest gate {}s", age.as_secs()));
+        format!("{cuts} · {}s latency{oldest}", self.latency.as_secs())
     }
 }
 
@@ -80,6 +83,7 @@ pub struct ScanStatus {
     pub cuts_expected: usize,
     pub radials_received: usize,
     pub latency: Duration,
+    pub oldest_radial_age: Option<Duration>,
     pub sails_cuts: u8,
     pub mrle_cuts: u8,
 }
@@ -378,6 +382,14 @@ async fn emit<F: FnMut(Update)>(
         .iter()
         .map(|sweep| sweep.radials().len())
         .sum();
+    let now = chrono::Utc::now();
+    let oldest_radial_age = new_scan
+        .sweeps()
+        .iter()
+        .flat_map(|sweep| sweep.radials())
+        .filter_map(|radial| chrono::DateTime::from_timestamp_millis(radial.collection_timestamp()))
+        .filter_map(|collected| (now - collected).to_std().ok())
+        .max();
     *merged = Arc::new(new_scan);
     let (name, time) = it
         .current()
@@ -399,7 +411,8 @@ async fn emit<F: FnMut(Update)>(
             cuts_received: *cuts_received,
             cuts_expected,
             radials_received,
-            latency: (chrono::Utc::now() - time).to_std().unwrap_or_default(),
+            latency: (now - time).to_std().unwrap_or_default(),
+            oldest_radial_age,
             sails_cuts,
             mrle_cuts,
         },
@@ -527,10 +540,14 @@ mod tests {
             cuts_expected: 14,
             radials_received: 720,
             latency: Duration::from_secs(8),
+            oldest_radial_age: Some(Duration::from_secs(12)),
             sails_cuts: 2,
             mrle_cuts: 0,
         };
-        assert_eq!(status.summary(), "3/14 cuts · 8s latency");
+        assert_eq!(
+            status.summary(),
+            "3/14 cuts · 8s latency · oldest gate 12s"
+        );
     }
 
     // A sweep covering `azimuths` (as azimuth numbers), collected at `t_ms`.
