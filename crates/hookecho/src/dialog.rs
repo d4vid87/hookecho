@@ -82,6 +82,8 @@ pub enum ImportKind {
     AlertSound,
     /// A GPX track to replay (one this app wrote, or one another chase logger did).
     ChaseGpx,
+    /// A user GIS overlay normalized into the map renderer.
+    Gis,
 }
 
 impl ImportKind {
@@ -92,6 +94,7 @@ impl ImportKind {
             ImportKind::MarkerIcon => "Marker icon",
             ImportKind::AlertSound => "Alert sound",
             ImportKind::ChaseGpx => "GPX track",
+            ImportKind::Gis => "GeoJSON overlay",
         }
     }
 
@@ -102,6 +105,7 @@ impl ImportKind {
             ImportKind::MarkerIcon => &["png"],
             ImportKind::AlertSound => &["wav", "mp3", "ogg", "flac"],
             ImportKind::ChaseGpx => &["gpx"],
+            ImportKind::Gis => &["geojson", "json"],
         }
     }
 
@@ -117,6 +121,7 @@ impl ImportKind {
             // No registered MIME for GPX that pickers agree on; the extension is checked on the
             // way back, same as a palette.
             ImportKind::ChaseGpx => "*/*",
+            ImportKind::Gis => "application/geo+json",
         }
     }
 }
@@ -223,6 +228,7 @@ mod android_open {
             ImportKind::MarkerIcon => "marker",
             ImportKind::AlertSound => "sound",
             ImportKind::ChaseGpx => "gpx",
+            ImportKind::Gis => "gis",
         }
     }
 
@@ -233,6 +239,7 @@ mod android_open {
             "marker" => ImportKind::MarkerIcon,
             "sound" => ImportKind::AlertSound,
             "gpx" => ImportKind::ChaseGpx,
+            "gis" => ImportKind::Gis,
             _ => return None,
         })
     }

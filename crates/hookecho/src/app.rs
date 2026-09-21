@@ -4427,13 +4427,22 @@ impl HookEchoApp {
                 }
                 None => {
                     changed = true;
+                    let imported = cfg
+                        .url
+                        .strip_prefix("gis:")
+                        .and_then(|_| self.settings.web_files.get(&cfg.url))
+                        .map(|text| wxdata::gis::geojson(&cfg.url[4..], text));
                     self.placefiles.push(LoadedPlacefile {
                         url: cfg.url.clone(),
                         enabled: cfg.enabled,
-                        pf: Default::default(),
-                        last_fetch: None,
-                        loaded: false,
-                        error: None,
+                        pf: imported
+                            .as_ref()
+                            .and_then(|result| result.as_ref().ok())
+                            .cloned()
+                            .unwrap_or_default(),
+                        last_fetch: imported.as_ref().map(|_| Instant::now()),
+                        loaded: imported.as_ref().is_some_and(Result::is_ok),
+                        error: imported.and_then(Result::err).map(|error| error.to_string()),
                     });
                 }
             }
@@ -4441,7 +4450,7 @@ impl HookEchoApp {
         // Fetch never-loaded and refresh stale (min 15s cadence).
         let mut to_fetch = Vec::new();
         for lp in &self.placefiles {
-            if !lp.enabled {
+            if !lp.enabled || lp.url.starts_with("gis:") {
                 continue;
             }
             // A plugin's cadence is the user's setting, not the placefile's own RefreshSeconds:
@@ -15406,6 +15415,26 @@ impl HookEchoApp {
                 }
                 Err(e) => self.toast(ToastKind::Error, format!("GPX import failed: {e}")),
             },
+            K::Gis => match import.text() {
+                Ok(text) => match wxdata::gis::geojson(&import.name(), &text) {
+                    Ok(file) => {
+                        let key = format!("gis:{}", import.name());
+                        let items = file.items.len();
+                        self.settings.web_files.insert(key.clone(), text);
+                        if !self.settings.placefiles.iter().any(|cfg| cfg.url == key) {
+                            self.settings.placefiles.push(crate::settings::PlacefileConfig {
+                                url: key.clone(),
+                                enabled: true,
+                                opacity: 1.0,
+                            });
+                        }
+                        self.placefiles.retain(|loaded| loaded.url != key);
+                        self.toast(ToastKind::Success, format!("Imported {items} GIS features"));
+                    }
+                    Err(error) => self.toast(ToastKind::Error, error.to_string()),
+                },
+                Err(error) => self.toast(ToastKind::Error, format!("GIS import failed: {error}")),
+            },
             K::MarkerIcon => {
                 let idx = import.tag.parse::<usize>().ok();
                 match (
@@ -17747,6 +17776,9 @@ impl eframe::App for HookEchoApp {
             .collect();
         self.placefile_window
             .show(ctx, &mut self.settings, &pf_status, &mut self.drawer);
+        if std::mem::take(&mut self.placefile_window.import_gis) {
+            crate::dialog::request_open(crate::dialog::ImportKind::Gis, "");
+        }
         // Names come from the action registry, so a layer reads the same here as in the layers
         // panel — the enum's Debug spelling ("Mrms") is not a label.
         let names: std::collections::HashMap<crate::render::FieldLayer, String> =
