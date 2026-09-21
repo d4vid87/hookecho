@@ -259,13 +259,13 @@ The current timeline is radar-centered. Convert it into a general valid-time coo
 
 ### Implement
 
-- [ ] one selected analysis time shared across panes
-- [ ] per-layer time offsets visible in the UI
-- [ ] valid-time alignment for model differences
-- [ ] run-time alignment for run-to-run comparison
-- [ ] radar/satellite/MRMS nearest-frame synchronization
-- [ ] “lock all panes to valid time” toggle
-- [ ] “lock to source frame” option for exact radar analysis
+- [x] one selected analysis time shared across panes ([evidence](us-analyst-implementation.md))
+- [x] per-layer time offsets visible in the UI
+- [x] valid-time alignment for model differences
+- [x] run-time alignment for run-to-run comparison
+- [x] radar/satellite/MRMS nearest-frame synchronization ([evidence](us-analyst-implementation.md))
+- [x] “lock all panes to valid time” toggle
+- [x] “lock to source frame” option for exact radar analysis
 - [ ] explicit warning when sources differ by more than a configurable tolerance
 
 ### Acceptance criteria
@@ -281,14 +281,14 @@ Native disk cache exists; browser persistence remains a roadmap concern.
 ### Implement
 
 - [ ] common cache interface for native and WASM
-- [ ] browser IndexedDB or OPFS persistence
-- [ ] cache namespaces by source/product/run
-- [ ] size quota per source family
-- [ ] LRU eviction
-- [ ] immutable object cache for archived frames
-- [ ] partial/range-response caching where useful for GRIB
-- [ ] checksum/content-length verification when available
-- [ ] storage statistics in existing Storage UI
+- [x] browser IndexedDB or OPFS persistence ([evidence](us-analyst-implementation.md))
+- [x] cache namespaces by source/product/run
+- [x] size quota per source family
+- [x] LRU eviction
+- [x] immutable object cache for archived frames
+- [x] partial/range-response caching where useful for GRIB
+- [x] checksum/content-length verification when available
+- [x] storage statistics in existing Storage UI
 
 ### Acceptance criteria
 

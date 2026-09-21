@@ -1006,6 +1006,13 @@ impl HookEchoApp {
                 false,
             ),
             (
+                T::LockSourceFrame,
+                "Reference",
+                "Lock exact radar source frame",
+                "Use the identical radar object across linked panes when available",
+                false,
+            ),
+            (
                 T::MiniLoop,
                 "Reference",
                 "Mini loop window",

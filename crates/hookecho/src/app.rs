@@ -1506,6 +1506,7 @@ pub(crate) enum OverlayToggle {
     Wind,
     LinkCameras,
     LinkTimes,
+    LockSourceFrame,
     /// The always-on-top mini-loop window (desktop only).
     MiniLoop,
     /// Beam-vs-terrain blockage shading for the displayed tilt (chase mode).
@@ -1526,7 +1527,7 @@ pub(crate) struct BlockageKey {
 impl OverlayToggle {
     /// Every toggle, for the persistence sweep. A new variant belongs here too, or it silently
     /// stops being remembered across restarts.
-    pub(crate) const ALL: [OverlayToggle; 42] = [
+    pub(crate) const ALL: [OverlayToggle; 43] = [
         Self::AlertPanel,
         Self::StormReports,
         Self::Spotters,
@@ -1567,6 +1568,7 @@ impl OverlayToggle {
         Self::Wind,
         Self::LinkCameras,
         Self::LinkTimes,
+        Self::LockSourceFrame,
         Self::MiniLoop,
         Self::Blockage,
     ];
@@ -1574,7 +1576,10 @@ impl OverlayToggle {
     /// Toggles that describe the current window arrangement rather than a global layer. Pane
     /// links are captured directly by workspaces; the mini loop is only a temporary window.
     pub(crate) fn session_only(self) -> bool {
-        matches!(self, Self::LinkCameras | Self::LinkTimes | Self::MiniLoop)
+        matches!(
+            self,
+            Self::LinkCameras | Self::LinkTimes | Self::LockSourceFrame | Self::MiniLoop
+        )
     }
 
     /// Stable name used in the settings file. Persisted as a string, not as the enum: an unknown
@@ -2769,6 +2774,8 @@ pub struct HookEchoApp {
     link_cameras: bool,
     /// When true, all panes follow the active pane's valid time.
     link_times: bool,
+    /// When times are linked, prefer the identical radar source object where another pane has it.
+    lock_source_frame: bool,
     /// Geographic cursor shared by linked panes, so the same point can be compared at a glance.
     linked_probe: Option<[f64; 2]>,
     /// The always-on-top mini-loop window is open (desktop only; see `mini_loop_viewport`).
@@ -3664,6 +3671,7 @@ impl HookEchoApp {
             loop_export: None,
             link_cameras: false,
             link_times: false,
+            lock_source_frame: false,
             linked_probe: None,
             mini_loop: false,
             #[cfg(not(any(target_os = "android", target_arch = "wasm32")))]
@@ -8440,6 +8448,7 @@ impl HookEchoApp {
             T::Recon => &mut self.show_recon,
             T::LinkCameras => &mut self.link_cameras,
             T::LinkTimes => &mut self.link_times,
+            T::LockSourceFrame => &mut self.lock_source_frame,
             T::MiniLoop => &mut self.mini_loop,
             T::Blockage => &mut self.show_blockage,
         }
@@ -20020,11 +20029,18 @@ impl eframe::App for HookEchoApp {
             if self.link_times {
                 let active = self.active.min(n - 1);
                 let leader = &self.views[active].timeline;
-                if let Some(time) = leader.current().and_then(|id| id.date_time()) {
-                    let (following, playing) = (leader.following, leader.playing);
-                    for (i, view) in self.views.iter_mut().enumerate() {
-                        if i != active {
-                            view.timeline.align_to(time, following, playing);
+                if let Some(source) = leader.current().cloned() {
+                    if let Some(time) = source.date_time() {
+                        let (following, playing) = (leader.following, leader.playing);
+                        for (i, view) in self.views.iter_mut().enumerate() {
+                            if i != active
+                                && (!self.lock_source_frame
+                                    || !view.timeline.align_to_source(
+                                        &source, following, playing,
+                                    ))
+                            {
+                                view.timeline.align_to(time, following, playing);
+                            }
                         }
                     }
                 }

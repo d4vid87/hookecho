@@ -225,6 +225,24 @@ impl Timeline {
         self.replay = None;
     }
 
+    /// Select the exact same source object when this timeline contains it.
+    pub fn align_to_source(
+        &mut self,
+        target: &Identifier,
+        following: bool,
+        playing: bool,
+    ) -> bool {
+        let Some(index) = self.frames.iter().position(|frame| frame == target) else {
+            return false;
+        };
+        self.playhead = index;
+        self.seek_target = None;
+        self.following = following;
+        self.playing = playing;
+        self.replay = None;
+        true
+    }
+
     /// Step `delta` slots (observed frames + forecast tail), un-pinning and pausing playback.
     pub fn step(&mut self, delta: i32) {
         self.playing = false;
@@ -408,6 +426,20 @@ mod tests {
         follower.align_to(tomorrow, false, false);
         assert_eq!(follower.date, tomorrow.date_naive());
         assert_eq!(follower.seek_target, Some(tomorrow));
+    }
+
+    #[test]
+    fn source_lock_requires_the_identical_radar_object() {
+        let mut timeline = with_frames(4);
+        timeline.playhead = 0;
+        let exact = timeline.frames[2].clone();
+        assert!(timeline.align_to_source(&exact, false, false));
+        assert_eq!(timeline.playhead, 2);
+        assert!(!timeline.following);
+
+        let other_site = Identifier::new("KFWS20130520_000200_V06".into());
+        assert!(!timeline.align_to_source(&other_site, false, false));
+        assert_eq!(timeline.playhead, 2, "a failed exact match changes nothing");
     }
 
     #[test]
