@@ -73,6 +73,40 @@ fn distance_m(a: [f64; 2], b: [f64; 2]) -> f64 {
     12_742_000.0 * h.sqrt().asin()
 }
 
+/// Sample a route at a bounded spacing while retaining distance from its start.
+pub fn sample_profile<T>(
+    points: &[[f64; 2]],
+    spacing_m: f64,
+    mut sample: impl FnMut(f64, f64) -> Option<T>,
+) -> Vec<(f64, T)> {
+    if points.len() < 2 || !spacing_m.is_finite() || spacing_m < 100.0 {
+        return Vec::new();
+    }
+    let mut output = Vec::new();
+    let mut traveled = 0.0;
+    for segment in points.windows(2) {
+        let (a, b) = (segment[0], segment[1]);
+        let length = distance_m(a, b);
+        let steps = ((length / spacing_m).ceil() as usize).max(1);
+        for index in 0..steps {
+            let t = index as f64 / steps as f64;
+            let point = [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
+            if let Some(value) = sample(point[0], point[1]) {
+                output.push((traveled + length * t, value));
+            }
+            if output.len() >= MAX_POINTS {
+                return output;
+            }
+        }
+        traveled += length;
+    }
+    let last = *points.last().expect("at least two points");
+    if let Some(value) = sample(last[0], last[1]) {
+        output.push((traveled, value));
+    }
+    output
+}
+
 pub async fn fetch_osrm(
     http: &reqwest::Client,
     endpoint: &str,
@@ -227,5 +261,13 @@ mod tests {
 
         let hole = vec![[-2.0, -0.5], [2.0, -0.5], [2.0, 0.5], [-2.0, 0.5]];
         assert!(first_intersection_m(&route, &[outer, hole]).is_none());
+    }
+
+    #[test]
+    fn samples_route_at_bounded_physical_spacing() {
+        let samples = sample_profile(&[[0.0, 0.0], [0.1, 0.0]], 1_000.0, |lon, _| Some(lon));
+        assert!((11..=14).contains(&samples.len()), "{}", samples.len());
+        assert_eq!(samples.last().unwrap().1, 0.1);
+        assert!(samples.windows(2).all(|pair| pair[0].0 <= pair[1].0));
     }
 }

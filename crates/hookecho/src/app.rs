@@ -8807,6 +8807,60 @@ impl HookEchoApp {
             .min_by(|a, b| a.1.total_cmp(&b.1))
     }
 
+    fn route_field_exposure(&self) -> Option<String> {
+        let route = self.routes.first()?;
+        let view = self.views.get(self.active)?;
+        let frame = crate::render::FieldLayer::DRAW_ORDER
+            .iter()
+            .rev()
+            .find(|layer| view.fields_on.contains(layer))
+            .and_then(|layer| self.fields.get(layer))?
+            .frame
+            .as_ref()?;
+        let profile = wxdata::route::sample_profile(&route.points, 1_000.0, |lon, lat| {
+            frame.sample(lon, lat).value
+        });
+        let maximum = profile
+            .iter()
+            .map(|(_, value)| *value)
+            .max_by(f32::total_cmp)?;
+        let threshold = match frame.descriptor.units {
+            "dBZ" => Some(40.0),
+            "mm" if frame.descriptor.id.0.contains("mesh") => Some(25.0),
+            "mm/hr" => Some(10.0),
+            "strikes/km²/min" => Some(0.0),
+            _ => None,
+        };
+        let span = threshold.and_then(|threshold| {
+            let mut exposed = profile
+                .iter()
+                .filter(|(_, value)| *value >= threshold)
+                .map(|(distance, _)| *distance);
+            Some((threshold, exposed.next()?, exposed.next_back().unwrap_or_else(|| {
+                profile
+                    .iter()
+                    .rev()
+                    .find(|(_, value)| *value >= threshold)
+                    .map(|(distance, _)| *distance)
+                    .unwrap_or(0.0)
+            })))
+        });
+        let exposure = span.map_or_else(String::new, |(threshold, start, end)| {
+            format!(
+                " · ≥{threshold:.0} {} from {} to {}",
+                frame.descriptor.units,
+                crate::geo::fmt_distance(start / 1000.0, self.metric(), 0),
+                crate::geo::fmt_distance(end / 1000.0, self.metric(), 0)
+            )
+        });
+        Some(format!(
+            "{} peaks at {maximum:.1} {}{exposure} · valid {}",
+            frame.descriptor.short_name,
+            frame.descriptor.units,
+            frame.stamp.valid_time.format("%H:%MZ")
+        ))
+    }
+
     /// The 5-min UTC bucket (Unix secs / 300) of the active pane's displayed frame, or `None` when
     /// following live (archive warnings only apply to scrubbed archive views).
     fn archive_bucket(&self) -> Option<i64> {
@@ -15306,6 +15360,9 @@ impl HookEchoApp {
                             crate::geo::fmt_distance(distance_m / 1000.0, metric, 0)
                         ),
                     );
+                }
+                if let Some(exposure) = self.route_field_exposure() {
+                    ui.label(format!("Weather along route: {exposure}"));
                 }
                 // Desktop streams from a local gpsd; Android polls the system LocationManager over
                 // JNI (see platform.rs); the web watches the browser's own Geolocation. All three
