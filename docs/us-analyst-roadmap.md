@@ -2165,8 +2165,8 @@ HookEcho should be considered “top-tier U.S. analyst workstation” only when 
 - [x] RRFS/REFS + GEFS + NBM + expanded HRRR/RAP/GFS
 - [ ] ensemble probabilities/postage stamps/plumes
 - [ ] RTMA/URMA surface analysis
-- [ ] model/run/observed comparison workflows
-- [ ] advanced soundings/hodographs
+- [x] model/run/observed comparison workflows
+- [x] advanced soundings/hodographs
 - [x] user-defined radar products
 - [x] temporal max/min trails
 - [x] advanced 3D transfer functions + isosurfaces + slicing planes
