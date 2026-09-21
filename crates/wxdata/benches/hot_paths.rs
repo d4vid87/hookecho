@@ -11,6 +11,7 @@
 use criterion::{criterion_group, criterion_main, Criterion};
 use wxdata::derived::DerivedOpts;
 use wxdata::level2::{BinnedSweep, Moment};
+use wxdata::product_dsl::{EnvironmentValues, Product, ProductDefinition};
 
 /// A full ladder of uniform reflectivity tilts — same shape the derived tests use, at a volume's
 /// worth of azimuths and gates.
@@ -74,6 +75,43 @@ fn bench_dualpol(c: &mut Criterion) {
     g.finish();
 }
 
+fn bench_product_dsl(c: &mut Criterion) {
+    let reflectivity = sweeps(45.0).remove(0);
+    let mut correlation = reflectivity.clone();
+    correlation.moment = Moment::CorrelationCoefficient;
+    correlation.value_min = 0.0;
+    correlation.value_max = 1.05;
+    correlation.data.fill(230);
+    let product = Product::compile(ProductDefinition {
+        version: 1,
+        name: "dual-pol score".into(),
+        description: String::new(),
+        units: "score".into(),
+        inputs: vec![Moment::Reflectivity, Moment::CorrelationCoefficient],
+        expression: "if(REF >= 40, clamp(REF * CC, 0, 100), 0)".into(),
+        palette: "REF".into(),
+        min: 0.0,
+        max: 100.0,
+        missing: -999.0,
+        environment: Vec::new(),
+    })
+    .unwrap();
+    let mut g = c.benchmark_group("product_dsl");
+    g.sample_size(10);
+    g.bench_function("full_sweep", |b| {
+        b.iter(|| {
+            product.sweep(
+                std::hint::black_box(&[
+                    (Moment::Reflectivity, &reflectivity),
+                    (Moment::CorrelationCoefficient, &correlation),
+                ]),
+                EnvironmentValues::default(),
+            )
+        })
+    });
+    g.finish();
+}
+
 /// Decode + bin a real volume, when one is pointed at: `HOOKECHO_BENCH_VOLUME=/path/to/volume`.
 /// Silently skipped otherwise — this repo commits no Level 2 fixture.
 fn bench_real_volume(c: &mut Criterion) {
@@ -97,5 +135,5 @@ fn bench_real_volume(c: &mut Criterion) {
     g.finish();
 }
 
-criterion_group!(benches, bench_derived, bench_dualpol, bench_real_volume);
+criterion_group!(benches, bench_derived, bench_dualpol, bench_product_dsl, bench_real_volume);
 criterion_main!(benches);
