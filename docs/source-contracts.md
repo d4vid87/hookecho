@@ -64,6 +64,9 @@ documented cycles; ECMWF 00/12 UTC runs extend to F240 while 06/18 UTC runs stop
   <https://training.weather.gov/wdtd/courses/MRMS/index.php>.
 - Live objects confirm native echo-top values are kilometres AGL and VIL is kg/m²; HookEcho keeps
   those native values for sampling and applies display palettes only during upload.
+- NOAA's operational GRIB2 table defines FLASH QPE-to-FFG 1/3/6-hour and maximum products as
+  unitless ratios at two-minute cadence; HookEcho displays the native 0–5 ratio scale:
+  <https://www.nssl.noaa.gov/projects/mrms/operational/tables.php>.
 
 ## NOAA RTMA / URMA
 

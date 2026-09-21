@@ -250,6 +250,22 @@ static FLASH_FLOOD: FieldRamp = ramp!(
     ]
 );
 
+static FFG_RATIO: FieldRamp = ramp!(
+    "QPE / flash-flood guidance",
+    "ratio",
+    0.0,
+    5.0,
+    RampScale::Linear,
+    255,
+    &[
+        (0.0, [60, 90, 160]),
+        (0.2, [70, 190, 110]),
+        (0.4, [240, 220, 50]),
+        (0.7, [235, 90, 35]),
+        (1.0, [220, 50, 190]),
+    ]
+);
+
 static VIL: FieldRamp = ramp!(
     "Water aloft (VIL)",
     "kg/m\u{b2}",
@@ -729,6 +745,7 @@ pub fn ramp_for(layer: FieldLayer) -> Option<&'static FieldRamp> {
             "qpe-1h" => Some(&QPE_1H),
             "qpe-24h" => Some(&QPE_24H),
             "flash-flood" => Some(&FLASH_FLOOD),
+            "ffg-ratio" => Some(&FFG_RATIO),
             _ => None,
         };
     }
