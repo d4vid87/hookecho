@@ -90,6 +90,26 @@ check_recent_gefs() {
   }
 }
 
+check_recent_rtma() {
+  local age day hour url body
+  for age in 1 2 3 4 5 6; do
+    day=$(date -u -d "$age hour ago" +%Y%m%d)
+    hour=$(date -u -d "$age hour ago" +%H)
+    url="https://nomads.ncep.noaa.gov/pub/data/nccf/com/rtma/v2.10/rtma2p5.${day}/rtma2p5.t${hour}z.2dvaranl_ndfd.grb2_wexp.idx"
+    if body=$(curl --fail --silent --show-error --retry 2 "$url"); then
+      for field in 'PRES:surface' 'TMP:2 m above ground' 'DPT:2 m above ground' 'UGRD:10 m above ground'; do
+        grep -Fq "$field" <<<"$body" || {
+          echo "RTMA index missing field: $field" >&2
+          return 1
+        }
+      done
+      return 0
+    fi
+  done
+  echo "no recent RTMA index" >&2
+  return 1
+}
+
 check_prefixes \
   'https://noaa-mrms-pds.s3.amazonaws.com/?list-type=2&delimiter=/&prefix=CONUS/' \
   'CONUS/MergedReflectivityQCComposite_00.50/' \
@@ -166,3 +186,4 @@ check_recent_goes 'ABI-L2-CMIPM'
 check_recent_goes 'GLM-L2-LCFA'
 check_recent_rrfs
 check_recent_gefs
+check_recent_rtma
