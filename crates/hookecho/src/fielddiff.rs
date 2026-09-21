@@ -274,6 +274,55 @@ pub fn diff_frames(
     ))
 }
 
+/// Deterministic forecast error over the common native domain.
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize)]
+pub struct VerificationMetrics {
+    pub samples: usize,
+    pub bias: f64,
+    pub mae: f64,
+    pub rmse: f64,
+}
+
+pub fn verify_forecast(
+    forecast: &FieldFrame,
+    analysis: &FieldFrame,
+) -> anyhow::Result<VerificationMetrics> {
+    anyhow::ensure!(
+        forecast.stamp.class == DataClass::Forecast,
+        "first field is not a forecast"
+    );
+    anyhow::ensure!(
+        matches!(analysis.stamp.class, DataClass::Analysis | DataClass::Observed),
+        "reference field is not an analysis or observation"
+    );
+    anyhow::ensure!(
+        forecast.stamp.valid_time == analysis.stamp.valid_time,
+        "forecast and reference valid times differ"
+    );
+    anyhow::ensure!(
+        forecast.descriptor.units == analysis.descriptor.units,
+        "forecast and reference units differ"
+    );
+    let errors = diff(forecast.field(), analysis.field())
+        .ok_or_else(|| anyhow::anyhow!("forecast and reference domains do not overlap"))?;
+    let (mut samples, mut sum, mut absolute, mut squared) = (0usize, 0.0, 0.0, 0.0);
+    for error in errors.values.into_iter().filter(|value| value.is_finite()) {
+        let error = f64::from(error);
+        samples += 1;
+        sum += error;
+        absolute += error.abs();
+        squared += error * error;
+    }
+    anyhow::ensure!(samples > 0, "common domain contains no valid samples");
+    let count = samples as f64;
+    Ok(VerificationMetrics {
+        samples,
+        bias: sum / count,
+        mae: absolute / count,
+        rmse: (squared / count).sqrt(),
+    })
+}
+
 /// `a - b`, on the coarser of the two lattices, over the part of the world both cover.
 ///
 /// The time is `a`'s: a difference is only meaningful for one instant, and the caller is
@@ -526,5 +575,38 @@ mod tests {
         let a = chrono::Utc::now();
         assert!(same_valid_time(a, a));
         assert!(!same_valid_time(a, a + chrono::Duration::minutes(1)));
+    }
+
+    #[test]
+    fn verification_scores_only_compatible_valid_native_values() {
+        let valid = chrono::Utc::now();
+        let make = |value, class: DataClass| {
+            FieldFrame::new(
+                &wxdata::global::MSLP_DESCRIPTOR,
+                grid(2, 2, -100.0, -99.0, 39.0, 40.0, value),
+                DataStamp {
+                    source_identity: class.label().into(),
+                    issue_time: None,
+                    run_time: None,
+                    valid_time: valid,
+                    received_time: valid,
+                    class,
+                    quality: QualitySummary::Good,
+                    available_members: None,
+                },
+            )
+        };
+        let score = verify_forecast(
+            &make(8.0, DataClass::Forecast),
+            &make(5.0, DataClass::Analysis),
+        )
+        .unwrap();
+        assert_eq!(score.samples, 4);
+        assert_eq!((score.bias, score.mae, score.rmse), (3.0, 3.0, 3.0));
+        assert!(verify_forecast(
+            &make(8.0, DataClass::Analysis),
+            &make(5.0, DataClass::Analysis)
+        )
+        .is_err());
     }
 }
