@@ -2,7 +2,9 @@
 
 Status is conservative: **existing** has repository evidence, **partial** has useful foundations
 but misses roadmap acceptance criteria, and **missing** has no accepted implementation. Update a
-roadmap checkbox only after its gate passes and link the test or capture here.
+roadmap checkbox only after its gate passes and link the test or capture here. The web gzip budget
+is 4,170,000 bytes after the case/report, scientific-export, and route-analysis slices measured
+4,164,254 bytes in CI (a 10 KB, 0.24% allowance over the previous baseline).
 
 | Area | Status | Current evidence | Gate evidence |
 |---|---|---|---|
