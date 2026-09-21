@@ -7567,6 +7567,43 @@ impl HookEchoApp {
                 None => self.toast(ToastKind::Info, "Trail has no frames yet"),
             }
         }
+        if actions.export_local_tracks_csv || actions.export_local_tracks_json {
+            let tracks = self.compute_local_tracks();
+            if tracks.is_empty() {
+                self.toast(ToastKind::Info, "Storm history needs at least two decoded radar volumes");
+            } else {
+                let (name, kind, bytes) = if actions.export_local_tracks_csv {
+                    (
+                        "hookecho-storm-history.csv",
+                        "csv",
+                        Ok(wxdata::celltrack::tracks_csv(&tracks)),
+                    )
+                } else {
+                    (
+                        "hookecho-storm-history.json",
+                        "json",
+                        wxdata::celltrack::tracks_json(&tracks),
+                    )
+                };
+                match bytes {
+                    Ok(bytes) => match crate::dialog::save_bytes(name, kind, bytes.as_bytes()) {
+                        crate::dialog::Saved::Where(where_) => self.toast(
+                            ToastKind::Success,
+                            format!("Storm history saved to {where_}"),
+                        ),
+                        crate::dialog::Saved::Failed(error) => self.toast(
+                            ToastKind::Error,
+                            format!("Storm history export failed: {error}"),
+                        ),
+                        crate::dialog::Saved::Cancelled => {}
+                    },
+                    Err(error) => self.toast(
+                        ToastKind::Error,
+                        format!("Storm history export failed: {error}"),
+                    ),
+                }
+            }
+        }
         if actions.instant_replay {
             self.instant_replay();
         }

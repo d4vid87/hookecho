@@ -34,6 +34,8 @@ pub struct UiActions {
     pub(crate) palette: Option<crate::app::PaletteAction>,
     pub trail_changed: bool,
     pub export_trail: bool,
+    pub export_local_tracks_csv: bool,
+    pub export_local_tracks_json: bool,
 }
 
 /// Read-only chase-pack state the app feeds the UI each frame: the current-view estimate and,
@@ -93,6 +95,7 @@ pub(crate) fn show(
     abi_scene: &mut wxdata::abi::Scene,
     // Spotter Network dots: on-state, and how far from the radar to draw them (0 = whole feed).
     show_spotters: bool,
+    show_local_tracks: bool,
     spotter_range_km: &mut f64,
     // Where the signature detectors draw their lines; only rendered for the ones that are on.
     detectors: &mut crate::settings::DetectorTuning,
@@ -131,6 +134,7 @@ pub(crate) fn show(
         ("Lightning", show_glm || on.contains(&FL::Lightning)),
         ("Satellite", satellite_on),
         ("Spotters", show_spotters),
+        ("Local cell tracks", show_local_tracks),
         ("Rotation tracks", on.contains(&FL::Rotation)),
         ("Reflectivity trail", on.contains(&FL::MrmsReflectivityTrail)),
         ("Hail swaths", on.contains(&FL::HailSwath)),
@@ -586,6 +590,15 @@ pub(crate) fn show(
         }
         actions.export_trail |= ui.button("Export trail values…").clicked();
         ui.weak("Keeps each cell's strongest reflectivity and its contributing frame age.");
+    }
+
+    if section == "Local cell tracks" && show_local_tracks {
+        header(ui, "Radar-derived storm history");
+        ui.weak("Exports every tracked centroid, time, direction, and speed currently held in the radar loop.");
+        ui.horizontal(|ui| {
+            actions.export_local_tracks_csv |= ui.button("Export CSV…").clicked();
+            actions.export_local_tracks_json |= ui.button("Export JSON…").clicked();
+        });
     }
 
     if section == "Rotation tracks" && on.contains(&FL::Rotation) {

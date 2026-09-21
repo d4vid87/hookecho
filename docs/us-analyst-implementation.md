@@ -29,7 +29,7 @@ in CI (a 2,339-byte, 0.06% allowance over the measured bundle).
 | O performance | Partial | profiling, smoke tests, bundle budget | Continuous |
 | P extensions | Partial | bounded native command plugins with a versioned manifest, declared capabilities/products/config schema, and environment-based IPC that works with external Python | Manifest compatibility and refusal tests pass; pending scalar-grid, annotation, and table outputs |
 | Q accessibility | Partial | keyboard/touch foundations | Continuous |
-| R research | Missing | — | Pending separately validated research gates |
+| R research | Partial | radar-derived storm cells retain their bounded observation histories and export timestamped centroid/motion JSON or CSV from the existing local-track controls | Export coverage passes; multi-source object enrichment, analyst correction, confidence, reflectivity fusion, and separately validated dual-Doppler retrieval remain pending |
 
 ## Baseline
 
@@ -41,7 +41,7 @@ Baseline commit: `9a0847c6521e9d9354c42cde09d291f4f2b67327`.
 | Lite web WASM | 149,346 bytes raw / 72,109 gzip | `scripts/web/build.sh`, generated artifact |
 | Linux release executable | 39,041,288 bytes | `cargo build --release -p hookecho` |
 
-The web gate is currently 4,160,000 gzip bytes. The cross-platform GIS import measured 4,126,418
+The web gate is currently 4,175,000 gzip bytes. The cross-platform GIS import measured 4,126,418
 bytes after replacing general Shapefile, ZIP, and XML libraries with bounded readers for the
 required geometry and archive formats. Portable cases measured 4,134,935 bytes; the route adapter,
 map display, warning intersection, and native-value profile measured 4,146,896 bytes. The ceiling
