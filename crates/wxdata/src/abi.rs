@@ -21,6 +21,7 @@ pub static C13_DESCRIPTOR: FieldDescriptor = FieldDescriptor {
     palette_key: "infrared",
     sampling: SamplingPolicy::Nearest,
     missing: MissingData::Nan,
+    time_policy: None,
     supports_contours: true,
     supports_difference: true,
 };
@@ -37,6 +38,7 @@ pub static C08_DESCRIPTOR: FieldDescriptor = FieldDescriptor {
     palette_key: "water-vapor",
     sampling: SamplingPolicy::Nearest,
     missing: MissingData::Nan,
+    time_policy: None,
     supports_contours: true,
     supports_difference: true,
 };
@@ -53,6 +55,7 @@ pub static C09_DESCRIPTOR: FieldDescriptor = FieldDescriptor {
     palette_key: "water-vapor",
     sampling: SamplingPolicy::Nearest,
     missing: MissingData::Nan,
+    time_policy: None,
     supports_contours: true,
     supports_difference: true,
 };
@@ -69,6 +72,7 @@ pub static C14_DESCRIPTOR: FieldDescriptor = FieldDescriptor {
     palette_key: "infrared",
     sampling: SamplingPolicy::Nearest,
     missing: MissingData::Nan,
+    time_policy: None,
     supports_contours: true,
     supports_difference: true,
 };
@@ -85,6 +89,7 @@ pub static C02_DESCRIPTOR: FieldDescriptor = FieldDescriptor {
     palette_key: "visible",
     sampling: SamplingPolicy::Nearest,
     missing: MissingData::Nan,
+    time_policy: None,
     supports_contours: false,
     supports_difference: true,
 };
@@ -101,6 +106,7 @@ pub static TRUE_COLOR_DESCRIPTOR: FieldDescriptor = FieldDescriptor {
     palette_key: "true-color",
     sampling: SamplingPolicy::Nearest,
     missing: MissingData::Nan,
+    time_policy: None,
     supports_contours: false,
     supports_difference: false,
 };
@@ -111,7 +117,7 @@ macro_rules! channel_descriptor {
             id: FieldId($id), source: "NOAA GOES ABI", family: FieldFamily::Satellite,
             display_name: $display, short_name: $short, search_aliases: &[$($alias),*],
             units: $units, value_kind: ValueKind::Scalar, palette_key: $palette,
-            sampling: SamplingPolicy::Nearest, missing: MissingData::Nan,
+            sampling: SamplingPolicy::Nearest, missing: MissingData::Nan, time_policy: None,
             supports_contours: $contours, supports_difference: true,
         };
     };

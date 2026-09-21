@@ -14407,7 +14407,11 @@ impl HookEchoApp {
         let aligned = wxdata::timecoord::align(
             &available,
             analysis_time,
-            wxdata::timecoord::policy_for(stamp.class),
+            layer
+                .descriptor()
+                .map_or_else(|| wxdata::timecoord::policy_for(stamp.class), |descriptor| {
+                    descriptor.time_policy(stamp.class)
+                }),
             tolerance,
         )
         .is_some();

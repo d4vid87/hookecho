@@ -63,8 +63,17 @@ pub struct FieldDescriptor {
     pub palette_key: &'static str,
     pub sampling: SamplingPolicy,
     pub missing: MissingData,
+    /// Override the default policy implied by [`DataClass`] when a product has stricter semantics.
+    pub time_policy: Option<crate::timecoord::TimePolicy>,
     pub supports_contours: bool,
     pub supports_difference: bool,
+}
+
+impl FieldDescriptor {
+    pub fn time_policy(&self, class: DataClass) -> crate::timecoord::TimePolicy {
+        self.time_policy
+            .unwrap_or_else(|| crate::timecoord::policy_for(class))
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -248,6 +257,7 @@ mod tests {
         palette_key: "test",
         sampling: SamplingPolicy::Nearest,
         missing: MissingData::Nan,
+        time_policy: None,
         supports_contours: false,
         supports_difference: false,
     };

@@ -44,6 +44,7 @@ macro_rules! descriptor {
             palette_key: $id,
             sampling: SamplingPolicy::Bilinear,
             missing: MissingData::Nan,
+            time_policy: None,
             supports_contours: false,
             supports_difference: true,
         };

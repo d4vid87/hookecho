@@ -27,6 +27,7 @@ pub static FLASH_DENSITY_DESCRIPTOR: FieldDescriptor = FieldDescriptor {
     palette_key: "glm-fed",
     sampling: SamplingPolicy::Nearest,
     missing: MissingData::Nan,
+    time_policy: Some(crate::timecoord::TimePolicy::HoldLast),
     supports_contours: false,
     supports_difference: false,
 };

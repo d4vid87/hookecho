@@ -33,6 +33,7 @@ pub static REFLECTIVITY_DESCRIPTOR: FieldDescriptor = FieldDescriptor {
     palette_key: "reflectivity",
     sampling: SamplingPolicy::Bilinear,
     missing: MissingData::Nan,
+    time_policy: None,
     supports_contours: true,
     supports_difference: true,
 };
@@ -49,6 +50,7 @@ pub static CAPE_DESCRIPTOR: FieldDescriptor = FieldDescriptor {
     palette_key: "cape",
     sampling: SamplingPolicy::Bilinear,
     missing: MissingData::Nan,
+    time_policy: None,
     supports_contours: true,
     supports_difference: true,
 };
@@ -65,6 +67,7 @@ pub static SRH_DESCRIPTOR: FieldDescriptor = FieldDescriptor {
     palette_key: "srh",
     sampling: SamplingPolicy::Bilinear,
     missing: MissingData::Nan,
+    time_policy: None,
     supports_contours: true,
     supports_difference: true,
 };
@@ -81,6 +84,7 @@ pub static UPDRAFT_HELICITY_DESCRIPTOR: FieldDescriptor = FieldDescriptor {
     palette_key: "updraft-helicity",
     sampling: SamplingPolicy::Nearest,
     missing: MissingData::Nan,
+    time_policy: None,
     supports_contours: false,
     supports_difference: false,
 };
@@ -97,6 +101,7 @@ pub static SNOWFALL_DESCRIPTOR: FieldDescriptor = FieldDescriptor {
     palette_key: "snowfall",
     sampling: SamplingPolicy::Nearest,
     missing: MissingData::Nan,
+    time_policy: None,
     supports_contours: false,
     supports_difference: false,
 };
@@ -113,6 +118,7 @@ pub static SMOKE_DESCRIPTOR: FieldDescriptor = FieldDescriptor {
     palette_key: "smoke",
     sampling: SamplingPolicy::Bilinear,
     missing: MissingData::Nan,
+    time_policy: None,
     supports_contours: true,
     supports_difference: false,
 };
@@ -129,6 +135,7 @@ pub static THUNDER_PROBABILITY_DESCRIPTOR: FieldDescriptor = FieldDescriptor {
     palette_key: "thunder-probability",
     sampling: SamplingPolicy::Bilinear,
     missing: MissingData::Nan,
+    time_policy: None,
     supports_contours: true,
     supports_difference: false,
 };

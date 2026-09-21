@@ -29,6 +29,7 @@ pub static REFLECTIVITY_DESCRIPTOR: FieldDescriptor = FieldDescriptor {
     palette_key: "reflectivity",
     sampling: SamplingPolicy::Bilinear,
     missing: MissingData::Nan,
+    time_policy: None,
     supports_contours: true,
     supports_difference: true,
 };
@@ -47,6 +48,7 @@ macro_rules! descriptor {
             palette_key: $palette,
             sampling: SamplingPolicy::$sampling,
             missing: MissingData::Nan,
+            time_policy: None,
             supports_contours: matches!(ValueKind::$kind, ValueKind::Scalar),
             supports_difference: $difference,
         };

@@ -31,6 +31,7 @@ pub static VIL_DESCRIPTOR: FieldDescriptor = FieldDescriptor {
     palette_key: "radar.level3.vil",
     sampling: SamplingPolicy::Bilinear,
     missing: MissingData::Nan,
+    time_policy: None,
     supports_contours: false,
     supports_difference: false,
 };
@@ -46,6 +47,7 @@ pub static ECHO_TOPS_DESCRIPTOR: FieldDescriptor = FieldDescriptor {
     palette_key: "radar.level3.echo-tops",
     sampling: SamplingPolicy::Bilinear,
     missing: MissingData::Nan,
+    time_policy: None,
     supports_contours: false,
     supports_difference: false,
 };
@@ -61,6 +63,7 @@ pub static HCA_DESCRIPTOR: FieldDescriptor = FieldDescriptor {
     palette_key: "radar.level3.hydrometeor-class",
     sampling: SamplingPolicy::Nearest,
     missing: MissingData::Nan,
+    time_policy: None,
     supports_contours: false,
     supports_difference: false,
 };

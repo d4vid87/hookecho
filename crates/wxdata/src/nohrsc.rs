@@ -34,6 +34,7 @@ pub static SNOWFALL_DESCRIPTOR: FieldDescriptor = FieldDescriptor {
     palette_key: "analysis.nohrsc.snowfall",
     sampling: SamplingPolicy::Bilinear,
     missing: MissingData::Nan,
+    time_policy: None,
     supports_contours: false,
     supports_difference: false,
 };

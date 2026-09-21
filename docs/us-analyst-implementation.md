@@ -7,7 +7,7 @@ roadmap checkbox only after its gate passes and link the test or capture here.
 | Area | Status | Current evidence | Gate evidence |
 |---|---|---|---|
 | A1 field registry | Partial | `wxdata::field`; MRMS and derived snow bands, NEXRAD Level III grids, NOHRSC snowfall, plus existing HRRR/RAP/NBM and GFS/ECMWF fields; stable workspace/favorite/recent IDs with legacy-slug reads; descriptor-backed search, native-value sampling, and separate device-sized display grids | `cargo test -p wxdata --lib`; workspace, descriptor coverage, field-ID, history and search tests |
-| A2 time alignment | Partial | `timecoord.rs`; class-specific observed/analysis/forecast/derived alignment, visible offsets and tolerance warnings, provenance-backed exact-time model differences, workspace-persisted pane time linking, and native ABI nearest-past archive selection from the radar timeline | Coordinator, compatibility, nearest-volume pane-link, and ABI object-time parsing tests pass; full cross-source release capture pending |
+| A2 time alignment | Partial | `timecoord.rs`; class-specific and product-overridden observed/analysis/forecast/derived alignment, visible offsets and tolerance warnings, provenance-backed exact-time model differences, workspace-persisted pane time linking, and native ABI nearest-past archive selection from the radar timeline | Coordinator, radar/MRMS/ABI/GLM alignment, compatibility, nearest-volume pane-link, and ABI object-time parsing tests pass; live cross-source release capture pending |
 | A3 requests/cancellation | Partial | hashed request identity, deduplication, one bounded retry inside the overall timeout, abortable fetches, generation checks, and a cancellation boundary before oversized-grid pooling | Retry, shared-consumer, stale-result, and cancellation-boundary tests pass; cancellation inside third-party decoders pending |
 | A4 provenance/health | Partial | shared source health records registered fields' `DataStamp` valid time separately from request-success age | Unmigrated feeds pending |
 | A5 persistent cache | Partial | native caches, pinned IndexedDB chase packs, automatic MRMS and immutable GOES ABI object caches with preserved receipt times, bounded memory fallback, visible degraded status, and pin-aware eviction/clear behavior; selected ABI bands are resolved across the full saved radar timeline and pinned separately from the automatic quota | Integrity/LRU/pin tests and compatible pack-manifest tests pass; model byte ranges pending milestone 4 |
@@ -39,9 +39,9 @@ Baseline commit: `9a0847c6521e9d9354c42cde09d291f4f2b67327`.
 | Lite web WASM | 149,346 bytes raw / 72,109 gzip | `scripts/web/build.sh`, generated artifact |
 | Linux release executable | 39,041,288 bytes | `cargo build --release -p hookecho` |
 
-The web gate is currently 4,087,000 gzip bytes. The selectable ABI scenes measured 4,086,961 bytes;
-the 1 KB increase from the prior gate keeps a sub-kilobyte margin while retaining searchable
-product metadata for the full ABI channel catalog.
+The web gate is currently 4,090,000 gzip bytes. Product-level time alignment measured 4,087,237
+bytes; the ceiling keeps a 2.7 KB regression margin while retaining searchable metadata for the
+full ABI channel catalog.
 
 Startup, resident memory, and interactive frame timing are hardware-dependent. Capture them with
 `scripts/perf/capture.sh` and the in-app performance panel on the release-test hardware before the

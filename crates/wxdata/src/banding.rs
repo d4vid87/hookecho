@@ -27,6 +27,7 @@ pub static SNOW_BANDS_DESCRIPTOR: FieldDescriptor = FieldDescriptor {
     palette_key: "snow-bands",
     sampling: SamplingPolicy::Bilinear,
     missing: MissingData::Nan,
+    time_policy: None,
     supports_contours: false,
     supports_difference: false,
 };

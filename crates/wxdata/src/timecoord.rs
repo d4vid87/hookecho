@@ -187,4 +187,43 @@ mod tests {
         assert_eq!(policy_for(DataClass::Forecast), TimePolicy::ForecastLead);
         assert_eq!(policy_for(DataClass::Derived), TimePolicy::Exact);
     }
+
+    #[test]
+    fn glm_density_holds_the_latest_flash_while_other_sources_use_nearest_past() {
+        use crate::field::DataClass;
+
+        let analysis = at(15);
+        let radar = [TimedFrame {
+            valid: at(14),
+            value: "radar",
+        }];
+        let mrms = [TimedFrame {
+            valid: at(12),
+            value: "mrms",
+        }];
+        let abi = [TimedFrame {
+            valid: at(10),
+            value: "abi",
+        }];
+        let glm = [TimedFrame {
+            valid: at(13),
+            value: "glm",
+        }];
+        for frames in [&radar[..], &mrms, &abi] {
+            assert!(align(
+                frames,
+                analysis,
+                policy_for(DataClass::Observed),
+                Duration::minutes(5),
+            )
+            .is_some());
+        }
+        assert!(align(
+            &glm,
+            analysis,
+            crate::glm::FLASH_DENSITY_DESCRIPTOR.time_policy(DataClass::Derived),
+            Duration::minutes(5),
+        )
+        .is_some());
+    }
 }
