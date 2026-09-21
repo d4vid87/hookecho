@@ -1781,7 +1781,7 @@ This is the explicit “what are we still missing?” list for agents.
 - [ ] native full-resolution GOES ABI
 - [ ] 1-minute mesoscale satellite
 - [ ] broad RGB/channel suite
-- [ ] generic 80+-class MRMS catalog coverage
+- [x] generic 80+-class MRMS catalog coverage
 - [ ] RRFS/REFS
 - [ ] GEFS / ensemble probabilities
 - [ ] NBM

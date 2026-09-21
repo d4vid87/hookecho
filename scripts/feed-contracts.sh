@@ -148,6 +148,26 @@ check_prefixes \
   'CONUS/Reflectivity_-5C_00.50/' \
   'CONUS/Reflectivity_-15C_00.50/' \
   'CONUS/SeamlessHSR_00.00/' \
+  'CONUS/MergedReflectivityQC_00.50/' \
+  'CONUS/MergedReflectivityQC_00.75/' \
+  'CONUS/MergedReflectivityQC_01.00/' \
+  'CONUS/MergedReflectivityQC_01.25/' \
+  'CONUS/MergedReflectivityQC_01.50/' \
+  'CONUS/MergedReflectivityQC_01.75/' \
+  'CONUS/MergedReflectivityQC_02.00/' \
+  'CONUS/MergedReflectivityQC_02.25/' \
+  'CONUS/MergedReflectivityQC_02.50/' \
+  'CONUS/MergedReflectivityQC_02.75/' \
+  'CONUS/MergedReflectivityQC_03.00/' \
+  'CONUS/MergedReflectivityQC_03.50/' \
+  'CONUS/MergedReflectivityQC_04.00/' \
+  'CONUS/MergedReflectivityQC_04.50/' \
+  'CONUS/MergedReflectivityQC_05.00/' \
+  'CONUS/MergedReflectivityQC_05.50/' \
+  'CONUS/MergedReflectivityQC_06.00/' \
+  'CONUS/MergedReflectivityQC_06.50/' \
+  'CONUS/MergedReflectivityQC_07.00/' \
+  'CONUS/MergedReflectivityQC_07.50/' \
   'CONUS/RotationTrack30min_00.50/' \
   'CONUS/RotationTrack60min_00.50/' \
   'CONUS/RotationTrack120min_00.50/' \
@@ -211,6 +231,26 @@ check_recent_mrms \
   'CONUS/Reflectivity_-5C_00.50' \
   'CONUS/Reflectivity_-15C_00.50' \
   'CONUS/SeamlessHSR_00.00' \
+  'CONUS/MergedReflectivityQC_00.50' \
+  'CONUS/MergedReflectivityQC_00.75' \
+  'CONUS/MergedReflectivityQC_01.00' \
+  'CONUS/MergedReflectivityQC_01.25' \
+  'CONUS/MergedReflectivityQC_01.50' \
+  'CONUS/MergedReflectivityQC_01.75' \
+  'CONUS/MergedReflectivityQC_02.00' \
+  'CONUS/MergedReflectivityQC_02.25' \
+  'CONUS/MergedReflectivityQC_02.50' \
+  'CONUS/MergedReflectivityQC_02.75' \
+  'CONUS/MergedReflectivityQC_03.00' \
+  'CONUS/MergedReflectivityQC_03.50' \
+  'CONUS/MergedReflectivityQC_04.00' \
+  'CONUS/MergedReflectivityQC_04.50' \
+  'CONUS/MergedReflectivityQC_05.00' \
+  'CONUS/MergedReflectivityQC_05.50' \
+  'CONUS/MergedReflectivityQC_06.00' \
+  'CONUS/MergedReflectivityQC_06.50' \
+  'CONUS/MergedReflectivityQC_07.00' \
+  'CONUS/MergedReflectivityQC_07.50' \
   'CONUS/RotationTrack30min_00.50' \
   'CONUS/RotationTrack60min_00.50' \
   'CONUS/RotationTrack120min_00.50' \

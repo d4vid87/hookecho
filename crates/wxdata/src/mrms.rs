@@ -105,6 +105,26 @@ descriptor!(RADAR_QPE_15M_DESCRIPTOR, "mrms.radar-qpe-15m", "Radar-only 15-minut
 descriptor!(REFLECTIVITY_MINUS5C_DESCRIPTOR, "mrms.reflectivity-minus-5c", "Reflectivity at the -5 °C level", "Reflectivity at -5 °C", "dBZ", Scalar, "reflectivity", Bilinear, true, ["freezing level", "hail", "isothermal"]);
 descriptor!(REFLECTIVITY_MINUS15C_DESCRIPTOR, "mrms.reflectivity-minus-15c", "Reflectivity at the -15 °C level", "Reflectivity at -15 °C", "dBZ", Scalar, "reflectivity", Bilinear, true, ["hail growth", "isothermal"]);
 descriptor!(SEAMLESS_HSR_DESCRIPTOR, "mrms.seamless-hsr", "Seamless hybrid-scan reflectivity", "Seamless HSR", "dBZ", Scalar, "reflectivity", Bilinear, true, ["hybrid scan", "lowest altitude", "vpr"]);
+descriptor!(REFLECTIVITY_00_50_KM_DESCRIPTOR, "mrms.reflectivity-0-5-km", "Reflectivity at 0.5 km MSL", "Reflectivity 0.5 km", "dBZ", Scalar, "reflectivity", Bilinear, true, ["constant altitude", "vertical level", "capppi"]);
+descriptor!(REFLECTIVITY_00_75_KM_DESCRIPTOR, "mrms.reflectivity-0-75-km", "Reflectivity at 0.75 km MSL", "Reflectivity 0.75 km", "dBZ", Scalar, "reflectivity", Bilinear, true, ["constant altitude", "vertical level", "capppi"]);
+descriptor!(REFLECTIVITY_01_00_KM_DESCRIPTOR, "mrms.reflectivity-1-km", "Reflectivity at 1.0 km MSL", "Reflectivity 1.0 km", "dBZ", Scalar, "reflectivity", Bilinear, true, ["constant altitude", "vertical level", "capppi"]);
+descriptor!(REFLECTIVITY_01_25_KM_DESCRIPTOR, "mrms.reflectivity-1-25-km", "Reflectivity at 1.25 km MSL", "Reflectivity 1.25 km", "dBZ", Scalar, "reflectivity", Bilinear, true, ["constant altitude", "vertical level", "capppi"]);
+descriptor!(REFLECTIVITY_01_50_KM_DESCRIPTOR, "mrms.reflectivity-1-5-km", "Reflectivity at 1.5 km MSL", "Reflectivity 1.5 km", "dBZ", Scalar, "reflectivity", Bilinear, true, ["constant altitude", "vertical level", "capppi"]);
+descriptor!(REFLECTIVITY_01_75_KM_DESCRIPTOR, "mrms.reflectivity-1-75-km", "Reflectivity at 1.75 km MSL", "Reflectivity 1.75 km", "dBZ", Scalar, "reflectivity", Bilinear, true, ["constant altitude", "vertical level", "capppi"]);
+descriptor!(REFLECTIVITY_02_00_KM_DESCRIPTOR, "mrms.reflectivity-2-km", "Reflectivity at 2.0 km MSL", "Reflectivity 2.0 km", "dBZ", Scalar, "reflectivity", Bilinear, true, ["constant altitude", "vertical level", "capppi"]);
+descriptor!(REFLECTIVITY_02_25_KM_DESCRIPTOR, "mrms.reflectivity-2-25-km", "Reflectivity at 2.25 km MSL", "Reflectivity 2.25 km", "dBZ", Scalar, "reflectivity", Bilinear, true, ["constant altitude", "vertical level", "capppi"]);
+descriptor!(REFLECTIVITY_02_50_KM_DESCRIPTOR, "mrms.reflectivity-2-5-km", "Reflectivity at 2.5 km MSL", "Reflectivity 2.5 km", "dBZ", Scalar, "reflectivity", Bilinear, true, ["constant altitude", "vertical level", "capppi"]);
+descriptor!(REFLECTIVITY_02_75_KM_DESCRIPTOR, "mrms.reflectivity-2-75-km", "Reflectivity at 2.75 km MSL", "Reflectivity 2.75 km", "dBZ", Scalar, "reflectivity", Bilinear, true, ["constant altitude", "vertical level", "capppi"]);
+descriptor!(REFLECTIVITY_03_00_KM_DESCRIPTOR, "mrms.reflectivity-3-km", "Reflectivity at 3.0 km MSL", "Reflectivity 3.0 km", "dBZ", Scalar, "reflectivity", Bilinear, true, ["constant altitude", "vertical level", "capppi"]);
+descriptor!(REFLECTIVITY_03_50_KM_DESCRIPTOR, "mrms.reflectivity-3-5-km", "Reflectivity at 3.5 km MSL", "Reflectivity 3.5 km", "dBZ", Scalar, "reflectivity", Bilinear, true, ["constant altitude", "vertical level", "capppi"]);
+descriptor!(REFLECTIVITY_04_00_KM_DESCRIPTOR, "mrms.reflectivity-4-km", "Reflectivity at 4.0 km MSL", "Reflectivity 4.0 km", "dBZ", Scalar, "reflectivity", Bilinear, true, ["constant altitude", "vertical level", "capppi"]);
+descriptor!(REFLECTIVITY_04_50_KM_DESCRIPTOR, "mrms.reflectivity-4-5-km", "Reflectivity at 4.5 km MSL", "Reflectivity 4.5 km", "dBZ", Scalar, "reflectivity", Bilinear, true, ["constant altitude", "vertical level", "capppi"]);
+descriptor!(REFLECTIVITY_05_00_KM_DESCRIPTOR, "mrms.reflectivity-5-km", "Reflectivity at 5.0 km MSL", "Reflectivity 5.0 km", "dBZ", Scalar, "reflectivity", Bilinear, true, ["constant altitude", "vertical level", "capppi"]);
+descriptor!(REFLECTIVITY_05_50_KM_DESCRIPTOR, "mrms.reflectivity-5-5-km", "Reflectivity at 5.5 km MSL", "Reflectivity 5.5 km", "dBZ", Scalar, "reflectivity", Bilinear, true, ["constant altitude", "vertical level", "capppi"]);
+descriptor!(REFLECTIVITY_06_00_KM_DESCRIPTOR, "mrms.reflectivity-6-km", "Reflectivity at 6.0 km MSL", "Reflectivity 6.0 km", "dBZ", Scalar, "reflectivity", Bilinear, true, ["constant altitude", "vertical level", "capppi"]);
+descriptor!(REFLECTIVITY_06_50_KM_DESCRIPTOR, "mrms.reflectivity-6-5-km", "Reflectivity at 6.5 km MSL", "Reflectivity 6.5 km", "dBZ", Scalar, "reflectivity", Bilinear, true, ["constant altitude", "vertical level", "capppi"]);
+descriptor!(REFLECTIVITY_07_00_KM_DESCRIPTOR, "mrms.reflectivity-7-km", "Reflectivity at 7.0 km MSL", "Reflectivity 7.0 km", "dBZ", Scalar, "reflectivity", Bilinear, true, ["constant altitude", "vertical level", "capppi"]);
+descriptor!(REFLECTIVITY_07_50_KM_DESCRIPTOR, "mrms.reflectivity-7-5-km", "Reflectivity at 7.5 km MSL", "Reflectivity 7.5 km", "dBZ", Scalar, "reflectivity", Bilinear, true, ["constant altitude", "vertical level", "capppi"]);
 
 pub struct CatalogProduct {
     pub descriptor: &'static FieldDescriptor,
@@ -113,7 +133,7 @@ pub struct CatalogProduct {
     pub description: &'static str,
 }
 
-pub static CATALOG: [CatalogProduct; 43] = [
+pub static CATALOG: [CatalogProduct; 63] = [
     CatalogProduct { descriptor: &ECHO_TOP_30_DESCRIPTOR, product: "CONUS/EchoTop_30_00.50", slug: "mrms-echo-top-30", description: "Height of the 30 dBZ storm top above ground" },
     CatalogProduct { descriptor: &ECHO_TOP_50_DESCRIPTOR, product: "CONUS/EchoTop_50_00.50", slug: "mrms-echo-top-50", description: "Height of the 50 dBZ core for storm-severity analysis" },
     CatalogProduct { descriptor: &ECHO_TOP_60_DESCRIPTOR, product: "CONUS/EchoTop_60_00.50", slug: "mrms-echo-top-60", description: "Height of the strongest 60 dBZ core" },
@@ -157,6 +177,26 @@ pub static CATALOG: [CatalogProduct; 43] = [
     CatalogProduct { descriptor: &REFLECTIVITY_MINUS5C_DESCRIPTOR, product: "CONUS/Reflectivity_-5C_00.50", slug: "mrms-reflectivity-minus-5c", description: "Reflectivity intersecting the -5 °C level" },
     CatalogProduct { descriptor: &REFLECTIVITY_MINUS15C_DESCRIPTOR, product: "CONUS/Reflectivity_-15C_00.50", slug: "mrms-reflectivity-minus-15c", description: "Reflectivity intersecting the -15 °C hail-growth layer" },
     CatalogProduct { descriptor: &SEAMLESS_HSR_DESCRIPTOR, product: "CONUS/SeamlessHSR_00.00", slug: "mrms-seamless-hsr", description: "Lowest usable hybrid-scan reflectivity with vertical-profile correction" },
+    CatalogProduct { descriptor: &REFLECTIVITY_00_50_KM_DESCRIPTOR, product: "CONUS/MergedReflectivityQC_00.50", slug: "mrms-reflectivity-0-5-km", description: "Quality-controlled reflectivity at 0.5 km MSL" },
+    CatalogProduct { descriptor: &REFLECTIVITY_00_75_KM_DESCRIPTOR, product: "CONUS/MergedReflectivityQC_00.75", slug: "mrms-reflectivity-0-75-km", description: "Quality-controlled reflectivity at 0.75 km MSL" },
+    CatalogProduct { descriptor: &REFLECTIVITY_01_00_KM_DESCRIPTOR, product: "CONUS/MergedReflectivityQC_01.00", slug: "mrms-reflectivity-1-km", description: "Quality-controlled reflectivity at 1.0 km MSL" },
+    CatalogProduct { descriptor: &REFLECTIVITY_01_25_KM_DESCRIPTOR, product: "CONUS/MergedReflectivityQC_01.25", slug: "mrms-reflectivity-1-25-km", description: "Quality-controlled reflectivity at 1.25 km MSL" },
+    CatalogProduct { descriptor: &REFLECTIVITY_01_50_KM_DESCRIPTOR, product: "CONUS/MergedReflectivityQC_01.50", slug: "mrms-reflectivity-1-5-km", description: "Quality-controlled reflectivity at 1.5 km MSL" },
+    CatalogProduct { descriptor: &REFLECTIVITY_01_75_KM_DESCRIPTOR, product: "CONUS/MergedReflectivityQC_01.75", slug: "mrms-reflectivity-1-75-km", description: "Quality-controlled reflectivity at 1.75 km MSL" },
+    CatalogProduct { descriptor: &REFLECTIVITY_02_00_KM_DESCRIPTOR, product: "CONUS/MergedReflectivityQC_02.00", slug: "mrms-reflectivity-2-km", description: "Quality-controlled reflectivity at 2.0 km MSL" },
+    CatalogProduct { descriptor: &REFLECTIVITY_02_25_KM_DESCRIPTOR, product: "CONUS/MergedReflectivityQC_02.25", slug: "mrms-reflectivity-2-25-km", description: "Quality-controlled reflectivity at 2.25 km MSL" },
+    CatalogProduct { descriptor: &REFLECTIVITY_02_50_KM_DESCRIPTOR, product: "CONUS/MergedReflectivityQC_02.50", slug: "mrms-reflectivity-2-5-km", description: "Quality-controlled reflectivity at 2.5 km MSL" },
+    CatalogProduct { descriptor: &REFLECTIVITY_02_75_KM_DESCRIPTOR, product: "CONUS/MergedReflectivityQC_02.75", slug: "mrms-reflectivity-2-75-km", description: "Quality-controlled reflectivity at 2.75 km MSL" },
+    CatalogProduct { descriptor: &REFLECTIVITY_03_00_KM_DESCRIPTOR, product: "CONUS/MergedReflectivityQC_03.00", slug: "mrms-reflectivity-3-km", description: "Quality-controlled reflectivity at 3.0 km MSL" },
+    CatalogProduct { descriptor: &REFLECTIVITY_03_50_KM_DESCRIPTOR, product: "CONUS/MergedReflectivityQC_03.50", slug: "mrms-reflectivity-3-5-km", description: "Quality-controlled reflectivity at 3.5 km MSL" },
+    CatalogProduct { descriptor: &REFLECTIVITY_04_00_KM_DESCRIPTOR, product: "CONUS/MergedReflectivityQC_04.00", slug: "mrms-reflectivity-4-km", description: "Quality-controlled reflectivity at 4.0 km MSL" },
+    CatalogProduct { descriptor: &REFLECTIVITY_04_50_KM_DESCRIPTOR, product: "CONUS/MergedReflectivityQC_04.50", slug: "mrms-reflectivity-4-5-km", description: "Quality-controlled reflectivity at 4.5 km MSL" },
+    CatalogProduct { descriptor: &REFLECTIVITY_05_00_KM_DESCRIPTOR, product: "CONUS/MergedReflectivityQC_05.00", slug: "mrms-reflectivity-5-km", description: "Quality-controlled reflectivity at 5.0 km MSL" },
+    CatalogProduct { descriptor: &REFLECTIVITY_05_50_KM_DESCRIPTOR, product: "CONUS/MergedReflectivityQC_05.50", slug: "mrms-reflectivity-5-5-km", description: "Quality-controlled reflectivity at 5.5 km MSL" },
+    CatalogProduct { descriptor: &REFLECTIVITY_06_00_KM_DESCRIPTOR, product: "CONUS/MergedReflectivityQC_06.00", slug: "mrms-reflectivity-6-km", description: "Quality-controlled reflectivity at 6.0 km MSL" },
+    CatalogProduct { descriptor: &REFLECTIVITY_06_50_KM_DESCRIPTOR, product: "CONUS/MergedReflectivityQC_06.50", slug: "mrms-reflectivity-6-5-km", description: "Quality-controlled reflectivity at 6.5 km MSL" },
+    CatalogProduct { descriptor: &REFLECTIVITY_07_00_KM_DESCRIPTOR, product: "CONUS/MergedReflectivityQC_07.00", slug: "mrms-reflectivity-7-km", description: "Quality-controlled reflectivity at 7.0 km MSL" },
+    CatalogProduct { descriptor: &REFLECTIVITY_07_50_KM_DESCRIPTOR, product: "CONUS/MergedReflectivityQC_07.50", slug: "mrms-reflectivity-7-5-km", description: "Quality-controlled reflectivity at 7.5 km MSL" },
 ];
 descriptor!(ROTATION_DESCRIPTOR, "mrms.rotation-track", "Rotation track", "Rotation Track", "s⁻¹", Accumulation, "rotation", Nearest, false, ["rotation", "azimuthal shear"]);
 descriptor!(QPE_01H_DESCRIPTOR, "mrms.qpe-1h", "One-hour quantitative precipitation estimate", "QPE 1h", "mm", Accumulation, "qpe-1h", Nearest, false, ["rain", "precipitation"]);
@@ -170,7 +210,7 @@ descriptor!(PRECIP_RATE_DESCRIPTOR, "mrms.precip-rate", "Surface precipitation r
 descriptor!(PRECIP_TYPE_DESCRIPTOR, "mrms.precip-type", "Surface precipitation type", "Precip Type", "category", Categorical, "precip-type", Nearest, false, ["rain", "snow", "sleet"]);
 descriptor!(FLASH_ARI30_DESCRIPTOR, "mrms.flash-ari30", "30-minute flash-flood recurrence interval", "FLASH ARI", "yr", Scalar, "flash-flood", Bilinear, false, ["flood", "ari"]);
 
-pub static DESCRIPTORS: [&FieldDescriptor; 62] = [
+pub static DESCRIPTORS: [&FieldDescriptor; 82] = [
     &REFLECTIVITY_DESCRIPTOR,
     &LOW_LEVEL_REFLECTIVITY_DESCRIPTOR,
     &LIGHTNING_DESCRIPTOR,
@@ -222,6 +262,26 @@ pub static DESCRIPTORS: [&FieldDescriptor; 62] = [
     &REFLECTIVITY_MINUS5C_DESCRIPTOR,
     &REFLECTIVITY_MINUS15C_DESCRIPTOR,
     &SEAMLESS_HSR_DESCRIPTOR,
+    &REFLECTIVITY_00_50_KM_DESCRIPTOR,
+    &REFLECTIVITY_00_75_KM_DESCRIPTOR,
+    &REFLECTIVITY_01_00_KM_DESCRIPTOR,
+    &REFLECTIVITY_01_25_KM_DESCRIPTOR,
+    &REFLECTIVITY_01_50_KM_DESCRIPTOR,
+    &REFLECTIVITY_01_75_KM_DESCRIPTOR,
+    &REFLECTIVITY_02_00_KM_DESCRIPTOR,
+    &REFLECTIVITY_02_25_KM_DESCRIPTOR,
+    &REFLECTIVITY_02_50_KM_DESCRIPTOR,
+    &REFLECTIVITY_02_75_KM_DESCRIPTOR,
+    &REFLECTIVITY_03_00_KM_DESCRIPTOR,
+    &REFLECTIVITY_03_50_KM_DESCRIPTOR,
+    &REFLECTIVITY_04_00_KM_DESCRIPTOR,
+    &REFLECTIVITY_04_50_KM_DESCRIPTOR,
+    &REFLECTIVITY_05_00_KM_DESCRIPTOR,
+    &REFLECTIVITY_05_50_KM_DESCRIPTOR,
+    &REFLECTIVITY_06_00_KM_DESCRIPTOR,
+    &REFLECTIVITY_06_50_KM_DESCRIPTOR,
+    &REFLECTIVITY_07_00_KM_DESCRIPTOR,
+    &REFLECTIVITY_07_50_KM_DESCRIPTOR,
     &ROTATION_DESCRIPTOR,
     &QPE_01H_DESCRIPTOR,
     &QPE_03H_DESCRIPTOR,
