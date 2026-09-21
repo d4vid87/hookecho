@@ -5239,7 +5239,7 @@ impl HookEchoApp {
     /// The site is whichever radar the active pane is on: a rule about a place is only replayable
     /// against a radar that can see it, and the pane the user is looking at is the best guess
     /// anyone can make without asking.
-    fn start_backtest(&mut self, rule_idx: usize, day: chrono::NaiveDate) {
+    fn start_backtest(&mut self, rule_idx: usize, day: chrono::NaiveDate, wfo: String) {
         let Some(rule) = self.settings.alert_rules.get(rule_idx).cloned() else {
             return;
         };
@@ -5250,7 +5250,7 @@ impl HookEchoApp {
         self.rules_window.backtest = Some(shared.clone());
         let settings = self.settings.clone();
         self.spawner
-            .spawn(crate::backtest::run(site, day, rule, settings, shared));
+            .spawn(crate::backtest::run(site, day, wfo, rule, settings, shared));
     }
 
     /// Remember detections so a compound rule can ask about them next pass, and forget anything
@@ -18992,8 +18992,8 @@ impl eframe::App for HookEchoApp {
             }
         }
 
-        if let Some((i, day)) = self.rules_window.backtest_request.take() {
-            self.start_backtest(i, day);
+        if let Some((i, day, wfo)) = self.rules_window.backtest_request.take() {
+            self.start_backtest(i, day, wfo);
         }
         if let Some(detail) = &self.detail {
             let tex = detail

@@ -13,6 +13,72 @@ use chrono::{DateTime, Utc};
 
 const API: &str = "https://mesonet.agron.iastate.edu/api/1/cow.json";
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct AlgorithmEvent {
+    pub valid: DateTime<Utc>,
+    pub lon: f64,
+    pub lat: f64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct AlgorithmStats {
+    pub hits: u32,
+    pub misses: u32,
+    pub false_alarms: u32,
+    pub pod: f64,
+    pub far: f64,
+    pub csi: f64,
+}
+
+/// Score algorithm detections against observed reports with one-to-one space/time matching.
+pub fn score_algorithm(
+    detections: &[AlgorithmEvent],
+    reports: &[Report],
+    max_distance_km: f64,
+    max_time: chrono::Duration,
+) -> AlgorithmStats {
+    let mut used = vec![false; detections.len()];
+    let mut hits = 0u32;
+    for report in reports {
+        let nearest = detections
+            .iter()
+            .enumerate()
+            .filter(|(i, detection)| {
+                !used[*i]
+                    && (detection.valid - report.valid).abs() <= max_time
+                    && distance_km(detection.lon, detection.lat, report.lon, report.lat)
+                        <= max_distance_km
+            })
+            .min_by_key(|(_, detection)| (detection.valid - report.valid).abs());
+        if let Some((index, _)) = nearest {
+            used[index] = true;
+            hits += 1;
+        }
+    }
+    let misses = reports.len() as u32 - hits;
+    let false_alarms = detections.len() as u32 - hits;
+    let ratio = |num: u32, den: u32| {
+        if den > 0 { num as f64 / den as f64 } else { 0.0 }
+    };
+    AlgorithmStats {
+        hits,
+        misses,
+        false_alarms,
+        pod: ratio(hits, hits + misses),
+        far: ratio(false_alarms, hits + false_alarms),
+        csi: ratio(hits, hits + misses + false_alarms),
+    }
+}
+
+fn distance_km(a_lon: f64, a_lat: f64, b_lon: f64, b_lat: f64) -> f64 {
+    let (a_lat, b_lat) = (a_lat.to_radians(), b_lat.to_radians());
+    let dlat = b_lat - a_lat;
+    let dlon = (b_lon - a_lon).to_radians();
+    let h = (dlat / 2.0).sin().powi(2)
+        + a_lat.cos() * b_lat.cos() * (dlon / 2.0).sin().powi(2);
+    6371.0 * 2.0 * h.sqrt().asin()
+}
+
 /// Aggregate skill for the queried window.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Stats {
@@ -358,5 +424,38 @@ mod tests {
     #[test]
     fn a_response_without_stats_is_an_error() {
         assert!(parse("{}", "OUN", Utc::now(), Utc::now()).is_err());
+    }
+
+    #[test]
+    fn algorithm_scoring_is_one_to_one_in_space_and_time() {
+        let at = DateTime::parse_from_rfc3339("2013-05-20T20:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let detections = [
+            AlgorithmEvent { valid: at, lon: -97.0, lat: 35.0 },
+            AlgorithmEvent { valid: at + chrono::Duration::minutes(2), lon: -97.01, lat: 35.0 },
+            AlgorithmEvent { valid: at, lon: -100.0, lat: 35.0 },
+        ];
+        let report = Report {
+            valid: at + chrono::Duration::minutes(1),
+            kind: "TORNADO".into(),
+            city: String::new(),
+            county: String::new(),
+            magnitude: None,
+            warned: false,
+            lead_min: None,
+            lon: -97.0,
+            lat: 35.0,
+        };
+        let score = score_algorithm(
+            &detections,
+            std::slice::from_ref(&report),
+            20.0,
+            chrono::Duration::minutes(10),
+        );
+        assert_eq!((score.hits, score.misses, score.false_alarms), (1, 0, 2));
+        assert_eq!(score.pod, 1.0);
+        assert!((score.far - 2.0 / 3.0).abs() < 1e-9);
+        assert!((score.csi - 1.0 / 3.0).abs() < 1e-9);
     }
 }
