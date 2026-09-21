@@ -6,7 +6,8 @@ The scheduled `Feed contracts` workflow runs `scripts/feed-contracts.sh` against
 bucket listings. It requires each selected MRMS feed to publish today or yesterday and GOES-19
 ABI/GLM families to publish in the current or previous hour. Missing or stale feeds fail that
 workflow without making pull-request tests depend on the network.
-RRFS and both GEFS ensemble aggregate products must also expose a current or previous-day index.
+RRFS plus GEFS mean, spread, control, and edge perturbed members must expose a current or
+previous-day index.
 
 Model schedule metadata follows NOAA's current HRRR/RAP/GFS product inventories and ECMWF's
 Cycle 50r1 open-data contract. Extended HRRR and RAP forecast hours are restricted to their
@@ -15,10 +16,11 @@ documented cycles; ECMWF 00/12 UTC runs extend to F240 while 06/18 UTC runs stop
 - HRRR/RAP: <https://registry.opendata.aws/noaa-rap/> and
   <https://registry.opendata.aws/dynamical-noaa-hrrr/>
 - GFS: <https://www.nco.ncep.noaa.gov/pmb/products/gfs/>
-- GEFS: <https://registry.opendata.aws/noaa-gefs/>. HookEcho reads the published ensemble-mean
-  `geavg` mean and `gespr` standard-deviation fields, using the 0.25-degree surface product and
-  0.5-degree pressure-level product. NOAA's operational inventory documents one control plus 30
-  perturbed forecasts; aggregate provenance therefore reports 31 available members:
+- GEFS: <https://registry.opendata.aws/noaa-gefs/>. HookEcho reads `geavg` mean, `gespr`
+  standard deviation, `gec00` control, and `gep01` through `gep30` perturbed fields, using the
+  0.25-degree surface product and 0.5-degree pressure-level product. NOAA's operational inventory
+  documents one control plus 30 perturbed forecasts; aggregate provenance therefore reports 31
+  available members:
   <https://www.nco.ncep.noaa.gov/pmb/products/gens/>.
 - ECMWF IFS: <https://confluence.ecmwf.int/spaces/DAC/pages/272310539/ECMWF+open+data+real-time+forecasts+from+IFS+and+AIFS>
 

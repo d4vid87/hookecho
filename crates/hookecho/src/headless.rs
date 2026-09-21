@@ -1673,8 +1673,15 @@ pub fn run_global(model: &str, slug: &str, out_path: &str) -> anyhow::Result<()>
         "ecmwf" => GlobalModel::Ecmwf,
         "gefs" | "gefs-mean" => GlobalModel::GefsMean,
         "gefs-spread" => GlobalModel::GefsSpread,
+        value if value.starts_with("gefs-member-") => GlobalModel::GefsMember(
+            value[12..]
+                .parse()
+                .map_err(|_| anyhow::anyhow!("invalid GEFS member: {value}"))?,
+        ),
         "gfs" => GlobalModel::Gfs,
-        other => anyhow::bail!("unknown global model '{other}' (gfs|gefs|gefs-spread|ecmwf)"),
+        other => anyhow::bail!(
+            "unknown global model '{other}' (gfs|gefs|gefs-spread|gefs-member-0..30|ecmwf)"
+        ),
     };
     let gfield = GlobalField::from_slug(slug)
         .ok_or_else(|| anyhow::anyhow!("unknown global field '{slug}'"))?;

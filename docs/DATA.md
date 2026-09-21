@@ -70,7 +70,7 @@ the 44 TDWRs are addressable.
 | Point forecast outside the US | Open-Meteo (ECMWF/GFS/ICON) | hourly | minutes | no |
 | Area forecast discussions | `api.weather.gov` products | per issue (~2×/day + updates) | minutes | no |
 | Surface fronts | WPC `CODSUS` bulletin | ~4×/day | ~1 h | no |
-| Global models (GFS, ECMWF open IFS) | `noaa-gfs-bdp-pds` on AWS; `data.ecmwf.int` | 6-hourly runs | ~3–5 h behind the run hour | no |
+| Global models (GFS, GEFS mean/spread and members, ECMWF open IFS) | `noaa-gfs-bdp-pds` / `noaa-gefs-pds` on AWS; `data.ecmwf.int` | 6-hourly runs | ~3–5 h behind the run hour | no |
 | Tropical cyclones (positions, cones, tracks) | NHC `CurrentStorms.json` + MapServer | per advisory (6 h, plus intermediates) | minutes | no |
 | Storm surge | NHC map service | per advisory | minutes | no |
 

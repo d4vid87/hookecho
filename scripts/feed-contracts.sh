@@ -70,7 +70,7 @@ check_recent_gefs() {
   for day in "$(date -u +%Y%m%d)" "$(date -u -d '1 day ago' +%Y%m%d)"; do
     for cycle in 18 12 06 00; do
       complete=1
-      for product in geavg gespr; do
+      for product in geavg gespr gec00 gep01 gep30; do
         body=$(curl --fail --silent --show-error --retry 3 \
           "https://noaa-gefs-pds.s3.amazonaws.com/?list-type=2&max-keys=1&prefix=gefs.${day}/${cycle}/atmos/pgrb2sp25/${product}.t${cycle}z.pgrb2s.0p25.f000.idx")
         if ! grep -Fq '<Key>' <<<"$body"; then
@@ -85,7 +85,7 @@ check_recent_gefs() {
     done
   done
   (( found == 1 )) || {
-    echo "no recent GEFS mean/spread index objects" >&2
+    echo "no recent GEFS aggregate/member index objects" >&2
     return 1
   }
 }

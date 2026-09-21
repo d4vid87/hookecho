@@ -118,6 +118,8 @@ pub enum GlobalModel {
     Gfs,
     GefsMean,
     GefsSpread,
+    /// NOAA GEFS control (`0`) or perturbed member (`1..=30`).
+    GefsMember(u8),
     Ecmwf,
 }
 
@@ -166,6 +168,20 @@ impl GlobalModel {
                 domain: "Global",
                 ensemble: true,
             },
+            Self::GefsMember(_) => ModelDefinition {
+                id: "gefs-member",
+                label: "GEFS member",
+                provider: "NOAA",
+                base_url: GEFS_BUCKET,
+                cycle_hours: 6,
+                max_forecast_hour: 384,
+                grid: "0.25/0.5 degree global latitude/longitude",
+                regrid_resolution_deg: RES_DEG,
+                index_suffix: ".idx",
+                expected_latency_minutes: None,
+                domain: "Global",
+                ensemble: true,
+            },
             Self::Ecmwf => ModelDefinition {
                 id: "ecmwf-open-ifs",
                 label: "ECMWF Open IFS",
@@ -184,6 +200,9 @@ impl GlobalModel {
     }
 
     pub fn validate_forecast_hour(self, hour: u16) -> anyhow::Result<()> {
+        if let Self::GefsMember(member) = self {
+            anyhow::ensure!(member <= 30, "GEFS member {member} is outside 0..=30");
+        }
         anyhow::ensure!(
             hour <= self.definition().max_forecast_hour,
             "{} forecast hour {hour} exceeds F{}",
@@ -196,13 +215,11 @@ impl GlobalModel {
     pub fn supports_forecast_hour(self, cycle_hour: u32, hour: u16) -> bool {
         match self {
             Self::Gfs => hour <= 120 || hour <= 384 && hour.is_multiple_of(3),
-            Self::GefsMean | Self::GefsSpread => {
-                hour <= 240 && hour.is_multiple_of(3)
-                    || hour <= 384 && hour.is_multiple_of(6)
+            Self::GefsMean | Self::GefsSpread | Self::GefsMember(_) => {
+                hour <= 240 && hour.is_multiple_of(3) || hour <= 384 && hour.is_multiple_of(6)
             }
             Self::Ecmwf if cycle_hour == 0 || cycle_hour == 12 => {
-                hour <= 144 && hour.is_multiple_of(3)
-                    || hour <= 240 && hour.is_multiple_of(6)
+                hour <= 144 && hour.is_multiple_of(3) || hour <= 240 && hour.is_multiple_of(6)
             }
             Self::Ecmwf => hour <= 90 && hour.is_multiple_of(3),
         }
@@ -392,12 +409,14 @@ async fn fetch_run(
                 .ok_or_else(|| anyhow::anyhow!("no {var}:{level} in GFS idx"))?;
             (base, r)
         }
-        GlobalModel::GefsMean | GlobalModel::GefsSpread => {
+        GlobalModel::GefsMean | GlobalModel::GefsSpread | GlobalModel::GefsMember(_) => {
             let source = model.definition().base_url;
-            let product = if model == GlobalModel::GefsMean {
-                "geavg"
-            } else {
-                "gespr"
+            let product = match model {
+                GlobalModel::GefsMean => "geavg".into(),
+                GlobalModel::GefsSpread => "gespr".into(),
+                GlobalModel::GefsMember(0) => "gec00".into(),
+                GlobalModel::GefsMember(member) => format!("gep{member:02}"),
+                _ => unreachable!(),
             };
             let (directory, name) = if field == GlobalField::Height500 {
                 ("pgrb2ap5", "pgrb2a.0p50")
@@ -605,6 +624,17 @@ mod tests {
         assert!(GlobalModel::GefsMean.supports_forecast_hour(0, 246));
         assert_eq!(available_members(GlobalModel::GefsMean), Some(31));
         assert_eq!(available_members(GlobalModel::GefsSpread), Some(31));
+        assert!(GlobalModel::GefsMember(0).validate_forecast_hour(0).is_ok());
+        assert!(
+            GlobalModel::GefsMember(30)
+                .validate_forecast_hour(384)
+                .is_ok()
+        );
+        assert!(
+            GlobalModel::GefsMember(31)
+                .validate_forecast_hour(0)
+                .is_err()
+        );
         assert_eq!(available_members(GlobalModel::Gfs), None);
     }
 
@@ -618,6 +648,7 @@ mod tests {
             GlobalModel::Gfs,
             GlobalModel::GefsMean,
             GlobalModel::GefsSpread,
+            GlobalModel::GefsMember(1),
             GlobalModel::Ecmwf,
         ] {
             let f = fetch(&http, model, GlobalField::Mslp, 0)

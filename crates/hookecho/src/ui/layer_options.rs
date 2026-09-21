@@ -276,6 +276,30 @@ pub(crate) fn show(
                 changed |= ui.selectable_value(global_model, m, m.label()).changed();
             }
         });
+        let mut member = match *global_model {
+            wxdata::global::GlobalModel::GefsMember(member) => member,
+            _ => 1,
+        };
+        ui.horizontal(|ui| {
+            if ui
+                .selectable_label(
+                    matches!(global_model, wxdata::global::GlobalModel::GefsMember(_)),
+                    "GEFS member",
+                )
+                .clicked()
+            {
+                *global_model = wxdata::global::GlobalModel::GefsMember(member);
+                changed = true;
+            }
+            if matches!(global_model, wxdata::global::GlobalModel::GefsMember(_))
+                && ui
+                    .add(egui::Slider::new(&mut member, 0..=30).text("member"))
+                    .changed()
+            {
+                *global_model = wxdata::global::GlobalModel::GefsMember(member);
+                changed = true;
+            }
+        });
         ui.horizontal(|ui| {
             ui.label("Forecast hour:");
             changed |= ui
