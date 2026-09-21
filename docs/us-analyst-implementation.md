@@ -3,8 +3,8 @@
 Status is conservative: **existing** has repository evidence, **partial** has useful foundations
 but misses roadmap acceptance criteria, and **missing** has no accepted implementation. Update a
 roadmap checkbox only after its gate passes and link the test or capture here. The web gzip budget
-is 4,195,000 bytes after the MRMS-trail, storm-history, chase-pack overlay, reflectivity-height,
-and native area-statistics slices measured 4,191,297 bytes locally with the same optimized toolchain (a 3,703-byte, 0.09%
+is 4,199,000 bytes after the MRMS-trail, storm-history, chase-pack overlay, reflectivity-height,
+native area-statistics, and radar scatterplot slices measured 4,195,468 bytes locally with the same optimized toolchain (a 3,532-byte, 0.08%
 allowance over the measured bundle).
 
 | Area | Status | Current evidence | Gate evidence |
@@ -42,11 +42,11 @@ Baseline commit: `9a0847c6521e9d9354c42cde09d291f4f2b67327`.
 | Lite web WASM | 149,346 bytes raw / 72,109 gzip | `scripts/web/build.sh`, generated artifact |
 | Linux release executable | 39,041,288 bytes | `cargo build --release -p hookecho` |
 
-The web gate is currently 4,195,000 gzip bytes. The cross-platform GIS import measured 4,126,418
+The web gate is currently 4,199,000 gzip bytes. The cross-platform GIS import measured 4,126,418
 bytes after replacing general Shapefile, ZIP, and XML libraries with bounded readers for the
 required geometry and archive formats. Portable cases measured 4,134,935 bytes; the route adapter,
 map display, warning intersection, and native-value profile measured 4,146,896 bytes. The ceiling
-keeps a 13 KB regression margin without hiding the cost of later roadmap work.
+keeps a measured sub-0.1% regression margin without hiding the cost of later roadmap work.
 
 Startup, resident memory, and interactive frame timing are hardware-dependent. Capture them with
 `scripts/perf/capture.sh` and the in-app performance panel on the release-test hardware before the
