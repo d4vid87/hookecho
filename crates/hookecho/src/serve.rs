@@ -833,7 +833,7 @@ fn render_png(
             return Ok(std::fs::read(out)?);
         };
         // Global knobs on the renderer, set under the same lock that serializes the render.
-        crate::headless::set_output(Some(f.px), f.zoom);
+        crate::headless::set_output(Some((f.px, f.px)), f.zoom);
         // Anything this server hands out is a picture someone will look at away from the app, so
         // it carries its warnings, its caption and its scale. The CLI verifiers do not.
         crate::headless::set_extras(true);
@@ -959,7 +959,10 @@ fn national(server: &Server) -> anyhow::Result<Vec<u8>> {
         Some(bytes) => bytes,
         None => match try_render(server, &out)? {
             Some(_one_at_a_time) => {
-                crate::headless::set_output(Some(NATIONAL_PX), Some(NATIONAL_ZOOM));
+                crate::headless::set_output(
+                    Some((NATIONAL_PX, NATIONAL_PX)),
+                    Some(NATIONAL_ZOOM),
+                );
                 crate::headless::set_extras(true);
                 crate::headless::set_palette(None);
                 crate::headless::run_mrms(out.to_string_lossy().as_ref())?;

@@ -873,9 +873,16 @@ fn main() -> eframe::Result<()> {
         return Ok(());
     }
 
-    // Headless verify mode: `hookecho --headless <out.png> [SITE] [--moment REF] [--tilt N]`.
+    // Headless verify mode: `hookecho --headless <out.png> [SITE] [--size WIDTHxHEIGHT]`.
     if let Some(pos) = args.iter().position(|a| a == "--headless") {
         headless::set_transparent(args.iter().any(|arg| arg == "--transparent"));
+        headless::set_output(
+            flag_value(&args, "--size").and_then(|value| {
+                let (width, height) = value.split_once('x').unwrap_or((value, value));
+                Some((width.parse().ok()?, height.parse().ok()?))
+            }),
+            flag_value(&args, "--zoom").and_then(|value| value.parse().ok()),
+        );
         let out = args
             .get(pos + 1)
             .map(String::as_str)
@@ -922,7 +929,7 @@ fn main() -> eframe::Result<()> {
         return Ok(());
     }
 
-    // Desktop-widget mode: `hookecho --snapshot out.png [SITE] [--size N] [--zoom Z]
+    // Desktop-widget mode: `hookecho --snapshot out.png [SITE] [--size N|WIDTHxHEIGHT] [--zoom Z]
     // [--every SECS]`. The same off-screen render `--headless` and the server's `/snapshot.png`
     // use, written where conky, a desktop wallpaper script or `feh --reload` can pick it up.
     if let Some(pos) = args.iter().position(|a| a == "--snapshot") {
@@ -945,7 +952,10 @@ fn main() -> eframe::Result<()> {
             None => tiles::BasemapStyle::default(),
         };
         headless::set_output(
-            flag_value(&args, "--size").and_then(|v| v.parse().ok()),
+            flag_value(&args, "--size").and_then(|value| {
+                let (width, height) = value.split_once('x').unwrap_or((value, value));
+                Some((width.parse().ok()?, height.parse().ok()?))
+            }),
             flag_value(&args, "--zoom").and_then(|v| v.parse().ok()),
         );
         let every = flag_value(&args, "--every").and_then(|v| v.parse::<u64>().ok());
