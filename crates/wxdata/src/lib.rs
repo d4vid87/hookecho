@@ -68,6 +68,7 @@ pub mod tds;
 pub mod tdwr;
 pub mod tfr;
 pub mod timecoord;
+pub mod trail;
 pub mod torclimo;
 pub mod towers;
 pub mod tropical;
