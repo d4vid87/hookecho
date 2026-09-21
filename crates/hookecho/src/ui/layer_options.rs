@@ -90,6 +90,7 @@ pub(crate) fn show(
     global_fcst_hour: &mut u16,
     analysis_source: &mut wxdata::rtma::Source,
     analysis_point: (f64, f64),
+    metars: &[wxdata::metar::SurfaceOb],
     // Model difference: which field, and the two valid times the last fetch actually compared.
     diff_field: &mut crate::fielddiff::DiffField,
     diff_valid: Option<&(String, String)>,
@@ -449,6 +450,23 @@ pub(crate) fn show(
                             ui.label(format!("Dewpoint gradient {value:.1} K/100 km"));
                         }
                     });
+                }
+                if let Some(blend) = crate::fielddiff::objective_surface_point(
+                    temp, dewpoint, metars, lon, lat,
+                ) {
+                    ui.separator();
+                    ui.strong("HookEcho objective analysis");
+                    ui.horizontal_wrapped(|ui| {
+                        if let Some(value) = blend.temperature_k {
+                            ui.label(format!("Temperature {:.1} °C", value - 273.15));
+                        }
+                        if let Some(value) = blend.dewpoint_k {
+                            ui.label(format!("Dewpoint {:.1} °C", value - 273.15));
+                        }
+                    });
+                    ui.weak(format!("{} · {:.0} km · {:.0}% observation weight",
+                        blend.station, blend.distance_km, blend.weight * 100.0));
+                    ui.weak("Nearest METAR innovation, ≤90 min old, 75 km decay; not an official SPC analysis.");
                 }
             } else {
                 ui.weak("Diagnostics wait for matching analysis times.");

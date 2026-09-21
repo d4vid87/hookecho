@@ -2177,7 +2177,7 @@ HookEcho should be considered “top-tier U.S. analyst workstation” only when 
 - [x] historical algorithm and model verification
 - [x] chase route weather-exposure analysis
 - [x] broadcast/headless deterministic rendering
-- [ ] GeoTIFF/NetCDF/CSV/GeoJSON scientific export where applicable
+- [x] GeoTIFF/NetCDF/CSV/GeoJSON scientific export where applicable
 - [x] browser persistent cache
 - [x] Android tablet analyst layout
 - [x] performance regression suite

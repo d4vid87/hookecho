@@ -410,6 +410,59 @@ pub fn gradient_per_100km(field: &MrmsField, lon: f64, lat: f64) -> Option<f32> 
     Some((((east - west) / dx_km as f32).hypot((north - south) / dy_km as f32)) * 100.0)
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct ObjectiveSurfacePoint {
+    pub station: String,
+    pub distance_km: f64,
+    pub weight: f32,
+    pub temperature_k: Option<f32>,
+    pub dewpoint_k: Option<f32>,
+}
+
+/// Blend the nearest recent METAR innovation into an analysis background at one point.
+/// The weight decays as `exp(-(distance / 75 km)^2)` and is zero beyond 150 km.
+pub fn objective_surface_point(
+    temperature: &FieldFrame,
+    dewpoint: &FieldFrame,
+    observations: &[wxdata::metar::SurfaceOb],
+    lon: f64,
+    lat: f64,
+) -> Option<ObjectiveSurfacePoint> {
+    if temperature.stamp.class != DataClass::Analysis
+        || dewpoint.stamp.class != DataClass::Analysis
+        || temperature.stamp.valid_time != dewpoint.stamp.valid_time
+    {
+        return None;
+    }
+    let background_t = temperature.sample(lon, lat).value;
+    let background_td = dewpoint.sample(lon, lat).value;
+    let (station, distance_km) = observations
+        .iter()
+        .filter(|ob| ob.obs_time
+            .and_then(|time| chrono::DateTime::from_timestamp(time, 0))
+            .is_some_and(|time| (time - temperature.stamp.valid_time).abs() <= chrono::Duration::minutes(90)))
+        .map(|ob| {
+            let dlat = (ob.lat - lat).to_radians();
+            let dlon = (ob.lon - lon).to_radians();
+            let a = (dlat / 2.0).sin().powi(2)
+                + lat.to_radians().cos() * ob.lat.to_radians().cos() * (dlon / 2.0).sin().powi(2);
+            (ob, 6371.0 * 2.0 * a.sqrt().atan2((1.0 - a).sqrt()))
+        })
+        .filter(|(_, distance)| *distance <= 150.0)
+        .min_by(|a, b| a.1.total_cmp(&b.1))?;
+    let weight = (-(distance_km / 75.0).powi(2)).exp() as f32;
+    let blend = |background: Option<f32>, observed_c: Option<f32>| {
+        background.zip(observed_c).map(|(background, observed)| {
+            background + weight * (observed + 273.15 - background)
+        })
+    };
+    Some(ObjectiveSurfacePoint {
+        station: station.icao.clone(), distance_km, weight,
+        temperature_k: blend(background_t, station.temp_c),
+        dewpoint_k: blend(background_td, station.dewp_c),
+    })
+}
+
 /// `a - b`, on the coarser of the two lattices, over the part of the world both cover.
 ///
 /// The time is `a`'s: a difference is only meaningful for one instant, and the caller is
@@ -778,5 +831,34 @@ mod tests {
         let field = MrmsField { values, ..field };
         let gradient = gradient_per_100km(&field, 0.0, 0.0).unwrap();
         assert!((0.89..=0.91).contains(&gradient), "{gradient}");
+    }
+
+    #[test]
+    fn objective_analysis_blends_only_a_nearby_recent_observation() {
+        let valid = chrono::Utc::now();
+        let frame = |descriptor, value| FieldFrame::new(
+            descriptor,
+            grid(2, 2, -100.0, -99.0, 39.0, 40.0, value),
+            DataStamp {
+                source_identity: "rtma".into(), issue_time: None, run_time: None,
+                valid_time: valid, received_time: valid, class: DataClass::Analysis,
+                quality: QualitySummary::Good, available_members: None,
+            },
+        );
+        let observation = wxdata::metar::SurfaceOb {
+            icao: "KTEST".into(), name: "Test".into(), lat: 39.5, lon: -99.5,
+            temp_c: Some(30.0), dewp_c: Some(20.0), wdir_deg: None, wspd_kt: 0.0,
+            wgst_kt: None, altim_mb: None, elev_m: None, obs_time: Some(valid.timestamp()),
+            flt_cat: String::new(), wvht_ft: None, dpd_s: None, raw: String::new(),
+        };
+        let blend = objective_surface_point(
+            &frame(&wxdata::rtma::TEMP_DESCRIPTOR, 300.0),
+            &frame(&wxdata::rtma::DEWPOINT_DESCRIPTOR, 290.0),
+            &[observation], -99.5, 39.5,
+        ).unwrap();
+        assert_eq!(blend.station, "KTEST");
+        assert_eq!(blend.weight, 1.0);
+        assert!((blend.temperature_k.unwrap() - 303.15).abs() < 0.001);
+        assert!((blend.dewpoint_k.unwrap() - 293.15).abs() < 0.001);
     }
 }
