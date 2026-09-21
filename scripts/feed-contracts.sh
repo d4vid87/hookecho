@@ -128,6 +128,8 @@ check_prefixes \
   'CONUS/RadarOnly_QPE_06H_00.00/' \
   'CONUS/RadarOnly_QPE_12H_00.00/' \
   'CONUS/RadarOnly_QPE_24H_00.00/' \
+  'CONUS/RadarOnly_QPE_48H_00.00/' \
+  'CONUS/RadarOnly_QPE_72H_00.00/' \
   'CONUS/LayerCompositeReflectivity_Low_00.50/' \
   'CONUS/LayerCompositeReflectivity_High_00.50/' \
   'CONUS/LayerCompositeReflectivity_Super_00.50/' \
@@ -150,6 +152,8 @@ check_prefixes \
   'CONUS/MultiSensor_QPE_03H_Pass2_00.00/' \
   'CONUS/MultiSensor_QPE_06H_Pass2_00.00/' \
   'CONUS/MultiSensor_QPE_12H_Pass2_00.00/' \
+  'CONUS/MultiSensor_QPE_48H_Pass2_00.00/' \
+  'CONUS/MultiSensor_QPE_72H_Pass2_00.00/' \
   'CONUS/NLDN_CG_005min_AvgDensity_00.00/'
 
 check_recent_mrms \
@@ -169,6 +173,8 @@ check_recent_mrms \
   'CONUS/RadarOnly_QPE_06H_00.00' \
   'CONUS/RadarOnly_QPE_12H_00.00' \
   'CONUS/RadarOnly_QPE_24H_00.00' \
+  'CONUS/RadarOnly_QPE_48H_00.00' \
+  'CONUS/RadarOnly_QPE_72H_00.00' \
   'CONUS/LayerCompositeReflectivity_Low_00.50' \
   'CONUS/LayerCompositeReflectivity_High_00.50' \
   'CONUS/LayerCompositeReflectivity_Super_00.50' \
@@ -191,6 +197,8 @@ check_recent_mrms \
   'CONUS/MultiSensor_QPE_03H_Pass2_00.00' \
   'CONUS/MultiSensor_QPE_06H_Pass2_00.00' \
   'CONUS/MultiSensor_QPE_12H_Pass2_00.00' \
+  'CONUS/MultiSensor_QPE_48H_Pass2_00.00' \
+  'CONUS/MultiSensor_QPE_72H_Pass2_00.00' \
   'CONUS/NLDN_CG_005min_AvgDensity_00.00'
 
 check_prefixes \
