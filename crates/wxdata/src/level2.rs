@@ -175,6 +175,134 @@ pub struct NativeGateSample {
     pub collected_at: chrono::DateTime<chrono::Utc>,
 }
 
+/// Native gates shared by two transmitted moments, ready for a bounded scatterplot.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MomentPairs {
+    pub x: Moment,
+    pub y: Moment,
+    pub points: Vec<[f32; 2]>,
+    pub pearson_r: f32,
+    pub slope: f32,
+    pub intercept: f32,
+}
+
+/// Pair two transmitted moments over a geographic box without using display-resampled values.
+pub fn moment_pairs_in_box(
+    scan: &Scan,
+    tilt: usize,
+    x: Moment,
+    y: Moment,
+    a: [f64; 2],
+    b: [f64; 2],
+) -> Option<MomentPairs> {
+    const MAX_POINTS: usize = 20_000;
+    if x == y
+        || matches!(x, Moment::SpecificDifferentialPhase)
+        || matches!(y, Moment::SpecificDifferentialPhase)
+    {
+        return None;
+    }
+    let site = scan.site()?;
+    let sweep = scan.sweeps().get(tilt)?;
+    let elevation = sweep.elevation_angle_degrees()? as f64;
+    let bounds = (
+        a[0].min(b[0]),
+        a[1].min(b[1]),
+        a[0].max(b[0]),
+        a[1].max(b[1]),
+    );
+    let available = sweep
+        .radials()
+        .iter()
+        .filter_map(|radial| x.select(radial))
+        .map(|data| data.gate_count() as usize)
+        .sum::<usize>();
+    let stride = available.div_ceil(MAX_POINTS).max(1);
+    let mut points = Vec::with_capacity(available.min(MAX_POINTS));
+    let mut visited = 0usize;
+    for radial in sweep.radials() {
+        let (Some(xs), Some(ys)) = (x.select(radial), y.select(radial)) else {
+            continue;
+        };
+        let y_values: Vec<_> = ys.iter().collect();
+        for (gate, xv) in xs.iter().enumerate() {
+            visited += 1;
+            if !visited.is_multiple_of(stride) {
+                continue;
+            }
+            let MomentValue::Value(xv) = xv else { continue };
+            let slant = xs.first_gate_range_km()
+                + (gate as f64 + 0.5) * xs.gate_interval_km();
+            let y_gate = ((slant - ys.first_gate_range_km()) / ys.gate_interval_km()).floor();
+            if y_gate < 0.0 {
+                continue;
+            }
+            let Some(MomentValue::Value(yv)) = y_values.get(y_gate as usize) else {
+                continue;
+            };
+            let ground = crate::xsection::ground_from_slant_km(slant, elevation);
+            let (lon, lat) = destination_point(
+                site.longitude() as f64,
+                site.latitude() as f64,
+                radial.azimuth_angle_degrees() as f64,
+                ground,
+            );
+            if (bounds.0..=bounds.2).contains(&lon) && (bounds.1..=bounds.3).contains(&lat) {
+                points.push([xv, *yv]);
+            }
+        }
+    }
+    let (pearson_r, slope, intercept) = linear_fit(&points)?;
+    Some(MomentPairs {
+        x,
+        y,
+        points,
+        pearson_r,
+        slope,
+        intercept,
+    })
+}
+
+fn linear_fit(points: &[[f32; 2]]) -> Option<(f32, f32, f32)> {
+    let (mut mean_x, mut mean_y, mut m2_x, mut m2_y, mut covariance) =
+        (0.0f64, 0.0f64, 0.0f64, 0.0f64, 0.0f64);
+    for (index, &[x, y]) in points.iter().enumerate() {
+        let count = (index + 1) as f64;
+        let dx = f64::from(x) - mean_x;
+        mean_x += dx / count;
+        let dy = f64::from(y) - mean_y;
+        mean_y += dy / count;
+        m2_x += dx * (f64::from(x) - mean_x);
+        m2_y += dy * (f64::from(y) - mean_y);
+        covariance += dx * (f64::from(y) - mean_y);
+    }
+    if points.len() < 2 || m2_x <= 0.0 || m2_y <= 0.0 {
+        return None;
+    }
+    let slope = covariance / m2_x;
+    Some((
+        (covariance / (m2_x * m2_y).sqrt()) as f32,
+        slope as f32,
+        (mean_y - slope * mean_x) as f32,
+    ))
+}
+
+fn destination_point(lon: f64, lat: f64, bearing_deg: f64, km: f64) -> (f64, f64) {
+    let angular = km / 6371.0088;
+    let (bearing, lat0, lon0) = (
+        bearing_deg.to_radians(),
+        lat.to_radians(),
+        lon.to_radians(),
+    );
+    let out_lat = (lat0.sin() * angular.cos()
+        + lat0.cos() * angular.sin() * bearing.cos())
+    .asin();
+    let out_lon = lon0
+        + (bearing.sin() * angular.sin() * lat0.cos())
+            .atan2(angular.cos() - lat0.sin() * out_lat.sin());
+    (out_lon.to_degrees(), out_lat.to_degrees())
+}
+
 /// Sample the nearest native radial and gate without palette encoding or display resampling.
 pub fn sample_native(
     scan: &Scan,
@@ -961,6 +1089,31 @@ mod tests {
         assert!((sample.gate_spacing_km as f64 - data.gate_interval_km()).abs() < 1e-6);
         assert!((sample.slant_range_km as f64 - slant).abs() < data.gate_interval_km());
         assert!(sample.beam_height_ft > 0.0);
+    }
+
+    #[test]
+    fn native_moment_pairs_are_bounded_and_fitted() {
+        let scan = nexrad_data::volume::File::new(
+            include_bytes!("../tests/data/kdmx-one-sweep.bin").to_vec(),
+        )
+        .scan()
+        .expect("fixture decodes");
+        let pairs = moment_pairs_in_box(
+            &scan,
+            0,
+            Moment::Reflectivity,
+            Moment::CorrelationCoefficient,
+            [-180.0, -90.0],
+            [180.0, 90.0],
+        )
+        .expect("fixture has paired dual-pol gates");
+        assert!((2..=20_000).contains(&pairs.points.len()));
+        assert!(pairs
+            .points
+            .iter()
+            .all(|point| point.iter().all(|v| v.is_finite())));
+        assert!((-1.0..=1.0).contains(&pairs.pearson_r));
+        assert!(pairs.slope.is_finite() && pairs.intercept.is_finite());
     }
 
     /// The two sentinel codes are not values, and must not be reported as one.

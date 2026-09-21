@@ -2644,6 +2644,7 @@ pub struct HookEchoApp {
     /// Opposite corners and cached native-value statistics for the selected registered field.
     region_points: Vec<[f64; 2]>,
     region_analysis: Option<RegionAnalysis>,
+    radar_scatter: Option<wxdata::level2::MomentPairs>,
     /// Freehand annotation strokes, in lon/lat so they stick to the ground through pan and zoom.
     /// Session-only by design: this is for pointing at a storm on a stream, not a saved document.
     strokes: Vec<Stroke2d>,
@@ -3585,6 +3586,7 @@ impl HookEchoApp {
             measure: Vec::new(),
             region_points: Vec::new(),
             region_analysis: None,
+            radar_scatter: None,
             strokes: Vec::new(),
             route_waypoints: Vec::new(),
             routes: Vec::new(),
@@ -12085,6 +12087,7 @@ impl HookEchoApp {
                         if self.region_points.len() >= 2 {
                             self.region_points.clear();
                             self.region_analysis = None;
+                            self.radar_scatter = None;
                         }
                         self.region_points.push([lon, lat]);
                         if self.region_points.len() == 2 {
@@ -12128,6 +12131,22 @@ impl HookEchoApp {
                                                 })
                                         }),
                                     })
+                            });
+                            let view = &self.views[idx];
+                            let other = if view.moment == Moment::Reflectivity {
+                                Moment::CorrelationCoefficient
+                            } else {
+                                Moment::Reflectivity
+                            };
+                            self.radar_scatter = view.volume.as_ref().and_then(|volume| {
+                                wxdata::level2::moment_pairs_in_box(
+                                    &volume.scan,
+                                    view.tilt,
+                                    view.moment,
+                                    other,
+                                    self.region_points[0],
+                                    self.region_points[1],
+                                )
                             });
                         }
                     }
@@ -15052,7 +15071,18 @@ impl HookEchoApp {
                     egui::StrokeKind::Middle,
                 );
                 let text = self.region_analysis.as_ref().map_or_else(
-                    || "No registered field values in box".to_string(),
+                    || self.radar_scatter.as_ref().map_or_else(
+                        || "No native values in box".to_string(),
+                        |pairs| format!(
+                            "{} vs {} · {} native gates · r {:.3} · y={:.3}x{:+.3}",
+                            pairs.x.short_name(),
+                            pairs.y.short_name(),
+                            pairs.points.len(),
+                            pairs.pearson_r,
+                            pairs.slope,
+                            pairs.intercept,
+                        ),
+                    ),
                     |analysis| {
                         let stats = &analysis.stats;
                         let mut text = format!(
@@ -15090,6 +15120,9 @@ impl HookEchoApp {
                     egui::FontId::proportional(11.0),
                     col,
                 );
+                if let Some(pairs) = &self.radar_scatter {
+                    draw_scatterplot(&painter, rect.center_bottom() + egui::vec2(0.0, 8.0), pairs);
+                }
             }
         }
 
@@ -16219,16 +16252,17 @@ impl HookEchoApp {
     }
 
     fn export_region_stats(&mut self) {
-        let Some(analysis) = &self.region_analysis else {
+        if self.region_analysis.is_none() && self.radar_scatter.is_none() {
             self.toast(ToastKind::Info, "Select a field area first");
             return;
-        };
-        let stats = &analysis.stats;
+        }
         let [a, b] = self.region_points.as_slice() else {
             self.toast(ToastKind::Info, "Select a field area first");
             return;
         };
-        let mut csv = format!(
+        let mut csv = self.region_analysis.as_ref().map_or_else(String::new, |analysis| {
+            let stats = &analysis.stats;
+            format!(
             "product,valid_time,units,west,south,east,north,count,min,max,mean,std_dev\n{},{},{},{},{},{},{},{},{},{},{},{}\n\nbin,count\n",
             analysis.product,
             analysis.valid.to_rfc3339(),
@@ -16242,23 +16276,35 @@ impl HookEchoApp {
             stats.max,
             stats.mean,
             stats.std_dev,
-        );
-        for (bin, count) in stats.histogram.iter().enumerate() {
-            use std::fmt::Write;
-            let _ = writeln!(csv, "{bin},{count}");
+            )
+        });
+        if let Some(analysis) = &self.region_analysis {
+            for (bin, count) in analysis.stats.histogram.iter().enumerate() {
+                use std::fmt::Write;
+                let _ = writeln!(csv, "{bin},{count}");
+            }
+            if let Some(pair) = &analysis.correlation {
+                use std::fmt::Write;
+                let _ = write!(
+                    csv,
+                    "\npaired_product,paired_units,count,pearson_r,slope,intercept\n{},{},{},{},{},{}\n",
+                    pair.product, pair.units, pair.stats.count, pair.stats.pearson_r,
+                    pair.stats.slope, pair.stats.intercept,
+                );
+            }
         }
-        if let Some(pair) = &analysis.correlation {
+        if let Some(pairs) = &self.radar_scatter {
             use std::fmt::Write;
             let _ = write!(
                 csv,
-                "\npaired_product,paired_units,count,pearson_r,slope,intercept\n{},{},{},{},{},{}\n",
-                pair.product,
-                pair.units,
-                pair.stats.count,
-                pair.stats.pearson_r,
-                pair.stats.slope,
-                pair.stats.intercept,
+                "\nradar_x,radar_y,x_units,y_units,count,pearson_r,slope,intercept,west,south,east,north\n{},{},{},{},{},{},{},{},{},{},{},{}\n\nx,y\n",
+                pairs.x.short_name(), pairs.y.short_name(), pairs.x.units(), pairs.y.units(),
+                pairs.points.len(), pairs.pearson_r, pairs.slope, pairs.intercept,
+                a[0].min(b[0]), a[1].min(b[1]), a[0].max(b[0]), a[1].max(b[1]),
             );
+            for &[x, y] in &pairs.points {
+                let _ = writeln!(csv, "{x},{y}");
+            }
         }
         match crate::dialog::save_bytes("hookecho-region-statistics.csv", "csv", csv.as_bytes()) {
             crate::dialog::Saved::Where(where_) => {
@@ -17748,6 +17794,39 @@ fn histogram_text(bins: &[u32; 16]) -> String {
             }
         })
         .collect()
+}
+
+fn draw_scatterplot(
+    painter: &egui::Painter,
+    top: egui::Pos2,
+    pairs: &wxdata::level2::MomentPairs,
+) {
+    let plot = egui::Rect::from_min_size(top - egui::vec2(70.0, 0.0), egui::vec2(140.0, 80.0));
+    painter.rect_filled(plot, 4.0, egui::Color32::from_black_alpha(210));
+    painter.rect_stroke(
+        plot,
+        4.0,
+        egui::Stroke::new(1.0, egui::Color32::from_gray(90)),
+        egui::StrokeKind::Middle,
+    );
+    let (mut xmin, mut xmax, mut ymin, mut ymax) =
+        (f32::INFINITY, f32::NEG_INFINITY, f32::INFINITY, f32::NEG_INFINITY);
+    for &[x, y] in &pairs.points {
+        xmin = xmin.min(x);
+        xmax = xmax.max(x);
+        ymin = ymin.min(y);
+        ymax = ymax.max(y);
+    }
+    let xspan = (xmax - xmin).max(f32::EPSILON);
+    let yspan = (ymax - ymin).max(f32::EPSILON);
+    let stride = pairs.points.len().div_ceil(1_000).max(1);
+    for &[x, y] in pairs.points.iter().step_by(stride) {
+        let pos = egui::pos2(
+            egui::lerp(plot.left() + 5.0..=plot.right() - 5.0, (x - xmin) / xspan),
+            egui::lerp(plot.bottom() - 5.0..=plot.top() + 5.0, (y - ymin) / yspan),
+        );
+        painter.circle_filled(pos, 1.0, egui::Color32::from_rgb(80, 220, 190));
+    }
 }
 
 fn warning_is_near_home(f: &GeoFeature, lon: f64, lat: f64) -> bool {
