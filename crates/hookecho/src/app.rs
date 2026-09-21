@@ -360,7 +360,7 @@ enum OverlaySource {
     /// HRRR-backed field layer (rotation tracks, smoke) at a forecast hour.
     HrrrLayer(crate::render::FieldLayer, u8),
     /// REFS neighborhood probability at a forecast hour.
-    RefsProbability(u8),
+    RefsProbability(u8, u8),
     /// A global-model field (GFS or ECMWF) at a forecast hour.
     Global(
         crate::render::FieldLayer,
@@ -937,9 +937,9 @@ impl OverlaySource {
                 };
                 OverlayMsg::RegisteredField(layer, frame, None)
             }
-            OverlaySource::RefsProbability(fh) => OverlayMsg::RegisteredField(
+            OverlaySource::RefsProbability(fh, threshold) => OverlayMsg::RegisteredField(
                 crate::render::FieldLayer::RefsReflectivityProb,
-                wxdata::refs::fetch_reflectivity_40(http, fh).await?,
+                wxdata::refs::fetch_reflectivity(http, fh, threshold).await?,
                 None,
             ),
             OverlaySource::Env(layer, model, ml, srh_km) => {
@@ -2850,6 +2850,8 @@ pub struct HookEchoApp {
     /// HRRR "future radar": selected forecast hour, last-fetched hour, run/valid times, clock.
     hrrr_fcst_hour: u8,
     refs_fcst_hour: u8,
+    refs_dbz_threshold: u8,
+    refs_key: Option<(u8, u8)>,
     hrrr_fetched_hour: Option<u8>,
     hrrr_run: Option<DateTime<Utc>>,
     hrrr_valid: Option<DateTime<Utc>>,
@@ -3721,6 +3723,8 @@ impl HookEchoApp {
             cappi_key: None,
             hrrr_fcst_hour: 1,
             refs_fcst_hour: 1,
+            refs_dbz_threshold: 40,
+            refs_key: None,
             hrrr_fetched_hour: None,
             hrrr_run: None,
             hrrr_valid: None,
@@ -18670,18 +18674,18 @@ impl eframe::App for HookEchoApp {
         {
             let layer = FL::RefsReflectivityProb;
             let fh = self.refs_fcst_hour;
+            let threshold = self.refs_dbz_threshold;
             let stale = self.field_wanted(layer)
                 && self.fields.get(&layer).is_none_or(|state| {
                     state
                         .last_fetch
                         .is_none_or(|time| time.elapsed().as_secs() >= field_refresh_secs(layer))
                 });
-            let hour_changed =
-                self.field_wanted(layer) && self.hrrr_layer_hour.get(&layer) != Some(&fh);
-            if stale || hour_changed {
+            let selection_changed = self.field_wanted(layer) && self.refs_key != Some((fh, threshold));
+            if stale || selection_changed {
                 self.fields.entry(layer).or_default().last_fetch = Some(Instant::now());
-                self.hrrr_layer_hour.insert(layer, fh);
-                self.spawn_overlay(ctx, OverlaySource::RefsProbability(fh));
+                self.refs_key = Some((fh, threshold));
+                self.spawn_overlay(ctx, OverlaySource::RefsProbability(fh, threshold));
             }
         }
         // Quiet hours just ended: replay what it held back as one push, so waking up to a silent

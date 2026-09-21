@@ -157,7 +157,7 @@ pub enum FieldLayer {
     SnowBands,
     /// NBM calibrated probability of thunder over the hour ending at the scrubbed forecast hour.
     ThunderProb,
-    /// REFS neighborhood probability of composite reflectivity above 40 dBZ.
+    /// REFS neighborhood probability of composite reflectivity above the selected threshold.
     RefsReflectivityProb,
     /// GLM flash-extent density — the recent satellite flashes gridded into a density field.
     GlmFed,

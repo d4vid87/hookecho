@@ -70,6 +70,7 @@ pub(crate) fn show(
     hail_minutes: &mut u16,
     hrrr_fcst_hour: &mut u8,
     refs_fcst_hour: &mut u8,
+    refs_dbz_threshold: &mut u8,
     hrrr_valid: Option<chrono::DateTime<chrono::Utc>>,
     tz: Option<wxdata::tz::Tz>,
     env_cape_ml: &mut bool,
@@ -702,7 +703,15 @@ pub(crate) fn show(
     if section == "Ensemble forecast" && on.contains(&FL::RefsReflectivityProb) {
         header(ui, "REFS storm probability");
         ui.add(egui::Slider::new(refs_fcst_hour, 1..=60).text("F+ hr"));
-        ui.weak("Neighborhood probability of composite reflectivity above 40 dBZ.");
+        ui.horizontal_wrapped(|ui| {
+            ui.label("Reflectivity:");
+            for threshold in wxdata::refs::REFLECTIVITY_THRESHOLDS {
+                ui.selectable_value(refs_dbz_threshold, threshold, format!(">{threshold} dBZ"));
+            }
+        });
+        ui.weak(format!(
+            "Neighborhood probability of composite reflectivity above {refs_dbz_threshold} dBZ."
+        ));
     }
 
     if section == "Environment" && on.contains(&FL::Cape) {
