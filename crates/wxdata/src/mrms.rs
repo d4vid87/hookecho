@@ -96,6 +96,15 @@ descriptor!(FLASH_CREST_SOIL_SAT_DESCRIPTOR, "mrms.flash-crest-soil-saturation",
 descriptor!(COMPOSITE_HEIGHT_DESCRIPTOR, "mrms.composite-reflectivity-height", "Composite reflectivity height", "Composite Height", "m MSL", Scalar, "height-msl", Bilinear, true, ["reflectivity height", "storm height", "altitude"]);
 descriptor!(LOW_LEVEL_HEIGHT_DESCRIPTOR, "mrms.low-level-reflectivity-height", "Low-level composite reflectivity height", "Low-level Height", "m MSL", Scalar, "height-msl", Bilinear, true, ["reflectivity height", "low level", "altitude"]);
 descriptor!(SEAMLESS_HSR_HEIGHT_DESCRIPTOR, "mrms.seamless-hsr-height", "Seamless hybrid-scan reflectivity height", "Hybrid-scan Height", "km AGL", Scalar, "echo-tops", Bilinear, true, ["hybrid scan", "reflectivity height", "beam height"]);
+descriptor!(BREF_1H_MAX_DESCRIPTOR, "mrms.base-reflectivity-max-1h", "One-hour maximum base reflectivity", "Base Reflectivity Max 1h", "dBZ", Scalar, "reflectivity", Bilinear, true, ["base reflectivity", "maximum", "swath"]);
+descriptor!(CREF_1H_MAX_DESCRIPTOR, "mrms.composite-reflectivity-max-1h", "One-hour maximum composite reflectivity", "Composite Reflectivity Max 1h", "dBZ", Scalar, "reflectivity", Bilinear, true, ["composite reflectivity", "maximum", "swath"]);
+descriptor!(BRIGHT_BAND_BOTTOM_DESCRIPTOR, "mrms.bright-band-bottom-height", "Bright-band bottom height", "Bright-band Bottom", "m AGL", Scalar, "height-msl", Bilinear, true, ["melting layer", "bright band", "height"]);
+descriptor!(BRIGHT_BAND_TOP_DESCRIPTOR, "mrms.bright-band-top-height", "Bright-band top height", "Bright-band Top", "m AGL", Scalar, "height-msl", Bilinear, true, ["melting layer", "bright band", "height"]);
+descriptor!(MODEL_FREEZING_HEIGHT_DESCRIPTOR, "mrms.model-freezing-level-height", "Model freezing-level height", "Freezing-level Height", "m MSL", Scalar, "height-msl", Bilinear, true, ["model", "zero c", "freezing level"]);
+descriptor!(RADAR_QPE_15M_DESCRIPTOR, "mrms.radar-qpe-15m", "Radar-only 15-minute precipitation", "Radar QPE 15m", "mm", Accumulation, "qpe-1h", Nearest, false, ["rain", "precipitation", "radar only"]);
+descriptor!(REFLECTIVITY_MINUS5C_DESCRIPTOR, "mrms.reflectivity-minus-5c", "Reflectivity at the -5 °C level", "Reflectivity at -5 °C", "dBZ", Scalar, "reflectivity", Bilinear, true, ["freezing level", "hail", "isothermal"]);
+descriptor!(REFLECTIVITY_MINUS15C_DESCRIPTOR, "mrms.reflectivity-minus-15c", "Reflectivity at the -15 °C level", "Reflectivity at -15 °C", "dBZ", Scalar, "reflectivity", Bilinear, true, ["hail growth", "isothermal"]);
+descriptor!(SEAMLESS_HSR_DESCRIPTOR, "mrms.seamless-hsr", "Seamless hybrid-scan reflectivity", "Seamless HSR", "dBZ", Scalar, "reflectivity", Bilinear, true, ["hybrid scan", "lowest altitude", "vpr"]);
 
 pub struct CatalogProduct {
     pub descriptor: &'static FieldDescriptor,
@@ -104,7 +113,7 @@ pub struct CatalogProduct {
     pub description: &'static str,
 }
 
-pub static CATALOG: [CatalogProduct; 34] = [
+pub static CATALOG: [CatalogProduct; 43] = [
     CatalogProduct { descriptor: &ECHO_TOP_30_DESCRIPTOR, product: "CONUS/EchoTop_30_00.50", slug: "mrms-echo-top-30", description: "Height of the 30 dBZ storm top above ground" },
     CatalogProduct { descriptor: &ECHO_TOP_50_DESCRIPTOR, product: "CONUS/EchoTop_50_00.50", slug: "mrms-echo-top-50", description: "Height of the 50 dBZ core for storm-severity analysis" },
     CatalogProduct { descriptor: &ECHO_TOP_60_DESCRIPTOR, product: "CONUS/EchoTop_60_00.50", slug: "mrms-echo-top-60", description: "Height of the strongest 60 dBZ core" },
@@ -139,6 +148,15 @@ pub static CATALOG: [CatalogProduct; 34] = [
     CatalogProduct { descriptor: &COMPOSITE_HEIGHT_DESCRIPTOR, product: "CONUS/HeightCompositeReflectivity_00.50", slug: "mrms-composite-reflectivity-height", description: "Altitude MSL of the strongest reflectivity in each column" },
     CatalogProduct { descriptor: &LOW_LEVEL_HEIGHT_DESCRIPTOR, product: "CONUS/HeightLowLevelCompositeReflectivity_00.50", slug: "mrms-low-level-reflectivity-height", description: "Altitude MSL of the strongest reflectivity below 4 km" },
     CatalogProduct { descriptor: &SEAMLESS_HSR_HEIGHT_DESCRIPTOR, product: "CONUS/SeamlessHSRHeight_00.00", slug: "mrms-seamless-hsr-height", description: "Height AGL sampled by the seamless hybrid-scan reflectivity" },
+    CatalogProduct { descriptor: &BREF_1H_MAX_DESCRIPTOR, product: "CONUS/BREF_1HR_MAX_00.50", slug: "mrms-base-reflectivity-max-1h", description: "Largest base reflectivity observed during the past hour" },
+    CatalogProduct { descriptor: &CREF_1H_MAX_DESCRIPTOR, product: "CONUS/CREF_1HR_MAX_00.50", slug: "mrms-composite-reflectivity-max-1h", description: "Largest composite reflectivity observed during the past hour" },
+    CatalogProduct { descriptor: &BRIGHT_BAND_BOTTOM_DESCRIPTOR, product: "CONUS/BrightBandBottomHeight_00.00", slug: "mrms-bright-band-bottom-height", description: "Analyzed bottom of the radar bright band above ground" },
+    CatalogProduct { descriptor: &BRIGHT_BAND_TOP_DESCRIPTOR, product: "CONUS/BrightBandTopHeight_00.00", slug: "mrms-bright-band-top-height", description: "Analyzed top of the radar bright band above ground" },
+    CatalogProduct { descriptor: &MODEL_FREEZING_HEIGHT_DESCRIPTOR, product: "CONUS/Model_0degC_Height_00.50", slug: "mrms-model-freezing-level-height", description: "Model-analyzed altitude of the freezing level" },
+    CatalogProduct { descriptor: &RADAR_QPE_15M_DESCRIPTOR, product: "CONUS/RadarOnly_QPE_15M_00.00", slug: "mrms-radar-qpe-15m", description: "Fifteen-minute precipitation from radar without gauge correction" },
+    CatalogProduct { descriptor: &REFLECTIVITY_MINUS5C_DESCRIPTOR, product: "CONUS/Reflectivity_-5C_00.50", slug: "mrms-reflectivity-minus-5c", description: "Reflectivity intersecting the -5 °C level" },
+    CatalogProduct { descriptor: &REFLECTIVITY_MINUS15C_DESCRIPTOR, product: "CONUS/Reflectivity_-15C_00.50", slug: "mrms-reflectivity-minus-15c", description: "Reflectivity intersecting the -15 °C hail-growth layer" },
+    CatalogProduct { descriptor: &SEAMLESS_HSR_DESCRIPTOR, product: "CONUS/SeamlessHSR_00.00", slug: "mrms-seamless-hsr", description: "Lowest usable hybrid-scan reflectivity with vertical-profile correction" },
 ];
 descriptor!(ROTATION_DESCRIPTOR, "mrms.rotation-track", "Rotation track", "Rotation Track", "s⁻¹", Accumulation, "rotation", Nearest, false, ["rotation", "azimuthal shear"]);
 descriptor!(QPE_01H_DESCRIPTOR, "mrms.qpe-1h", "One-hour quantitative precipitation estimate", "QPE 1h", "mm", Accumulation, "qpe-1h", Nearest, false, ["rain", "precipitation"]);
@@ -152,7 +170,7 @@ descriptor!(PRECIP_RATE_DESCRIPTOR, "mrms.precip-rate", "Surface precipitation r
 descriptor!(PRECIP_TYPE_DESCRIPTOR, "mrms.precip-type", "Surface precipitation type", "Precip Type", "category", Categorical, "precip-type", Nearest, false, ["rain", "snow", "sleet"]);
 descriptor!(FLASH_ARI30_DESCRIPTOR, "mrms.flash-ari30", "30-minute flash-flood recurrence interval", "FLASH ARI", "yr", Scalar, "flash-flood", Bilinear, false, ["flood", "ari"]);
 
-pub static DESCRIPTORS: [&FieldDescriptor; 53] = [
+pub static DESCRIPTORS: [&FieldDescriptor; 62] = [
     &REFLECTIVITY_DESCRIPTOR,
     &LOW_LEVEL_REFLECTIVITY_DESCRIPTOR,
     &LIGHTNING_DESCRIPTOR,
@@ -195,6 +213,15 @@ pub static DESCRIPTORS: [&FieldDescriptor; 53] = [
     &COMPOSITE_HEIGHT_DESCRIPTOR,
     &LOW_LEVEL_HEIGHT_DESCRIPTOR,
     &SEAMLESS_HSR_HEIGHT_DESCRIPTOR,
+    &BREF_1H_MAX_DESCRIPTOR,
+    &CREF_1H_MAX_DESCRIPTOR,
+    &BRIGHT_BAND_BOTTOM_DESCRIPTOR,
+    &BRIGHT_BAND_TOP_DESCRIPTOR,
+    &MODEL_FREEZING_HEIGHT_DESCRIPTOR,
+    &RADAR_QPE_15M_DESCRIPTOR,
+    &REFLECTIVITY_MINUS5C_DESCRIPTOR,
+    &REFLECTIVITY_MINUS15C_DESCRIPTOR,
+    &SEAMLESS_HSR_DESCRIPTOR,
     &ROTATION_DESCRIPTOR,
     &QPE_01H_DESCRIPTOR,
     &QPE_03H_DESCRIPTOR,

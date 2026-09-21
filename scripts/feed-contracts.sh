@@ -139,6 +139,15 @@ check_prefixes \
   'CONUS/HeightCompositeReflectivity_00.50/' \
   'CONUS/HeightLowLevelCompositeReflectivity_00.50/' \
   'CONUS/SeamlessHSRHeight_00.00/' \
+  'CONUS/BREF_1HR_MAX_00.50/' \
+  'CONUS/CREF_1HR_MAX_00.50/' \
+  'CONUS/BrightBandBottomHeight_00.00/' \
+  'CONUS/BrightBandTopHeight_00.00/' \
+  'CONUS/Model_0degC_Height_00.50/' \
+  'CONUS/RadarOnly_QPE_15M_00.00/' \
+  'CONUS/Reflectivity_-5C_00.50/' \
+  'CONUS/Reflectivity_-15C_00.50/' \
+  'CONUS/SeamlessHSR_00.00/' \
   'CONUS/RotationTrack30min_00.50/' \
   'CONUS/RotationTrack60min_00.50/' \
   'CONUS/RotationTrack120min_00.50/' \
@@ -193,6 +202,15 @@ check_recent_mrms \
   'CONUS/HeightCompositeReflectivity_00.50' \
   'CONUS/HeightLowLevelCompositeReflectivity_00.50' \
   'CONUS/SeamlessHSRHeight_00.00' \
+  'CONUS/BREF_1HR_MAX_00.50' \
+  'CONUS/CREF_1HR_MAX_00.50' \
+  'CONUS/BrightBandBottomHeight_00.00' \
+  'CONUS/BrightBandTopHeight_00.00' \
+  'CONUS/Model_0degC_Height_00.50' \
+  'CONUS/RadarOnly_QPE_15M_00.00' \
+  'CONUS/Reflectivity_-5C_00.50' \
+  'CONUS/Reflectivity_-15C_00.50' \
+  'CONUS/SeamlessHSR_00.00' \
   'CONUS/RotationTrack30min_00.50' \
   'CONUS/RotationTrack60min_00.50' \
   'CONUS/RotationTrack120min_00.50' \
