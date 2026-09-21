@@ -6,6 +6,7 @@ The scheduled `Feed contracts` workflow runs `scripts/feed-contracts.sh` against
 bucket listings. It requires each selected MRMS feed to publish today or yesterday and GOES-19
 ABI/GLM families to publish in the current or previous hour. Missing or stale feeds fail that
 workflow without making pull-request tests depend on the network.
+RRFS and both GEFS ensemble aggregate products must also expose a current or previous-day index.
 
 Model schedule metadata follows NOAA's current HRRR/RAP/GFS product inventories and ECMWF's
 Cycle 50r1 open-data contract. Extended HRRR and RAP forecast hours are restricted to their

@@ -64,6 +64,32 @@ check_recent_rrfs() {
   fi
 }
 
+check_recent_gefs() {
+  local day cycle product body found complete
+  found=0
+  for day in "$(date -u +%Y%m%d)" "$(date -u -d '1 day ago' +%Y%m%d)"; do
+    for cycle in 18 12 06 00; do
+      complete=1
+      for product in geavg gespr; do
+        body=$(curl --fail --silent --show-error --retry 3 \
+          "https://noaa-gefs-pds.s3.amazonaws.com/?list-type=2&max-keys=1&prefix=gefs.${day}/${cycle}/atmos/pgrb2sp25/${product}.t${cycle}z.pgrb2s.0p25.f000.idx")
+        if ! grep -Fq '<Key>' <<<"$body"; then
+          complete=0
+          break
+        fi
+      done
+      if (( complete == 1 )); then
+        found=1
+        break 2
+      fi
+    done
+  done
+  (( found == 1 )) || {
+    echo "no recent GEFS mean/spread index objects" >&2
+    return 1
+  }
+}
+
 check_prefixes \
   'https://noaa-mrms-pds.s3.amazonaws.com/?list-type=2&delimiter=/&prefix=CONUS/' \
   'CONUS/MergedReflectivityQCComposite_00.50/' \
@@ -139,3 +165,4 @@ check_recent_goes 'ABI-L2-CMIPC'
 check_recent_goes 'ABI-L2-CMIPM'
 check_recent_goes 'GLM-L2-LCFA'
 check_recent_rrfs
+check_recent_gefs
