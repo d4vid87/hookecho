@@ -10,8 +10,103 @@
 //! draw detail that is not there. GFS and ECMWF already share one lattice, so that pair does not
 //! resample at all.
 
+use wxdata::field::{
+    DataClass, DataStamp, FieldDescriptor, FieldFamily, FieldFrame, FieldId, MissingData,
+    QualitySummary, SamplingPolicy, ValueKind,
+};
 use wxdata::global::GlobalField;
 use wxdata::mrms::MrmsField;
+
+macro_rules! descriptor {
+    ($name:ident, $id:literal, $label:literal, $units:literal) => {
+        static $name: FieldDescriptor = FieldDescriptor {
+            id: FieldId($id),
+            source: "Model comparison",
+            family: FieldFamily::Model,
+            display_name: $label,
+            short_name: $label,
+            search_aliases: &["difference", "comparison"],
+            units: $units,
+            value_kind: ValueKind::Scalar,
+            palette_key: "derived.model-difference",
+            sampling: SamplingPolicy::Bilinear,
+            missing: MissingData::Nan,
+            time_policy: None,
+            supports_contours: false,
+            supports_difference: false,
+        };
+    };
+}
+
+pub static MODEL_DIFF_DESCRIPTOR: FieldDescriptor = FieldDescriptor {
+    id: FieldId("derived.model-difference"),
+    source: "Model comparison",
+    family: FieldFamily::Model,
+    display_name: "Model difference",
+    short_name: "Model difference",
+    search_aliases: &["spread", "comparison"],
+    units: "",
+    value_kind: ValueKind::Scalar,
+    palette_key: "derived.model-difference",
+    sampling: SamplingPolicy::Bilinear,
+    missing: MissingData::Nan,
+    time_policy: None,
+    supports_contours: false,
+    supports_difference: false,
+};
+descriptor!(
+    DIFF_MSLP,
+    "derived.model-difference.mslp",
+    "MSLP difference",
+    "Pa"
+);
+descriptor!(
+    DIFF_HEIGHT,
+    "derived.model-difference.height-500",
+    "500 hPa height difference",
+    "m"
+);
+descriptor!(
+    DIFF_TEMP,
+    "derived.model-difference.temperature-2m",
+    "2 m temperature difference",
+    "K"
+);
+descriptor!(
+    DIFF_DEWPOINT,
+    "derived.model-difference.dewpoint-2m",
+    "2 m dewpoint difference",
+    "K"
+);
+descriptor!(
+    DIFF_WIND,
+    "derived.model-difference.wind-10m",
+    "10 m wind difference",
+    "m s-1"
+);
+descriptor!(
+    DIFF_PRECIP,
+    "derived.model-difference.precipitable-water",
+    "Precipitable water difference",
+    "kg m-2"
+);
+descriptor!(
+    DIFF_CAPE,
+    "derived.model-difference.cape",
+    "CAPE difference",
+    "J/kg"
+);
+descriptor!(
+    DIFF_SRH,
+    "derived.model-difference.srh",
+    "SRH difference",
+    "m2/s2"
+);
+
+/// Comparisons are scientific only when both operands describe the same valid instant.
+pub fn same_valid_time(a: chrono::DateTime<chrono::Utc>, b: chrono::DateTime<chrono::Utc>) -> bool {
+    a == b
+}
 
 /// What the difference layer is differencing, and therefore which two models it asks for.
 ///
@@ -61,16 +156,27 @@ impl Default for DiffField {
 }
 
 impl DiffField {
-    /// Moisture is here as 2 m dewpoint: both models publish it as the same quantity in the same
-    /// units, so the subtraction means something. Column moisture still is not — GFS publishes
-    /// precipitable water and ECMWF total precipitation, and subtracting them subtracts two
-    /// different things. A plausible looking map of nonsense is worse than no map.
-    pub const ALL: [DiffField; 7] = [
+    pub fn descriptor(self) -> &'static FieldDescriptor {
+        match self {
+            DiffField::Global(GlobalFieldKind::Mslp) => &DIFF_MSLP,
+            DiffField::Global(GlobalFieldKind::Height500) => &DIFF_HEIGHT,
+            DiffField::Global(GlobalFieldKind::Temp2m) => &DIFF_TEMP,
+            DiffField::Global(GlobalFieldKind::Dewpoint2m) => &DIFF_DEWPOINT,
+            DiffField::Global(GlobalFieldKind::Wind10m) => &DIFF_WIND,
+            DiffField::Global(GlobalFieldKind::Precip) => &DIFF_PRECIP,
+            DiffField::Cape => &DIFF_CAPE,
+            DiffField::Srh => &DIFF_SRH,
+        }
+    }
+    /// Every pair uses the same physical quantity and native units. The column-moisture pair is
+    /// GFS precipitable water against ECMWF total-column water, both kg/m² (numerically mm).
+    pub const ALL: [DiffField; 8] = [
         DiffField::Global(GlobalFieldKind::Mslp),
         DiffField::Global(GlobalFieldKind::Height500),
         DiffField::Global(GlobalFieldKind::Temp2m),
         DiffField::Global(GlobalFieldKind::Dewpoint2m),
         DiffField::Global(GlobalFieldKind::Wind10m),
+        DiffField::Global(GlobalFieldKind::Precip),
         DiffField::Cape,
         DiffField::Srh,
     ];
@@ -141,6 +247,220 @@ impl DiffField {
             DiffField::Srh => "m²/s²",
         }
     }
+}
+
+pub fn diff_frames(
+    a: &FieldFrame,
+    b: &FieldFrame,
+    descriptor: &'static FieldDescriptor,
+) -> Option<FieldFrame> {
+    if !same_valid_time(a.stamp.valid_time, b.stamp.valid_time) {
+        return None;
+    }
+    let field = diff(a.field(), b.field())?;
+    Some(FieldFrame::new(
+        descriptor,
+        field,
+        DataStamp {
+            source_identity: format!("{} − {}", a.stamp.source_identity, b.stamp.source_identity),
+            issue_time: None,
+            run_time: None,
+            valid_time: a.stamp.valid_time,
+            received_time: a.stamp.received_time.max(b.stamp.received_time),
+            class: DataClass::Derived,
+            quality: QualitySummary::Unknown,
+            available_members: None,
+        },
+    ))
+}
+
+/// Deterministic forecast error over the common native domain.
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize)]
+pub struct VerificationMetrics {
+    pub samples: usize,
+    pub bias: f64,
+    pub mae: f64,
+    pub rmse: f64,
+}
+
+pub fn verify_forecast(
+    forecast: &FieldFrame,
+    analysis: &FieldFrame,
+) -> anyhow::Result<VerificationMetrics> {
+    anyhow::ensure!(
+        forecast.stamp.class == DataClass::Forecast,
+        "first field is not a forecast"
+    );
+    anyhow::ensure!(
+        matches!(analysis.stamp.class, DataClass::Analysis | DataClass::Observed),
+        "reference field is not an analysis or observation"
+    );
+    anyhow::ensure!(
+        forecast.stamp.valid_time == analysis.stamp.valid_time,
+        "forecast and reference valid times differ"
+    );
+    anyhow::ensure!(
+        forecast.descriptor.units == analysis.descriptor.units,
+        "forecast and reference units differ"
+    );
+    let errors = diff(forecast.field(), analysis.field())
+        .ok_or_else(|| anyhow::anyhow!("forecast and reference domains do not overlap"))?;
+    metrics(errors.values)
+}
+
+/// Score a surface forecast or analysis against temporally matched METAR stations in native units.
+pub fn verify_stations(
+    field: &FieldFrame,
+    observations: &[wxdata::metar::SurfaceOb],
+    tolerance: chrono::Duration,
+) -> anyhow::Result<VerificationMetrics> {
+    anyhow::ensure!(
+        matches!(field.stamp.class, DataClass::Forecast | DataClass::Analysis),
+        "field is not a forecast or analysis"
+    );
+    let id = field.descriptor.id.0;
+    anyhow::ensure!(
+        matches!(
+            id,
+            "model.global.temperature-2m"
+                | "model.global.dewpoint-2m"
+                | "model.global.mslp"
+                | "model.global.wind-10m"
+                | "analysis.rtma.temperature-2m"
+                | "analysis.rtma.dewpoint-2m"
+                | "analysis.rtma.surface-pressure"
+                | "analysis.rtma.wind-u-10m"
+                | "analysis.urma.temperature-2m"
+                | "analysis.urma.dewpoint-2m"
+                | "analysis.urma.surface-pressure"
+                | "analysis.urma.wind-u-10m"
+        ),
+        "field has no METAR verification mapping"
+    );
+    anyhow::ensure!(tolerance > chrono::Duration::zero(), "invalid time tolerance");
+    metrics(observations.iter().filter_map(|ob| {
+        let observed_at = chrono::DateTime::from_timestamp(ob.obs_time?, 0)?;
+        if (observed_at - field.stamp.valid_time).abs() > tolerance {
+            return None;
+        }
+        let observed = match id {
+            "model.global.temperature-2m" | "analysis.rtma.temperature-2m" | "analysis.urma.temperature-2m" => ob.temp_c? + 273.15,
+            "model.global.dewpoint-2m" | "analysis.rtma.dewpoint-2m" | "analysis.urma.dewpoint-2m" => ob.dewp_c? + 273.15,
+            "model.global.mslp" | "analysis.rtma.surface-pressure" | "analysis.urma.surface-pressure" => ob.altim_mb? * 100.0,
+            "model.global.wind-10m" | "analysis.rtma.wind-u-10m" | "analysis.urma.wind-u-10m" => {
+                -ob.wspd_kt / 1.943_844 * ob.wdir_deg?.to_radians().sin()
+            }
+            _ => return None,
+        };
+        Some(field.sample(ob.lon, ob.lat).value? - observed)
+    }))
+}
+
+fn metrics(errors: impl IntoIterator<Item = f32>) -> anyhow::Result<VerificationMetrics> {
+    let (mut samples, mut sum, mut absolute, mut squared) = (0usize, 0.0, 0.0, 0.0);
+    for error in errors.into_iter().filter(|value| value.is_finite()) {
+        let error = f64::from(error);
+        samples += 1;
+        sum += error;
+        absolute += error.abs();
+        squared += error * error;
+    }
+    anyhow::ensure!(samples > 0, "common domain contains no valid samples");
+    let count = samples as f64;
+    Ok(VerificationMetrics {
+        samples,
+        bias: sum / count,
+        mae: absolute / count,
+        rmse: (squared / count).sqrt(),
+    })
+}
+
+/// Bolton-style equivalent potential temperature from surface temperature, dewpoint, and pressure.
+pub fn theta_e_k(temp_k: f32, dewpoint_k: f32, pressure_pa: f32) -> Option<f32> {
+    if !(temp_k > 150.0 && dewpoint_k > 150.0 && pressure_pa > 10_000.0) {
+        return None;
+    }
+    let pressure_hpa = pressure_pa / 100.0;
+    let dewpoint_c = dewpoint_k - 273.15;
+    let vapor_hpa = 6.112 * (17.67 * dewpoint_c / (dewpoint_c + 243.5)).exp();
+    if vapor_hpa >= pressure_hpa {
+        return None;
+    }
+    let mixing_ratio = 0.622 * vapor_hpa / (pressure_hpa - vapor_hpa);
+    let lcl_k = 1.0 / (1.0 / (dewpoint_k - 56.0) + (temp_k / dewpoint_k).ln() / 800.0) + 56.0;
+    let theta_e = temp_k
+        * (1000.0 / pressure_hpa).powf(0.2854 * (1.0 - 0.28 * mixing_ratio))
+        * ((3376.0 / lcl_k - 2.54) * mixing_ratio * (1.0 + 0.81 * mixing_ratio)).exp();
+    theta_e.is_finite().then_some(theta_e)
+}
+
+/// Horizontal gradient magnitude at a point, expressed as native field units per 100 km.
+pub fn gradient_per_100km(field: &MrmsField, lon: f64, lat: f64) -> Option<f32> {
+    if field.nx < 3 || field.ny < 3 {
+        return None;
+    }
+    let dlon = (field.lon_east - field.lon_west) / field.nx as f64;
+    let dlat = (field.lat_north - field.lat_south) / field.ny as f64;
+    let west = field.sample_bilinear(lon - dlon, lat)?;
+    let east = field.sample_bilinear(lon + dlon, lat)?;
+    let south = field.sample_bilinear(lon, lat - dlat)?;
+    let north = field.sample_bilinear(lon, lat + dlat)?;
+    let dx_km = 2.0 * dlon.abs() * 111.32 * lat.to_radians().cos().abs().max(0.01);
+    let dy_km = 2.0 * dlat.abs() * 111.32;
+    Some((((east - west) / dx_km as f32).hypot((north - south) / dy_km as f32)) * 100.0)
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ObjectiveSurfacePoint {
+    pub station: String,
+    pub distance_km: f64,
+    pub weight: f32,
+    pub temperature_k: Option<f32>,
+    pub dewpoint_k: Option<f32>,
+}
+
+/// Blend the nearest recent METAR innovation into an analysis background at one point.
+/// The weight decays as `exp(-(distance / 75 km)^2)` and is zero beyond 150 km.
+pub fn objective_surface_point(
+    temperature: &FieldFrame,
+    dewpoint: &FieldFrame,
+    observations: &[wxdata::metar::SurfaceOb],
+    lon: f64,
+    lat: f64,
+) -> Option<ObjectiveSurfacePoint> {
+    if temperature.stamp.class != DataClass::Analysis
+        || dewpoint.stamp.class != DataClass::Analysis
+        || temperature.stamp.valid_time != dewpoint.stamp.valid_time
+    {
+        return None;
+    }
+    let background_t = temperature.sample(lon, lat).value;
+    let background_td = dewpoint.sample(lon, lat).value;
+    let (station, distance_km) = observations
+        .iter()
+        .filter(|ob| ob.obs_time
+            .and_then(|time| chrono::DateTime::from_timestamp(time, 0))
+            .is_some_and(|time| (time - temperature.stamp.valid_time).abs() <= chrono::Duration::minutes(90)))
+        .map(|ob| {
+            let dlat = (ob.lat - lat).to_radians();
+            let dlon = (ob.lon - lon).to_radians();
+            let a = (dlat / 2.0).sin().powi(2)
+                + lat.to_radians().cos() * ob.lat.to_radians().cos() * (dlon / 2.0).sin().powi(2);
+            (ob, 6371.0 * 2.0 * a.sqrt().atan2((1.0 - a).sqrt()))
+        })
+        .filter(|(_, distance)| *distance <= 150.0)
+        .min_by(|a, b| a.1.total_cmp(&b.1))?;
+    let weight = (-(distance_km / 75.0).powi(2)).exp() as f32;
+    let blend = |background: Option<f32>, observed_c: Option<f32>| {
+        background.zip(observed_c).map(|(background, observed)| {
+            background + weight * (observed + 273.15 - background)
+        })
+    };
+    Some(ObjectiveSurfacePoint {
+        station: station.icao.clone(), distance_km, weight,
+        temperature_k: blend(background_t, station.temp_c),
+        dewpoint_k: blend(background_td, station.dewp_c),
+    })
 }
 
 /// `a - b`, on the coarser of the two lattices, over the part of the world both cover.
@@ -315,6 +635,33 @@ mod tests {
     }
 
     #[test]
+    fn frame_difference_keeps_both_contributors_and_exact_time() {
+        let valid = chrono::Utc::now();
+        let make = |value, source: &str| {
+            FieldFrame::new(
+                &wxdata::global::MSLP_DESCRIPTOR,
+                grid(2, 2, -100.0, -99.0, 39.0, 40.0, value),
+                DataStamp {
+                    source_identity: source.into(),
+                    issue_time: None,
+                    run_time: None,
+                    valid_time: valid,
+                    received_time: valid,
+                    class: DataClass::Forecast,
+                    quality: QualitySummary::Unknown,
+                    available_members: None,
+                },
+            )
+        };
+        let frame = diff_frames(&make(8.0, "gfs"), &make(5.0, "ecmwf"), &DIFF_MSLP)
+            .expect("compatible frames");
+        assert_eq!(frame.stamp.class, DataClass::Derived);
+        assert_eq!(frame.stamp.valid_time, valid);
+        assert_eq!(frame.stamp.source_identity, "gfs − ecmwf");
+        assert_eq!(frame.sample(-99.5, 39.5).value, Some(3.0));
+    }
+
+    #[test]
     fn the_coarser_lattice_wins_and_the_overlap_clips() {
         // Fine grid over half the domain of a coarse one.
         let fine = grid(101, 101, -100.0, -95.0, 30.0, 35.0, 10.0);
@@ -361,5 +708,157 @@ mod tests {
         };
         assert!(rgb(-9.0).1 > rgb(-9.0).0, "negative is blue");
         assert!(rgb(9.0).0 > rgb(9.0).1, "positive is red");
+    }
+
+    #[test]
+    fn comparisons_require_the_same_valid_instant() {
+        let a = chrono::Utc::now();
+        assert!(same_valid_time(a, a));
+        assert!(!same_valid_time(a, a + chrono::Duration::minutes(1)));
+    }
+
+    #[test]
+    fn verification_scores_only_compatible_valid_native_values() {
+        let valid = chrono::Utc::now();
+        let make = |value, class: DataClass| {
+            FieldFrame::new(
+                &wxdata::global::MSLP_DESCRIPTOR,
+                grid(2, 2, -100.0, -99.0, 39.0, 40.0, value),
+                DataStamp {
+                    source_identity: class.label().into(),
+                    issue_time: None,
+                    run_time: None,
+                    valid_time: valid,
+                    received_time: valid,
+                    class,
+                    quality: QualitySummary::Good,
+                    available_members: None,
+                },
+            )
+        };
+        let score = verify_forecast(
+            &make(8.0, DataClass::Forecast),
+            &make(5.0, DataClass::Analysis),
+        )
+        .unwrap();
+        assert_eq!(score.samples, 4);
+        assert_eq!((score.bias, score.mae, score.rmse), (3.0, 3.0, 3.0));
+        assert!(verify_forecast(
+            &make(8.0, DataClass::Analysis),
+            &make(5.0, DataClass::Analysis)
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn station_verification_converts_units_and_rejects_stale_observations() {
+        let valid = chrono::Utc::now();
+        let forecast = FieldFrame::new(
+            &wxdata::global::TEMP_2M_DESCRIPTOR,
+            grid(2, 2, -100.0, -99.0, 39.0, 40.0, 300.0),
+            DataStamp {
+                source_identity: "gfs".into(),
+                issue_time: None,
+                run_time: None,
+                valid_time: valid,
+                received_time: valid,
+                class: DataClass::Forecast,
+                quality: QualitySummary::Good,
+                available_members: None,
+            },
+        );
+        let observation = |minutes: i64| wxdata::metar::SurfaceOb {
+            icao: "KTEST".into(),
+            name: "Test".into(),
+            lat: 39.5,
+            lon: -99.5,
+            temp_c: Some(25.85),
+            dewp_c: None,
+            wdir_deg: None,
+            wspd_kt: 0.0,
+            wgst_kt: None,
+            altim_mb: None,
+            elev_m: None,
+            obs_time: Some((valid + chrono::Duration::minutes(minutes)).timestamp()),
+            flt_cat: String::new(),
+            wvht_ft: None,
+            dpd_s: None,
+            raw: String::new(),
+        };
+        let score = verify_stations(
+            &forecast,
+            &[observation(30), observation(180)],
+            chrono::Duration::minutes(90),
+        )
+        .unwrap();
+        assert_eq!(score.samples, 1);
+        assert!((score.bias - 1.0).abs() < 0.001);
+
+        let analysis = FieldFrame::new(
+            &wxdata::rtma::TEMP_DESCRIPTOR,
+            grid(2, 2, -100.0, -99.0, 39.0, 40.0, 299.0),
+            DataStamp {
+                source_identity: "rtma".into(),
+                issue_time: None,
+                run_time: None,
+                valid_time: valid,
+                received_time: valid,
+                class: DataClass::Analysis,
+                quality: QualitySummary::Good,
+                available_members: None,
+            },
+        );
+        let score = verify_stations(
+            &analysis,
+            &[observation(0)],
+            chrono::Duration::minutes(90),
+        )
+        .unwrap();
+        assert!((score.bias).abs() < 0.001);
+    }
+
+    #[test]
+    fn surface_diagnostics_are_bounded_and_physical() {
+        let theta_e = theta_e_k(303.15, 293.15, 100_000.0).unwrap();
+        assert!((340.0..=350.0).contains(&theta_e), "{theta_e}");
+        assert!(theta_e_k(f32::NAN, 293.15, 100_000.0).is_none());
+
+        let mut values = Vec::new();
+        for _row in 0..5 {
+            values.extend([0.0, 1.0, 2.0, 3.0, 4.0]);
+        }
+        let field = grid(5, 5, -2.5, 2.5, -2.5, 2.5, 0.0);
+        let field = MrmsField { values, ..field };
+        let gradient = gradient_per_100km(&field, 0.0, 0.0).unwrap();
+        assert!((0.89..=0.91).contains(&gradient), "{gradient}");
+    }
+
+    #[test]
+    fn objective_analysis_blends_only_a_nearby_recent_observation() {
+        let valid = chrono::Utc::now();
+        let frame = |descriptor, value| FieldFrame::new(
+            descriptor,
+            grid(2, 2, -100.0, -99.0, 39.0, 40.0, value),
+            DataStamp {
+                source_identity: "rtma".into(), issue_time: None, run_time: None,
+                valid_time: valid, received_time: valid, class: DataClass::Analysis,
+                quality: QualitySummary::Good, available_members: None,
+            },
+        );
+        let observation = wxdata::metar::SurfaceOb {
+            icao: "KTEST".into(), name: "Test".into(), lat: 39.5, lon: -99.5,
+            temp_c: Some(30.0), dewp_c: Some(20.0), wdir_deg: None, wspd_kt: 0.0,
+            wgst_kt: None, altim_mb: None, elev_m: None, obs_time: Some(valid.timestamp()),
+            flt_cat: String::new(), wvht_ft: None, dpd_s: None, raw: String::new(),
+        };
+        let blend = objective_surface_point(
+            &frame(&wxdata::rtma::TEMP_DESCRIPTOR, 300.0),
+            &frame(&wxdata::rtma::DEWPOINT_DESCRIPTOR, 290.0),
+            &[observation], -99.5, 39.5,
+        ).unwrap();
+        assert_eq!(blend.station, "KTEST");
+        assert_eq!(blend.weight, 1.0);
+        assert!((blend.temperature_k.unwrap() - 303.15).abs() < 0.001);
+        assert!((blend.dewpoint_k.unwrap() - 293.15).abs() < 0.001);
     }
 }

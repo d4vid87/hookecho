@@ -250,6 +250,53 @@ static FLASH_FLOOD: FieldRamp = ramp!(
     ]
 );
 
+static FFG_RATIO: FieldRamp = ramp!(
+    "QPE / flash-flood guidance",
+    "ratio",
+    0.0,
+    5.0,
+    RampScale::Linear,
+    255,
+    &[
+        (0.0, [60, 90, 160]),
+        (0.2, [70, 190, 110]),
+        (0.4, [240, 220, 50]),
+        (0.7, [235, 90, 35]),
+        (1.0, [220, 50, 190]),
+    ]
+);
+
+static UNIT_STREAMFLOW: FieldRamp = ramp!(
+    "Unit streamflow",
+    "m³/s/km²",
+    0.1,
+    10.0,
+    RampScale::Log,
+    255,
+    &[
+        (0.0, [50, 110, 170]),
+        (0.35, [60, 190, 130]),
+        (0.6, [240, 220, 50]),
+        (0.8, [235, 90, 35]),
+        (1.0, [220, 50, 190]),
+    ]
+);
+
+static SOIL_SATURATION: FieldRamp = ramp!(
+    "Soil saturation",
+    "%",
+    0.0,
+    100.0,
+    RampScale::Linear,
+    220,
+    &[
+        (0.0, [115, 85, 55]),
+        (0.45, [220, 190, 90]),
+        (0.7, [80, 180, 120]),
+        (1.0, [60, 120, 220]),
+    ]
+);
+
 static VIL: FieldRamp = ramp!(
     "Water aloft (VIL)",
     "kg/m\u{b2}",
@@ -278,6 +325,37 @@ static ECHO_TOPS: FieldRamp = ramp!(
         (0.4, [40, 200, 90]),
         (0.75, [240, 230, 60]),
         (1.0, [240, 240, 240]),
+    ]
+);
+
+static MRMS_ECHO_TOPS: FieldRamp = ramp!(
+    "MRMS storm tops",
+    "km AGL",
+    1.5,
+    21.0,
+    RampScale::Linear,
+    255,
+    &[
+        (0.0, [40, 90, 200]),
+        (0.4, [40, 200, 90]),
+        (0.75, [240, 230, 60]),
+        (1.0, [240, 240, 240]),
+    ]
+);
+
+static MRMS_HEIGHT_MSL: FieldRamp = ramp!(
+    "Reflectivity height",
+    "m MSL",
+    0.0,
+    20_000.0,
+    RampScale::Linear,
+    190,
+    &[
+        (0.0, [50, 110, 170]),
+        (0.3, [40, 200, 200]),
+        (0.6, [240, 220, 50]),
+        (0.8, [240, 130, 30]),
+        (1.0, [220, 50, 190]),
     ]
 );
 
@@ -415,6 +493,61 @@ static GLOBAL_TEMP_2M: FieldRamp = FieldRamp {
             (0.5, [230, 230, 210]),
             (0.75, [240, 160, 50]),
             (1.0, [190, 40, 40]),
+        ]
+    )
+};
+
+static GOES_C13: FieldRamp = FieldRamp {
+    input_scale: 1.0,
+    ..ramp!(
+        "GOES clean infrared",
+        "K",
+        180.0,
+        330.0,
+        RampScale::Linear,
+        220,
+        &[
+            (0.0, [255, 255, 255]),
+            (0.3, [150, 200, 255]),
+            (0.55, [70, 80, 110]),
+            (0.8, [80, 80, 80]),
+            (1.0, [15, 15, 15]),
+        ]
+    )
+};
+
+static GOES_WATER_VAPOR: FieldRamp = FieldRamp {
+    input_scale: 1.0,
+    ..ramp!(
+        "GOES upper-level water vapor",
+        "K",
+        190.0,
+        270.0,
+        RampScale::Linear,
+        220,
+        &[
+            (0.0, [255, 255, 255]),
+            (0.25, [80, 190, 255]),
+            (0.5, [50, 70, 150]),
+            (0.75, [180, 100, 60]),
+            (1.0, [30, 20, 20]),
+        ]
+    )
+};
+
+static GOES_VISIBLE: FieldRamp = FieldRamp {
+    input_scale: 1.0,
+    ..ramp!(
+        "GOES red visible",
+        "reflectance",
+        0.0,
+        1.0,
+        RampScale::Linear,
+        230,
+        &[
+            (0.0, [8, 8, 10]),
+            (0.5, [125, 130, 135]),
+            (1.0, [255, 255, 255])
         ]
     )
 };
@@ -644,12 +777,40 @@ pub fn bake_ramp_lut(stops: &[(f32, [u8; 3])], alpha: u8) -> Vec<u8> {
 /// palette (`Mrms`/`Hrrr`, which follow the user's `.pal` table) and `Lightning` (own upload fn).
 pub fn ramp_for(layer: FieldLayer) -> Option<&'static FieldRamp> {
     use FieldLayer as FL;
+    if let FL::GoesCatalog(index) = layer {
+        return match wxdata::abi::CATALOG.get(index as usize)?.descriptor.palette_key {
+            "visible" => Some(&GOES_VISIBLE),
+            "water-vapor" => Some(&GOES_WATER_VAPOR),
+            "infrared" => Some(&GOES_C13),
+            _ => None,
+        };
+    }
+    if let FL::MrmsCatalog(index) = layer {
+        return match wxdata::mrms::CATALOG.get(index as usize)?.descriptor.palette_key {
+            "echo-tops" => Some(&MRMS_ECHO_TOPS),
+            "height-msl" => Some(&MRMS_HEIGHT_MSL),
+            "vil-density" => Some(&VIL_DENSITY),
+            "qpe-1h" => Some(&QPE_1H),
+            "qpe-24h" => Some(&QPE_24H),
+            "flash-flood" => Some(&FLASH_FLOOD),
+            "ffg-ratio" => Some(&FFG_RATIO),
+            "unit-streamflow" => Some(&UNIT_STREAMFLOW),
+            "soil-saturation" => Some(&SOIL_SATURATION),
+            _ => None,
+        };
+    }
     Some(match layer {
-        FL::Rotation | FL::AzShear => &ROTATION,
+        FL::GoesC13 => &GOES_C13,
+        FL::GoesWaterVapor => &GOES_WATER_VAPOR,
+        FL::GoesMidWaterVapor => &GOES_WATER_VAPOR,
+        FL::GoesLongwaveIr => &GOES_C13,
+        FL::GoesVisible => &GOES_VISIBLE,
+        FL::Rotation | FL::AzShear | FL::AzShearMid => &ROTATION,
         FL::Mesh => &MESH,
         FL::HailSwath => &HAIL_SWATH,
         FL::PrecipRate => &PRECIP_RATE,
         FL::Qpe1h => &QPE_1H,
+        FL::Qpe3h | FL::Qpe6h | FL::Qpe12h => &QPE_24H,
         FL::Qpe24h => &QPE_24H,
         FL::Cape => &CAPE,
         FL::Srh => &SRH,
@@ -661,7 +822,9 @@ pub fn ramp_for(layer: FieldLayer) -> Option<&'static FieldRamp> {
         FL::VilDensity => &VIL_DENSITY,
         // MEHS shares the MRMS MESH scale: one hail scale app-wide.
         FL::HailMehs => &MESH,
-        FL::HailPosh => &POSH,
+        FL::HailPosh | FL::Posh => &POSH,
+        FL::MrmsEchoTop18 => &MRMS_ECHO_TOPS,
+        FL::MrmsVil => &VIL,
         FL::PrecipType => &PRECIP_TYPE,
         FL::UpdraftHelicity => &UPDRAFT_HELICITY,
         FL::Smoke => &SMOKE,
@@ -673,15 +836,27 @@ pub fn ramp_for(layer: FieldLayer) -> Option<&'static FieldRamp> {
         FL::GlobalDewpoint2m => &GLOBAL_DEWPOINT_2M,
         FL::GlobalWind10m => &GLOBAL_WIND_10M,
         FL::GlobalPrecip => &GLOBAL_PRECIP,
+        FL::RtmaTemp2m => &GLOBAL_TEMP_2M,
+        FL::RtmaDewpoint2m => &GLOBAL_DEWPOINT_2M,
+        FL::RtmaPressure => &GLOBAL_MSLP,
+        FL::RtmaWindU10m => &GLOBAL_WIND_10M,
         FL::Hca => &HCA,
         FL::GlmFed => &GLM_FED,
         FL::SnowBands => &SNOW_BANDS,
-        FL::ThunderProb => &THUNDER_PROB,
+        FL::ThunderProb | FL::RefsReflectivityProb => &THUNDER_PROB,
         // Composite is reflectivity in dBZ, so like the mosaic it follows the user's own
         // reflectivity `.pal` rather than a fixed ramp of its own.
-        FL::Mrms | FL::Mosaic | FL::CompositeLocal | FL::Hrrr | FL::Lightning | FL::ModelDiff => {
-            return None
-        }
+        FL::Mrms
+        | FL::MrmsLowLevel
+        | FL::MrmsReflectivityTrail
+        | FL::Mosaic
+        | FL::CompositeLocal
+        | FL::Hrrr
+        | FL::Lightning
+        | FL::ModelDiff
+        | FL::GoesTrueColor
+        | FL::GoesCatalog(_)
+        | FL::MrmsCatalog(_) => return None,
     })
 }
 
@@ -691,8 +866,9 @@ mod tests {
 
     /// Layers colored outside this table. A new `FieldLayer` must join the table or this list —
     /// forgetting both silently ships a layer with no legend.
-    const NO_RAMP: [FieldLayer; 6] = [
+    const NO_RAMP: [FieldLayer; 8] = [
         FieldLayer::Mrms,
+        FieldLayer::MrmsLowLevel,
         FieldLayer::Mosaic,
         FieldLayer::CompositeLocal,
         FieldLayer::Hrrr,
@@ -700,12 +876,15 @@ mod tests {
         // The difference layer's ramp is symmetric about zero and rebuilt whenever the field
         // changes, so it is baked in `fielddiff`, not tabulated here.
         FieldLayer::ModelDiff,
+        FieldLayer::GoesTrueColor,
     ];
 
     #[test]
     fn every_layer_is_either_ramped_or_explicitly_exempt() {
-        for l in FieldLayer::DRAW_ORDER {
-            let exempt = NO_RAMP.contains(&l);
+        for l in FieldLayer::draw_order() {
+            let exempt = NO_RAMP.contains(&l)
+                || l.descriptor()
+                    .is_some_and(|descriptor| descriptor.palette_key == "reflectivity");
             assert_eq!(
                 ramp_for(l).is_some(),
                 !exempt,
@@ -716,7 +895,7 @@ mod tests {
 
     #[test]
     fn ramps_are_labeled_and_ordered() {
-        for l in FieldLayer::DRAW_ORDER {
+        for l in FieldLayer::draw_order() {
             let Some(r) = ramp_for(l) else { continue };
             assert!(!r.label.is_empty(), "{l:?}");
             if let FieldScale::Ramp { lo, hi, .. } = r.scale {

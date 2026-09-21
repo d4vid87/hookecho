@@ -16,35 +16,453 @@
 //! pan east of +180 and it simply ends. Drawing a second copy is easy if anyone chases Fiji.
 
 use crate::alerts::USER_AGENT;
+use crate::field::{
+    DataClass, DataStamp, FieldDescriptor, FieldFamily, FieldFrame, FieldId, MissingData,
+    ModelDefinition, QualitySummary, SamplingPolicy, ValueKind,
+};
 use crate::mrms::MrmsField;
 use chrono::{DateTime, Datelike, Timelike, Utc};
 
 const GFS_BUCKET: &str = "https://noaa-gfs-bdp-pds.s3.amazonaws.com";
+const GEFS_BUCKET: &str = "https://noaa-gefs-pds.s3.amazonaws.com";
 const ECMWF_BASE: &str = "https://data.ecmwf.int/forecasts";
 
 /// Quarter-degree source grids resample onto this. Coarser than the grid itself, so the scatter
 /// fills every cell; 1440×721 at 0.25° well under the 4096 texture cap either way.
 const RES_DEG: f64 = 0.3;
 
+fn available_members(model: GlobalModel) -> Option<u16> {
+    match model {
+        GlobalModel::GefsMean | GlobalModel::GefsSpread => Some(31),
+        GlobalModel::GefsMember(_) => Some(1),
+        _ => None,
+    }
+}
+
+/// Point statistics used by GEFS plumes and threshold probabilities.
+#[derive(Debug, Clone, PartialEq)]
+pub struct EnsembleDistribution {
+    pub available: usize,
+    pub expected: usize,
+    pub minimum: f32,
+    pub percentile_10: f32,
+    pub median: f32,
+    pub percentile_90: f32,
+    pub maximum: f32,
+    pub mean: f32,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct GefsPointDistribution {
+    pub field: GlobalField,
+    pub run: DateTime<Utc>,
+    pub valid: DateTime<Utc>,
+    pub longitude: f64,
+    pub latitude: f64,
+    pub statistics: EnsembleDistribution,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct GefsPointPlume {
+    pub field: GlobalField,
+    pub run: DateTime<Utc>,
+    pub longitude: f64,
+    pub latitude: f64,
+    pub points: Vec<GefsPointDistribution>,
+}
+
+#[derive(Clone)]
+pub struct GefsPostageStamp {
+    pub member: u8,
+    pub field: MrmsField,
+}
+
+#[derive(Clone)]
+pub struct GefsPostageStamps {
+    pub field: GlobalField,
+    pub run: DateTime<Utc>,
+    pub valid: DateTime<Utc>,
+    pub expected: usize,
+    pub stamps: Vec<GefsPostageStamp>,
+}
+
+/// Summarize the members that actually supplied a finite value.
+pub fn ensemble_distribution(
+    members: impl IntoIterator<Item = Option<f32>>,
+    expected: usize,
+) -> Option<EnsembleDistribution> {
+    let mut values: Vec<f32> = members
+        .into_iter()
+        .flatten()
+        .filter(|value| value.is_finite())
+        .collect();
+    values.sort_by(f32::total_cmp);
+    let available = values.len();
+    if available == 0 {
+        return None;
+    }
+    let percentile = |p: f32| values[((available - 1) as f32 * p).round() as usize];
+    Some(EnsembleDistribution {
+        available,
+        expected,
+        minimum: values[0],
+        percentile_10: percentile(0.1),
+        median: percentile(0.5),
+        percentile_90: percentile(0.9),
+        maximum: values[available - 1],
+        mean: values.iter().sum::<f32>() / available as f32,
+    })
+}
+
+/// Fraction of available members at or above `threshold`, plus the explicit sample count.
+pub fn exceedance_probability(
+    members: impl IntoIterator<Item = Option<f32>>,
+    threshold: f32,
+) -> Option<(f32, usize)> {
+    let values: Vec<f32> = members
+        .into_iter()
+        .flatten()
+        .filter(|value| value.is_finite())
+        .collect();
+    (!values.is_empty()).then(|| {
+        let hits = values.iter().filter(|&&value| value >= threshold).count();
+        (hits as f32 / values.len() as f32, values.len())
+    })
+}
+
+/// Load one GEFS cycle across all 31 members and summarize a native point value.
+/// Missing members stay missing and are reflected in `statistics.available`.
+pub async fn fetch_gefs_point_distribution(
+    http: &reqwest::Client,
+    field: GlobalField,
+    fh: u16,
+    longitude: f64,
+    latitude: f64,
+) -> anyhow::Result<GefsPointDistribution> {
+    GlobalModel::GefsMember(0).validate_forecast_hour(fh)?;
+    let now = Utc::now();
+    let step = GlobalModel::GefsMember(0).cycle_step() as i64;
+    let mut last_error = None;
+    for back in 0..5 {
+        let hours = (now.hour() as i64 / step) * step - back * step;
+        let run = now.date_naive().and_hms_opt(0, 0, 0).unwrap().and_utc()
+            + chrono::Duration::hours(hours);
+        if !GlobalModel::GefsMember(0).supports_forecast_hour(run.hour(), fh) {
+            continue;
+        }
+        match fetch_gefs_point_distribution_run(http, field, run, fh, longitude, latitude).await {
+            Ok(distribution) => return Ok(distribution),
+            Err(error) => last_error = Some(error),
+        }
+    }
+    Err(last_error.unwrap_or_else(|| anyhow::anyhow!("no GEFS member cycle found")))
+}
+
+async fn fetch_gefs_point_distribution_run(
+    http: &reqwest::Client,
+    field: GlobalField,
+    run: DateTime<Utc>,
+    fh: u16,
+    longitude: f64,
+    latitude: f64,
+) -> anyhow::Result<GefsPointDistribution> {
+    let mut samples = Vec::with_capacity(31);
+    let mut last_error = None;
+    for batch in (0u8..=30).collect::<Vec<_>>().chunks(6) {
+        let requests = batch
+            .iter()
+            .map(|member| fetch_run(http, GlobalModel::GefsMember(*member), field, run, fh));
+        for result in futures_util::future::join_all(requests).await {
+            match result {
+                Ok(forecast) => samples.push(forecast.field.sample_bilinear(longitude, latitude)),
+                Err(error) => {
+                    last_error = Some(error);
+                    samples.push(None);
+                }
+            }
+        }
+    }
+    let statistics = ensemble_distribution(samples, 31)
+        .ok_or_else(|| last_error.unwrap_or_else(|| anyhow::anyhow!("no finite GEFS members")))?;
+    Ok(GefsPointDistribution {
+        field,
+        run,
+        valid: run + chrono::Duration::hours(fh as i64),
+        longitude,
+        latitude,
+        statistics,
+    })
+}
+
+/// Load a five-point, 24-hour plume from one complete GEFS cycle.
+pub async fn fetch_gefs_point_plume(
+    http: &reqwest::Client,
+    field: GlobalField,
+    first_hour: u16,
+    longitude: f64,
+    latitude: f64,
+) -> anyhow::Result<GefsPointPlume> {
+    let hours = gefs_plume_hours(first_hour)?;
+    let last_hour = *hours.last().unwrap();
+    let last = fetch_gefs_point_distribution(http, field, last_hour, longitude, latitude).await?;
+    let mut points = Vec::with_capacity(hours.len());
+    for hour in hours.into_iter().take(4) {
+        points.push(
+            fetch_gefs_point_distribution_run(http, field, last.run, hour, longitude, latitude)
+                .await?,
+        );
+    }
+    points.push(last);
+    Ok(GefsPointPlume {
+        field,
+        run: points[0].run,
+        longitude,
+        latitude,
+        points,
+    })
+}
+
+fn gefs_plume_hours(first_hour: u16) -> anyhow::Result<Vec<u16>> {
+    let hours: Vec<u16> = (0..=4)
+        .map(|step| first_hour.saturating_add(step * 6))
+        .collect();
+    GlobalModel::GefsMember(0).validate_forecast_hour(*hours.last().unwrap())?;
+    Ok(hours)
+}
+
+/// Load every available GEFS member from one cycle and retain a bounded display grid for each.
+pub async fn fetch_gefs_postage_stamps(
+    http: &reqwest::Client,
+    field: GlobalField,
+    fh: u16,
+) -> anyhow::Result<GefsPostageStamps> {
+    let seed = fetch(http, GlobalModel::GefsMember(30), field, fh).await?;
+    let run = seed.run;
+    let valid = seed.valid();
+    let mut stamps = vec![GefsPostageStamp {
+        member: 30,
+        field: seed.field.subsampled(40),
+    }];
+    for batch in (0u8..30).collect::<Vec<_>>().chunks(6) {
+        let requests = batch
+            .iter()
+            .map(|member| fetch_run(http, GlobalModel::GefsMember(*member), field, run, fh));
+        for (&member, result) in batch.iter().zip(futures_util::future::join_all(requests).await) {
+            if let Ok(forecast) = result {
+                stamps.push(GefsPostageStamp {
+                    member,
+                    field: forecast.field.subsampled(40),
+                });
+            }
+        }
+    }
+    stamps.sort_by_key(|stamp| stamp.member);
+    Ok(GefsPostageStamps {
+        field,
+        run,
+        valid,
+        expected: 31,
+        stamps,
+    })
+}
+
+macro_rules! descriptor {
+    ($name:ident, $id:literal, $display:literal, $short:literal, $aliases:expr, $units:literal, $kind:expr) => {
+        pub static $name: FieldDescriptor = FieldDescriptor {
+            id: FieldId($id),
+            source: "NOAA GFS / ECMWF IFS",
+            family: FieldFamily::Model,
+            display_name: $display,
+            short_name: $short,
+            search_aliases: $aliases,
+            units: $units,
+            value_kind: $kind,
+            palette_key: $id,
+            sampling: SamplingPolicy::Bilinear,
+            missing: MissingData::Nan,
+            time_policy: None,
+            supports_contours: false,
+            supports_difference: true,
+        };
+    };
+}
+
+descriptor!(
+    MSLP_DESCRIPTOR,
+    "model.global.mslp",
+    "Mean sea-level pressure",
+    "MSLP",
+    &["pressure", "GFS", "ECMWF"],
+    "Pa",
+    ValueKind::Scalar
+);
+descriptor!(
+    HEIGHT_500_DESCRIPTOR,
+    "model.global.height-500",
+    "500 hPa height",
+    "500 hPa",
+    &["geopotential", "height", "GFS", "ECMWF"],
+    "m",
+    ValueKind::Scalar
+);
+descriptor!(
+    TEMP_2M_DESCRIPTOR,
+    "model.global.temperature-2m",
+    "2 m temperature",
+    "2 m temp",
+    &["temperature", "GFS", "ECMWF"],
+    "K",
+    ValueKind::Scalar
+);
+descriptor!(
+    DEWPOINT_2M_DESCRIPTOR,
+    "model.global.dewpoint-2m",
+    "2 m dewpoint",
+    "2 m dewpoint",
+    &["moisture", "GFS", "ECMWF"],
+    "K",
+    ValueKind::Scalar
+);
+descriptor!(
+    WIND_10M_DESCRIPTOR,
+    "model.global.wind-10m",
+    "10 m zonal wind",
+    "10 m U wind",
+    &["wind", "u component", "GFS", "ECMWF"],
+    "m s-1",
+    ValueKind::Scalar
+);
+descriptor!(
+    PRECIP_DESCRIPTOR,
+    "model.global.precipitable-water",
+    "Precipitable water",
+    "PWAT",
+    &["total column water", "moisture", "GFS", "ECMWF"],
+    "kg m-2",
+    ValueKind::Scalar
+);
+
 /// Which global model to read.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum GlobalModel {
     #[default]
     Gfs,
+    GefsMean,
+    GefsSpread,
+    /// NOAA GEFS control (`0`) or perturbed member (`1..=30`).
+    GefsMember(u8),
     Ecmwf,
 }
 
 impl GlobalModel {
-    pub fn label(self) -> &'static str {
+    pub fn definition(self) -> ModelDefinition {
         match self {
-            GlobalModel::Gfs => "GFS",
-            GlobalModel::Ecmwf => "ECMWF",
+            Self::Gfs => ModelDefinition {
+                id: "gfs",
+                label: "GFS",
+                provider: "NOAA",
+                base_url: GFS_BUCKET,
+                cycle_hours: 6,
+                max_forecast_hour: 384,
+                grid: "0.25 degree global latitude/longitude",
+                regrid_resolution_deg: RES_DEG,
+                index_suffix: ".idx",
+                expected_latency_minutes: None,
+                domain: "Global",
+                ensemble: false,
+            },
+            Self::GefsMean => ModelDefinition {
+                id: "gefs-mean",
+                label: "GEFS mean",
+                provider: "NOAA",
+                base_url: GEFS_BUCKET,
+                cycle_hours: 6,
+                max_forecast_hour: 384,
+                grid: "0.25/0.5 degree global latitude/longitude",
+                regrid_resolution_deg: RES_DEG,
+                index_suffix: ".idx",
+                expected_latency_minutes: None,
+                domain: "Global",
+                ensemble: true,
+            },
+            Self::GefsSpread => ModelDefinition {
+                id: "gefs-spread",
+                label: "GEFS spread",
+                provider: "NOAA",
+                base_url: GEFS_BUCKET,
+                cycle_hours: 6,
+                max_forecast_hour: 384,
+                grid: "0.25/0.5 degree global latitude/longitude",
+                regrid_resolution_deg: RES_DEG,
+                index_suffix: ".idx",
+                expected_latency_minutes: None,
+                domain: "Global",
+                ensemble: true,
+            },
+            Self::GefsMember(_) => ModelDefinition {
+                id: "gefs-member",
+                label: "GEFS member",
+                provider: "NOAA",
+                base_url: GEFS_BUCKET,
+                cycle_hours: 6,
+                max_forecast_hour: 384,
+                grid: "0.25/0.5 degree global latitude/longitude",
+                regrid_resolution_deg: RES_DEG,
+                index_suffix: ".idx",
+                expected_latency_minutes: None,
+                domain: "Global",
+                ensemble: true,
+            },
+            Self::Ecmwf => ModelDefinition {
+                id: "ecmwf-open-ifs",
+                label: "ECMWF Open IFS",
+                provider: "ECMWF",
+                base_url: ECMWF_BASE,
+                cycle_hours: 6,
+                max_forecast_hour: 240,
+                grid: "0.25 degree global latitude/longitude",
+                regrid_resolution_deg: RES_DEG,
+                index_suffix: ".index",
+                expected_latency_minutes: None,
+                domain: "Global",
+                ensemble: false,
+            },
         }
+    }
+
+    pub fn validate_forecast_hour(self, hour: u16) -> anyhow::Result<()> {
+        if let Self::GefsMember(member) = self {
+            anyhow::ensure!(member <= 30, "GEFS member {member} is outside 0..=30");
+        }
+        anyhow::ensure!(
+            hour <= self.definition().max_forecast_hour,
+            "{} forecast hour {hour} exceeds F{}",
+            self.label(),
+            self.definition().max_forecast_hour
+        );
+        Ok(())
+    }
+
+    pub fn supports_forecast_hour(self, cycle_hour: u32, hour: u16) -> bool {
+        match self {
+            Self::Gfs => hour <= 120 || hour <= 384 && hour.is_multiple_of(3),
+            Self::GefsMean | Self::GefsSpread | Self::GefsMember(_) => {
+                hour <= 240 && hour.is_multiple_of(3) || hour <= 384 && hour.is_multiple_of(6)
+            }
+            Self::Ecmwf if cycle_hour == 0 || cycle_hour == 12 => {
+                hour <= 144 && hour.is_multiple_of(3) || hour <= 240 && hour.is_multiple_of(6)
+            }
+            Self::Ecmwf => hour <= 90 && hour.is_multiple_of(3),
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        self.definition().label
     }
 
     /// Hours between cycles. Both run four times a day.
     fn cycle_step(self) -> u32 {
-        6
+        self.definition().cycle_hours
     }
 }
 
@@ -96,6 +514,17 @@ impl GlobalField {
         GlobalField::ALL.into_iter().find(|f| f.slug() == s)
     }
 
+    pub fn descriptor(self) -> &'static FieldDescriptor {
+        match self {
+            GlobalField::Mslp => &MSLP_DESCRIPTOR,
+            GlobalField::Height500 => &HEIGHT_500_DESCRIPTOR,
+            GlobalField::Temp2m => &TEMP_2M_DESCRIPTOR,
+            GlobalField::Dewpoint2m => &DEWPOINT_2M_DESCRIPTOR,
+            GlobalField::Wind10m => &WIND_10M_DESCRIPTOR,
+            GlobalField::Precip => &PRECIP_DESCRIPTOR,
+        }
+    }
+
     /// GFS `.idx` `(var, level)`.
     fn gfs_key(self) -> (&'static str, &'static str) {
         match self {
@@ -116,7 +545,7 @@ impl GlobalField {
             GlobalField::Temp2m => ("2t", "sfc", None),
             GlobalField::Dewpoint2m => ("2d", "sfc", None),
             GlobalField::Wind10m => ("10u", "sfc", None),
-            GlobalField::Precip => ("tp", "sfc", None),
+            GlobalField::Precip => ("tcwv", "sfc", None),
         }
     }
 }
@@ -126,11 +555,32 @@ pub struct GlobalForecast {
     pub field: MrmsField,
     pub run: DateTime<Utc>,
     pub fcst_hour: u16,
+    source_identity: String,
+    received_at: DateTime<Utc>,
+    available_members: Option<u16>,
 }
 
 impl GlobalForecast {
     pub fn valid(&self) -> DateTime<Utc> {
         self.run + chrono::Duration::hours(self.fcst_hour as i64)
+    }
+
+    pub fn into_frame(self, descriptor: &'static FieldDescriptor) -> FieldFrame {
+        let valid_time = self.valid();
+        FieldFrame::new(
+            descriptor,
+            self.field,
+            DataStamp {
+                source_identity: self.source_identity,
+                issue_time: Some(self.run),
+                run_time: Some(self.run),
+                valid_time,
+                received_time: self.received_at,
+                class: DataClass::Forecast,
+                quality: QualitySummary::Unknown,
+                available_members: self.available_members,
+            },
+        )
     }
 }
 
@@ -144,6 +594,12 @@ pub async fn fetch(
     field: GlobalField,
     fh: u16,
 ) -> anyhow::Result<GlobalForecast> {
+    model.validate_forecast_hour(fh)?;
+    anyhow::ensure!(
+        (0..24).any(|cycle| model.supports_forecast_hour(cycle, fh)),
+        "{} does not publish forecast hour {fh}",
+        model.label()
+    );
     let now = Utc::now();
     let mut last_err = None;
     for back in 0..5 {
@@ -151,6 +607,9 @@ pub async fn fetch(
         let hours = (now.hour() as i64 / step) * step - back * step;
         let run = (now.date_naive().and_hms_opt(0, 0, 0).unwrap().and_utc())
             + chrono::Duration::hours(hours);
+        if !model.supports_forecast_hour(run.hour(), fh) {
+            continue;
+        }
         match fetch_run(http, model, field, run, fh).await {
             Ok(f) => return Ok(f),
             Err(e) => last_err = Some(e),
@@ -169,8 +628,9 @@ async fn fetch_run(
     let date = format!("{:04}{:02}{:02}", run.year(), run.month(), run.day());
     let (base, range) = match model {
         GlobalModel::Gfs => {
+            let source = model.definition().base_url;
             let base = format!(
-                "{GFS_BUCKET}/gfs.{date}/{:02}/atmos/gfs.t{:02}z.pgrb2.0p25.f{fh:03}",
+                "{source}/gfs.{date}/{:02}/atmos/gfs.t{:02}z.pgrb2.0p25.f{fh:03}",
                 run.hour(),
                 run.hour()
             );
@@ -180,9 +640,35 @@ async fn fetch_run(
                 .ok_or_else(|| anyhow::anyhow!("no {var}:{level} in GFS idx"))?;
             (base, r)
         }
-        GlobalModel::Ecmwf => {
+        GlobalModel::GefsMean | GlobalModel::GefsSpread | GlobalModel::GefsMember(_) => {
+            let source = model.definition().base_url;
+            let product = match model {
+                GlobalModel::GefsMean => "geavg".into(),
+                GlobalModel::GefsSpread => "gespr".into(),
+                GlobalModel::GefsMember(0) => "gec00".into(),
+                GlobalModel::GefsMember(member) => format!("gep{member:02}"),
+                _ => unreachable!(),
+            };
+            let (directory, name) = if field == GlobalField::Height500 {
+                ("pgrb2ap5", "pgrb2a.0p50")
+            } else {
+                ("pgrb2sp25", "pgrb2s.0p25")
+            };
             let base = format!(
-                "{ECMWF_BASE}/{date}/{:02}z/ifs/0p25/oper/{date}{:02}0000-{fh}h-oper-fc.grib2",
+                "{source}/gefs.{date}/{:02}/atmos/{directory}/{product}.t{:02}z.{name}.f{fh:03}",
+                run.hour(),
+                run.hour()
+            );
+            let idx = get_text(http, &format!("{base}.idx")).await?;
+            let (var, level) = field.gfs_key();
+            let r = crate::hrrr::field_byte_range(&idx, var, level)
+                .ok_or_else(|| anyhow::anyhow!("no {var}:{level} in GEFS idx"))?;
+            (base, r)
+        }
+        GlobalModel::Ecmwf => {
+            let source = model.definition().base_url;
+            let base = format!(
+                "{source}/{date}/{:02}z/ifs/0p25/oper/{date}{:02}0000-{fh}h-oper-fc.grib2",
                 run.hour(),
                 run.hour()
             );
@@ -194,27 +680,19 @@ async fn fetch_run(
     };
 
     let (start, end) = range;
-    let http_range = match end {
-        Some(e) => format!("bytes={start}-{}", e - 1),
-        None => format!("bytes={start}-"),
-    };
-    let bytes = http
-        .get(crate::net::fetch_url(&base))
-        .timeout(crate::net::FEED_TIMEOUT)
-        .header("User-Agent", USER_AGENT)
-        .header("Range", http_range)
-        .send()
-        .await?
-        .error_for_status()?
-        .bytes()
-        .await?;
+    let cached = crate::object_cache::fetch_range(http, &base, start, end).await?;
+    let received_at = cached.received_at;
 
-    let raw = bytes.to_vec();
+    let raw = cached.bytes;
     let field_out = crate::task::blocking(move || decode(&raw)).await??;
     Ok(GlobalForecast {
         field: field_out,
         run,
         fcst_hour: fh,
+        source_identity: base,
+        received_at,
+        // NOAA publishes one control and 30 perturbed GEFS members. Mean/spread use the full set.
+        available_members: available_members(model),
     })
 }
 
@@ -339,8 +817,84 @@ mod tests {
     fn field_slugs_round_trip() {
         for f in GlobalField::ALL {
             assert_eq!(GlobalField::from_slug(f.slug()), Some(f));
+            assert_eq!(f.descriptor().family, FieldFamily::Model);
         }
         assert_eq!(GlobalField::from_slug("nope"), None);
+    }
+
+    #[test]
+    fn both_models_request_compatible_column_water() {
+        assert_eq!(GlobalField::Precip.gfs_key().0, "PWAT");
+        assert_eq!(GlobalField::Precip.ecmwf_key().0, "tcwv");
+        assert_eq!(GlobalField::Precip.descriptor().units, "kg m-2");
+    }
+
+    #[test]
+    fn ensemble_statistics_report_only_available_members() {
+        let distribution = ensemble_distribution(
+            [Some(1.0), None, Some(f32::NAN), Some(3.0), Some(2.0)],
+            5,
+        )
+        .unwrap();
+        assert_eq!(distribution.available, 3);
+        assert_eq!(distribution.expected, 5);
+        assert_eq!(distribution.minimum, 1.0);
+        assert_eq!(distribution.median, 2.0);
+        assert_eq!(distribution.maximum, 3.0);
+        assert_eq!(distribution.mean, 2.0);
+        assert_eq!(
+            exceedance_probability([Some(1.0), None, Some(3.0), Some(2.0)], 2.0),
+            Some((2.0 / 3.0, 3))
+        );
+        assert!(ensemble_distribution([None, Some(f32::NAN)], 2).is_none());
+        assert!(exceedance_probability([None, Some(f32::NAN)], 0.0).is_none());
+    }
+
+    #[test]
+    fn plume_is_bounded_to_five_six_hour_steps() {
+        assert_eq!(gefs_plume_hours(12).unwrap(), [12, 18, 24, 30, 36]);
+        assert!(gefs_plume_hours(366).is_err());
+    }
+
+    #[test]
+    fn global_models_share_complete_source_definitions() {
+        let gfs = GlobalModel::Gfs.definition();
+        let gefs = GlobalModel::GefsMean.definition();
+        let spread = GlobalModel::GefsSpread.definition();
+        let ecmwf = GlobalModel::Ecmwf.definition();
+        assert_ne!(gfs.id, ecmwf.id);
+        assert!(gefs.ensemble);
+        assert!(spread.ensemble);
+        assert_eq!(gfs.index_suffix, ".idx");
+        assert_eq!(ecmwf.index_suffix, ".index");
+        assert!(GlobalModel::Gfs.validate_forecast_hour(384).is_ok());
+        assert!(GlobalModel::Gfs.validate_forecast_hour(385).is_err());
+        assert!(GlobalModel::Ecmwf.validate_forecast_hour(240).is_ok());
+        assert!(GlobalModel::Ecmwf.validate_forecast_hour(241).is_err());
+        assert!(GlobalModel::Ecmwf.supports_forecast_hour(0, 240));
+        assert!(!GlobalModel::Ecmwf.supports_forecast_hour(6, 93));
+        assert!(!GlobalModel::Ecmwf.supports_forecast_hour(0, 145));
+        assert!(GlobalModel::Gfs.supports_forecast_hour(18, 120));
+        assert!(!GlobalModel::Gfs.supports_forecast_hour(18, 121));
+        assert!(GlobalModel::Gfs.supports_forecast_hour(18, 123));
+        assert!(GlobalModel::GefsMean.supports_forecast_hour(0, 240));
+        assert!(!GlobalModel::GefsMean.supports_forecast_hour(0, 243));
+        assert!(GlobalModel::GefsMean.supports_forecast_hour(0, 246));
+        assert_eq!(available_members(GlobalModel::GefsMean), Some(31));
+        assert_eq!(available_members(GlobalModel::GefsSpread), Some(31));
+        assert_eq!(available_members(GlobalModel::GefsMember(0)), Some(1));
+        assert!(GlobalModel::GefsMember(0).validate_forecast_hour(0).is_ok());
+        assert!(
+            GlobalModel::GefsMember(30)
+                .validate_forecast_hour(384)
+                .is_ok()
+        );
+        assert!(
+            GlobalModel::GefsMember(31)
+                .validate_forecast_hour(0)
+                .is_err()
+        );
+        assert_eq!(available_members(GlobalModel::Gfs), None);
     }
 
     /// Both sources, live, at the newest usable cycle.
@@ -349,7 +903,13 @@ mod tests {
     #[ignore = "network"]
     async fn global_live() {
         let http = reqwest::Client::new();
-        for model in [GlobalModel::Gfs, GlobalModel::Ecmwf] {
+        for model in [
+            GlobalModel::Gfs,
+            GlobalModel::GefsMean,
+            GlobalModel::GefsSpread,
+            GlobalModel::GefsMember(1),
+            GlobalModel::Ecmwf,
+        ] {
             let f = fetch(&http, model, GlobalField::Mslp, 0)
                 .await
                 .unwrap_or_else(|e| panic!("{} fetch: {e}", model.label()));
@@ -368,5 +928,65 @@ mod tests {
             assert!(f.field.lon_west >= -180.5 && f.field.lon_east <= 180.5);
             assert!(finite > 0);
         }
+    }
+
+    /// `cargo test -p wxdata gefs_point_distribution_live -- --ignored --nocapture`
+    #[tokio::test]
+    #[ignore = "network: downloads one field from all 31 GEFS members"]
+    async fn gefs_point_distribution_live() {
+        let distribution = fetch_gefs_point_distribution(
+            &reqwest::Client::new(),
+            GlobalField::Temp2m,
+            0,
+            -97.28,
+            35.33,
+        )
+        .await
+        .unwrap();
+        println!("{distribution:?}");
+        assert!(distribution.statistics.available >= 20);
+        assert_eq!(distribution.statistics.expected, 31);
+        assert!(distribution.statistics.minimum <= distribution.statistics.median);
+        assert!(distribution.statistics.median <= distribution.statistics.maximum);
+    }
+
+    /// `cargo test -p wxdata gefs_point_plume_live -- --ignored --nocapture`
+    #[tokio::test]
+    #[ignore = "network: downloads five fields from all 31 GEFS members"]
+    async fn gefs_point_plume_live() {
+        let plume = fetch_gefs_point_plume(
+            &reqwest::Client::new(),
+            GlobalField::Temp2m,
+            0,
+            -97.28,
+            35.33,
+        )
+        .await
+        .unwrap();
+        assert_eq!(plume.points.len(), 5);
+        assert!(plume.points.iter().all(|point| point.run == plume.run));
+        assert!(plume
+            .points
+            .windows(2)
+            .all(|pair| pair[1].valid - pair[0].valid == chrono::Duration::hours(6)));
+    }
+
+    /// `cargo test -p wxdata gefs_postage_stamps_live -- --ignored --nocapture`
+    #[tokio::test]
+    #[ignore = "network: downloads one field from all 31 GEFS members"]
+    async fn gefs_postage_stamps_live() {
+        let stamps = fetch_gefs_postage_stamps(
+            &reqwest::Client::new(),
+            GlobalField::Temp2m,
+            0,
+        )
+        .await
+        .unwrap();
+        assert!(stamps.stamps.len() >= 20);
+        assert_eq!(stamps.expected, 31);
+        assert!(stamps
+            .stamps
+            .iter()
+            .all(|stamp| stamp.field.nx <= 40 && stamp.field.ny <= 40));
     }
 }

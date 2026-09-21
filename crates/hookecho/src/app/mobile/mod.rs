@@ -276,12 +276,11 @@ impl super::HookEchoApp {
 
             // Second strip for the topmost gridded layer — the phone has no room for the desktop
             // legend box, but an unlabeled MESH/QPE wash is just as cryptic here.
-            if let Some(top) = crate::render::FieldLayer::DRAW_ORDER
-                .iter()
+            if let Some(top) = crate::render::FieldLayer::draw_order()
                 .rev()
                 .find(|l| self.views[self.active].fields_on.contains(l))
             {
-                paint_field_strip(&painter, strip.translate(vec2(0.0, 11.0)), *top);
+                paint_field_strip(&painter, strip.translate(vec2(0.0, 11.0)), top);
             }
         }
 
@@ -294,10 +293,12 @@ impl super::HookEchoApp {
     fn mobile_tool_hint(&mut self, ctx: &egui::Context, content: Rect) {
         let text = match self.tool {
             crate::app::MapTool::Measure => "Tap two points to measure",
+            crate::app::MapTool::RegionStats => "Tap two corners for area statistics",
             crate::app::MapTool::Marker => "Tap the map to drop a marker",
             crate::app::MapTool::CrossSection => "Tap two points for a cross-section",
             crate::app::MapTool::Sounding => "Tap a point for a sounding",
             crate::app::MapTool::Climatology => "Tap a point for tornado climatology",
+            crate::app::MapTool::Route => "Tap start, waypoints, and destination",
             _ => return,
         };
         let accent = crate::theme::accent(self.settings.theme);

@@ -32,6 +32,12 @@ pub struct UiActions {
     pub cancel_chasepack: bool,
     /// A row in the embedded layers registry was clicked; the app applies it.
     pub(crate) palette: Option<crate::app::PaletteAction>,
+    pub trail_changed: bool,
+    pub export_trail: bool,
+    pub export_local_tracks_csv: bool,
+    pub export_local_tracks_json: bool,
+    pub load_gefs_distribution: bool,
+    pub load_gefs_postage: bool,
 }
 
 /// Read-only chase-pack state the app feeds the UI each frame: the current-view estimate and,
@@ -61,8 +67,12 @@ pub(crate) fn show(
     // fetch state, which is what `fields` is still needed for (clearing a refetch clock).
     on: &std::collections::HashSet<crate::render::FieldLayer>,
     rotation_minutes: &mut u16,
+    trail_minutes: &mut u16,
+    trail_threshold: &mut f32,
     hail_minutes: &mut u16,
     hrrr_fcst_hour: &mut u8,
+    refs_fcst_hour: &mut u8,
+    refs_dbz_threshold: &mut u8,
     hrrr_valid: Option<chrono::DateTime<chrono::Utc>>,
     tz: Option<wxdata::tz::Tz>,
     env_cape_ml: &mut bool,
@@ -78,6 +88,9 @@ pub(crate) fn show(
     // Global models: which one, and how far into its run.
     global_model: &mut wxdata::global::GlobalModel,
     global_fcst_hour: &mut u16,
+    analysis_source: &mut wxdata::rtma::Source,
+    analysis_point: (f64, f64),
+    metars: &[wxdata::metar::SurfaceOb],
     // Model difference: which field, and the two valid times the last fetch actually compared.
     diff_field: &mut crate::fielddiff::DiffField,
     diff_valid: Option<&(String, String)>,
@@ -85,8 +98,10 @@ pub(crate) fn show(
     lightning_minutes: &mut u16,
     show_glm: bool,
     glm_goes_west: &mut bool,
+    abi_scene: &mut wxdata::abi::Scene,
     // Spotter Network dots: on-state, and how far from the radar to draw them (0 = whole feed).
     show_spotters: bool,
+    show_local_tracks: bool,
     spotter_range_km: &mut f64,
     // Where the signature detectors draw their lines; only rendered for the ones that are on.
     detectors: &mut crate::settings::DetectorTuning,
@@ -94,6 +109,8 @@ pub(crate) fn show(
     // why there isn't one. Radars scan on their own schedules, so a composite is always a little
     // ragged in time and the honest thing is to show by how much.
     mosaic: Option<&str>,
+    gefs_distribution: Option<&wxdata::global::GefsPointPlume>,
+    gefs_postage: Option<&wxdata::global::GefsPostageStamps>,
     actions: &mut UiActions,
 ) {
     use crate::render::FieldLayer as FL;
@@ -109,6 +126,11 @@ pub(crate) fn show(
     ]
     .iter()
     .any(|l| on.contains(l));
+    let satellite_on = on.iter().any(|layer| {
+        layer.descriptor().is_some_and(|descriptor| {
+            descriptor.family == wxdata::field::FieldFamily::Satellite
+        })
+    });
     let sections = [
         ("Storm cells", filters.show_cells),
         ("Alerts", filters.show_alerts),
@@ -116,13 +138,33 @@ pub(crate) fn show(
         ("Outlooks", true),
         ("Environment", true),
         ("Global forecast", global_on),
+        (
+            "Surface analysis",
+            [FL::RtmaTemp2m, FL::RtmaDewpoint2m, FL::RtmaPressure, FL::RtmaWindU10m]
+                .iter()
+                .any(|layer| on.contains(layer)),
+        ),
         ("Model comparison", on.contains(&FL::ModelDiff)),
         ("Lightning", show_glm || on.contains(&FL::Lightning)),
+        ("Satellite", satellite_on),
         ("Spotters", show_spotters),
+        ("Local cell tracks", show_local_tracks),
         ("Rotation tracks", on.contains(&FL::Rotation)),
+        ("Reflectivity trail", on.contains(&FL::MrmsReflectivityTrail)),
         ("Hail swaths", on.contains(&FL::HailSwath)),
         ("Radar mosaic", on.contains(&FL::Mosaic)),
+        (
+            "Data details",
+            crate::render::FieldLayer::draw_order().any(|layer| {
+                on.contains(&layer)
+                    && fields
+                        .get(&layer)
+                        .and_then(|state| state.frame.as_ref())
+                        .is_some()
+            }),
+        ),
         ("Future radar", on.contains(&FL::Hrrr)),
+        ("Ensemble forecast", on.contains(&FL::RefsReflectivityProb)),
         ("Nowcast", filters.show_nowcast),
         ("Snowfall", on.contains(&FL::SnowAnalysis)),
         (
@@ -159,14 +201,125 @@ pub(crate) fn show(
         .on_hover_text("Choose a layer to adjust");
     ui.ctx().data_mut(|d| d.insert_temp(id, section));
     ui.add_space(4.0);
+    if section == "Data details" {
+        if let Some((descriptor, grid, stamp)) = crate::render::FieldLayer::draw_order()
+            .rev()
+            .find(|layer| on.contains(layer))
+            .and_then(|layer| {
+                let state = fields.get(&layer)?;
+                let descriptor = state
+                    .frame
+                    .as_ref()
+                    .map(|frame| frame.descriptor)
+                    .or_else(|| layer.descriptor())?;
+                let (grid, stamp) = state.metadata.as_ref()?;
+                Some((descriptor, grid, stamp))
+            })
+        {
+            ui.label(egui::RichText::new(descriptor.display_name).strong());
+            egui::Grid::new("field_provenance")
+                .num_columns(2)
+                .show(ui, |ui| {
+                    ui.weak("Source");
+                    ui.label(descriptor.source);
+                    ui.end_row();
+                    ui.weak("Source ID");
+                    ui.label(descriptor.source_id().0);
+                    ui.end_row();
+                    ui.weak("Valid");
+                    ui.label(stamp.valid_time.format("%Y-%m-%d %H:%M UTC").to_string());
+                    ui.end_row();
+                    ui.weak("Issue");
+                    ui.label(
+                        stamp
+                            .issue_time
+                            .map(|time| time.format("%Y-%m-%d %H:%M UTC").to_string())
+                            .unwrap_or_else(|| "Unknown".into()),
+                    );
+                    ui.end_row();
+                    ui.weak("Run");
+                    ui.label(
+                        stamp
+                            .run_time
+                            .map(|time| time.format("%Y-%m-%d %H:%M UTC").to_string())
+                            .unwrap_or_else(|| "Unknown".into()),
+                    );
+                    ui.end_row();
+                    ui.weak("Received");
+                    ui.label(
+                        stamp
+                            .received_time
+                            .format("%Y-%m-%d %H:%M:%S UTC")
+                            .to_string(),
+                    );
+                    ui.end_row();
+                    ui.weak("Class");
+                    ui.label(stamp.class.label());
+                    ui.end_row();
+                    ui.weak("Quality");
+                    ui.label(stamp.quality.label());
+                    ui.end_row();
+                    if let Some(members) = stamp.available_members {
+                        ui.weak("Members");
+                        ui.label(members.to_string());
+                        ui.end_row();
+                    }
+                    ui.weak("Units");
+                    ui.label(descriptor.units);
+                    ui.end_row();
+                    ui.weak("Grid");
+                    ui.label(format!("{} × {} · {}", grid.nx, grid.ny, grid.projection));
+                    ui.end_row();
+                    ui.weak("Resolution");
+                    ui.label(
+                        grid.native_resolution_m
+                            .map(|metres| format!("{metres:.0} m"))
+                            .unwrap_or_else(|| "Unknown".into()),
+                    );
+                    ui.end_row();
+                    ui.weak("Sampling");
+                    ui.label(descriptor.sampling.label());
+                    ui.end_row();
+                    ui.weak("Object");
+                    ui.label(&stamp.source_identity);
+                    ui.end_row();
+                });
+        }
+    }
     if section == "Global forecast" && global_on {
         ui.horizontal(|ui| {
             ui.label("Global model:");
             for m in [
                 wxdata::global::GlobalModel::Gfs,
+                wxdata::global::GlobalModel::GefsMean,
+                wxdata::global::GlobalModel::GefsSpread,
                 wxdata::global::GlobalModel::Ecmwf,
             ] {
                 changed |= ui.selectable_value(global_model, m, m.label()).changed();
+            }
+        });
+        let mut member = match *global_model {
+            wxdata::global::GlobalModel::GefsMember(member) => member,
+            _ => 1,
+        };
+        ui.horizontal(|ui| {
+            if ui
+                .selectable_label(
+                    matches!(global_model, wxdata::global::GlobalModel::GefsMember(_)),
+                    "GEFS member",
+                )
+                .clicked()
+            {
+                *global_model = wxdata::global::GlobalModel::GefsMember(member);
+                changed = true;
+            }
+            if matches!(global_model, wxdata::global::GlobalModel::GefsMember(_))
+                && ui
+                    .add(egui::Slider::new(&mut member, 0..=30).text("member"))
+                    .changed()
+            {
+                *global_model = wxdata::global::GlobalModel::GefsMember(member);
+                changed = true;
             }
         });
         ui.horizontal(|ui| {
@@ -180,6 +333,45 @@ pub(crate) fn show(
                 .on_hover_text("Three-hourly out to five days, from the newest complete cycle")
                 .changed();
         });
+        if ui.button("Load 24 h GEFS plume at map center").clicked() {
+            actions.load_gefs_distribution = true;
+        }
+        if ui.button("Load GEFS postage stamps").clicked() {
+            actions.load_gefs_postage = true;
+        }
+        if let Some(result) = gefs_distribution {
+            ui.weak(format!(
+                "{} ({}) · run {} · {:.2}, {:.2}",
+                result.field.label(), result.field.descriptor().units,
+                result.run.format("%d %H:%MZ"),
+                result.longitude, result.latitude
+            ));
+            egui::Grid::new("gefs_distribution").num_columns(8).show(ui, |ui| {
+                for label in ["Valid", "Members", "Min", "P10", "Median", "Mean", "P90", "Max"] {
+                    ui.weak(label);
+                }
+                ui.end_row();
+                for point in &result.points {
+                    let s = &point.statistics;
+                    ui.label(point.valid.format("%d %HZ").to_string());
+                    ui.label(format!("{}/{}", s.available, s.expected));
+                    for value in [s.minimum, s.percentile_10, s.median, s.mean, s.percentile_90, s.maximum] {
+                        ui.label(format!("{value:.1}"));
+                    }
+                    ui.end_row();
+                }
+            });
+        }
+        if let Some(result) = gefs_postage {
+            ui.weak(format!(
+                "{} · valid {} · {}/{} members",
+                result.field.label(),
+                result.valid.format("%d %H:%MZ"),
+                result.stamps.len(),
+                result.expected
+            ));
+            postage_stamps(ui, result);
+        }
     }
 
     if section == "Model comparison" && on.contains(&FL::ModelDiff) {
@@ -209,6 +401,79 @@ pub(crate) fn show(
         }
     }
 
+    if section == "Surface analysis" {
+        let before = *analysis_source;
+        ui.horizontal(|ui| {
+            ui.label("Analysis:");
+            ui.selectable_value(analysis_source, wxdata::rtma::Source::Rtma, "RTMA");
+            ui.selectable_value(analysis_source, wxdata::rtma::Source::Urma, "URMA");
+        });
+        ui.weak(match *analysis_source {
+            wxdata::rtma::Source::Rtma => "Hourly real-time mesoscale analysis",
+            wxdata::rtma::Source::Urma => "Delayed retrospective analysis",
+        });
+        if *analysis_source != before {
+            for layer in [FL::RtmaTemp2m, FL::RtmaDewpoint2m, FL::RtmaPressure, FL::RtmaWindU10m] {
+                if let Some(state) = fields.get_mut(&layer) {
+                    state.last_fetch = None;
+                }
+            }
+            changed = true;
+        }
+        let frame = |layer| fields.get(&layer).and_then(|state| state.frame.as_ref());
+        if let (Some(temp), Some(dewpoint), Some(pressure)) = (
+            frame(FL::RtmaTemp2m),
+            frame(FL::RtmaDewpoint2m),
+            frame(FL::RtmaPressure),
+        ) {
+            let matched = temp.stamp.valid_time == dewpoint.stamp.valid_time
+                && temp.stamp.valid_time == pressure.stamp.valid_time
+                && temp.stamp.source_identity == dewpoint.stamp.source_identity
+                && temp.stamp.source_identity == pressure.stamp.source_identity;
+            if matched {
+                let (lon, lat) = analysis_point;
+                let theta_e = temp
+                    .sample(lon, lat)
+                    .value
+                    .zip(dewpoint.sample(lon, lat).value)
+                    .zip(pressure.sample(lon, lat).value)
+                    .and_then(|((t, td), p)| crate::fielddiff::theta_e_k(t, td, p));
+                let gradient = crate::fielddiff::gradient_per_100km(dewpoint.field(), lon, lat);
+                if theta_e.is_some() || gradient.is_some() {
+                    ui.separator();
+                    ui.weak(format!("Map center · {:.2}, {:.2}", lon, lat));
+                    ui.horizontal_wrapped(|ui| {
+                        if let Some(value) = theta_e {
+                            ui.label(format!("θe {value:.1} K"));
+                        }
+                        if let Some(value) = gradient {
+                            ui.label(format!("Dewpoint gradient {value:.1} K/100 km"));
+                        }
+                    });
+                }
+                if let Some(blend) = crate::fielddiff::objective_surface_point(
+                    temp, dewpoint, metars, lon, lat,
+                ) {
+                    ui.separator();
+                    ui.strong("HookEcho objective analysis");
+                    ui.horizontal_wrapped(|ui| {
+                        if let Some(value) = blend.temperature_k {
+                            ui.label(format!("Temperature {:.1} °C", value - 273.15));
+                        }
+                        if let Some(value) = blend.dewpoint_k {
+                            ui.label(format!("Dewpoint {:.1} °C", value - 273.15));
+                        }
+                    });
+                    ui.weak(format!("{} · {:.0} km · {:.0}% observation weight",
+                        blend.station, blend.distance_km, blend.weight * 100.0));
+                    ui.weak("Nearest METAR innovation, ≤90 min old, 75 km decay; not an official SPC analysis.");
+                }
+            } else {
+                ui.weak("Diagnostics wait for matching analysis times.");
+            }
+        }
+    }
+
     if section == "Lightning" && on.contains(&FL::Lightning) {
         ui.horizontal(|ui| {
             ui.label("CG density window:");
@@ -225,6 +490,31 @@ pub(crate) fn show(
         changed |= crate::ui::style::toggle(ui, glm_goes_west, "Include GOES-West")
             .on_hover_text("Adds GOES-18 so the Pacific and the west coast are covered too")
             .changed();
+    }
+
+    if section == "Satellite" {
+        let before = *abi_scene;
+        ui.horizontal_wrapped(|ui| {
+            ui.label("ABI sector:");
+            for (scene, label) in [
+                (wxdata::abi::Scene::Conus, "CONUS"),
+                (wxdata::abi::Scene::Mesoscale1, "Mesoscale 1"),
+                (wxdata::abi::Scene::Mesoscale2, "Mesoscale 2"),
+                (wxdata::abi::Scene::FullDisk, "Full disk"),
+            ] {
+                changed |= ui.selectable_value(abi_scene, scene, label).changed();
+            }
+        });
+        ui.weak("Mesoscale sectors update every minute; full disk updates every 10 minutes.");
+        if *abi_scene != before {
+            for (layer, state) in fields.iter_mut() {
+                if layer.descriptor().is_some_and(|descriptor| {
+                    descriptor.family == wxdata::field::FieldFamily::Satellite
+                }) {
+                    state.last_fetch = None;
+                }
+            }
+        }
     }
 
     if section == "Spotters" && show_spotters {
@@ -278,7 +568,10 @@ pub(crate) fn show(
                 ui.label(egui::RichText::new("Forecast day").small().strong());
                 ui.horizontal_wrapped(|ui| {
                     for day in 1u8..=8 {
-                        if ui.selectable_label(filters.outlook_day == day, format!("Day {day}")).clicked() {
+                        if ui
+                            .selectable_label(filters.outlook_day == day, format!("Day {day}"))
+                            .clicked()
+                        {
                             filters.outlook_day = if filters.outlook_day == day { 0 } else { day };
                             changed = true;
                         }
@@ -388,6 +681,10 @@ pub(crate) fn show(
             .on_hover_text(
                 "RAP f00 observed analysis, 13 km grid — coarser, but what is, not what's forecast",
             );
+                ui.selectable_value(env_model, wxdata::hrrr::Model::Rrfs, "RRFS v1 parallel")
+                    .on_hover_text(
+                        "NOAA's 3 km RRFS pre-implementation parallel — experimental until the operational promotion",
+                    );
                 ui.selectable_value(env_model, wxdata::hrrr::Model::NamNest, "NAM 3 km nest")
             .on_hover_text(
                 "The NAM's 3 km CONUS nest — a second convection-allowing opinion on its own \
@@ -433,14 +730,50 @@ pub(crate) fn show(
         }
     };
 
-    if section == "Rotation tracks" && on.contains(&FL::Rotation) {
-        header(ui, "Rotation tracks");
+    if section == "Reflectivity trail" && on.contains(&FL::MrmsReflectivityTrail) {
+        header(ui, "MRMS maximum reflectivity trail");
         ui.horizontal(|ui| {
             ui.label("Window:");
+            for minutes in [15u16, 30, 60, 120] {
+                actions.trail_changed |= ui
+                    .selectable_value(trail_minutes, minutes, format!("{minutes}m"))
+                    .changed();
+            }
+        });
+        actions.trail_changed |= ui
+            .add(egui::Slider::new(trail_threshold, 5.0..=70.0).text("Threshold").suffix(" dBZ"))
+            .changed();
+        if ui.button("Reset trail now").clicked() {
+            actions.trail_changed = true;
+        }
+        actions.export_trail |= ui.button("Export trail values…").clicked();
+        ui.weak("Keeps each cell's strongest reflectivity and its contributing frame age.");
+    }
+
+    if section == "Local cell tracks" && show_local_tracks {
+        header(ui, "Radar-derived storm history");
+        ui.weak("Exports every tracked centroid, time, direction, and speed currently held in the radar loop.");
+        ui.horizontal(|ui| {
+            actions.export_local_tracks_csv |= ui.button("Export CSV…").clicked();
+            actions.export_local_tracks_json |= ui.button("Export JSON…").clicked();
+        });
+    }
+
+    if section == "Rotation tracks" && on.contains(&FL::Rotation) {
+        header(ui, "Rotation tracks");
+        ui.horizontal_wrapped(|ui| {
+            ui.label("Window:");
             let mut dur = false;
-            for m in [30u16, 60, 120] {
+            for (m, label) in [
+                (30u16, "30m"),
+                (60, "1h"),
+                (120, "2h"),
+                (240, "4h"),
+                (360, "6h"),
+                (1440, "24h"),
+            ] {
                 dur |= ui
-                    .selectable_value(rotation_minutes, m, format!("{m}m"))
+                    .selectable_value(rotation_minutes, m, label)
                     .changed();
             }
             // Duration change → force an immediate refetch of the rotation grid.
@@ -499,6 +832,20 @@ pub(crate) fn show(
                 ui.weak("loading forecast…");
             }
         }
+    }
+
+    if section == "Ensemble forecast" && on.contains(&FL::RefsReflectivityProb) {
+        header(ui, "REFS storm probability");
+        ui.add(egui::Slider::new(refs_fcst_hour, 1..=60).text("F+ hr"));
+        ui.horizontal_wrapped(|ui| {
+            ui.label("Reflectivity:");
+            for threshold in wxdata::refs::REFLECTIVITY_THRESHOLDS {
+                ui.selectable_value(refs_dbz_threshold, threshold, format!(">{threshold} dBZ"));
+            }
+        });
+        ui.weak(format!(
+            "Neighborhood probability of composite reflectivity above {refs_dbz_threshold} dBZ."
+        ));
     }
 
     if section == "Environment" && on.contains(&FL::Cape) {
@@ -671,4 +1018,54 @@ pub(crate) fn show(
     }
 
     actions.overlays_changed |= changed;
+}
+
+fn postage_stamps(ui: &mut egui::Ui, result: &wxdata::global::GefsPostageStamps) {
+    let (mut lo, mut hi) = (f32::INFINITY, f32::NEG_INFINITY);
+    for value in result
+        .stamps
+        .iter()
+        .flat_map(|stamp| stamp.field.values.iter().copied())
+        .filter(|value| value.is_finite())
+    {
+        lo = lo.min(value);
+        hi = hi.max(value);
+    }
+    let span = (hi - lo).max(f32::EPSILON);
+    ui.weak(format!(
+        "Shared scale: {lo:.1} to {hi:.1} {}",
+        result.field.descriptor().units
+    ));
+    egui::ScrollArea::vertical().max_height(360.0).show(ui, |ui| {
+        ui.columns(2, |columns| {
+            for (index, stamp) in result.stamps.iter().enumerate() {
+                let ui = &mut columns[index % 2];
+                ui.weak(if stamp.member == 0 {
+                    "Control".to_string()
+                } else {
+                    format!("Member {:02}", stamp.member)
+                });
+                let size = egui::vec2(ui.available_width(), 64.0);
+                let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
+                let field = &stamp.field;
+                let cell = egui::vec2(rect.width() / field.nx as f32, rect.height() / field.ny as f32);
+                for row in 0..field.ny {
+                    for col in 0..field.nx {
+                        let value = field.values[row * field.nx + col];
+                        if !value.is_finite() {
+                            continue;
+                        }
+                        let t = ((value - lo) / span).clamp(0.0, 1.0);
+                        let color = egui::Color32::from_rgb(
+                            (30.0 + 220.0 * t) as u8,
+                            (80.0 + 140.0 * (1.0 - (2.0 * t - 1.0).abs())) as u8,
+                            (230.0 - 200.0 * t) as u8,
+                        );
+                        let min = rect.min + egui::vec2(col as f32 * cell.x, row as f32 * cell.y);
+                        ui.painter().rect_filled(egui::Rect::from_min_size(min, cell), 0.0, color);
+                    }
+                }
+            }
+        });
+    });
 }

@@ -86,6 +86,10 @@ pub struct RadialArray {
 #[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize))]
 pub struct Level3Product {
+    /// NEXRAD modified Julian day (days since 1970-01-01, with that day numbered 1).
+    pub modified_julian_date: u16,
+    /// Product time in seconds after midnight UTC.
+    pub seconds_since_midnight: u32,
     /// Product code (58 = Storm Tracking, 59 = Hail Index, 141 = Mesocyclone, …).
     pub code: i16,
     /// Radar latitude / longitude (degrees) and height (feet), from the PDB.
@@ -125,7 +129,10 @@ pub fn decode(raw: &[u8]) -> Result<Level3Product> {
 
     // Offsets in the PDB are half-words from the start of the message header.
     let mut r = Reader::new(msg);
-    r.skip("message header block", 18)?; // MHB: code/date/time/len/src/dest/nblocks
+    let _message_code = r.i16("message code")?;
+    let modified_julian_date = r.u16("message date")?;
+    let seconds_since_midnight = r.u32("message time")?;
+    r.skip("message header remainder", 10)?;
 
     let pdb_start = r.pos;
     let divider = r.i16("pdb divider")?;
@@ -209,6 +216,8 @@ pub fn decode(raw: &[u8]) -> Result<Level3Product> {
     let raw_text = parse_text_block(msg, 0, msg.len());
 
     Ok(Level3Product {
+        modified_julian_date,
+        seconds_since_midnight,
         code,
         lat,
         lon,

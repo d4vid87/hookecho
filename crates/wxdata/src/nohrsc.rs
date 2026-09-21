@@ -9,6 +9,10 @@
 //! answers — in the warm season that can be the whole retention window, and no snow analysis is
 //! the correct answer.
 
+use crate::field::{
+    DataClass, DataStamp, FieldDescriptor, FieldFamily, FieldFrame, FieldId, MissingData,
+    QualitySummary, SamplingPolicy, ValueKind,
+};
 use crate::mrms::MrmsField;
 use chrono::{DateTime, Datelike, Duration, Timelike, Utc};
 use gribberish::message::read_message;
@@ -17,6 +21,23 @@ const BASE: &str = "https://www.nohrsc.noaa.gov/snowfall_v2/data";
 
 /// Accumulation windows the analysis is published for.
 pub const DURATIONS: [u16; 4] = [6, 24, 48, 72];
+
+pub static SNOWFALL_DESCRIPTOR: FieldDescriptor = FieldDescriptor {
+    id: FieldId("analysis.nohrsc.snowfall"),
+    source: "NOAA NOHRSC",
+    family: FieldFamily::Analysis,
+    display_name: "Observed snowfall",
+    short_name: "Snowfall analysis",
+    search_aliases: &["snow", "accumulation", "NOHRSC"],
+    units: "m",
+    value_kind: ValueKind::Accumulation,
+    palette_key: "analysis.nohrsc.snowfall",
+    sampling: SamplingPolicy::Bilinear,
+    missing: MissingData::Nan,
+    time_policy: None,
+    supports_contours: false,
+    supports_difference: false,
+};
 
 /// Candidate URLs for the `hours`-hour analysis, newest issue first.
 ///
@@ -43,11 +64,42 @@ fn candidate_urls(hours: u16, now: DateTime<Utc>, back: usize) -> Vec<String> {
 
 /// Fetch the newest available `hours`-hour snowfall analysis.
 pub async fn fetch(http: &reqwest::Client, hours: u16) -> anyhow::Result<MrmsField> {
+    Ok(fetch_with_metadata(http, hours).await?.0)
+}
+
+/// Fetch through the common field path, preserving the immutable source object and receipt time.
+pub async fn fetch_frame(http: &reqwest::Client, hours: u16) -> anyhow::Result<FieldFrame> {
+    let (field, source_identity, received_time) = fetch_with_metadata(http, hours).await?;
+    let valid_time = field.time;
+    Ok(FieldFrame::new(
+        &SNOWFALL_DESCRIPTOR,
+        field,
+        DataStamp {
+            source_identity,
+            issue_time: Some(valid_time),
+            run_time: None,
+            valid_time,
+            received_time,
+            class: DataClass::Analysis,
+            quality: QualitySummary::Unknown,
+            available_members: None,
+        },
+    ))
+}
+
+async fn fetch_with_metadata(
+    http: &reqwest::Client,
+    hours: u16,
+) -> anyhow::Result<(MrmsField, String, DateTime<Utc>)> {
     // Eight issues is two days: enough to ride out a late posting, short enough that an
     // out-of-season request gives up quickly instead of crawling the archive.
     for url in candidate_urls(hours, Utc::now(), 8) {
-        let Ok(resp) = http.get(crate::net::fetch_url(&url))
-        .timeout(crate::net::FEED_TIMEOUT).send().await else {
+        let Ok(resp) = http
+            .get(crate::net::fetch_url(&url))
+            .timeout(crate::net::FEED_TIMEOUT)
+            .send()
+            .await
+        else {
             continue;
         };
         if !resp.status().is_success() {
@@ -56,10 +108,11 @@ pub async fn fetch(http: &reqwest::Client, hours: u16) -> anyhow::Result<MrmsFie
         let Ok(raw) = resp.bytes().await else {
             continue;
         };
+        let received_time = Utc::now();
         // Same containment as the MRMS decode: a bad packing must not abort the process.
         let decoded = crate::task::guarded(|| decode(&raw));
         match decoded {
-            Ok(Ok(f)) => return Ok(f),
+            Ok(Ok(f)) => return Ok((f, url, received_time)),
             Ok(Err(e)) => log::warn!("nohrsc decode {url}: {e}"),
             Err(_) => log::warn!("nohrsc decode panicked for {url}"),
         }
@@ -224,6 +277,13 @@ mod tests {
         );
         assert!(urls[1].ends_with("sfav2_CONUS_24h_2026021506_grid184.grb2"));
         assert!(urls[2].ends_with("sfav2_CONUS_24h_2026021500_grid184.grb2"));
+    }
+
+    #[test]
+    fn snowfall_metadata_declares_an_analysis_accumulation() {
+        assert_eq!(SNOWFALL_DESCRIPTOR.family, FieldFamily::Analysis);
+        assert_eq!(SNOWFALL_DESCRIPTOR.value_kind, ValueKind::Accumulation);
+        assert!(!SNOWFALL_DESCRIPTOR.supports_difference);
     }
 
     #[test]

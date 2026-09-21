@@ -159,6 +159,9 @@ pub struct Settings {
     /// Whether radar timestamps read in the site's local time or in UTC.
     #[serde(default)]
     pub time_display: TimeDisplay,
+    /// Optional global override for cross-source valid-time matching. `None` uses product policy.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub alignment_tolerance_minutes: Option<u16>,
     /// UI text/widget zoom factor (egui `zoom_factor`); also captures Ctrl+= / Ctrl+- / Ctrl+0.
     pub ui_scale: f32,
     /// User-added GRLevelX placefile overlays.
@@ -254,6 +257,9 @@ pub struct Settings {
     /// listing per 20-second cycle and covers the Pacific and the west coast.
     #[serde(default)]
     pub glm_goes_west: bool,
+    /// Native ABI sector used by satellite field layers.
+    #[serde(default)]
+    pub abi_scene: wxdata::abi::Scene,
     /// How far from the active radar to draw Spotter Network dots, in km. 0 = no limit (the whole
     /// CONUS feed). Default 230 km, roughly the radar's own useful range.
     #[serde(default = "default_spotter_range_km")]
@@ -410,6 +416,9 @@ pub struct Settings {
     /// memory only until you save it.
     #[serde(default)]
     pub chase_log: bool,
+    /// User-configured OSRM base URL. Empty keeps road routing disabled.
+    #[serde(default)]
+    pub route_endpoint: String,
     /// Attach a picture of the radar to the ntfy push when a warning fires. Desktop only: the
     /// Android background service has no GPU surface to render from, and says so in the UI.
     #[serde(default)]
@@ -529,11 +538,28 @@ pub struct Settings {
     /// receives it.
     #[serde(default = "default_true")]
     pub share_card: bool,
+    #[serde(default = "default_broadcast_margin")]
+    pub broadcast_safe_margin: u16,
+    #[serde(default = "default_true")]
+    pub broadcast_clock_source: bool,
+    #[serde(default)]
+    pub broadcast_warning_crawl: bool,
+    #[serde(default)]
+    pub broadcast_branding: String,
     /// Registry labels in the order the user dragged them, across every category. Labels not in
     /// here keep their registry order behind the ones that are — so a reorder never hides a row,
     /// and a renamed action just falls back to its default place.
     #[serde(default)]
     pub layer_order: Vec<String>,
+    /// Starred registry products, persisted by stable field ID rather than display label.
+    #[serde(default)]
+    pub favorite_fields: Vec<String>,
+    /// Most recently enabled registry products, newest first and bounded by the action path.
+    #[serde(default)]
+    pub recent_fields: Vec<String>,
+    /// Portable analyst-defined radar products. Settings export and sync carry these definitions.
+    #[serde(default)]
+    pub radar_products: Vec<wxdata::product_dsl::ProductDefinition>,
     /// Thresholds the signature detectors fire at (see [`DetectorTuning`]).
     #[serde(default)]
     pub detectors: DetectorTuning,
@@ -590,6 +616,20 @@ impl Default for DetectorTuning {
 }
 
 impl Settings {
+    pub fn record_recent_field(&mut self, id: &str) {
+        self.recent_fields.retain(|saved| saved != id);
+        self.recent_fields.insert(0, id.to_string());
+        self.recent_fields.truncate(8);
+    }
+
+    pub fn toggle_favorite_field(&mut self, id: &str) {
+        if let Some(index) = self.favorite_fields.iter().position(|saved| saved == id) {
+            self.favorite_fields.remove(index);
+        } else {
+            self.favorite_fields.push(id.to_string());
+        }
+    }
+
     /// Timezone to render `site`'s timestamps in — `None` means "show Zulu", either because the
     /// user picked UTC or because the site has no known zone.
     pub fn tz_for(&self, site: Option<&str>) -> Option<wxdata::tz::Tz> {
@@ -684,6 +724,54 @@ pub struct PluginConfig {
     #[serde(default = "default_plugin_refresh")]
     pub refresh_secs: u32,
     pub enabled: bool,
+    #[serde(default)]
+    pub manifest: PluginManifest,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct PluginManifest {
+    #[serde(default = "default_plugin_version")]
+    pub version: String,
+    #[serde(default = "default_plugin_api")]
+    pub api_version: u16,
+    #[serde(default = "default_plugin_capabilities")]
+    pub capabilities: Vec<String>,
+    #[serde(default)]
+    pub input_products: Vec<String>,
+    #[serde(default = "default_plugin_outputs")]
+    pub output_products: Vec<String>,
+    #[serde(default)]
+    pub config_schema: Option<serde_json::Value>,
+}
+
+impl Default for PluginManifest {
+    fn default() -> Self {
+        Self {
+            version: default_plugin_version(),
+            api_version: default_plugin_api(),
+            capabilities: default_plugin_capabilities(),
+            input_products: Vec::new(),
+            output_products: default_plugin_outputs(),
+            config_schema: None,
+        }
+    }
+}
+
+fn default_plugin_version() -> String {
+    "0.1.0".into()
+}
+fn default_plugin_api() -> u16 {
+    1
+}
+fn default_plugin_capabilities() -> Vec<String> {
+    vec!["placefile-output".into()]
+}
+fn default_plugin_outputs() -> Vec<String> {
+    vec!["vector-features".into()]
+}
+
+fn default_broadcast_margin() -> u16 {
+    32
 }
 
 fn default_plugin_refresh() -> u32 {
@@ -1087,7 +1175,14 @@ impl Default for Settings {
             tile_disk_cache_mb: 0,
             map_quality: MapQuality::Auto,
             share_card: true,
+            broadcast_safe_margin: default_broadcast_margin(),
+            broadcast_clock_source: true,
+            broadcast_warning_crawl: false,
+            broadcast_branding: String::new(),
             layer_order: Vec::new(),
+            favorite_fields: Vec::new(),
+            recent_fields: Vec::new(),
+            radar_products: Vec::new(),
             mping_key: String::new(),
             etop_dbz: default_etop_dbz(),
             poll_interval_secs: 30,
@@ -1100,6 +1195,7 @@ impl Default for Settings {
             velocity_unit: VelocityUnit::default(),
             temp_unit: TempUnit::default(),
             time_display: TimeDisplay::default(),
+            alignment_tolerance_minutes: None,
             // 1.0 everywhere: this multiplies the native scale factor, and Android's display
             // density already sizes widgets for touch — an extra 1.3 shrank the S24's logical
             // canvas to ~277 pt wide (nothing fit).
@@ -1127,6 +1223,7 @@ impl Default for Settings {
             share_video_url: String::new(),
             lightning_minutes: default_lightning_minutes(),
             glm_goes_west: false,
+            abi_scene: wxdata::abi::Scene::default(),
             spotter_range_km: default_spotter_range_km(),
             alert_sound: true,
             smooth_radar: true,
@@ -1165,6 +1262,7 @@ impl Default for Settings {
             setup_done: false,
             desktop_notify: false,
             chase_log: false,
+            route_endpoint: String::new(),
             battery_saver: false,
             ntfy_snapshot: false,
             alert_follow_gps: false,
@@ -1486,6 +1584,23 @@ mod tests {
     use super::*;
 
     #[test]
+    fn field_history_is_stable_bounded_and_toggleable() {
+        let mut settings = Settings::default();
+        for n in 0..10 {
+            settings.record_recent_field(&format!("field.{n}"));
+        }
+        settings.record_recent_field("field.5");
+        assert_eq!(settings.recent_fields.len(), 8);
+        assert_eq!(settings.recent_fields[0], "field.5");
+        assert_eq!(settings.recent_fields.iter().filter(|id| *id == "field.5").count(), 1);
+
+        settings.toggle_favorite_field("mrms.mesh");
+        assert_eq!(settings.favorite_fields, ["mrms.mesh"]);
+        settings.toggle_favorite_field("mrms.mesh");
+        assert!(settings.favorite_fields.is_empty());
+    }
+
+    #[test]
     fn atomic_write_replaces_an_existing_file() {
         let dir = std::env::temp_dir().join(format!(
             "hookecho-atomic-write-{}-{:?}",
@@ -1586,6 +1701,9 @@ mod tests {
         let s: Settings =
             serde_json::from_str(r#"{"coach_done": true, "setup_done": true}"#).unwrap();
         assert!(s.setup_done);
+        assert_eq!(s.broadcast_safe_margin, 32);
+        assert!(s.broadcast_clock_source);
+        assert!(!s.broadcast_warning_crawl);
     }
 
     #[test]
@@ -1627,7 +1745,14 @@ mod tests {
             seeded_workspaces: false,
             smooth_radar: false,
             share_card: true,
+            broadcast_safe_margin: default_broadcast_margin(),
+            broadcast_clock_source: true,
+            broadcast_warning_crawl: false,
+            broadcast_branding: String::new(),
             layer_order: Vec::new(),
+            favorite_fields: vec!["mrms.mesh".into()],
+            recent_fields: vec!["mrms.composite-reflectivity".into()],
+            radar_products: Vec::new(),
             mping_key: String::new(),
             etop_dbz: 30.0,
             default_site: "KFWS".to_string(),
@@ -1640,6 +1765,7 @@ mod tests {
             velocity_unit: VelocityUnit::Mph,
             temp_unit: TempUnit::Celsius,
             time_display: TimeDisplay::Utc,
+            alignment_tolerance_minutes: Some(20),
             ui_scale: 1.2,
             sync_client_id: String::new(),
             sync_client_secret: String::new(),
@@ -1681,6 +1807,7 @@ mod tests {
             }),
             lightning_minutes: default_lightning_minutes(),
             glm_goes_west: false,
+            abi_scene: wxdata::abi::Scene::default(),
             spotter_range_km: default_spotter_range_km(),
             alert_sound: false,
             ntfy_topic: "hookecho-test".to_string(),
@@ -1725,6 +1852,7 @@ mod tests {
             setup_done: true,
             desktop_notify: false,
             chase_log: false,
+            route_endpoint: String::new(),
             battery_saver: false,
             ntfy_snapshot: false,
             alert_follow_gps: false,

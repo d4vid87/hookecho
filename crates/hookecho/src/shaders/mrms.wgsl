@@ -19,7 +19,8 @@ struct Mrms {
     ny: f32,
     /// Layer opacity 0..1, rewritten per frame from the Layer Manager slider.
     opacity: f32,
-    _pad1: f32,
+    /// 1 when grid_tex contains direct RGBA bytes instead of palette indices.
+    direct_rgba: f32,
     _pad2: f32,
     _pad3: f32,
     _pad4: f32,
@@ -62,9 +63,16 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
 
     let gx = i32(fu * mrms.nx);
     let gy = i32(fv * mrms.ny);
-    let raw = textureLoad(grid_tex, vec2<i32>(gx, gy), 0).r;
+    let raw = textureLoad(grid_tex, vec2<i32>(gx, gy), 0);
 
-    let color = textureLoad(lut_tex, vec2<i32>(i32(raw), 0), 0);
+    if (mrms.direct_rgba > 0.5) {
+        if (raw.a == 0u) { discard; }
+        let srgb = vec3<f32>(raw.rgb) / 255.0;
+        let linear = pow(srgb, vec3<f32>(2.2));
+        return vec4<f32>(linear, f32(raw.a) / 255.0 * mrms.opacity);
+    }
+
+    let color = textureLoad(lut_tex, vec2<i32>(i32(raw.r), 0), 0);
     if (color.a == 0.0) { discard; }
     return vec4<f32>(color.rgb, color.a * mrms.opacity);
 }

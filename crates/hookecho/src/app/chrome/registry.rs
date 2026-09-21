@@ -17,17 +17,28 @@ impl HookEchoApp {
                 .to_std()
                 .unwrap_or_default()
         });
+        let source = v
+            .site
+            .as_deref()
+            .map_or_else(|| "Radar".to_string(), |site| format!("{site} radar"));
+        let source = v
+            .volume
+            .as_ref()
+            .and_then(|volume| volume.live_status.as_ref())
+            .map_or(source.clone(), |status| {
+                format!("{source} · {}", status.summary())
+            });
         SourceHealth {
-            source: v
-                .site
-                .as_deref()
-                .map_or_else(|| "Radar".to_string(), |site| format!("{site} radar")),
+            source,
             fetching: v.loading,
             last_attempt: v.last_poll.map(|t| t.elapsed()),
             last_success: age,
+            data_age: age,
             last_failure: v.error.as_ref().map(|_| std::time::Duration::ZERO),
             error: v.error.clone(),
             cadence: std::time::Duration::from_secs(120),
+            successes: u64::from(v.volume.is_some()),
+            failures: u64::from(v.error.is_some()),
         }
     }
 
@@ -42,14 +53,30 @@ impl HookEchoApp {
             PaletteAction::ToggleField(layer)
                 if matches!(
                     layer,
-                    FL::Mrms
+                    FL::GoesC13
+                        | FL::GoesWaterVapor
+                        | FL::GoesMidWaterVapor
+                        | FL::GoesLongwaveIr
+                        | FL::GoesVisible
+                        | FL::GoesTrueColor
+                        | FL::GoesCatalog(_)
+                        | FL::Mrms
+                        | FL::MrmsLowLevel
                         | FL::Mosaic
                         | FL::Rotation
                         | FL::Mesh
                         | FL::Lightning
                         | FL::AzShear
+                        | FL::AzShearMid
+                        | FL::Posh
+                        | FL::MrmsEchoTop18
+                        | FL::MrmsVil
+                        | FL::MrmsCatalog(_)
                         | FL::PrecipRate
                         | FL::Qpe1h
+                        | FL::Qpe3h
+                        | FL::Qpe6h
+                        | FL::Qpe12h
                         | FL::Qpe24h
                         | FL::PrecipType
                         | FL::FlashFlood
@@ -71,10 +98,19 @@ impl HookEchoApp {
                         | FL::GlobalDewpoint2m
                         | FL::GlobalWind10m
                         | FL::GlobalPrecip
+                        | FL::RtmaTemp2m
+                        | FL::RtmaDewpoint2m
+                        | FL::RtmaPressure
+                        | FL::RtmaWindU10m
+                        | FL::MrmsReflectivityTrail
                         | FL::ThunderProb
+                        | FL::RefsReflectivityProb
                         | FL::GlmFed
                         | FL::ModelDiff
-                ) => RequestLane::Field(layer),
+                ) =>
+            {
+                RequestLane::Field(layer)
+            }
             PaletteAction::ToggleOverlay(toggle) => match toggle {
                 T::AlertPanel | T::Alerts => RequestLane::Feed("Weather alerts"),
                 T::StormReports => RequestLane::Feed("Storm reports"),
@@ -93,9 +129,7 @@ impl HookEchoApp {
                 T::Tfr => RequestLane::Feed("Temporary flight restrictions"),
                 T::Sensors => RequestLane::Feed("Radar observations"),
                 T::Hodo => RequestLane::Feed("VAD profile"),
-                T::Cells | T::Tracks | T::ArrivalCones => {
-                    RequestLane::Feed("Storm cells")
-                }
+                T::Cells | T::Tracks | T::ArrivalCones => RequestLane::Feed("Storm cells"),
                 T::Mds => RequestLane::Feed("Mesoscale discussions"),
                 T::Mping => RequestLane::Feed("mPING reports"),
                 T::Pireps => RequestLane::Feed("Pilot reports"),
@@ -138,6 +172,9 @@ impl HookEchoApp {
         use AppWindow as W;
         use OverlayToggle as T;
         let mut out = Vec::new();
+        let favorite_fields: std::collections::HashSet<String> =
+            self.settings.favorite_fields.iter().cloned().collect();
+        let recent_fields = self.settings.recent_fields.clone();
         // Reverse index from the live bindings, so a rebind relabels every row that shows a chip.
         let keys: Vec<(PaletteAction, String)> = crate::hotkeys::active(&self.settings)
             .iter()
@@ -168,6 +205,18 @@ impl HookEchoApp {
                     .find(|(a, _)| *a == action)
                     .map(|(_, k)| k.clone()),
                 health: None,
+                favorite: match action {
+                    PaletteAction::ToggleField(layer) => {
+                        favorite_fields.contains(layer.stable_id())
+                    }
+                    _ => false,
+                },
+                recent: match action {
+                    PaletteAction::ToggleField(layer) => recent_fields
+                        .iter()
+                        .position(|saved| saved == layer.stable_id()),
+                    _ => None,
+                },
             })
         };
 
@@ -204,13 +253,84 @@ impl HookEchoApp {
         }
 
         // --- National / model grids. ---
+        for (index, entry) in wxdata::abi::CATALOG.iter().enumerate() {
+            let layer = FL::GoesCatalog(index as u8);
+            push(
+                entry.descriptor.display_name,
+                "National",
+                "Native GOES ABI channel imagery",
+                false,
+                PaletteAction::ToggleField(layer),
+                Some(self.views[self.active].fields_on.contains(&layer)),
+            );
+        }
+        for (index, entry) in wxdata::mrms::CATALOG.iter().enumerate() {
+            let layer = FL::MrmsCatalog(index as u8);
+            push(
+                entry.descriptor.display_name,
+                "MRMS",
+                entry.description,
+                false,
+                PaletteAction::ToggleField(layer),
+                Some(self.views[self.active].fields_on.contains(&layer)),
+            );
+        }
         for (layer, category, label, desc, common) in [
+            (
+                FL::GoesC13,
+                "National",
+                "GOES clean infrared (C13)",
+                "Native satellite cloud-top temperatures from GOES ABI",
+                true,
+            ),
+            (
+                FL::GoesWaterVapor,
+                "National",
+                "GOES upper-level water vapor (C08)",
+                "Native satellite moisture imagery from GOES ABI",
+                true,
+            ),
+            (
+                FL::GoesMidWaterVapor,
+                "National",
+                "GOES mid-level water vapor (C09)",
+                "Native mid-level moisture imagery from GOES ABI",
+                false,
+            ),
+            (
+                FL::GoesLongwaveIr,
+                "National",
+                "GOES longwave infrared (C14)",
+                "Native longwave cloud-top temperatures from GOES ABI",
+                false,
+            ),
+            (
+                FL::GoesVisible,
+                "National",
+                "GOES red visible (C02)",
+                "Native high-resolution daytime reflectance from GOES ABI",
+                true,
+            ),
+            (
+                FL::GoesTrueColor,
+                "National",
+                "GOES true color",
+                "Daytime natural-color satellite imagery composed from native ABI channels",
+                true,
+            ),
             (
                 FL::Mrms,
                 "MRMS",
                 "National mosaic (MRMS)",
                 "Every radar in the country stitched into one picture",
                 true,
+            ),
+            (
+                FL::MrmsLowLevel,
+                "MRMS",
+                "Low-level reflectivity (MRMS)",
+                "Composite of the lowest available radar observations",
+                false,
             ),
             (
                 FL::Mosaic,
@@ -249,6 +369,34 @@ impl HookEchoApp {
                 false,
             ),
             (
+                FL::AzShearMid,
+                "National",
+                "Mid-level rotation strength (AzShear, 3–6 km)",
+                "Rotation strength in the mid-levels of a storm",
+                false,
+            ),
+            (
+                FL::Posh,
+                "National",
+                "Severe hail probability (POSH)",
+                "MRMS probability that a storm is producing severe hail",
+                false,
+            ),
+            (
+                FL::MrmsEchoTop18,
+                "National",
+                "Storm-top height (MRMS 18 dBZ)",
+                "Height of the 18 dBZ echo top above ground",
+                false,
+            ),
+            (
+                FL::MrmsVil,
+                "National",
+                "Water aloft (MRMS VIL)",
+                "Vertically integrated liquid from the national radar mosaic",
+                false,
+            ),
+            (
                 FL::PrecipRate,
                 "National",
                 "Rain rate",
@@ -260,6 +408,27 @@ impl HookEchoApp {
                 "National",
                 "Rain so far, 1 hour (QPE)",
                 "How much rain has fallen in the last hour",
+                false,
+            ),
+            (
+                FL::Qpe3h,
+                "National",
+                "Rain so far, 3 hours (QPE)",
+                "How much rain has fallen in the last three hours",
+                false,
+            ),
+            (
+                FL::Qpe6h,
+                "National",
+                "Rain so far, 6 hours (QPE)",
+                "How much rain has fallen in the last six hours",
+                false,
+            ),
+            (
+                FL::Qpe12h,
+                "National",
+                "Rain so far, 12 hours (QPE)",
+                "How much rain has fallen in the last 12 hours",
                 false,
             ),
             (
@@ -296,6 +465,13 @@ impl HookEchoApp {
                 "Chance of thunder (NBM)",
                 "The National Blend's calibrated probability of a thunderstorm in the hour you \
                  have scrubbed to — a forecast, not a detection",
+                false,
+            ),
+            (
+                FL::RefsReflectivityProb,
+                "Models",
+                "Chance of 40 dBZ storms (REFS)",
+                "Fourteen-member neighborhood probability of composite reflectivity above 40 dBZ",
                 false,
             ),
             (
@@ -416,6 +592,41 @@ impl HookEchoApp {
                 "Models",
                 "Moisture in the air column",
                 "Precipitable water (GFS) or total precipitation (ECMWF)",
+                false,
+            ),
+            (
+                FL::RtmaTemp2m,
+                "Analysis",
+                "RTMA surface temperature",
+                "NOAA real-time 2 m temperature analysis",
+                false,
+            ),
+            (
+                FL::RtmaDewpoint2m,
+                "Analysis",
+                "RTMA surface dewpoint",
+                "NOAA real-time 2 m dewpoint analysis",
+                false,
+            ),
+            (
+                FL::RtmaPressure,
+                "Analysis",
+                "RTMA surface pressure",
+                "NOAA real-time surface pressure analysis",
+                false,
+            ),
+            (
+                FL::RtmaWindU10m,
+                "Analysis",
+                "RTMA west/east wind",
+                "NOAA real-time 10 m U-wind analysis",
+                false,
+            ),
+            (
+                FL::MrmsReflectivityTrail,
+                "Radar",
+                "Reflectivity trail (MRMS)",
+                "Moving-window maximum reflectivity with configurable threshold and age",
                 false,
             ),
             (
@@ -790,6 +1001,20 @@ impl HookEchoApp {
                 false,
             ),
             (
+                T::LinkTimes,
+                "Reference",
+                "Link pane times",
+                "Scrub every pane to the same valid time",
+                false,
+            ),
+            (
+                T::LockSourceFrame,
+                "Reference",
+                "Lock exact radar source frame",
+                "Use the identical radar object across linked panes when available",
+                false,
+            ),
+            (
                 T::MiniLoop,
                 "Reference",
                 "Mini loop window",
@@ -853,6 +1078,38 @@ impl HookEchoApp {
             PaletteAction::SaveWorkspace,
             None,
         );
+        push(
+            "Export case manifest",
+            "Reference",
+            "Save this workspace, selected times, and exact radar source objects",
+            true,
+            PaletteAction::ExportCase,
+            None,
+        );
+        push(
+            "Export case report",
+            "Reference",
+            "Save a readable report with exact source objects and an embedded manifest",
+            true,
+            PaletteAction::ExportCaseReport,
+            None,
+        );
+        push(
+            "Export detector history",
+            "Reference",
+            "Save versioned detector thresholds, reason codes, contributing gates and scores over time",
+            false,
+            PaletteAction::ExportDetectorHistory,
+            None,
+        );
+        push(
+            "Open case manifest",
+            "Reference",
+            "Restore a portable HookEcho case manifest",
+            true,
+            PaletteAction::ImportCase,
+            None,
+        );
         for (i, ws) in self.settings.workspaces.iter().enumerate() {
             push(
                 &format!("Workspace: {}", ws.name),
@@ -907,6 +1164,12 @@ impl HookEchoApp {
                 true,
             ),
             (
+                MapTool::RegionStats,
+                "Tool: Area statistics",
+                "Select two corners for native-value statistics and a histogram",
+                false,
+            ),
+            (
                 MapTool::Marker,
                 "Tool: Drop marker",
                 "Save a place — home, work, where you're headed",
@@ -937,6 +1200,12 @@ impl HookEchoApp {
                 false,
             ),
             (
+                MapTool::Route,
+                "Tool: Plan route",
+                "Click a start, optional waypoints, and destination",
+                true,
+            ),
+            (
                 MapTool::Climatology,
                 "Tool: Tornado climatology",
                 "How often tornadoes have hit this spot historically",
@@ -964,6 +1233,14 @@ impl HookEchoApp {
                 Some(tool == t),
             );
         }
+        push(
+            "Export area statistics",
+            "Tools",
+            "Save the selected field area's native-value summary and histogram as CSV",
+            false,
+            PaletteAction::ExportRegionStats,
+            None,
+        );
         for (w, label, desc, common) in [
             (
                 W::Site,

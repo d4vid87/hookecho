@@ -39,6 +39,8 @@ pub struct Progress {
     pub total: usize,
     /// Volume times at which the rule would have fired.
     pub fired: Vec<chrono::DateTime<chrono::Utc>>,
+    pub detections: Vec<wxdata::verify::AlgorithmEvent>,
+    pub score: Option<wxdata::verify::AlgorithmStats>,
     /// Set when the run ends, successfully or not.
     pub finished: Option<String>,
 }
@@ -55,6 +57,7 @@ pub type Shared = Arc<Mutex<Progress>>;
 pub async fn run(
     site: String,
     day: chrono::NaiveDate,
+    wfo: String,
     rule: AlertRule,
     settings: Settings,
     out: Shared,
@@ -85,10 +88,17 @@ pub async fn run(
         let at = id.date_time();
         match level2::download_scan(id, cache.clone()).await {
             Ok(scan) => {
-                if let Some(hit) = first_hit(&scan, &rule, &settings) {
-                    let _ = hit;
-                    if let (Ok(mut p), Some(at)) = (out.lock(), at) {
-                        p.fired.push(at);
+                if let (Some(hit), Some(at)) = (first_hit(&scan, &rule, &settings), at) {
+                    if let Ok(mut p) = out.lock() {
+                        let cooled_down = cooldown_allows(p.fired.last().copied(), at, rule.cooldown_min);
+                        if cooled_down {
+                            p.fired.push(at);
+                            p.detections.push(wxdata::verify::AlgorithmEvent {
+                                valid: at,
+                                lon: hit.lon,
+                                lat: hit.lat,
+                            });
+                        }
                     }
                 }
             }
@@ -99,8 +109,35 @@ pub async fn run(
             p.done += 1;
         }
     }
+    if !wfo.trim().is_empty() {
+        let start = day.and_hms_opt(0, 0, 0).unwrap().and_utc();
+        let end = start + chrono::Duration::days(1);
+        match wxdata::verify::fetch(&reqwest::Client::new(), wfo.trim(), start, end).await {
+            Ok(verification) => {
+                if let Ok(mut progress) = out.lock() {
+                    progress.score = Some(wxdata::verify::score_algorithm(
+                        &progress.detections,
+                        &verification.reports,
+                        20.0,
+                        chrono::Duration::minutes(15),
+                    ));
+                }
+            }
+            Err(error) => log::warn!("detector verification unavailable: {error}"),
+        }
+    }
     let n = out.lock().map(|p| p.fired.len()).unwrap_or(0);
     finish(&out, &format!("done — would have fired {n} times"));
+}
+
+fn cooldown_allows(
+    previous: Option<chrono::DateTime<chrono::Utc>>,
+    at: chrono::DateTime<chrono::Utc>,
+    minutes: u16,
+) -> bool {
+    previous.is_none_or(|previous| {
+        at - previous >= chrono::Duration::minutes(minutes.into())
+    })
 }
 
 /// The first detection in this volume that the rule accepts, if any. Same detectors and the same
@@ -156,4 +193,18 @@ fn first_hit(scan: &level2::Scan, rule: &AlertRule, settings: &Settings) -> Opti
     };
     hits.into_iter()
         .find(|h| crate::rules::matches(rule, h, settings))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn replay_uses_the_configured_live_cooldown() {
+        let at = chrono::DateTime::parse_from_rfc3339("2013-05-20T20:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        assert!(!cooldown_allows(Some(at), at + chrono::Duration::minutes(9), 10));
+        assert!(cooldown_allows(Some(at), at + chrono::Duration::minutes(10), 10));
+    }
 }

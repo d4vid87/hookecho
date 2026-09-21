@@ -14,11 +14,13 @@ pub struct RulesWindow {
     pub open: bool,
     /// A backtest the user asked for, picked up by the app (which owns the runtime) on its next
     /// frame: rule index, and the UTC day to replay.
-    pub backtest_request: Option<(usize, chrono::NaiveDate)>,
+    pub backtest_request: Option<(usize, chrono::NaiveDate, String)>,
     /// The run in flight or the last one's result.
     pub backtest: Option<crate::backtest::Shared>,
     /// The day the buttons replay, edited as text because a date picker is a dependency.
     pub backtest_day: String,
+    /// Optional forecast office whose official storm reports score the detector replay.
+    pub backtest_wfo: String,
 }
 
 impl RulesWindow {
@@ -305,6 +307,12 @@ fn backtest_bar(ui: &mut egui::Ui, state: &mut RulesWindow, settings: &Settings)
                 .desired_width(96.0)
                 .hint_text("YYYY-MM-DD"),
         );
+        ui.label("WFO:");
+        ui.add(
+            egui::TextEdit::singleline(&mut state.backtest_wfo)
+                .desired_width(48.0)
+                .hint_text("OUN"),
+        );
         let day = state.backtest_day.parse::<chrono::NaiveDate>().ok();
         let armed: Vec<usize> = settings
             .alert_rules
@@ -320,7 +328,11 @@ fn backtest_bar(ui: &mut egui::Ui, state: &mut RulesWindow, settings: &Settings)
                     for i in armed {
                         if ui.button(settings.alert_rules[i].title()).clicked() {
                             if let Some(d) = day {
-                                state.backtest_request = Some((i, d));
+                                state.backtest_request = Some((
+                                    i,
+                                    d,
+                                    state.backtest_wfo.trim().to_ascii_uppercase(),
+                                ));
                             }
                         }
                     }
@@ -329,8 +341,8 @@ fn backtest_bar(ui: &mut egui::Ui, state: &mut RulesWindow, settings: &Settings)
     });
     ui.weak(format!(
         "Replays up to {} volumes from the archive against one scan rule — the same detectors the \
-         live path runs. Feed triggers (warnings, ProbSevere, lightning) and extra conditions are \
-         not replayable.",
+         live path runs. Enter a WFO to score hits, misses, and false alarms against official \
+         reports. Feed triggers and extra conditions are not replayable.",
         crate::backtest::MAX_VOLUMES
     ));
     let Some(shared) = &state.backtest else {
@@ -350,6 +362,17 @@ fn backtest_bar(ui: &mut egui::Ui, state: &mut RulesWindow, settings: &Settings)
                 .collect::<Vec<_>>()
                 .join("  "),
         );
+    }
+    if let Some(score) = p.score {
+        ui.label(format!(
+            "Reports: {} hits · {} misses · {} false alarms · POD {:.0}% · FAR {:.0}% · CSI {:.0}%",
+            score.hits,
+            score.misses,
+            score.false_alarms,
+            score.pod * 100.0,
+            score.far * 100.0,
+            score.csi * 100.0,
+        ));
     }
 }
 

@@ -7,10 +7,335 @@
 use gribberish::data_message::DataMessage;
 use gribberish::message::read_message;
 
+use crate::field::{
+    DataClass, DataStamp, FieldDescriptor, FieldFamily, FieldFrame, FieldId, MissingData,
+    QualitySummary, SamplingPolicy, ValueKind,
+};
+
 const BUCKET: &str = "https://noaa-mrms-pds.s3.amazonaws.com";
 
 /// National composite reflectivity mosaic (dBZ).
 pub const REFLECTIVITY: &str = "CONUS/MergedReflectivityQCComposite_00.50";
+
+pub static REFLECTIVITY_DESCRIPTOR: FieldDescriptor = FieldDescriptor {
+    id: FieldId("mrms.composite-reflectivity"),
+    source: "NOAA MRMS",
+    family: FieldFamily::Mrms,
+    display_name: "MRMS composite reflectivity",
+    short_name: "MRMS Reflectivity",
+    search_aliases: &["mosaic", "dbz", "reflectivity"],
+    units: "dBZ",
+    value_kind: ValueKind::Scalar,
+    palette_key: "reflectivity",
+    sampling: SamplingPolicy::Bilinear,
+    missing: MissingData::Nan,
+    time_policy: None,
+    supports_contours: true,
+    supports_difference: true,
+};
+
+macro_rules! descriptor {
+    ($name:ident, $id:literal, $display:literal, $short:literal, $units:literal, $kind:ident, $palette:literal, $sampling:ident, $difference:literal, [$($alias:literal),* $(,)?]) => {
+        pub static $name: FieldDescriptor = FieldDescriptor {
+            id: FieldId($id),
+            source: "NOAA MRMS",
+            family: FieldFamily::Mrms,
+            display_name: $display,
+            short_name: $short,
+            search_aliases: &[$($alias),*],
+            units: $units,
+            value_kind: ValueKind::$kind,
+            palette_key: $palette,
+            sampling: SamplingPolicy::$sampling,
+            missing: MissingData::Nan,
+            time_policy: None,
+            supports_contours: matches!(ValueKind::$kind, ValueKind::Scalar),
+            supports_difference: $difference,
+        };
+    };
+}
+
+descriptor!(LOW_LEVEL_REFLECTIVITY_DESCRIPTOR, "mrms.low-level-composite-reflectivity", "Low-level composite reflectivity", "Low-level Reflectivity", "dBZ", Scalar, "reflectivity", Bilinear, true, ["mosaic", "dbz", "low level"]);
+descriptor!(LIGHTNING_DESCRIPTOR, "mrms.nldn-cg-density", "Cloud-to-ground lightning density", "CG Lightning", "strikes/km²/min", Scalar, "lightning", Bilinear, false, ["nldn", "lightning"]);
+descriptor!(MESH_DESCRIPTOR, "mrms.mesh", "Maximum estimated hail size", "MESH", "mm", Scalar, "mesh", Bilinear, true, ["hail", "mesh"]);
+descriptor!(HAIL_SWATH_DESCRIPTOR, "mrms.mesh-max", "Maximum hail-size swath", "Hail Swath", "mm", Accumulation, "hail-swath", Nearest, false, ["hail track", "mesh max"]);
+descriptor!(AZSHEAR_DESCRIPTOR, "mrms.azshear-0-2km", "0–2 km azimuthal shear", "AzShear", "s⁻¹", Scalar, "azshear", Bilinear, true, ["rotation", "shear"]);
+descriptor!(AZSHEAR_MID_DESCRIPTOR, "mrms.azshear-3-6km", "3–6 km azimuthal shear", "Mid-level AzShear", "s⁻¹", Scalar, "azshear", Bilinear, true, ["rotation", "shear", "mid level"]);
+descriptor!(POSH_DESCRIPTOR, "mrms.posh", "Probability of severe hail", "POSH", "%", Probability, "posh", Bilinear, false, ["hail", "probability"]);
+descriptor!(ECHO_TOP_18_DESCRIPTOR, "mrms.echo-top-18", "18 dBZ echo-top height", "MRMS Echo Tops", "km AGL", Scalar, "echo-tops", Bilinear, true, ["storm top", "cloud top", "height"]);
+descriptor!(VIL_DESCRIPTOR, "mrms.vil", "Vertically integrated liquid", "MRMS VIL", "kg/m²", Scalar, "vil", Bilinear, true, ["water aloft", "hail"]);
+descriptor!(ECHO_TOP_30_DESCRIPTOR, "mrms.echo-top-30", "30 dBZ echo-top height", "MRMS 30 dBZ Top", "km AGL", Scalar, "echo-tops", Bilinear, true, ["storm top", "height"]);
+descriptor!(ECHO_TOP_50_DESCRIPTOR, "mrms.echo-top-50", "50 dBZ echo-top height", "MRMS 50 dBZ Top", "km AGL", Scalar, "echo-tops", Bilinear, true, ["storm top", "hail", "height"]);
+descriptor!(ECHO_TOP_60_DESCRIPTOR, "mrms.echo-top-60", "60 dBZ echo-top height", "MRMS 60 dBZ Top", "km AGL", Scalar, "echo-tops", Bilinear, true, ["storm top", "hail", "height"]);
+descriptor!(VIL_DENSITY_DESCRIPTOR, "mrms.vil-density", "VIL density", "MRMS VIL Density", "g/m³", Scalar, "vil-density", Bilinear, true, ["water aloft", "hail"]);
+descriptor!(RADAR_QPE_01H_DESCRIPTOR, "mrms.radar-qpe-1h", "Radar-only 1-hour precipitation", "Radar QPE 1h", "mm", Accumulation, "qpe-1h", Nearest, false, ["rain", "precipitation", "radar only"]);
+descriptor!(RADAR_QPE_03H_DESCRIPTOR, "mrms.radar-qpe-3h", "Radar-only 3-hour precipitation", "Radar QPE 3h", "mm", Accumulation, "qpe-24h", Nearest, false, ["rain", "precipitation", "radar only"]);
+descriptor!(RADAR_QPE_06H_DESCRIPTOR, "mrms.radar-qpe-6h", "Radar-only 6-hour precipitation", "Radar QPE 6h", "mm", Accumulation, "qpe-24h", Nearest, false, ["rain", "precipitation", "radar only"]);
+descriptor!(RADAR_QPE_12H_DESCRIPTOR, "mrms.radar-qpe-12h", "Radar-only 12-hour precipitation", "Radar QPE 12h", "mm", Accumulation, "qpe-24h", Nearest, false, ["rain", "precipitation", "radar only"]);
+descriptor!(RADAR_QPE_24H_DESCRIPTOR, "mrms.radar-qpe-24h", "Radar-only 24-hour precipitation", "Radar QPE 24h", "mm", Accumulation, "qpe-24h", Nearest, false, ["rain", "precipitation", "radar only"]);
+descriptor!(RADAR_QPE_48H_DESCRIPTOR, "mrms.radar-qpe-48h", "Radar-only 48-hour precipitation", "Radar QPE 48h", "mm", Accumulation, "qpe-24h", Nearest, false, ["rain", "precipitation", "radar only"]);
+descriptor!(RADAR_QPE_72H_DESCRIPTOR, "mrms.radar-qpe-72h", "Radar-only 72-hour precipitation", "Radar QPE 72h", "mm", Accumulation, "qpe-24h", Nearest, false, ["rain", "precipitation", "radar only"]);
+descriptor!(LAYER_REFLECTIVITY_LOW_DESCRIPTOR, "mrms.layer-reflectivity-low", "Low-layer composite reflectivity", "Low-layer Reflectivity", "dBZ", Scalar, "reflectivity", Bilinear, true, ["mosaic", "dbz", "0-24 kft"]);
+descriptor!(LAYER_REFLECTIVITY_HIGH_DESCRIPTOR, "mrms.layer-reflectivity-high", "High-layer composite reflectivity", "High-layer Reflectivity", "dBZ", Scalar, "reflectivity", Bilinear, true, ["mosaic", "dbz", "24-60 kft"]);
+descriptor!(LAYER_REFLECTIVITY_SUPER_DESCRIPTOR, "mrms.layer-reflectivity-super", "Super-high composite reflectivity", "Super-high Reflectivity", "dBZ", Scalar, "reflectivity", Bilinear, true, ["mosaic", "dbz", "33-60 kft"]);
+descriptor!(REFLECTIVITY_0C_DESCRIPTOR, "mrms.reflectivity-0c", "Reflectivity at the 0 °C level", "Reflectivity at 0 °C", "dBZ", Scalar, "reflectivity", Bilinear, true, ["freezing level", "hail", "isothermal"]);
+descriptor!(REFLECTIVITY_MINUS10C_DESCRIPTOR, "mrms.reflectivity-minus-10c", "Reflectivity at the -10 °C level", "Reflectivity at -10 °C", "dBZ", Scalar, "reflectivity", Bilinear, true, ["hail growth", "isothermal"]);
+descriptor!(REFLECTIVITY_MINUS20C_DESCRIPTOR, "mrms.reflectivity-minus-20c", "Reflectivity at the -20 °C level", "Reflectivity at -20 °C", "dBZ", Scalar, "reflectivity", Bilinear, true, ["hail growth", "isothermal"]);
+descriptor!(FLASH_ARI01H_DESCRIPTOR, "mrms.flash-ari-1h", "1-hour flash-flood recurrence interval", "FLASH ARI 1h", "yr", Scalar, "flash-flood", Bilinear, false, ["flood", "ari", "recurrence"]);
+descriptor!(FLASH_ARI03H_DESCRIPTOR, "mrms.flash-ari-3h", "3-hour flash-flood recurrence interval", "FLASH ARI 3h", "yr", Scalar, "flash-flood", Bilinear, false, ["flood", "ari", "recurrence"]);
+descriptor!(FLASH_ARI06H_DESCRIPTOR, "mrms.flash-ari-6h", "6-hour flash-flood recurrence interval", "FLASH ARI 6h", "yr", Scalar, "flash-flood", Bilinear, false, ["flood", "ari", "recurrence"]);
+descriptor!(FLASH_ARI12H_DESCRIPTOR, "mrms.flash-ari-12h", "12-hour flash-flood recurrence interval", "FLASH ARI 12h", "yr", Scalar, "flash-flood", Bilinear, false, ["flood", "ari", "recurrence"]);
+descriptor!(FLASH_ARI24H_DESCRIPTOR, "mrms.flash-ari-24h", "24-hour flash-flood recurrence interval", "FLASH ARI 24h", "yr", Scalar, "flash-flood", Bilinear, false, ["flood", "ari", "recurrence"]);
+descriptor!(FLASH_ARIMAX_DESCRIPTOR, "mrms.flash-ari-max", "Maximum flash-flood recurrence interval", "FLASH ARI Max", "yr", Scalar, "flash-flood", Bilinear, false, ["flood", "ari", "recurrence"]);
+descriptor!(FLASH_FFG01H_DESCRIPTOR, "mrms.flash-ffg-1h", "1-hour QPE-to-FFG ratio", "FLASH FFG Ratio 1h", "ratio", Scalar, "ffg-ratio", Bilinear, false, ["flood", "guidance", "exceedance"]);
+descriptor!(FLASH_FFG03H_DESCRIPTOR, "mrms.flash-ffg-3h", "3-hour QPE-to-FFG ratio", "FLASH FFG Ratio 3h", "ratio", Scalar, "ffg-ratio", Bilinear, false, ["flood", "guidance", "exceedance"]);
+descriptor!(FLASH_FFG06H_DESCRIPTOR, "mrms.flash-ffg-6h", "6-hour QPE-to-FFG ratio", "FLASH FFG Ratio 6h", "ratio", Scalar, "ffg-ratio", Bilinear, false, ["flood", "guidance", "exceedance"]);
+descriptor!(FLASH_FFGMAX_DESCRIPTOR, "mrms.flash-ffg-max", "Maximum QPE-to-FFG ratio", "FLASH FFG Ratio Max", "ratio", Scalar, "ffg-ratio", Bilinear, false, ["flood", "guidance", "exceedance"]);
+descriptor!(FLASH_CREST_UNIT_FLOW_DESCRIPTOR, "mrms.flash-crest-unit-flow", "CREST maximum unit streamflow", "FLASH CREST Unit Flow", "m³/s/km²", Scalar, "unit-streamflow", Bilinear, false, ["flood", "crest", "streamflow"]);
+descriptor!(FLASH_CREST_SOIL_SAT_DESCRIPTOR, "mrms.flash-crest-soil-saturation", "CREST maximum soil saturation", "FLASH CREST Soil Saturation", "%", Scalar, "soil-saturation", Bilinear, false, ["flood", "crest", "soil moisture"]);
+descriptor!(COMPOSITE_HEIGHT_DESCRIPTOR, "mrms.composite-reflectivity-height", "Composite reflectivity height", "Composite Height", "m MSL", Scalar, "height-msl", Bilinear, true, ["reflectivity height", "storm height", "altitude"]);
+descriptor!(LOW_LEVEL_HEIGHT_DESCRIPTOR, "mrms.low-level-reflectivity-height", "Low-level composite reflectivity height", "Low-level Height", "m MSL", Scalar, "height-msl", Bilinear, true, ["reflectivity height", "low level", "altitude"]);
+descriptor!(SEAMLESS_HSR_HEIGHT_DESCRIPTOR, "mrms.seamless-hsr-height", "Seamless hybrid-scan reflectivity height", "Hybrid-scan Height", "km AGL", Scalar, "echo-tops", Bilinear, true, ["hybrid scan", "reflectivity height", "beam height"]);
+descriptor!(BREF_1H_MAX_DESCRIPTOR, "mrms.base-reflectivity-max-1h", "One-hour maximum base reflectivity", "Base Reflectivity Max 1h", "dBZ", Scalar, "reflectivity", Bilinear, true, ["base reflectivity", "maximum", "swath"]);
+descriptor!(CREF_1H_MAX_DESCRIPTOR, "mrms.composite-reflectivity-max-1h", "One-hour maximum composite reflectivity", "Composite Reflectivity Max 1h", "dBZ", Scalar, "reflectivity", Bilinear, true, ["composite reflectivity", "maximum", "swath"]);
+descriptor!(BRIGHT_BAND_BOTTOM_DESCRIPTOR, "mrms.bright-band-bottom-height", "Bright-band bottom height", "Bright-band Bottom", "m AGL", Scalar, "height-msl", Bilinear, true, ["melting layer", "bright band", "height"]);
+descriptor!(BRIGHT_BAND_TOP_DESCRIPTOR, "mrms.bright-band-top-height", "Bright-band top height", "Bright-band Top", "m AGL", Scalar, "height-msl", Bilinear, true, ["melting layer", "bright band", "height"]);
+descriptor!(MODEL_FREEZING_HEIGHT_DESCRIPTOR, "mrms.model-freezing-level-height", "Model freezing-level height", "Freezing-level Height", "m MSL", Scalar, "height-msl", Bilinear, true, ["model", "zero c", "freezing level"]);
+descriptor!(RADAR_QPE_15M_DESCRIPTOR, "mrms.radar-qpe-15m", "Radar-only 15-minute precipitation", "Radar QPE 15m", "mm", Accumulation, "qpe-1h", Nearest, false, ["rain", "precipitation", "radar only"]);
+descriptor!(REFLECTIVITY_MINUS5C_DESCRIPTOR, "mrms.reflectivity-minus-5c", "Reflectivity at the -5 °C level", "Reflectivity at -5 °C", "dBZ", Scalar, "reflectivity", Bilinear, true, ["freezing level", "hail", "isothermal"]);
+descriptor!(REFLECTIVITY_MINUS15C_DESCRIPTOR, "mrms.reflectivity-minus-15c", "Reflectivity at the -15 °C level", "Reflectivity at -15 °C", "dBZ", Scalar, "reflectivity", Bilinear, true, ["hail growth", "isothermal"]);
+descriptor!(SEAMLESS_HSR_DESCRIPTOR, "mrms.seamless-hsr", "Seamless hybrid-scan reflectivity", "Seamless HSR", "dBZ", Scalar, "reflectivity", Bilinear, true, ["hybrid scan", "lowest altitude", "vpr"]);
+descriptor!(REFLECTIVITY_00_50_KM_DESCRIPTOR, "mrms.reflectivity-0-5-km", "Reflectivity at 0.5 km MSL", "Reflectivity 0.5 km", "dBZ", Scalar, "reflectivity", Bilinear, true, ["constant altitude", "vertical level", "capppi"]);
+descriptor!(REFLECTIVITY_00_75_KM_DESCRIPTOR, "mrms.reflectivity-0-75-km", "Reflectivity at 0.75 km MSL", "Reflectivity 0.75 km", "dBZ", Scalar, "reflectivity", Bilinear, true, ["constant altitude", "vertical level", "capppi"]);
+descriptor!(REFLECTIVITY_01_00_KM_DESCRIPTOR, "mrms.reflectivity-1-km", "Reflectivity at 1.0 km MSL", "Reflectivity 1.0 km", "dBZ", Scalar, "reflectivity", Bilinear, true, ["constant altitude", "vertical level", "capppi"]);
+descriptor!(REFLECTIVITY_01_25_KM_DESCRIPTOR, "mrms.reflectivity-1-25-km", "Reflectivity at 1.25 km MSL", "Reflectivity 1.25 km", "dBZ", Scalar, "reflectivity", Bilinear, true, ["constant altitude", "vertical level", "capppi"]);
+descriptor!(REFLECTIVITY_01_50_KM_DESCRIPTOR, "mrms.reflectivity-1-5-km", "Reflectivity at 1.5 km MSL", "Reflectivity 1.5 km", "dBZ", Scalar, "reflectivity", Bilinear, true, ["constant altitude", "vertical level", "capppi"]);
+descriptor!(REFLECTIVITY_01_75_KM_DESCRIPTOR, "mrms.reflectivity-1-75-km", "Reflectivity at 1.75 km MSL", "Reflectivity 1.75 km", "dBZ", Scalar, "reflectivity", Bilinear, true, ["constant altitude", "vertical level", "capppi"]);
+descriptor!(REFLECTIVITY_02_00_KM_DESCRIPTOR, "mrms.reflectivity-2-km", "Reflectivity at 2.0 km MSL", "Reflectivity 2.0 km", "dBZ", Scalar, "reflectivity", Bilinear, true, ["constant altitude", "vertical level", "capppi"]);
+descriptor!(REFLECTIVITY_02_25_KM_DESCRIPTOR, "mrms.reflectivity-2-25-km", "Reflectivity at 2.25 km MSL", "Reflectivity 2.25 km", "dBZ", Scalar, "reflectivity", Bilinear, true, ["constant altitude", "vertical level", "capppi"]);
+descriptor!(REFLECTIVITY_02_50_KM_DESCRIPTOR, "mrms.reflectivity-2-5-km", "Reflectivity at 2.5 km MSL", "Reflectivity 2.5 km", "dBZ", Scalar, "reflectivity", Bilinear, true, ["constant altitude", "vertical level", "capppi"]);
+descriptor!(REFLECTIVITY_02_75_KM_DESCRIPTOR, "mrms.reflectivity-2-75-km", "Reflectivity at 2.75 km MSL", "Reflectivity 2.75 km", "dBZ", Scalar, "reflectivity", Bilinear, true, ["constant altitude", "vertical level", "capppi"]);
+descriptor!(REFLECTIVITY_03_00_KM_DESCRIPTOR, "mrms.reflectivity-3-km", "Reflectivity at 3.0 km MSL", "Reflectivity 3.0 km", "dBZ", Scalar, "reflectivity", Bilinear, true, ["constant altitude", "vertical level", "capppi"]);
+descriptor!(REFLECTIVITY_03_50_KM_DESCRIPTOR, "mrms.reflectivity-3-5-km", "Reflectivity at 3.5 km MSL", "Reflectivity 3.5 km", "dBZ", Scalar, "reflectivity", Bilinear, true, ["constant altitude", "vertical level", "capppi"]);
+descriptor!(REFLECTIVITY_04_00_KM_DESCRIPTOR, "mrms.reflectivity-4-km", "Reflectivity at 4.0 km MSL", "Reflectivity 4.0 km", "dBZ", Scalar, "reflectivity", Bilinear, true, ["constant altitude", "vertical level", "capppi"]);
+descriptor!(REFLECTIVITY_04_50_KM_DESCRIPTOR, "mrms.reflectivity-4-5-km", "Reflectivity at 4.5 km MSL", "Reflectivity 4.5 km", "dBZ", Scalar, "reflectivity", Bilinear, true, ["constant altitude", "vertical level", "capppi"]);
+descriptor!(REFLECTIVITY_05_00_KM_DESCRIPTOR, "mrms.reflectivity-5-km", "Reflectivity at 5.0 km MSL", "Reflectivity 5.0 km", "dBZ", Scalar, "reflectivity", Bilinear, true, ["constant altitude", "vertical level", "capppi"]);
+descriptor!(REFLECTIVITY_05_50_KM_DESCRIPTOR, "mrms.reflectivity-5-5-km", "Reflectivity at 5.5 km MSL", "Reflectivity 5.5 km", "dBZ", Scalar, "reflectivity", Bilinear, true, ["constant altitude", "vertical level", "capppi"]);
+descriptor!(REFLECTIVITY_06_00_KM_DESCRIPTOR, "mrms.reflectivity-6-km", "Reflectivity at 6.0 km MSL", "Reflectivity 6.0 km", "dBZ", Scalar, "reflectivity", Bilinear, true, ["constant altitude", "vertical level", "capppi"]);
+descriptor!(REFLECTIVITY_06_50_KM_DESCRIPTOR, "mrms.reflectivity-6-5-km", "Reflectivity at 6.5 km MSL", "Reflectivity 6.5 km", "dBZ", Scalar, "reflectivity", Bilinear, true, ["constant altitude", "vertical level", "capppi"]);
+descriptor!(REFLECTIVITY_07_00_KM_DESCRIPTOR, "mrms.reflectivity-7-km", "Reflectivity at 7.0 km MSL", "Reflectivity 7.0 km", "dBZ", Scalar, "reflectivity", Bilinear, true, ["constant altitude", "vertical level", "capppi"]);
+descriptor!(REFLECTIVITY_07_50_KM_DESCRIPTOR, "mrms.reflectivity-7-5-km", "Reflectivity at 7.5 km MSL", "Reflectivity 7.5 km", "dBZ", Scalar, "reflectivity", Bilinear, true, ["constant altitude", "vertical level", "capppi"]);
+
+pub struct CatalogProduct {
+    pub descriptor: &'static FieldDescriptor,
+    pub product: &'static str,
+    pub slug: &'static str,
+    pub description: &'static str,
+}
+
+impl CatalogProduct {
+    /// Constant-altitude reflectivity level encoded by the operational object path.
+    pub fn height_msl_km(&self) -> Option<f32> {
+        self.product
+            .strip_prefix("CONUS/MergedReflectivityQC_")?
+            .parse()
+            .ok()
+    }
+}
+
+pub static CATALOG: [CatalogProduct; 63] = [
+    CatalogProduct { descriptor: &ECHO_TOP_30_DESCRIPTOR, product: "CONUS/EchoTop_30_00.50", slug: "mrms-echo-top-30", description: "Height of the 30 dBZ storm top above ground" },
+    CatalogProduct { descriptor: &ECHO_TOP_50_DESCRIPTOR, product: "CONUS/EchoTop_50_00.50", slug: "mrms-echo-top-50", description: "Height of the 50 dBZ core for storm-severity analysis" },
+    CatalogProduct { descriptor: &ECHO_TOP_60_DESCRIPTOR, product: "CONUS/EchoTop_60_00.50", slug: "mrms-echo-top-60", description: "Height of the strongest 60 dBZ core" },
+    CatalogProduct { descriptor: &VIL_DENSITY_DESCRIPTOR, product: "CONUS/VIL_Density_00.50", slug: "mrms-vil-density", description: "Liquid water normalized by storm depth" },
+    CatalogProduct { descriptor: &RADAR_QPE_01H_DESCRIPTOR, product: "CONUS/RadarOnly_QPE_01H_00.00", slug: "mrms-radar-qpe-1h", description: "One-hour precipitation from radar without gauge correction" },
+    CatalogProduct { descriptor: &RADAR_QPE_03H_DESCRIPTOR, product: "CONUS/RadarOnly_QPE_03H_00.00", slug: "mrms-radar-qpe-3h", description: "Three-hour precipitation from radar without gauge correction" },
+    CatalogProduct { descriptor: &RADAR_QPE_06H_DESCRIPTOR, product: "CONUS/RadarOnly_QPE_06H_00.00", slug: "mrms-radar-qpe-6h", description: "Six-hour precipitation from radar without gauge correction" },
+    CatalogProduct { descriptor: &RADAR_QPE_12H_DESCRIPTOR, product: "CONUS/RadarOnly_QPE_12H_00.00", slug: "mrms-radar-qpe-12h", description: "12-hour precipitation from radar without gauge correction" },
+    CatalogProduct { descriptor: &RADAR_QPE_24H_DESCRIPTOR, product: "CONUS/RadarOnly_QPE_24H_00.00", slug: "mrms-radar-qpe-24h", description: "24-hour precipitation from radar without gauge correction" },
+    CatalogProduct { descriptor: &RADAR_QPE_48H_DESCRIPTOR, product: "CONUS/RadarOnly_QPE_48H_00.00", slug: "mrms-radar-qpe-48h", description: "48-hour precipitation from radar without gauge correction" },
+    CatalogProduct { descriptor: &RADAR_QPE_72H_DESCRIPTOR, product: "CONUS/RadarOnly_QPE_72H_00.00", slug: "mrms-radar-qpe-72h", description: "72-hour precipitation from radar without gauge correction" },
+    CatalogProduct { descriptor: &LAYER_REFLECTIVITY_LOW_DESCRIPTOR, product: "CONUS/LayerCompositeReflectivity_Low_00.50", slug: "mrms-layer-reflectivity-low", description: "Strongest reflectivity in the low 0–24 kft layer" },
+    CatalogProduct { descriptor: &LAYER_REFLECTIVITY_HIGH_DESCRIPTOR, product: "CONUS/LayerCompositeReflectivity_High_00.50", slug: "mrms-layer-reflectivity-high", description: "Strongest reflectivity in the high 24–60 kft layer" },
+    CatalogProduct { descriptor: &LAYER_REFLECTIVITY_SUPER_DESCRIPTOR, product: "CONUS/LayerCompositeReflectivity_Super_00.50", slug: "mrms-layer-reflectivity-super", description: "Strongest reflectivity in the 33–60 kft layer" },
+    CatalogProduct { descriptor: &FLASH_ARI01H_DESCRIPTOR, product: "CONUS/FLASH_QPE_ARI01H_00.00", slug: "mrms-flash-ari-1h", description: "How rare the last hour of rainfall is at this location" },
+    CatalogProduct { descriptor: &FLASH_ARI03H_DESCRIPTOR, product: "CONUS/FLASH_QPE_ARI03H_00.00", slug: "mrms-flash-ari-3h", description: "How rare the last three hours of rainfall are" },
+    CatalogProduct { descriptor: &FLASH_ARI06H_DESCRIPTOR, product: "CONUS/FLASH_QPE_ARI06H_00.00", slug: "mrms-flash-ari-6h", description: "How rare the last six hours of rainfall are" },
+    CatalogProduct { descriptor: &FLASH_ARI12H_DESCRIPTOR, product: "CONUS/FLASH_QPE_ARI12H_00.00", slug: "mrms-flash-ari-12h", description: "How rare the last 12 hours of rainfall are" },
+    CatalogProduct { descriptor: &FLASH_ARI24H_DESCRIPTOR, product: "CONUS/FLASH_QPE_ARI24H_00.00", slug: "mrms-flash-ari-24h", description: "How rare the last 24 hours of rainfall are" },
+    CatalogProduct { descriptor: &FLASH_ARIMAX_DESCRIPTOR, product: "CONUS/FLASH_QPE_ARIMAX_00.00", slug: "mrms-flash-ari-max", description: "Largest recurrence interval across FLASH rainfall windows" },
+    CatalogProduct { descriptor: &REFLECTIVITY_0C_DESCRIPTOR, product: "CONUS/Reflectivity_0C_00.50", slug: "mrms-reflectivity-0c", description: "Reflectivity intersecting the analyzed freezing level" },
+    CatalogProduct { descriptor: &REFLECTIVITY_MINUS10C_DESCRIPTOR, product: "CONUS/Reflectivity_-10C_00.50", slug: "mrms-reflectivity-minus-10c", description: "Reflectivity in the -10 °C hail-growth layer" },
+    CatalogProduct { descriptor: &REFLECTIVITY_MINUS20C_DESCRIPTOR, product: "CONUS/Reflectivity_-20C_00.50", slug: "mrms-reflectivity-minus-20c", description: "Reflectivity in the -20 °C hail-growth layer" },
+    CatalogProduct { descriptor: &QPE_48H_DESCRIPTOR, product: "CONUS/MultiSensor_QPE_48H_Pass2_00.00", slug: "mrms-qpe-48h", description: "Gauge-corrected precipitation accumulated over 48 hours" },
+    CatalogProduct { descriptor: &QPE_72H_DESCRIPTOR, product: "CONUS/MultiSensor_QPE_72H_Pass2_00.00", slug: "mrms-qpe-72h", description: "Gauge-corrected precipitation accumulated over 72 hours" },
+    CatalogProduct { descriptor: &FLASH_FFG01H_DESCRIPTOR, product: "CONUS/FLASH_QPE_FFG01H_00.00", slug: "mrms-flash-ffg-1h", description: "One-hour rainfall divided by current flash-flood guidance" },
+    CatalogProduct { descriptor: &FLASH_FFG03H_DESCRIPTOR, product: "CONUS/FLASH_QPE_FFG03H_00.00", slug: "mrms-flash-ffg-3h", description: "Three-hour rainfall divided by current flash-flood guidance" },
+    CatalogProduct { descriptor: &FLASH_FFG06H_DESCRIPTOR, product: "CONUS/FLASH_QPE_FFG06H_00.00", slug: "mrms-flash-ffg-6h", description: "Six-hour rainfall divided by current flash-flood guidance" },
+    CatalogProduct { descriptor: &FLASH_FFGMAX_DESCRIPTOR, product: "CONUS/FLASH_QPE_FFGMAX_00.00", slug: "mrms-flash-ffg-max", description: "Largest rainfall-to-guidance ratio across the published durations" },
+    CatalogProduct { descriptor: &FLASH_CREST_UNIT_FLOW_DESCRIPTOR, product: "CONUS/FLASH_CREST_MAXUNITSTREAMFLOW_00.00", slug: "mrms-flash-crest-unit-flow", description: "Maximum CREST streamflow normalized by upstream basin area" },
+    CatalogProduct { descriptor: &FLASH_CREST_SOIL_SAT_DESCRIPTOR, product: "CONUS/FLASH_CREST_MAXSOILSAT_00.00", slug: "mrms-flash-crest-soil-saturation", description: "Maximum CREST modeled soil saturation" },
+    CatalogProduct { descriptor: &COMPOSITE_HEIGHT_DESCRIPTOR, product: "CONUS/HeightCompositeReflectivity_00.50", slug: "mrms-composite-reflectivity-height", description: "Altitude MSL of the strongest reflectivity in each column" },
+    CatalogProduct { descriptor: &LOW_LEVEL_HEIGHT_DESCRIPTOR, product: "CONUS/HeightLowLevelCompositeReflectivity_00.50", slug: "mrms-low-level-reflectivity-height", description: "Altitude MSL of the strongest reflectivity below 4 km" },
+    CatalogProduct { descriptor: &SEAMLESS_HSR_HEIGHT_DESCRIPTOR, product: "CONUS/SeamlessHSRHeight_00.00", slug: "mrms-seamless-hsr-height", description: "Height AGL sampled by the seamless hybrid-scan reflectivity" },
+    CatalogProduct { descriptor: &BREF_1H_MAX_DESCRIPTOR, product: "CONUS/BREF_1HR_MAX_00.50", slug: "mrms-base-reflectivity-max-1h", description: "Largest base reflectivity observed during the past hour" },
+    CatalogProduct { descriptor: &CREF_1H_MAX_DESCRIPTOR, product: "CONUS/CREF_1HR_MAX_00.50", slug: "mrms-composite-reflectivity-max-1h", description: "Largest composite reflectivity observed during the past hour" },
+    CatalogProduct { descriptor: &BRIGHT_BAND_BOTTOM_DESCRIPTOR, product: "CONUS/BrightBandBottomHeight_00.00", slug: "mrms-bright-band-bottom-height", description: "Analyzed bottom of the radar bright band above ground" },
+    CatalogProduct { descriptor: &BRIGHT_BAND_TOP_DESCRIPTOR, product: "CONUS/BrightBandTopHeight_00.00", slug: "mrms-bright-band-top-height", description: "Analyzed top of the radar bright band above ground" },
+    CatalogProduct { descriptor: &MODEL_FREEZING_HEIGHT_DESCRIPTOR, product: "CONUS/Model_0degC_Height_00.50", slug: "mrms-model-freezing-level-height", description: "Model-analyzed altitude of the freezing level" },
+    CatalogProduct { descriptor: &RADAR_QPE_15M_DESCRIPTOR, product: "CONUS/RadarOnly_QPE_15M_00.00", slug: "mrms-radar-qpe-15m", description: "Fifteen-minute precipitation from radar without gauge correction" },
+    CatalogProduct { descriptor: &REFLECTIVITY_MINUS5C_DESCRIPTOR, product: "CONUS/Reflectivity_-5C_00.50", slug: "mrms-reflectivity-minus-5c", description: "Reflectivity intersecting the -5 °C level" },
+    CatalogProduct { descriptor: &REFLECTIVITY_MINUS15C_DESCRIPTOR, product: "CONUS/Reflectivity_-15C_00.50", slug: "mrms-reflectivity-minus-15c", description: "Reflectivity intersecting the -15 °C hail-growth layer" },
+    CatalogProduct { descriptor: &SEAMLESS_HSR_DESCRIPTOR, product: "CONUS/SeamlessHSR_00.00", slug: "mrms-seamless-hsr", description: "Lowest usable hybrid-scan reflectivity with vertical-profile correction" },
+    CatalogProduct { descriptor: &REFLECTIVITY_00_50_KM_DESCRIPTOR, product: "CONUS/MergedReflectivityQC_00.50", slug: "mrms-reflectivity-0-5-km", description: "Quality-controlled reflectivity at 0.5 km MSL" },
+    CatalogProduct { descriptor: &REFLECTIVITY_00_75_KM_DESCRIPTOR, product: "CONUS/MergedReflectivityQC_00.75", slug: "mrms-reflectivity-0-75-km", description: "Quality-controlled reflectivity at 0.75 km MSL" },
+    CatalogProduct { descriptor: &REFLECTIVITY_01_00_KM_DESCRIPTOR, product: "CONUS/MergedReflectivityQC_01.00", slug: "mrms-reflectivity-1-km", description: "Quality-controlled reflectivity at 1.0 km MSL" },
+    CatalogProduct { descriptor: &REFLECTIVITY_01_25_KM_DESCRIPTOR, product: "CONUS/MergedReflectivityQC_01.25", slug: "mrms-reflectivity-1-25-km", description: "Quality-controlled reflectivity at 1.25 km MSL" },
+    CatalogProduct { descriptor: &REFLECTIVITY_01_50_KM_DESCRIPTOR, product: "CONUS/MergedReflectivityQC_01.50", slug: "mrms-reflectivity-1-5-km", description: "Quality-controlled reflectivity at 1.5 km MSL" },
+    CatalogProduct { descriptor: &REFLECTIVITY_01_75_KM_DESCRIPTOR, product: "CONUS/MergedReflectivityQC_01.75", slug: "mrms-reflectivity-1-75-km", description: "Quality-controlled reflectivity at 1.75 km MSL" },
+    CatalogProduct { descriptor: &REFLECTIVITY_02_00_KM_DESCRIPTOR, product: "CONUS/MergedReflectivityQC_02.00", slug: "mrms-reflectivity-2-km", description: "Quality-controlled reflectivity at 2.0 km MSL" },
+    CatalogProduct { descriptor: &REFLECTIVITY_02_25_KM_DESCRIPTOR, product: "CONUS/MergedReflectivityQC_02.25", slug: "mrms-reflectivity-2-25-km", description: "Quality-controlled reflectivity at 2.25 km MSL" },
+    CatalogProduct { descriptor: &REFLECTIVITY_02_50_KM_DESCRIPTOR, product: "CONUS/MergedReflectivityQC_02.50", slug: "mrms-reflectivity-2-5-km", description: "Quality-controlled reflectivity at 2.5 km MSL" },
+    CatalogProduct { descriptor: &REFLECTIVITY_02_75_KM_DESCRIPTOR, product: "CONUS/MergedReflectivityQC_02.75", slug: "mrms-reflectivity-2-75-km", description: "Quality-controlled reflectivity at 2.75 km MSL" },
+    CatalogProduct { descriptor: &REFLECTIVITY_03_00_KM_DESCRIPTOR, product: "CONUS/MergedReflectivityQC_03.00", slug: "mrms-reflectivity-3-km", description: "Quality-controlled reflectivity at 3.0 km MSL" },
+    CatalogProduct { descriptor: &REFLECTIVITY_03_50_KM_DESCRIPTOR, product: "CONUS/MergedReflectivityQC_03.50", slug: "mrms-reflectivity-3-5-km", description: "Quality-controlled reflectivity at 3.5 km MSL" },
+    CatalogProduct { descriptor: &REFLECTIVITY_04_00_KM_DESCRIPTOR, product: "CONUS/MergedReflectivityQC_04.00", slug: "mrms-reflectivity-4-km", description: "Quality-controlled reflectivity at 4.0 km MSL" },
+    CatalogProduct { descriptor: &REFLECTIVITY_04_50_KM_DESCRIPTOR, product: "CONUS/MergedReflectivityQC_04.50", slug: "mrms-reflectivity-4-5-km", description: "Quality-controlled reflectivity at 4.5 km MSL" },
+    CatalogProduct { descriptor: &REFLECTIVITY_05_00_KM_DESCRIPTOR, product: "CONUS/MergedReflectivityQC_05.00", slug: "mrms-reflectivity-5-km", description: "Quality-controlled reflectivity at 5.0 km MSL" },
+    CatalogProduct { descriptor: &REFLECTIVITY_05_50_KM_DESCRIPTOR, product: "CONUS/MergedReflectivityQC_05.50", slug: "mrms-reflectivity-5-5-km", description: "Quality-controlled reflectivity at 5.5 km MSL" },
+    CatalogProduct { descriptor: &REFLECTIVITY_06_00_KM_DESCRIPTOR, product: "CONUS/MergedReflectivityQC_06.00", slug: "mrms-reflectivity-6-km", description: "Quality-controlled reflectivity at 6.0 km MSL" },
+    CatalogProduct { descriptor: &REFLECTIVITY_06_50_KM_DESCRIPTOR, product: "CONUS/MergedReflectivityQC_06.50", slug: "mrms-reflectivity-6-5-km", description: "Quality-controlled reflectivity at 6.5 km MSL" },
+    CatalogProduct { descriptor: &REFLECTIVITY_07_00_KM_DESCRIPTOR, product: "CONUS/MergedReflectivityQC_07.00", slug: "mrms-reflectivity-7-km", description: "Quality-controlled reflectivity at 7.0 km MSL" },
+    CatalogProduct { descriptor: &REFLECTIVITY_07_50_KM_DESCRIPTOR, product: "CONUS/MergedReflectivityQC_07.50", slug: "mrms-reflectivity-7-5-km", description: "Quality-controlled reflectivity at 7.5 km MSL" },
+];
+descriptor!(ROTATION_DESCRIPTOR, "mrms.rotation-track", "Rotation track", "Rotation Track", "s⁻¹", Accumulation, "rotation", Nearest, false, ["rotation", "azimuthal shear"]);
+descriptor!(QPE_01H_DESCRIPTOR, "mrms.qpe-1h", "One-hour quantitative precipitation estimate", "QPE 1h", "mm", Accumulation, "qpe-1h", Nearest, false, ["rain", "precipitation"]);
+descriptor!(QPE_03H_DESCRIPTOR, "mrms.qpe-3h", "Three-hour quantitative precipitation estimate", "QPE 3h", "mm", Accumulation, "qpe-3h", Nearest, false, ["rain", "precipitation"]);
+descriptor!(QPE_06H_DESCRIPTOR, "mrms.qpe-6h", "Six-hour quantitative precipitation estimate", "QPE 6h", "mm", Accumulation, "qpe-6h", Nearest, false, ["rain", "precipitation"]);
+descriptor!(QPE_12H_DESCRIPTOR, "mrms.qpe-12h", "12-hour quantitative precipitation estimate", "QPE 12h", "mm", Accumulation, "qpe-12h", Nearest, false, ["rain", "precipitation"]);
+descriptor!(QPE_24H_DESCRIPTOR, "mrms.qpe-24h", "24-hour quantitative precipitation estimate", "QPE 24h", "mm", Accumulation, "qpe-24h", Nearest, false, ["rain", "precipitation"]);
+descriptor!(QPE_48H_DESCRIPTOR, "mrms.qpe-48h", "48-hour quantitative precipitation estimate", "QPE 48h", "mm", Accumulation, "qpe-24h", Nearest, false, ["rain", "precipitation"]);
+descriptor!(QPE_72H_DESCRIPTOR, "mrms.qpe-72h", "72-hour quantitative precipitation estimate", "QPE 72h", "mm", Accumulation, "qpe-24h", Nearest, false, ["rain", "precipitation"]);
+descriptor!(PRECIP_RATE_DESCRIPTOR, "mrms.precip-rate", "Surface precipitation rate", "Precip Rate", "mm/hr", Scalar, "precip-rate", Bilinear, true, ["rain rate"]);
+descriptor!(PRECIP_TYPE_DESCRIPTOR, "mrms.precip-type", "Surface precipitation type", "Precip Type", "category", Categorical, "precip-type", Nearest, false, ["rain", "snow", "sleet"]);
+descriptor!(FLASH_ARI30_DESCRIPTOR, "mrms.flash-ari30", "30-minute flash-flood recurrence interval", "FLASH ARI", "yr", Scalar, "flash-flood", Bilinear, false, ["flood", "ari"]);
+
+pub static DESCRIPTORS: [&FieldDescriptor; 82] = [
+    &REFLECTIVITY_DESCRIPTOR,
+    &LOW_LEVEL_REFLECTIVITY_DESCRIPTOR,
+    &LIGHTNING_DESCRIPTOR,
+    &MESH_DESCRIPTOR,
+    &HAIL_SWATH_DESCRIPTOR,
+    &AZSHEAR_DESCRIPTOR,
+    &AZSHEAR_MID_DESCRIPTOR,
+    &POSH_DESCRIPTOR,
+    &ECHO_TOP_18_DESCRIPTOR,
+    &VIL_DESCRIPTOR,
+    &ECHO_TOP_30_DESCRIPTOR,
+    &ECHO_TOP_50_DESCRIPTOR,
+    &ECHO_TOP_60_DESCRIPTOR,
+    &VIL_DENSITY_DESCRIPTOR,
+    &RADAR_QPE_01H_DESCRIPTOR,
+    &RADAR_QPE_03H_DESCRIPTOR,
+    &RADAR_QPE_06H_DESCRIPTOR,
+    &RADAR_QPE_12H_DESCRIPTOR,
+    &RADAR_QPE_24H_DESCRIPTOR,
+    &RADAR_QPE_48H_DESCRIPTOR,
+    &RADAR_QPE_72H_DESCRIPTOR,
+    &LAYER_REFLECTIVITY_LOW_DESCRIPTOR,
+    &LAYER_REFLECTIVITY_HIGH_DESCRIPTOR,
+    &LAYER_REFLECTIVITY_SUPER_DESCRIPTOR,
+    &REFLECTIVITY_0C_DESCRIPTOR,
+    &REFLECTIVITY_MINUS10C_DESCRIPTOR,
+    &REFLECTIVITY_MINUS20C_DESCRIPTOR,
+    &FLASH_ARI01H_DESCRIPTOR,
+    &FLASH_ARI03H_DESCRIPTOR,
+    &FLASH_ARI06H_DESCRIPTOR,
+    &FLASH_ARI12H_DESCRIPTOR,
+    &FLASH_ARI24H_DESCRIPTOR,
+    &FLASH_ARIMAX_DESCRIPTOR,
+    &FLASH_FFG01H_DESCRIPTOR,
+    &FLASH_FFG03H_DESCRIPTOR,
+    &FLASH_FFG06H_DESCRIPTOR,
+    &FLASH_FFGMAX_DESCRIPTOR,
+    &FLASH_CREST_UNIT_FLOW_DESCRIPTOR,
+    &FLASH_CREST_SOIL_SAT_DESCRIPTOR,
+    &COMPOSITE_HEIGHT_DESCRIPTOR,
+    &LOW_LEVEL_HEIGHT_DESCRIPTOR,
+    &SEAMLESS_HSR_HEIGHT_DESCRIPTOR,
+    &BREF_1H_MAX_DESCRIPTOR,
+    &CREF_1H_MAX_DESCRIPTOR,
+    &BRIGHT_BAND_BOTTOM_DESCRIPTOR,
+    &BRIGHT_BAND_TOP_DESCRIPTOR,
+    &MODEL_FREEZING_HEIGHT_DESCRIPTOR,
+    &RADAR_QPE_15M_DESCRIPTOR,
+    &REFLECTIVITY_MINUS5C_DESCRIPTOR,
+    &REFLECTIVITY_MINUS15C_DESCRIPTOR,
+    &SEAMLESS_HSR_DESCRIPTOR,
+    &REFLECTIVITY_00_50_KM_DESCRIPTOR,
+    &REFLECTIVITY_00_75_KM_DESCRIPTOR,
+    &REFLECTIVITY_01_00_KM_DESCRIPTOR,
+    &REFLECTIVITY_01_25_KM_DESCRIPTOR,
+    &REFLECTIVITY_01_50_KM_DESCRIPTOR,
+    &REFLECTIVITY_01_75_KM_DESCRIPTOR,
+    &REFLECTIVITY_02_00_KM_DESCRIPTOR,
+    &REFLECTIVITY_02_25_KM_DESCRIPTOR,
+    &REFLECTIVITY_02_50_KM_DESCRIPTOR,
+    &REFLECTIVITY_02_75_KM_DESCRIPTOR,
+    &REFLECTIVITY_03_00_KM_DESCRIPTOR,
+    &REFLECTIVITY_03_50_KM_DESCRIPTOR,
+    &REFLECTIVITY_04_00_KM_DESCRIPTOR,
+    &REFLECTIVITY_04_50_KM_DESCRIPTOR,
+    &REFLECTIVITY_05_00_KM_DESCRIPTOR,
+    &REFLECTIVITY_05_50_KM_DESCRIPTOR,
+    &REFLECTIVITY_06_00_KM_DESCRIPTOR,
+    &REFLECTIVITY_06_50_KM_DESCRIPTOR,
+    &REFLECTIVITY_07_00_KM_DESCRIPTOR,
+    &REFLECTIVITY_07_50_KM_DESCRIPTOR,
+    &ROTATION_DESCRIPTOR,
+    &QPE_01H_DESCRIPTOR,
+    &QPE_03H_DESCRIPTOR,
+    &QPE_06H_DESCRIPTOR,
+    &QPE_12H_DESCRIPTOR,
+    &QPE_24H_DESCRIPTOR,
+    &QPE_48H_DESCRIPTOR,
+    &QPE_72H_DESCRIPTOR,
+    &PRECIP_RATE_DESCRIPTOR,
+    &PRECIP_TYPE_DESCRIPTOR,
+    &FLASH_ARI30_DESCRIPTOR,
+];
+
+/// Source object path for a registered MRMS field.
+pub fn product_for_id(
+    id: &str,
+    lightning_minutes: u16,
+    hail_minutes: u16,
+    rotation_minutes: u16,
+) -> Option<&'static str> {
+    Some(match id {
+        "mrms.composite-reflectivity" => REFLECTIVITY,
+        "mrms.low-level-composite-reflectivity" => LOW_LEVEL_REFLECTIVITY,
+        "mrms.nldn-cg-density" => lightning_density(lightning_minutes),
+        "mrms.mesh" => MESH,
+        "mrms.mesh-max" => hail_swath(hail_minutes),
+        "mrms.azshear-0-2km" => AZSHEAR,
+        "mrms.azshear-3-6km" => AZSHEAR_MID,
+        "mrms.posh" => POSH,
+        "mrms.echo-top-18" => ECHO_TOP_18,
+        "mrms.vil" => VIL,
+        "mrms.rotation-track" => rotation_track(rotation_minutes),
+        "mrms.qpe-1h" => QPE_01H,
+        "mrms.qpe-3h" => QPE_03H,
+        "mrms.qpe-6h" => QPE_06H,
+        "mrms.qpe-12h" => QPE_12H,
+        "mrms.qpe-24h" => QPE_24H,
+        "mrms.precip-rate" => PRECIP_RATE,
+        "mrms.precip-type" => PRECIP_TYPE,
+        "mrms.flash-ari30" => FLASH_ARI30,
+        _ => return CATALOG.iter().find(|entry| entry.descriptor.id.0 == id).map(|entry| entry.product),
+    })
+}
+
 /// Cloud-to-ground lightning strike density, 5-minute average (strikes/km²/min).
 pub const LIGHTNING: &str = "CONUS/NLDN_CG_005min_AvgDensity_00.00";
 
@@ -46,8 +371,24 @@ pub fn hail_swath(minutes: u16) -> &'static str {
 }
 /// Instantaneous 0–2 km AGL azimuthal shear (s⁻¹).
 pub const AZSHEAR: &str = "CONUS/MergedAzShear_0-2kmAGL_00.50";
+/// Instantaneous 3–6 km AGL azimuthal shear (s⁻¹).
+pub const AZSHEAR_MID: &str = "CONUS/MergedAzShear_3-6kmAGL_00.50";
+/// Probability of severe hail (%).
+pub const POSH: &str = "CONUS/POSH_00.50";
+/// Composite reflectivity from the lowest available radar observations (dBZ).
+pub const LOW_LEVEL_REFLECTIVITY: &str = "CONUS/LowLevelCompositeReflectivity_00.50";
+/// Height of the 18 dBZ echo top (km AGL).
+pub const ECHO_TOP_18: &str = "CONUS/EchoTop_18_00.50";
+/// High-resolution vertically integrated liquid (kg/m²).
+pub const VIL: &str = "CONUS/LVL3_HighResVIL_00.50";
 /// Multi-sensor 1-hour QPE accumulation, Pass-2 gauge-corrected (mm).
 pub const QPE_01H: &str = "CONUS/MultiSensor_QPE_01H_Pass2_00.00";
+/// Multi-sensor 3-hour QPE accumulation, Pass-2 gauge-corrected (mm).
+pub const QPE_03H: &str = "CONUS/MultiSensor_QPE_03H_Pass2_00.00";
+/// Multi-sensor 6-hour QPE accumulation, Pass-2 gauge-corrected (mm).
+pub const QPE_06H: &str = "CONUS/MultiSensor_QPE_06H_Pass2_00.00";
+/// Multi-sensor 12-hour QPE accumulation, Pass-2 gauge-corrected (mm).
+pub const QPE_12H: &str = "CONUS/MultiSensor_QPE_12H_Pass2_00.00";
 /// Multi-sensor 24-hour QPE accumulation, Pass-2 gauge-corrected (mm; storm-total scale).
 pub const QPE_24H: &str = "CONUS/MultiSensor_QPE_24H_Pass2_00.00";
 /// Instantaneous surface precipitation rate (mm/hr), 2-minute cadence.
@@ -57,12 +398,14 @@ pub const PRECIP_TYPE: &str = "CONUS/PrecipFlag_00.00";
 /// FLASH flash-flood average recurrence interval over the 30-min QPE window (years).
 pub const FLASH_ARI30: &str = "CONUS/FLASH_QPE_ARI30M_00.00";
 
-/// Low-level rotation-track (accumulated azimuthal-shear max) product path for `minutes`
-/// (30/60/120 supported; other values fall back to 30).
+/// Low-level rotation-track (accumulated azimuthal-shear max) product path for `minutes`.
 pub fn rotation_track(minutes: u16) -> &'static str {
     match minutes {
         60 => "CONUS/RotationTrack60min_00.50",
         120 => "CONUS/RotationTrack120min_00.50",
+        240 => "CONUS/RotationTrack240min_00.50",
+        360 => "CONUS/RotationTrack360min_00.50",
+        1440 => "CONUS/RotationTrack1440min_00.50",
         _ => "CONUS/RotationTrack30min_00.50",
     }
 }
@@ -91,6 +434,27 @@ fn haversine_km(lat1: f64, lon1: f64, lat2: f64, lon2: f64) -> f64 {
 }
 
 impl MrmsField {
+    /// Value from the cell containing `(lon, lat)`, or `None` outside the grid/missing data.
+    pub fn sample_nearest(&self, lon: f64, lat: f64) -> Option<f32> {
+        if self.nx == 0
+            || self.ny == 0
+            || lon < self.lon_west
+            || lon > self.lon_east
+            || lat < self.lat_south
+            || lat > self.lat_north
+        {
+            return None;
+        }
+        let x = (((lon - self.lon_west) / (self.lon_east - self.lon_west) * self.nx as f64)
+            .floor() as usize)
+            .min(self.nx - 1);
+        let y = (((self.lat_north - lat) / (self.lat_north - self.lat_south) * self.ny as f64)
+            .floor() as usize)
+            .min(self.ny - 1);
+        let value = self.values[y * self.nx + x];
+        value.is_finite().then_some(value)
+    }
+
     /// Largest non-NaN grid value within `radius_km` of `(lon, lat)`, or 0.0 if none. Scans a
     /// lat/lon window sized to the radius and haversine-filters. Used for point proximity checks
     /// (e.g. lightning density near a saved location) against a density/intensity grid.
@@ -275,7 +639,100 @@ impl MrmsField {
 
 /// Fetch + decode the latest CONUS mosaic for `product` (see [`REFLECTIVITY`], [`LIGHTNING`]).
 pub async fn fetch_latest(http: &reqwest::Client, product: &str) -> anyhow::Result<MrmsField> {
-    let key = latest_key(http, product).await?;
+    let key = latest_available_key(http, product).await?;
+    fetch_key(http, product, &key).await.map(|fetched| fetched.0)
+}
+
+/// Fetch composite reflectivity through the common metadata path.
+pub async fn fetch_latest_frame(
+    http: &reqwest::Client,
+    product: &str,
+) -> anyhow::Result<FieldFrame> {
+    let descriptor = descriptor_for_product(product)
+        .ok_or_else(|| anyhow::anyhow!("unregistered MRMS product {product}"))?;
+    let key = latest_available_key(http, product).await?;
+    let (field, received_time) = fetch_key(http, product, &key).await?;
+    let valid_time = field.time;
+    Ok(FieldFrame::new(
+        descriptor,
+        field,
+        DataStamp {
+            source_identity: key,
+            issue_time: None,
+            run_time: None,
+            valid_time,
+            received_time,
+            class: DataClass::Analysis,
+            quality: QualitySummary::Unknown,
+            available_members: None,
+        },
+    ))
+}
+
+/// Registry metadata for a currently supported MRMS object path.
+pub fn descriptor_for_product(product: &str) -> Option<&'static FieldDescriptor> {
+    Some(match product {
+        REFLECTIVITY => &REFLECTIVITY_DESCRIPTOR,
+        LOW_LEVEL_REFLECTIVITY => &LOW_LEVEL_REFLECTIVITY_DESCRIPTOR,
+        LIGHTNING
+        | "CONUS/NLDN_CG_001min_AvgDensity_00.00"
+        | "CONUS/NLDN_CG_015min_AvgDensity_00.00"
+        | "CONUS/NLDN_CG_030min_AvgDensity_00.00" => &LIGHTNING_DESCRIPTOR,
+        MESH => &MESH_DESCRIPTOR,
+        MESH_1440
+        | "CONUS/MESH_Max_30min_00.50"
+        | "CONUS/MESH_Max_60min_00.50"
+        | "CONUS/MESH_Max_120min_00.50"
+        | "CONUS/MESH_Max_240min_00.50"
+        | "CONUS/MESH_Max_360min_00.50" => &HAIL_SWATH_DESCRIPTOR,
+        AZSHEAR => &AZSHEAR_DESCRIPTOR,
+        AZSHEAR_MID => &AZSHEAR_MID_DESCRIPTOR,
+        POSH => &POSH_DESCRIPTOR,
+        ECHO_TOP_18 => &ECHO_TOP_18_DESCRIPTOR,
+        VIL => &VIL_DESCRIPTOR,
+        "CONUS/RotationTrack30min_00.50"
+        | "CONUS/RotationTrack60min_00.50"
+        | "CONUS/RotationTrack120min_00.50"
+        | "CONUS/RotationTrack240min_00.50"
+        | "CONUS/RotationTrack360min_00.50"
+        | "CONUS/RotationTrack1440min_00.50" => &ROTATION_DESCRIPTOR,
+        QPE_01H => &QPE_01H_DESCRIPTOR,
+        QPE_03H => &QPE_03H_DESCRIPTOR,
+        QPE_06H => &QPE_06H_DESCRIPTOR,
+        QPE_12H => &QPE_12H_DESCRIPTOR,
+        QPE_24H => &QPE_24H_DESCRIPTOR,
+        PRECIP_RATE => &PRECIP_RATE_DESCRIPTOR,
+        PRECIP_TYPE => &PRECIP_TYPE_DESCRIPTOR,
+        FLASH_ARI30 => &FLASH_ARI30_DESCRIPTOR,
+        _ => return CATALOG.iter().find(|entry| entry.product == product).map(|entry| entry.descriptor),
+    })
+}
+
+fn normalize_product_missing(product: &str, field: &mut MrmsField) {
+    if descriptor_for_product(product).is_some_and(|descriptor| {
+        matches!(descriptor.palette_key, "reflectivity" | "azshear")
+    }) {
+        return;
+    }
+    field
+        .values
+        .iter_mut()
+        .filter(|value| value.is_finite() && **value < 0.0)
+        .for_each(|value| *value = f32::NAN);
+}
+
+async fn fetch_key(
+    http: &reqwest::Client,
+    product: &str,
+    key: &str,
+) -> anyhow::Result<(MrmsField, chrono::DateTime<chrono::Utc>)> {
+    if let Some(cached) = crate::object_cache::get("mrms", key).await {
+        let raw = gunzip(&cached.bytes)?;
+        let mut field = crate::task::guarded(|| decode_grib2(&raw))
+            .unwrap_or_else(|_| anyhow::bail!("cached grib decode panicked for {product}"))?;
+        normalize_product_missing(product, &mut field);
+        return Ok((field, cached.received_at));
+    }
     let url = format!("{BUCKET}/{key}");
     let gz = http
         .get(&url)
@@ -284,11 +741,17 @@ pub async fn fetch_latest(http: &reqwest::Client, product: &str) -> anyhow::Resu
         .error_for_status()?
         .bytes()
         .await?;
+    let received_at = chrono::Utc::now();
     let raw = gunzip(&gz)?;
     // gribberish can panic on some MRMS product packings (a slice off-by-one on rotation-track /
     // AzShear grids). Contain it so a bad product surfaces as an error, never a process abort.
-    crate::task::guarded(|| decode_grib2(&raw))
-        .unwrap_or_else(|_| anyhow::bail!("grib decode panicked for {product}"))
+    let mut field = crate::task::guarded(|| decode_grib2(&raw))
+        .unwrap_or_else(|_| anyhow::bail!("grib decode panicked for {product}"))?;
+    normalize_product_missing(product, &mut field);
+    if let Err(error) = crate::object_cache::put("mrms", key, &gz, received_at).await {
+        log::warn!("MRMS browser cache write failed: {error}");
+    }
+    Ok((field, received_at))
 }
 
 /// Newest key seen per product, so refreshes can ask S3 only for what came after it.
@@ -317,11 +780,11 @@ async fn latest_key(http: &reqwest::Client, product: &str) -> anyhow::Result<Str
             _ => String::new(),
         };
         let url = format!("{BUCKET}/?list-type=2&prefix={prefix}&max-keys=2000{after}");
-        let Ok(resp) = http.get(&url).send().await else {
+        let current = known.as_deref().filter(|key| key.starts_with(&prefix));
+        let Ok(result) = fetch_listing(http, &url, current).await else {
             continue;
         };
-        let Ok(xml) = resp.text().await else { continue };
-        if let Some(key) = last_key(&xml) {
+        if let Some(key) = result {
             if let Ok(mut g) = LAST_SEEN.lock() {
                 g.get_or_insert_with(Default::default)
                     .insert(product.to_string(), key.clone());
@@ -330,12 +793,79 @@ async fn latest_key(http: &reqwest::Client, product: &str) -> anyhow::Result<Str
         }
         // Nothing newer than what we already have.
         if !after.is_empty() {
-            if let Some(k) = known {
-                return Ok(k);
+            if let Some(k) = &known {
+                return Ok(k.clone());
             }
         }
     }
+    if let Some(key) = known {
+        log::warn!("MRMS listing failed; reusing last known object {key}");
+        return Ok(key);
+    }
     anyhow::bail!("no MRMS objects found for today or yesterday")
+}
+
+async fn fetch_listing(
+    http: &reqwest::Client,
+    url: &str,
+    current: Option<&str>,
+) -> anyhow::Result<Option<String>> {
+    #[cfg(not(target_arch = "wasm32"))]
+    if let Some(current) = current {
+        let remembered = crate::net::validators::get(url);
+        let response = crate::net::validators::apply(
+            http.get(crate::net::fetch_url(url)).timeout(crate::net::FEED_TIMEOUT),
+            url,
+        )
+        .send()
+        .await?;
+        if response.status() == reqwest::StatusCode::NOT_MODIFIED {
+            if remembered.and_then(|entry| entry.tag).as_deref() == Some(current) {
+                crate::stats::bump(crate::stats::Counter::NetNotModified);
+                return Ok(Some(current.to_string()));
+            }
+        } else {
+            return finish_listing(url, response, Some(current)).await;
+        }
+    }
+    let response = http
+        .get(crate::net::fetch_url(url))
+        .timeout(crate::net::FEED_TIMEOUT)
+        .send()
+        .await?;
+    finish_listing(url, response, current).await
+}
+
+async fn finish_listing(
+    _url: &str,
+    response: reqwest::Response,
+    current: Option<&str>,
+) -> anyhow::Result<Option<String>> {
+    let response = response.error_for_status()?;
+    #[cfg(not(target_arch = "wasm32"))]
+    let headers = response.headers().clone();
+    let xml = response.text().await?;
+    let result = listing_result(&xml, current);
+    #[cfg(not(target_arch = "wasm32"))]
+    crate::net::validators::remember_headers(_url, &headers, result.clone());
+    Ok(result)
+}
+
+fn listing_result(xml: &str, current: Option<&str>) -> Option<String> {
+    last_key(xml).or_else(|| current.map(str::to_string))
+}
+
+async fn latest_available_key(http: &reqwest::Client, product: &str) -> anyhow::Result<String> {
+    match latest_key(http, product).await {
+        Ok(key) => Ok(key),
+        Err(error) => match crate::object_cache::latest_key("mrms", &format!("{product}/")).await {
+            Some(key) => {
+                log::warn!("MRMS listing failed; using cached object {key}: {error}");
+                Ok(key)
+            }
+            None => Err(error),
+        },
+    }
 }
 
 fn gunzip(bytes: &[u8]) -> anyhow::Result<Vec<u8>> {
@@ -447,6 +977,11 @@ mod tests {
         let xml =
             "<x><Key>a/20260717-000000.grib2.gz</Key><Key>a/20260717-000200.grib2.gz</Key></x>";
         assert_eq!(last_key(xml).unwrap(), "a/20260717-000200.grib2.gz");
+        assert_eq!(
+            listing_result("<ListBucketResult/>", Some("a/current.grib2.gz")).as_deref(),
+            Some("a/current.grib2.gz")
+        );
+        assert_eq!(listing_result("<ListBucketResult/>", None), None);
     }
 
     #[test]
@@ -555,5 +1090,78 @@ mod tests {
         // 720 is not published, so it lands on the 24-hour swath rather than a 404.
         assert_eq!(hail_swath(720), MESH_1440);
         assert_eq!(hail_swath(1440), MESH_1440);
+    }
+
+    #[test]
+    fn rotation_windows_map_to_every_published_low_level_product() {
+        for (minutes, suffix) in [
+            (30, "30min"),
+            (60, "60min"),
+            (120, "120min"),
+            (240, "240min"),
+            (360, "360min"),
+            (1440, "1440min"),
+        ] {
+            let product = rotation_track(minutes);
+            assert!(product.contains(suffix), "{minutes}: {product}");
+            assert_eq!(
+                descriptor_for_product(product).map(|descriptor| descriptor.id),
+                Some(ROTATION_DESCRIPTOR.id),
+            );
+        }
+    }
+
+    #[test]
+    fn supported_products_have_unique_stable_descriptors() {
+        let mut ids: Vec<_> = DESCRIPTORS
+            .into_iter()
+            .map(|descriptor| {
+                let product = product_for_id(descriptor.id.0, 30, 60, 120).unwrap();
+                assert_eq!(descriptor_for_product(product).unwrap().id, descriptor.id);
+                descriptor.id.0
+            })
+            .collect();
+        ids.sort_unstable();
+        ids.dedup();
+        assert_eq!(ids.len(), DESCRIPTORS.len());
+    }
+
+    #[test]
+    fn constant_altitude_stack_has_ordered_unique_levels() {
+        let levels: Vec<_> = CATALOG
+            .iter()
+            .filter_map(CatalogProduct::height_msl_km)
+            .collect();
+        assert_eq!(levels.len(), 20);
+        assert_eq!(levels.first(), Some(&0.5));
+        assert_eq!(levels.last(), Some(&7.5));
+        assert!(levels.windows(2).all(|pair| pair[0] < pair[1]));
+    }
+
+    #[test]
+    fn product_missing_values_do_not_reach_sampling() {
+        let mut field = MrmsField {
+            values: vec![-99.0, -3.0, -1.0, 0.0, 2.0],
+            nx: 5,
+            ny: 1,
+            lon_west: 0.0,
+            lon_east: 5.0,
+            lat_north: 1.0,
+            lat_south: 0.0,
+            time: chrono::Utc::now(),
+        };
+        normalize_product_missing(QPE_01H, &mut field);
+        assert!(field.values[..3].iter().all(|value| value.is_nan()));
+        assert_eq!(&field.values[3..], &[0.0, 2.0]);
+
+        let mut signed = field.clone();
+        signed.values = vec![-20.0, 10.0];
+        normalize_product_missing(AZSHEAR, &mut signed);
+        assert_eq!(signed.values, [-20.0, 10.0]);
+        normalize_product_missing(
+            product_for_id("mrms.layer-reflectivity-low", 30, 60, 120).unwrap(),
+            &mut signed,
+        );
+        assert_eq!(signed.values, [-20.0, 10.0]);
     }
 }

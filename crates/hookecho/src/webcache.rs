@@ -46,6 +46,18 @@ pub struct Pack {
     pub date: String,
     /// Volume object names, oldest first — the timeline as it stood when saved.
     pub volumes: Vec<String>,
+    /// Immutable native GOES source objects pinned in the shared object cache.
+    #[serde(default)]
+    pub satellite: Vec<String>,
+    /// Immutable MRMS source objects pinned in the shared object cache.
+    #[serde(default)]
+    pub mrms: Vec<String>,
+    /// Imported placefile/GIS source text needed by this pack.
+    #[serde(default)]
+    pub overlays: std::collections::BTreeMap<String, String>,
+    /// Overlay settings paired with [`Self::overlays`].
+    #[serde(default)]
+    pub placefiles: Vec<crate::settings::PlacefileConfig>,
     /// Unix seconds when it was saved.
     pub saved_at: i64,
     /// Total size of the volumes, for the eviction accounting and the picker's readout.
@@ -61,11 +73,13 @@ impl Pack {
     /// One line for the picker.
     pub fn label(&self) -> String {
         format!(
-            "{} {} \u{2014} {} volume{}, {:.0} MB",
+            "{} {} \u{2014} {} volume{}, {} weather file{}, {:.0} MB",
             self.site,
             self.date,
             self.volumes.len(),
             if self.volumes.len() == 1 { "" } else { "s" },
+            self.satellite.len() + self.mrms.len() + self.overlays.len(),
+            if self.satellite.len() + self.mrms.len() + self.overlays.len() == 1 { "" } else { "s" },
             self.bytes / 1024.0 / 1024.0
         )
     }
@@ -178,11 +192,20 @@ pub async fn save_pack(
     site: &str,
     date: &str,
     volumes: Vec<(String, Vec<u8>)>,
+    satellite: Vec<String>,
+    mrms: Vec<String>,
+    overlays: std::collections::BTreeMap<String, String>,
+    placefiles: Vec<crate::settings::PlacefileConfig>,
 ) -> anyhow::Result<Pack> {
     if volumes.is_empty() {
         anyhow::bail!("nothing in the loop to save");
     }
     let db = open().await?;
+    let pack_key = format!("{site}-{date}");
+    let previous = packs()
+        .await
+        .into_iter()
+        .find(|pack| pack.key() == pack_key);
     let mut bytes = 0.0;
     let mut names = Vec::new();
     for (name, data) in &volumes {
@@ -190,12 +213,42 @@ pub async fn save_pack(
         bytes += data.len() as f64;
         names.push(name.clone());
     }
+    let mut pinned = Vec::new();
+    for key in satellite {
+        let Some(object) = wxdata::object_cache::get("satellite", &key).await else {
+            continue;
+        };
+        if wxdata::object_cache::set_pinned("satellite", &key, true)
+            .await
+            .is_ok()
+        {
+            bytes += object.bytes.len() as f64;
+            pinned.push(key);
+        }
+    }
+    let mut pinned_mrms = Vec::new();
+    for key in mrms {
+        let Some(object) = wxdata::object_cache::get("mrms", &key).await else {
+            continue;
+        };
+        if wxdata::object_cache::set_pinned("mrms", &key, true)
+            .await
+            .is_ok()
+        {
+            bytes += object.bytes.len() as f64;
+            pinned_mrms.push(key);
+        }
+    }
     let pack = Pack {
         site: site.to_string(),
         date: date.to_string(),
         volumes: names,
+        satellite: pinned,
+        mrms: pinned_mrms,
+        bytes: bytes + overlays.values().map(|text| text.len() as f64).sum::<f64>(),
+        overlays,
+        placefiles,
         saved_at: chrono::Utc::now().timestamp(),
-        bytes,
     };
     let s = store(&db, PACKS, IdbTransactionMode::Readwrite)?;
     let json = serde_json::to_string(&pack)?;
@@ -203,6 +256,19 @@ pub async fn save_pack(
         .put_with_key(&json.as_str().into(), &pack.key().into())
         .map_err(|e| anyhow!("{e:?}"))?;
     await_request(req).await?;
+    if let Some(previous) = previous {
+        let current = packs().await;
+        for key in previous.satellite {
+            if !current.iter().any(|pack| pack.satellite.contains(&key)) {
+                let _ = wxdata::object_cache::set_pinned("satellite", &key, false).await;
+            }
+        }
+        for key in previous.mrms {
+            if !current.iter().any(|pack| pack.mrms.contains(&key)) {
+                let _ = wxdata::object_cache::set_pinned("mrms", &key, false).await;
+            }
+        }
+    }
     evict(&db).await;
     Ok(pack)
 }
@@ -237,6 +303,16 @@ async fn delete_pack(db: &IdbDatabase, pack: &Pack) -> anyhow::Result<()> {
         }
         if let Ok(req) = s.delete(&name.as_str().into()) {
             let _ = await_request(req).await;
+        }
+    }
+    for key in &pack.satellite {
+        if !others.iter().any(|pack| pack.satellite.contains(key)) {
+            let _ = wxdata::object_cache::set_pinned("satellite", key, false).await;
+        }
+    }
+    for key in &pack.mrms {
+        if !others.iter().any(|pack| pack.mrms.contains(key)) {
+            let _ = wxdata::object_cache::set_pinned("mrms", key, false).await;
         }
     }
     let s = store(db, PACKS, IdbTransactionMode::Readwrite)?;
@@ -303,7 +379,15 @@ async fn refresh() {
 /// Fetch every volume in `ids` — from the pack store when it is already there, from the bucket
 /// otherwise — and save them as one pack.
 #[cfg(target_arch = "wasm32")]
-pub async fn save_timeline(site: String, date: String, ids: Vec<wxdata::level2::Identifier>) {
+pub async fn save_timeline(
+    site: String,
+    date: String,
+    ids: Vec<wxdata::level2::Identifier>,
+    satellite: Vec<String>,
+    mrms: Vec<String>,
+    overlays: std::collections::BTreeMap<String, String>,
+    placefiles: Vec<crate::settings::PlacefileConfig>,
+) {
     let total = ids.len();
     let mut out = Vec::new();
     for (i, id) in ids.into_iter().enumerate() {
@@ -321,7 +405,7 @@ pub async fn save_timeline(site: String, date: String, ids: Vec<wxdata::level2::
         };
         out.push((name, bytes));
     }
-    match save_pack(&site, &date, out).await {
+    match save_pack(&site, &date, out, satellite, mrms, overlays, placefiles).await {
         Ok(p) => set_status(Some(format!("saved {}", p.label()))),
         Err(e) => set_status(Some(format!("could not save the pack: {e}"))),
     }
@@ -347,12 +431,28 @@ mod tests {
             site: "KTLX".into(),
             date: "2026-05-20".into(),
             volumes: vec!["KTLX20260520_231502_V06".into()],
+            satellite: vec!["ABI-L2-CMIPC/example.nc".into()],
+            mrms: vec!["MergedReflectivityQCComposite/example.grib2.gz".into()],
+            overlays: std::collections::BTreeMap::from([(
+                "gis:damage.geojson".into(),
+                r#"{"type":"FeatureCollection","features":[]}"#.into(),
+            )]),
+            placefiles: vec![crate::settings::PlacefileConfig {
+                url: "gis:damage.geojson".into(),
+                enabled: true,
+                opacity: 1.0,
+            }],
             saved_at: 1_780_000_000,
             bytes: 32.0 * 1024.0 * 1024.0,
         };
         let back: Pack = serde_json::from_str(&serde_json::to_string(&p).unwrap()).unwrap();
         assert_eq!(back, p);
         assert_eq!(back.key(), "KTLX-2026-05-20");
-        assert_eq!(back.label(), "KTLX 2026-05-20 — 1 volume, 32 MB");
+        assert_eq!(back.label(), "KTLX 2026-05-20 — 1 volume, 3 weather files, 32 MB");
+        let old: Pack = serde_json::from_str(
+            r#"{"site":"KTLX","date":"2026-05-20","volumes":[],"saved_at":1,"bytes":0}"#,
+        )
+        .unwrap();
+        assert!(old.satellite.is_empty() && old.mrms.is_empty() && old.overlays.is_empty());
     }
 }

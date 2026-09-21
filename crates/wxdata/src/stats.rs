@@ -100,6 +100,11 @@ pub fn snapshot() -> Vec<(&'static str, u64)> {
         .collect()
 }
 
+#[cfg(target_arch = "wasm32")]
+pub fn snapshot() -> Vec<(&'static str, u64)> {
+    Vec::new()
+}
+
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
     use super::*;

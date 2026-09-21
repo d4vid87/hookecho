@@ -14,6 +14,12 @@
 
 use crate::view::MapView;
 
+pub const MAX_PANES: usize = 4;
+
+pub fn bounded_pane_count(requested: usize) -> usize {
+    requested.clamp(1, MAX_PANES)
+}
+
 /// One saved pane arrangement.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Workspace {
@@ -24,6 +30,8 @@ pub struct Workspace {
     pub active: usize,
     #[serde(default)]
     pub link_cameras: bool,
+    #[serde(default)]
+    pub link_times: bool,
     /// Overlay toggles that were on, by slug — the same names `Settings::overlays_on` uses, so an
     /// unknown one from a newer build is skipped rather than fatal.
     #[serde(default)]
@@ -76,6 +84,8 @@ pub struct Chrome {
 pub struct PaneSnap {
     pub site: Option<String>,
     pub moment: wxdata::level2::Moment,
+    #[serde(default)]
+    pub custom_product: Option<String>,
     pub tilt: usize,
     #[serde(default)]
     pub srv: bool,
@@ -107,6 +117,7 @@ impl PaneSnap {
         Self {
             site: v.site.clone(),
             moment: v.moment,
+            custom_product: v.custom_product.clone(),
             tilt: v.tilt,
             srv: v.srv,
             basemap: v.basemap.slug().to_string(),
@@ -114,10 +125,9 @@ impl PaneSnap {
             lat,
             zoom: v.camera.zoom,
             fields_on: Some(
-                crate::render::FieldLayer::DRAW_ORDER
-                    .iter()
+                crate::render::FieldLayer::draw_order()
                     .filter(|l| v.fields_on.contains(l))
-                    .map(|l| l.slug().to_string())
+                    .map(|l| l.stable_id().to_string())
                     .collect(),
             ),
             thresholds: wxdata::level2::Moment::ALL
@@ -134,6 +144,7 @@ impl PaneSnap {
     pub fn apply(&self, v: &mut MapView) {
         v.site = self.site.clone();
         v.moment = self.moment;
+        v.custom_product = self.custom_product.clone();
         v.tilt = self.tilt;
         v.srv = self.srv;
         v.basemap = crate::tiles::BasemapStyle::from_slug(&self.basemap);
@@ -158,6 +169,7 @@ fn pane(moment: wxdata::level2::Moment, tilt: usize, srv: bool) -> PaneSnap {
     PaneSnap {
         site: None,
         moment,
+        custom_product: None,
         tilt,
         srv,
         basemap: "dark".into(),
@@ -188,6 +200,7 @@ pub fn starters() -> Vec<Workspace> {
             ],
             active: 0,
             link_cameras: true,
+            link_times: true,
             overlays_on: vec![
                 "Alerts".into(),
                 "Cells".into(),
@@ -206,6 +219,7 @@ pub fn starters() -> Vec<Workspace> {
             panes: vec![PaneSnap {
                 site: None,
                 moment: Moment::Reflectivity,
+                custom_product: None,
                 tilt: 0,
                 srv: false,
                 basemap: "dark".into(),
@@ -217,6 +231,7 @@ pub fn starters() -> Vec<Workspace> {
             }],
             active: 0,
             link_cameras: false,
+            link_times: false,
             overlays_on: vec![
                 "Alerts".into(),
                 "RadarSites".into(),
@@ -236,6 +251,7 @@ pub fn starters() -> Vec<Workspace> {
                 .collect(),
             active: 0,
             link_cameras: true,
+            link_times: true,
             overlays_on: vec![
                 "Alerts".into(),
                 "Cells".into(),
@@ -262,6 +278,13 @@ mod tests {
         assert_eq!(starters[0].adopted_site(None, "KTLX").as_deref(), Some("KTLX"));
         assert_eq!(starters[2].adopted_site(Some("KFWS"), "KTLX").as_deref(), Some("KFWS"));
         assert_eq!(starters[1].adopted_site(None, "KTLX"), None);
+    }
+
+    #[test]
+    fn pane_count_has_a_fixed_resource_ceiling() {
+        assert_eq!(bounded_pane_count(0), 1);
+        assert_eq!(bounded_pane_count(2), 2);
+        assert_eq!(bounded_pane_count(99), MAX_PANES);
     }
 
     #[test]
@@ -307,7 +330,10 @@ mod tests {
         v.thresholds[Moment::Velocity.index()] = Some(20.0);
 
         let snap = PaneSnap::capture(&v);
-        assert_eq!(snap.fields_on.as_deref(), Some(["mrms".to_string()].as_slice()));
+        assert_eq!(
+            snap.fields_on.as_deref(),
+            Some(["mrms.composite-reflectivity".to_string()].as_slice())
+        );
         assert_eq!(snap.thresholds, vec![(Moment::Reflectivity, 35.0)]);
 
         let mut fresh = MapView::new(
@@ -356,6 +382,7 @@ mod tests {
             panes: vec![PaneSnap {
                 site: Some("KDMX".into()),
                 moment: wxdata::level2::Moment::CorrelationCoefficient,
+                custom_product: Some("Debris score".into()),
                 tilt: 1,
                 srv: false,
                 basemap: "dark".into(),
@@ -367,6 +394,7 @@ mod tests {
             }],
             active: 0,
             link_cameras: true,
+            link_times: true,
             overlays_on: vec!["Alerts".into(), "Cells".into()],
             adopt_site: false,
             fields_on: vec!["mrms".into()],
@@ -387,7 +415,12 @@ mod tests {
         let json = r#"{"name":"old","panes":[],"active":0,"link_cameras":false,
             "overlays_on":["Alerts"]}"#;
         let ws: Workspace = serde_json::from_str(json).unwrap();
-        assert!(ws.fields_on.is_empty() && !ws.adopt_site && ws.chrome.is_none());
+        assert!(
+            ws.fields_on.is_empty()
+                && !ws.adopt_site
+                && !ws.link_times
+                && ws.chrome.is_none()
+        );
     }
 
     #[test]
@@ -397,7 +430,7 @@ mod tests {
             assert!(ws.active < ws.panes.len());
             for slug in &ws.fields_on {
                 assert!(
-                    crate::render::FieldLayer::from_slug(slug).is_some(),
+                    crate::render::FieldLayer::from_stable_id(slug).is_some(),
                     "{}: unknown field layer {slug}",
                     ws.name
                 );

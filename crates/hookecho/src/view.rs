@@ -35,11 +35,7 @@ const BINNED_CACHE: usize = if cfg!(target_arch = "wasm32") { 16 } else { 32 };
 /// Compared with the same 0.15 degree tolerance the caller uses to match a changed tilt: the angles
 /// are recomputed from the merged scan each time and need not be bit-identical.
 fn tilts_only_grew(old: &[f32], new: &[f32]) -> bool {
-    new.len() >= old.len()
-        && old
-            .iter()
-            .zip(new)
-            .all(|(a, b)| (a - b).abs() < 0.15)
+    new.len() >= old.len() && old.iter().zip(new).all(|(a, b)| (a - b).abs() < 0.15)
 }
 
 /// How many volumes a pane keeps after the playhead has moved off them.
@@ -83,6 +79,7 @@ pub struct Volume {
     /// tilts may not have arrived — so it must never be kept and shown again later in place of
     /// the complete archived volume of the same name.
     live: bool,
+    pub live_status: Option<wxdata::live::ScanStatus>,
 }
 
 impl Volume {
@@ -99,6 +96,7 @@ impl Volume {
             moments,
             binned: LruCache::new(NonZeroUsize::new(BINNED_CACHE).unwrap()),
             live: false,
+            live_status: None,
         }
     }
 
@@ -110,7 +108,9 @@ impl Volume {
         name: String,
         time: DateTime<Utc>,
         changed: &[f32],
+        status: wxdata::live::ScanStatus,
     ) {
+        self.live_status = Some(status);
         // The first chunks of a new volume carry the metadata and a sweep with no radials yet, so
         // the merged scan has no elevation angles at all. Applying it emptied the tilt list, blanked
         // the moment rows, and made the next frame's bin fail with "tilt 0 out of range". Keep
@@ -143,6 +143,12 @@ impl Volume {
         self.name = name;
         self.time = time;
         self.live = true;
+    }
+
+    pub fn end_live(&mut self) {
+        if let Some(status) = &mut self.live_status {
+            status.stream_active = false;
+        }
     }
 
     /// Bin (and cache) the sweep for `moment` at tilt index `tilt`.
@@ -179,6 +185,8 @@ pub struct MapView {
     /// Selected radar site (`None` = Supercell's cleared "None" state).
     pub site: Option<String>,
     pub moment: Moment,
+    /// Name of a saved user-defined radar product, or `None` for a native moment.
+    pub custom_product: Option<String>,
     pub tilt: usize,
     /// Per-moment display threshold (physical units), indexed by [`Moment::index`].
     pub thresholds: [Option<f32>; Moment::ALL.len()],
@@ -234,6 +242,7 @@ impl MapView {
             camera,
             site,
             moment: Moment::Reflectivity,
+            custom_product: None,
             tilt: 0,
             thresholds,
             threshold_enabled,
@@ -305,6 +314,13 @@ impl MapView {
     /// Forget every kept volume. The site changed, so none of them is of anywhere being looked at.
     pub fn forget_recent(&mut self) {
         self.recent.clear();
+    }
+
+    pub fn live_stream_ended(&mut self) {
+        self.last_poll = None;
+        if let Some(volume) = &mut self.volume {
+            volume.end_live();
+        }
     }
 
     pub fn clamp_tilt(&mut self) {
@@ -380,6 +396,23 @@ mod tests {
     use nexrad_model::data::{
         MomentData, PulseWidth, Radial, RadialStatus, Sweep, VolumeCoveragePattern,
     };
+
+    fn live_status() -> wxdata::live::ScanStatus {
+        wxdata::live::ScanStatus {
+            provider: "test",
+            vcp: 212,
+            cuts_received: 1,
+            cuts_expected: 14,
+            radials_received: 360,
+            current_elevation_deg: Some(0.5),
+            latency: std::time::Duration::ZERO,
+            oldest_radial_age: Some(std::time::Duration::ZERO),
+            sails_cuts: 0,
+            mrle_cuts: 0,
+            retries: 0,
+            stream_active: true,
+        }
+    }
 
     /// A scan with one radial per given elevation, carrying reflectivity only.
     fn scan_at(elevations: &[f32]) -> Arc<Scan> {
@@ -488,10 +521,13 @@ mod tests {
         // and showing it again later in place of the complete archive volume loses them.
         view.forget_recent();
         view.show_volume(scan_at(&[0.5, 1.5]), "live".into(), now);
-        view.volume
-            .as_mut()
-            .unwrap()
-            .apply_live(scan_at(&[0.5]), "live".into(), now, &[]);
+        view.volume.as_mut().unwrap().apply_live(
+            scan_at(&[0.5]),
+            "live".into(),
+            now,
+            &[],
+            live_status(),
+        );
         view.show_volume(scan_at(&[0.5, 1.5]), "next".into(), now);
         view.show_volume(scan_at(&[0.5, 1.5]), "live".into(), now);
         assert_eq!(
@@ -543,13 +579,28 @@ mod tests {
         let now = chrono::Utc::now();
         let mut vol = Volume::new(scan_at(&[0.5, 1.5]), "a".into(), now);
         assert_eq!(vol.elevations, vec![0.5, 1.5]);
-        vol.apply_live(scan_at(&[]), "b".into(), now, &[]);
+        vol.apply_live(scan_at(&[]), "b".into(), now, &[], live_status());
         assert_eq!(vol.elevations, vec![0.5, 1.5], "kept the tilts it had");
         assert_eq!(vol.name, "a", "and the volume they came from");
         // A real volume still applies.
-        vol.apply_live(scan_at(&[0.5]), "c".into(), now, &[]);
+        vol.apply_live(scan_at(&[0.5]), "c".into(), now, &[], live_status());
         assert_eq!(vol.elevations, vec![0.5]);
         assert_eq!(vol.name, "c");
+        vol.end_live();
+        assert!(!vol.live_status.as_ref().unwrap().stream_active);
+    }
+
+    #[test]
+    fn ending_a_live_stream_requests_archive_fallback_immediately() {
+        let now = chrono::Utc::now();
+        let mut view = MapView::new(Some("KTLX".into()), Camera::at_lonlat(-97.0, 35.0, 8.0));
+        let mut volume = Volume::new(scan_at(&[0.5]), "live".into(), now);
+        volume.live_status = Some(live_status());
+        view.volume = Some(volume);
+        view.last_poll = Some(Instant::now());
+        view.live_stream_ended();
+        assert!(view.last_poll.is_none());
+        assert!(!view.volume.unwrap().live_status.unwrap().stream_active);
     }
 
     /// Early in a live volume only reflectivity has arrived; the dual-pol rows must not blink out

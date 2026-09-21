@@ -400,6 +400,8 @@ mod tests {
             })
             .collect();
         let p = Level3Product {
+            modified_julian_date: 1,
+            seconds_since_midnight: 0,
             code: 180,
             lat: 35.276,
             lon: -97.51,

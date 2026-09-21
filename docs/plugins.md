@@ -10,9 +10,18 @@ placefiles use — thresholds, `TimeRange` gating, icons and all.
 
 Desktop only. Android can't execute a program you dropped in app storage.
 
+For external analysis, **Settings → Share → Export active field CSV** streams the selected native
+grid with coordinates and provenance. Python, MetPy, and similar tools can consume that file
+without embedding a language runtime in HookEcho.
+
+Each plugin entry also carries a versioned manifest in the settings file. Existing entries migrate
+to API version 1 with the `placefile-output` capability. Advanced integrations can declare their
+version, input products, output products, and JSON configuration schema there; HookEcho rejects an
+unknown API version or a missing output capability before launching the command.
+
 ## What your plugin is told
 
-Four environment variables, set before every run:
+Environment variables set before every run:
 
 | Variable | Example | Meaning |
 |---|---|---|
@@ -20,6 +29,10 @@ Four environment variables, set before every run:
 | `HOOKECHO_BBOX` | `-98.4,34.6,-96.1,36.2` | The visible map, `min_lon,min_lat,max_lon,max_lat`. |
 | `HOOKECHO_TIME` | `2013-05-20T20:15:00+00:00` | The instant on screen. **Archive-aware** — scrub back and your plugin is asked about then, not now. |
 | `HOOKECHO_PRODUCT` | `REF` | The moment being displayed. |
+| `HOOKECHO_PLUGIN_API_VERSION` | `1` | Negotiated plugin IPC version. |
+| `HOOKECHO_PLUGIN_VERSION` | `0.1.0` | Plugin version from its manifest. |
+| `HOOKECHO_PLUGIN_CAPABILITIES` | `placefile-output` | Comma-separated declared capabilities. |
+| `HOOKECHO_INPUT_PRODUCTS` | `mrms.composite-reflectivity` | Comma-separated requested stable product IDs. |
 
 Answering for `HOOKECHO_TIME` rather than for "now" is what makes a plugin work during an event
 replay, which is most of the point.

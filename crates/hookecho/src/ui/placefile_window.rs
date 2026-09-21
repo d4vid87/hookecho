@@ -15,6 +15,7 @@ pub struct PlacefileStatus {
 #[derive(Default)]
 pub struct PlacefileWindow {
     pub open: bool,
+    pub import_gis: bool,
     new_url: String,
     new_plugin: String,
     new_command: String,
@@ -42,6 +43,12 @@ impl PlacefileWindow {
         };
         window.show(ctx, |ui| {
             ui.label("GRLevelX placefiles (lines, polygons, text, icons at lat/lon).");
+            if ui
+                .button("Import GeoJSON, KML/KMZ, or zipped Shapefile…")
+                .clicked()
+            {
+                self.import_gis = true;
+            }
             ui.add_space(4.0);
 
             let mut remove: Option<usize> = None;
@@ -183,6 +190,7 @@ impl PlacefileWindow {
                     args: words.map(str::to_string).collect(),
                     refresh_secs: 60,
                     enabled: true,
+                    manifest: Default::default(),
                 });
                 self.new_plugin.clear();
                 self.new_command.clear();

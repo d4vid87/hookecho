@@ -295,11 +295,12 @@ fn image_reply(ctype: &'static str, body: Vec<u8>) -> Reply {
 fn route(server: &Server, path: &str, query: &str, if_none_match: Option<&str>) -> Reply {
     count(match path {
         "/" => "index",
-        "/status.json" | "/alerts.json" | "/obs.json" | "/health.json" => "json",
-        "/cells.json" => "cells",
-        "/snapshot.png" => "snapshot",
+        "/status.json" | "/alerts.json" | "/obs.json" | "/health.json"
+        | "/v1/status" | "/v1/health" | "/v1/products" | "/v1/frame" | "/v1/probe" => "json",
+        "/cells.json" | "/v1/cells" => "cells",
+        "/snapshot.png" | "/v1/snapshot.png" => "snapshot",
         "/national.png" | "/national.mp4" => "national",
-        "/loop.gif" | "/loop.mp4" => "loop",
+        "/loop.gif" | "/loop.mp4" | "/v1/loop.gif" | "/v1/loop.mp4" => "loop",
         "/metrics" => "metrics",
         _ if path.starts_with("/proxy/") => "proxy",
         _ => "other",
@@ -324,6 +325,31 @@ fn route(server: &Server, path: &str, query: &str, if_none_match: Option<&str>) 
             Ok(body) => ("200 OK", "application/json", body).into(),
             Err(e) => error_json(e).into(),
         },
+        "/v1/status" => match cached_json(server, "/status.json") {
+            Ok(body) => ("200 OK", "application/json", body).into(),
+            Err(e) => error_json(e).into(),
+        },
+        "/v1/health" => match health_json(server) {
+            Ok(body) => ("200 OK", "application/json", body).into(),
+            Err(e) => error_json(e).into(),
+        },
+        "/v1/products" => ("200 OK", "application/json", products_json()).into(),
+        "/v1/cells" => match cells_json(server, query) {
+            Ok(body) => ("200 OK", "application/json", body).into(),
+            Err(e) => error_json(e).into(),
+        },
+        "/v1/frame" => match frame_json(server, query) {
+            Ok(body) => ("200 OK", "application/json", body).into(),
+            Err(e) => error_json(e).into(),
+        },
+        "/v1/probe" => match probe_json(server, query) {
+            Ok(body) => ("200 OK", "application/json", body).into(),
+            Err(e) => error_json(e).into(),
+        },
+        "/v1/snapshot.png" => match snapshot(server, query) {
+            Ok(png) => image_reply("image/png", png),
+            Err(e) => error_json(e).into(),
+        },
         "/snapshot.png" => match snapshot(server, query) {
             Ok(png) => image_reply("image/png", png),
             Err(e) => error_json(e).into(),
@@ -341,6 +367,14 @@ fn route(server: &Server, path: &str, query: &str, if_none_match: Option<&str>) 
             Err(e) => error_json(e).into(),
         },
         "/loop.mp4" => match loop_clip(server, query, crate::loopexport::LoopFormat::Mp4) {
+            Ok(body) => image_reply("video/mp4", body),
+            Err(e) => error_json(e).into(),
+        },
+        "/v1/loop.gif" => match loop_clip(server, query, crate::loopexport::LoopFormat::Gif) {
+            Ok(body) => image_reply("image/gif", body),
+            Err(e) => error_json(e).into(),
+        },
+        "/v1/loop.mp4" => match loop_clip(server, query, crate::loopexport::LoopFormat::Mp4) {
             Ok(body) => image_reply("video/mp4", body),
             Err(e) => error_json(e).into(),
         },
@@ -552,6 +586,7 @@ fn health_json(server: &Server) -> anyhow::Result<Vec<u8>> {
     // rather than on never having tried.
     let feeds_ok = cached_json(server, "/status.json").is_ok();
     let body = serde_json::to_vec(&serde_json::json!({
+        "api_version": 1,
         "version": env!("CARGO_PKG_VERSION"),
         "uptime_secs": STARTED.get().map(|t| t.elapsed().as_secs()),
         "spots": server.spots.len(),
@@ -566,6 +601,127 @@ fn health_json(server: &Server) -> anyhow::Result<Vec<u8>> {
             .count(),
     }))?;
     Ok(body)
+}
+
+fn products_json() -> Vec<u8> {
+    serde_json::to_vec(&serde_json::json!({
+        "api_version": 1,
+        "radar_sites": wxdata::sites::sites().iter().map(|site| serde_json::json!({
+            "id": site.id,
+            "city": site.city,
+            "state": site.state,
+            "lat": site.latitude,
+            "lon": site.longitude,
+            "elevation_m": site.elevation_meters,
+        })).collect::<Vec<_>>(),
+        "radar_products": crate::products::PRODUCTS.iter().map(|product| serde_json::json!({
+            "id": product.short,
+            "name": product.name,
+            "units": product.moment.units(),
+        })).collect::<Vec<_>>(),
+        "mrms_products": wxdata::mrms::DESCRIPTORS.iter().map(|field| serde_json::json!({
+            "id": field.id.0,
+            "name": field.display_name,
+            "units": field.units,
+        })).collect::<Vec<_>>(),
+    }))
+    .expect("static product catalog serializes")
+}
+
+fn selected_radar_object(
+    server: &Server,
+    query: &str,
+) -> anyhow::Result<(Frame, wxdata::level2::Identifier)> {
+    let frame = Frame::parse(query)?;
+    let requested = crate::cloud::param(query, "time")
+        .map(|value| {
+            chrono::DateTime::parse_from_rfc3339(&value)
+                .map(|time| time.with_timezone(&chrono::Utc))
+                .map_err(|_| anyhow::anyhow!("time must be RFC3339"))
+        })
+        .transpose()?;
+    let date = match crate::cloud::param(query, "date") {
+        Some(value) => chrono::NaiveDate::parse_from_str(&value, "%Y-%m-%d")
+            .map_err(|_| anyhow::anyhow!("date must be YYYY-MM-DD"))?,
+        None => requested
+            .map(|time| time.date_naive())
+            .unwrap_or_else(|| chrono::Utc::now().date_naive()),
+    };
+    let objects = server
+        .rt
+        .block_on(wxdata::level2::list_volumes(&frame.site, date))?;
+    let object = match requested {
+        Some(time) => objects
+            .into_iter()
+            .filter_map(|object| object.date_time().map(|at| (object, (at - time).abs())))
+            .min_by_key(|(_, distance)| *distance)
+            .map(|(object, _)| object),
+        None => objects.into_iter().next_back(),
+    }
+    .ok_or_else(|| anyhow::anyhow!("no radar volumes for {} on {date}", frame.site))?;
+    Ok((frame, object))
+}
+
+fn frame_json(server: &Server, query: &str) -> anyhow::Result<Vec<u8>> {
+    let (frame, object) = selected_radar_object(server, query)?;
+    Ok(serde_json::to_vec(&serde_json::json!({
+        "api_version": 1,
+        "site": frame.site,
+        "product": frame.moment.short_name(),
+        "units": frame.moment.units(),
+        "tilt_index": frame.tilt,
+        "source_object": object.name(),
+        "valid_time": object.date_time(),
+        "classification": "observed",
+    }))?)
+}
+
+fn probe_json(server: &Server, query: &str) -> anyhow::Result<Vec<u8>> {
+    let lon: f64 = crate::cloud::param(query, "lon")
+        .ok_or_else(|| anyhow::anyhow!("lon is required"))?
+        .parse()?;
+    let lat: f64 = crate::cloud::param(query, "lat")
+        .ok_or_else(|| anyhow::anyhow!("lat is required"))?
+        .parse()?;
+    anyhow::ensure!(
+        lon.is_finite()
+            && lat.is_finite()
+            && (-180.0..=180.0).contains(&lon)
+            && (-90.0..=90.0).contains(&lat),
+        "invalid probe coordinate"
+    );
+    let (frame, object) = selected_radar_object(server, query)?;
+    let source_object = object.name().to_string();
+    let scan = server
+        .rt
+        .block_on(wxdata::level2::download_scan(object, crate::paths::cache_dir()))?;
+    let sample = wxdata::level2::sample_native(
+        &scan,
+        frame.moment,
+        frame.tilt,
+        lon,
+        lat,
+    )
+    .ok_or_else(|| anyhow::anyhow!("point is outside the selected radar sweep"))?;
+    Ok(serde_json::to_vec(&serde_json::json!({
+        "api_version": 1,
+        "site": frame.site,
+        "product": frame.moment.short_name(),
+        "units": frame.moment.units(),
+        "tilt_index": frame.tilt,
+        "source_object": source_object,
+        "valid_time": sample.collected_at,
+        "lon": lon,
+        "lat": lat,
+        "value": sample.value,
+        "below_threshold": sample.below_threshold,
+        "range_folded": sample.folded,
+        "azimuth_deg": sample.azimuth_deg,
+        "ground_range_km": sample.ground_range_km,
+        "beam_height_ft": sample.beam_height_ft,
+        "gate_spacing_km": sample.gate_spacing_km,
+        "sampling": "nearest native radial and gate",
+    }))?)
 }
 
 /// When this process started serving, for `/health.json`.
@@ -677,7 +833,7 @@ fn render_png(
             return Ok(std::fs::read(out)?);
         };
         // Global knobs on the renderer, set under the same lock that serializes the render.
-        crate::headless::set_output(Some(f.px), f.zoom);
+        crate::headless::set_output(Some((f.px, f.px)), f.zoom);
         // Anything this server hands out is a picture someone will look at away from the app, so
         // it carries its warnings, its caption and its scale. The CLI verifiers do not.
         crate::headless::set_extras(true);
@@ -803,7 +959,10 @@ fn national(server: &Server) -> anyhow::Result<Vec<u8>> {
         Some(bytes) => bytes,
         None => match try_render(server, &out)? {
             Some(_one_at_a_time) => {
-                crate::headless::set_output(Some(NATIONAL_PX), Some(NATIONAL_ZOOM));
+                crate::headless::set_output(
+                    Some((NATIONAL_PX, NATIONAL_PX)),
+                    Some(NATIONAL_ZOOM),
+                );
                 crate::headless::set_extras(true);
                 crate::headless::set_palette(None);
                 crate::headless::run_mrms(out.to_string_lossy().as_ref())?;
@@ -906,10 +1065,6 @@ fn national_clip(server: &Server) -> anyhow::Result<Vec<u8>> {
     Ok(body)
 }
 
-/// How far apart the frames of a loop are asked for. A volume is about five minutes wide; a site
-/// in clear-air mode is slower, and two targets then land on the same volume — a repeated frame,
-/// not an error.
-const LOOP_STEP_MIN: i64 = 5;
 /// Rendered loop frames older than this are never wanted again — the window only slides forward.
 const LOOP_FRAME_TTL: Duration = Duration::from_secs(2 * 3600);
 
@@ -920,10 +1075,6 @@ const LOOP_FRAME_TTL: Duration = Duration::from_secs(2 * 3600);
 /// same window a snapshot is, and frames already on disk are reused — a poll a minute later
 /// renders one new frame, not six.
 ///
-// ponytail: frames are picked by wall-clock steps rather than by listing the site's volumes,
-// which reuses the archive path the timeline already uses. Listing volumes would give exact
-// frames; it also gives a second network round trip per request, for a dashboard that cannot
-// tell the difference.
 fn loop_clip(
     server: &Server,
     query: &str,
@@ -940,13 +1091,42 @@ fn loop_clip(
         .and_then(|v| v.parse().ok())
         .unwrap_or(2)
         .clamp(1, 10);
+    let source_timing = match crate::cloud::param(query, "timing").as_deref() {
+        None | Some("fixed") => false,
+        Some("source") => true,
+        Some(other) => anyhow::bail!("unknown timing '{other}' (use fixed or source)"),
+    };
     let ext = match format {
         crate::loopexport::LoopFormat::Gif => "gif",
         crate::loopexport::LoopFormat::Mp4 => "mp4",
     };
 
-    let now = chrono::Utc::now();
-    let key = format!("/loop.{ext}?{}-{count}-{fps}", f.tag());
+    let end = crate::cloud::param(query, "time")
+        .map(|value| {
+            chrono::DateTime::parse_from_rfc3339(&value)
+                .map(|time| time.with_timezone(&chrono::Utc))
+                .map_err(|_| anyhow::anyhow!("time must be RFC3339"))
+        })
+        .transpose()?
+        .unwrap_or_else(chrono::Utc::now);
+    let date = crate::cloud::param(query, "date")
+        .map(|value| {
+            chrono::NaiveDate::parse_from_str(&value, "%Y-%m-%d")
+                .map_err(|_| anyhow::anyhow!("date must be YYYY-MM-DD"))
+        })
+        .transpose()?
+        .unwrap_or_else(|| end.date_naive());
+    let objects = server
+        .rt
+        .block_on(wxdata::level2::list_volumes(&f.site, date))?;
+    let times = select_loop_times(&objects, end, count);
+    anyhow::ensure!(times.len() >= 2, "not enough radar frames for a loop");
+    let newest = times.last().expect("at least two frames").timestamp();
+    let timing_tag = if source_timing { "source" } else { "fixed" };
+    let key = format!(
+        "/loop.{ext}?{}-{count}-{fps}-{newest}-{timing_tag}",
+        f.tag()
+    );
     if let Some(hit) = server
         .cache
         .lock()
@@ -959,9 +1139,10 @@ fn loop_clip(
 
     let dir = snapshot_dir()?;
     let mut frames = Vec::with_capacity(count);
+    let mut frame_delays: Vec<u32> = Vec::with_capacity(count);
     let mut last: Option<Vec<u8>> = None;
-    for k in (0..count as i64).rev() {
-        let at = now - chrono::Duration::minutes(k * LOOP_STEP_MIN);
+    let delays_ms = loop_delays(&times, fps, source_timing);
+    for (index, at) in times.into_iter().enumerate() {
         let out = dir.join(format!("loop-{}-{}.png", f.tag(), at.format("%Y%m%d-%H%M")));
         // An archived frame never changes, so one already on disk is the answer. Only the newest
         // step is rendered on a repeat poll.
@@ -973,9 +1154,13 @@ fn loop_clip(
         // newer than the one three minutes old, so the head of the window repeats it. Identical
         // consecutive frames are a stutter in the loop, not information.
         if last.as_deref() == Some(png.as_slice()) {
+            if let Some(delay) = frame_delays.last_mut() {
+                *delay = (*delay + delays_ms[index]).min(15 * 60 * 1_000);
+            }
             continue;
         }
         frames.push(image::load_from_memory(&png)?.to_rgba8());
+        frame_delays.push(delays_ms[index]);
         last = Some(png);
     }
     prune_loop_frames(&dir);
@@ -984,9 +1169,11 @@ fn loop_clip(
     let clip = dir.join(format!("loop-{}.{ext}", f.tag()));
     match format {
         crate::loopexport::LoopFormat::Gif => {
-            crate::loopexport::encode_gif(&frames, (1000 / fps) as u16, &clip)?
+            crate::loopexport::encode_gif_timed(&frames, &frame_delays, &clip)?
         }
-        crate::loopexport::LoopFormat::Mp4 => crate::loopexport::encode_mp4(&frames, fps, &clip)?,
+        crate::loopexport::LoopFormat::Mp4 => {
+            crate::loopexport::encode_mp4_timed(&frames, &frame_delays, &clip)?
+        }
     }
     let body = std::fs::read(&clip)?;
     server
@@ -995,6 +1182,37 @@ fn loop_clip(
         .unwrap()
         .put(key, (Instant::now(), body.clone()));
     Ok(body)
+}
+
+fn loop_delays(times: &[chrono::DateTime<chrono::Utc>], fps: u32, source: bool) -> Vec<u32> {
+    let mut delays = vec![1_000 / fps.max(1); times.len()];
+    if source {
+        for (index, pair) in times.windows(2).enumerate() {
+            delays[index] = (pair[1] - pair[0])
+                .num_milliseconds()
+                .clamp(100, 15 * 60 * 1_000) as u32;
+        }
+        if times.len() > 1 {
+            delays[times.len() - 1] = delays[times.len() - 2];
+        }
+    }
+    delays
+}
+
+fn select_loop_times(
+    objects: &[wxdata::level2::Identifier],
+    end: chrono::DateTime<chrono::Utc>,
+    count: usize,
+) -> Vec<chrono::DateTime<chrono::Utc>> {
+    let mut times: Vec<_> = objects
+        .iter()
+        .filter_map(|object| object.date_time())
+        .filter(|time| *time <= end)
+        .rev()
+        .take(count)
+        .collect();
+    times.reverse();
+    times
 }
 
 /// How long a rendered snapshot stays on disk. Longer than a loop frame's TTL because a snapshot
@@ -1618,6 +1836,56 @@ mod tests {
         // A dashboard's `?token=` form.
         assert_eq!(query_token("site=KTLX&token=abc"), Some("abc".to_string()));
         assert_eq!(query_token("site=KTLX"), None);
+    }
+
+    #[test]
+    fn versioned_product_catalog_has_stable_ids_and_units() {
+        let catalog: serde_json::Value = serde_json::from_slice(&products_json()).unwrap();
+        assert_eq!(catalog["api_version"], 1);
+        assert!(catalog["radar_sites"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|site| site["id"] == "KTLX"));
+        assert!(catalog["radar_products"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|product| product["id"] == "REF" && product["units"] == "dBZ"));
+        assert!(catalog["mrms_products"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|product| product["id"] == "mrms.composite-reflectivity"));
+    }
+
+    #[test]
+    fn loop_selection_uses_exact_archive_times_before_requested_end() {
+        let objects = [0, 5, 10, 15]
+            .into_iter()
+            .map(|minute| {
+                wxdata::level2::Identifier::new(format!(
+                    "KTLX20240526_01{minute:02}00_V06"
+                ))
+            })
+            .collect::<Vec<_>>();
+        let end = "2024-05-26T01:12:00Z".parse().unwrap();
+        let times = select_loop_times(&objects, end, 2);
+        assert_eq!(
+            times
+                .iter()
+                .map(|time| time.format("%H:%M").to_string())
+                .collect::<Vec<_>>(),
+            ["01:05", "01:10"]
+        );
+    }
+
+    #[test]
+    fn loop_timing_can_follow_source_intervals() {
+        let times = ["01:00", "01:05", "01:12"]
+            .map(|time| format!("2024-05-26T{time}:00Z").parse().unwrap());
+        assert_eq!(loop_delays(&times, 2, false), [500, 500, 500]);
+        assert_eq!(loop_delays(&times, 2, true), [300_000, 420_000, 420_000]);
     }
 
     #[test]

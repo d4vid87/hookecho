@@ -90,6 +90,10 @@ impl HookEchoApp {
         let l3_site = self.l3grid_site.clone();
         let tz = self.active_tz();
         let mosaic = self.mosaic_status();
+        let analysis_point = crate::render::mercator::world_to_lonlat(
+            self.views[self.active].camera.center.0,
+            self.views[self.active].camera.center.1,
+        );
         let mut etop_dbz = self.settings.etop_dbz;
         let mut hide = false;
         // Height budget: the search pill above, the scrubber pill below (which is centred and
@@ -164,8 +168,12 @@ impl HookEchoApp {
                             &mut self.fields,
                             &self.views[self.active].fields_on.clone(),
                             &mut self.rotation_minutes,
+                            &mut self.reflectivity_trail_minutes,
+                            &mut self.reflectivity_trail_threshold,
                             &mut self.hail_minutes,
                             &mut self.hrrr_fcst_hour,
+                            &mut self.refs_fcst_hour,
+                            &mut self.refs_dbz_threshold,
                             self.hrrr_valid,
                             tz,
                             &mut self.env_cape_ml,
@@ -180,15 +188,22 @@ impl HookEchoApp {
                             l3_site.as_deref(),
                             &mut self.global_model,
                             &mut self.global_fcst_hour,
+                            &mut self.analysis_source,
+                            analysis_point,
+                            &self.metars,
                             &mut self.diff_field,
                             self.diff_valid.as_ref(),
                             &mut self.settings.lightning_minutes,
                             glm_options,
                             &mut self.settings.glm_goes_west,
+                            &mut self.settings.abi_scene,
                             self.show_spotters,
+                            self.show_local_tracks,
                             &mut self.settings.spotter_range_km,
                             &mut self.settings.detectors,
                             Some(mosaic.as_str()),
+                            self.gefs_distribution.as_ref(),
+                            self.gefs_postage.as_ref(),
                             &mut opts,
                         );
                     } else {
@@ -289,8 +304,12 @@ impl HookEchoApp {
                                     &mut self.fields,
                                     &self.views[self.active].fields_on.clone(),
                                     &mut self.rotation_minutes,
+                                    &mut self.reflectivity_trail_minutes,
+                                    &mut self.reflectivity_trail_threshold,
                                     &mut self.hail_minutes,
                                     &mut self.hrrr_fcst_hour,
+                                    &mut self.refs_fcst_hour,
+                                    &mut self.refs_dbz_threshold,
                                     self.hrrr_valid,
                                     tz,
                                     &mut self.env_cape_ml,
@@ -305,15 +324,22 @@ impl HookEchoApp {
                                     l3_site.as_deref(),
                                     &mut self.global_model,
                                     &mut self.global_fcst_hour,
+                                    &mut self.analysis_source,
+                                    analysis_point,
+                                    &self.metars,
                                     &mut self.diff_field,
                                     self.diff_valid.as_ref(),
                                     &mut self.settings.lightning_minutes,
                                     glm_options,
                                     &mut self.settings.glm_goes_west,
+                                    &mut self.settings.abi_scene,
                                     self.show_spotters,
+                                    self.show_local_tracks,
                                     &mut self.settings.spotter_range_km,
                                     &mut self.settings.detectors,
                                     Some(mosaic.as_str()),
+                                    self.gefs_distribution.as_ref(),
+                                    self.gefs_postage.as_ref(),
                                     &mut opts,
                                 );
                             });

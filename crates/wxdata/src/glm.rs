@@ -10,6 +10,28 @@
 use chrono::{DateTime, TimeZone, Utc};
 use std::collections::VecDeque;
 
+use crate::field::{
+    DataClass, DataStamp, FieldDescriptor, FieldFamily, FieldFrame, FieldId, MissingData,
+    QualitySummary, SamplingPolicy, ValueKind,
+};
+
+pub static FLASH_DENSITY_DESCRIPTOR: FieldDescriptor = FieldDescriptor {
+    id: FieldId("satellite.glm.flash-extent-density"),
+    source: "NOAA GOES GLM",
+    family: FieldFamily::Satellite,
+    display_name: "GLM flash-extent density",
+    short_name: "GLM FED",
+    search_aliases: &["lightning", "satellite flashes", "fed"],
+    units: "flashes/cell",
+    value_kind: ValueKind::Scalar,
+    palette_key: "glm-fed",
+    sampling: SamplingPolicy::Nearest,
+    missing: MissingData::Nan,
+    time_policy: Some(crate::timecoord::TimePolicy::HoldLast),
+    supports_contours: false,
+    supports_difference: false,
+};
+
 /// GOES-East. GOES-19 took over the slot from GOES-16 in 2025.
 pub const EAST: &str = "https://noaa-goes19.s3.amazonaws.com";
 /// GOES-West (GOES-18) — the Pacific, the west coast and the Rockies, which East sees at a very
@@ -325,6 +347,39 @@ pub fn flash_density(
     })
 }
 
+pub fn flash_density_frame(
+    flashes: &VecDeque<Flash>,
+    cell_deg: f64,
+    window: chrono::Duration,
+    now: DateTime<Utc>,
+    source_identity: String,
+) -> Option<FieldFrame> {
+    let valid_time = flashes
+        .iter()
+        .rev()
+        .find(|flash| now - flash.time <= window)?
+        .time;
+    let field = flash_density(flashes, cell_deg, window, now)?;
+    Some(FieldFrame::new(
+        &FLASH_DENSITY_DESCRIPTOR,
+        field,
+        DataStamp {
+            source_identity: if source_identity.is_empty() {
+                "GOES GLM rolling window".into()
+            } else {
+                source_identity
+            },
+            issue_time: None,
+            run_time: None,
+            valid_time,
+            received_time: now,
+            class: DataClass::Derived,
+            quality: QualitySummary::Unknown,
+            available_members: None,
+        },
+    ))
+}
+
 /// Rate of change of flash-extent density between two [`flash_density`] grids, in flashes per
 /// cell per minute — the lightning jump.
 ///
@@ -480,6 +535,41 @@ mod density_tests {
     fn nothing_recent_is_no_grid() {
         let flashes: VecDeque<Flash> = [at(-97.0, 35.0, 90)].into_iter().collect();
         assert!(flash_density(&flashes, 0.05, chrono::Duration::minutes(15), Utc::now()).is_none());
+    }
+
+    #[test]
+    fn density_frame_uses_the_newest_flash_as_valid_time() {
+        let now = Utc::now();
+        let newest = now - chrono::Duration::minutes(1);
+        let flashes: VecDeque<Flash> = [
+            Flash {
+                lon: -97.0,
+                lat: 35.0,
+                energy: 1.0,
+                time: now - chrono::Duration::minutes(3),
+            },
+            Flash {
+                lon: -97.1,
+                lat: 35.1,
+                energy: 1.0,
+                time: newest,
+            },
+        ]
+        .into_iter()
+        .collect();
+        let frame = flash_density_frame(
+            &flashes,
+            0.05,
+            chrono::Duration::minutes(15),
+            now,
+            "goes/granule.nc".into(),
+        )
+        .unwrap();
+
+        assert_eq!(frame.descriptor.id, FLASH_DENSITY_DESCRIPTOR.id);
+        assert_eq!(frame.stamp.valid_time, newest);
+        assert_eq!(frame.stamp.class, DataClass::Derived);
+        assert_eq!(frame.field().time, now);
     }
 }
 

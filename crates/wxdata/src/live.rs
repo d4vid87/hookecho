@@ -3,7 +3,7 @@
 //! NEXRAD publishes a volume as a sequence of small "chunks" to an S3 bucket during the scan
 //! itself, so a display can update sweep-by-sweep instead of waiting ~5 min for the archived
 //! volume. [`stream`] drives `nexrad-data`'s pull-based [`ChunkIterator`], assembles the
-//! accumulated chunks into a [`Scan`] at every sweep boundary, merges it into the running
+//! accumulated chunks into a [`Scan`] as each radial block arrives, merges it into the running
 //! volume, and hands the caller a full updated [`Scan`] via `on_update`.
 //!
 //! All merged state lives on this task; the UI thread only ever receives a finished `Scan`.
@@ -16,6 +16,77 @@ use nexrad_model::data::{Radial, Sweep};
 use std::sync::Arc;
 use std::time::Duration;
 
+/// Public live Level II provider. Additional providers implement the same call surface here.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Provider {
+    AwsChunks,
+}
+
+pub const PUBLIC_PROVIDER: Provider = Provider::AwsChunks;
+
+impl Provider {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::AwsChunks => "AWS NEXRAD live chunks",
+        }
+    }
+
+    pub async fn stream<F>(
+        self,
+        site: String,
+        base: Arc<Scan>,
+        active: impl Fn() -> bool,
+        on_update: F,
+    ) -> anyhow::Result<()>
+    where
+        F: FnMut(Update),
+    {
+        match self {
+            Self::AwsChunks => stream_aws_chunks(site, base, active, on_update).await,
+        }
+    }
+}
+
+impl ScanStatus {
+    pub fn summary(&self) -> String {
+        let cuts = if self.cuts_expected == 0 {
+            format!("{} cuts", self.cuts_received)
+        } else {
+            format!("{}/{} cuts", self.cuts_received, self.cuts_expected)
+        };
+        let oldest = self.oldest_radial_age.map_or(String::new(), |age| {
+            format!(" · oldest gate {}s", age.as_secs())
+        });
+        let sails = if self.sails_cuts > 0 {
+            format!(" · SAILS {}", self.sails_cuts)
+        } else {
+            String::new()
+        };
+        let mrle = if self.mrle_cuts > 0 {
+            format!(" · MRLE {}", self.mrle_cuts)
+        } else {
+            String::new()
+        };
+        let elevation = self
+            .current_elevation_deg
+            .map_or(String::new(), |angle| format!(" · {angle:.1}°"));
+        let transport = if self.stream_active {
+            if self.retries == 0 {
+                String::new()
+            } else {
+                format!(" · {} retries", self.retries)
+            }
+        } else {
+            " · archive fallback".to_string()
+        };
+        format!(
+            "VCP {}{elevation} · {cuts} · {}s latency{oldest}{sails}{mrle}{transport}",
+            self.vcp,
+            self.latency.as_secs()
+        )
+    }
+}
+
 /// A merged live volume ready to display.
 pub struct Update {
     /// A synthetic name identifying this update (volume prefix + sequence).
@@ -27,10 +98,27 @@ pub struct Update {
     /// Elevation angles (deg) whose sweeps changed vs. the previous update — the app uses
     /// this to evict only the affected tilts from its binned-sweep cache.
     pub changed: Vec<f32>,
+    pub status: ScanStatus,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ScanStatus {
+    pub provider: &'static str,
+    pub vcp: u16,
+    pub cuts_received: usize,
+    pub cuts_expected: usize,
+    pub radials_received: usize,
+    pub current_elevation_deg: Option<f32>,
+    pub latency: Duration,
+    pub oldest_radial_age: Option<Duration>,
+    pub sails_cuts: u8,
+    pub mrle_cuts: u8,
+    pub retries: u32,
+    pub stream_active: bool,
 }
 
 /// Stream live chunks for `site`, starting from `base` (the last polled volume), calling
-/// `on_update` with a full merged [`Scan`] at each sweep boundary.
+/// `on_update` with a full merged [`Scan`] as each radial block arrives.
 ///
 /// `active` is polled before each chunk fetch; returning false ends the stream cleanly, so a
 /// backgrounded phone stops pulling chunks over mobile data and stops holding a timer awake (the
@@ -44,7 +132,7 @@ pub struct Update {
 ///
 /// Runs on the web too: the waits go through [`crate::task::sleep`] (a `setTimeout` there) and the
 /// backfill through `futures_util`, so nothing in here reaches for tokio directly.
-pub async fn stream<F>(
+async fn stream_aws_chunks<F>(
     site: String,
     base: Arc<Scan>,
     active: impl Fn() -> bool,
@@ -105,14 +193,24 @@ where
 
     let mut merged = base;
     let mut volume = init.latest_chunk.identifier.volume().as_number();
-    // First emit assembles the whole backfilled volume; after that only the chunks since the last
-    // sweep boundary are re-assembled (plus the start chunk, which carries the VCP and site
-    // metadata assembly needs). Re-decoding every accumulated chunk at every boundary was O(n^2)
-    // over a volume, and the chunk count grows to ~55.
-    emit(&it, &chunks, &mut merged, &mut on_update).await;
+    // First emit assembles the whole backfilled volume; after that each arriving block is assembled
+    // with the start chunk, which carries the VCP and site metadata assembly needs. Re-decoding
+    // every accumulated chunk was O(n^2) over a volume, and the chunk count grows to ~55.
+    let mut cuts_received = 0;
+    emit(
+        &it,
+        &chunks,
+        &mut merged,
+        &mut cuts_received,
+        EmitKind::Initial,
+        0,
+        &mut on_update,
+    )
+    .await;
     let mut window_start = chunks.len();
 
     let mut fails = 0u32;
+    let mut retries = 0u32;
     loop {
         let wait = it
             .time_until_next()
@@ -141,13 +239,14 @@ where
                 if ctype == ChunkType::Start || vol != volume {
                     chunks.clear(); // volume rollover: start a fresh accumulator
                     window_start = 0;
+                    cuts_received = 0;
                 }
                 volume = vol;
                 chunks.push(dc.chunk);
                 let sweep_done = it.chunk_metadata(seq).is_some_and(|m| m.is_last_in_sweep());
                 // The fetch itself can outlast the cancellation: a sweep assembled for a site the
                 // caller has already left is a stale frame handed to a live view.
-                if (sweep_done || ctype == ChunkType::End) && active() {
+                if active() {
                     let window: Vec<Chunk<'static>> = chunks
                         .first()
                         .filter(|_| window_start > 0)
@@ -155,13 +254,27 @@ where
                         .chain(chunks[window_start..].iter())
                         .cloned()
                         .collect();
-                    emit(&it, &window, &mut merged, &mut on_update).await;
+                    emit(
+                        &it,
+                        &window,
+                        &mut merged,
+                        &mut cuts_received,
+                        if sweep_done || ctype == ChunkType::End {
+                            EmitKind::Cut
+                        } else {
+                            EmitKind::Block
+                        },
+                        retries,
+                        &mut on_update,
+                    )
+                    .await;
                     window_start = chunks.len();
                 }
             }
             Ok(None) => { /* not available yet; loop and wait again */ }
             Err(e) => {
                 fails += 1;
+                retries = retries.saturating_add(1);
                 if !tolerate_failure(fails) {
                     return Err(anyhow::anyhow!("chunk stream: {e}"));
                 }
@@ -238,14 +351,17 @@ fn tolerate_failure(consecutive: u32) -> bool {
 }
 
 /// Assemble `chunks`, merge into `merged`, and emit if anything changed. Assembly failure
-/// (e.g. a still-incomplete volume) is skipped; the next sweep boundary self-heals.
+/// (e.g. a still-incomplete block) is skipped; the next block self-heals.
 async fn emit<F: FnMut(Update)>(
     it: &ChunkIterator,
     chunks: &[Chunk<'static>],
     merged: &mut Arc<Scan>,
+    cuts_received: &mut usize,
+    kind: EmitKind,
+    retries: u32,
     on_update: &mut F,
 ) {
-    // Re-assembling every accumulated chunk at each sweep boundary is the heaviest CPU on this
+    // Assembling incoming blocks is the heaviest CPU on this
     // task; `block_in_place` moves it off the async worker so chunk polling and every other
     // fetch on that thread keep running. (Requires the multi-threaded runtime, which is what the
     // app and the headless harness both build.)
@@ -253,17 +369,18 @@ async fn emit<F: FnMut(Update)>(
     let assembled = crate::task::in_place(|| assemble_volume(chunks.iter().cloned()))
         .map_err(|e| anyhow::anyhow!("{e}"));
     // In the browser there is no other thread to move it to: "off the async worker" would be the
-    // thread drawing the map, once per sweep boundary for as long as the tab is open. Send the
+    // thread drawing the map for as long as the tab is open. Send the
     // window to the same Web Worker the archive decode uses, and assemble inline only if there
     // is no worker to send it to.
     #[cfg(target_arch = "wasm32")]
-    let assembled = match crate::wasm_worker::assemble_chunks(frame(chunks.iter().map(|c| c.data()))).await {
-        Ok(wire) => crate::level2::scan_from_wire(&wire),
-        Err(crate::wasm_worker::Error::Unavailable) => {
-            assemble_volume(chunks.iter().cloned()).map_err(|e| anyhow::anyhow!("{e}"))
-        }
-        Err(e) => Err(anyhow::anyhow!("{e}")),
-    };
+    let assembled =
+        match crate::wasm_worker::assemble_chunks(frame(chunks.iter().map(|c| c.data()))).await {
+            Ok(wire) => crate::level2::scan_from_wire(&wire),
+            Err(crate::wasm_worker::Error::Unavailable) => {
+                assemble_volume(chunks.iter().cloned()).map_err(|e| anyhow::anyhow!("{e}"))
+            }
+            Err(e) => Err(anyhow::anyhow!("{e}")),
+        };
     let partial = match assembled {
         Ok(s) => s,
         Err(e) => {
@@ -271,10 +388,45 @@ async fn emit<F: FnMut(Update)>(
             return;
         }
     };
+    let partial_cuts = partial
+        .sweeps()
+        .iter()
+        .filter(|sweep| !sweep.radials().is_empty())
+        .count();
+    let current_elevation_deg = partial
+        .sweeps()
+        .iter()
+        .rev()
+        .find(|sweep| !sweep.radials().is_empty())
+        .and_then(|sweep| sweep.elevation_angle_degrees());
+    let (cuts_expected, sails_cuts, mrle_cuts) = {
+        let vcp = partial.coverage_pattern();
+        (
+            vcp.number_of_elevation_cuts(),
+            vcp.sails_cuts(),
+            vcp.mrle_cuts(),
+        )
+    };
+    match kind {
+        EmitKind::Initial => *cuts_received = partial_cuts,
+        EmitKind::Cut if partial_cuts > 0 => *cuts_received += 1,
+        EmitKind::Block | EmitKind::Cut => {}
+    }
+    if cuts_expected > 0 {
+        *cuts_received = (*cuts_received).min(cuts_expected);
+    }
     let (new_scan, changed) = merge_scan(merged, partial);
     if changed.is_empty() {
         return; // nothing new since the last emit; `merged` already holds this content
     }
+    let vcp = new_scan.coverage_pattern_number().number();
+    let radials_received = new_scan
+        .sweeps()
+        .iter()
+        .map(|sweep| sweep.radials().len())
+        .sum();
+    let now = chrono::Utc::now();
+    let oldest_radial_age = oldest_radial_age_at(&new_scan, now);
     *merged = Arc::new(new_scan);
     let (name, time) = it
         .current()
@@ -290,13 +442,45 @@ async fn emit<F: FnMut(Update)>(
         time,
         scan: Arc::clone(merged),
         changed,
+        status: ScanStatus {
+            provider: PUBLIC_PROVIDER.label(),
+            vcp,
+            cuts_received: *cuts_received,
+            cuts_expected,
+            radials_received,
+            current_elevation_deg,
+            latency: (now - time).to_std().unwrap_or_default(),
+            oldest_radial_age,
+            sails_cuts,
+            mrle_cuts,
+            retries,
+            stream_active: true,
+        },
     });
 }
 
-/// A sweep pass finishes in well under this. A base sweep older than that at the same elevation
-/// number is the *previous* volume's version of the tilt, which has to be dropped whole rather
-/// than stitched, or a rollover would leave last volume's radials standing in the gaps.
-const SAME_PASS_MS: i64 = 90_000;
+#[derive(Clone, Copy)]
+enum EmitKind {
+    Initial,
+    Block,
+    Cut,
+}
+
+/// Keep the prior completed pass under a new partial pass for at most two normal volume cycles.
+/// Every retained radial keeps its original collection timestamp, so the status reports its age.
+const RETAIN_PRIOR_MS: i64 = 10 * 60_000;
+
+fn oldest_radial_age_at(
+    scan: &Scan,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Option<Duration> {
+    scan.sweeps()
+        .iter()
+        .flat_map(|sweep| sweep.radials())
+        .filter_map(|radial| chrono::DateTime::from_timestamp_millis(radial.collection_timestamp()))
+        .filter_map(|collected| (now - collected).to_std().ok())
+        .max()
+}
 
 /// Stitch a partial sweep onto the base sweep of the same tilt, newest radial wins per azimuth.
 ///
@@ -307,11 +491,11 @@ const SAME_PASS_MS: i64 = 90_000;
 /// radials away and drew the volume with a wedge of empty azimuths: the seam.
 fn stitch(base: &Sweep, partial: &Sweep) -> Sweep {
     let start = |s: &Sweep| s.radials().iter().map(|r| r.collection_timestamp()).min();
-    let same_pass = match (start(base), start(partial)) {
-        (Some(b), Some(p)) => (p - b).abs() < SAME_PASS_MS,
+    let close_enough_to_retain = match (start(base), start(partial)) {
+        (Some(b), Some(p)) => (p - b).abs() < RETAIN_PRIOR_MS,
         _ => false,
     };
-    if !same_pass {
+    if !close_enough_to_retain {
         return partial.clone();
     }
     // ponytail: BTreeMap because it dedupes and sorts by azimuth in one pass, and a sweep is
@@ -322,12 +506,14 @@ fn stitch(base: &Sweep, partial: &Sweep) -> Sweep {
         .iter()
         .map(|r| (r.azimuth_number(), r.clone()))
         .collect();
-    by_az.extend(
-        partial
-            .radials()
-            .iter()
-            .map(|r| (r.azimuth_number(), r.clone())),
-    );
+    for radial in partial.radials() {
+        let replace = by_az
+            .get(&radial.azimuth_number())
+            .is_none_or(|old| radial.collection_timestamp() >= old.collection_timestamp());
+        if replace {
+            by_az.insert(radial.azimuth_number(), radial.clone());
+        }
+    }
     Sweep::new(base.elevation_number(), by_az.into_values().collect())
 }
 
@@ -403,6 +589,32 @@ mod tests {
             false,
             Vec::new(),
         )
+    }
+
+    #[test]
+    fn scan_status_summary_reports_progress_and_latency() {
+        let mut status = ScanStatus {
+            provider: "test",
+            vcp: 212,
+            cuts_received: 3,
+            cuts_expected: 14,
+            radials_received: 720,
+            current_elevation_deg: Some(0.5),
+            latency: Duration::from_secs(8),
+            oldest_radial_age: Some(Duration::from_secs(12)),
+            sails_cuts: 2,
+            mrle_cuts: 0,
+            retries: 0,
+            stream_active: true,
+        };
+        assert_eq!(
+            status.summary(),
+            "VCP 212 · 0.5° · 3/14 cuts · 8s latency · oldest gate 12s · SAILS 2"
+        );
+        status.retries = 2;
+        assert!(status.summary().ends_with(" · 2 retries"));
+        status.stream_active = false;
+        assert!(status.summary().ends_with(" · archive fallback"));
     }
 
     // A sweep covering `azimuths` (as azimuth numbers), collected at `t_ms`.
@@ -505,11 +717,26 @@ mod tests {
     }
 
     #[test]
-    fn a_new_volume_replaces_the_tilt_instead_of_stitching_to_it() {
-        // Same tilt five minutes later is the next volume, not the rest of this pass. Keeping the
-        // old radials would leave last volume's echoes standing wherever the new one is thin.
+    fn a_new_partial_volume_retains_and_ages_prior_azimuths() {
         let base = Scan::new(vcp(212), vec![wedge(1, 0..720, 1_000)]);
         let partial = Scan::new(vcp(212), vec![wedge(1, 0..120, 301_000)]);
+        let (merged, _) = merge_scan(&base, partial);
+        assert_eq!(merged.sweeps()[0].radials().len(), 720);
+        assert_eq!(merged.sweeps()[0].radials()[0].collection_timestamp(), 301_000);
+        assert_eq!(merged.sweeps()[0].radials()[120].collection_timestamp(), 1_000);
+        assert_eq!(
+            oldest_radial_age_at(
+                &merged,
+                chrono::DateTime::from_timestamp_millis(301_000).unwrap(),
+            ),
+            Some(Duration::from_secs(300)),
+        );
+    }
+
+    #[test]
+    fn an_expired_prior_volume_does_not_fill_new_gaps() {
+        let base = Scan::new(vcp(212), vec![wedge(1, 0..720, 1_000)]);
+        let partial = Scan::new(vcp(212), vec![wedge(1, 0..120, 901_000)]);
         let (merged, _) = merge_scan(&base, partial);
         assert_eq!(merged.sweeps()[0].radials().len(), 120);
     }
@@ -522,6 +749,40 @@ mod tests {
         let r = merged.sweeps()[0].radials();
         assert_eq!(r.len(), 180, "overlap must dedupe, not duplicate");
         assert_eq!(r[60].collection_timestamp(), 9_000);
+    }
+
+    #[test]
+    fn reordered_and_duplicated_blocks_converge_without_corrupting_azimuths() {
+        let base = Scan::new(vcp(212), vec![wedge(1, 0..120, 1_000)]);
+        let (scan, _) = merge_scan(&base, Scan::new(vcp(212), vec![wedge(1, 240..360, 3_000)]));
+        let (scan, _) = merge_scan(&scan, Scan::new(vcp(212), vec![wedge(1, 120..240, 2_000)]));
+        let (scan, _) = merge_scan(&scan, Scan::new(vcp(212), vec![wedge(1, 200..300, 1_500)]));
+        let radials = scan.sweeps()[0].radials();
+        assert_eq!(radials.len(), 360);
+        assert!(radials
+            .windows(2)
+            .all(|pair| { pair[1].azimuth_number() == pair[0].azimuth_number() + 1 }));
+        assert_eq!(radials[250].collection_timestamp(), 3_000);
+    }
+
+    #[test]
+    fn chunk_assembly_matches_the_same_archived_level2_fixture() {
+        let archive = nexrad_data::volume::File::new(
+            include_bytes!("../tests/data/kdmx-one-sweep.bin").to_vec(),
+        );
+        let expected = archive.scan().expect("archive fixture decodes");
+        let records = archive.records().expect("archive fixture has records");
+        let mut start =
+            archive.data()[..std::mem::size_of::<nexrad_data::volume::Header>()].to_vec();
+        start.extend_from_slice(records[0].data());
+        let mut chunks = vec![Chunk::new(start).expect("start chunk")];
+        chunks.extend(
+            records[1..]
+                .iter()
+                .map(|record| Chunk::new(record.data().to_vec()).expect("data chunk")),
+        );
+        let actual = assemble_volume(chunks).expect("chunks assemble");
+        assert_eq!(actual, expected);
     }
 }
 
@@ -551,6 +812,8 @@ mod retry_tests {
         }
         assert!(split_framed(&framed[..framed.len() - 1]).is_err());
         assert!(split_framed(&framed[..2]).is_err());
-        assert!(split_framed(&[]).expect("empty framing is an empty window").is_empty());
+        assert!(split_framed(&[])
+            .expect("empty framing is an empty window")
+            .is_empty());
     }
 }

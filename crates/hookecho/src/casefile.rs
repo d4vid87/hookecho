@@ -1,0 +1,205 @@
+//! Portable case manifests: pane layout plus exact source-object identities and selected times.
+
+use crate::workspace::Workspace;
+use chrono::{DateTime, Utc};
+
+pub const SCHEMA_VERSION: u16 = 1;
+const MAX_OBJECTS_PER_PANE: usize = 2048;
+
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct CaseManifest {
+    pub schema_version: u16,
+    pub name: String,
+    pub created_at: DateTime<Utc>,
+    pub workspace: Workspace,
+    pub panes: Vec<CasePane>,
+    #[serde(default)]
+    pub annotations: Vec<CaseStroke>,
+    #[serde(default)]
+    pub bookmarks: Vec<crate::settings::Bookmark>,
+}
+
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct CasePane {
+    pub site: String,
+    pub selected_time: Option<DateTime<Utc>>,
+    /// Immutable upstream object names in playback order.
+    pub radar_objects: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct CaseStroke {
+    pub points: Vec<[f64; 2]>,
+    pub rgba: [u8; 4],
+}
+
+impl CaseManifest {
+    pub fn new(
+        name: String,
+        workspace: Workspace,
+        panes: Vec<CasePane>,
+        annotations: Vec<CaseStroke>,
+        bookmarks: Vec<crate::settings::Bookmark>,
+    ) -> anyhow::Result<Self> {
+        let manifest = Self {
+            schema_version: SCHEMA_VERSION,
+            name,
+            created_at: Utc::now(),
+            workspace,
+            panes,
+            annotations,
+            bookmarks,
+        };
+        manifest.validate()?;
+        Ok(manifest)
+    }
+
+    pub fn from_json(json: &str) -> anyhow::Result<Self> {
+        let manifest: Self = serde_json::from_str(json)?;
+        manifest.validate()?;
+        Ok(manifest)
+    }
+
+    pub fn to_json(&self) -> anyhow::Result<String> {
+        self.validate()?;
+        Ok(serde_json::to_string_pretty(self)?)
+    }
+
+    pub fn to_markdown(&self) -> anyhow::Result<String> {
+        use std::fmt::Write;
+        self.validate()?;
+        let mut report = format!(
+            "# {}\n\nCreated: {}  \nWorkspace: {}  \nPanes: {}\n\n",
+            self.name.replace(['\n', '\r'], " "),
+            self.created_at.to_rfc3339(),
+            self.workspace.name.replace(['\n', '\r'], " "),
+            self.panes.len(),
+        );
+        for (index, pane) in self.panes.iter().enumerate() {
+            writeln!(report, "## Pane {} — {}\n", index + 1, pane.site)?;
+            writeln!(
+                report,
+                "Selected time: {}  ",
+                pane.selected_time
+                    .map(|time| time.to_rfc3339())
+                    .unwrap_or_else(|| "live".into())
+            )?;
+            writeln!(report, "Radar objects: {}\n", pane.radar_objects.len())?;
+            for object in &pane.radar_objects {
+                writeln!(report, "- `{object}`")?;
+            }
+            report.push('\n');
+        }
+        writeln!(report, "## Analyst material\n")?;
+        writeln!(report, "Annotations: {}  ", self.annotations.len())?;
+        writeln!(report, "Bookmarks: {}\n", self.bookmarks.len())?;
+        for bookmark in &self.bookmarks {
+            writeln!(
+                report,
+                "- {} — {} ({:.4}, {:.4}, zoom {:.1})",
+                bookmark.name.replace(['\n', '\r'], " "),
+                bookmark.site,
+                bookmark.x,
+                bookmark.y,
+                bookmark.zoom
+            )?;
+        }
+        writeln!(report, "\n## Reproducible manifest\n\n```json")?;
+        report.push_str(&self.to_json()?);
+        report.push_str("\n```\n");
+        Ok(report)
+    }
+
+    fn validate(&self) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            self.schema_version == SCHEMA_VERSION,
+            "unsupported case manifest version {}",
+            self.schema_version
+        );
+        anyhow::ensure!(!self.name.trim().is_empty(), "case name is empty");
+        anyhow::ensure!(
+            self.workspace.panes.len() == self.panes.len(),
+            "case pane metadata does not match its workspace"
+        );
+        anyhow::ensure!(
+            self.panes.len() <= crate::workspace::MAX_PANES,
+            "case exceeds the pane resource limit"
+        );
+        anyhow::ensure!(
+            self.panes
+                .iter()
+                .all(|pane| pane.radar_objects.len() <= MAX_OBJECTS_PER_PANE),
+            "case contains too many radar objects"
+        );
+        anyhow::ensure!(
+            self.annotations.len() <= 1024
+                && self
+                    .annotations
+                    .iter()
+                    .all(|stroke| stroke.points.len() <= 100_000),
+            "case contains too many annotation points"
+        );
+        anyhow::ensure!(
+            self.bookmarks.len() <= 2048,
+            "case contains too many bookmarks"
+        );
+        for pane in &self.panes {
+            for name in &pane.radar_objects {
+                let object = wxdata::level2::Identifier::new(name.clone());
+                anyhow::ensure!(
+                    name.len() <= 128
+                        && object.site() == Some(pane.site.as_str())
+                        && object.date_time().is_some(),
+                    "case contains an invalid radar object"
+                );
+            }
+        }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn manifest_round_trips_and_rejects_mismatched_panes() {
+        let workspace = crate::workspace::starters().remove(0);
+        let panes = workspace
+            .panes
+            .iter()
+            .map(|_| CasePane {
+                site: "KTLX".into(),
+                selected_time: Some("2024-05-26T01:30:00Z".parse().unwrap()),
+                radar_objects: vec!["KTLX20240526_013000_V06".into()],
+            })
+            .collect();
+        let manifest = CaseManifest::new(
+            "May 25 outbreak".into(),
+            workspace,
+            panes,
+            vec![CaseStroke {
+                points: vec![[-97.3, 35.3], [-97.2, 35.4]],
+                rgba: [255, 80, 80, 255],
+            }],
+            Vec::new(),
+        )
+        .unwrap();
+        assert_eq!(
+            CaseManifest::from_json(&manifest.to_json().unwrap()).unwrap(),
+            manifest
+        );
+        let report = manifest.to_markdown().unwrap();
+        assert!(report.contains("# May 25 outbreak"));
+        assert!(report.contains("`KTLX20240526_013000_V06`"));
+        assert!(report.contains("\"schema_version\": 1"));
+
+        let mut bad = manifest;
+        bad.panes.pop();
+        assert!(bad
+            .to_json()
+            .unwrap_err()
+            .to_string()
+            .contains("pane metadata"));
+    }
+}

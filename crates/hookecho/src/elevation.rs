@@ -197,6 +197,67 @@ pub struct BeamSite {
     pub tilt_deg: f64,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct BeamCoverage {
+    pub ground_km: f64,
+    pub center_km_agl: f64,
+    pub bottom_km_agl: f64,
+    pub top_km_agl: f64,
+    pub blockage: f32,
+    pub tilt_deg: f64,
+}
+
+/// Beam centre, half-power envelope, and terrain blockage over one target point.
+pub fn coverage_at(site: BeamSite, target: [f64; 2], occult_deg: f64) -> Option<BeamCoverage> {
+    let (ground_km, _) = crate::geo::great_circle([site.lon, site.lat], target);
+    if !(0.0..MAX_RANGE_KM).contains(&ground_km) {
+        return None;
+    }
+    let height = |tilt: f64| wxdata::xsection::beam_height_km(ground_km, tilt).max(0.0);
+    Some(BeamCoverage {
+        ground_km,
+        center_km_agl: height(site.tilt_deg),
+        bottom_km_agl: height(site.tilt_deg - HALF_BEAMWIDTH_DEG),
+        top_km_agl: height(site.tilt_deg + HALF_BEAMWIDTH_DEG),
+        blockage: blockage_fraction(occult_deg, site.tilt_deg),
+        tilt_deg: site.tilt_deg,
+    })
+}
+
+/// Lowest transmitted tilt whose beam is not mostly blocked over `target`.
+pub fn lowest_usable_beam(
+    mut site: BeamSite,
+    target: [f64; 2],
+    elevations: &[f32],
+    occult_deg: f64,
+    max_blockage: f32,
+) -> Option<BeamCoverage> {
+    elevations.iter().copied().find_map(|tilt| {
+        site.tilt_deg = tilt as f64;
+        coverage_at(site, target, occult_deg).filter(|coverage| coverage.blockage <= max_blockage)
+    })
+}
+
+/// Best neighboring radar at one point: lowest usable beam centre, then shortest range.
+pub fn best_coverage(
+    sites: &[(BeamSite, &[f32], f64)],
+    target: [f64; 2],
+    max_blockage: f32,
+) -> Option<(usize, BeamCoverage)> {
+    sites
+        .iter()
+        .enumerate()
+        .filter_map(|(index, (site, elevations, occult_deg))| {
+            lowest_usable_beam(*site, target, elevations, *occult_deg, max_blockage)
+                .map(|coverage| (index, coverage))
+        })
+        .min_by(|(_, a), (_, b)| {
+            a.center_km_agl
+                .total_cmp(&b.center_km_agl)
+                .then(a.ground_km.total_cmp(&b.ground_km))
+        })
+}
+
 /// Antenna height above the site's registry ground elevation, for a site we have no measurement
 /// for. Real per-site heights live in [`wxdata::towers`] — they run from 10 m to 55 m, so the flat
 /// 20 m this used to be was wrong by up to 35 m, about a fifth of a degree of beam elevation at
@@ -324,6 +385,43 @@ mod tests {
         let wall = terrain_angle_deg(radar_msl, 4000.0, 40.0);
         assert_eq!(blockage_fraction(wall, tilt), 1.0);
         assert!(wall > grazing);
+    }
+
+    #[test]
+    fn beam_envelope_and_lowest_usable_tilt_share_the_terrain_model() {
+        let site = BeamSite {
+            lon: -97.0,
+            lat: 35.0,
+            ground_m: 300.0,
+            tower_m: 20.0,
+            tilt_deg: 0.5,
+        };
+        let target = crate::geo::destination_point([site.lon, site.lat], 90.0, 100.0);
+        let coverage = coverage_at(site, target, 0.0).unwrap();
+        assert!(coverage.bottom_km_agl < coverage.center_km_agl);
+        assert!(coverage.center_km_agl < coverage.top_km_agl);
+        let usable = lowest_usable_beam(site, target, &[0.5, 1.5], 0.8, 0.5).unwrap();
+        assert_eq!(usable.tilt_deg, 1.5, "terrain blocks the lowest tilt");
+    }
+
+    #[test]
+    fn coverage_comparison_prefers_the_lower_neighboring_beam() {
+        let base = BeamSite {
+            lon: -97.0,
+            lat: 35.0,
+            ground_m: 300.0,
+            tower_m: 20.0,
+            tilt_deg: 0.5,
+        };
+        let far = BeamSite { lon: -99.0, ..base };
+        let tilts = [0.5];
+        let best = best_coverage(
+            &[(far, &tilts, -5.0), (base, &tilts, -5.0)],
+            [-96.5, 35.0],
+            0.5,
+        )
+        .unwrap();
+        assert_eq!(best.0, 1);
     }
 
     /// The DEM zoom is process-global, and cargo runs tests in parallel — the tests that flip it

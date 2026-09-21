@@ -6,6 +6,10 @@
 //! MRMS field-layer render pipeline (a plate-carrée→mercator warp).
 
 use crate::alerts::USER_AGENT;
+use crate::field::{
+    DataClass, DataStamp, FieldDescriptor, FieldFamily, FieldFrame, FieldId, MissingData,
+    ModelDefinition, QualitySummary, SamplingPolicy, ValueKind,
+};
 use crate::mrms::MrmsField;
 use chrono::{DateTime, Datelike, Timelike, Utc};
 use futures_util::StreamExt;
@@ -16,6 +20,126 @@ const NAM_BUCKET: &str = "https://noaa-nam-pds.s3.amazonaws.com";
 /// The National Blend of Models, in GRIB2 with `.idx` sidecars. Not `noaa-nbm-pds`: that bucket
 /// republished as per-element GeoTIFF, which would need a TIFF decoder to read one field.
 const NBM_BUCKET: &str = "https://noaa-nbm-grib2-pds.s3.amazonaws.com";
+const RRFS_BUCKET: &str = "https://noaa-rrfs-ops-pds.s3.amazonaws.com";
+
+pub static REFLECTIVITY_DESCRIPTOR: FieldDescriptor = FieldDescriptor {
+    id: FieldId("model.hrrr.composite-reflectivity"),
+    source: "NOAA HRRR",
+    family: FieldFamily::Model,
+    display_name: "HRRR composite reflectivity",
+    short_name: "HRRR Future Radar",
+    search_aliases: &["future radar", "forecast radar", "refc", "dbz"],
+    units: "dBZ",
+    value_kind: ValueKind::Scalar,
+    palette_key: "reflectivity",
+    sampling: SamplingPolicy::Bilinear,
+    missing: MissingData::Nan,
+    time_policy: None,
+    supports_contours: true,
+    supports_difference: true,
+};
+
+pub static CAPE_DESCRIPTOR: FieldDescriptor = FieldDescriptor {
+    id: FieldId("model.mesoscale.cape"),
+    source: "NOAA regional models",
+    family: FieldFamily::Model,
+    display_name: "Surface convective available potential energy",
+    short_name: "CAPE",
+    search_aliases: &["instability", "environment", "hrrr", "rap"],
+    units: "J/kg",
+    value_kind: ValueKind::Scalar,
+    palette_key: "cape",
+    sampling: SamplingPolicy::Bilinear,
+    missing: MissingData::Nan,
+    time_policy: None,
+    supports_contours: true,
+    supports_difference: true,
+};
+
+pub static SRH_DESCRIPTOR: FieldDescriptor = FieldDescriptor {
+    id: FieldId("model.mesoscale.srh"),
+    source: "NOAA regional models",
+    family: FieldFamily::Model,
+    display_name: "Storm-relative helicity",
+    short_name: "SRH",
+    search_aliases: &["shear", "environment", "hrrr", "rap"],
+    units: "m²/s²",
+    value_kind: ValueKind::Scalar,
+    palette_key: "srh",
+    sampling: SamplingPolicy::Bilinear,
+    missing: MissingData::Nan,
+    time_policy: None,
+    supports_contours: true,
+    supports_difference: true,
+};
+
+pub static UPDRAFT_HELICITY_DESCRIPTOR: FieldDescriptor = FieldDescriptor {
+    id: FieldId("model.hrrr.updraft-helicity-swath"),
+    source: "NOAA HRRR",
+    family: FieldFamily::Model,
+    display_name: "HRRR updraft helicity swath",
+    short_name: "Future Rotation Tracks",
+    search_aliases: &["uh", "rotation", "storm track"],
+    units: "m²/s²",
+    value_kind: ValueKind::Accumulation,
+    palette_key: "updraft-helicity",
+    sampling: SamplingPolicy::Nearest,
+    missing: MissingData::Nan,
+    time_policy: None,
+    supports_contours: false,
+    supports_difference: false,
+};
+
+pub static SNOWFALL_DESCRIPTOR: FieldDescriptor = FieldDescriptor {
+    id: FieldId("model.hrrr.snowfall"),
+    source: "NOAA HRRR",
+    family: FieldFamily::Model,
+    display_name: "HRRR accumulated snowfall",
+    short_name: "Forecast Snowfall",
+    search_aliases: &["snow", "accumulation", "asnow"],
+    units: "m",
+    value_kind: ValueKind::Accumulation,
+    palette_key: "snowfall",
+    sampling: SamplingPolicy::Nearest,
+    missing: MissingData::Nan,
+    time_policy: None,
+    supports_contours: false,
+    supports_difference: false,
+};
+
+pub static SMOKE_DESCRIPTOR: FieldDescriptor = FieldDescriptor {
+    id: FieldId("model.hrrr.smoke"),
+    source: "NOAA HRRR",
+    family: FieldFamily::Model,
+    display_name: "HRRR near-surface smoke",
+    short_name: "Wildfire Smoke",
+    search_aliases: &["mass density", "air quality", "fire"],
+    units: "kg/m³",
+    value_kind: ValueKind::Scalar,
+    palette_key: "smoke",
+    sampling: SamplingPolicy::Bilinear,
+    missing: MissingData::Nan,
+    time_policy: None,
+    supports_contours: true,
+    supports_difference: false,
+};
+
+pub static THUNDER_PROBABILITY_DESCRIPTOR: FieldDescriptor = FieldDescriptor {
+    id: FieldId("model.nbm.thunder-probability"),
+    source: "NOAA NBM",
+    family: FieldFamily::Model,
+    display_name: "NBM thunder probability",
+    short_name: "Thunder Probability",
+    search_aliases: &["tstm", "lightning", "nbm"],
+    units: "%",
+    value_kind: ValueKind::Probability,
+    palette_key: "thunder-probability",
+    sampling: SamplingPolicy::Bilinear,
+    missing: MissingData::Nan,
+    time_policy: None,
+    supports_contours: true,
+    supports_difference: false,
+};
 
 /// Which model to pull a field from.
 ///
@@ -28,6 +152,9 @@ pub enum Model {
     #[default]
     Hrrr,
     Rap,
+    /// RRFS v1 pre-implementation parallel. The adapter uses the operational bucket contract;
+    /// source status remains explicit until NOAA promotes it operationally.
+    Rrfs,
     /// HRRR's pressure-level file. Not offered as a user-facing source — it exists for the
     /// effective-layer parameters, which need real columns.
     HrrrPressure,
@@ -40,27 +167,133 @@ pub enum Model {
 }
 
 impl Model {
+    pub fn definition(self) -> ModelDefinition {
+        match self {
+            Self::Hrrr => ModelDefinition {
+                id: "hrrr",
+                label: "HRRR",
+                provider: "NOAA",
+                base_url: BUCKET,
+                cycle_hours: 1,
+                max_forecast_hour: 48,
+                grid: "3 km Lambert conformal CONUS",
+                regrid_resolution_deg: 0.04,
+                index_suffix: ".idx",
+                expected_latency_minutes: None,
+                domain: "CONUS",
+                ensemble: false,
+            },
+            Self::HrrrPressure => ModelDefinition {
+                id: "hrrr-pressure",
+                label: "HRRR pressure",
+                grid: "3 km Lambert conformal CONUS pressure levels",
+                ..Self::Hrrr.definition()
+            },
+            Self::Rap => ModelDefinition {
+                id: "rap",
+                label: "RAP",
+                provider: "NOAA",
+                base_url: RAP_BUCKET,
+                cycle_hours: 1,
+                max_forecast_hour: 51,
+                grid: "13 km Lambert conformal North America",
+                regrid_resolution_deg: 0.15,
+                index_suffix: ".idx",
+                expected_latency_minutes: None,
+                domain: "North America",
+                ensemble: false,
+            },
+            Self::Rrfs => ModelDefinition {
+                id: "rrfs-v1",
+                label: "RRFS v1 parallel",
+                provider: "NOAA",
+                base_url: RRFS_BUCKET,
+                cycle_hours: 1,
+                max_forecast_hour: 84,
+                grid: "3 km Lambert conformal CONUS",
+                regrid_resolution_deg: 0.04,
+                index_suffix: ".idx",
+                expected_latency_minutes: None,
+                domain: "CONUS",
+                ensemble: false,
+            },
+            Self::NamNest => ModelDefinition {
+                id: "nam-conus-nest",
+                label: "NAM 3 km nest",
+                provider: "NOAA",
+                base_url: NAM_BUCKET,
+                cycle_hours: 6,
+                max_forecast_hour: 60,
+                grid: "3 km Lambert conformal CONUS nest",
+                regrid_resolution_deg: 0.04,
+                index_suffix: ".idx",
+                expected_latency_minutes: None,
+                domain: "CONUS",
+                ensemble: false,
+            },
+            Self::Nbm => ModelDefinition {
+                id: "nbm",
+                label: "NBM",
+                provider: "NOAA",
+                base_url: NBM_BUCKET,
+                cycle_hours: 1,
+                max_forecast_hour: 264,
+                grid: "2.5 km CONUS blend",
+                regrid_resolution_deg: 0.035,
+                index_suffix: ".idx",
+                expected_latency_minutes: None,
+                domain: "CONUS",
+                ensemble: false,
+            },
+        }
+    }
+
+    pub fn validate_forecast_hour(self, hour: u16) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            hour <= self.definition().max_forecast_hour,
+            "{} forecast hour {hour} exceeds F{}",
+            self.label(),
+            self.definition().max_forecast_hour
+        );
+        Ok(())
+    }
+
+    pub fn supports_forecast_hour(self, cycle_hour: u32, hour: u16) -> bool {
+        match self {
+            Self::Hrrr | Self::HrrrPressure => {
+                hour <= 18 || cycle_hour.is_multiple_of(6) && hour <= 48
+            }
+            Self::Rap => hour <= 21 || cycle_hour % 6 == 3 && hour <= 51,
+            Self::Rrfs => hour <= 18 || cycle_hour.is_multiple_of(6) && hour <= 84,
+            Self::NamNest | Self::Nbm => hour <= self.definition().max_forecast_hour,
+        }
+    }
+
     /// The GRIB2 file for a cycle + forecast hour.
     fn url(self, date: &str, cycle_hour: u32, fh: u8) -> String {
+        let base = self.definition().base_url;
         match self {
             Model::Hrrr => {
-                format!("{BUCKET}/hrrr.{date}/conus/hrrr.t{cycle_hour:02}z.wrfsfcf{fh:02}.grib2")
+                format!("{base}/hrrr.{date}/conus/hrrr.t{cycle_hour:02}z.wrfsfcf{fh:02}.grib2")
             }
             // The pressure-level file: full mandatory levels with dewpoint and with U and V as
             // separate messages, which the surface file and RAP's awp130 both lack.
             Model::HrrrPressure => {
-                format!("{BUCKET}/hrrr.{date}/conus/hrrr.t{cycle_hour:02}z.wrfprsf{fh:02}.grib2")
+                format!("{base}/hrrr.{date}/conus/hrrr.t{cycle_hour:02}z.wrfprsf{fh:02}.grib2")
             }
             // awp130 is the 13 km CONUS pressure/surface product — the one with CAPE and helicity.
             Model::Rap => {
-                format!("{RAP_BUCKET}/rap.{date}/rap.t{cycle_hour:02}z.awp130pgrbf{fh:02}.grib2")
+                format!("{base}/rap.{date}/rap.t{cycle_hour:02}z.awp130pgrbf{fh:02}.grib2")
             }
+            Model::Rrfs => format!(
+                "{base}/rrfs.{date}/{cycle_hour:02}/rrfs.t{cycle_hour:02}z.2dfld.3km.f{fh:03}.conus.grib2"
+            ),
             Model::NamNest => format!(
-                "{NAM_BUCKET}/nam.{date}/nam.t{cycle_hour:02}z.conusnest.hiresf{fh:02}.tm00.grib2"
+                "{base}/nam.{date}/nam.t{cycle_hour:02}z.conusnest.hiresf{fh:02}.tm00.grib2"
             ),
             // `co` is the CONUS domain; the forecast hour is three digits here, not two.
             Model::Nbm => format!(
-                "{NBM_BUCKET}/blend.{date}/{cycle_hour:02}/core/blend.t{cycle_hour:02}z.core.f{fh:03}.co.grib2"
+                "{base}/blend.{date}/{cycle_hour:02}/core/blend.t{cycle_hour:02}z.core.f{fh:03}.co.grib2"
             ),
         }
     }
@@ -68,33 +301,18 @@ impl Model {
     /// Hours between cycles. Walking back an hour at a time past a model that runs every six only
     /// ever finds 404s.
     fn cycle_hours(self) -> u32 {
-        match self {
-            Model::NamNest => 6,
-            _ => 1,
-        }
+        self.definition().cycle_hours
     }
 
     /// Regular-grid cell size (degrees) for the regrid: a shade coarser than the model's native
     /// spacing, so the scatter fills every target cell instead of leaving a grid of holes.
     /// HRRR is ~3 km, RAP ~13 km.
     fn res_deg(self) -> f64 {
-        match self {
-            Model::Hrrr | Model::HrrrPressure => 0.04,
-            Model::Rap => 0.15,
-            // The NAM nest is 3 km like the HRRR; the NBM CONUS grid is 2.5 km.
-            Model::NamNest => 0.04,
-            Model::Nbm => 0.035,
-        }
+        self.definition().regrid_resolution_deg
     }
 
     pub fn label(self) -> &'static str {
-        match self {
-            Model::Hrrr => "HRRR",
-            Model::HrrrPressure => "HRRR pressure",
-            Model::Rap => "RAP",
-            Model::NamNest => "NAM 3 km nest",
-            Model::Nbm => "NBM",
-        }
+        self.definition().label
     }
 }
 
@@ -112,9 +330,62 @@ impl HrrrForecast {
     pub fn valid(&self) -> DateTime<Utc> {
         self.run + chrono::Duration::hours(self.fcst_hour as i64)
     }
+
+    /// Wrap future radar in the common field metadata path.
+    pub fn into_reflectivity_frame(self) -> FieldFrame {
+        self.into_frame(&REFLECTIVITY_DESCRIPTOR, Model::Hrrr)
+    }
+
+    pub fn into_frame(
+        self,
+        descriptor: &'static FieldDescriptor,
+        model: Model,
+    ) -> FieldFrame {
+        let date = self.run.format("%Y%m%d").to_string();
+        let source_identity = model.url(&date, self.run.hour(), self.fcst_hour);
+        self.into_frame_with_identity(descriptor, model, source_identity)
+    }
+
+    pub fn into_swath_frame(
+        self,
+        descriptor: &'static FieldDescriptor,
+        model: Model,
+    ) -> FieldFrame {
+        let date = self.run.format("%Y%m%d").to_string();
+        let first = model.url(&date, self.run.hour(), 1);
+        let last = model.url(&date, self.run.hour(), self.fcst_hour);
+        self.into_frame_with_identity(descriptor, model, format!("{first} … {last}"))
+    }
+
+    fn into_frame_with_identity(
+        self,
+        descriptor: &'static FieldDescriptor,
+        model: Model,
+        source_identity: String,
+    ) -> FieldFrame {
+        let valid_time = self.valid();
+        FieldFrame::new(
+            descriptor,
+            self.field,
+            DataStamp {
+                source_identity,
+                issue_time: Some(self.run),
+                run_time: Some(self.run),
+                valid_time,
+                received_time: Utc::now(),
+                class: if model == Model::Rap {
+                    DataClass::Analysis
+                } else {
+                    DataClass::Forecast
+                },
+                quality: QualitySummary::Unknown,
+                available_members: None,
+            },
+        )
+    }
 }
 
-/// Fetch the REFC forecast for `fcst_hour` (0..=18) from the most recent available HRRR run.
+/// Fetch the REFC forecast for `fcst_hour` from the most recent available HRRR run.
 /// Tries recent cycles (allowing for the ~1–2 h data latency), newest first.
 pub async fn fetch_forecast(http: &reqwest::Client, fcst_hour: u8) -> anyhow::Result<HrrrForecast> {
     fetch_field(
@@ -139,10 +410,14 @@ pub async fn fetch_field(
     fcst_hour: u8,
     min_valid: f64,
 ) -> anyhow::Result<HrrrForecast> {
-    let fh = fcst_hour.min(18);
+    model.validate_forecast_hour(fcst_hour.into())?;
+    let fh = fcst_hour;
     let now = Utc::now();
     let mut last_err = None;
-    for run in recent_cycles(model, now) {
+    for run in recent_cycles(model, now)
+        .into_iter()
+        .filter(|run| model.supports_forecast_hour(run.hour(), fh.into()))
+    {
         match fetch_run_field(http, model, run, fh, var, level, min_valid).await {
             Ok(field) => {
                 return Ok(HrrrForecast {
@@ -208,7 +483,8 @@ pub async fn fetch_fields_one_run_capped(
     specs: &[(&str, &str, f64)],
     max_dim: Option<usize>,
 ) -> anyhow::Result<(DateTime<Utc>, Vec<MrmsField>)> {
-    let fh = fcst_hour.min(18);
+    model.validate_forecast_hour(fcst_hour.into())?;
+    let fh = fcst_hour;
     // Owned up front: the concurrent stream below must not borrow `specs` across an await, or
     // the whole future stops being `Send` and the app can't spawn it.
     let owned_specs: Vec<(String, String, f64)> = specs
@@ -217,7 +493,10 @@ pub async fn fetch_fields_one_run_capped(
         .collect();
     let now = Utc::now();
     let mut last_err = None;
-    for run in recent_cycles(model, now) {
+    for run in recent_cycles(model, now)
+        .into_iter()
+        .filter(|run| model.supports_forecast_hour(run.hour(), fh.into()))
+    {
         let results: Vec<_> = futures_util::stream::iter(owned_specs.clone().into_iter().map(
             |(var, level, mv): (String, String, f64)| {
                 let http = http.clone();
@@ -441,23 +720,10 @@ async fn fetch_run_field(
     let (start, end) = field_byte_range(&idx, var, level)
         .ok_or_else(|| anyhow::anyhow!("no {var}:{level} in idx"))?;
 
-    let range = match end {
-        Some(e) => format!("bytes={start}-{}", e - 1),
-        None => format!("bytes={start}-"),
-    };
-    let bytes = http
-        .get(crate::net::fetch_url(&base))
-        .timeout(crate::net::FEED_TIMEOUT)
-        .header("User-Agent", USER_AGENT)
-        .header("Range", range)
-        .send()
-        .await?
-        .error_for_status()?
-        .bytes()
-        .await?;
+    let bytes = crate::object_cache::fetch_range(http, &base, start, end).await?;
 
     // gribberish can panic on some packings; contain it (see mrms::fetch_latest).
-    crate::task::guarded(|| decode_regrid(&bytes, model, min_valid))
+    crate::task::guarded(|| decode_regrid(&bytes.bytes, model, min_valid))
         .unwrap_or_else(|_| anyhow::bail!("{} grib decode panicked", model.label()))
 }
 
@@ -488,7 +754,19 @@ pub(crate) fn field_byte_range(idx: &str, var: &str, level: &str) -> Option<(u64
 
 /// Decode a single-message HRRR GRIB2 (Lambert grid) and scatter-regrid onto a regular lat/lon
 /// grid, keeping the max dBZ per target cell (reflectivity composites well under max).
-fn decode_regrid(raw: &[u8], model: Model, min_valid: f64) -> anyhow::Result<MrmsField> {
+pub(crate) fn decode_regrid(
+    raw: &[u8],
+    model: Model,
+    min_valid: f64,
+) -> anyhow::Result<MrmsField> {
+    decode_regrid_at_resolution(raw, model.res_deg(), min_valid)
+}
+
+pub(crate) fn decode_regrid_at_resolution(
+    raw: &[u8],
+    resolution_deg: f64,
+    min_valid: f64,
+) -> anyhow::Result<MrmsField> {
     use gribberish::data_message::DataMessage;
     use gribberish::message::read_message;
     let msg = read_message(raw, 0).ok_or_else(|| anyhow::anyhow!("no GRIB2 message"))?;
@@ -501,7 +779,7 @@ fn decode_regrid(raw: &[u8], model: Model, min_valid: f64) -> anyhow::Result<Mrm
         "hrrr latlng/data length mismatch"
     );
 
-    regrid(&lats, &lons, &data, time, model.res_deg(), min_valid)
+    regrid(&lats, &lons, &data, time, resolution_deg, min_valid)
 }
 
 /// Scatter native (lat, lon, value) triples onto a regular lat/lon grid (max per cell).
@@ -655,6 +933,40 @@ mod tests {
             Model::Rap.res_deg() > Model::Hrrr.res_deg(),
             "13 km vs 3 km"
         );
+        assert!(Model::Rrfs
+            .url("20260920", 18, 2)
+            .ends_with("rrfs.20260920/18/rrfs.t18z.2dfld.3km.f002.conus.grib2"));
+    }
+
+    #[test]
+    fn operational_models_have_complete_unique_definitions() {
+        let models = [
+            Model::Hrrr,
+            Model::Rap,
+            Model::Rrfs,
+            Model::NamNest,
+            Model::Nbm,
+        ];
+        let mut ids = std::collections::HashSet::new();
+        for model in models {
+            let definition = model.definition();
+            assert!(ids.insert(definition.id));
+            assert!(definition.base_url.starts_with("https://"));
+            assert!(definition.cycle_hours > 0);
+            assert!(definition.max_forecast_hour > 0);
+            assert_eq!(definition.index_suffix, ".idx");
+            assert!(!definition.grid.is_empty());
+            assert!(!definition.domain.is_empty());
+        }
+        assert!(Model::Hrrr.validate_forecast_hour(48).is_ok());
+        assert!(Model::Hrrr.validate_forecast_hour(49).is_err());
+        assert!(Model::Nbm.validate_forecast_hour(255).is_ok());
+        assert!(Model::Hrrr.supports_forecast_hour(12, 48));
+        assert!(!Model::Hrrr.supports_forecast_hour(13, 19));
+        assert!(Model::Rap.supports_forecast_hour(9, 51));
+        assert!(!Model::Rap.supports_forecast_hour(10, 22));
+        assert!(Model::Rrfs.supports_forecast_hour(18, 84));
+        assert!(!Model::Rrfs.supports_forecast_hour(19, 19));
     }
 
     #[tokio::test]
@@ -699,6 +1011,27 @@ mod tests {
         eprintln!("peak CAPE — RAP {max:.0} vs HRRR {hmax:.0} J/kg");
         let ratio = (max as f64 / hmax.max(1.0) as f64).max(hmax as f64 / max.max(1.0) as f64);
         assert!(ratio < 3.0, "RAP {max} and HRRR {hmax} disagree wildly");
+    }
+
+    /// `cargo test -p wxdata rrfs_parallel_live -- --ignored --nocapture`
+    #[tokio::test]
+    #[ignore = "network"]
+    async fn rrfs_parallel_live() {
+        let http = reqwest::Client::new();
+        let forecast = fetch_field(&http, Model::Rrfs, "CAPE", "surface", 0, 0.0)
+            .await
+            .expect("RRFS parallel CAPE");
+        let finite = forecast
+            .field
+            .values
+            .iter()
+            .filter(|value| value.is_finite())
+            .count();
+        eprintln!(
+            "RRFS {}x{} run {} — {finite} finite cells",
+            forecast.field.nx, forecast.field.ny, forecast.run
+        );
+        assert!(finite > 1000);
     }
 
     #[tokio::test]
@@ -855,5 +1188,68 @@ mod tests {
         let nbm = Model::Nbm.url("20260825", 12, 6);
         assert!(nbm.contains("noaa-nbm-grib2-pds"));
         assert!(nbm.ends_with("blend.t12z.core.f006.co.grib2"));
+    }
+
+    #[test]
+    fn future_radar_frame_carries_model_provenance() {
+        let run = "2026-08-25T12:00:00Z".parse::<DateTime<Utc>>().unwrap();
+        let frame = HrrrForecast {
+            field: MrmsField {
+                values: vec![42.0],
+                nx: 1,
+                ny: 1,
+                lon_west: -100.0,
+                lon_east: -99.0,
+                lat_north: 40.0,
+                lat_south: 39.0,
+                time: run + chrono::Duration::hours(3),
+            },
+            run,
+            fcst_hour: 3,
+        }
+        .into_reflectivity_frame();
+        assert_eq!(frame.descriptor.id, FieldId("model.hrrr.composite-reflectivity"));
+        assert_eq!(frame.stamp.run_time, Some(run));
+        assert_eq!(frame.stamp.valid_time, run + chrono::Duration::hours(3));
+        assert_eq!(frame.stamp.class, DataClass::Forecast);
+        assert!(frame.stamp.source_identity.ends_with("wrfsfcf03.grib2"));
+        assert_eq!(frame.sample(-99.5, 39.5).value, Some(42.0));
+
+        let analysis = HrrrForecast {
+            field: MrmsField {
+                values: vec![1_500.0],
+                nx: 1,
+                ny: 1,
+                lon_west: -100.0,
+                lon_east: -99.0,
+                lat_north: 40.0,
+                lat_south: 39.0,
+                time: run,
+            },
+            run,
+            fcst_hour: 0,
+        }
+        .into_frame(&CAPE_DESCRIPTOR, Model::Rap);
+        assert_eq!(analysis.stamp.class, DataClass::Analysis);
+        assert!(analysis.stamp.source_identity.contains("noaa-rap-pds"));
+        assert_eq!(analysis.descriptor.units, "J/kg");
+
+        let swath = HrrrForecast {
+            field: MrmsField {
+                values: vec![75.0],
+                nx: 1,
+                ny: 1,
+                lon_west: -100.0,
+                lon_east: -99.0,
+                lat_north: 40.0,
+                lat_south: 39.0,
+                time: run + chrono::Duration::hours(6),
+            },
+            run,
+            fcst_hour: 6,
+        }
+        .into_swath_frame(&UPDRAFT_HELICITY_DESCRIPTOR, Model::Hrrr);
+        assert!(swath.stamp.source_identity.contains("wrfsfcf01.grib2"));
+        assert!(swath.stamp.source_identity.ends_with("wrfsfcf06.grib2"));
     }
 }

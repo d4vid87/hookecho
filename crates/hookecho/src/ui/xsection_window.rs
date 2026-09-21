@@ -25,6 +25,7 @@ pub fn show(
     xs: &CrossSection,
     tex: &egui::TextureHandle,
     moment: &mut wxdata::level2::Moment,
+    show_beams: &mut bool,
     drawer: &mut crate::ui::drawer::Drawer,
 ) -> bool {
     use wxdata::level2::Moment;
@@ -73,6 +74,8 @@ pub fn show(
                     || xs.to_csv(),
                 );
             });
+            ui.checkbox(show_beams, "Beam paths")
+                .on_hover_text("Show 4/3-earth beam centers for every transmitted tilt");
         });
         ui.separator();
         // Draw the panel stretched to a readable size (distance wide, height tall).
@@ -85,6 +88,30 @@ pub fn show(
         let resp = ui.add(img);
         // Axis captions along the drawn rect.
         let rect = resp.rect;
+        if *show_beams {
+            let color = egui::Color32::from_rgba_unmultiplied(235, 235, 235, 125);
+            for path in &xs.beam_paths_km {
+                let mut previous = None;
+                for (col, height) in path.iter().enumerate() {
+                    let point = height.map(|height| {
+                        egui::pos2(
+                            egui::lerp(
+                                rect.left()..=rect.right(),
+                                col as f32 / (xs.cols - 1).max(1) as f32,
+                            ),
+                            egui::lerp(
+                                rect.bottom()..=rect.top(),
+                                (height / xs.max_height_km).clamp(0.0, 1.0),
+                            ),
+                        )
+                    });
+                    if let (Some(a), Some(b)) = (previous, point) {
+                        ui.painter().line_segment([a, b], egui::Stroke::new(0.8, color));
+                    }
+                    previous = point;
+                }
+            }
+        }
         let cap = |ui: &egui::Ui, pos, anchor, txt: &str| {
             ui.painter().text(
                 pos,

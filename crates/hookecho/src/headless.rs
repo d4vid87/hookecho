@@ -14,14 +14,22 @@ use wxdata::level2::{self, Moment};
 /// Process-global rather than threaded through the dozen render entry points, because every
 /// caller of those is already serialized: the CLI renders once and exits, and the server holds a
 /// render mutex for the whole call. Set it inside that lock or not at all.
-static SIZE_PX: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(1000);
+static WIDTH_PX: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(1000);
+static HEIGHT_PX: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(1000);
 /// The zoom override as `f64` bits, or `u64::MAX` for "no override" — no float is that pattern.
 static ZOOM_OVERRIDE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(u64::MAX);
 
 /// Edge length of the rendered PNG. Square: every camera the harness builds is square, and a
 /// non-square viewport would need the world-to-clip uniform to carry an aspect ratio it doesn't.
 fn size() -> u32 {
-    SIZE_PX.load(std::sync::atomic::Ordering::Relaxed)
+    WIDTH_PX.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+fn dimensions() -> (u32, u32) {
+    (
+        WIDTH_PX.load(std::sync::atomic::Ordering::Relaxed),
+        HEIGHT_PX.load(std::sync::atomic::Ordering::Relaxed),
+    )
 }
 
 /// Whether the renders that follow carry warning polygons, a caption, a color bar and city
@@ -30,31 +38,56 @@ fn size() -> u32 {
 ///
 /// Process-global for the same reason as the two knobs above, and set under the same lock.
 static EXTRAS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static TRANSPARENT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 /// Ask for warnings + chrome (or not) on the renders that follow.
 pub fn set_extras(on: bool) {
     EXTRAS.store(on, std::sync::atomic::Ordering::Relaxed);
 }
 
+/// Clear headless PNG output to alpha zero. Opaque basemap tiles remain opaque when requested.
+pub fn set_transparent(on: bool) {
+    TRANSPARENT.store(on, std::sync::atomic::Ordering::Relaxed);
+}
+
+fn clear_color() -> wgpu::Color {
+    background_clear(TRANSPARENT.load(std::sync::atomic::Ordering::Relaxed))
+}
+
+fn background_clear(transparent: bool) -> wgpu::Color {
+    wgpu::Color {
+        r: 0.05,
+        g: 0.05,
+        b: 0.08,
+        a: if transparent { 0.0 } else { 1.0 },
+    }
+}
+
 fn extras() -> bool {
     EXTRAS.load(std::sync::atomic::Ordering::Relaxed)
 }
 
-/// Ask for a different output size (256..=2048 px) and/or zoom for the renders that follow.
+/// Ask for different output dimensions (256..=4096 px per edge) and/or zoom.
 ///
 /// `px: None` leaves the size where it was, but **`zoom: None` clears the override** rather than
 /// leaving it: the caller is saying "frame this the way the site deserves", and on a server the
 /// previous caller was somebody else's request. The national mosaic asks for a continental zoom
 /// every four minutes, and a sticky override handed that framing to every site snapshot after it
 /// — a radar page showing the whole continent with a `KFWS · REF 0.5°` caption on it.
-pub fn set_output(px: Option<u32>, zoom: Option<f64>) {
-    if let Some(px) = px {
-        SIZE_PX.store(px.clamp(256, 2048), std::sync::atomic::Ordering::Relaxed);
+pub fn set_output(px: Option<(u32, u32)>, zoom: Option<f64>) {
+    if let Some((width, height)) = px {
+        let (width, height) = clamp_dimensions(width, height);
+        WIDTH_PX.store(width, std::sync::atomic::Ordering::Relaxed);
+        HEIGHT_PX.store(height, std::sync::atomic::Ordering::Relaxed);
     }
     ZOOM_OVERRIDE.store(
         zoom.map_or(u64::MAX, |z| z.clamp(1.0, 14.0).to_bits()),
         std::sync::atomic::Ordering::Relaxed,
     );
+}
+
+fn clamp_dimensions(width: u32, height: u32) -> (u32, u32) {
+    (width.clamp(256, 4096), height.clamp(256, 4096))
 }
 
 /// Built-in alternate palette for the renders that follow, or `None` for each moment's default.
@@ -377,9 +410,9 @@ pub fn run(
     );
 
     let camera = cam_or_env(sweep.radar_lon as f64, sweep.radar_lat as f64, 7.0);
-    let (center, scale) = camera.world_to_clip_uniform((size() as f32, size() as f32));
-
-    let vp = (size() as f32, size() as f32);
+    let (width, height) = dimensions();
+    let vp = (width as f32, height as f32);
+    let (center, scale) = camera.world_to_clip_uniform(vp);
     let client = reqwest::Client::builder()
         .user_agent("Mozilla/5.0 (compatible; hookecho/0.0; +github.com/d4vid87/hookecho)")
         .build()?;
@@ -637,7 +670,7 @@ pub fn run_mosaic(site: &str) -> anyhow::Result<()> {
     println!(
         "  contributed: {}
   grid {}x{}  lon {:.2}..{:.2}  lat {:.2}..{:.2}",
-        m.sites.join(", "),
+        m.provenance.sites.join(", "),
         f.nx,
         f.ny,
         f.lon_west,
@@ -1149,7 +1182,7 @@ pub fn run_live(out_path: &str, site: &str, moment: Moment) -> anyhow::Result<()
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
         let site_owned = site.to_string();
         let handle = tokio::spawn(async move {
-            let _ = wxdata::live::stream(
+            let _ = wxdata::live::PUBLIC_PROVIDER.stream(
                 site_owned,
                 base,
                 || true,
@@ -1409,6 +1442,7 @@ pub fn run_mrms(out_path: &str) -> anyhow::Result<()> {
     let (wx0, wy0) = lonlat_to_world(field.lon_west, field.lat_north);
     let (wx1, wy1) = lonlat_to_world(field.lon_east, field.lat_south);
     let upload = MrmsUpload {
+        rgba: false,
         data,
         nx: field.nx as u32,
         ny: field.ny as u32,
@@ -1637,8 +1671,17 @@ pub fn run_global(model: &str, slug: &str, out_path: &str) -> anyhow::Result<()>
     use wxdata::global::{GlobalField, GlobalModel};
     let model = match model {
         "ecmwf" => GlobalModel::Ecmwf,
+        "gefs" | "gefs-mean" => GlobalModel::GefsMean,
+        "gefs-spread" => GlobalModel::GefsSpread,
+        value if value.starts_with("gefs-member-") => GlobalModel::GefsMember(
+            value[12..]
+                .parse()
+                .map_err(|_| anyhow::anyhow!("invalid GEFS member: {value}"))?,
+        ),
         "gfs" => GlobalModel::Gfs,
-        other => anyhow::bail!("unknown global model '{other}' (gfs|ecmwf)"),
+        other => anyhow::bail!(
+            "unknown global model '{other}' (gfs|gefs|gefs-spread|gefs-member-0..30|ecmwf)"
+        ),
     };
     let gfield = GlobalField::from_slug(slug)
         .ok_or_else(|| anyhow::anyhow!("unknown global field '{slug}'"))?;
@@ -2314,6 +2357,7 @@ pub fn run_hrrr_layer(
         let (wx0, wy0) = lonlat_to_world(f.lon_west, f.lat_north);
         let (wx1, wy1) = lonlat_to_world(f.lon_east, f.lat_south);
         let upload = MrmsUpload {
+            rgba: false,
             data,
             nx: f.nx as u32,
             ny: f.ny as u32,
@@ -2368,6 +2412,7 @@ pub fn run_hrrr_layer(
     let (wx0, wy0) = lonlat_to_world(f.lon_west, f.lat_north);
     let (wx1, wy1) = lonlat_to_world(f.lon_east, f.lat_south);
     let upload = MrmsUpload {
+        rgba: false,
         data,
         nx: f.nx as u32,
         ny: f.ny as u32,
@@ -2613,7 +2658,9 @@ pub fn run_3d(site: &str, out_path: &str, threshold_dbz: Option<f32>) -> anyhow:
         ..Default::default()
     };
     let uniform =
-        crate::render3d::orbit_uniform(30.0, 25.0, 3.0, 1.0, N as u32, NZ as u32, 256, view);
+        crate::render3d::orbit_uniform(
+            30.0, 25.0, 3.0, 1.0, N as u32, NZ as u32, 256, view, false, &[],
+        );
 
     let (device, queue, adapter) = init_gpu(&rt)?;
     println!("adapter: {}", adapter.get_info().name);
@@ -2993,12 +3040,7 @@ fn draw_and_read(
         queue,
         &view,
         pane,
-        wgpu::Color {
-            r: 0.05,
-            g: 0.05,
-            b: 0.08,
-            a: 1.0,
-        },
+        clear_color(),
     );
     read_target(device, queue, &target, size())
 }
@@ -3033,11 +3075,12 @@ fn render_to_png_stamped(
     let format = wgpu::TextureFormat::Rgba8UnormSrgb;
     let mut res = RenderResources::new(&device, format);
 
+    let (width, height) = dimensions();
     let target = device.create_texture(&wgpu::TextureDescriptor {
         label: Some("headless_target"),
         size: wgpu::Extent3d {
-            width: size(),
-            height: size(),
+            width,
+            height,
             depth_or_array_layers: 1,
         },
         mip_level_count: 1,
@@ -3053,21 +3096,16 @@ fn render_to_png_stamped(
         &queue,
         &view,
         &cb,
-        wgpu::Color {
-            r: 0.05,
-            g: 0.05,
-            b: 0.08,
-            a: 1.0,
-        },
+        clear_color(),
     );
 
     let bytes_per_pixel = 4u32;
-    let unpadded = size() * bytes_per_pixel;
+    let unpadded = width * bytes_per_pixel;
     let align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
     let padded = unpadded.div_ceil(align) * align;
     let buffer = device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("readback"),
-        size: (padded * size()) as u64,
+        size: (padded * height) as u64,
         usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
         mapped_at_creation: false,
     });
@@ -3085,12 +3123,12 @@ fn render_to_png_stamped(
             layout: wgpu::TexelCopyBufferLayout {
                 offset: 0,
                 bytes_per_row: Some(padded),
-                rows_per_image: Some(size()),
+                rows_per_image: Some(height),
             },
         },
         wgpu::Extent3d {
-            width: size(),
-            height: size(),
+            width,
+            height,
             depth_or_array_layers: 1,
         },
     );
@@ -3105,8 +3143,8 @@ fn render_to_png_stamped(
     rx.recv()??;
 
     let mapped = slice.get_mapped_range();
-    let mut rgba = Vec::with_capacity((unpadded * size()) as usize);
-    for row in 0..size() {
+    let mut rgba = Vec::with_capacity((unpadded * height) as usize);
+    for row in 0..height {
         let start = (row * padded) as usize;
         rgba.extend_from_slice(&mapped[start..start + unpadded as usize]);
     }
@@ -3114,9 +3152,9 @@ fn render_to_png_stamped(
     buffer.unmap();
 
     if let Some(stamp) = stamp {
-        crate::chrome::draw(&mut rgba, size(), size(), stamp);
+        crate::chrome::draw(&mut rgba, width, height, stamp);
     }
-    image::save_buffer(out_path, &rgba, size(), size(), image::ColorType::Rgba8)?;
+    image::save_buffer(out_path, &rgba, width, height, image::ColorType::Rgba8)?;
     println!("wrote {out_path}");
     Ok(())
 }
@@ -3131,6 +3169,26 @@ mod golden_tests {
     /// Small so the checked-in golden stays tens of KB.
     const GOLDEN_SIZE: u32 = 200;
     const GOLDEN: &str = "tests/golden/snapshot_base.png";
+
+    #[test]
+    fn transparent_output_only_changes_clear_alpha() {
+        let opaque = background_clear(false);
+        let transparent = background_clear(true);
+        assert_eq!(
+            (opaque.r, opaque.g, opaque.b, opaque.a),
+            (0.05, 0.05, 0.08, 1.0)
+        );
+        assert_eq!(
+            (transparent.r, transparent.g, transparent.b, transparent.a),
+            (0.05, 0.05, 0.08, 0.0)
+        );
+    }
+
+    #[test]
+    fn output_dimensions_preserve_aspect_and_bound_resources() {
+        assert_eq!(clamp_dimensions(1920, 1080), (1920, 1080));
+        assert_eq!(clamp_dimensions(10, 9000), (256, 4096));
+    }
 
     /// A deterministic synthetic sweep: a 90° wedge plus three range rings.
     fn synthetic_sweep() -> BinnedSweep {

@@ -18,7 +18,7 @@
 use crate::level2::BinnedSweep;
 
 /// One contiguous region of reflectivity at or above the threshold.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize)]
 pub struct Blob {
     pub lon: f64,
     pub lat: f64,
@@ -141,7 +141,7 @@ pub fn find_cells(sweep: &BinnedSweep, min_dbz: f32) -> Vec<Blob> {
 }
 
 /// One cell followed across volumes, newest point last.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct Track {
     /// Position and observation time of each volume this cell appeared in.
     pub points: Vec<(f64, f64, chrono::DateTime<chrono::Utc>)>,
@@ -166,6 +166,25 @@ impl Track {
         let km = self.speed_kt * 1.852 / 60.0 * minutes;
         Some(dest(last.0, last.1, self.dir_deg, km))
     }
+}
+
+/// Portable storm-history JSON for analysis notebooks and case archives.
+pub fn tracks_json(tracks: &[Track]) -> anyhow::Result<String> {
+    Ok(serde_json::to_string_pretty(tracks)?)
+}
+
+/// One row per observed position; `track` is stable within this export.
+pub fn tracks_csv(tracks: &[Track]) -> String {
+    let mut out = String::from("track,time,longitude,latitude,direction_deg,speed_kt\n");
+    for (track, history) in tracks.iter().enumerate() {
+        for &(lon, lat, time) in &history.points {
+            out.push_str(&format!(
+                "{track},{},{lon:.6},{lat:.6},{:.1},{:.1}\n",
+                time.to_rfc3339(), history.dir_deg, history.speed_kt,
+            ));
+        }
+    }
+    out
 }
 
 /// Points used to fit motion. Six volumes is 25–30 minutes, long enough to smooth centroid jitter
@@ -396,5 +415,22 @@ mod tests {
         let tr = &tracks[0];
         assert!((tr.dir_deg - 90.0).abs() < 5.0, "{tr:?}");
         assert!((tr.speed_kt - 30.0).abs() < 3.0, "{tr:?}");
+    }
+
+    #[test]
+    fn histories_export_every_observation() {
+        let t0 = chrono::DateTime::from_timestamp(1_700_000_000, 0).unwrap();
+        let tracks = associate(&[], &[blob(-97.0, 35.0)], t0, 20.0);
+        let tracks = associate(
+            &tracks,
+            &[blob(-96.95, 35.0)],
+            t0 + chrono::Duration::minutes(5),
+            20.0,
+        );
+        let csv = tracks_csv(&tracks);
+        assert_eq!(csv.lines().count(), 3);
+        assert!(csv.contains("-97.000000,35.000000"));
+        let json = tracks_json(&tracks).unwrap();
+        assert_eq!(serde_json::from_str::<serde_json::Value>(&json).unwrap()[0]["points"].as_array().unwrap().len(), 2);
     }
 }

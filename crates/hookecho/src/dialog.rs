@@ -82,6 +82,10 @@ pub enum ImportKind {
     AlertSound,
     /// A GPX track to replay (one this app wrote, or one another chase logger did).
     ChaseGpx,
+    /// A user GIS overlay normalized into the map renderer.
+    Gis,
+    /// A portable HookEcho case manifest.
+    CaseManifest,
 }
 
 impl ImportKind {
@@ -92,6 +96,8 @@ impl ImportKind {
             ImportKind::MarkerIcon => "Marker icon",
             ImportKind::AlertSound => "Alert sound",
             ImportKind::ChaseGpx => "GPX track",
+            ImportKind::Gis => "GIS overlay",
+            ImportKind::CaseManifest => "HookEcho case manifest",
         }
     }
 
@@ -102,6 +108,8 @@ impl ImportKind {
             ImportKind::MarkerIcon => &["png"],
             ImportKind::AlertSound => &["wav", "mp3", "ogg", "flac"],
             ImportKind::ChaseGpx => &["gpx"],
+            ImportKind::Gis => &["geojson", "json", "kml", "kmz", "zip"],
+            ImportKind::CaseManifest => &["hookecho-case.json", "json"],
         }
     }
 
@@ -117,6 +125,8 @@ impl ImportKind {
             // No registered MIME for GPX that pickers agree on; the extension is checked on the
             // way back, same as a palette.
             ImportKind::ChaseGpx => "*/*",
+            ImportKind::Gis => "*/*",
+            ImportKind::CaseManifest => "application/json",
         }
     }
 }
@@ -141,6 +151,14 @@ pub struct Import {
 }
 
 impl Import {
+    /// The file's raw content, including binary GIS archives.
+    pub fn content(&self) -> Result<Vec<u8>, String> {
+        match &self.bytes {
+            Some(bytes) => Ok(bytes.clone()),
+            None => std::fs::read(&self.path).map_err(|error| error.to_string()),
+        }
+    }
+
     /// The file's content as text. The one read that works everywhere: native and Android reopen
     /// the path, the browser already has the bytes.
     pub fn text(&self) -> Result<String, String> {
@@ -223,6 +241,8 @@ mod android_open {
             ImportKind::MarkerIcon => "marker",
             ImportKind::AlertSound => "sound",
             ImportKind::ChaseGpx => "gpx",
+            ImportKind::Gis => "gis",
+            ImportKind::CaseManifest => "case",
         }
     }
 
@@ -233,6 +253,8 @@ mod android_open {
             "marker" => ImportKind::MarkerIcon,
             "sound" => ImportKind::AlertSound,
             "gpx" => ImportKind::ChaseGpx,
+            "gis" => ImportKind::Gis,
+            "case" => ImportKind::CaseManifest,
             _ => return None,
         })
     }

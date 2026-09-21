@@ -3,10 +3,12 @@
 //! you care about with a reflectivity floor and three axis slabs.
 
 use crate::render3d::{orbit_uniform, threshold_index, View3d, Volume3dCallback, Volume3dUpload};
+use wxdata::level2::Moment;
 
 /// Everything the window keeps between frames: the orbit camera, the dBZ floor, and the slab.
 #[derive(Clone, Copy, Debug)]
 pub struct Volume3dState {
+    pub moment: Moment,
     pub az: f32,
     pub el: f32,
     pub dist: f32,
@@ -17,6 +19,10 @@ pub struct Volume3dState {
     /// Raymarch samples per pixel. The cost of the window is almost entirely this number, so it
     /// is the one knob worth exposing on a phone or an integrated GPU.
     pub steps: u32,
+    /// First threshold crossing (surface) rather than maximum intensity along each ray.
+    pub surface: bool,
+    /// Overlay the transmitted tilt beam-center surfaces.
+    pub beams: bool,
 }
 
 /// The three quality rungs, coarsest first. 256 is what the window shipped with.
@@ -25,6 +31,7 @@ const STEP_PRESETS: [(&str, u32); 3] = [("Low", 96), ("Medium", 160), ("High", 2
 impl Default for Volume3dState {
     fn default() -> Self {
         Self {
+            moment: Moment::Reflectivity,
             az: 30.0,
             el: 25.0,
             dist: 3.0,
@@ -34,6 +41,8 @@ impl Default for Volume3dState {
             // ponytail: a phone is the one place the full march reliably misses frame budget, so
             // pick by platform rather than benchmarking the GPU.
             steps: if cfg!(target_os = "android") { 96 } else { 256 },
+            surface: false,
+            beams: false,
         }
     }
 }
@@ -64,6 +73,8 @@ pub fn show(
     n: u32,
     nz: u32,
     range: (f32, f32),
+    beam_tilts: &[f32],
+    available: [bool; Moment::ALL.len()],
     drawer: &mut crate::ui::drawer::Drawer,
     degraded: bool,
 ) {
@@ -81,6 +92,22 @@ pub fn show(
     };
     window.show(ctx, |ui| {
         ui.weak("Drag to orbit · scroll to zoom · max-intensity projection");
+        ui.horizontal_wrapped(|ui| {
+            ui.label("Moment");
+            for moment in Moment::ALL {
+                if available[moment.index()] {
+                    ui.selectable_value(&mut st.moment, moment, moment.short_name());
+                }
+            }
+        });
+        ui.horizontal(|ui| {
+            ui.label("Render");
+            ui.selectable_value(&mut st.surface, false, "Maximum");
+            ui.selectable_value(&mut st.surface, true, "Surface")
+                .on_hover_text("First crossing of the selected threshold");
+            ui.checkbox(&mut st.beams, "Beam paths")
+                .on_hover_text("Show the 4/3-earth center surface of each transmitted tilt");
+        });
         ui.horizontal(|ui| {
             let mut on = st.threshold_dbz.is_finite();
             if ui
@@ -88,17 +115,28 @@ pub fn show(
                 .on_hover_text("Hide everything weaker, so cores stand alone")
                 .changed()
             {
-                st.threshold_dbz = if on { 45.0 } else { f32::NEG_INFINITY };
+                st.threshold_dbz = if on {
+                    if st.moment == Moment::Reflectivity {
+                        45.0
+                    } else {
+                        range.0 + (range.1 - range.0) * 0.65
+                    }
+                } else {
+                    f32::NEG_INFINITY
+                };
             }
             if on {
                 let mut dbz = st.threshold_dbz;
                 if ui
-                    .add(egui::Slider::new(&mut dbz, range.0..=range.1).suffix(" dBZ"))
+                    .add(
+                        egui::Slider::new(&mut dbz, range.0..=range.1)
+                            .suffix(format!(" {}", st.moment.units())),
+                    )
                     .changed()
                 {
                     st.threshold_dbz = dbz;
                 }
-                if ui
+                if st.moment == Moment::Reflectivity && ui
                     .button("Hail core")
                     .on_hover_text("45 dBZ — the usual floor for a hail core")
                     .clicked()
@@ -152,6 +190,7 @@ pub fn show(
                 2.0
             },
             clip: st.clip,
+            surface: st.surface,
         };
         let uniform = orbit_uniform(
             st.az,
@@ -162,6 +201,8 @@ pub fn show(
             nz,
             effective_steps(st.steps, degraded),
             view,
+            st.beams,
+            beam_tilts,
         );
         // On the window's first frame egui may hand us a zero-area rect (auto-size pass);
         // the paint callback would be culled and the one-shot upload lost, leaving the view
@@ -193,6 +234,7 @@ mod tests {
         // Otherwise no button reads as selected and the row looks broken on first open.
         let d = super::Volume3dState::default();
         assert!(super::STEP_PRESETS.iter().any(|&(_, s)| s == d.steps));
+        assert_eq!(d.moment, wxdata::level2::Moment::Reflectivity);
     }
 
     #[test]

@@ -67,16 +67,32 @@ pub struct RadarUpload {
 /// LUT, and draw order). `below_radar` layers paint under the single-site radar; the rest above.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum FieldLayer {
+    GoesC13,
+    GoesWaterVapor,
+    GoesMidWaterVapor,
+    GoesLongwaveIr,
+    GoesVisible,
+    GoesTrueColor,
+    GoesCatalog(u8),
     Mrms,
+    MrmsLowLevel,
     Hrrr,
     Rotation,
     Mesh,
     AzShear,
+    AzShearMid,
+    Posh,
+    MrmsEchoTop18,
+    MrmsVil,
+    MrmsCatalog(u8),
     Lightning,
     /// Instantaneous precipitation rate (mm/hr) — how hard it is coming down right now,
     /// as against the QPE layers' how much has fallen.
     PrecipRate,
     Qpe1h,
+    Qpe3h,
+    Qpe6h,
+    Qpe12h,
     Qpe24h,
     /// HRRR surface CAPE (environment suite).
     Cape,
@@ -130,10 +146,19 @@ pub enum FieldLayer {
     GlobalWind10m,
     /// Global model precipitable water / total precipitation.
     GlobalPrecip,
+    /// NOAA real-time surface analyses.
+    RtmaTemp2m,
+    RtmaDewpoint2m,
+    RtmaPressure,
+    RtmaWindU10m,
+    /// Moving-window maximum of MRMS reflectivity with contributor history.
+    MrmsReflectivityTrail,
     /// Banded precipitation from the MRMS mosaic, narrowed to snow — the snow-squall layer.
     SnowBands,
     /// NBM calibrated probability of thunder over the hour ending at the scrubbed forecast hour.
     ThunderProb,
+    /// REFS neighborhood probability of composite reflectivity above the selected threshold.
+    RefsReflectivityProb,
     /// GLM flash-extent density — the recent satellite flashes gridded into a density field.
     GlmFed,
     /// One model minus another — which field, and therefore which pair, is `app.diff_field`.
@@ -145,13 +170,22 @@ impl FieldLayer {
     pub fn below_radar(self) -> bool {
         matches!(
             self,
-            FieldLayer::Mrms
+            FieldLayer::GoesC13
+                | FieldLayer::GoesWaterVapor
+                | FieldLayer::GoesMidWaterVapor
+                | FieldLayer::GoesLongwaveIr
+                | FieldLayer::GoesVisible
+                | FieldLayer::GoesTrueColor
+                | FieldLayer::GoesCatalog(_)
+                | FieldLayer::Mrms
+                | FieldLayer::MrmsLowLevel
                 | FieldLayer::Mosaic
                 | FieldLayer::Hrrr
                 | FieldLayer::Cape
                 | FieldLayer::Srh
                 | FieldLayer::PrecipType
                 | FieldLayer::ThunderProb
+                | FieldLayer::RefsReflectivityProb
                 | FieldLayer::Smoke
                 | FieldLayer::Snowfall
                 | FieldLayer::SnowAnalysis
@@ -161,22 +195,50 @@ impl FieldLayer {
                 | FieldLayer::GlobalDewpoint2m
                 | FieldLayer::GlobalWind10m
                 | FieldLayer::GlobalPrecip
+                | FieldLayer::RtmaTemp2m
+                | FieldLayer::RtmaDewpoint2m
+                | FieldLayer::RtmaPressure
+                | FieldLayer::RtmaWindU10m
+                | FieldLayer::MrmsReflectivityTrail
                 | FieldLayer::ModelDiff
         )
     }
 
     /// Fixed bottom-to-top paint order within each band.
-    pub const DRAW_ORDER: [FieldLayer; 38] = [
+    pub const BASE_DRAW_ORDER: [FieldLayer; 67] = [
         // Below-radar context band (bottom to top). The global models sit at the very bottom:
         // they are the synoptic backdrop everything else is drawn against.
+        FieldLayer::GoesC13,
+        FieldLayer::GoesWaterVapor,
+        FieldLayer::GoesMidWaterVapor,
+        FieldLayer::GoesLongwaveIr,
+        FieldLayer::GoesVisible,
+        FieldLayer::GoesTrueColor,
+        FieldLayer::GoesCatalog(0),
+        FieldLayer::GoesCatalog(1),
+        FieldLayer::GoesCatalog(2),
+        FieldLayer::GoesCatalog(3),
+        FieldLayer::GoesCatalog(4),
+        FieldLayer::GoesCatalog(5),
+        FieldLayer::GoesCatalog(6),
+        FieldLayer::GoesCatalog(7),
+        FieldLayer::GoesCatalog(8),
+        FieldLayer::GoesCatalog(9),
+        FieldLayer::GoesCatalog(10),
         FieldLayer::GlobalMslp,
         FieldLayer::GlobalHeight500,
         FieldLayer::GlobalTemp2m,
         FieldLayer::GlobalDewpoint2m,
         FieldLayer::GlobalWind10m,
         FieldLayer::GlobalPrecip,
+        FieldLayer::RtmaTemp2m,
+        FieldLayer::RtmaDewpoint2m,
+        FieldLayer::RtmaPressure,
+        FieldLayer::RtmaWindU10m,
         FieldLayer::ModelDiff,
         FieldLayer::Mrms,
+        FieldLayer::MrmsReflectivityTrail,
+        FieldLayer::MrmsLowLevel,
         FieldLayer::Mosaic,
         FieldLayer::Hrrr,
         FieldLayer::Cape,
@@ -186,10 +248,14 @@ impl FieldLayer {
         FieldLayer::SnowAnalysis,
         FieldLayer::PrecipType,
         FieldLayer::ThunderProb,
+        FieldLayer::RefsReflectivityProb,
         // Above-radar severe-signal band.
         FieldLayer::SnowBands,
         FieldLayer::PrecipRate,
         FieldLayer::Qpe1h,
+        FieldLayer::Qpe3h,
+        FieldLayer::Qpe6h,
+        FieldLayer::Qpe12h,
         FieldLayer::Qpe24h,
         FieldLayer::FlashFlood,
         FieldLayer::HailSwath,
@@ -206,22 +272,51 @@ impl FieldLayer {
         FieldLayer::Rotation,
         FieldLayer::Mesh,
         FieldLayer::AzShear,
-        FieldLayer::Lightning,
-        FieldLayer::GlmFed,
+        FieldLayer::AzShearMid,
+        FieldLayer::Posh,
+        FieldLayer::MrmsEchoTop18,
+        FieldLayer::MrmsVil,
     ];
+
+    pub fn draw_order() -> impl DoubleEndedIterator<Item = FieldLayer> {
+        Self::BASE_DRAW_ORDER
+            .into_iter()
+            .chain((0..wxdata::mrms::CATALOG.len()).map(|index| FieldLayer::MrmsCatalog(index as u8)))
+            .chain([FieldLayer::Lightning, FieldLayer::GlmFed])
+    }
 
     /// Stable name for saved files — a workspace records which layers were on by slug, so a file
     /// written by a newer build names a layer this one skips rather than failing to load.
     pub fn slug(self) -> &'static str {
         match self {
+            FieldLayer::GoesC13 => "goes-c13",
+            FieldLayer::GoesWaterVapor => "goes-water-vapor",
+            FieldLayer::GoesMidWaterVapor => "goes-mid-water-vapor",
+            FieldLayer::GoesLongwaveIr => "goes-longwave-ir",
+            FieldLayer::GoesVisible => "goes-visible",
+            FieldLayer::GoesTrueColor => "goes-true-color",
+            FieldLayer::GoesCatalog(index) => wxdata::abi::CATALOG
+                .get(index as usize)
+                .map_or("unknown-goes-catalog", |entry| entry.slug),
             FieldLayer::Mrms => "mrms",
+            FieldLayer::MrmsLowLevel => "mrms-low-level",
             FieldLayer::Hrrr => "hrrr",
             FieldLayer::Rotation => "rotation",
             FieldLayer::Mesh => "mesh",
             FieldLayer::AzShear => "azshear",
+            FieldLayer::AzShearMid => "azshear-mid",
+            FieldLayer::Posh => "posh",
+            FieldLayer::MrmsEchoTop18 => "mrms-echo-top-18",
+            FieldLayer::MrmsVil => "mrms-vil",
+            FieldLayer::MrmsCatalog(index) => wxdata::mrms::CATALOG
+                .get(index as usize)
+                .map_or("unknown-mrms-catalog", |entry| entry.slug),
             FieldLayer::Lightning => "lightning",
             FieldLayer::PrecipRate => "preciprate",
             FieldLayer::Qpe1h => "qpe1h",
+            FieldLayer::Qpe3h => "qpe3h",
+            FieldLayer::Qpe6h => "qpe6h",
+            FieldLayer::Qpe12h => "qpe12h",
             FieldLayer::Qpe24h => "qpe24h",
             FieldLayer::Cape => "cape",
             FieldLayer::Srh => "srh",
@@ -232,6 +327,7 @@ impl FieldLayer {
             FieldLayer::HailSwath => "hailswath",
             FieldLayer::SnowBands => "snowbands",
             FieldLayer::ThunderProb => "thunderprob",
+            FieldLayer::RefsReflectivityProb => "refs-reflectivity-probability",
             FieldLayer::Hca => "hca",
             FieldLayer::UpdraftHelicity => "updrafthelicity",
             FieldLayer::Smoke => "smoke",
@@ -250,6 +346,11 @@ impl FieldLayer {
             FieldLayer::GlobalDewpoint2m => "global-dewpoint2m",
             FieldLayer::GlobalWind10m => "global-wind10m",
             FieldLayer::GlobalPrecip => "global-precip",
+            FieldLayer::RtmaTemp2m => "rtma-temp2m",
+            FieldLayer::RtmaDewpoint2m => "rtma-dewpoint2m",
+            FieldLayer::RtmaPressure => "rtma-pressure",
+            FieldLayer::RtmaWindU10m => "rtma-wind-u10m",
+            FieldLayer::MrmsReflectivityTrail => "mrms-reflectivity-trail",
             FieldLayer::ModelDiff => "model-diff",
             FieldLayer::GlmFed => "glm-fed",
         }
@@ -257,7 +358,80 @@ impl FieldLayer {
 
     /// The inverse of [`slug`](Self::slug), or `None` for a name this build doesn't have.
     pub fn from_slug(s: &str) -> Option<FieldLayer> {
-        Self::DRAW_ORDER.into_iter().find(|f| f.slug() == s)
+        Self::draw_order().find(|f| f.slug() == s)
+    }
+
+    /// Common metadata for migrated MRMS fields.
+    pub fn descriptor(self) -> Option<&'static wxdata::field::FieldDescriptor> {
+        use FieldLayer as FL;
+        Some(match self {
+            FL::GoesC13 => &wxdata::abi::C13_DESCRIPTOR,
+            FL::GoesWaterVapor => &wxdata::abi::C08_DESCRIPTOR,
+            FL::GoesMidWaterVapor => &wxdata::abi::C09_DESCRIPTOR,
+            FL::GoesLongwaveIr => &wxdata::abi::C14_DESCRIPTOR,
+            FL::GoesVisible => &wxdata::abi::C02_DESCRIPTOR,
+            FL::GoesTrueColor => &wxdata::abi::TRUE_COLOR_DESCRIPTOR,
+            FL::GoesCatalog(index) => wxdata::abi::CATALOG.get(index as usize)?.descriptor,
+            FL::Mrms => &wxdata::mrms::REFLECTIVITY_DESCRIPTOR,
+            FL::MrmsLowLevel => &wxdata::mrms::LOW_LEVEL_REFLECTIVITY_DESCRIPTOR,
+            FL::Lightning => &wxdata::mrms::LIGHTNING_DESCRIPTOR,
+            FL::Mesh => &wxdata::mrms::MESH_DESCRIPTOR,
+            FL::HailSwath => &wxdata::mrms::HAIL_SWATH_DESCRIPTOR,
+            FL::AzShear => &wxdata::mrms::AZSHEAR_DESCRIPTOR,
+            FL::AzShearMid => &wxdata::mrms::AZSHEAR_MID_DESCRIPTOR,
+            FL::Posh => &wxdata::mrms::POSH_DESCRIPTOR,
+            FL::MrmsEchoTop18 => &wxdata::mrms::ECHO_TOP_18_DESCRIPTOR,
+            FL::MrmsVil => &wxdata::mrms::VIL_DESCRIPTOR,
+            FL::MrmsCatalog(index) => wxdata::mrms::CATALOG.get(index as usize)?.descriptor,
+            FL::Rotation => &wxdata::mrms::ROTATION_DESCRIPTOR,
+            FL::Qpe1h => &wxdata::mrms::QPE_01H_DESCRIPTOR,
+            FL::Qpe3h => &wxdata::mrms::QPE_03H_DESCRIPTOR,
+            FL::Qpe6h => &wxdata::mrms::QPE_06H_DESCRIPTOR,
+            FL::Qpe12h => &wxdata::mrms::QPE_12H_DESCRIPTOR,
+            FL::Qpe24h => &wxdata::mrms::QPE_24H_DESCRIPTOR,
+            FL::PrecipRate => &wxdata::mrms::PRECIP_RATE_DESCRIPTOR,
+            FL::PrecipType => &wxdata::mrms::PRECIP_TYPE_DESCRIPTOR,
+            FL::FlashFlood => &wxdata::mrms::FLASH_ARI30_DESCRIPTOR,
+            FL::Hrrr => &wxdata::hrrr::REFLECTIVITY_DESCRIPTOR,
+            FL::Cape => &wxdata::hrrr::CAPE_DESCRIPTOR,
+            FL::Srh => &wxdata::hrrr::SRH_DESCRIPTOR,
+            FL::UpdraftHelicity => &wxdata::hrrr::UPDRAFT_HELICITY_DESCRIPTOR,
+            FL::Snowfall => &wxdata::hrrr::SNOWFALL_DESCRIPTOR,
+            FL::Smoke => &wxdata::hrrr::SMOKE_DESCRIPTOR,
+            FL::ThunderProb => &wxdata::hrrr::THUNDER_PROBABILITY_DESCRIPTOR,
+            FL::RefsReflectivityProb => &wxdata::refs::REFLECTIVITY_40_DESCRIPTOR,
+            FL::GlobalMslp => &wxdata::global::MSLP_DESCRIPTOR,
+            FL::GlobalHeight500 => &wxdata::global::HEIGHT_500_DESCRIPTOR,
+            FL::GlobalTemp2m => &wxdata::global::TEMP_2M_DESCRIPTOR,
+            FL::GlobalDewpoint2m => &wxdata::global::DEWPOINT_2M_DESCRIPTOR,
+            FL::GlobalWind10m => &wxdata::global::WIND_10M_DESCRIPTOR,
+            FL::GlobalPrecip => &wxdata::global::PRECIP_DESCRIPTOR,
+            FL::RtmaTemp2m => &wxdata::rtma::TEMP_DESCRIPTOR,
+            FL::RtmaDewpoint2m => &wxdata::rtma::DEWPOINT_DESCRIPTOR,
+            FL::RtmaPressure => &wxdata::rtma::PRESSURE_DESCRIPTOR,
+            FL::RtmaWindU10m => &wxdata::rtma::WIND_U_DESCRIPTOR,
+            FL::MrmsReflectivityTrail => &wxdata::trail::REFLECTIVITY_TRAIL_DESCRIPTOR,
+            FL::SnowAnalysis => &wxdata::nohrsc::SNOWFALL_DESCRIPTOR,
+            FL::SnowBands => &wxdata::banding::SNOW_BANDS_DESCRIPTOR,
+            FL::ModelDiff => &crate::fielddiff::MODEL_DIFF_DESCRIPTOR,
+            FL::Vil => &wxdata::level3::VIL_DESCRIPTOR,
+            FL::EchoTops => &wxdata::level3::ECHO_TOPS_DESCRIPTOR,
+            FL::Hca => &wxdata::level3::HCA_DESCRIPTOR,
+            FL::GlmFed => &wxdata::glm::FLASH_DENSITY_DESCRIPTOR,
+            FL::Mosaic => &wxdata::mosaic::DESCRIPTOR,
+            _ => return None,
+        })
+    }
+
+    /// Registry identity for migrated products; legacy layers keep their established slug.
+    pub fn stable_id(self) -> &'static str {
+        self.descriptor().map_or_else(|| self.slug(), |d| d.id.0)
+    }
+
+    /// Read current registry IDs and every legacy layer slug.
+    pub fn from_stable_id(id: &str) -> Option<FieldLayer> {
+        Self::draw_order()
+            .find(|field| field.stable_id() == id || field.slug() == id)
     }
 }
 
@@ -267,21 +441,87 @@ mod field_slug_tests {
 
     #[test]
     fn every_layer_has_a_slug_that_parses_back() {
-        for l in FieldLayer::DRAW_ORDER {
+        for l in FieldLayer::draw_order() {
             assert_eq!(FieldLayer::from_slug(l.slug()), Some(l), "{}", l.slug());
         }
-        let mut slugs: Vec<&str> = FieldLayer::DRAW_ORDER.iter().map(|l| l.slug()).collect();
+        let mut slugs: Vec<&str> = FieldLayer::draw_order().map(|l| l.slug()).collect();
         slugs.sort_unstable();
         let n = slugs.len();
         slugs.dedup();
         assert_eq!(slugs.len(), n, "two layers share a slug");
         assert_eq!(FieldLayer::from_slug("not-a-layer"), None);
     }
+
+    #[test]
+    fn draw_order_includes_the_entire_mrms_catalog() {
+        let layers: Vec<_> = FieldLayer::draw_order().collect();
+        assert_eq!(
+            layers.len(),
+            FieldLayer::BASE_DRAW_ORDER.len() + wxdata::mrms::CATALOG.len() + 2
+        );
+        for index in 0..wxdata::mrms::CATALOG.len() {
+            assert!(layers.contains(&FieldLayer::MrmsCatalog(index as u8)));
+        }
+    }
+
+    #[test]
+    fn migrated_ids_and_legacy_slugs_both_restore() {
+        assert_eq!(FieldLayer::Mrms.stable_id(), "mrms.composite-reflectivity");
+        assert_eq!(
+            FieldLayer::from_stable_id("mrms.composite-reflectivity"),
+            Some(FieldLayer::Mrms)
+        );
+        assert_eq!(FieldLayer::from_stable_id("mrms"), Some(FieldLayer::Mrms));
+        assert_eq!(FieldLayer::Hrrr.stable_id(), "model.hrrr.composite-reflectivity");
+        assert_eq!(FieldLayer::from_stable_id("hrrr"), Some(FieldLayer::Hrrr));
+        assert_eq!(FieldLayer::from_stable_id("cape"), Some(FieldLayer::Cape));
+        assert_eq!(FieldLayer::from_stable_id("srh"), Some(FieldLayer::Srh));
+        assert_eq!(
+            FieldLayer::SnowBands.stable_id(),
+            "derived.mrms.snow-bands"
+        );
+        assert_eq!(
+            FieldLayer::from_stable_id("snowbands"),
+            Some(FieldLayer::SnowBands)
+        );
+        assert_eq!(
+            FieldLayer::GlmFed.stable_id(),
+            "satellite.glm.flash-extent-density"
+        );
+        for layer in [
+            FieldLayer::UpdraftHelicity,
+            FieldLayer::Snowfall,
+            FieldLayer::Smoke,
+            FieldLayer::ThunderProb,
+        ] {
+            assert_eq!(FieldLayer::from_stable_id(layer.slug()), Some(layer));
+            assert!(layer.stable_id().contains('.'));
+        }
+        assert_eq!(FieldLayer::from_stable_id("future.unknown"), None);
+        assert_eq!(FieldLayer::MrmsCatalog(255).slug(), "unknown-mrms-catalog");
+        assert_eq!(FieldLayer::GoesCatalog(255).slug(), "unknown-goes-catalog");
+        assert_eq!(
+            FieldLayer::Lightning.descriptor().unwrap().search_aliases,
+            &["nldn", "lightning"]
+        );
+    }
+
+    #[test]
+    fn every_mrms_descriptor_has_one_layer() {
+        for descriptor in wxdata::mrms::DESCRIPTORS {
+            let layers: Vec<_> = FieldLayer::draw_order()
+                .filter(|layer| layer.descriptor().is_some_and(|d| d.id == descriptor.id))
+                .collect();
+            assert_eq!(layers.len(), 1, "{}", descriptor.id.0);
+        }
+    }
 }
 
 /// A national MRMS mosaic to upload: an R8 index grid + LUT, warped plate-carrée→mercator.
 pub struct MrmsUpload {
     pub data: Vec<u8>,
+    /// `data` contains RGBA bytes instead of one LUT index per cell.
+    pub rgba: bool,
     pub nx: u32,
     pub ny: u32,
     /// World-space quad (mercator bbox of the grid).
@@ -1345,7 +1585,11 @@ impl RenderResources {
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::R8Uint,
+            format: if m.rgba {
+                wgpu::TextureFormat::Rgba8Uint
+            } else {
+                wgpu::TextureFormat::R8Uint
+            },
             usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
             view_formats: &[],
         });
@@ -1359,7 +1603,7 @@ impl RenderResources {
             &m.data,
             wgpu::TexelCopyBufferLayout {
                 offset: 0,
-                bytes_per_row: Some(m.nx),
+                bytes_per_row: Some(m.nx * if m.rgba { 4 } else { 1 }),
                 rows_per_image: Some(m.ny),
             },
             size,
@@ -1481,7 +1725,7 @@ impl RenderResources {
     /// bottom-to-top order, using this pane's camera.
     fn draw_fields(&self, pane: &PaneGpu, pass: &mut wgpu::RenderPass<'_>, below: bool) {
         let cam = &pane.camera_bg;
-        for layer in FieldLayer::DRAW_ORDER {
+        for layer in FieldLayer::draw_order() {
             if layer.below_radar() != below || !pane.field_draws.contains(&layer) {
                 continue;
             }

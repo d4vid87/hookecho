@@ -11,6 +11,7 @@ enum Tab {
     #[default]
     Appearance,
     Radar,
+    Products,
     Alerts,
     Units,
     Workspaces,
@@ -21,9 +22,10 @@ enum Tab {
 }
 
 impl Tab {
-    const ALL: [(Self, &'static str, &'static str); 9] = [
+    const ALL: [(Self, &'static str, &'static str); 10] = [
         (Self::Appearance, "Appearance", "Personalize"),
         (Self::Radar, "Radar & map", "Personalize"),
+        (Self::Products, "Radar products", "Manage"),
         (Self::Alerts, "Alerts", "Personalize"),
         (Self::Units, "Units & time", "Personalize"),
         (Self::Workspaces, "Workspaces", "Manage"),
@@ -185,6 +187,7 @@ impl SettingsWindow {
                                         self.palettes_tab(ui, settings, palettes)
                                     });
                                 }
+                                Tab::Products => radar_products_tab(ui, settings),
                                 Tab::Alerts => alerts_tab(ui, settings),
                                 Tab::Units => settings_group(ui, "Measurement & clock", |ui| {
                                     units_tab(ui, settings)
@@ -204,6 +207,8 @@ impl SettingsWindow {
                                     ui.collapsing("Storage & cache", |ui| {
                                         self.storage_tab(ui, settings)
                                     });
+                                    #[cfg(target_arch = "wasm32")]
+                                    ui.collapsing("Storage & cache", browser_storage_tab);
                                 }
                                 Tab::Help => help_tab(ui, &mut self.run_setup, &mut self.run_tour),
                             }
@@ -568,6 +573,49 @@ impl SettingsWindow {
     }
 }
 
+#[cfg(target_arch = "wasm32")]
+fn browser_storage_tab(ui: &mut egui::Ui) {
+    let (rows, ready, error) = wxdata::object_cache::known_stats();
+    if !ready {
+        ui.spinner();
+        ui.ctx().request_repaint();
+        return;
+    }
+    ui.weak("Automatic weather-data cache. Saved chase packs are separate and stay pinned.");
+    if rows.is_empty() {
+        ui.label("No automatic weather data cached yet.");
+    }
+    for row in rows {
+        ui.horizontal(|ui| {
+            ui.label(row.family.to_uppercase());
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui.button("Clear").clicked() {
+                    wxdata::object_cache::spawn_clear(row.family.clone());
+                }
+                ui.weak(format!(
+                    "{} objects · {} of {}",
+                    row.objects,
+                    human_bytes(row.bytes),
+                    human_bytes(row.cap)
+                ));
+            });
+        });
+    }
+    if let Some(error) = error {
+        ui.colored_label(ui.visuals().error_fg_color, error);
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+fn human_bytes(bytes: usize) -> String {
+    let mb = bytes as f64 / 1024.0 / 1024.0;
+    if mb >= 1024.0 {
+        format!("{:.1} GB", mb / 1024.0)
+    } else {
+        format!("{mb:.1} MB")
+    }
+}
+
 fn units_tab(ui: &mut egui::Ui, settings: &mut Settings) {
     ui.label("Velocity / spectrum width");
     ui.horizontal_wrapped(|ui| {
@@ -588,6 +636,143 @@ fn units_tab(ui: &mut egui::Ui, settings: &mut Settings) {
         }
     });
     ui.weak("Site local uses the radar site's clock. Reflectivity stays dBZ.");
+    ui.separator();
+    let mut custom_tolerance = settings.alignment_tolerance_minutes.is_some();
+    if ui
+        .checkbox(&mut custom_tolerance, "Custom cross-source time tolerance")
+        .changed()
+    {
+        settings.alignment_tolerance_minutes = custom_tolerance.then_some(30);
+    }
+    if let Some(minutes) = &mut settings.alignment_tolerance_minutes {
+        ui.add(egui::Slider::new(minutes, 1..=180).text("minutes"));
+    }
+    ui.weak("When off, each product uses its scientifically appropriate tolerance.");
+}
+
+fn radar_products_tab(ui: &mut egui::Ui, settings: &mut Settings) {
+    use wxdata::product_dsl::{EnvironmentInput, Product, ProductDefinition};
+
+    ui.weak(
+        "Build safe radar formulas from native moments. Definitions travel with settings exports, sync, and workspaces.",
+    );
+    if ui.button("＋ New product").clicked() {
+        settings.radar_products.push(ProductDefinition {
+            version: 1,
+            name: "New radar product".into(),
+            description: "Describe what this product measures".into(),
+            units: "score".into(),
+            inputs: vec![Moment::Reflectivity],
+            expression: "REF".into(),
+            palette: "REF".into(),
+            min: 0.0,
+            max: 80.0,
+            missing: -999.0,
+            environment: Vec::new(),
+        });
+    }
+    let duplicate_names: std::collections::HashSet<String> = settings
+        .radar_products
+        .iter()
+        .filter(|candidate| {
+            settings
+                .radar_products
+                .iter()
+                .filter(|other| other.name == candidate.name)
+                .count()
+                > 1
+        })
+        .map(|definition| definition.name.clone())
+        .collect();
+    let mut remove = None;
+    let product_count = settings.radar_products.len();
+    for (index, definition) in settings.radar_products.iter_mut().enumerate() {
+        ui.push_id(index, |ui| {
+            let title = if definition.name.trim().is_empty() {
+                "Unnamed product"
+            } else {
+                &definition.name
+            };
+            egui::CollapsingHeader::new(title)
+                .default_open(index + 1 == product_count)
+                .show(ui, |ui| {
+                    egui::Grid::new("product_identity")
+                        .num_columns(2)
+                        .show(ui, |ui| {
+                            ui.label("Name");
+                            ui.text_edit_singleline(&mut definition.name);
+                            ui.end_row();
+                            ui.label("Description");
+                            ui.text_edit_singleline(&mut definition.description);
+                            ui.end_row();
+                            ui.label("Units");
+                            ui.text_edit_singleline(&mut definition.units);
+                            ui.end_row();
+                            ui.label("Palette");
+                            ui.text_edit_singleline(&mut definition.palette)
+                                .on_hover_text("REF, VEL, SW, ZDR, PHI, KDP, or CC");
+                            ui.end_row();
+                            ui.label("Display range");
+                            ui.horizontal(|ui| {
+                                ui.add(egui::DragValue::new(&mut definition.min));
+                                ui.label("to");
+                                ui.add(egui::DragValue::new(&mut definition.max));
+                            });
+                            ui.end_row();
+                        });
+                    ui.label("Inputs");
+                    ui.horizontal_wrapped(|ui| {
+                        for moment in Moment::ALL {
+                            let mut enabled = definition.inputs.contains(&moment);
+                            if ui.checkbox(&mut enabled, moment.short_name()).changed() {
+                                if enabled {
+                                    definition.inputs.push(moment);
+                                } else {
+                                    definition.inputs.retain(|saved| *saved != moment);
+                                }
+                            }
+                        }
+                    });
+                    ui.label("Environmental inputs");
+                    ui.horizontal_wrapped(|ui| {
+                        for (input, label) in [
+                            (EnvironmentInput::FreezingLevel, "Freezing level"),
+                            (EnvironmentInput::Minus10CHeight, "−10 °C height"),
+                            (EnvironmentInput::Minus20CHeight, "−20 °C height"),
+                        ] {
+                            let mut enabled = definition.environment.contains(&input);
+                            if ui.checkbox(&mut enabled, label).changed() {
+                                if enabled {
+                                    definition.environment.push(input);
+                                } else {
+                                    definition.environment.retain(|saved| *saved != input);
+                                }
+                            }
+                        }
+                    });
+                    ui.label("Expression");
+                    ui.add(
+                        egui::TextEdit::multiline(&mut definition.expression)
+                            .font(egui::TextStyle::Monospace)
+                            .desired_rows(3)
+                            .desired_width(f32::INFINITY),
+                    );
+                    if duplicate_names.contains(&definition.name) {
+                        ui.colored_label(ui.visuals().error_fg_color, "Product names must be unique");
+                    } else if let Err(error) = Product::compile(definition.clone()) {
+                        ui.colored_label(ui.visuals().error_fg_color, error.to_string());
+                    } else {
+                        ui.colored_label(egui::Color32::from_rgb(60, 200, 130), "Formula valid");
+                    }
+                    if ui.button("Delete product").clicked() {
+                        remove = Some(index);
+                    }
+                });
+        });
+    }
+    if let Some(index) = remove {
+        settings.radar_products.remove(index);
+    }
 }
 
 /// The "Custom (XYZ URL)" basemap's template, zoom cap and attribution.

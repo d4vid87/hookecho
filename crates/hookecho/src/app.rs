@@ -8,6 +8,9 @@
 /// windows, and every data path are shared.
 mod chrome;
 mod mobile;
+mod request_book;
+
+use request_book::{retry_once, RequestBook};
 
 use crate::colormap::{ColorTable, Palettes};
 use crate::hotkeys::{self, BindableAction};
@@ -230,8 +233,18 @@ enum OverlayMsg {
     Placefile(String, wxdata::placefile::Placefile),
     /// The latest grid for a national field layer (mosaic, rotation, MESH, AzShear, lightning).
     Field(crate::render::FieldLayer, wxdata::mrms::MrmsField),
+    /// A registry-backed grid. Unmigrated fields continue through `Field` above.
+    RegisteredField(
+        crate::render::FieldLayer,
+        wxdata::field::FieldFrame,
+        Option<wxdata::mrms::MrmsField>,
+    ),
+    /// A direct RGBA satellite composite.
+    Rgb(crate::render::FieldLayer, wxdata::abi::RgbImage),
     /// A model-difference grid plus the two valid times it compared, for the layer's own row.
-    ModelDiff(wxdata::mrms::MrmsField, (String, String)),
+    ModelDiff(wxdata::field::FieldFrame, (String, String)),
+    GefsDistribution(wxdata::global::GefsPointPlume),
+    GefsPostage(wxdata::global::GefsPostageStamps),
     /// `(0 °C, −20 °C)` level heights above sea level, in metres, at the active radar.
     FreezingLevels(f64, f64),
     /// Local storm reports: live trailing window (`None`) or an archive bucket (feature CC).
@@ -240,8 +253,6 @@ enum OverlayMsg {
     Spotters(Vec<wxdata::spotters::Spotter>),
     /// ProbSevere per-storm probability polygons.
     ProbSevere(Vec<GeoFeature>),
-    /// An HRRR composite-reflectivity forecast (regridded + run/valid metadata).
-    Hrrr(wxdata::hrrr::HrrrForecast),
     /// HRRR wind components for the particle layer.
     ///
     /// Deliberately not an [`OverlayMsg::Field`]: `spawn_overlay` runs `decimated` on every
@@ -281,11 +292,7 @@ enum OverlayMsg {
     PlacefileError(String, String),
     /// A finished multi-radar reflectivity composite: the grid, its contributing sites, and the
     /// oldest contributing scan time.
-    Mosaic(
-        wxdata::mrms::MrmsField,
-        Vec<String>,
-        chrono::DateTime<chrono::Utc>,
-    ),
+    Mosaic(wxdata::mosaic::Mosaic),
     /// River flood gauges (NWPS) for the requested bbox.
     Gauges(Vec<wxdata::river::Gauge>),
     /// HRRR model contour polylines for a kind, plus the forecast valid time.
@@ -305,7 +312,7 @@ enum OverlayMsg {
 }
 
 /// One overlay data source to fetch.
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 enum OverlaySource {
     /// NWS alerts; the `(lat, lon)` list scopes zone-only alert resolution to the active radar and
     /// every saved marker. The bounds are the active pane's viewport, which is what decides
@@ -329,6 +336,14 @@ enum OverlaySource {
     Placefile(String),
     /// A national field layer plus the MRMS S3 product path to fetch it from.
     Field(crate::render::FieldLayer, String),
+    /// Native GOES ABI imagery for a registered band.
+    GoesAbi(
+        crate::render::FieldLayer,
+        u8,
+        wxdata::abi::Scene,
+        Option<DateTime<Utc>>,
+    ),
+    GoesRgb(wxdata::abi::Scene, Option<DateTime<Utc>>),
     /// Local storm reports: live (`None`) or a 30-min archive bucket (Unix secs / 1800).
     StormReports(Option<i64>),
     Spotters,
@@ -342,12 +357,21 @@ enum OverlaySource {
     Env(crate::render::FieldLayer, wxdata::hrrr::Model, bool, u8),
     /// HRRR-backed field layer (rotation tracks, smoke) at a forecast hour.
     HrrrLayer(crate::render::FieldLayer, u8),
+    /// REFS neighborhood probability at a forecast hour.
+    RefsProbability(u8, u8),
     /// A global-model field (GFS or ECMWF) at a forecast hour.
     Global(
         crate::render::FieldLayer,
         wxdata::global::GlobalModel,
         wxdata::global::GlobalField,
         u16,
+    ),
+    GefsDistribution(wxdata::global::GlobalField, u16, f64, f64),
+    GefsPostage(wxdata::global::GlobalField, u16),
+    Rtma(
+        crate::render::FieldLayer,
+        wxdata::rtma::Source,
+        wxdata::rtma::SurfaceField,
     ),
     /// One model's field minus another's, at a forecast hour. Which two models is implied by the
     /// field (see `fielddiff::DiffField::pair`).
@@ -380,7 +404,13 @@ enum OverlaySource {
     /// Run an external-process plugin: `(key, command, args, context)`. The key is the synthetic
     /// `plugin:<name>` id it shares with the placefile pipeline it feeds.
     #[cfg(not(target_arch = "wasm32"))]
-    Plugin(String, String, Vec<String>, crate::plugins::Context),
+    Plugin(
+        String,
+        String,
+        Vec<String>,
+        crate::settings::PluginManifest,
+        crate::plugins::Context,
+    ),
     /// Camera sites within a lon/lat bbox `(min_lon, min_lat, max_lon, max_lat)`, plus the user's
     /// Windy API key — empty for FAA-only, which is the keyless default.
     Webcams(f64, f64, f64, f64, String),
@@ -483,9 +513,13 @@ pub(crate) struct SourceHealth {
     pub fetching: bool,
     pub last_attempt: Option<std::time::Duration>,
     pub last_success: Option<std::time::Duration>,
+    /// Age of the source's valid time. This is distinct from a successful cache/network read.
+    pub data_age: Option<std::time::Duration>,
     pub last_failure: Option<std::time::Duration>,
     pub error: Option<String>,
     pub cadence: std::time::Duration,
+    pub successes: u64,
+    pub failures: u64,
 }
 
 impl SourceHealth {
@@ -497,9 +531,13 @@ impl SourceHealth {
             .is_some_and(|failed| self.last_success.is_none_or(|success| failed <= success))
         {
             HealthState::Failed
-        } else if self.last_success.is_some_and(|age| age <= self.cadence) {
+        } else if self
+            .data_age
+            .or(self.last_success)
+            .is_some_and(|age| age <= self.cadence)
+        {
             HealthState::Fresh
-        } else if self.last_success.is_some() {
+        } else if self.data_age.is_some() || self.last_success.is_some() {
             HealthState::Stale
         } else {
             HealthState::Waiting
@@ -508,92 +546,6 @@ impl SourceHealth {
 
     pub(crate) fn next_retry(&self) -> Option<std::time::Duration> {
         self.last_attempt.map(|age| self.cadence.saturating_sub(age))
-    }
-}
-
-struct RequestStatus {
-    fetching: bool,
-    last_attempt: Instant,
-    last_success: Option<Instant>,
-    last_failure: Option<(Instant, String)>,
-    cadence: std::time::Duration,
-}
-
-/// Latest generation and fetch health in each result lane.
-#[derive(Default)]
-struct RequestBook {
-    next: u64,
-    latest: std::collections::HashMap<RequestLane, u64>,
-    status: std::collections::HashMap<RequestLane, RequestStatus>,
-}
-
-impl RequestBook {
-    fn start(&mut self, lane: RequestLane) -> u64 {
-        self.next = self.next.wrapping_add(1);
-        self.latest.insert(lane.clone(), self.next);
-        let now = Instant::now();
-        let cadence = lane.cadence();
-        self.status
-            .entry(lane)
-            .and_modify(|s| {
-                s.fetching = true;
-                s.last_attempt = now;
-                s.cadence = cadence;
-            })
-            .or_insert(RequestStatus {
-                fetching: true,
-                last_attempt: now,
-                last_success: None,
-                last_failure: None,
-                cadence,
-            });
-        self.next
-    }
-
-    fn is_current(&self, lane: &RequestLane, generation: u64) -> bool {
-        self.latest.get(lane) == Some(&generation)
-    }
-
-    /// Finish only the newest generation. An old failure cannot poison a newer success.
-    fn finish(&mut self, lane: &RequestLane, generation: u64, error: Option<&str>) -> bool {
-        if !self.is_current(lane, generation) {
-            return false;
-        }
-        if let Some(s) = self.status.get_mut(lane) {
-            s.fetching = false;
-            match error {
-                Some(e) => s.last_failure = Some((Instant::now(), e.to_string())),
-                None => s.last_success = Some(Instant::now()),
-            }
-        }
-        true
-    }
-
-    fn health(&self, lane: &RequestLane) -> SourceHealth {
-        let now = Instant::now();
-        let Some(s) = self.status.get(lane) else {
-            return SourceHealth {
-                source: lane.label(),
-                fetching: false,
-                last_attempt: None,
-                last_success: None,
-                last_failure: None,
-                error: None,
-                cadence: lane.cadence(),
-            };
-        };
-        SourceHealth {
-            source: lane.label(),
-            fetching: s.fetching,
-            last_attempt: Some(now.saturating_duration_since(s.last_attempt)),
-            last_success: s.last_success.map(|t| now.saturating_duration_since(t)),
-            last_failure: s
-                .last_failure
-                .as_ref()
-                .map(|(t, _)| now.saturating_duration_since(*t)),
-            error: s.last_failure.as_ref().map(|(_, e)| e.clone()),
-            cadence: s.cadence,
-        }
     }
 }
 
@@ -608,7 +560,28 @@ enum OverlayDelivery {
     },
 }
 
+fn registered_display_field(
+    frame: &wxdata::field::FieldFrame,
+    max_dim: usize,
+) -> Option<wxdata::mrms::MrmsField> {
+    (frame.grid.nx.max(frame.grid.ny) > max_dim).then(|| match frame.descriptor.value_kind {
+        wxdata::field::ValueKind::Categorical | wxdata::field::ValueKind::Mask => {
+            frame.field().subsampled(max_dim)
+        }
+        _ => frame.field().clone().decimated(max_dim),
+    })
+}
+
 impl OverlaySource {
+    fn identity(&self) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut hash = std::collections::hash_map::DefaultHasher::new();
+        // Debug includes every selector carried by the enum. Hash immediately so credentials and
+        // private coordinates never enter request state, health UI, or diagnostics.
+        format!("{self:?}").hash(&mut hash);
+        hash.finish()
+    }
+
     fn lane(&self) -> RequestLane {
         use crate::render::FieldLayer as FL;
         match self {
@@ -629,8 +602,12 @@ impl OverlaySource {
             | Self::Env(layer, ..)
             | Self::HrrrLayer(layer, ..)
             | Self::Global(layer, ..)
+            | Self::Rtma(layer, ..)
             | Self::L3Grid(layer, ..) => RequestLane::Field(*layer),
+            Self::GefsDistribution(..) => RequestLane::Feed("GEFS plume"),
+            Self::GefsPostage(..) => RequestLane::Feed("GEFS postage stamps"),
             Self::ModelDiff(..) => RequestLane::Field(FL::ModelDiff),
+            Self::RefsProbability(..) => RequestLane::Field(FL::RefsReflectivityProb),
             Self::Mosaic(..) => RequestLane::Field(FL::Mosaic),
             Self::Hrrr(..) => RequestLane::Field(FL::Hrrr),
             Self::Snow(..) => RequestLane::Field(FL::SnowAnalysis),
@@ -640,6 +617,8 @@ impl OverlaySource {
             Self::Spotters => RequestLane::Feed("Spotter Network"),
             Self::ProbSevere => RequestLane::Feed("ProbSevere"),
             Self::Fronts => RequestLane::Feed("Surface analysis"),
+            Self::GoesAbi(layer, ..) => RequestLane::Field(*layer),
+            Self::GoesRgb(..) => RequestLane::Field(crate::render::FieldLayer::GoesTrueColor),
             Self::FreezingLevels(..) => RequestLane::Feed("Freezing levels"),
             Self::Obs { .. } => RequestLane::Feed("Radar observations"),
             Self::Vwp(..) => RequestLane::Feed("VAD profile"),
@@ -714,33 +693,87 @@ impl OverlaySource {
                 OverlayMsg::Placefile(url, pf)
             }
             #[cfg(not(target_arch = "wasm32"))]
-            OverlaySource::Plugin(key, command, args, pctx) => {
+            OverlaySource::Plugin(key, command, args, manifest, pctx) => {
                 // A plugin failure is the user's own command misbehaving, so it has to reach the
                 // manager window rather than only the log — hence a message either way.
-                match crate::plugins::run(&command, &args, &pctx).await {
+                match crate::plugins::run(&command, &args, &manifest, &pctx).await {
                     Ok(pf) => OverlayMsg::Placefile(key, pf),
                     Err(e) => OverlayMsg::PlacefileError(key, e.to_string()),
                 }
             }
             OverlaySource::Field(layer, product) => {
-                OverlayMsg::Field(layer, wxdata::mrms::fetch_latest(http, &product).await?)
+                if wxdata::mrms::descriptor_for_product(&product).is_some() {
+                    OverlayMsg::RegisteredField(
+                        layer,
+                        wxdata::mrms::fetch_latest_frame(http, &product).await?,
+                        None,
+                    )
+                } else {
+                    OverlayMsg::Field(layer, wxdata::mrms::fetch_latest(http, &product).await?)
+                }
             }
+            OverlaySource::GoesAbi(layer, band, scene, at) => {
+                let received = Utc::now();
+                let image = wxdata::abi::fetch_at(
+                    http,
+                    wxdata::abi::Satellite::East,
+                    scene,
+                    band,
+                    at.unwrap_or(received),
+                )
+                .await?;
+                OverlayMsg::RegisteredField(
+                    layer,
+                    image.into_frame(received)?,
+                    None,
+                )
+            }
+            OverlaySource::GoesRgb(scene, at) => OverlayMsg::Rgb(
+                crate::render::FieldLayer::GoesTrueColor,
+                wxdata::abi::fetch_rgb_at(
+                    http,
+                    wxdata::abi::Satellite::East,
+                    scene,
+                    &wxdata::abi::TRUE_COLOR,
+                    at.unwrap_or_else(Utc::now),
+                )
+                .await?,
+            ),
             OverlaySource::SnowBands => {
                 // Both grids at once: the mask is useless without the echo and vice versa.
                 let (mosaic, flags) = futures_util::future::try_join(
-                    wxdata::mrms::fetch_latest(http, wxdata::mrms::REFLECTIVITY),
-                    wxdata::mrms::fetch_latest(http, wxdata::mrms::PRECIP_TYPE),
+                    wxdata::mrms::fetch_latest_frame(http, wxdata::mrms::REFLECTIVITY),
+                    wxdata::mrms::fetch_latest_frame(http, wxdata::mrms::PRECIP_TYPE),
                 )
                 .await?;
                 // MRMS PrecipFlag: 3 is snow, 4 is wet snow. Everything else is rain, ice or
                 // nothing, and a snow-squall layer that lit up over warm rain would be a liar.
-                let bands = wxdata::banding::bands(&mosaic, 20.0, Some((&flags, &[3, 4])))
+                let bands = wxdata::banding::snow_bands_frame(&mosaic, &flags)
                     .ok_or_else(|| anyhow::anyhow!("the mosaic came back empty"))?;
-                OverlayMsg::Field(crate::render::FieldLayer::SnowBands, bands)
+                OverlayMsg::RegisteredField(
+                    crate::render::FieldLayer::SnowBands,
+                    bands,
+                    None,
+                )
             }
             OverlaySource::Global(layer, model, field, fh) => {
                 let fc = wxdata::global::fetch(http, model, field, fh).await?;
-                OverlayMsg::Field(layer, fc.field)
+                OverlayMsg::RegisteredField(layer, fc.into_frame(field.descriptor()), None)
+            }
+            OverlaySource::GefsDistribution(field, fh, lon, lat) => {
+                OverlayMsg::GefsDistribution(
+                    wxdata::global::fetch_gefs_point_plume(http, field, fh, lon, lat).await?,
+                )
+            }
+            OverlaySource::GefsPostage(field, fh) => OverlayMsg::GefsPostage(
+                wxdata::global::fetch_gefs_postage_stamps(http, field, fh).await?,
+            ),
+            OverlaySource::Rtma(layer, source, field) => {
+                let frame = match source {
+                    wxdata::rtma::Source::Rtma => wxdata::rtma::fetch_latest_rtma(http, field).await?,
+                    wxdata::rtma::Source::Urma => wxdata::rtma::fetch_latest_urma(http, field).await?,
+                };
+                OverlayMsg::RegisteredField(layer, frame, None)
             }
             OverlaySource::ModelDiff(field, fh) => {
                 use crate::fielddiff::DiffField;
@@ -755,11 +788,21 @@ impl OverlaySource {
                             wxdata::global::fetch(http, GlobalModel::Ecmwf, g, fh),
                         )
                         .await?;
+                        anyhow::ensure!(
+                            crate::fielddiff::same_valid_time(gfs.valid(), ecmwf.valid()),
+                            "model difference unavailable: GFS valid {} but ECMWF valid {}",
+                            gfs.valid().format("%d %H:%MZ"),
+                            ecmwf.valid().format("%d %H:%MZ")
+                        );
                         let valid = (
                             gfs.valid().format("%d %H:%MZ").to_string(),
                             ecmwf.valid().format("%d %H:%MZ").to_string(),
                         );
-                        (gfs.field, ecmwf.field, valid)
+                        (
+                            gfs.into_frame(g.descriptor()),
+                            ecmwf.into_frame(g.descriptor()),
+                            valid,
+                        )
                     }
                     DiffField::Cape | DiffField::Srh => {
                         let (var, level, min_valid) = match field {
@@ -785,15 +828,29 @@ impl OverlaySource {
                             ),
                         )
                         .await?;
+                        anyhow::ensure!(
+                            crate::fielddiff::same_valid_time(hrrr.run, rap.run),
+                            "model difference unavailable: HRRR valid {} but RAP valid {}",
+                            hrrr.run.format("%d %H:%MZ"),
+                            rap.run.format("%d %H:%MZ")
+                        );
                         let valid = (
                             hrrr.run.format("%d %H:%MZ").to_string(),
                             rap.run.format("%d %H:%MZ").to_string(),
                         );
-                        (hrrr.field, rap.field, valid)
+                        let descriptor = match field {
+                            DiffField::Cape => &wxdata::hrrr::CAPE_DESCRIPTOR,
+                            _ => &wxdata::hrrr::SRH_DESCRIPTOR,
+                        };
+                        (
+                            hrrr.into_frame(descriptor, wxdata::hrrr::Model::Hrrr),
+                            rap.into_frame(descriptor, wxdata::hrrr::Model::Rap),
+                            valid,
+                        )
                     }
                 };
-                let d = crate::fielddiff::diff(&a, &b)
-                    .ok_or_else(|| anyhow::anyhow!("the two models cover nothing in common"))?;
+                let d = crate::fielddiff::diff_frames(&a, &b, field.descriptor())
+                    .ok_or_else(|| anyhow::anyhow!("the model fields are incompatible"))?;
                 OverlayMsg::ModelDiff(d, valid)
             }
             OverlaySource::StormReports(bucket) => {
@@ -822,14 +879,20 @@ impl OverlaySource {
                 OverlayMsg::ProbSevere(wxdata::probsevere::fetch_probsevere(http).await?)
             }
             OverlaySource::Hrrr(fh) => {
-                OverlayMsg::Hrrr(wxdata::hrrr::fetch_forecast(http, fh).await?)
+                OverlayMsg::RegisteredField(
+                    crate::render::FieldLayer::Hrrr,
+                    wxdata::hrrr::fetch_forecast(http, fh)
+                        .await?
+                        .into_reflectivity_frame(),
+                    None,
+                )
             }
             OverlaySource::HrrrLayer(layer, fh) => {
                 use crate::render::FieldLayer as FL;
-                let fc = match layer {
+                let (fc, model) = match layer {
                     // Rotation tracks read as a swath: the union of every hourly max window from
                     // now through the scrubbed hour, not just that one hour's slice.
-                    FL::UpdraftHelicity => {
+                    FL::UpdraftHelicity => (
                         wxdata::hrrr::fetch_field_swath(
                             http,
                             "MXUPHL",
@@ -837,10 +900,11 @@ impl OverlaySource {
                             fh.max(1),
                             0.0,
                         )
-                        .await?
-                    }
+                        .await?,
+                        wxdata::hrrr::Model::Hrrr,
+                    ),
                     // Accumulated snowfall since the run started, through the scrubbed hour.
-                    FL::Snowfall => {
+                    FL::Snowfall => (
                         wxdata::hrrr::fetch_field(
                             http,
                             wxdata::hrrr::Model::Hrrr,
@@ -849,12 +913,13 @@ impl OverlaySource {
                             fh,
                             0.0,
                         )
-                        .await?
-                    }
+                        .await?,
+                        wxdata::hrrr::Model::Hrrr,
+                    ),
                     // NBM's calibrated probability of thunder over the hour ending at `fh`. The
                     // idx lists the trailing window first, so the plain var+level match already
                     // picks that one over the run-total windows beside it.
-                    FL::ThunderProb => {
+                    FL::ThunderProb => (
                         wxdata::hrrr::fetch_field(
                             http,
                             wxdata::hrrr::Model::Nbm,
@@ -863,9 +928,10 @@ impl OverlaySource {
                             fh.max(1),
                             0.0,
                         )
-                        .await?
-                    }
-                    _ => {
+                        .await?,
+                        wxdata::hrrr::Model::Nbm,
+                    ),
+                    FL::Smoke => (
                         wxdata::hrrr::fetch_field(
                             http,
                             wxdata::hrrr::Model::Hrrr,
@@ -874,11 +940,26 @@ impl OverlaySource {
                             fh,
                             0.0,
                         )
-                        .await?
-                    }
+                        .await?,
+                        wxdata::hrrr::Model::Hrrr,
+                    ),
+                    _ => anyhow::bail!("unregistered forecast field {layer:?}"),
                 };
-                OverlayMsg::Field(layer, fc.field)
+                let descriptor = layer
+                    .descriptor()
+                    .ok_or_else(|| anyhow::anyhow!("unregistered forecast field {layer:?}"))?;
+                let frame = if layer == FL::UpdraftHelicity {
+                    fc.into_swath_frame(descriptor, model)
+                } else {
+                    fc.into_frame(descriptor, model)
+                };
+                OverlayMsg::RegisteredField(layer, frame, None)
             }
+            OverlaySource::RefsProbability(fh, threshold) => OverlayMsg::RegisteredField(
+                crate::render::FieldLayer::RefsReflectivityProb,
+                wxdata::refs::fetch_reflectivity(http, fh, threshold).await?,
+                None,
+            ),
             OverlaySource::Env(layer, model, ml, srh_km) => {
                 use crate::render::FieldLayer as FL;
                 let (var, level, min_valid) = match layer {
@@ -892,24 +973,28 @@ impl OverlaySource {
                     _ => ("REFC", "entire atmosphere".to_string(), -30.0),
                 };
                 let fc = wxdata::hrrr::fetch_field(http, model, var, &level, 0, min_valid).await?;
-                OverlayMsg::Field(layer, fc.field)
+                let descriptor = layer
+                    .descriptor()
+                    .ok_or_else(|| anyhow::anyhow!("unregistered environment field {layer:?}"))?;
+                OverlayMsg::RegisteredField(layer, fc.into_frame(descriptor, model), None)
             }
             OverlaySource::L3Grid(layer, site) => {
                 use crate::render::FieldLayer as FL;
                 let field = match layer {
-                    FL::Vil => wxdata::level3::fetch_dvl(http, &site).await,
-                    FL::EchoTops => wxdata::level3::fetch_eet(http, &site).await,
-                    FL::Hca => wxdata::level3::fetch_hhc(http, &site).await,
+                    FL::Vil => wxdata::level3::fetch_dvl_frame(http, &site).await,
+                    FL::EchoTops => wxdata::level3::fetch_eet_frame(http, &site).await,
+                    FL::Hca => wxdata::level3::fetch_hhc_frame(http, &site).await,
                     _ => None,
                 };
                 match field {
-                    Some(f) => OverlayMsg::Field(layer, f),
+                    Some(f) => OverlayMsg::RegisteredField(layer, f, None),
                     None => anyhow::bail!("no L3 grid for {site}"),
                 }
             }
-            OverlaySource::Snow(hours) => OverlayMsg::Field(
+            OverlaySource::Snow(hours) => OverlayMsg::RegisteredField(
                 crate::render::FieldLayer::SnowAnalysis,
-                wxdata::nohrsc::fetch(http, hours).await?,
+                wxdata::nohrsc::fetch_frame(http, hours).await?,
+                None,
             ),
             OverlaySource::FreezingLevels(lon, lat) => {
                 // HRRR carries both isotherm heights as analysis fields, so the hail algorithm
@@ -1074,7 +1159,7 @@ impl OverlaySource {
                 let m = wxdata::mosaic::fetch(http, &sites)
                     .await
                     .ok_or_else(|| anyhow::anyhow!("no radar mosaic for {sites:?}"))?;
-                OverlayMsg::Mosaic(m.field, m.sites, m.oldest)
+                OverlayMsg::Mosaic(m)
             }
             OverlaySource::Gauges(lat0, lon0, lat1, lon1) => {
                 OverlayMsg::Gauges(wxdata::river::fetch_bbox(http, lat0, lon0, lat1, lon1).await?)
@@ -1184,6 +1269,8 @@ pub(crate) enum MapTool {
     Interrogate,
     /// Measure great-circle distance/bearing between two clicks.
     Measure,
+    /// Select opposite corners and calculate exact native-value area statistics.
+    RegionStats,
     /// Drop a location marker at the clicked point.
     Marker,
     /// Draw a two-click line, then reconstruct a vertical cross-section along it.
@@ -1192,6 +1279,8 @@ pub(crate) enum MapTool {
     Sounding,
     /// Click to set your position for chase mode (follow-me + nearest-radar handoff).
     Chase,
+    /// Click start, optional waypoints, and destination for road routing.
+    Route,
     /// Click a point for the plain NWS forecast there (7-day + hourly).
     Forecast,
     /// Click a point to list historical tornado tracks near it (SPC climatology).
@@ -1434,6 +1523,8 @@ pub(crate) enum OverlayToggle {
     Strikes,
     Wind,
     LinkCameras,
+    LinkTimes,
+    LockSourceFrame,
     /// The always-on-top mini-loop window (desktop only).
     MiniLoop,
     /// Beam-vs-terrain blockage shading for the displayed tilt (chase mode).
@@ -1454,7 +1545,7 @@ pub(crate) struct BlockageKey {
 impl OverlayToggle {
     /// Every toggle, for the persistence sweep. A new variant belongs here too, or it silently
     /// stops being remembered across restarts.
-    pub(crate) const ALL: [OverlayToggle; 41] = [
+    pub(crate) const ALL: [OverlayToggle; 43] = [
         Self::AlertPanel,
         Self::StormReports,
         Self::Spotters,
@@ -1494,15 +1585,19 @@ impl OverlayToggle {
         Self::Strikes,
         Self::Wind,
         Self::LinkCameras,
+        Self::LinkTimes,
+        Self::LockSourceFrame,
         Self::MiniLoop,
         Self::Blockage,
     ];
 
-    /// Toggles that describe this session's window arrangement rather than a layer: camera
-    /// linking is about the panes on screen right now, and the mini loop is a window. Neither is
-    /// persisted or captured into a workspace.
+    /// Toggles that describe the current window arrangement rather than a global layer. Pane
+    /// links are captured directly by workspaces; the mini loop is only a temporary window.
     pub(crate) fn session_only(self) -> bool {
-        matches!(self, Self::LinkCameras | Self::MiniLoop)
+        matches!(
+            self,
+            Self::LinkCameras | Self::LinkTimes | Self::LockSourceFrame | Self::MiniLoop
+        )
     }
 
     /// Stable name used in the settings file. Persisted as a string, not as the enum: an unknown
@@ -1560,6 +1655,7 @@ pub(crate) enum PaletteAction {
     /// Four panes, one product, four distinct tilts, cameras linked.
     AllTilts,
     ToggleField(crate::render::FieldLayer),
+    ToggleFavorite(crate::render::FieldLayer),
     ToggleOverlay(OverlayToggle),
     /// Open the SPC outlook day and hazard controls.
     OpenOutlooks,
@@ -1569,6 +1665,8 @@ pub(crate) enum PaletteAction {
     SetOutlookKind(u8),
     SetContours(ContourKind),
     Tool(MapTool),
+    ExportRegionStats,
+    ExportDetectorHistory,
     OpenWindow(AppWindow),
     SetPanes(usize),
     CycleBasemap,
@@ -1588,6 +1686,9 @@ pub(crate) enum PaletteAction {
     Explain(usize),
     /// Snapshot the current pane layout as a new workspace.
     SaveWorkspace,
+    ExportCase,
+    ExportCaseReport,
+    ImportCase,
     /// Restore the saved workspace at this index (an index, not the workspace itself, so the enum
     /// stays `Copy` and the palette rows stay cheap).
     ApplyWorkspace(usize),
@@ -1681,18 +1782,38 @@ pub(crate) struct PaletteEntry {
     pub key: Option<String>,
     /// Current network health. Disabled, static and local-only rows deliberately carry none.
     pub health: Option<SourceHealth>,
+    pub favorite: bool,
+    pub recent: Option<usize>,
 }
 
 /// Refresh cadence (seconds) for a national field layer's product.
 fn field_refresh_secs(layer: crate::render::FieldLayer) -> u64 {
     use crate::render::FieldLayer as FL;
     match layer {
+        FL::GoesC13
+        | FL::GoesWaterVapor
+        | FL::GoesMidWaterVapor
+        | FL::GoesLongwaveIr
+        | FL::GoesVisible
+        | FL::GoesTrueColor
+        | FL::GoesCatalog(_) => 60,
         FL::Lightning | FL::AzShear => 60,
-        FL::Mrms | FL::Mesh | FL::Rotation | FL::Hrrr | FL::Mosaic => 120,
+        FL::Mrms
+        | FL::MrmsReflectivityTrail
+        | FL::MrmsLowLevel
+        | FL::Mesh
+        | FL::Posh
+        | FL::MrmsEchoTop18
+        | FL::MrmsVil
+        | FL::MrmsCatalog(_)
+        | FL::Rotation
+        | FL::AzShearMid
+        | FL::Hrrr
+        | FL::Mosaic => 120,
         // QPE accumulations update on a ~2-minute MRMS cadence.
         // The rate product lands every 2 minutes; the accumulations move far more slowly.
         FL::PrecipRate => 120,
-        FL::Qpe1h | FL::Qpe24h => 120,
+        FL::Qpe1h | FL::Qpe3h | FL::Qpe6h | FL::Qpe12h | FL::Qpe24h => 120,
         // MRMS precip type / flash-flood ARI on the ~2-min cadence; L3 grids on the 120 s L3 cadence.
         FL::PrecipType | FL::FlashFlood | FL::Vil | FL::EchoTops | FL::Hca => 120,
         // Bands are cut from the ~2-min mosaic, so they are as fresh as it is.
@@ -1711,9 +1832,11 @@ fn field_refresh_secs(layer: crate::render::FieldLayer) -> u64 {
         | FL::GlobalPrecip
         // Two global cycles behind it, so the same half hour.
         | FL::ModelDiff => 1800,
+        // RTMA is hourly; poll often enough to notice a newly published analysis.
+        FL::RtmaTemp2m | FL::RtmaDewpoint2m | FL::RtmaPressure | FL::RtmaWindU10m => 300,
         FL::Smoke => 900,
         // NBM posts hourly; the blend moves no faster than that.
-        FL::ThunderProb => 900,
+        FL::ThunderProb | FL::RefsReflectivityProb => 900,
         // An accumulation moves slower than the grid it accumulates, whatever the window.
         FL::HailSwath => 300,
         // Environment (HRRR CAPE/SRH) refreshes slowly — 15 min.
@@ -1727,6 +1850,14 @@ fn field_refresh_secs(layer: crate::render::FieldLayer) -> u64 {
         | FL::HailPosh => 60,
         // Gridded from the GLM feed the app already polls every 20 s; regridding is local work.
         FL::GlmFed => 60,
+    }
+}
+
+fn field_time_tolerance(layer: crate::render::FieldLayer) -> chrono::Duration {
+    match layer {
+        // NOHRSC analyses are issued at 00/06/12/18Z; allow one cadence plus posting delay.
+        crate::render::FieldLayer::SnowAnalysis => chrono::Duration::hours(7),
+        _ => chrono::Duration::seconds((field_refresh_secs(layer) * 2) as i64),
     }
 }
 
@@ -1759,10 +1890,37 @@ type ZdrCache = (
 #[derive(Default)]
 pub(crate) struct FieldState {
     pub pending: Option<crate::render::MrmsUpload>,
+    /// Native values and provenance for registry-backed products. GPU uploads remain display-only.
+    pub frame: Option<wxdata::field::FieldFrame>,
+    /// Small common metadata retained for direct-color fields that have no scalar `FieldFrame`.
+    pub metadata: Option<(wxdata::field::GridSpec, wxdata::field::DataStamp)>,
     pub last_fetch: Option<Instant>,
+    /// Analysis time used by the current native-satellite request (`None` inside = live).
+    pub requested_time: Option<Option<DateTime<Utc>>>,
     /// Since when no pane has drawn this layer. Its GPU texture (up to 8192 px of R8) is freed
     /// after [`FIELD_EVICT`]; before this, thirty-five layers could stay resident until exit.
     pub off_since: Option<Instant>,
+}
+
+struct RegionAnalysis {
+    product: &'static str,
+    units: &'static str,
+    valid: DateTime<Utc>,
+    stats: wxdata::field::RegionStats,
+    correlation: Option<RegionCorrelation>,
+}
+
+struct RegionCorrelation {
+    product: &'static str,
+    units: &'static str,
+    stats: wxdata::field::CorrelationStats,
+}
+
+struct RadarTimeSeries {
+    moment: Moment,
+    lon: f64,
+    lat: f64,
+    samples: Vec<wxdata::level2::NativeTimeSample>,
 }
 
 /// How long a field layer stays uploaded after the last pane turns it off. Long enough that
@@ -1818,6 +1976,13 @@ struct LoopExport {
     /// Playback speed the scrubber was set to when the export started — the exported clip plays
     /// at the speed the user was watching, instead of a hardcoded 5 fps.
     fps: f32,
+    site: Option<String>,
+    product: String,
+    units: &'static str,
+    tilt: usize,
+    center: [f64; 2],
+    zoom: f64,
+    sources: Vec<String>,
 }
 
 /// A placefile the app has fetched and is tracking (mirrors a `PlacefileConfig` by URL).
@@ -1834,6 +1999,19 @@ struct LoadedPlacefile {
     loaded: bool,
     /// Why the last load failed, if it did.
     error: Option<String>,
+}
+
+fn stored_gis(name: &str, content: &str) -> anyhow::Result<wxdata::placefile::Placefile> {
+    if name.to_ascii_lowercase().ends_with(".kmz") || name.to_ascii_lowercase().ends_with(".zip") {
+        use base64::Engine as _;
+        let encoded = content
+            .strip_prefix("base64:")
+            .ok_or_else(|| anyhow::anyhow!("saved GIS archive is corrupt"))?;
+        let bytes = base64::engine::general_purpose::STANDARD.decode(encoded)?;
+        wxdata::gis::archive(name, &bytes)
+    } else {
+        wxdata::gis::parse(name, content)
+    }
 }
 
 /// A background fetch result routed back to a specific view.
@@ -1881,7 +2059,7 @@ enum DataMsg {
         time: DateTime<Utc>,
         scan: Scan,
     },
-    /// A live sweep-boundary update (merged full volume) from the chunk streamer.
+    /// A live radial-block update (merged full volume) from the chunk streamer.
     Live {
         view: usize,
         site: String,
@@ -1890,6 +2068,7 @@ enum DataMsg {
         /// Already shared with the streaming task's running volume (see `live::Update`).
         scan: Arc<Scan>,
         changed: Vec<f32>,
+        status: live::ScanStatus,
     },
     /// The live stream for `view` ended (error or clean exit); polling resumes.
     LiveEnded {
@@ -1965,6 +2144,7 @@ type ShownKey = (
     // Precipitation-tint generation: `None` when the tint is off, else the grid revision, so a
     // new precipitation-type grid or toggling the tint rebuilds the image.
     Option<u32>,
+    Option<u64>,
 );
 
 /// An in-progress offline chase-pack download: the worker outcome channel, a cancel flag the
@@ -2270,6 +2450,8 @@ pub struct HookEchoApp {
     pane_shown: std::collections::HashMap<usize, ShownKey>,
     /// Palette generation currently baked into each pane's LUT (see [`ShownKey`]).
     pane_lut: std::collections::HashMap<usize, u64>,
+    /// Last evaluated custom sweep per pane, retained for cursor sampling.
+    pane_custom_sweep: std::collections::HashMap<usize, BinnedSweep>,
     /// Last `(theme, system_dark, density, accent)` handed to `theme::apply`.
     theme_applied: Option<(
         crate::settings::Theme,
@@ -2408,9 +2590,12 @@ pub struct HookEchoApp {
     /// Which global model the global layers read, and how far into its run.
     global_model: wxdata::global::GlobalModel,
     global_fcst_hour: u16,
+    analysis_source: wxdata::rtma::Source,
     /// The (model, hour) each global layer was last fetched for, so a change refetches at once.
     global_layer_key:
         std::collections::HashMap<crate::render::FieldLayer, (wxdata::global::GlobalModel, u16)>,
+    gefs_distribution: Option<wxdata::global::GefsPointPlume>,
+    gefs_postage: Option<wxdata::global::GefsPostageStamps>,
     /// What the difference layer differences, and the two valid times its last fetch compared —
     /// the pair rarely shares a cycle, and a difference between two instants has to say so.
     diff_field: crate::fielddiff::DiffField,
@@ -2490,9 +2675,20 @@ pub struct HookEchoApp {
     tool: MapTool,
     /// Measure-tool clicked endpoints in `[lon, lat]` (max 2).
     measure: Vec<[f64; 2]>,
+    /// Opposite corners and cached native-value statistics for the selected registered field.
+    region_points: Vec<[f64; 2]>,
+    region_analysis: Option<RegionAnalysis>,
+    radar_scatter: Option<wxdata::level2::MomentPairs>,
+    radar_time_series: Option<RadarTimeSeries>,
+    detector_history: std::collections::VecDeque<crate::detector_history::Snapshot>,
+    detector_history_key: Option<(usize, String, usize)>,
     /// Freehand annotation strokes, in lon/lat so they stick to the ground through pan and zoom.
     /// Session-only by design: this is for pointing at a storm on a stream, not a saved document.
     strokes: Vec<Stroke2d>,
+    /// Clicked start/waypoints/destination and provider-returned road alternatives.
+    route_waypoints: Vec<[f64; 2]>,
+    routes: Vec<wxdata::route::Route>,
+    route_rx: Option<std::sync::mpsc::Receiver<Result<Vec<wxdata::route::Route>, String>>>,
     /// The colour the next stroke gets.
     draw_color: egui::Color32,
     marker_window: ui::marker_window::MarkerWindow,
@@ -2597,6 +2793,12 @@ pub struct HookEchoApp {
     loop_export: Option<LoopExport>,
     /// When true, all panes share the active pane's camera.
     link_cameras: bool,
+    /// When true, all panes follow the active pane's valid time.
+    link_times: bool,
+    /// When times are linked, prefer the identical radar source object where another pane has it.
+    lock_source_frame: bool,
+    /// Geographic cursor shared by linked panes, so the same point can be compared at a glance.
+    linked_probe: Option<[f64; 2]>,
     /// The always-on-top mini-loop window is open (desktop only; see `mini_loop_viewport`).
     mini_loop: bool,
     /// The mini loop's own camera while it is open; `None` until it borrows the pane's.
@@ -2609,6 +2811,10 @@ pub struct HookEchoApp {
     fields: std::collections::HashMap<crate::render::FieldLayer, FieldState>,
     /// Selected rotation-track accumulation window (minutes): 30, 60, or 120.
     rotation_minutes: u16,
+    reflectivity_trail: wxdata::trail::ExtremaTrail,
+    reflectivity_trail_result: Option<wxdata::trail::TrailResult>,
+    reflectivity_trail_minutes: u16,
+    reflectivity_trail_threshold: f32,
     /// Selected hail-swath accumulation window (minutes); see [`wxdata::mrms::hail_swath`].
     hail_minutes: u16,
     /// Environment suite (HRRR CAPE/SRH): CAPE uses the mixed-layer (90-0 mb) parcel when true,
@@ -2671,6 +2877,9 @@ pub struct HookEchoApp {
     cappi_key: Option<(String, u32)>,
     /// HRRR "future radar": selected forecast hour, last-fetched hour, run/valid times, clock.
     hrrr_fcst_hour: u8,
+    refs_fcst_hour: u8,
+    refs_dbz_threshold: u8,
+    refs_key: Option<(u8, u8)>,
     hrrr_fetched_hour: Option<u8>,
     hrrr_run: Option<DateTime<Utc>>,
     hrrr_valid: Option<DateTime<Utc>>,
@@ -2817,6 +3026,7 @@ pub struct HookEchoApp {
     /// was built for — panning off the composite refetches instead of leaving a stale picture.
     mosaic_sites: Vec<String>,
     mosaic_oldest: Option<chrono::DateTime<chrono::Utc>>,
+    mosaic_provenance: Option<wxdata::mosaic::Provenance>,
     mosaic_bounds: Option<(f64, f64, f64, f64)>,
     spotters: Vec<wxdata::spotters::Spotter>,
     spotters_last_fetch: Option<Instant>,
@@ -2933,6 +3143,7 @@ pub struct HookEchoApp {
     /// mark the frames-per-minute number is derived from, and the last idle interval requested.
     #[cfg(not(target_arch = "wasm32"))]
     perf: PerfReadout,
+    renderer_info: String,
     /// Last pane state posted to the parent frame, so only real changes cross the boundary.
     #[cfg(target_arch = "wasm32")]
     last_posted: Option<crate::workspace::PaneSnap>,
@@ -2969,6 +3180,7 @@ pub struct HookEchoApp {
     xsection_pts: Vec<[f64; 2]>,
     xsection: Option<wxdata::xsection::CrossSection>,
     xsection_tex: Option<egui::TextureHandle>,
+    xsection_beams: bool,
     /// Lazily-loaded textures for uploaded marker icons, keyed by filename. `None` = load failed
     /// (negative-cached so a missing/corrupt file isn't retried every frame).
     marker_icon_tex: ui::marker_window::IconTextures,
@@ -2977,7 +3189,7 @@ pub struct HookEchoApp {
     show_3d: bool,
     vol3d: ui::volume3d_window::Volume3dState,
     /// Which volume the built grid belongs to, so reopening the window doesn't rebuild it.
-    vol3d_key: Option<(String, usize)>,
+    vol3d_key: Option<(String, usize, Moment)>,
     /// In-flight build (the resample runs off the UI thread).
     #[allow(clippy::type_complexity)]
     vol3d_rx: Option<std::sync::mpsc::Receiver<(crate::render3d::Volume3dUpload, (f32, f32))>>,
@@ -3063,7 +3275,7 @@ impl HookEchoApp {
         // Which GPU actually got picked. One line, at startup, because every performance report
         // is unreadable without it — "the map is choppy" means one thing on a discrete adapter
         // and another on llvmpipe, and nothing in the app said which one was running.
-        {
+        let renderer_info = {
             let info = render_state.adapter.get_info();
             log::info!(
                 "gpu: {} ({:?}, {:?}) driver {}",
@@ -3072,7 +3284,8 @@ impl HookEchoApp {
                 info.backend,
                 info.driver
             );
-        }
+            format!("{} ({:?}, {:?}) driver {}", info.name, info.device_type, info.backend, info.driver)
+        };
         // Device loss on wasm is unrecoverable from inside the app: WebGPU (Safari 26+) loses
         // devices silently — black canvas, `webglcontextlost` can never fire — and on the WebGL
         // fallback (WebKitGTK) wgpu marks the device lost for gles errors that never surface as
@@ -3168,6 +3381,19 @@ impl HookEchoApp {
         // Zone geometry (county and forecast-zone shapes) never changes, so it outlives the run.
         if let Some(dir) = crate::paths::cache_dir() {
             wxdata::alerts::set_zone_cache_dir(dir);
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            if let Some(root) = crate::paths::cache_dir().map(|dir| dir.join("objects")) {
+                wxdata::object_cache::set_native_root(root.clone());
+                for family in ["model", "mrms", "satellite", "radar"] {
+                    crate::tiles::sweep_later(
+                        root.join(family),
+                        "weather object cache",
+                        if family == "mrms" { 128 } else { 256 } * 1024 * 1024,
+                    );
+                }
+            }
         }
         // Whatever the last run's quiet hours were still holding when it closed.
         let quiet_pending = settings.quiet_pending.clone();
@@ -3289,6 +3515,7 @@ impl HookEchoApp {
             chasepack: None,
             pane_shown: std::collections::HashMap::new(),
             pane_lut: std::collections::HashMap::new(),
+            pane_custom_sweep: std::collections::HashMap::new(),
             theme_applied: None,
             settings_checked: None,
             frame_nr: 0,
@@ -3377,7 +3604,10 @@ impl HookEchoApp {
             marker_popup: None,
             global_model: wxdata::global::GlobalModel::default(),
             global_fcst_hour: 0,
+            analysis_source: wxdata::rtma::Source::Rtma,
             global_layer_key: std::collections::HashMap::new(),
+            gefs_distribution: None,
+            gefs_postage: None,
             diff_field: crate::fielddiff::DiffField::default(),
             diff_valid: None,
             diff_grid: None,
@@ -3415,7 +3645,16 @@ impl HookEchoApp {
             last_viewport: (1000.0, 800.0),
             tool: MapTool::default(),
             measure: Vec::new(),
+            region_points: Vec::new(),
+            region_analysis: None,
+            radar_scatter: None,
+            radar_time_series: None,
+            detector_history: std::collections::VecDeque::new(),
+            detector_history_key: None,
             strokes: Vec::new(),
+            route_waypoints: Vec::new(),
+            routes: Vec::new(),
+            route_rx: None,
             draw_color: DRAW_COLORS[0],
             marker_window: Default::default(),
             event_window: Default::default(),
@@ -3471,6 +3710,9 @@ impl HookEchoApp {
             share_card: None,
             loop_export: None,
             link_cameras: false,
+            link_times: false,
+            lock_source_frame: false,
+            linked_probe: None,
             mini_loop: false,
             #[cfg(not(any(target_os = "android", target_arch = "wasm32")))]
             mini_cam: None,
@@ -3480,11 +3722,19 @@ impl HookEchoApp {
             crash_report: None,
             cells_site: None,
             cell_trends: std::collections::HashMap::new(),
-            fields: crate::render::FieldLayer::DRAW_ORDER
-                .iter()
-                .map(|&l| (l, FieldState::default()))
+            fields: crate::render::FieldLayer::draw_order()
+                .map(|l| (l, FieldState::default()))
                 .collect(),
             rotation_minutes: 30,
+            reflectivity_trail: wxdata::trail::ExtremaTrail::new(
+                30,
+                35.0,
+                wxdata::trail::Mode::Maximum,
+            )
+            .expect("valid reflectivity trail defaults"),
+            reflectivity_trail_result: None,
+            reflectivity_trail_minutes: 30,
+            reflectivity_trail_threshold: 35.0,
             hail_minutes: 1440,
             env_cape_ml: false,
             env_srh_km: 3,
@@ -3520,6 +3770,9 @@ impl HookEchoApp {
             cappi_tex: None,
             cappi_key: None,
             hrrr_fcst_hour: 1,
+            refs_fcst_hour: 1,
+            refs_dbz_threshold: 40,
+            refs_key: None,
             hrrr_fetched_hour: None,
             hrrr_run: None,
             hrrr_valid: None,
@@ -3605,6 +3858,7 @@ impl HookEchoApp {
             dat_key: None,
             mosaic_sites: Vec::new(),
             mosaic_oldest: None,
+            mosaic_provenance: None,
             mosaic_bounds: None,
             spotters: Vec::new(),
             spotters_last_fetch: None,
@@ -3660,6 +3914,7 @@ impl HookEchoApp {
             gesture_live: false,
             #[cfg(not(target_arch = "wasm32"))]
             perf: PerfReadout::new(),
+            renderer_info,
             #[cfg(target_arch = "wasm32")]
             last_posted: None,
             obs_tour: false,
@@ -3680,6 +3935,7 @@ impl HookEchoApp {
             xsection_pts: Vec::new(),
             xsection: None,
             xsection_tex: None,
+            xsection_beams: true,
             marker_icon_tex: Default::default(),
             show_3d: false,
             vol3d: Default::default(),
@@ -4085,6 +4341,12 @@ impl HookEchoApp {
         if self.derived_key.as_ref() == Some(&key) {
             return;
         }
+        let derived_identity = {
+            use std::hash::{Hash, Hasher};
+            let mut hash = std::collections::hash_map::DefaultHasher::new();
+            key.hash(&mut hash);
+            hash.finish()
+        };
         // Binning is cached on the volume; the integral is the expensive half and runs off-thread.
         let sweeps = vol.reflectivity_tilts();
         if sweeps.len() < 2 {
@@ -4102,7 +4364,8 @@ impl HookEchoApp {
             .overlay_requests
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .start(lane.clone());
+            .start(lane.clone(), derived_identity)
+            .expect("a changed derived-field key cannot duplicate an in-flight request");
         let cap = self.field_texture_cap();
         let ctx = ctx.clone();
         self.spawner.spawn_blocking(move || {
@@ -4161,41 +4424,62 @@ impl HookEchoApp {
 
     fn spawn_overlay(&self, ctx: &egui::Context, source: OverlaySource) {
         let lane = source.lane();
-        let generation = self
+        let identity = source.identity();
+        let Some(generation) = self
             .overlay_requests
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .start(lane.clone());
+            .start(lane.clone(), identity)
+        else {
+            return;
+        };
         let http = self.http.clone();
         let tx = self.overlay_tx.clone();
         let ctx = ctx.clone();
         let cap = self.field_texture_cap();
-        self.spawner.spawn(async move {
+        let delivery_lane = lane.clone();
+        let handle = self.spawner.spawn_abortable(async move {
             // Deliberately shorter than the 120 s refresh that drives this: a fetch that cannot
             // outlive its own cadence cannot stack. Before, a feed the network swallowed left a
             // task alive forever and the next tick started another one on top of it.
-            let result = match wxdata::task::timeout(OVERLAY_TIMEOUT, source.fetch(&http))
-                .await
-                .unwrap_or_else(Err)
+            let result = match wxdata::task::timeout(
+                OVERLAY_TIMEOUT,
+                retry_once(std::time::Duration::from_millis(750), || {
+                    source.clone().fetch(&http)
+                }),
+            )
+            .await
+            .unwrap_or_else(Err)
             {
                 Ok(msg) => {
+                    // Fetch adapters decode before returning. Yield once so cancellation can stop
+                    // an obsolete request before the next CPU-heavy stage pools its full grid.
+                    wxdata::task::yield_now().await;
                     // Max-pool oversized grids here, on the fetch task: MRMS rotation tracks and
                     // AzShear arrive 14000x7000, and doing this on the UI thread stalled a frame
                     // for the whole pool.
                     Ok(match msg {
                         OverlayMsg::Field(layer, f) => OverlayMsg::Field(layer, f.decimated(cap)),
+                        OverlayMsg::RegisteredField(layer, frame, _) => {
+                            let display = registered_display_field(&frame, cap);
+                            OverlayMsg::RegisteredField(layer, frame, display)
+                        }
                         other => other,
                     })
                 }
                 Err(e) => Err(e.to_string()),
             };
             let _ = tx.send(OverlayDelivery::Fetched {
-                lane,
+                lane: delivery_lane,
                 generation,
                 result,
             });
             ctx.request_repaint();
         });
+        self.overlay_requests
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .attach_abort(&lane, generation, handle);
     }
 
     /// Hazard kind for the current outlook day: probabilistic layers exist only for Day 1;
@@ -4297,13 +4581,22 @@ impl HookEchoApp {
                 }
                 None => {
                     changed = true;
+                    let imported = cfg
+                        .url
+                        .strip_prefix("gis:")
+                        .and_then(|_| self.settings.web_files.get(&cfg.url))
+                        .map(|text| stored_gis(&cfg.url[4..], text));
                     self.placefiles.push(LoadedPlacefile {
                         url: cfg.url.clone(),
                         enabled: cfg.enabled,
-                        pf: Default::default(),
-                        last_fetch: None,
-                        loaded: false,
-                        error: None,
+                        pf: imported
+                            .as_ref()
+                            .and_then(|result| result.as_ref().ok())
+                            .cloned()
+                            .unwrap_or_default(),
+                        last_fetch: imported.as_ref().map(|_| Instant::now()),
+                        loaded: imported.as_ref().is_some_and(Result::is_ok),
+                        error: imported.and_then(Result::err).map(|error| error.to_string()),
                     });
                 }
             }
@@ -4311,7 +4604,7 @@ impl HookEchoApp {
         // Fetch never-loaded and refresh stale (min 15s cadence).
         let mut to_fetch = Vec::new();
         for lp in &self.placefiles {
-            if !lp.enabled {
+            if !lp.enabled || lp.url.starts_with("gis:") {
                 continue;
             }
             // A plugin's cadence is the user's setting, not the placefile's own RefreshSeconds:
@@ -4351,6 +4644,7 @@ impl HookEchoApp {
                     url.clone(),
                     p.command.clone(),
                     p.args.clone(),
+                    p.manifest.clone(),
                     self.plugin_context(),
                 ),
                 #[cfg(target_arch = "wasm32")]
@@ -4447,18 +4741,53 @@ impl HookEchoApp {
         });
     }
 
-    /// Height of pane `idx`'s beam centre above the radar, in feet, over the point `ll`
-    /// (`[lon, lat]`). `None` when the pane has no site or no loaded tilt.
-    ///
-    /// Ground range is close enough to slant range for the shallow tilts this is read at, and the
-    /// 4/3-earth model is the same one the cross-section draws with
-    /// ([`wxdata::xsection::beam_height_km`]), so the two agree.
-    fn beam_height_ft(&self, idx: usize, ll: [f64; 2]) -> Option<f64> {
+    /// Beam centre and half-power envelope over `ll`. Terrain blockage is rendered separately;
+    /// this shared geometry keeps the measure label and comparison tools consistent.
+    fn beam_coverage(&self, idx: usize, ll: [f64; 2]) -> Option<crate::elevation::BeamCoverage> {
         let v = &self.views[idx];
         let site = wxdata::sites::site_by_id(v.site.as_deref()?)?;
         let elev = *v.volume.as_ref()?.elevations.get(v.tilt)? as f64;
-        let (km, _) = crate::geo::great_circle([site.longitude as f64, site.latitude as f64], ll);
-        Some(wxdata::xsection::beam_height_km(km, elev) * 3280.84)
+        crate::elevation::coverage_at(
+            crate::elevation::BeamSite {
+                lon: site.longitude as f64,
+                lat: site.latitude as f64,
+                ground_m: site.elevation_meters as f64,
+                tower_m: wxdata::towers::tower_m(site.id),
+                tilt_deg: elev,
+            },
+            ll,
+            f64::NEG_INFINITY,
+        )
+    }
+
+    fn best_neighbor_coverage(
+        &self,
+        idx: usize,
+        ll: [f64; 2],
+    ) -> Option<(&'static str, crate::elevation::BeamCoverage)> {
+        const LOWEST_TILT: &[f32] = &[0.5];
+        let selected = self.views.get(idx)?.site.as_deref()?;
+        let candidates: Vec<_> = wxdata::sites::all()
+            .filter(|site| site.id != selected && wxdata::sites::is_nexrad(site.id))
+            .collect();
+        let sites: Vec<_> = candidates
+            .iter()
+            .map(|site| {
+                (
+                    crate::elevation::BeamSite {
+                        lon: site.longitude as f64,
+                        lat: site.latitude as f64,
+                        ground_m: site.elevation_meters as f64,
+                        tower_m: wxdata::towers::tower_m(site.id),
+                        tilt_deg: LOWEST_TILT[0] as f64,
+                    },
+                    LOWEST_TILT,
+                    f64::NEG_INFINITY,
+                )
+            })
+            .collect();
+        let (best, coverage) = crate::elevation::best_coverage(&sites, ll, 0.5)?;
+        Some((candidates.get(best)?.id, coverage))
     }
 
     /// Chime when a new volume lands on the live pane you are watching — the "look up" cue for
@@ -5017,7 +5346,7 @@ impl HookEchoApp {
     /// The site is whichever radar the active pane is on: a rule about a place is only replayable
     /// against a radar that can see it, and the pane the user is looking at is the best guess
     /// anyone can make without asking.
-    fn start_backtest(&mut self, rule_idx: usize, day: chrono::NaiveDate) {
+    fn start_backtest(&mut self, rule_idx: usize, day: chrono::NaiveDate, wfo: String) {
         let Some(rule) = self.settings.alert_rules.get(rule_idx).cloned() else {
             return;
         };
@@ -5028,7 +5357,7 @@ impl HookEchoApp {
         self.rules_window.backtest = Some(shared.clone());
         let settings = self.settings.clone();
         self.spawner
-            .spawn(crate::backtest::run(site, day, rule, settings, shared));
+            .spawn(crate::backtest::run(site, day, wfo, rule, settings, shared));
     }
 
     /// Remember detections so a compound rule can ask about them next pass, and forget anything
@@ -5321,18 +5650,19 @@ impl HookEchoApp {
             return;
         };
         // Rebuild once per volume, not once per open: resampling 192x192x48 is a second of CPU.
-        let key = (vol.name.clone(), VOL3D_N);
+        let moment = self.vol3d.moment;
+        let key = (vol.name.clone(), VOL3D_N, moment);
         if self.vol3d_key.as_ref() == Some(&key) || self.vol3d_rx.is_some() {
             return;
         }
-        let sweeps = vol.reflectivity_tilts();
+        let sweeps = vol.moment_tilts(moment);
         if sweeps.is_empty() {
             return;
         }
         self.vol3d_key = Some(key);
         let table = crate::colormap::effective_table(
             &self.palettes,
-            Moment::Reflectivity,
+            moment,
             self.settings.theme,
         );
         let (tx, rx) = std::sync::mpsc::channel();
@@ -6276,6 +6606,33 @@ impl HookEchoApp {
         });
     }
 
+    fn fetch_route(&mut self, ctx: &egui::Context) {
+        if self.settings.route_endpoint.trim().is_empty() {
+            self.toast(ToastKind::Error, "Set an OSRM endpoint first".to_string());
+            return;
+        }
+        if self.route_waypoints.len() < 2 {
+            self.toast(
+                ToastKind::Error,
+                "Click a route start and destination first".to_string(),
+            );
+            return;
+        }
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.route_rx = Some(rx);
+        let http = self.http.clone();
+        let endpoint = self.settings.route_endpoint.clone();
+        let waypoints = self.route_waypoints.clone();
+        let ctx = ctx.clone();
+        self.spawner.spawn(async move {
+            let result = wxdata::route::fetch_osrm(&http, &endpoint, &waypoints)
+                .await
+                .map_err(|error| error.to_string());
+            let _ = tx.send(result);
+            ctx.request_repaint();
+        });
+    }
+
     /// Current conditions for the forecast point, on the same cache cell and TTL as the forecast.
     /// A failure (offshore, no station, API down) simply sends nothing — the window drops the
     /// "Now" line rather than showing an error for a decoration.
@@ -6676,6 +7033,46 @@ impl HookEchoApp {
         out
     }
 
+    fn record_detector_history(
+        &mut self,
+        idx: usize,
+        tds: &[wxdata::tds::TdsHit],
+        tbss: &[wxdata::dualpol::TbssHit],
+        zdr: &[wxdata::dualpol::ZdrColumnHit],
+        rotation: &[wxdata::rotation::CoupletHit],
+    ) {
+        let key = self.volume_key(idx);
+        if self.detector_history_key.as_ref() == Some(&key) {
+            return;
+        }
+        let Some(volume) = self.views[idx].volume.as_ref() else {
+            return;
+        };
+        self.detector_history.push_back(crate::detector_history::Snapshot {
+            algorithm_version: crate::detector_history::ALGORITHM_VERSION,
+            source_object: volume.name.clone(),
+            valid_time: volume.time,
+            sweep_count: volume.scan.sweeps().len(),
+            thresholds: crate::detector_history::Thresholds::from_settings(
+                &self.settings.detectors,
+            ),
+            tds: tds.to_vec(),
+            tbss: tbss.to_vec(),
+            zdr_columns: zdr.to_vec(),
+            rotation: rotation.to_vec(),
+            reason_codes: [
+                "LOW_CC_HIGH_Z",
+                "HAIL_CORE_SPIKE",
+                "ZDR_ABOVE_FREEZING",
+                "OPPOSITE_SIGN_SHEAR",
+            ],
+        });
+        while self.detector_history.len() > 512 {
+            self.detector_history.pop_front();
+        }
+        self.detector_history_key = Some(key);
+    }
+
     /// Packs saved in this browser, refreshed in the background whenever one is written.
     #[cfg(target_arch = "wasm32")]
     fn packs(&self) -> Vec<crate::webcache::Pack> {
@@ -6698,9 +7095,98 @@ impl HookEchoApp {
         let ids: Vec<_> = tl.frames.iter().take(tl.playhead + 1).cloned().collect();
         let site = self.views[self.active].site.clone().unwrap_or_default();
         let date = tl.date.format("%Y-%m-%d").to_string();
+        let current_satellite: Vec<String> = self.views[self.active]
+            .fields_on
+            .iter()
+            .filter_map(|layer| self.fields.get(layer))
+            .filter_map(|state| state.metadata.as_ref())
+            .flat_map(|(_, stamp)| stamp.source_identity.split(" + "))
+            .filter(|key| key.contains("ABI-L2-"))
+            .map(str::to_string)
+            .collect();
+        let current_mrms: Vec<String> = self.views[self.active]
+            .fields_on
+            .iter()
+            .filter_map(|layer| self.fields.get(layer)?.frame.as_ref())
+            .filter(|frame| frame.descriptor.family == wxdata::field::FieldFamily::Mrms)
+            .map(|frame| frame.stamp.source_identity.clone())
+            .collect();
+        let placefiles: Vec<_> = self
+            .settings
+            .placefiles
+            .iter()
+            .filter(|config| self.settings.web_files.contains_key(&config.url))
+            .cloned()
+            .collect();
+        let overlays = placefiles
+            .iter()
+            .filter_map(|config| {
+                self.settings
+                    .web_files
+                    .get(&config.url)
+                    .map(|text| (config.url.clone(), text.clone()))
+            })
+            .collect();
+        let mut satellite_bands = std::collections::BTreeSet::new();
+        for layer in &self.views[self.active].fields_on {
+            match layer {
+                crate::render::FieldLayer::GoesVisible => {
+                    satellite_bands.insert(2);
+                }
+                crate::render::FieldLayer::GoesWaterVapor => {
+                    satellite_bands.insert(8);
+                }
+                crate::render::FieldLayer::GoesMidWaterVapor => {
+                    satellite_bands.insert(9);
+                }
+                crate::render::FieldLayer::GoesLongwaveIr => {
+                    satellite_bands.insert(14);
+                }
+                crate::render::FieldLayer::GoesC13 => {
+                    satellite_bands.insert(13);
+                }
+                crate::render::FieldLayer::GoesTrueColor => {
+                    satellite_bands.extend(wxdata::abi::TRUE_COLOR.bands);
+                }
+                crate::render::FieldLayer::GoesCatalog(index) => {
+                    if let Some(entry) = wxdata::abi::CATALOG.get(*index as usize) {
+                        satellite_bands.insert(entry.band);
+                    }
+                }
+                _ => {}
+            }
+        }
+        let http = self.http.clone();
         let ctx = ctx.clone();
+        let abi_scene = self.settings.abi_scene;
         self.spawner.spawn(async move {
-            crate::webcache::save_timeline(site, date, ids).await;
+            let mut satellite: std::collections::BTreeSet<String> =
+                current_satellite.into_iter().collect();
+            for time in ids.iter().filter_map(|id| id.date_time()) {
+                for &band in &satellite_bands {
+                    if let Ok(image) = wxdata::abi::fetch_at(
+                        &http,
+                        wxdata::abi::Satellite::East,
+                        abi_scene,
+                        band,
+                        time,
+                    )
+                    .await
+                    {
+                        satellite.insert(image.source_identity);
+                    }
+                }
+            }
+            crate::webcache::save_timeline(
+                site,
+                date,
+                ids,
+                satellite.into_iter().collect(),
+                current_mrms,
+                overlays,
+                placefiles,
+            )
+            .await;
             ctx.request_repaint();
         });
     }
@@ -6713,6 +7199,12 @@ impl HookEchoApp {
             return;
         };
         self.views[self.active].site = Some(pack.site.clone());
+        self.settings.web_files.extend(pack.overlays.clone());
+        for config in &pack.placefiles {
+            if !self.settings.placefiles.iter().any(|old| old.url == config.url) {
+                self.settings.placefiles.push(config.clone());
+            }
+        }
         let tl = &mut self.views[self.active].timeline;
         tl.date = date;
         tl.following = false;
@@ -7201,6 +7693,116 @@ impl HookEchoApp {
         if actions.reload {
             self.trigger_reload(ctx);
         }
+        if actions.load_gefs_distribution {
+            use crate::render::FieldLayer as FL;
+            let field = [
+                (FL::GlobalMslp, wxdata::global::GlobalField::Mslp),
+                (FL::GlobalHeight500, wxdata::global::GlobalField::Height500),
+                (FL::GlobalTemp2m, wxdata::global::GlobalField::Temp2m),
+                (FL::GlobalDewpoint2m, wxdata::global::GlobalField::Dewpoint2m),
+                (FL::GlobalWind10m, wxdata::global::GlobalField::Wind10m),
+                (FL::GlobalPrecip, wxdata::global::GlobalField::Precip),
+            ]
+            .into_iter()
+            .find_map(|(layer, field)| self.field_wanted(layer).then_some(field));
+            if let Some(field) = field {
+                let center = self.views[self.active].camera.center;
+                let (lon, lat) = crate::render::mercator::world_to_lonlat(center.0, center.1);
+                self.gefs_distribution = None;
+                self.spawn_overlay(
+                    ctx,
+                    OverlaySource::GefsDistribution(field, self.global_fcst_hour, lon, lat),
+                );
+            }
+        }
+        if actions.load_gefs_postage {
+            use crate::render::FieldLayer as FL;
+            let field = [
+                (FL::GlobalMslp, wxdata::global::GlobalField::Mslp),
+                (FL::GlobalHeight500, wxdata::global::GlobalField::Height500),
+                (FL::GlobalTemp2m, wxdata::global::GlobalField::Temp2m),
+                (FL::GlobalDewpoint2m, wxdata::global::GlobalField::Dewpoint2m),
+                (FL::GlobalWind10m, wxdata::global::GlobalField::Wind10m),
+                (FL::GlobalPrecip, wxdata::global::GlobalField::Precip),
+            ]
+            .into_iter()
+            .find_map(|(layer, field)| self.field_wanted(layer).then_some(field));
+            if let Some(field) = field {
+                self.gefs_postage = None;
+                self.spawn_overlay(
+                    ctx,
+                    OverlaySource::GefsPostage(field, self.global_fcst_hour),
+                );
+            }
+        }
+        if actions.trail_changed {
+            self.reflectivity_trail = wxdata::trail::ExtremaTrail::new(
+                self.reflectivity_trail_minutes,
+                self.reflectivity_trail_threshold,
+                wxdata::trail::Mode::Maximum,
+            )
+            .expect("trail controls are bounded");
+            self.reflectivity_trail_result = None;
+            if let Some(state) = self.fields.get_mut(&crate::render::FieldLayer::Mrms) {
+                state.last_fetch = None;
+            }
+        }
+        if actions.export_trail {
+            match self.reflectivity_trail_result.as_ref() {
+                Some(result) => match crate::dialog::save_bytes(
+                    "hookecho-reflectivity-trail.csv",
+                    "csv",
+                    result.to_csv().as_bytes(),
+                ) {
+                    crate::dialog::Saved::Where(where_) => self.toast(
+                        ToastKind::Success,
+                        format!("Trail values saved to {where_}"),
+                    ),
+                    crate::dialog::Saved::Failed(error) => {
+                        self.toast(ToastKind::Error, format!("Trail export failed: {error}"))
+                    }
+                    crate::dialog::Saved::Cancelled => {}
+                },
+                None => self.toast(ToastKind::Info, "Trail has no frames yet"),
+            }
+        }
+        if actions.export_local_tracks_csv || actions.export_local_tracks_json {
+            let tracks = self.compute_local_tracks();
+            if tracks.is_empty() {
+                self.toast(ToastKind::Info, "Storm history needs at least two decoded radar volumes");
+            } else {
+                let (name, kind, bytes) = if actions.export_local_tracks_csv {
+                    (
+                        "hookecho-storm-history.csv",
+                        "csv",
+                        Ok(wxdata::celltrack::tracks_csv(&tracks)),
+                    )
+                } else {
+                    (
+                        "hookecho-storm-history.json",
+                        "json",
+                        wxdata::celltrack::tracks_json(&tracks),
+                    )
+                };
+                match bytes {
+                    Ok(bytes) => match crate::dialog::save_bytes(name, kind, bytes.as_bytes()) {
+                        crate::dialog::Saved::Where(where_) => self.toast(
+                            ToastKind::Success,
+                            format!("Storm history saved to {where_}"),
+                        ),
+                        crate::dialog::Saved::Failed(error) => self.toast(
+                            ToastKind::Error,
+                            format!("Storm history export failed: {error}"),
+                        ),
+                        crate::dialog::Saved::Cancelled => {}
+                    },
+                    Err(error) => self.toast(
+                        ToastKind::Error,
+                        format!("Storm history export failed: {error}"),
+                    ),
+                }
+            }
+        }
         if actions.instant_replay {
             self.instant_replay();
         }
@@ -7480,9 +8082,9 @@ impl HookEchoApp {
     /// options that used to hide in the toolbox. All of it writes the same fields the hotkeys do.
     fn product_section(&mut self, ui: &mut egui::Ui, actions: &mut ui::layer_options::UiActions) {
         use crate::ui::style;
-        let (moment, srv, tilt) = {
+        let (moment, srv, tilt, custom_product) = {
             let v = &self.views[self.active];
-            (v.moment, v.srv, v.tilt)
+            (v.moment, v.srv, v.tilt, v.custom_product.clone())
         };
         let elevations = self.views[self.active]
             .volume
@@ -7495,6 +8097,7 @@ impl HookEchoApp {
             .unwrap_or_else(|| "Pick a site".to_string());
 
         let mut pick: Option<(wxdata::level2::Moment, bool)> = None;
+        let mut pick_custom: Option<String> = None;
         let mut pick_tilt: Option<usize> = None;
         // Expert knobs for the product you're on, edited through locals so the popup closure
         // doesn't need `self`. They used to live in the toolbox's Product ▸ Options disclosure.
@@ -7529,7 +8132,9 @@ impl HookEchoApp {
                 ] {
                     ui.columns(2, |columns| {
                         for (column, (label, m, relative)) in columns.iter_mut().zip(pair) {
-                            let selected = moment == m && (m != Moment::Velocity || srv == relative);
+                            let selected = custom_product.is_none()
+                                && moment == m
+                                && (m != Moment::Velocity || srv == relative);
                             if column.add_sized([column.available_width(), 38.0], egui::Button::new(label).selected(selected)).clicked() {
                                 pick = Some((m, relative));
                             }
@@ -7541,6 +8146,21 @@ impl HookEchoApp {
                         if ui.button(product.name).clicked() {
                             pick = Some((product.moment, false));
                             ui.close();
+                        }
+                    }
+                    if !self.settings.radar_products.is_empty() {
+                        ui.separator();
+                        for product in &self.settings.radar_products {
+                            if ui
+                                .selectable_label(
+                                    custom_product.as_deref() == Some(&product.name),
+                                    &product.name,
+                                )
+                                .clicked()
+                            {
+                                pick_custom = Some(product.name.clone());
+                                ui.close();
+                            }
                         }
                     }
                 });
@@ -7570,7 +8190,7 @@ impl HookEchoApp {
                     });
                 });
                 ui.add_space(8.0);
-                ui.label(egui::RichText::new(crate::products::name(moment, srv))
+                ui.label(egui::RichText::new(custom_product.as_deref().unwrap_or_else(|| crate::products::name(moment, srv)))
                     .size(style::FONT_TITLE).strong());
                 ui.add_space(6.0);
                 ui.horizontal(|ui| {
@@ -7687,6 +8307,9 @@ impl HookEchoApp {
         }
         if let Some((moment, relative)) = pick {
             self.apply_palette(PaletteAction::SetMoment(moment, relative), ui.ctx());
+        }
+        if let Some(product) = pick_custom {
+            self.views[self.active].custom_product = Some(product);
         }
         if srv_from_cells {
             if let Some((dir, spd)) = self.scit_mean_motion() {
@@ -7908,6 +8531,8 @@ impl HookEchoApp {
             T::Pireps => &mut self.show_pireps,
             T::Recon => &mut self.show_recon,
             T::LinkCameras => &mut self.link_cameras,
+            T::LinkTimes => &mut self.link_times,
+            T::LockSourceFrame => &mut self.lock_source_frame,
             T::MiniLoop => &mut self.mini_loop,
             T::Blockage => &mut self.show_blockage,
         }
@@ -7920,6 +8545,7 @@ impl HookEchoApp {
             PaletteAction::SetMoment(m, srv) => {
                 let v = &mut self.views[self.active];
                 v.moment = m;
+                v.custom_product = None;
                 if m == Moment::Velocity {
                     v.srv = srv;
                 }
@@ -7928,7 +8554,15 @@ impl HookEchoApp {
                 // The active pane's choice, not the app's: that is what makes two panes able to
                 // show two fields.
                 let on = self.views[self.active].fields_on.contains(&layer);
+                if !on && layer.descriptor().is_some() {
+                    self.settings.record_recent_field(layer.stable_id());
+                    self.settings.save();
+                }
                 self.set_field(layer, !on);
+            }
+            PaletteAction::ToggleFavorite(layer) => {
+                self.settings.toggle_favorite_field(layer.stable_id());
+                self.settings.save();
             }
             PaletteAction::ToggleOverlay(t) => {
                 let f = self.overlay_flag(t);
@@ -7988,6 +8622,8 @@ impl HookEchoApp {
                     t
                 }
             }
+            PaletteAction::ExportRegionStats => self.export_region_stats(),
+            PaletteAction::ExportDetectorHistory => self.export_detector_history(),
             PaletteAction::SetPanes(n) => {
                 self.set_pane_count(n);
                 if n > 1 {
@@ -8057,6 +8693,11 @@ impl HookEchoApp {
                     ToastKind::Success,
                     format!("Saved \u{2014} rename \"{name}\" in Settings"),
                 );
+            }
+            PaletteAction::ExportCase => self.export_case(),
+            PaletteAction::ExportCaseReport => self.export_case_report(),
+            PaletteAction::ImportCase => {
+                crate::dialog::request_open(crate::dialog::ImportKind::CaseManifest, "")
             }
             PaletteAction::ApplyWorkspace(i) => {
                 if let Some(ws) = self.settings.workspaces.get(i).cloned() {
@@ -8158,17 +8799,40 @@ impl HookEchoApp {
         let mut changed = false;
         while let Ok(delivery) = self.overlay_rx.try_recv() {
             let msg = match delivery {
-                OverlayDelivery::Immediate(msg) => msg,
+                OverlayDelivery::Immediate(msg) => {
+                    if let OverlayMsg::RegisteredField(layer, frame, _) = &msg {
+                        let lane = RequestLane::Field(*layer);
+                        let mut requests = self
+                            .overlay_requests
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner);
+                        if let Some(generation) = requests.start(lane.clone(), 0) {
+                            requests.finish(&lane, generation, None, Some(frame.stamp.valid_time));
+                        }
+                    }
+                    msg
+                }
                 OverlayDelivery::Fetched {
                     lane,
                     generation,
                     result,
                 } => {
+                    let data_time = match &result {
+                        Ok(OverlayMsg::RegisteredField(_, frame, _)) => {
+                            Some(frame.stamp.valid_time)
+                        }
+                        _ => None,
+                    };
                     let current = self
                         .overlay_requests
                         .lock()
                         .unwrap_or_else(std::sync::PoisonError::into_inner)
-                        .finish(&lane, generation, result.as_ref().err().map(|e| e.as_str()));
+                        .finish(
+                            &lane,
+                            generation,
+                            result.as_ref().err().map(|e| e.as_str()),
+                            data_time,
+                        );
                     if !current {
                         log::debug!("discarding stale {} reply", lane.label());
                         continue;
@@ -8288,20 +8952,109 @@ impl HookEchoApp {
                         s.pending = Some(upload);
                     }
                 }
-                OverlayMsg::ModelDiff(field, valid) => {
+                OverlayMsg::RegisteredField(layer, frame, display) => {
+                    if layer == crate::render::FieldLayer::Hrrr {
+                        self.hrrr_run = frame.stamp.run_time;
+                        self.hrrr_valid = Some(frame.stamp.valid_time);
+                    }
+                    if layer == crate::render::FieldLayer::Mrms
+                        && self.field_wanted(crate::render::FieldLayer::MrmsReflectivityTrail)
+                    {
+                        match self
+                            .reflectivity_trail
+                            .push(frame.field().clone().decimated(2_000))
+                        {
+                            Ok(result) => {
+                                let trail_layer = crate::render::FieldLayer::MrmsReflectivityTrail;
+                                let trail_frame = wxdata::field::FieldFrame::new(
+                                    &wxdata::trail::REFLECTIVITY_TRAIL_DESCRIPTOR,
+                                    result.field.clone(),
+                                    wxdata::field::DataStamp {
+                                        source_identity: format!(
+                                            "derived:mrms-reflectivity-trail:{}m:{:.1}dBZ",
+                                            self.reflectivity_trail_minutes,
+                                            self.reflectivity_trail_threshold,
+                                        ),
+                                        issue_time: frame.stamp.issue_time,
+                                        run_time: None,
+                                        valid_time: result.field.time,
+                                        received_time: frame.stamp.received_time,
+                                        class: wxdata::field::DataClass::Derived,
+                                        quality: frame.stamp.quality,
+                                        available_members: None,
+                                    },
+                                );
+                                let upload = self.field_upload(trail_layer, trail_frame.field());
+                                if let Some(state) = self.fields.get_mut(&trail_layer) {
+                                    state.pending = Some(upload);
+                                    state.metadata = Some((
+                                        trail_frame.grid.clone(),
+                                        trail_frame.stamp.clone(),
+                                    ));
+                                    state.frame = Some(trail_frame);
+                                }
+                                self.reflectivity_trail_result = Some(result);
+                            }
+                            Err(error) => log::warn!("reflectivity trail: {error}"),
+                        }
+                    }
+                    let upload = self.field_upload(layer, display.as_ref().unwrap_or(frame.field()));
+                    if let Some(s) = self.fields.get_mut(&layer) {
+                        s.pending = Some(upload);
+                        s.metadata = Some((frame.grid.clone(), frame.stamp.clone()));
+                        s.frame = Some(frame);
+                    }
+                }
+                OverlayMsg::Rgb(layer, image) => {
+                    let upload = rgb_upload(&image);
+                    if let Some(state) = self.fields.get_mut(&layer) {
+                        state.pending = Some(upload);
+                        state.metadata = Some((
+                            wxdata::field::GridSpec {
+                                nx: image.width,
+                                ny: image.height,
+                                projection: "GOES-R fixed grid",
+                                lon_west: image.lon_west,
+                                lon_east: image.lon_east,
+                                lat_north: image.lat_north,
+                                lat_south: image.lat_south,
+                                native_resolution_m: None,
+                                missing: wxdata::field::MissingData::Nan,
+                            },
+                            wxdata::field::DataStamp {
+                                source_identity: image.source_identity.clone(),
+                                issue_time: None,
+                                run_time: None,
+                                valid_time: image.valid_time,
+                                received_time: image.received_time.unwrap_or_else(Utc::now),
+                                class: wxdata::field::DataClass::Observed,
+                                quality: wxdata::field::QualitySummary::Unknown,
+                                available_members: None,
+                            },
+                        ));
+                    }
+                }
+                OverlayMsg::ModelDiff(frame, valid) => {
                     let layer = crate::render::FieldLayer::ModelDiff;
                     let (range, deadband) = self.diff_field.range();
                     let scale = self.diff_field.input_scale();
                     let upload = field_index_upload(
-                        &field,
+                        frame.field(),
                         |v| crate::fielddiff::diff_index(v * scale, range),
                         crate::fielddiff::diverging_lut(range, deadband),
                     );
                     if let Some(s) = self.fields.get_mut(&layer) {
                         s.pending = Some(upload);
+                        s.frame = Some(frame.clone());
                     }
                     self.diff_valid = Some(valid);
-                    self.diff_grid = Some(field);
+                    self.diff_grid = Some(frame.field().clone());
+                }
+                OverlayMsg::GefsDistribution(result) => {
+                    self.gefs_distribution = Some(result);
+                }
+                OverlayMsg::GefsPostage(result) => {
+                    self.gefs_postage = Some(result);
                 }
                 OverlayMsg::StormReports(bucket, reports) => match bucket {
                     None => self.storm_reports = reports,
@@ -8327,15 +9080,6 @@ impl HookEchoApp {
                 OverlayMsg::ProbSevere(f) => {
                     self.evaluate_probsevere_rules(&f);
                     self.probsevere = f;
-                }
-                OverlayMsg::Hrrr(fc) => {
-                    use crate::render::FieldLayer;
-                    let upload = self.field_upload(FieldLayer::Hrrr, &fc.field);
-                    if let Some(s) = self.fields.get_mut(&FieldLayer::Hrrr) {
-                        s.pending = Some(upload);
-                    }
-                    self.hrrr_run = Some(fc.run);
-                    self.hrrr_valid = Some(fc.valid());
                 }
                 OverlayMsg::Obs(site, res) => {
                     // Keep only if still the active site.
@@ -8405,13 +9149,30 @@ impl HookEchoApp {
                     self.dat_points = points;
                     self.dat_tracks = tracks;
                 }
-                OverlayMsg::Mosaic(field, sites, oldest) => {
-                    self.mosaic_sites = sites;
-                    self.mosaic_oldest = Some(oldest);
+                OverlayMsg::Mosaic(mosaic) => {
+                    self.mosaic_sites = mosaic.provenance.sites.clone();
+                    self.mosaic_oldest = Some(mosaic.oldest);
+                    self.mosaic_provenance = Some(mosaic.provenance);
                     let layer = crate::render::FieldLayer::Mosaic;
+                    let field = mosaic.field;
+                    let valid_time = field.time;
                     let upload = self.field_upload(layer, &field);
                     if let Some(s) = self.fields.get_mut(&layer) {
                         s.pending = Some(upload);
+                        s.frame = Some(wxdata::field::FieldFrame::new(
+                            &wxdata::mosaic::DESCRIPTOR,
+                            field,
+                            wxdata::field::DataStamp {
+                                source_identity: self.mosaic_sites.join(","),
+                                issue_time: None,
+                                run_time: None,
+                                valid_time,
+                                received_time: chrono::Utc::now(),
+                                class: wxdata::field::DataClass::Derived,
+                                quality: wxdata::field::QualitySummary::Unknown,
+                                available_members: None,
+                            },
+                        ));
                     }
                 }
                 OverlayMsg::Gauges(g) => self.gauges = g,
@@ -8449,6 +9210,139 @@ impl HookEchoApp {
             }
         }
         &self.alert_features
+    }
+
+    fn route_warning_exposure(&self) -> Option<(String, f64)> {
+        let route = self.routes.first()?;
+        self.active_alert_features()
+            .iter()
+            .filter(|feature| feature.kind == overlay::FeatureKind::Warning)
+            .filter_map(|feature| {
+                wxdata::route::first_intersection_m(&route.points, &feature.rings)
+                    .map(|distance| (feature.title.clone(), distance))
+            })
+            .min_by(|a, b| a.1.total_cmp(&b.1))
+    }
+
+    fn route_field_exposure(&self) -> Option<String> {
+        let route = self.routes.first()?;
+        let view = self.views.get(self.active)?;
+        let frame = crate::render::FieldLayer::draw_order()
+            .rev()
+            .find(|layer| view.fields_on.contains(layer))
+            .and_then(|layer| self.fields.get(&layer))
+            .and_then(|state| state.frame.as_ref());
+        let (label, units, product_id, valid, class, profile) = if let Some(frame) = frame {
+            (
+                frame.descriptor.short_name.to_string(),
+                frame.descriptor.units,
+                frame.descriptor.id.0,
+                frame.stamp.valid_time,
+                frame.stamp.class,
+                wxdata::route::sample_profile(&route.points, 1_000.0, |lon, lat| {
+                    frame.sample(lon, lat).value
+                }),
+            )
+        } else {
+            let volume = view.volume.as_ref()?;
+            let moment = view.moment;
+            (
+                moment.short_name().to_string(),
+                moment.units(),
+                moment.short_name(),
+                volume.time,
+                wxdata::field::DataClass::Observed,
+                wxdata::route::sample_profile(&route.points, 1_000.0, |lon, lat| {
+                    wxdata::level2::sample_native(
+                        &volume.scan,
+                        moment,
+                        view.tilt,
+                        lon,
+                        lat,
+                    )
+                    .and_then(|sample| sample.value)
+                }),
+            )
+        };
+        let maximum = profile
+            .iter()
+            .map(|(_, value)| *value)
+            .max_by(f32::total_cmp)?;
+        let threshold = match units {
+            "dBZ" => Some(40.0),
+            "mm" if product_id.contains("mesh") => Some(25.0),
+            "mm/hr" => Some(10.0),
+            "strikes/km²/min" => Some(0.0),
+            _ => None,
+        };
+        let span = threshold.and_then(|threshold| {
+            let mut exposed = profile
+                .iter()
+                .filter(|(_, value)| *value >= threshold)
+                .map(|(distance, _)| *distance);
+            Some((threshold, exposed.next()?, exposed.next_back().unwrap_or_else(|| {
+                profile
+                    .iter()
+                    .rev()
+                    .find(|(_, value)| *value >= threshold)
+                    .map(|(distance, _)| *distance)
+                    .unwrap_or(0.0)
+            })))
+        });
+        let exposure = span.map_or_else(String::new, |(threshold, start, end)| {
+            if class == wxdata::field::DataClass::Forecast {
+                let departure = chrono::Utc::now();
+                if let Some((from, to)) =
+                    wxdata::route::arrival_window(route, start, end, departure)
+                {
+                    return format!(
+                        " · forecast path ≥{threshold:.0} {units} between {}–{}",
+                        from.format("%H:%MZ"),
+                        to.format("%H:%MZ")
+                    );
+                }
+            }
+            format!(
+                " · ≥{threshold:.0} {} from {} to {}",
+                units,
+                crate::geo::fmt_distance(start / 1000.0, self.metric(), 0),
+                crate::geo::fmt_distance(end / 1000.0, self.metric(), 0)
+            )
+        });
+        Some(format!(
+            "{} peaks at {maximum:.1} {}{exposure} · valid {}",
+            label,
+            units,
+            valid.format("%H:%MZ")
+        ))
+    }
+
+    fn route_storm_analysis(&self) -> Option<(String, wxdata::route::StormRouteAnalysis)> {
+        if !self.views.get(self.active)?.timeline.following {
+            return None;
+        }
+        let cell = self
+            .cell_popup
+            .as_ref()
+            .or_else(|| self.follow_cell.as_ref().map(|(_, cell, _)| cell))?;
+        let (bearing, speed) = (cell.mvt_deg? as f64, cell.mvt_kt? as f64);
+        let age_s = cell
+            .time
+            .map(|time| (Utc::now() - time).num_seconds().clamp(0, 1_800) as f64)
+            .unwrap_or(0.0);
+        let origin = crate::geo::destination_point(
+            [cell.lon, cell.lat],
+            bearing,
+            speed * 0.514_444 * age_s / 1_000.0,
+        );
+        wxdata::route::analyze_storm_route(
+            self.routes.first()?,
+            origin,
+            bearing,
+            speed,
+            3.0 * 60.0 * 60.0,
+        )
+        .map(|analysis| (cell.title.clone(), analysis))
     }
 
     /// The 5-min UTC bucket (Unix secs / 300) of the active pane's displayed frame, or `None` when
@@ -9743,7 +10637,13 @@ impl HookEchoApp {
                         .as_ref()
                         .is_some_and(|(v, _, g)| *v == view && *g == gen)
                     {
-                        self.live_stream = None; // interval polling resumes automatically
+                        self.live_stream = None;
+                        if let Some(pane) = self.views.get_mut(view) {
+                            // Do not wait out the normal cadence after a provider dies: fetch the
+                            // complete archive object on this update and label retained data as
+                            // fallback until a new stream update arrives.
+                            pane.live_stream_ended();
+                        }
                     }
                 }
                 continue;
@@ -9815,6 +10715,7 @@ impl HookEchoApp {
                     time,
                     scan,
                     changed,
+                    status,
                     ..
                 } => {
                     let v = &mut self.views[view];
@@ -9822,8 +10723,12 @@ impl HookEchoApp {
                         continue; // looping pane owns its displayed frame (cf. Volume above)
                     }
                     match &mut v.volume {
-                        Some(vol) => vol.apply_live(scan, name, time, &changed),
-                        None => v.volume = Some(Volume::new(scan, name, time)),
+                        Some(vol) => vol.apply_live(scan, name, time, &changed, status),
+                        None => {
+                            let mut volume = Volume::new(scan, name, time);
+                            volume.live_status = Some(status);
+                            v.volume = Some(volume);
+                        }
                     }
                     v.loading = false;
                     v.error = None;
@@ -9953,8 +10858,9 @@ impl HookEchoApp {
             let cb_tx = tx.clone();
             let cb_ctx = ctx.clone();
             let cb_site = site.clone();
-            log::info!("live stream started for {end_site}");
-            let res = live::stream(site, base, active, move |u| {
+            let provider = live::PUBLIC_PROVIDER;
+            log::info!("{} started for {end_site}", provider.label());
+            let res = provider.stream(site, base, active, move |u| {
                 let _ = cb_tx.send(DataMsg::Live {
                     view: view_idx,
                     site: cb_site.clone(),
@@ -9962,6 +10868,7 @@ impl HookEchoApp {
                     time: u.time,
                     scan: u.scan,
                     changed: u.changed,
+                    status: u.status,
                 });
                 cb_ctx.request_repaint();
             })
@@ -10113,56 +11020,16 @@ impl HookEchoApp {
     /// has a fetch block of its own (HRRR forecast, the environment suite, the global models,
     /// per-site Level 3 grids).
     ///
-    /// One exhaustive match rather than a skip list and a second match that had to agree with it:
-    /// they drifted, the global model fields were missing from the skip list, and switching one on
-    /// walked into an `unreachable!()` and took the app down. A layer added to `FieldLayer` now
-    /// fails to compile here instead of panicking at runtime.
+    /// Product routing lives beside the MRMS descriptors so the UI does not maintain a second
+    /// source-path table. Unmigrated fields have no descriptor and return `None`.
     fn mrms_product(&self, layer: crate::render::FieldLayer) -> Option<String> {
-        use crate::render::FieldLayer as FL;
-        Some(match layer {
-            FL::Mrms => wxdata::mrms::REFLECTIVITY.to_string(),
-            FL::Lightning => {
-                wxdata::mrms::lightning_density(self.settings.lightning_minutes).to_string()
-            }
-            FL::Mesh => wxdata::mrms::MESH.to_string(),
-            FL::AzShear => wxdata::mrms::AZSHEAR.to_string(),
-            FL::Rotation => wxdata::mrms::rotation_track(self.rotation_minutes).to_string(),
-            FL::PrecipRate => wxdata::mrms::PRECIP_RATE.to_string(),
-            FL::Qpe1h => wxdata::mrms::QPE_01H.to_string(),
-            FL::Qpe24h => wxdata::mrms::QPE_24H.to_string(),
-            FL::PrecipType => wxdata::mrms::PRECIP_TYPE.to_string(),
-            FL::FlashFlood => wxdata::mrms::FLASH_ARI30.to_string(),
-            FL::HailSwath => wxdata::mrms::hail_swath(self.hail_minutes).to_string(),
-            FL::Hrrr
-            | FL::Cape
-            | FL::Srh
-            | FL::Vil
-            | FL::EchoTops
-            | FL::Hca
-            | FL::UpdraftHelicity
-            | FL::Smoke
-            | FL::Mosaic
-            | FL::CompositeLocal
-            | FL::VilLocal
-            | FL::VilDensity
-            | FL::EtopLocal
-            | FL::HailMehs
-            | FL::HailPosh
-            | FL::Snowfall
-            | FL::SnowAnalysis
-            | FL::GlobalMslp
-            | FL::GlobalHeight500
-            | FL::GlobalTemp2m
-            | FL::GlobalDewpoint2m
-            | FL::GlobalWind10m
-            | FL::GlobalPrecip
-            | FL::ModelDiff
-            | FL::GlmFed
-            // Built from two grids at once, so it has a fetch block of its own.
-            | FL::SnowBands
-            // Model layers, fetched on the forecast-hour scrub rather than a product path.
-            | FL::ThunderProb => return None,
-        })
+        wxdata::mrms::product_for_id(
+            layer.descriptor()?.id.0,
+            self.settings.lightning_minutes,
+            self.hail_minutes,
+            self.rotation_minutes,
+        )
+        .map(str::to_string)
     }
 
     /// Per-frame per-pane: react to site changes, keep the timeline current, and (for the active
@@ -10577,10 +11444,15 @@ impl HookEchoApp {
         if !self.views[idx].show_radar || !has_volume {
             self.pane_shown.remove(&idx);
             self.pane_lut.remove(&idx);
+            self.pane_custom_sweep.remove(&idx);
             return (None, false);
         }
         let count = self.views[data].elevation_count();
         self.views[idx].clamp_tilt_to(&count);
+        if let Some(name) = self.views[idx].custom_product.clone() {
+            return self.pane_custom_radar(idx, data, &name);
+        }
+        self.pane_custom_sweep.remove(&idx);
         let (moment, tilt, threshold, smooth, storm_uv) = {
             let v = &self.views[idx];
             (
@@ -10633,6 +11505,7 @@ impl HookEchoApp {
             uv_key,
             dealias,
             self.settings.precip_tint.then_some(self.precip_flag_gen),
+            None,
         );
         let lut_gen = self.palettes.gen.wrapping_add(
             if crate::theme::is_high_contrast(self.settings.theme) {
@@ -10688,6 +11561,278 @@ impl HookEchoApp {
                 (None, false)
             }
         }
+    }
+
+    fn pane_custom_radar(
+        &mut self,
+        idx: usize,
+        data: usize,
+        product_name: &str,
+    ) -> (Option<RadarUpload>, bool) {
+        use std::hash::{Hash, Hasher};
+        let Some(definition) = self
+            .settings
+            .radar_products
+            .iter()
+            .find(|definition| definition.name == product_name)
+            .cloned()
+        else {
+            self.views[idx].error = Some(format!("radar product '{product_name}' was not found"));
+            return (None, false);
+        };
+        let product = match wxdata::product_dsl::Product::compile(definition.clone()) {
+            Ok(product) => product,
+            Err(error) => {
+                self.views[idx].error = Some(error.to_string());
+                return (None, false);
+            }
+        };
+        let tilt = self.views[idx].tilt;
+        let smooth = self.views[idx].smooth;
+        let Some(volume_name) = self.views[data].volume.as_ref().map(|volume| volume.name.clone())
+        else {
+            return (None, true);
+        };
+        let sweeps_result = {
+            let Some(volume) = self.views[data].volume.as_mut() else {
+                return (None, true);
+            };
+            product
+                .inputs()
+                .iter()
+                .map(|moment| {
+                    volume
+                        .binned(*moment, tilt, false)
+                        .map(|sweep| (*moment, sweep.clone()))
+                })
+                .collect::<anyhow::Result<Vec<_>>>()
+        };
+        let sweeps = match sweeps_result {
+            Ok(sweeps) => sweeps,
+            Err(error) => {
+                self.views[idx].error = Some(error.to_string());
+                return (None, false);
+            }
+        };
+        let refs: Vec<_> = sweeps.iter().map(|(moment, sweep)| (*moment, sweep)).collect();
+        let sweep = match product.sweep(&refs, Default::default()) {
+            Ok(sweep) => sweep,
+            Err(error) => {
+                self.views[idx].error = Some(error.to_string());
+                return (None, false);
+            }
+        };
+        let mut hash = std::collections::hash_map::DefaultHasher::new();
+        definition.name.hash(&mut hash);
+        definition.expression.hash(&mut hash);
+        definition.min.to_bits().hash(&mut hash);
+        definition.max.to_bits().hash(&mut hash);
+        let product_hash = hash.finish();
+        let key: ShownKey = (
+            volume_name,
+            Moment::Reflectivity,
+            tilt,
+            None,
+            smooth,
+            None,
+            false,
+            None,
+            Some(product_hash),
+        );
+        let lut_gen = self.palettes.gen.wrapping_add(product_hash);
+        let lut_only = self.pane_shown.get(&idx) == Some(&key);
+        if lut_only && self.pane_lut.get(&idx) == Some(&lut_gen) {
+            return (None, true);
+        }
+        let palette_moment = Moment::from_code(&definition.palette).unwrap_or(Moment::Reflectivity);
+        let table = crate::colormap::effective_table(
+            &self.palettes,
+            palette_moment,
+            self.settings.theme,
+        );
+        let upload = to_upload(&sweep, &table, None, smooth, None, None, lut_only);
+        self.pane_custom_sweep.insert(idx, sweep);
+        self.pane_shown.insert(idx, key);
+        self.pane_lut.insert(idx, lut_gen);
+        self.views[idx].error = None;
+        (Some(upload), true)
+    }
+
+    fn custom_radar_probe(&self, idx: usize, lon: f64, lat: f64) -> Option<String> {
+        let name = self.views.get(idx)?.custom_product.as_deref()?;
+        let definition = self
+            .settings
+            .radar_products
+            .iter()
+            .find(|definition| definition.name == name)?;
+        let sweep = self.pane_custom_sweep.get(&idx)?;
+        let sample = sweep.sample_at(lon, lat)?;
+        let value = sample.value.map_or_else(
+            || "Missing".to_string(),
+            |value| format!("{value:.2} {}", definition.units),
+        );
+        Some(format!(
+            "{} · {}\n{value}\nElevation {:.2}° · azimuth {:.2}°\nRange {:.1} km · gate {}",
+            definition.name,
+            definition.description,
+            sweep.elevation_deg,
+            sample.azimuth_deg,
+            sample.range_km,
+            sample.gate,
+        ))
+    }
+
+    fn field_probe_at(&self, idx: usize, lon: f64, lat: f64) -> Option<String> {
+        let view = self.views.get(idx)?;
+        let (layer, frame) = crate::render::FieldLayer::draw_order()
+            .rev()
+            .find(|layer| view.fields_on.contains(layer))
+            .and_then(|layer| Some((layer, self.fields.get(&layer)?.frame.as_ref()?)))?;
+        let sample = frame.sample(lon, lat);
+        sample.value.map(|value| {
+            let display = frame.descriptor.display_value(
+                value,
+                if self.settings.temp_unit == crate::settings::TempUnit::Fahrenheit {
+                    wxdata::field::UnitSystem::Us
+                } else {
+                    wxdata::field::UnitSystem::Metric
+                },
+            );
+            let coverage_warning = self
+                .beam_coverage(idx, [lon, lat])
+                .and_then(|coverage| {
+                    let site_msl_km = view
+                        .site
+                        .as_deref()
+                        .and_then(wxdata::sites::site_by_id)
+                        .map(|site| {
+                            (site.elevation_meters as f64 + wxdata::towers::tower_m(site.id))
+                                / 1000.0
+                        })
+                        .unwrap_or(0.0);
+                    sampled_height_warning(sample.units, value, coverage, site_msl_km)
+                })
+                .map(|warning| format!("\n⚠ {warning}"))
+                .unwrap_or_default();
+            let profile = self.mrms_vertical_profile_at(idx, lon, lat);
+            let provenance = (layer == crate::render::FieldLayer::Mosaic)
+                .then(|| self.mosaic_provenance.as_ref()?.sample(lon, lat))
+                .flatten()
+                .map(|(site, confidence)| {
+                    format!("\nContributor {site} · confidence {:.0}%", confidence * 100.0)
+                })
+                .unwrap_or_default();
+            format!(
+                "{}\n{:.1} {} · valid {}{coverage_warning}",
+                frame.descriptor.short_name,
+                display.value,
+                display.units,
+                sample.valid_time.format("%Y-%m-%d %H:%M UTC"),
+            ) + &provenance + &profile
+        })
+    }
+
+    fn mrms_vertical_profile_at(&self, idx: usize, lon: f64, lat: f64) -> String {
+        let Some(view) = self.views.get(idx) else {
+            return String::new();
+        };
+        let mut points: Vec<_> = view
+            .fields_on
+            .iter()
+            .filter_map(|layer| {
+                let crate::render::FieldLayer::MrmsCatalog(index) = *layer else {
+                    return None;
+                };
+                let product = wxdata::mrms::CATALOG.get(index as usize)?;
+                let height = product.height_msl_km()?;
+                let sample = self.fields.get(layer)?.frame.as_ref()?.sample(lon, lat);
+                Some((height, sample.value?, sample.valid_time))
+            })
+            .collect();
+        if points.len() < 2 {
+            return String::new();
+        }
+        points.sort_by(|a, b| a.0.total_cmp(&b.0));
+        let first = points.iter().map(|point| point.2).min().unwrap();
+        let last = points.iter().map(|point| point.2).max().unwrap();
+        let values = points
+            .iter()
+            .map(|(height, value, _)| format!("{height} km {value:.1}"))
+            .collect::<Vec<_>>()
+            .join(" · ");
+        let time = if first == last {
+            first.format("%H:%M UTC").to_string()
+        } else {
+            format!("{}–{}", first.format("%H:%M"), last.format("%H:%M UTC"))
+        };
+        format!("\nVertical reflectivity (dBZ) · {time}\n{values}")
+    }
+
+    fn radar_probe_at(&mut self, idx: usize, lon: f64, lat: f64) -> Option<String> {
+        if let Some(probe) = self.custom_radar_probe(idx, lon, lat) {
+            return Some(probe);
+        }
+        let (sample, site, vcp, moment, tilt) = {
+            let view = &self.views[idx];
+            let volume = view.volume.as_ref()?;
+            (
+                wxdata::level2::sample_native(
+                    &volume.scan,
+                    view.moment,
+                    view.tilt,
+                    lon,
+                    lat,
+                )?,
+                view.site.clone().unwrap_or_else(|| "Radar".into()),
+                volume.vcp.clone(),
+                view.moment,
+                view.tilt,
+            )
+        };
+        let value = sample.value.map_or_else(
+            || {
+                if sample.folded {
+                    "Range folded".to_string()
+                } else if sample.below_threshold {
+                    "Below threshold".to_string()
+                } else {
+                    "Missing".to_string()
+                }
+            },
+            |value| format!("Raw: {value:.2} {}", moment.units()),
+        );
+        let dealiased = if moment == Moment::Velocity
+            && self.settings.dealias_velocity
+            && !wxdata::tdwr::is_tdwr(&site)
+        {
+            self.views[idx]
+                .volume
+                .as_mut()
+                .and_then(|volume| volume.binned(moment, tilt, true).ok())
+                .and_then(|sweep| sweep.sample_at(lon, lat))
+                .and_then(|gate| gate.value)
+                .map(|value| format!("\nDealiased: {value:.2} {}", moment.units()))
+                .unwrap_or_default()
+        } else {
+            String::new()
+        };
+        let nyquist = if moment == Moment::Velocity {
+            "\nNyquist: unavailable in decoded metadata"
+        } else {
+            ""
+        };
+        Some(format!(
+            "{site} {vcp} · {}\n{value}{dealiased}{nyquist}\nElevation {:.2}° · azimuth {:.2}°\nGround {:.1} km · slant {:.1} km · beam {:.0} ft\nGate {} · {:.3} km spacing\n{}",
+            moment.short_name(),
+            sample.elevation_deg,
+            sample.azimuth_deg,
+            sample.ground_range_km,
+            sample.slant_range_km,
+            sample.beam_height_ft,
+            sample.gate,
+            sample.gate_spacing_km,
+            sample.collected_at.format("%Y-%m-%d %H:%M:%S UTC")
+        ))
     }
 
     /// The always-on-top mini loop: a small undecorated window showing the active pane, so the
@@ -11179,6 +12324,100 @@ impl HookEchoApp {
                         }
                         self.measure.push([lon, lat]);
                     }
+                    MapTool::RegionStats => {
+                        if self.region_points.len() >= 2 {
+                            self.region_points.clear();
+                            self.region_analysis = None;
+                            self.radar_scatter = None;
+                            self.radar_time_series = None;
+                        }
+                        self.region_points.push([lon, lat]);
+                        if self.region_points.len() == 2 {
+                            let frames = crate::render::FieldLayer::draw_order()
+                                .rev()
+                                .filter(|layer| self.views[idx].fields_on.contains(layer))
+                                .filter_map(|layer| self.fields.get(&layer)?.frame.as_ref())
+                                .filter(|frame| {
+                                    !matches!(
+                                        frame.descriptor.value_kind,
+                                        wxdata::field::ValueKind::Categorical
+                                            | wxdata::field::ValueKind::Mask
+                                            | wxdata::field::ValueKind::Vector
+                                    )
+                                })
+                                .take(2)
+                                .collect::<Vec<_>>();
+                            self.region_analysis = frames.first().and_then(|frame| {
+                                frame
+                                    .statistics_in_box(
+                                        self.region_points[0],
+                                        self.region_points[1],
+                                    )
+                                    .map(|stats| RegionAnalysis {
+                                        product: frame.descriptor.short_name,
+                                        units: frame.descriptor.units,
+                                        valid: frame.stamp.valid_time,
+                                        stats,
+                                        correlation: frames.get(1).and_then(|other| {
+                                            frame
+                                                .correlation_in_box(
+                                                    other,
+                                                    self.region_points[0],
+                                                    self.region_points[1],
+                                                )
+                                                .map(|stats| RegionCorrelation {
+                                                    product: other.descriptor.short_name,
+                                                    units: other.descriptor.units,
+                                                    stats,
+                                                })
+                                        }),
+                                    })
+                            });
+                            let view = &self.views[idx];
+                            let other = if view.moment == Moment::Reflectivity {
+                                Moment::CorrelationCoefficient
+                            } else {
+                                Moment::Reflectivity
+                            };
+                            self.radar_scatter = view.volume.as_ref().and_then(|volume| {
+                                wxdata::level2::moment_pairs_in_box(
+                                    &volume.scan,
+                                    view.tilt,
+                                    view.moment,
+                                    other,
+                                    self.region_points[0],
+                                    self.region_points[1],
+                                )
+                            });
+                            let center = [
+                                (self.region_points[0][0] + self.region_points[1][0]) * 0.5,
+                                (self.region_points[0][1] + self.region_points[1][1]) * 0.5,
+                            ];
+                            let moment = view.moment;
+                            let tilt = view.tilt;
+                            let frame_names = view
+                                .timeline
+                                .frames
+                                .iter()
+                                .map(|frame| frame.name().to_string())
+                                .collect::<Vec<_>>();
+                            let samples = wxdata::level2::native_time_series(
+                                frame_names.iter().filter_map(|name| {
+                                    self.scan_cache.peek(name).map(std::convert::AsRef::as_ref)
+                                }),
+                                moment,
+                                tilt,
+                                center[0],
+                                center[1],
+                            );
+                            self.radar_time_series = (!samples.is_empty()).then_some(RadarTimeSeries {
+                                moment,
+                                lon: center[0],
+                                lat: center[1],
+                                samples,
+                            });
+                        }
+                    }
                     MapTool::Marker => {
                         let n = self.settings.markers.len() + 1;
                         self.settings.markers.push(crate::settings::Marker {
@@ -11206,6 +12445,13 @@ impl HookEchoApp {
                     MapTool::Chase => {
                         self.chase_mode = true;
                         self.chase_pos = Some((lon, lat));
+                    }
+                    MapTool::Route => {
+                        if self.route_waypoints.len() >= 32 {
+                            self.route_waypoints.clear();
+                            self.routes.clear();
+                        }
+                        self.route_waypoints.push([lon, lat]);
                     }
                     MapTool::Climatology => self.query_climatology(lon, lat),
                     // Drawing happens on drag, not on click; a bare click leaves no mark.
@@ -11539,6 +12785,17 @@ impl HookEchoApp {
                 .flat_map(|v| v.fields_on.iter().copied())
                 .collect();
             let mut drop = Vec::new();
+            {
+                let mut requests = self
+                    .overlay_requests
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                for layer in crate::render::FieldLayer::draw_order() {
+                    if !on.contains(&layer) {
+                        requests.cancel(&RequestLane::Field(layer));
+                    }
+                }
+            }
             for (layer, st) in self.fields.iter_mut() {
                 if on.contains(layer) {
                     st.off_since = None;
@@ -11569,6 +12826,7 @@ impl HookEchoApp {
         let field_draws: Vec<(crate::render::FieldLayer, f32)> = self.views[idx]
             .fields_on
             .iter()
+            .filter(|layer| self.field_aligned(idx, **layer))
             .map(|k| {
                 (
                     *k,
@@ -11629,6 +12887,7 @@ impl HookEchoApp {
                                 for m in Moment::ALL.into_iter().filter(|m| have[m.index()]) {
                                     if ui.selectable_label(m == cur, m.short_name()).clicked() {
                                         self.views[idx].moment = m;
+                                        self.views[idx].custom_product = None;
                                         self.active = idx;
                                     }
                                 }
@@ -11684,6 +12943,9 @@ impl HookEchoApp {
             Vec::new()
         };
         if idx == self.active {
+            if want_tds || want_tbss || want_zdr || want_couplets {
+                self.record_detector_history(idx, &tds_hits, &tbss_hits, &zdr_hits, &couplets);
+            }
             self.check_rain_arrival();
             self.evaluate_scan_rules(idx, &tds_hits, &tbss_hits, &zdr_hits, &couplets);
         }
@@ -11708,6 +12970,20 @@ impl HookEchoApp {
         } else {
             Vec::new()
         };
+        let radar_probe = response.hover_pos().and_then(|pos| {
+            let w = cam.screen_to_world((pos.x - prect.left(), pos.y - prect.top()), vp);
+            let (lon, lat) = crate::render::mercator::world_to_lonlat(w.0, w.1);
+            self.field_probe_at(idx, lon, lat)
+                .or_else(|| self.radar_probe_at(idx, lon, lat))
+        });
+        let linked_probe_value = self
+            .linked_probe
+            .filter(|_| self.views.len() > 1)
+            .and_then(|ll| {
+                self.field_probe_at(idx, ll[0], ll[1])
+                    .or_else(|| self.radar_probe_at(idx, ll[0], ll[1]))
+            })
+            .map(|probe| probe.lines().take(2).collect::<Vec<_>>().join("\n"));
 
         // --- Painter overlays (clipped to this pane) ---
         let painter = ui.painter_at(prect);
@@ -13540,6 +14816,40 @@ impl HookEchoApp {
                     ));
                 }
             }
+        } else if let Some(hp) = response.hover_pos() {
+            // Sample the same native values the inspector exposes. The GPU texture may be
+            // decimated or palette-indexed for display, so reading it back would be scientifically
+            // wrong even when it looks identical.
+            let frame = crate::render::FieldLayer::draw_order()
+                .rev()
+                .find(|layer| view.fields_on.contains(layer))
+                .and_then(|layer| self.fields.get(&layer))
+                .and_then(|state| state.frame.as_ref());
+            if let Some(frame) = frame {
+                let w = cam.screen_to_world((hp.x - prect.left(), hp.y - prect.top()), vp);
+                let (lon, lat) = crate::render::mercator::world_to_lonlat(w.0, w.1);
+                let sample = frame.sample(lon, lat);
+                if let Some(value) = sample.value {
+                    let display = frame.descriptor.display_value(
+                        value,
+                        if self.settings.temp_unit == crate::settings::TempUnit::Fahrenheit {
+                            wxdata::field::UnitSystem::Us
+                        } else {
+                            wxdata::field::UnitSystem::Metric
+                        },
+                    );
+                    response.clone().show_tooltip_text(format!(
+                        "{}: {:.1} {}\nValid {} · {:?}",
+                        frame.descriptor.short_name,
+                        display.value,
+                        display.units,
+                        sample.valid_time.format("%Y-%m-%d %H:%M UTC"),
+                        sample.method
+                    ));
+                }
+            } else if let Some(probe) = &radar_probe {
+                response.clone().show_tooltip_text(probe);
+            }
         }
 
         // Beam-vs-terrain blockage shading, under the reference annotations. The raster covers a
@@ -13783,6 +15093,62 @@ impl HookEchoApp {
             );
         }
 
+        // Road alternatives, with the provider's preferred route emphasized. This is a route
+        // display only; weather exposure is drawn independently and never labels a route safe.
+        for (index, route) in self.routes.iter().enumerate().rev() {
+            let points = route
+                .points
+                .iter()
+                .map(|[lon, lat]| {
+                    let world = crate::render::mercator::lonlat_to_world(*lon, *lat);
+                    let (x, y) = cam.world_to_screen(world, vp);
+                    egui::pos2(prect.left() + x, prect.top() + y)
+                })
+                .collect();
+            let color = if index == 0 {
+                crate::theme::accent(self.settings.theme)
+            } else {
+                egui::Color32::from_rgba_unmultiplied(180, 190, 205, 155)
+            };
+            painter.add(egui::Shape::line(
+                points,
+                egui::Stroke::new(if index == 0 { 4.0 } else { 2.0 }, color),
+            ));
+        }
+        for (index, [lon, lat]) in self.route_waypoints.iter().enumerate() {
+            let world = crate::render::mercator::lonlat_to_world(*lon, *lat);
+            let (x, y) = cam.world_to_screen(world, vp);
+            let point = egui::pos2(prect.left() + x, prect.top() + y);
+            painter.circle_filled(point, 6.0, crate::theme::accent(self.settings.theme));
+            painter.text(
+                point,
+                egui::Align2::CENTER_CENTER,
+                (index + 1).to_string(),
+                egui::FontId::proportional(9.0),
+                egui::Color32::WHITE,
+            );
+        }
+        if let Some((_, analysis)) = self.route_storm_analysis() {
+            if let Some(crossing) = analysis.intersection {
+                let world = crate::render::mercator::lonlat_to_world(
+                    crossing.point[0],
+                    crossing.point[1],
+                );
+                let (x, y) = cam.world_to_screen(world, vp);
+                let point = egui::pos2(prect.left() + x, prect.top() + y);
+                let color = egui::Color32::from_rgb(255, 185, 70);
+                painter.circle_filled(point, 8.0, egui::Color32::from_black_alpha(190));
+                painter.line_segment(
+                    [point + egui::vec2(-6.0, -6.0), point + egui::vec2(6.0, 6.0)],
+                    egui::Stroke::new(2.0, color),
+                );
+                painter.line_segment(
+                    [point + egui::vec2(-6.0, 6.0), point + egui::vec2(6.0, -6.0)],
+                    egui::Stroke::new(2.0, color),
+                );
+            }
+        }
+
         // Freehand annotation strokes. Painted with the rest of the tool graphics so they sit
         // above every overlay, and drawn in OBS mode too — circling a storm on a stream is the
         // whole point of the tool.
@@ -13875,6 +15241,42 @@ impl HookEchoApp {
             }
         }
 
+        // A linked geographic probe is projected independently in every pane. This remains at
+        // the same lon/lat even when the panes use different cameras or radar sites.
+        if let Some(ll) = self.linked_probe.filter(|_| self.views.len() > 1) {
+            let w = crate::render::mercator::lonlat_to_world(ll[0], ll[1]);
+            let (sx, sy) = cam.world_to_screen(w, vp);
+            let p = egui::pos2(prect.left() + sx, prect.top() + sy);
+            if prect.contains(p) {
+                let col = crate::theme::accent(self.settings.theme);
+                painter.line_segment(
+                    [p - egui::vec2(7.0, 0.0), p + egui::vec2(7.0, 0.0)],
+                    egui::Stroke::new(1.5, col),
+                );
+                painter.line_segment(
+                    [p - egui::vec2(0.0, 7.0), p + egui::vec2(0.0, 7.0)],
+                    egui::Stroke::new(1.5, col),
+                );
+                if let Some(label) = &linked_probe_value {
+                    let at = p + egui::vec2(9.0, 9.0);
+                    painter.text(
+                        at + egui::vec2(1.0, 1.0),
+                        egui::Align2::LEFT_TOP,
+                        label,
+                        egui::FontId::proportional(11.0),
+                        egui::Color32::BLACK,
+                    );
+                    painter.text(
+                        at,
+                        egui::Align2::LEFT_TOP,
+                        label,
+                        egui::FontId::proportional(11.0),
+                        egui::Color32::WHITE,
+                    );
+                }
+            }
+        }
+
         // Measure tool.
         if !self.measure.is_empty() {
             let col = egui::Color32::from_rgb(255, 210, 80);
@@ -13897,8 +15299,23 @@ impl HookEchoApp {
                 // How high the beam is over the far end of the line. The number that decides
                 // whether "there's nothing on radar there" means the storm is weak or means the
                 // scan is looking over its head, and until now it lived only in the cross-section.
-                if let Some(h) = self.beam_height_ft(idx, self.measure[1]) {
-                    txt.push_str(&format!("  ·  beam {h:.0} ft"));
+                if let Some(beam) = self.beam_coverage(idx, self.measure[1]) {
+                    let feet = |km: f64| km * 3280.84;
+                    txt.push_str(&format!(
+                        "  ·  beam {:.0} ft ({:.0}–{:.0})",
+                        feet(beam.center_km_agl),
+                        feet(beam.bottom_km_agl),
+                        feet(beam.top_km_agl),
+                    ));
+                    if let Some((site, neighbor)) = self
+                        .best_neighbor_coverage(idx, self.measure[1])
+                        .filter(|(_, neighbor)| neighbor.center_km_agl < beam.center_km_agl)
+                    {
+                        txt.push_str(&format!(
+                            "  ·  {site} 0.5° {:.0} ft",
+                            feet(neighbor.center_km_agl)
+                        ));
+                    }
                 }
                 let mid = a + (b - a) * 0.5;
                 painter.text(
@@ -13908,6 +15325,98 @@ impl HookEchoApp {
                     egui::FontId::proportional(12.0),
                     col,
                 );
+            }
+        }
+
+        if !self.region_points.is_empty() {
+            let col = egui::Color32::from_rgb(80, 220, 190);
+            let screen = |ll: [f64; 2]| {
+                let world = crate::render::mercator::lonlat_to_world(ll[0], ll[1]);
+                let (x, y) = cam.world_to_screen(world, vp);
+                egui::pos2(prect.left() + x, prect.top() + y)
+            };
+            for &point in &self.region_points {
+                painter.circle_filled(screen(point), 3.5, col);
+            }
+            if self.region_points.len() == 2 {
+                let rect = egui::Rect::from_two_pos(
+                    screen(self.region_points[0]),
+                    screen(self.region_points[1]),
+                );
+                painter.rect_filled(rect, 0.0, col.gamma_multiply(0.08));
+                painter.rect_stroke(
+                    rect,
+                    0.0,
+                    egui::Stroke::new(1.5, col),
+                    egui::StrokeKind::Middle,
+                );
+                let mut text = self.region_analysis.as_ref().map_or_else(
+                    || self.radar_scatter.as_ref().map_or_else(
+                        || "No native values in box".to_string(),
+                        |pairs| format!(
+                            "{} vs {} · {} native gates · r {:.3} · y={:.3}x{:+.3}",
+                            pairs.x.short_name(),
+                            pairs.y.short_name(),
+                            pairs.points.len(),
+                            pairs.pearson_r,
+                            pairs.slope,
+                            pairs.intercept,
+                        ),
+                    ),
+                    |analysis| {
+                        let stats = &analysis.stats;
+                        let mut text = format!(
+                            "{} · {} cells · mean {:.2} {} · min {:.2} · max {:.2} · σ {:.2}\n{}",
+                            analysis.product,
+                            stats.count,
+                            stats.mean,
+                            analysis.units,
+                            stats.min,
+                            stats.max,
+                            stats.std_dev,
+                            histogram_text(&stats.histogram),
+                        );
+                        if let Some(pair) = &analysis.correlation {
+                            use std::fmt::Write;
+                            let _ = write!(
+                                text,
+                                "\n{} vs {} · n {} · r {:.3} · y={:.3}x{:+.3} {}",
+                                analysis.product,
+                                pair.product,
+                                pair.stats.count,
+                                pair.stats.pearson_r,
+                                pair.stats.slope,
+                                pair.stats.intercept,
+                                pair.units,
+                            );
+                        }
+                        text
+                    },
+                );
+                if let Some(series) = &self.radar_time_series {
+                    use std::fmt::Write;
+                    let _ = write!(
+                        text,
+                        "\n{} time series · {} cached native frames · {:.4}, {:.4}",
+                        series.moment.short_name(),
+                        series.samples.len(),
+                        series.lat,
+                        series.lon,
+                    );
+                }
+                painter.text(
+                    rect.center_top() + egui::vec2(0.0, -8.0),
+                    egui::Align2::CENTER_BOTTOM,
+                    text,
+                    egui::FontId::proportional(11.0),
+                    col,
+                );
+                if let Some(pairs) = &self.radar_scatter {
+                    draw_scatterplot(&painter, rect.center_bottom() + egui::vec2(0.0, 8.0), pairs);
+                }
+                if let Some(series) = &self.radar_time_series {
+                    draw_time_series(&painter, rect.right_top() + egui::vec2(8.0, 0.0), series);
+                }
             }
         }
 
@@ -13991,15 +15500,14 @@ impl HookEchoApp {
             // Whichever gridded layer the user actually sees on top — the last enabled one in
             // paint order — gets its scale keyed underneath. Without this, MESH/QPE/VIL and the
             // categorical classifications were unlabeled color.
-            if let Some(top) = crate::render::FieldLayer::DRAW_ORDER
-                .iter()
+            if let Some(top) = crate::render::FieldLayer::draw_order()
                 .rev()
                 .find(|l| view.fields_on.contains(l))
             {
-                y += if *top == crate::render::FieldLayer::ModelDiff {
+                y += if top == crate::render::FieldLayer::ModelDiff {
                     ui::legend::draw_diff(&painter, prect, self.diff_field, y)
                 } else {
-                    ui::legend::draw_field(&painter, prect, *top, y)
+                    ui::legend::draw_field(&painter, prect, top, y)
                 };
             }
             // Wind particles carry their own scale — it isn't a FieldLayer, so it needs its own
@@ -14008,6 +15516,109 @@ impl HookEchoApp {
                 ui::legend::draw_ramp(&painter, prect, &crate::render::field_ramps::WIND, y);
             }
         }
+
+        if let Some((layer, valid, selected, tolerance, aligned)) =
+            crate::render::FieldLayer::draw_order().rev().find_map(|layer| {
+                view.fields_on.contains(&layer).then(|| {
+                    self.field_time_status(idx, layer).and_then(
+                        |(valid, selected, tolerance, aligned)| {
+                            (valid != selected || !aligned)
+                                .then_some((layer, valid, selected, tolerance, aligned))
+                        },
+                    )
+                })?
+            })
+        {
+            let delta = valid - selected;
+            let minutes = delta.num_minutes().unsigned_abs();
+            let direction = if delta < chrono::Duration::zero() {
+                "older"
+            } else {
+                "newer"
+            };
+            let name = layer
+                .descriptor()
+                .map_or_else(|| layer.slug(), |descriptor| descriptor.short_name);
+            let text = if aligned {
+                format!("{name} · data {minutes}m {direction}")
+            } else {
+                format!(
+                    "{name} hidden · {minutes}m {direction} (limit {}m)",
+                    tolerance.num_minutes()
+                )
+            };
+            let color = if aligned {
+                egui::Color32::from_rgb(145, 205, 225)
+            } else {
+                egui::Color32::from_rgb(255, 205, 100)
+            };
+            let font = egui::FontId::proportional(12.0);
+            let galley = painter.layout_no_wrap(text.clone(), font.clone(), color);
+            let rect = egui::Rect::from_min_size(
+                prect.left_top() + egui::vec2(12.0, 12.0),
+                galley.size() + egui::vec2(16.0, 10.0),
+            );
+            painter.rect_filled(rect, 6.0, egui::Color32::from_black_alpha(220));
+            painter.text(
+                rect.left_center() + egui::vec2(8.0, 0.0),
+                egui::Align2::LEFT_CENTER,
+                text,
+                font,
+                color,
+            );
+        }
+    }
+
+    /// Whether a registry-backed observed field answers the instant this pane is showing.
+    /// Unmigrated fields retain their existing behavior until they carry a `DataStamp`.
+    fn field_aligned(&self, pane: usize, layer: crate::render::FieldLayer) -> bool {
+        self.field_time_status(pane, layer)
+            .is_none_or(|(_, _, _, aligned)| aligned)
+    }
+
+    /// The field's source time, selected analysis time, tolerance, and alignment result.
+    fn field_time_status(
+        &self,
+        pane: usize,
+        layer: crate::render::FieldLayer,
+    ) -> Option<(
+        chrono::DateTime<Utc>,
+        chrono::DateTime<Utc>,
+        chrono::Duration,
+        bool,
+    )> {
+        let stamp = self
+            .fields
+            .get(&layer)
+            .and_then(|state| state.metadata.as_ref())
+            .map(|(_, stamp)| stamp)?;
+        let analysis_time = self.views[pane]
+            .timeline
+            .current()
+            .and_then(|id| id.date_time())
+            .or_else(|| self.views[pane].volume.as_ref().map(|volume| volume.time))?;
+        let tolerance = self
+            .settings
+            .alignment_tolerance_minutes
+            .map_or_else(|| field_time_tolerance(layer), |minutes| {
+                chrono::Duration::minutes(i64::from(minutes))
+            });
+        let available = [wxdata::timecoord::TimedFrame {
+            valid: stamp.valid_time,
+            value: (),
+        }];
+        let aligned = wxdata::timecoord::align(
+            &available,
+            analysis_time,
+            layer
+                .descriptor()
+                .map_or_else(|| wxdata::timecoord::policy_for(stamp.class), |descriptor| {
+                    descriptor.time_policy(stamp.class)
+                }),
+            tolerance,
+        )
+        .is_some();
+        Some((stamp.valid_time, analysis_time, tolerance, aligned))
     }
 
     /// Resize the pane grid to `n` (1/2/4). New panes copy the active pane's site/camera but
@@ -14129,18 +15740,114 @@ impl HookEchoApp {
                 .collect(),
             active: self.active,
             link_cameras: self.link_cameras,
+            link_times: self.link_times,
             overlays_on,
             // A workspace you saved records the sites you had open; only the shipped starters
             // adopt whatever is on screen.
             adopt_site: false,
             // The workspace-wide list stays as the union across panes: it is what an older build
             // reads, and what a pane snapshot written before per-pane layers falls back to.
-            fields_on: crate::render::FieldLayer::DRAW_ORDER
-                .iter()
-                .filter(|l| self.field_wanted(**l))
-                .map(|l| l.slug().to_string())
+            fields_on: crate::render::FieldLayer::draw_order()
+                .filter(|l| self.field_wanted(*l))
+                .map(|l| l.stable_id().to_string())
                 .collect(),
             chrome: Some(self.capture_chrome()),
+        }
+    }
+
+    fn current_case(&mut self) -> anyhow::Result<crate::casefile::CaseManifest> {
+        let stamp = chrono::Utc::now().format("%Y%m%d-%H%MZ");
+        let name = format!("HookEcho case {stamp}");
+        let mut workspace = self.capture_workspace();
+        workspace.name = name.clone();
+        let panes = self
+            .views
+            .iter()
+            .map(|view| {
+                let selected_time = view
+                    .timeline
+                    .current()
+                    .and_then(|frame| frame.date_time())
+                    .or_else(|| view.volume.as_ref().map(|volume| volume.time));
+                let radar_objects = match view.timeline.replay {
+                    Some((from, to)) => view
+                        .timeline
+                        .frames
+                        .get(from..=to)
+                        .unwrap_or(&[])
+                        .iter()
+                        .take(2048)
+                        .map(|frame| frame.name().to_string())
+                        .collect(),
+                    None => view
+                        .timeline
+                        .current()
+                        .map(|frame| vec![frame.name().to_string()])
+                        .unwrap_or_default(),
+                };
+                crate::casefile::CasePane {
+                    site: view.site.clone().unwrap_or_default(),
+                    selected_time,
+                    radar_objects,
+                }
+            })
+            .collect();
+        let annotations = self
+            .strokes
+            .iter()
+            .map(|stroke| crate::casefile::CaseStroke {
+                points: stroke.points.clone(),
+                rgba: stroke.color.to_array(),
+            })
+            .collect();
+        crate::casefile::CaseManifest::new(
+            name,
+            workspace,
+            panes,
+            annotations,
+            self.settings.bookmarks.clone(),
+        )
+    }
+
+    fn export_case(&mut self) {
+        let stamp = chrono::Utc::now().format("%Y%m%d-%H%MZ");
+        let result = self.current_case().and_then(|manifest| manifest.to_json());
+        match result {
+            Ok(json) => match crate::dialog::save_bytes(
+                &format!("hookecho-case-{stamp}.json"),
+                "json",
+                json.as_bytes(),
+            ) {
+                crate::dialog::Saved::Where(where_) => {
+                    self.toast(ToastKind::Success, format!("Case saved to {where_}"))
+                }
+                crate::dialog::Saved::Failed(error) => {
+                    self.toast(ToastKind::Error, format!("Case export failed: {error}"))
+                }
+                crate::dialog::Saved::Cancelled => {}
+            },
+            Err(error) => self.toast(ToastKind::Error, format!("Case export failed: {error}")),
+        }
+    }
+
+    fn export_case_report(&mut self) {
+        let stamp = chrono::Utc::now().format("%Y%m%d-%H%MZ");
+        let result = self.current_case().and_then(|manifest| manifest.to_markdown());
+        match result {
+            Ok(report) => match crate::dialog::save_bytes(
+                &format!("hookecho-case-report-{stamp}.md"),
+                "md",
+                report.as_bytes(),
+            ) {
+                crate::dialog::Saved::Where(where_) => {
+                    self.toast(ToastKind::Success, format!("Case report saved to {where_}"))
+                }
+                crate::dialog::Saved::Failed(error) => {
+                    self.toast(ToastKind::Error, format!("Case report failed: {error}"))
+                }
+                crate::dialog::Saved::Cancelled => {}
+            },
+            Err(error) => self.toast(ToastKind::Error, format!("Case report failed: {error}")),
         }
     }
 
@@ -14174,6 +15881,7 @@ impl HookEchoApp {
         }
         self.active = ws.active.min(self.views.len() - 1);
         self.link_cameras = ws.link_cameras;
+        self.link_times = ws.link_times;
         // Overlay names this build doesn't know are skipped, same as the settings restore.
         for t in OverlayToggle::ALL {
             if t.session_only() {
@@ -14193,10 +15901,9 @@ impl HookEchoApp {
             // back to the workspace-wide list so an old file still restores what it meant. An
             // empty list is a pane that had its layers off, which is a decision, not a gap.
             let list = snap.fields_on.as_ref().unwrap_or(&ws.fields_on);
-            v.fields_on = crate::render::FieldLayer::DRAW_ORDER
+            v.fields_on = list
                 .iter()
-                .copied()
-                .filter(|l| list.iter().any(|s| s == l.slug()))
+                .filter_map(|id| crate::render::FieldLayer::from_stable_id(id))
                 .collect();
         }
         if let Some(c) = &ws.chrome {
@@ -14207,7 +15914,7 @@ impl HookEchoApp {
     }
 
     fn set_pane_count(&mut self, n: usize) {
-        let n = n.clamp(1, 4);
+        let n = crate::workspace::bounded_pane_count(n);
         while self.views.len() < n {
             let src = &self.views[self.active];
             let (site, camera, basemap, tilt, date) = (
@@ -14343,6 +16050,49 @@ impl HookEchoApp {
                         self.obs_mode = true;
                     }
                 }
+                ui.separator();
+                ui.strong("Broadcast output");
+                ui.horizontal_wrapped(|ui| {
+                    for (label, size) in [
+                        ("1080p", [1920.0, 1080.0]),
+                        ("1440p", [2560.0, 1440.0]),
+                        ("4K", [3840.0, 2160.0]),
+                        ("Portrait", [1080.0, 1920.0]),
+                    ] {
+                        if ui.button(label).clicked() {
+                            ui.ctx().send_viewport_cmd(egui::ViewportCommand::InnerSize(
+                                egui::vec2(size[0], size[1]),
+                            ));
+                            self.obs_mode = true;
+                        }
+                    }
+                });
+                ui.horizontal(|ui| {
+                    ui.label("Safe margin");
+                    ui.add(
+                        egui::DragValue::new(&mut self.settings.broadcast_safe_margin)
+                            .range(0..=240)
+                            .suffix(" px"),
+                    );
+                });
+                toggle(
+                    ui,
+                    &mut self.settings.broadcast_clock_source,
+                    "Clock and source stamp",
+                );
+                toggle(
+                    ui,
+                    &mut self.settings.broadcast_warning_crawl,
+                    "Warning crawl",
+                );
+                ui.horizontal(|ui| {
+                    ui.label("Branding");
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.settings.broadcast_branding)
+                            .hint_text("Optional station or organization")
+                            .desired_width(220.0),
+                    );
+                });
 
                 if ui
                     .add_enabled(
@@ -14411,6 +16161,96 @@ impl HookEchoApp {
                             self.chase_track.clear();
                         }
                     });
+                }
+                ui.separator();
+                ui.label("Road route");
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.settings.route_endpoint)
+                        .hint_text("OSRM endpoint, for example https://router.example.com"),
+                );
+                ui.weak(format!(
+                    "{} route points · choose Tool: Plan route, then click the map",
+                    self.route_waypoints.len()
+                ));
+                ui.horizontal(|ui| {
+                    if ui
+                        .add_enabled(
+                            self.route_waypoints.len() >= 2 && self.route_rx.is_none(),
+                            egui::Button::new("Calculate route"),
+                        )
+                        .clicked()
+                    {
+                        self.fetch_route(ui.ctx());
+                    }
+                    if ui.button("Clear route").clicked() {
+                        self.route_waypoints.clear();
+                        self.routes.clear();
+                        self.route_rx = None;
+                    }
+                });
+                if let Some(route) = self.routes.first() {
+                    ui.weak(format!(
+                        "{} · about {} min{}",
+                        crate::geo::fmt_distance(route.distance_m / 1000.0, metric, 0),
+                        (route.duration_s / 60.0).round() as u64,
+                        if self.routes.len() > 1 {
+                            format!(" · {} alternatives", self.routes.len() - 1)
+                        } else {
+                            String::new()
+                        }
+                    ));
+                }
+                if let Some((warning, distance_m)) = self.route_warning_exposure() {
+                    ui.colored_label(
+                        egui::Color32::from_rgb(255, 185, 70),
+                        format!(
+                            "⚠ Route intersects active {warning} in {}",
+                            crate::geo::fmt_distance(distance_m / 1000.0, metric, 0)
+                        ),
+                    );
+                }
+                if let Some(exposure) = self.route_field_exposure() {
+                    ui.label(format!("Weather along route: {exposure}"));
+                }
+                if let Some((name, analysis)) = self.route_storm_analysis() {
+                    let closest = analysis.closest;
+                    let side = if closest.relative_bearing_deg < 0.0 {
+                        "left"
+                    } else {
+                        "right"
+                    };
+                    ui.label(format!(
+                        "{name}: closest approach {} in {:.0} min · {:.0}° {side}",
+                        crate::geo::fmt_distance(
+                            closest.separation_m / 1_000.0,
+                            metric,
+                            1
+                        ),
+                        closest.eta_s / 60.0,
+                        closest.relative_bearing_deg.abs()
+                    ));
+                    if let Some(crossing) = analysis.intersection {
+                        let difference = crossing.vehicle_eta_s - crossing.storm_eta_s;
+                        ui.colored_label(
+                            egui::Color32::from_rgb(255, 185, 70),
+                            format!(
+                                "⚠ Projected path crosses route in {} · storm ETA {:.0} min, vehicle ETA {:.0} min ({:.0} min {})",
+                                crate::geo::fmt_distance(
+                                    crossing.route_distance_m / 1_000.0,
+                                    metric,
+                                    0
+                                ),
+                                crossing.storm_eta_s / 60.0,
+                                crossing.vehicle_eta_s / 60.0,
+                                difference.abs() / 60.0,
+                                if difference >= 0.0 {
+                                    "before vehicle"
+                                } else {
+                                    "after vehicle"
+                                }
+                            ),
+                        );
+                    }
                 }
                 // Desktop streams from a local gpsd; Android polls the system LocationManager over
                 // JNI (see platform.rs); the web watches the browser's own Geolocation. All three
@@ -14527,6 +16367,9 @@ impl HookEchoApp {
                 if ui.button("Copy link to this view").clicked() {
                     self.apply_palette(PaletteAction::CopyViewLink, ui.ctx());
                 }
+                if ui.button("Export field verification…").clicked() {
+                    self.export_forecast_verification();
+                }
                 #[cfg(not(target_arch = "wasm32"))]
                 {
                     if ui.button("Save screenshot…").clicked() {
@@ -14536,6 +16379,9 @@ impl HookEchoApp {
                     }
                     if ui.button("Copy view to clipboard").clicked() {
                         self.request_capture(ui.ctx(), ShotDest::Clipboard);
+                    }
+                    if ui.button("Export active field CSV…").clicked() {
+                        self.export_active_field_csv();
                     }
                     toggle(ui, &mut self.settings.share_card, "Caption shared images")
                         .on_hover_text(
@@ -14601,6 +16447,9 @@ impl HookEchoApp {
                 }
                 if ui.button("Take the tour…").clicked() {
                     self.tour.start();
+                }
+                if ui.button("Save diagnostics…").clicked() {
+                    self.export_diagnostics();
                 }
                 #[cfg(not(target_arch = "wasm32"))]
                 if ui.button("Exit HookEcho").clicked() {
@@ -14675,6 +16524,296 @@ impl HookEchoApp {
         });
     }
 
+    fn export_active_field_csv(&mut self) {
+        let frame = crate::render::FieldLayer::draw_order()
+            .rev()
+            .find(|layer| self.views[self.active].fields_on.contains(layer))
+            .and_then(|layer| self.fields.get(&layer))
+            .and_then(|state| state.frame.clone());
+        let Some(frame) = frame else {
+            self.toast(ToastKind::Info, "No scalar field is active");
+            return;
+        };
+        let name = format!("hookecho-{}.csv", frame.descriptor.id.0);
+        let Some(path) = crate::dialog::save_path(&name, "csv") else {
+            return;
+        };
+        let result = std::fs::File::create(&path).and_then(|file| {
+            frame.write_csv(std::io::BufWriter::new(file))
+        });
+        match result {
+            Ok(rows) => self.toast(ToastKind::Success, format!("Exported {rows} native values")),
+            Err(error) => {
+                let _ = std::fs::remove_file(&path);
+                self.toast(ToastKind::Error, format!("Field export failed: {error}"));
+            }
+        }
+    }
+
+    fn export_region_stats(&mut self) {
+        if self.region_analysis.is_none()
+            && self.radar_scatter.is_none()
+            && self.radar_time_series.is_none()
+        {
+            self.toast(ToastKind::Info, "Select a field area first");
+            return;
+        }
+        let [a, b] = self.region_points.as_slice() else {
+            self.toast(ToastKind::Info, "Select a field area first");
+            return;
+        };
+        let mut csv = self.region_analysis.as_ref().map_or_else(String::new, |analysis| {
+            let stats = &analysis.stats;
+            format!(
+            "product,valid_time,units,west,south,east,north,count,min,max,mean,std_dev\n{},{},{},{},{},{},{},{},{},{},{},{}\n\nbin,count\n",
+            analysis.product,
+            analysis.valid.to_rfc3339(),
+            analysis.units,
+            a[0].min(b[0]),
+            a[1].min(b[1]),
+            a[0].max(b[0]),
+            a[1].max(b[1]),
+            stats.count,
+            stats.min,
+            stats.max,
+            stats.mean,
+            stats.std_dev,
+            )
+        });
+        if let Some(analysis) = &self.region_analysis {
+            for (bin, count) in analysis.stats.histogram.iter().enumerate() {
+                use std::fmt::Write;
+                let _ = writeln!(csv, "{bin},{count}");
+            }
+            if let Some(pair) = &analysis.correlation {
+                use std::fmt::Write;
+                let _ = write!(
+                    csv,
+                    "\npaired_product,paired_units,count,pearson_r,slope,intercept\n{},{},{},{},{},{}\n",
+                    pair.product, pair.units, pair.stats.count, pair.stats.pearson_r,
+                    pair.stats.slope, pair.stats.intercept,
+                );
+            }
+        }
+        if let Some(pairs) = &self.radar_scatter {
+            use std::fmt::Write;
+            let _ = write!(
+                csv,
+                "\nradar_x,radar_y,x_units,y_units,count,pearson_r,slope,intercept,west,south,east,north\n{},{},{},{},{},{},{},{},{},{},{},{}\n\nx,y\n",
+                pairs.x.short_name(), pairs.y.short_name(), pairs.x.units(), pairs.y.units(),
+                pairs.points.len(), pairs.pearson_r, pairs.slope, pairs.intercept,
+                a[0].min(b[0]), a[1].min(b[1]), a[0].max(b[0]), a[1].max(b[1]),
+            );
+            for &[x, y] in &pairs.points {
+                let _ = writeln!(csv, "{x},{y}");
+            }
+        }
+        if let Some(series) = &self.radar_time_series {
+            use std::fmt::Write;
+            let _ = write!(
+                csv,
+                "\ntime_series_product,units,longitude,latitude,count\n{},{},{},{},{}\n\ntime,value\n",
+                series.moment.short_name(),
+                series.moment.units(),
+                series.lon,
+                series.lat,
+                series.samples.len(),
+            );
+            for sample in &series.samples {
+                let _ = writeln!(csv, "{},{}", sample.time.to_rfc3339(), sample.value);
+            }
+        }
+        match crate::dialog::save_bytes("hookecho-region-statistics.csv", "csv", csv.as_bytes()) {
+            crate::dialog::Saved::Where(where_) => {
+                self.toast(ToastKind::Success, format!("Statistics saved to {where_}"))
+            }
+            crate::dialog::Saved::Failed(error) => {
+                self.toast(ToastKind::Error, format!("Statistics export failed: {error}"))
+            }
+            crate::dialog::Saved::Cancelled => {}
+        }
+    }
+
+    fn export_detector_history(&mut self) {
+        if self.detector_history.is_empty() {
+            self.toast(ToastKind::Info, "No detector history yet");
+            return;
+        }
+        match crate::detector_history::to_json(&self.detector_history) {
+            Ok(json) => match crate::dialog::save_bytes(
+                "hookecho-detector-history.json",
+                "json",
+                json.as_bytes(),
+            ) {
+                crate::dialog::Saved::Where(where_) => self.toast(
+                    ToastKind::Success,
+                    format!("Detector history saved to {where_}"),
+                ),
+                crate::dialog::Saved::Failed(error) => self.toast(
+                    ToastKind::Error,
+                    format!("Detector history export failed: {error}"),
+                ),
+                crate::dialog::Saved::Cancelled => {}
+            },
+            Err(error) => self.toast(
+                ToastKind::Error,
+                format!("Detector history export failed: {error}"),
+            ),
+        }
+    }
+
+    fn export_forecast_verification(&mut self) {
+        use wxdata::field::DataClass;
+        let active = &self.views[self.active].fields_on;
+        let frames: Vec<_> = crate::render::FieldLayer::draw_order()
+            .filter(|layer| active.contains(layer))
+            .filter_map(|layer| self.fields.get(&layer)?.frame.as_ref())
+            .collect();
+        let forecast = frames
+            .iter()
+            .copied()
+            .find(|frame| frame.stamp.class == DataClass::Forecast)
+            .cloned();
+        let reference = frames
+            .into_iter()
+            .find(|frame| {
+                matches!(frame.stamp.class, DataClass::Analysis | DataClass::Observed)
+            })
+            .cloned();
+        let result = match forecast {
+            Some(forecast) => (|| {
+                let (metrics, reference_json) = match reference {
+                    Some(reference) => (
+                        crate::fielddiff::verify_forecast(&forecast, &reference)?,
+                        serde_json::json!({
+                            "kind": "grid",
+                            "product": reference.descriptor.id.0,
+                            "source": &reference.stamp.source_identity,
+                            "valid_time": reference.stamp.valid_time,
+                        }),
+                    ),
+                    None => (
+                        crate::fielddiff::verify_stations(
+                            &forecast,
+                            &self.metars,
+                            chrono::Duration::minutes(90),
+                        )?,
+                        serde_json::json!({
+                            "kind": "METAR stations",
+                            "source": "aviationweather.gov",
+                            "time_tolerance_minutes": 90,
+                            "stations_loaded": self.metars.len(),
+                        }),
+                    ),
+                };
+                Ok(serde_json::to_vec_pretty(&serde_json::json!({
+                    "schema": "hookecho.forecast-verification.v1",
+                    "forecast": {
+                        "product": forecast.descriptor.id.0,
+                        "source": &forecast.stamp.source_identity,
+                        "valid_time": forecast.stamp.valid_time,
+                    },
+                    "reference": reference_json,
+                    "units": forecast.descriptor.units,
+                    "metrics": metrics,
+                }))?)
+            })(),
+            None => reference
+                .ok_or_else(|| anyhow::anyhow!("show a forecast or surface analysis field"))
+                .and_then(|analysis| {
+                    let metrics = crate::fielddiff::verify_stations(
+                        &analysis,
+                        &self.metars,
+                        chrono::Duration::minutes(90),
+                    )?;
+                    Ok(serde_json::to_vec_pretty(&serde_json::json!({
+                        "schema": "hookecho.surface-analysis-residuals.v1",
+                        "analysis": {
+                            "product": analysis.descriptor.id.0,
+                            "source": &analysis.stamp.source_identity,
+                            "valid_time": analysis.stamp.valid_time,
+                        },
+                        "reference": {
+                            "kind": "METAR stations",
+                            "source": "aviationweather.gov",
+                            "time_tolerance_minutes": 90,
+                            "stations_loaded": self.metars.len(),
+                        },
+                        "units": analysis.descriptor.units,
+                        "metrics": metrics,
+                    }))?)
+                }),
+        };
+        match result {
+            Ok(bytes) => match crate::dialog::save_bytes(
+                "hookecho-field-verification.json",
+                "json",
+                &bytes,
+            ) {
+                crate::dialog::Saved::Where(where_) => self.toast(
+                    ToastKind::Success,
+                    format!("Verification saved to {where_}"),
+                ),
+                crate::dialog::Saved::Failed(error) => self.toast(
+                    ToastKind::Error,
+                    format!("Verification export failed: {error}"),
+                ),
+                crate::dialog::Saved::Cancelled => {}
+            },
+            Err(error) => self.toast(ToastKind::Error, format!("Cannot verify: {error}")),
+        }
+    }
+
+    fn export_diagnostics(&mut self) {
+        let sources = self
+            .overlay_requests
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .diagnostics();
+        let (cache, degraded, storage_error) = wxdata::object_cache::known_stats();
+        let cache: Vec<_> = cache
+            .into_iter()
+            .map(|row| serde_json::json!({
+                "family": row.family,
+                "objects": row.objects,
+                "bytes": row.bytes,
+                "cap": row.cap,
+            }))
+            .collect();
+        let counters: serde_json::Map<String, serde_json::Value> = wxdata::stats::snapshot()
+            .into_iter()
+            .map(|(name, value)| (name.to_string(), value.into()))
+            .collect();
+        let bytes = serde_json::to_vec_pretty(&serde_json::json!({
+            "schema": "hookecho.diagnostics/v1",
+            "version": env!("CARGO_PKG_VERSION"),
+            "platform": {
+                "os": std::env::consts::OS,
+                "arch": std::env::consts::ARCH,
+            },
+            "renderer": &self.renderer_info,
+            "sources": sources,
+            "cache": {
+                "families": cache,
+                "degraded": degraded,
+                "storage_error": storage_error.map(|_| "storage unavailable"),
+            },
+            "performance_counters": counters,
+        }))
+        .expect("diagnostics values are serializable");
+        match crate::dialog::save_bytes("hookecho-diagnostics.json", "json", &bytes) {
+            crate::dialog::Saved::Where(where_) => self.toast(
+                ToastKind::Success,
+                format!("Diagnostics saved to {where_}"),
+            ),
+            crate::dialog::Saved::Failed(error) => self.toast(
+                ToastKind::Error,
+                format!("Diagnostics export failed: {error}"),
+            ),
+            crate::dialog::Saved::Cancelled => {}
+        }
+    }
+
     /// Export settings + referenced color tables to a portable JSON bundle (a save dialog on
     /// desktop, a download in a browser).
     fn export_settings_bundle(&mut self) {
@@ -14705,7 +16844,7 @@ impl HookEchoApp {
     }
 
     /// Route a picked file to whatever asked for it.
-    fn apply_import(&mut self, import: crate::dialog::Import) {
+    fn apply_import(&mut self, import: crate::dialog::Import, ctx: &egui::Context) {
         use crate::dialog::ImportKind as K;
         match import.kind {
             K::SettingsBundle => self.apply_settings_bundle(&import),
@@ -14748,6 +16887,107 @@ impl HookEchoApp {
                     }
                 }
                 Err(e) => self.toast(ToastKind::Error, format!("GPX import failed: {e}")),
+            },
+            K::Gis => {
+                let name = import.name();
+                let archive = name.to_ascii_lowercase().ends_with(".kmz")
+                    || name.to_ascii_lowercase().ends_with(".zip");
+                let content = if archive {
+                    use base64::Engine as _;
+                    import.content().map(|bytes| {
+                        format!(
+                            "base64:{}",
+                            base64::engine::general_purpose::STANDARD.encode(bytes)
+                        )
+                    })
+                } else {
+                    import.text()
+                };
+                match content {
+                    Ok(content) => match stored_gis(&name, &content) {
+                        Ok(file) => {
+                            let key = format!("gis:{name}");
+                            let items = file.items.len();
+                            self.settings.web_files.insert(key.clone(), content);
+                            if !self.settings.placefiles.iter().any(|cfg| cfg.url == key) {
+                                self.settings.placefiles.push(crate::settings::PlacefileConfig {
+                                    url: key.clone(),
+                                    enabled: true,
+                                    opacity: 1.0,
+                                });
+                            }
+                            self.placefiles.retain(|loaded| loaded.url != key);
+                            self.toast(
+                                ToastKind::Success,
+                                format!("Imported {items} GIS features"),
+                            );
+                        }
+                        Err(error) => self.toast(ToastKind::Error, error.to_string()),
+                    },
+                    Err(error) => {
+                        self.toast(ToastKind::Error, format!("GIS import failed: {error}"))
+                    }
+                }
+            }
+            K::CaseManifest => match import
+                .text()
+                .map_err(anyhow::Error::msg)
+                .and_then(|json| crate::casefile::CaseManifest::from_json(&json))
+            {
+                Ok(case) => {
+                    self.apply_workspace(&case.workspace, ctx);
+                    self.strokes = case
+                        .annotations
+                        .into_iter()
+                        .map(|stroke| Stroke2d {
+                            points: stroke.points,
+                            color: egui::Color32::from_rgba_unmultiplied(
+                                stroke.rgba[0],
+                                stroke.rgba[1],
+                                stroke.rgba[2],
+                                stroke.rgba[3],
+                            ),
+                        })
+                        .collect();
+                    for bookmark in case.bookmarks {
+                        if !self.settings.bookmarks.contains(&bookmark) {
+                            self.settings.bookmarks.push(bookmark);
+                        }
+                    }
+                    for (view, pane) in self.views.iter_mut().zip(case.panes) {
+                        if !pane.radar_objects.is_empty() {
+                            view.timeline.frames = pane
+                                .radar_objects
+                                .into_iter()
+                                .map(Identifier::new)
+                                .collect();
+                            view.timeline.frames_key = Some((
+                                pane.site,
+                                pane.selected_time
+                                    .map(|time| time.date_naive())
+                                    .unwrap_or_else(|| view.timeline.date),
+                            ));
+                        }
+                        if let Some(time) = pane.selected_time {
+                            view.timeline.date = time.date_naive();
+                            view.timeline.playhead = view
+                                .timeline
+                                .frames
+                                .iter()
+                                .enumerate()
+                                .filter_map(|(index, frame)| {
+                                    frame.date_time().map(|at| (index, (at - time).abs()))
+                                })
+                                .min_by_key(|(_, distance)| *distance)
+                                .map(|(index, _)| index)
+                                .unwrap_or(0);
+                            view.timeline.seek_target = None;
+                            view.timeline.following = false;
+                        }
+                    }
+                    self.toast(ToastKind::Success, format!("Opened case: {}", case.name));
+                }
+                Err(error) => self.toast(ToastKind::Error, format!("Case import failed: {error}")),
             },
             K::MarkerIcon => {
                 let idx = import.tag.parse::<usize>().ok();
@@ -14813,6 +17053,8 @@ impl HookEchoApp {
             return;
         }
         let speed = v.timeline.speed;
+        let (lon, lat) =
+            crate::render::mercator::world_to_lonlat(v.camera.center.0, v.camera.center.1);
         v.timeline.go_begin();
         self.loop_export = Some(LoopExport {
             dest: path,
@@ -14822,6 +17064,16 @@ impl HookEchoApp {
             settle: LOOP_SETTLE_FRAMES,
             capturing: false,
             fps: speed,
+            site: v.site.clone(),
+            product: v
+                .custom_product
+                .clone()
+                .unwrap_or_else(|| v.moment.short_name().to_string()),
+            units: v.moment.units(),
+            tilt: v.tilt,
+            center: [lon, lat],
+            zoom: v.camera.zoom,
+            sources: Vec::with_capacity(slots),
         });
     }
 
@@ -14845,6 +17097,10 @@ impl HookEchoApp {
 
     /// Record one captured loop frame; step to the next, or finish + encode the GIF.
     fn record_loop_frame(&mut self, image: &egui::ColorImage) {
+        let source = self.views[self.active]
+            .timeline
+            .current()
+            .map(|frame| frame.name().to_string());
         let Some(le) = &mut self.loop_export else {
             return;
         };
@@ -14855,6 +17111,9 @@ impl HookEchoApp {
         }
         if let Some(img) = image::RgbaImage::from_raw(w, h, buf) {
             le.frames.push(img);
+            if let Some(source) = source {
+                le.sources.push(source);
+            }
         }
         le.capturing = false;
         le.remaining -= 1;
@@ -14883,7 +17142,22 @@ impl HookEchoApp {
                     le.fps.round().clamp(1.0, 15.0) as u32,
                     &le.dest,
                 ),
-            };
+            }
+            .and_then(|()| {
+                crate::loopexport::write_manifest(
+                    &le.dest,
+                    &crate::loopexport::Manifest {
+                        site: le.site.as_deref(),
+                        product: &le.product,
+                        units: le.units,
+                        tilt: le.tilt,
+                        fps: le.fps,
+                        center: le.center,
+                        zoom: le.zoom,
+                    },
+                    &le.sources,
+                )
+            });
             match res {
                 Ok(()) => {
                     log::info!(
@@ -15429,6 +17703,7 @@ fn mrms_upload(f: &wxdata::mrms::MrmsField, table: &ColorTable) -> crate::render
     let (wx1, wy1) = lonlat_to_world(f.lon_east, f.lat_south);
     crate::render::MrmsUpload {
         data,
+        rgba: false,
         nx: f.nx as u32,
         ny: f.ny as u32,
         world_min: [wx0 as f32, wy0 as f32],
@@ -15451,6 +17726,35 @@ fn mrms_upload(f: &wxdata::mrms::MrmsField, table: &ColorTable) -> crate::render
     }
 }
 
+fn rgb_upload(image: &wxdata::abi::RgbImage) -> crate::render::MrmsUpload {
+    use crate::render::mercator::lonlat_to_world;
+    let (wx0, wy0) = lonlat_to_world(image.lon_west, image.lat_north);
+    let (wx1, wy1) = lonlat_to_world(image.lon_east, image.lat_south);
+    crate::render::MrmsUpload {
+        data: image.pixels.iter().flatten().copied().collect(),
+        rgba: true,
+        nx: image.width as u32,
+        ny: image.height as u32,
+        world_min: [wx0 as f32, wy0 as f32],
+        world_max: [wx1 as f32, wy1 as f32],
+        uniform: [
+            image.lon_west as f32,
+            image.lat_north as f32,
+            image.lon_east as f32,
+            image.lat_south as f32,
+            image.width as f32,
+            image.height as f32,
+            1.0,
+            1.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+        ],
+        lut: vec![0; 256 * 4],
+    }
+}
+
 /// Build a field-layer GPU upload from a grid: `map` turns each cell value into a LUT index
 /// (0 = transparent, 2..=255 = data), `lut` is the 256-entry RGBA color table.
 pub(crate) fn field_index_upload(
@@ -15468,6 +17772,7 @@ pub(crate) fn field_index_upload(
     let (wx1, wy1) = lonlat_to_world(f.lon_east, f.lat_south);
     crate::render::MrmsUpload {
         data,
+        rgba: false,
         nx: f.nx as u32,
         ny: f.ny as u32,
         world_min: [wx0 as f32, wy0 as f32],
@@ -15630,12 +17935,14 @@ impl HookEchoApp {
         f: &wxdata::mrms::MrmsField,
     ) -> crate::render::MrmsUpload {
         use crate::render::FieldLayer as FL;
-        match layer {
-            // Mosaic + HRRR forecast are both dBZ → the reflectivity palette.
-            FL::Mrms | FL::Mosaic | FL::Hrrr => {
-                mrms_upload(f, self.palettes.table(Moment::Reflectivity))
-            }
-            other => field_upload_indexed(other, f),
+        if layer
+            .descriptor()
+            .is_some_and(|descriptor| descriptor.palette_key == "reflectivity")
+            || matches!(layer, FL::Mosaic | FL::Hrrr)
+        {
+            mrms_upload(f, self.palettes.table(Moment::Reflectivity))
+        } else {
+            field_upload_indexed(layer, f)
         }
     }
 }
@@ -15897,6 +18204,115 @@ fn feature_in_box(f: &GeoFeature, bx: (f64, f64, f64, f64)) -> bool {
     x1 >= bx0 && x0 <= bx1 && y1 >= by0 && y0 <= by1
 }
 
+fn histogram_text(bins: &[u32; 16]) -> String {
+    const BARS: [char; 8] = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
+    let high = bins.iter().copied().max().unwrap_or(0);
+    bins.iter()
+        .map(|&count| {
+            if high == 0 {
+                BARS[0]
+            } else {
+                BARS[((count as usize * (BARS.len() - 1)) / high as usize).min(BARS.len() - 1)]
+            }
+        })
+        .collect()
+}
+
+fn draw_scatterplot(
+    painter: &egui::Painter,
+    top: egui::Pos2,
+    pairs: &wxdata::level2::MomentPairs,
+) {
+    let plot = egui::Rect::from_min_size(top - egui::vec2(70.0, 0.0), egui::vec2(140.0, 80.0));
+    painter.rect_filled(plot, 4.0, egui::Color32::from_black_alpha(210));
+    painter.rect_stroke(
+        plot,
+        4.0,
+        egui::Stroke::new(1.0, egui::Color32::from_gray(90)),
+        egui::StrokeKind::Middle,
+    );
+    let (mut xmin, mut xmax, mut ymin, mut ymax) =
+        (f32::INFINITY, f32::NEG_INFINITY, f32::INFINITY, f32::NEG_INFINITY);
+    for &[x, y] in &pairs.points {
+        xmin = xmin.min(x);
+        xmax = xmax.max(x);
+        ymin = ymin.min(y);
+        ymax = ymax.max(y);
+    }
+    let xspan = (xmax - xmin).max(f32::EPSILON);
+    let yspan = (ymax - ymin).max(f32::EPSILON);
+    let stride = pairs.points.len().div_ceil(1_000).max(1);
+    for &[x, y] in pairs.points.iter().step_by(stride) {
+        let pos = egui::pos2(
+            egui::lerp(plot.left() + 5.0..=plot.right() - 5.0, (x - xmin) / xspan),
+            egui::lerp(plot.bottom() - 5.0..=plot.top() + 5.0, (y - ymin) / yspan),
+        );
+        painter.circle_filled(pos, 1.0, egui::Color32::from_rgb(80, 220, 190));
+    }
+}
+
+fn draw_time_series(painter: &egui::Painter, top_left: egui::Pos2, series: &RadarTimeSeries) {
+    let plot = egui::Rect::from_min_size(top_left, egui::vec2(160.0, 80.0));
+    painter.rect_filled(plot, 4.0, egui::Color32::from_black_alpha(210));
+    painter.rect_stroke(
+        plot,
+        4.0,
+        egui::Stroke::new(1.0, egui::Color32::from_gray(90)),
+        egui::StrokeKind::Middle,
+    );
+    let Some(first) = series.samples.first() else { return };
+    let Some(last) = series.samples.last() else { return };
+    let (min, max) = series.samples.iter().fold(
+        (f32::INFINITY, f32::NEG_INFINITY),
+        |(min, max), sample| (min.min(sample.value), max.max(sample.value)),
+    );
+    let seconds = (last.time - first.time).num_seconds().max(1) as f32;
+    let span = (max - min).max(f32::EPSILON);
+    let points = series.samples.iter().map(|sample| {
+        egui::pos2(
+            egui::lerp(
+                plot.left() + 5.0..=plot.right() - 5.0,
+                (sample.time - first.time).num_seconds() as f32 / seconds,
+            ),
+            egui::lerp(
+                plot.bottom() - 5.0..=plot.top() + 5.0,
+                (sample.value - min) / span,
+            ),
+        )
+    });
+    painter.add(egui::Shape::line(
+        points.collect(),
+        egui::Stroke::new(1.5, egui::Color32::from_rgb(80, 220, 190)),
+    ));
+    painter.text(
+        plot.left_top() + egui::vec2(5.0, 4.0),
+        egui::Align2::LEFT_TOP,
+        format!("{} {:.1}–{:.1} {}", series.moment.short_name(), min, max, series.moment.units()),
+        egui::FontId::proportional(10.0),
+        egui::Color32::from_gray(210),
+    );
+}
+
+fn sampled_height_warning(
+    units: &str,
+    value: f32,
+    coverage: crate::elevation::BeamCoverage,
+    site_msl_km: f64,
+) -> Option<&'static str> {
+    let height_km = match units {
+        "km AGL" => value as f64,
+        "m MSL" => value as f64 / 1000.0 - site_msl_km,
+        _ => return None,
+    };
+    if height_km < coverage.bottom_km_agl {
+        Some("sampled feature is below this radar beam")
+    } else if height_km > coverage.top_km_agl {
+        Some("sampled feature extends above this radar beam")
+    } else {
+        None
+    }
+}
+
 fn warning_is_near_home(f: &GeoFeature, lon: f64, lat: f64) -> bool {
     f.distance_km(lon, lat) <= 30.0 * crate::geo::KM_PER_MILE
 }
@@ -16029,7 +18445,7 @@ impl eframe::App for HookEchoApp {
         // button, because on Android the picker is an activity result that lands long after the
         // click — through the same file handover a notification tap uses.
         if let Some(import) = crate::dialog::take_result() {
-            self.apply_import(import);
+            self.apply_import(import, ctx);
         }
 
         // Android paste: re-focus the text field that lost focus to the Paste-button tap, before
@@ -16252,15 +18668,16 @@ impl eframe::App for HookEchoApp {
         // MRMS national mosaic: fetch when enabled, refresh at the ~2-min product cadence.
         // National field layers: fetch each enabled layer at its product cadence.
         use crate::render::FieldLayer as FL;
-        for layer in FL::DRAW_ORDER {
+        for layer in FL::draw_order() {
             // Layers with a fetch block of their own answer `None` and are skipped here.
             let Some(product) = self.mrms_product(layer) else {
                 continue;
             };
             // The reflectivity tint reads the precipitation-type grid whether or not that
             // layer is being drawn, so wanting the tint counts as wanting the layer's data.
-            let wanted =
-                self.field_wanted(layer) || (layer == FL::PrecipType && self.settings.precip_tint);
+            let wanted = self.field_wanted(layer)
+                || (layer == FL::Mrms && self.field_wanted(FL::MrmsReflectivityTrail))
+                || (layer == FL::PrecipType && self.settings.precip_tint);
             let stale = wanted
                 && self.fields.get(&layer).is_none_or(|s| {
                     s.last_fetch
@@ -16269,6 +18686,87 @@ impl eframe::App for HookEchoApp {
             if stale {
                 self.fields.entry(layer).or_default().last_fetch = Some(Instant::now());
                 self.spawn_overlay(ctx, OverlaySource::Field(layer, product));
+            }
+        }
+        // GOES ABI imagery has its own source adapter and arrives every five minutes.
+        let satellite_time = (!self.views[self.active].timeline.following)
+            .then(|| {
+                self.views[self.active]
+                    .timeline
+                    .current()
+                    .and_then(|frame| frame.date_time())
+            })
+            .flatten();
+        for (layer, band) in [
+            (FL::GoesC13, 13),
+            (FL::GoesWaterVapor, 8),
+            (FL::GoesMidWaterVapor, 9),
+            (FL::GoesLongwaveIr, 14),
+            (FL::GoesVisible, 2),
+        ] {
+            let stale = self.field_wanted(layer)
+                && self.fields.get(&layer).is_none_or(|state| {
+                    state.requested_time != Some(satellite_time)
+                        || state.last_fetch.is_none_or(|time| {
+                            time.elapsed().as_secs() >= field_refresh_secs(layer)
+                        })
+                });
+            if stale {
+                let state = self.fields.entry(layer).or_default();
+                state.last_fetch = Some(Instant::now());
+                state.requested_time = Some(satellite_time);
+                self.spawn_overlay(
+                    ctx,
+                    OverlaySource::GoesAbi(
+                        layer,
+                        band,
+                        self.settings.abi_scene,
+                        satellite_time,
+                    ),
+                );
+            }
+        }
+        for (index, entry) in wxdata::abi::CATALOG.iter().enumerate() {
+            let layer = FL::GoesCatalog(index as u8);
+            let stale = self.field_wanted(layer)
+                && self.fields.get(&layer).is_none_or(|state| {
+                    state.requested_time != Some(satellite_time)
+                        || state.last_fetch.is_none_or(|time| {
+                            time.elapsed().as_secs() >= field_refresh_secs(layer)
+                        })
+                });
+            if stale {
+                let state = self.fields.entry(layer).or_default();
+                state.last_fetch = Some(Instant::now());
+                state.requested_time = Some(satellite_time);
+                self.spawn_overlay(
+                    ctx,
+                    OverlaySource::GoesAbi(
+                        layer,
+                        entry.band,
+                        self.settings.abi_scene,
+                        satellite_time,
+                    ),
+                );
+            }
+        }
+        {
+            let layer = FL::GoesTrueColor;
+            let stale = self.field_wanted(layer)
+                && self.fields.get(&layer).is_none_or(|state| {
+                    state.requested_time != Some(satellite_time)
+                        || state.last_fetch.is_none_or(|time| {
+                            time.elapsed().as_secs() >= field_refresh_secs(layer)
+                        })
+                });
+            if stale {
+                let state = self.fields.entry(layer).or_default();
+                state.last_fetch = Some(Instant::now());
+                state.requested_time = Some(satellite_time);
+                self.spawn_overlay(
+                    ctx,
+                    OverlaySource::GoesRgb(self.settings.abi_scene, satellite_time),
+                );
             }
         }
         // Snow bands: the mosaic and the precipitation-type grid, cut to the banded snow.
@@ -16333,6 +18831,25 @@ impl eframe::App for HookEchoApp {
                 self.spawn_overlay(ctx, OverlaySource::Global(layer, model, gfield, fh));
             }
         }
+        for (layer, field) in [
+            (FL::RtmaTemp2m, wxdata::rtma::SurfaceField::Temperature2m),
+            (FL::RtmaDewpoint2m, wxdata::rtma::SurfaceField::Dewpoint2m),
+            (FL::RtmaPressure, wxdata::rtma::SurfaceField::Pressure),
+            (FL::RtmaWindU10m, wxdata::rtma::SurfaceField::WindU10m),
+        ] {
+            let stale = self.field_wanted(layer)
+                && self.fields.get(&layer).is_some_and(|state| {
+                    state
+                        .last_fetch
+                        .is_none_or(|time| time.elapsed().as_secs() >= field_refresh_secs(layer))
+                });
+            if stale {
+                if let Some(state) = self.fields.get_mut(&layer) {
+                    state.last_fetch = Some(Instant::now());
+                }
+                self.spawn_overlay(ctx, OverlaySource::Rtma(layer, self.analysis_source, field));
+            }
+        }
         // Model difference: same cadence as a global layer, and the same refetch-on-change rule.
         {
             let layer = FL::ModelDiff;
@@ -16374,6 +18891,23 @@ impl eframe::App for HookEchoApp {
                 }
                 self.hrrr_layer_hour.insert(layer, fh);
                 self.spawn_overlay(ctx, OverlaySource::HrrrLayer(layer, fh));
+            }
+        }
+        {
+            let layer = FL::RefsReflectivityProb;
+            let fh = self.refs_fcst_hour;
+            let threshold = self.refs_dbz_threshold;
+            let stale = self.field_wanted(layer)
+                && self.fields.get(&layer).is_none_or(|state| {
+                    state
+                        .last_fetch
+                        .is_none_or(|time| time.elapsed().as_secs() >= field_refresh_secs(layer))
+                });
+            let selection_changed = self.field_wanted(layer) && self.refs_key != Some((fh, threshold));
+            if stale || selection_changed {
+                self.fields.entry(layer).or_default().last_fetch = Some(Instant::now());
+                self.refs_key = Some((fh, threshold));
+                self.spawn_overlay(ctx, OverlaySource::RefsProbability(fh, threshold));
             }
         }
         // Quiet hours just ended: replay what it held back as one push, so waking up to a silent
@@ -16458,15 +18992,18 @@ impl eframe::App for HookEchoApp {
             if let Some(s) = self.fields.get_mut(&FL::GlmFed) {
                 s.last_fetch = Some(Instant::now());
             }
-            let field = self.glm.lock().ok().and_then(|f| {
-                wxdata::glm::flash_density(
+            let now = Utc::now();
+            let frame = self.glm.lock().ok().and_then(|f| {
+                wxdata::glm::flash_density_frame(
                     f.flashes(),
                     self.settings.detectors.glm_fed_cell_deg,
                     chrono::Duration::minutes(self.settings.detectors.glm_fed_window_min),
-                    Utc::now(),
+                    now,
+                    f.last_keys().values().cloned().collect::<Vec<_>>().join(" + "),
                 )
             });
-            if let Some(field) = &field {
+            if let Some(frame) = &frame {
+                let field = frame.field();
                 self.evaluate_grid_rules(crate::settings::RuleTrigger::GlmFed, field);
                 // The jump is the difference between this grid and the one before it, so it can
                 // only be asked for once there is a previous one — the first grid after launch
@@ -16478,13 +19015,15 @@ impl eframe::App for HookEchoApp {
                 }
                 self.glm_fed_prev = Some(field.clone());
             }
-            if let (Some(field), true) = (field, glm_fed_on) {
+            if let (Some(frame), true) = (frame, glm_fed_on) {
                 let cap = self.field_texture_cap();
+                let display = registered_display_field(&frame, cap);
                 let _ = self
                     .overlay_tx
-                    .send(OverlayDelivery::Immediate(OverlayMsg::Field(
+                    .send(OverlayDelivery::Immediate(OverlayMsg::RegisteredField(
                         FL::GlmFed,
-                        field.decimated(cap),
+                        frame,
+                        display,
                     )));
             }
         }
@@ -16954,6 +19493,9 @@ impl eframe::App for HookEchoApp {
             .collect();
         self.placefile_window
             .show(ctx, &mut self.settings, &pf_status, &mut self.drawer);
+        if std::mem::take(&mut self.placefile_window.import_gis) {
+            crate::dialog::request_open(crate::dialog::ImportKind::Gis, "");
+        }
         // Names come from the action registry, so a layer reads the same here as in the layers
         // panel — the enum's Debug spelling ("Mrms") is not a label.
         let names: std::collections::HashMap<crate::render::FieldLayer, String> =
@@ -16969,8 +19511,7 @@ impl eframe::App for HookEchoApp {
                 Default::default()
             };
         let active_fields: Vec<(crate::render::FieldLayer, String)> =
-            crate::render::FieldLayer::DRAW_ORDER
-                .into_iter()
+            crate::render::FieldLayer::draw_order()
                 .filter(|l| self.field_wanted(*l))
                 .map(|l| {
                     let name = names.get(&l).cloned().unwrap_or_else(|| format!("{l:?}"));
@@ -17086,6 +19627,21 @@ impl eframe::App for HookEchoApp {
         }
         self.palette_editor
             .show(ctx, &mut self.settings, &self.palettes, &mut self.drawer);
+        if let Some(rx) = &self.route_rx {
+            if let Ok(result) = rx.try_recv() {
+                self.route_rx = None;
+                match result {
+                    Ok(routes) => {
+                        let count = routes.len();
+                        self.routes = routes;
+                        self.toast(ToastKind::Success, format!("Loaded {count} road route(s)"));
+                    }
+                    Err(error) => {
+                        self.toast(ToastKind::Error, format!("Route failed: {error}"));
+                    }
+                }
+            }
+        }
         // Storm digest: poll a pending Claude result, then render + handle Generate.
         if let Some(rx) = &self.digest_rx {
             if let Ok(res) = rx.try_recv() {
@@ -17350,8 +19906,8 @@ impl eframe::App for HookEchoApp {
             }
         }
 
-        if let Some((i, day)) = self.rules_window.backtest_request.take() {
-            self.start_backtest(i, day);
+        if let Some((i, day, wfo)) = self.rules_window.backtest_request.take() {
+            self.start_backtest(i, day, wfo);
         }
         if let Some(detail) = &self.detail {
             let tex = detail
@@ -17545,7 +20101,14 @@ impl eframe::App for HookEchoApp {
         }
         if let (Some(xs), Some(tex)) = (&self.xsection, &self.xsection_tex) {
             let mut moment = self.xsection_moment;
-            let open = ui::xsection_window::show(ctx, xs, tex, &mut moment, &mut self.drawer);
+            let open = ui::xsection_window::show(
+                ctx,
+                xs,
+                tex,
+                &mut moment,
+                &mut self.xsection_beams,
+                &mut self.drawer,
+            );
             if !open {
                 self.xsection = None;
                 self.xsection_tex = None;
@@ -17559,6 +20122,13 @@ impl eframe::App for HookEchoApp {
         if self.show_3d {
             self.drain_volume3d(ctx);
             let mut open = true;
+            let before = self.vol3d.moment;
+            let available = self.views[self.active].moments();
+            let beam_tilts = self.views[self.active]
+                .volume
+                .as_ref()
+                .map(|volume| volume.elevations.as_slice())
+                .unwrap_or(&[]);
             ui::volume3d_window::show(
                 ctx,
                 &mut open,
@@ -17567,10 +20137,18 @@ impl eframe::App for HookEchoApp {
                 VOL3D_N as u32,
                 VOL3D_NZ as u32,
                 self.vol3d_range,
+                beam_tilts,
+                available,
                 &mut self.drawer,
                 ui::motion::degraded(),
             );
             self.show_3d = open;
+            if self.vol3d.moment != before {
+                self.vol3d.threshold_dbz = f32::NEG_INFINITY;
+                self.vol3d_key = None;
+                self.vol3d_pending = None;
+                self.build_volume3d();
+            }
         }
         if self.show_cappi {
             self.update_cappi(ctx);
@@ -17587,6 +20165,7 @@ impl eframe::App for HookEchoApp {
             self.show_cappi = open;
         }
         self.show_warning_banners(ctx);
+        self.show_broadcast_overlay(ctx);
         self.show_toasts(ctx);
 
         // Turn this frame's UI mutations into uploads/fetches before painting the map.
@@ -17639,6 +20218,26 @@ impl eframe::App for HookEchoApp {
                 let cam = self.views[self.active.min(n - 1)].camera;
                 for v in &mut self.views {
                     v.camera = cam;
+                }
+            }
+
+            if self.link_times {
+                let active = self.active.min(n - 1);
+                let leader = &self.views[active].timeline;
+                if let Some(source) = leader.current().cloned() {
+                    if let Some(time) = source.date_time() {
+                        let (following, playing) = (leader.following, leader.playing);
+                        for (i, view) in self.views.iter_mut().enumerate() {
+                            if i != active
+                                && (!self.lock_source_frame
+                                    || !view.timeline.align_to_source(
+                                        &source, following, playing,
+                                    ))
+                            {
+                                view.timeline.align_to(time, following, playing);
+                            }
+                        }
+                    }
                 }
             }
 
@@ -17734,6 +20333,23 @@ impl eframe::App for HookEchoApp {
             self.last_viewport = rects
                 .get(self.active)
                 .map_or((full.width(), full.height()), |r| (r.width(), r.height()));
+
+            self.linked_probe = if n > 1 && (self.link_cameras || self.link_times) {
+                ui.input(|input| input.pointer.hover_pos()).and_then(|pos| {
+                    rects.iter().enumerate().find_map(|(i, rect)| {
+                        rect.contains(pos).then(|| {
+                            let world = self.views[i].camera.screen_to_world(
+                                (pos.x - rect.left(), pos.y - rect.top()),
+                                (rect.width(), rect.height()),
+                            );
+                            let (lon, lat) = crate::render::mercator::world_to_lonlat(world.0, world.1);
+                            [lon, lat]
+                        })
+                    })
+                })
+            } else {
+                None
+            };
 
             // Which pane carries the once-per-frame work (tile-cache clears, the shared label
             // pass): the first one actually drawn, which under `solo` is the active one.
@@ -18071,7 +20687,10 @@ mod follow_tests {
 
 #[cfg(test)]
 mod warning_scope_tests {
-    use super::{feature_in_box, nearest_alternate_nexrad, warning_is_near_home, GeoFeature};
+    use super::{
+        feature_in_box, nearest_alternate_nexrad, sampled_height_warning, warning_is_near_home,
+        GeoFeature,
+    };
     use wxdata::overlay::FeatureKind;
 
     fn poly(x0: f64, y0: f64, x1: f64, y1: f64) -> GeoFeature {
@@ -18115,6 +20734,25 @@ mod warning_scope_tests {
         assert_ne!(alternate, "KTLX");
         assert!(wxdata::sites::is_nexrad(&alternate));
     }
+
+    #[test]
+    fn height_fields_warn_outside_the_sampled_beam() {
+        let coverage = crate::elevation::BeamCoverage {
+            ground_km: 80.0,
+            center_km_agl: 2.0,
+            bottom_km_agl: 1.5,
+            top_km_agl: 2.5,
+            blockage: 0.0,
+            tilt_deg: 0.5,
+        };
+        assert!(sampled_height_warning("km AGL", 5.0, coverage, 0.3)
+            .unwrap()
+            .contains("above"));
+        assert!(sampled_height_warning("m MSL", 1_000.0, coverage, 0.3)
+            .unwrap()
+            .contains("below"));
+        assert_eq!(sampled_height_warning("dBZ", 50.0, coverage, 0.3), None);
+    }
 }
 
 #[cfg(test)]
@@ -18149,7 +20787,9 @@ mod tropical_click_tests {
 
 #[cfg(test)]
 mod field_lut_tests {
-    use super::{categorical_lut, distinct_tilts, glm_style, ramp_lut, ramp_lut_a, windy_url};
+    use super::{
+        categorical_lut, distinct_tilts, glm_style, ramp_lut, ramp_lut_a, rgb_upload, windy_url,
+    };
 
     #[test]
     fn distinct_tilts_skips_sails_repeats() {
@@ -18219,10 +20859,46 @@ mod field_lut_tests {
         let translucent = ramp_lut_a(&[(0.0, [0, 0, 0]), (1.0, [255, 255, 255])], 150);
         assert_eq!(translucent[255 * 4 + 3], 150, "top index uses given alpha");
     }
+
+    #[test]
+    fn rgb_upload_marks_direct_color_and_preserves_pixels() {
+        let image = wxdata::abi::RgbImage {
+            width: 2,
+            height: 1,
+            pixels: vec![[1, 2, 3, 255], [4, 5, 6, 0]],
+            valid_time: chrono::Utc::now(),
+            recipe: &wxdata::abi::TRUE_COLOR,
+            lon_west: -100.0,
+            lon_east: -98.0,
+            lat_north: 40.0,
+            lat_south: 39.0,
+            source_identity: "fixture".into(),
+            received_time: None,
+        };
+        let upload = rgb_upload(&image);
+        assert!(upload.rgba);
+        assert_eq!(upload.data, [1, 2, 3, 255, 4, 5, 6, 0]);
+        assert_eq!(upload.uniform[7], 1.0);
+    }
 }
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn area_histogram_is_non_color_and_preserves_all_bins() {
+        let text = super::histogram_text(&[0, 1, 2, 3, 4, 5, 6, 7, 8, 7, 6, 5, 4, 3, 2, 1]);
+        assert_eq!(text.chars().count(), 16);
+        assert!(text.contains('█'));
+    }
+
+    #[test]
+    fn snowfall_alignment_covers_its_six_hour_issue_cadence() {
+        assert_eq!(
+            super::field_time_tolerance(crate::render::FieldLayer::SnowAnalysis),
+            chrono::Duration::hours(7)
+        );
+    }
 
     #[test]
     fn storm_labels_show_only_the_strongest_indicator() {
@@ -18717,7 +21393,10 @@ mod nowcast_tests {
 
 #[cfg(test)]
 mod request_book_tests {
-    use super::{HealthState, RequestBook, RequestLane, SourceHealth};
+    use super::{
+        field_refresh_secs, registered_display_field, retry_once, HealthState, RequestBook,
+        RequestLane, SourceHealth,
+    };
     use crate::render::FieldLayer;
 
     #[test]
@@ -18725,20 +21404,139 @@ mod request_book_tests {
         let mut book = RequestBook::default();
         let cape = RequestLane::Field(FieldLayer::Cape);
         let srh = RequestLane::Field(FieldLayer::Srh);
-        let old_cape = book.start(cape.clone());
-        let current_srh = book.start(srh.clone());
-        let current_cape = book.start(cape.clone());
+        let old_cape = book.start(cape.clone(), 1).unwrap();
+        let current_srh = book.start(srh.clone(), 1).unwrap();
+        let current_cape = book.start(cape.clone(), 2).unwrap();
 
         // A late success or failure has the same identity check: neither may mutate state.
         assert!(!book.is_current(&cape, old_cape));
         assert!(book.is_current(&cape, current_cape));
         assert!(book.is_current(&srh, current_srh));
-        assert!(book.finish(&cape, current_cape, None));
-        assert!(!book.finish(&cape, old_cape, Some("old failure")));
+        assert!(book.finish(&cape, current_cape, None, None));
+        assert!(!book.finish(&cape, old_cape, Some("old failure"), None));
         let health = book.health(&cape);
         assert_eq!(health.state(), HealthState::Fresh);
         assert!(health.error.is_none());
         assert_eq!(book.health(&srh).state(), HealthState::Fetching);
+    }
+
+    #[test]
+    fn identical_inflight_work_is_joined_but_changed_work_supersedes_it() {
+        let mut book = RequestBook::default();
+        let lane = RequestLane::Field(FieldLayer::Mrms);
+        let first = book.start(lane.clone(), 41).unwrap();
+        assert_eq!(book.start(lane.clone(), 41), None);
+        let changed = book.start(lane.clone(), 42).unwrap();
+        assert_ne!(first, changed);
+        assert!(!book.finish(&lane, first, None, None));
+        assert!(book.finish(&lane, changed, None, None));
+        // Once completed, the same identity may refresh normally.
+        assert!(book.start(lane, 42).is_some());
+    }
+
+    #[test]
+    fn field_health_uses_the_frames_valid_time() {
+        let mut book = RequestBook::default();
+        let lane = RequestLane::Field(FieldLayer::Mrms);
+        let generation = book.start(lane.clone(), 1).unwrap();
+        let valid_time = chrono::Utc::now() - chrono::Duration::minutes(10);
+
+        assert!(book.finish(&lane, generation, None, Some(valid_time)));
+        let age = book.health(&lane).data_age.unwrap().as_secs();
+        assert!((600..=601).contains(&age));
+    }
+
+    #[test]
+    fn diagnostics_report_counts_without_request_selectors_or_errors() {
+        let mut book = RequestBook::default();
+        let lane = RequestLane::Feed("test feed");
+        let generation = book.start(lane.clone(), 0xdead_beef).unwrap();
+        assert!(book.finish(&lane, generation, Some("secret-token"), None));
+        let text = serde_json::to_string(&book.diagnostics()).unwrap();
+        assert!(text.contains("test feed"));
+        assert!(text.contains("failures\":1"));
+        assert!(!text.contains("secret-token"));
+        assert!(!text.contains("dead"));
+    }
+
+    #[test]
+    fn abi_discovery_keeps_up_with_mesoscale_frames() {
+        assert_eq!(field_refresh_secs(FieldLayer::GoesC13), 60);
+        assert_eq!(field_refresh_secs(FieldLayer::GoesCatalog(0)), 60);
+    }
+
+    #[test]
+    fn display_pooling_keeps_native_values_and_categorical_classes() {
+        let field = wxdata::mrms::MrmsField {
+            values: vec![1.0, 100.0, 2.0, 3.0],
+            nx: 4,
+            ny: 1,
+            lon_west: 0.0,
+            lon_east: 4.0,
+            lat_north: 1.0,
+            lat_south: 0.0,
+            time: chrono::Utc::now(),
+        };
+        let frame = |descriptor| {
+            wxdata::field::FieldFrame::new(
+                descriptor,
+                field.clone(),
+                wxdata::field::DataStamp {
+                    source_identity: "fixture".into(),
+                    issue_time: None,
+                    run_time: None,
+                    valid_time: field.time,
+                    received_time: field.time,
+                    class: wxdata::field::DataClass::Analysis,
+                    quality: wxdata::field::QualitySummary::Good,
+                    available_members: None,
+                },
+            )
+        };
+
+        let continuous = frame(&wxdata::mrms::REFLECTIVITY_DESCRIPTOR);
+        assert_eq!(
+            registered_display_field(&continuous, 2).unwrap().values,
+            [100.0, 3.0]
+        );
+        assert_eq!(continuous.field().values, [1.0, 100.0, 2.0, 3.0]);
+        let categorical = frame(&wxdata::mrms::PRECIP_TYPE_DESCRIPTOR);
+        assert_eq!(
+            registered_display_field(&categorical, 2).unwrap().values,
+            [1.0, 2.0]
+        );
+        assert!(registered_display_field(&categorical, 4).is_none());
+    }
+
+    #[tokio::test]
+    async fn transient_reads_retry_once() {
+        let attempts = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let result = retry_once(std::time::Duration::ZERO, || {
+            let attempts = attempts.clone();
+            async move {
+                if attempts.fetch_add(1, std::sync::atomic::Ordering::Relaxed) == 0 {
+                    Err("temporary")
+                } else {
+                    Ok(42)
+                }
+            }
+        })
+        .await;
+        assert_eq!(result, Ok(42));
+        assert_eq!(attempts.load(std::sync::atomic::Ordering::Relaxed), 2);
+    }
+
+    #[test]
+    fn a_field_is_cancelled_only_after_its_last_consumer_leaves() {
+        let mut book = RequestBook::default();
+        let lane = RequestLane::Field(FieldLayer::Mrms);
+        let generation = book.start(lane.clone(), 1).unwrap();
+        let (handle, _registration) = futures_util::future::AbortHandle::new_pair();
+        book.attach_abort(&lane, generation, handle.clone());
+        assert!(book.cancel(&lane));
+        assert!(handle.is_aborted());
+        assert!(!book.is_current(&lane, generation));
+        assert!(!book.cancel(&lane));
     }
 
     #[test]
@@ -18754,13 +21552,19 @@ mod request_book_tests {
             fetching,
             last_attempt: Some(std::time::Duration::from_secs(1)),
             last_success: success.map(std::time::Duration::from_secs),
+            data_age: None,
             last_failure: failure.map(std::time::Duration::from_secs),
             error,
             cadence,
+            successes: u64::from(success.is_some()),
+            failures: u64::from(failure.is_some()),
         };
         assert_eq!(health(true, None, None, None).state(), HealthState::Fetching);
         assert_eq!(health(false, Some(5), None, None).state(), HealthState::Fresh);
         assert_eq!(health(false, Some(61), None, None).state(), HealthState::Stale);
+        let mut old_data = health(false, Some(1), None, None);
+        old_data.data_age = Some(std::time::Duration::from_secs(61));
+        assert_eq!(old_data.state(), HealthState::Stale);
         assert_eq!(
             health(false, Some(20), Some(5), Some("offline".into())).state(),
             HealthState::Failed

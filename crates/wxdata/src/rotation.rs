@@ -12,7 +12,7 @@
 use crate::level2::{BinnedSweep, Moment};
 
 /// A detected rotation couplet.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize)]
 pub struct CoupletHit {
     pub lon: f64,
     pub lat: f64,
