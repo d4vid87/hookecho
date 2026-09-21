@@ -2651,7 +2651,9 @@ pub fn run_3d(site: &str, out_path: &str, threshold_dbz: Option<f32>) -> anyhow:
         ..Default::default()
     };
     let uniform =
-        crate::render3d::orbit_uniform(30.0, 25.0, 3.0, 1.0, N as u32, NZ as u32, 256, view);
+        crate::render3d::orbit_uniform(
+            30.0, 25.0, 3.0, 1.0, N as u32, NZ as u32, 256, view, false, &[],
+        );
 
     let (device, queue, adapter) = init_gpu(&rt)?;
     println!("adapter: {}", adapter.get_info().name);

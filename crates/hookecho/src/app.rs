@@ -19868,6 +19868,11 @@ impl eframe::App for HookEchoApp {
             let mut open = true;
             let before = self.vol3d.moment;
             let available = self.views[self.active].moments();
+            let beam_tilts = self.views[self.active]
+                .volume
+                .as_ref()
+                .map(|volume| volume.elevations.as_slice())
+                .unwrap_or(&[]);
             ui::volume3d_window::show(
                 ctx,
                 &mut open,
@@ -19876,6 +19881,7 @@ impl eframe::App for HookEchoApp {
                 VOL3D_N as u32,
                 VOL3D_NZ as u32,
                 self.vol3d_range,
+                beam_tilts,
                 available,
                 &mut self.drawer,
                 ui::motion::degraded(),

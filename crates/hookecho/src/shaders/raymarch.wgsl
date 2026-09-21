@@ -10,12 +10,13 @@ struct Uniforms {
     box_min: vec4<f32>,
     box_max: vec4<f32>,
     dims: vec4<f32>, // nx, ny, nz, step_count
-    // x: minimum index; y: first-crossing surface mode; z,w: spare.
+    // x: minimum index; y: first-crossing surface mode; z: beam overlay; w: tilt count.
     ctl: vec4<f32>,
     // Slab bounds as fractions of the full box, so slicing narrows what is marched without
     // changing how a world position maps to a voxel.
     clip_min: vec4<f32>,
     clip_max: vec4<f32>,
+    beam_tilts: array<vec4<f32>, 3>,
 };
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
@@ -67,13 +68,30 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     // and leaves the cores standing on their own.
     let floor_idx = u32(max(u.ctl.x, 2.0));
     let surface = u.ctl.y > 0.5;
+    let show_beams = u.ctl.z > 0.5;
+    let beam_count = i32(u.ctl.w);
     var max_idx: u32 = 0u;
+    var beam_hit = false;
     for (var s = 0; s < steps; s = s + 1) {
         let t = tmin + (tmax - tmin) * (f32(s) + 0.5) / f32(steps);
         let pos = ro + rd * t;
         let uvw = (pos - u.box_min.xyz) / span;
         let voxel = vec3<i32>(clamp(uvw * dims, vec3<f32>(0.0), dims - 1.0));
         let idx = textureLoad(vol, voxel, 0).r;
+        if (show_beams) {
+            // The volume is 300 km wide and 18 km tall. The small-angle 4/3-earth beam equation
+            // is sub-voxel accurate here and avoids twelve square roots per ray step.
+            let ground_km = length((uvw.xy - vec2<f32>(0.5)) * 300.0);
+            let height_km = uvw.z * 18.0;
+            for (var i = 0; i < 12; i = i + 1) {
+                if (i >= beam_count) { break; }
+                let tilt = u.beam_tilts[i / 4][i % 4] * 0.01745329252;
+                let beam_km = ground_km * tan(tilt) + ground_km * ground_km / 16988.0;
+                if (abs(height_km - beam_km) < 0.12) {
+                    beam_hit = true;
+                }
+            }
+        }
         if (idx >= floor_idx && idx > max_idx) {
             max_idx = idx;
             if (surface) {
@@ -82,13 +100,17 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
         }
     }
 
-    if (max_idx < floor_idx) {
+    if (max_idx < floor_idx && !beam_hit) {
         discard;
+    }
+    if (max_idx < floor_idx) {
+        return vec4<f32>(0.12, 0.55, 0.62, 0.38);
     }
     let color = textureLoad(lut, vec2<i32>(i32(max_idx), 0), 0);
     // Opacity ramps from the threshold, not from zero: with a 45 dBZ floor the surviving cores
     // read solid instead of uniformly hazy.
     let head = max(255.0 - f32(floor_idx), 1.0);
     let alpha = select(clamp((f32(max_idx) - f32(floor_idx)) / head * 1.6 + 0.15, 0.0, 1.0), 0.92, surface);
-    return vec4<f32>(color.rgb * alpha, alpha);
+    let rgb = select(color.rgb, mix(color.rgb, vec3<f32>(0.32, 0.95, 1.0), 0.45), beam_hit);
+    return vec4<f32>(rgb * alpha, alpha);
 }

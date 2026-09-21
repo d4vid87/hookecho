@@ -21,6 +21,8 @@ pub struct Volume3dState {
     pub steps: u32,
     /// First threshold crossing (surface) rather than maximum intensity along each ray.
     pub surface: bool,
+    /// Overlay the transmitted tilt beam-center surfaces.
+    pub beams: bool,
 }
 
 /// The three quality rungs, coarsest first. 256 is what the window shipped with.
@@ -40,6 +42,7 @@ impl Default for Volume3dState {
             // pick by platform rather than benchmarking the GPU.
             steps: if cfg!(target_os = "android") { 96 } else { 256 },
             surface: false,
+            beams: false,
         }
     }
 }
@@ -70,6 +73,7 @@ pub fn show(
     n: u32,
     nz: u32,
     range: (f32, f32),
+    beam_tilts: &[f32],
     available: [bool; Moment::ALL.len()],
     drawer: &mut crate::ui::drawer::Drawer,
     degraded: bool,
@@ -101,6 +105,8 @@ pub fn show(
             ui.selectable_value(&mut st.surface, false, "Maximum");
             ui.selectable_value(&mut st.surface, true, "Surface")
                 .on_hover_text("First crossing of the selected threshold");
+            ui.checkbox(&mut st.beams, "Beam paths")
+                .on_hover_text("Show the 4/3-earth center surface of each transmitted tilt");
         });
         ui.horizontal(|ui| {
             let mut on = st.threshold_dbz.is_finite();
@@ -195,6 +201,8 @@ pub fn show(
             nz,
             effective_steps(st.steps, degraded),
             view,
+            st.beams,
+            beam_tilts,
         );
         // On the window's first frame egui may hand us a zero-area rect (auto-size pass);
         // the paint callback would be culled and the one-shot upload lost, leaving the view

@@ -507,7 +507,7 @@ HookEcho already models beam height. Extend it into a full analysis layer.
 - [x] lowest usable beam map
 - [x] terrain blockage estimate using existing elevation infrastructure
 - [x] radar coverage comparison between neighboring sites
-- [ ] optional beam-rise overlay in cross-section and 3D
+- [x] optional beam-rise overlay in cross-section and 3D
 - [x] warn when a sampled feature is below/above sampled beam coverage
 
 Do not imply perfect propagation; clearly label 4/3-earth assumptions.
@@ -2170,7 +2170,7 @@ HookEcho should be considered “top-tier U.S. analyst workstation” only when 
 - [x] user-defined radar products
 - [x] temporal max/min trails
 - [x] advanced 3D transfer functions + isosurfaces + slicing planes
-- [ ] beam-rise/blockage/coverage analysis
+- [x] beam-rise/blockage/coverage analysis
 - [x] GeoJSON/Shapefile/KML GIS import
 - [x] AWIPS-style linked multi-pane layouts
 - [x] synchronized multi-pane crosshair/probe

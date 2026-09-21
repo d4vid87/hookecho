@@ -15,6 +15,7 @@ pub struct Uniforms {
     ctl: [f32; 4],  // minimum reflectivity index to draw; rest spare
     clip_min: [f32; 4],
     clip_max: [f32; 4],
+    beam_tilts: [[f32; 4]; 3],
 }
 
 /// A new volume grid to upload: `data` is `n×n×nz` R8 indices, `lut` a 256-entry RGBA table.
@@ -62,6 +63,8 @@ pub fn orbit_uniform(
     nz: u32,
     steps: u32,
     v3: View3d,
+    show_beams: bool,
+    beam_tilts: &[f32],
 ) -> Uniforms {
     let center = (BOX_MIN + BOX_MAX) * 0.5;
     let (az, el) = (az_deg.to_radians(), el_deg.to_radians());
@@ -70,15 +73,29 @@ pub fn orbit_uniform(
     let view = Mat4::look_at_rh(eye, center, Vec3::Z);
     let proj = Mat4::perspective_rh(45f32.to_radians(), aspect.max(0.1), 0.01, 100.0);
     let inv = (proj * view).inverse();
+    let mut packed_tilts = [[0.0; 4]; 3];
+    for (slot, tilt) in packed_tilts
+        .iter_mut()
+        .flatten()
+        .zip(beam_tilts.iter().copied())
+    {
+        *slot = tilt;
+    }
     Uniforms {
         inv_view_proj: inv.to_cols_array_2d(),
         cam_pos: [eye.x, eye.y, eye.z, 1.0],
         box_min: [BOX_MIN.x, BOX_MIN.y, BOX_MIN.z, 0.0],
         box_max: [BOX_MAX.x, BOX_MAX.y, BOX_MAX.z, 0.0],
         dims: [n as f32, n as f32, nz as f32, steps as f32],
-        ctl: [v3.threshold_idx, if v3.surface { 1.0 } else { 0.0 }, 0.0, 0.0],
+        ctl: [
+            v3.threshold_idx,
+            if v3.surface { 1.0 } else { 0.0 },
+            if show_beams { 1.0 } else { 0.0 },
+            beam_tilts.len().min(12) as f32,
+        ],
         clip_min: [v3.clip[0], v3.clip[2], v3.clip[4], 0.0],
         clip_max: [v3.clip[1], v3.clip[3], v3.clip[5], 0.0],
+        beam_tilts: packed_tilts,
     }
 }
 
@@ -409,7 +426,27 @@ mod tests {
             surface: true,
             ..Default::default()
         };
-        let uniform = orbit_uniform(30.0, 25.0, 3.0, 1.0, 32, 16, 96, view);
+        let uniform = orbit_uniform(30.0, 25.0, 3.0, 1.0, 32, 16, 96, view, false, &[]);
         assert_eq!(uniform.ctl[1], 1.0);
+    }
+
+    #[test]
+    fn beam_tilts_are_bounded_and_packed_for_the_shader() {
+        let tilts = (0..20).map(|i| i as f32 + 0.5).collect::<Vec<_>>();
+        let uniform = orbit_uniform(
+            30.0,
+            25.0,
+            3.0,
+            1.0,
+            32,
+            16,
+            96,
+            View3d::default(),
+            true,
+            &tilts,
+        );
+        assert_eq!(uniform.ctl[2..], [1.0, 12.0]);
+        assert_eq!(uniform.beam_tilts[0], [0.5, 1.5, 2.5, 3.5]);
+        assert_eq!(uniform.beam_tilts[2], [8.5, 9.5, 10.5, 11.5]);
     }
 }
