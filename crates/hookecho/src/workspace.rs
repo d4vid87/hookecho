@@ -125,8 +125,7 @@ impl PaneSnap {
             lat,
             zoom: v.camera.zoom,
             fields_on: Some(
-                crate::render::FieldLayer::DRAW_ORDER
-                    .iter()
+                crate::render::FieldLayer::draw_order()
                     .filter(|l| v.fields_on.contains(l))
                     .map(|l| l.stable_id().to_string())
                     .collect(),

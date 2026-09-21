@@ -3672,9 +3672,8 @@ impl HookEchoApp {
             crash_report: None,
             cells_site: None,
             cell_trends: std::collections::HashMap::new(),
-            fields: crate::render::FieldLayer::DRAW_ORDER
-                .iter()
-                .map(|&l| (l, FieldState::default()))
+            fields: crate::render::FieldLayer::draw_order()
+                .map(|l| (l, FieldState::default()))
                 .collect(),
             rotation_minutes: 30,
             reflectivity_trail: wxdata::trail::ExtremaTrail::new(
@@ -9108,11 +9107,10 @@ impl HookEchoApp {
     fn route_field_exposure(&self) -> Option<String> {
         let route = self.routes.first()?;
         let view = self.views.get(self.active)?;
-        let frame = crate::render::FieldLayer::DRAW_ORDER
-            .iter()
+        let frame = crate::render::FieldLayer::draw_order()
             .rev()
             .find(|layer| view.fields_on.contains(layer))
-            .and_then(|layer| self.fields.get(layer))
+            .and_then(|layer| self.fields.get(&layer))
             .and_then(|state| state.frame.as_ref());
         let (label, units, product_id, valid, class, profile) = if let Some(frame) = frame {
             (
@@ -11566,11 +11564,10 @@ impl HookEchoApp {
 
     fn field_probe_at(&self, idx: usize, lon: f64, lat: f64) -> Option<String> {
         let view = self.views.get(idx)?;
-        let frame = crate::render::FieldLayer::DRAW_ORDER
-            .iter()
+        let frame = crate::render::FieldLayer::draw_order()
             .rev()
             .find(|layer| view.fields_on.contains(layer))
-            .and_then(|layer| self.fields.get(layer))?
+            .and_then(|layer| self.fields.get(&layer))?
             .frame
             .as_ref()?;
         let sample = frame.sample(lon, lat);
@@ -12165,11 +12162,10 @@ impl HookEchoApp {
                         }
                         self.region_points.push([lon, lat]);
                         if self.region_points.len() == 2 {
-                            let frames = crate::render::FieldLayer::DRAW_ORDER
-                                .iter()
+                            let frames = crate::render::FieldLayer::draw_order()
                                 .rev()
                                 .filter(|layer| self.views[idx].fields_on.contains(layer))
-                                .filter_map(|layer| self.fields.get(layer)?.frame.as_ref())
+                                .filter_map(|layer| self.fields.get(&layer)?.frame.as_ref())
                                 .filter(|frame| {
                                     !matches!(
                                         frame.descriptor.value_kind,
@@ -12623,7 +12619,7 @@ impl HookEchoApp {
                     .overlay_requests
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner);
-                for layer in crate::render::FieldLayer::DRAW_ORDER {
+                for layer in crate::render::FieldLayer::draw_order() {
                     if !on.contains(&layer) {
                         requests.cancel(&RequestLane::Field(layer));
                     }
@@ -14653,11 +14649,10 @@ impl HookEchoApp {
             // Sample the same native values the inspector exposes. The GPU texture may be
             // decimated or palette-indexed for display, so reading it back would be scientifically
             // wrong even when it looks identical.
-            let frame = crate::render::FieldLayer::DRAW_ORDER
-                .iter()
+            let frame = crate::render::FieldLayer::draw_order()
                 .rev()
                 .find(|layer| view.fields_on.contains(layer))
-                .and_then(|layer| self.fields.get(layer))
+                .and_then(|layer| self.fields.get(&layer))
                 .and_then(|state| state.frame.as_ref());
             if let Some(frame) = frame {
                 let w = cam.screen_to_world((hp.x - prect.left(), hp.y - prect.top()), vp);
@@ -15325,15 +15320,14 @@ impl HookEchoApp {
             // Whichever gridded layer the user actually sees on top — the last enabled one in
             // paint order — gets its scale keyed underneath. Without this, MESH/QPE/VIL and the
             // categorical classifications were unlabeled color.
-            if let Some(top) = crate::render::FieldLayer::DRAW_ORDER
-                .iter()
+            if let Some(top) = crate::render::FieldLayer::draw_order()
                 .rev()
                 .find(|l| view.fields_on.contains(l))
             {
-                y += if *top == crate::render::FieldLayer::ModelDiff {
+                y += if top == crate::render::FieldLayer::ModelDiff {
                     ui::legend::draw_diff(&painter, prect, self.diff_field, y)
                 } else {
-                    ui::legend::draw_field(&painter, prect, *top, y)
+                    ui::legend::draw_field(&painter, prect, top, y)
                 };
             }
             // Wind particles carry their own scale — it isn't a FieldLayer, so it needs its own
@@ -15344,12 +15338,12 @@ impl HookEchoApp {
         }
 
         if let Some((layer, valid, selected, tolerance, aligned)) =
-            crate::render::FieldLayer::DRAW_ORDER.iter().rev().find_map(|layer| {
-                view.fields_on.contains(layer).then(|| {
-                    self.field_time_status(idx, *layer).and_then(
+            crate::render::FieldLayer::draw_order().rev().find_map(|layer| {
+                view.fields_on.contains(&layer).then(|| {
+                    self.field_time_status(idx, layer).and_then(
                         |(valid, selected, tolerance, aligned)| {
                             (valid != selected || !aligned)
-                                .then_some((*layer, valid, selected, tolerance, aligned))
+                                .then_some((layer, valid, selected, tolerance, aligned))
                         },
                     )
                 })?
@@ -15568,9 +15562,8 @@ impl HookEchoApp {
             adopt_site: false,
             // The workspace-wide list stays as the union across panes: it is what an older build
             // reads, and what a pane snapshot written before per-pane layers falls back to.
-            fields_on: crate::render::FieldLayer::DRAW_ORDER
-                .iter()
-                .filter(|l| self.field_wanted(**l))
+            fields_on: crate::render::FieldLayer::draw_order()
+                .filter(|l| self.field_wanted(*l))
                 .map(|l| l.stable_id().to_string())
                 .collect(),
             chrome: Some(self.capture_chrome()),
@@ -16344,11 +16337,10 @@ impl HookEchoApp {
     }
 
     fn export_active_field_csv(&mut self) {
-        let frame = crate::render::FieldLayer::DRAW_ORDER
-            .iter()
+        let frame = crate::render::FieldLayer::draw_order()
             .rev()
             .find(|layer| self.views[self.active].fields_on.contains(layer))
-            .and_then(|layer| self.fields.get(layer))
+            .and_then(|layer| self.fields.get(&layer))
             .and_then(|state| state.frame.clone());
         let Some(frame) = frame else {
             self.toast(ToastKind::Info, "No scalar field is active");
@@ -16485,15 +16477,17 @@ impl HookEchoApp {
     fn export_forecast_verification(&mut self) {
         use wxdata::field::DataClass;
         let active = &self.views[self.active].fields_on;
-        let mut frames = crate::render::FieldLayer::DRAW_ORDER
-            .iter()
+        let frames: Vec<_> = crate::render::FieldLayer::draw_order()
             .filter(|layer| active.contains(layer))
-            .filter_map(|layer| self.fields.get(layer)?.frame.as_ref());
+            .filter_map(|layer| self.fields.get(&layer)?.frame.as_ref())
+            .collect();
         let forecast = frames
-            .clone()
+            .iter()
+            .copied()
             .find(|frame| frame.stamp.class == DataClass::Forecast)
             .cloned();
         let reference = frames
+            .into_iter()
             .find(|frame| {
                 matches!(frame.stamp.class, DataClass::Analysis | DataClass::Observed)
             })
@@ -18411,7 +18405,7 @@ impl eframe::App for HookEchoApp {
         // MRMS national mosaic: fetch when enabled, refresh at the ~2-min product cadence.
         // National field layers: fetch each enabled layer at its product cadence.
         use crate::render::FieldLayer as FL;
-        for layer in FL::DRAW_ORDER {
+        for layer in FL::draw_order() {
             // Layers with a fetch block of their own answer `None` and are skipped here.
             let Some(product) = self.mrms_product(layer) else {
                 continue;
@@ -19254,8 +19248,7 @@ impl eframe::App for HookEchoApp {
                 Default::default()
             };
         let active_fields: Vec<(crate::render::FieldLayer, String)> =
-            crate::render::FieldLayer::DRAW_ORDER
-                .into_iter()
+            crate::render::FieldLayer::draw_order()
                 .filter(|l| self.field_wanted(*l))
                 .map(|l| {
                     let name = names.get(&l).cloned().unwrap_or_else(|| format!("{l:?}"));

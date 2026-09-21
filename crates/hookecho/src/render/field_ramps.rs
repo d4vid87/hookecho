@@ -881,7 +881,7 @@ mod tests {
 
     #[test]
     fn every_layer_is_either_ramped_or_explicitly_exempt() {
-        for l in FieldLayer::DRAW_ORDER {
+        for l in FieldLayer::draw_order() {
             let exempt = NO_RAMP.contains(&l)
                 || l.descriptor()
                     .is_some_and(|descriptor| descriptor.palette_key == "reflectivity");
@@ -895,7 +895,7 @@ mod tests {
 
     #[test]
     fn ramps_are_labeled_and_ordered() {
-        for l in FieldLayer::DRAW_ORDER {
+        for l in FieldLayer::draw_order() {
             let Some(r) = ramp_for(l) else { continue };
             assert!(!r.label.is_empty(), "{l:?}");
             if let FieldScale::Ramp { lo, hi, .. } = r.scale {

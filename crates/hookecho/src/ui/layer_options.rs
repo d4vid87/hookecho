@@ -141,10 +141,10 @@ pub(crate) fn show(
         ("Radar mosaic", on.contains(&FL::Mosaic)),
         (
             "Data details",
-            crate::render::FieldLayer::DRAW_ORDER.iter().any(|layer| {
-                on.contains(layer)
+            crate::render::FieldLayer::draw_order().any(|layer| {
+                on.contains(&layer)
                     && fields
-                        .get(layer)
+                        .get(&layer)
                         .and_then(|state| state.frame.as_ref())
                         .is_some()
             }),
@@ -188,13 +188,12 @@ pub(crate) fn show(
     ui.ctx().data_mut(|d| d.insert_temp(id, section));
     ui.add_space(4.0);
     if section == "Data details" {
-        if let Some((descriptor, grid, stamp)) = crate::render::FieldLayer::DRAW_ORDER
-            .iter()
+        if let Some((descriptor, grid, stamp)) = crate::render::FieldLayer::draw_order()
             .rev()
             .find(|layer| on.contains(layer))
             .and_then(|layer| {
                 let descriptor = layer.descriptor()?;
-                let (grid, stamp) = fields.get(layer)?.metadata.as_ref()?;
+                let (grid, stamp) = fields.get(&layer)?.metadata.as_ref()?;
                 Some((descriptor, grid, stamp))
             })
         {

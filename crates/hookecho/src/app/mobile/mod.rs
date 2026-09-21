@@ -276,12 +276,11 @@ impl super::HookEchoApp {
 
             // Second strip for the topmost gridded layer — the phone has no room for the desktop
             // legend box, but an unlabeled MESH/QPE wash is just as cryptic here.
-            if let Some(top) = crate::render::FieldLayer::DRAW_ORDER
-                .iter()
+            if let Some(top) = crate::render::FieldLayer::draw_order()
                 .rev()
                 .find(|l| self.views[self.active].fields_on.contains(l))
             {
-                paint_field_strip(&painter, strip.translate(vec2(0.0, 11.0)), *top);
+                paint_field_strip(&painter, strip.translate(vec2(0.0, 11.0)), top);
             }
         }
 

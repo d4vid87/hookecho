@@ -205,7 +205,7 @@ impl FieldLayer {
     }
 
     /// Fixed bottom-to-top paint order within each band.
-    pub const DRAW_ORDER: [FieldLayer; 103] = [
+    pub const BASE_DRAW_ORDER: [FieldLayer; 67] = [
         // Below-radar context band (bottom to top). The global models sit at the very bottom:
         // they are the synoptic backdrop everything else is drawn against.
         FieldLayer::GoesC13,
@@ -276,43 +276,14 @@ impl FieldLayer {
         FieldLayer::Posh,
         FieldLayer::MrmsEchoTop18,
         FieldLayer::MrmsVil,
-        FieldLayer::MrmsCatalog(0),
-        FieldLayer::MrmsCatalog(1),
-        FieldLayer::MrmsCatalog(2),
-        FieldLayer::MrmsCatalog(3),
-        FieldLayer::MrmsCatalog(4),
-        FieldLayer::MrmsCatalog(5),
-        FieldLayer::MrmsCatalog(6),
-        FieldLayer::MrmsCatalog(7),
-        FieldLayer::MrmsCatalog(8),
-        FieldLayer::MrmsCatalog(9),
-        FieldLayer::MrmsCatalog(10),
-        FieldLayer::MrmsCatalog(11),
-        FieldLayer::MrmsCatalog(12),
-        FieldLayer::MrmsCatalog(13),
-        FieldLayer::MrmsCatalog(14),
-        FieldLayer::MrmsCatalog(15),
-        FieldLayer::MrmsCatalog(16),
-        FieldLayer::MrmsCatalog(17),
-        FieldLayer::MrmsCatalog(18),
-        FieldLayer::MrmsCatalog(19),
-        FieldLayer::MrmsCatalog(20),
-        FieldLayer::MrmsCatalog(21),
-        FieldLayer::MrmsCatalog(22),
-        FieldLayer::MrmsCatalog(23),
-        FieldLayer::MrmsCatalog(24),
-        FieldLayer::MrmsCatalog(25),
-        FieldLayer::MrmsCatalog(26),
-        FieldLayer::MrmsCatalog(27),
-        FieldLayer::MrmsCatalog(28),
-        FieldLayer::MrmsCatalog(29),
-        FieldLayer::MrmsCatalog(30),
-        FieldLayer::MrmsCatalog(31),
-        FieldLayer::MrmsCatalog(32),
-        FieldLayer::MrmsCatalog(33),
-        FieldLayer::Lightning,
-        FieldLayer::GlmFed,
     ];
+
+    pub fn draw_order() -> impl DoubleEndedIterator<Item = FieldLayer> {
+        Self::BASE_DRAW_ORDER
+            .into_iter()
+            .chain((0..wxdata::mrms::CATALOG.len()).map(|index| FieldLayer::MrmsCatalog(index as u8)))
+            .chain([FieldLayer::Lightning, FieldLayer::GlmFed])
+    }
 
     /// Stable name for saved files — a workspace records which layers were on by slug, so a file
     /// written by a newer build names a layer this one skips rather than failing to load.
@@ -387,7 +358,7 @@ impl FieldLayer {
 
     /// The inverse of [`slug`](Self::slug), or `None` for a name this build doesn't have.
     pub fn from_slug(s: &str) -> Option<FieldLayer> {
-        Self::DRAW_ORDER.into_iter().find(|f| f.slug() == s)
+        Self::draw_order().find(|f| f.slug() == s)
     }
 
     /// Common metadata for migrated MRMS fields.
@@ -458,8 +429,7 @@ impl FieldLayer {
 
     /// Read current registry IDs and every legacy layer slug.
     pub fn from_stable_id(id: &str) -> Option<FieldLayer> {
-        Self::DRAW_ORDER
-            .into_iter()
+        Self::draw_order()
             .find(|field| field.stable_id() == id || field.slug() == id)
     }
 }
@@ -470,15 +440,27 @@ mod field_slug_tests {
 
     #[test]
     fn every_layer_has_a_slug_that_parses_back() {
-        for l in FieldLayer::DRAW_ORDER {
+        for l in FieldLayer::draw_order() {
             assert_eq!(FieldLayer::from_slug(l.slug()), Some(l), "{}", l.slug());
         }
-        let mut slugs: Vec<&str> = FieldLayer::DRAW_ORDER.iter().map(|l| l.slug()).collect();
+        let mut slugs: Vec<&str> = FieldLayer::draw_order().map(|l| l.slug()).collect();
         slugs.sort_unstable();
         let n = slugs.len();
         slugs.dedup();
         assert_eq!(slugs.len(), n, "two layers share a slug");
         assert_eq!(FieldLayer::from_slug("not-a-layer"), None);
+    }
+
+    #[test]
+    fn draw_order_includes_the_entire_mrms_catalog() {
+        let layers: Vec<_> = FieldLayer::draw_order().collect();
+        assert_eq!(
+            layers.len(),
+            FieldLayer::BASE_DRAW_ORDER.len() + wxdata::mrms::CATALOG.len() + 2
+        );
+        for index in 0..wxdata::mrms::CATALOG.len() {
+            assert!(layers.contains(&FieldLayer::MrmsCatalog(index as u8)));
+        }
     }
 
     #[test]
@@ -526,8 +508,7 @@ mod field_slug_tests {
     #[test]
     fn every_mrms_descriptor_has_one_layer() {
         for descriptor in wxdata::mrms::DESCRIPTORS {
-            let layers: Vec<_> = FieldLayer::DRAW_ORDER
-                .into_iter()
+            let layers: Vec<_> = FieldLayer::draw_order()
                 .filter(|layer| layer.descriptor().is_some_and(|d| d.id == descriptor.id))
                 .collect();
             assert_eq!(layers.len(), 1, "{}", descriptor.id.0);
@@ -1743,7 +1724,7 @@ impl RenderResources {
     /// bottom-to-top order, using this pane's camera.
     fn draw_fields(&self, pane: &PaneGpu, pass: &mut wgpu::RenderPass<'_>, below: bool) {
         let cam = &pane.camera_bg;
-        for layer in FieldLayer::DRAW_ORDER {
+        for layer in FieldLayer::draw_order() {
             if layer.below_radar() != below || !pane.field_draws.contains(&layer) {
                 continue;
             }
