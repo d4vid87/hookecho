@@ -106,7 +106,7 @@ pub(crate) fn show(
     // why there isn't one. Radars scan on their own schedules, so a composite is always a little
     // ragged in time and the honest thing is to show by how much.
     mosaic: Option<&str>,
-    gefs_distribution: Option<&wxdata::global::GefsPointDistribution>,
+    gefs_distribution: Option<&wxdata::global::GefsPointPlume>,
     actions: &mut UiActions,
 ) {
     use crate::render::FieldLayer as FL;
@@ -329,26 +329,30 @@ pub(crate) fn show(
                 .on_hover_text("Three-hourly out to five days, from the newest complete cycle")
                 .changed();
         });
-        if ui.button("Load GEFS distribution at map center").clicked() {
+        if ui.button("Load 24 h GEFS plume at map center").clicked() {
             actions.load_gefs_distribution = true;
         }
         if let Some(result) = gefs_distribution {
-            let s = &result.statistics;
             ui.weak(format!(
-                "{} ({}) · valid {} · {}/{} members · {:.2}, {:.2}",
+                "{} ({}) · run {} · {:.2}, {:.2}",
                 result.field.label(), result.field.descriptor().units,
-                result.valid.format("%d %H:%MZ"), s.available, s.expected,
+                result.run.format("%d %H:%MZ"),
                 result.longitude, result.latitude
             ));
-            egui::Grid::new("gefs_distribution").num_columns(6).show(ui, |ui| {
-                for label in ["Min", "P10", "Median", "Mean", "P90", "Max"] {
+            egui::Grid::new("gefs_distribution").num_columns(8).show(ui, |ui| {
+                for label in ["Valid", "Members", "Min", "P10", "Median", "Mean", "P90", "Max"] {
                     ui.weak(label);
                 }
                 ui.end_row();
-                for value in [s.minimum, s.percentile_10, s.median, s.mean, s.percentile_90, s.maximum] {
-                    ui.label(format!("{value:.1}"));
+                for point in &result.points {
+                    let s = &point.statistics;
+                    ui.label(point.valid.format("%d %HZ").to_string());
+                    ui.label(format!("{}/{}", s.available, s.expected));
+                    for value in [s.minimum, s.percentile_10, s.median, s.mean, s.percentile_90, s.maximum] {
+                        ui.label(format!("{value:.1}"));
+                    }
+                    ui.end_row();
                 }
-                ui.end_row();
             });
         }
     }

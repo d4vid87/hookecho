@@ -62,6 +62,15 @@ pub struct GefsPointDistribution {
     pub statistics: EnsembleDistribution,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct GefsPointPlume {
+    pub field: GlobalField,
+    pub run: DateTime<Utc>,
+    pub longitude: f64,
+    pub latitude: f64,
+    pub points: Vec<GefsPointDistribution>,
+}
+
 /// Summarize the members that actually supplied a finite value.
 pub fn ensemble_distribution(
     members: impl IntoIterator<Item = Option<f32>>,
@@ -126,33 +135,84 @@ pub async fn fetch_gefs_point_distribution(
         if !GlobalModel::GefsMember(0).supports_forecast_hour(run.hour(), fh) {
             continue;
         }
-        let mut samples = Vec::with_capacity(31);
-        for batch in (0u8..=30).collect::<Vec<_>>().chunks(6) {
-            let requests = batch.iter().map(|member| {
-                fetch_run(http, GlobalModel::GefsMember(*member), field, run, fh)
-            });
-            for result in futures_util::future::join_all(requests).await {
-                match result {
-                    Ok(forecast) => samples.push(forecast.field.sample_bilinear(longitude, latitude)),
-                    Err(error) => {
-                        last_error = Some(error);
-                        samples.push(None);
-                    }
-                }
-            }
-        }
-        if let Some(statistics) = ensemble_distribution(samples, 31) {
-            return Ok(GefsPointDistribution {
-                field,
-                run,
-                valid: run + chrono::Duration::hours(fh as i64),
-                longitude,
-                latitude,
-                statistics,
-            });
+        match fetch_gefs_point_distribution_run(http, field, run, fh, longitude, latitude).await {
+            Ok(distribution) => return Ok(distribution),
+            Err(error) => last_error = Some(error),
         }
     }
     Err(last_error.unwrap_or_else(|| anyhow::anyhow!("no GEFS member cycle found")))
+}
+
+async fn fetch_gefs_point_distribution_run(
+    http: &reqwest::Client,
+    field: GlobalField,
+    run: DateTime<Utc>,
+    fh: u16,
+    longitude: f64,
+    latitude: f64,
+) -> anyhow::Result<GefsPointDistribution> {
+    let mut samples = Vec::with_capacity(31);
+    let mut last_error = None;
+    for batch in (0u8..=30).collect::<Vec<_>>().chunks(6) {
+        let requests = batch
+            .iter()
+            .map(|member| fetch_run(http, GlobalModel::GefsMember(*member), field, run, fh));
+        for result in futures_util::future::join_all(requests).await {
+            match result {
+                Ok(forecast) => samples.push(forecast.field.sample_bilinear(longitude, latitude)),
+                Err(error) => {
+                    last_error = Some(error);
+                    samples.push(None);
+                }
+            }
+        }
+    }
+    let statistics = ensemble_distribution(samples, 31)
+        .ok_or_else(|| last_error.unwrap_or_else(|| anyhow::anyhow!("no finite GEFS members")))?;
+    Ok(GefsPointDistribution {
+        field,
+        run,
+        valid: run + chrono::Duration::hours(fh as i64),
+        longitude,
+        latitude,
+        statistics,
+    })
+}
+
+/// Load a five-point, 24-hour plume from one complete GEFS cycle.
+pub async fn fetch_gefs_point_plume(
+    http: &reqwest::Client,
+    field: GlobalField,
+    first_hour: u16,
+    longitude: f64,
+    latitude: f64,
+) -> anyhow::Result<GefsPointPlume> {
+    let hours = gefs_plume_hours(first_hour)?;
+    let last_hour = *hours.last().unwrap();
+    let last = fetch_gefs_point_distribution(http, field, last_hour, longitude, latitude).await?;
+    let mut points = Vec::with_capacity(hours.len());
+    for hour in hours.into_iter().take(4) {
+        points.push(
+            fetch_gefs_point_distribution_run(http, field, last.run, hour, longitude, latitude)
+                .await?,
+        );
+    }
+    points.push(last);
+    Ok(GefsPointPlume {
+        field,
+        run: points[0].run,
+        longitude,
+        latitude,
+        points,
+    })
+}
+
+fn gefs_plume_hours(first_hour: u16) -> anyhow::Result<Vec<u16>> {
+    let hours: Vec<u16> = (0..=4)
+        .map(|step| first_hour.saturating_add(step * 6))
+        .collect();
+    GlobalModel::GefsMember(0).validate_forecast_hour(*hours.last().unwrap())?;
+    Ok(hours)
 }
 
 macro_rules! descriptor {
@@ -740,6 +800,12 @@ mod tests {
     }
 
     #[test]
+    fn plume_is_bounded_to_five_six_hour_steps() {
+        assert_eq!(gefs_plume_hours(12).unwrap(), [12, 18, 24, 30, 36]);
+        assert!(gefs_plume_hours(366).is_err());
+    }
+
+    #[test]
     fn global_models_share_complete_source_definitions() {
         let gfs = GlobalModel::Gfs.definition();
         let gefs = GlobalModel::GefsMean.definition();
@@ -831,5 +897,26 @@ mod tests {
         assert_eq!(distribution.statistics.expected, 31);
         assert!(distribution.statistics.minimum <= distribution.statistics.median);
         assert!(distribution.statistics.median <= distribution.statistics.maximum);
+    }
+
+    /// `cargo test -p wxdata gefs_point_plume_live -- --ignored --nocapture`
+    #[tokio::test]
+    #[ignore = "network: downloads five fields from all 31 GEFS members"]
+    async fn gefs_point_plume_live() {
+        let plume = fetch_gefs_point_plume(
+            &reqwest::Client::new(),
+            GlobalField::Temp2m,
+            0,
+            -97.28,
+            35.33,
+        )
+        .await
+        .unwrap();
+        assert_eq!(plume.points.len(), 5);
+        assert!(plume.points.iter().all(|point| point.run == plume.run));
+        assert!(plume
+            .points
+            .windows(2)
+            .all(|pair| pair[1].valid - pair[0].valid == chrono::Duration::hours(6)));
     }
 }

@@ -243,7 +243,7 @@ enum OverlayMsg {
     Rgb(crate::render::FieldLayer, wxdata::abi::RgbImage),
     /// A model-difference grid plus the two valid times it compared, for the layer's own row.
     ModelDiff(wxdata::field::FieldFrame, (String, String)),
-    GefsDistribution(wxdata::global::GefsPointDistribution),
+    GefsDistribution(wxdata::global::GefsPointPlume),
     /// `(0 °C, −20 °C)` level heights above sea level, in metres, at the active radar.
     FreezingLevels(f64, f64),
     /// Local storm reports: live trailing window (`None`) or an archive bucket (feature CC).
@@ -761,8 +761,7 @@ impl OverlaySource {
             }
             OverlaySource::GefsDistribution(field, fh, lon, lat) => {
                 OverlayMsg::GefsDistribution(
-                    wxdata::global::fetch_gefs_point_distribution(http, field, fh, lon, lat)
-                        .await?,
+                    wxdata::global::fetch_gefs_point_plume(http, field, fh, lon, lat).await?,
                 )
             }
             OverlaySource::Rtma(layer, source, field) => {
@@ -2591,7 +2590,7 @@ pub struct HookEchoApp {
     /// The (model, hour) each global layer was last fetched for, so a change refetches at once.
     global_layer_key:
         std::collections::HashMap<crate::render::FieldLayer, (wxdata::global::GlobalModel, u16)>,
-    gefs_distribution: Option<wxdata::global::GefsPointDistribution>,
+    gefs_distribution: Option<wxdata::global::GefsPointPlume>,
     /// What the difference layer differences, and the two valid times its last fetch compared —
     /// the pair rarely shares a cycle, and a difference between two instants has to say so.
     diff_field: crate::fielddiff::DiffField,
