@@ -4574,18 +4574,23 @@ impl HookEchoApp {
         });
     }
 
-    /// Height of pane `idx`'s beam centre above the radar, in feet, over the point `ll`
-    /// (`[lon, lat]`). `None` when the pane has no site or no loaded tilt.
-    ///
-    /// Ground range is close enough to slant range for the shallow tilts this is read at, and the
-    /// 4/3-earth model is the same one the cross-section draws with
-    /// ([`wxdata::xsection::beam_height_km`]), so the two agree.
-    fn beam_height_ft(&self, idx: usize, ll: [f64; 2]) -> Option<f64> {
+    /// Beam centre and half-power envelope over `ll`. Terrain blockage is rendered separately;
+    /// this shared geometry keeps the measure label and comparison tools consistent.
+    fn beam_coverage(&self, idx: usize, ll: [f64; 2]) -> Option<crate::elevation::BeamCoverage> {
         let v = &self.views[idx];
         let site = wxdata::sites::site_by_id(v.site.as_deref()?)?;
         let elev = *v.volume.as_ref()?.elevations.get(v.tilt)? as f64;
-        let (km, _) = crate::geo::great_circle([site.longitude as f64, site.latitude as f64], ll);
-        Some(wxdata::xsection::beam_height_km(km, elev) * 3280.84)
+        crate::elevation::coverage_at(
+            crate::elevation::BeamSite {
+                lon: site.longitude as f64,
+                lat: site.latitude as f64,
+                ground_m: site.elevation_meters as f64,
+                tower_m: wxdata::towers::tower_m(site.id),
+                tilt_deg: elev,
+            },
+            ll,
+            f64::NEG_INFINITY,
+        )
     }
 
     /// Chime when a new volume lands on the live pane you are watching — the "look up" cue for
@@ -14373,8 +14378,14 @@ impl HookEchoApp {
                 // How high the beam is over the far end of the line. The number that decides
                 // whether "there's nothing on radar there" means the storm is weak or means the
                 // scan is looking over its head, and until now it lived only in the cross-section.
-                if let Some(h) = self.beam_height_ft(idx, self.measure[1]) {
-                    txt.push_str(&format!("  ·  beam {h:.0} ft"));
+                if let Some(beam) = self.beam_coverage(idx, self.measure[1]) {
+                    let feet = |km: f64| km * 3280.84;
+                    txt.push_str(&format!(
+                        "  ·  beam {:.0} ft ({:.0}–{:.0})",
+                        feet(beam.center_km_agl),
+                        feet(beam.bottom_km_agl),
+                        feet(beam.top_km_agl),
+                    ));
                 }
                 let mid = a + (b - a) * 0.5;
                 painter.text(
