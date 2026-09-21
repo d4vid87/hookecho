@@ -292,11 +292,7 @@ enum OverlayMsg {
     PlacefileError(String, String),
     /// A finished multi-radar reflectivity composite: the grid, its contributing sites, and the
     /// oldest contributing scan time.
-    Mosaic(
-        wxdata::mrms::MrmsField,
-        Vec<String>,
-        chrono::DateTime<chrono::Utc>,
-    ),
+    Mosaic(wxdata::mosaic::Mosaic),
     /// River flood gauges (NWPS) for the requested bbox.
     Gauges(Vec<wxdata::river::Gauge>),
     /// HRRR model contour polylines for a kind, plus the forecast valid time.
@@ -1161,7 +1157,7 @@ impl OverlaySource {
                 let m = wxdata::mosaic::fetch(http, &sites)
                     .await
                     .ok_or_else(|| anyhow::anyhow!("no radar mosaic for {sites:?}"))?;
-                OverlayMsg::Mosaic(m.field, m.sites, m.oldest)
+                OverlayMsg::Mosaic(m)
             }
             OverlaySource::Gauges(lat0, lon0, lat1, lon1) => {
                 OverlayMsg::Gauges(wxdata::river::fetch_bbox(http, lat0, lon0, lat1, lon1).await?)
@@ -3028,6 +3024,7 @@ pub struct HookEchoApp {
     /// was built for — panning off the composite refetches instead of leaving a stale picture.
     mosaic_sites: Vec<String>,
     mosaic_oldest: Option<chrono::DateTime<chrono::Utc>>,
+    mosaic_provenance: Option<wxdata::mosaic::Provenance>,
     mosaic_bounds: Option<(f64, f64, f64, f64)>,
     spotters: Vec<wxdata::spotters::Spotter>,
     spotters_last_fetch: Option<Instant>,
@@ -3857,6 +3854,7 @@ impl HookEchoApp {
             dat_key: None,
             mosaic_sites: Vec::new(),
             mosaic_oldest: None,
+            mosaic_provenance: None,
             mosaic_bounds: None,
             spotters: Vec::new(),
             spotters_last_fetch: None,
@@ -9146,13 +9144,30 @@ impl HookEchoApp {
                     self.dat_points = points;
                     self.dat_tracks = tracks;
                 }
-                OverlayMsg::Mosaic(field, sites, oldest) => {
-                    self.mosaic_sites = sites;
-                    self.mosaic_oldest = Some(oldest);
+                OverlayMsg::Mosaic(mosaic) => {
+                    self.mosaic_sites = mosaic.provenance.sites.clone();
+                    self.mosaic_oldest = Some(mosaic.oldest);
+                    self.mosaic_provenance = Some(mosaic.provenance);
                     let layer = crate::render::FieldLayer::Mosaic;
+                    let field = mosaic.field;
+                    let valid_time = field.time;
                     let upload = self.field_upload(layer, &field);
                     if let Some(s) = self.fields.get_mut(&layer) {
                         s.pending = Some(upload);
+                        s.frame = Some(wxdata::field::FieldFrame::new(
+                            &wxdata::mosaic::DESCRIPTOR,
+                            field,
+                            wxdata::field::DataStamp {
+                                source_identity: self.mosaic_sites.join(","),
+                                issue_time: None,
+                                run_time: None,
+                                valid_time,
+                                received_time: chrono::Utc::now(),
+                                class: wxdata::field::DataClass::Derived,
+                                quality: wxdata::field::QualitySummary::Unknown,
+                                available_members: None,
+                            },
+                        ));
                     }
                 }
                 OverlayMsg::Gauges(g) => self.gauges = g,
@@ -11664,12 +11679,10 @@ impl HookEchoApp {
 
     fn field_probe_at(&self, idx: usize, lon: f64, lat: f64) -> Option<String> {
         let view = self.views.get(idx)?;
-        let frame = crate::render::FieldLayer::draw_order()
+        let (layer, frame) = crate::render::FieldLayer::draw_order()
             .rev()
             .find(|layer| view.fields_on.contains(layer))
-            .and_then(|layer| self.fields.get(&layer))?
-            .frame
-            .as_ref()?;
+            .and_then(|layer| Some((layer, self.fields.get(&layer)?.frame.as_ref()?)))?;
         let sample = frame.sample(lon, lat);
         sample.value.map(|value| {
             let display = frame.descriptor.display_value(
@@ -11697,13 +11710,20 @@ impl HookEchoApp {
                 .map(|warning| format!("\n⚠ {warning}"))
                 .unwrap_or_default();
             let profile = self.mrms_vertical_profile_at(idx, lon, lat);
+            let provenance = (layer == crate::render::FieldLayer::Mosaic)
+                .then(|| self.mosaic_provenance.as_ref()?.sample(lon, lat))
+                .flatten()
+                .map(|(site, confidence)| {
+                    format!("\nContributor {site} · confidence {:.0}%", confidence * 100.0)
+                })
+                .unwrap_or_default();
             format!(
                 "{}\n{:.1} {} · valid {}{coverage_warning}",
                 frame.descriptor.short_name,
                 display.value,
                 display.units,
                 sample.valid_time.format("%Y-%m-%d %H:%M UTC"),
-            ) + &profile
+            ) + &provenance + &profile
         })
     }
 

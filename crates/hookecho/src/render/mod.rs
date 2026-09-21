@@ -418,6 +418,7 @@ impl FieldLayer {
             FL::EchoTops => &wxdata::level3::ECHO_TOPS_DESCRIPTOR,
             FL::Hca => &wxdata::level3::HCA_DESCRIPTOR,
             FL::GlmFed => &wxdata::glm::FLASH_DENSITY_DESCRIPTOR,
+            FL::Mosaic => &wxdata::mosaic::DESCRIPTOR,
             _ => return None,
         })
     }

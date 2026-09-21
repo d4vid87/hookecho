@@ -670,7 +670,7 @@ pub fn run_mosaic(site: &str) -> anyhow::Result<()> {
     println!(
         "  contributed: {}
   grid {}x{}  lon {:.2}..{:.2}  lat {:.2}..{:.2}",
-        m.sites.join(", "),
+        m.provenance.sites.join(", "),
         f.nx,
         f.ny,
         f.lon_west,

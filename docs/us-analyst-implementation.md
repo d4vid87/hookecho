@@ -29,7 +29,7 @@ build (a 3,732-byte, 0.09% allowance over the measured bundle).
 | O performance | Partial | profiling, smoke tests, bundle budget | Continuous |
 | P extensions | Existing | bounded native command plugins with a versioned manifest, declared capabilities/products/config schema, environment-based IPC that works with external Python, and placefile annotation output routed through the normal bounded overlay renderer; plugins run out of process with output and time limits | Manifest compatibility/refusal, environment contract, successful output, failure, missing-command, and timeout/kill tests pass; additional scalar-grid and table capabilities can extend the versioned manifest later |
 | Q accessibility | Partial | keyboard/touch foundations | Continuous |
-| R research | Partial | radar-derived storm cells retain their bounded observation histories and export timestamped centroid/motion JSON or CSV from the existing local-track controls | Export coverage passes; multi-source object enrichment, analyst correction, confidence, reflectivity fusion, and separately validated dual-Doppler retrieval remain pending |
+| R research | Existing | radar-derived storm cells retain bounded observation histories and export timestamped centroid/motion JSON or CSV; live multi-radar reflectivity fusion keeps the nearest physical measurement at each pixel, registers exact fused-field provenance, and exposes the contributing radar plus range-based confidence in native probes | Track-export, nearest-radar ownership, contributor-boundary, confidence-falloff, field-registry, native/WASM, and provenance tests pass; dual-Doppler remains a separately validated experimental feature and no radial-velocity averaging is offered |
 
 ## Baseline
 

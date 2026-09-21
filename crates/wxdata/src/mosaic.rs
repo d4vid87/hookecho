@@ -13,14 +13,56 @@
 //! since each radar measures motion along its own beam.
 
 use crate::mrms::MrmsField;
+use crate::field::{FieldDescriptor, FieldFamily, FieldId, MissingData, SamplingPolicy, ValueKind};
+
+pub static DESCRIPTOR: FieldDescriptor = FieldDescriptor {
+    id: FieldId("radar.reflectivity-fusion"),
+    source: "NEXRAD Level III fusion",
+    family: FieldFamily::Radar,
+    display_name: "Multi-radar reflectivity fusion",
+    short_name: "Radar Mosaic",
+    search_aliases: &["mosaic", "multi radar", "fusion"],
+    units: "dBZ",
+    value_kind: ValueKind::Scalar,
+    palette_key: "reflectivity",
+    sampling: SamplingPolicy::Bilinear,
+    missing: MissingData::Nan,
+    time_policy: None,
+    supports_contours: true,
+    supports_difference: false,
+};
 
 /// The composite, plus what went into it (for the legend and the honesty about age).
 pub struct Mosaic {
     pub field: MrmsField,
-    /// Sites that actually contributed, nearest-to-view-centre first.
-    pub sites: Vec<String>,
+    pub provenance: Provenance,
     /// Age of the oldest contributing scan, for the "this is a composite" readout.
     pub oldest: chrono::DateTime<chrono::Utc>,
+}
+
+/// Per-pixel contributor and range-based confidence for the fused field.
+pub struct Provenance {
+    pub sites: Vec<String>,
+    owner: Vec<u8>,
+    confidence: Vec<f32>,
+    nx: usize,
+    ny: usize,
+    bounds: (f64, f64, f64, f64),
+}
+
+impl Provenance {
+    pub fn sample(&self, lon: f64, lat: f64) -> Option<(&str, f32)> {
+        let (west, south, east, north) = self.bounds;
+        if !(west..=east).contains(&lon) || !(south..=north).contains(&lat) {
+            return None;
+        }
+        let x = (((lon - west) / (east - west) * self.nx as f64) as usize).min(self.nx - 1);
+        let y = (((north - lat) / (north - south) * self.ny as f64) as usize).min(self.ny - 1);
+        let index = y * self.nx + x;
+        let owner = *self.owner.get(index)?;
+        let site = self.sites.get(owner as usize)?;
+        Some((site, *self.confidence.get(index)?))
+    }
 }
 
 /// Radars whose 460 km coverage disk intersects the view box, nearest the centre first, capped at
@@ -85,9 +127,18 @@ pub async fn fetch(client: &reqwest::Client, sites: &[String]) -> Option<Mosaic>
     }
     let oldest = parts.iter().map(|(_, f)| f.time).min()?;
     let names = parts.iter().map(|(s, _)| s.clone()).collect();
-    Some(Mosaic {
-        field: composite(parts.iter().map(|(_, f)| f)),
+    let (field, owner, confidence) = composite(parts.iter().map(|(_, f)| f));
+    let provenance = Provenance {
+        nx: field.nx,
+        ny: field.ny,
+        bounds: (field.lon_west, field.lat_south, field.lon_east, field.lat_north),
         sites: names,
+        owner,
+        confidence,
+    };
+    Some(Mosaic {
+        field,
+        provenance,
         oldest,
     })
 }
@@ -98,7 +149,7 @@ pub async fn fetch(client: &reqwest::Client, sites: &[String]) -> Option<Mosaic>
 /// is wrong, so blending them smears the reflectivity gradients that matter. Taking the closer
 /// radar's value keeps every pixel a real measurement from the radar best placed to make it — the
 /// same rule the national mosaics use, minus the range weighting.
-fn composite<'a>(parts: impl Iterator<Item = &'a MrmsField> + Clone) -> MrmsField {
+fn composite<'a>(parts: impl Iterator<Item = &'a MrmsField> + Clone) -> (MrmsField, Vec<u8>, Vec<f32>) {
     const RES_DEG: f64 = 0.01;
     let (mut lon_west, mut lon_east) = (f64::MAX, f64::MIN);
     let (mut lat_south, mut lat_north) = (f64::MAX, f64::MIN);
@@ -115,8 +166,9 @@ fn composite<'a>(parts: impl Iterator<Item = &'a MrmsField> + Clone) -> MrmsFiel
     let mut values = vec![f32::NAN; nx * ny];
     // Distance (squared, in degrees) from the radar that currently owns each cell.
     let mut owner = vec![f64::MAX; nx * ny];
+    let mut owner_index = vec![u8::MAX; nx * ny];
 
-    for f in parts {
+    for (part_index, f) in parts.enumerate() {
         let (rlon, rlat) = (
             (f.lon_west + f.lon_east) / 2.0,
             (f.lat_south + f.lat_north) / 2.0,
@@ -145,13 +197,18 @@ fn composite<'a>(parts: impl Iterator<Item = &'a MrmsField> + Clone) -> MrmsFiel
                 let i = oy as usize * nx + ox as usize;
                 if d2 < owner[i] {
                     owner[i] = d2;
+                    owner_index[i] = part_index as u8;
                     values[i] = v;
                 }
             }
         }
     }
 
-    MrmsField {
+    let confidence = owner
+        .iter()
+        .map(|distance| (1.0 - distance.sqrt() as f32 / 4.15).clamp(0.0, 1.0))
+        .collect();
+    (MrmsField {
         values,
         nx,
         ny,
@@ -160,7 +217,7 @@ fn composite<'a>(parts: impl Iterator<Item = &'a MrmsField> + Clone) -> MrmsFiel
         lat_north,
         lat_south,
         time: newest,
-    }
+    }, owner_index, confidence)
 }
 
 #[cfg(test)]
@@ -186,7 +243,7 @@ mod tests {
     fn nearest_radar_wins_in_the_overlap() {
         // Two radars 0.5° apart, so the right half of the left one overlaps the left half of the
         // right one. Every cell must carry the value of whichever centre it sits nearer.
-        let out = composite([patch(-97.0, 35.0, 10.0), patch(-96.5, 35.0, 50.0)].iter());
+        let (out, owner, confidence) = composite([patch(-97.0, 35.0, 10.0), patch(-96.5, 35.0, 50.0)].iter());
         assert!(out.lon_west <= -97.5 && out.lon_east >= -96.0);
         let at = |lon: f64, lat: f64| {
             let gx = ((lon - out.lon_west) / 0.01) as usize;
@@ -197,6 +254,13 @@ mod tests {
         assert_eq!(at(-96.1, 35.0), 50.0, "right radar's exclusive area");
         assert_eq!(at(-96.8, 35.0), 10.0, "overlap, nearer the left radar");
         assert_eq!(at(-96.7, 35.0), 50.0, "overlap, nearer the right radar");
+        let index = |lon: f64, lat: f64| {
+            ((out.lat_north - lat) / 0.01) as usize * out.nx
+                + ((lon - out.lon_west) / 0.01) as usize
+        };
+        assert_eq!(owner[index(-96.8, 35.0)], 0);
+        assert_eq!(owner[index(-96.7, 35.0)], 1);
+        assert!(confidence[index(-97.0, 35.0)] > confidence[index(-96.8, 35.0)]);
         // Outside both disks stays no-data, so the renderer's discard leaves a real gap.
         assert!(at(-97.4, 35.45).is_nan() || at(-97.4, 35.45) == 10.0);
     }
