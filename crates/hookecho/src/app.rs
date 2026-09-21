@@ -2361,6 +2361,8 @@ pub struct HookEchoApp {
     pane_shown: std::collections::HashMap<usize, ShownKey>,
     /// Palette generation currently baked into each pane's LUT (see [`ShownKey`]).
     pane_lut: std::collections::HashMap<usize, u64>,
+    /// Last evaluated custom sweep per pane, retained for cursor sampling.
+    pane_custom_sweep: std::collections::HashMap<usize, BinnedSweep>,
     /// Last `(theme, system_dark, density, accent)` handed to `theme::apply`.
     theme_applied: Option<(
         crate::settings::Theme,
@@ -3383,6 +3385,7 @@ impl HookEchoApp {
             chasepack: None,
             pane_shown: std::collections::HashMap::new(),
             pane_lut: std::collections::HashMap::new(),
+            pane_custom_sweep: std::collections::HashMap::new(),
             theme_applied: None,
             settings_checked: None,
             frame_nr: 0,
@@ -10818,6 +10821,7 @@ impl HookEchoApp {
         if !self.views[idx].show_radar || !has_volume {
             self.pane_shown.remove(&idx);
             self.pane_lut.remove(&idx);
+            self.pane_custom_sweep.remove(&idx);
             return (None, false);
         }
         let count = self.views[data].elevation_count();
@@ -10825,6 +10829,7 @@ impl HookEchoApp {
         if let Some(name) = self.views[idx].custom_product.clone() {
             return self.pane_custom_radar(idx, data, &name);
         }
+        self.pane_custom_sweep.remove(&idx);
         let (moment, tilt, threshold, smooth, storm_uv) = {
             let v = &self.views[idx];
             (
@@ -11023,10 +11028,35 @@ impl HookEchoApp {
             self.settings.theme,
         );
         let upload = to_upload(&sweep, &table, None, smooth, None, None, lut_only);
+        self.pane_custom_sweep.insert(idx, sweep);
         self.pane_shown.insert(idx, key);
         self.pane_lut.insert(idx, lut_gen);
         self.views[idx].error = None;
         (Some(upload), true)
+    }
+
+    fn custom_radar_probe(&self, idx: usize, lon: f64, lat: f64) -> Option<String> {
+        let name = self.views.get(idx)?.custom_product.as_deref()?;
+        let definition = self
+            .settings
+            .radar_products
+            .iter()
+            .find(|definition| definition.name == name)?;
+        let sweep = self.pane_custom_sweep.get(&idx)?;
+        let sample = sweep.sample_at(lon, lat)?;
+        let value = sample.value.map_or_else(
+            || "Missing".to_string(),
+            |value| format!("{value:.2} {}", definition.units),
+        );
+        Some(format!(
+            "{} · {}\n{value}\nElevation {:.2}° · azimuth {:.2}°\nRange {:.1} km · gate {}",
+            definition.name,
+            definition.description,
+            sweep.elevation_deg,
+            sample.azimuth_deg,
+            sample.range_km,
+            sample.gate,
+        ))
     }
 
     /// The always-on-top mini loop: a small undecorated window showing the active pane, so the
@@ -11980,6 +12010,7 @@ impl HookEchoApp {
                                 for m in Moment::ALL.into_iter().filter(|m| have[m.index()]) {
                                     if ui.selectable_label(m == cur, m.short_name()).clicked() {
                                         self.views[idx].moment = m;
+                                        self.views[idx].custom_product = None;
                                         self.active = idx;
                                     }
                                 }
@@ -12062,6 +12093,9 @@ impl HookEchoApp {
         let radar_probe = response.hover_pos().and_then(|pos| {
             let w = cam.screen_to_world((pos.x - prect.left(), pos.y - prect.top()), vp);
             let (lon, lat) = crate::render::mercator::world_to_lonlat(w.0, w.1);
+            if let Some(probe) = self.custom_radar_probe(idx, lon, lat) {
+                return Some(probe);
+            }
             let (sample, site, vcp, moment, tilt) = {
                 let view = &self.views[idx];
                 let volume = view.volume.as_ref()?;
