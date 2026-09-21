@@ -215,8 +215,8 @@ Create a common description layer for scalar grids, vectors, categorical grids a
 - [x] `FieldFamily`: radar / MRMS / satellite / model / analysis / observation-derived / user-defined
 - [x] `ValueKind`: scalar / categorical / vector / probability / accumulation / mask
 - [x] unit metadata and conversion ([evidence](us-analyst-implementation.md))
-- [ ] default palette and range
-- [ ] contour interval defaults
+- [x] default palette and range
+- [x] contour interval defaults
 - [x] missing-data semantics
 - [x] valid domain / bounds
 - [x] native grid metadata
@@ -318,8 +318,8 @@ trait Level2LiveProvider {
 
 ### Providers
 
-- [ ] current Unidata/AWS chunk source
-- [ ] completed-volume fallback from NOAA/AWS archive/current objects where applicable
+- [x] current Unidata/AWS chunk source
+- [x] completed-volume fallback from NOAA/AWS archive/current objects where applicable
 - [ ] optional user-configured direct/LDM/NOAAPort-compatible relay provider
 
 **Do not claim sub-10-second performance unless the active provider actually supplies data that quickly.** The UI must report measured latency rather than marketing a fixed number.
@@ -328,13 +328,13 @@ trait Level2LiveProvider {
 
 Instead of waiting for a sweep/volume boundary:
 
-- [ ] decode and publish radial blocks as they arrive
-- [ ] update GPU polar texture incrementally
-- [ ] preserve previous sweep underneath not-yet-updated azimuths
+- [x] decode and publish radial blocks as they arrive
+- [x] update GPU polar texture incrementally
+- [x] preserve previous sweep underneath not-yet-updated azimuths
 - [ ] visually distinguish “new scan”, “old scan” and “not yet received” when analyst scan-progress mode is enabled
-- [ ] expose current elevation, VCP, sweep number and scan progress
-- [ ] show age since radar timestamp and age since local receipt separately
-- [ ] keep animation smooth while updates stream
+- [x] expose current elevation, VCP, sweep number and scan progress
+- [x] show age since radar timestamp and age since local receipt separately
+- [x] keep animation smooth while updates stream
 
 ## B3. Latency dashboard
 
@@ -368,9 +368,9 @@ For a sampled gate expose:
 
 ## B5. VCP / SAILS / MESO-SAILS awareness
 
-- [ ] parse/display current VCP details
-- [ ] identify repeated low-level cuts
-- [ ] show scan strategy in analyst panel
+- [x] parse/display current VCP details
+- [x] identify repeated low-level cuts
+- [x] show scan strategy in analyst panel
 - [ ] make timeline order reflect actual sweep chronology
 - [ ] allow “follow newest 0.5° cut” mode independent of full-volume completion
 
@@ -378,9 +378,9 @@ For a sampled gate expose:
 
 - [ ] provider priority list
 - [ ] health probes
-- [ ] automatic failover after bounded failure criteria
+- [x] automatic failover after bounded failure criteria
 - [ ] manual provider override in advanced settings
-- [ ] no hidden mixing of timestamps—provider changes are recorded in provenance
+- [x] no hidden mixing of timestamps—provider changes are recorded in provenance
 
 ### Acceptance tests
 

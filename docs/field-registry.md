@@ -13,6 +13,11 @@ renderers migrate incrementally. It lives in `wxdata::field`; UI and GPU types s
 - `FieldFrame` owns immutable native decoded values and provides the common sampling entry point.
 - `SampleResult` carries the sampled value, units, quality, exact valid time, and method.
 
+Palette keys cross the crate boundary; `hookecho::render::field_ramps` remains the single source
+for display ranges because it also builds the GPU lookup table and legend. Model contour kinds
+likewise own their tested default intervals next to the GRIB-to-display-unit conversion. Keeping
+those renderer settings out of `wxdata` prevents a second range or interval from drifting.
+
 Stable IDs use lowercase namespaced strings such as `mrms.composite-reflectivity`. Display names
 may change; persisted IDs may not. Unknown persisted IDs are skipped without rejecting the rest of
 the settings file.
