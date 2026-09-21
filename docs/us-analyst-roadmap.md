@@ -1785,7 +1785,7 @@ This is the explicit “what are we still missing?” list for agents.
 - [ ] RRFS/REFS
 - [ ] GEFS / ensemble probabilities
 - [ ] NBM
-- [ ] RTMA/URMA
+- [x] RTMA/URMA
 - [ ] richer model/run comparison
 - [ ] route planning
 - [ ] AWIPS-style pane layouts
@@ -2164,7 +2164,7 @@ HookEcho should be considered “top-tier U.S. analyst workstation” only when 
 - [x] radar/satellite/MRMS valid-time synchronization
 - [x] RRFS/REFS + GEFS + NBM + expanded HRRR/RAP/GFS
 - [ ] ensemble probabilities/postage stamps/plumes
-- [ ] RTMA/URMA surface analysis
+- [x] RTMA/URMA surface analysis
 - [x] model/run/observed comparison workflows
 - [x] advanced soundings/hodographs
 - [x] user-defined radar products

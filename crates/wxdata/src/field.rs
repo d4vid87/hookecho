@@ -115,6 +115,7 @@ impl FieldDescriptor {
             "NOAA regional models" => "noaa.regional-models",
             "NOAA REFS v1 parallel" => "noaa.refs-v1",
             "NOAA RTMA" => "noaa.rtma",
+            "NOAA URMA" => "noaa.urma",
             source => source,
         })
     }

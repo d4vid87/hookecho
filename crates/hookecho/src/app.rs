@@ -370,7 +370,11 @@ enum OverlaySource {
         u16,
     ),
     GefsDistribution(wxdata::global::GlobalField, u16, f64, f64),
-    Rtma(crate::render::FieldLayer, wxdata::rtma::SurfaceField),
+    Rtma(
+        crate::render::FieldLayer,
+        wxdata::rtma::Source,
+        wxdata::rtma::SurfaceField,
+    ),
     /// One model's field minus another's, at a forecast hour. Which two models is implied by the
     /// field (see `fielddiff::DiffField::pair`).
     ModelDiff(crate::fielddiff::DiffField, u16),
@@ -761,11 +765,13 @@ impl OverlaySource {
                         .await?,
                 )
             }
-            OverlaySource::Rtma(layer, field) => OverlayMsg::RegisteredField(
-                layer,
-                wxdata::rtma::fetch_latest_rtma(http, field).await?,
-                None,
-            ),
+            OverlaySource::Rtma(layer, source, field) => {
+                let frame = match source {
+                    wxdata::rtma::Source::Rtma => wxdata::rtma::fetch_latest_rtma(http, field).await?,
+                    wxdata::rtma::Source::Urma => wxdata::rtma::fetch_latest_urma(http, field).await?,
+                };
+                OverlayMsg::RegisteredField(layer, frame, None)
+            }
             OverlaySource::ModelDiff(field, fh) => {
                 use crate::fielddiff::DiffField;
                 use wxdata::global::{GlobalField, GlobalModel};
@@ -2581,6 +2587,7 @@ pub struct HookEchoApp {
     /// Which global model the global layers read, and how far into its run.
     global_model: wxdata::global::GlobalModel,
     global_fcst_hour: u16,
+    analysis_source: wxdata::rtma::Source,
     /// The (model, hour) each global layer was last fetched for, so a change refetches at once.
     global_layer_key:
         std::collections::HashMap<crate::render::FieldLayer, (wxdata::global::GlobalModel, u16)>,
@@ -3590,6 +3597,7 @@ impl HookEchoApp {
             marker_popup: None,
             global_model: wxdata::global::GlobalModel::default(),
             global_fcst_hour: 0,
+            analysis_source: wxdata::rtma::Source::Rtma,
             global_layer_key: std::collections::HashMap::new(),
             gefs_distribution: None,
             diff_field: crate::fielddiff::DiffField::default(),
@@ -18706,7 +18714,7 @@ impl eframe::App for HookEchoApp {
                 if let Some(state) = self.fields.get_mut(&layer) {
                     state.last_fetch = Some(Instant::now());
                 }
-                self.spawn_overlay(ctx, OverlaySource::Rtma(layer, field));
+                self.spawn_overlay(ctx, OverlaySource::Rtma(layer, self.analysis_source, field));
             }
         }
         // Model difference: same cadence as a global layer, and the same refetch-on-change rule.

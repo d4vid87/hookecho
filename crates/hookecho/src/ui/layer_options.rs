@@ -87,6 +87,7 @@ pub(crate) fn show(
     // Global models: which one, and how far into its run.
     global_model: &mut wxdata::global::GlobalModel,
     global_fcst_hour: &mut u16,
+    analysis_source: &mut wxdata::rtma::Source,
     // Model difference: which field, and the two valid times the last fetch actually compared.
     diff_field: &mut crate::fielddiff::DiffField,
     diff_valid: Option<&(String, String)>,
@@ -133,6 +134,12 @@ pub(crate) fn show(
         ("Outlooks", true),
         ("Environment", true),
         ("Global forecast", global_on),
+        (
+            "Surface analysis",
+            [FL::RtmaTemp2m, FL::RtmaDewpoint2m, FL::RtmaPressure, FL::RtmaWindU10m]
+                .iter()
+                .any(|layer| on.contains(layer)),
+        ),
         ("Model comparison", on.contains(&FL::ModelDiff)),
         ("Lightning", show_glm || on.contains(&FL::Lightning)),
         ("Satellite", satellite_on),
@@ -370,6 +377,27 @@ pub(crate) fn show(
                 ui.weak(format!("Both valid {va}."));
             }
             None => {}
+        }
+    }
+
+    if section == "Surface analysis" {
+        let before = *analysis_source;
+        ui.horizontal(|ui| {
+            ui.label("Analysis:");
+            ui.selectable_value(analysis_source, wxdata::rtma::Source::Rtma, "RTMA");
+            ui.selectable_value(analysis_source, wxdata::rtma::Source::Urma, "URMA");
+        });
+        ui.weak(match *analysis_source {
+            wxdata::rtma::Source::Rtma => "Hourly real-time mesoscale analysis",
+            wxdata::rtma::Source::Urma => "Delayed retrospective analysis",
+        });
+        if *analysis_source != before {
+            for layer in [FL::RtmaTemp2m, FL::RtmaDewpoint2m, FL::RtmaPressure, FL::RtmaWindU10m] {
+                if let Some(state) = fields.get_mut(&layer) {
+                    state.last_fetch = None;
+                }
+            }
+            changed = true;
         }
     }
 

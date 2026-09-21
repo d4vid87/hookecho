@@ -79,6 +79,6 @@ documented cycles; ECMWF 00/12 UTC runs extend to F240 while 06/18 UTC runs stop
 
 - RTMA v2.10 immutable analysis objects and text indexes are read from NOAA NOMADS:
   <https://nomads.ncep.noaa.gov/pub/data/nccf/com/rtma/v2.10/>.
-- URMA object naming is verified at <https://nomads.ncep.noaa.gov/pub/data/nccf/com/urma/prod/>.
-  The current directory publishes analysis objects without usable sidecar indexes, so HookEcho
-  does not download whole objects merely to extract one field.
+- URMA objects are read from <https://nomads.ncep.noaa.gov/pub/data/nccf/com/urma/prod/>. NOAA
+  publishes no usable sidecar index there, so HookEcho walks the self-sized GRIB message headers
+  with 512-byte range requests and downloads only the selected field message.

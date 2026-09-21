@@ -24,14 +24,14 @@ pub enum SurfaceField {
 }
 
 macro_rules! descriptor {
-    ($name:ident, $id:literal, $label:literal, $short:literal, $units:literal) => {
+    ($name:ident, $source:literal, $id:literal, $label:literal, $short:literal, $units:literal, $alias:literal) => {
         pub static $name: FieldDescriptor = FieldDescriptor {
             id: FieldId($id),
-            source: "NOAA RTMA",
+            source: $source,
             family: FieldFamily::Analysis,
             display_name: $label,
             short_name: $short,
-            search_aliases: &["RTMA", "surface analysis"],
+            search_aliases: &[$alias, "surface analysis"],
             units: $units,
             value_kind: ValueKind::Scalar,
             palette_key: $id,
@@ -46,32 +46,45 @@ macro_rules! descriptor {
 
 descriptor!(
     TEMP_DESCRIPTOR,
+    "NOAA RTMA",
     "analysis.rtma.temperature-2m",
     "RTMA 2 m temperature",
     "RTMA temp",
-    "K"
+    "K",
+    "RTMA"
 );
 descriptor!(
     DEWPOINT_DESCRIPTOR,
+    "NOAA RTMA",
     "analysis.rtma.dewpoint-2m",
     "RTMA 2 m dewpoint",
     "RTMA dewpoint",
-    "K"
+    "K",
+    "RTMA"
 );
 descriptor!(
     PRESSURE_DESCRIPTOR,
+    "NOAA RTMA",
     "analysis.rtma.pressure",
     "RTMA surface pressure",
     "RTMA pressure",
-    "Pa"
+    "Pa",
+    "RTMA"
 );
 descriptor!(
     WIND_U_DESCRIPTOR,
+    "NOAA RTMA",
     "analysis.rtma.wind-u-10m",
     "RTMA 10 m U wind",
     "RTMA U wind",
-    "m s-1"
+    "m s-1",
+    "RTMA"
 );
+
+descriptor!(URMA_TEMP_DESCRIPTOR, "NOAA URMA", "analysis.urma.temperature-2m", "URMA 2 m temperature", "URMA temp", "K", "URMA");
+descriptor!(URMA_DEWPOINT_DESCRIPTOR, "NOAA URMA", "analysis.urma.dewpoint-2m", "URMA 2 m dewpoint", "URMA dewpoint", "K", "URMA");
+descriptor!(URMA_PRESSURE_DESCRIPTOR, "NOAA URMA", "analysis.urma.pressure", "URMA surface pressure", "URMA pressure", "Pa", "URMA");
+descriptor!(URMA_WIND_U_DESCRIPTOR, "NOAA URMA", "analysis.urma.wind-u-10m", "URMA 10 m U wind", "URMA U wind", "m s-1", "URMA");
 
 impl SurfaceField {
     fn index(self) -> (&'static str, &'static str) {
@@ -91,6 +104,18 @@ impl SurfaceField {
             Self::WindU10m => &WIND_U_DESCRIPTOR,
         }
     }
+
+    pub fn descriptor_for(self, source: Source) -> &'static FieldDescriptor {
+        if source == Source::Rtma {
+            return self.descriptor();
+        }
+        match self {
+            Self::Temperature2m => &URMA_TEMP_DESCRIPTOR,
+            Self::Dewpoint2m => &URMA_DEWPOINT_DESCRIPTOR,
+            Self::Pressure => &URMA_PRESSURE_DESCRIPTOR,
+            Self::WindU10m => &URMA_WIND_U_DESCRIPTOR,
+        }
+    }
 }
 
 /// Exact immutable analysis object for a UTC valid hour.
@@ -106,25 +131,77 @@ pub fn object_url(source: Source, valid: DateTime<Utc>) -> String {
     )
 }
 
-/// Fetch one RTMA message by its official text-index byte range and wrap native provenance.
-pub async fn fetch_rtma(
+fn grib_message(bytes: &[u8]) -> Option<(u64, u8, u8, u8)> {
+    if bytes.get(..4)? != b"GRIB" || bytes.get(7) != Some(&2) {
+        return None;
+    }
+    let length = u64::from_be_bytes(bytes.get(8..16)?.try_into().ok()?);
+    let mut offset = 16usize;
+    while offset + 5 <= bytes.len() {
+        let section_length = u32::from_be_bytes(bytes.get(offset..offset + 4)?.try_into().ok()?) as usize;
+        if section_length < 5 || offset + section_length > bytes.len() {
+            return None;
+        }
+        if bytes[offset + 4] == 4 {
+            let section = &bytes[offset..offset + section_length];
+            return Some((length, *section.get(9)?, *section.get(10)?, *section.get(22)?));
+        }
+        offset += section_length;
+    }
+    None
+}
+
+async fn urma_range(
     http: &reqwest::Client,
+    url: &str,
+    field: SurfaceField,
+) -> anyhow::Result<(u64, Option<u64>)> {
+    let target = match field {
+        SurfaceField::Temperature2m => (0, 0, 103),
+        SurfaceField::Dewpoint2m => (0, 6, 103),
+        SurfaceField::Pressure => (3, 0, 1),
+        SurfaceField::WindU10m => (2, 2, 103),
+    };
+    let mut offset = 0u64;
+    for _ in 0..32 {
+        let header = crate::object_cache::fetch_range(http, url, offset, Some(offset + 512)).await?;
+        let (length, category, parameter, surface) = grib_message(&header.bytes)
+            .ok_or_else(|| anyhow::anyhow!("URMA object has an invalid GRIB message at {offset}"))?;
+        anyhow::ensure!(length >= 512, "URMA GRIB message is too short");
+        if (category, parameter, surface) == target {
+            return Ok((offset, Some(offset + length)));
+        }
+        offset = offset
+            .checked_add(length)
+            .ok_or_else(|| anyhow::anyhow!("URMA GRIB offsets overflowed"))?;
+    }
+    anyhow::bail!("URMA object has no requested surface field")
+}
+
+/// Fetch one RTMA or URMA message by byte range and wrap native provenance.
+pub async fn fetch_analysis(
+    http: &reqwest::Client,
+    source: Source,
     field: SurfaceField,
     valid: DateTime<Utc>,
 ) -> anyhow::Result<FieldFrame> {
-    let url = object_url(Source::Rtma, valid);
-    let index = http
-        .get(crate::net::fetch_url(&format!("{url}.idx")))
-        .timeout(crate::net::FEED_TIMEOUT)
-        .header("User-Agent", crate::alerts::USER_AGENT)
-        .send()
-        .await?
-        .error_for_status()?
-        .text()
-        .await?;
-    let (variable, level) = field.index();
-    let (start, end) = crate::hrrr::field_byte_range(&index, variable, level)
-        .ok_or_else(|| anyhow::anyhow!("RTMA index has no {variable}:{level}"))?;
+    let url = object_url(source, valid);
+    let (start, end) = if source == Source::Urma {
+        urma_range(http, &url, field).await?
+    } else {
+        let index = http
+            .get(crate::net::fetch_url(&format!("{url}.idx")))
+            .timeout(crate::net::FEED_TIMEOUT)
+            .header("User-Agent", crate::alerts::USER_AGENT)
+            .send()
+            .await?
+            .error_for_status()?
+            .text()
+            .await?;
+        let (variable, level) = field.index();
+        crate::hrrr::field_byte_range(&index, variable, level)
+            .ok_or_else(|| anyhow::anyhow!("RTMA index has no {variable}:{level}"))?
+    };
     let cached = crate::object_cache::fetch_range(http, &url, start, end).await?;
     let grid = crate::task::guarded(|| {
         crate::hrrr::decode_regrid_at_resolution(&cached.bytes, 0.03, f64::NEG_INFINITY)
@@ -136,7 +213,7 @@ pub async fn fetch_rtma(
         |end| format!("{url}#bytes={start}-{}", end - 1),
     );
     Ok(FieldFrame::new(
-        field.descriptor(),
+        field.descriptor_for(source),
         grid,
         DataStamp {
             source_identity,
@@ -149,6 +226,14 @@ pub async fn fetch_rtma(
             available_members: None,
         },
     ))
+}
+
+pub async fn fetch_rtma(
+    http: &reqwest::Client,
+    field: SurfaceField,
+    valid: DateTime<Utc>,
+) -> anyhow::Result<FieldFrame> {
+    fetch_analysis(http, Source::Rtma, field, valid).await
 }
 
 /// Fetch the newest available hourly RTMA analysis, allowing for normal publication latency.
@@ -172,6 +257,27 @@ pub async fn fetch_latest_rtma(
     Err(last_error.unwrap_or_else(|| anyhow::anyhow!("no recent RTMA analysis")))
 }
 
+/// Fetch the newest delayed URMA analysis without downloading its full aggregate object.
+pub async fn fetch_latest_urma(
+    http: &reqwest::Client,
+    field: SurfaceField,
+) -> anyhow::Result<FieldFrame> {
+    let now = Utc::now();
+    let hour = now
+        .with_minute(0)
+        .and_then(|time| time.with_second(0))
+        .and_then(|time| time.with_nanosecond(0))
+        .unwrap_or(now);
+    let mut last_error = None;
+    for age in 6..=36 {
+        match fetch_analysis(http, Source::Urma, field, hour - chrono::Duration::hours(age)).await {
+            Ok(frame) => return Ok(frame),
+            Err(error) => last_error = Some(error),
+        }
+    }
+    Err(last_error.unwrap_or_else(|| anyhow::anyhow!("no recent URMA analysis")))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -192,5 +298,48 @@ mod tests {
             crate::hrrr::field_byte_range(index, "TMP", "2 m above ground"),
             Some((14_980_236, Some(21_065_993)))
         );
+        assert_eq!(
+            SurfaceField::Temperature2m.descriptor_for(Source::Urma).source_id().0,
+            "noaa.urma"
+        );
+        assert_ne!(
+            SurfaceField::Temperature2m.descriptor().id,
+            SurfaceField::Temperature2m.descriptor_for(Source::Urma).id
+        );
+    }
+
+    #[test]
+    fn urma_grib_headers_locate_parameter_and_level() {
+        let mut bytes = vec![0u8; 56];
+        bytes[..4].copy_from_slice(b"GRIB");
+        bytes[7] = 2;
+        bytes[8..16].copy_from_slice(&6_085_757u64.to_be_bytes());
+        bytes[16..20].copy_from_slice(&5u32.to_be_bytes());
+        bytes[20] = 1;
+        bytes[21..25].copy_from_slice(&35u32.to_be_bytes());
+        bytes[25] = 4;
+        bytes[30] = 0;
+        bytes[31] = 6;
+        bytes[43] = 103;
+        assert_eq!(grib_message(&bytes), Some((6_085_757, 0, 6, 103)));
+        bytes[0] = 0;
+        assert_eq!(grib_message(&bytes), None);
+    }
+
+    /// `cargo test -p wxdata urma_live -- --ignored --nocapture`
+    #[tokio::test]
+    #[ignore = "network"]
+    async fn urma_live() {
+        let frame = fetch_analysis(
+            &reqwest::Client::new(),
+            Source::Urma,
+            SurfaceField::Temperature2m,
+            "2026-09-20T20:00:00Z".parse().unwrap(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(frame.descriptor.id.0, "analysis.urma.temperature-2m");
+        assert!(frame.field().values.iter().any(|value| value.is_finite()));
+        println!("{}", frame.stamp.source_identity);
     }
 }

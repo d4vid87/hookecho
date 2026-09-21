@@ -110,6 +110,24 @@ check_recent_rtma() {
   return 1
 }
 
+check_recent_urma() {
+  local age day hour url header
+  for age in $(seq 6 48); do
+    day=$(date -u -d "$age hour ago" +%Y%m%d)
+    hour=$(date -u -d "$age hour ago" +%H)
+    url="https://nomads.ncep.noaa.gov/pub/data/nccf/com/urma/prod/urma2p5.${day}/urma2p5.t${hour}z.2dvaranl_ndfd.grb2_wexp"
+    if header=$(curl --fail --silent --show-error --retry 2 --range 0-3 "$url"); then
+      [[ $header == GRIB ]] || {
+        echo "recent URMA object is not GRIB2" >&2
+        return 1
+      }
+      return 0
+    fi
+  done
+  echo "no recent range-readable URMA analysis" >&2
+  return 1
+}
+
 check_prefixes \
   'https://noaa-mrms-pds.s3.amazonaws.com/?list-type=2&delimiter=/&prefix=CONUS/' \
   'CONUS/MergedReflectivityQCComposite_00.50/' \
@@ -291,3 +309,4 @@ check_recent_goes 'GLM-L2-LCFA'
 check_recent_rrfs
 check_recent_gefs
 check_recent_rtma
+check_recent_urma
