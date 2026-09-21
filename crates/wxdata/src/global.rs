@@ -425,23 +425,10 @@ async fn fetch_run(
     };
 
     let (start, end) = range;
-    let http_range = match end {
-        Some(e) => format!("bytes={start}-{}", e - 1),
-        None => format!("bytes={start}-"),
-    };
-    let bytes = http
-        .get(crate::net::fetch_url(&base))
-        .timeout(crate::net::FEED_TIMEOUT)
-        .header("User-Agent", USER_AGENT)
-        .header("Range", http_range)
-        .send()
-        .await?
-        .error_for_status()?
-        .bytes()
-        .await?;
-    let received_at = Utc::now();
+    let cached = crate::object_cache::fetch_range(http, &base, start, end).await?;
+    let received_at = cached.received_at;
 
-    let raw = bytes.to_vec();
+    let raw = cached.bytes;
     let field_out = crate::task::blocking(move || decode(&raw)).await??;
     Ok(GlobalForecast {
         field: field_out,

@@ -483,20 +483,9 @@ async fn sample_message(
     lon: f64,
     lat: f64,
 ) -> anyhow::Result<f64> {
-    let range = match end {
-        Some(e) => format!("bytes={start}-{}", e - 1),
-        None => format!("bytes={start}-"),
-    };
-    let bytes = http
-        .get(crate::net::fetch_url(base))
-        .timeout(crate::net::FEED_TIMEOUT)
-        .header("User-Agent", USER_AGENT)
-        .header("Range", range)
-        .send()
+    let bytes = crate::object_cache::fetch_range(http, base, start, end)
         .await?
-        .error_for_status()?
-        .bytes()
-        .await?;
+        .bytes;
     // Off the async worker: each of these decodes a full HRRR level and scans ~1.9M grid points,
     // so leaving them here made forty concurrent fetches finish one decode at a time.
     crate::task::blocking(move || {

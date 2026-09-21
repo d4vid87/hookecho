@@ -19,6 +19,46 @@ pub struct CachedObject {
     pub received_at: chrono::DateTime<chrono::Utc>,
 }
 
+fn range_key(url: &str, start: u64, end: Option<u64>) -> String {
+    end.map_or_else(
+        || format!("{url}#bytes={start}-"),
+        |end| format!("{url}#bytes={start}-{}", end - 1),
+    )
+}
+
+/// Read one immutable model message, reusing the exact source-object byte range in browsers.
+pub async fn fetch_range(
+    http: &reqwest::Client,
+    url: &str,
+    start: u64,
+    end: Option<u64>,
+) -> anyhow::Result<CachedObject> {
+    let key = range_key(url, start, end);
+    if let Some(cached) = get("model", &key).await {
+        return Ok(cached);
+    }
+    let range = end.map_or_else(
+        || format!("bytes={start}-"),
+        |end| format!("bytes={start}-{}", end - 1),
+    );
+    let bytes = http
+        .get(crate::net::fetch_url(url))
+        .timeout(crate::net::FEED_TIMEOUT)
+        .header("User-Agent", crate::alerts::USER_AGENT)
+        .header("Range", range)
+        .send()
+        .await?
+        .error_for_status()?
+        .bytes()
+        .await?;
+    let received_at = chrono::Utc::now();
+    put("model", &key, &bytes, received_at).await?;
+    Ok(CachedObject {
+        bytes: bytes.to_vec(),
+        received_at,
+    })
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CacheStats {
     pub family: String,
@@ -517,5 +557,12 @@ mod tests {
             Some("CONUS/MESH/20260919/b".into())
         );
         assert_eq!(newest_key(&entries, "mrms", "CONUS/QPE/"), None);
+    }
+
+    #[test]
+    fn range_identity_includes_object_and_exact_interval() {
+        assert_eq!(range_key("object", 10, Some(20)), "object#bytes=10-19");
+        assert_ne!(range_key("object", 10, Some(20)), range_key("object", 10, None));
+        assert_ne!(range_key("object", 10, None), range_key("other", 10, None));
     }
 }

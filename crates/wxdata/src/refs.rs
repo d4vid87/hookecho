@@ -71,23 +71,10 @@ async fn fetch_run(
         .await?;
     let (start, end, members) = probability_range(&index, "REFC", "prob >40")
         .ok_or_else(|| anyhow::anyhow!("REFS index lacks REFC probability above 40 dBZ"))?;
-    let range = end.map_or_else(
-        || format!("bytes={start}-"),
-        |end| format!("bytes={start}-{}", end - 1),
-    );
-    let bytes = http
-        .get(crate::net::fetch_url(&base))
-        .timeout(crate::net::FEED_TIMEOUT)
-        .header("User-Agent", USER_AGENT)
-        .header("Range", range)
-        .send()
-        .await?
-        .error_for_status()?
-        .bytes()
-        .await?;
-    let received_time = Utc::now();
+    let cached = crate::object_cache::fetch_range(http, &base, start, end).await?;
+    let received_time = cached.received_at;
     let field = crate::task::guarded(|| {
-        crate::hrrr::decode_regrid(&bytes, crate::hrrr::Model::Rrfs, 0.0)
+        crate::hrrr::decode_regrid(&cached.bytes, crate::hrrr::Model::Rrfs, 0.0)
     })
     .unwrap_or_else(|_| anyhow::bail!("REFS GRIB decode panicked"))?;
     let valid_time = run + chrono::Duration::hours(forecast_hour.into());
