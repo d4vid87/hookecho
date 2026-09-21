@@ -13,6 +13,10 @@ pub struct CaseManifest {
     pub created_at: DateTime<Utc>,
     pub workspace: Workspace,
     pub panes: Vec<CasePane>,
+    #[serde(default)]
+    pub annotations: Vec<CaseStroke>,
+    #[serde(default)]
+    pub bookmarks: Vec<crate::settings::Bookmark>,
 }
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -23,14 +27,28 @@ pub struct CasePane {
     pub radar_objects: Vec<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct CaseStroke {
+    pub points: Vec<[f64; 2]>,
+    pub rgba: [u8; 4],
+}
+
 impl CaseManifest {
-    pub fn new(name: String, workspace: Workspace, panes: Vec<CasePane>) -> anyhow::Result<Self> {
+    pub fn new(
+        name: String,
+        workspace: Workspace,
+        panes: Vec<CasePane>,
+        annotations: Vec<CaseStroke>,
+        bookmarks: Vec<crate::settings::Bookmark>,
+    ) -> anyhow::Result<Self> {
         let manifest = Self {
             schema_version: SCHEMA_VERSION,
             name,
             created_at: Utc::now(),
             workspace,
             panes,
+            annotations,
+            bookmarks,
         };
         manifest.validate()?;
         Ok(manifest)
@@ -68,6 +86,15 @@ impl CaseManifest {
                 .all(|pane| pane.radar_objects.len() <= MAX_OBJECTS_PER_PANE),
             "case contains too many radar objects"
         );
+        anyhow::ensure!(
+            self.annotations.len() <= 1024
+                && self
+                    .annotations
+                    .iter()
+                    .all(|stroke| stroke.points.len() <= 100_000),
+            "case contains too many annotation points"
+        );
+        anyhow::ensure!(self.bookmarks.len() <= 2048, "case contains too many bookmarks");
         for pane in &self.panes {
             for name in &pane.radar_objects {
                 let object = wxdata::level2::Identifier::new(name.clone());
@@ -99,7 +126,17 @@ mod tests {
                 radar_objects: vec!["KTLX20240526_013000_V06".into()],
             })
             .collect();
-        let manifest = CaseManifest::new("May 25 outbreak".into(), workspace, panes).unwrap();
+        let manifest = CaseManifest::new(
+            "May 25 outbreak".into(),
+            workspace,
+            panes,
+            vec![CaseStroke {
+                points: vec![[-97.3, 35.3], [-97.2, 35.4]],
+                rgba: [255, 80, 80, 255],
+            }],
+            Vec::new(),
+        )
+        .unwrap();
         assert_eq!(
             CaseManifest::from_json(&manifest.to_json().unwrap()).unwrap(),
             manifest

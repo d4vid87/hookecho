@@ -14867,8 +14867,22 @@ impl HookEchoApp {
                 }
             })
             .collect();
-        let result = crate::casefile::CaseManifest::new(name, workspace, panes)
-            .and_then(|manifest| manifest.to_json());
+        let annotations = self
+            .strokes
+            .iter()
+            .map(|stroke| crate::casefile::CaseStroke {
+                points: stroke.points.clone(),
+                rgba: stroke.color.to_array(),
+            })
+            .collect();
+        let result = crate::casefile::CaseManifest::new(
+            name,
+            workspace,
+            panes,
+            annotations,
+            self.settings.bookmarks.clone(),
+        )
+        .and_then(|manifest| manifest.to_json());
         match result {
             Ok(json) => match crate::dialog::save_bytes(
                 &format!("hookecho-case-{stamp}.json"),
@@ -15540,6 +15554,24 @@ impl HookEchoApp {
             {
                 Ok(case) => {
                     self.apply_workspace(&case.workspace, ctx);
+                    self.strokes = case
+                        .annotations
+                        .into_iter()
+                        .map(|stroke| Stroke2d {
+                            points: stroke.points,
+                            color: egui::Color32::from_rgba_unmultiplied(
+                                stroke.rgba[0],
+                                stroke.rgba[1],
+                                stroke.rgba[2],
+                                stroke.rgba[3],
+                            ),
+                        })
+                        .collect();
+                    for bookmark in case.bookmarks {
+                        if !self.settings.bookmarks.contains(&bookmark) {
+                            self.settings.bookmarks.push(bookmark);
+                        }
+                    }
                     for (view, pane) in self.views.iter_mut().zip(case.panes) {
                         if !pane.radar_objects.is_empty() {
                             view.timeline.frames = pane
