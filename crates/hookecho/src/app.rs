@@ -16312,7 +16312,7 @@ impl HookEchoApp {
                 if ui.button("Copy link to this view").clicked() {
                     self.apply_palette(PaletteAction::CopyViewLink, ui.ctx());
                 }
-                if ui.button("Export forecast verification…").clicked() {
+                if ui.button("Export field verification…").clicked() {
                     self.export_forecast_verification();
                 }
                 #[cfg(not(target_arch = "wasm32"))]
@@ -16622,9 +16622,8 @@ impl HookEchoApp {
                 matches!(frame.stamp.class, DataClass::Analysis | DataClass::Observed)
             })
             .cloned();
-        let result = forecast
-            .ok_or_else(|| anyhow::anyhow!("show a forecast field"))
-            .and_then(|forecast| {
+        let result = match forecast {
+            Some(forecast) => (|| {
                 let (metrics, reference_json) = match reference {
                     Some(reference) => (
                         crate::fielddiff::verify_forecast(&forecast, &reference)?,
@@ -16660,10 +16659,36 @@ impl HookEchoApp {
                     "units": forecast.descriptor.units,
                     "metrics": metrics,
                 }))?)
-            });
+            })(),
+            None => reference
+                .ok_or_else(|| anyhow::anyhow!("show a forecast or surface analysis field"))
+                .and_then(|analysis| {
+                    let metrics = crate::fielddiff::verify_stations(
+                        &analysis,
+                        &self.metars,
+                        chrono::Duration::minutes(90),
+                    )?;
+                    Ok(serde_json::to_vec_pretty(&serde_json::json!({
+                        "schema": "hookecho.surface-analysis-residuals.v1",
+                        "analysis": {
+                            "product": analysis.descriptor.id.0,
+                            "source": &analysis.stamp.source_identity,
+                            "valid_time": analysis.stamp.valid_time,
+                        },
+                        "reference": {
+                            "kind": "METAR stations",
+                            "source": "aviationweather.gov",
+                            "time_tolerance_minutes": 90,
+                            "stations_loaded": self.metars.len(),
+                        },
+                        "units": analysis.descriptor.units,
+                        "metrics": metrics,
+                    }))?)
+                }),
+        };
         match result {
             Ok(bytes) => match crate::dialog::save_bytes(
-                "hookecho-forecast-verification.json",
+                "hookecho-field-verification.json",
                 "json",
                 &bytes,
             ) {

@@ -308,17 +308,17 @@ pub fn verify_forecast(
     metrics(errors.values)
 }
 
-/// Score a surface forecast against temporally matched METAR stations in its native units.
+/// Score a surface forecast or analysis against temporally matched METAR stations in native units.
 pub fn verify_stations(
-    forecast: &FieldFrame,
+    field: &FieldFrame,
     observations: &[wxdata::metar::SurfaceOb],
     tolerance: chrono::Duration,
 ) -> anyhow::Result<VerificationMetrics> {
     anyhow::ensure!(
-        forecast.stamp.class == DataClass::Forecast,
-        "field is not a forecast"
+        matches!(field.stamp.class, DataClass::Forecast | DataClass::Analysis),
+        "field is not a forecast or analysis"
     );
-    let id = forecast.descriptor.id.0;
+    let id = field.descriptor.id.0;
     anyhow::ensure!(
         matches!(
             id,
@@ -326,25 +326,33 @@ pub fn verify_stations(
                 | "model.global.dewpoint-2m"
                 | "model.global.mslp"
                 | "model.global.wind-10m"
+                | "analysis.rtma.temperature-2m"
+                | "analysis.rtma.dewpoint-2m"
+                | "analysis.rtma.surface-pressure"
+                | "analysis.rtma.wind-u-10m"
+                | "analysis.urma.temperature-2m"
+                | "analysis.urma.dewpoint-2m"
+                | "analysis.urma.surface-pressure"
+                | "analysis.urma.wind-u-10m"
         ),
         "field has no METAR verification mapping"
     );
     anyhow::ensure!(tolerance > chrono::Duration::zero(), "invalid time tolerance");
     metrics(observations.iter().filter_map(|ob| {
         let observed_at = chrono::DateTime::from_timestamp(ob.obs_time?, 0)?;
-        if (observed_at - forecast.stamp.valid_time).abs() > tolerance {
+        if (observed_at - field.stamp.valid_time).abs() > tolerance {
             return None;
         }
         let observed = match id {
-            "model.global.temperature-2m" => ob.temp_c? + 273.15,
-            "model.global.dewpoint-2m" => ob.dewp_c? + 273.15,
-            "model.global.mslp" => ob.altim_mb? * 100.0,
-            "model.global.wind-10m" => {
+            "model.global.temperature-2m" | "analysis.rtma.temperature-2m" | "analysis.urma.temperature-2m" => ob.temp_c? + 273.15,
+            "model.global.dewpoint-2m" | "analysis.rtma.dewpoint-2m" | "analysis.urma.dewpoint-2m" => ob.dewp_c? + 273.15,
+            "model.global.mslp" | "analysis.rtma.surface-pressure" | "analysis.urma.surface-pressure" => ob.altim_mb? * 100.0,
+            "model.global.wind-10m" | "analysis.rtma.wind-u-10m" | "analysis.urma.wind-u-10m" => {
                 -ob.wspd_kt / 1.943_844 * ob.wdir_deg?.to_radians().sin()
             }
             _ => return None,
         };
-        Some(forecast.sample(ob.lon, ob.lat).value? - observed)
+        Some(field.sample(ob.lon, ob.lat).value? - observed)
     }))
 }
 
@@ -697,5 +705,27 @@ mod tests {
         .unwrap();
         assert_eq!(score.samples, 1);
         assert!((score.bias - 1.0).abs() < 0.001);
+
+        let analysis = FieldFrame::new(
+            &wxdata::rtma::TEMP_DESCRIPTOR,
+            grid(2, 2, -100.0, -99.0, 39.0, 40.0, 299.0),
+            DataStamp {
+                source_identity: "rtma".into(),
+                issue_time: None,
+                run_time: None,
+                valid_time: valid,
+                received_time: valid,
+                class: DataClass::Analysis,
+                quality: QualitySummary::Good,
+                available_members: None,
+            },
+        );
+        let score = verify_stations(
+            &analysis,
+            &[observation(0)],
+            chrono::Duration::minutes(90),
+        )
+        .unwrap();
+        assert!((score.bias).abs() < 0.001);
     }
 }
