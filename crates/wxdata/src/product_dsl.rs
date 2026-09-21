@@ -4,6 +4,7 @@ use crate::level2::Moment;
 
 const MAX_NODES: usize = 128;
 const MAX_DEPTH: usize = 16;
+const MAX_COLUMN_GATES: usize = 4096;
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ProductDefinition {
@@ -78,6 +79,15 @@ enum Fn {
     Clamp,
     If,
     Threshold,
+    MaxVertical,
+    MinVertical,
+    MeanVertical,
+    MaxLayer,
+    MinLayer,
+    MeanLayer,
+    FirstHeight,
+    LastHeight,
+    CountGates,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -137,6 +147,20 @@ impl Product {
     pub fn sample(&self, gate: &GateValues) -> f32 {
         match self.root.eval(gate) {
             Some(Value::Number(value)) if value.is_finite() => value,
+            _ => self.definition.missing,
+        }
+    }
+
+    pub fn column(&self, gates: &[GateValues]) -> f32 {
+        if gates.is_empty() || gates.len() > MAX_COLUMN_GATES {
+            return self.definition.missing;
+        }
+        match &self.root {
+            Expr::Call(function, args) => function
+                .eval_column(args, gates)
+                .filter(|value| value.is_finite())
+                .unwrap_or(self.definition.missing),
+            _ if gates.len() == 1 => self.sample(&gates[0]),
             _ => self.definition.missing,
         }
     }
@@ -250,6 +274,28 @@ impl Fn {
             Self::Clamp | Self::If => 3,
             Self::Threshold => 2,
             Self::Min | Self::Max | Self::Mean => 2,
+            Self::MaxVertical | Self::MinVertical | Self::MeanVertical => {
+                anyhow::ensure!((1..=2).contains(&args.len()), "vertical reducer expects value and optional condition");
+                anyhow::ensure!(args[0].ty()? == Ty::Number, "vertical value must be numeric");
+                if args.len() == 2 { anyhow::ensure!(args[1].ty()? == Ty::Bool, "vertical condition must be boolean"); }
+                return Ok(Ty::Number);
+            }
+            Self::MaxLayer | Self::MinLayer | Self::MeanLayer => {
+                anyhow::ensure!((3..=4).contains(&args.len()), "layer reducer expects value, lower, upper, and optional condition");
+                anyhow::ensure!(args[..3].iter().all(|arg| arg.ty().ok() == Some(Ty::Number)), "layer bounds must be numeric");
+                if args.len() == 4 { anyhow::ensure!(args[3].ty()? == Ty::Bool, "layer condition must be boolean"); }
+                return Ok(Ty::Number);
+            }
+            Self::FirstHeight | Self::LastHeight => {
+                anyhow::ensure!((2..=3).contains(&args.len()), "height crossing expects value, threshold, and optional condition");
+                anyhow::ensure!(args[..2].iter().all(|arg| arg.ty().ok() == Some(Ty::Number)), "height crossing arguments must be numeric");
+                if args.len() == 3 { anyhow::ensure!(args[2].ty()? == Ty::Bool, "height condition must be boolean"); }
+                return Ok(Ty::Number);
+            }
+            Self::CountGates => {
+                anyhow::ensure!(args.len() == 1 && args[0].ty()? == Ty::Bool, "count_gates expects one condition");
+                return Ok(Ty::Number);
+            }
         };
         anyhow::ensure!(args.len() == expected, "function expects {expected} arguments");
         if matches!(self, Self::If) {
@@ -279,7 +325,65 @@ impl Fn {
             Self::Clamp => a.clamp(b, number(2)?),
             Self::Threshold => if a >= b { 1.0 } else { 0.0 },
             Self::If => unreachable!(),
+            _ => return None,
         }))
+    }
+
+    fn eval_column(self, args: &[Expr], gates: &[GateValues]) -> Option<f32> {
+        let condition_at = |at: usize, gate: &GateValues| -> bool {
+            at >= args.len() || matches!(args[at].eval(gate), Some(Value::Bool(true)))
+        };
+        if matches!(self, Self::CountGates) {
+            return Some(
+                gates
+                    .iter()
+                    .filter(|gate| matches!(args[0].eval(gate), Some(Value::Bool(true))))
+                    .count() as f32,
+            );
+        }
+        let (condition, layer) = match self {
+            Self::MaxVertical | Self::MinVertical | Self::MeanVertical => (1, None),
+            Self::MaxLayer | Self::MinLayer | Self::MeanLayer => {
+                let first = gates.first()?;
+                let Value::Number(low) = args[1].eval(first)? else { return None };
+                let Value::Number(high) = args[2].eval(first)? else { return None };
+                (3, Some((low.min(high), low.max(high))))
+            }
+            Self::FirstHeight | Self::LastHeight => {
+                let first = gates.first()?;
+                let Value::Number(threshold) = args[1].eval(first)? else { return None };
+                let iter: Box<dyn Iterator<Item = &GateValues>> = if matches!(self, Self::FirstHeight) {
+                    Box::new(gates.iter())
+                } else {
+                    Box::new(gates.iter().rev())
+                };
+                return iter
+                    .filter(|gate| condition_at(2, gate))
+                    .find_map(|gate| match args[0].eval(gate) {
+                        Some(Value::Number(value)) if value >= threshold => Some(gate.altitude_km),
+                        _ => None,
+                    });
+            }
+            _ => return None,
+        };
+        let values: Vec<f32> = gates
+            .iter()
+            .filter(|gate| {
+                layer.is_none_or(|(low, high)| (low..=high).contains(&gate.altitude_km))
+                    && condition_at(condition, gate)
+            })
+            .filter_map(|gate| match args[0].eval(gate) {
+                Some(Value::Number(value)) if value.is_finite() => Some(value),
+                _ => None,
+            })
+            .collect();
+        if values.is_empty() { return None; }
+        Some(match self {
+            Self::MaxVertical | Self::MaxLayer => values.into_iter().fold(f32::NEG_INFINITY, f32::max),
+            Self::MinVertical | Self::MinLayer => values.into_iter().fold(f32::INFINITY, f32::min),
+            Self::MeanVertical | Self::MeanLayer => values.iter().sum::<f32>() / values.len() as f32,
+            _ => unreachable!(),
+        })
     }
 }
 
@@ -387,6 +491,15 @@ fn function(name: &str) -> anyhow::Result<Fn> {
         "clamp" => Fn::Clamp,
         "if" => Fn::If,
         "threshold" => Fn::Threshold,
+        "max_vertical" => Fn::MaxVertical,
+        "min_vertical" => Fn::MinVertical,
+        "mean_vertical" => Fn::MeanVertical,
+        "max_layer" => Fn::MaxLayer,
+        "min_layer" => Fn::MinLayer,
+        "mean_layer" => Fn::MeanLayer,
+        "first_height" => Fn::FirstHeight,
+        "last_height" => Fn::LastHeight,
+        "count_gates" => Fn::CountGates,
         _ => anyhow::bail!("unknown function '{name}'"),
     })
 }
@@ -486,5 +599,22 @@ mod tests {
         let json = serde_json::to_string(&definition).unwrap();
         let restored: ProductDefinition = serde_json::from_str(&json).unwrap();
         assert!(Product::compile(restored).is_ok());
+    }
+
+    #[test]
+    fn vertical_and_layer_reducers_respect_masks_and_heights() {
+        let gates: Vec<_> = [(1.0, 30.0), (3.0, 45.0), (5.0, 55.0)]
+            .into_iter()
+            .map(|(altitude_km, reflectivity)| {
+                let mut gate = GateValues { altitude_km, ..Default::default() };
+                gate.moments[Moment::Reflectivity.index()] = Some(reflectivity);
+                gate
+            })
+            .collect();
+        assert_eq!(Product::compile(definition("max_vertical(REF, REF >= 40)")).unwrap().column(&gates), 55.0);
+        assert_eq!(Product::compile(definition("mean_layer(REF, 2, 4)")).unwrap().column(&gates), 45.0);
+        assert_eq!(Product::compile(definition("first_height(REF, 40)")).unwrap().column(&gates), 3.0);
+        assert_eq!(Product::compile(definition("last_height(REF, 40)")).unwrap().column(&gates), 5.0);
+        assert_eq!(Product::compile(definition("count_gates(REF >= 40)")).unwrap().column(&gates), 2.0);
     }
 }
