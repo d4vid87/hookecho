@@ -15744,6 +15744,9 @@ impl HookEchoApp {
                 if ui.button("Copy link to this view").clicked() {
                     self.apply_palette(PaletteAction::CopyViewLink, ui.ctx());
                 }
+                if ui.button("Export forecast verification…").clicked() {
+                    self.export_forecast_verification();
+                }
                 #[cfg(not(target_arch = "wasm32"))]
                 {
                     if ui.button("Save screenshot…").clicked() {
@@ -15919,6 +15922,60 @@ impl HookEchoApp {
                 let _ = std::fs::remove_file(&path);
                 self.toast(ToastKind::Error, format!("Field export failed: {error}"));
             }
+        }
+    }
+
+    fn export_forecast_verification(&mut self) {
+        use wxdata::field::DataClass;
+        let active = &self.views[self.active].fields_on;
+        let mut frames = crate::render::FieldLayer::DRAW_ORDER
+            .iter()
+            .filter(|layer| active.contains(layer))
+            .filter_map(|layer| self.fields.get(layer)?.frame.as_ref());
+        let forecast = frames
+            .clone()
+            .find(|frame| frame.stamp.class == DataClass::Forecast);
+        let reference = frames.find(|frame| {
+            matches!(frame.stamp.class, DataClass::Analysis | DataClass::Observed)
+        });
+        let result = forecast
+            .zip(reference)
+            .ok_or_else(|| anyhow::anyhow!("show one forecast and one observed/analysis field"))
+            .and_then(|(forecast, reference)| {
+                let metrics = crate::fielddiff::verify_forecast(forecast, reference)?;
+                Ok(serde_json::to_vec_pretty(&serde_json::json!({
+                    "schema": "hookecho.forecast-verification.v1",
+                    "forecast": {
+                        "product": forecast.descriptor.id.0,
+                        "source": &forecast.stamp.source_identity,
+                        "valid_time": forecast.stamp.valid_time,
+                    },
+                    "reference": {
+                        "product": reference.descriptor.id.0,
+                        "source": &reference.stamp.source_identity,
+                        "valid_time": reference.stamp.valid_time,
+                    },
+                    "units": forecast.descriptor.units,
+                    "metrics": metrics,
+                }))?)
+            });
+        match result {
+            Ok(bytes) => match crate::dialog::save_bytes(
+                "hookecho-forecast-verification.json",
+                "json",
+                &bytes,
+            ) {
+                crate::dialog::Saved::Where(where_) => self.toast(
+                    ToastKind::Success,
+                    format!("Verification saved to {where_}"),
+                ),
+                crate::dialog::Saved::Failed(error) => self.toast(
+                    ToastKind::Error,
+                    format!("Verification export failed: {error}"),
+                ),
+                crate::dialog::Saved::Cancelled => {}
+            },
+            Err(error) => self.toast(ToastKind::Error, format!("Cannot verify: {error}")),
         }
     }
 
