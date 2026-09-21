@@ -37,6 +37,8 @@ pub struct View3d {
     pub threshold_idx: f32,
     /// Slab bounds as fractions of the box, `[x0, x1, y0, y1, z0, z1]`.
     pub clip: [f32; 6],
+    /// Stop at the first threshold crossing instead of projecting the ray's maximum.
+    pub surface: bool,
 }
 
 impl Default for View3d {
@@ -44,6 +46,7 @@ impl Default for View3d {
         Self {
             threshold_idx: 2.0,
             clip: [0.0, 1.0, 0.0, 1.0, 0.0, 1.0],
+            surface: false,
         }
     }
 }
@@ -73,7 +76,7 @@ pub fn orbit_uniform(
         box_min: [BOX_MIN.x, BOX_MIN.y, BOX_MIN.z, 0.0],
         box_max: [BOX_MAX.x, BOX_MAX.y, BOX_MAX.z, 0.0],
         dims: [n as f32, n as f32, nz as f32, steps as f32],
-        ctl: [v3.threshold_idx, 0.0, 0.0, 0.0],
+        ctl: [v3.threshold_idx, if v3.surface { 1.0 } else { 0.0 }, 0.0, 0.0],
         clip_min: [v3.clip[0], v3.clip[2], v3.clip[4], 0.0],
         clip_max: [v3.clip[1], v3.clip[3], v3.clip[5], 0.0],
     }
@@ -393,5 +396,20 @@ impl egui_wgpu::CallbackTrait for Volume3dCallback {
         if let Some(res) = resources.get::<Volume3dResources>() {
             res.record(pass);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn surface_mode_is_carried_only_in_the_uniform() {
+        let view = View3d {
+            surface: true,
+            ..Default::default()
+        };
+        let uniform = orbit_uniform(30.0, 25.0, 3.0, 1.0, 32, 16, 96, view);
+        assert_eq!(uniform.ctl[1], 1.0);
     }
 }

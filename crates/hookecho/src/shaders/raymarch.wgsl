@@ -10,7 +10,7 @@ struct Uniforms {
     box_min: vec4<f32>,
     box_max: vec4<f32>,
     dims: vec4<f32>, // nx, ny, nz, step_count
-    // x: minimum reflectivity index to draw (isolates cores); y,z,w: spare.
+    // x: minimum index; y: first-crossing surface mode; z,w: spare.
     ctl: vec4<f32>,
     // Slab bounds as fractions of the full box, so slicing narrows what is marched without
     // changing how a world position maps to a voxel.
@@ -66,6 +66,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     // Below the threshold a voxel is treated as empty, so raising it carves the weak echo away
     // and leaves the cores standing on their own.
     let floor_idx = u32(max(u.ctl.x, 2.0));
+    let surface = u.ctl.y > 0.5;
     var max_idx: u32 = 0u;
     for (var s = 0; s < steps; s = s + 1) {
         let t = tmin + (tmax - tmin) * (f32(s) + 0.5) / f32(steps);
@@ -75,6 +76,9 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
         let idx = textureLoad(vol, voxel, 0).r;
         if (idx >= floor_idx && idx > max_idx) {
             max_idx = idx;
+            if (surface) {
+                break;
+            }
         }
     }
 
@@ -85,6 +89,6 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     // Opacity ramps from the threshold, not from zero: with a 45 dBZ floor the surviving cores
     // read solid instead of uniformly hazy.
     let head = max(255.0 - f32(floor_idx), 1.0);
-    let alpha = clamp((f32(max_idx) - f32(floor_idx)) / head * 1.6 + 0.15, 0.0, 1.0);
+    let alpha = select(clamp((f32(max_idx) - f32(floor_idx)) / head * 1.6 + 0.15, 0.0, 1.0), 0.92, surface);
     return vec4<f32>(color.rgb * alpha, alpha);
 }

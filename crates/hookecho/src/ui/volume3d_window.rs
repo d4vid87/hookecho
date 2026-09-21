@@ -19,6 +19,8 @@ pub struct Volume3dState {
     /// Raymarch samples per pixel. The cost of the window is almost entirely this number, so it
     /// is the one knob worth exposing on a phone or an integrated GPU.
     pub steps: u32,
+    /// First threshold crossing (surface) rather than maximum intensity along each ray.
+    pub surface: bool,
 }
 
 /// The three quality rungs, coarsest first. 256 is what the window shipped with.
@@ -37,6 +39,7 @@ impl Default for Volume3dState {
             // ponytail: a phone is the one place the full march reliably misses frame budget, so
             // pick by platform rather than benchmarking the GPU.
             steps: if cfg!(target_os = "android") { 96 } else { 256 },
+            surface: false,
         }
     }
 }
@@ -92,6 +95,12 @@ pub fn show(
                     ui.selectable_value(&mut st.moment, moment, moment.short_name());
                 }
             }
+        });
+        ui.horizontal(|ui| {
+            ui.label("Render");
+            ui.selectable_value(&mut st.surface, false, "Maximum");
+            ui.selectable_value(&mut st.surface, true, "Surface")
+                .on_hover_text("First crossing of the selected threshold");
         });
         ui.horizontal(|ui| {
             let mut on = st.threshold_dbz.is_finite();
@@ -175,6 +184,7 @@ pub fn show(
                 2.0
             },
             clip: st.clip,
+            surface: st.surface,
         };
         let uniform = orbit_uniform(
             st.az,
