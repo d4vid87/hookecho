@@ -150,6 +150,8 @@ pub enum FieldLayer {
     SnowBands,
     /// NBM calibrated probability of thunder over the hour ending at the scrubbed forecast hour.
     ThunderProb,
+    /// REFS neighborhood probability of composite reflectivity above 40 dBZ.
+    RefsReflectivityProb,
     /// GLM flash-extent density — the recent satellite flashes gridded into a density field.
     GlmFed,
     /// One model minus another — which field, and therefore which pair, is `app.diff_field`.
@@ -176,6 +178,7 @@ impl FieldLayer {
                 | FieldLayer::Srh
                 | FieldLayer::PrecipType
                 | FieldLayer::ThunderProb
+                | FieldLayer::RefsReflectivityProb
                 | FieldLayer::Smoke
                 | FieldLayer::Snowfall
                 | FieldLayer::SnowAnalysis
@@ -190,7 +193,7 @@ impl FieldLayer {
     }
 
     /// Fixed bottom-to-top paint order within each band.
-    pub const DRAW_ORDER: [FieldLayer; 81] = [
+    pub const DRAW_ORDER: [FieldLayer; 82] = [
         // Below-radar context band (bottom to top). The global models sit at the very bottom:
         // they are the synoptic backdrop everything else is drawn against.
         FieldLayer::GoesC13,
@@ -228,6 +231,7 @@ impl FieldLayer {
         FieldLayer::SnowAnalysis,
         FieldLayer::PrecipType,
         FieldLayer::ThunderProb,
+        FieldLayer::RefsReflectivityProb,
         // Above-radar severe-signal band.
         FieldLayer::SnowBands,
         FieldLayer::PrecipRate,
@@ -319,6 +323,7 @@ impl FieldLayer {
             FieldLayer::HailSwath => "hailswath",
             FieldLayer::SnowBands => "snowbands",
             FieldLayer::ThunderProb => "thunderprob",
+            FieldLayer::RefsReflectivityProb => "refs-reflectivity-probability",
             FieldLayer::Hca => "hca",
             FieldLayer::UpdraftHelicity => "updrafthelicity",
             FieldLayer::Smoke => "smoke",
@@ -385,6 +390,7 @@ impl FieldLayer {
             FL::Snowfall => &wxdata::hrrr::SNOWFALL_DESCRIPTOR,
             FL::Smoke => &wxdata::hrrr::SMOKE_DESCRIPTOR,
             FL::ThunderProb => &wxdata::hrrr::THUNDER_PROBABILITY_DESCRIPTOR,
+            FL::RefsReflectivityProb => &wxdata::refs::REFLECTIVITY_40_DESCRIPTOR,
             FL::GlobalMslp => &wxdata::global::MSLP_DESCRIPTOR,
             FL::GlobalHeight500 => &wxdata::global::HEIGHT_500_DESCRIPTOR,
             FL::GlobalTemp2m => &wxdata::global::TEMP_2M_DESCRIPTOR,

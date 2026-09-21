@@ -772,7 +772,7 @@ pub fn ramp_for(layer: FieldLayer) -> Option<&'static FieldRamp> {
         FL::Hca => &HCA,
         FL::GlmFed => &GLM_FED,
         FL::SnowBands => &SNOW_BANDS,
-        FL::ThunderProb => &THUNDER_PROB,
+        FL::ThunderProb | FL::RefsReflectivityProb => &THUNDER_PROB,
         // Composite is reflectivity in dBZ, so like the mosaic it follows the user's own
         // reflectivity `.pal` rather than a fixed ramp of its own.
         FL::Mrms

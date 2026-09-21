@@ -97,6 +97,7 @@ impl HookEchoApp {
                         | FL::GlobalWind10m
                         | FL::GlobalPrecip
                         | FL::ThunderProb
+                        | FL::RefsReflectivityProb
                         | FL::GlmFed
                         | FL::ModelDiff
                 ) =>
@@ -457,6 +458,13 @@ impl HookEchoApp {
                 "Chance of thunder (NBM)",
                 "The National Blend's calibrated probability of a thunderstorm in the hour you \
                  have scrubbed to — a forecast, not a detection",
+                false,
+            ),
+            (
+                FL::RefsReflectivityProb,
+                "Models",
+                "Chance of 40 dBZ storms (REFS)",
+                "Fourteen-member neighborhood probability of composite reflectivity above 40 dBZ",
                 false,
             ),
             (

@@ -63,6 +63,7 @@ pub(crate) fn show(
     rotation_minutes: &mut u16,
     hail_minutes: &mut u16,
     hrrr_fcst_hour: &mut u8,
+    refs_fcst_hour: &mut u8,
     hrrr_valid: Option<chrono::DateTime<chrono::Utc>>,
     tz: Option<wxdata::tz::Tz>,
     env_cape_ml: &mut bool,
@@ -140,6 +141,7 @@ pub(crate) fn show(
             }),
         ),
         ("Future radar", on.contains(&FL::Hrrr)),
+        ("Ensemble forecast", on.contains(&FL::RefsReflectivityProb)),
         ("Nowcast", filters.show_nowcast),
         ("Snowfall", on.contains(&FL::SnowAnalysis)),
         (
@@ -625,6 +627,12 @@ pub(crate) fn show(
                 ui.weak("loading forecast…");
             }
         }
+    }
+
+    if section == "Ensemble forecast" && on.contains(&FL::RefsReflectivityProb) {
+        header(ui, "REFS storm probability");
+        ui.add(egui::Slider::new(refs_fcst_hour, 1..=60).text("F+ hr"));
+        ui.weak("Neighborhood probability of composite reflectivity above 40 dBZ.");
     }
 
     if section == "Environment" && on.contains(&FL::Cape) {

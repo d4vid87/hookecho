@@ -359,6 +359,8 @@ enum OverlaySource {
     Env(crate::render::FieldLayer, wxdata::hrrr::Model, bool, u8),
     /// HRRR-backed field layer (rotation tracks, smoke) at a forecast hour.
     HrrrLayer(crate::render::FieldLayer, u8),
+    /// REFS neighborhood probability at a forecast hour.
+    RefsProbability(u8),
     /// A global-model field (GFS or ECMWF) at a forecast hour.
     Global(
         crate::render::FieldLayer,
@@ -589,6 +591,7 @@ impl OverlaySource {
             | Self::Global(layer, ..)
             | Self::L3Grid(layer, ..) => RequestLane::Field(*layer),
             Self::ModelDiff(..) => RequestLane::Field(FL::ModelDiff),
+            Self::RefsProbability(..) => RequestLane::Field(FL::RefsReflectivityProb),
             Self::Mosaic(..) => RequestLane::Field(FL::Mosaic),
             Self::Hrrr(..) => RequestLane::Field(FL::Hrrr),
             Self::Snow(..) => RequestLane::Field(FL::SnowAnalysis),
@@ -921,6 +924,11 @@ impl OverlaySource {
                 };
                 OverlayMsg::RegisteredField(layer, frame, None)
             }
+            OverlaySource::RefsProbability(fh) => OverlayMsg::RegisteredField(
+                crate::render::FieldLayer::RefsReflectivityProb,
+                wxdata::refs::fetch_reflectivity_40(http, fh).await?,
+                None,
+            ),
             OverlaySource::Env(layer, model, ml, srh_km) => {
                 use crate::render::FieldLayer as FL;
                 let (var, level, min_valid) = match layer {
@@ -1780,7 +1788,7 @@ fn field_refresh_secs(layer: crate::render::FieldLayer) -> u64 {
         | FL::ModelDiff => 1800,
         FL::Smoke => 900,
         // NBM posts hourly; the blend moves no faster than that.
-        FL::ThunderProb => 900,
+        FL::ThunderProb | FL::RefsReflectivityProb => 900,
         // An accumulation moves slower than the grid it accumulates, whatever the window.
         FL::HailSwath => 300,
         // Environment (HRRR CAPE/SRH) refreshes slowly — 15 min.
@@ -2755,6 +2763,7 @@ pub struct HookEchoApp {
     cappi_key: Option<(String, u32)>,
     /// HRRR "future radar": selected forecast hour, last-fetched hour, run/valid times, clock.
     hrrr_fcst_hour: u8,
+    refs_fcst_hour: u8,
     hrrr_fetched_hour: Option<u8>,
     hrrr_run: Option<DateTime<Utc>>,
     hrrr_valid: Option<DateTime<Utc>>,
@@ -3605,6 +3614,7 @@ impl HookEchoApp {
             cappi_tex: None,
             cappi_key: None,
             hrrr_fcst_hour: 1,
+            refs_fcst_hour: 1,
             hrrr_fetched_hour: None,
             hrrr_run: None,
             hrrr_valid: None,
@@ -16898,6 +16908,23 @@ impl eframe::App for HookEchoApp {
                 }
                 self.hrrr_layer_hour.insert(layer, fh);
                 self.spawn_overlay(ctx, OverlaySource::HrrrLayer(layer, fh));
+            }
+        }
+        {
+            let layer = FL::RefsReflectivityProb;
+            let fh = self.refs_fcst_hour;
+            let stale = self.field_wanted(layer)
+                && self.fields.get(&layer).is_none_or(|state| {
+                    state
+                        .last_fetch
+                        .is_none_or(|time| time.elapsed().as_secs() >= field_refresh_secs(layer))
+                });
+            let hour_changed =
+                self.field_wanted(layer) && self.hrrr_layer_hour.get(&layer) != Some(&fh);
+            if stale || hour_changed {
+                self.fields.entry(layer).or_default().last_fetch = Some(Instant::now());
+                self.hrrr_layer_hour.insert(layer, fh);
+                self.spawn_overlay(ctx, OverlaySource::RefsProbability(fh));
             }
         }
         // Quiet hours just ended: replay what it held back as one push, so waking up to a silent
