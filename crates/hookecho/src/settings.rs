@@ -159,6 +159,9 @@ pub struct Settings {
     /// Whether radar timestamps read in the site's local time or in UTC.
     #[serde(default)]
     pub time_display: TimeDisplay,
+    /// Optional global override for cross-source valid-time matching. `None` uses product policy.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub alignment_tolerance_minutes: Option<u16>,
     /// UI text/widget zoom factor (egui `zoom_factor`); also captures Ctrl+= / Ctrl+- / Ctrl+0.
     pub ui_scale: f32,
     /// User-added GRLevelX placefile overlays.
@@ -1192,6 +1195,7 @@ impl Default for Settings {
             velocity_unit: VelocityUnit::default(),
             temp_unit: TempUnit::default(),
             time_display: TimeDisplay::default(),
+            alignment_tolerance_minutes: None,
             // 1.0 everywhere: this multiplies the native scale factor, and Android's display
             // density already sizes widgets for touch — an extra 1.3 shrank the S24's logical
             // canvas to ~277 pt wide (nothing fit).
@@ -1761,6 +1765,7 @@ mod tests {
             velocity_unit: VelocityUnit::Mph,
             temp_unit: TempUnit::Celsius,
             time_display: TimeDisplay::Utc,
+            alignment_tolerance_minutes: Some(20),
             ui_scale: 1.2,
             sync_client_id: String::new(),
             sync_client_secret: String::new(),

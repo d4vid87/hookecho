@@ -636,6 +636,18 @@ fn units_tab(ui: &mut egui::Ui, settings: &mut Settings) {
         }
     });
     ui.weak("Site local uses the radar site's clock. Reflectivity stays dBZ.");
+    ui.separator();
+    let mut custom_tolerance = settings.alignment_tolerance_minutes.is_some();
+    if ui
+        .checkbox(&mut custom_tolerance, "Custom cross-source time tolerance")
+        .changed()
+    {
+        settings.alignment_tolerance_minutes = custom_tolerance.then_some(30);
+    }
+    if let Some(minutes) = &mut settings.alignment_tolerance_minutes {
+        ui.add(egui::Slider::new(minutes, 1..=180).text("minutes"));
+    }
+    ui.weak("When off, each product uses its scientifically appropriate tolerance.");
 }
 
 fn radar_products_tab(ui: &mut egui::Ui, settings: &mut Settings) {

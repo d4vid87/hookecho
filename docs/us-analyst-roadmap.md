@@ -266,7 +266,7 @@ The current timeline is radar-centered. Convert it into a general valid-time coo
 - [x] radar/satellite/MRMS nearest-frame synchronization ([evidence](us-analyst-implementation.md))
 - [x] “lock all panes to valid time” toggle
 - [x] “lock to source frame” option for exact radar analysis
-- [ ] explicit warning when sources differ by more than a configurable tolerance
+- [x] explicit warning when sources differ by more than a configurable tolerance
 
 ### Acceptance criteria
 

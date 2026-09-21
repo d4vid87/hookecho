@@ -15485,7 +15485,12 @@ impl HookEchoApp {
             .current()
             .and_then(|id| id.date_time())
             .or_else(|| self.views[pane].volume.as_ref().map(|volume| volume.time))?;
-        let tolerance = field_time_tolerance(layer);
+        let tolerance = self
+            .settings
+            .alignment_tolerance_minutes
+            .map_or_else(|| field_time_tolerance(layer), |minutes| {
+                chrono::Duration::minutes(i64::from(minutes))
+            });
         let available = [wxdata::timecoord::TimedFrame {
             valid: stamp.valid_time,
             value: (),
