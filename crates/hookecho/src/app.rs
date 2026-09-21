@@ -399,7 +399,13 @@ enum OverlaySource {
     /// Run an external-process plugin: `(key, command, args, context)`. The key is the synthetic
     /// `plugin:<name>` id it shares with the placefile pipeline it feeds.
     #[cfg(not(target_arch = "wasm32"))]
-    Plugin(String, String, Vec<String>, crate::plugins::Context),
+    Plugin(
+        String,
+        String,
+        Vec<String>,
+        crate::settings::PluginManifest,
+        crate::plugins::Context,
+    ),
     /// Camera sites within a lon/lat bbox `(min_lon, min_lat, max_lon, max_lat)`, plus the user's
     /// Windy API key — empty for FAA-only, which is the keyless default.
     Webcams(f64, f64, f64, f64, String),
@@ -677,10 +683,10 @@ impl OverlaySource {
                 OverlayMsg::Placefile(url, pf)
             }
             #[cfg(not(target_arch = "wasm32"))]
-            OverlaySource::Plugin(key, command, args, pctx) => {
+            OverlaySource::Plugin(key, command, args, manifest, pctx) => {
                 // A plugin failure is the user's own command misbehaving, so it has to reach the
                 // manager window rather than only the log — hence a message either way.
-                match crate::plugins::run(&command, &args, &pctx).await {
+                match crate::plugins::run(&command, &args, &manifest, &pctx).await {
                     Ok(pf) => OverlayMsg::Placefile(key, pf),
                     Err(e) => OverlayMsg::PlacefileError(key, e.to_string()),
                 }
@@ -4521,6 +4527,7 @@ impl HookEchoApp {
                     url.clone(),
                     p.command.clone(),
                     p.args.clone(),
+                    p.manifest.clone(),
                     self.plugin_context(),
                 ),
                 #[cfg(target_arch = "wasm32")]

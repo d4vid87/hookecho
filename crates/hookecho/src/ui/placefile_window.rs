@@ -190,6 +190,7 @@ impl PlacefileWindow {
                     args: words.map(str::to_string).collect(),
                     refresh_secs: 60,
                     enabled: true,
+                    manifest: Default::default(),
                 });
                 self.new_plugin.clear();
                 self.new_command.clear();

@@ -53,11 +53,24 @@ impl Context {
 pub async fn run(
     command: &str,
     args: &[String],
+    manifest: &crate::settings::PluginManifest,
     ctx: &Context,
 ) -> anyhow::Result<wxdata::placefile::Placefile> {
     use std::process::Stdio;
     use tokio::io::AsyncReadExt;
 
+    anyhow::ensure!(
+        manifest.api_version == 1,
+        "unsupported plugin API version {}",
+        manifest.api_version
+    );
+    anyhow::ensure!(
+        manifest
+            .capabilities
+            .iter()
+            .any(|capability| capability == "placefile-output"),
+        "plugin must declare the placefile-output capability"
+    );
     let mut cmd = tokio::process::Command::new(command);
     // ponytail: tokio Command, same CREATE_NO_WINDOW flag inline — a generic trait for one site
     // isn't worth it.
@@ -72,6 +85,16 @@ pub async fn run(
     for (k, v) in ctx.env() {
         cmd.env(k, v);
     }
+    cmd.env(
+        "HOOKECHO_PLUGIN_API_VERSION",
+        manifest.api_version.to_string(),
+    )
+    .env("HOOKECHO_PLUGIN_VERSION", &manifest.version)
+    .env(
+        "HOOKECHO_PLUGIN_CAPABILITIES",
+        manifest.capabilities.join(","),
+    )
+    .env("HOOKECHO_INPUT_PRODUCTS", manifest.input_products.join(","));
     let mut child = cmd
         .spawn()
         .map_err(|e| anyhow::anyhow!("could not run {command}: {e}"))?;
@@ -81,12 +104,18 @@ pub async fn run(
     let read = async {
         let out = async {
             let mut bytes = Vec::new();
-            (&mut stdout).take(MAX_OUTPUT as u64).read_to_end(&mut bytes).await?;
+            (&mut stdout)
+                .take(MAX_OUTPUT as u64)
+                .read_to_end(&mut bytes)
+                .await?;
             std::io::Result::Ok(bytes)
         };
         let err = async {
             let mut text = String::new();
-            (&mut stderr).take(64 * 1024).read_to_string(&mut text).await?;
+            (&mut stderr)
+                .take(64 * 1024)
+                .read_to_string(&mut text)
+                .await?;
             std::io::Result::Ok(text)
         };
         let (out, err, status) = tokio::join!(out, err, child.wait());
@@ -120,6 +149,7 @@ pub async fn run(
 pub async fn run(
     command: &str,
     _args: &[String],
+    _manifest: &crate::settings::PluginManifest,
     _ctx: &Context,
 ) -> anyhow::Result<wxdata::placefile::Placefile> {
     anyhow::bail!("plugins are desktop-only ({command} not run)")
@@ -142,6 +172,10 @@ mod tests {
         }
     }
 
+    fn manifest() -> crate::settings::PluginManifest {
+        crate::settings::PluginManifest::default()
+    }
+
     #[test]
     fn env_is_the_documented_shape() {
         let e = ctx().env();
@@ -150,6 +184,16 @@ mod tests {
         assert_eq!(get("HOOKECHO_BBOX").unwrap(), "-98,34,-96,36");
         assert_eq!(get("HOOKECHO_TIME").unwrap(), "2013-05-20T20:15:00+00:00");
         assert_eq!(get("HOOKECHO_PRODUCT").unwrap(), "REF");
+    }
+
+    #[test]
+    fn old_plugin_settings_receive_the_v1_manifest() {
+        let plugin: crate::settings::PluginConfig = serde_json::from_str(
+            r#"{"name":"legacy","command":"echo","refresh_secs":60,"enabled":true}"#,
+        )
+        .unwrap();
+        assert_eq!(plugin.manifest.api_version, 1);
+        assert_eq!(plugin.manifest.capabilities, ["placefile-output"]);
     }
 
     #[cfg(not(target_os = "android"))]
@@ -164,6 +208,7 @@ mod tests {
                  \"$HOOKECHO_SITE\""
                     .into(),
             ],
+            &manifest(),
             &ctx(),
         )
         .await
@@ -176,7 +221,9 @@ mod tests {
     #[tokio::test]
     async fn a_hung_plugin_is_killed_not_waited_on() {
         let started = std::time::Instant::now();
-        let err = run("sleep", &["600".into()], &ctx()).await.unwrap_err();
+        let err = run("sleep", &["600".into()], &manifest(), &ctx())
+            .await
+            .unwrap_err();
         assert!(err.to_string().contains("did not finish"), "{err}");
         assert!(started.elapsed() < TIMEOUT + Duration::from_secs(5));
     }
@@ -184,15 +231,33 @@ mod tests {
     #[cfg(not(target_os = "android"))]
     #[tokio::test]
     async fn a_failing_plugin_reports_its_stderr() {
-        let err = run("sh", &["-c".into(), "echo boom >&2; exit 3".into()], &ctx())
-            .await
-            .unwrap_err();
+        let err = run(
+            "sh",
+            &["-c".into(), "echo boom >&2; exit 3".into()],
+            &manifest(),
+            &ctx(),
+        )
+        .await
+        .unwrap_err();
         assert!(err.to_string().contains("boom"), "{err}");
     }
 
     #[cfg(not(target_os = "android"))]
     #[tokio::test]
     async fn a_missing_command_is_an_error_not_a_panic() {
-        assert!(run("hookecho-no-such-command", &[], &ctx()).await.is_err());
+        assert!(run("hookecho-no-such-command", &[], &manifest(), &ctx())
+            .await
+            .is_err());
+    }
+
+    #[cfg(not(target_os = "android"))]
+    #[tokio::test]
+    async fn rejects_an_unsupported_manifest_before_launch() {
+        let mut manifest = manifest();
+        manifest.api_version = 2;
+        let error = run("hookecho-no-such-command", &[], &manifest, &ctx())
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("API version 2"));
     }
 }

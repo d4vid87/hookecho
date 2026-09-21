@@ -25,7 +25,7 @@ roadmap checkbox only after its gate passes and link the test or capture here.
 | M output/API | Partial | snapshots, GIF/MP4 with fixed or exact source-time intervals and JSON provenance sidecars, streamer mode, timestamp-exact archive loop selection, and a token-protected versioned local API for radar/product discovery, frame provenance, native point probes, cells, health, stills, and loops while preserving legacy routes | Exact archive-time selection, interval encoding, sidecar schema, and local API route/catalog tests, native Clippy, and WASM checks pass; pending broadcast presets and scientific formats |
 | N diagnostics | Partial | source health and request status | Continuous |
 | O performance | Partial | profiling, smoke tests, bundle budget | Continuous |
-| P extensions | Partial | native command plugins | Pending capability-declared IPC/Python |
+| P extensions | Partial | bounded native command plugins with a versioned manifest, declared capabilities/products/config schema, and environment-based IPC that works with external Python | Manifest compatibility and refusal tests pass; pending scalar-grid, annotation, and table outputs |
 | Q accessibility | Partial | keyboard/touch foundations | Continuous |
 | R research | Missing | — | Pending separately validated research gates |
 

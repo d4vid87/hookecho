@@ -713,6 +713,50 @@ pub struct PluginConfig {
     #[serde(default = "default_plugin_refresh")]
     pub refresh_secs: u32,
     pub enabled: bool,
+    #[serde(default)]
+    pub manifest: PluginManifest,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct PluginManifest {
+    #[serde(default = "default_plugin_version")]
+    pub version: String,
+    #[serde(default = "default_plugin_api")]
+    pub api_version: u16,
+    #[serde(default = "default_plugin_capabilities")]
+    pub capabilities: Vec<String>,
+    #[serde(default)]
+    pub input_products: Vec<String>,
+    #[serde(default = "default_plugin_outputs")]
+    pub output_products: Vec<String>,
+    #[serde(default)]
+    pub config_schema: Option<serde_json::Value>,
+}
+
+impl Default for PluginManifest {
+    fn default() -> Self {
+        Self {
+            version: default_plugin_version(),
+            api_version: default_plugin_api(),
+            capabilities: default_plugin_capabilities(),
+            input_products: Vec::new(),
+            output_products: default_plugin_outputs(),
+            config_schema: None,
+        }
+    }
+}
+
+fn default_plugin_version() -> String {
+    "0.1.0".into()
+}
+fn default_plugin_api() -> u16 {
+    1
+}
+fn default_plugin_capabilities() -> Vec<String> {
+    vec!["placefile-output".into()]
+}
+fn default_plugin_outputs() -> Vec<String> {
+    vec!["vector-features".into()]
 }
 
 fn default_plugin_refresh() -> u32 {
