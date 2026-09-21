@@ -3088,7 +3088,7 @@ pub struct HookEchoApp {
     show_3d: bool,
     vol3d: ui::volume3d_window::Volume3dState,
     /// Which volume the built grid belongs to, so reopening the window doesn't rebuild it.
-    vol3d_key: Option<(String, usize)>,
+    vol3d_key: Option<(String, usize, Moment)>,
     /// In-flight build (the resample runs off the UI thread).
     #[allow(clippy::type_complexity)]
     vol3d_rx: Option<std::sync::mpsc::Receiver<(crate::render3d::Volume3dUpload, (f32, f32))>>,
@@ -5478,18 +5478,19 @@ impl HookEchoApp {
             return;
         };
         // Rebuild once per volume, not once per open: resampling 192x192x48 is a second of CPU.
-        let key = (vol.name.clone(), VOL3D_N);
+        let moment = self.vol3d.moment;
+        let key = (vol.name.clone(), VOL3D_N, moment);
         if self.vol3d_key.as_ref() == Some(&key) || self.vol3d_rx.is_some() {
             return;
         }
-        let sweeps = vol.reflectivity_tilts();
+        let sweeps = vol.moment_tilts(moment);
         if sweeps.is_empty() {
             return;
         }
         self.vol3d_key = Some(key);
         let table = crate::colormap::effective_table(
             &self.palettes,
-            Moment::Reflectivity,
+            moment,
             self.settings.theme,
         );
         let (tx, rx) = std::sync::mpsc::channel();
@@ -18418,6 +18419,8 @@ impl eframe::App for HookEchoApp {
         if self.show_3d {
             self.drain_volume3d(ctx);
             let mut open = true;
+            let before = self.vol3d.moment;
+            let available = self.views[self.active].moments();
             ui::volume3d_window::show(
                 ctx,
                 &mut open,
@@ -18426,10 +18429,17 @@ impl eframe::App for HookEchoApp {
                 VOL3D_N as u32,
                 VOL3D_NZ as u32,
                 self.vol3d_range,
+                available,
                 &mut self.drawer,
                 ui::motion::degraded(),
             );
             self.show_3d = open;
+            if self.vol3d.moment != before {
+                self.vol3d.threshold_dbz = f32::NEG_INFINITY;
+                self.vol3d_key = None;
+                self.vol3d_pending = None;
+                self.build_volume3d();
+            }
         }
         if self.show_cappi {
             self.update_cappi(ctx);
