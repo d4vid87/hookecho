@@ -22,24 +22,47 @@ pub enum LoopFormat {
 /// Encode `frames` into an MP4 (H.264) at `path` via the `ffmpeg` CLI. Frames are written as
 /// PNGs to a temp dir and muxed at `fps`. Errors if ffmpeg is missing or fails.
 pub fn encode_mp4(frames: &[RgbaImage], fps: u32, path: &Path) -> anyhow::Result<()> {
+    encode_mp4_timed(frames, &vec![1_000 / fps.max(1); frames.len()], path)
+}
+
+pub fn encode_mp4_timed(
+    frames: &[RgbaImage],
+    delays_ms: &[u32],
+    path: &Path,
+) -> anyhow::Result<()> {
     if frames.is_empty() {
         anyhow::bail!("no frames captured");
     }
+    anyhow::ensure!(
+        frames.len() == delays_ms.len(),
+        "frame timing count mismatch"
+    );
     // Stage PNGs in a unique temp dir.
     let dir = std::env::temp_dir().join(format!("hookecho_mp4_{}", std::process::id()));
     std::fs::create_dir_all(&dir)?;
     for (i, img) in frames.iter().enumerate() {
         img.save(dir.join(format!("f{i:04}.png")))?;
     }
+    let mut concat = String::new();
+    for (i, delay) in delays_ms.iter().enumerate() {
+        concat.push_str(&format!(
+            "file 'f{i:04}.png'\nduration {:.3}\n",
+            *delay as f64 / 1_000.0
+        ));
+    }
+    concat.push_str(&format!("file 'f{:04}.png'\n", frames.len() - 1));
+    std::fs::write(dir.join("frames.txt"), concat)?;
     // Even dimensions are required by yuv420p; pad if odd.
     let mut ffmpeg = std::process::Command::new("ffmpeg");
     crate::platform::no_window(&mut ffmpeg);
     let status = ffmpeg
-        .args(["-y", "-framerate", &fps.to_string(), "-i"])
-        .arg(dir.join("f%04d.png"))
+        .current_dir(&dir)
+        .args(["-y", "-f", "concat", "-safe", "0", "-i", "frames.txt"])
         .args([
             "-vf",
             "pad=ceil(iw/2)*2:ceil(ih/2)*2",
+            "-fps_mode",
+            "vfr",
             "-c:v",
             "libx264",
             "-pix_fmt",
@@ -63,14 +86,27 @@ pub fn encode_mp4(frames: &[RgbaImage], fps: u32, path: &Path) -> anyhow::Result
 /// Encode `frames` into a looping GIF at `path`, each shown for `delay_ms` milliseconds.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn encode_gif(frames: &[RgbaImage], delay_ms: u16, path: &Path) -> anyhow::Result<()> {
+    encode_gif_timed(frames, &vec![delay_ms as u32; frames.len()], path)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub fn encode_gif_timed(
+    frames: &[RgbaImage],
+    delays_ms: &[u32],
+    path: &Path,
+) -> anyhow::Result<()> {
     if frames.is_empty() {
         anyhow::bail!("no frames captured");
     }
+    anyhow::ensure!(
+        frames.len() == delays_ms.len(),
+        "frame timing count mismatch"
+    );
     let file = std::fs::File::create(path)?;
     let mut enc = GifEncoder::new(std::io::BufWriter::new(file));
     enc.set_repeat(Repeat::Infinite)?;
-    let delay = Delay::from_numer_denom_ms(delay_ms as u32, 1);
-    for img in frames {
+    for (img, delay_ms) in frames.iter().zip(delays_ms) {
+        let delay = Delay::from_numer_denom_ms(*delay_ms, 1);
         enc.encode_frame(Frame::from_parts(img.clone(), 0, 0, delay))?;
     }
     Ok(())
@@ -106,6 +142,12 @@ mod tests {
         let path = std::env::temp_dir().join("hookecho_gif_empty.gif");
         assert!(encode_gif(&[], 100, &path).is_err());
         assert!(encode_mp4(&[], 5, &path).is_err());
+    }
+
+    #[test]
+    fn rejects_mismatched_frame_timing() {
+        let path = std::env::temp_dir().join("hookecho_gif_bad_timing.gif");
+        assert!(encode_gif_timed(&[RgbaImage::new(1, 1)], &[], &path).is_err());
     }
 
     #[test]

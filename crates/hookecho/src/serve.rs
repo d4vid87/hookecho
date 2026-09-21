@@ -1062,9 +1062,6 @@ fn national_clip(server: &Server) -> anyhow::Result<Vec<u8>> {
     Ok(body)
 }
 
-/// How far apart the frames of a loop are asked for. A volume is about five minutes wide; a site
-/// in clear-air mode is slower, and two targets then land on the same volume — a repeated frame,
-/// not an error.
 /// Rendered loop frames older than this are never wanted again — the window only slides forward.
 const LOOP_FRAME_TTL: Duration = Duration::from_secs(2 * 3600);
 
@@ -1091,6 +1088,11 @@ fn loop_clip(
         .and_then(|v| v.parse().ok())
         .unwrap_or(2)
         .clamp(1, 10);
+    let source_timing = match crate::cloud::param(query, "timing").as_deref() {
+        None | Some("fixed") => false,
+        Some("source") => true,
+        Some(other) => anyhow::bail!("unknown timing '{other}' (use fixed or source)"),
+    };
     let ext = match format {
         crate::loopexport::LoopFormat::Gif => "gif",
         crate::loopexport::LoopFormat::Mp4 => "mp4",
@@ -1117,7 +1119,11 @@ fn loop_clip(
     let times = select_loop_times(&objects, end, count);
     anyhow::ensure!(times.len() >= 2, "not enough radar frames for a loop");
     let newest = times.last().expect("at least two frames").timestamp();
-    let key = format!("/loop.{ext}?{}-{count}-{fps}-{newest}", f.tag());
+    let timing_tag = if source_timing { "source" } else { "fixed" };
+    let key = format!(
+        "/loop.{ext}?{}-{count}-{fps}-{newest}-{timing_tag}",
+        f.tag()
+    );
     if let Some(hit) = server
         .cache
         .lock()
@@ -1130,8 +1136,10 @@ fn loop_clip(
 
     let dir = snapshot_dir()?;
     let mut frames = Vec::with_capacity(count);
+    let mut frame_delays: Vec<u32> = Vec::with_capacity(count);
     let mut last: Option<Vec<u8>> = None;
-    for at in times {
+    let delays_ms = loop_delays(&times, fps, source_timing);
+    for (index, at) in times.into_iter().enumerate() {
         let out = dir.join(format!("loop-{}-{}.png", f.tag(), at.format("%Y%m%d-%H%M")));
         // An archived frame never changes, so one already on disk is the answer. Only the newest
         // step is rendered on a repeat poll.
@@ -1143,9 +1151,13 @@ fn loop_clip(
         // newer than the one three minutes old, so the head of the window repeats it. Identical
         // consecutive frames are a stutter in the loop, not information.
         if last.as_deref() == Some(png.as_slice()) {
+            if let Some(delay) = frame_delays.last_mut() {
+                *delay = (*delay + delays_ms[index]).min(15 * 60 * 1_000);
+            }
             continue;
         }
         frames.push(image::load_from_memory(&png)?.to_rgba8());
+        frame_delays.push(delays_ms[index]);
         last = Some(png);
     }
     prune_loop_frames(&dir);
@@ -1154,9 +1166,11 @@ fn loop_clip(
     let clip = dir.join(format!("loop-{}.{ext}", f.tag()));
     match format {
         crate::loopexport::LoopFormat::Gif => {
-            crate::loopexport::encode_gif(&frames, (1000 / fps) as u16, &clip)?
+            crate::loopexport::encode_gif_timed(&frames, &frame_delays, &clip)?
         }
-        crate::loopexport::LoopFormat::Mp4 => crate::loopexport::encode_mp4(&frames, fps, &clip)?,
+        crate::loopexport::LoopFormat::Mp4 => {
+            crate::loopexport::encode_mp4_timed(&frames, &frame_delays, &clip)?
+        }
     }
     let body = std::fs::read(&clip)?;
     server
@@ -1165,6 +1179,21 @@ fn loop_clip(
         .unwrap()
         .put(key, (Instant::now(), body.clone()));
     Ok(body)
+}
+
+fn loop_delays(times: &[chrono::DateTime<chrono::Utc>], fps: u32, source: bool) -> Vec<u32> {
+    let mut delays = vec![1_000 / fps.max(1); times.len()];
+    if source {
+        for (index, pair) in times.windows(2).enumerate() {
+            delays[index] = (pair[1] - pair[0])
+                .num_milliseconds()
+                .clamp(100, 15 * 60 * 1_000) as u32;
+        }
+        if times.len() > 1 {
+            delays[times.len() - 1] = delays[times.len() - 2];
+        }
+    }
+    delays
 }
 
 fn select_loop_times(
@@ -1846,6 +1875,14 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["01:05", "01:10"]
         );
+    }
+
+    #[test]
+    fn loop_timing_can_follow_source_intervals() {
+        let times = ["01:00", "01:05", "01:12"]
+            .map(|time| format!("2024-05-26T{time}:00Z").parse().unwrap());
+        assert_eq!(loop_delays(&times, 2, false), [500, 500, 500]);
+        assert_eq!(loop_delays(&times, 2, true), [300_000, 420_000, 420_000]);
     }
 
     #[test]
