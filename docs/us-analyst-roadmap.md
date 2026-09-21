@@ -2182,7 +2182,7 @@ HookEcho should be considered “top-tier U.S. analyst workstation” only when 
 - [ ] Android tablet analyst layout
 - [x] performance regression suite
 - [x] scheduled public-feed contract tests
-- [ ] all major layers expose provenance, exact time, units, age and sampling
+- [x] all major layers expose provenance, exact time, units, age and sampling
 
 When these are complete, further work should focus less on copying competitor checklists and more on **scientific quality, uncertainty visualization, reproducibility, performance, and novel multi-source analysis**.
 
