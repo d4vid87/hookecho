@@ -16,6 +16,15 @@ documented cycles; ECMWF 00/12 UTC runs extend to F240 while 06/18 UTC runs stop
 - GFS: <https://www.nco.ncep.noaa.gov/pmb/products/gfs/>
 - ECMWF IFS: <https://confluence.ecmwf.int/spaces/DAC/pages/272310539/ECMWF+open+data+real-time+forecasts+from+IFS+and+AIFS>
 
+## NOAA RRFS v1 parallel
+
+- Provider: NOAA's `noaa-rrfs-ops-pds` public bucket, using the operational directory contract
+  during pre-implementation parallel: <https://registry.opendata.aws/noaa-rrfs-ops/>.
+- Adapter: CONUS 3 km `2dfld` GRIB2 plus `.idx` range reads. Hourly cycles extend to F18;
+  00/06/12/18 UTC cycles extend to F84.
+- Status: label the source as parallel/experimental until NOAA's announced operational promotion.
+  Scheduled CI requires a current or previous-day index object so naming drift fails visibly.
+
 ## NOAA GOES ABI CMIP
 
 - Provider: NOAA Open Data Dissemination on AWS. GOES-19 is operational GOES-East and GOES-18 is

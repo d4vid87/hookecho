@@ -48,6 +48,22 @@ check_recent_goes() {
   fi
 }
 
+check_recent_rrfs() {
+  local today yesterday body
+  today=$(date -u +%Y%m%d)
+  yesterday=$(date -u -d '1 day ago' +%Y%m%d)
+  body=$(curl --fail --silent --show-error --retry 3 \
+    "https://noaa-rrfs-ops-pds.s3.amazonaws.com/?list-type=2&max-keys=2&prefix=rrfs.${today}/")
+  if ! grep -Fq '.grib2.idx</Key>' <<<"$body"; then
+    body=$(curl --fail --silent --show-error --retry 3 \
+      "https://noaa-rrfs-ops-pds.s3.amazonaws.com/?list-type=2&max-keys=2&prefix=rrfs.${yesterday}/")
+    grep -Fq '.grib2.idx</Key>' <<<"$body" || {
+      echo "no recent RRFS index object" >&2
+      return 1
+    }
+  fi
+}
+
 check_prefixes \
   'https://noaa-mrms-pds.s3.amazonaws.com/?list-type=2&delimiter=/&prefix=CONUS/' \
   'CONUS/MergedReflectivityQCComposite_00.50/' \
@@ -122,3 +138,4 @@ check_prefixes \
 check_recent_goes 'ABI-L2-CMIPC'
 check_recent_goes 'ABI-L2-CMIPM'
 check_recent_goes 'GLM-L2-LCFA'
+check_recent_rrfs

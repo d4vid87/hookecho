@@ -505,6 +505,10 @@ pub(crate) fn show(
             .on_hover_text(
                 "RAP f00 observed analysis, 13 km grid — coarser, but what is, not what's forecast",
             );
+                ui.selectable_value(env_model, wxdata::hrrr::Model::Rrfs, "RRFS v1 parallel")
+                    .on_hover_text(
+                        "NOAA's 3 km RRFS pre-implementation parallel — experimental until the operational promotion",
+                    );
                 ui.selectable_value(env_model, wxdata::hrrr::Model::NamNest, "NAM 3 km nest")
             .on_hover_text(
                 "The NAM's 3 km CONUS nest — a second convection-allowing opinion on its own \

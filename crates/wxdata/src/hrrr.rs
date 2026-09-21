@@ -20,6 +20,7 @@ const NAM_BUCKET: &str = "https://noaa-nam-pds.s3.amazonaws.com";
 /// The National Blend of Models, in GRIB2 with `.idx` sidecars. Not `noaa-nbm-pds`: that bucket
 /// republished as per-element GeoTIFF, which would need a TIFF decoder to read one field.
 const NBM_BUCKET: &str = "https://noaa-nbm-grib2-pds.s3.amazonaws.com";
+const RRFS_BUCKET: &str = "https://noaa-rrfs-ops-pds.s3.amazonaws.com";
 
 pub static REFLECTIVITY_DESCRIPTOR: FieldDescriptor = FieldDescriptor {
     id: FieldId("model.hrrr.composite-reflectivity"),
@@ -40,7 +41,7 @@ pub static REFLECTIVITY_DESCRIPTOR: FieldDescriptor = FieldDescriptor {
 
 pub static CAPE_DESCRIPTOR: FieldDescriptor = FieldDescriptor {
     id: FieldId("model.mesoscale.cape"),
-    source: "NOAA HRRR/RAP",
+    source: "NOAA regional models",
     family: FieldFamily::Model,
     display_name: "Surface convective available potential energy",
     short_name: "CAPE",
@@ -57,7 +58,7 @@ pub static CAPE_DESCRIPTOR: FieldDescriptor = FieldDescriptor {
 
 pub static SRH_DESCRIPTOR: FieldDescriptor = FieldDescriptor {
     id: FieldId("model.mesoscale.srh"),
-    source: "NOAA HRRR/RAP",
+    source: "NOAA regional models",
     family: FieldFamily::Model,
     display_name: "Storm-relative helicity",
     short_name: "SRH",
@@ -151,6 +152,9 @@ pub enum Model {
     #[default]
     Hrrr,
     Rap,
+    /// RRFS v1 pre-implementation parallel. The adapter uses the operational bucket contract;
+    /// source status remains explicit until NOAA promotes it operationally.
+    Rrfs,
     /// HRRR's pressure-level file. Not offered as a user-facing source — it exists for the
     /// effective-layer parameters, which need real columns.
     HrrrPressure,
@@ -197,6 +201,20 @@ impl Model {
                 index_suffix: ".idx",
                 expected_latency_minutes: None,
                 domain: "North America",
+                ensemble: false,
+            },
+            Self::Rrfs => ModelDefinition {
+                id: "rrfs-v1",
+                label: "RRFS v1 parallel",
+                provider: "NOAA",
+                base_url: RRFS_BUCKET,
+                cycle_hours: 1,
+                max_forecast_hour: 84,
+                grid: "3 km Lambert conformal CONUS",
+                regrid_resolution_deg: 0.04,
+                index_suffix: ".idx",
+                expected_latency_minutes: None,
+                domain: "CONUS",
                 ensemble: false,
             },
             Self::NamNest => ModelDefinition {
@@ -246,6 +264,7 @@ impl Model {
                 hour <= 18 || cycle_hour.is_multiple_of(6) && hour <= 48
             }
             Self::Rap => hour <= 21 || cycle_hour % 6 == 3 && hour <= 51,
+            Self::Rrfs => hour <= 18 || cycle_hour.is_multiple_of(6) && hour <= 84,
             Self::NamNest | Self::Nbm => hour <= self.definition().max_forecast_hour,
         }
     }
@@ -266,6 +285,9 @@ impl Model {
             Model::Rap => {
                 format!("{base}/rap.{date}/rap.t{cycle_hour:02}z.awp130pgrbf{fh:02}.grib2")
             }
+            Model::Rrfs => format!(
+                "{base}/rrfs.{date}/{cycle_hour:02}/rrfs.t{cycle_hour:02}z.2dfld.3km.f{fh:03}.conus.grib2"
+            ),
             Model::NamNest => format!(
                 "{base}/nam.{date}/nam.t{cycle_hour:02}z.conusnest.hiresf{fh:02}.tm00.grib2"
             ),
@@ -911,11 +933,20 @@ mod tests {
             Model::Rap.res_deg() > Model::Hrrr.res_deg(),
             "13 km vs 3 km"
         );
+        assert!(Model::Rrfs
+            .url("20260920", 18, 2)
+            .ends_with("rrfs.20260920/18/rrfs.t18z.2dfld.3km.f002.conus.grib2"));
     }
 
     #[test]
     fn operational_models_have_complete_unique_definitions() {
-        let models = [Model::Hrrr, Model::Rap, Model::NamNest, Model::Nbm];
+        let models = [
+            Model::Hrrr,
+            Model::Rap,
+            Model::Rrfs,
+            Model::NamNest,
+            Model::Nbm,
+        ];
         let mut ids = std::collections::HashSet::new();
         for model in models {
             let definition = model.definition();
@@ -934,6 +965,8 @@ mod tests {
         assert!(!Model::Hrrr.supports_forecast_hour(13, 19));
         assert!(Model::Rap.supports_forecast_hour(9, 51));
         assert!(!Model::Rap.supports_forecast_hour(10, 22));
+        assert!(Model::Rrfs.supports_forecast_hour(18, 84));
+        assert!(!Model::Rrfs.supports_forecast_hour(19, 19));
     }
 
     #[tokio::test]
@@ -978,6 +1011,27 @@ mod tests {
         eprintln!("peak CAPE — RAP {max:.0} vs HRRR {hmax:.0} J/kg");
         let ratio = (max as f64 / hmax.max(1.0) as f64).max(hmax as f64 / max.max(1.0) as f64);
         assert!(ratio < 3.0, "RAP {max} and HRRR {hmax} disagree wildly");
+    }
+
+    /// `cargo test -p wxdata rrfs_parallel_live -- --ignored --nocapture`
+    #[tokio::test]
+    #[ignore = "network"]
+    async fn rrfs_parallel_live() {
+        let http = reqwest::Client::new();
+        let forecast = fetch_field(&http, Model::Rrfs, "CAPE", "surface", 0, 0.0)
+            .await
+            .expect("RRFS parallel CAPE");
+        let finite = forecast
+            .field
+            .values
+            .iter()
+            .filter(|value| value.is_finite())
+            .count();
+        eprintln!(
+            "RRFS {}x{} run {} — {finite} finite cells",
+            forecast.field.nx, forecast.field.ny, forecast.run
+        );
+        assert!(finite > 1000);
     }
 
     #[tokio::test]
