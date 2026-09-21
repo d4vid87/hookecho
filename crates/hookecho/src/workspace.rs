@@ -78,6 +78,8 @@ pub struct Chrome {
 pub struct PaneSnap {
     pub site: Option<String>,
     pub moment: wxdata::level2::Moment,
+    #[serde(default)]
+    pub custom_product: Option<String>,
     pub tilt: usize,
     #[serde(default)]
     pub srv: bool,
@@ -109,6 +111,7 @@ impl PaneSnap {
         Self {
             site: v.site.clone(),
             moment: v.moment,
+            custom_product: v.custom_product.clone(),
             tilt: v.tilt,
             srv: v.srv,
             basemap: v.basemap.slug().to_string(),
@@ -136,6 +139,7 @@ impl PaneSnap {
     pub fn apply(&self, v: &mut MapView) {
         v.site = self.site.clone();
         v.moment = self.moment;
+        v.custom_product = self.custom_product.clone();
         v.tilt = self.tilt;
         v.srv = self.srv;
         v.basemap = crate::tiles::BasemapStyle::from_slug(&self.basemap);
@@ -160,6 +164,7 @@ fn pane(moment: wxdata::level2::Moment, tilt: usize, srv: bool) -> PaneSnap {
     PaneSnap {
         site: None,
         moment,
+        custom_product: None,
         tilt,
         srv,
         basemap: "dark".into(),
@@ -209,6 +214,7 @@ pub fn starters() -> Vec<Workspace> {
             panes: vec![PaneSnap {
                 site: None,
                 moment: Moment::Reflectivity,
+                custom_product: None,
                 tilt: 0,
                 srv: false,
                 basemap: "dark".into(),
@@ -364,6 +370,7 @@ mod tests {
             panes: vec![PaneSnap {
                 site: Some("KDMX".into()),
                 moment: wxdata::level2::Moment::CorrelationCoefficient,
+                custom_product: Some("Debris score".into()),
                 tilt: 1,
                 srv: false,
                 basemap: "dark".into(),

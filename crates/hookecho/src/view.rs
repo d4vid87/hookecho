@@ -185,6 +185,8 @@ pub struct MapView {
     /// Selected radar site (`None` = Supercell's cleared "None" state).
     pub site: Option<String>,
     pub moment: Moment,
+    /// Name of a saved user-defined radar product, or `None` for a native moment.
+    pub custom_product: Option<String>,
     pub tilt: usize,
     /// Per-moment display threshold (physical units), indexed by [`Moment::index`].
     pub thresholds: [Option<f32>; Moment::ALL.len()],
@@ -240,6 +242,7 @@ impl MapView {
             camera,
             site,
             moment: Moment::Reflectivity,
+            custom_product: None,
             tilt: 0,
             thresholds,
             threshold_enabled,

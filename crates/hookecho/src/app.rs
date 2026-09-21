@@ -2055,6 +2055,7 @@ type ShownKey = (
     // Precipitation-tint generation: `None` when the tint is off, else the grid revision, so a
     // new precipitation-type grid or toggling the tint rebuilds the image.
     Option<u32>,
+    Option<u64>,
 );
 
 /// An in-progress offline chase-pack download: the worker outcome channel, a cancel flag the
@@ -7660,9 +7661,9 @@ impl HookEchoApp {
     /// options that used to hide in the toolbox. All of it writes the same fields the hotkeys do.
     fn product_section(&mut self, ui: &mut egui::Ui, actions: &mut ui::layer_options::UiActions) {
         use crate::ui::style;
-        let (moment, srv, tilt) = {
+        let (moment, srv, tilt, custom_product) = {
             let v = &self.views[self.active];
-            (v.moment, v.srv, v.tilt)
+            (v.moment, v.srv, v.tilt, v.custom_product.clone())
         };
         let elevations = self.views[self.active]
             .volume
@@ -7675,6 +7676,7 @@ impl HookEchoApp {
             .unwrap_or_else(|| "Pick a site".to_string());
 
         let mut pick: Option<(wxdata::level2::Moment, bool)> = None;
+        let mut pick_custom: Option<String> = None;
         let mut pick_tilt: Option<usize> = None;
         // Expert knobs for the product you're on, edited through locals so the popup closure
         // doesn't need `self`. They used to live in the toolbox's Product ▸ Options disclosure.
@@ -7709,7 +7711,9 @@ impl HookEchoApp {
                 ] {
                     ui.columns(2, |columns| {
                         for (column, (label, m, relative)) in columns.iter_mut().zip(pair) {
-                            let selected = moment == m && (m != Moment::Velocity || srv == relative);
+                            let selected = custom_product.is_none()
+                                && moment == m
+                                && (m != Moment::Velocity || srv == relative);
                             if column.add_sized([column.available_width(), 38.0], egui::Button::new(label).selected(selected)).clicked() {
                                 pick = Some((m, relative));
                             }
@@ -7721,6 +7725,21 @@ impl HookEchoApp {
                         if ui.button(product.name).clicked() {
                             pick = Some((product.moment, false));
                             ui.close();
+                        }
+                    }
+                    if !self.settings.radar_products.is_empty() {
+                        ui.separator();
+                        for product in &self.settings.radar_products {
+                            if ui
+                                .selectable_label(
+                                    custom_product.as_deref() == Some(&product.name),
+                                    &product.name,
+                                )
+                                .clicked()
+                            {
+                                pick_custom = Some(product.name.clone());
+                                ui.close();
+                            }
                         }
                     }
                 });
@@ -7750,7 +7769,7 @@ impl HookEchoApp {
                     });
                 });
                 ui.add_space(8.0);
-                ui.label(egui::RichText::new(crate::products::name(moment, srv))
+                ui.label(egui::RichText::new(custom_product.as_deref().unwrap_or_else(|| crate::products::name(moment, srv)))
                     .size(style::FONT_TITLE).strong());
                 ui.add_space(6.0);
                 ui.horizontal(|ui| {
@@ -7867,6 +7886,9 @@ impl HookEchoApp {
         }
         if let Some((moment, relative)) = pick {
             self.apply_palette(PaletteAction::SetMoment(moment, relative), ui.ctx());
+        }
+        if let Some(product) = pick_custom {
+            self.views[self.active].custom_product = Some(product);
         }
         if srv_from_cells {
             if let Some((dir, spd)) = self.scit_mean_motion() {
@@ -8101,6 +8123,7 @@ impl HookEchoApp {
             PaletteAction::SetMoment(m, srv) => {
                 let v = &mut self.views[self.active];
                 v.moment = m;
+                v.custom_product = None;
                 if m == Moment::Velocity {
                     v.srv = srv;
                 }
@@ -10799,6 +10822,9 @@ impl HookEchoApp {
         }
         let count = self.views[data].elevation_count();
         self.views[idx].clamp_tilt_to(&count);
+        if let Some(name) = self.views[idx].custom_product.clone() {
+            return self.pane_custom_radar(idx, data, &name);
+        }
         let (moment, tilt, threshold, smooth, storm_uv) = {
             let v = &self.views[idx];
             (
@@ -10851,6 +10877,7 @@ impl HookEchoApp {
             uv_key,
             dealias,
             self.settings.precip_tint.then_some(self.precip_flag_gen),
+            None,
         );
         let lut_gen = self.palettes.gen.wrapping_add(
             if crate::theme::is_high_contrast(self.settings.theme) {
@@ -10906,6 +10933,100 @@ impl HookEchoApp {
                 (None, false)
             }
         }
+    }
+
+    fn pane_custom_radar(
+        &mut self,
+        idx: usize,
+        data: usize,
+        product_name: &str,
+    ) -> (Option<RadarUpload>, bool) {
+        use std::hash::{Hash, Hasher};
+        let Some(definition) = self
+            .settings
+            .radar_products
+            .iter()
+            .find(|definition| definition.name == product_name)
+            .cloned()
+        else {
+            self.views[idx].error = Some(format!("radar product '{product_name}' was not found"));
+            return (None, false);
+        };
+        let product = match wxdata::product_dsl::Product::compile(definition.clone()) {
+            Ok(product) => product,
+            Err(error) => {
+                self.views[idx].error = Some(error.to_string());
+                return (None, false);
+            }
+        };
+        let tilt = self.views[idx].tilt;
+        let smooth = self.views[idx].smooth;
+        let Some(volume_name) = self.views[data].volume.as_ref().map(|volume| volume.name.clone())
+        else {
+            return (None, true);
+        };
+        let sweeps_result = {
+            let Some(volume) = self.views[data].volume.as_mut() else {
+                return (None, true);
+            };
+            product
+                .inputs()
+                .iter()
+                .map(|moment| {
+                    volume
+                        .binned(*moment, tilt, false)
+                        .map(|sweep| (*moment, sweep.clone()))
+                })
+                .collect::<anyhow::Result<Vec<_>>>()
+        };
+        let sweeps = match sweeps_result {
+            Ok(sweeps) => sweeps,
+            Err(error) => {
+                self.views[idx].error = Some(error.to_string());
+                return (None, false);
+            }
+        };
+        let refs: Vec<_> = sweeps.iter().map(|(moment, sweep)| (*moment, sweep)).collect();
+        let sweep = match product.sweep(&refs, Default::default()) {
+            Ok(sweep) => sweep,
+            Err(error) => {
+                self.views[idx].error = Some(error.to_string());
+                return (None, false);
+            }
+        };
+        let mut hash = std::collections::hash_map::DefaultHasher::new();
+        definition.name.hash(&mut hash);
+        definition.expression.hash(&mut hash);
+        definition.min.to_bits().hash(&mut hash);
+        definition.max.to_bits().hash(&mut hash);
+        let product_hash = hash.finish();
+        let key: ShownKey = (
+            volume_name,
+            Moment::Reflectivity,
+            tilt,
+            None,
+            smooth,
+            None,
+            false,
+            None,
+            Some(product_hash),
+        );
+        let lut_gen = self.palettes.gen.wrapping_add(product_hash);
+        let lut_only = self.pane_shown.get(&idx) == Some(&key);
+        if lut_only && self.pane_lut.get(&idx) == Some(&lut_gen) {
+            return (None, true);
+        }
+        let palette_moment = Moment::from_code(&definition.palette).unwrap_or(Moment::Reflectivity);
+        let table = crate::colormap::effective_table(
+            &self.palettes,
+            palette_moment,
+            self.settings.theme,
+        );
+        let upload = to_upload(&sweep, &table, None, smooth, None, None, lut_only);
+        self.pane_shown.insert(idx, key);
+        self.pane_lut.insert(idx, lut_gen);
+        self.views[idx].error = None;
+        (Some(upload), true)
     }
 
     /// The always-on-top mini loop: a small undecorated window showing the active pane, so the
