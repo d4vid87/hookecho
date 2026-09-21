@@ -15656,6 +15656,9 @@ impl HookEchoApp {
                     if ui.button("Copy view to clipboard").clicked() {
                         self.request_capture(ui.ctx(), ShotDest::Clipboard);
                     }
+                    if ui.button("Export active field CSV…").clicked() {
+                        self.export_active_field_csv();
+                    }
                     toggle(ui, &mut self.settings.share_card, "Caption shared images")
                         .on_hover_text(
                             "Stamp the site, product, valid time and source onto saved and copied \
@@ -15792,6 +15795,33 @@ impl HookEchoApp {
             time_secs,
             span_min,
         });
+    }
+
+    fn export_active_field_csv(&mut self) {
+        let frame = crate::render::FieldLayer::DRAW_ORDER
+            .iter()
+            .rev()
+            .find(|layer| self.views[self.active].fields_on.contains(layer))
+            .and_then(|layer| self.fields.get(layer))
+            .and_then(|state| state.frame.clone());
+        let Some(frame) = frame else {
+            self.toast(ToastKind::Info, "No scalar field is active");
+            return;
+        };
+        let name = format!("hookecho-{}.csv", frame.descriptor.id.0);
+        let Some(path) = crate::dialog::save_path(&name, "csv") else {
+            return;
+        };
+        let result = std::fs::File::create(&path).and_then(|file| {
+            frame.write_csv(std::io::BufWriter::new(file))
+        });
+        match result {
+            Ok(rows) => self.toast(ToastKind::Success, format!("Exported {rows} native values")),
+            Err(error) => {
+                let _ = std::fs::remove_file(&path);
+                self.toast(ToastKind::Error, format!("Field export failed: {error}"));
+            }
+        }
     }
 
     /// Export settings + referenced color tables to a portable JSON bundle (a save dialog on

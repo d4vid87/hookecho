@@ -10,6 +10,10 @@ placefiles use — thresholds, `TimeRange` gating, icons and all.
 
 Desktop only. Android can't execute a program you dropped in app storage.
 
+For external analysis, **Settings → Share → Export active field CSV** streams the selected native
+grid with coordinates and provenance. Python, MetPy, and similar tools can consume that file
+without embedding a language runtime in HookEcho.
+
 Each plugin entry also carries a versioned manifest in the settings file. Existing entries migrate
 to API version 1 with the `placefile-output` capability. Advanced integrations can declare their
 version, input products, output products, and JSON configuration schema there; HookEcho rejects an

@@ -249,6 +249,57 @@ impl FieldFrame {
             method: self.descriptor.sampling,
         }
     }
+
+    /// Stream native scalar values with enough metadata to reproduce their meaning.
+    pub fn write_csv(&self, mut output: impl std::io::Write) -> std::io::Result<usize> {
+        let metadata = serde_json::json!({
+            "schema": "hookecho.field/v1",
+            "product_id": self.descriptor.id.0,
+            "source_identity": self.stamp.source_identity,
+            "units": self.descriptor.units,
+            "valid_time": self.stamp.valid_time.to_rfc3339(),
+            "received_time": self.stamp.received_time.to_rfc3339(),
+            "quality": self.stamp.quality.label(),
+            "sampling": self.descriptor.sampling.label(),
+            "projection": self.grid.projection,
+        });
+        writeln!(output, "# {metadata}")?;
+        writeln!(output, "lon,lat,value")?;
+        let mut rows = 0;
+        if let Some(image) = &self.native_abi {
+            for (row, &y) in image.y.iter().enumerate() {
+                for (col, &x) in image.x.iter().enumerate() {
+                    let index = row * image.width + col;
+                    let value = image.values[index];
+                    if image.quality.get(index).copied().unwrap_or(3) >= 2 || !value.is_finite() {
+                        continue;
+                    }
+                    let Some((lon, lat)) = image.projection.lon_lat(x, y) else {
+                        continue;
+                    };
+                    writeln!(output, "{lon:.6},{lat:.6},{value}")?;
+                    rows += 1;
+                }
+            }
+        } else {
+            let field = &self.field;
+            let dlon = (field.lon_east - field.lon_west) / field.nx.max(1) as f64;
+            let dlat = (field.lat_north - field.lat_south) / field.ny.max(1) as f64;
+            for row in 0..field.ny {
+                let lat = field.lat_north - (row as f64 + 0.5) * dlat;
+                for col in 0..field.nx {
+                    let value = field.values[row * field.nx + col];
+                    if !value.is_finite() {
+                        continue;
+                    }
+                    let lon = field.lon_west + (col as f64 + 0.5) * dlon;
+                    writeln!(output, "{lon:.6},{lat:.6},{value}")?;
+                    rows += 1;
+                }
+            }
+        }
+        Ok(rows)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -311,5 +362,11 @@ mod tests {
         assert_eq!(sample.value, Some(1.0));
         assert_eq!(sample.units, "unit");
         assert_eq!(sample.valid_time, valid);
+        let mut csv = Vec::new();
+        assert_eq!(frame.write_csv(&mut csv).unwrap(), 4);
+        let csv = String::from_utf8(csv).unwrap();
+        assert!(csv.contains("\"product_id\":\"test.scalar\""));
+        assert!(csv.contains("\"source_identity\":\"fixture\""));
+        assert!(csv.contains("-99.500000,39.500000,1"));
     }
 }
