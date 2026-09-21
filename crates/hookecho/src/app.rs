@@ -1246,6 +1246,8 @@ pub(crate) enum MapTool {
     Sounding,
     /// Click to set your position for chase mode (follow-me + nearest-radar handoff).
     Chase,
+    /// Click start, optional waypoints, and destination for road routing.
+    Route,
     /// Click a point for the plain NWS forecast there (7-day + hourly).
     Forecast,
     /// Click a point to list historical tornado tracks near it (SPC climatology).
@@ -2601,6 +2603,10 @@ pub struct HookEchoApp {
     /// Freehand annotation strokes, in lon/lat so they stick to the ground through pan and zoom.
     /// Session-only by design: this is for pointing at a storm on a stream, not a saved document.
     strokes: Vec<Stroke2d>,
+    /// Clicked start/waypoints/destination and provider-returned road alternatives.
+    route_waypoints: Vec<[f64; 2]>,
+    routes: Vec<wxdata::route::Route>,
+    route_rx: Option<std::sync::mpsc::Receiver<Result<Vec<wxdata::route::Route>, String>>>,
     /// The colour the next stroke gets.
     draw_color: egui::Color32,
     marker_window: ui::marker_window::MarkerWindow,
@@ -3530,6 +3536,9 @@ impl HookEchoApp {
             tool: MapTool::default(),
             measure: Vec::new(),
             strokes: Vec::new(),
+            route_waypoints: Vec::new(),
+            routes: Vec::new(),
+            route_rx: None,
             draw_color: DRAW_COLORS[0],
             marker_window: Default::default(),
             event_window: Default::default(),
@@ -6436,6 +6445,33 @@ impl HookEchoApp {
         });
     }
 
+    fn fetch_route(&mut self, ctx: &egui::Context) {
+        if self.settings.route_endpoint.trim().is_empty() {
+            self.toast(ToastKind::Error, "Set an OSRM endpoint first".to_string());
+            return;
+        }
+        if self.route_waypoints.len() < 2 {
+            self.toast(
+                ToastKind::Error,
+                "Click a route start and destination first".to_string(),
+            );
+            return;
+        }
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.route_rx = Some(rx);
+        let http = self.http.clone();
+        let endpoint = self.settings.route_endpoint.clone();
+        let waypoints = self.route_waypoints.clone();
+        let ctx = ctx.clone();
+        self.spawner.spawn(async move {
+            let result = wxdata::route::fetch_osrm(&http, &endpoint, &waypoints)
+                .await
+                .map_err(|error| error.to_string());
+            let _ = tx.send(result);
+            ctx.request_repaint();
+        });
+    }
+
     /// Current conditions for the forecast point, on the same cache cell and TTL as the forecast.
     /// A failure (offshore, no station, API down) simply sends nothing — the window drops the
     /// "Now" line rather than showing an error for a decoration.
@@ -8757,6 +8793,18 @@ impl HookEchoApp {
             }
         }
         &self.alert_features
+    }
+
+    fn route_warning_exposure(&self) -> Option<(String, f64)> {
+        let route = self.routes.first()?;
+        self.active_alert_features()
+            .iter()
+            .filter(|feature| feature.kind == overlay::FeatureKind::Warning)
+            .filter_map(|feature| {
+                wxdata::route::first_intersection_m(&route.points, &feature.rings)
+                    .map(|distance| (feature.title.clone(), distance))
+            })
+            .min_by(|a, b| a.1.total_cmp(&b.1))
     }
 
     /// The 5-min UTC bucket (Unix secs / 300) of the active pane's displayed frame, or `None` when
@@ -11700,6 +11748,13 @@ impl HookEchoApp {
                         self.chase_mode = true;
                         self.chase_pos = Some((lon, lat));
                     }
+                    MapTool::Route => {
+                        if self.route_waypoints.len() >= 32 {
+                            self.route_waypoints.clear();
+                            self.routes.clear();
+                        }
+                        self.route_waypoints.push([lon, lat]);
+                    }
                     MapTool::Climatology => self.query_climatology(lon, lat),
                     // Drawing happens on drag, not on click; a bare click leaves no mark.
                     MapTool::Draw => {}
@@ -14328,6 +14383,42 @@ impl HookEchoApp {
             );
         }
 
+        // Road alternatives, with the provider's preferred route emphasized. This is a route
+        // display only; weather exposure is drawn independently and never labels a route safe.
+        for (index, route) in self.routes.iter().enumerate().rev() {
+            let points = route
+                .points
+                .iter()
+                .map(|[lon, lat]| {
+                    let world = crate::render::mercator::lonlat_to_world(*lon, *lat);
+                    let (x, y) = cam.world_to_screen(world, vp);
+                    egui::pos2(prect.left() + x, prect.top() + y)
+                })
+                .collect();
+            let color = if index == 0 {
+                crate::theme::accent(self.settings.theme)
+            } else {
+                egui::Color32::from_rgba_unmultiplied(180, 190, 205, 155)
+            };
+            painter.add(egui::Shape::line(
+                points,
+                egui::Stroke::new(if index == 0 { 4.0 } else { 2.0 }, color),
+            ));
+        }
+        for (index, [lon, lat]) in self.route_waypoints.iter().enumerate() {
+            let world = crate::render::mercator::lonlat_to_world(*lon, *lat);
+            let (x, y) = cam.world_to_screen(world, vp);
+            let point = egui::pos2(prect.left() + x, prect.top() + y);
+            painter.circle_filled(point, 6.0, crate::theme::accent(self.settings.theme));
+            painter.text(
+                point,
+                egui::Align2::CENTER_CENTER,
+                (index + 1).to_string(),
+                egui::FontId::proportional(9.0),
+                egui::Color32::WHITE,
+            );
+        }
+
         // Freehand annotation strokes. Painted with the rest of the tool graphics so they sit
         // above every overlay, and drawn in OBS mode too — circling a storm on a stream is the
         // whole point of the tool.
@@ -15168,6 +15259,53 @@ impl HookEchoApp {
                             self.chase_track.clear();
                         }
                     });
+                }
+                ui.separator();
+                ui.label("Road route");
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.settings.route_endpoint)
+                        .hint_text("OSRM endpoint, for example https://router.example.com"),
+                );
+                ui.weak(format!(
+                    "{} route points · choose Tool: Plan route, then click the map",
+                    self.route_waypoints.len()
+                ));
+                ui.horizontal(|ui| {
+                    if ui
+                        .add_enabled(
+                            self.route_waypoints.len() >= 2 && self.route_rx.is_none(),
+                            egui::Button::new("Calculate route"),
+                        )
+                        .clicked()
+                    {
+                        self.fetch_route(ui.ctx());
+                    }
+                    if ui.button("Clear route").clicked() {
+                        self.route_waypoints.clear();
+                        self.routes.clear();
+                        self.route_rx = None;
+                    }
+                });
+                if let Some(route) = self.routes.first() {
+                    ui.weak(format!(
+                        "{} · about {} min{}",
+                        crate::geo::fmt_distance(route.distance_m / 1000.0, metric, 0),
+                        (route.duration_s / 60.0).round() as u64,
+                        if self.routes.len() > 1 {
+                            format!(" · {} alternatives", self.routes.len() - 1)
+                        } else {
+                            String::new()
+                        }
+                    ));
+                }
+                if let Some((warning, distance_m)) = self.route_warning_exposure() {
+                    ui.colored_label(
+                        egui::Color32::from_rgb(255, 185, 70),
+                        format!(
+                            "⚠ Route intersects active {warning} in {}",
+                            crate::geo::fmt_distance(distance_m / 1000.0, metric, 0)
+                        ),
+                    );
                 }
                 // Desktop streams from a local gpsd; Android polls the system LocationManager over
                 // JNI (see platform.rs); the web watches the browser's own Geolocation. All three
@@ -18083,6 +18221,21 @@ impl eframe::App for HookEchoApp {
         }
         self.palette_editor
             .show(ctx, &mut self.settings, &self.palettes, &mut self.drawer);
+        if let Some(rx) = &self.route_rx {
+            if let Ok(result) = rx.try_recv() {
+                self.route_rx = None;
+                match result {
+                    Ok(routes) => {
+                        let count = routes.len();
+                        self.routes = routes;
+                        self.toast(ToastKind::Success, format!("Loaded {count} road route(s)"));
+                    }
+                    Err(error) => {
+                        self.toast(ToastKind::Error, format!("Route failed: {error}"));
+                    }
+                }
+            }
+        }
         // Storm digest: poll a pending Claude result, then render + handle Generate.
         if let Some(rx) = &self.digest_rx {
             if let Ok(res) = rx.try_recv() {

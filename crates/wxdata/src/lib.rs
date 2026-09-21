@@ -55,6 +55,7 @@ pub mod raob;
 pub mod recon;
 pub mod refs;
 pub mod river;
+pub mod route;
 pub mod rotation;
 pub mod severe;
 pub mod sounding;

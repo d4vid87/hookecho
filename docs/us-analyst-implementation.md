@@ -20,9 +20,9 @@ roadmap checkbox only after its gate passes and link the test or capture here.
 | H workspaces | Existing | compatible workspaces, analyst presets, 1/2/4 pane layouts, camera/time link groups, and a geographic cursor with native radar or field values projected across linked panes; layouts cap at four panes and national textures respect platform GPU limits | Workspace compatibility, pane-ceiling, Mercator round-trip, field sampling, and native radar sampling tests pass |
 | I GIS | Existing | cross-platform GeoJSON, KML/KMZ, and zipped Shapefile import normalizes points, lines, polygons, and holes into the shared overlay renderer and persists with settings; archive size/count/feature limits bound input, and Shapefiles require a matching WGS84 `.prj` | GeoJSON geometry/CRS, KML geometry, KMZ archive, zipped Shapefile, unsupported/missing CRS, native Clippy, and WASM checks pass |
 | J 3D | Existing | GPU volume raymarch, cross sections, CAPPI slices, six selectable radar moments with per-moment palettes/units, quality budgets, threshold transfer, three-axis clipping, and a first-threshold-crossing surface mode; camera, clip, transfer, and surface changes update uniforms without rebuilding the volume | 3D state/threshold/quality/surface-uniform tests, native Clippy, WASM checks, and the GPU golden workflow cover the gate |
-| K case/chase | Partial | GPS, packs, sharing, archive replay, versioned portable case manifests with exact radar objects, annotations, bookmarks, and cross-platform import/export | Pending optional cached files, routing exposure, and case reports |
-| L output/API | Partial | snapshots, GIF/MP4, streamer mode | Pending deterministic exports and local API |
-| M backtesting | Partial | warning verification | Pending repeatable algorithm/alert backtests |
+| K verification/cases | Partial | warning verification; versioned portable case manifests with exact radar objects, annotations, bookmarks, and cross-platform import/export | Pending objective/model/algorithm verification, optional cached case files, and case reports |
+| L route/chase | Partial | GPS, packs, sharing, archive replay, user-configured OSRM route requests, alternate-route display, distance/ETA, and active-warning intersection distance | Route request/GeoJSON validation, bounded geometry, polygon-hole, native Clippy, settings compatibility, and WASM checks pass; pending radar/MRMS/lightning/model exposure, intercept geometry, and pack v2 |
+| M output/API | Partial | snapshots, GIF/MP4, streamer mode | Pending deterministic exports and local API |
 | N diagnostics | Partial | source health and request status | Continuous |
 | O performance | Partial | profiling, smoke tests, bundle budget | Continuous |
 | P extensions | Partial | native command plugins | Pending capability-declared IPC/Python |
@@ -46,3 +46,7 @@ required geometry and archive formats; the ceiling keeps a narrow regression mar
 Startup, resident memory, and interactive frame timing are hardware-dependent. Capture them with
 `scripts/perf/capture.sh` and the in-app performance panel on the release-test hardware before the
 foundation promotion; do not turn one developer-machine run into a universal threshold.
+
+The initial route adapter follows the official OSRM v5.24 Route service contract (`route/v1`,
+GeoJSON geometry, full overview, and optional alternatives), verified on 2026-09-20:
+<https://project-osrm.org/docs/v5.24.0/api/>.

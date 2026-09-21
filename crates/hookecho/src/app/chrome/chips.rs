@@ -189,6 +189,7 @@ impl HookEchoApp {
             MapTool::Sounding => (ph::THERMOMETER_SIMPLE, "Sounding", "click a point"),
             MapTool::Forecast => (ph::CLOUD_SUN, "Forecast", "click a point"),
             MapTool::Chase => (ph::CROSSHAIR, "Chase", "click your location"),
+            MapTool::Route => (ph::PATH, "Route", "click start, waypoints, destination"),
             MapTool::Climatology => (ph::TORNADO, "Climatology", "click a point"),
             MapTool::Draw => (ph::PENCIL_SIMPLE, "Draw", "drag to scribble"),
             MapTool::AlertZone => (

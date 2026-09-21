@@ -1129,6 +1129,12 @@ impl HookEchoApp {
                 false,
             ),
             (
+                MapTool::Route,
+                "Tool: Plan route",
+                "Click a start, optional waypoints, and destination",
+                true,
+            ),
+            (
                 MapTool::Climatology,
                 "Tool: Tornado climatology",
                 "How often tornadoes have hit this spot historically",

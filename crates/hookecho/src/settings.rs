@@ -413,6 +413,9 @@ pub struct Settings {
     /// memory only until you save it.
     #[serde(default)]
     pub chase_log: bool,
+    /// User-configured OSRM base URL. Empty keeps road routing disabled.
+    #[serde(default)]
+    pub route_endpoint: String,
     /// Attach a picture of the radar to the ntfy push when a warning fires. Desktop only: the
     /// Android background service has no GPU surface to render from, and says so in the UI.
     #[serde(default)]
@@ -1195,6 +1198,7 @@ impl Default for Settings {
             setup_done: false,
             desktop_notify: false,
             chase_log: false,
+            route_endpoint: String::new(),
             battery_saver: false,
             ntfy_snapshot: false,
             alert_follow_gps: false,
@@ -1776,6 +1780,7 @@ mod tests {
             setup_done: true,
             desktop_notify: false,
             chase_log: false,
+            route_endpoint: String::new(),
             battery_saver: false,
             ntfy_snapshot: false,
             alert_follow_gps: false,
