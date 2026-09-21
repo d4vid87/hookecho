@@ -52,6 +52,12 @@ pub struct Pack {
     /// Immutable MRMS source objects pinned in the shared object cache.
     #[serde(default)]
     pub mrms: Vec<String>,
+    /// Imported placefile/GIS source text needed by this pack.
+    #[serde(default)]
+    pub overlays: std::collections::BTreeMap<String, String>,
+    /// Overlay settings paired with [`Self::overlays`].
+    #[serde(default)]
+    pub placefiles: Vec<crate::settings::PlacefileConfig>,
     /// Unix seconds when it was saved.
     pub saved_at: i64,
     /// Total size of the volumes, for the eviction accounting and the picker's readout.
@@ -72,8 +78,8 @@ impl Pack {
             self.date,
             self.volumes.len(),
             if self.volumes.len() == 1 { "" } else { "s" },
-            self.satellite.len() + self.mrms.len(),
-            if self.satellite.len() + self.mrms.len() == 1 { "" } else { "s" },
+            self.satellite.len() + self.mrms.len() + self.overlays.len(),
+            if self.satellite.len() + self.mrms.len() + self.overlays.len() == 1 { "" } else { "s" },
             self.bytes / 1024.0 / 1024.0
         )
     }
@@ -188,6 +194,8 @@ pub async fn save_pack(
     volumes: Vec<(String, Vec<u8>)>,
     satellite: Vec<String>,
     mrms: Vec<String>,
+    overlays: std::collections::BTreeMap<String, String>,
+    placefiles: Vec<crate::settings::PlacefileConfig>,
 ) -> anyhow::Result<Pack> {
     if volumes.is_empty() {
         anyhow::bail!("nothing in the loop to save");
@@ -237,8 +245,10 @@ pub async fn save_pack(
         volumes: names,
         satellite: pinned,
         mrms: pinned_mrms,
+        bytes: bytes + overlays.values().map(|text| text.len() as f64).sum::<f64>(),
+        overlays,
+        placefiles,
         saved_at: chrono::Utc::now().timestamp(),
-        bytes,
     };
     let s = store(&db, PACKS, IdbTransactionMode::Readwrite)?;
     let json = serde_json::to_string(&pack)?;
@@ -375,6 +385,8 @@ pub async fn save_timeline(
     ids: Vec<wxdata::level2::Identifier>,
     satellite: Vec<String>,
     mrms: Vec<String>,
+    overlays: std::collections::BTreeMap<String, String>,
+    placefiles: Vec<crate::settings::PlacefileConfig>,
 ) {
     let total = ids.len();
     let mut out = Vec::new();
@@ -393,7 +405,7 @@ pub async fn save_timeline(
         };
         out.push((name, bytes));
     }
-    match save_pack(&site, &date, out, satellite, mrms).await {
+    match save_pack(&site, &date, out, satellite, mrms, overlays, placefiles).await {
         Ok(p) => set_status(Some(format!("saved {}", p.label()))),
         Err(e) => set_status(Some(format!("could not save the pack: {e}"))),
     }
@@ -421,17 +433,26 @@ mod tests {
             volumes: vec!["KTLX20260520_231502_V06".into()],
             satellite: vec!["ABI-L2-CMIPC/example.nc".into()],
             mrms: vec!["MergedReflectivityQCComposite/example.grib2.gz".into()],
+            overlays: std::collections::BTreeMap::from([(
+                "gis:damage.geojson".into(),
+                r#"{"type":"FeatureCollection","features":[]}"#.into(),
+            )]),
+            placefiles: vec![crate::settings::PlacefileConfig {
+                url: "gis:damage.geojson".into(),
+                enabled: true,
+                opacity: 1.0,
+            }],
             saved_at: 1_780_000_000,
             bytes: 32.0 * 1024.0 * 1024.0,
         };
         let back: Pack = serde_json::from_str(&serde_json::to_string(&p).unwrap()).unwrap();
         assert_eq!(back, p);
         assert_eq!(back.key(), "KTLX-2026-05-20");
-        assert_eq!(back.label(), "KTLX 2026-05-20 — 1 volume, 2 weather files, 32 MB");
+        assert_eq!(back.label(), "KTLX 2026-05-20 — 1 volume, 3 weather files, 32 MB");
         let old: Pack = serde_json::from_str(
             r#"{"site":"KTLX","date":"2026-05-20","volumes":[],"saved_at":1,"bytes":0}"#,
         )
         .unwrap();
-        assert!(old.satellite.is_empty() && old.mrms.is_empty());
+        assert!(old.satellite.is_empty() && old.mrms.is_empty() && old.overlays.is_empty());
     }
 }

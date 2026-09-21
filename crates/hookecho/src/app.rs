@@ -6978,6 +6978,22 @@ impl HookEchoApp {
             .filter(|frame| frame.descriptor.family == wxdata::field::FieldFamily::Mrms)
             .map(|frame| frame.stamp.source_identity.clone())
             .collect();
+        let placefiles: Vec<_> = self
+            .settings
+            .placefiles
+            .iter()
+            .filter(|config| self.settings.web_files.contains_key(&config.url))
+            .cloned()
+            .collect();
+        let overlays = placefiles
+            .iter()
+            .filter_map(|config| {
+                self.settings
+                    .web_files
+                    .get(&config.url)
+                    .map(|text| (config.url.clone(), text.clone()))
+            })
+            .collect();
         let mut satellite_bands = std::collections::BTreeSet::new();
         for layer in &self.views[self.active].fields_on {
             match layer {
@@ -7034,6 +7050,8 @@ impl HookEchoApp {
                 ids,
                 satellite.into_iter().collect(),
                 current_mrms,
+                overlays,
+                placefiles,
             )
             .await;
             ctx.request_repaint();
@@ -7048,6 +7066,12 @@ impl HookEchoApp {
             return;
         };
         self.views[self.active].site = Some(pack.site.clone());
+        self.settings.web_files.extend(pack.overlays.clone());
+        for config in &pack.placefiles {
+            if !self.settings.placefiles.iter().any(|old| old.url == config.url) {
+                self.settings.placefiles.push(config.clone());
+            }
+        }
         let tl = &mut self.views[self.active].timeline;
         tl.date = date;
         tl.following = false;
