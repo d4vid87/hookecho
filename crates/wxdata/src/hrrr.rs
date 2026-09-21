@@ -759,6 +759,14 @@ pub(crate) fn decode_regrid(
     model: Model,
     min_valid: f64,
 ) -> anyhow::Result<MrmsField> {
+    decode_regrid_at_resolution(raw, model.res_deg(), min_valid)
+}
+
+pub(crate) fn decode_regrid_at_resolution(
+    raw: &[u8],
+    resolution_deg: f64,
+    min_valid: f64,
+) -> anyhow::Result<MrmsField> {
     use gribberish::data_message::DataMessage;
     use gribberish::message::read_message;
     let msg = read_message(raw, 0).ok_or_else(|| anyhow::anyhow!("no GRIB2 message"))?;
@@ -771,7 +779,7 @@ pub(crate) fn decode_regrid(
         "hrrr latlng/data length mismatch"
     );
 
-    regrid(&lats, &lons, &data, time, model.res_deg(), min_valid)
+    regrid(&lats, &lons, &data, time, resolution_deg, min_valid)
 }
 
 /// Scatter native (lat, lon, value) triples onto a regular lat/lon grid (max per cell).
