@@ -30,10 +30,29 @@ fn size() -> u32 {
 ///
 /// Process-global for the same reason as the two knobs above, and set under the same lock.
 static EXTRAS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static TRANSPARENT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 /// Ask for warnings + chrome (or not) on the renders that follow.
 pub fn set_extras(on: bool) {
     EXTRAS.store(on, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Clear headless PNG output to alpha zero. Opaque basemap tiles remain opaque when requested.
+pub fn set_transparent(on: bool) {
+    TRANSPARENT.store(on, std::sync::atomic::Ordering::Relaxed);
+}
+
+fn clear_color() -> wgpu::Color {
+    background_clear(TRANSPARENT.load(std::sync::atomic::Ordering::Relaxed))
+}
+
+fn background_clear(transparent: bool) -> wgpu::Color {
+    wgpu::Color {
+        r: 0.05,
+        g: 0.05,
+        b: 0.08,
+        a: if transparent { 0.0 } else { 1.0 },
+    }
 }
 
 fn extras() -> bool {
@@ -2998,12 +3017,7 @@ fn draw_and_read(
         queue,
         &view,
         pane,
-        wgpu::Color {
-            r: 0.05,
-            g: 0.05,
-            b: 0.08,
-            a: 1.0,
-        },
+        clear_color(),
     );
     read_target(device, queue, &target, size())
 }
@@ -3058,12 +3072,7 @@ fn render_to_png_stamped(
         &queue,
         &view,
         &cb,
-        wgpu::Color {
-            r: 0.05,
-            g: 0.05,
-            b: 0.08,
-            a: 1.0,
-        },
+        clear_color(),
     );
 
     let bytes_per_pixel = 4u32;
@@ -3136,6 +3145,20 @@ mod golden_tests {
     /// Small so the checked-in golden stays tens of KB.
     const GOLDEN_SIZE: u32 = 200;
     const GOLDEN: &str = "tests/golden/snapshot_base.png";
+
+    #[test]
+    fn transparent_output_only_changes_clear_alpha() {
+        let opaque = background_clear(false);
+        let transparent = background_clear(true);
+        assert_eq!(
+            (opaque.r, opaque.g, opaque.b, opaque.a),
+            (0.05, 0.05, 0.08, 1.0)
+        );
+        assert_eq!(
+            (transparent.r, transparent.g, transparent.b, transparent.a),
+            (0.05, 0.05, 0.08, 0.0)
+        );
+    }
 
     /// A deterministic synthetic sweep: a 90° wedge plus three range rings.
     fn synthetic_sweep() -> BinnedSweep {

@@ -875,6 +875,7 @@ fn main() -> eframe::Result<()> {
 
     // Headless verify mode: `hookecho --headless <out.png> [SITE] [--moment REF] [--tilt N]`.
     if let Some(pos) = args.iter().position(|a| a == "--headless") {
+        headless::set_transparent(args.iter().any(|arg| arg == "--transparent"));
         let out = args
             .get(pos + 1)
             .map(String::as_str)
@@ -925,6 +926,7 @@ fn main() -> eframe::Result<()> {
     // [--every SECS]`. The same off-screen render `--headless` and the server's `/snapshot.png`
     // use, written where conky, a desktop wallpaper script or `feh --reload` can pick it up.
     if let Some(pos) = args.iter().position(|a| a == "--snapshot") {
+        headless::set_transparent(args.iter().any(|arg| arg == "--transparent"));
         let out = args
             .get(pos + 1)
             .map(String::as_str)
