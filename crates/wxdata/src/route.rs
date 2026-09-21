@@ -410,7 +410,7 @@ mod tests {
     fn finds_first_polygon_entry_and_respects_holes() {
         let outer = vec![[-1.0, -1.0], [1.0, -1.0], [1.0, 1.0], [-1.0, 1.0]];
         let route = vec![[-2.0, 0.0], [2.0, 0.0]];
-        let distance = first_intersection_m(&route, &[outer.clone()]).unwrap();
+        let distance = first_intersection_m(&route, std::slice::from_ref(&outer)).unwrap();
         assert!((distance / 1000.0 - 111.2).abs() < 1.0);
 
         let hole = vec![[-2.0, -0.5], [2.0, -0.5], [2.0, 0.5], [-2.0, 0.5]];
