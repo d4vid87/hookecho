@@ -27,6 +27,7 @@ pub mod colormap;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod crash;
 pub mod dialog;
+pub mod detector_history;
 pub mod digest;
 /// Terrain heights (DEM) and the beam-vs-terrain blockage raster.
 pub mod elevation;

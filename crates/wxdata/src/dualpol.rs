@@ -25,7 +25,7 @@ use crate::xsection::column_samples;
 const CELL: f64 = 0.04;
 
 /// A three-body scatter spike: the hail core it points away from, and how long the spike runs.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize)]
 pub struct TbssHit {
     /// The core the spike came off, not the spike itself — that is where the hail is.
     pub lon: f64,
@@ -39,7 +39,7 @@ pub struct TbssHit {
 }
 
 /// A ZDR column: an updraft carrying rain above the freezing level.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize)]
 pub struct ZdrColumnHit {
     pub lon: f64,
     pub lat: f64,

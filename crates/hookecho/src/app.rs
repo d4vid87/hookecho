@@ -1643,6 +1643,7 @@ pub(crate) enum PaletteAction {
     SetContours(ContourKind),
     Tool(MapTool),
     ExportRegionStats,
+    ExportDetectorHistory,
     OpenWindow(AppWindow),
     SetPanes(usize),
     CycleBasemap,
@@ -2645,6 +2646,8 @@ pub struct HookEchoApp {
     region_points: Vec<[f64; 2]>,
     region_analysis: Option<RegionAnalysis>,
     radar_scatter: Option<wxdata::level2::MomentPairs>,
+    detector_history: std::collections::VecDeque<crate::detector_history::Snapshot>,
+    detector_history_key: Option<(usize, String, usize)>,
     /// Freehand annotation strokes, in lon/lat so they stick to the ground through pan and zoom.
     /// Session-only by design: this is for pointing at a storm on a stream, not a saved document.
     strokes: Vec<Stroke2d>,
@@ -3587,6 +3590,8 @@ impl HookEchoApp {
             region_points: Vec::new(),
             region_analysis: None,
             radar_scatter: None,
+            detector_history: std::collections::VecDeque::new(),
+            detector_history_key: None,
             strokes: Vec::new(),
             route_waypoints: Vec::new(),
             routes: Vec::new(),
@@ -6964,6 +6969,46 @@ impl HookEchoApp {
         out
     }
 
+    fn record_detector_history(
+        &mut self,
+        idx: usize,
+        tds: &[wxdata::tds::TdsHit],
+        tbss: &[wxdata::dualpol::TbssHit],
+        zdr: &[wxdata::dualpol::ZdrColumnHit],
+        rotation: &[wxdata::rotation::CoupletHit],
+    ) {
+        let key = self.volume_key(idx);
+        if self.detector_history_key.as_ref() == Some(&key) {
+            return;
+        }
+        let Some(volume) = self.views[idx].volume.as_ref() else {
+            return;
+        };
+        self.detector_history.push_back(crate::detector_history::Snapshot {
+            algorithm_version: crate::detector_history::ALGORITHM_VERSION,
+            source_object: volume.name.clone(),
+            valid_time: volume.time,
+            sweep_count: volume.scan.sweeps().len(),
+            thresholds: crate::detector_history::Thresholds::from_settings(
+                &self.settings.detectors,
+            ),
+            tds: tds.to_vec(),
+            tbss: tbss.to_vec(),
+            zdr_columns: zdr.to_vec(),
+            rotation: rotation.to_vec(),
+            reason_codes: [
+                "LOW_CC_HIGH_Z",
+                "HAIL_CORE_SPIKE",
+                "ZDR_ABOVE_FREEZING",
+                "OPPOSITE_SIGN_SHEAR",
+            ],
+        });
+        while self.detector_history.len() > 512 {
+            self.detector_history.pop_front();
+        }
+        self.detector_history_key = Some(key);
+    }
+
     /// Packs saved in this browser, refreshed in the background whenever one is written.
     #[cfg(target_arch = "wasm32")]
     fn packs(&self) -> Vec<crate::webcache::Pack> {
@@ -8471,6 +8516,7 @@ impl HookEchoApp {
                 }
             }
             PaletteAction::ExportRegionStats => self.export_region_stats(),
+            PaletteAction::ExportDetectorHistory => self.export_detector_history(),
             PaletteAction::SetPanes(n) => {
                 self.set_pane_count(n);
                 if n > 1 {
@@ -12675,6 +12721,9 @@ impl HookEchoApp {
             Vec::new()
         };
         if idx == self.active {
+            if want_tds || want_tbss || want_zdr || want_couplets {
+                self.record_detector_history(idx, &tds_hits, &tbss_hits, &zdr_hits, &couplets);
+            }
             self.check_rain_arrival();
             self.evaluate_scan_rules(idx, &tds_hits, &tbss_hits, &zdr_hits, &couplets);
         }
@@ -16314,6 +16363,34 @@ impl HookEchoApp {
                 self.toast(ToastKind::Error, format!("Statistics export failed: {error}"))
             }
             crate::dialog::Saved::Cancelled => {}
+        }
+    }
+
+    fn export_detector_history(&mut self) {
+        if self.detector_history.is_empty() {
+            self.toast(ToastKind::Info, "No detector history yet");
+            return;
+        }
+        match crate::detector_history::to_json(&self.detector_history) {
+            Ok(json) => match crate::dialog::save_bytes(
+                "hookecho-detector-history.json",
+                "json",
+                json.as_bytes(),
+            ) {
+                crate::dialog::Saved::Where(where_) => self.toast(
+                    ToastKind::Success,
+                    format!("Detector history saved to {where_}"),
+                ),
+                crate::dialog::Saved::Failed(error) => self.toast(
+                    ToastKind::Error,
+                    format!("Detector history export failed: {error}"),
+                ),
+                crate::dialog::Saved::Cancelled => {}
+            },
+            Err(error) => self.toast(
+                ToastKind::Error,
+                format!("Detector history export failed: {error}"),
+            ),
         }
     }
 

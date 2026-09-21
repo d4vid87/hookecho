@@ -12,7 +12,7 @@
 use crate::level2::{BinnedSweep, Moment};
 
 /// A detected debris-signature cluster.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize)]
 pub struct TdsHit {
     pub lon: f64,
     pub lat: f64,

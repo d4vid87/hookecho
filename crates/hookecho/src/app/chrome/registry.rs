@@ -1086,6 +1086,14 @@ impl HookEchoApp {
             None,
         );
         push(
+            "Export detector history",
+            "Reference",
+            "Save versioned detector thresholds, reason codes, contributing gates and scores over time",
+            false,
+            PaletteAction::ExportDetectorHistory,
+            None,
+        );
+        push(
             "Open case manifest",
             "Reference",
             "Restore a portable HookEcho case manifest",
