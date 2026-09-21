@@ -8,7 +8,7 @@
 use crate::alerts::USER_AGENT;
 use crate::field::{
     DataClass, DataStamp, FieldDescriptor, FieldFamily, FieldFrame, FieldId, MissingData,
-    QualitySummary, SamplingPolicy, ValueKind,
+    ModelDefinition, QualitySummary, SamplingPolicy, ValueKind,
 };
 use crate::mrms::MrmsField;
 use chrono::{DateTime, Datelike, Timelike, Utc};
@@ -160,23 +160,6 @@ pub enum Model {
     /// National Blend of Models, CONUS domain. Statistically post-processed guidance rather than
     /// a raw model: no updraft helicity, but the calibrated probabilities nobody else publishes.
     Nbm,
-}
-
-/// Acquisition facts shared by run discovery, range reads, UI, and diagnostics.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct ModelDefinition {
-    pub id: &'static str,
-    pub label: &'static str,
-    pub provider: &'static str,
-    pub base_url: &'static str,
-    pub cycle_hours: u32,
-    pub max_forecast_hour: u16,
-    pub grid: &'static str,
-    pub regrid_resolution_deg: f64,
-    pub index_suffix: &'static str,
-    pub expected_latency_minutes: Option<u16>,
-    pub domain: &'static str,
-    pub ensemble: bool,
 }
 
 impl Model {

@@ -18,7 +18,7 @@
 use crate::alerts::USER_AGENT;
 use crate::field::{
     DataClass, DataStamp, FieldDescriptor, FieldFamily, FieldFrame, FieldId, MissingData,
-    QualitySummary, SamplingPolicy, ValueKind,
+    ModelDefinition, QualitySummary, SamplingPolicy, ValueKind,
 };
 use crate::mrms::MrmsField;
 use chrono::{DateTime, Datelike, Timelike, Utc};
@@ -115,16 +115,56 @@ pub enum GlobalModel {
 }
 
 impl GlobalModel {
-    pub fn label(self) -> &'static str {
+    pub fn definition(self) -> ModelDefinition {
         match self {
-            GlobalModel::Gfs => "GFS",
-            GlobalModel::Ecmwf => "ECMWF",
+            Self::Gfs => ModelDefinition {
+                id: "gfs",
+                label: "GFS",
+                provider: "NOAA",
+                base_url: GFS_BUCKET,
+                cycle_hours: 6,
+                max_forecast_hour: 384,
+                grid: "0.25 degree global latitude/longitude",
+                regrid_resolution_deg: RES_DEG,
+                index_suffix: ".idx",
+                expected_latency_minutes: None,
+                domain: "Global",
+                ensemble: false,
+            },
+            Self::Ecmwf => ModelDefinition {
+                id: "ecmwf-open-ifs",
+                label: "ECMWF Open IFS",
+                provider: "ECMWF",
+                base_url: ECMWF_BASE,
+                cycle_hours: 6,
+                max_forecast_hour: 360,
+                grid: "0.25 degree global latitude/longitude",
+                regrid_resolution_deg: RES_DEG,
+                index_suffix: ".index",
+                expected_latency_minutes: None,
+                domain: "Global",
+                ensemble: false,
+            },
         }
+    }
+
+    pub fn validate_forecast_hour(self, hour: u16) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            hour <= self.definition().max_forecast_hour,
+            "{} forecast hour {hour} exceeds F{}",
+            self.label(),
+            self.definition().max_forecast_hour
+        );
+        Ok(())
+    }
+
+    pub fn label(self) -> &'static str {
+        self.definition().label
     }
 
     /// Hours between cycles. Both run four times a day.
     fn cycle_step(self) -> u32 {
-        6
+        self.definition().cycle_hours
     }
 }
 
@@ -254,6 +294,7 @@ pub async fn fetch(
     field: GlobalField,
     fh: u16,
 ) -> anyhow::Result<GlobalForecast> {
+    model.validate_forecast_hour(fh)?;
     let now = Utc::now();
     let mut last_err = None;
     for back in 0..5 {
@@ -279,8 +320,9 @@ async fn fetch_run(
     let date = format!("{:04}{:02}{:02}", run.year(), run.month(), run.day());
     let (base, range) = match model {
         GlobalModel::Gfs => {
+            let source = model.definition().base_url;
             let base = format!(
-                "{GFS_BUCKET}/gfs.{date}/{:02}/atmos/gfs.t{:02}z.pgrb2.0p25.f{fh:03}",
+                "{source}/gfs.{date}/{:02}/atmos/gfs.t{:02}z.pgrb2.0p25.f{fh:03}",
                 run.hour(),
                 run.hour()
             );
@@ -291,8 +333,9 @@ async fn fetch_run(
             (base, r)
         }
         GlobalModel::Ecmwf => {
+            let source = model.definition().base_url;
             let base = format!(
-                "{ECMWF_BASE}/{date}/{:02}z/ifs/0p25/oper/{date}{:02}0000-{fh}h-oper-fc.grib2",
+                "{source}/{date}/{:02}z/ifs/0p25/oper/{date}{:02}0000-{fh}h-oper-fc.grib2",
                 run.hour(),
                 run.hour()
             );
@@ -462,6 +505,18 @@ mod tests {
         assert_eq!(GlobalField::Precip.gfs_key().0, "PWAT");
         assert_eq!(GlobalField::Precip.ecmwf_key().0, "tcwv");
         assert_eq!(GlobalField::Precip.descriptor().units, "kg m-2");
+    }
+
+    #[test]
+    fn global_models_share_complete_source_definitions() {
+        let gfs = GlobalModel::Gfs.definition();
+        let ecmwf = GlobalModel::Ecmwf.definition();
+        assert_ne!(gfs.id, ecmwf.id);
+        assert_eq!(gfs.index_suffix, ".idx");
+        assert_eq!(ecmwf.index_suffix, ".index");
+        assert!(GlobalModel::Gfs.validate_forecast_hour(384).is_ok());
+        assert!(GlobalModel::Gfs.validate_forecast_hour(385).is_err());
+        assert!(GlobalModel::Ecmwf.validate_forecast_hour(360).is_ok());
     }
 
     /// Both sources, live, at the newest usable cycle.

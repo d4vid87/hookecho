@@ -69,6 +69,23 @@ pub struct FieldDescriptor {
     pub supports_difference: bool,
 }
 
+/// Source and schedule metadata shared by model adapters and diagnostics.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ModelDefinition {
+    pub id: &'static str,
+    pub label: &'static str,
+    pub provider: &'static str,
+    pub base_url: &'static str,
+    pub cycle_hours: u32,
+    pub max_forecast_hour: u16,
+    pub grid: &'static str,
+    pub regrid_resolution_deg: f64,
+    pub index_suffix: &'static str,
+    pub expected_latency_minutes: Option<u16>,
+    pub domain: &'static str,
+    pub ensemble: bool,
+}
+
 impl FieldDescriptor {
     pub fn time_policy(&self, class: DataClass) -> crate::timecoord::TimePolicy {
         self.time_policy
