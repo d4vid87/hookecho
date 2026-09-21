@@ -131,6 +131,9 @@ check_prefixes \
   'CONUS/LayerCompositeReflectivity_Low_00.50/' \
   'CONUS/LayerCompositeReflectivity_High_00.50/' \
   'CONUS/LayerCompositeReflectivity_Super_00.50/' \
+  'CONUS/Reflectivity_0C_00.50/' \
+  'CONUS/Reflectivity_-10C_00.50/' \
+  'CONUS/Reflectivity_-20C_00.50/' \
   'CONUS/FLASH_QPE_ARI01H_00.00/' \
   'CONUS/FLASH_QPE_ARI03H_00.00/' \
   'CONUS/FLASH_QPE_ARI06H_00.00/' \
@@ -163,6 +166,9 @@ check_recent_mrms \
   'CONUS/LayerCompositeReflectivity_Low_00.50' \
   'CONUS/LayerCompositeReflectivity_High_00.50' \
   'CONUS/LayerCompositeReflectivity_Super_00.50' \
+  'CONUS/Reflectivity_0C_00.50' \
+  'CONUS/Reflectivity_-10C_00.50' \
+  'CONUS/Reflectivity_-20C_00.50' \
   'CONUS/FLASH_QPE_ARI01H_00.00' \
   'CONUS/FLASH_QPE_ARI03H_00.00' \
   'CONUS/FLASH_QPE_ARI06H_00.00' \

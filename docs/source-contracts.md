@@ -57,6 +57,8 @@ documented cycles; ECMWF 00/12 UTC runs extend to F240 while 06/18 UTC runs stop
 - Provider: NOAA Open Data Dissemination on AWS, public bucket
   <https://registry.opendata.aws/noaa-mrms-pds/>.
 - Selected catalog prefixes and their current object dates are checked by `scripts/feed-contracts.sh`.
+- The public bucket listing currently publishes the 0, -10, and -20 °C isothermal reflectivity
+  grids used by the metadata-driven catalog; their prefixes and recent objects are contract-tested.
 - The NWS Warning Decision Training Division MRMS product guide defines 18 dBZ echo tops as the
   maximum height AGL of that reflectivity surface and VIL as vertically integrated liquid water:
   <https://training.weather.gov/wdtd/courses/MRMS/index.php>.
