@@ -4643,6 +4643,36 @@ impl HookEchoApp {
         )
     }
 
+    fn best_neighbor_coverage(
+        &self,
+        idx: usize,
+        ll: [f64; 2],
+    ) -> Option<(&'static str, crate::elevation::BeamCoverage)> {
+        const LOWEST_TILT: &[f32] = &[0.5];
+        let selected = self.views.get(idx)?.site.as_deref()?;
+        let candidates: Vec<_> = wxdata::sites::all()
+            .filter(|site| site.id != selected && wxdata::sites::is_nexrad(site.id))
+            .collect();
+        let sites: Vec<_> = candidates
+            .iter()
+            .map(|site| {
+                (
+                    crate::elevation::BeamSite {
+                        lon: site.longitude as f64,
+                        lat: site.latitude as f64,
+                        ground_m: site.elevation_meters as f64,
+                        tower_m: wxdata::towers::tower_m(site.id),
+                        tilt_deg: LOWEST_TILT[0] as f64,
+                    },
+                    LOWEST_TILT,
+                    f64::NEG_INFINITY,
+                )
+            })
+            .collect();
+        let (best, coverage) = crate::elevation::best_coverage(&sites, ll, 0.5)?;
+        Some((candidates.get(best)?.id, coverage))
+    }
+
     /// Chime when a new volume lands on the live pane you are watching — the "look up" cue for
     /// someone doing something else while a storm is on.
     ///
@@ -14719,6 +14749,15 @@ impl HookEchoApp {
                         feet(beam.bottom_km_agl),
                         feet(beam.top_km_agl),
                     ));
+                    if let Some((site, neighbor)) = self
+                        .best_neighbor_coverage(idx, self.measure[1])
+                        .filter(|(_, neighbor)| neighbor.center_km_agl < beam.center_km_agl)
+                    {
+                        txt.push_str(&format!(
+                            "  ·  {site} 0.5° {:.0} ft",
+                            feet(neighbor.center_km_agl)
+                        ));
+                    }
                 }
                 let mid = a + (b - a) * 0.5;
                 painter.text(
