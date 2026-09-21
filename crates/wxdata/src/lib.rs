@@ -48,6 +48,7 @@ pub mod opera;
 pub mod outages;
 pub mod overlay;
 pub mod placefile;
+pub mod product_dsl;
 pub mod probsevere;
 pub mod raob;
 pub mod recon;
