@@ -1743,7 +1743,7 @@ fn field_refresh_secs(layer: crate::render::FieldLayer) -> u64 {
         | FL::GoesLongwaveIr
         | FL::GoesVisible
         | FL::GoesTrueColor
-        | FL::GoesCatalog(_) => 300,
+        | FL::GoesCatalog(_) => 60,
         FL::Lightning | FL::AzShear => 60,
         FL::Mrms
         | FL::MrmsLowLevel
@@ -19290,7 +19290,8 @@ mod nowcast_tests {
 #[cfg(test)]
 mod request_book_tests {
     use super::{
-        registered_display_field, retry_once, HealthState, RequestBook, RequestLane, SourceHealth,
+        field_refresh_secs, registered_display_field, retry_once, HealthState, RequestBook,
+        RequestLane, SourceHealth,
     };
     use crate::render::FieldLayer;
 
@@ -19339,6 +19340,12 @@ mod request_book_tests {
         assert!(book.finish(&lane, generation, None, Some(valid_time)));
         let age = book.health(&lane).data_age.unwrap().as_secs();
         assert!((600..=601).contains(&age));
+    }
+
+    #[test]
+    fn abi_discovery_keeps_up_with_mesoscale_frames() {
+        assert_eq!(field_refresh_secs(FieldLayer::GoesC13), 60);
+        assert_eq!(field_refresh_secs(FieldLayer::GoesCatalog(0)), 60);
     }
 
     #[test]
