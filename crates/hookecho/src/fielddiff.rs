@@ -305,8 +305,52 @@ pub fn verify_forecast(
     );
     let errors = diff(forecast.field(), analysis.field())
         .ok_or_else(|| anyhow::anyhow!("forecast and reference domains do not overlap"))?;
+    metrics(errors.values)
+}
+
+/// Score a surface forecast against temporally matched METAR stations in its native units.
+pub fn verify_stations(
+    forecast: &FieldFrame,
+    observations: &[wxdata::metar::SurfaceOb],
+    tolerance: chrono::Duration,
+) -> anyhow::Result<VerificationMetrics> {
+    anyhow::ensure!(
+        forecast.stamp.class == DataClass::Forecast,
+        "field is not a forecast"
+    );
+    let id = forecast.descriptor.id.0;
+    anyhow::ensure!(
+        matches!(
+            id,
+            "model.global.temperature-2m"
+                | "model.global.dewpoint-2m"
+                | "model.global.mslp"
+                | "model.global.wind-10m"
+        ),
+        "field has no METAR verification mapping"
+    );
+    anyhow::ensure!(tolerance > chrono::Duration::zero(), "invalid time tolerance");
+    metrics(observations.iter().filter_map(|ob| {
+        let observed_at = chrono::DateTime::from_timestamp(ob.obs_time?, 0)?;
+        if (observed_at - forecast.stamp.valid_time).abs() > tolerance {
+            return None;
+        }
+        let observed = match id {
+            "model.global.temperature-2m" => ob.temp_c? + 273.15,
+            "model.global.dewpoint-2m" => ob.dewp_c? + 273.15,
+            "model.global.mslp" => ob.altim_mb? * 100.0,
+            "model.global.wind-10m" => {
+                -ob.wspd_kt / 1.943_844 * ob.wdir_deg?.to_radians().sin()
+            }
+            _ => return None,
+        };
+        Some(forecast.sample(ob.lon, ob.lat).value? - observed)
+    }))
+}
+
+fn metrics(errors: impl IntoIterator<Item = f32>) -> anyhow::Result<VerificationMetrics> {
     let (mut samples, mut sum, mut absolute, mut squared) = (0usize, 0.0, 0.0, 0.0);
-    for error in errors.values.into_iter().filter(|value| value.is_finite()) {
+    for error in errors.into_iter().filter(|value| value.is_finite()) {
         let error = f64::from(error);
         samples += 1;
         sum += error;
@@ -608,5 +652,50 @@ mod tests {
             &make(5.0, DataClass::Analysis)
         )
         .is_err());
+    }
+
+    #[test]
+    fn station_verification_converts_units_and_rejects_stale_observations() {
+        let valid = chrono::Utc::now();
+        let forecast = FieldFrame::new(
+            &wxdata::global::TEMP_2M_DESCRIPTOR,
+            grid(2, 2, -100.0, -99.0, 39.0, 40.0, 300.0),
+            DataStamp {
+                source_identity: "gfs".into(),
+                issue_time: None,
+                run_time: None,
+                valid_time: valid,
+                received_time: valid,
+                class: DataClass::Forecast,
+                quality: QualitySummary::Good,
+                available_members: None,
+            },
+        );
+        let observation = |minutes: i64| wxdata::metar::SurfaceOb {
+            icao: "KTEST".into(),
+            name: "Test".into(),
+            lat: 39.5,
+            lon: -99.5,
+            temp_c: Some(25.85),
+            dewp_c: None,
+            wdir_deg: None,
+            wspd_kt: 0.0,
+            wgst_kt: None,
+            altim_mb: None,
+            elev_m: None,
+            obs_time: Some((valid + chrono::Duration::minutes(minutes)).timestamp()),
+            flt_cat: String::new(),
+            wvht_ft: None,
+            dpd_s: None,
+            raw: String::new(),
+        };
+        let score = verify_stations(
+            &forecast,
+            &[observation(30), observation(180)],
+            chrono::Duration::minutes(90),
+        )
+        .unwrap();
+        assert_eq!(score.samples, 1);
+        assert!((score.bias - 1.0).abs() < 0.001);
     }
 }
