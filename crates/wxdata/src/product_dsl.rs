@@ -1,6 +1,7 @@
 //! Safe, bounded expressions for portable user-defined radar products.
 
 use crate::level2::Moment;
+use crate::level2::BinnedSweep;
 
 const MAX_NODES: usize = 128;
 const MAX_DEPTH: usize = 16;
@@ -108,6 +109,13 @@ pub struct GateValues {
     pub minus20_km: Option<f32>,
 }
 
+#[derive(Debug, Clone, Copy, Default)]
+pub struct EnvironmentValues {
+    pub freezing_km: Option<f32>,
+    pub minus10_km: Option<f32>,
+    pub minus20_km: Option<f32>,
+}
+
 pub struct Product {
     definition: ProductDefinition,
     root: Expr,
@@ -144,6 +152,10 @@ impl Product {
         &self.definition
     }
 
+    pub fn inputs(&self) -> &[Moment] {
+        &self.definition.inputs
+    }
+
     pub fn sample(&self, gate: &GateValues) -> f32 {
         match self.root.eval(gate) {
             Some(Value::Number(value)) if value.is_finite() => value,
@@ -164,6 +176,74 @@ impl Product {
             _ => self.definition.missing,
         }
     }
+
+    /// Evaluate a gate-local product on aligned binned moments for one tilt.
+    pub fn sweep(
+        &self,
+        inputs: &[(Moment, &BinnedSweep)],
+        environment: EnvironmentValues,
+    ) -> anyhow::Result<BinnedSweep> {
+        anyhow::ensure!(
+            !matches!(&self.root, Expr::Call(function, _) if function.is_reducer()),
+            "vertical product requires a volume column"
+        );
+        let base = inputs.first().map(|(_, sweep)| *sweep).ok_or_else(|| anyhow::anyhow!("product has no input sweeps"))?;
+        for moment in &self.definition.inputs {
+            anyhow::ensure!(inputs.iter().any(|(got, _)| got == moment), "missing {} input", moment.short_name());
+        }
+        anyhow::ensure!(inputs.iter().all(|(_, sweep)| same_grid(base, sweep)), "product inputs are not on the same radar grid");
+        let span = self.definition.max - self.definition.min;
+        let mut data = Vec::with_capacity(base.data.len());
+        for at in 0..base.data.len() {
+            let gate = at % base.gate_count;
+            let azimuth = at / base.gate_count;
+            let range_km = base.first_gate_km + gate as f32 * base.gate_interval_km;
+            let mut values = GateValues {
+                altitude_km: crate::xsection::beam_height_km(range_km.into(), base.elevation_deg.into()) as f32,
+                range_km,
+                azimuth_deg: azimuth as f32 * 360.0 / base.az_bins as f32,
+                elevation_deg: base.elevation_deg,
+                freezing_km: environment.freezing_km,
+                minus10_km: environment.minus10_km,
+                minus20_km: environment.minus20_km,
+                ..Default::default()
+            };
+            for (moment, sweep) in inputs {
+                values.moments[moment.index()] = decode_gate(sweep, at);
+            }
+            let encoded = match self.root.eval(&values) {
+                Some(Value::Number(value)) if value.is_finite() => {
+                    2 + (((value - self.definition.min) / span).clamp(0.0, 1.0) * 253.0).round() as u8
+                }
+                _ => 0,
+            };
+            data.push(encoded);
+        }
+        Ok(BinnedSweep {
+            moment: Moment::Reflectivity,
+            data,
+            value_min: self.definition.min,
+            value_max: self.definition.max,
+            ..base.clone()
+        })
+    }
+}
+
+fn same_grid(a: &BinnedSweep, b: &BinnedSweep) -> bool {
+    a.az_bins == b.az_bins
+        && a.gate_count == b.gate_count
+        && a.first_gate_km == b.first_gate_km
+        && a.gate_interval_km == b.gate_interval_km
+        && a.radar_lat == b.radar_lat
+        && a.radar_lon == b.radar_lon
+        && a.elevation_deg == b.elevation_deg
+}
+
+fn decode_gate(sweep: &BinnedSweep, at: usize) -> Option<f32> {
+    let raw = *sweep.data.get(at)?;
+    (raw >= 2).then(|| {
+        sweep.value_min + (raw as f32 - 2.0) / 253.0 * (sweep.value_max - sweep.value_min)
+    })
 }
 
 impl Expr {
@@ -269,6 +349,21 @@ impl Op {
 }
 
 impl Fn {
+    fn is_reducer(self) -> bool {
+        matches!(
+            self,
+            Self::MaxVertical
+                | Self::MinVertical
+                | Self::MeanVertical
+                | Self::MaxLayer
+                | Self::MinLayer
+                | Self::MeanLayer
+                | Self::FirstHeight
+                | Self::LastHeight
+                | Self::CountGates
+        )
+    }
+
     fn ty(self, args: &[Expr]) -> anyhow::Result<Ty> {
         let expected = match self {
             Self::Clamp | Self::If => 3,
@@ -616,5 +711,26 @@ mod tests {
         assert_eq!(Product::compile(definition("first_height(REF, 40)")).unwrap().column(&gates), 3.0);
         assert_eq!(Product::compile(definition("last_height(REF, 40)")).unwrap().column(&gates), 5.0);
         assert_eq!(Product::compile(definition("count_gates(REF >= 40)")).unwrap().column(&gates), 2.0);
+    }
+
+    #[test]
+    fn gate_product_builds_a_renderable_sweep() {
+        let product = Product::compile(definition("REF * CC")).unwrap();
+        let sweep = |moment, raw, min, max| BinnedSweep {
+            moment, az_bins: 1, gate_count: 1, data: vec![raw], first_gate_km: 1.0,
+            gate_interval_km: 0.25, radar_lat: 35.0, radar_lon: -97.0, elevation_deg: 0.5,
+            value_min: min, value_max: max,
+        };
+        let reflectivity = sweep(Moment::Reflectivity, 102, 0.0, 100.0);
+        let correlation = sweep(Moment::CorrelationCoefficient, 230, 0.0, 1.0);
+        let out = product
+            .sweep(
+                &[(Moment::Reflectivity, &reflectivity), (Moment::CorrelationCoefficient, &correlation)],
+                EnvironmentValues::default(),
+            )
+            .unwrap();
+        assert_eq!(out.data.len(), 1);
+        assert!(out.data[0] > 2);
+        assert_eq!((out.value_min, out.value_max), (0.0, 100.0));
     }
 }
