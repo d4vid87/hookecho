@@ -15934,15 +15934,40 @@ impl HookEchoApp {
             .filter_map(|layer| self.fields.get(layer)?.frame.as_ref());
         let forecast = frames
             .clone()
-            .find(|frame| frame.stamp.class == DataClass::Forecast);
-        let reference = frames.find(|frame| {
-            matches!(frame.stamp.class, DataClass::Analysis | DataClass::Observed)
-        });
+            .find(|frame| frame.stamp.class == DataClass::Forecast)
+            .cloned();
+        let reference = frames
+            .find(|frame| {
+                matches!(frame.stamp.class, DataClass::Analysis | DataClass::Observed)
+            })
+            .cloned();
         let result = forecast
-            .zip(reference)
-            .ok_or_else(|| anyhow::anyhow!("show one forecast and one observed/analysis field"))
-            .and_then(|(forecast, reference)| {
-                let metrics = crate::fielddiff::verify_forecast(forecast, reference)?;
+            .ok_or_else(|| anyhow::anyhow!("show a forecast field"))
+            .and_then(|forecast| {
+                let (metrics, reference_json) = match reference {
+                    Some(reference) => (
+                        crate::fielddiff::verify_forecast(&forecast, &reference)?,
+                        serde_json::json!({
+                            "kind": "grid",
+                            "product": reference.descriptor.id.0,
+                            "source": &reference.stamp.source_identity,
+                            "valid_time": reference.stamp.valid_time,
+                        }),
+                    ),
+                    None => (
+                        crate::fielddiff::verify_stations(
+                            &forecast,
+                            &self.metars,
+                            chrono::Duration::minutes(90),
+                        )?,
+                        serde_json::json!({
+                            "kind": "METAR stations",
+                            "source": "aviationweather.gov",
+                            "time_tolerance_minutes": 90,
+                            "stations_loaded": self.metars.len(),
+                        }),
+                    ),
+                };
                 Ok(serde_json::to_vec_pretty(&serde_json::json!({
                     "schema": "hookecho.forecast-verification.v1",
                     "forecast": {
@@ -15950,11 +15975,7 @@ impl HookEchoApp {
                         "source": &forecast.stamp.source_identity,
                         "valid_time": forecast.stamp.valid_time,
                     },
-                    "reference": {
-                        "product": reference.descriptor.id.0,
-                        "source": &reference.stamp.source_identity,
-                        "valid_time": reference.stamp.valid_time,
-                    },
+                    "reference": reference_json,
                     "units": forecast.descriptor.units,
                     "metrics": metrics,
                 }))?)
