@@ -8828,19 +8828,45 @@ impl HookEchoApp {
             .iter()
             .rev()
             .find(|layer| view.fields_on.contains(layer))
-            .and_then(|layer| self.fields.get(layer))?
-            .frame
-            .as_ref()?;
-        let profile = wxdata::route::sample_profile(&route.points, 1_000.0, |lon, lat| {
-            frame.sample(lon, lat).value
-        });
+            .and_then(|layer| self.fields.get(layer))
+            .and_then(|state| state.frame.as_ref());
+        let (label, units, product_id, valid, profile) = if let Some(frame) = frame {
+            (
+                frame.descriptor.short_name.to_string(),
+                frame.descriptor.units,
+                frame.descriptor.id.0,
+                frame.stamp.valid_time,
+                wxdata::route::sample_profile(&route.points, 1_000.0, |lon, lat| {
+                    frame.sample(lon, lat).value
+                }),
+            )
+        } else {
+            let volume = view.volume.as_ref()?;
+            let moment = view.moment;
+            (
+                moment.short_name().to_string(),
+                moment.units(),
+                moment.short_name(),
+                volume.time,
+                wxdata::route::sample_profile(&route.points, 1_000.0, |lon, lat| {
+                    wxdata::level2::sample_native(
+                        &volume.scan,
+                        moment,
+                        view.tilt,
+                        lon,
+                        lat,
+                    )
+                    .and_then(|sample| sample.value)
+                }),
+            )
+        };
         let maximum = profile
             .iter()
             .map(|(_, value)| *value)
             .max_by(f32::total_cmp)?;
-        let threshold = match frame.descriptor.units {
+        let threshold = match units {
             "dBZ" => Some(40.0),
-            "mm" if frame.descriptor.id.0.contains("mesh") => Some(25.0),
+            "mm" if product_id.contains("mesh") => Some(25.0),
             "mm/hr" => Some(10.0),
             "strikes/km²/min" => Some(0.0),
             _ => None,
@@ -8862,16 +8888,16 @@ impl HookEchoApp {
         let exposure = span.map_or_else(String::new, |(threshold, start, end)| {
             format!(
                 " · ≥{threshold:.0} {} from {} to {}",
-                frame.descriptor.units,
+                units,
                 crate::geo::fmt_distance(start / 1000.0, self.metric(), 0),
                 crate::geo::fmt_distance(end / 1000.0, self.metric(), 0)
             )
         });
         Some(format!(
             "{} peaks at {maximum:.1} {}{exposure} · valid {}",
-            frame.descriptor.short_name,
-            frame.descriptor.units,
-            frame.stamp.valid_time.format("%H:%MZ")
+            label,
+            units,
+            valid.format("%H:%MZ")
         ))
     }
 
