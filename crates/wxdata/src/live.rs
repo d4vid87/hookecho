@@ -426,13 +426,7 @@ async fn emit<F: FnMut(Update)>(
         .map(|sweep| sweep.radials().len())
         .sum();
     let now = chrono::Utc::now();
-    let oldest_radial_age = new_scan
-        .sweeps()
-        .iter()
-        .flat_map(|sweep| sweep.radials())
-        .filter_map(|radial| chrono::DateTime::from_timestamp_millis(radial.collection_timestamp()))
-        .filter_map(|collected| (now - collected).to_std().ok())
-        .max();
+    let oldest_radial_age = oldest_radial_age_at(&new_scan, now);
     *merged = Arc::new(new_scan);
     let (name, time) = it
         .current()
@@ -472,10 +466,21 @@ enum EmitKind {
     Cut,
 }
 
-/// A sweep pass finishes in well under this. A base sweep older than that at the same elevation
-/// number is the *previous* volume's version of the tilt, which has to be dropped whole rather
-/// than stitched, or a rollover would leave last volume's radials standing in the gaps.
-const SAME_PASS_MS: i64 = 90_000;
+/// Keep the prior completed pass under a new partial pass for at most two normal volume cycles.
+/// Every retained radial keeps its original collection timestamp, so the status reports its age.
+const RETAIN_PRIOR_MS: i64 = 10 * 60_000;
+
+fn oldest_radial_age_at(
+    scan: &Scan,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Option<Duration> {
+    scan.sweeps()
+        .iter()
+        .flat_map(|sweep| sweep.radials())
+        .filter_map(|radial| chrono::DateTime::from_timestamp_millis(radial.collection_timestamp()))
+        .filter_map(|collected| (now - collected).to_std().ok())
+        .max()
+}
 
 /// Stitch a partial sweep onto the base sweep of the same tilt, newest radial wins per azimuth.
 ///
@@ -486,11 +491,11 @@ const SAME_PASS_MS: i64 = 90_000;
 /// radials away and drew the volume with a wedge of empty azimuths: the seam.
 fn stitch(base: &Sweep, partial: &Sweep) -> Sweep {
     let start = |s: &Sweep| s.radials().iter().map(|r| r.collection_timestamp()).min();
-    let same_pass = match (start(base), start(partial)) {
-        (Some(b), Some(p)) => (p - b).abs() < SAME_PASS_MS,
+    let close_enough_to_retain = match (start(base), start(partial)) {
+        (Some(b), Some(p)) => (p - b).abs() < RETAIN_PRIOR_MS,
         _ => false,
     };
-    if !same_pass {
+    if !close_enough_to_retain {
         return partial.clone();
     }
     // ponytail: BTreeMap because it dedupes and sorts by azimuth in one pass, and a sweep is
@@ -712,11 +717,26 @@ mod tests {
     }
 
     #[test]
-    fn a_new_volume_replaces_the_tilt_instead_of_stitching_to_it() {
-        // Same tilt five minutes later is the next volume, not the rest of this pass. Keeping the
-        // old radials would leave last volume's echoes standing wherever the new one is thin.
+    fn a_new_partial_volume_retains_and_ages_prior_azimuths() {
         let base = Scan::new(vcp(212), vec![wedge(1, 0..720, 1_000)]);
         let partial = Scan::new(vcp(212), vec![wedge(1, 0..120, 301_000)]);
+        let (merged, _) = merge_scan(&base, partial);
+        assert_eq!(merged.sweeps()[0].radials().len(), 720);
+        assert_eq!(merged.sweeps()[0].radials()[0].collection_timestamp(), 301_000);
+        assert_eq!(merged.sweeps()[0].radials()[120].collection_timestamp(), 1_000);
+        assert_eq!(
+            oldest_radial_age_at(
+                &merged,
+                chrono::DateTime::from_timestamp_millis(301_000).unwrap(),
+            ),
+            Some(Duration::from_secs(300)),
+        );
+    }
+
+    #[test]
+    fn an_expired_prior_volume_does_not_fill_new_gaps() {
+        let base = Scan::new(vcp(212), vec![wedge(1, 0..720, 1_000)]);
+        let partial = Scan::new(vcp(212), vec![wedge(1, 0..120, 901_000)]);
         let (merged, _) = merge_scan(&base, partial);
         assert_eq!(merged.sweeps()[0].radials().len(), 120);
     }
