@@ -4431,7 +4431,7 @@ impl HookEchoApp {
                         .url
                         .strip_prefix("gis:")
                         .and_then(|_| self.settings.web_files.get(&cfg.url))
-                        .map(|text| wxdata::gis::geojson(&cfg.url[4..], text));
+                        .map(|text| wxdata::gis::parse(&cfg.url[4..], text));
                     self.placefiles.push(LoadedPlacefile {
                         url: cfg.url.clone(),
                         enabled: cfg.enabled,
@@ -15416,7 +15416,7 @@ impl HookEchoApp {
                 Err(e) => self.toast(ToastKind::Error, format!("GPX import failed: {e}")),
             },
             K::Gis => match import.text() {
-                Ok(text) => match wxdata::gis::geojson(&import.name(), &text) {
+                Ok(text) => match wxdata::gis::parse(&import.name(), &text) {
                     Ok(file) => {
                         let key = format!("gis:{}", import.name());
                         let items = file.items.len();

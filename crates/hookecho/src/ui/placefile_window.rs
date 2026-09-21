@@ -43,7 +43,7 @@ impl PlacefileWindow {
         };
         window.show(ctx, |ui| {
             ui.label("GRLevelX placefiles (lines, polygons, text, icons at lat/lon).");
-            if ui.button("Import GeoJSON…").clicked() {
+            if ui.button("Import GeoJSON or KML…").clicked() {
                 self.import_gis = true;
             }
             ui.add_space(4.0);

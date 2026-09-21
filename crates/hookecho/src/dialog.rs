@@ -94,7 +94,7 @@ impl ImportKind {
             ImportKind::MarkerIcon => "Marker icon",
             ImportKind::AlertSound => "Alert sound",
             ImportKind::ChaseGpx => "GPX track",
-            ImportKind::Gis => "GeoJSON overlay",
+            ImportKind::Gis => "GIS overlay",
         }
     }
 
@@ -105,7 +105,7 @@ impl ImportKind {
             ImportKind::MarkerIcon => &["png"],
             ImportKind::AlertSound => &["wav", "mp3", "ogg", "flac"],
             ImportKind::ChaseGpx => &["gpx"],
-            ImportKind::Gis => &["geojson", "json"],
+            ImportKind::Gis => &["geojson", "json", "kml"],
         }
     }
 
@@ -121,7 +121,7 @@ impl ImportKind {
             // No registered MIME for GPX that pickers agree on; the extension is checked on the
             // way back, same as a palette.
             ImportKind::ChaseGpx => "*/*",
-            ImportKind::Gis => "application/geo+json",
+            ImportKind::Gis => "*/*",
         }
     }
 }

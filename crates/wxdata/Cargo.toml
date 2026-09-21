@@ -26,6 +26,7 @@ lru.workspace = true
 directories.workspace = true
 log.workspace = true
 geojson = "1.0.0"
+quick-xml = "0.39.4"
 # Already in the tree under reqwest; used here to run the per-forecast-hour HRRR fetches with
 # bounded concurrency instead of one at a time.
 futures-util = { version = "0.3", default-features = false, features = ["std", "async-await-macro"] }

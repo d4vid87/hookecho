@@ -7315,6 +7315,7 @@ dependencies = [
  "nexrad-level3",
  "nexrad-model",
  "postcard",
+ "quick-xml",
  "rayon",
  "reqwest 0.12.28",
  "serde",
