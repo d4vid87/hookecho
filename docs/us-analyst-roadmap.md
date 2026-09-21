@@ -2159,7 +2159,7 @@ HookEcho should be considered “top-tier U.S. analyst workstation” only when 
 - [x] progressive in-progress Level II display with measured latency
 - [x] automatic feed fallback and source-health display
 - [x] exact radar gate/beam/VCP inspection
-- [ ] broad metadata-driven MRMS catalog
+- [x] broad metadata-driven MRMS catalog
 - [x] native GOES ABI + 1-minute mesoscale imagery
 - [x] radar/satellite/MRMS valid-time synchronization
 - [x] RRFS/REFS + GEFS + NBM + expanded HRRR/RAP/GFS
