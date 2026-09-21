@@ -134,6 +134,12 @@ check_prefixes \
   'CONUS/Reflectivity_0C_00.50/' \
   'CONUS/Reflectivity_-10C_00.50/' \
   'CONUS/Reflectivity_-20C_00.50/' \
+  'CONUS/RotationTrack30min_00.50/' \
+  'CONUS/RotationTrack60min_00.50/' \
+  'CONUS/RotationTrack120min_00.50/' \
+  'CONUS/RotationTrack240min_00.50/' \
+  'CONUS/RotationTrack360min_00.50/' \
+  'CONUS/RotationTrack1440min_00.50/' \
   'CONUS/FLASH_QPE_ARI01H_00.00/' \
   'CONUS/FLASH_QPE_ARI03H_00.00/' \
   'CONUS/FLASH_QPE_ARI06H_00.00/' \
@@ -169,6 +175,12 @@ check_recent_mrms \
   'CONUS/Reflectivity_0C_00.50' \
   'CONUS/Reflectivity_-10C_00.50' \
   'CONUS/Reflectivity_-20C_00.50' \
+  'CONUS/RotationTrack30min_00.50' \
+  'CONUS/RotationTrack60min_00.50' \
+  'CONUS/RotationTrack120min_00.50' \
+  'CONUS/RotationTrack240min_00.50' \
+  'CONUS/RotationTrack360min_00.50' \
+  'CONUS/RotationTrack1440min_00.50' \
   'CONUS/FLASH_QPE_ARI01H_00.00' \
   'CONUS/FLASH_QPE_ARI03H_00.00' \
   'CONUS/FLASH_QPE_ARI06H_00.00' \

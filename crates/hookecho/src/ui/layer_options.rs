@@ -603,12 +603,19 @@ pub(crate) fn show(
 
     if section == "Rotation tracks" && on.contains(&FL::Rotation) {
         header(ui, "Rotation tracks");
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             ui.label("Window:");
             let mut dur = false;
-            for m in [30u16, 60, 120] {
+            for (m, label) in [
+                (30u16, "30m"),
+                (60, "1h"),
+                (120, "2h"),
+                (240, "4h"),
+                (360, "6h"),
+                (1440, "24h"),
+            ] {
                 dur |= ui
-                    .selectable_value(rotation_minutes, m, format!("{m}m"))
+                    .selectable_value(rotation_minutes, m, label)
                     .changed();
             }
             // Duration change → force an immediate refetch of the rotation grid.

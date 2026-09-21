@@ -262,12 +262,14 @@ pub const PRECIP_TYPE: &str = "CONUS/PrecipFlag_00.00";
 /// FLASH flash-flood average recurrence interval over the 30-min QPE window (years).
 pub const FLASH_ARI30: &str = "CONUS/FLASH_QPE_ARI30M_00.00";
 
-/// Low-level rotation-track (accumulated azimuthal-shear max) product path for `minutes`
-/// (30/60/120 supported; other values fall back to 30).
+/// Low-level rotation-track (accumulated azimuthal-shear max) product path for `minutes`.
 pub fn rotation_track(minutes: u16) -> &'static str {
     match minutes {
         60 => "CONUS/RotationTrack60min_00.50",
         120 => "CONUS/RotationTrack120min_00.50",
+        240 => "CONUS/RotationTrack240min_00.50",
+        360 => "CONUS/RotationTrack360min_00.50",
+        1440 => "CONUS/RotationTrack1440min_00.50",
         _ => "CONUS/RotationTrack30min_00.50",
     }
 }
@@ -554,7 +556,10 @@ pub fn descriptor_for_product(product: &str) -> Option<&'static FieldDescriptor>
         VIL => &VIL_DESCRIPTOR,
         "CONUS/RotationTrack30min_00.50"
         | "CONUS/RotationTrack60min_00.50"
-        | "CONUS/RotationTrack120min_00.50" => &ROTATION_DESCRIPTOR,
+        | "CONUS/RotationTrack120min_00.50"
+        | "CONUS/RotationTrack240min_00.50"
+        | "CONUS/RotationTrack360min_00.50"
+        | "CONUS/RotationTrack1440min_00.50" => &ROTATION_DESCRIPTOR,
         QPE_01H => &QPE_01H_DESCRIPTOR,
         QPE_03H => &QPE_03H_DESCRIPTOR,
         QPE_06H => &QPE_06H_DESCRIPTOR,
@@ -949,6 +954,25 @@ mod tests {
         // 720 is not published, so it lands on the 24-hour swath rather than a 404.
         assert_eq!(hail_swath(720), MESH_1440);
         assert_eq!(hail_swath(1440), MESH_1440);
+    }
+
+    #[test]
+    fn rotation_windows_map_to_every_published_low_level_product() {
+        for (minutes, suffix) in [
+            (30, "30min"),
+            (60, "60min"),
+            (120, "120min"),
+            (240, "240min"),
+            (360, "360min"),
+            (1440, "1440min"),
+        ] {
+            let product = rotation_track(minutes);
+            assert!(product.contains(suffix), "{minutes}: {product}");
+            assert_eq!(
+                descriptor_for_product(product).map(|descriptor| descriptor.id),
+                Some(ROTATION_DESCRIPTOR.id),
+            );
+        }
     }
 
     #[test]
