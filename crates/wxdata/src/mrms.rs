@@ -93,6 +93,9 @@ descriptor!(FLASH_FFG06H_DESCRIPTOR, "mrms.flash-ffg-6h", "6-hour QPE-to-FFG rat
 descriptor!(FLASH_FFGMAX_DESCRIPTOR, "mrms.flash-ffg-max", "Maximum QPE-to-FFG ratio", "FLASH FFG Ratio Max", "ratio", Scalar, "ffg-ratio", Bilinear, false, ["flood", "guidance", "exceedance"]);
 descriptor!(FLASH_CREST_UNIT_FLOW_DESCRIPTOR, "mrms.flash-crest-unit-flow", "CREST maximum unit streamflow", "FLASH CREST Unit Flow", "m³/s/km²", Scalar, "unit-streamflow", Bilinear, false, ["flood", "crest", "streamflow"]);
 descriptor!(FLASH_CREST_SOIL_SAT_DESCRIPTOR, "mrms.flash-crest-soil-saturation", "CREST maximum soil saturation", "FLASH CREST Soil Saturation", "%", Scalar, "soil-saturation", Bilinear, false, ["flood", "crest", "soil moisture"]);
+descriptor!(COMPOSITE_HEIGHT_DESCRIPTOR, "mrms.composite-reflectivity-height", "Composite reflectivity height", "Composite Height", "m MSL", Scalar, "height-msl", Bilinear, true, ["reflectivity height", "storm height", "altitude"]);
+descriptor!(LOW_LEVEL_HEIGHT_DESCRIPTOR, "mrms.low-level-reflectivity-height", "Low-level composite reflectivity height", "Low-level Height", "m MSL", Scalar, "height-msl", Bilinear, true, ["reflectivity height", "low level", "altitude"]);
+descriptor!(SEAMLESS_HSR_HEIGHT_DESCRIPTOR, "mrms.seamless-hsr-height", "Seamless hybrid-scan reflectivity height", "Hybrid-scan Height", "km AGL", Scalar, "echo-tops", Bilinear, true, ["hybrid scan", "reflectivity height", "beam height"]);
 
 pub struct CatalogProduct {
     pub descriptor: &'static FieldDescriptor,
@@ -101,7 +104,7 @@ pub struct CatalogProduct {
     pub description: &'static str,
 }
 
-pub static CATALOG: [CatalogProduct; 31] = [
+pub static CATALOG: [CatalogProduct; 34] = [
     CatalogProduct { descriptor: &ECHO_TOP_30_DESCRIPTOR, product: "CONUS/EchoTop_30_00.50", slug: "mrms-echo-top-30", description: "Height of the 30 dBZ storm top above ground" },
     CatalogProduct { descriptor: &ECHO_TOP_50_DESCRIPTOR, product: "CONUS/EchoTop_50_00.50", slug: "mrms-echo-top-50", description: "Height of the 50 dBZ core for storm-severity analysis" },
     CatalogProduct { descriptor: &ECHO_TOP_60_DESCRIPTOR, product: "CONUS/EchoTop_60_00.50", slug: "mrms-echo-top-60", description: "Height of the strongest 60 dBZ core" },
@@ -133,6 +136,9 @@ pub static CATALOG: [CatalogProduct; 31] = [
     CatalogProduct { descriptor: &FLASH_FFGMAX_DESCRIPTOR, product: "CONUS/FLASH_QPE_FFGMAX_00.00", slug: "mrms-flash-ffg-max", description: "Largest rainfall-to-guidance ratio across the published durations" },
     CatalogProduct { descriptor: &FLASH_CREST_UNIT_FLOW_DESCRIPTOR, product: "CONUS/FLASH_CREST_MAXUNITSTREAMFLOW_00.00", slug: "mrms-flash-crest-unit-flow", description: "Maximum CREST streamflow normalized by upstream basin area" },
     CatalogProduct { descriptor: &FLASH_CREST_SOIL_SAT_DESCRIPTOR, product: "CONUS/FLASH_CREST_MAXSOILSAT_00.00", slug: "mrms-flash-crest-soil-saturation", description: "Maximum CREST modeled soil saturation" },
+    CatalogProduct { descriptor: &COMPOSITE_HEIGHT_DESCRIPTOR, product: "CONUS/HeightCompositeReflectivity_00.50", slug: "mrms-composite-reflectivity-height", description: "Altitude MSL of the strongest reflectivity in each column" },
+    CatalogProduct { descriptor: &LOW_LEVEL_HEIGHT_DESCRIPTOR, product: "CONUS/HeightLowLevelCompositeReflectivity_00.50", slug: "mrms-low-level-reflectivity-height", description: "Altitude MSL of the strongest reflectivity below 4 km" },
+    CatalogProduct { descriptor: &SEAMLESS_HSR_HEIGHT_DESCRIPTOR, product: "CONUS/SeamlessHSRHeight_00.00", slug: "mrms-seamless-hsr-height", description: "Height AGL sampled by the seamless hybrid-scan reflectivity" },
 ];
 descriptor!(ROTATION_DESCRIPTOR, "mrms.rotation-track", "Rotation track", "Rotation Track", "s⁻¹", Accumulation, "rotation", Nearest, false, ["rotation", "azimuthal shear"]);
 descriptor!(QPE_01H_DESCRIPTOR, "mrms.qpe-1h", "One-hour quantitative precipitation estimate", "QPE 1h", "mm", Accumulation, "qpe-1h", Nearest, false, ["rain", "precipitation"]);
@@ -146,7 +152,7 @@ descriptor!(PRECIP_RATE_DESCRIPTOR, "mrms.precip-rate", "Surface precipitation r
 descriptor!(PRECIP_TYPE_DESCRIPTOR, "mrms.precip-type", "Surface precipitation type", "Precip Type", "category", Categorical, "precip-type", Nearest, false, ["rain", "snow", "sleet"]);
 descriptor!(FLASH_ARI30_DESCRIPTOR, "mrms.flash-ari30", "30-minute flash-flood recurrence interval", "FLASH ARI", "yr", Scalar, "flash-flood", Bilinear, false, ["flood", "ari"]);
 
-pub static DESCRIPTORS: [&FieldDescriptor; 50] = [
+pub static DESCRIPTORS: [&FieldDescriptor; 53] = [
     &REFLECTIVITY_DESCRIPTOR,
     &LOW_LEVEL_REFLECTIVITY_DESCRIPTOR,
     &LIGHTNING_DESCRIPTOR,
@@ -186,6 +192,9 @@ pub static DESCRIPTORS: [&FieldDescriptor; 50] = [
     &FLASH_FFGMAX_DESCRIPTOR,
     &FLASH_CREST_UNIT_FLOW_DESCRIPTOR,
     &FLASH_CREST_SOIL_SAT_DESCRIPTOR,
+    &COMPOSITE_HEIGHT_DESCRIPTOR,
+    &LOW_LEVEL_HEIGHT_DESCRIPTOR,
+    &SEAMLESS_HSR_HEIGHT_DESCRIPTOR,
     &ROTATION_DESCRIPTOR,
     &QPE_01H_DESCRIPTOR,
     &QPE_03H_DESCRIPTOR,

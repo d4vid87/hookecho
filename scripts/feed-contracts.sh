@@ -136,6 +136,9 @@ check_prefixes \
   'CONUS/Reflectivity_0C_00.50/' \
   'CONUS/Reflectivity_-10C_00.50/' \
   'CONUS/Reflectivity_-20C_00.50/' \
+  'CONUS/HeightCompositeReflectivity_00.50/' \
+  'CONUS/HeightLowLevelCompositeReflectivity_00.50/' \
+  'CONUS/SeamlessHSRHeight_00.00/' \
   'CONUS/RotationTrack30min_00.50/' \
   'CONUS/RotationTrack60min_00.50/' \
   'CONUS/RotationTrack120min_00.50/' \
@@ -187,6 +190,9 @@ check_recent_mrms \
   'CONUS/Reflectivity_0C_00.50' \
   'CONUS/Reflectivity_-10C_00.50' \
   'CONUS/Reflectivity_-20C_00.50' \
+  'CONUS/HeightCompositeReflectivity_00.50' \
+  'CONUS/HeightLowLevelCompositeReflectivity_00.50' \
+  'CONUS/SeamlessHSRHeight_00.00' \
   'CONUS/RotationTrack30min_00.50' \
   'CONUS/RotationTrack60min_00.50' \
   'CONUS/RotationTrack120min_00.50' \

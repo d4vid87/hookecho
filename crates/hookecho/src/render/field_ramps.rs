@@ -343,6 +343,22 @@ static MRMS_ECHO_TOPS: FieldRamp = ramp!(
     ]
 );
 
+static MRMS_HEIGHT_MSL: FieldRamp = ramp!(
+    "Reflectivity height",
+    "m MSL",
+    0.0,
+    20_000.0,
+    RampScale::Linear,
+    190,
+    &[
+        (0.0, [50, 110, 170]),
+        (0.3, [40, 200, 200]),
+        (0.6, [240, 220, 50]),
+        (0.8, [240, 130, 30]),
+        (1.0, [220, 50, 190]),
+    ]
+);
+
 /// VIL density: water aloft per unit storm depth. Above ~3.5 g/m³ is the classic large-hail
 /// signature, so the scale turns hot exactly there rather than spending its range on drizzle.
 static VIL_DENSITY: FieldRamp = ramp!(
@@ -772,6 +788,7 @@ pub fn ramp_for(layer: FieldLayer) -> Option<&'static FieldRamp> {
     if let FL::MrmsCatalog(index) = layer {
         return match wxdata::mrms::CATALOG.get(index as usize)?.descriptor.palette_key {
             "echo-tops" => Some(&MRMS_ECHO_TOPS),
+            "height-msl" => Some(&MRMS_HEIGHT_MSL),
             "vil-density" => Some(&VIL_DENSITY),
             "qpe-1h" => Some(&QPE_1H),
             "qpe-24h" => Some(&QPE_24H),
