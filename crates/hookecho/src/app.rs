@@ -8861,6 +8861,34 @@ impl HookEchoApp {
         ))
     }
 
+    fn route_storm_analysis(&self) -> Option<(String, wxdata::route::StormRouteAnalysis)> {
+        if !self.views.get(self.active)?.timeline.following {
+            return None;
+        }
+        let cell = self
+            .cell_popup
+            .as_ref()
+            .or_else(|| self.follow_cell.as_ref().map(|(_, cell, _)| cell))?;
+        let (bearing, speed) = (cell.mvt_deg? as f64, cell.mvt_kt? as f64);
+        let age_s = cell
+            .time
+            .map(|time| (Utc::now() - time).num_seconds().clamp(0, 1_800) as f64)
+            .unwrap_or(0.0);
+        let origin = crate::geo::destination_point(
+            [cell.lon, cell.lat],
+            bearing,
+            speed * 0.514_444 * age_s / 1_000.0,
+        );
+        wxdata::route::analyze_storm_route(
+            self.routes.first()?,
+            origin,
+            bearing,
+            speed,
+            3.0 * 60.0 * 60.0,
+        )
+        .map(|analysis| (cell.title.clone(), analysis))
+    }
+
     /// The 5-min UTC bucket (Unix secs / 300) of the active pane's displayed frame, or `None` when
     /// following live (archive warnings only apply to scrubbed archive views).
     fn archive_bucket(&self) -> Option<i64> {
@@ -14472,6 +14500,26 @@ impl HookEchoApp {
                 egui::Color32::WHITE,
             );
         }
+        if let Some((_, analysis)) = self.route_storm_analysis() {
+            if let Some(crossing) = analysis.intersection {
+                let world = crate::render::mercator::lonlat_to_world(
+                    crossing.point[0],
+                    crossing.point[1],
+                );
+                let (x, y) = cam.world_to_screen(world, vp);
+                let point = egui::pos2(prect.left() + x, prect.top() + y);
+                let color = egui::Color32::from_rgb(255, 185, 70);
+                painter.circle_filled(point, 8.0, egui::Color32::from_black_alpha(190));
+                painter.line_segment(
+                    [point + egui::vec2(-6.0, -6.0), point + egui::vec2(6.0, 6.0)],
+                    egui::Stroke::new(2.0, color),
+                );
+                painter.line_segment(
+                    [point + egui::vec2(-6.0, 6.0), point + egui::vec2(6.0, -6.0)],
+                    egui::Stroke::new(2.0, color),
+                );
+            }
+        }
 
         // Freehand annotation strokes. Painted with the rest of the tool graphics so they sit
         // above every overlay, and drawn in OBS mode too — circling a storm on a stream is the
@@ -15363,6 +15411,46 @@ impl HookEchoApp {
                 }
                 if let Some(exposure) = self.route_field_exposure() {
                     ui.label(format!("Weather along route: {exposure}"));
+                }
+                if let Some((name, analysis)) = self.route_storm_analysis() {
+                    let closest = analysis.closest;
+                    let side = if closest.relative_bearing_deg < 0.0 {
+                        "left"
+                    } else {
+                        "right"
+                    };
+                    ui.label(format!(
+                        "{name}: closest approach {} in {:.0} min · {:.0}° {side}",
+                        crate::geo::fmt_distance(
+                            closest.separation_m / 1_000.0,
+                            metric,
+                            1
+                        ),
+                        closest.eta_s / 60.0,
+                        closest.relative_bearing_deg.abs()
+                    ));
+                    if let Some(crossing) = analysis.intersection {
+                        let difference = crossing.vehicle_eta_s - crossing.storm_eta_s;
+                        ui.colored_label(
+                            egui::Color32::from_rgb(255, 185, 70),
+                            format!(
+                                "⚠ Projected path crosses route in {} · storm ETA {:.0} min, vehicle ETA {:.0} min ({:.0} min {})",
+                                crate::geo::fmt_distance(
+                                    crossing.route_distance_m / 1_000.0,
+                                    metric,
+                                    0
+                                ),
+                                crossing.storm_eta_s / 60.0,
+                                crossing.vehicle_eta_s / 60.0,
+                                difference.abs() / 60.0,
+                                if difference >= 0.0 {
+                                    "before vehicle"
+                                } else {
+                                    "after vehicle"
+                                }
+                            ),
+                        );
+                    }
                 }
                 // Desktop streams from a local gpsd; Android polls the system LocationManager over
                 // JNI (see platform.rs); the web watches the browser's own Geolocation. All three

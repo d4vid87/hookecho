@@ -12,6 +12,122 @@ pub struct Route {
     pub duration_s: f64,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct StormRouteAnalysis {
+    pub closest: ClosestApproach,
+    pub intersection: Option<RouteIntersection>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ClosestApproach {
+    pub vehicle_point: [f64; 2],
+    pub storm_point: [f64; 2],
+    pub separation_m: f64,
+    pub eta_s: f64,
+    /// Storm bearing relative to vehicle heading, -180° left through +180° right.
+    pub relative_bearing_deg: f64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct RouteIntersection {
+    pub point: [f64; 2],
+    pub route_distance_m: f64,
+    pub vehicle_eta_s: f64,
+    pub storm_eta_s: f64,
+}
+
+/// Compare a provider route with a constant-motion storm forecast for up to `horizon_s`.
+pub fn analyze_storm_route(
+    route: &Route,
+    storm_origin: [f64; 2],
+    storm_bearing_deg: f64,
+    storm_speed_kt: f64,
+    horizon_s: f64,
+) -> Option<StormRouteAnalysis> {
+    if route.points.len() < 2
+        || route.duration_s <= 0.0
+        || !storm_bearing_deg.is_finite()
+        || storm_speed_kt <= 0.0
+        || horizon_s <= 0.0
+    {
+        return None;
+    }
+    let route_length: f64 = route
+        .points
+        .windows(2)
+        .map(|segment| distance_m(segment[0], segment[1]))
+        .sum();
+    if route_length <= 0.0 {
+        return None;
+    }
+    let profile = sample_profile(&route.points, 1_000.0, |lon, lat| Some([lon, lat]));
+    let mut closest = None;
+    for (index, (route_distance, vehicle_point)) in profile.iter().enumerate() {
+        let eta_s = route.duration_s * route_distance / route_length;
+        if eta_s > horizon_s {
+            break;
+        }
+        let storm_point = destination(
+            storm_origin,
+            storm_bearing_deg,
+            storm_speed_kt * 0.514_444 * eta_s / 1_000.0,
+        );
+        let separation_m = distance_m(*vehicle_point, storm_point);
+        let neighbor = profile
+            .get(index + 1)
+            .or_else(|| index.checked_sub(1).and_then(|i| profile.get(i)))?
+            .1;
+        let vehicle_heading = bearing_deg(*vehicle_point, neighbor);
+        let relative_bearing_deg = normalize_bearing(
+            bearing_deg(*vehicle_point, storm_point) - vehicle_heading,
+        );
+        let candidate = ClosestApproach {
+            vehicle_point: *vehicle_point,
+            storm_point,
+            separation_m,
+            eta_s,
+            relative_bearing_deg,
+        };
+        if closest
+            .as_ref()
+            .is_none_or(|best: &ClosestApproach| separation_m < best.separation_m)
+        {
+            closest = Some(candidate);
+        }
+    }
+
+    let storm_end = destination(
+        storm_origin,
+        storm_bearing_deg,
+        storm_speed_kt * 0.514_444 * horizon_s / 1_000.0,
+    );
+    let mut traveled = 0.0;
+    let mut intersection = None;
+    for segment in route.points.windows(2) {
+        let length = distance_m(segment[0], segment[1]);
+        if let Some((route_fraction, storm_fraction)) =
+            crossing_fractions(segment[0], segment[1], storm_origin, storm_end)
+        {
+            let route_distance_m = traveled + length * route_fraction;
+            intersection = Some(RouteIntersection {
+                point: [
+                    segment[0][0] + (segment[1][0] - segment[0][0]) * route_fraction,
+                    segment[0][1] + (segment[1][1] - segment[0][1]) * route_fraction,
+                ],
+                route_distance_m,
+                vehicle_eta_s: route.duration_s * route_distance_m / route_length,
+                storm_eta_s: horizon_s * storm_fraction,
+            });
+            break;
+        }
+        traveled += length;
+    }
+    Some(StormRouteAnalysis {
+        closest: closest?,
+        intersection,
+    })
+}
+
 /// Distance along a route to its first entry into a polygon, including interior holes.
 pub fn first_intersection_m(points: &[[f64; 2]], rings: &[Vec<[f64; 2]>]) -> Option<f64> {
     let outer = rings.first()?;
@@ -52,6 +168,15 @@ pub fn first_intersection_m(points: &[[f64; 2]], rings: &[Vec<[f64; 2]>]) -> Opt
 }
 
 fn crossing_fraction(a: [f64; 2], b: [f64; 2], c: [f64; 2], d: [f64; 2]) -> Option<f64> {
+    crossing_fractions(a, b, c, d).map(|(t, _)| t)
+}
+
+fn crossing_fractions(
+    a: [f64; 2],
+    b: [f64; 2],
+    c: [f64; 2],
+    d: [f64; 2],
+) -> Option<(f64, f64)> {
     let (rx, ry) = (b[0] - a[0], b[1] - a[1]);
     let (sx, sy) = (d[0] - c[0], d[1] - c[1]);
     let denominator = rx * sy - ry * sx;
@@ -61,7 +186,7 @@ fn crossing_fraction(a: [f64; 2], b: [f64; 2], c: [f64; 2], d: [f64; 2]) -> Opti
     let (qx, qy) = (c[0] - a[0], c[1] - a[1]);
     let t = (qx * sy - qy * sx) / denominator;
     let u = (qx * ry - qy * rx) / denominator;
-    ((0.0..=1.0).contains(&t) && (0.0..=1.0).contains(&u)).then_some(t)
+    ((0.0..=1.0).contains(&t) && (0.0..=1.0).contains(&u)).then_some((t, u))
 }
 
 fn distance_m(a: [f64; 2], b: [f64; 2]) -> f64 {
@@ -71,6 +196,35 @@ fn distance_m(a: [f64; 2], b: [f64; 2]) -> f64 {
     let h = (dlat / 2.0).sin().powi(2)
         + lat1.cos() * lat2.cos() * (dlon / 2.0).sin().powi(2);
     12_742_000.0 * h.sqrt().asin()
+}
+
+fn bearing_deg(a: [f64; 2], b: [f64; 2]) -> f64 {
+    let (lat1, lat2) = (a[1].to_radians(), b[1].to_radians());
+    let dlon = (b[0] - a[0]).to_radians();
+    (dlon.sin() * lat2.cos())
+        .atan2(lat1.cos() * lat2.sin() - lat1.sin() * lat2.cos() * dlon.cos())
+        .to_degrees()
+        .rem_euclid(360.0)
+}
+
+fn normalize_bearing(value: f64) -> f64 {
+    (value + 180.0).rem_euclid(360.0) - 180.0
+}
+
+fn destination(origin: [f64; 2], bearing_deg: f64, distance_km: f64) -> [f64; 2] {
+    let angular = distance_km / 6_371.0;
+    let bearing = bearing_deg.to_radians();
+    let (lon, lat) = (origin[0].to_radians(), origin[1].to_radians());
+    let out_lat = (lat.sin() * angular.cos()
+        + lat.cos() * angular.sin() * bearing.cos())
+    .asin();
+    let out_lon = lon
+        + (bearing.sin() * angular.sin() * lat.cos())
+            .atan2(angular.cos() - lat.sin() * out_lat.sin());
+    [
+        normalize_bearing(out_lon.to_degrees()),
+        out_lat.to_degrees(),
+    ]
 }
 
 /// Sample a route at a bounded spacing while retaining distance from its start.
@@ -269,5 +423,24 @@ mod tests {
         assert!((11..=14).contains(&samples.len()), "{}", samples.len());
         assert_eq!(samples.last().unwrap().1, 0.1);
         assert!(samples.windows(2).all(|pair| pair[0].0 <= pair[1].0));
+    }
+
+    #[test]
+    fn compares_vehicle_and_storm_arrival_at_route_crossing() {
+        let route = Route {
+            points: vec![[-0.1, 0.0], [0.1, 0.0]],
+            distance_m: 22_239.0,
+            duration_s: 3_600.0,
+        };
+        let analysis = analyze_storm_route(&route, [0.0, -0.1], 0.0, 12.0, 7_200.0).unwrap();
+        let crossing = analysis.intersection.unwrap();
+        assert!(crossing.point[0].abs() < 0.001 && crossing.point[1].abs() < 0.001);
+        assert!((crossing.vehicle_eta_s - 1_800.0).abs() < 30.0);
+        assert!((crossing.storm_eta_s - 1_800.0).abs() < 60.0);
+        assert!(
+            analysis.closest.separation_m < 750.0,
+            "{} m",
+            analysis.closest.separation_m
+        );
     }
 }
