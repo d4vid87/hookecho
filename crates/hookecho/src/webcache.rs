@@ -49,6 +49,9 @@ pub struct Pack {
     /// Immutable native GOES source objects pinned in the shared object cache.
     #[serde(default)]
     pub satellite: Vec<String>,
+    /// Immutable MRMS source objects pinned in the shared object cache.
+    #[serde(default)]
+    pub mrms: Vec<String>,
     /// Unix seconds when it was saved.
     pub saved_at: i64,
     /// Total size of the volumes, for the eviction accounting and the picker's readout.
@@ -64,11 +67,13 @@ impl Pack {
     /// One line for the picker.
     pub fn label(&self) -> String {
         format!(
-            "{} {} \u{2014} {} volume{}, {:.0} MB",
+            "{} {} \u{2014} {} volume{}, {} weather file{}, {:.0} MB",
             self.site,
             self.date,
             self.volumes.len(),
             if self.volumes.len() == 1 { "" } else { "s" },
+            self.satellite.len() + self.mrms.len(),
+            if self.satellite.len() + self.mrms.len() == 1 { "" } else { "s" },
             self.bytes / 1024.0 / 1024.0
         )
     }
@@ -182,6 +187,7 @@ pub async fn save_pack(
     date: &str,
     volumes: Vec<(String, Vec<u8>)>,
     satellite: Vec<String>,
+    mrms: Vec<String>,
 ) -> anyhow::Result<Pack> {
     if volumes.is_empty() {
         anyhow::bail!("nothing in the loop to save");
@@ -212,11 +218,25 @@ pub async fn save_pack(
             pinned.push(key);
         }
     }
+    let mut pinned_mrms = Vec::new();
+    for key in mrms {
+        let Some(object) = wxdata::object_cache::get("mrms", &key).await else {
+            continue;
+        };
+        if wxdata::object_cache::set_pinned("mrms", &key, true)
+            .await
+            .is_ok()
+        {
+            bytes += object.bytes.len() as f64;
+            pinned_mrms.push(key);
+        }
+    }
     let pack = Pack {
         site: site.to_string(),
         date: date.to_string(),
         volumes: names,
         satellite: pinned,
+        mrms: pinned_mrms,
         saved_at: chrono::Utc::now().timestamp(),
         bytes,
     };
@@ -231,6 +251,11 @@ pub async fn save_pack(
         for key in previous.satellite {
             if !current.iter().any(|pack| pack.satellite.contains(&key)) {
                 let _ = wxdata::object_cache::set_pinned("satellite", &key, false).await;
+            }
+        }
+        for key in previous.mrms {
+            if !current.iter().any(|pack| pack.mrms.contains(&key)) {
+                let _ = wxdata::object_cache::set_pinned("mrms", &key, false).await;
             }
         }
     }
@@ -273,6 +298,11 @@ async fn delete_pack(db: &IdbDatabase, pack: &Pack) -> anyhow::Result<()> {
     for key in &pack.satellite {
         if !others.iter().any(|pack| pack.satellite.contains(key)) {
             let _ = wxdata::object_cache::set_pinned("satellite", key, false).await;
+        }
+    }
+    for key in &pack.mrms {
+        if !others.iter().any(|pack| pack.mrms.contains(key)) {
+            let _ = wxdata::object_cache::set_pinned("mrms", key, false).await;
         }
     }
     let s = store(db, PACKS, IdbTransactionMode::Readwrite)?;
@@ -344,6 +374,7 @@ pub async fn save_timeline(
     date: String,
     ids: Vec<wxdata::level2::Identifier>,
     satellite: Vec<String>,
+    mrms: Vec<String>,
 ) {
     let total = ids.len();
     let mut out = Vec::new();
@@ -362,7 +393,7 @@ pub async fn save_timeline(
         };
         out.push((name, bytes));
     }
-    match save_pack(&site, &date, out, satellite).await {
+    match save_pack(&site, &date, out, satellite, mrms).await {
         Ok(p) => set_status(Some(format!("saved {}", p.label()))),
         Err(e) => set_status(Some(format!("could not save the pack: {e}"))),
     }
@@ -389,12 +420,18 @@ mod tests {
             date: "2026-05-20".into(),
             volumes: vec!["KTLX20260520_231502_V06".into()],
             satellite: vec!["ABI-L2-CMIPC/example.nc".into()],
+            mrms: vec!["MergedReflectivityQCComposite/example.grib2.gz".into()],
             saved_at: 1_780_000_000,
             bytes: 32.0 * 1024.0 * 1024.0,
         };
         let back: Pack = serde_json::from_str(&serde_json::to_string(&p).unwrap()).unwrap();
         assert_eq!(back, p);
         assert_eq!(back.key(), "KTLX-2026-05-20");
-        assert_eq!(back.label(), "KTLX 2026-05-20 — 1 volume, 32 MB");
+        assert_eq!(back.label(), "KTLX 2026-05-20 — 1 volume, 2 weather files, 32 MB");
+        let old: Pack = serde_json::from_str(
+            r#"{"site":"KTLX","date":"2026-05-20","volumes":[],"saved_at":1,"bytes":0}"#,
+        )
+        .unwrap();
+        assert!(old.satellite.is_empty() && old.mrms.is_empty());
     }
 }

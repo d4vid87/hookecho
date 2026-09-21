@@ -6948,6 +6948,13 @@ impl HookEchoApp {
             .filter(|key| key.contains("ABI-L2-"))
             .map(str::to_string)
             .collect();
+        let current_mrms: Vec<String> = self.views[self.active]
+            .fields_on
+            .iter()
+            .filter_map(|layer| self.fields.get(layer)?.frame.as_ref())
+            .filter(|frame| frame.descriptor.family == wxdata::field::FieldFamily::Mrms)
+            .map(|frame| frame.stamp.source_identity.clone())
+            .collect();
         let mut satellite_bands = std::collections::BTreeSet::new();
         for layer in &self.views[self.active].fields_on {
             match layer {
@@ -6998,7 +7005,14 @@ impl HookEchoApp {
                     }
                 }
             }
-            crate::webcache::save_timeline(site, date, ids, satellite.into_iter().collect()).await;
+            crate::webcache::save_timeline(
+                site,
+                date,
+                ids,
+                satellite.into_iter().collect(),
+                current_mrms,
+            )
+            .await;
             ctx.request_repaint();
         });
     }
