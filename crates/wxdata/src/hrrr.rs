@@ -240,6 +240,16 @@ impl Model {
         Ok(())
     }
 
+    pub fn supports_forecast_hour(self, cycle_hour: u32, hour: u16) -> bool {
+        match self {
+            Self::Hrrr | Self::HrrrPressure => {
+                hour <= 18 || cycle_hour.is_multiple_of(6) && hour <= 48
+            }
+            Self::Rap => hour <= 21 || cycle_hour % 6 == 3 && hour <= 51,
+            Self::NamNest | Self::Nbm => hour <= self.definition().max_forecast_hour,
+        }
+    }
+
     /// The GRIB2 file for a cycle + forecast hour.
     fn url(self, date: &str, cycle_hour: u32, fh: u8) -> String {
         let base = self.definition().base_url;
@@ -381,7 +391,10 @@ pub async fn fetch_field(
     let fh = fcst_hour;
     let now = Utc::now();
     let mut last_err = None;
-    for run in recent_cycles(model, now) {
+    for run in recent_cycles(model, now)
+        .into_iter()
+        .filter(|run| model.supports_forecast_hour(run.hour(), fh.into()))
+    {
         match fetch_run_field(http, model, run, fh, var, level, min_valid).await {
             Ok(field) => {
                 return Ok(HrrrForecast {
@@ -457,7 +470,10 @@ pub async fn fetch_fields_one_run_capped(
         .collect();
     let now = Utc::now();
     let mut last_err = None;
-    for run in recent_cycles(model, now) {
+    for run in recent_cycles(model, now)
+        .into_iter()
+        .filter(|run| model.supports_forecast_hour(run.hour(), fh.into()))
+    {
         let results: Vec<_> = futures_util::stream::iter(owned_specs.clone().into_iter().map(
             |(var, level, mv): (String, String, f64)| {
                 let http = http.clone();
@@ -914,6 +930,10 @@ mod tests {
         assert!(Model::Hrrr.validate_forecast_hour(48).is_ok());
         assert!(Model::Hrrr.validate_forecast_hour(49).is_err());
         assert!(Model::Nbm.validate_forecast_hour(255).is_ok());
+        assert!(Model::Hrrr.supports_forecast_hour(12, 48));
+        assert!(!Model::Hrrr.supports_forecast_hour(13, 19));
+        assert!(Model::Rap.supports_forecast_hour(9, 51));
+        assert!(!Model::Rap.supports_forecast_hour(10, 22));
     }
 
     #[tokio::test]

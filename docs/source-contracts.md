@@ -7,6 +7,15 @@ bucket listings. It requires each selected MRMS feed to publish today or yesterd
 ABI/GLM families to publish in the current or previous hour. Missing or stale feeds fail that
 workflow without making pull-request tests depend on the network.
 
+Model schedule metadata follows NOAA's current HRRR/RAP/GFS product inventories and ECMWF's
+Cycle 50r1 open-data contract. Extended HRRR and RAP forecast hours are restricted to their
+documented cycles; ECMWF 00/12 UTC runs extend to F240 while 06/18 UTC runs stop at F90.
+
+- HRRR/RAP: <https://registry.opendata.aws/noaa-rap/> and
+  <https://registry.opendata.aws/dynamical-noaa-hrrr/>
+- GFS: <https://www.nco.ncep.noaa.gov/pmb/products/gfs/>
+- ECMWF IFS: <https://confluence.ecmwf.int/spaces/DAC/pages/272310539/ECMWF+open+data+real-time+forecasts+from+IFS+and+AIFS>
+
 ## NOAA GOES ABI CMIP
 
 - Provider: NOAA Open Data Dissemination on AWS. GOES-19 is operational GOES-East and GOES-18 is

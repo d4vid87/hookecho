@@ -137,7 +137,7 @@ impl GlobalModel {
                 provider: "ECMWF",
                 base_url: ECMWF_BASE,
                 cycle_hours: 6,
-                max_forecast_hour: 360,
+                max_forecast_hour: 240,
                 grid: "0.25 degree global latitude/longitude",
                 regrid_resolution_deg: RES_DEG,
                 index_suffix: ".index",
@@ -156,6 +156,17 @@ impl GlobalModel {
             self.definition().max_forecast_hour
         );
         Ok(())
+    }
+
+    pub fn supports_forecast_hour(self, cycle_hour: u32, hour: u16) -> bool {
+        match self {
+            Self::Gfs => hour <= 120 || hour <= 384 && hour.is_multiple_of(3),
+            Self::Ecmwf if cycle_hour == 0 || cycle_hour == 12 => {
+                hour <= 144 && hour.is_multiple_of(3)
+                    || hour <= 240 && hour.is_multiple_of(6)
+            }
+            Self::Ecmwf => hour <= 90 && hour.is_multiple_of(3),
+        }
     }
 
     pub fn label(self) -> &'static str {
@@ -295,6 +306,11 @@ pub async fn fetch(
     fh: u16,
 ) -> anyhow::Result<GlobalForecast> {
     model.validate_forecast_hour(fh)?;
+    anyhow::ensure!(
+        (0..24).any(|cycle| model.supports_forecast_hour(cycle, fh)),
+        "{} does not publish forecast hour {fh}",
+        model.label()
+    );
     let now = Utc::now();
     let mut last_err = None;
     for back in 0..5 {
@@ -302,6 +318,9 @@ pub async fn fetch(
         let hours = (now.hour() as i64 / step) * step - back * step;
         let run = (now.date_naive().and_hms_opt(0, 0, 0).unwrap().and_utc())
             + chrono::Duration::hours(hours);
+        if !model.supports_forecast_hour(run.hour(), fh) {
+            continue;
+        }
         match fetch_run(http, model, field, run, fh).await {
             Ok(f) => return Ok(f),
             Err(e) => last_err = Some(e),
@@ -516,7 +535,14 @@ mod tests {
         assert_eq!(ecmwf.index_suffix, ".index");
         assert!(GlobalModel::Gfs.validate_forecast_hour(384).is_ok());
         assert!(GlobalModel::Gfs.validate_forecast_hour(385).is_err());
-        assert!(GlobalModel::Ecmwf.validate_forecast_hour(360).is_ok());
+        assert!(GlobalModel::Ecmwf.validate_forecast_hour(240).is_ok());
+        assert!(GlobalModel::Ecmwf.validate_forecast_hour(241).is_err());
+        assert!(GlobalModel::Ecmwf.supports_forecast_hour(0, 240));
+        assert!(!GlobalModel::Ecmwf.supports_forecast_hour(6, 93));
+        assert!(!GlobalModel::Ecmwf.supports_forecast_hour(0, 145));
+        assert!(GlobalModel::Gfs.supports_forecast_hour(18, 120));
+        assert!(!GlobalModel::Gfs.supports_forecast_hour(18, 121));
+        assert!(GlobalModel::Gfs.supports_forecast_hour(18, 123));
     }
 
     /// Both sources, live, at the newest usable cycle.
