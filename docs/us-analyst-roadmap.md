@@ -280,7 +280,7 @@ Native disk cache exists; browser persistence remains a roadmap concern.
 
 ### Implement
 
-- [ ] common cache interface for native and WASM
+- [x] common cache interface for native and WASM ([evidence](us-analyst-implementation.md))
 - [x] browser IndexedDB or OPFS persistence ([evidence](us-analyst-implementation.md))
 - [x] cache namespaces by source/product/run
 - [x] size quota per source family

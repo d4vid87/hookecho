@@ -93,7 +93,6 @@ fn eviction_keys(mut entries: Vec<Meta>, cap: usize) -> Vec<String> {
         .collect()
 }
 
-#[cfg(any(target_arch = "wasm32", test))]
 fn checksum(bytes: &[u8]) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut hash = std::collections::hash_map::DefaultHasher::new();
@@ -113,9 +112,9 @@ fn newest_key(entries: &[Meta], family: &str, prefix: &str) -> Option<String> {
 
 #[cfg(target_arch = "wasm32")]
 mod browser {
-    use super::{checksum, eviction_keys, family_cap, newest_key, CacheStats, CachedObject, Meta};
+    use super::{CacheStats, CachedObject, Meta, checksum, eviction_keys, family_cap, newest_key};
     use anyhow::anyhow;
-    use wasm_bindgen::{prelude::*, JsCast};
+    use wasm_bindgen::{JsCast, prelude::*};
     use wasm_bindgen_futures::JsFuture;
     use web_sys::{IdbDatabase, IdbObjectStore, IdbRequest, IdbTransactionMode};
 
@@ -482,28 +481,167 @@ mod browser {
 pub use browser::{get, known_stats, latest_key, put, set_pinned, spawn_clear};
 
 #[cfg(not(target_arch = "wasm32"))]
-pub async fn get(_family: &str, _key: &str) -> Option<CachedObject> {
-    None
+mod native {
+    use super::{CachedObject, checksum};
+    use chrono::{DateTime, Utc};
+    use std::io::{Read, Write};
+    use std::path::{Path, PathBuf};
+    use std::sync::OnceLock;
+
+    const MAGIC: &[u8; 4] = b"HEO1";
+    static ROOT: OnceLock<PathBuf> = OnceLock::new();
+
+    pub fn set_root(root: PathBuf) {
+        let _ = ROOT.set(root);
+    }
+
+    pub fn root() -> Option<&'static Path> {
+        ROOT.get().map(PathBuf::as_path)
+    }
+
+    fn key_hash(key: &str) -> u64 {
+        key.as_bytes()
+            .iter()
+            .fold(0xcbf29ce484222325, |hash, byte| {
+                (hash ^ u64::from(*byte)).wrapping_mul(0x100000001b3)
+            })
+    }
+
+    fn path(root: &Path, family: &str, key: &str) -> PathBuf {
+        root.join(family)
+            .join(format!("{:016x}.obj", key_hash(key)))
+    }
+
+    fn read(path: &Path, expected_key: Option<&str>) -> Option<(String, CachedObject)> {
+        let mut file = std::fs::File::open(path).ok()?;
+        let mut fixed = [0u8; 24];
+        file.read_exact(&mut fixed).ok()?;
+        if &fixed[..4] != MAGIC {
+            return None;
+        }
+        let received = i64::from_le_bytes(fixed[4..12].try_into().ok()?);
+        let expected_checksum = u64::from_le_bytes(fixed[12..20].try_into().ok()?);
+        let key_len = u32::from_le_bytes(fixed[20..24].try_into().ok()?) as usize;
+        if key_len > 64 * 1024 {
+            return None;
+        }
+        let mut key = vec![0; key_len];
+        file.read_exact(&mut key).ok()?;
+        let key = String::from_utf8(key).ok()?;
+        if expected_key.is_some_and(|expected| expected != key) {
+            return None;
+        }
+        let mut bytes = Vec::new();
+        file.read_to_end(&mut bytes).ok()?;
+        if checksum(&bytes) != expected_checksum {
+            let _ = std::fs::remove_file(path);
+            return None;
+        }
+        Some((
+            key,
+            CachedObject {
+                bytes,
+                received_at: DateTime::from_timestamp(received, 0)?,
+            },
+        ))
+    }
+
+    fn read_key(path: &Path) -> Option<String> {
+        let mut file = std::fs::File::open(path).ok()?;
+        let mut fixed = [0u8; 24];
+        file.read_exact(&mut fixed).ok()?;
+        if &fixed[..4] != MAGIC {
+            return None;
+        }
+        let key_len = u32::from_le_bytes(fixed[20..24].try_into().ok()?) as usize;
+        if key_len > 64 * 1024 {
+            return None;
+        }
+        let mut key = vec![0; key_len];
+        file.read_exact(&mut key).ok()?;
+        String::from_utf8(key).ok()
+    }
+
+    fn write(
+        root: &Path,
+        family: &str,
+        key: &str,
+        bytes: &[u8],
+        received_at: DateTime<Utc>,
+    ) -> anyhow::Result<()> {
+        let path = path(root, family, key);
+        let parent = path.parent().expect("cache object has parent");
+        std::fs::create_dir_all(parent)?;
+        let temp = path.with_extension("tmp");
+        let mut file = std::fs::File::create(&temp)?;
+        file.write_all(MAGIC)?;
+        file.write_all(&received_at.timestamp().to_le_bytes())?;
+        file.write_all(&checksum(bytes).to_le_bytes())?;
+        file.write_all(&(key.len() as u32).to_le_bytes())?;
+        file.write_all(key.as_bytes())?;
+        file.write_all(bytes)?;
+        file.sync_all()?;
+        if path.exists() {
+            std::fs::remove_file(&path)?;
+        }
+        std::fs::rename(temp, path)?;
+        Ok(())
+    }
+
+    pub async fn get(family: &str, key: &str) -> Option<CachedObject> {
+        let root = root()?.to_path_buf();
+        let family = family.to_string();
+        let key = key.to_string();
+        crate::task::blocking(move || read(&path(&root, &family, &key), Some(&key)))
+            .await
+            .ok()?
+            .map(|(_, object)| object)
+    }
+
+    pub async fn put(
+        family: &str,
+        key: &str,
+        bytes: &[u8],
+        received_at: DateTime<Utc>,
+    ) -> anyhow::Result<()> {
+        let Some(root) = root().map(Path::to_path_buf) else {
+            return Ok(());
+        };
+        let family = family.to_string();
+        let key = key.to_string();
+        let bytes = bytes.to_vec();
+        crate::task::blocking(move || write(&root, &family, &key, &bytes, received_at)).await??;
+        Ok(())
+    }
+
+    pub async fn latest_key(family: &str, prefix: &str) -> Option<String> {
+        let root = root()?.join(family);
+        let prefix = prefix.to_string();
+        crate::task::blocking(move || {
+            std::fs::read_dir(root)
+                .ok()?
+                .filter_map(Result::ok)
+                .filter_map(|entry| read_key(&entry.path()))
+                .filter(|key| key.starts_with(&prefix))
+                .max()
+        })
+        .await
+        .ok()?
+    }
+
+    pub async fn set_pinned(_family: &str, _key: &str, _pinned: bool) -> anyhow::Result<()> {
+        // Native chase packs retain their own source copies; automatic-cache eviction cannot
+        // remove them, so no pin marker is needed here.
+        Ok(())
+    }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-pub async fn put(
-    _family: &str,
-    _key: &str,
-    _bytes: &[u8],
-    _received_at: chrono::DateTime<chrono::Utc>,
-) -> anyhow::Result<()> {
-    Ok(())
-}
+pub use native::{get, latest_key, put, set_pinned};
 
 #[cfg(not(target_arch = "wasm32"))]
-pub async fn latest_key(_family: &str, _prefix: &str) -> Option<String> {
-    None
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-pub async fn set_pinned(_family: &str, _key: &str, _pinned: bool) -> anyhow::Result<()> {
-    Ok(())
+pub fn set_native_root(root: std::path::PathBuf) {
+    native::set_root(root);
 }
 
 #[cfg(test)]
@@ -562,7 +700,37 @@ mod tests {
     #[test]
     fn range_identity_includes_object_and_exact_interval() {
         assert_eq!(range_key("object", 10, Some(20)), "object#bytes=10-19");
-        assert_ne!(range_key("object", 10, Some(20)), range_key("object", 10, None));
+        assert_ne!(
+            range_key("object", 10, Some(20)),
+            range_key("object", 10, None)
+        );
         assert_ne!(range_key("object", 10, None), range_key("other", 10, None));
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[tokio::test]
+    async fn native_cache_round_trips_bytes_receipt_and_latest_key() {
+        let root = std::env::temp_dir().join(format!(
+            "hookecho-object-cache-{}-{}",
+            std::process::id(),
+            chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        ));
+        set_native_root(root.clone());
+        let received = chrono::DateTime::from_timestamp(chrono::Utc::now().timestamp(), 0)
+            .expect("valid timestamp");
+        put("mrms", "product/20260921/a", b"first", received)
+            .await
+            .unwrap();
+        put("mrms", "product/20260921/b", b"second", received)
+            .await
+            .unwrap();
+        let cached = get("mrms", "product/20260921/a").await.unwrap();
+        assert_eq!(cached.bytes, b"first");
+        assert_eq!(cached.received_at, received);
+        assert_eq!(
+            latest_key("mrms", "product/").await.as_deref(),
+            Some("product/20260921/b")
+        );
+        let _ = std::fs::remove_dir_all(root);
     }
 }

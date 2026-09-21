@@ -3358,6 +3358,19 @@ impl HookEchoApp {
         if let Some(dir) = crate::paths::cache_dir() {
             wxdata::alerts::set_zone_cache_dir(dir);
         }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            if let Some(root) = crate::paths::cache_dir().map(|dir| dir.join("objects")) {
+                wxdata::object_cache::set_native_root(root.clone());
+                for family in ["model", "mrms", "satellite", "radar"] {
+                    crate::tiles::sweep_later(
+                        root.join(family),
+                        "weather object cache",
+                        if family == "mrms" { 128 } else { 256 } * 1024 * 1024,
+                    );
+                }
+            }
+        }
         // Whatever the last run's quiet hours were still holding when it closed.
         let quiet_pending = settings.quiet_pending.clone();
         // The user's cap overrides, before anything that sweeps or reports against them.
