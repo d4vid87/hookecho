@@ -280,10 +280,12 @@ check_recent_mrms \
 check_prefixes \
   'https://noaa-goes19.s3.amazonaws.com/?list-type=2&delimiter=/' \
   'ABI-L2-CMIPC/' \
+  'ABI-L2-CMIPF/' \
   'ABI-L2-CMIPM/' \
   'GLM-L2-LCFA/'
 
 check_recent_goes 'ABI-L2-CMIPC'
+check_recent_goes 'ABI-L2-CMIPF'
 check_recent_goes 'ABI-L2-CMIPM'
 check_recent_goes 'GLM-L2-LCFA'
 check_recent_rrfs
