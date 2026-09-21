@@ -193,8 +193,13 @@ pub(crate) fn show(
             .rev()
             .find(|layer| on.contains(layer))
             .and_then(|layer| {
-                let descriptor = layer.descriptor()?;
-                let (grid, stamp) = fields.get(&layer)?.metadata.as_ref()?;
+                let state = fields.get(&layer)?;
+                let descriptor = state
+                    .frame
+                    .as_ref()
+                    .map(|frame| frame.descriptor)
+                    .or_else(|| layer.descriptor())?;
+                let (grid, stamp) = state.metadata.as_ref()?;
                 Some((descriptor, grid, stamp))
             })
         {
@@ -204,6 +209,9 @@ pub(crate) fn show(
                 .show(ui, |ui| {
                     ui.weak("Source");
                     ui.label(descriptor.source);
+                    ui.end_row();
+                    ui.weak("Source ID");
+                    ui.label(descriptor.source_id().0);
                     ui.end_row();
                     ui.weak("Valid");
                     ui.label(stamp.valid_time.format("%Y-%m-%d %H:%M UTC").to_string());

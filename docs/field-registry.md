@@ -47,7 +47,8 @@ The remaining existing regional guidance grids—HRRR updraft-helicity swaths, s
 plus NBM thunder probability—also carry registry metadata without changing their controls.
 
 The six existing global guidance layers use the same path. Their stable IDs are namespaced under
-`model.global`, and each frame retains its GFS or ECMWF source object, run, valid, and receipt
+`model.global`, and each descriptor exposes a stable `DataSourceId` while each frame retains its
+GFS or ECMWF source object, run, valid, and receipt
 times. The shared moisture layer requests total-column water from both providers so comparisons
 do not mix GFS precipitable water with ECMWF accumulated precipitation.
 

@@ -7,6 +7,10 @@ use std::sync::Arc;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct FieldId(pub &'static str);
 
+/// Stable provider identity for diagnostics and cache namespaces.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct DataSourceId(pub &'static str);
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FieldFamily {
     Radar,
@@ -87,6 +91,22 @@ pub struct ModelDefinition {
 }
 
 impl FieldDescriptor {
+    pub fn source_id(&self) -> DataSourceId {
+        DataSourceId(match self.source {
+            "NOAA MRMS" => "noaa.mrms",
+            "NOAA MRMS derived" => "noaa.mrms.derived",
+            "NOAA GOES ABI" => "noaa.goes.abi",
+            "NOAA GOES GLM" => "noaa.goes.glm",
+            "NOAA GFS / ECMWF IFS" => "model.global",
+            "NOAA HRRR" => "noaa.hrrr",
+            "NOAA NBM" => "noaa.nbm",
+            "NOAA regional models" => "noaa.regional-models",
+            "NOAA REFS v1 parallel" => "noaa.refs-v1",
+            "NOAA RTMA" => "noaa.rtma",
+            source => source,
+        })
+    }
+
     pub fn time_policy(&self, class: DataClass) -> crate::timecoord::TimePolicy {
         self.time_policy
             .unwrap_or_else(|| crate::timecoord::policy_for(class))
@@ -377,6 +397,7 @@ impl FieldFrame {
         let metadata = serde_json::json!({
             "schema": "hookecho.field/v1",
             "product_id": self.descriptor.id.0,
+            "source_id": self.descriptor.source_id().0,
             "source_identity": self.stamp.source_identity,
             "units": self.descriptor.units,
             "valid_time": self.stamp.valid_time.to_rfc3339(),
@@ -506,6 +527,7 @@ mod tests {
         assert_eq!(frame.write_csv(&mut csv).unwrap(), 4);
         let csv = String::from_utf8(csv).unwrap();
         assert!(csv.contains("\"product_id\":\"test.scalar\""));
+        assert!(csv.contains("\"source_id\":\"test\""));
         assert!(csv.contains("\"source_identity\":\"fixture\""));
         assert!(csv.contains("-99.500000,39.500000,1"));
 
@@ -527,5 +549,6 @@ mod tests {
         assert!((correlation.pearson_r - 1.0).abs() < 1e-6);
         assert!((correlation.slope - 2.0).abs() < 1e-6);
         assert!(correlation.intercept.abs() < 1e-6);
+        assert_eq!(crate::mrms::REFLECTIVITY_DESCRIPTOR.source_id().0, "noaa.mrms");
     }
 }

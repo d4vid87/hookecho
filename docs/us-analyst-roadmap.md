@@ -210,19 +210,19 @@ Create a common description layer for scalar grids, vectors, categorical grids a
 
 ### Implement
 
-- [ ] `FieldId` stable identifier
-- [ ] `DataSource` enum/ID
-- [ ] `FieldFamily`: radar / MRMS / satellite / model / analysis / observation-derived / user-defined
-- [ ] `ValueKind`: scalar / categorical / vector / probability / accumulation / mask
+- [x] `FieldId` stable identifier ([evidence](us-analyst-implementation.md))
+- [x] `DataSource` enum/ID ([evidence](us-analyst-implementation.md))
+- [x] `FieldFamily`: radar / MRMS / satellite / model / analysis / observation-derived / user-defined
+- [x] `ValueKind`: scalar / categorical / vector / probability / accumulation / mask
 - [ ] unit metadata and conversion
 - [ ] default palette and range
 - [ ] contour interval defaults
-- [ ] missing-data semantics
-- [ ] valid domain / bounds
-- [ ] native grid metadata
-- [ ] product search aliases
-- [ ] favorite/recent products
-- [ ] source/provenance inspector
+- [x] missing-data semantics
+- [x] valid domain / bounds
+- [x] native grid metadata
+- [x] product search aliases
+- [x] favorite/recent products
+- [x] source/provenance inspector ([evidence](us-analyst-implementation.md))
 
 ### Integrate first
 
