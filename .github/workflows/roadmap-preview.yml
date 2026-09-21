@@ -3,8 +3,6 @@ name: Roadmap preview
 on:
   push:
     branches: ["roadmap/**"]
-  pull_request:
-    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -38,7 +36,6 @@ jobs:
           path: web/
           retention-days: 14
       - name: Deploy non-production Cloudflare preview
-        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
