@@ -36,6 +36,31 @@ pub struct RouteIntersection {
     pub storm_eta_s: f64,
 }
 
+/// Convert distances along a route into vehicle arrival times using the provider ETA.
+pub fn arrival_window(
+    route: &Route,
+    start_m: f64,
+    end_m: f64,
+    departure: chrono::DateTime<chrono::Utc>,
+) -> Option<(chrono::DateTime<chrono::Utc>, chrono::DateTime<chrono::Utc>)> {
+    if route.distance_m <= 0.0
+        || route.duration_s <= 0.0
+        || !start_m.is_finite()
+        || !end_m.is_finite()
+    {
+        return None;
+    }
+    let at = |distance: f64| {
+        departure
+            + chrono::Duration::milliseconds(
+                (route.duration_s * distance.clamp(0.0, route.distance_m) / route.distance_m
+                    * 1_000.0)
+                    .round() as i64,
+            )
+    };
+    Some((at(start_m.min(end_m)), at(start_m.max(end_m))))
+}
+
 /// Compare a provider route with a constant-motion storm forecast for up to `horizon_s`.
 pub fn analyze_storm_route(
     route: &Route,
@@ -442,5 +467,18 @@ mod tests {
             "{} m",
             analysis.closest.separation_m
         );
+    }
+
+    #[test]
+    fn maps_route_distance_to_provider_eta() {
+        let route = Route {
+            points: vec![[0.0, 0.0], [1.0, 0.0]],
+            distance_m: 100_000.0,
+            duration_s: 7_200.0,
+        };
+        let departure = "2026-05-01T20:00:00Z".parse().unwrap();
+        let (start, end) = arrival_window(&route, 25_000.0, 50_000.0, departure).unwrap();
+        assert_eq!(start.to_rfc3339(), "2026-05-01T20:30:00+00:00");
+        assert_eq!(end.to_rfc3339(), "2026-05-01T21:00:00+00:00");
     }
 }

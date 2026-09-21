@@ -8862,12 +8862,13 @@ impl HookEchoApp {
             .find(|layer| view.fields_on.contains(layer))
             .and_then(|layer| self.fields.get(layer))
             .and_then(|state| state.frame.as_ref());
-        let (label, units, product_id, valid, profile) = if let Some(frame) = frame {
+        let (label, units, product_id, valid, class, profile) = if let Some(frame) = frame {
             (
                 frame.descriptor.short_name.to_string(),
                 frame.descriptor.units,
                 frame.descriptor.id.0,
                 frame.stamp.valid_time,
+                frame.stamp.class,
                 wxdata::route::sample_profile(&route.points, 1_000.0, |lon, lat| {
                     frame.sample(lon, lat).value
                 }),
@@ -8880,6 +8881,7 @@ impl HookEchoApp {
                 moment.units(),
                 moment.short_name(),
                 volume.time,
+                wxdata::field::DataClass::Observed,
                 wxdata::route::sample_profile(&route.points, 1_000.0, |lon, lat| {
                     wxdata::level2::sample_native(
                         &volume.scan,
@@ -8918,6 +8920,18 @@ impl HookEchoApp {
             })))
         });
         let exposure = span.map_or_else(String::new, |(threshold, start, end)| {
+            if class == wxdata::field::DataClass::Forecast {
+                let departure = chrono::Utc::now();
+                if let Some((from, to)) =
+                    wxdata::route::arrival_window(route, start, end, departure)
+                {
+                    return format!(
+                        " · forecast path ≥{threshold:.0} {units} between {}–{}",
+                        from.format("%H:%MZ"),
+                        to.format("%H:%MZ")
+                    );
+                }
+            }
             format!(
                 " · ≥{threshold:.0} {} from {} to {}",
                 units,
