@@ -6,7 +6,7 @@ const MAX_NODES: usize = 128;
 const MAX_DEPTH: usize = 16;
 const MAX_COLUMN_GATES: usize = 4096;
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ProductDefinition {
     pub version: u16,
     pub name: String,

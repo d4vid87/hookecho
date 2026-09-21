@@ -543,6 +543,9 @@ pub struct Settings {
     /// Most recently enabled registry products, newest first and bounded by the action path.
     #[serde(default)]
     pub recent_fields: Vec<String>,
+    /// Portable analyst-defined radar products. Settings export and sync carry these definitions.
+    #[serde(default)]
+    pub radar_products: Vec<wxdata::product_dsl::ProductDefinition>,
     /// Thresholds the signature detectors fire at (see [`DetectorTuning`]).
     #[serde(default)]
     pub detectors: DetectorTuning,
@@ -1113,6 +1116,7 @@ impl Default for Settings {
             layer_order: Vec::new(),
             favorite_fields: Vec::new(),
             recent_fields: Vec::new(),
+            radar_products: Vec::new(),
             mping_key: String::new(),
             etop_dbz: default_etop_dbz(),
             poll_interval_secs: 30,
@@ -1673,6 +1677,7 @@ mod tests {
             layer_order: Vec::new(),
             favorite_fields: vec!["mrms.mesh".into()],
             recent_fields: vec!["mrms.composite-reflectivity".into()],
+            radar_products: Vec::new(),
             mping_key: String::new(),
             etop_dbz: 30.0,
             default_site: "KFWS".to_string(),
