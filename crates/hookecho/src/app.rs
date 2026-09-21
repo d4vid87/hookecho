@@ -11576,6 +11576,14 @@ impl HookEchoApp {
             .as_ref()?;
         let sample = frame.sample(lon, lat);
         sample.value.map(|value| {
+            let display = frame.descriptor.display_value(
+                value,
+                if self.settings.temp_unit == crate::settings::TempUnit::Fahrenheit {
+                    wxdata::field::UnitSystem::Us
+                } else {
+                    wxdata::field::UnitSystem::Metric
+                },
+            );
             let coverage_warning = self
                 .beam_coverage(idx, [lon, lat])
                 .and_then(|coverage| {
@@ -11594,9 +11602,10 @@ impl HookEchoApp {
                 .unwrap_or_default();
             let profile = self.mrms_vertical_profile_at(idx, lon, lat);
             format!(
-                "{}\n{value:.1} {} · valid {}{coverage_warning}",
+                "{}\n{:.1} {} · valid {}{coverage_warning}",
                 frame.descriptor.short_name,
-                sample.units,
+                display.value,
+                display.units,
                 sample.valid_time.format("%Y-%m-%d %H:%M UTC"),
             ) + &profile
         })
@@ -14700,10 +14709,19 @@ impl HookEchoApp {
                 let (lon, lat) = crate::render::mercator::world_to_lonlat(w.0, w.1);
                 let sample = frame.sample(lon, lat);
                 if let Some(value) = sample.value {
+                    let display = frame.descriptor.display_value(
+                        value,
+                        if self.settings.temp_unit == crate::settings::TempUnit::Fahrenheit {
+                            wxdata::field::UnitSystem::Us
+                        } else {
+                            wxdata::field::UnitSystem::Metric
+                        },
+                    );
                     response.clone().show_tooltip_text(format!(
-                        "{}: {value:.1} {}\nValid {} · {:?}",
+                        "{}: {:.1} {}\nValid {} · {:?}",
                         frame.descriptor.short_name,
-                        sample.units,
+                        display.value,
+                        display.units,
                         sample.valid_time.format("%Y-%m-%d %H:%M UTC"),
                         sample.method
                     ));

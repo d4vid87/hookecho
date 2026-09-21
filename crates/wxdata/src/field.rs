@@ -53,6 +53,18 @@ pub enum MissingData {
     Value(f32),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UnitSystem {
+    Metric,
+    Us,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct DisplayValue {
+    pub value: f32,
+    pub units: &'static str,
+}
+
 /// Static product behavior used by acquisition, UI, legends, and analysis.
 #[derive(Debug)]
 pub struct FieldDescriptor {
@@ -110,6 +122,45 @@ impl FieldDescriptor {
     pub fn time_policy(&self, class: DataClass) -> crate::timecoord::TimePolicy {
         self.time_policy
             .unwrap_or_else(|| crate::timecoord::policy_for(class))
+    }
+
+    /// Convert a native scientific value for display. Sampling and exports remain native.
+    pub fn display_value(&self, value: f32, system: UnitSystem) -> DisplayValue {
+        match (self.units, system) {
+            ("K", UnitSystem::Metric) => DisplayValue {
+                value: value - 273.15,
+                units: "°C",
+            },
+            ("K", UnitSystem::Us) => DisplayValue {
+                value: (value - 273.15) * 1.8 + 32.0,
+                units: "°F",
+            },
+            ("Pa", UnitSystem::Metric) => DisplayValue {
+                value: value / 100.0,
+                units: "hPa",
+            },
+            ("Pa", UnitSystem::Us) => DisplayValue {
+                value: value / 3386.389,
+                units: "inHg",
+            },
+            ("m s-1", UnitSystem::Metric) => DisplayValue {
+                value: value * 3.6,
+                units: "km/h",
+            },
+            ("m s-1", UnitSystem::Us) => DisplayValue {
+                value: value * 2.236_936_3,
+                units: "mph",
+            },
+            ("kg m-2", UnitSystem::Metric) => DisplayValue { value, units: "mm" },
+            ("kg m-2", UnitSystem::Us) => DisplayValue {
+                value: value / 25.4,
+                units: "in",
+            },
+            _ => DisplayValue {
+                value,
+                units: self.units,
+            },
+        }
     }
 }
 
@@ -550,5 +601,13 @@ mod tests {
         assert!((correlation.slope - 2.0).abs() < 1e-6);
         assert!(correlation.intercept.abs() < 1e-6);
         assert_eq!(crate::mrms::REFLECTIVITY_DESCRIPTOR.source_id().0, "noaa.mrms");
+        let c = crate::global::TEMP_2M_DESCRIPTOR.display_value(273.15, UnitSystem::Metric);
+        assert_eq!((c.value, c.units), (0.0, "°C"));
+        let f = crate::global::TEMP_2M_DESCRIPTOR.display_value(273.15, UnitSystem::Us);
+        assert!((f.value - 32.0).abs() < 1e-5);
+        assert_eq!(f.units, "°F");
+        let pressure = crate::global::MSLP_DESCRIPTOR.display_value(101_325.0, UnitSystem::Us);
+        assert!((pressure.value - 29.92).abs() < 0.01);
+        assert_eq!(pressure.units, "inHg");
     }
 }
