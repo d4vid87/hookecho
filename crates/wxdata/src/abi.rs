@@ -313,6 +313,7 @@ pub enum Scene {
     Conus,
     Mesoscale1,
     Mesoscale2,
+    FullDisk,
 }
 
 fn prefix(at: DateTime<Utc>, scene: Scene, band: u8) -> String {
@@ -321,6 +322,7 @@ fn prefix(at: DateTime<Utc>, scene: Scene, band: u8) -> String {
         Scene::Conus => ("ABI-L2-CMIPC", "ABI-L2-CMIPC"),
         Scene::Mesoscale1 => ("ABI-L2-CMIPM", "ABI-L2-CMIPM1"),
         Scene::Mesoscale2 => ("ABI-L2-CMIPM", "ABI-L2-CMIPM2"),
+        Scene::FullDisk => ("ABI-L2-CMIPF", "ABI-L2-CMIPF"),
     };
     format!(
         "{product}/{:04}/{:03}/{:02}/OR_{stem}-M6C{band:02}",
@@ -757,6 +759,10 @@ mod tests {
         assert_eq!(
             prefix(at, Scene::Mesoscale1, 2),
             "ABI-L2-CMIPM/2025/100/18/OR_ABI-L2-CMIPM1-M6C02"
+        );
+        assert_eq!(
+            prefix(at, Scene::FullDisk, 13),
+            "ABI-L2-CMIPF/2025/100/18/OR_ABI-L2-CMIPF-M6C13"
         );
         for band in 1..=16 {
             assert_eq!(

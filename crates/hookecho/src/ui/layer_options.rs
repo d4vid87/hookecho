@@ -375,11 +375,12 @@ pub(crate) fn show(
                 (wxdata::abi::Scene::Conus, "CONUS"),
                 (wxdata::abi::Scene::Mesoscale1, "Mesoscale 1"),
                 (wxdata::abi::Scene::Mesoscale2, "Mesoscale 2"),
+                (wxdata::abi::Scene::FullDisk, "Full disk"),
             ] {
                 changed |= ui.selectable_value(abi_scene, scene, label).changed();
             }
         });
-        ui.weak("Mesoscale sectors update every minute and move with active weather.");
+        ui.weak("Mesoscale sectors update every minute; full disk updates every 10 minutes.");
         if *abi_scene != before {
             for (layer, state) in fields.iter_mut() {
                 if layer.descriptor().is_some_and(|descriptor| {

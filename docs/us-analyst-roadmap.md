@@ -1778,9 +1778,9 @@ This is the explicit “what are we still missing?” list for agents.
 
 ## WeatherFront-class gaps
 
-- [ ] native full-resolution GOES ABI
-- [ ] 1-minute mesoscale satellite
-- [ ] broad RGB/channel suite
+- [x] native full-resolution GOES ABI
+- [x] 1-minute mesoscale satellite
+- [x] broad RGB/channel suite
 - [x] generic 80+-class MRMS catalog coverage
 - [ ] RRFS/REFS
 - [ ] GEFS / ensemble probabilities
