@@ -31,6 +31,10 @@ const ECMWF_BASE: &str = "https://data.ecmwf.int/forecasts";
 /// fills every cell; 1440×721 at 0.25° well under the 4096 texture cap either way.
 const RES_DEG: f64 = 0.3;
 
+fn available_members(model: GlobalModel) -> Option<u16> {
+    matches!(model, GlobalModel::GefsMean | GlobalModel::GefsSpread).then_some(31)
+}
+
 macro_rules! descriptor {
     ($name:ident, $id:literal, $display:literal, $short:literal, $aliases:expr, $units:literal, $kind:expr) => {
         pub static $name: FieldDescriptor = FieldDescriptor {
@@ -305,6 +309,7 @@ pub struct GlobalForecast {
     pub fcst_hour: u16,
     source_identity: String,
     received_at: DateTime<Utc>,
+    available_members: Option<u16>,
 }
 
 impl GlobalForecast {
@@ -325,7 +330,7 @@ impl GlobalForecast {
                 received_time: self.received_at,
                 class: DataClass::Forecast,
                 quality: QualitySummary::Unknown,
-                available_members: None,
+                available_members: self.available_members,
             },
         )
     }
@@ -436,6 +441,8 @@ async fn fetch_run(
         fcst_hour: fh,
         source_identity: base,
         received_at,
+        // NOAA publishes one control and 30 perturbed GEFS members. Mean/spread use the full set.
+        available_members: available_members(model),
     })
 }
 
@@ -596,6 +603,9 @@ mod tests {
         assert!(GlobalModel::GefsMean.supports_forecast_hour(0, 240));
         assert!(!GlobalModel::GefsMean.supports_forecast_hour(0, 243));
         assert!(GlobalModel::GefsMean.supports_forecast_hour(0, 246));
+        assert_eq!(available_members(GlobalModel::GefsMean), Some(31));
+        assert_eq!(available_members(GlobalModel::GefsSpread), Some(31));
+        assert_eq!(available_members(GlobalModel::Gfs), None);
     }
 
     /// Both sources, live, at the newest usable cycle.

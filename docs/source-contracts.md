@@ -17,7 +17,9 @@ documented cycles; ECMWF 00/12 UTC runs extend to F240 while 06/18 UTC runs stop
 - GFS: <https://www.nco.ncep.noaa.gov/pmb/products/gfs/>
 - GEFS: <https://registry.opendata.aws/noaa-gefs/>. HookEcho reads the published ensemble-mean
   `geavg` mean and `gespr` standard-deviation fields, using the 0.25-degree surface product and
-  0.5-degree pressure-level product.
+  0.5-degree pressure-level product. NOAA's operational inventory documents one control plus 30
+  perturbed forecasts; aggregate provenance therefore reports 31 available members:
+  <https://www.nco.ncep.noaa.gov/pmb/products/gens/>.
 - ECMWF IFS: <https://confluence.ecmwf.int/spaces/DAC/pages/272310539/ECMWF+open+data+real-time+forecasts+from+IFS+and+AIFS>
 
 ## NOAA RRFS v1 parallel
@@ -60,3 +62,11 @@ documented cycles; ECMWF 00/12 UTC runs extend to F240 while 06/18 UTC runs stop
   <https://training.weather.gov/wdtd/courses/MRMS/index.php>.
 - Live objects confirm native echo-top values are kilometres AGL and VIL is kg/m²; HookEcho keeps
   those native values for sampling and applies display palettes only during upload.
+
+## NOAA RTMA / URMA
+
+- RTMA v2.10 immutable analysis objects and text indexes are read from NOAA NOMADS:
+  <https://nomads.ncep.noaa.gov/pub/data/nccf/com/rtma/v2.10/>.
+- URMA object naming is verified at <https://nomads.ncep.noaa.gov/pub/data/nccf/com/urma/prod/>.
+  The current directory publishes analysis objects without usable sidecar indexes, so HookEcho
+  does not download whole objects merely to extract one field.
