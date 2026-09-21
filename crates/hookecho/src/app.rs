@@ -11067,6 +11067,26 @@ impl HookEchoApp {
         ))
     }
 
+    fn field_probe_at(&self, idx: usize, lon: f64, lat: f64) -> Option<String> {
+        let view = self.views.get(idx)?;
+        let frame = crate::render::FieldLayer::DRAW_ORDER
+            .iter()
+            .rev()
+            .find(|layer| view.fields_on.contains(layer))
+            .and_then(|layer| self.fields.get(layer))?
+            .frame
+            .as_ref()?;
+        let sample = frame.sample(lon, lat);
+        sample.value.map(|value| {
+            format!(
+                "{}\n{value:.1} {} · valid {}",
+                frame.descriptor.short_name,
+                sample.units,
+                sample.valid_time.format("%Y-%m-%d %H:%M UTC")
+            )
+        })
+    }
+
     fn radar_probe_at(&mut self, idx: usize, lon: f64, lat: f64) -> Option<String> {
         if let Some(probe) = self.custom_radar_probe(idx, lon, lat) {
             return Some(probe);
@@ -12173,7 +12193,10 @@ impl HookEchoApp {
         let linked_probe_value = self
             .linked_probe
             .filter(|_| self.views.len() > 1)
-            .and_then(|ll| self.radar_probe_at(idx, ll[0], ll[1]))
+            .and_then(|ll| {
+                self.field_probe_at(idx, ll[0], ll[1])
+                    .or_else(|| self.radar_probe_at(idx, ll[0], ll[1]))
+            })
             .map(|probe| probe.lines().take(2).collect::<Vec<_>>().join("\n"));
 
         // --- Painter overlays (clipped to this pane) ---
@@ -14841,7 +14864,7 @@ impl HookEchoApp {
     }
 
     fn set_pane_count(&mut self, n: usize) {
-        let n = n.clamp(1, 4);
+        let n = crate::workspace::bounded_pane_count(n);
         while self.views.len() < n {
             let src = &self.views[self.active];
             let (site, camera, basemap, tilt, date) = (

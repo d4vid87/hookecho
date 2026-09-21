@@ -14,6 +14,12 @@
 
 use crate::view::MapView;
 
+pub const MAX_PANES: usize = 4;
+
+pub fn bounded_pane_count(requested: usize) -> usize {
+    requested.clamp(1, MAX_PANES)
+}
+
 /// One saved pane arrangement.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Workspace {
@@ -273,6 +279,13 @@ mod tests {
         assert_eq!(starters[0].adopted_site(None, "KTLX").as_deref(), Some("KTLX"));
         assert_eq!(starters[2].adopted_site(Some("KFWS"), "KTLX").as_deref(), Some("KFWS"));
         assert_eq!(starters[1].adopted_site(None, "KTLX"), None);
+    }
+
+    #[test]
+    fn pane_count_has_a_fixed_resource_ceiling() {
+        assert_eq!(bounded_pane_count(0), 1);
+        assert_eq!(bounded_pane_count(2), 2);
+        assert_eq!(bounded_pane_count(99), MAX_PANES);
     }
 
     #[test]
