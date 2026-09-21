@@ -197,6 +197,7 @@ impl HookEchoApp {
                             &mut self.settings.detectors,
                             Some(mosaic.as_str()),
                             self.gefs_distribution.as_ref(),
+                            self.gefs_postage.as_ref(),
                             &mut opts,
                         );
                     } else {
@@ -330,6 +331,7 @@ impl HookEchoApp {
                                     &mut self.settings.detectors,
                                     Some(mosaic.as_str()),
                                     self.gefs_distribution.as_ref(),
+                                    self.gefs_postage.as_ref(),
                                     &mut opts,
                                 );
                             });

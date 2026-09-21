@@ -71,6 +71,21 @@ pub struct GefsPointPlume {
     pub points: Vec<GefsPointDistribution>,
 }
 
+#[derive(Clone)]
+pub struct GefsPostageStamp {
+    pub member: u8,
+    pub field: MrmsField,
+}
+
+#[derive(Clone)]
+pub struct GefsPostageStamps {
+    pub field: GlobalField,
+    pub run: DateTime<Utc>,
+    pub valid: DateTime<Utc>,
+    pub expected: usize,
+    pub stamps: Vec<GefsPostageStamp>,
+}
+
 /// Summarize the members that actually supplied a finite value.
 pub fn ensemble_distribution(
     members: impl IntoIterator<Item = Option<f32>>,
@@ -213,6 +228,42 @@ fn gefs_plume_hours(first_hour: u16) -> anyhow::Result<Vec<u16>> {
         .collect();
     GlobalModel::GefsMember(0).validate_forecast_hour(*hours.last().unwrap())?;
     Ok(hours)
+}
+
+/// Load every available GEFS member from one cycle and retain a bounded display grid for each.
+pub async fn fetch_gefs_postage_stamps(
+    http: &reqwest::Client,
+    field: GlobalField,
+    fh: u16,
+) -> anyhow::Result<GefsPostageStamps> {
+    let seed = fetch(http, GlobalModel::GefsMember(30), field, fh).await?;
+    let run = seed.run;
+    let valid = seed.valid();
+    let mut stamps = vec![GefsPostageStamp {
+        member: 30,
+        field: seed.field.subsampled(40),
+    }];
+    for batch in (0u8..30).collect::<Vec<_>>().chunks(6) {
+        let requests = batch
+            .iter()
+            .map(|member| fetch_run(http, GlobalModel::GefsMember(*member), field, run, fh));
+        for (&member, result) in batch.iter().zip(futures_util::future::join_all(requests).await) {
+            if let Ok(forecast) = result {
+                stamps.push(GefsPostageStamp {
+                    member,
+                    field: forecast.field.subsampled(40),
+                });
+            }
+        }
+    }
+    stamps.sort_by_key(|stamp| stamp.member);
+    Ok(GefsPostageStamps {
+        field,
+        run,
+        valid,
+        expected: 31,
+        stamps,
+    })
 }
 
 macro_rules! descriptor {
@@ -918,5 +969,24 @@ mod tests {
             .points
             .windows(2)
             .all(|pair| pair[1].valid - pair[0].valid == chrono::Duration::hours(6)));
+    }
+
+    /// `cargo test -p wxdata gefs_postage_stamps_live -- --ignored --nocapture`
+    #[tokio::test]
+    #[ignore = "network: downloads one field from all 31 GEFS members"]
+    async fn gefs_postage_stamps_live() {
+        let stamps = fetch_gefs_postage_stamps(
+            &reqwest::Client::new(),
+            GlobalField::Temp2m,
+            0,
+        )
+        .await
+        .unwrap();
+        assert!(stamps.stamps.len() >= 20);
+        assert_eq!(stamps.expected, 31);
+        assert!(stamps
+            .stamps
+            .iter()
+            .all(|stamp| stamp.field.nx <= 40 && stamp.field.ny <= 40));
     }
 }

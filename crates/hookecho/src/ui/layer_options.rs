@@ -37,6 +37,7 @@ pub struct UiActions {
     pub export_local_tracks_csv: bool,
     pub export_local_tracks_json: bool,
     pub load_gefs_distribution: bool,
+    pub load_gefs_postage: bool,
 }
 
 /// Read-only chase-pack state the app feeds the UI each frame: the current-view estimate and,
@@ -107,6 +108,7 @@ pub(crate) fn show(
     // ragged in time and the honest thing is to show by how much.
     mosaic: Option<&str>,
     gefs_distribution: Option<&wxdata::global::GefsPointPlume>,
+    gefs_postage: Option<&wxdata::global::GefsPostageStamps>,
     actions: &mut UiActions,
 ) {
     use crate::render::FieldLayer as FL;
@@ -332,6 +334,9 @@ pub(crate) fn show(
         if ui.button("Load 24 h GEFS plume at map center").clicked() {
             actions.load_gefs_distribution = true;
         }
+        if ui.button("Load GEFS postage stamps").clicked() {
+            actions.load_gefs_postage = true;
+        }
         if let Some(result) = gefs_distribution {
             ui.weak(format!(
                 "{} ({}) · run {} · {:.2}, {:.2}",
@@ -354,6 +359,16 @@ pub(crate) fn show(
                     ui.end_row();
                 }
             });
+        }
+        if let Some(result) = gefs_postage {
+            ui.weak(format!(
+                "{} · valid {} · {}/{} members",
+                result.field.label(),
+                result.valid.format("%d %H:%MZ"),
+                result.stamps.len(),
+                result.expected
+            ));
+            postage_stamps(ui, result);
         }
     }
 
@@ -949,4 +964,54 @@ pub(crate) fn show(
     }
 
     actions.overlays_changed |= changed;
+}
+
+fn postage_stamps(ui: &mut egui::Ui, result: &wxdata::global::GefsPostageStamps) {
+    let (mut lo, mut hi) = (f32::INFINITY, f32::NEG_INFINITY);
+    for value in result
+        .stamps
+        .iter()
+        .flat_map(|stamp| stamp.field.values.iter().copied())
+        .filter(|value| value.is_finite())
+    {
+        lo = lo.min(value);
+        hi = hi.max(value);
+    }
+    let span = (hi - lo).max(f32::EPSILON);
+    ui.weak(format!(
+        "Shared scale: {lo:.1} to {hi:.1} {}",
+        result.field.descriptor().units
+    ));
+    egui::ScrollArea::vertical().max_height(360.0).show(ui, |ui| {
+        ui.columns(2, |columns| {
+            for (index, stamp) in result.stamps.iter().enumerate() {
+                let ui = &mut columns[index % 2];
+                ui.weak(if stamp.member == 0 {
+                    "Control".to_string()
+                } else {
+                    format!("Member {:02}", stamp.member)
+                });
+                let size = egui::vec2(ui.available_width(), 64.0);
+                let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
+                let field = &stamp.field;
+                let cell = egui::vec2(rect.width() / field.nx as f32, rect.height() / field.ny as f32);
+                for row in 0..field.ny {
+                    for col in 0..field.nx {
+                        let value = field.values[row * field.nx + col];
+                        if !value.is_finite() {
+                            continue;
+                        }
+                        let t = ((value - lo) / span).clamp(0.0, 1.0);
+                        let color = egui::Color32::from_rgb(
+                            (30.0 + 220.0 * t) as u8,
+                            (80.0 + 140.0 * (1.0 - (2.0 * t - 1.0).abs())) as u8,
+                            (230.0 - 200.0 * t) as u8,
+                        );
+                        let min = rect.min + egui::vec2(col as f32 * cell.x, row as f32 * cell.y);
+                        ui.painter().rect_filled(egui::Rect::from_min_size(min, cell), 0.0, color);
+                    }
+                }
+            }
+        });
+    });
 }

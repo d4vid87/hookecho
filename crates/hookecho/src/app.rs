@@ -244,6 +244,7 @@ enum OverlayMsg {
     /// A model-difference grid plus the two valid times it compared, for the layer's own row.
     ModelDiff(wxdata::field::FieldFrame, (String, String)),
     GefsDistribution(wxdata::global::GefsPointPlume),
+    GefsPostage(wxdata::global::GefsPostageStamps),
     /// `(0 °C, −20 °C)` level heights above sea level, in metres, at the active radar.
     FreezingLevels(f64, f64),
     /// Local storm reports: live trailing window (`None`) or an archive bucket (feature CC).
@@ -370,6 +371,7 @@ enum OverlaySource {
         u16,
     ),
     GefsDistribution(wxdata::global::GlobalField, u16, f64, f64),
+    GefsPostage(wxdata::global::GlobalField, u16),
     Rtma(
         crate::render::FieldLayer,
         wxdata::rtma::Source,
@@ -605,6 +607,7 @@ impl OverlaySource {
             | Self::Rtma(layer, ..)
             | Self::L3Grid(layer, ..) => RequestLane::Field(*layer),
             Self::GefsDistribution(..) => RequestLane::Feed("GEFS plume"),
+            Self::GefsPostage(..) => RequestLane::Feed("GEFS postage stamps"),
             Self::ModelDiff(..) => RequestLane::Field(FL::ModelDiff),
             Self::RefsProbability(..) => RequestLane::Field(FL::RefsReflectivityProb),
             Self::Mosaic(..) => RequestLane::Field(FL::Mosaic),
@@ -764,6 +767,9 @@ impl OverlaySource {
                     wxdata::global::fetch_gefs_point_plume(http, field, fh, lon, lat).await?,
                 )
             }
+            OverlaySource::GefsPostage(field, fh) => OverlayMsg::GefsPostage(
+                wxdata::global::fetch_gefs_postage_stamps(http, field, fh).await?,
+            ),
             OverlaySource::Rtma(layer, source, field) => {
                 let frame = match source {
                     wxdata::rtma::Source::Rtma => wxdata::rtma::fetch_latest_rtma(http, field).await?,
@@ -2591,6 +2597,7 @@ pub struct HookEchoApp {
     global_layer_key:
         std::collections::HashMap<crate::render::FieldLayer, (wxdata::global::GlobalModel, u16)>,
     gefs_distribution: Option<wxdata::global::GefsPointPlume>,
+    gefs_postage: Option<wxdata::global::GefsPostageStamps>,
     /// What the difference layer differences, and the two valid times its last fetch compared —
     /// the pair rarely shares a cycle, and a difference between two instants has to say so.
     diff_field: crate::fielddiff::DiffField,
@@ -3599,6 +3606,7 @@ impl HookEchoApp {
             analysis_source: wxdata::rtma::Source::Rtma,
             global_layer_key: std::collections::HashMap::new(),
             gefs_distribution: None,
+            gefs_postage: None,
             diff_field: crate::fielddiff::DiffField::default(),
             diff_valid: None,
             diff_grid: None,
@@ -7704,6 +7712,26 @@ impl HookEchoApp {
                 );
             }
         }
+        if actions.load_gefs_postage {
+            use crate::render::FieldLayer as FL;
+            let field = [
+                (FL::GlobalMslp, wxdata::global::GlobalField::Mslp),
+                (FL::GlobalHeight500, wxdata::global::GlobalField::Height500),
+                (FL::GlobalTemp2m, wxdata::global::GlobalField::Temp2m),
+                (FL::GlobalDewpoint2m, wxdata::global::GlobalField::Dewpoint2m),
+                (FL::GlobalWind10m, wxdata::global::GlobalField::Wind10m),
+                (FL::GlobalPrecip, wxdata::global::GlobalField::Precip),
+            ]
+            .into_iter()
+            .find_map(|(layer, field)| self.field_wanted(layer).then_some(field));
+            if let Some(field) = field {
+                self.gefs_postage = None;
+                self.spawn_overlay(
+                    ctx,
+                    OverlaySource::GefsPostage(field, self.global_fcst_hour),
+                );
+            }
+        }
         if actions.trail_changed {
             self.reflectivity_trail = wxdata::trail::ExtremaTrail::new(
                 self.reflectivity_trail_minutes,
@@ -9021,6 +9049,9 @@ impl HookEchoApp {
                 }
                 OverlayMsg::GefsDistribution(result) => {
                     self.gefs_distribution = Some(result);
+                }
+                OverlayMsg::GefsPostage(result) => {
+                    self.gefs_postage = Some(result);
                 }
                 OverlayMsg::StormReports(bucket, reports) => match bucket {
                     None => self.storm_reports = reports,

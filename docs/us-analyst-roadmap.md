@@ -1783,7 +1783,7 @@ This is the explicit “what are we still missing?” list for agents.
 - [x] broad RGB/channel suite
 - [x] generic 80+-class MRMS catalog coverage
 - [ ] RRFS/REFS
-- [ ] GEFS / ensemble probabilities
+- [x] GEFS / ensemble probabilities
 - [ ] NBM
 - [x] RTMA/URMA
 - [ ] richer model/run comparison
@@ -2163,7 +2163,7 @@ HookEcho should be considered “top-tier U.S. analyst workstation” only when 
 - [x] native GOES ABI + 1-minute mesoscale imagery
 - [x] radar/satellite/MRMS valid-time synchronization
 - [x] RRFS/REFS + GEFS + NBM + expanded HRRR/RAP/GFS
-- [ ] ensemble probabilities/postage stamps/plumes
+- [x] ensemble probabilities/postage stamps/plumes
 - [x] RTMA/URMA surface analysis
 - [x] model/run/observed comparison workflows
 - [x] advanced soundings/hodographs
