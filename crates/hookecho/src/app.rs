@@ -2692,6 +2692,8 @@ pub struct HookEchoApp {
     link_cameras: bool,
     /// When true, all panes follow the active pane's valid time.
     link_times: bool,
+    /// Geographic cursor shared by linked panes, so the same point can be compared at a glance.
+    linked_probe: Option<[f64; 2]>,
     /// The always-on-top mini-loop window is open (desktop only; see `mini_loop_viewport`).
     mini_loop: bool,
     /// The mini loop's own camera while it is open; `None` until it borrows the pane's.
@@ -3569,6 +3571,7 @@ impl HookEchoApp {
             loop_export: None,
             link_cameras: false,
             link_times: false,
+            linked_probe: None,
             mini_loop: false,
             #[cfg(not(any(target_os = "android", target_arch = "wasm32")))]
             mini_cam: None,
@@ -14356,6 +14359,25 @@ impl HookEchoApp {
             }
         }
 
+        // A linked geographic probe is projected independently in every pane. This remains at
+        // the same lon/lat even when the panes use different cameras or radar sites.
+        if let Some(ll) = self.linked_probe.filter(|_| self.views.len() > 1) {
+            let w = crate::render::mercator::lonlat_to_world(ll[0], ll[1]);
+            let (sx, sy) = cam.world_to_screen(w, vp);
+            let p = egui::pos2(prect.left() + sx, prect.top() + sy);
+            if prect.contains(p) {
+                let col = crate::theme::accent(self.settings.theme);
+                painter.line_segment(
+                    [p - egui::vec2(7.0, 0.0), p + egui::vec2(7.0, 0.0)],
+                    egui::Stroke::new(1.5, col),
+                );
+                painter.line_segment(
+                    [p - egui::vec2(0.0, 7.0), p + egui::vec2(0.0, 7.0)],
+                    egui::Stroke::new(1.5, col),
+                );
+            }
+        }
+
         // Measure tool.
         if !self.measure.is_empty() {
             let col = egui::Color32::from_rgb(255, 210, 80);
@@ -18469,6 +18491,23 @@ impl eframe::App for HookEchoApp {
             self.last_viewport = rects
                 .get(self.active)
                 .map_or((full.width(), full.height()), |r| (r.width(), r.height()));
+
+            self.linked_probe = if n > 1 && (self.link_cameras || self.link_times) {
+                ui.input(|input| input.pointer.hover_pos()).and_then(|pos| {
+                    rects.iter().enumerate().find_map(|(i, rect)| {
+                        rect.contains(pos).then(|| {
+                            let world = self.views[i].camera.screen_to_world(
+                                (pos.x - rect.left(), pos.y - rect.top()),
+                                (rect.width(), rect.height()),
+                            );
+                            let (lon, lat) = crate::render::mercator::world_to_lonlat(world.0, world.1);
+                            [lon, lat]
+                        })
+                    })
+                })
+            } else {
+                None
+            };
 
             // Which pane carries the once-per-frame work (tile-cache clears, the shared label
             // pass): the first one actually drawn, which under `solo` is the active one.
