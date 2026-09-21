@@ -32,7 +32,125 @@ const ECMWF_BASE: &str = "https://data.ecmwf.int/forecasts";
 const RES_DEG: f64 = 0.3;
 
 fn available_members(model: GlobalModel) -> Option<u16> {
-    matches!(model, GlobalModel::GefsMean | GlobalModel::GefsSpread).then_some(31)
+    match model {
+        GlobalModel::GefsMean | GlobalModel::GefsSpread => Some(31),
+        GlobalModel::GefsMember(_) => Some(1),
+        _ => None,
+    }
+}
+
+/// Point statistics used by GEFS plumes and threshold probabilities.
+#[derive(Debug, Clone, PartialEq)]
+pub struct EnsembleDistribution {
+    pub available: usize,
+    pub expected: usize,
+    pub minimum: f32,
+    pub percentile_10: f32,
+    pub median: f32,
+    pub percentile_90: f32,
+    pub maximum: f32,
+    pub mean: f32,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct GefsPointDistribution {
+    pub run: DateTime<Utc>,
+    pub valid: DateTime<Utc>,
+    pub longitude: f64,
+    pub latitude: f64,
+    pub statistics: EnsembleDistribution,
+}
+
+/// Summarize the members that actually supplied a finite value.
+pub fn ensemble_distribution(
+    members: impl IntoIterator<Item = Option<f32>>,
+    expected: usize,
+) -> Option<EnsembleDistribution> {
+    let mut values: Vec<f32> = members
+        .into_iter()
+        .flatten()
+        .filter(|value| value.is_finite())
+        .collect();
+    values.sort_by(f32::total_cmp);
+    let available = values.len();
+    if available == 0 {
+        return None;
+    }
+    let percentile = |p: f32| values[((available - 1) as f32 * p).round() as usize];
+    Some(EnsembleDistribution {
+        available,
+        expected,
+        minimum: values[0],
+        percentile_10: percentile(0.1),
+        median: percentile(0.5),
+        percentile_90: percentile(0.9),
+        maximum: values[available - 1],
+        mean: values.iter().sum::<f32>() / available as f32,
+    })
+}
+
+/// Fraction of available members at or above `threshold`, plus the explicit sample count.
+pub fn exceedance_probability(
+    members: impl IntoIterator<Item = Option<f32>>,
+    threshold: f32,
+) -> Option<(f32, usize)> {
+    let values: Vec<f32> = members
+        .into_iter()
+        .flatten()
+        .filter(|value| value.is_finite())
+        .collect();
+    (!values.is_empty()).then(|| {
+        let hits = values.iter().filter(|&&value| value >= threshold).count();
+        (hits as f32 / values.len() as f32, values.len())
+    })
+}
+
+/// Load one GEFS cycle across all 31 members and summarize a native point value.
+/// Missing members stay missing and are reflected in `statistics.available`.
+pub async fn fetch_gefs_point_distribution(
+    http: &reqwest::Client,
+    field: GlobalField,
+    fh: u16,
+    longitude: f64,
+    latitude: f64,
+) -> anyhow::Result<GefsPointDistribution> {
+    GlobalModel::GefsMember(0).validate_forecast_hour(fh)?;
+    let now = Utc::now();
+    let step = GlobalModel::GefsMember(0).cycle_step() as i64;
+    let mut last_error = None;
+    for back in 0..5 {
+        let hours = (now.hour() as i64 / step) * step - back * step;
+        let run = now.date_naive().and_hms_opt(0, 0, 0).unwrap().and_utc()
+            + chrono::Duration::hours(hours);
+        if !GlobalModel::GefsMember(0).supports_forecast_hour(run.hour(), fh) {
+            continue;
+        }
+        let mut samples = Vec::with_capacity(31);
+        for batch in (0u8..=30).collect::<Vec<_>>().chunks(6) {
+            let requests = batch.iter().map(|member| {
+                fetch_run(http, GlobalModel::GefsMember(*member), field, run, fh)
+            });
+            for result in futures_util::future::join_all(requests).await {
+                match result {
+                    Ok(forecast) => samples.push(forecast.field.sample_bilinear(longitude, latitude)),
+                    Err(error) => {
+                        last_error = Some(error);
+                        samples.push(None);
+                    }
+                }
+            }
+        }
+        if let Some(statistics) = ensemble_distribution(samples, 31) {
+            return Ok(GefsPointDistribution {
+                run,
+                valid: run + chrono::Duration::hours(fh as i64),
+                longitude,
+                latitude,
+                statistics,
+            });
+        }
+    }
+    Err(last_error.unwrap_or_else(|| anyhow::anyhow!("no GEFS member cycle found")))
 }
 
 macro_rules! descriptor {
@@ -599,6 +717,27 @@ mod tests {
     }
 
     #[test]
+    fn ensemble_statistics_report_only_available_members() {
+        let distribution = ensemble_distribution(
+            [Some(1.0), None, Some(f32::NAN), Some(3.0), Some(2.0)],
+            5,
+        )
+        .unwrap();
+        assert_eq!(distribution.available, 3);
+        assert_eq!(distribution.expected, 5);
+        assert_eq!(distribution.minimum, 1.0);
+        assert_eq!(distribution.median, 2.0);
+        assert_eq!(distribution.maximum, 3.0);
+        assert_eq!(distribution.mean, 2.0);
+        assert_eq!(
+            exceedance_probability([Some(1.0), None, Some(3.0), Some(2.0)], 2.0),
+            Some((2.0 / 3.0, 3))
+        );
+        assert!(ensemble_distribution([None, Some(f32::NAN)], 2).is_none());
+        assert!(exceedance_probability([None, Some(f32::NAN)], 0.0).is_none());
+    }
+
+    #[test]
     fn global_models_share_complete_source_definitions() {
         let gfs = GlobalModel::Gfs.definition();
         let gefs = GlobalModel::GefsMean.definition();
@@ -624,6 +763,7 @@ mod tests {
         assert!(GlobalModel::GefsMean.supports_forecast_hour(0, 246));
         assert_eq!(available_members(GlobalModel::GefsMean), Some(31));
         assert_eq!(available_members(GlobalModel::GefsSpread), Some(31));
+        assert_eq!(available_members(GlobalModel::GefsMember(0)), Some(1));
         assert!(GlobalModel::GefsMember(0).validate_forecast_hour(0).is_ok());
         assert!(
             GlobalModel::GefsMember(30)
@@ -669,5 +809,25 @@ mod tests {
             assert!(f.field.lon_west >= -180.5 && f.field.lon_east <= 180.5);
             assert!(finite > 0);
         }
+    }
+
+    /// `cargo test -p wxdata gefs_point_distribution_live -- --ignored --nocapture`
+    #[tokio::test]
+    #[ignore = "network: downloads one field from all 31 GEFS members"]
+    async fn gefs_point_distribution_live() {
+        let distribution = fetch_gefs_point_distribution(
+            &reqwest::Client::new(),
+            GlobalField::Temp2m,
+            0,
+            -97.28,
+            35.33,
+        )
+        .await
+        .unwrap();
+        println!("{distribution:?}");
+        assert!(distribution.statistics.available >= 20);
+        assert_eq!(distribution.statistics.expected, 31);
+        assert!(distribution.statistics.minimum <= distribution.statistics.median);
+        assert!(distribution.statistics.median <= distribution.statistics.maximum);
     }
 }
