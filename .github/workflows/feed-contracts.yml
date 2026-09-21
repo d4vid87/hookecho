@@ -1,6 +1,8 @@
 name: Feed contracts
 
 on:
+  push:
+    branches: [roadmap/foundation]
   schedule:
     - cron: "23 13 * * 1,4"
   workflow_dispatch:
