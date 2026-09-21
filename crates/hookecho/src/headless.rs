@@ -1638,8 +1638,9 @@ pub fn run_global(model: &str, slug: &str, out_path: &str) -> anyhow::Result<()>
     use wxdata::global::{GlobalField, GlobalModel};
     let model = match model {
         "ecmwf" => GlobalModel::Ecmwf,
+        "gefs" | "gefs-mean" => GlobalModel::GefsMean,
         "gfs" => GlobalModel::Gfs,
-        other => anyhow::bail!("unknown global model '{other}' (gfs|ecmwf)"),
+        other => anyhow::bail!("unknown global model '{other}' (gfs|gefs|ecmwf)"),
     };
     let gfield = GlobalField::from_slug(slug)
         .ok_or_else(|| anyhow::anyhow!("unknown global field '{slug}'"))?;

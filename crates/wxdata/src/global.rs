@@ -24,6 +24,7 @@ use crate::mrms::MrmsField;
 use chrono::{DateTime, Datelike, Timelike, Utc};
 
 const GFS_BUCKET: &str = "https://noaa-gfs-bdp-pds.s3.amazonaws.com";
+const GEFS_BUCKET: &str = "https://noaa-gefs-pds.s3.amazonaws.com";
 const ECMWF_BASE: &str = "https://data.ecmwf.int/forecasts";
 
 /// Quarter-degree source grids resample onto this. Coarser than the grid itself, so the scatter
@@ -111,6 +112,7 @@ descriptor!(
 pub enum GlobalModel {
     #[default]
     Gfs,
+    GefsMean,
     Ecmwf,
 }
 
@@ -130,6 +132,20 @@ impl GlobalModel {
                 expected_latency_minutes: None,
                 domain: "Global",
                 ensemble: false,
+            },
+            Self::GefsMean => ModelDefinition {
+                id: "gefs-mean",
+                label: "GEFS mean",
+                provider: "NOAA",
+                base_url: GEFS_BUCKET,
+                cycle_hours: 6,
+                max_forecast_hour: 384,
+                grid: "0.25/0.5 degree global latitude/longitude",
+                regrid_resolution_deg: RES_DEG,
+                index_suffix: ".idx",
+                expected_latency_minutes: None,
+                domain: "Global",
+                ensemble: true,
             },
             Self::Ecmwf => ModelDefinition {
                 id: "ecmwf-open-ifs",
@@ -161,6 +177,10 @@ impl GlobalModel {
     pub fn supports_forecast_hour(self, cycle_hour: u32, hour: u16) -> bool {
         match self {
             Self::Gfs => hour <= 120 || hour <= 384 && hour.is_multiple_of(3),
+            Self::GefsMean => {
+                hour <= 240 && hour.is_multiple_of(3)
+                    || hour <= 384 && hour.is_multiple_of(6)
+            }
             Self::Ecmwf if cycle_hour == 0 || cycle_hour == 12 => {
                 hour <= 144 && hour.is_multiple_of(3)
                     || hour <= 240 && hour.is_multiple_of(6)
@@ -352,6 +372,24 @@ async fn fetch_run(
                 .ok_or_else(|| anyhow::anyhow!("no {var}:{level} in GFS idx"))?;
             (base, r)
         }
+        GlobalModel::GefsMean => {
+            let source = model.definition().base_url;
+            let (directory, name) = if field == GlobalField::Height500 {
+                ("pgrb2ap5", "pgrb2a.0p50")
+            } else {
+                ("pgrb2sp25", "pgrb2s.0p25")
+            };
+            let base = format!(
+                "{source}/gefs.{date}/{:02}/atmos/{directory}/geavg.t{:02}z.{name}.f{fh:03}",
+                run.hour(),
+                run.hour()
+            );
+            let idx = get_text(http, &format!("{base}.idx")).await?;
+            let (var, level) = field.gfs_key();
+            let r = crate::hrrr::field_byte_range(&idx, var, level)
+                .ok_or_else(|| anyhow::anyhow!("no {var}:{level} in GEFS idx"))?;
+            (base, r)
+        }
         GlobalModel::Ecmwf => {
             let source = model.definition().base_url;
             let base = format!(
@@ -530,8 +568,10 @@ mod tests {
     #[test]
     fn global_models_share_complete_source_definitions() {
         let gfs = GlobalModel::Gfs.definition();
+        let gefs = GlobalModel::GefsMean.definition();
         let ecmwf = GlobalModel::Ecmwf.definition();
         assert_ne!(gfs.id, ecmwf.id);
+        assert!(gefs.ensemble);
         assert_eq!(gfs.index_suffix, ".idx");
         assert_eq!(ecmwf.index_suffix, ".index");
         assert!(GlobalModel::Gfs.validate_forecast_hour(384).is_ok());
@@ -544,6 +584,9 @@ mod tests {
         assert!(GlobalModel::Gfs.supports_forecast_hour(18, 120));
         assert!(!GlobalModel::Gfs.supports_forecast_hour(18, 121));
         assert!(GlobalModel::Gfs.supports_forecast_hour(18, 123));
+        assert!(GlobalModel::GefsMean.supports_forecast_hour(0, 240));
+        assert!(!GlobalModel::GefsMean.supports_forecast_hour(0, 243));
+        assert!(GlobalModel::GefsMean.supports_forecast_hour(0, 246));
     }
 
     /// Both sources, live, at the newest usable cycle.
@@ -552,7 +595,11 @@ mod tests {
     #[ignore = "network"]
     async fn global_live() {
         let http = reqwest::Client::new();
-        for model in [GlobalModel::Gfs, GlobalModel::Ecmwf] {
+        for model in [
+            GlobalModel::Gfs,
+            GlobalModel::GefsMean,
+            GlobalModel::Ecmwf,
+        ] {
             let f = fetch(&http, model, GlobalField::Mslp, 0)
                 .await
                 .unwrap_or_else(|e| panic!("{} fetch: {e}", model.label()));
