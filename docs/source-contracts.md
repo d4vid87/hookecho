@@ -67,6 +67,8 @@ documented cycles; ECMWF 00/12 UTC runs extend to F240 while 06/18 UTC runs stop
 - NOAA's operational GRIB2 table defines FLASH QPE-to-FFG 1/3/6-hour and maximum products as
   unitless ratios at two-minute cadence; HookEcho displays the native 0–5 ratio scale:
   <https://www.nssl.noaa.gov/projects/mrms/operational/tables.php>.
+- The same table defines CREST maximum unit streamflow as m³/s/km² and maximum soil saturation
+  as percent; both public prefixes and recent objects are contract-tested.
 
 ## NOAA RTMA / URMA
 

@@ -266,6 +266,37 @@ static FFG_RATIO: FieldRamp = ramp!(
     ]
 );
 
+static UNIT_STREAMFLOW: FieldRamp = ramp!(
+    "Unit streamflow",
+    "m³/s/km²",
+    0.1,
+    10.0,
+    RampScale::Log,
+    255,
+    &[
+        (0.0, [50, 110, 170]),
+        (0.35, [60, 190, 130]),
+        (0.6, [240, 220, 50]),
+        (0.8, [235, 90, 35]),
+        (1.0, [220, 50, 190]),
+    ]
+);
+
+static SOIL_SATURATION: FieldRamp = ramp!(
+    "Soil saturation",
+    "%",
+    0.0,
+    100.0,
+    RampScale::Linear,
+    220,
+    &[
+        (0.0, [115, 85, 55]),
+        (0.45, [220, 190, 90]),
+        (0.7, [80, 180, 120]),
+        (1.0, [60, 120, 220]),
+    ]
+);
+
 static VIL: FieldRamp = ramp!(
     "Water aloft (VIL)",
     "kg/m\u{b2}",
@@ -746,6 +777,8 @@ pub fn ramp_for(layer: FieldLayer) -> Option<&'static FieldRamp> {
             "qpe-24h" => Some(&QPE_24H),
             "flash-flood" => Some(&FLASH_FLOOD),
             "ffg-ratio" => Some(&FFG_RATIO),
+            "unit-streamflow" => Some(&UNIT_STREAMFLOW),
+            "soil-saturation" => Some(&SOIL_SATURATION),
             _ => None,
         };
     }
