@@ -133,6 +133,16 @@ pub struct CatalogProduct {
     pub description: &'static str,
 }
 
+impl CatalogProduct {
+    /// Constant-altitude reflectivity level encoded by the operational object path.
+    pub fn height_msl_km(&self) -> Option<f32> {
+        self.product
+            .strip_prefix("CONUS/MergedReflectivityQC_")?
+            .parse()
+            .ok()
+    }
+}
+
 pub static CATALOG: [CatalogProduct; 63] = [
     CatalogProduct { descriptor: &ECHO_TOP_30_DESCRIPTOR, product: "CONUS/EchoTop_30_00.50", slug: "mrms-echo-top-30", description: "Height of the 30 dBZ storm top above ground" },
     CatalogProduct { descriptor: &ECHO_TOP_50_DESCRIPTOR, product: "CONUS/EchoTop_50_00.50", slug: "mrms-echo-top-50", description: "Height of the 50 dBZ core for storm-severity analysis" },
@@ -1114,6 +1124,18 @@ mod tests {
         ids.sort_unstable();
         ids.dedup();
         assert_eq!(ids.len(), DESCRIPTORS.len());
+    }
+
+    #[test]
+    fn constant_altitude_stack_has_ordered_unique_levels() {
+        let levels: Vec<_> = CATALOG
+            .iter()
+            .filter_map(CatalogProduct::height_msl_km)
+            .collect();
+        assert_eq!(levels.len(), 20);
+        assert_eq!(levels.first(), Some(&0.5));
+        assert_eq!(levels.last(), Some(&7.5));
+        assert!(levels.windows(2).all(|pair| pair[0] < pair[1]));
     }
 
     #[test]

@@ -11588,13 +11588,50 @@ impl HookEchoApp {
                 })
                 .map(|warning| format!("\n⚠ {warning}"))
                 .unwrap_or_default();
+            let profile = self.mrms_vertical_profile_at(idx, lon, lat);
             format!(
                 "{}\n{value:.1} {} · valid {}{coverage_warning}",
                 frame.descriptor.short_name,
                 sample.units,
-                sample.valid_time.format("%Y-%m-%d %H:%M UTC")
-            )
+                sample.valid_time.format("%Y-%m-%d %H:%M UTC"),
+            ) + &profile
         })
+    }
+
+    fn mrms_vertical_profile_at(&self, idx: usize, lon: f64, lat: f64) -> String {
+        let Some(view) = self.views.get(idx) else {
+            return String::new();
+        };
+        let mut points: Vec<_> = view
+            .fields_on
+            .iter()
+            .filter_map(|layer| {
+                let crate::render::FieldLayer::MrmsCatalog(index) = *layer else {
+                    return None;
+                };
+                let product = wxdata::mrms::CATALOG.get(index as usize)?;
+                let height = product.height_msl_km()?;
+                let sample = self.fields.get(layer)?.frame.as_ref()?.sample(lon, lat);
+                Some((height, sample.value?, sample.valid_time))
+            })
+            .collect();
+        if points.len() < 2 {
+            return String::new();
+        }
+        points.sort_by(|a, b| a.0.total_cmp(&b.0));
+        let first = points.iter().map(|point| point.2).min().unwrap();
+        let last = points.iter().map(|point| point.2).max().unwrap();
+        let values = points
+            .iter()
+            .map(|(height, value, _)| format!("{height} km {value:.1}"))
+            .collect::<Vec<_>>()
+            .join(" · ");
+        let time = if first == last {
+            first.format("%H:%M UTC").to_string()
+        } else {
+            format!("{}–{}", first.format("%H:%M"), last.format("%H:%M UTC"))
+        };
+        format!("\nVertical reflectivity (dBZ) · {time}\n{values}")
     }
 
     fn radar_probe_at(&mut self, idx: usize, lon: f64, lat: f64) -> Option<String> {
