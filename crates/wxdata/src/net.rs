@@ -97,10 +97,7 @@ pub fn install_s3_proxy_rewriter() {
 /// edge in front of `/proxy/`; adding a second layer inside the wasm would cost bundle size to
 /// re-implement what the platform does for free.
 ///
-// ponytail: one adopter today (the DWD volume probe, where it turns a 201 KB poll into a
-// header exchange). It lives here rather than in `dwd.rs` because the next feed that wants it
-// should not write a second one — but it is deliberately small, and it is not a cache: it stores
-// validators, never bodies.
+// It is deliberately small, and it is not a cache: it stores validators, never bodies.
 #[cfg(not(target_arch = "wasm32"))]
 pub mod validators {
     use std::num::NonZeroUsize;

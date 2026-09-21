@@ -630,11 +630,11 @@ async fn latest_key(http: &reqwest::Client, product: &str) -> anyhow::Result<Str
             _ => String::new(),
         };
         let url = format!("{BUCKET}/?list-type=2&prefix={prefix}&max-keys=2000{after}");
-        let Ok(resp) = http.get(&url).send().await else {
+        let current = known.as_deref().filter(|key| key.starts_with(&prefix));
+        let Ok(result) = fetch_listing(http, &url, current).await else {
             continue;
         };
-        let Ok(xml) = resp.text().await else { continue };
-        if let Some(key) = last_key(&xml) {
+        if let Some(key) = result {
             if let Ok(mut g) = LAST_SEEN.lock() {
                 g.get_or_insert_with(Default::default)
                     .insert(product.to_string(), key.clone());
@@ -653,6 +653,56 @@ async fn latest_key(http: &reqwest::Client, product: &str) -> anyhow::Result<Str
         return Ok(key);
     }
     anyhow::bail!("no MRMS objects found for today or yesterday")
+}
+
+async fn fetch_listing(
+    http: &reqwest::Client,
+    url: &str,
+    current: Option<&str>,
+) -> anyhow::Result<Option<String>> {
+    #[cfg(not(target_arch = "wasm32"))]
+    if let Some(current) = current {
+        let remembered = crate::net::validators::get(url);
+        let response = crate::net::validators::apply(
+            http.get(crate::net::fetch_url(url)).timeout(crate::net::FEED_TIMEOUT),
+            url,
+        )
+        .send()
+        .await?;
+        if response.status() == reqwest::StatusCode::NOT_MODIFIED {
+            if remembered.and_then(|entry| entry.tag).as_deref() == Some(current) {
+                crate::stats::bump(crate::stats::Counter::NetNotModified);
+                return Ok(Some(current.to_string()));
+            }
+        } else {
+            return finish_listing(url, response, Some(current)).await;
+        }
+    }
+    let response = http
+        .get(crate::net::fetch_url(url))
+        .timeout(crate::net::FEED_TIMEOUT)
+        .send()
+        .await?;
+    finish_listing(url, response, current).await
+}
+
+async fn finish_listing(
+    _url: &str,
+    response: reqwest::Response,
+    current: Option<&str>,
+) -> anyhow::Result<Option<String>> {
+    let response = response.error_for_status()?;
+    #[cfg(not(target_arch = "wasm32"))]
+    let headers = response.headers().clone();
+    let xml = response.text().await?;
+    let result = listing_result(&xml, current);
+    #[cfg(not(target_arch = "wasm32"))]
+    crate::net::validators::remember_headers(_url, &headers, result.clone());
+    Ok(result)
+}
+
+fn listing_result(xml: &str, current: Option<&str>) -> Option<String> {
+    last_key(xml).or_else(|| current.map(str::to_string))
 }
 
 async fn latest_available_key(http: &reqwest::Client, product: &str) -> anyhow::Result<String> {
@@ -777,6 +827,11 @@ mod tests {
         let xml =
             "<x><Key>a/20260717-000000.grib2.gz</Key><Key>a/20260717-000200.grib2.gz</Key></x>";
         assert_eq!(last_key(xml).unwrap(), "a/20260717-000200.grib2.gz");
+        assert_eq!(
+            listing_result("<ListBucketResult/>", Some("a/current.grib2.gz")).as_deref(),
+            Some("a/current.grib2.gz")
+        );
+        assert_eq!(listing_result("<ListBucketResult/>", None), None);
     }
 
     #[test]
