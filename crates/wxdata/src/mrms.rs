@@ -1040,7 +1040,10 @@ mod tests {
         signed.values = vec![-20.0, 10.0];
         normalize_product_missing(AZSHEAR, &mut signed);
         assert_eq!(signed.values, [-20.0, 10.0]);
-        normalize_product_missing(CATALOG[9].product, &mut signed);
+        normalize_product_missing(
+            product_for_id("mrms.layer-reflectivity-low", 30, 60, 120).unwrap(),
+            &mut signed,
+        );
         assert_eq!(signed.values, [-20.0, 10.0]);
     }
 }
